@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D6A2F76C6B814A808C21DCFC /* NativeTabOverview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A47C4B65B2644DD9CE6DC2E /* NativeTabOverview.swift */; };
+		2C5840EE8C5446409840312D /* NativeDocumentTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62B11016CF644ADE9A6A105B /* NativeDocumentTabs.swift */; };
         C4918AC6B7374CA39C883D70 /* NativeShellComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D38D54610AD4BE88C5D9C34 /* NativeShellComponents.swift */; };
         111111111111111111111103 /* NativePages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111104 /* NativePages.swift */; };
         111111111111111111111101 /* NativeMobile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111102 /* NativeMobile.swift */; };
@@ -26,6 +28,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		0A47C4B65B2644DD9CE6DC2E /* NativeTabOverview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTabOverview.swift; sourceTree = "<group>"; };
+		62B11016CF644ADE9A6A105B /* NativeDocumentTabs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeDocumentTabs.swift; sourceTree = "<group>"; };
         7D38D54610AD4BE88C5D9C34 /* NativeShellComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeShellComponents.swift; sourceTree = "<group>"; };
         111111111111111111111104 /* NativePages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePages.swift; sourceTree = "<group>"; };
         111111111111111111111102 /* NativeMobile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeMobile.swift; sourceTree = "<group>"; };
@@ -90,6 +94,8 @@
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
                 111111111111111111111102 /* NativeMobile.swift */,
                 111111111111111111111104 /* NativePages.swift */,
+				0A47C4B65B2644DD9CE6DC2E /* NativeTabOverview.swift */,
+				62B11016CF644ADE9A6A105B /* NativeDocumentTabs.swift */,
                 7D38D54610AD4BE88C5D9C34 /* NativeShellComponents.swift */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
@@ -201,6 +207,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D6A2F76C6B814A808C21DCFC /* NativeTabOverview.swift in Sources */,
+				2C5840EE8C5446409840312D /* NativeDocumentTabs.swift in Sources */,
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 				FD9F126313343F4D57AFAD1B /* NativeKeyboardToolbar.swift in Sources */,
 				7758A6C7811392A07AB7FAD6 /* AppVariant.swift in Sources */,

@@ -1127,3 +1127,31 @@ install,launch}.log and devicectl JSON under/private/tmp. No compilation or new
 source included; document tabs/import/menu/loading successors remain outside9.
 Offered two-file typecheck slot returned unconsumed msg3f74b5f9974e; fresh ACK
 required before compiler use. Main untouched.
+
+
+Successor composition — 2026-10-18 00:14 UTC (NOT Dev9): owner reviewed
+actual c5357 reservation diff and composed loading7128+c5357 as c9b2ad14 and
+6871a511. Picker reservation now survives Back until late open and returned host
+close completion, or releases on Pages transfer. Source review/model checks do
+not prove actual UIKit scheduling; new build/runtime matrix remains required.
+
+Tabs source5824+2d5 composed a011dc4a+527fe77e; root ran actual-source model
+harness207 PASS (exec42964), not repeated here. Scoped project grant6fe356
+permits minimal source registration: NativeDocumentTabs.swift and
+NativeTabOverview.swift each occur exactly once in App Sources; plutil parses
+project and diff check passes. No linker/typecheck/build claim. Fresh bounded
+two-file typecheck slot requested c3406b1241a2; no fresh ACK yet, no compiler.
+
+Explicit existing-worker followups now started:2f model active binding/Home and
+overview busy props; d809 editor close without pop/snapshot/current-document
+validation. Reviewed actual model/view followup diff source-only, no blocker;
+UIKit pop guard and recovery cancel-pending remain caller integration gates.
+371 retains NativePages pending-journal/no-authority recovery then header/FAB
+and tabs source adapters; root atomic folder witness/status wire stays separate.
+Native owner retains scoped root catalog/coordinator/picker integration after
+bd57 ownership reconciliation. No file-wide takeover or main mutation.
+
+Apple bounded diagnostics exec37303 at00:05UTC still returns403
+REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED for apps/bundleIds/users/invitations.
+Existing support case103000040642 remains; no duplicate case or repeated API
+loop. TestFlight/internal tester acceptance remains blocked by account access.
