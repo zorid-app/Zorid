@@ -1,5 +1,15 @@
 # Native mobile integration
 
+## Native import library — 2026-10-18 00:15 UTC
+
+Main d1ceed0a integrates the reviewed staged-import helper and native C ABI;
+all six source files match tested candidate d9836528. Host tests50497 passed10/10,
+ABI tests63416 passed5/5. Logs: tmp/native-import-host-fixed-test.log and
+tmp/native-import-abi-test.log. Collision authorization now inspects the original
+durable stage before deciding whether failure is terminal or uncertain.
+Swift provider/import UI, composed device execution and full64MiB transfer remain
+unverified. No import screen is claimed delivered by this library integration.
+
 ## Canonical native9 integration — 2026-10-18 00:03 UTC
 
 Main60ffc972 integrates only reviewed native9 Settings/search/navigation and caret

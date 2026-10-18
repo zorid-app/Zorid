@@ -116,6 +116,22 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:15UTC: main d1ceed0a integrates the reviewed native staged-import library/ABI
+from d9836528. All six integrated source files compare exactly with the tested
+candidate. Corrected host module50497 exit0,10/10; ABI63416 exit0,5/5; logs
+tmp/native-import-host-fixed-test.log and tmp/native-import-abi-test.log. Earlier
+authorization collision failure is fixed by querying the same durable stage
+after authorization error; no uncertain outcome allocates replacement identity.
+This is library verification, not Swift provider/import UI acceptance.
+
+Native owner has exclusive frozen527fe77e two-file Swift frontend typecheck slot
+via msg_d0a63534c94f; no Xcode/Rust/assets/install authorized by that slot. Host
+menu wire44497c7f and core12933f3c independently source-approved, focused tests
+await slot return. Tab successor9ecedf6f+873b4989 independently source-approved;
+prepared successor harness remains unrun. Native owner owns new coordinator and
+minimal catalog/picker hooks after bd57 reconciliation, preserving Pages371,
+container/plugin d809 and import/session bd57 scopes. Source work remains isolated.
+
 00:10UTC source checkpoint: import runtime boundary fix5a226480 independently
 reviewed, targeted reproduction101→fixed58276exit0/1pass. Root composed only fix
 as d9836528 in native-import-integration; no duplicate dependency change. Host
