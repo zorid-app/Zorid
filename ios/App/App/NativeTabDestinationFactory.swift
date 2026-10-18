@@ -36,8 +36,8 @@ final class NativeTabDestinationFactory {
     private let admissionReady: () -> Bool
     private let chooseFile: (UUID) -> Void
     private let validatedDocument: (NativeTabDocument, UUID) -> Void
-    // Hook assignment awaits the container owner's frozen public API. These
-    // callbacks do not authorize direct navigation or preloading the container.
+    // Root owns routing; the container owns toolbar items and visibility gates.
+    // These callbacks never authorize preloading or a second host.
     private let showTabs: ((UIViewController) -> Void)?
     private let returnToNativePages: ((UIViewController) -> Void)?
     private var reservation: Reservation?
@@ -105,7 +105,11 @@ final class NativeTabDestinationFactory {
                         do {
                             let listing = try result.get()
                             let matches = listing.entries.filter { $0.id == document.stableFileID }
-                            guard listing.scanComplete, listing.localStoreId == document.localStoreID,
+                            // A global incomplete-reconciliation warning is not
+                            // proof that this freshly listed committed file is
+                            // absent. Preserve the session warning unchanged;
+                            // require this exact store and live stable identity.
+                            guard listing.localStoreId == document.localStoreID,
                                   matches.count == 1, let entry = matches.first, !entry.deleted, entry.kind == .file,
                                   NativeFileEntry.isVisiblePath(entry.path) else { throw Failure.changed }
                             installContainer(current, session: session, entry: entry, document: document)
@@ -130,6 +134,24 @@ final class NativeTabDestinationFactory {
         // Identity is deliberately independent of foreground, stack or visibility:
         // the container applies those checks to close/capture/validation itself.
         container.configureDocumentTabOwner(sourceOwnerID: owner, isCurrent: identity)
+        if showTabs != nil {
+            container.onShowDocumentTabs = { [weak self, weak current, weak container, weak session] in
+                guard let self = self, let current = current, let container = container, let session = session,
+                      self.reservation === current, current.ownerID == owner, current.installed,
+                      current.controller === container, current.session === session,
+                      !current.closing, !current.cleanupRequested else { return }
+                self.showTabs?(container)
+            }
+        }
+        if returnToNativePages != nil {
+            container.onReturnToNativePages = { [weak self, weak current, weak container, weak session] in
+                guard let self = self, let current = current, let container = container, let session = session,
+                      self.reservation === current, current.ownerID == owner, current.installed,
+                      current.controller === container, current.session === session,
+                      !current.closing, !current.cleanupRequested else { return }
+                self.returnToNativePages?(container)
+            }
+        }
         container.onDocumentValidated = { [weak self, weak current, weak container, weak session] validated in
             guard let self = self, let current = current, let container = container, let session = session,
                   self.reservation === current, current.ownerID == owner,
