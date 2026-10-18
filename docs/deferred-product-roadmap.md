@@ -116,6 +116,14 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+01:05UTC managed namedowner: records-store/dispatcher term_6307fc89-12c7-4bd1-a490-27eb41bc87ef
+task_2448039200d5/ctx_856b7fa4e164 isolatedmanaged-records-store owns NEWmodule/tests;
+wire term_cf5aebc1/ctx_3cacb97fdb34 isolatedmanaged-records-wire owns NEWwire.rs/tests
+unregistered. Existinghunks conditional oncontractreview. Rootreview confirmed
+existingledger/AAD fit, found host restore requires exactsame-record priorgeneration
+committedtombstone lookup, and managed_apply explicitrecord/generation target.
+Both sentlead27f071dac468, reviewfinishing boundedretryfairness/quota details.
+
 01:04UTC: native Dev10 exactcommand/private signingcontract use ACKed underuser
 phoneinstall extension; no provisioning/accountchanges, afterfocusedSimpass.
 ActualSimnoteopenPASS, tabclose/Home checks71219 pending; native stillowns slot.
