@@ -38,3 +38,27 @@ full TypeScript/diff checks. No warm Swift source is activated by this successor
 the native owner's `b46a2e3e` remains the separate phone19 build. Exact paired warm
 Swift composition/compilation and interaction verification follow in another
 isolated candidate after phone19's slot returns.
+
+## Canonical source and Dev19 delivery — 2026-10-18 04:33 UTC
+
+Canonical `3cfff3f7` integrates the reviewed native/NewNote source; `24c4ec40`
+integrates the approved JS reattestation composition. Root verified the complete
+source/test trees match isolated `8e438ca5`, with299 affected checks/fullTS passing.
+This source integration does not claim a combined-main native runtime pass.
+
+Simulator19 `b46a2e3e` passed corrected direct-create chrome, exact saved Rust
+file bytes, native Back and loaded-editor reopen. Root read
+`sim19-reopened-editor-ax.json`: exact `NewNote19 chrome proof`, Back/Show Tabs
+enabled. Simulator app/helper cleanup exit0; owned Simulator remains booted.
+Dev19 signing/install/launch succeeded on the physical iPhone and was left open.
+Root inspected `phone19-artifact.json`, install and launch JSON success outcomes;
+signature exit0, binary SHA256
+`0fe0a591608bc86d1311df9e6f507137af10336991321f51d4fa91d665afcaa0`.
+Physical-phone interaction and in-flight create recovery remain unproved.
+
+Separate warm candidate `ddbc83a7` composes reviewed helper, packets and native
+consumer atop `8e438ca5`. Independent exact composition review approved preserved
+NewNote callbacks/factory/chrome and warm barrier/ACK/history behavior; PBX includes
+both sources once. It remains isolated. Next iOS slot is granted after the managed
+bounded Rust checks return; paired compile and actual positive/rollback/lifecycle
+proof remain required. No two-live-editor swipe implementation is claimed.
