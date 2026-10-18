@@ -92,6 +92,11 @@ pub(super) fn prepare_metadata(
     let expected_texts = retained_texts(tx, graph.scope())?;
     let file_family = matches!(&incoming, AuthenticatedFamily::Files(_));
     let (candidate, text, new_text, overlay) = match incoming {
+        AuthenticatedFamily::Records(_) => {
+            return Err(StoreError::Corrupt(
+                "records must route before file/text materialization".into(),
+            ))
+        }
         AuthenticatedFamily::Files(incoming) => {
             let wire = prior.as_ref().map(|p| zorid_file_sync::WireRecord {
                 scope: graph.scope().clone(),

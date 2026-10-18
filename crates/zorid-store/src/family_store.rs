@@ -16,6 +16,7 @@ pub type FamilyScope = zorid_file_sync::Scope;
 pub enum FamilyPayloadKind {
     Text,
     Files,
+    Records,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -75,6 +76,7 @@ use zorid_crypto::{OpenedEnvelope, SystemEntropy, VaultKey};
 use zorid_sync_protocol::{DeviceId, Envelope, ExpectedContext, Header, RealmId, VaultId};
 
 pub(super) enum AuthenticatedFamily {
+    Records(super::managed_records::AuthenticatedRecords),
     Text(zorid_client_sync::v2::AuthenticatedText),
     Files(zorid_file_sync::v2::AuthenticatedPayload),
 }
@@ -88,7 +90,10 @@ pub(super) fn decode(opened: &OpenedEnvelope) -> Result<(EnvelopeMetadata, Authe
     }
     let routing: Routing = serde_json::from_slice(opened.plaintext())
         .map_err(|_| zorid_client_sync::SyncError::InvalidPayload)?;
-    if routing.format_version != 2 {
+    if !matches!(
+        (routing.family.as_str(), routing.format_version),
+        ("records", 1) | ("text", 2) | ("files", 2)
+    ) {
         return Err(zorid_client_sync::SyncError::UnsupportedFormat.into());
     }
     let header = opened.header();
@@ -98,6 +103,10 @@ pub(super) fn decode(opened: &OpenedEnvelope) -> Result<(EnvelopeMetadata, Authe
         update_id: header.update_id().clone(),
     };
     let (family, text_binding, capability) = match routing.family.as_str() {
+        "records" => {
+            let value = super::managed_records::AuthenticatedRecords::from_opened(opened)?;
+            (Family::Records, None, AuthenticatedFamily::Records(value))
+        }
         "text" => {
             let value = zorid_client_sync::v2::AuthenticatedText::from_opened(opened)?;
             let identity = value.identity();
@@ -121,7 +130,7 @@ pub(super) fn decode(opened: &OpenedEnvelope) -> Result<(EnvelopeMetadata, Authe
     let metadata = EnvelopeMetadata {
         key,
         family,
-        format_version: 2,
+        format_version: routing.format_version,
         payload_digest: zorid_file_sync::Sha256Digest::of(opened.plaintext()),
         payload_bytes: u32::try_from(opened.plaintext().len())
             .map_err(|_| zorid_client_sync::SyncError::TooLarge)?,
@@ -130,7 +139,7 @@ pub(super) fn decode(opened: &OpenedEnvelope) -> Result<(EnvelopeMetadata, Authe
                 zorid_file_sync::metadata::GraphRecord::from_authenticated(value)?
                     .summary_digest()?,
             ),
-            AuthenticatedFamily::Text(_) => None,
+            AuthenticatedFamily::Text(_) | AuthenticatedFamily::Records(_) => None,
         },
         text_binding,
     };
@@ -158,6 +167,7 @@ fn public_kind(family: Family) -> FamilyPayloadKind {
     match family {
         Family::Text => FamilyPayloadKind::Text,
         Family::Files => FamilyPayloadKind::Files,
+        Family::Records => FamilyPayloadKind::Records,
     }
 }
 impl Store {
@@ -460,7 +470,34 @@ impl Store {
             vault_id: opened.header().vault_id().clone(),
         };
         // Reject obsolete formats before even opening a write transaction.
-        decode(opened)?;
+        let (metadata, incoming) = decode(opened)?;
+        if let AuthenticatedFamily::Records(incoming) = incoming {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            require_scope(&tx, &scope.realm_id, &scope.vault_id)?;
+            family_ingress::check_delivery(&tx, &scope, delivery)?;
+            let (duplicate, _) = super::managed_records::receive_in_transaction(
+                &tx,
+                &incoming,
+                &metadata,
+                &opened.envelope().encode(),
+            )?;
+            if let Some(delivery) = delivery {
+                family_ledger::compare_cursor(&tx, Some(&delivery.expected), &delivery.next)?;
+            }
+            let cursor = family_ledger::cursor(&tx, &scope.realm_id, &scope.vault_id)?;
+            let result = FamilyReceiveCommit {
+                scope,
+                update_id: metadata.key.update_id,
+                duplicate,
+                changed_entry_ids: Vec::new(),
+                pending_prerequisites: super::managed_records::pending_count(&tx)?,
+                cursor,
+            };
+            tx.commit()?;
+            return Ok(result);
+        }
         let tx = self.connection.unchecked_transaction()?;
         require_scope(&tx, &scope.realm_id, &scope.vault_id)?;
         let current = blob_index::load_metadata(&tx, &scope)?

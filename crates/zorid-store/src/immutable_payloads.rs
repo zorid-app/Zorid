@@ -14,7 +14,7 @@ const MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
 const MAX_DIGEST_JSON_BYTES: usize = 256;
 
 pub(super) const SCHEMA: &[(&str, &str)] = &[
-    ("immutable_payloads", "CREATE TABLE immutable_payloads (realm_id TEXT NOT NULL,vault_id TEXT NOT NULL,update_id TEXT NOT NULL,family TEXT NOT NULL CHECK(family IN ('files','text')),payload_bytes INTEGER NOT NULL CHECK(payload_bytes BETWEEN 1 AND 1048576),payload_digest TEXT NOT NULL,file_summary_digest TEXT,descriptor TEXT,payload BLOB NOT NULL CHECK(length(payload)=payload_bytes),CHECK((family='files' AND file_summary_digest IS NOT NULL AND descriptor IS NOT NULL) OR (family='text' AND file_summary_digest IS NULL AND descriptor IS NULL)),PRIMARY KEY(realm_id,vault_id,update_id))"),
+    ("immutable_payloads", "CREATE TABLE immutable_payloads (realm_id TEXT NOT NULL,vault_id TEXT NOT NULL,update_id TEXT NOT NULL,family TEXT NOT NULL CHECK(family IN ('files','text','records')),payload_bytes INTEGER NOT NULL CHECK(payload_bytes BETWEEN 1 AND 1048576),payload_digest TEXT NOT NULL,file_summary_digest TEXT,descriptor TEXT,payload BLOB NOT NULL CHECK(length(payload)=payload_bytes),CHECK((family='files' AND file_summary_digest IS NOT NULL AND descriptor IS NOT NULL) OR (family IN ('text','records') AND file_summary_digest IS NULL AND descriptor IS NULL)),PRIMARY KEY(realm_id,vault_id,update_id))"),
     ("immutable_payloads_insert_only", "CREATE TRIGGER immutable_payloads_insert_only BEFORE INSERT ON immutable_payloads WHEN EXISTS(SELECT 1 FROM immutable_payloads WHERE realm_id=NEW.realm_id AND vault_id=NEW.vault_id AND update_id=NEW.update_id) BEGIN SELECT RAISE(ABORT,'immutable payload key is already retained'); END"),
     ("immutable_payloads_no_update", "CREATE TRIGGER immutable_payloads_no_update BEFORE UPDATE ON immutable_payloads BEGIN SELECT RAISE(ABORT,'immutable payload rows cannot be updated'); END"),
     ("immutable_payloads_no_delete", "CREATE TRIGGER immutable_payloads_no_delete BEFORE DELETE ON immutable_payloads BEGIN SELECT RAISE(ABORT,'immutable payload rows cannot be deleted'); END"),
@@ -39,6 +39,7 @@ fn family_name(family: Family) -> &'static str {
     match family {
         Family::Files => "files",
         Family::Text => "text",
+        Family::Records => "records",
     }
 }
 
@@ -48,7 +49,7 @@ pub(super) fn head(tx: &Connection, key: &EnvelopeKey) -> Result<Option<PayloadH
     let descriptor_bound = i64::try_from(MAX_GRAPH_RECORD_BYTES)
         .map_err(|_| corrupt("portable descriptor bound exceeds SQLite integer range"))?;
     let bounded: Option<bool> = tx.query_row(
-        "SELECT family IN ('files','text') AND payload_bytes BETWEEN 1 AND 1048576 AND length(payload)=payload_bytes AND length(CAST(payload_digest AS BLOB)) BETWEEN 1 AND 256 AND ((family='files' AND file_summary_digest IS NOT NULL AND length(CAST(file_summary_digest AS BLOB)) BETWEEN 1 AND 256 AND descriptor IS NOT NULL AND length(CAST(descriptor AS BLOB)) BETWEEN 1 AND ?4) OR (family='text' AND file_summary_digest IS NULL AND descriptor IS NULL)) FROM immutable_payloads WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3",
+        "SELECT family IN ('files','text','records') AND payload_bytes BETWEEN 1 AND 1048576 AND length(payload)=payload_bytes AND length(CAST(payload_digest AS BLOB)) BETWEEN 1 AND 256 AND ((family='files' AND file_summary_digest IS NOT NULL AND length(CAST(file_summary_digest AS BLOB)) BETWEEN 1 AND 256 AND descriptor IS NOT NULL AND length(CAST(descriptor AS BLOB)) BETWEEN 1 AND ?4) OR (family IN ('text','records') AND file_summary_digest IS NULL AND descriptor IS NULL)) FROM immutable_payloads WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3",
         params![key.realm_id.as_str(),key.vault_id.as_str(),key.update_id.as_str(),descriptor_bound], |r|r.get(0),
     ).optional()?;
     match bounded {
@@ -63,6 +64,7 @@ pub(super) fn head(tx: &Connection, key: &EnvelopeKey) -> Result<Option<PayloadH
     let family = match family.as_str() {
         "files" => Family::Files,
         "text" => Family::Text,
+        "records" => Family::Records,
         _ => return Err(corrupt("immutable payload family mismatch")),
     };
     let payload_bytes =
@@ -93,7 +95,7 @@ fn checked_descriptor(metadata: &EnvelopeMetadata, exact: &[u8]) -> Result<Optio
         return Err(corrupt("immutable payload body exceeds bound"));
     }
     metadata.check_payload(exact)?;
-    if metadata.family == Family::Text {
+    if matches!(metadata.family, Family::Text | Family::Records) {
         return Ok(None);
     }
     let (scope, id, record) = GraphRecord::from_authored_exact(exact)

@@ -61,6 +61,11 @@ mod family_observations;
 pub use family_materialization::{FamilyContentWitness, FamilyMaterialization, FamilyPublication};
 mod family_ledger;
 mod family_store;
+mod managed_records;
+pub use managed_records::{
+    ManagedChange, ManagedChangePage, ManagedCollection, ManagedCommit, ManagedExportPage,
+    ManagedRegistration, ManagedRetryPage, ManagedRevision, ManagedSnapshot, ManagedTarget,
+};
 mod file_state;
 pub use family_store::{
     FamilyAuthoredStatus, FamilyCreateMode, FamilyEnvelopeOrigin, FamilyEnvelopeStatus,
@@ -108,7 +113,7 @@ use zorid_core::{
     Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 pub const DEFAULT_STREAMING_LIMITS: StreamingLimits = StreamingLimits {
     max_active_stages: 8,
     max_stage_records: 4096,
@@ -142,6 +147,7 @@ fn schema_objects() -> Vec<(&'static str, &'static str)> {
         .chain(family_external_namespace::SCHEMA)
         .chain(immutable_payloads::SCHEMA)
         .chain(family_ledger::SCHEMA)
+        .chain(managed_records::SCHEMA)
         .chain(file_state::SCHEMA)
         .chain(blob_index::SCHEMA)
         .chain(blob_stage::SCHEMA)
@@ -445,6 +451,7 @@ impl Store {
                 .chain(family_external_namespace::SCHEMA)
                 .chain(immutable_payloads::SCHEMA)
                 .chain(family_ledger::SCHEMA)
+                .chain(managed_records::SCHEMA)
                 .chain(file_state::SCHEMA)
                 .chain(blob_index::SCHEMA)
                 .chain(blob_stage::SCHEMA)

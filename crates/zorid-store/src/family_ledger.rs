@@ -26,6 +26,7 @@ pub(super) struct EnvelopeKey {
 pub(super) enum Family {
     Text,
     Files,
+    Records,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -99,7 +100,7 @@ fn mismatch() -> StoreError {
 }
 impl EnvelopeMetadata {
     fn validate(&self) -> Result<()> {
-        if self.format_version != 2
+        if self.format_version != if self.family == Family::Records { 1 } else { 2 }
             || self.payload_bytes == 0
             || self.payload_bytes as usize > zorid_sync_protocol::MAX_PLAINTEXT_BYTES
             || (self.family == Family::Text) != self.text_binding.is_some()
@@ -127,6 +128,17 @@ impl EnvelopeMetadata {
             || self.payload_digest != Sha256Digest::of(payload)
         {
             return Err(corrupt("envelope payload/provenance mismatch"));
+        }
+        if self.family == Family::Records {
+            let records = zorid_records::wire::Payload::decode(payload)
+                .map_err(|_| corrupt("invalid records source plaintext"))?;
+            records
+                .check_context(
+                    self.key.realm_id.as_str(),
+                    self.key.vault_id.as_str(),
+                    self.key.update_id.as_str(),
+                )
+                .map_err(|_| corrupt("records plaintext identity differs from envelope"))?;
         }
         if self.family == Family::Files {
             let (scope, id, record) =
