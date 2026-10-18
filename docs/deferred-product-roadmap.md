@@ -77,6 +77,26 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Coordinator checkpoint (2026-10-18 04:14 UTC): NewNote18 frozen native candidate
+9cf7fe9f includes current main c233362a and byte-matches reviewed4e390d70 app/project
+source. Native owner holds the acknowledged iOS slot; Xcode25844 was observed
+live. Actual FAB/create/edit/save/reopen/interruption remains required. Separate
+paired warm-navigation review found source reattestation missing after rollback;
+see mobile-finite-navigation-source-results.md. Do not fold that unfinished code
+into NewNote18. Tasks corrected-identity actual4cbf now passes normal save/split;
+its stale check stopped on transient-alert visibility, not established data loss.
+Reviewed successor15ff377b checks retained exact draft/guidance and authoritative
+bytes, with the next actual pass serialized after native load.
+
+Next Tasks/Base Calendar contract c2760a2f is accepted for routine first-slice UX:
+shared Calendar canvas, linked WorkBlock membership from exact saved Rust Base
+selection, all-time inverse membership with honest unknown coverage, and durable
+create/link continuation. Managed lead prepares independent source-only review
+and named seam table; shared source grant follows that review/current Tasks gate.
+This desktop slice does not replace required generic file-date calendars. Browser
+joint2834c783 reports generated wasm32/real-WASM Node and77Node/fullTS success;
+normal product Worker/strictIDB/encrypted convergence proof remains unrun.
+
 Core repair delivery (2026-10-18 04:08 UTC): main209368fb preserves validated
 current.entryId during reconcileDurableWrite publication. Root isolated b0c80ab5
 adds direct cache/event identity regression: oldsource9/10 fails, fix10/10 passes;
