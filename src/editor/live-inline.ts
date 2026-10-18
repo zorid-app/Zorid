@@ -48,6 +48,8 @@ export interface LiveInlineOptions extends RenderExclusionOptions {
   /** Workspace owns navigation/disposition. The original event preserves
    * Ctrl/Meta/Shift and middle-button information; this module opens no URL. */
   open?: (target: string, kind: 'wiki' | 'markdown', event: MouseEvent) => void;
+  /** Native short-tap admission, before editable touchend defaults. */
+  nativeTouch?: { isCurrent: () => boolean };
   /** Called for wiki targets, with source path captured by the workspace.
    * Omit when resolution is unknown; missing files are still navigable. */
   isUnresolved?: (target: string, kind: 'wiki' | 'markdown') => boolean;
@@ -254,10 +256,13 @@ function decorate(view: EditorView, options: LiveInlineOptions): { decorations: 
  * Markers are decorations, never document edits or a second editable surface.
  */
 export function liveInline(options: LiveInlineOptions = {}): Extension {
-  const plugin = ViewPlugin.fromClass(class {
+  class InlineView {
     decorations: DecorationSet = Decoration.none;
     atomic: DecorationSet = Decoration.none;
     private pointer = false;
+    private nativeGesture?: {id:number; label:HTMLElement; x:number; y:number; time:number;
+      doc:EditorState['doc']; selection:EditorState['selection']; canceled:boolean};
+    private nativeClick?: {label:HTMLElement;x:number;y:number;time:number;accepted:boolean};
     private settling = false;
     private composition = false;
     private destroyed = false;
@@ -269,6 +274,80 @@ export function liveInline(options: LiveInlineOptions = {}): Extension {
       const element = node.nodeType === 1 ? node as Element : node.parentElement;
       return element?.closest('.cm-editor') === this.view.dom;
     }
+    private nativeCurrent(): boolean {
+      try {
+        return !this.destroyed && !!options.nativeTouch?.isCurrent() && this.view.dom.isConnected
+          && !this.view.dom.closest('[inert]') && this.view.dom.ownerDocument.visibilityState !== 'hidden'
+          && !this.composition && !this.view.composing && !this.view.compositionStarted
+          && !this.view.state.readOnly && this.view.state.facet(EditorView.editable)
+          && this.view.state.selection.ranges.every(range => range.empty)
+          && this.view.dom.ownerDocument.getSelection()?.isCollapsed !== false
+          && !searchPanelOpen(this.view.state) && !this.view.dom.querySelector('.cm-tooltip-autocomplete')
+          && !this.view.dom.ownerDocument.querySelector('.modal-overlay,[aria-modal="true"],[role="menu"]');
+      } catch { return false; }
+    }
+    private renderedLabel(target:EventTarget|null): HTMLElement|null {
+      if (!this.owns(target)) return null;
+      const node=target as Node, element=node.nodeType===1?node as Element:node.parentElement;
+      if (element?.closest('button,input,textarea,select,audio,video,iframe,.interactive-child,.cm-live-embed,[contenteditable="false"]')) return null;
+      return element?.closest<HTMLElement>('.cm-live-inline-link[data-live-inline-rendered="true"][role="link"]')??null;
+    }
+    private nativeStart = (event:TouchEvent): void => {
+      if (this.nativeGesture) { this.cancelNative(); return; }
+      this.nativeClick=undefined;
+      const point=event.touches[0],label=this.renderedLabel(event.target);
+      if (!point || !label) return;
+      this.nativeGesture={id:point.identifier,label,x:point.clientX,y:point.clientY,time:Date.now(),
+        doc:this.view.state.doc,selection:this.view.state.selection,canceled:event.touches.length!==1 || event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || !options.open || !this.nativeCurrent()};
+      this.pointer=true; this.settling=false; clearTimeout(this.timer);
+      // Tracking must preserve native pan, long-press and selection defaults.
+    };
+    private cancelNative = (event?:Event): void => {
+      if (!this.nativeGesture) return;
+      this.nativeGesture.canceled=true;
+      if (['touchcancel','blur','dragstart'].includes(event?.type??'')) this.endNative(false);
+    };
+    private nativeMove = (event:TouchEvent): void => {
+      const gesture=this.nativeGesture,point=Array.from(event.touches).find(point=>point.identifier===gesture?.id);
+      if (gesture && (event.touches.length!==1 || !point || Math.hypot(point.clientX-gesture.x,point.clientY-gesture.y)>8)) this.cancelNative();
+    };
+    private endNative(accepted:boolean, x=this.nativeGesture?.x??0, y=this.nativeGesture?.y??0): void {
+      const gesture=this.nativeGesture;
+      this.nativeGesture=undefined;
+      if (gesture) this.nativeClick={label:gesture.label,x,y,time:Date.now(),accepted};
+      this.release();
+    }
+    endTouch(event:TouchEvent): boolean {
+      const gesture=this.nativeGesture;
+      if (!gesture) return false;
+      const point=Array.from(event.changedTouches).find(point=>point.identifier===gesture.id);
+      if (!point || event.touches.length) { this.cancelNative(); return false; }
+      const hit=this.view.dom.ownerDocument.elementFromPoint?.(point.clientX,point.clientY);
+      const label=this.renderedLabel(hit??null);
+      const mouse=new this.view.dom.ownerDocument.defaultView!.MouseEvent('click',{
+        button:0,clientX:point.clientX,clientY:point.clientY,detail:1,cancelable:true,
+      });
+      const valid=!gesture.canceled && !event.defaultPrevented && event.cancelable
+        && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey && this.nativeCurrent()
+        && Date.now()-gesture.time<=500 && Math.hypot(point.clientX-gesture.x,point.clientY-gesture.y)<=8
+        && label===gesture.label && gesture.label.isConnected && gesture.doc===this.view.state.doc
+        && gesture.selection.eq(this.view.state.selection);
+      const link=valid?this.followTarget(mouse,false,label):null;
+      this.endNative(!!link,point.clientX,point.clientY);
+      if (!link) return false;
+      // Only a recognized short tap consumes touchend, before editable caret
+      // defaults. Share click validation, but never dispatch a synthetic click.
+      event.preventDefault();
+      options.open!(link.target,link.kind,mouse);
+      return true;
+    }
+    private nativeFinish = (event:TouchEvent): void => {
+      if (event.touches.length) return;
+      const gesture=this.nativeGesture;
+      // Clean up even if another handler consumed touchend before CM saw it.
+      queueMicrotask(()=>{if (gesture && this.nativeGesture===gesture) this.endNative(false);});
+    };
+    private nativeKey = (): void => { this.nativeGesture=undefined; this.nativeClick=undefined; this.release(); };
     private down = (event: MouseEvent): void => {
       if (event.button !== 0 || !this.owns(event.target)) return;
       this.pointer = true; this.settling = false; clearTimeout(this.timer);
@@ -295,6 +374,18 @@ export function liveInline(options: LiveInlineOptions = {}): Extension {
     }
     constructor(view: EditorView) {
       this.view = view;
+      if (options.nativeTouch) {
+        const document=view.dom.ownerDocument;
+        document.addEventListener('touchstart',this.nativeStart,{capture:true,passive:true});
+        document.addEventListener('touchmove',this.nativeMove,{capture:true,passive:true});
+        document.addEventListener('touchend',this.nativeFinish,{capture:true,passive:true});
+        document.addEventListener('touchcancel',this.cancelNative,true);
+        document.addEventListener('scroll',this.cancelNative,true);
+        document.addEventListener('dragstart',this.cancelNative,true);
+        document.addEventListener('contextmenu',this.cancelNative,true);
+        document.addEventListener('keydown',this.nativeKey,true);
+        document.defaultView?.addEventListener('blur',this.cancelNative);
+      }
       if (syntaxTreeAvailable(view.state, view.viewport.to)) Object.assign(this, decorate(view, options));
       view.scrollDOM.addEventListener('mousedown', this.down, true);
       view.dom.ownerDocument.addEventListener('mouseup', this.release, true);
@@ -327,30 +418,59 @@ export function liveInline(options: LiveInlineOptions = {}): Extension {
       // A notification must not consume native hover/selection events.
       return false;
     }
-    follow(event: MouseEvent, middle = false): boolean {
-      if (!options.open || event.defaultPrevented || !this.owns(event.target) || (middle ? event.button !== 1 : event.button !== 0)) return false;
-      const target = event.target as Node, element = target.nodeType === 1 ? target as Element : target.parentElement;
-      if (!element || element.closest('button,input,textarea,select,audio,video,iframe,.interactive-child,.cm-live-embed,[contenteditable="false"]')) return false;
+    private followTarget(event:MouseEvent,middle=false,eventTarget:EventTarget|null=event.target): LinkSpan|null {
+      if (!options.open || event.defaultPrevented || !this.owns(eventTarget) || (middle ? event.button !== 1 : event.button !== 0)) return null;
+      const target = eventTarget as Node, element = target.nodeType === 1 ? target as Element : target.parentElement;
+      if (!element || element.closest('button,input,textarea,select,audio,video,iframe,.interactive-child,.cm-live-embed,[contenteditable="false"]')) return null;
       const modified = event.ctrlKey || event.metaKey || middle;
       const label = element.closest<HTMLElement>('.cm-live-inline-link,.cm-live-inline-unsafe');
-      if (label?.classList.contains('cm-live-inline-unsafe')) return false;
-      if (!modified && (event.altKey || event.shiftKey || label?.dataset.liveInlineRendered !== 'true')) return false;
+      if (label?.classList.contains('cm-live-inline-unsafe')) return null;
+      if (!modified && (event.altKey || event.shiftKey || label?.dataset.liveInlineRendered !== 'true')) return null;
       const selection = this.view.dom.ownerDocument.getSelection();
       if (!modified && selection && !selection.isCollapsed &&
-        (label?.contains(selection.anchorNode) || label?.contains(selection.focusNode))) return false;
+        (label?.contains(selection.anchorNode) || label?.contains(selection.focusNode))) return null;
       let position: number | null = null;
       // Rendered DOM mapping stays valid during the pointer freeze, even if
       // marks moved through a concurrent transaction. Never trust stored URLs.
       try { if (label) position = this.view.posAtDOM(label); } catch { /* Detached DOM falls back to measured coordinates. */ }
       position ??= this.view.posAtCoords({ x: event.clientX, y: event.clientY });
-      if (position === null) return false;
+      if (position === null) return null;
       const link = linkAt(this.view, position);
-      if (!link?.safe) return false;
-      if (!modified && this.view.state.selection.ranges.some(range => !range.empty && range.from <= link.to && range.to >= link.from)) return false;
-      event.preventDefault(); options.open(link.target, link.kind, event); return true;
+      if (!link?.safe) return null;
+      if (!modified && this.view.state.selection.ranges.some(range => !range.empty && range.from <= link.to && range.to >= link.from)) return null;
+      return link;
+    }
+    follow(event: MouseEvent, middle = false): boolean {
+      if (options.nativeTouch && !middle && event.button===0 && this.owns(event.target)) {
+        const click=this.nativeClick;
+        this.nativeClick=undefined;
+        if (click && event.detail>0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey
+          && Date.now()-click.time<=1000 && Math.hypot(event.clientX-click.x,event.clientY-click.y)<=8
+          && click.label===this.renderedLabel(event.target)) {
+          if (click.accepted) event.preventDefault();
+          return click.accepted; // Rejected gestures keep native defaults, not navigation.
+        }
+        if (!this.nativeCurrent()) return false;
+      }
+      const link=this.followTarget(event,middle);
+      if (!link) return false;
+      event.preventDefault(); options.open!(link.target,link.kind,event); return true;
     }
     destroy(): void {
       this.destroyed = true; clearTimeout(this.timer);
+      if (options.nativeTouch) {
+        const document=this.view.dom.ownerDocument;
+        document.removeEventListener('touchstart',this.nativeStart,true);
+        document.removeEventListener('touchmove',this.nativeMove,true);
+        document.removeEventListener('touchend',this.nativeFinish,true);
+        document.removeEventListener('touchcancel',this.cancelNative,true);
+        document.removeEventListener('scroll',this.cancelNative,true);
+        document.removeEventListener('dragstart',this.cancelNative,true);
+        document.removeEventListener('contextmenu',this.cancelNative,true);
+        document.removeEventListener('keydown',this.nativeKey,true);
+        document.defaultView?.removeEventListener('blur',this.cancelNative);
+      }
+      this.nativeGesture=undefined; this.nativeClick=undefined;
       this.view.scrollDOM.removeEventListener('mousedown', this.down, true);
       this.view.dom.ownerDocument.removeEventListener('mouseup', this.release, true);
       this.view.dom.ownerDocument.removeEventListener('dragend', this.release, true);
@@ -358,9 +478,10 @@ export function liveInline(options: LiveInlineOptions = {}): Extension {
       this.view.contentDOM.removeEventListener('compositionstart', this.compose, true);
       this.view.contentDOM.removeEventListener('compositionend', this.compose, true);
     }
-  }, { decorations: value => value.decorations,
+  }
+  const plugin = ViewPlugin.fromClass(InlineView, { decorations: value => value.decorations,
     provide: extension => EditorView.atomicRanges.of(view => view.plugin(extension)?.atomic ?? Decoration.none),
-    eventHandlers: { click(event) { return this.follow(event); }, mousedown(event) { return event.button === 1 && this.follow(event, true); },
+    eventHandlers: { ...(options.nativeTouch ? {touchend(this:InlineView,event:TouchEvent){return this.endTouch(event);}} : {}), click(event) { return this.follow(event); }, mousedown(event) { return event.button === 1 && this.follow(event, true); },
       mouseover(event) { return this.hover(event); } },
   });
   return plugin;

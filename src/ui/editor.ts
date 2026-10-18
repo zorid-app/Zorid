@@ -120,7 +120,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
         liveTables(options.open, owner => [wiki, editorCommandHotkeys(options.hotkeys, owner), nativeUpdates, nativeCaret], renderedCalloutRanges), liveTasks({excludes: renderedCalloutRanges}), liveLists({excludes: renderedCalloutRanges}),
         liveMath({excludes: renderedCalloutRanges}), liveFences({excludes: renderedCalloutRanges}),
         ...(options.renderEmbed ? [liveEmbeds(options.renderEmbed, {excludes: renderedCalloutRanges})] : []),
-        liveInline({open: options.open,isUnresolved: options.isUnresolved,onHover: options.onLinkHover,excludes: renderedCalloutRanges})] : []),
+        liveInline({nativeTouch: options.onNativeEditorState ? {isCurrent: options.isCurrent ?? (() => true)} : undefined,open: options.open,isUnresolved: options.isUnresolved,onHover: options.onLinkHover,excludes: renderedCalloutRanges})] : []),
     ]}),
   });
   if (options.mode === 'live' && bodyStart(view.state)) view.dispatch({ selection: { anchor: bodyStart(view.state) } });

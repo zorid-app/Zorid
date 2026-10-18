@@ -433,3 +433,114 @@ test('an incomplete parser maps existing decorations until the viewport is parse
   assert.deepEqual(inlineDecorations(view), mapped);
   assert.equal(view.state.doc.toString(), 'prefix\n\n' + source);
 });
+
+
+const nativeSource='[web](https://example.com) [[Note|Alias]]\nplain';
+function nativeLinkFixture(t:TestContext, current=()=>true) {
+  const f=setup(t,nativeSource,{nativeTouch:{isCurrent:current}});
+  f.cursor(nativeSource.length);f.view.focus();
+  const label=()=>f.view.contentDOM.querySelector<HTMLElement>('.cm-live-inline-link')!;
+  Object.defineProperty(f.dom.window.document,'elementFromPoint',{configurable:true,value:()=>label()});
+  return {...f,label};
+}
+function nativeTouch(f:ReturnType<typeof setup>,target:EventTarget,type:string,points=[{identifier:1,clientX:10,clientY:10}],active=type==='touchend'||type==='touchcancel'?[]:points,cancelable=true,modifiers:Partial<TouchEvent>={}) {
+ const event=new f.dom.window.Event(type,{bubbles:true,cancelable});
+ Object.defineProperties(event,{touches:{value:active},targetTouches:{value:active},changedTouches:{value:points}});
+ for(const [key,value]of Object.entries(modifiers))Object.defineProperty(event,key,{value});
+ target.dispatchEvent(event);return event;
+}
+function compatibilityClick(f:ReturnType<typeof setup>,target:Element) {return f.click(target,{detail:1,clientX:10,clientY:10});}
+
+test('native short touchend consumes caret default and opens once with fresh validation',t=>{
+ const f=nativeLinkFixture(t),selection=f.view.state.selection,doc=f.view.state.doc,before=f.transactions.length;
+ assert.equal(nativeTouch(f,f.label(),'touchstart').defaultPrevented,false,'start preserves pan/longpress');
+ assert.equal(f.opened.length,0);
+ assert.ok(nativeTouch(f,f.label(),'touchend').defaultPrevented);
+ assert.deepEqual(f.opened.map(x=>x.target),['https://example.com']);
+ assert.equal((f.view as unknown as {inputState:{touchActive:boolean}}).inputState.touchActive,false,'CM touch observer must settle before admission');
+ assert.ok(compatibilityClick(f,f.label()).defaultPrevented);assert.equal(f.opened.length,1);
+ assert.ok(f.view.state.selection.eq(selection));assert.equal(f.view.state.doc,doc);
+ assert.equal(f.transactions.slice(before).some(tx=>tx.selection),false,'no selection rewrite/restore');
+});
+for(const reason of ['drag','scroll','longpress','contextmenu','cancel','multitouch','owner','document','selection','modal','composition','noncancelable','endOutside'] as const)
+ test(`native ${reason} preserves touch defaults and rejects matching navigation`,t=>{
+  let current=true,now=100;const f=nativeLinkFixture(t,()=>current);t.mock.method(Date,'now',()=>now);
+  assert.equal(nativeTouch(f,f.label(),'touchstart').defaultPrevented,false);
+  if(reason==='drag')assert.equal(nativeTouch(f,f.label(),'touchmove',[{identifier:1,clientX:30,clientY:10}]).defaultPrevented,false);
+  if(reason==='scroll')document.dispatchEvent(new f.dom.window.Event('scroll'));
+  if(reason==='longpress')now+=600;
+  if(reason==='contextmenu')assert.equal(f.label().dispatchEvent(new f.dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true})),true);
+  if(reason==='cancel')nativeTouch(f,f.label(),'touchcancel');
+  if(reason==='multitouch')nativeTouch(f,f.label(),'touchstart',[{identifier:1,clientX:10,clientY:10},{identifier:2,clientX:20,clientY:20}]);
+  if(reason==='owner')current=false;
+  if(reason==='document')f.view.dispatch({changes:{from:nativeSource.length,insert:'!'}});
+  if(reason==='selection')f.view.dispatch({selection:{anchor:nativeSource.length-2,head:nativeSource.length}});
+  if(reason==='modal'){const modal=document.createElement('div');modal.setAttribute('aria-modal','true');document.body.append(modal);}
+  if(reason==='composition')f.view.contentDOM.dispatchEvent(new f.dom.window.CompositionEvent('compositionstart',{bubbles:true}));
+  if(reason==='endOutside')Object.defineProperty(document,'elementFromPoint',{configurable:true,value:()=>document.body});
+  const selection=f.view.state.selection;
+  assert.equal(nativeTouch(f,f.label(),'touchend',undefined,undefined,reason!=='noncancelable').defaultPrevented,false);
+  assert.equal(compatibilityClick(f,f.label()).defaultPrevented,false,'rejected gesture is not consumed');
+  assert.deepEqual(f.opened,[]);assert.ok(f.view.state.selection.eq(selection));
+ });
+
+test('native rejected start cannot reacquire owner at touchend or compatibility click',t=>{
+ let current=false;const f=nativeLinkFixture(t,()=>current);
+ nativeTouch(f,f.label(),'touchstart');current=true;
+ assert.equal(nativeTouch(f,f.label(),'touchend').defaultPrevented,false);
+ compatibilityClick(f,f.label());assert.deepEqual(f.opened,[]);
+});
+
+test('native noncollapsed selection and revealed source preserve start/end defaults',async t=>{
+ const f=nativeLinkFixture(t);
+ f.view.dispatch({selection:{anchor:nativeSource.length-2,head:nativeSource.length}});
+ nativeTouch(f,f.label(),'touchstart');assert.equal(nativeTouch(f,f.label(),'touchend').defaultPrevented,false);assert.deepEqual(f.opened,[]);
+ await new Promise(resolve=>setTimeout(resolve,80));f.cursor(4);assert.equal(f.label().dataset.liveInlineRendered,'false');
+ nativeTouch(f,f.label(),'touchstart');assert.equal(nativeTouch(f,f.label(),'touchend').defaultPrevented,false);assert.deepEqual(f.opened,[]);
+});
+
+test('desktop rendered touch stays default and follows only real click',t=>{
+ const f=setup(t,nativeSource),label=f.view.contentDOM.querySelector('.cm-live-inline-link')!;
+ assert.equal(nativeTouch(f,label,'touchstart').defaultPrevented,false);
+ assert.equal(nativeTouch(f,label,'touchend').defaultPrevented,false);assert.equal(f.opened.length,0);
+ f.click(label);assert.equal(f.opened.length,1);
+});
+
+test('native compatibility fence is bounded and never swallows keyboard/AT click',t=>{
+ let now=100;const f=nativeLinkFixture(t);t.mock.method(Date,'now',()=>now);
+ nativeTouch(f,f.label(),'touchstart');nativeTouch(f,f.label(),'touchcancel');
+ f.click(f.label(),{detail:0});assert.equal(f.opened.length,1,'AT click remains available');
+ nativeTouch(f,f.label(),'touchstart');nativeTouch(f,f.label(),'touchcancel');now+=1100;
+ compatibilityClick(f,f.label());assert.equal(f.opened.length,2,'expired witness cannot consume a new activation');
+});
+
+test('native cancel releases rendering freeze and fresh tap remains usable',async t=>{
+ const f=nativeLinkFixture(t);nativeTouch(f,f.label(),'touchstart');nativeTouch(f,f.label(),'touchcancel');
+ f.cursor(4);await new Promise(resolve=>setTimeout(resolve,80));assert.equal(f.label().dataset.liveInlineRendered,'false');
+ f.cursor(nativeSource.length);nativeTouch(f,f.label(),'touchstart');nativeTouch(f,f.label(),'touchend');assert.equal(f.opened.length,1);
+});
+
+
+test('native initial multitouch cannot become a fresh link tap after fingers leave',t=>{
+ const f=nativeLinkFixture(t),points=[{identifier:1,clientX:10,clientY:10},{identifier:2,clientX:20,clientY:20}];
+ nativeTouch(f,f.label(),'touchstart',points);
+ assert.equal(nativeTouch(f,f.label(),'touchend').defaultPrevented,false);
+ compatibilityClick(f,f.label());assert.deepEqual(f.opened,[]);
+});
+
+test('native unsafe rendered link never intercepts touch defaults or opens',t=>{
+ const f=setup(t,'[unsafe](javascript:alert(1))\nplain',{nativeTouch:{isCurrent:()=>true}});
+ const label=f.view.contentDOM.querySelector<HTMLElement>('.cm-live-inline-unsafe')!;
+ assert.ok(label);assert.equal(nativeTouch(f,label,'touchstart').defaultPrevented,false);
+ assert.equal(nativeTouch(f,label,'touchend').defaultPrevented,false);f.click(label);assert.deepEqual(f.opened,[]);
+});
+
+
+for(const modifier of ['ctrlKey','metaKey','shiftKey','altKey'] as const)
+ for(const phase of ['touchstart','touchend'] as const)test(`native ${modifier} at ${phase} preserves platform defaults`,t=>{
+  const f=nativeLinkFixture(t);
+  const start=nativeTouch(f,f.label(),'touchstart',undefined,undefined,true,phase==='touchstart'?{[modifier]:true}:{});
+  const end=nativeTouch(f,f.label(),'touchend',undefined,undefined,true,phase==='touchend'?{[modifier]:true}:{});
+  assert.equal(start.defaultPrevented,false);assert.equal(end.defaultPrevented,false);
+  compatibilityClick(f,f.label());assert.deepEqual(f.opened,[]);
+ });

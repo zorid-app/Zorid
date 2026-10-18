@@ -150,3 +150,15 @@ for(const reason of ['drag','cancel'] as const)test(`keyboard resize cannot revi
   f.event(f.viewport,'resize');f.settle();assert.deepEqual(f.calls,[]);
   f.pointer(f.view.contentDOM,'pointerup',30,30);f.event(f.win,'resize');f.settle();assert.deepEqual(f.calls,[]);
 });
+
+
+test('rendered link role span suppresses native caret reveal but source span retains caret intent',t=>{
+ const f=setup(t),link=document.createElement('span');
+ link.className='cm-live-inline-link';link.setAttribute('role','link');link.dataset.liveInlineRendered='true';
+ f.view.contentDOM.append(link);
+ f.pointer(link,'pointerdown');f.cursor(12);f.pointer(link,'pointerup');f.event(f.win,'resize');f.settle();
+ assert.deepEqual(f.calls,[]);
+ const source=document.createElement('span');source.className=link.className;source.setAttribute('role','link');source.dataset.liveInlineRendered='false';f.view.contentDOM.append(source);
+ f.pointer(source,'pointerdown');f.cursor(9);f.pointer(f.view.contentDOM,'pointerup');f.settle();
+ assert.equal(f.calls.at(-1)?.head,9);
+});

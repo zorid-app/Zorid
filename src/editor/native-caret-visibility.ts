@@ -55,7 +55,7 @@ export function nativeCaretVisibility(isCurrent?:()=>boolean) {
       if(this.pointer||event.isPrimary===false){this.cancelGesture();return;}
       this.cancel();
       const target=event.target as HTMLElement|null;
-      const control=target?.closest?.('a,button,input,textarea,select,audio,video,[contenteditable="false"],.interactive-child');
+      const control=target?.closest?.('a,.cm-live-inline-link[data-live-inline-rendered="true"][role="link"],button,input,textarea,select,audio,video,[contenteditable="false"],.interactive-child');
       const body=target?.closest?.('.cm-content')===this.view.contentDOM&&(!control||!this.view.contentDOM.contains(control));
       this.manual=!body||event.button!==0||event.defaultPrevented;
       this.pointer=this.manual?undefined:{id:event.pointerId??0,x:event.clientX,y:event.clientY,moved:false,wanted:false};
