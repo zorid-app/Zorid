@@ -77,8 +77,19 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Recovery helper checkpoint (2026-10-18 05:23 UTC): root composition `9acab0ad`
+exactly matches independently approved6c80a893+bcc02aa0. Retained9/9 focused
+checks cover completed inventory owner/client/vault retirement with no extra
+body reads. It is a bounded read-only metadata/passive-preview helper, not a
+Workspace recovery activation. See mobile-note-recovery-integration.md.
+TS371 is actively implementing the paired Workspace consumer; native lead owns
+physical retained-host/Pages/PBX composition. Changed command-ID payloads must
+be admission-dropped without emitting a stale receipt that could settle the
+original native request; only exact duplicates coalesce. No wire change needed.
+
+
 Browser delivery checkpoint (2026-10-18 05:20 UTC): canonical `2972911c`
-integrates the root browser candidate `46e7360e` combines the reviewed33-file browser WorkBlocks implementation
+integrates the root browser candidate `46e7360e`, which combines the reviewed33-file browser WorkBlocks implementation
 with canonical `2120024d`. Its actual current-input WASM build and full TypeScript
 check both exit0. Fresh Chrome/IndexedDB/WASM run passes12 selected groups with
 443 strict transactions,43 atomicity snapshots and10 causal ordering pairs;
@@ -94,7 +105,8 @@ review; native Calendar query foundation at `aab1d5c8` retains explicitly split
 native/stdio results; passive actual CodeMirror host at `2120024d` passes7 component
 cases. These are source/component foundations, not activated retained WebKit
 navigation. TS371 owns optional bridge/recovery/Workspace composition; bridge
-changed-payload reuse and completed recovery-page scope checks need narrow fixes.
+changed-payload reuse needs its final correction; the recovery helper scope fix
+is accepted separately above.
 Managed lead owns the next reviewed Electron Calendar retry, root starts no heavy
 job concurrently. The original UI attempts failed driver selectors; no full
 Calendar GUI case is accepted from those attempts. Dev19 remains the phone build.
