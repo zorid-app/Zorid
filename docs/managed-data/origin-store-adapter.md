@@ -323,3 +323,63 @@ Checks so far: bounded rustfmt parsing/formatting, git diff --check and manifest
 feature-edge source inspection only. Compiler/tests/apps remain unrun pending
 coordinator load release. Main integration, native/WASM/IDB/encrypted/product
 cutover and parity remain separate required gates.
+
+## Actual focused SQLite validation — 2026-10-18
+
+Exact frozen source: `6078c333d9c6838c07cbfbedaa3951d7df483245`.
+HEAD/source/docs remained unchanged throughout compilation and execution. Official
+`rustc 1.95.0 (59807616e 2026-04-14)` and cargo/rustdoc came from
+`/Users/ctk/Projects/Zorid/tmp/shared-rust-toolchain/toolchains/stable-aarch64-apple-darwin/bin`.
+Every command used `--offline --locked`, `CARGO_BUILD_JOBS=1`,
+`CARGO_INCREMENTAL=0`,
+`CARGO_TARGET_DIR=/Users/ctk/Projects/Zorid/target/stage4-verified` and one test
+thread. Coordinator msg_9bbc60e2bfc4 authorized exactly this bounded turn.
+
+All five commands exited0, **18 total tests passed**:
+
+| Scope / exact arguments after `cargo test --offline --locked -p zorid-store` | Result | Log SHA256 |
+| --- | --- | --- |
+| `--test managed_intents -- --test-threads=1` | 11/11; build16.96s/tests0.97s | `2410dedc3c1f8ba5ffe1a576809dbe78110201445ba0f71d3c1ca40263ad74b5` |
+| `--test checkpoints reserved_managed_namespace_is_denied_while_ordinary_operation_ids_stay_valid -- --exact --test-threads=1` | 1/1 | `0d1061c277cf87790d93edf87f0f6dc3607b6ea2a9f3d90598b25b98bb4cda0b` |
+| `--test checkpoints only_current_exact_retry_is_successful_and_tombstones_retain_fences -- --exact --test-threads=1` | 1/1 | `4035748e6602a92fa6d102860d34f59f1c1917793c0374f1d57389ee12c4bce5` |
+| `--test checkpoints scope_cursor_and_input_bounds_fail_without_mutation -- --exact --test-threads=1` | 1/1 | `1939140558334625ecaf30a0b123950b1df398d007f127fac563e48d8fa66947` |
+| `--features intent-test-fixtures --lib managed_records::origin_sqlite_fixtures:: -- --test-threads=1` | 4/4; build11.69s/tests0.31s;96 unrelated filtered | `b5e6bdb889a9141ef3146eabe15ce41a4bf495603038387075665d2675ab7167` |
+
+Persistent raw logs and per-command JSON receipts:
+`/Users/ctk/orca/artifacts/zorid-origin-store-20261018/task_b677f7629e9b/`.
+JSON retains full commands, exact head/environment, durations and exit codes;
+first receipt includes source-file hashes and official compiler identity.
+`binary-sha256.json` retains actual binaries:
+
+- `managed_intents-bb31664929a24c82`:
+  `aecd03cd2e4565f410519739dc6ddc4ea50131212a4adefadd2fb1b5764b4713`
+- `checkpoints-7d8efda900136a79`:
+  `5569a26dd4f8ef98de1b0203be801b85a2b598d64a6215b91514ddf765c5a1a3`
+- `zorid_store-572fc49b61647e1f`:
+  `2ad250ae1fdeb2cacdb42912a035fc2f55182d9d39642d3c424ad2e90ee6d15b`
+
+Negative paths executed within real SQLite tests include precommit SQL abort,
+wrong ref/head/Store/receipt, corrupted receipt and foreign retirement predecessor,
+old tuple rejection,32-live and4096-retained-key rejection, origin mismatch after
+optional-default upgrade and busy writer exclusion in both apply/retire orders.
+The separate postcommit upgrade test returns the original receipt without
+new defaults or authored echo.32 upgraded nojournal intents all reject then
+explicitly retire, freeing capacity without identity reuse. This closes those
+isolated SQLite gates; request/live-byte cap boundary execution remains unproved,
+and mathematical domination replaces no runtime claim for the metadata ceiling.
+
+Independent reviewer ctx_4ef93249788f source-approved exact6078c333 with nine-file
+witness `884358f26073b68ccb2440053893fd7c954b824c566698b452daf2e524a17c95`;
+reviewer did not run tests. Source inspection of latest canonical2972911c native/
+WASM manifests finds neither fixture feature request; workspace resolver2 and
+only explicit Store forwarding remain. Release fixture exclusion is a reviewed
+compile guard, **not** an executed negative release build. Default native/WASM
+builds, broad existing managed/file-sync suites and product apps were not run.
+
+Final cargo PID12830 exited; coordinator received load-return checkpoint
+msg_509a9e7fab5a immediately. No compiler or test app remains from this turn.
+Only the owned report changes after tested source freeze. Root alone integrates
+these coherent commits after its review; no main checkout was mutated.
+Native/browser ordinary admission, session/lease enforcement, semantic caller
+recovery before tag derivation, no-old-apply-bypass cutover, generatedWASM/strictIDB,
+encrypted convergence and rendered product/native/mobile remain separate gates.
