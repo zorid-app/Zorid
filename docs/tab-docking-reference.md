@@ -12,7 +12,7 @@ Pinned artifacts are outside this repository, under `/private/tmp/zorid-referenc
 | `app.css` | `866e50ac84dd8ad2775e0047ebd3ec5bd03e5af722aff259e6c4ea3cec42d7ba` |
 | `main.js` | `5d90e3738f7db8fb8ea00d01556d71310fd557c4a3c785601274c2bb875a2cba` |
 
-Offsets below are zero-based UTF-8 byte offsets in these exact artifacts. Existing REA E3 evidence `ev_a023c82af045a4b5acedab1eab958db521c3828491a6320c1f7ee85152573b37` is a partial renderer analysis: one parsed JavaScript file, 195 factories, with a partial semantic graph. These additional bounded inspections establish local behavior, not complete call-graph coverage. See `docs/source-audit.md`. No recovered implementation or bulk proprietary CSS was copied into project source.
+Offsets below are zero-based UTF-8 byte offsets in these exact artifacts. Existing REA E3 evidence `ev_a023c82af045a4b5acedab1eab958db521c3828491a6320c1f7ee85152573b37` is a partial renderer analysis: one parsed JavaScript file, 195 factories, with a partial semantic graph. These additional bounded inspections establish local behavior, not complete call-graph coverage. See `docs/history/source-audit.md`. No recovered implementation or bulk proprietary CSS was copied into project source.
 
 ## Verified behavior
 

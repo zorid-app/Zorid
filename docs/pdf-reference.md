@@ -4,7 +4,7 @@ Focused static inspection of Obsidian 1.14.4, 2026-10-16. This report reuses the
 
 ## Evidence and scope
 
-Desktop payload: `obsidian-1.14.4.asar`, SHA-256 `146ef8470d8cbb4a6db209bdc19bf2bad13350444186c0fd93c31087b142b92f`. Recovered artifacts remain under `/private/tmp/zorid-reference-20261016/recovered/obsidian-1.14.4`, outside project source. REA E3 `ev_a023c82af045a4b5acedab1eab958db521c3828491a6320c1f7ee85152573b37` binds the renderer source; its expanded semantic graph is incomplete. Detailed findings here come from ordinary focused source inspection, not additional REA semantic conclusions. See [reference evidence](reference-evidence.md), [source inventory](source-audit.md), and [attachment findings](attachment-reference.md).
+Desktop payload: `obsidian-1.14.4.asar`, SHA-256 `146ef8470d8cbb4a6db209bdc19bf2bad13350444186c0fd93c31087b142b92f`. Recovered artifacts remain under `/private/tmp/zorid-reference-20261016/recovered/obsidian-1.14.4`, outside project source. REA E3 `ev_a023c82af045a4b5acedab1eab958db521c3828491a6320c1f7ee85152573b37` binds the renderer source; its expanded semantic graph is incomplete. Detailed findings here come from ordinary focused source inspection, not additional REA semantic conclusions. See [reference evidence](reference-evidence.md), [source inventory](history/source-audit.md), and [attachment findings](reference/attachment-reference.md).
 
 | File | SHA-256 | Inspected scope |
 | --- | --- | --- |

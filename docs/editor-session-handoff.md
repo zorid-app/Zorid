@@ -78,7 +78,7 @@ lifecycle commit `4ca382f`, which the writable Base embed host needs.
 
 The Base host's six owned paths are `src/ui/embeds.ts`, `src/ui/workspace.ts`,
 `src/ui/base-embed-sessions.ts`, `tests/base-embed-sessions.test.ts`,
-`tests/workspace-base-embeds.test.ts` and `docs/base-file-embed-lifecycle.md`.
+`tests/workspace-base-embeds.test.ts` and `docs/history/base-file-embed-lifecycle.md`.
 Its worktree document records prerequisite cherry-picks, including occurrence
 context `e3114bf` and named-view fixes `eefb947` then `bd8357c`. Inspect equivalent
 commits before integrating; do not duplicate dependency cherry-picks.

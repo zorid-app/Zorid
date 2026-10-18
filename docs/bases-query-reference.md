@@ -1,6 +1,6 @@
 # Bases query and formula reference
 
-This is a bounded static audit of the desktop Obsidian 1.14.4 Bases query engine. It supplements [Bases reference](bases-reference.md), [source audit](source-audit.md), and [reference evidence](reference-evidence.md). It does not certify implementation or runtime parity. The scope is typed values, expression evaluation, function registration, filtering, result assembly, incremental refresh, and the shared property-edit path. View-specific gestures, complete grammar recovery, and Android equivalence remain separate work.
+This is a bounded static audit of the desktop Obsidian 1.14.4 Bases query engine. It supplements [Bases reference](reference/bases-reference.md), [source audit](history/source-audit.md), and [reference evidence](reference-evidence.md). It does not certify implementation or runtime parity. The scope is typed values, expression evaluation, function registration, filtering, result assembly, incremental refresh, and the shared property-edit path. View-specific gestures, complete grammar recovery, and Android equivalence remain separate work.
 
 ## Evidence identity and method
 

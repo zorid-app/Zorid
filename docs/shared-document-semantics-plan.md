@@ -28,7 +28,7 @@ Native mobile metadata/Base features should consume the shared engine.
 
 ## Reuse-first gate
 
-The completed [source reuse assessment](document-semantics-reuse-assessment.md)
+The completed [source reuse assessment](history/document-semantics-reuse-assessment.md)
 is preparation evidence, not dependency adoption or runtime verification. Evaluate
 pulldown-cmark/Comrak for Markdown extraction, MDBASE's existing Bases evaluator
 for formulas/queries, and SQLite FTS5 for sound search candidate acceleration

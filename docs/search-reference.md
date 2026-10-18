@@ -4,7 +4,7 @@ Inspection date: 2026-10-16. This is a bounded static audit of global search, it
 
 ## Identity and evidence boundary
 
-The inspected artifact is `/private/tmp/zorid-reference-20261016/recovered/obsidian-1.14.4/app.js`: 3,942,126 bytes, SHA-256 `958ce57fe22f87fdf121546e46dfccd9c8ee971ce3fd8f801d60d4ece39a2df9`. Payload provenance and limitations are in [reference evidence](reference-evidence.md); broader unfinished scope is in [source audit](source-audit.md).
+The inspected artifact is `/private/tmp/zorid-reference-20261016/recovered/obsidian-1.14.4/app.js`: 3,942,126 bytes, SHA-256 `958ce57fe22f87fdf121546e46dfccd9c8ee971ce3fd8f801d60d4ece39a2df9`. Payload provenance and limitations are in [reference evidence](reference-evidence.md); broader unfinished scope is in [source audit](history/source-audit.md).
 
 REA E3 is `ev_a023c82af045a4b5acedab1eab958db521c3828491a6320c1f7ee85152573b37`, source-module node `jag_node_621f724371e7aca9238d1f3a97fd54476f29e95749ed28f0e9b6a7f00f7078a2`. Its complete exported record at `/private/tmp/zorid-reference-20261016/rea-renderer-bundle.json` was reused. This worker's connection does not retain that ID; no producer was rerun. E3 parsed the renderer as inert text but could not retain the expanded semantic graph within its memory budget. The findings below are **ordinary focused source inspection of that digest**, not newly produced REA semantic facts or observed runtime behavior.
 

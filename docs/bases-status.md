@@ -22,6 +22,6 @@ and shown by other views. This is not evidence of lost data. Missing configurati
 controls were the relevant gap. Those controls are now integrated; their native
 behavior still needs verification.
 
-See the [workspace checkpoint](bases-workspace-integration-checkpoint.md) for exact
-validation scope and [workspace host](bases-workspace-host.md) for storage and
+See the [workspace checkpoint](history/bases-workspace-integration-checkpoint.md) for exact
+validation scope and [workspace host](history/bases-workspace-host.md) for storage and
 lifecycle details. Editor-wide and shared-core changes remain separately owned.

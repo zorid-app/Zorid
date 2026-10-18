@@ -1,5 +1,18 @@
 # Product discussions after the editor foundation
 
+## Latest sequencing and architecture correction — 2026-10-18
+
+User now prioritizes saving/recovery correctness and Rust indexing/search/cache
+performance, then complete desktop Bases, Tasks, Calendar and Google integration,
+then iOS implementation. Preserve existing native work; older parallel mobile
+execution notes below do not override this order. No storage/backend migration or
+performance improvement is established by the documentation update.
+
+The maintained [architecture manual](architecture/README.md) records the platform
+paths and Rust systems. Accepted SQLite/cache/recovery placement and implementation
+gates are in [decisions](architecture/decisions.md). Keep execution ownership and
+verification here rather than growing the architecture pages into another diary.
+
 ## Execution checkpoint — shared-core coordinator
 
 Updated 2026-10-17. Read this section before resuming after a context reset;
@@ -23,7 +36,7 @@ implementation complexity, not the evidence needed to claim completion.
 The user requested durable written decisions, execution tracking and a Codex
 built-in goal. The first integrated Rust core + web + Electron + standalone
 full-vault CLI + E2EE server-sync milestone has passed its implementation and
-runtime gates; see [final acceptance](shared-core-milestone-acceptance.md).
+runtime gates; see [final acceptance](history/shared-core-milestone-acceptance.md).
 The built-in goal is being closed against that requirement audit. Subsequent P2P,
 full history/backups/admin and native mobile milestones remain required in the
 sequence below; completion of the first goal must not close those requirements.
@@ -684,7 +697,7 @@ lifecycle fit. Current Yrs/RustCrypto primitives remain in use; no backend switc
 or migration is approved. Compare complete requirements, including browser/core
 portability, independent CLI, durable ingestion, key recovery/revocation and
 encrypted restore; library encryption alone does not establish protocol safety.
-The completed source assessment is in `docs/etebase-reuse-assessment.md`;
+The completed source assessment is in `docs/history/etebase-reuse-assessment.md`;
 it includes independent Yrs/browser review and no runtime/security-audit claim.
 
 Subsequent user clarification: use Etebase as a reference and selectively reuse
@@ -699,7 +712,7 @@ The user additionally requires systematic review of LiveSync's solved edge cases
 `mobile_readiness` owns a pinned source/tests/changelog matrix, consulting the
 prior `livesync_audit` findings. Relevant cases must map to Zorid regression tests
 or explicit gaps; source inspection alone is not verified coverage. Target
-artifact: `docs/livesync-edge-case-matrix.md`. Record audit scope and uninspected
+artifact: `docs/history/livesync-edge-case-matrix.md`. Record audit scope and uninspected
 areas rather than claiming that every upstream edge case has been exhausted.
 
 1. Read AGENTS.md, this checkpoint, the accepted decisions/sequence below and
@@ -1208,7 +1221,7 @@ is queued next, not yet granted. No parallel root/native compiler.
 Canonical update00:03UTC: main60ffc972 integrates source-identical3288 native9
 Settings/search/minimum-one and caret batch. Independent review, fulltsc99639exit0,
 focused66/66 tests55162 pass. Actual Simulator8/9 evidence and phoneDev9 repeated
-install/launch65171both0 recorded docs/native-mobile-integration.md. Caret pixel/
+install/launch65171both0 recorded docs/history/native-mobile-integration.md. Caret pixel/
 dragUI gaps remain; no menus/import/loader/tabs included. Root checks terminal,
 no compiler live; tab harness requires ready-source exactpath/fresh slot ACK.
 
@@ -1285,7 +1298,7 @@ Latest Vite completion — main165cf17a +manager-lock60efe609:
   required byte-exact original pnpm12.14 manager-lockdoc restoration; application
   dependency resolutions unchanged, independently reviewed. Main cache activation
   uses existing source/artifact fingerprint validation. Source/evidence:
-  docs/vite-migration.md, tmp/vite-main-*.log, native msg67c02132f86d.
+  docs/history/vite-migration.md, tmp/vite-main-*.log, native msg67c02132f86d.
 - Phone7 EXACTce1e0ace build91966 passed; strict signing/development metadata
   passed and physical iPhone install/launch12016 both exited0. Native owner returned
   the exclusive heavy slot in msg5e815eb955cf. Keyboard interaction acceptance,
@@ -2348,7 +2361,7 @@ Historical preceding updates:
   slice owns fix and subsequent rebuilt UI proof.
 
 Historical first-milestone acceptance snapshot (2026-10-17; superseded by
-the current checkpoint and [final acceptance](shared-core-milestone-acceptance.md)):
+the current checkpoint and [final acceptance](history/shared-core-milestone-acceptance.md)):
 
 | Requirement | Current evidence / next necessary step |
 | --- | --- |
@@ -2397,7 +2410,7 @@ the current checkpoint and [final acceptance](shared-core-milestone-acceptance.m
   these are not included in the successful runtime claims above.
 - Main `517f87b` includes reviewed browser ancestor-publication fix and hashed
   smoke assets. Actual worker nested create/reload/read and encrypted upload
-  passed; see `docs/browser-relay-verification.md`. Old failed database is
+  passed; see `docs/history/browser-relay-verification.md`. Old failed database is
   preserved. Earlier apparent failed rerun used cached JavaScript.
 - Normal desktop bridge `96e4542` fixes full-reload journal response validation.
   Latest observed fixture draft was committed and checkpointed; exact UI restart
@@ -2584,7 +2597,7 @@ the current checkpoint and [final acceptance](shared-core-milestone-acceptance.m
 - Root pinned WASM build session43081 exited0 at source `f79a294`; native
   wrapper tests passed15. Actual Chrome fixture `6f3ade8` passed all10 groups,
   including authenticated family updates and raw transport decoding. Evidence
-  committed as `a78770b` in `docs/wasm-family-browser-verification.md`. Test tab
+  committed as `a78770b` in `docs/history/wasm-family-browser-verification.md`. Test tab
   and loopback server are closed. Reconcile main crypto recovery dependencies
   and strengthen namespace metadata before the next WASM integration gate.
 - Family-store focused session35255 exited0: 9 new ledger/file-state unit
@@ -2658,7 +2671,7 @@ the current checkpoint and [final acceptance](shared-core-milestone-acceptance.m
 - Main `227f084` contains both native/CLI batches and editor E1/E2. Native batch2
   candidate `3df1de8` passed 109 tests in a fresh target (session30255 exit0),
   covering folder creation, bounded rescans and coherent reads/change cursors.
-  See `docs/core-integration-acceptance.md`. Apps still use existing storage;
+  See `docs/history/core-integration-acceptance.md`. Apps still use existing storage;
   no migration, push or deployment by this session.
 - Editor candidate `6b96d1f` passed 29 focused and 1963 aggregate tests,
   TypeScript and production webpack (three performance warnings), session64815
@@ -2680,14 +2693,14 @@ the current checkpoint and [final acceptance](shared-core-milestone-acceptance.m
   passed 28 protocol/crypto/server checks including managed backup/restore
   (session65524 exit0); no-default-features crypto passed 8 including its doc
   test (session5557 exit0). Offline lock resolution preserved existing pins.
-  See `docs/backend-integration-acceptance.md`. The server remains a loopback
+  See `docs/history/backend-integration-acceptance.md`. The server remains a loopback
   fixture: hosted enrollment, admin UI and deployment are unfinished.
 - Web foundation is integrated on main `c369571`. Candidate8eb89de passed
   focused9 and full2005 app tests, typecheck, ordinary production and explicit
   fixture builds. Ordinary build excludes fixture assets. Actual Chrome passed
   host27 and WASM6 groups; the real app production worker opened a synthetic
   vault, saved a note that survived reload, and a second client read identical
-  text. See `docs/browser-core-integration-acceptance.md`. The durable editor
+  text. See `docs/history/browser-core-integration-acceptance.md`. The durable editor
   consumer remains disabled; this is not its crash/restart acceptance.
 - Native schema6 `28cff13` passed108 focused native/store tests after source
   review fixed historical cross-entry revision reuse, sealed epoch mismatch and
@@ -2771,7 +2784,7 @@ and distributed namespace semantics remain unfinished.
   `cargo build --offline -p zorid-crdt --example interop -j1` passed; executable was
   used in the actual browser byte exchange. Current `d00a617` adds three helper
   tests and browser replay assertions; those need a rebuild/run.
-- Protocol/crypto verified native-only in `docs/sync-protocol.md`; optional control
+- Protocol/crypto verified native-only in `docs/history/sync-protocol.md`; optional control
   extensions are preserved, unknown required features fail, relay can retain a
   future document format while clients reject unsupported consumption. No-default
   crypto dependency tree excludes implicit system entropy. Actual native/browser

@@ -14,7 +14,7 @@ included. The root coordinator approved reference links, JSON-safe YAML values,
 integer safety and the explicit resource bounds below for this contract.
 
 The [accepted milestone](shared-document-semantics-plan.md) and
-[reuse assessment](document-semantics-reuse-assessment.md) define the boundary:
+[reuse assessment](history/document-semantics-reuse-assessment.md) define the boundary:
 headless metadata moves to portable Rust; CodeMirror syntax, rendering, property
 and link source transformations stay in TypeScript. Invalid metadata does not
 prevent reading, editing, saving or syncing raw content. No metadata operation

@@ -82,7 +82,7 @@ explicitly. It is superseded by the file-v2 clean-client fixture in
 `crates/zorid-cli/tests/recovery.rs`: the receiver starts without namespace or
 bootstrap bindings and reconstructs text and a multi-chunk binary attachment
 after original client state removal. Executed acceptance is recorded in
-[shared-core-milestone-acceptance.md](shared-core-milestone-acceptance.md).
+[shared-core-milestone-acceptance.md](history/shared-core-milestone-acceptance.md).
 This bounded fixture does not establish every namespace history or product
 recovery setup. There is no hidden trusted metadata export from the lost client.
 Multi-key-epoch history/rotation, automatic

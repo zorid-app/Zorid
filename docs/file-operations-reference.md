@@ -27,7 +27,7 @@ The renderer's local resource path at 3922540–3923000 normalizes/decodes a loc
 
 ## Creation, names, case and Unicode
 
-The file manager at 1787100–1789587 chooses a configured new-note parent, trims the supplied name, removes a matching extension, allocates an available name, and creates missing folders. Its folder lookup is case-insensitive. The vault allocator at 1427682–1428371 checks case-insensitive collisions and adds space-separated numeric suffixes beginning at 1 before the extension. Attachment folder interpretation and sanitation are covered further in [attachment reference](attachment-reference.md).
+The file manager at 1787100–1789587 chooses a configured new-note parent, trims the supplied name, removes a matching extension, allocates an available name, and creates missing folders. Its folder lookup is case-insensitive. The vault allocator at 1427682–1428371 checks case-insensitive collisions and adds space-separated numeric suffixes beginning at 1 before the extension. Attachment folder interpretation and sanitation are covered further in [attachment reference](reference/attachment-reference.md).
 
 Path normalization at 543264–543970 converts backslash/slash runs to slashes, removes outer slashes, represents the root as `/`, replaces nonbreaking and narrow nonbreaking spaces with regular spaces, and normalizes NFC. This differs from case folding: display spelling is retained. Filename validation at 1335750–1336500 has platform branches, including Windows reserved device names and trailing dot/space rejection. The invalid-character sets are platform-specific; this does not justify one universal Windows-style sanitizer.
 

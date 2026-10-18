@@ -1,5 +1,23 @@
 # User findings queue
 
+## Current user steering — 2026-10-18
+
+- **Sequence:** saving/recovery bug fixes and Rust indexing/search/cache performance
+  first; then fully usable desktop Bases, Tasks, Calendar and Google integration;
+  resume iOS implementation afterward. Preserve paused work. This supersedes older
+  parallel mobile delivery requests below.
+- **Open saving findings:** persistent import/reconciliation attention banner and
+  accumulating `.previous` artifacts. Source mechanism inspected; actual vault cause,
+  safe cleanup and changed save strategy remain unimplemented/unverified.
+- **Accepted architecture:** SQLite infrastructure shared across platforms; native
+  authority stays in the vault; per-vault cache/recovery SQLite goes in app-local
+  storage. Browser SQLite/OPFS remains a feasibility gate; existing browser backend
+  is IndexedDB. Snapshots follow the inspected Obsidian local retention behavior; they are
+  not rebuildable caches and not synced history.
+- **Documentation:** maintain platform-first [architecture modules](architecture/README.md)
+  with current/target distinctions. This documentation task does not implement the
+  storage migration, performance work or Google integration.
+
 This queue supplements the full parity ledger. It records recent user steering;
 older requirements remain in `parity.md` and `interaction-parity.md`. Implementation
 and verification are separate. Work is sequenced by dependencies and user impact,

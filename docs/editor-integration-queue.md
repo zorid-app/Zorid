@@ -101,7 +101,7 @@ pass. Auto-pan does not generate synthetic resize events; fitting is bounded and
 retains live editor ownership. Preserve E1's lifecycle hooks when reconciling.
 Actual integrated E1+E2 and native/touch geometry remain separate gates. Reference
 anchors and remaining snap-guide/settings/group-background gaps are documented
-in `docs/canvas-resize-fit-reference.md` on the feature branch.
+in `docs/reference/canvas-resize-fit-reference.md` on the feature branch.
 
 ## Core candidate transferred separately
 

@@ -11,7 +11,7 @@ planning waits for the shared document public types. No builds, runtime or
 performance claim; native/store/host/CLI remain unassigned to this worker.
 
 Depends on [the accepted milestone](shared-document-semantics-plan.md) and
-[source reuse assessment](document-semantics-reuse-assessment.md). Wave3 passed;
+[source reuse assessment](history/document-semantics-reuse-assessment.md). Wave3 passed;
 the plan's older timing paragraph saying that gate is incomplete is historical.
 This proposal does not select a Markdown dialect, Base evaluator or FTS package.
 

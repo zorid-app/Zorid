@@ -46,7 +46,7 @@ capability decision before migration.
 
 Re-inspected upstream revision
 `2e8f47f3a0737766060599cf9534582bd75aa719` using exact raw GitHub files. This
-confirms the earlier [reuse assessment](document-semantics-reuse-assessment.md).
+confirms the earlier [reuse assessment](history/document-semantics-reuse-assessment.md).
 Browser fetches returned cache misses; direct HTTPS source fetch succeeded.
 The manifest declares `mdbase 0.4.0-rc.6`, Rust 1.94, MIT. It has unconditional
 bundled `rusqlite`, filesystem/capability/watch, CEL and schema dependencies;

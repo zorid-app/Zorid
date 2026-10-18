@@ -231,7 +231,7 @@ No timers, automatic retry, background task or parallel sync worker is added.
 
 Apple worker currently owns this plan/review only. Shared `zorid-native-sync`,
 NativeVault/store, protocol, CLI, root build/lock files and native owner's
-`docs/native-mobile-integration.md` remain untouched. Rebase/review against the
+`docs/history/native-mobile-integration.md` remain untouched. Rebase/review against the
 current recovery HEAD again before granting edits; clean integration is not proof.
 
 ## Disposable-fixture acceptance before calling this slice complete
