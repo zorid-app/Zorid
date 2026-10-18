@@ -77,6 +77,20 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Canonical service checkpoint (2026-10-18 03:06 UTC): main4f768f9f..f2988dee
+integrates exactly17 N+B native WorkBlock/desktop binding/proof commits, excluding
+the feature merge and separate Task query/Calendar slices. Root compared26 changed
+source/test/build files with tested6e915 assembly: byte-identical, diff check pass.
+Final independent review and actual3 Electron launches/26 commands cover scoped
+bridge/storage create/edit/reopen/replay and observer-interruption exact retry.
+Real contextBridge error-field loss was fixed with a validated plain envelope;
+failed initial proof retained. Two launches needed owned SIGKILL; native children
+exited. No graceful UI-close, rendered Calendar, network/mobile or whole-goal claim.
+Root mobile lock refresh adds only serde_json/records edges to NativeVault, offline
+resolution plus locked verification; no versions changed. Separate Tasks query
+and actual Calendar UI batch is awaited, Tasks create-uncertainty fix remains
+owned. Disk recovered enough for bounded proof; no broad build campaign needed.
+
 Resource/lifecycle checkpoint (2026-10-18 02:56 UTC): ENOSPC at184MiB left the
 desktop host truncated despite Cargo success; it was never launched. Managed
 owner removed only old generated feature caches (~1.8GiB); root removed9 obsolete

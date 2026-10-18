@@ -1778,6 +1778,7 @@ version = "0.1.0"
 dependencies = [
  "rustix",
  "serde",
+ "serde_json",
  "sha2",
  "uuid",
  "zorid-bases",
@@ -1785,6 +1786,7 @@ dependencies = [
  "zorid-core",
  "zorid-crypto",
  "zorid-index",
+ "zorid-records",
  "zorid-store",
  "zorid-sync-protocol",
 ]
