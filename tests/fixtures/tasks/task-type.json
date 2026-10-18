@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "id": "type-task",
+  "label": "Task",
+  "futureRoot": {"retain": ["001", true]},
+  "properties": [
+    {"id":"field-status","key":"state","label":"Status","datatype":"status","default":"todo","options":[
+      {"id":"todo","label":"To do","category":"not_started","futureOption":"keep"},
+      {"id":"active","label":"Working","category":"working"},
+      {"id":"done","label":"Done","category":"done"}
+    ]},
+    {"id":"field-planned","key":"plan","label":"Planned day","datatype":"date"},
+    {"id":"field-deadline","key":"due","label":"Deadline","datatype":"date"},
+    {"id":"field-text","key":"detail","label":"Detail","datatype":"text","default":null}
+  ],
+  "capabilities":{"task":{"status":"field-status","plannedDay":"field-planned","deadline":"field-deadline"}}
+}

@@ -1,6 +1,8 @@
 //! Portable, host-fed Bases expressions adapted from MDBASE's existing evaluator.
 //! This crate owns neither files nor a running vault. See UPSTREAM.md for scope.
 mod expression;
+pub mod types;
+pub mod tasks;
 mod files;
 mod graph;
 pub use graph::{query_generation, FilePresentationFacts, MetadataIssue, MAX_RELATIONSHIP_EDGES};
