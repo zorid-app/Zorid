@@ -43,3 +43,7 @@
 .calendar-delete-confirm{padding:8px;border:1px solid var(--background-modifier-border);border-radius:5px;}
 .calendar-grid button,.calendar-grid a{font-family:inherit;}
 @container (max-width:450px){.calendar-heading{order:-1;flex-basis:100%;text-align:left;}.calendar-controls button{padding:5px 8px;}.calendar-field{flex-basis:100%;}.calendar-grid{font-size:12px;}}
+
+/* Month cells stay compact in narrow splits; the complete text remains in the
+ * event's accessible content and native tooltip. */
+.calendar-grid .calendar-event-label{display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}

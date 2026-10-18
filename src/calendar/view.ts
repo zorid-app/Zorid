@@ -118,7 +118,7 @@ export function createCalendarView(host:HTMLElement,service:WorkBlockService|und
     eventInteractive:true,headerToolbar:false,height:'100%',timeZone:'local',editable:true,selectable:true,nowIndicator:true,
     eventDrop:propose,eventResize:propose,
     eventClick:info=>{const block=records.get(String(info.event.extendedProps.blockKey));if(block)void inspect(block);},
-    eventContent:info=>{const text=node('span','',info.timeText+' '+info.event.title);return{domNodes:[text]};},
+    eventContent:info=>{const text=node('span','calendar-event-label',info.timeText+' '+info.event.title);text.title=info.event.title;return{domNodes:[text]};},
     select:info=>{selectionSerial++;const startDate=new Date(info.start);if(info.allDay)startDate.setHours(9,0,0,0);openForm(undefined,{start_ms:String(startDate.getTime()),end_ms:String(info.allDay?startDate.getTime()+3_600_000:info.end.getTime()),timezone:localZone()});},
     datesSet:info=>{if(range.from!==info.start.getTime()||range.until!==info.end.getTime())selectionSerial++;title.textContent=info.view.title;switcher.value=info.view.type;range={from:info.start.getTime(),until:info.end.getTime()};onState?.({view:info.view.type,date:localDateTime(info.view.currentStart.getTime(),localZone()).slice(0,10)});void refresh();},
   });
