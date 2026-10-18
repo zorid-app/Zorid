@@ -172,3 +172,23 @@ test('document commands atomically leave retained native overlay; failed command
   f.failAdmit('B');assert.equal((await f.run({type:'open',entryId:'B',disposition:'current'})).status,'failed');assert.equal(f.router.snapshot().presentation,'native');assert.equal(f.active(),undefined);
   f.failAdmit(false);assert.equal((await f.run({type:'open',entryId:'B',disposition:'current'})).status,'applied');assert.equal(f.router.snapshot().presentation,'editor');assert.equal(f.active()?.entryId,'B');
 });
+test('held source resume serializes later native open and cannot overwrite a different selected visit',async()=>{
+  const f=fixture();await f.router.start();await f.run({type:'open',entryId:'A',disposition:'current'});await f.router.drain();
+  const pending=gate();f.holdAdmit(pending.promise);const resume=f.router.resume();await until(()=>f.admitEntered);
+  let settled=false;const open=f.run({type:'open',entryId:'B',disposition:'current'}).then(result=>{settled=true;return result;});
+  await new Promise<void>(yes=>setImmediate(yes));assert.equal(settled,false);assert.equal(f.active(),undefined);
+  pending.resolve();await resume;assert.equal((await open).status,'stale');assert.equal(f.active()?.entryId,'A');
+  f.holdAdmit(undefined);await f.run({type:'open',entryId:'B',disposition:'current'});assert.equal(f.active()?.entryId,'B');
+  assert.equal(f.selected().route.kind==='document'&&f.selected().route.entryId,'B');
+});
+test('ordinary link supersedes held resume; late source callback cannot overwrite new route or writer',async()=>{
+  const f=fixture();await f.router.start();await f.run({type:'open',entryId:'A',disposition:'current'});await f.router.drain();
+  const pending=gate();f.holdAdmit(pending.promise);const resume=f.router.resume();await until(()=>f.admitEntered);f.holdAdmit(undefined);
+  const opening=f.router.followEntry('B');pending.resolve();await assert.rejects(resume,/Stale/);assert.equal((await opening).status,'applied');
+  assert.equal(f.active()?.entryId,'B');assert.equal(f.selected().route.kind==='document'&&f.selected().route.entryId,'B');assert.equal(f.views.filter(v=>v.canMutate()).length,1);
+});
+test('new lifecycle drain invalidates a held resume and leaves all writers revoked',async()=>{
+  const f=fixture();await f.router.start();await f.run({type:'open',entryId:'A',disposition:'current'});await f.router.drain();
+  const pending=gate();f.holdAdmit(pending.promise);const resume=f.router.resume();await until(()=>f.admitEntered);const drain=f.router.drain();
+  pending.resolve();await assert.rejects(resume,/Stale/);await drain;assert.equal(f.active(),undefined);
+});

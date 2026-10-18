@@ -207,11 +207,20 @@ export class MobileWebRouter<V extends MobileDocumentView> {
     this.paused=true;this.generation++;this.window.invalidate();this.gesture=undefined;
     await this.tail;await this.window.drain();this.status='busy';this.advancePresentation();await this.publish();
   }
-  async resume():Promise<void>{
-    this.paused=false;this.check();
-    try{await this.window.resume(route=>{const model=copy(this.model);if(route)this.current(this.selected(model)).route=route;this.commit(model);});this.status='ready';}
-    catch(error){this.status='blocked';throw error;}
-    await this.publish();
+  resume():Promise<void>{
+    const generation=this.generation;
+    return this.enqueue(async()=>{
+      if(this.closed||generation!==this.generation||!this.host.isCurrent())throw new Error('Stale web router resume');
+      this.paused=false;this.check(generation);
+      const tabId=this.model.selectedTabId,visitId=this.current().id;
+      try{
+        await this.window.resume(route=>{
+          this.check(generation);if(this.model.selectedTabId!==tabId||this.current().id!==visitId)throw new Error('Resumed web route changed');
+          const model=copy(this.model);if(route)this.current(this.selected(model)).route=route;this.commit(model);
+        });this.status='ready';
+      }catch(error){if(generation===this.generation)this.status='blocked';throw error;}
+      await this.publish();
+    });
   }
   async destroy():Promise<void>{if(this.closed)return;await this.drain();await this.window.destroy();this.closed=true;}
   encode(model=this.model):string{const encoded=JSON.stringify({version:1,localStoreId:this.scope.localStoreId,...model});if(encoded.length>4*1024*1024)throw new Error('Router state too large');return encoded;}

@@ -173,7 +173,8 @@ export class MobileDocumentViewWindow<V extends MobileDocumentView> {
   }
   async resume(accept?:(route?:WebDocumentRoute)=>void):Promise<void>{
     this.check();if(this.loan)throw new Error('Cannot resume during gesture');
-    const epoch=this.epoch,check=()=>this.check(epoch),source=this.currentId?this.records.get(this.currentId):undefined;
+    const epoch=this.epoch,sourceId=this.currentId,source=sourceId?this.records.get(sourceId):undefined;
+    const check=()=>{this.check(epoch);if(this.loan||this.currentId!==sourceId||sourceId&&this.records.get(sourceId)!==source)throw new Error('Resumed source view changed');};
     let route:WebDocumentRoute|undefined;
     if(!this.suspended&&source){route=await this.host.admit(source.view,source.visit.entryId,check);check();captureWebRoute(route);
       if(route.entryId!==source.visit.entryId)throw new Error('Resumed source identity changed');}
