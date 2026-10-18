@@ -112,6 +112,44 @@ fn old_tuple_missing_origin_unknown_fields_and_noncanonical_bytes_are_rejected()
         .unwrap()
         .remove("origin_registration");
     assert!(validate(&serde_json::to_vec(&missing).unwrap()).is_err());
+    let canonical = String::from_utf8(canonical_intent_request(&capture()).unwrap()).unwrap();
+    let unknown = format!(
+        "{},\"unexpected\":true}}",
+        canonical.strip_suffix('}').unwrap()
+    );
+    assert_eq!(
+        validate(unknown.as_bytes()).err(),
+        Some(IntentError::OriginInvalid)
+    );
+    let duplicate = canonical.replacen(
+        "\"format_version\":1,",
+        "\"format_version\":1,\"format_version\":1,",
+        1,
+    );
+    assert_ne!(duplicate, canonical);
+    assert!(validate(duplicate.as_bytes()).is_err());
+    let nested = canonical.replacen(
+        "\"start_ms\":\"0\"",
+        "\"start_ms\":\"0\",\"start_ms\":\"0\"",
+        1,
+    );
+    assert_ne!(nested, canonical);
+    assert!(validate(nested.as_bytes()).is_err());
+    let mut embedded = wire();
+    embedded.origin_registration =
+        embedded
+            .origin_registration
+            .replacen("\"version\":1", "\"version\":1,\"version\":1", 1);
+    assert!(validate(&raw(&embedded)).is_err());
+    let mut embedded = wire();
+    embedded.semantic_request = embedded.semantic_request.map(|raw| {
+        raw.replacen(
+            "\"record\":\"record\"",
+            "\"record\":\"record\",\"record\":\"record\"",
+            1,
+        )
+    });
+    assert!(validate(&raw(&embedded)).is_err());
     let mut extra = wire();
     extra.format_version = 2;
     assert_eq!(
@@ -441,6 +479,62 @@ fn declared_bounds_fail_before_decode_and_do_not_loosen_existing_domain_rules() 
             Some(&vec![b'x'; MAX_SEMANTIC_BYTES + 1])
         )
         .err(),
+        Some(IntentError::Limit)
+    );
+    // The size gate is inclusive; malformed bytes AT the bound fail decoding, not size.
+    assert_eq!(
+        validate(&vec![b' '; MAX_INTENT_BYTES]).err(),
+        Some(IntentError::OriginInvalid)
+    );
+    assert_eq!(
+        validate_registration(&vec![b' '; MAX_REGISTRATION_BYTES]).err(),
+        Some(IntentError::OriginInvalid)
+    );
+    assert_eq!(
+        capture_local_intent(
+            &registration(),
+            AUTH,
+            REV,
+            id("create"),
+            scope(),
+            [0; 32],
+            command(),
+            Some(&vec![b'x'; MAX_SEMANTIC_BYTES])
+        )
+        .err(),
+        Some(IntentError::OriginInvalid)
+    );
+    let mut edge = scope();
+    let ordinary = "a".repeat(128);
+    let base = serde_json::to_vec(&(
+        "managed-record-intent-v1",
+        &ordinary,
+        &ordinary,
+        &ordinary,
+        &ordinary,
+        &ordinary,
+    ))
+    .unwrap()
+    .len();
+    let mut remaining = MAX_INTENT_KEY_BYTES - base;
+    let mut parts = Vec::new();
+    for _ in 0..5 {
+        let quotes = remaining.min(128);
+        remaining -= quotes;
+        parts.push(id(&("\"".repeat(quotes) + &"a".repeat(128 - quotes))));
+    }
+    assert_eq!(remaining, 0);
+    edge.realm = parts[0].clone();
+    edge.vault = parts[1].clone();
+    edge.owner = parts[2].clone();
+    edge.collection = parts[3].clone();
+    assert_eq!(
+        intent_checkpoint_key(&edge, &parts[4]).unwrap().len(),
+        MAX_INTENT_KEY_BYTES
+    );
+    let longer = id(&("\"".to_owned() + &parts[4].as_str()[1..]));
+    assert_eq!(
+        intent_checkpoint_key(&edge, &longer).err(),
         Some(IntentError::Limit)
     );
     let mut escaped = scope();

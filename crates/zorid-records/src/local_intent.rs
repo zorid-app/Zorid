@@ -754,6 +754,39 @@ mod tests {
             f.default = None;
             assert!(optional_step(&v1(), &bad).is_err());
         }
+        let mut known = v1();
+        known.fields.insert(
+            id("kept"),
+            Field {
+                kind: Kind::String,
+                required: false,
+                nullable: false,
+                default: None,
+            },
+        );
+        for change in 0..8 {
+            let mut next = known.clone();
+            next.version = 2;
+            match change {
+                0 => {
+                    next.fields.remove(&id("kept"));
+                }
+                1 => next.fields.get_mut(&id("kept")).unwrap().kind = Kind::Number,
+                2 => next.fields.get_mut(&id("kept")).unwrap().nullable = true,
+                3 => {
+                    next.fields.get_mut(&id("kept")).unwrap().default =
+                        Some(Cell::Value(Value::String("changed".into())))
+                }
+                4 => next.fields.get_mut(&id("kept")).unwrap().required = true,
+                5 => next.policy = Policy::Local,
+                6 => next.collection = id("different"),
+                _ => next.version = 1,
+            }
+            assert!(
+                optional_step(&known, &next).is_err(),
+                "incompatible declaration change {change}"
+            );
+        }
         let mut negative = v1();
         negative.fields.insert(
             id("n"),
@@ -910,6 +943,51 @@ mod tests {
             ),
             Err(IntentError::OperationCollision)
         );
+        let mut numeric = v1();
+        numeric.fields.insert(
+            id("number"),
+            Field {
+                kind: Kind::Number,
+                required: false,
+                nullable: false,
+                default: None,
+            },
+        );
+        let numeric_registration = fixture(vec![numeric], 1);
+        let negative = Command::Create(vec![Action::Write {
+            field: id("number"),
+            cell: Cell::Value(Value::Number(-0.0)),
+        }]);
+        let positive = Command::Create(vec![Action::Write {
+            field: id("number"),
+            cell: Cell::Value(Value::Number(0.0)),
+        }]);
+        assert_eq!(negative, positive); // Rust f64 equality alone would lose this identity.
+        let signed = capture_local_intent(
+            &numeric_registration,
+            AUTH,
+            REV,
+            id("create"),
+            scope(),
+            [8; 32],
+            negative,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            require_matching_input(&signed, &scope(), &id("create"), &[8; 32], &positive, None),
+            Err(IntentError::OperationCollision)
+        );
+        let bytes = canonical_intent_request(&signed).unwrap();
+        let decoded = validate_retained_intent(
+            &numeric_registration,
+            AUTH,
+            &scope(),
+            &signed.reference(),
+            &bytes,
+        )
+        .unwrap();
+        assert_eq!(canonical_intent_request(&decoded).unwrap(), bytes);
         let expanded = Command::Create(vec![Action::Write {
             field: id("optional"),
             cell: Cell::Value(Value::String("new-default".into())),
