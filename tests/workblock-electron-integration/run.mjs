@@ -33,7 +33,7 @@ await fs.mkdir(out,{recursive:true});
 const evidence={kind:'actual-electron-bridge-storage-subset',status:'running',started:new Date().toISOString(),groups:[],passes:[],remaining:['Calendar rendered UI acceptance','multi-client encrypted convergence','mobile/browser runtime parity'],limitations:['Raw existing preload semantic API exercised; no Calendar UI instrumentation','Explicit durable release tested; process termination recorded separately from UI-close acceptance']};
 let sandbox,child,cdp,before,failure;
 const runtime=[],nativeChildren=new Map();
-const processTable=()=>execFileSync('ps',['-axo','pid=,ppid=,command='],{encoding:'utf8',maxBuffer:4*1024*1024}).split('\n').map(line=>{const match=line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);return match?{pid:Number(match[1]),parent:Number(match[2]),command:match[3]}:null;}).filter(Boolean);
+const processTable=()=>execFileSync('ps',['-ww','-axo','pid=,ppid=,command='],{encoding:'utf8',maxBuffer:4*1024*1024}).split('\n').map(line=>{const match=line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);return match?{pid:Number(match[1]),parent:Number(match[2]),command:match[3]}:null;}).filter(Boolean);
 function observeNative(){
   if(!child||!sandbox)return [];
   const observed=processTable().filter(row=>row.parent===child.pid&&row.command.startsWith(native+' --vault '+path.join(sandbox,'vault')));
