@@ -109,11 +109,15 @@ fencing requires a separate worker lifecycle pass.
 6. Missing-parent child retained, invalid-schema-value child retained/rejected,
    reopen, parent received and bounded AEAD-backed retry recovering child while
    invalid child remains terminal `invalid_operation`.
-7. Fault injection calls actual Chrome `IDBTransaction.abort()` after an actual
+7. Post-AEAD epoch rotation uses the real key opener and queues a real strict IDB
+   config writer after authentication. Fresh receive, duplicate delivery and retained
+   retry must reject `sync_snapshot_conflict` with every store equal to the actual
+   AFTER-injection baseline; only the disposable config change is permitted.
+8. Fault injection calls actual Chrome `IDBTransaction.abort()` after an actual
    `managed_records.put` request succeeds. Assert no partial state, replay row,
    changes, source, quota, cursor or outbox; close/reopen preserves rollback;
    the same operation can then commit as fresh.
-8. Observation wrappers require `{durability:'strict'}` on all fixture database
+9. Observation wrappers require `{durability:'strict'}` on all fixture database
    readwrite transactions and record real `complete`/`abort` events. They never
    synthesize transactions/results. Raw inspection uses real readonly cursors.
 

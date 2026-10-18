@@ -59,14 +59,19 @@ async function raw(name) {
     r.onsuccess=()=>resolve(r.result); r.onerror=()=>reject(r.error);r.onblocked=()=>reject(new Error('Raw open blocked'));
   });
 }
-async function dump(name) {
-  const db=await raw(name);
-  try { return await new Promise((resolve,reject) => {
+function dumpConnection(db) {
+  // Start immediately on an existing real connection so race baselines are
+  // queued between the injected writer and the product's subsequent readers.
+  return new Promise((resolve,reject) => {
     const stores=Array.from(db.objectStoreNames),tx=db.transaction(stores,'readonly'),result={};
     for(const name of stores){const rows=[],r=tx.objectStore(name).openCursor();result[name]=rows;
       r.onsuccess=()=>{const c=r.result;if(c){rows.push({key:normalize(c.primaryKey),value:normalize(c.value)});c.continue();}};}
     tx.oncomplete=()=>resolve(result);tx.onabort=()=>reject(tx.error??new Error('Dump aborted'));
-  }); } finally { db.close(); }
+  });
+}
+async function dump(name) {
+  const db=await raw(name);
+  try { return await dumpConnection(db); } finally { db.close(); }
 }
 async function remove(name) {
   assert(names.has(name)&&name.startsWith(prefix),'Deletion outside run');
@@ -219,6 +224,55 @@ async function main() {
     assert(await status(b,'invalid-child')==='invalid_operation','Invalid child was accepted or retry stuck');
     const final=await snap(b,tb,s);assert(dec(final.projection).includes('child'),'Child missing from projection');
     return {invalidBefore,parent:await status(b,'parent'),child:await status(b,'child'),invalid:await status(b,'invalid-child'),retries};
+  });
+  await group('post-AEAD enrolled epoch rotation rejects fresh duplicate and retained commits without progress',async()=>{
+    const evidence=[];
+    for(const path of ['fresh','duplicate','retained']){
+      const h=await fresh('config-'+path),token=await register(h),s=recordScope('Synced','config-'+path,'config-root');
+      const id='config-'+path,parents=path==='retained'?['missing-parent']:[];
+      const bytes=recordPayload(id,s,[operation(id,s,parents,command(path==='retained'?'Patch':'Create',path))]);
+      const wire=seal(id,bytes),cursor={...scope,server_epoch:'config-race-epoch',after:'0'};
+      if(path!=='fresh')await h.vault.sync.receive(id,wire,key);
+      if(path==='retained')assert(await status(h,id)==='waiting_dependencies','No retained retry candidate');
+      await h.vault.sync.setCursor(cursor,null);
+      const before=await dump(h.name),db=await raw(h.name),original=key.openSyncUpdate;
+      const own=Object.getOwnPropertyDescriptor(key,'openSyncUpdate');
+      let injected=false,baselinePromise,configBefore,configAfter;
+      Object.defineProperty(key,'openSyncUpdate',{configurable:true,value:function(...args){
+        // The actual Rust method authenticates and creates the exact capability.
+        // Queue a real IDB writer only AFTER it returns; never construct a capability.
+        const opened=original.apply(this,args);
+        if(!injected){
+          injected=true;
+          const tx=db.transaction(['sync_state'],'readwrite',{durability:'strict'}),store=tx.objectStore('sync_state'),request=store.get('config');
+          request.onsuccess=()=>{
+            configBefore=request.result;
+            assert(configBefore?.value.key_epoch===1,'Unexpected fixture enrolled epoch');
+            configAfter={...configBefore,value:{...configBefore.value,key_epoch:2}};store.put(configAfter);
+          };
+          // IndexedDB transaction ordering makes this an actual AFTER-mutation
+          // full-store baseline, before the receive/retry can start another writer.
+          baselinePromise=dumpConnection(db);
+        }
+        return opened;
+      }});
+      try{
+        const error=await reject(()=>path==='retained'?h.records.retryPage(token):h.vault.sync.receive(id,wire,key,{expected:cursor,next:{...cursor,after:'1'}}));
+        assert(injected&&baselinePromise,'Actual AEAD open did not reach injection');
+        const baseline=await baselinePromise;
+        assert(error.code==='sync_snapshot_conflict','Wrong epoch rotation rejection: '+JSON.stringify(error));
+        const expected=structuredClone(before),row=expected.sync_state.find(row=>row.key==='config');
+        assert(row,'Missing actual config baseline');row.value=normalize(configAfter);
+        exact(baseline,expected,'Injection changed more than disposable config');
+        exact(await dump(h.name),baseline,'Epoch rotation progressed state/receipt/source/cursor/retry stores');
+        const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',enc(JSON.stringify(normalize(baseline))))),n=>n.toString(16).padStart(2,'0')).join('');
+        evidence.push({path,error,configBefore,configAfter,afterInjectionAllStoresSha256:digest,storesCompared:Object.keys(baseline)});
+      }finally{
+        if(own)Object.defineProperty(key,'openSyncUpdate',own);else delete key.openSyncUpdate;
+        db.close();close(h);
+      }
+    }
+    return evidence;
   });
   await group('real strict transaction abort after state put rolls back all stores and survives reopen',async()=>{
     const before=await dump(a.name);abortNextManagedPut=a.name;
