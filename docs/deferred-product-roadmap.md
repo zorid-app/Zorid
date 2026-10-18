@@ -77,6 +77,19 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Restart recovery (2026-10-18 03:44 UTC): machine reboot confirmed; temporary
+builds/evidence and old process handles were lost. Main remains clean0e9c1174.
+Root restored terminal084947b9, native d8fdd76f, managed62fd2871; durable run
+addresses unchanged. Native reports build17 four steps/install/launch completed
+before restart and installed Simulator artifact survives, raw temporary evidence
+lost: revalidate artifact identity then bounded NO-BUILD pass under its existing
+iOS slot. Managed Tasks assembly cc1fbf80 source/fullTS/Vite preserved, actual
+Tasks proof never launched; restore matched host/Electron before runtime proof.
+Missing workers are recovered from terminal_missing/abandoned receipts, not
+silence. Existing source grants remain. All future evidence must persist outside
+temporary directories. Root independently inventories existing Stage5 enrollment
+source read-only; no new cryptography or implementation direction inferred.
+
 iOS slot checkpoint (2026-10-18 03:30 UTC): native owner term_bbf1787b has
 exclusive build17 plus bounded Simulator validation, followed by healthy Dev
 phone delivery under existing authorization. Reviewed candidate c4fc1acd includes
