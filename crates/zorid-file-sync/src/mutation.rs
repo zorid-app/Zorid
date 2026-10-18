@@ -66,6 +66,14 @@ pub enum CreateMode {
     Text,
     Binary,
 }
+/// Exact picker-selected parent. Root is explicit; an omitted witness remains
+/// an older unguarded command and must never be interpreted as Root.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DestinationParent {
+    Root,
+    Folder { id: EntryId, revision: Revision, path: VaultPath },
+}
 /// Complete durable local command identity for an enrolled family vault.
 /// Persist this at PREPARE, before authorization. Receipts and prepared intents
 /// compare the entire value before import, allocation or planning. This is not a
@@ -77,6 +85,8 @@ pub struct FamilyCommand {
     pub version: u32,
     pub request: MutationRequest,
     pub create_mode: Option<CreateMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_parent: Option<DestinationParent>,
 }
 // A custom field decoder without a default makes create_mode REQUIRED even
 // when its explicit value is null. Plain Option<T> accepts an omitted field.
@@ -92,6 +102,8 @@ struct RawFamilyCommand {
     request: MutationRequest,
     #[serde(deserialize_with = "required_mode")]
     create_mode: Option<CreateMode>,
+    #[serde(default)]
+    destination_parent: Option<DestinationParent>,
 }
 impl TryFrom<RawFamilyCommand> for FamilyCommand {
     type Error = Error;
@@ -100,6 +112,7 @@ impl TryFrom<RawFamilyCommand> for FamilyCommand {
             version: raw.version,
             request: raw.request,
             create_mode: raw.create_mode,
+            destination_parent: raw.destination_parent,
         };
         command.validate()?;
         Ok(command)
@@ -107,11 +120,11 @@ impl TryFrom<RawFamilyCommand> for FamilyCommand {
 }
 impl FamilyCommand {
     pub fn new(request: MutationRequest, create_mode: Option<CreateMode>) -> Result<Self> {
-        let command = Self {
-            version: 1,
-            request,
-            create_mode,
-        };
+        Self::new_with_parent(request, create_mode, None)
+    }
+    pub fn new_with_parent(request: MutationRequest, create_mode: Option<CreateMode>,
+        destination_parent: Option<DestinationParent>) -> Result<Self> {
+        let command = Self { version: 1, request, create_mode, destination_parent };
         command.validate()?;
         Ok(command)
     }
@@ -123,6 +136,16 @@ impl FamilyCommand {
             return Err(Error::UnsupportedCommandVersion);
         }
         self.request.validate()?;
+        if let Some(parent) = &self.destination_parent {
+            let Mutation::Move { path, .. } = &self.request.mutation else {
+                return Err(ContractError::InvalidMutation { reason: "destination parent is only valid for Move".into() }.into());
+            };
+            let matches = match parent {
+                DestinationParent::Root => path.parent().is_none(),
+                DestinationParent::Folder { path: selected, .. } => path.parent().as_ref() == Some(selected),
+            };
+            if !matches { return Err(ContractError::InvalidMutation { reason: "destination does not match selected parent".into() }.into()); }
+        }
         match (&self.request.mutation, self.create_mode) {
             (
                 Mutation::Create {
@@ -141,6 +164,18 @@ impl FamilyCommand {
             (_, None) => Ok(()),
             (_, Some(_)) => Err(Error::InvalidMode),
         }
+    }
+    /// Fresh snapshot validation only, AFTER exact retained replay. The final
+    /// store writer repeats this inside its existing full graph/entry CAS.
+    pub fn validate_destination_parent(&self, entries: &[EntryState]) -> Result<()> {
+        self.validate()?;
+        if let Some(DestinationParent::Folder { id, revision, path }) = &self.destination_parent {
+            let entry = zorid_core::validate_target(entries.iter().find(|entry| entry.id == *id), id, revision)?;
+            if entry.kind != EntryKind::Folder || entry.path != *path {
+                return Err(ContractError::InvalidMutation { reason: "selected destination parent changed".into() }.into());
+            }
+        }
+        Ok(())
     }
     /// The caller finds `prior` by operation ID in its scoped durable journal.
     /// This does NOT authorize a prepared intent or validate an attached receipt.
@@ -1019,4 +1054,37 @@ pub fn plan_mutation(
         authored_files: b.authored,
         text,
     })
+}
+
+#[cfg(test)]
+mod destination_parent_tests {
+    use super::*;
+    use zorid_core::OperationId;
+    fn command(path: &str, parent: Option<DestinationParent>) -> FamilyCommand {
+        FamilyCommand::new_with_parent(MutationRequest { operation_id: OperationId::new("parent-move").unwrap(),
+            mutation: Mutation::Move { id: EntryId::new("source").unwrap(), expected: Revision::new("r1").unwrap(), path: VaultPath::new(path).unwrap() } }, None, parent).unwrap()
+    }
+    #[test]
+    fn omitted_parent_preserves_exact_old_json_and_explicit_root_is_distinct() {
+        let old = command("target.md", None);
+        let json = serde_json::to_string(&old).unwrap();
+        assert!(!json.contains("destination_parent"));
+        assert_eq!(serde_json::from_str::<FamilyCommand>(&json).unwrap(), old);
+        let guarded = command("target.md", Some(DestinationParent::Root));
+        assert!(matches!(guarded.check_replay(&old), Err(Error::Contract(ContractError::IdempotencyConflict { .. }))));
+        assert!(serde_json::from_str::<FamilyCommand>(&json.replace(",\"create_mode\":null", "")).is_err());
+    }
+    #[test]
+    fn selected_folder_requires_exact_live_identity_revision_and_path() {
+        let folder = EntryState { id: EntryId::new("folder").unwrap(), revision: Revision::new("f1").unwrap(), path: VaultPath::new("P").unwrap(), kind: EntryKind::Folder, deleted: false };
+        let guarded = command("P/target.md", Some(DestinationParent::Folder { id: folder.id.clone(), revision: folder.revision.clone(), path: folder.path.clone() }));
+        guarded.validate_destination_parent(&[folder.clone()]).unwrap();
+        let mut changed = folder.clone(); changed.revision = Revision::new("f2").unwrap();
+        assert!(guarded.validate_destination_parent(&[changed]).is_err());
+        let mut changed = folder.clone(); changed.path = VaultPath::new("Q").unwrap();
+        assert!(guarded.validate_destination_parent(&[changed]).is_err());
+        assert!(guarded.validate_destination_parent(&[]).is_err());
+        let mut invalid = guarded; invalid.destination_parent = Some(DestinationParent::Root);
+        assert!(invalid.validate().is_err());
+    }
 }

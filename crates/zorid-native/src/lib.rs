@@ -27,8 +27,10 @@ pub use zorid_store::{
 };
 pub use zorid_store::{
     FamilyAuthoredStatus, FamilyCreateMode, FamilyEnvelopeStatus, FamilyReceiveCommit, FamilyScope,
-    FamilyStatus,
+    FamilyStatus, FamilyCommandKind, FamilyCommandProjection, FamilyCommandStatus,
+    MAX_FAMILY_COMMAND_STATUS_BYTES,
 };
+pub use zorid_file_sync::mutation::{DestinationParent, FamilyCommand};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FamilyReceiveOutcome {
     pub commit: FamilyReceiveCommit,
@@ -476,6 +478,9 @@ impl NativeVault {
     ) -> Result<ApplyOutcome> {
         unsupported()
     }
+    pub fn family_apply_command(&mut self, _: &FamilyCommand) -> Result<ApplyOutcome> { unsupported() }
+    pub fn family_apply_command_compact(&mut self, _: &FamilyCommand) -> Result<FamilyCommandStatus> { unsupported() }
+    pub fn family_command_status(&self, _: &FamilyCommand) -> Result<FamilyCommandStatus> { unsupported() }
     pub fn family_receive(
         &mut self,
         _: &zorid_crypto::OpenedEnvelope,
