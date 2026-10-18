@@ -77,6 +77,22 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+First-party implementation checkpoint (2026-10-18 02:26 UTC): root read the full
+5fb80202 consumer map and authorized independent Types/Tasks domain files in
+zorid-bases plus task preset/config modules, and WorkBlock compiled validation in
+zorid-records with narrow Store/WASM admission hooks. Same records owner may add
+zorid-core and already pinned chrono/chrono-tz dependencies/feature lock edges;
+root still integrates main. Local/incoming/retry/restore all share validation;
+tasks remain Markdown files, never managed mirrors. Existing export64-page limit
+must not silently rise to the proposed UI200-row aggregate. Host/desktop/Workspace
+activation hunks need named ownership later, no new framework. Schema guard is
+integrated mainafb3947c..87efd9db; replica fixture/proof52c3cf55..e5a5405b closes
+bounded independent adapter-worker HTTP1 convergence, not normal product authoring.
+Native371 bridge contract is strict8 fields; only Workspace disabled initializer
+hunk is shared. Unsafe state always cancels without resetting producer high-water
+revision; native owner alone owns Swift matching consumer. Per-vault model/store
+API uses trusted UUID and throwing v2 restore, with no silent old/global fallback.
+
 Mobile steering checkpoint (2026-10-18 02:19 UTC): user phone findings require
 vault-scoped tabs/restore, functional Home create, route gestures, and skeleton-only
 loading without technical text.2f owns isolated NativeDocumentTabs/MetadataStore
