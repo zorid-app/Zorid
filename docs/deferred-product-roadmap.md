@@ -116,6 +116,19 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:24UTC: host38747 bounded at2m11s/terminal101 SIGTERM, no pass claim;
+expensive repeated native recovery during setup is being replaced with public
+Store setup on one connection, closed before real leased host endpoints. Preserve
+actual >1MiB reply/status/compact assertions. Next log
+/private/tmp/native-menu-wire-host-optimized.log; Rust worker retains slot.
+Latest native coordinator draft audit msg_472295a52a0c still has concrete route,
+foreground epoch and recovery corrections; owner notified msg_23227ec2562a.
+Native owner assigned bd57 new-file-only NativeTabDestinationFactory.swift for
+file/Home preparation; API ACK msg_d0577b80284b conditional on exact coordinator
+signature agreement. No adapter navigation/hidden Home host; buffer fresh identity
+until root registration if needed. Newnote factory mode remains separate proposal
+until existing durable create identity/uncertain retry behavior is reviewed.
+
 00:23UTC: root independently source-approved fcdb2a78/e0704c2f. Corrective
 portable2 tests passed; final host run38747 live, log
 /private/tmp/native-menu-wire-host-final.log (old retry log records failures).
