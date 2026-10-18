@@ -1058,3 +1058,46 @@ phone editing/keyboard/tab runtime proof yet. Requested unlock again; retry is
 authorized without rebuild. Private install/launch logs0600 in/private/tmp.
 Phone8 skipped; Dev9 replaces Dev7 installation. Heavy compiler slot can return
 now while waiting for unlocked launch; no simulator test app/helper remains.
+
+
+### Source queue after phone9 delivery — 2026-10-18 00:00 UTC
+
+Exclusive heavy slot returned msg6f4746c927eb; root acknowledged02a5f76d3f71 and
+claimed frozen import5fc59cae host10/ABI5 checks. No owner compiler/Simulator job
+may start until new acknowledgement. Install-free phone launch retry70606 still
+EXIT1 Locked; lockState passcodeRequired=false does not prove launch-unlocked.
+Stop retries until explicit unlock/new evidence. Phone9 installation remains
+confirmed, phone UX not verified.
+
+Reviewed source queue, NOT composed into phone9:
+- Menu5adb0e4a only Move/Rename/Delete; independent117 c88b03d9d6b6 withheld
+ acceptance for atomic selected destination-folder witness race, native pending
+ journal ownership across startup/editor/history/newnote/import handoff, and
+ known no-authority lender completion. Large folder receipts >1MiB can remain
+ uncertain forever; never infer original receipt from current listing. Root
+ assigned native-consumer read-only minimal Rust parent/status proposal.371
+ owns native recovery/lender corrections and row flash; not complete UX.
+- Loading7128f1d8 source parsed/reviewed initially. Owner full review requested
+ d809 followup: picker viewDidAppear resets opening while popped loader open
+ remains pending, permitting a new open before old returned host close ACK.
+ Keep picker reservation until successful transfer or canceled open/close drain.
+ File loader already owns explicit busy/close gate. No loading source composed.
+- Native import source979327ce atop2ab4e411 typed/staging/helper source ready;
+ noauthority lender dependency, project registrations/router integration and real
+ native pipeline evidence still pending. Root composes Rust source/dependencies.
+- Tabs source5824bbfe +2d5e934e on canonical-baseea1e209d reviewed by root/owner
+ without concrete source blocker, TWO NEW files only. Opaque store identity
+ String, ticket+source-owner nonce, one committed file/Home per tab, mixed scopes,
+ explicit bounded restore disposition; memory-only bounded native snapshots.
+ Temporary actual-source model harness requested, not executed during root slot.
+ Existing header/FAB/overview/editor/snapshot/lifecycle wiring requires exact
+ proposal and named scope before edits; tabs are not available in9.
+- Bounded Share source helper newly assigned bd57: ONLY NEW NativeFileExport.swift
+ in separate branch from preserved979; native read_presented exact revision/raw
+ bytes <=16MiB file-only -> own private export -> system activity sheet. No Swift
+ vault IO or Rust/NativePages/NativeMobile/project changes granted; frozen API to
+371 before wiring. Source/review/runtime all pending.
+
+Confirmed native9 batch sent sole main integrator msgd455052bc708: first-parent
+b947801b merge delta,0beb0268,e0070be2 plus delivery ledgers. No main mutation or
+push here. Integration hashes/semantic reconciliation remain coordinator-owned.
