@@ -20,18 +20,24 @@ export function createBrowserManagedRecordsHost(host:Host) {
   const entries:Array<{consumer:ManagedHostConsumer;handle:ManagedCollectionHandle;after:string}>=[];
   let stopped=false, pending:Promise<void>|undefined,again=false,scopeId:string|undefined;
   const active=()=>{host.assertActive();if(stopped)throw new BrowserVaultError('client_not_admitted','Managed host is closing');};
-  async function maintain() {
+  async function registerConsumers():Promise<boolean> {
     active();
     const scope=await host.scope();active();
-    if(!scope)return;
+    if(!scope)return false;
     const identity=JSON.stringify([scope.realm_id,scope.vault_id]);
     if(scopeId!==undefined&&scopeId!==identity)throw new BrowserVaultError('sync_scope_conflict','Managed host scope changed');
     scopeId=identity;
     for(const consumer of host.consumers.slice(entries.length)){
       active();
       const handle=await host.records.register({realmId:scope.realm_id,vaultId:scope.vault_id,owner:consumer.owner,collection:consumer.collection},consumer.registration(scope));
-      active();entries.push({consumer,handle,after:'0'});
+      // Retain ownership before callback/guard: failed attachment still drains it.
+      entries.push({consumer,handle,after:'0'});active();consumer.opened?.(handle);active();
     }
+    return true;
+  }
+  async function initializeOnLocalTail():Promise<void> {await registerConsumers();}
+  async function maintain() {
+    if(!await registerConsumers())return;active();
     // Each round is at most four existing adapter pages (16 receipts / 1 MiB
     // each) and four 64-row change pages. Yield to other local operations at
     // this finite budget; further work waits for a new host trigger.
@@ -74,6 +80,8 @@ export function createBrowserManagedRecordsHost(host:Host) {
   }
   return {
     trigger,
+    /** Called directly by open while it already holds the local tail. */
+    initializeOnLocalTail,
     /** Synchronous admission fence, before the release operation is queued. */
     stop(){stopped=true;},
     async drain(){await pending;for(const entry of entries)entry.handle.dispose();entries.length=0;},

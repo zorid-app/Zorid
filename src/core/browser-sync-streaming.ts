@@ -116,7 +116,7 @@ export interface PreparedStreamingRecoveryRead {
   length():string; chunkCount():number; chunkJson(index:number):string;
   verifyPayload(index:number,exactPayload:Uint8Array):Uint8Array; dispose():void;
 }
-export type BrowserStreamingManagedRecords = Pick<ReturnType<typeof createBrowserManagedRecords>,'register'|'apply'|'snapshot'|'retryPage'|'changes'>;
+export type BrowserStreamingManagedRecords = Pick<ReturnType<typeof createBrowserManagedRecords>,'register'|'apply'|'applyWorkBlock'|'watermark'|'exportOne'|'snapshot'|'retryPage'|'changes'>;
 export interface BrowserStreamingSyncEngine {
   readonly managedRecords?: BrowserStreamingManagedRecords;
   api:BrowserSync & {readonly concurrentPreparation:true};
@@ -903,7 +903,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
     },
   }}):undefined;
 
-  const managedRecords:BrowserStreamingManagedRecords|undefined=managedAdapter?Object.freeze({register:managedAdapter.register,apply:managedAdapter.apply,snapshot:managedAdapter.snapshot,retryPage:managedAdapter.retryPage,changes:managedAdapter.changes}):undefined;
+  const managedRecords:BrowserStreamingManagedRecords|undefined=managedAdapter?Object.freeze({register:managedAdapter.register,apply:managedAdapter.apply,applyWorkBlock:managedAdapter.applyWorkBlock,watermark:managedAdapter.watermark,exportOne:managedAdapter.exportOne,snapshot:managedAdapter.snapshot,retryPage:managedAdapter.retryPage,changes:managedAdapter.changes}):undefined;
 
   const api:BrowserSync & {readonly concurrentPreparation:true}={
     concurrentPreparation:true,

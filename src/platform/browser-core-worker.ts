@@ -9,7 +9,9 @@ import { afterDurableCommit } from './browser-core-events.ts';
 import { claimBrowserClient } from './browser-client-lease.ts';
 import type { BrowserClientLease } from './browser-client-lease.ts';
 import { createBrowserManagedRecordsHost } from './browser-managed-records-host.ts';
-import { browserManagedRecordConsumers } from './browser-managed-records-registry.ts';
+import { createBrowserManagedRecordConsumers } from './browser-managed-records-registry.ts';
+import { createBrowserWorkBlocksHost } from './browser-workblocks-host.ts';
+import type { BrowserWorkBlocksWasm } from './browser-workblocks-host.ts';
 
 // DOM builds and worker builds share this file without mixing lib.dom/lib.webworker.
 const port = self as unknown as {onmessage: ((event: MessageEvent) => void) | null; postMessage(value: unknown): void};
@@ -21,6 +23,7 @@ let sync:BrowserSyncWorker|undefined;
 let storageFailed=false,closing=false;
 let binary:BinaryStreams|undefined;
 let managed:ReturnType<typeof createBrowserManagedRecordsHost>|undefined;
+let workBlocks:ReturnType<typeof createBrowserWorkBlocksHost>|undefined;
 const assertManagedActive=()=>{assertOwner();if(closing)throw new BrowserVaultError('client_not_admitted','Browser client is releasing');};
 let releasingCleanup=false;
 const assertVaultActive=()=>{assertOwner();if(closing&&!releasingCleanup)throw new BrowserVaultError('client_not_admitted','Browser client is releasing');};
@@ -37,7 +40,7 @@ function storageDiagnostic(details:unknown):Record<string,string|boolean>|undefi
 }
 function failStorage(code:string,details?:unknown):void {
   if(closing||storageFailed||!['storage_closed','storage_corrupt','client_ownership_lost'].includes(code))return;
-  storageFailed=true;managed?.stop();sync?.revoke();channel?.close();vault?.close();
+  storageFailed=true;workBlocks?.stop();managed?.stop();sync?.revoke();channel?.close();vault?.close();
   try{const diagnostic=storageDiagnostic(details);port.postMessage({event:'storage-error',code,...(diagnostic?{details:diagnostic}:{})});}catch{/* Worker transport already failed. */}
 }
 function local<T>(operation:()=>Promise<T>):Promise<T> {
@@ -91,12 +94,21 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
         changed:async assertSession=>{assertSession();await refresh(assertSession);assertSession();channel?.postMessage({changed:true});}});
       channel = new BroadcastChannel(`zorid-core:${payload.database}`);
       const records=streaming()?.managedRecords;
-      if(records)managed=createBrowserManagedRecordsHost({records,consumers:browserManagedRecordConsumers,local,assertActive:assertManagedActive,
+      if(payload.legacyFixture!==true){
+        if(!records)throw new BrowserVaultError('workblocks_unavailable','Managed WorkBlock storage is unavailable');
+        workBlocks=createBrowserWorkBlocksHost({records:records as unknown as Parameters<typeof createBrowserWorkBlocksHost>[0]['records'],wasm:wasm as unknown as BrowserWorkBlocksWasm,
+          assertActive:assertManagedActive,scope:async()=>{const inspected=await vault!.sync.inspect();assertManagedActive();return inspected.scope;},
+          committed:async()=>{assertManagedActive();port.postMessage({event:'change',paths:[]});channel?.postMessage({changed:true});await refresh();assertManagedActive();void managed?.trigger();}});
+      }
+      if(records)managed=createBrowserManagedRecordsHost({records,consumers:workBlocks?createBrowserManagedRecordConsumers(wasm as unknown as BrowserWorkBlocksWasm,{opened:handle=>workBlocks!.opened(handle),changed:()=>{}}):[],local,assertActive:assertManagedActive,
         scope:async()=>{const inspected=await vault!.sync.inspect();return inspected.scope;},hasSession:()=>!!sync?.recordsSession(),
         notify:()=>{assertManagedActive();port.postMessage({event:'change',paths:[]});channel?.postMessage({changed:true});},
         failed:error=>{const code=error instanceof BrowserVaultError?error.code:'managed_host_failed';failStorage(code);
           if(['sync_session_revoked','records_retry_key_unavailable','managed_snapshot_conflict','sync_snapshot_conflict'].includes(code))return;
-          if(!closing&&!storageFailed){storageFailed=true;managed?.stop();sync?.revoke();channel?.close();vault?.close();port.postMessage({event:'storage-error',code});}}});
+          if(!closing&&!storageFailed){storageFailed=true;workBlocks?.stop();managed?.stop();sync?.revoke();channel?.close();vault?.close();port.postMessage({event:'storage-error',code});}}});
+      // Open already holds the local tail; do not recursively queue and await.
+      await managed?.initializeOnLocalTail();assertManagedActive();
+      if(payload.initializeLocal===true&&payload.legacyFixture!==true&&!workBlocks?.ready)throw new BrowserVaultError('workblocks_unavailable','Compiled WorkBlock consumer was not registered');
       let recoveredCommit = false;
       for (const intent of await vault.intents(clientId)) if (!intent.acknowledged && ['commit_requested','committed'].includes(intent.status)) {
         try { assertOwner(); await vault.executeIntent(clientId, intent.intent_id); recoveredCommit = true; }
@@ -111,9 +123,9 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
       recovery = new Set((await vault.intents(clientId)).filter(intent => !intent.acknowledged && intent.status !== 'prepared').map(intent=>intent.intent_id));
       assertManagedActive();
       void managed?.trigger();
-      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{}),documentIndexAvailable:!!streaming()?.documentIndex};
+      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{}),documentIndexAvailable:!!streaming()?.documentIndex,...(workBlocks?.ready?{workBlocks:true}:{})};
     } catch (error) {
-      managed?.stop();sync?.revoke(); channel?.close(); channel = undefined; vault.close(); vault = undefined;
+      workBlocks?.stop();managed?.stop();await workBlocks?.drain();await managed?.drain();sync?.revoke(); channel?.close(); channel = undefined; vault.close(); vault = undefined;
       if (lease) { try { await lease.release(); } catch { /* Original open failure remains uncertain. */ } }
       throw error;
     }
@@ -122,6 +134,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
   if (operation === 'release-client') {
     if (released) return; // Exact retry after a lost release acknowledgement.
     assertOwner();
+    await workBlocks?.drain();
     await managed?.drain();
     await Promise.allSettled([...detached]);
     releasingCleanup=true;
@@ -132,6 +145,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
     await lease!.release(); released = true; return;
   }
   assertOwner();
+  if(operation==='workblock-command'){assertManagedActive();if(!workBlocks?.ready)throw new BrowserVaultError('workblocks_unavailable','WorkBlock service is unavailable');return workBlocks.execute(payload);}
   if(operation.startsWith('document-index-')){
     const index=streaming()?.documentIndex;if(!index)throw new BrowserVaultError('index_unavailable','Shared document index WASM is unavailable');
     switch(operation){
@@ -193,7 +207,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
 port.onmessage = ({data}) => {
   const {id, operation, payload} = data;
   // Revoke before queued storage dispatch. Network work never occupies the local-operation tail.
-  if (operation === 'release-client') {closing=true;managed?.stop();sync?.revoke();}
+  if (operation === 'release-client') {closing=true;workBlocks?.stop();managed?.stop();sync?.revoke();}
   if(typeof operation==='string'&&operation.startsWith('binary-')){
     const task=(async()=>{try{if(closing)throw new BrowserVaultError('client_not_admitted','Browser client is releasing');assertOwner();const result=await dispatch(operation,payload);
       const transfer=operation==='binary-read'&&result&&typeof result==='object'&&'bytes'in result&&result.bytes instanceof Uint8Array&&result.bytes.buffer instanceof ArrayBuffer?[result.bytes.buffer]:undefined;
@@ -209,8 +223,18 @@ port.onmessage = ({data}) => {
         if(operation==='sync-configure'){
           const configured=sync.configure(payload);
           if(payload){payload.bearerToken='';if(payload.keyBytes instanceof Uint8Array)payload.keyBytes.fill(0);}
-          result=await configured;
-          assertManagedActive();
+          await configured;assertManagedActive();
+          const session=sync.recordsSession();
+          if(!session)throw new BrowserVaultError('sync_session_revoked','Sync configuration was revoked');
+          // configure is detached; join the existing local tail exactly once.
+          // Registration itself runs directly on that tail, never recursively.
+          result=await local(async()=>{
+            assertManagedActive();session.assertActive();
+            await managed?.initializeOnLocalTail();
+            assertManagedActive();session.assertActive();
+            return {workBlocks:workBlocks?.ready===true};
+          });
+          assertManagedActive();session.assertActive();
           void managed?.trigger();
         }else result=operation==='sync-once'?await sync.once():sync.revoke();
         port.postMessage({id,ok:true,result});
@@ -228,7 +252,7 @@ port.onmessage = ({data}) => {
     try { port.postMessage({id, ok:true, result:await dispatch(operation, payload)}); }
     catch (error) {
       const failure = error instanceof BrowserVaultError ? error : new BrowserVaultError('storage_failure', error instanceof Error ? error.message : String(error));
-      try { port.postMessage({id, ok:false, error:{code:failure.code, message:failure.message, details:failure.details, source:failure.source}}); }
+      try { port.postMessage({id, ok:false, error:{code:failure.code, message:failure.message, details:failure.details, source:failure.source,...(operation==='workblock-command'?{commitUncertain:(failure as BrowserVaultError&{commitUncertain?:boolean}).commitUncertain===true}:{})}}); }
       catch { /* Lost response remains outcome_unknown; do not poison later dispatch. */ }
       failStorage(failure.code,failure.details);
     }

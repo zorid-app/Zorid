@@ -1,0 +1,395 @@
+{
+  "schemaVersion": 1,
+  "task": {
+    "taskId": "task_172568a274b3",
+    "dispatchId": "ctx_0a4cfee3f064",
+    "ownedBranch": "managed-browser-wb-proof",
+    "scope": "documentation only; raw files retained in place"
+  },
+  "sourceFreeze": {
+    "root": "/Users/ctk/orca/workspaces/Zorid/managed-browser-wb-integration",
+    "head": "3f07c9d4ed080bda39c24d8e4ecf1a42907e0e1d",
+    "fingerprint": "2839865d44b7a7ba87e862dfac82d118125053866552135c7643df8fedae60d0",
+    "files": {
+      "zorid_wasm.js": "ab5af194bf78cad8a5dd5da6396d7671bef07172e24463eb0c82ad2b1221986f",
+      "zorid_wasm_bg.wasm": "7e95c92909d7e2fd8c4f4136a0844bde93b3cbf3c395f13655496af97a33121f"
+    },
+    "sourceDigest": "b71686c024e405843ed7a34acb3b7db1b9b391e0cea86cd900d0e36374917d50",
+    "observation": {
+      "channel": "zorid-workblocks-proof:dc411a67-61f9-455c-9bf4-aa4b07cfebf1",
+      "path": "src/platform/browser-core-worker.ts",
+      "mode": "test-only prepend; original product body unchanged",
+      "originalSha256": "a1277a3d40b1744b0ee5b63a097b0d20bd2d8fbfa2858a267e71d4caa8d1b385",
+      "prependSha256": "e7ec847133eaea99c4b43e52feefa051d947029761bdec768da2ed1098540b29",
+      "transformedSha256": "f972b4a0178dbbac9d43587e052dafa5a47c0171b8afc028c2f9a9e621c61b55"
+    },
+    "sourceDigestAlgorithm": "SHA256 over src/core, src/platform, tests/browser-workblocks-worker recursively in localeCompare order; .ts/.mjs/.html only; relative path + NUL + bytes + NUL",
+    "sourceFileCount": 71,
+    "sourcePaths": [
+      "src/core/attachment-import.ts",
+      "src/core/binary-streams.ts",
+      "src/core/binary-transfer.ts",
+      "src/core/browser-binary-stage-store.ts",
+      "src/core/browser-checkpoints.ts",
+      "src/core/browser-document-index.ts",
+      "src/core/browser-managed-records.ts",
+      "src/core/browser-normalized-idb.ts",
+      "src/core/browser-streaming-vault.ts",
+      "src/core/browser-sync-streaming.ts",
+      "src/core/browser-sync.ts",
+      "src/core/browser-vault.ts",
+      "src/core/checkpoint-input.ts",
+      "src/core/document-semantics.ts",
+      "src/core/durable-checkpoints.ts",
+      "src/core/durable-writes.ts",
+      "src/core/index.ts",
+      "src/core/memory-adapter.ts",
+      "src/core/metadata.ts",
+      "src/core/properties.ts",
+      "src/core/subpath.ts",
+      "src/core/types.ts",
+      "src/core/vault-config.ts",
+      "src/core/vault.ts",
+      "src/core/window-handoff.ts",
+      "src/core/workblocks.ts",
+      "src/platform/binary.ts",
+      "src/platform/bridge.d.ts",
+      "src/platform/browser-binary-commands.ts",
+      "src/platform/browser-client-admission.ts",
+      "src/platform/browser-client-lease.ts",
+      "src/platform/browser-client-slots.ts",
+      "src/platform/browser-core-events.ts",
+      "src/platform/browser-core-fixture-flags.d.ts",
+      "src/platform/browser-core-fixture.ts",
+      "src/platform/browser-core-runtime.ts",
+      "src/platform/browser-core-worker.ts",
+      "src/platform/browser-core.ts",
+      "src/platform/browser-default.ts",
+      "src/platform/browser-durable-writes.ts",
+      "src/platform/browser-file-commands.ts",
+      "src/platform/browser-grpc-frame-guard.ts",
+      "src/platform/browser-grpc-transport.ts",
+      "src/platform/browser-legacy-export.ts",
+      "src/platform/browser-managed-records-host.ts",
+      "src/platform/browser-managed-records-registry.ts",
+      "src/platform/browser-sync-transport.ts",
+      "src/platform/browser-sync-worker.ts",
+      "src/platform/browser-workblocks-host.ts",
+      "src/platform/browser-workblocks.ts",
+      "src/platform/browser.ts",
+      "src/platform/context-menu.ts",
+      "src/platform/desktop-document-semantics.ts",
+      "src/platform/desktop.ts",
+      "src/platform/index.ts",
+      "src/platform/input-context-menu.ts",
+      "src/platform/mobile-native.ts",
+      "src/platform/mobile.ts",
+      "src/platform/path.ts",
+      "tests/browser-workblocks-worker/assertions.mjs",
+      "tests/browser-workblocks-worker/assertions.test.mjs",
+      "tests/browser-workblocks-worker/atomicity.test.mjs",
+      "tests/browser-workblocks-worker/cleanup.mjs",
+      "tests/browser-workblocks-worker/cleanup.test.mjs",
+      "tests/browser-workblocks-worker/fixture.mjs",
+      "tests/browser-workblocks-worker/index.html",
+      "tests/browser-workblocks-worker/observation-client.mjs",
+      "tests/browser-workblocks-worker/observation-transform.mjs",
+      "tests/browser-workblocks-worker/observation-transform.test.mjs",
+      "tests/browser-workblocks-worker/run.mjs",
+      "tests/browser-workblocks-worker/worker-observer.mjs"
+    ],
+    "rustFingerprintAlgorithm": "SHA256 of wasm-bindgen 0.2.129 + NUL, then sourceInputs(root) relative path + NUL + bytes + NUL"
+  },
+  "beforeAfter": {
+    "before": {
+      "head": "3f07c9d4ed080bda39c24d8e4ecf1a42907e0e1d",
+      "fingerprint": "2839865d44b7a7ba87e862dfac82d118125053866552135c7643df8fedae60d0",
+      "files": {
+        "zorid_wasm.js": "ab5af194bf78cad8a5dd5da6396d7671bef07172e24463eb0c82ad2b1221986f",
+        "zorid_wasm_bg.wasm": "7e95c92909d7e2fd8c4f4136a0844bde93b3cbf3c395f13655496af97a33121f"
+      },
+      "sourceDigest": "b71686c024e405843ed7a34acb3b7db1b9b391e0cea86cd900d0e36374917d50",
+      "observation": {
+        "channel": "zorid-workblocks-proof:dc411a67-61f9-455c-9bf4-aa4b07cfebf1",
+        "path": "src/platform/browser-core-worker.ts",
+        "mode": "test-only prepend; original product body unchanged",
+        "originalSha256": "a1277a3d40b1744b0ee5b63a097b0d20bd2d8fbfa2858a267e71d4caa8d1b385",
+        "prependSha256": "e7ec847133eaea99c4b43e52feefa051d947029761bdec768da2ed1098540b29",
+        "transformedSha256": "f972b4a0178dbbac9d43587e052dafa5a47c0171b8afc028c2f9a9e621c61b55"
+      }
+    },
+    "after": {
+      "witness": "Runner artifactProof() equality after successful groups before cleanup; no separate after object serialized",
+      "matchesBefore": true
+    },
+    "independentReadOnlyRecomputation": {
+      "at": "2026-10-18T05:05:03.401Z",
+      "head": "3f07c9d4ed080bda39c24d8e4ecf1a42907e0e1d",
+      "fingerprint": "2839865d44b7a7ba87e862dfac82d118125053866552135c7643df8fedae60d0",
+      "sourceDigest": "b71686c024e405843ed7a34acb3b7db1b9b391e0cea86cd900d0e36374917d50",
+      "files": {
+        "zorid_wasm.js": "ab5af194bf78cad8a5dd5da6396d7671bef07172e24463eb0c82ad2b1221986f",
+        "zorid_wasm_bg.wasm": "7e95c92909d7e2fd8c4f4136a0844bde93b3cbf3c395f13655496af97a33121f"
+      },
+      "observationHashesMatch": true
+    }
+  },
+  "generatedArtifacts": [
+    {
+      "path": "/Users/ctk/orca/workspaces/Zorid/managed-browser-wb-integration/target/browser-wasm/generated/build.json",
+      "bytes": 319,
+      "sha256": "ab9c77c019f7dc33ee27c09597ebd17bf6c86687000cd83e32b1b261131464ec"
+    },
+    {
+      "path": "/Users/ctk/orca/workspaces/Zorid/managed-browser-wb-integration/target/browser-wasm/generated/zorid_wasm.js",
+      "bytes": 151263,
+      "sha256": "ab5af194bf78cad8a5dd5da6396d7671bef07172e24463eb0c82ad2b1221986f"
+    },
+    {
+      "path": "/Users/ctk/orca/workspaces/Zorid/managed-browser-wb-integration/target/browser-wasm/generated/zorid_wasm_bg.wasm",
+      "bytes": 7959382,
+      "sha256": "7e95c92909d7e2fd8c4f4136a0844bde93b3cbf3c395f13655496af97a33121f"
+    }
+  ],
+  "rawArtifacts": [
+    {
+      "path": "/Users/ctk/orca/workspaces/Zorid/managed-data-foundation/tmp/browser-wb-proof-3f07c9d4/report.json",
+      "bytes": 42831740,
+      "sha256": "34031e83c8c02d963c9ddcbb496f0cf753e13c4285e78b437b47fef5e22d30c6"
+    },
+    {
+      "path": "/Users/ctk/orca/workspaces/Zorid/managed-data-foundation/tmp/browser-wb-proof-3f07c9d4/cleanup.json",
+      "bytes": 1441,
+      "sha256": "77217d8dac409f8d9e9178ab79b6baad6dc463a1dd9ad6bdca7604892a306628"
+    },
+    {
+      "path": "/Users/ctk/orca/workspaces/Zorid/managed-data-foundation/tmp/browser-wb-proof-3f07c9d4/browser.json",
+      "bytes": 300,
+      "sha256": "ebc2d4dd529ac915f4a46dd3bfbad0210afe5271fe263a360f2abb9b06bd1217"
+    },
+    {
+      "path": "/Users/ctk/orca/workspaces/Zorid/managed-data-foundation/tmp/browser-wb-proof-3f07c9d4/cdp-events.json",
+      "bytes": 4959,
+      "sha256": "1231adc3c37b89068ea5633f68545b693b4be82ccaf2eb3b681bdd191b3b133f"
+    },
+    {
+      "path": "/Users/ctk/orca/workspaces/Zorid/managed-data-foundation/tmp/browser-wb-proof-3f07c9d4/chrome-stderr.log",
+      "bytes": 11326,
+      "sha256": "fb7345e445e9fdad2945c92874e91b659f8ad19577911de85f1c608988d6786b"
+    },
+    {
+      "path": "/Users/ctk/orca/workspaces/Zorid/managed-data-foundation/tmp/browser-wb-proof-3f07c9d4.log",
+      "bytes": 140,
+      "sha256": "5477e46044a59ea2e35e0bac1b68b0027088335aa79b8455abe2879a426229c0"
+    }
+  ],
+  "result": {
+    "status": "passed-subset",
+    "groups": [
+      {
+        "name": "normal admitted CRUD/ref lifecycle, immutable receipts, rejections and restart",
+        "status": "passed",
+        "ms": 237
+      },
+      {
+        "name": "bounded window scanning, byte nonconsumption, cursor/query/watermark fences",
+        "status": "passed",
+        "ms": 9005
+      },
+      {
+        "name": "journal replay precedes deliberately corrupt current state and source/quota reads",
+        "status": "passed",
+        "ms": 188
+      },
+      {
+        "name": "admitted release drains held strict writes before cleanup and exact client reacquires",
+        "status": "passed",
+        "ms": 258
+      },
+      {
+        "name": "deliberate worker release during real before-prepare hold preserves exact outcome",
+        "status": "passed",
+        "ms": 239
+      },
+      {
+        "name": "deliberate worker release during real common-authored hold preserves exact outcome",
+        "status": "passed",
+        "ms": 307
+      },
+      {
+        "name": "deliberate worker release during real after-final-write hold preserves exact outcome",
+        "status": "passed",
+        "ms": 341
+      },
+      {
+        "name": "sync revocation during held local authoring preserves credential-independent durable save",
+        "status": "passed",
+        "ms": 161
+      },
+      {
+        "name": "deliberate exact reply loss after commit remains uncertain and replays original receipt",
+        "status": "passed",
+        "ms": 3368
+      },
+      {
+        "name": "two normal same-authority clients catch a deliberately lost hint on foreground refresh",
+        "status": "passed",
+        "ms": 214
+      },
+      {
+        "name": "two normal Workers: encrypted offline field/ref/delete races, restart receipts and no echo",
+        "status": "passed",
+        "ms": 1794
+      },
+      {
+        "name": "normal encrypted receive rejects wrong key/scope and aborts a session-revoked held transaction",
+        "status": "passed",
+        "ms": 496
+      }
+    ],
+    "atomicitySnapshots": 43,
+    "strict": {
+      "count": 443,
+      "complete": 436,
+      "abort": 7
+    },
+    "causalPairs": 10,
+    "runnerError": null,
+    "artifactFailures": [],
+    "remainingGates": [
+      "Unrelated fence proof uses a normal file-family mutation, not a second managed collection; 1MiB budget is requested, not saturated",
+      "No gRPC/protobuf, rendered UI, native/mobile or full browser matrix proof"
+    ],
+    "limitations": [
+      "Wrong-scope evidence proves configuration rejection only; incoming malicious cross-scope ciphertext rejection remains unproved.",
+      "After-final-write same-facade definite retry remains uncertain and blocks changed input reusing the same operation ID; original durable receipt recovery succeeds after reacquisition through a new runtime."
+    ]
+  },
+  "cleanup": {
+    "startedAt": "2026-10-18T05:01:46.105Z",
+    "chrome": {
+      "pid": 38170,
+      "signals": [
+        {
+          "signal": "SIGTERM",
+          "pid": 38170,
+          "at": "2026-10-18T05:01:46.107Z",
+          "killReturned": true
+        }
+      ],
+      "confirmedExit": true,
+      "status": "exit_event_confirmed",
+      "raw": {
+        "pid": 38170,
+        "events": [
+          {
+            "event": "spawn",
+            "pid": 38170,
+            "at": "2026-10-18T05:01:23.371Z"
+          },
+          {
+            "event": "exit",
+            "code": 0,
+            "signal": null,
+            "at": "2026-10-18T05:01:46.611Z"
+          }
+        ],
+        "exit": {
+          "code": 0,
+          "signal": null,
+          "at": "2026-10-18T05:01:46.611Z"
+        }
+      },
+      "exitCode": 0,
+      "signalCode": null
+    },
+    "profile": {
+      "path": "/var/folders/yc/__symlbx5zxd7v1vhwh84z180000gn/T/zorid-workblocks-browser-chrome-DDu6DK",
+      "removed": true,
+      "status": "absence_confirmed",
+      "absenceErrorCode": "ENOENT",
+      "removedAt": "2026-10-18T05:01:46.905Z"
+    },
+    "vite": {
+      "created": true,
+      "closeResolved": true,
+      "status": "close_confirmed",
+      "addressBefore": {
+        "address": "127.0.0.1",
+        "family": "IPv4",
+        "port": 54132
+      },
+      "httpListeningAfter": false,
+      "closedAt": "2026-10-18T05:01:46.655Z"
+    },
+    "cdp": {
+      "created": true,
+      "closeRequested": true
+    },
+    "failures": [],
+    "finishedAt": "2026-10-18T05:01:46.905Z",
+    "databases": [
+      {
+        "name": "zorid-core-vault:workblocks-proof-7daf8525-9bca-4db5-817e-609d926b2623",
+        "deleted": true
+      },
+      {
+        "name": "zorid-core-vault:workblocks-proof-4e11d81e-96c3-48c5-bd8a-5b90104f7ea5",
+        "deleted": true
+      },
+      {
+        "name": "zorid-core-vault:workblocks-proof-953b6cbc-e9fe-41d3-a6ef-304e34dd5d60",
+        "deleted": true
+      },
+      {
+        "name": "zorid-core-vault:workblocks-proof-7a16b988-b5d3-4473-8023-4fbe54bf0a5e",
+        "deleted": true
+      },
+      {
+        "name": "zorid-core-vault:workblocks-proof-40241492-44ba-46ce-9991-c882ae530a33",
+        "deleted": true
+      },
+      {
+        "name": "zorid-core-vault:workblocks-proof-479ea22c-d9b5-4f4d-b3f8-bd6871100c83",
+        "deleted": true
+      },
+      {
+        "name": "zorid-core-vault:workblocks-proof-da844d00-6718-4a2f-bf65-ca1f74afc9bf",
+        "deleted": true
+      },
+      {
+        "name": "zorid-core-vault:workblocks-proof-d8219d5b-3f6d-48d6-ac43-cea4d2fb94f1",
+        "deleted": true
+      },
+      {
+        "name": "zorid-core-vault:workblocks-proof-34213027-e22d-473e-b8e0-cf913a834bdb",
+        "deleted": true
+      },
+      {
+        "name": "zorid-core-vault:workblocks-proof-1279a833-5f93-46f1-9bf5-02758b36dcd3",
+        "deleted": true
+      },
+      {
+        "name": "zorid-core-vault:workblocks-proof-297a9942-113c-40f7-89cb-01e06f86b01f",
+        "deleted": true
+      },
+      {
+        "name": "zorid-core-vault:workblocks-proof-be0316a2-f0ba-4232-9a33-0bf4ecec7c5a",
+        "deleted": true
+      }
+    ]
+  },
+  "terminalReceipt": {
+    "source": "Coordinator dispatch instruction; not inferred from PASS log or app cleanup",
+    "execSession": 35242,
+    "exitCode": 0,
+    "observedAt": "2026-10-18T05:02:57Z",
+    "note": "PASS log and owned app cleanup occurred at 05:01:46; Node lingered afterward; cause not established"
+  },
+  "review": {
+    "actualEvidenceReviewer": "ctx_b7e810f05a37",
+    "actualAcceptanceReceipt": "msg_c891acf8d710",
+    "coordinatorRelay": "msg_e6a36a421c80",
+    "scope": "actual evidence acceptance; exact final report review tracked separately"
+  }
+}

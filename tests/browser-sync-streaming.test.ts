@@ -721,7 +721,7 @@ const managedEmission=(id:string)=>{const e=emission(id);return {...e,metadata:{
 
 test('records facade excludes raw authenticated receive/plan/commit/key mutation hooks',()=>{
   const h=harness(true),api=h.engine.managedRecords!;
-  assert.deepEqual(Object.keys(api).sort(),['apply','changes','register','retryPage','snapshot']);
+  assert.deepEqual(Object.keys(api).sort(),['apply','applyWorkBlock','changes','exportOne','register','retryPage','snapshot','watermark']);
   for(const name of ['receive','prepareReceive','commitReceive','bindSyncKey'])assert.equal((api as any)[name],undefined);
 });
 

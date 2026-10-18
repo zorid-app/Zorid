@@ -237,3 +237,25 @@ test('metadata row cap plus one byte rejects before immutable storage mutation',
   await assert.rejects(f.run(['sync_graph_records'],(tx,done,abort)=>addImmutableMetadata(tx,'sync_graph_records',row,done,abort)),{code:'storage_metadata_too_large'});
   assert.equal(f.row('sync_graph_records',['realm','vault','over-limit']),undefined);
 });
+
+test('terminal witness runs before settlement and throwing witness still settles conservatively',async()=>{
+  for(const outcome of ['abort','complete'] as const)for(const throws of [false,true]){
+    const order:string[]=[],sentinel=new Error('terminal hook failed');
+    let tx:any;
+    const db:any={transaction(){
+      tx={durability:'strict',objectStore(){return {get(){const request:any={result:{value:authority}};queueMicrotask(()=>request.onsuccess());return request;}};}};
+      return tx;
+    }};
+    const pending=normalizedTransact(db,{authorityId:authority,stores:['control'],mode:'readwrite',assertActive(){},onTerminal(value){
+      order.push(value);if(throws)throw sentinel;
+    }},(_tx,done)=>done('candidate'));
+    const settled=pending.then(value=>{order.push('resolved');return value;},error=>{order.push('rejected');throw error;});
+    await Promise.resolve();tx[outcome==='abort'?'onabort':'oncomplete']();
+    // Simulate a native event microtask checkpoint before the next registered listener.
+    queueMicrotask(()=>order.push('later listener'));
+    if(throws)await assert.rejects(settled,error=>error===sentinel);
+    else if(outcome==='abort')await assert.rejects(settled,{code:'storage_failure'});
+    else assert.equal(await settled,'candidate');
+    assert.deepEqual(order,[outcome,outcome==='complete'&&!throws?'resolved':'rejected','later listener']);
+  }
+});

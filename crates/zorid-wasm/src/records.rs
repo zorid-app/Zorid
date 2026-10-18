@@ -333,18 +333,22 @@ pub fn snapshot(
     scope_json: &str,
     bytes: Option<Vec<u8>>,
 ) -> std::result::Result<RecordsPlan, JsValue> {
-    let run = || -> Result<RecordsPlan> {
-        let r = registration(r)?;
-        let scope: Scope = decode(scope_json.as_bytes(), 4096)?;
-        let state = core(admission::restore_accepted(&r, &scope, bytes.as_deref()))?;
-        let mut plan = RecordsPlan::empty(None, Status::Accepted);
-        plan.accept(
-            core(state.snapshot())?,
-            core(admission::projection_bytes(&state))?,
-        );
-        Ok(plan)
-    };
-    run().map_err(err)
+    snapshot_inner(r, scope_json, bytes.as_deref()).map_err(err)
+}
+pub(crate) fn snapshot_inner(
+    r: &[u8],
+    scope_json: &str,
+    bytes: Option<&[u8]>,
+) -> Result<RecordsPlan> {
+    let r = registration(r)?;
+    let scope: Scope = decode(scope_json.as_bytes(), 4096)?;
+    let state = core(admission::restore_accepted(&r, &scope, bytes))?;
+    let mut plan = RecordsPlan::empty(None, Status::Accepted);
+    plan.accept(
+        core(state.snapshot())?,
+        core(admission::projection_bytes(&state))?,
+    );
+    Ok(plan)
 }
 #[wasm_bindgen(js_name=canonicalRecordsLocalRequest)]
 pub fn canonical_local_request(
@@ -438,7 +442,7 @@ pub(crate) fn payload_metadata(payload: &Payload, exact: &[u8]) -> Result<String
 pub fn prepare_local(raw: &str, raw_command: &[u8]) -> std::result::Result<RecordsPlan, JsValue> {
     prepare_local_inner(raw, raw_command).map_err(err)
 }
-fn prepare_local_inner(raw: &str, raw_command: &[u8]) -> Result<RecordsPlan> {
+pub(crate) fn prepare_local_inner(raw: &str, raw_command: &[u8]) -> Result<RecordsPlan> {
     let f = facts(raw)?;
     let r = registration(
         f.registration
@@ -700,7 +704,7 @@ pub fn validate_stored_operation(
 ) -> std::result::Result<(), JsValue> {
     validate_stored_operation_inner(scope_json, operation, update, content).map_err(err)
 }
-fn validate_stored_replay_inner(
+pub(crate) fn validate_stored_replay_inner(
     collection_json: &str,
     operation: &str,
     request: &[u8],

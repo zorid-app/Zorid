@@ -1,3 +1,5 @@
+import type {WorkBlockService} from '../core/workblocks.ts';
+import {workBlockFailure} from './browser-workblocks.ts';
 import type {BrowserDocumentIndex} from '../core/browser-document-index.ts';
 import { BrowserVaultError } from '../core/browser-vault.ts';
 import type { CheckpointScope, DurableCheckpoints } from '../core/durable-checkpoints.ts';
@@ -18,6 +20,7 @@ export interface BrowserFlushContext {
 export interface BrowserClientContext extends BrowserFlushContext {
   readonly documentIndex?:Omit<BrowserDocumentIndex,'close'>;
   readonly binaryStreams?:BinaryStreams;
+  readonly workBlocks?:WorkBlockService;
   fileCommand?(input:BrowserFileCommandInput):Promise<void>;
   recoverCommands?():Promise<boolean>;
   release(flushGate: (context: BrowserFlushContext) => void | Promise<void>): Promise<void>;
@@ -141,12 +144,29 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
     search:input=>invoke(()=>backend.documentIndex!.search(input)),resolve:input=>invoke(()=>backend.documentIndex!.resolve(input)),
     backlinks:input=>invoke(()=>backend.documentIndex!.backlinks(input)),rebuild:()=>invoke(()=>backend.documentIndex!.rebuild()),
   }):undefined;
+  let workBlocks:WorkBlockService|undefined;
+  function workBlock<T>(action:()=>Promise<T>,mutation=false):Promise<T>{
+    return invoke(async()=>{const value=await action();try{live();}catch{throw workBlockFailure('client_ownership_lost',mutation);}return value;});
+  }
+  function admittedWorkBlocks():WorkBlockService|undefined{
+    if(workBlocks)return workBlocks;
+    const rawWorkBlocks=runtime.workBlocks;
+    if(!rawWorkBlocks)return;
+    allowed();
+    workBlocks=Object.freeze<WorkBlockService>({
+    create:i=>workBlock(()=>rawWorkBlocks.create(i),true),read:i=>workBlock(()=>rawWorkBlocks.read(i)),windowPage:i=>workBlock(()=>rawWorkBlocks.windowPage(i)),
+    move:i=>workBlock(()=>rawWorkBlocks.move(i),true),title:i=>workBlock(()=>rawWorkBlocks.title(i),true),addRef:i=>workBlock(()=>rawWorkBlocks.addRef(i),true),
+    removeRef:i=>workBlock(()=>rawWorkBlocks.removeRef(i),true),delete:i=>workBlock(()=>rawWorkBlocks.delete(i),true),changes:i=>workBlock(()=>rawWorkBlocks.changes(i)),
+    });
+    return workBlocks;
+  }
   runtime.installAdmissionGuard(() => dispatch(() => undefined));
   admittedRuntimes.add(runtime);
   async function drain() { while (pending.size) await Promise.allSettled([...pending]); }
   return Object.freeze({ scope, durableWrites, ...(documentIndex?{documentIndex}:{}), assertActive: () => allowed(),
     ...(commands?{fileCommand:(input:BrowserFileCommandInput)=>invoke(()=>commands.execute(input))}:{}),
     ...(binaryStreams?{binaryStreams}:{}),
+    get workBlocks(){return admittedWorkBlocks();},
     ...(commands||binary?{recoverCommands:()=>invoke(async()=>{const files=commands?await commands.recover():false;const stages=binary?await binary.recover():false;return files||stages;})}:{}),
     release(flushGate: (context: BrowserFlushContext) => void | Promise<void>): Promise<void> {
       if (phase === 'released') return Promise.resolve();

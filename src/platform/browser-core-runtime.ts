@@ -1,3 +1,5 @@
+import {createBrowserWorkBlocks,workBlockFailure} from './browser-workblocks.ts';
+import type {WorkBlockService} from '../core/workblocks.ts';
 import type {BrowserDocumentIndex} from '../core/browser-document-index.ts';
 import type { BrowserSyncFixtureCredentials, BrowserSyncSweep } from './browser-sync-worker.ts';
 import { BrowserVaultError } from '../core/browser-vault.ts';
@@ -38,6 +40,8 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
   get documentIndex():Omit<BrowserDocumentIndex,'close'>|undefined{return this.indexProvider;}
   private checkpointProvider?: DurableCheckpoints;
   get checkpoints():DurableCheckpoints|undefined{return this.checkpointProvider;}
+  private workBlockBinding?:ReturnType<typeof createBrowserWorkBlocks>;
+  get workBlocks():WorkBlockService|undefined{return this.workBlockBinding?.service;}
   private binaryCapability?:BinaryStreams;
   get binaryStreams():BinaryStreams|undefined{return this.binaryCapability;}
   private readonly binaryInFlight=new Set<Promise<unknown>>();
@@ -50,6 +54,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
   private listeners = new Set<(paths?: readonly string[]) => void>();
   private closed = false;
   private releasing = false;
+  private workBlockDraining = false;
   private releasePending?: Promise<void>;
   private syncPending?:Promise<BrowserSyncSweep>;
   private syncRevokePending?:Promise<void>;
@@ -78,7 +83,12 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       const request = this.pending.get(data?.id);
       if (!request) return;
       this.pending.delete(data.id); clearTimeout(request.timer);
-      if (data.ok) request.resolve(data.result);
+      if(request.operation==='workblock-command'){
+        if(data.ok===true){request.resolve(data.result);return;}
+        const error=data?.error;
+        request.reject(data.ok===false&&error&&typeof error.code==='string'&&/^[a-z_]{1,64}$/.test(error.code)&&(error.source==='host'||error.source==='rust')&&typeof error.commitUncertain==='boolean'
+          ?workBlockFailure(error.code,error.commitUncertain,error.source):workBlockFailure('invalid_workblock_response',true));
+      }else if(data.ok)request.resolve(data.result);
       else request.reject(new BrowserVaultError(data.error.code, data.error.message, data.error.details, data.error.source));
     };
     this.worker.onerror = () => this.fail(new BrowserVaultError('outcome_unknown', 'Browser worker failed; recover the original intent before retrying'));
@@ -95,7 +105,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       // this named client's pending intents, using Rust
       // receipt lookup, before this Promise exposes a ready adapter.
       const clientId = options.clientId;
-      const opened = await runtime.call<{recovery:string[];authorityId:string;binaryLimits?:BinaryStreamLimits;documentIndexAvailable?:boolean}>('open', {...options, wasmModuleUrl:moduleUrl.href});
+      const opened = await runtime.call<{recovery:string[];authorityId:string;binaryLimits?:BinaryStreamLimits;documentIndexAvailable?:boolean;workBlocks?:boolean}>('open', {...options, wasmModuleUrl:moduleUrl.href});
       if (typeof opened.authorityId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(opened.authorityId)) throw new BrowserVaultError('storage_corrupt','Worker returned no valid local storage authority');
       runtime.authorityScope = Object.freeze({vaultId:opened.authorityId,clientId});
       const pageOptions=(input:CheckpointListOptions)=>{
@@ -123,15 +133,27 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
         resolve:input=>runtime.call('document-index-resolve',structuredClone(input)),
         backlinks:input=>runtime.call('document-index-backlinks',structuredClone(input)),rebuild:()=>runtime.call('document-index-rebuild'),
       });
+      if(opened.workBlocks===true)runtime.installWorkBlocks();
       runtime.recovery = new Set(opened.recovery);
       if(opened.binaryLimits){runtime.installBinaryStreams(opened.binaryLimits);await runtime.recoverReadRequests();}
       document.addEventListener('visibilitychange', runtime.visibility);
       return runtime;
     } catch (error) { runtime.close(); throw error; }
   }
+  /** Called only after an owner-fenced host readiness acknowledgement. One
+   * binding preserves retained mutation identities across sync reconfiguration. */
+  private installWorkBlocks():void {
+    this.assertDispatch('workblock-command');
+    if(this.workBlockBinding)return;
+    this.workBlockBinding=createBrowserWorkBlocks(async request=>{
+      const reply=await this.call('workblock-command',request);
+      try{this.assertDispatch('workblock-command');}catch{throw workBlockFailure('client_ownership_lost',true);}
+      return reply;
+    });
+  }
   private assertDispatch(operation: string): void {
     if (this.closed) throw new BrowserVaultError('storage_closed', 'Browser worker is closed');
-    if (this.releasing && operation !== 'release-client') throw new BrowserVaultError('client_not_admitted', 'Browser consumer is releasing its ownership');
+    if (this.releasing && operation !== 'release-client' && !(operation==='workblock-command'&&this.workBlockDraining)) throw new BrowserVaultError('client_not_admitted', 'Browser consumer is releasing its ownership');
     if (operation !== 'release-client') this.admissionGuard?.();
   }
   /** One owner guard per opened runtime. Checked again after transport queue
@@ -275,9 +297,10 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
   releaseClient(): Promise<void> {
     if (this.releasePending) return this.releasePending;
     if (this.closed) return Promise.reject(new BrowserVaultError('client_ownership_lost', 'Worker release cannot be confirmed after transport loss'));
-    this.releasing = true;
+    this.workBlockBinding?.stop();
+    this.releasing=true;this.workBlockDraining=true;
     document.removeEventListener('visibilitychange', this.visibility);
-    this.releasePending = (async()=>{while(this.binaryInFlight.size)await Promise.allSettled([...this.binaryInFlight]);await this.call<void>('release-client');this.close();})()
+    this.releasePending = (async()=>{await this.workBlockBinding?.drain();this.workBlockDraining=false;while(this.binaryInFlight.size)await Promise.allSettled([...this.binaryInFlight]);await this.call<void>('release-client');this.close();})()
       .finally(() => { this.releasePending = undefined; });
     return this.releasePending;
   }
@@ -288,11 +311,17 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       ![credentials.realmId,credentials.vaultId,credentials.serverEpoch].every(value=>typeof value==='string'&&value.length<=128))
       return Promise.reject(new BrowserVaultError('invalid_sync_credentials','Invalid fixture sync credentials'));
     const enrollEmpty=credentials.enrollEmpty===true;
-    return this.call<void>('sync-configure',credentials,true).then(async()=>{
+    return this.call<{workBlocks:boolean}|undefined>('sync-configure',credentials,true).then(async ready=>{
+      this.assertDispatch('sync-configure');
+      // An old unregistered fixture can acknowledge without capability metadata.
+      // Only the exact positive H marker can install a service.
+      if(ready!==undefined&&(!ready||typeof ready.workBlocks!=='boolean'))throw workBlockFailure('invalid_workblock_response');
       if(enrollEmpty&&!this.legacyFixture&&!this.binaryCapability){
         const limits=await this.call<BinaryStreamLimits>('binary-limits');this.binaryActive();
         this.installBinaryStreams(limits);await this.recoverReadRequests();
       }
+      this.assertDispatch('sync-configure');
+      if(ready?.workBlocks===true)this.installWorkBlocks();
     });
   }
   syncOnce():Promise<BrowserSyncSweep> {
@@ -337,6 +366,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
   subscribe(listener: (paths?: readonly string[]) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   close(): void {
     if (this.closed) return;
+    this.workBlockBinding?.stop();
     this.closed = true; document.removeEventListener('visibilitychange', this.visibility);
     this.worker.terminate(); this.listeners.clear();
     for (const request of this.pending.values()) {

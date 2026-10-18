@@ -1,6 +1,6 @@
 import { BrowserVaultError } from './browser-vault.ts';
 import { decimalU64, normalizedTransact, getExactSource } from './browser-normalized-idb.ts';
-import type { Abort, SourceKey, SourceRead } from './browser-normalized-idb.ts';
+import type { Abort, SourceKey, SourceRead, NormalizedTransactionOptions } from './browser-normalized-idb.ts';
 
 /** Private storage seam. The parent opener owns the fresh database version and activation.
  * No JavaScript merge/admission decisions or JS-constructible authentication capability. */
@@ -21,6 +21,26 @@ export const browserManagedIndexes = {
 } as const;
 export const managedRetryLimits = Object.freeze({ count: 16, bytes: 1024 * 1024 });
 const failure = (code: string) => new BrowserVaultError(code, 'Managed browser storage rejected an unavailable or inconsistent record');
+
+// Worker-private identity evidence: structured-cloned error fields cannot mint this witness.
+const workBlockDefiniteAborts = new WeakSet<object>();
+export function isWorkBlockDefiniteAbort(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && workBlockDefiniteAborts.has(error);
+}
+
+// Provenance is private and independent from transaction outcome evidence.
+const workBlockRustFailures = new WeakSet<object>();
+/** Invoke only a trusted WorkBlock WASM export, never an adapter or host callback. */
+export function callWorkBlockWasm<T>(call: () => T): T {
+  try { return sync(call()); } catch (error) {
+    const row = error as { code?: unknown; source?: unknown; details?: unknown } | null;
+    if (row?.source !== 'workblocks' || typeof row.code !== 'string') throw error;
+    const classified = new BrowserVaultError(row.code, 'WorkBlock core rejected the request', row.details, 'rust');
+    Object.defineProperty(classified, 'cause', { value: error });
+    workBlockRustFailures.add(classified);
+    throw classified;
+  }
+}
 
 /** Called only by the parent fresh-format upgrade; never adopts existing records stores. */
 export function createBrowserManagedSchema(db: IDBDatabase): void {
@@ -125,7 +145,16 @@ export interface RecordsPlan {
   operationBindings(): Uint8Array;
   free(): void;
 }
-export interface ManagedRecordsWasm {
+/** Private compiled semantic bindings; optional only for legacy generic fixtures. */
+export interface ManagedWorkBlockWasm {
+  workBlockReadSet(enrolledScopeJson: string, request: Uint8Array): string;
+  workBlockReplay(enrolledScopeJson: string, request: Uint8Array, priorRequest: Uint8Array | undefined,
+    priorResult: Uint8Array | undefined): Uint8Array | undefined;
+  prepareWorkBlockLocal(factsJson: string, request: Uint8Array): RecordsPlan;
+  workBlockSnapshot(scopeJson: string, state: Uint8Array | undefined, unresolvedRowsJson: string): Uint8Array;
+  workBlockStorageKey(keyJson: string): string;
+}
+export interface ManagedRecordsWasm extends Partial<ManagedWorkBlockWasm> {
   validateRecordsRegistration(next: Uint8Array, old: Uint8Array | undefined): void;
   validateRecordsAccepted(registration: Uint8Array, state: Uint8Array): void;
   canonicalRecordsLocalRequest(registration: Uint8Array, scopeJson: string, operation: string, expected: Uint8Array, command: Uint8Array): Uint8Array;
@@ -219,9 +248,9 @@ export function createBrowserManagedRecords(host: ManagedRecordsHost) {
   const stores = [...browserManagedStores, ...host.common.stores];
   const active = () => host.assertActive();
   const transactionGuards = new WeakMap<IDBTransaction, () => void>();
-  const transact = <T>(mode: IDBTransactionMode, start: (tx: IDBTransaction, done: (value: T) => void, abort: Abort) => void, extra?: () => void) => {
+  const transact = <T>(mode: IDBTransactionMode, start: (tx: IDBTransaction, done: (value: T) => void, abort: Abort) => void, extra?: () => void, onTerminal?: NormalizedTransactionOptions['onTerminal']) => {
     const admitted = () => { active(); extra?.(); };
-    return normalizedTransact<T>(host.db, { authorityId: host.authorityId, stores, mode, assertActive: admitted }, (tx, done, abort) => {
+    return normalizedTransact<T>(host.db, { authorityId: host.authorityId, stores, mode, assertActive: admitted, onTerminal }, (tx, done, abort) => {
       transactionGuards.set(tx, admitted); start(tx, done, abort);
     });
   };
@@ -334,6 +363,36 @@ export function createBrowserManagedRecords(host: ManagedRecordsHost) {
     handles.set(token, { key: structuredClone(key), revision }); return token;
   }
 
+  /** Shared strict-transaction install for generic and semantic Rust plans. */
+  function installLocal(tx: IDBTransaction, scope: ManagedScope, operation: string,
+    snapshot: FactsSnapshot, plan: RecordsPlan, expectedRequest: Uint8Array | undefined,
+    done: (value: ManagedCommitOutcome) => void, abort: Abort): void {
+    try {
+      sync(plan.checkPreconditions(JSON.stringify(snapshot.facts)));
+      const metadata = JSON.parse(plan.resultJson()) as { status: string; revision: number[] | null };
+      if (metadata.status !== 'accepted' || !Array.isArray(metadata.revision) || metadata.revision.length !== 32) throw failure('invalid_managed_plan');
+      const request = plan.localRequest();
+      if (!request || (expectedRequest && !sameBytes(request, expectedRequest))) throw failure('invalid_managed_plan');
+      installState(tx, scope, snapshot, plan); installBindings(tx, scope, snapshot, plan);
+      const sequence = appendChange(tx, scope, operation, 'accepted', snapshot.counters);
+      const result = sync(host.wasm.finalizeRecordsLocalResult(operation, new Uint8Array(metadata.revision), sequence));
+      if (request.byteLength > 2 * 1024 * 1024 || result.byteLength > 2 * 1024 * 1024) throw failure('managed_replay_capacity');
+      changeCounter(snapshot.counters.usage, 'local_operations', 1n);
+      changeCounter(snapshot.counters.usage, 'local_bytes', BigInt(request.byteLength + result.byteLength));
+      const payload = plan.payload(), payloadMetadata = plan.payloadMetadataJson();
+      const finish = () => {
+        tx.objectStore('managed_local_operations').add({ ...scopeKey(scope), record:scope.record,generation:scope.generation,restores:scope.restores,operationId: operation, request, result,
+          updateId: payloadMetadata ? JSON.parse(payloadMetadata).key.update_id : null });
+        tx.objectStore('control').put(snapshot.counters); done({ result, replay: false, localDurable: true });
+      };
+      if (payload !== undefined) {
+        if (!payloadMetadata) throw failure('invalid_managed_plan');
+        // Snapshot bytes before freeing the private Rust plan.
+        sync(host.common.authored(tx, payloadMetadata, payload.slice(), finish, abort));
+      } else { if (payloadMetadata !== undefined) throw failure('invalid_managed_plan'); finish(); }
+    } finally { plan.free(); }
+  }
+
   async function apply(token: ManagedCollectionHandle, input: ManagedLocalInput): Promise<ManagedCommitOutcome> {
     const stable = structuredClone(input);
     stable.command = boundedBytes(stable.command, 4 * 1024 * 1024);
@@ -352,34 +411,124 @@ export function createBrowserManagedRecords(host: ManagedRecordsHost) {
           }
           readFacts(tx, stable.scope, registration, { operation: stable.operation, expected_revision: [...stable.expectedRevision], prior_request: null, prior_result: null }, snapshot => {
             const plan = sync(host.wasm.prepareRecordsLocal(JSON.stringify(snapshot.facts), stable.command));
-            try {
-              sync(plan.checkPreconditions(JSON.stringify(snapshot.facts)));
-              const metadata = JSON.parse(plan.resultJson()) as { status: string; revision: number[] | null };
-              if (metadata.status !== 'accepted' || !Array.isArray(metadata.revision) || metadata.revision.length !== 32) throw failure('invalid_managed_plan');
-              if (!sameBytes(plan.localRequest()!, request)) throw failure('invalid_managed_plan');
-              installState(tx, stable.scope, snapshot, plan); installBindings(tx, stable.scope, snapshot, plan);
-              const sequence = appendChange(tx, stable.scope, stable.operation, 'accepted', snapshot.counters);
-              const result = sync(host.wasm.finalizeRecordsLocalResult(stable.operation, new Uint8Array(metadata.revision), sequence));
-              if (request.byteLength > 2 * 1024 * 1024 || result.byteLength > 2 * 1024 * 1024) throw failure('managed_replay_capacity');
-              changeCounter(snapshot.counters.usage, 'local_operations', 1n);
-              changeCounter(snapshot.counters.usage, 'local_bytes', BigInt(request.byteLength + result.byteLength));
-              const payload = plan.payload(), payloadMetadata = plan.payloadMetadataJson();
-              const finish = () => {
-                tx.objectStore('managed_local_operations').add({ ...scopeKey(stable.scope), record:stable.scope.record,generation:stable.scope.generation,restores:stable.scope.restores,operationId: stable.operation, request, result,
-                  updateId: payloadMetadata ? JSON.parse(payloadMetadata).key.update_id : null });
-                tx.objectStore('control').put(snapshot.counters); done({ result, replay: false, localDurable: true });
-              };
-              if (payload !== undefined) {
-                if (!payloadMetadata) throw failure('invalid_managed_plan');
-                // Snapshot bytes before freeing the private Rust plan.
-                sync(host.common.authored(tx, payloadMetadata, payload.slice(), finish, abort));
-              } else { if (payloadMetadata !== undefined) throw failure('invalid_managed_plan'); finish(); }
-            } finally { plan.free(); }
+            installLocal(tx, stable.scope, stable.operation, snapshot, plan, request, done, abort);
           }, abort);
         }, abort);
       }, abort);
     });
     // Revocation here is response loss AFTER possible durable commit, never rollback.
+    active(); return result;
+  }
+
+  async function applyWorkBlock(token: ManagedCollectionHandle, request: Uint8Array): Promise<ManagedCommitOutcome> {
+    let started = false, terminal: 'abort' | 'complete' | undefined;
+    try {
+      // Capture before the first await/IDB callback. Rust alone decodes semantic commands.
+      const stable = boundedBytes(request, 16 * 1024);
+      const result = await transact<ManagedCommitOutcome>('readwrite', (tx, done, abort) => {
+        started = true;
+        authorize(tx, token, registration => {
+          const wasm = host.wasm;
+          if (!wasm.workBlockReadSet || !wasm.workBlockReplay || !wasm.prepareWorkBlockLocal) throw failure('records_bindings_unavailable');
+          const enrolled = JSON.stringify({ realm_id: registration.realmId, vault_id: registration.vaultId });
+          const description = JSON.parse(callWorkBlockWasm(() => wasm.workBlockReadSet!(enrolled, stable))) as {
+            scope: ManagedScope; operation: string; kind: string; expectedRevision: number[];
+          };
+          const { scope, operation, expectedRevision } = description;
+          if (description.kind !== 'mutation' || typeof operation !== 'string' || !scope ||
+            components(registration).some((part, index) => part !== components(scopeKey(scope))[index]) ||
+            !Array.isArray(expectedRevision) || expectedRevision.length !== 32) throw failure('invalid_managed_plan');
+          read(tx, tx.objectStore('managed_local_operations').get([...components(registration), operation]), (prior: LocalRow | undefined) => {
+            const replay = callWorkBlockWasm(() => wasm.workBlockReplay!(enrolled, stable, prior?.request, prior?.result));
+            if (replay !== undefined) {
+              if (!prior) throw failure('storage_corrupt');
+              done({ result: boundedBytes(replay, 2 * 1024 * 1024), replay: true, localDurable: true }); return;
+            }
+            if (prior) throw failure('storage_corrupt');
+            // No accepted state, restore, sources, quotas or shared config read before replay.
+            readFacts(tx, scope, registration, { operation, expected_revision: expectedRevision,
+              prior_request: null, prior_result: null }, snapshot => {
+              const plan = callWorkBlockWasm(() => wasm.prepareWorkBlockLocal!(JSON.stringify(snapshot.facts), stable));
+              installLocal(tx, scope, operation, snapshot, plan, undefined, done, abort);
+            }, abort);
+          }, abort);
+        }, abort);
+      }, undefined, outcome => { terminal = outcome; });
+      active(); return result;
+    } catch (error) {
+      // Before start no managed writes are possible; after start require a real
+      // abort event. Complete/unknown outcomes and late owner loss stay uncertain.
+      const definiteAbort = !started || terminal === 'abort';
+      const row = error as { code?: unknown; message?: unknown; details?: unknown; source?: unknown } | null;
+      // Fresh identity prevents a reused underlying error from carrying evidence
+      // into a later transaction that may have committed.
+      const classified = Object.assign(new BrowserVaultError(
+        typeof row?.code === 'string' ? row.code : 'workblock_failed',
+        typeof row?.message === 'string' ? row.message : 'Browser WorkBlock operation aborted',
+        row?.details, typeof error === 'object' && error !== null && workBlockRustFailures.has(error) ? 'rust' : 'host'), { commitUncertain: !definiteAbort });
+      Object.defineProperty(classified, 'cause', { value: error });
+      if (definiteAbort) workBlockDefiniteAborts.add(classified);
+      throw classified;
+    }
+  }
+
+  /** One compound-key row, plus bounded collection receipt metadata, never an aggregate state scan. */
+  async function exportOne(token: ManagedCollectionHandle, afterKeyJson: string | null): Promise<{ snapshot: Uint8Array; nextKeyJson: string } | null> {
+    const result = await transact<{ snapshot: Uint8Array; nextKeyJson: string } | null>('readonly', (tx, done, abort) => {
+      authorize(tx, token, registration => {
+        const wasm = host.wasm;
+        if (!wasm.workBlockStorageKey || !wasm.workBlockSnapshot) throw failure('records_bindings_unavailable');
+        const prefix = components(registration);
+        const after: string[] | null = afterKeyJson === null ? null : JSON.parse(callWorkBlockWasm(() => wasm.workBlockStorageKey!(afterKeyJson)));
+        const request = tx.objectStore('managed_records').openCursor(IDBKeyRange.bound(
+          after === null ? prefix : [...prefix, ...after], [...prefix, []], after !== null, true));
+        read(tx, request, cursor => {
+          if (!cursor) { done(null); return; }
+          const row = cursor.value as StateRow;
+          if (components(row).some((part, index) => part !== prefix[index])) throw failure('storage_corrupt');
+          const nextKeyJson = callWorkBlockWasm(() => wasm.workBlockStorageKey!(JSON.stringify([row.record, row.generation])));
+          const scope: ManagedScope = { realm: row.realmId, vault: row.vaultId, owner: row.owner,
+            collection: row.collection, record: row.record, generation: row.generation, restores: row.restores };
+          const state = boundedBytes(row.state, 1024 * 1024);
+          const unresolved: Array<{updateId: string; status: string; revision: string}> = [];
+          let examined = 0;
+          const receipts = tx.objectStore('managed_receipts').index('by_retry')
+            .openCursor(IDBKeyRange.bound(prefix, [...prefix, []], false, true));
+          read(tx, receipts, entry => {
+            if (entry) {
+              if (++examined > 4096) throw failure('storage_corrupt');
+              const receipt = head(entry.value, registration);
+              if (receipt.record === row.record && receipt.generation === row.generation && receipt.status !== 'accepted') {
+                unresolved.push({ updateId: receipt.updateId, status: receipt.status, revision: receipt.revision });
+              }
+              entry.continue(); return;
+            }
+            const snapshot = boundedBytes(callWorkBlockWasm(() => wasm.workBlockSnapshot!(JSON.stringify(scope), state, JSON.stringify(unresolved))), 4 * 1024 * 1024);
+            done({ snapshot, nextKeyJson });
+          }, abort);
+        }, abort);
+      }, abort);
+    });
+    active(); return result;
+  }
+
+  /** Collection fence: unrelated collections and the global control sequence are excluded. */
+  async function watermark(token: ManagedCollectionHandle): Promise<string> {
+    const result = await transact<string>('readonly', (tx, done, abort) => {
+      authorize(tx, token, registration => {
+        const prefix = components(registration);
+        const request = tx.objectStore('managed_changes').index('by_collection')
+          .openCursor(IDBKeyRange.bound(prefix, [...prefix, []], false, true), 'prev');
+        read(tx, request, cursor => {
+          if (!cursor) { done('0'); return; }
+          const row = cursor.value;
+          const sequence = decimalU64(row.sequence);
+          if (components(row).some((part, index) => part !== prefix[index]) || sequence === '0' ||
+            BigInt(sequence) > 9223372036854775807n || row.sequenceOrder !== sequence.padStart(20, '0')) throw failure('storage_corrupt');
+          done(sequence);
+        }, abort);
+      }, abort);
+    });
     active(); return result;
   }
 
@@ -704,7 +853,7 @@ export function createBrowserManagedRecords(host: ManagedRecordsHost) {
     active();
   }
 
-  return { register, apply, snapshot, prepareReceive, commitReceive, receive, retryPage, changes, validate };
+  return { register, apply, applyWorkBlock, watermark, exportOne, snapshot, prepareReceive, commitReceive, receive, retryPage, changes, validate };
 
 
 }

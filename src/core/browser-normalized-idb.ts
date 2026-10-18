@@ -62,6 +62,9 @@ export interface NormalizedTransactionOptions {
   mode: IDBTransactionMode;
   /** Worker-owned lease/admission/session guard; explicitly supplied by the host. */
   assertActive(): void;
+  /** Internal synchronous witness, called inside the terminal handler before settlement.
+   * Throwing rejects the result (including after commit); it never prevents settlement. */
+  onTerminal?(outcome: 'abort' | 'complete'): void;
 }
 /** No transaction spans an await. All requested writes and the authority check share one tx.
  * Start/helpers report a candidate result; only oncomplete resolves it. The parent owns
@@ -80,9 +83,17 @@ export function normalizedTransact<T>(db: IDBDatabase, options: NormalizedTransa
     let value: T, reported = false, cause: unknown;
     const abort: Abort = error => { cause ??= error; try { tx.abort(); } catch { /* Terminal tx event settles the result. */ } };
     guards.set(tx, options.assertActive);
-    tx.onabort = () => { guards.delete(tx); reject(cause ?? failure('storage_failure')); };
+    tx.onabort = () => {
+      guards.delete(tx);
+      try { options.onTerminal?.('abort'); } catch (error) { reject(error); return; }
+      reject(cause ?? failure('storage_failure'));
+    };
     tx.onerror = () => { /* Request errors abort normally; never resolve early. */ };
-    tx.oncomplete = () => { guards.delete(tx); if (reported) resolve(value); else reject(failure('storage_protocol_error')); };
+    tx.oncomplete = () => {
+      guards.delete(tx);
+      try { options.onTerminal?.('complete'); } catch (error) { reject(error); return; }
+      if (reported) resolve(value); else reject(failure('storage_protocol_error'));
+    };
     if (options.mode === 'readwrite' && tx.durability !== 'strict') { abort(failure('strict_durability_unavailable')); return; }
     try {
       on(tx, tx.objectStore('control').get('local-store-id'), row => {

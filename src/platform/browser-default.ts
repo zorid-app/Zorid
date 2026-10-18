@@ -145,11 +145,12 @@ export async function openDefaultBrowserVault():Promise<PlatformVault>{
     let active=true;
     const opened=runtime;
     const consumer=admitBrowserClient(opened,{assertOwner:()=>{if(!active)throw new BrowserVaultError('client_ownership_lost','Browser tab no longer owns its vault');}});
+    if(!consumer.workBlocks)throw new BrowserVaultError('workblocks_unavailable','Browser WorkBlock registration is not ready');
     const adapter=defaultBrowserAdapter(opened,consumer);
     const retire=()=>{active=false;opened.close();slot.retire();};
     window.addEventListener('pagehide',retire,{once:true});
     const release=createBrowserRelease(consumer,slot,()=>{active=false;window.removeEventListener('pagehide',retire);});
-    return {adapter,...(adapter.documentSemantics?{documentSemantics:adapter.documentSemantics}:{}),label:'Browser vault',id:`browser:core:${consumer.scope.vaultId}:client:${consumer.scope.clientId}`,
+    return {adapter,workBlocks:consumer.workBlocks,...(adapter.documentSemantics?{documentSemantics:adapter.documentSemantics}:{}),label:'Browser vault',id:`browser:core:${consumer.scope.vaultId}:client:${consumer.scope.clientId}`,
       legacyExport:legacyBrowserExport(),recoverCommands:()=>consumer.recoverCommands!(),
       release,
     };

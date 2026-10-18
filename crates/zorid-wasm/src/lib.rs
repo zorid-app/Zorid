@@ -7,6 +7,7 @@ mod document;
 mod document_index;
 mod rpc;
 mod records;
+mod workblocks;
 mod sync;
 
 use serde::{Deserialize, Serialize};

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBrowserNormalizedSchema, normalizedTransact, decimalOrder, addImmutableSource, getExactSource } from '../src/core/browser-normalized-idb.ts';
-import { createBrowserManagedSchema, browserManagedStores, browserManagedIndexes, selectManagedRetryPage, readManagedRetrySource, createBrowserManagedRecords } from '../src/core/browser-managed-records.ts';
+import { createBrowserManagedSchema, browserManagedStores, browserManagedIndexes, selectManagedRetryPage, readManagedRetrySource, createBrowserManagedRecords, isWorkBlockDefiniteAbort } from '../src/core/browser-managed-records.ts';
 import type { ManagedReceiptHead } from '../src/core/browser-managed-records.ts';
 const savedRange=globalThis.IDBKeyRange;
 globalThis.IDBKeyRange={bound(lower:any,upper:any,lowerOpen=false,upperOpen=false){return {lower,upper,lowerOpen,upperOpen};}} as any;
@@ -20,7 +20,7 @@ function fixture(){
   const indexes=new Map<string,Array<{name:string,path:string|string[],unique:boolean}>>();
   const requests:{store:string;operation:string;key?:any}[]=[];
   const transactions:any[]=[];
-  let strict=true, hold=false, fail=false, denied=false;
+  let strict=true, hold=false, fail=false, denied=false, nativeOrdering=false;
   const db:any={objectStoreNames:{contains(name:string){return records.has(name);}},
     createObjectStore(name:string,options:any){
       records.set(name,new Map());paths.set(name,options.keyPath);indexes.set(name,[]);
@@ -31,10 +31,12 @@ function fixture(){
       if(mode==='readwrite')assert.deepEqual(options,{durability:'strict'});
       const local=new Map(names.map(name=>{if(!records.has(name))throw new Error('missing store');return[name,structuredClone(records.get(name)!)];}));
       const modified=new Set<string>();let pending=0,aborted=false,completed=false,scheduled=false;
+      const events=new EventTarget();
       const tx:any={durability:strict?'strict':'relaxed',names,mode,
-        abort(){if(aborted||completed)return;aborted=true;queueMicrotask(()=>tx.onabort?.());},
+        addEventListener:events.addEventListener.bind(events),
+        abort(){if(aborted||completed)return;aborted=true;queueMicrotask(()=>{tx.onabort?.();deliver('abort');});},
         finish(){if(aborted||completed||pending)return;if(hold){return;}if(fail){fail=false;tx.abort();return;}
-          completed=true;for(const name of modified)records.set(name,local.get(name)!);tx.oncomplete?.();},
+          completed=true;for(const name of modified)records.set(name,local.get(name)!);tx.oncomplete?.();deliver('complete');},
         objectStore(name:string){
           if(!local.has(name))throw new Error('store not in transaction');
           const request=(operation:string,key:any,operationFn:()=>any)=>{
@@ -60,7 +62,7 @@ function fixture(){
             getAll(){assert.fail('byte-bearing aggregate scan is forbidden');},
             index(indexName:string){
               const descriptor=indexes.get(name)?.find(value=>value.name===indexName);if(!descriptor)throw new Error('missing index');
-              return {openCursor(range?:any){return cursorRequest(descriptor.path,range);}};
+              return {openCursor(range?:any,direction='next'){return cursorRequest(descriptor.path,range,direction);}};
             },
             openCursor(range?:any,direction='next'){return cursorRequest(paths.get(name)!,range,direction);},
           };
@@ -76,6 +78,10 @@ function fixture(){
             }
         },
       };
+      function deliver(outcome:string){
+        if(nativeOrdering)queueMicrotask(()=>events.dispatchEvent(new Event(outcome)));
+        else events.dispatchEvent(new Event(outcome));
+      }
       function schedule(){if(scheduled)return;scheduled=true;queueMicrotask(()=>{scheduled=false;tx.finish();});}
       transactions.push(tx);schedule();return tx;
     },
@@ -83,7 +89,7 @@ function fixture(){
   createBrowserNormalizedSchema(db);createBrowserManagedSchema(db);
   const run=<T>(stores:readonly string[],action:Parameters<typeof normalizedTransact<T>>[2],mode:IDBTransactionMode='readwrite',owner=authority)=>
     normalizedTransact<T>(db,{authorityId:owner,stores,mode,assertActive(){if(denied)throw Object.assign(new Error('retired'),{code:'owner_retired'});}},action);
-  return {db,records,paths,indexes,requests,transactions,run,
+  return {db,records,paths,indexes,requests,transactions,run,nativeOrdering(){nativeOrdering=true;},
     deny(){denied=true;},relax(){strict=false;},hold(){hold=true;},finish(){hold=false;for(const tx of transactions)tx.finish();},failNextCommit(){fail=true;},
     row(store:string,key:any){return records.get(store)!.get(JSON.stringify(key));},
     seed(store:string,key:any,row:any){records.get(store)!.set(JSON.stringify(key),structuredClone(row));},
@@ -153,8 +159,8 @@ const registration=encode(JSON.stringify({realm:'realm',vault:'vault',owner:'app
 const input={scope,operation:'local:1',expectedRevision:new Uint8Array(32),command:encode('{"value":9223372036854775807}')};
 function engine(f:ReturnType<typeof fixture>,synced=false){
   for(const name of ['sync_state','sync_authored','sync_envelopes','sync_cursors'])f.db.createObjectStore(name,{keyPath:'key'});
-  let denied=false,status='accepted',conflicts:string[]=[],plans=0,frees=0,prepareHook:()=>void=()=>{};
-  const active=()=>{if(denied)throw Object.assign(new Error('retired'),{code:'owner_retired'});};
+  let denied=false,deniedCause:unknown,status='accepted',conflicts:string[]=[],plans=0,frees=0,prepareHook:()=>void=()=>{},authoredHook:()=>void=()=>{};
+  const active=()=>{if(denied)throw deniedCause??Object.assign(new Error('retired'),{code:'owner_retired'});};
   const request=(reg:any,scopeJson:string,operation:string,expected:Uint8Array,command:Uint8Array)=>encode(JSON.stringify([JSON.parse(scopeJson),[...expected],decode(command)]));
   const meta=(id:string)=>({key:{realm_id:'realm',vault_id:'vault',update_id:id},family:'records',format_version:1,payload_bytes:3,payload_digest:Array(32).fill(0),text_binding:null});
   const makePlan=(factsJson:string,operation:string,update:string,command?:Uint8Array)=>{
@@ -173,6 +179,7 @@ function engine(f:ReturnType<typeof fixture>,synced=false){
   const common={authenticatedContext(){return {key_epoch:1};},storedSource(tx:any,key:any,done:any,abort:any){getExactSource(tx,key,'payload',source=>{if(!source){done(null);return;}guardRead(tx.objectStore('sync_authored').get([key.realmId,key.vaultId,key.updateId]),authored=>done({source,authored:!!authored}),abort);},abort);},stores:['sync_state','sync_authored','sync_envelopes','sync_cursors','sync_source_headers','sync_source_payloads','sync_source_wires'],
     readContext(tx:any,_scope:any,done:any,abort:any){guardRead(tx.objectStore('sync_cursors').get(['realm','vault']),row=>done(row?.value??null),abort);},
     authored(tx:any,metadataJson:string,payload:Uint8Array,done:any,abort:any){
+      authoredHook();
       const metadata=JSON.parse(metadataJson),key=['realm','vault',metadata.key.update_id];
       addImmutableSource(tx,{header:{realmId:'realm',vaultId:'vault',updateId:metadata.key.update_id,descriptor:{metadata}},payload},()=>{},()=>{
         tx.objectStore('sync_authored').add({key,metadata,pending:1});done();
@@ -213,8 +220,27 @@ function engine(f:ReturnType<typeof fixture>,synced=false){
       exactPlaintext(){return new Uint8Array([1,2,3]);},exactWire(){return new Uint8Array([4,5,6]);},
       prepareRecords(facts:string){return makePlan(facts,'op:remote',id);},free(){}};
   }
+  // Semantic fixtures model only the trusted binding boundary; they do not prove Rust semantics.
+  const workBlockRequest=(change:any={})=>encode(JSON.stringify({scope,operation:input.operation,
+    expectedRevision:[...input.expectedRevision],command:decode(input.command),...change}));
+  Object.assign(wasm,{
+    workBlockReadSet(enrolled:string,bytes:Uint8Array){
+      assert.deepEqual(JSON.parse(enrolled),{realm_id:'realm',vault_id:'vault'});
+      const value=JSON.parse(decode(bytes));return JSON.stringify({...value,kind:'mutation'});
+    },
+    workBlockReplay(_enrolled:string,bytes:Uint8Array,prior?:Uint8Array,result?:Uint8Array){
+      if(prior===undefined&&result===undefined)return undefined;
+      if(!prior||!result)throw Object.assign(new Error('corrupt'),{code:'storage_corrupt'});
+      const value=JSON.parse(decode(bytes)),canonical=request(null,JSON.stringify(value.scope),value.operation,new Uint8Array(value.expectedRevision),encode(value.command));
+      if(decode(canonical)!==decode(prior))throw Object.assign(new Error('collision'),{code:'operation_collision',source:'workblocks',commitUncertain:false});
+      return result.slice();
+    },
+    prepareWorkBlockLocal(facts:string,bytes:Uint8Array){const value=JSON.parse(decode(bytes));return makePlan(facts,value.operation,value.operation.replace(':','_'),encode(value.command));},
+    workBlockStorageKey(raw:string){const key=JSON.parse(raw);if(!Array.isArray(key)||key.length!==2||key.some(v=>typeof v!=='string'||!v)||JSON.stringify(key)!==raw)throw Object.assign(new Error('key'),{code:'invalid_request'});return raw;},
+    workBlockSnapshot(scopeJson:string,state:Uint8Array|undefined,unresolvedJson:string){return encode(JSON.stringify({scope:JSON.parse(scopeJson),state:state?decode(state):null,unresolved:JSON.parse(unresolvedJson)}));},
+  });
   const adapter=createBrowserManagedRecords({db:f.db,authorityId:authority,assertActive:active,wasm,common});
-  return {adapter,incoming,deny(){denied=true;},allow(){denied=false;},setStatus(value:string){status=value;},setConflicts(value:string[]){conflicts=value;},
+  return {adapter,incoming,workBlockRequest,wasm,common,beforeAuthored(hook:()=>void){authoredHook=hook;},deny(error?:unknown){denied=true;deniedCause=error;},allow(){denied=false;deniedCause=undefined;},setStatus(value:string){status=value;},setConflicts(value:string[]){conflicts=value;},
     afterPrepare(hook:()=>void){prepareHook=hook;},counts(){return {plans,frees};}};
 }
 
@@ -373,4 +399,172 @@ test('startup binds Local/Cache replay metadata restores to the exact accepted s
   const f=fixture(),e=engine(f),token=await e.adapter.register(collection,registration);await e.adapter.apply(token,input);await e.adapter.validate();
   const key=[...Object.values(collection),input.operation],local=f.row('managed_local_operations',key);f.seed('managed_local_operations',key,{...local,restores:'invented-prior'});
   await assert.rejects(e.adapter.validate(),{code:'storage_corrupt'});
+});
+
+
+test('collection watermark uses reverse indexed fence and ignores global/foreign sequence',async()=>{
+  const f=fixture(),e=engine(f),token=await e.adapter.register(collection,registration);
+  assert.equal(await e.adapter.watermark(token),'0');
+  const seed=(sequence:string,extra:any={})=>f.seed('managed_changes',['realm','vault',sequence.padStart(20,'0')],{
+    ...collection,record:scope.record,generation:scope.generation,operationId:'op',status:'accepted',sequence,sequenceOrder:sequence.padStart(20,'0'),...extra});
+  seed('2');seed('12');seed('99',{collection:'other'});
+  f.seed('control','managed-records-usage:v1',{key:'managed-records-usage:v1',sequence:'999999'});
+  f.requests.length=0;
+  assert.equal(await e.adapter.watermark(token),'12');
+  assert.ok(f.requests.every(row=>row.store!=='managed_records'&&!(row.store==='control'&&row.key==='managed-records-usage:v1')));
+  token.dispose();await assert.rejects(e.adapter.watermark(token),{code:'invalid_managed_handle'});
+});
+
+test('collection watermark rejects corrupt sequence ordering and stale authority',async()=>{
+  const f=fixture(),e=engine(f),token=await e.adapter.register(collection,registration);
+  f.seed('managed_changes',['realm','vault','x'],{...collection,sequence:'01',sequenceOrder:'x'});
+  await assert.rejects(e.adapter.watermark(token),{code:'invalid_decimal_u64'});
+  e.deny();await assert.rejects(e.adapter.watermark(token),{code:'owner_retired'});
+});
+
+
+test('WorkBlock journal-first replay bypasses corrupt state/quota and preserves structured collision',async()=>{
+  const f=fixture(),e=engine(f,true),token=await e.adapter.register(collection,registration);
+  const original=e.workBlockRequest(),first=await e.adapter.applyWorkBlock(token,original);
+  f.seed('managed_records',[...Object.values(collection),scope.record,scope.generation],{...collection,record:scope.record,generation:scope.generation,state:new Uint8Array([255]),projection:new Uint8Array([255])});
+  f.seed('control','managed-records-usage:v1',{sequence:'broken'});f.requests.length=0;
+  assert.deepEqual(await e.adapter.applyWorkBlock(token,original),{...first,replay:true});
+  assert.ok(f.requests.every(row=>!['managed_records','managed_operation_sources','sync_cursors'].includes(row.store)&&!(row.store==='control'&&row.key==='managed-records-usage:v1')));
+  await assert.rejects(e.adapter.applyWorkBlock(token,e.workBlockRequest({command:'changed'})),{code:'operation_collision',source:'rust',commitUncertain:false});
+  assert.equal(f.records.get('managed_changes')!.size,1);assert.equal(f.records.get('sync_authored')!.size,1);assert.deepEqual(e.counts(),{plans:1,frees:1});
+});
+
+test('WorkBlock captures immutable request and commits common ledger atomically after completion',async()=>{
+  const f=fixture(),e=engine(f,true),token=await e.adapter.register(collection,registration),bytes=e.workBlockRequest();
+  f.hold();let settled=false;const pending=e.adapter.applyWorkBlock(token,bytes).then(value=>{settled=true;return value;});bytes.fill(255);await flush();
+  assert.equal(settled,false);for(const name of ['managed_records','managed_operation_sources','managed_local_operations','managed_changes','sync_authored','sync_source_headers'])assert.equal(f.records.get(name)!.size,0);
+  f.finish();assert.equal((await pending).localDurable,true);
+  const before=structuredClone(f.records);f.failNextCommit();await assert.rejects(e.adapter.applyWorkBlock(token,e.workBlockRequest({operation:'local:2'})));assert.deepEqual(f.records,before);
+  assert.deepEqual(e.counts(),{plans:2,frees:2});
+});
+
+test('WorkBlock malformed journal fails before state reads and disposed or stale handles fail',async()=>{
+  const f=fixture(),e=engine(f),token=await e.adapter.register(collection,registration);
+  f.seed('managed_local_operations',[...Object.values(collection),input.operation],{...collection,operationId:input.operation,request:encode('prior')});f.requests.length=0;
+  await assert.rejects(e.adapter.applyWorkBlock(token,e.workBlockRequest()),{code:'storage_corrupt'});
+  assert.ok(f.requests.every(row=>row.store!=='managed_records'));
+  token.dispose();await assert.rejects(e.adapter.applyWorkBlock(token,e.workBlockRequest()),{code:'invalid_managed_handle'});
+});
+
+test('WorkBlock bounded export uses compound tuple continuation and Rust snapshot with unknown receipts',async()=>{
+  const f=fixture(),e=engine(f),token=await e.adapter.register(collection,registration);
+  const seed=(record:string,generation:string,extra:any={})=>f.seed('managed_records',[...Object.values(collection),record,generation],{
+    ...collection,record,generation,restores:null,state:encode(record+generation),projection:encode('{}'),...extra});
+  seed('a','1');seed('a','2');seed('b','1');
+  f.seed('managed_records',['realm','vault','app:tasks','other','a','0'],{...collection,collection:'other',record:'a',generation:'0',state:new Uint8Array([255])});
+  seedReceipt(f,{...receipt('waiting'),record:'a',generation:'1',status:'future_status'});
+  seedReceipt(f,{...receipt('accepted'),record:'a',generation:'1',status:'accepted'});
+  seedReceipt(f,{...receipt('other-generation'),record:'a',generation:'2'});
+  f.requests.length=0;
+  const first=(await e.adapter.exportOne(token,null))!;assert.equal(first.nextKeyJson,'["a","1"]');
+  assert.deepEqual(JSON.parse(decode(first.snapshot)).unresolved,[{updateId:'waiting',status:'future_status',revision:'receipt-1'}]);
+  assert.equal((await e.adapter.exportOne(token,first.nextKeyJson))!.nextKeyJson,'["a","2"]');
+  assert.equal((await e.adapter.exportOne(token,'["a","2"]'))!.nextKeyJson,'["b","1"]');assert.equal(await e.adapter.exportOne(token,'["b","1"]'),null);
+  assert.ok(f.requests.every(row=>!['sync_source_payloads','managed_operation_sources'].includes(row.store)));
+  await assert.rejects(e.adapter.exportOne(token,'[ "a", "1" ]'),{code:'invalid_request'});
+});
+
+test('WorkBlock export bounds receipt metadata and rejects revoked or disposed admission',async()=>{
+  const f=fixture(),e=engine(f),token=await e.adapter.register(collection,registration);
+  f.seed('managed_records',[...Object.values(collection),scope.record,scope.generation],{...collection,...{record:scope.record,generation:scope.generation,restores:null,state:encode('{}'),projection:encode('{}')}});
+  for(let i=0;i<4097;i++)seedReceipt(f,receipt(String(i).padStart(4,'0')));
+  await assert.rejects(e.adapter.exportOne(token,null),{code:'storage_corrupt'});
+  e.deny();await assert.rejects(e.adapter.exportOne(token,null),{code:'owner_retired'});
+});
+
+
+test('WorkBlock common authoring rejection aborts earlier staged state bindings and change writes',async()=>{
+  const f=fixture(),e=engine(f,true),token=await e.adapter.register(collection,registration),before=structuredClone(f.records);
+  e.beforeAuthored(()=>{throw Object.assign(new Error('config changed'),{code:'sync_config_changed'});});
+  await assert.rejects(e.adapter.applyWorkBlock(token,e.workBlockRequest()),error=>{
+    assert.equal((error as any).code,'sync_config_changed');assert.equal((error as any).commitUncertain,false);assert.equal(isWorkBlockDefiniteAbort(error),true);return true;
+  });
+  assert.deepEqual(f.records,before);assert.deepEqual(e.counts(),{plans:1,frees:1});
+});
+
+test('WorkBlock admission loss while abortable rolls back; postcommit loss recovers by original receipt',async()=>{
+  const f=fixture(),e=engine(f,true),token=await e.adapter.register(collection,registration),before=structuredClone(f.records);
+  e.afterPrepare(()=>e.deny());await assert.rejects(e.adapter.applyWorkBlock(token,e.workBlockRequest()),error=>{
+    assert.equal((error as any).code,'owner_retired');assert.equal((error as any).commitUncertain,false);assert.equal(isWorkBlockDefiniteAbort(error),true);return true;
+  });assert.deepEqual(f.records,before);
+  e.allow();e.afterPrepare(()=>{});f.hold();const original=e.workBlockRequest(),pending=e.adapter.applyWorkBlock(token,original);await flush();
+  e.deny();f.finish();await assert.rejects(pending,error=>{
+    assert.equal((error as any).code,'owner_retired');assert.equal((error as any).commitUncertain,true);assert.equal(isWorkBlockDefiniteAbort(error),false);return true;
+  });assert.equal(f.records.get('managed_local_operations')!.size,1);
+  e.allow();assert.equal((await e.adapter.applyWorkBlock(token,original)).replay,true);assert.equal(f.records.get('sync_authored')!.size,1);
+});
+
+test('WorkBlock missing compiled binding and oversized input fail closed without storage changes',async()=>{
+  const f=fixture(),e=engine(f),token=await e.adapter.register(collection,registration),before=structuredClone(f.records);
+  await assert.rejects(e.adapter.applyWorkBlock(token,new Uint8Array(16385)),{code:'invalid_managed_bytes'});
+  delete (e.wasm as any).workBlockReplay;
+  await assert.rejects(e.adapter.applyWorkBlock(token,e.workBlockRequest()),{code:'records_bindings_unavailable'});
+  delete (e.wasm as any).workBlockStorageKey;
+  await assert.rejects(e.adapter.exportOne(token,null),{code:'records_bindings_unavailable'});assert.deepEqual(f.records,before);
+});
+
+
+test('WorkBlock complete without reported result is not rollback evidence despite rejection',async()=>{
+  const f=fixture(),e=engine(f,true),token=await e.adapter.register(collection,registration);
+  // A broken common callback returns without finish: IDB completes staged writes,
+  // while normalizedTransact rejects because no candidate result was reported.
+  e.common.authored=()=>{};
+  await assert.rejects(e.adapter.applyWorkBlock(token,e.workBlockRequest()),error=>{
+    assert.equal((error as any).code,'storage_protocol_error');assert.equal((error as any).commitUncertain,true);assert.equal(isWorkBlockDefiniteAbort(error),false);return true;
+  });
+  assert.equal(f.records.get('managed_records')!.size,1);assert.equal(f.records.get('managed_changes')!.size,1);
+  assert.equal(f.records.get('managed_local_operations')!.size,0);
+});
+
+test('WorkBlock pre-start rejection has fresh private evidence, not cloneable public fields',async()=>{
+  const f=fixture(),e=engine(f),token=await e.adapter.register(collection,registration);
+  const original=Object.assign(new Error('cannot start'),{code:'transaction_unavailable'});
+  f.db.transaction=()=>{throw original;};
+  let prior:unknown;
+  for(let i=0;i<2;i++)await assert.rejects(e.adapter.applyWorkBlock(token,e.workBlockRequest()),error=>{
+    assert.equal((error as any).code,'transaction_unavailable');assert.equal(isWorkBlockDefiniteAbort(error),true);
+    assert.notEqual(error,original);assert.notEqual(error,prior);prior=error;
+    assert.equal(isWorkBlockDefiniteAbort({...error as object}),false);return true;
+  });
+  assert.equal(isWorkBlockDefiniteAbort(original),false);
+});
+
+
+test('native terminal handler stamps abort evidence before Promise catch outruns later listener',async()=>{
+  const f=fixture(),e=engine(f,true),token=await e.adapter.register(collection,registration);
+  f.nativeOrdering();const before=structuredClone(f.records);
+  const original=Object.assign(new Error('stale revision'),{code:'stale_revision',source:'workblocks'});
+  e.wasm.prepareWorkBlockLocal=()=>{throw original;};
+  let later=false,observed=false;
+  const create=f.db.transaction.bind(f.db);
+  f.db.transaction=(...args:any[])=>{const tx=create(...args);tx.addEventListener('abort',()=>{later=true;});return tx;};
+  const pending=e.adapter.applyWorkBlock(token,e.workBlockRequest());
+  await assert.rejects(pending,error=>{
+    observed=true;assert.equal((error as any).code,'stale_revision');assert.equal((error as any).source,'rust');
+    assert.equal((error as any).commitUncertain,false);assert.equal(isWorkBlockDefiniteAbort(error),true);
+    assert.notEqual(error,original);return true;
+  });
+  assert.equal(observed,true);assert.equal(later,true);assert.deepEqual(f.records,before);
+  assert.equal(isWorkBlockDefiniteAbort(original),false);
+});
+
+test('reused WASM-shaped error and public rollback flags cannot carry proof into unknown outcome',async()=>{
+  const f=fixture(),e=engine(f),token=await e.adapter.register(collection,registration);
+  const original=Object.assign(new Error('reused'),{code:'stale_revision',source:'workblocks',commitUncertain:false});
+  const prepare=e.wasm.prepareWorkBlockLocal;
+  e.wasm.prepareWorkBlockLocal=()=>{throw original;};
+  let first:unknown;
+  await assert.rejects(e.adapter.applyWorkBlock(token,e.workBlockRequest()),error=>{first=error;assert.equal(isWorkBlockDefiniteAbort(error),true);return true;});
+  e.wasm.prepareWorkBlockLocal=prepare;
+  // The exact same underlying Error is now thrown by admission after commit.
+  e.afterPrepare(()=>{});f.hold();const pending=e.adapter.applyWorkBlock(token,e.workBlockRequest());await flush();
+  e.deny(original);f.finish();await assert.rejects(pending,error=>{
+    assert.equal((error as any).cause,original);assert.equal((error as any).source,'host');
+    assert.notEqual(error,first);assert.equal((error as any).commitUncertain,true);assert.equal(isWorkBlockDefiniteAbort(error),false);return true;
+  });
 });
