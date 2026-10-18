@@ -54,6 +54,9 @@ function captureWorkBlockRequest(input){
   if(size(JSON.stringify(out))>MAX_WORKBLOCK_REQUEST)throw failure('request_limit');
   return out;
 }
+function captureWorkBlockCommand(op,input){
+  return captureWorkBlockRequest({schemaVersion:1,command:{...detached(input),op}});
+}
 function read(value){
   if(!keys(value,['record','generation','revision','created','deleted','block','unresolved'])||!id(value.record)||!id(value.generation)||!revision(value.revision)||typeof value.created!=='boolean'||typeof value.deleted!=='boolean'||!object(value.unresolved)||Object.keys(value.unresolved).length>4096||!Object.entries(value.unresolved).every(([key,status])=>statusString(key)&&decimal(status)))return false;
   if(value.block===null)return !value.created||value.deleted;
@@ -88,4 +91,4 @@ function decodeWorkBlockReply(request,marker,bytes){
   return validateWorkBlockValue(request,reply.value);
 }
 function validWorkBlockReply(command,marker,bytes){try{decodeWorkBlockReply(command.request,marker,bytes);return true;}catch{return false;}}
-module.exports={MAX_WORKBLOCK_REQUEST,MAX_WORKBLOCK_RESPONSE,captureWorkBlockRequest,decodeWorkBlockReply,validWorkBlockReply,validateWorkBlockValue};
+module.exports={MAX_WORKBLOCK_REQUEST,MAX_WORKBLOCK_RESPONSE,captureWorkBlockCommand,captureWorkBlockRequest,decodeWorkBlockReply,validWorkBlockReply,validateWorkBlockValue};

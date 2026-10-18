@@ -1,4 +1,4 @@
-import {captureWorkBlockRequest,validateWorkBlockValue} from '../../desktop/workblocks.cjs';
+import {captureWorkBlockCommand,validateWorkBlockValue} from '../../desktop/workblocks.cjs';
 import type {DesktopWorkBlockRequest,WorkBlockService} from '../core/workblocks.ts';
 import {create,fromBinary,toBinary} from '@bufbuild/protobuf';
 import {BinaryCommandSchema,BinaryResultSchema,ErrorCode} from '../generated/zorid/stream/v1/binary_pb.ts';
@@ -246,7 +246,7 @@ export function createDesktopWorkBlocks(invoke:(request:DesktopWorkBlockRequest)
   function command<T>(op:string,input:object):Promise<T>{
     if(released)return Promise.reject(reject('client_not_admitted'));
     let request:DesktopWorkBlockRequest;
-    try{request=captureWorkBlockRequest({schemaVersion:1,command:{...input,op}});}catch(error){return Promise.reject(error);}
+    try{request=captureWorkBlockCommand(op,input);}catch(error){return Promise.reject(error);}
     const operation=request.command.operation as string|undefined,encoded=JSON.stringify(request);
     const previous=operation?mutations.get(operation):undefined;
     if(previous&&previous.encoded!==encoded)return Promise.reject(reject('operation_collision'));

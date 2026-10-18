@@ -68,3 +68,10 @@ test('normal desktop platform injects only advertised admitted capability and dr
     await platform.release!();advertised=false;const old=(await createPlatformAdapter())!;assert.equal(old.workBlocks,undefined);await old.release!();
   }finally{if(previous)Object.defineProperty(globalThis,'window',previous);else Reflect.deleteProperty(globalThis,'window');}
 });
+
+test('renderer rejects getters without evaluating them or dispatching after release',async()=>{
+  let gets=0,calls=0;const binding=createDesktopWorkBlocks(async request=>{calls++;return receipt(request.command.operation);});
+  const input=create();Object.defineProperty(input,'title',{enumerable:true,get(){gets++;void binding.release();return 'title';}});
+  await assert.rejects(binding.service.create(input),{code:'invalid_workblock_request'});assert.equal(gets,0);assert.equal(calls,0);
+  await binding.service.create(create());assert.equal(calls,1);await binding.release();
+});
