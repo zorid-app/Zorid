@@ -226,6 +226,7 @@ pub struct WorkBlockSession {
     scope: FamilyScope,
     cursors: BTreeMap<String, WindowCursor>,
     order: VecDeque<String>,
+    calendar_slots: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 fn target(record: Id, generation: Id) -> ManagedTarget {
     ManagedTarget {
@@ -300,6 +301,7 @@ impl NativeVault {
             scope,
             cursors: BTreeMap::new(),
             order: VecDeque::new(),
+            calendar_slots: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
     }
     pub fn execute_workblocks(
@@ -545,7 +547,8 @@ impl NativeVault {
                 Some(token) => token,
                 None => {
                     let token = uuid::Uuid::new_v4().to_string();
-                    if session.cursors.len() == 8 {
+                    if session.cursors.len() + session.calendar_slots.load(std::sync::atomic::Ordering::Relaxed) >= 8 {
+                        if session.order.is_empty() { return Err(WorkBlockError::Limit); }
                         if let Some(old) = session.order.pop_front() {
                             session.cursors.remove(&old);
                         }

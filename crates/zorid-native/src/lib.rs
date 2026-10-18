@@ -215,6 +215,10 @@ mod native;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub use native::{select_external_file_mode, ExternalFileMode, NativeVault};
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android"))]
+pub use native::{CalendarRead, CalendarScope, CalendarContext, CalendarJoinState,
+    CalendarReadValue, CalendarEvidence, CalendarSelection, CalendarTask,
+    CalendarBlock, CalendarLinkLabel, CalendarMembership, CalendarTarget};
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub use native::{WorkBlockCommand, WorkBlockError, WorkBlockRange, WorkBlockRangeCandidate,
     WorkBlockTitleCandidate, WorkBlockValue, WorkBlockRead, WorkBlockWindowPage,
     WorkBlockReply, WorkBlockResult, WorkBlockSession};
