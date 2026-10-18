@@ -116,6 +116,15 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+01:00UTC: Simulator10 fullscript16736 terminal1 BEFOREcompilation, pnpm dependency
+workspace verification rejected sharednode_modules. Native retains exclusive slot
+for boundedprep/retry; verify pinnedpnpm12.14/rootcwd --dir (known9.15cwdtrap),
+then owner-only symlinkunlink+isolatedoffline frozeninstall ifneeded, no sharedtree
+mutation/bypass/network/lockchange. Rootread/approved HomeShowtabs d7e77c3c narrow
+source; maycompose beforefreshretryfreeze sinceoldprocess terminal. No buildproof
+or phoneupdate; actual newHEAD/command/handle forthcoming. FullSHA73da corrected
+by owner, rootused actualGitobject73da2173e01167ac8789d9e326ea8fc84f49005c.
+
 00:59UTC canonical integration: mainf7dc7569 merges exact73da2173 portable records
 batch, all11 source/docs/lock files byte-match candidate. Actual33tests17018pass,
 independent root library review approved; no repeatedtests or productionwire/store
