@@ -116,6 +116,13 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+01:09UTC: uservaultsubtitle6line removal independently source-approved, final
+NativePages SHAa41bac48..., committedphonecandidate2add282b (otherSimfb1csource
+unchanged). SignedDev10 buildstartingunderextendedgrant, pinnedpnpm/Rust/jobs1,
+existingDev9automaticwildcardprofile/no provisioningupdates, privatecontractonly
+team/device, fresh/private/tmp/zorid-ios-v10-phone-20261018. No install/launchproof
+yet, phonepreviousversionuntilactualsuccess. Native retains slot/sourcefreeze.
+
 01:08UTC actualSimulator10 focusedFile/HomePASS: nativevault/Pages→existingnote→
 quiesce/closeoverview→newHome→HomeShowtabs→twoTabs→originalnote/bodypreserved→
 ReturnFiles usable. No typededits inpass (notnewedited-saveproof). Screenshot
