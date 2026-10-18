@@ -1,5 +1,22 @@
 # User findings queue
 
+## Confirmed query performance and browser persistence design — 2026-10-18
+
+User confirmed the consolidated [S1 design](architecture/indexing-search-design.md):
+shared Rust search/backlinks/Bases query capabilities, documented Obsidian language
+semantics, persisted parse/search indexes, bounded memory Base/answer caches,
+interactive-first adaptive parallel work, committed-source query freshness,
+time-aware local/configured timezone refresh and marked partial first-build results.
+Workload targets are 10,000 representative/100,000 stress notes, not speed promises.
+S0 storage and S0A interfaces still come first; implementation is not started here.
+
+Browser latest correction supersedes optional-only persistence statements below:
+retain local working note data/indexes between visits and fetch incremental changes;
+attachment bodies load on demand into bounded cache. Synced cache is refetchable;
+unsent edits/receipts are protected pending data. Storage engine, exact offline/
+reload and key-retention policies remain separate storage/browser design work.
+
+
 ## Maintained product roadmap — latest priority
 
 **New interface milestone:** S0A follows S0 and gates S1/downstream feature work.

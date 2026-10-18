@@ -66,8 +66,10 @@ how stale/corrupt entries trigger bounded rebuild rather than false empty result
 ## Platform boundaries and proof
 
 Desktop/mobile use durable native SQLite services. Browser joins an existing sync
-group and may keep transient working state or optional cache; do not promise native
-persistence or require OPFS parity. Rust owns shared semantics; platform bindings
+group and retains local working data/indexes between visits for incremental
+catch-up. Protect pending writes separately from refetchable cache; browser storage
+is not a native vault directory and need not use OPFS. Rust owns shared semantics;
+platform bindings
 adapt execution and storage capabilities without implementing another parser,
 query engine or sync policy. CLI remains an independent consumer of the native core.
 

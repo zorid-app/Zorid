@@ -15,8 +15,9 @@ feature work. This roadmap is documentation, not a claim
 that its implementation has started. Existing feature/iOS work is preserved.
 
 Design for desktop, browser and mobile now; finish the usable desktop feature set
-before resuming iOS implementation. The browser is a connected sync-group client,
-not another durable local-vault application. Do not reopen all tracks in parallel.
+before resuming iOS implementation. The browser is a connected sync-group client
+with retained local working data, rather than a user-managed filesystem vault.
+Do not reopen all tracks in parallel.
 
 ## How a milestone advances
 
@@ -155,28 +156,40 @@ future feature or a public plugin API freeze.
 
 ## S1 — Rust parsing, indexing, caching and search performance
 
-**Current:** portable parsing, index generations, native persisted cache and
-compatible prior-generation reuse exist. Parallel extraction and measured improved
-end-to-end performance are not established.
+**Design:** confirmed after user interview; implementation remains planned and
+requires S0/S0A. [Design](architecture/indexing-search-design.md),
+[implementation slices](plans/indexing-search.md),
+[query boundary ADR](adr/0001-shared-query-semantics.md).
 
-- [ ] Measure representative cold/warm startup, file-open, large-note/vault indexing,
-  incremental edits, search latency, memory and foreground editing responsiveness.
-- [ ] Reuse parse results by content hash plus parser/schema/options; reattach
-  entry/path/revision context safely. Avoid reparsing unchanged content.
-- [ ] Incrementally index changed data; avoid redundant whole-vault reads and scans.
-- [ ] Add bounded parallel Rust hashing/extraction where profiling justifies it,
-  with coordinated publication, source fences and bounded memory. Browser workers
-  reuse Rust/WASM semantics; they do not implement another parser.
-- [ ] Cancel obsolete searches/work, reuse query snapshots and retain correct
-  links/backlinks/Base results. Keep interactive CodeMirror state separately owned.
+**Current:** portable parsing/index generations and native prior-generation reuse
+exist; pumps are sequential, Rust literal search scans text and Bases rebuilds
+substantial state per call. No new measured improvement or complete Obsidian query
+compatibility is established by this roadmap.
+
+- [ ] Preserve distinct documented Obsidian Bases/search languages and results in
+  shared Rust; inventory supported syntax, gaps and deliberate differences first.
+- [ ] Measure 10,000-note baseline/100,000-note stress plus large-note workflows:
+  cold/warm startup, indexing, incremental edits, search/Base latency and memory.
+- [ ] Persist content-derived parse/index reuse with semantic-version keys and safe
+  identity rebinding; incrementally invalidate changed inputs and survive restart.
+- [ ] Reuse compiled Base programs, graph/generation preparation and eligible query
+  answers in bounded memory; include all relevant dependencies and time context.
+- [ ] Add measured bounded adaptive multicore work, priority for editing/saves/active
+  queries and real cancellation/bounded chunks without stale publication.
+- [ ] Query committed source; retain coherent previous results while updating and
+  clearly mark partial first-build results/counts. Refresh time-dependent visible
+  views using configured timezone (device-local default), one time context/query.
+- [ ] Cover supported text/properties and attachment names/metadata; PDF extraction/
+  OCR later. Keep browser working data/indexes across visits with incremental
+  catch-up and on-demand bounded attachment caching.
 - [ ] Measure renderer startup/lazy loading and fix demonstrated bottlenecks.
 
-**Exit:** the same representative workloads have retained before/after results;
-correctness is unchanged, stale work cannot replace newer results, warm reuse is
-observed, and foreground editing remains usable. Choose numerical budgets from
-measurements and intended vault sizes before judging acceptance.
-
-Design: [indexing](architecture/indexing.md), [search](architecture/search.md).
+**Exit:** same representative workloads have retained before/after results and
+measurement-based budgets. Semantic compatibility, invalidation/cancellation,
+coverage and actual foreground responsiveness pass on the integrated changed
+paths. No new Base/Task/Calendar feature UI or paused native mobile implementation
+is smuggled into S1. Execute slices one at a time; source approval alone is not
+runtime or performance acceptance.
 
 ## S2 — Sync foundation and self-hosted service
 
@@ -347,9 +360,10 @@ claim that the domain/service is deployed.
   and pending/error status must be honest.
 - [ ] Zorid Cloud and self-hosted use the same client/protocol. Define browser
   connection requirements, origin/credential isolation and service discovery.
-- [ ] During use retain working state/indexes; after leaving, optional bounded cache
-  may remain. Re-authenticate/unlock, validate cached state and catch up on return.
-  Browser storage is not a permanent vault or the group's sole durable copy.
+- [ ] Retain local working note text/metadata and indexes across visits for fast
+  local use and incremental catch-up. Fetch attachment bodies on demand into a
+  bounded cache. Re-authenticate/unlock and validate retained state on return.
+  Browser storage is not a native vault directory or the group's sole durable copy.
 - [ ] Define close/reload/sign-out behavior, cache cleanup/key retention and handling
   of unsent edits. Pending edits are not disposable cache; a local write is not
   proof of remote acknowledgment. Offline editing/reload guarantees remain open.

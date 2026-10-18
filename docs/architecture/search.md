@@ -26,6 +26,19 @@ and parallel query execution are separate optimizations; profile each. Publish
 only results matching the original vault/revision/generation and measure warm
 query latency as well as indexing throughput.
 
+## Confirmed language and coverage target
+
+Use documented Obsidian vault-search syntax through shared Rust execution, while
+Bases retains its separate YAML/expression language. Supported expressions target
+documented meaning; list current gaps/deviations rather than implying the existing
+literal path is complete. Preserve required substring matches when selecting an
+accelerator. Shared search reflects committed source, covers supported text and
+properties plus attachment names/metadata, and leaves PDF extraction/OCR for later.
+
+[Indexing/search design](indexing-search-design.md) defines caching, coherent and
+partial result presentation, scheduling and measurement. Current implementations
+above have not changed merely because the target is documented.
+
 ## Source map
 
 [Literal queries](../../crates/zorid-index/src/literal.rs),

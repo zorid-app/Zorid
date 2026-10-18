@@ -5,9 +5,11 @@
 ## Intended product role
 
 The browser joins an existing sync group and presents its data through the shared
-editor. Desktop and mobile own durable local vaults; the browser is not required
-to create or maintain an independent persistent vault. This supersedes the earlier
-three-platform persistent-SQLite/OPFS proposal.
+editor. It retains a persistent local working replica for responsive local reads,
+edits, search and indexing, then syncs changes in the background. Desktop/mobile
+own user-accessible vaults; browser has origin-local app storage rather than a
+native vault directory. This supersedes optional-only browser persistence wording.
+A mandatory SQLite/OPFS engine is still not selected.
 
 Rust/WASM still provides validation, decryption/convergence, parsing, indexing and
 query semantics for the browser client. Joining requires the group's authorization,
@@ -15,11 +17,13 @@ key access and initial synchronization; it does not imply unrestricted access or
 plaintext processing by the relay. The join UX and enrollment protocol remain to
 be specified.
 
-Working data, indexes and caches can exist locally during use. Browser-local
-persistence is an optional implementation detail, not a durable-vault product
-promise. Do not require a full persistent replica, per-vault recovery.sqlite or
-SQLite/OPFS migration simply to match native storage. Offline editing, reload
-recovery and storage retention policies remain unspecified.
+Retain note text/metadata and derived indexes between visits, validate cached
+state and fetch only changes on return. Download attachment bodies when opened
+and keep them in a bounded cache; joining does not download every video/PDF.
+Synchronized data can be refetched if browser storage is cleared. Pending edits
+and receipts must persist until acknowledged or explicitly resolved; they are not
+disposable cache. Exact offline, close/reload, key-retention and expiry policies
+remain to be specified. Per-vault recovery.sqlite/OPFS parity is not required.
 
 A browser edit must not be reported as synced based solely on an in-memory change
 or a local database write. Preserve truthful pending/error state and define how
@@ -34,7 +38,7 @@ unlock its content and show notes, attachments, Bases, Tasks and Calendar throug
 the shared UI. Hosted and self-hosted use the same client/protocol. This describes
 the intended product; it does not claim a deployed hosted service or complete UI.
 
-When the user leaves, optional cache can remain to accelerate a later visit. On
+When the user leaves, retained working data/indexes accelerate a later visit. On
 return, authenticate/unlock, validate that cache and fetch current changes. The
 service and durable synced native clients retain the group's data. Cache loss
 must be recoverable by refetching synchronized content; unconfirmed edits are a
@@ -79,8 +83,8 @@ sync-group joining product flow.
 ## Next architecture work
 
 Design join/bootstrap, working-set acquisition, reconnect and pending-edit behavior
-around an existing sync group. Choose in-memory or optional cached storage based
-on those requirements. SQLite/WASM may be useful to reuse query/storage logic,
+around an existing sync group and its persistent local working data. Select the
+storage adapter against those requirements. SQLite/WASM may reuse query/storage logic,
 but persistent OPFS storage is not a requirement. Do not remove the existing
 IndexedDB path until the replacement's state/receipt and pending-edit handling is
 explicitly designed and verified.

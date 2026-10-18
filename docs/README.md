@@ -9,6 +9,8 @@ rendering first, then the shared Rust systems and their storage boundaries.
 | [Architecture](architecture/README.md) | Maintained explanation of how the application fits together |
 | [Platform setup](platforms.md) | Development entry points and build boundaries |
 | [Current decisions](architecture/decisions.md) | Accepted direction, implementation gaps and delivery sequence |
+| [Domain glossary](../GLOSSARY.md) | Canonical product terms |
+| [Query design and S1 slices](architecture/indexing-search-design.md) | Confirmed optimization behavior and planned implementation sequence |
 | [User findings](user-findings.md) | Requests and bugs, with implementation and verification tracked separately |
 | [Execution checkpoint](deferred-product-roadmap.md) | Cross-session ownership and integration record; not the architecture manual |
 | [Reference evidence](reference/README.md) | Historical behavior audits and comparisons |

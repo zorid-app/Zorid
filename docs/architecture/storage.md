@@ -43,8 +43,10 @@ Platform app-local storage/
 
 Desktop uses its app-data directory; native mobile uses private app storage.
 This native layout is not a browser requirement. The browser joins an existing
-sync group; local working state/caches do not constitute an independent durable
-vault. Optional persistence and offline/reload behavior remain to be designed.
+sync group and retains local working data/derived indexes for low-latency access
+and incremental catch-up. Browser storage is not a native vault directory; its
+engine and exact offline/reload guarantees remain to be designed. Protect pending
+edits/receipts separately from refetchable synchronized content.
 Recovery and cache do not travel with a copied vault and are excluded from sync.
 Define stable local vault identity, copied/moved-vault handling, retirement and CLI
 path discovery before cutting over; a display name is not a storage identity.

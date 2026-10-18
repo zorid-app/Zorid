@@ -13,9 +13,10 @@ SQLite infrastructure layer yet, and the browser still uses IndexedDB.
 
 Provide shared Rust SQLite infrastructure for durable desktop/mobile storage.
 Browser clients share domain/service contracts but join existing sync groups; they
-are not required to use a persistent local SQLite database. The earlier mandatory
-browser SQLite/OPFS proposal is superseded. Browser SQLite/WASM remains an optional
-implementation choice if it helps reuse queries or manage working state.
+retain persistent local working data/indexes for responsiveness and incremental
+catch-up. This requires persistence, not a predetermined engine: SQLite/WASM+OPFS
+remains a candidate, while current IndexedDB already persists data. The native
+SQLite infrastructure does not automatically become a browser implementation.
 
 The native storage path is:
 

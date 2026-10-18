@@ -11,6 +11,8 @@ contracts/plans and source-addressed documents retain their existing root paths.
 
 ## Files
 
+- [Confirmed query performance design](indexing-search-design-2026-10-18.md)
+
 - [Maintained product roadmap](product-roadmap-2026-10-18.md)
 
 - [Architecture documentation reorganization](architecture-documentation-2026-10-18.md)

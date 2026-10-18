@@ -22,6 +22,14 @@ separate delivery stages. Desktop Tasks has bounded runtime evidence; production
 Base wiring and complete Calendar composition remain unfinished in the execution
 records. No mobile/browser feature parity is inferred.
 
+## Query language and performance
+
+The [confirmed query design](indexing-search-design.md) includes Bases compilation,
+filters, formulas, sorting and grouping in S1. Keep Bases in a dedicated Rust
+language module over shared query/index capabilities. Target documented Obsidian
+syntax and results, with explicit compatibility gaps and reviewed deviations.
+This does not move new Bases/Tasks/Calendar UI delivery into the optimization stage.
+
 ## External integrations
 
 Google integration is a required desktop milestone. Provider OAuth, credential

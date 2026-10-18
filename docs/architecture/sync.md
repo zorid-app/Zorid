@@ -28,9 +28,10 @@ Google integration or production account administration UI.
 ## Browser membership
 
 The intended browser client joins an existing sync group instead of owning a
-standalone durable local vault. It still needs scoped authorization, key access,
-initial state acquisition, convergence and reconnect behavior. Local working
-state/cache persistence is optional. Current IndexedDB receipts alone are not a
+native vault directory. It retains local working data/indexes across visits and
+incrementally catches up, requiring scoped authorization, key access and coherent
+initial acquisition. Attachment bodies load on demand. Current IndexedDB receipts
+alone are not a
 remote acknowledgment, and deleting unconfirmed edits is not an allowed shortcut.
 Offline/reload retention and group-join UX remain design work.
 

@@ -4,8 +4,10 @@ Zorid is a Markdown workspace with three presentation targets and a shared Rust
 data core. TypeScript renders the editor and document views; platform shells
 provide windows, native navigation and operating-system integration. Rust owns
 portable data semantics and native storage operations. The browser is intended
-to join existing sync groups rather than own a durable local vault. Its current implementation still persists data in IndexedDB around
-the same Rust/WASM semantics; that standalone behavior is not the product target.
+to join existing sync groups and retain local working data for fast access and
+incremental catch-up. It has no user-managed native vault directory. Its current
+IndexedDB/Rust-WASM path is implemented; connected service onboarding is not yet
+complete.
 
 This manual describes canonical source at `824ddd2c` plus the explicitly marked
 architecture decisions accepted on 2026-10-18. Isolated feature work and historical
@@ -56,6 +58,7 @@ immediate milestone. This manual describes architecture rather than scheduling.
 | [SQLite infrastructure](sqlite.md) | Current Store implementation and planned unified access layer |
 | [Saving and recovery](saving-recovery.md) | Editor drafts, durable saves, physical files and planned snapshot history |
 | [Documents and indexing](indexing.md) | Shared parsing, cached metadata, generation publication and optimization |
+| [Query performance design](indexing-search-design.md) | Confirmed indexing/search/Bases behavior, compatibility and cache policy |
 | [Search and relationships](search.md) | Literal search, link resolution and presentation queries |
 | [Managed data and features](managed-data.md) | Bases, Types, Tasks, Calendar and provider boundaries |
 | [Sync and security](sync.md) | Convergence, encrypted transport, relay and local-only data |

@@ -33,8 +33,17 @@ relevant semantic options. Reattach path/entry/revision context correctly; cache
 metadata from another identity is not an authority witness. A future cache key
 must account for all inputs that affect extraction, not only file modification time.
 Separate app-local `cache.sqlite` is accepted native placement direction, not
-current code. Browser indexes operate on the joined group working state; persistent
-cache storage is optional and need not mirror native databases.
+current code. Browser retains joined-group working data and persisted derived
+indexes between visits, with incremental catch-up; its storage engine need not
+mirror native databases.
+
+The [confirmed performance design](indexing-search-design.md) includes Bases query
+execution and search/backlinks. Persist parse/search-index reuse; keep compiled
+Bases and final answers initially in bounded memory. Index successful saves,
+prioritize interactive work, retain coherent previous results during updates and
+mark first-build partial coverage explicitly. Time-dependent answers refresh in
+configured/device-local timezone. See the [S1 slices](../plans/indexing-search.md)
+for implementation and measurement gates.
 
 ## Interface review gate
 
