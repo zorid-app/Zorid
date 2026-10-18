@@ -2112,9 +2112,10 @@ private final class NativePagesModel: ObservableObject {
         onSearch?(fieldMode == .search ? query : "")
     }
     func showSearchProgress(_ progress: NativeSearchProgress) {
+        // The existing search skeleton represents in-flight work. Keep progress
+        // counters out of the page; completed results and errors remain visible.
         switch progress {
-        case .preparing(let prepared, let total): searchStatus = "Preparing search: \(prepared) of \(total) documents…"
-        case .searching: searchStatus = "Searching note content…"
+        case .preparing, .searching: searchStatus = ""
         }
     }
     func setSearchAdmissionBusy(_ busy: Bool) { searchAdmissionBusy = busy }
@@ -2142,7 +2143,7 @@ private final class NativePagesModel: ObservableObject {
     @Published private(set) var preferences = NativePagePreferences()
     @Published private(set) var rows: [NativeFileEntry] = []
     @Published private(set) var folder = ""
-    @Published private(set) var status = "Loading vault…"
+    @Published private(set) var status = ""
     @Published private(set) var loading = true
     @Published private(set) var canCreateNote = false
     @Published private(set) var emptyMessage = ""
@@ -2245,7 +2246,7 @@ private final class NativePagesModel: ObservableObject {
 
     func setLoading() {
         loading = true
-        status = listing == nil ? "Loading vault…" : ""
+        status = ""
         render()
     }
     func showLoadFailure(missingSelection: Bool = false) {
@@ -2651,7 +2652,7 @@ final class NativePagesController: UIViewController {
         guard UIApplication.shared.applicationState == .active else {
             binding.finish(.success(())); model.fileActionStatus = "Action cancelled while the app was inactive."; return
         }
-        model.fileActionStatus = "Applying file action…"
+        model.fileActionStatus = ""
         Task { @MainActor [weak self] in
             let result = await NativeFileCommand(binding: binding).run(input)
             guard let self = self else { return }
@@ -2903,10 +2904,6 @@ private struct NativePagesView: View {
                 Text(model.fileActionStatus).font(.footnote).foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 20)
                     .accessibilityIdentifier("native.file-action.status")
-            }
-            if model.recovery == .checking {
-                Text("Checking saved native actions…").font(.footnote).padding(.horizontal, 20)
-                    .accessibilityIdentifier("native.file-action.checking")
             }
             if model.recovery == .blocked {
                 Text("Another native operation still owns this session. Wait for it to finish, then check ownership. This page will not close or release that operation.")

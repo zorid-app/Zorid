@@ -429,3 +429,13 @@ User also requests that tapping Markdown links opens the link without placing
 the caret there. Root assigned source-only diagnosis to stage4_contract_review
 (0e1c0611ffda); shared editor/mobile bridge edits await named seam ownership.
 Actual tap/navigation/selection/IME evidence remains required; no fix claim.
+
+2026-10-18 native loading follow-up: user reports excessive note/vault loading,
+requests no loading words or technical details, and asks to discuss dynamic
+WebView reuse. Presentation source in native-vault-context removes transient
+vault/search/checking/applying copy while retaining existing skeletons, trusted
+rows on refresh and errors/retry. Syntax/diff checks passed; independent review
+and actual visual verification pending. Source change is not a load-time fix.
+Fresh WebView and whole-vault indexing are observed source paths; comparative
+runtime costs and Obsidian behavior are unmeasured. Warm reuse/pooling remains
+a proposal; no session-lifetime redesign has been implemented from discussion.

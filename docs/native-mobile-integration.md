@@ -1601,3 +1601,33 @@ only, after this terminal checkpoint. No edge/NewNote mix; frontend/cap copy
 and incremental Xcode, actual WK tap/caret/pan/longpress still required.
 Phone current details still paired but tunnel unavailable (last connection
 01:08 UTC); signed Dev10 artifact remains uninstalled, no new build needed.
+
+
+Native loading presentation follow-up — 2026-10-18 02:40 UTC:
+Owner: native mobile terminal term_bbf1787b-d2e5-402a-b366-24d40a2385c3.
+Source-only successor: /Users/ctk/orca/workspaces/Zorid/native-vault-context,
+branch tingkai-c/native-vault-context, based on canonical main0496b721.
+NativePages removes transient vault/search-preparation/searching/file-action
+and startup-check copy. Existing first-list/search skeletons and their Reduce
+Motion behavior remain; ordinary refresh retains the trusted listing. Loading,
+loan, admission, pending-action, error/retry and lifecycle gates are unchanged.
+Swift frontend syntax parse and git diff --check passed. Independent source
+review375419ce approved the exact NativePages SHA02075c9e; no Xcode build or visual/runtime proof
+for this presentation change yet. This does not improve measured load time.
+
+Latest user observation: native app feels slower than Obsidian's Capacitor app.
+Source inspection identifies repeated fresh editor WKWebView construction and
+whole-vault Markdown reads/indexing before the selected note. Their individual
+runtime costs have not yet been measured; Obsidian internals were not measured.
+One warm editor per current vault with logical per-tab state is a recommendation
+under discussion, not implemented or approved lifecycle/session redesign. Root
+b24 explicitly preserves that discussion boundary. No WebView pool or Rust
+storage authority change is included in this source batch.
+
+Delivery correction to earlier chronological entries: physical Dev10 was
+successfully installed and launched (actual process7774 exit0); receipts are
+/private/tmp/zorid-phone-dev10-reconnected-install.json and -launch.json.
+Clean Simulator14 build/install succeeded for reviewed link source11c91da1,
+but final matching tap/caret proof is still pending. No newer phone build or
+install is claimed. Prior Simulator app/helper cleanup68963 exited0; device
+remains booted. Retained resource slot returned to coordinator msg_4bb6b32ee050.
