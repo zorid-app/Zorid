@@ -116,6 +116,16 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:52UTC: native13 typing30104 terminal1 with single showMessage fileprivate
+access error; fixed privately in coordinator. One continuation13source retry
+granted after frozen corrected snapshot, no other compiler. Final foreground
+recovery source review remains separate. NewNote f00ebadc independently approved
+library-only; root delayed-CID handoff must honor returned originaltab/creationID,
+occupied-name escape unresolved before UIexposure. Managed engine source active
+5e1c78f3+adversarial2cb47716 (32tests unrun), ancestry resourcefix underway.
+Root inspected/approved isolated6cdbd6c8 Cargo.lock exactly8new package lines,
+existingserde/serde_json only; no production merge-engine/integration approval.
+
 00:50UTC: native13 immutable snapshot typing started (handle pendingreport),
 no competing compiler. NewNote NEWhelperf00ebadc source-ready, independent root
 review assigned native_consumer: exact same-intent/CID checkpoint CAS, freshloan
