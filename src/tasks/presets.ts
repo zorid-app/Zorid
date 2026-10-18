@@ -24,6 +24,9 @@ export function createTaskPreset(ids: TaskPresetIds, locations: { type?: string;
   const typePath = path(locations.type ?? 'Types/Task.yaml');
   const basePath = path(locations.base ?? 'Bases/Tasks.base');
   const destination = path(locations.destination ?? 'Tasks');
+  const key = (value: string) => value.normalize('NFC').toLowerCase();
+  const under = (a: string,b: string) => key(a) === key(b) || key(a).startsWith(key(b) + '/');
+  if (under(typePath,basePath) || under(basePath,typePath) || under(destination,typePath) || under(destination,basePath)) throw new Error('Preset files and capture folder conflict');
   if (!/\.ya?ml$/.test(typePath) || !basePath.endsWith('.base') || typePath === basePath) throw new Error('Invalid preset file extensions');
   const typeSource = stringify({
     version: 1, id: ids.type, label: 'Task', properties: [

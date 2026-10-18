@@ -59,6 +59,7 @@ pub struct TaskRow {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskGroup {
+    pub type_id: String,
     pub category: Option<StatusCategory>,
     pub status_id: Option<String>,
     pub entry_ids: Vec<crate::EntryId>,
@@ -102,6 +103,8 @@ fn date(
 }
 /// Type configuration revisions must belong to this exact namespace generation.
 /// No current-path substitution, detached rows or mutable host metadata are read.
+/// Hosts still own pin admission/revocation/expiry and must recheck before
+/// delivering results; a borrowed Generation itself is not a live capability.
 pub fn query_tasks(
     generation: &Generation,
     registry: &TypeRegistry,
@@ -284,18 +287,25 @@ pub fn query_tasks(
     result.matched = result.rows.len();
     result.truncated = result.matched > options.max_rows;
     result.rows.truncate(options.max_rows);
-    let mut groups: BTreeMap<(Option<StatusCategory>, Option<String>), Vec<crate::EntryId>> =
-        BTreeMap::new();
+    let mut groups: BTreeMap<
+        (Option<StatusCategory>, String, Option<String>),
+        Vec<crate::EntryId>,
+    > = BTreeMap::new();
     for row in &result.rows {
         groups
-            .entry((row.category.clone(), row.status_id.clone()))
+            .entry((
+                row.category.clone(),
+                row.type_id.clone(),
+                row.status_id.clone(),
+            ))
             .or_default()
             .push(row.witness.entry_id.clone());
     }
     // Unknown status groups follow the three semantic categories.
     result.groups = groups
         .into_iter()
-        .map(|((category, status_id), entry_ids)| TaskGroup {
+        .map(|((category, type_id, status_id), entry_ids)| TaskGroup {
+            type_id,
             category,
             status_id,
             entry_ids,
@@ -305,6 +315,7 @@ pub fn query_tasks(
         (
             g.category.is_none(),
             g.category.clone(),
+            g.type_id.clone(),
             g.status_id.clone(),
         )
     });

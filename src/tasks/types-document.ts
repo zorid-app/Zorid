@@ -1,4 +1,4 @@
-import { parseDocument, isMap, isSeq } from 'yaml';
+import { parseDocument, isMap, isSeq, isNode, visit } from 'yaml';
 import type { Document, YAMLMap } from 'yaml';
 
 export type TypeValue = null | boolean | number | string | readonly TypeValue[] | { readonly [key: string]: TypeValue };
@@ -29,6 +29,12 @@ function dateOnly(value: string): boolean {
   const date = new Date(0); date.setUTCFullYear(y, m - 1, d); date.setUTCHours(0,0,0,0);
   return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
 }
+function dateTime(value: string): boolean {
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match || !dateOnly(match[1]) || Number(match[2]) > 23 || Number(match[3]) > 59 || Number(match[4]) > 59) return false;
+  if (match[5] !== 'Z' && (Number(match[5].slice(1,3)) > 23 || Number(match[5].slice(4)) > 59)) return false;
+  return Number.isFinite(Date.parse(value));
+}
 /** The existing YAML parser supplies a bounded, ordered safe AST for Rust.
  * No expression evaluation or Markdown parsing occurs here. */
 function rootValue(doc: Document): TypeValue {
@@ -57,7 +63,8 @@ function rootValue(doc: Document): TypeValue {
     } finally { ancestors.delete(value); }
   }
   if (!isMap(doc.contents) || doc.errors.length || doc.warnings.length) return fail('Invalid or unsupported type YAML');
-  try { return convert(doc.toJS({ mapAsMap: true, maxAliasCount: 100 }), 0); }
+  visit(doc, { Alias: () => fail('YAML aliases are not supported in type definitions'), Value: (_, node) => { if (node.tag) fail('Explicit YAML tags are not supported in type definitions'); } });
+  try { return convert(doc.toJS({ mapAsMap: true, maxAliasCount: 0 }), 0); }
   catch (error) { throw error instanceof TypesDocumentError ? error : new TypesDocumentError(String(error)); }
 }
 function validate(value: TypeValue): NoteType {
@@ -79,7 +86,7 @@ function validate(value: TypeValue): NoteType {
       const d = p.default;
       const valid = d === null ? p.datatype !== 'status' : p.datatype === 'text' ? typeof d === 'string'
         : p.datatype === 'date' ? typeof d === 'string' && dateOnly(d)
-        : p.datatype === 'datetime' ? typeof d === 'string' && dateOnly(d.slice(0,10)) && /^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$/.test(d) && Number.isFinite(Date.parse(d))
+        : p.datatype === 'datetime' ? typeof d === 'string' && dateTime(d)
         : p.datatype === 'number' ? typeof d === 'number'
         : p.datatype === 'checkbox' ? typeof d === 'boolean'
         : p.datatype === 'multi-select' ? Array.isArray(d) && new Set(d).size === d.length && d.every(v => typeof v === 'string' && optionIds.has(v))
@@ -121,14 +128,48 @@ export class TypesDocument {
   /** Complete safe AST, including unknown keys, for compile_types. */
   get configuration(): TypeValue { return rootValue(this.document); }
   toString(): string { return this.source; }
-  private edit(operation: (doc: Document) => void): void {
-    const next = this.document.clone();
-    operation(next);
-    const newline = /\r?\n/.exec(this.source)?.[0] ?? '\n';
-    const source = (this.source.startsWith('\uFEFF') ? '\uFEFF' : '') + next.toString({ lineWidth: 0 }).replace(/\r?\n/g, newline);
-    // Reparse to prove alias ordering/limits of the serialized result too.
+  private change(start: number, end: number, replacement: string): void {
+    const source = this.source.slice(0,start) + replacement + this.source.slice(end);
     const checked = parse(source); const model = validate(rootValue(checked));
     this.document = checked; this.source = source; this.current = model;
+  }
+  /** Replace only the owned value span; unrelated formatting/comments stay exact. */
+  private patch(map: YAMLMap, key: string, value: TypeValue | undefined): void {
+    const index = map.items.findIndex(pair => isNode(pair.key) && 'value' in pair.key && pair.key.value === key);
+    const pair = index < 0 ? undefined : map.items[index];
+    const keyNode = pair?.key;
+    const node = pair?.value;
+    if (pair && isNode(keyNode) && keyNode.range) {
+      if (!isNode(node) || !node.range) return fail('An explicit value is required before editing');
+      if (value !== undefined) { this.change(node.range[0],node.range[1],JSON.stringify(value)); return; }
+      if (map.flow) {
+        if (index < map.items.length - 1) {
+          const next = map.items[index + 1].key;
+          if (!isNode(next) || !next.range) return fail('Invalid mapping range');
+          this.change(keyNode.range[0],next.range[0],'');
+        } else if (index > 0) {
+          const previous = map.items[index - 1].value;
+          if (!isNode(previous) || !previous.range) return fail('Invalid mapping range');
+          this.change(previous.range[1],node.range[1],'');
+        } else this.change(keyNode.range[0],node.range[1],'');
+      } else {
+        const lineStart = this.source.lastIndexOf('\n',keyNode.range[0] - 1) + 1;
+        if (this.source.slice(lineStart,keyNode.range[0]).trim()) return fail('Cannot remove a key sharing its container line');
+        this.change(lineStart,node.range[2],'');
+      }
+      return;
+    }
+    if (value === undefined) return;
+    if (!map.range) return fail('Invalid mapping range');
+    if (map.flow) {
+      this.change(map.range[1] - 1,map.range[1] - 1,`${map.items.length ? ', ' : ''}${key}: ${JSON.stringify(value)}`);
+    } else {
+      const lineStart = this.source.lastIndexOf('\n',map.range[0] - 1) + 1;
+      const indent = ' '.repeat(map.range[0] - lineStart);
+      const newline = /\r?\n/.exec(this.source)?.[0] ?? '\n';
+      const prefix = this.source[map.range[1] - 1] === '\n' ? '' : newline;
+      this.change(map.range[1],map.range[1],`${prefix}${indent}${key}: ${JSON.stringify(value)}${newline}`);
+    }
   }
   private property(doc: Document, id: string): YAMLMap {
     const index = this.current.properties.findIndex(p => p.id === id);
@@ -139,22 +180,20 @@ export class TypesDocument {
     if (!isMap(node)) return fail('Aliased properties cannot be edited directly');
     return node;
   }
-  rename(label: string): void { this.edit(doc => doc.set('label', label)); }
-  renameProperty(id: string, label: string): void { this.edit(doc => this.property(doc,id).set('label',label)); }
+  rename(label: string): void { if (!isMap(this.document.contents)) return fail('Invalid type root'); this.patch(this.document.contents,'label',label); }
+  renameProperty(id: string, label: string): void { this.patch(this.property(this.document,id),'label',label); }
   renameOption(propertyId: string, optionId: string, label: string): void {
     const p = this.current.properties.find(p => p.id === propertyId);
     const index = p?.options?.findIndex(o => o.id === optionId) ?? -1;
     if (index < 0) return fail('Unknown option ID');
-    this.edit(doc => {
-      const options = this.property(doc,propertyId).get('options',true);
-      if (!isSeq(options)) return fail('Invalid options sequence');
-      const node = options.items[index];
-      if (!isMap(node)) return fail('Aliased options cannot be edited directly');
-      node.set('label', label);
-    });
+    const options = this.property(this.document,propertyId).get('options',true);
+    if (!isSeq(options)) return fail('Invalid options sequence');
+    const node = options.items[index];
+    if (!isMap(node)) return fail('Invalid option mapping');
+    this.patch(node,'label',label);
   }
   setDefault(propertyId: string, value: TypeValue | undefined): void {
-    this.edit(doc => { const property = this.property(doc,propertyId); if (value === undefined) property.delete('default'); else property.set('default',doc.createNode(value)); });
+    this.patch(this.property(this.document,propertyId),'default',value);
   }
 }
 /** Invalid/unknown-version source is returned untouched for recovery/editor UI. */

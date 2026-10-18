@@ -363,3 +363,30 @@ fn host_ast_structural_budget_is_checked_before_recursive_interpretation() {
     raw.configuration = PropertyValue::Array(vec![PropertyValue::Null; 8193]);
     assert_eq!(compile_types(vec![raw]).unwrap_err().code, "budget");
 }
+
+#[test]
+fn option_identity_is_scoped_to_type_when_grouping_multiple_capabilities() {
+    let mut assignment = definition();
+    assignment["id"] = json!("assignment");
+    assignment["label"] = json!("Assignment");
+    let mut assignment_source = source(assignment);
+    assignment_source.witness.entry_id = id("assignment-type");
+    assignment_source.path = "Types/Assignment.yaml".into();
+    let generation = generation(&[
+        ("assignment-type", "Types/Assignment.yaml", "host config"),
+        ("task", "Task.md", "---\ntype: type-task\n---\n"),
+        (
+            "assignment",
+            "Assignment.md",
+            "---\ntype: assignment\n---\n",
+        ),
+    ]);
+    let registry = compile_types(vec![source(definition()), assignment_source]).unwrap();
+    let result = query_tasks(&generation, &registry, &TaskQueryOptions::default()).unwrap();
+    assert_eq!(result.groups.len(), 2);
+    assert!(result
+        .groups
+        .iter()
+        .all(|g| g.status_id.as_deref() == Some("todo") && g.entry_ids.len() == 1));
+    assert_ne!(result.groups[0].type_id, result.groups[1].type_id);
+}

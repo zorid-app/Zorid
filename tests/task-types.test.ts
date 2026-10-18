@@ -63,3 +63,37 @@ test('nonoverwrite planning permits existing folders and blocks files, parents a
   assert.throws(() => createTaskPreset(ids,{destination:'a//b'}));
   assert.throws(() => createTaskPreset({...ids,todo:ids.type}));
 });
+test('harmless aliases and all explicit YAML tags are rejected without losing source', () => {
+  for (const extra of ['x: &x hello\ny: *x\n','x: !!str hello\n','x: !!int 1\n']) {
+    const source = 'version: 1\nid: t\nlabel: Task\nproperties: []\n' + extra;
+    assert.throws(() => TypesDocument.parse(source));
+    assert.equal(inspectTypeDocument(source).source,source);
+  }
+});
+test('surgical scalar/default edits leave unrelated bytes and comments exact', () => {
+  const source = '\uFEFF# top\r\n' + stringify(fixture()).replace(/\n/g,'\r\n') + 'x: {a: 1,b: 2} # untouched\r\n';
+  const doc = TypesDocument.parse(source);
+  doc.rename('Changed'); doc.renameProperty('field-status','Progress'); doc.renameOption('field-status','todo','Ready');
+  doc.setDefault('field-planned','2024-02-29');
+  assert.equal(doc.model.properties[1].default,'2024-02-29');
+  doc.setDefault('field-planned',undefined);
+  assert.equal(doc.model.properties[1].default,undefined);
+  assert.ok(doc.toString().startsWith('\uFEFF# top\r\n'));
+  assert.ok(doc.toString().endsWith('x: {a: 1,b: 2} # untouched\r\n'));
+  assert.equal(doc.toString().replace(/label: "Changed"/,'label: Task').replace(/label: "Progress"/,'label: Status').replace(/label: "Ready"/,'label: To do'),source);
+  const flow = TypesDocument.parse('version: 1\nid: t\nlabel: Task\nproperties: [{id: p, key: p, label: P, datatype: text}]\nx: {a: 1,b: 2} # untouched\n');
+  flow.setDefault('p','hello'); assert.equal(flow.model.properties[0].default,'hello');
+  flow.setDefault('p',undefined); assert.equal(flow.model.properties[0].default,undefined);
+  assert.ok(flow.toString().endsWith('x: {a: 1,b: 2} # untouched\n'));
+});
+test('preset rejects conflicts between its own planned files and capture folder', () => {
+  for (const locations of [{destination:'Types/Task.yaml'},{destination:'types/task.YAML/Notes'},{type:'Bases/Tasks.base/Task.yaml'},{base:'Types/Task.yaml/Tasks.base'}]) {
+    assert.throws(() => createTaskPreset(ids,locations));
+  }
+});
+test('datetime defaults reject normalized invalid calendar dates', () => {
+  for (const datetime of ['2026-02-30T00:00:00Z','2026-02-28T24:00:00Z','2026-02-28T01:00:00+24:00']) {
+    const value=fixture(); value.properties.push({id:'datetime',key:'when',label:'When',datatype:'datetime',default:datetime});
+    assert.throws(() => TypesDocument.parse(stringify(value)));
+  }
+});

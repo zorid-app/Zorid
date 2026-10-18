@@ -314,6 +314,8 @@ pub fn compile_types(sources: Vec<TypeSource>) -> Result<TypeRegistry, Expressio
     Ok(registry)
 }
 /// New captures persist defaults rather than relying on query-time display fallback.
+/// Capture hosts must recheck registry source witnesses before their durable
+/// file command; this pure function does not authorize a filesystem write.
 pub fn task_capture_defaults(
     registry: &TypeRegistry,
     type_id: &str,
