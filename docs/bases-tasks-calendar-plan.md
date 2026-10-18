@@ -1,5 +1,12 @@
 # Bases, tasks and calendar
 
+> Historical plan — superseded by
+> [the managed-data implementation plan](managed-data-tasks-calendar-plan.md).
+> Do not implement the combined checkbox/task aggregate or direct task-calendar
+> scheduling described below. Markdown checkboxes remain separate from task
+> notes; tasks are a type capability, and work blocks/time entries use managed
+> records. Keep this file as provenance for isolated early candidates only.
+
 User moved this milestone before Stage5 on2026-10-17. Execution order is Vite →
 this milestone → Stage5. This is preparation while Vite native acceptance runs;
 no new product feature or schema is implemented by this document.

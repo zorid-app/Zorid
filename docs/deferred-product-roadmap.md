@@ -380,13 +380,16 @@ later capture was contaminated by typing. Menu/import/loading/tabs remain outsid
 Root import candidate5fc59cae checks wait for explicit slot return; no root heavy
 job or shared dependency-tree mutation while native owner holds the slot.
 
-Latest user design supersedes the initial task contract: ordinary Markdown records
+Historical design/discussion checkpoint (implementation hold superseded by the
+managed-data lead's user-authorized Phase0/1 plan; see current top checkpoint and
+managed-data-tasks-calendar-plan.md): ordinary Markdown records
 reference configurable vault type definitions; task behavior is an optional type
 capability mapping status categories/planned day/deadline/recurrence/reminders.
 Checkboxes stay separate with explicit conversion. Bases select records and hold
 multiple views/creation defaults; built-in Tasks/Calendar reuse the same system.
-User says "let's discuss": stop new task/calendar implementation and hold all
-isolated candidates. No task or calendar source has reached main. Resolve storage
+At that time the user said "let's discuss", pausing implementation and holding
+isolated candidates. The later coordinated managed-data track may now proceed;
+those old checkbox/tag candidates remain superseded. Resolve storage
 and stable type/property/option identity, then recurrence/calendar connection
 ownership before resuming. Native UX/import work remains separately owned.
 
@@ -421,11 +424,11 @@ Latest Vite completion — main165cf17a +manager-lock60efe609:
   passed and physical iPhone install/launch12016 both exited0. Native owner returned
   the exclusive heavy slot in msg5e815eb955cf. Keyboard interaction acceptance,
   search and new Settings remain separate; those new screens are not in build7.
-- Next active milestone is first-party Bases/tasks/calendar, then Stage5. Task
-  representations optional question has had a reasonable reply window; working
-  default is both inline checkboxes and task notes, pending later user correction.
-  Freeze a narrow source-preserving model before parallel UI/core implementation;
-  no inline schedule syntax invention or speculative plugin records.
+- Historical next-milestone proposal was Bases/tasks/calendar, then Stage5.
+  Its assumed combined checkbox/task model is superseded: checkboxes are separate,
+  task behavior belongs to configurable note types, and work blocks/time entries
+  use managed records. Follow managed-data-tasks-calendar-plan.md and current
+  coordinated ownership; do not revive the old aggregate task implementation.
 
 
 Current Vite checkpoint — candidate103428be (not main default yet):
