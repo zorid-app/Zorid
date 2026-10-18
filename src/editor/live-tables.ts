@@ -1,4 +1,4 @@
-import { Annotation, Compartment, EditorSelection, EditorState, Prec, StateField, Transaction } from '@codemirror/state';
+import { Annotation, Compartment, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
 import { Decoration, EditorView, keymap, ViewPlugin, WidgetType } from '@codemirror/view';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
@@ -14,6 +14,8 @@ import { alignTableCells, clearTableCells, copyTableCells, deleteTableCells, par
   setTableColumnAlignment, sortTableRows } from './table-model.ts';
 import type { MarkdownTable, TableEdit, TableCellPosition, TableCellRange } from './table-model.ts';
 
+/** Lease refreshes also invalidate queued focus restoration when facets stay equal. */
+export const refreshTableInteraction = StateEffect.define<void>();
 const cellSync = Annotation.define<boolean>();
 const controllers = new WeakMap<HTMLElement, TableController>();
 const contextTargets = new WeakMap<Event, { owner: EditorView; target: HTMLElement }>();
@@ -860,7 +862,9 @@ export function liveTables(open: (target: string) => void, cellExtensions: Exten
   const selection = ViewPlugin.fromClass(class {
     private version = 0;
     update(update: ViewUpdate) {
-      if (update.startState.readOnly !== update.state.readOnly || update.startState.facet(EditorView.editable) !== update.state.facet(EditorView.editable)) {
+      const interactionChanged = update.transactions.some(transaction => transaction.effects.some(effect => effect.is(refreshTableInteraction)));
+      if (interactionChanged) this.version++;
+      if (interactionChanged || update.startState.readOnly !== update.state.readOnly || update.startState.facet(EditorView.editable) !== update.state.facet(EditorView.editable)) {
         for (const dom of update.view.dom.querySelectorAll<HTMLElement>('.cm-live-table')) controllers.get(dom)?.syncReadOnly();
       }
       if ((!update.selectionSet && !update.docChanged) || update.transactions.some(t => t.annotation(cellSync))) return;

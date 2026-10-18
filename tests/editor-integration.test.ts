@@ -381,3 +381,33 @@ test('two retained editors accept authored changes only for the current writer t
     assert.deepEqual(changes, ['Bsecond']);
   } finally { second.destroy(); }
 });
+
+test('same-active refresh recovers a child created during live predicate loss', t => {
+  let writer = true;
+  const source = '| A | B |\n| --- | --- |\n| one | two |';
+  const { editor, host, dom, key } = setup(t, source, { canMutate: () => writer });
+  writer = false;
+  const cell = host.querySelector<HTMLElement>('.cm-live-table [data-row="1"][data-column="0"]')!;
+  cell.dispatchEvent(new dom.window.MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true }));
+  const child = EditorView.findFromDOM(cell.querySelector('.cm-editor')!)!;
+  assert.equal(child.state.readOnly, true);
+  writer = true;
+  editor.setInteractionState!({ active: true });
+  assert.equal(child.state.readOnly, false);
+  assert.equal(EditorView.findFromDOM(cell.querySelector('.cm-editor')!), child);
+  child.dispatch({ selection: { anchor: 0, head: 3 } });
+  key('Enter', true, child);
+  assert.notEqual(editor.getValue(), source, 'child keyboard authoring resumes');
+});
+
+test('rapid deactivate/reactivate invalidates pending table selection focus restoration', async t => {
+  const source = '| A | B |\n| --- | --- |\n| one | two |\n\nend';
+  const { editor, view, dom, host } = setup(t, source);
+  view.focus();
+  view.dispatch({ selection: { anchor: source.indexOf('one') } });
+  editor.setInteractionState!({ active: false });
+  editor.setInteractionState!({ active: true });
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(dom.window.document.activeElement, dom.window.document.body);
+  assert.equal(host.querySelector('.cm-live-table .cm-editor'), null, 'retired callback cannot mount/focus child');
+});

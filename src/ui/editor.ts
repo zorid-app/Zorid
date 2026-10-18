@@ -11,7 +11,7 @@ import { tags } from '@lezer/highlight';
 import { searchKeymap } from '@codemirror/search';
 import { editorCommandHotkeys, runEditorCommand } from '../editor/editor-commands.ts';
 import type { EditorHotkeySource } from './hotkeys.ts';
-import { activeTableEditor, liveTables, retainTableEditor } from '../editor/live-tables.ts';
+import { activeTableEditor, liveTables, refreshTableInteraction, retainTableEditor } from '../editor/live-tables.ts';
 import { bodyStart, liveProperties, propertyUpdate } from '../editor/live-properties.ts';
 import { frontmatterMarkdown } from '../editor/frontmatter-syntax.ts';
 import { liveCallouts, renderedCalloutRanges } from '../editor/live-callouts.ts';
@@ -162,7 +162,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       authoringEpoch = {};
       active = state.active;
       // A fresh menu plugin retires its outstanding async action witnesses.
-      view.dispatch({ effects: [interaction.reconfigure(interactionExtensions()), menus.reconfigure(editorContextMenu())] });
+      view.dispatch({ effects: [interaction.reconfigure(interactionExtensions()), menus.reconfigure(editorContextMenu()), refreshTableInteraction.of()] });
       const focused = view.dom.ownerDocument.activeElement;
       if (!active && focused instanceof HTMLElement && view.dom.contains(focused)) focused.blur();
     },

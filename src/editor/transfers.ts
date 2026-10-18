@@ -108,9 +108,16 @@ export function editorTransfers(options: TransferOptions,
     }
     private paste = (event: ClipboardEvent) => {
       if (event.defaultPrevented || !event.clipboardData) return;
-      if (!this.canAuthor()) { event.preventDefault(); return; }
+      const view = this.target(event);
+      if (!this.canAuthor()) {
+        if (view) event.preventDefault();
+        // CM's readOnly fallback also cancels paste. Controls outside an
+        // editor content target keep their own browser input behavior.
+        else event.stopPropagation();
+        return;
+      }
       if (handleTableClipboard(this.view, event)) return;
-      const view = this.target(event); if (!view || view.state.readOnly) return;
+      if (!view || view.state.readOnly) return;
       const transfer = event.clipboardData, plain = transfer.getData('text/plain'), html = transfer.getData('text/html');
       const ownCopy = !!plain && isOwnClipboardHTML(html);
       let converted = ownCopy ? '' : transfer.getData('text/markdown');
@@ -142,8 +149,13 @@ export function editorTransfers(options: TransferOptions,
     };
     private drop = (event: DragEvent) => {
       if (event.defaultPrevented || !event.dataTransfer) return;
-      if (!this.canAuthor()) { event.preventDefault(); return; }
-      const view = this.target(event); if (!view || view.state.readOnly) return;
+      const view = this.target(event);
+      if (!this.canAuthor()) {
+        if (view) event.preventDefault(); else event.stopPropagation();
+        return;
+      }
+      if (!view) return;
+      if (view.state.readOnly) return;
       let files: TransferFile[];
       try { files = transferFiles(event.dataTransfer, options.nativePath); }
       catch (error) { event.preventDefault(); options.onError?.(error); return; }

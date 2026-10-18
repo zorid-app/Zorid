@@ -359,3 +359,22 @@ test('live writer loss before queued import starts prevents storage dispatch wit
   assert.deepEqual(started, []);
   assert.equal(editor.getValue(), 'original');
 });
+
+for (const inactive of [false, true]) test(`writer-denied transfer handling preserves search and native-control defaults (inactive=${inactive})`, t => {
+  const { editor, view, dom, paste, file, imports } = setup(t, 'body', {}, 'source', { canMutate: () => false });
+  if (inactive) editor.setInteractionState!({ active: false });
+  openSearchPanel(view);
+  const search = view.dom.querySelector<HTMLInputElement>('.cm-search input')!;
+  assert.ok(search);
+  const control = dom.window.document.createElement('input'); view.contentDOM.append(control);
+  for (const target of [search, control]) {
+    assert.equal(paste({ 'text/plain': 'input text' }, [], target).event.defaultPrevented, false);
+    const drop = new dom.window.Event('drop', { bubbles: true, cancelable: true });
+    const dropped = file('control.png', [1]);
+    Object.defineProperty(drop, 'dataTransfer', { value: { files: [dropped], items: [{ kind: 'file', getAsFile: () => dropped }] } });
+    target.dispatchEvent(drop);
+    assert.equal(drop.defaultPrevented, false);
+  }
+  assert.equal(editor.getValue(), 'body');
+  assert.deepEqual(imports, []);
+});
