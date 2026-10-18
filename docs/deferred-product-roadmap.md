@@ -116,6 +116,16 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+01:03UTC direct user phone request reported by nativeowner: installupdatedDevapp.
+Exclusive native slot EXTENDED afterfocusedSimulatorpass for same reviewed
+fb1c04d7 signeddevelopment build/install/launch app.zorid.notes.dev, existing
+key/profile/devicecontract only. This supersedes earlier agentkeepDev9 choice;
+known NewNote/history/import incompleteness communicated, not reason to block
+requestedtry. No AppStore/TestFlight/account/production changes. Exactredacted
+command/handle/artifactsignature+bundle/version+install/launch evidence required;
+closeownedSimulatorapp/helper, leaveuserphoneapprunning, returnslotafterterminal.
+Actual Simulatorinstall/launch67686 terminal0, focusedUIpass stillongoing.
+
 01:02UTC actual Simulator10 build39003 terminal0 BUILD SUCCEEDED, frozenfb1c04d7.
 Ruststaticlib+fullXcodecompile/link passed; artifact
 /private/tmp/zorid-ios-v10b-sim-20261018/DerivedData/Build/Products/Debug-iphonesimulator/App.app.
