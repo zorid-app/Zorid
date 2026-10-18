@@ -6,8 +6,16 @@ const durable = async (name, ...args) => {
   let reply;
   try { reply = await invoke(name, ...args); }
   catch (error) {
-    if (workblock) throw Object.assign(new Error('WorkBlock acknowledgement is uncertain; retain the identical operation ID and request.'), {code:'workblock_transport_lost',source:'host',commitUncertain:true});
+    if (workblock) return {workblocks:true,schemaVersion:1,ok:false,error:{code:'workblock_transport_lost',source:'host',commitUncertain:true}};
     throw error;
+  }
+  if (workblock) {
+    // contextBridge copies Error objects without custom properties. Transfer
+    // only bounded plain data; the renderer reconstructs its own typed error.
+    if (reply?.ok === true) return {workblocks:true,schemaVersion:1,ok:true,value:reply.result};
+    const valid = reply?.ok === false && typeof reply.error?.code === 'string'
+      && /^[a-z_]{1,64}$/.test(reply.error.code) && typeof reply.error.commitUncertain === 'boolean';
+    return {workblocks:true,schemaVersion:1,ok:false,error:{code:valid?reply.error.code:'invalid_workblock_response',source:'host',commitUncertain:valid?reply.error.commitUncertain:true}};
   }
   if (!reply?.ok) throw Object.assign(new Error('Durable editor request failed; retain pending recovery state.'), reply?.error, {source:'host'});
   return reply.result;

@@ -123,9 +123,8 @@ test('capability is absent on old native hosts and semantic methods fail closed'
 test('preload sanitizes lost WorkBlock IPC without leaking native details or dispatching a replay',async()=>{
   let bridge,calls=0;const filename=require.resolve('../desktop/preload.cjs');
   vm.runInNewContext(fs.readFileSync(filename,'utf8'),{require(name){assert.equal(name,'electron');return{contextBridge:{exposeInMainWorld(_name,value){bridge=value;}},ipcRenderer:{async invoke(){calls++;throw new Error('private /vault/native path');}},webUtils:{}};}});
-  await assert.rejects(bridge.durableInvoke('/vault','admission','workblockCommand',[req('create',{...target,operation:'op',range})]),error=>{
-    assert.equal(error.code,'workblock_transport_lost');assert.equal(error.commitUncertain,true);assert.equal(error.source,'host');assert.equal(error.message.includes('/vault'),false);return true;
-  });assert.equal(calls,1);
+  const envelope=await bridge.durableInvoke('/vault','admission','workblockCommand',[req('create',{...target,operation:'op',range})]);
+  assert.deepEqual(JSON.parse(JSON.stringify(envelope)),{workblocks:true,schemaVersion:1,ok:false,error:{code:'workblock_transport_lost',source:'host',commitUncertain:true}});assert.equal(JSON.stringify(envelope).includes('/vault'),false);assert.equal(calls,1);
 });
 
 test('admission rejects own accessors, toJSON and nonplain requests before any transport',async()=>{
@@ -136,4 +135,29 @@ test('admission rejects own accessors, toJSON and nonplain requests before any t
   const query=capture(req('window',{fromMs:range.start_ms,untilMs:range.end_ms,limit:1,byteLimit:1000}));
   for(const bad of [{blocks:[{...read(),created:false,block:null}],cursor:null,incomplete:false,watermark:'1',scanned:1,bytes:0},{blocks:[read()],cursor:null,incomplete:false,watermark:'1',scanned:1,bytes:0}])assert.throws(()=>decodeValue(query,bad),{code:'invalid_workblock_response'});
   await context.release(()=>{});
+});
+
+test('WorkBlock-only preload envelopes survive cloning and renderer decoder restores safe typed errors',async()=>{
+  const {decodeWorkBlockEnvelope}=require('../desktop/workblocks.cjs');
+  let bridge,reply={ok:false,error:{code:'stale_revision',commitUncertain:false,message:'/private/native/details'}};
+  vm.runInNewContext(fs.readFileSync(require.resolve('../desktop/preload.cjs'),'utf8'),{require(){return{contextBridge:{exposeInMainWorld(_name,value){bridge=value;}},ipcRenderer:{async invoke(){return reply;}},webUtils:{}};}});
+  const request=capture(req('title',{...mutation,title:null}));
+  let envelope=structuredClone(await bridge.durableInvoke('/vault','admission','workblockCommand',[request]));
+  assert.deepEqual(envelope,{workblocks:true,schemaVersion:1,ok:false,error:{code:'stale_revision',source:'host',commitUncertain:false}});
+  assert.throws(()=>decodeWorkBlockEnvelope(request,envelope),{code:'stale_revision',source:'host',commitUncertain:false});
+  reply={ok:true,result:commit(mutation.operation)};envelope=structuredClone(await bridge.durableInvoke('/vault','admission','workblockCommand',[request]));
+  assert.deepEqual(decodeWorkBlockEnvelope(request,envelope),commit(mutation.operation));
+  for(const bad of [undefined,{ok:false},{ok:false,error:{code:'stale_revision',commitUncertain:'false'}},{ok:false,error:{code:'unsafe /path',commitUncertain:false}}]){
+    reply=bad;envelope=structuredClone(await bridge.durableInvoke('/vault','admission','workblockCommand',[request]));
+    assert.throws(()=>decodeWorkBlockEnvelope(request,envelope),{code:'invalid_workblock_response',commitUncertain:true});
+  }
+  reply={ok:false,error:{code:'old_api',commitUncertain:false}};
+  await assert.rejects(bridge.getDurableContext('/vault'),{code:'old_api'},'other durable API still rejects as before');
+});
+
+test('post-bridge decoder rejects malformed envelope/version/error metadata as mutation-uncertain',()=>{
+  const {decodeWorkBlockEnvelope}=require('../desktop/workblocks.cjs'),request=capture(req('title',{...mutation,title:null}));
+  const rejected={workblocks:true,schemaVersion:1,ok:false,error:{code:'stale_revision',source:'host',commitUncertain:false}};
+  for(const invalid of [null,{...rejected,extra:true},{...rejected,schemaVersion:2},{...rejected,ok:0},{...rejected,error:{...rejected.error,source:'native'}},{...rejected,error:{...rejected.error,commitUncertain:undefined}},{...rejected,error:{...rejected.error,code:'x'.repeat(65)}},{...rejected,error:{...rejected.error,message:'secret'}},{workblocks:true,schemaVersion:1,ok:true,value:commit('wrong')}])assert.throws(()=>decodeWorkBlockEnvelope(request,invalid),{code:'invalid_workblock_response',commitUncertain:true});
+  assert.throws(()=>decodeWorkBlockEnvelope(capture(req('read',target)),null),{code:'invalid_workblock_response',commitUncertain:false});
 });

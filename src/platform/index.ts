@@ -1,3 +1,4 @@
+import {decodeWorkBlockEnvelope} from '../../desktop/workblocks.cjs';
 import {createDesktopWorkBlocks,createDesktopBinaryStreams} from './desktop.ts';
 import {createDesktopDocumentService} from './desktop-document-semantics.ts';
 import type {DocumentService} from '../core/document-semantics.ts';
@@ -88,7 +89,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
         list: options => call('checkpoints.list',options), changes: options => call('checkpoints.changes',options)}),
     });
     let binaryDrained=false,documentsDrained=false;
-    if(binding.workBlocks===true)workBlocks=createDesktopWorkBlocks(request=>call('workblockCommand',request));
+    if(binding.workBlocks===true)workBlocks=createDesktopWorkBlocks(request=>call('workblockCommand',request).then(reply=>decodeWorkBlockEnvelope(request,reply)));
     if(binding.documentSemantics)documents=createDesktopDocumentService(request=>call('documentCommand',request));
     if(binding.binaryLimits)binary=createDesktopBinaryStreams({scope,checkpoints:durableWrites.checkpoints,limits:binding.binaryLimits,assertActive:()=>{if(released||binaryDrained)throw new Error('Desktop binary context released');},invoke:bytes=>call<Uint8Array>('binaryCommand',bytes)});
     release = async () => { if (!released) { if(workBlocks)await workBlocks.release(); if(binary&&!binaryDrained){await binary.release();binaryDrained=true;} if(documents&&!documentsDrained){await documents.release();documentsDrained=true;} await releaseContext(info.path, admissionId); released = true; } };

@@ -58,7 +58,7 @@ test('normal desktop platform injects only advertised admitted capability and dr
   Object.defineProperty(globalThis,'window',{configurable:true,value:{zorid:{
     getVault:async()=>({path:'/vault',name:'Fixture'}),
     getDurableContext:async()=>({admissionId:'admitted',scope:{vaultId:'store',clientId:'client'},...(advertised?{workBlocks:true}:{})}),
-    durableInvoke:async(root:string,admission:string,method:string,args:unknown[])=>{assert.equal(root,'/vault');assert.equal(admission,'admitted');assert.equal(method,'workblockCommand');calls.push(args);return receipt((args[0] as DesktopWorkBlockRequest).command.operation);},
+    durableInvoke:async(root:string,admission:string,method:string,args:unknown[])=>{assert.equal(root,'/vault');assert.equal(admission,'admitted');assert.equal(method,'workblockCommand');calls.push(args);return {workblocks:true,schemaVersion:1,ok:true,value:receipt((args[0] as DesktopWorkBlockRequest).command.operation)};},
     releaseDurableContext:async()=>{if(releaseFails){releaseFails=false;throw {code:'host_timeout',commitUncertain:true};}},
   }}});
   try{
@@ -74,4 +74,24 @@ test('renderer rejects getters without evaluating them or dispatching after rele
   const input=create();Object.defineProperty(input,'title',{enumerable:true,get(){gets++;void binding.release();return 'title';}});
   await assert.rejects(binding.service.create(input),{code:'invalid_workblock_request'});assert.equal(gets,0);assert.equal(calls,0);
   await binding.service.create(create());assert.equal(calls,1);await binding.release();
+});
+
+test('normal admitted platform decodes cloneable bridge rejection and uncertainty in renderer',async()=>{
+  const previous=Object.getOwnPropertyDescriptor(globalThis,'window');let reply:unknown;
+  Object.defineProperty(globalThis,'window',{configurable:true,value:{zorid:{
+    getVault:async()=>({path:'/vault',name:'Fixture'}),getDurableContext:async()=>({admissionId:'admitted',scope:{vaultId:'store',clientId:'client'},workBlocks:true}),
+    durableInvoke:async()=>structuredClone(reply),releaseDurableContext:async()=>{},
+  }}});
+  try{
+    const platform=(await createPlatformAdapter())!;
+    reply={workblocks:true,schemaVersion:1,ok:false,error:{code:'stale_revision',source:'host',commitUncertain:false}};
+    await assert.rejects(platform.workBlocks!.create(create()),{code:'stale_revision',source:'host',commitUncertain:false});
+    reply={workblocks:true,schemaVersion:1,ok:false,error:{code:'workblock_transport_lost',source:'host',commitUncertain:true}};
+    await assert.rejects(platform.workBlocks!.create(create()),{code:'workblock_transport_lost',commitUncertain:true});
+    await assert.rejects(platform.workBlocks!.create({...create(),title:'changed'}),{code:'operation_collision'});
+    reply={workblocks:true,schemaVersion:1,ok:true,value:receipt(create().operation)};assert.deepEqual(await platform.workBlocks!.create(create()),receipt(create().operation));
+    reply={workblocks:true,schemaVersion:1,ok:false,error:{code:'invalid_request',source:'host',commitUncertain:'false'}};
+    await assert.rejects(platform.workBlocks!.create({...create(),operation:'malformed'}),{code:'invalid_workblock_response',commitUncertain:true});
+    await platform.release!();
+  }finally{if(previous)Object.defineProperty(globalThis,'window',previous);else Reflect.deleteProperty(globalThis,'window');}
 });

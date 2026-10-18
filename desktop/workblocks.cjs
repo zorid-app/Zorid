@@ -83,6 +83,19 @@ function validateWorkBlockValue(request,value){
   if(!valid||size(JSON.stringify(value))>MAX_WORKBLOCK_RESPONSE)throw failure('invalid_workblock_response',mutations.has(c.op));
   return value;
 }
+// Decode AFTER contextBridge, never by parsing a thrown Error message.
+function decodeWorkBlockEnvelope(request,envelope){
+  const malformed=()=>failure('invalid_workblock_response',mutations.has(request.command.op));
+  let bytes;try{bytes=size(JSON.stringify(envelope));}catch{throw malformed();}
+  if(bytes>MAX_WORKBLOCK_RESPONSE+1024||!object(envelope)||envelope.workblocks!==true||envelope.schemaVersion!==1||typeof envelope.ok!=='boolean')throw malformed();
+  if(envelope.ok){
+    if(!keys(envelope,['workblocks','schemaVersion','ok','value']))throw malformed();
+    return validateWorkBlockValue(request,envelope.value);
+  }
+  const error=envelope.error;
+  if(!keys(envelope,['workblocks','schemaVersion','ok','error'])||!keys(error,['code','source','commitUncertain'])||typeof error.code!=='string'||!/^[a-z_]{1,64}$/.test(error.code)||error.source!=='host'||typeof error.commitUncertain!=='boolean')throw malformed();
+  throw failure(error.code,error.commitUncertain);
+}
 function decodeWorkBlockReply(request,marker,bytes){
   const fail=()=>failure('invalid_workblock_response',mutations.has(request.command.op));
   if(!keys(marker,['workblocks','schemaVersion','bytes'])||marker.workblocks!==true||marker.schemaVersion!==1||!uint(marker.bytes,MAX_WORKBLOCK_RESPONSE)||!(bytes instanceof Uint8Array)||!bytes.length||bytes.length!==marker.bytes)throw fail();
@@ -91,4 +104,4 @@ function decodeWorkBlockReply(request,marker,bytes){
   return validateWorkBlockValue(request,reply.value);
 }
 function validWorkBlockReply(command,marker,bytes){try{decodeWorkBlockReply(command.request,marker,bytes);return true;}catch{return false;}}
-module.exports={MAX_WORKBLOCK_REQUEST,MAX_WORKBLOCK_RESPONSE,captureWorkBlockCommand,captureWorkBlockRequest,decodeWorkBlockReply,validWorkBlockReply,validateWorkBlockValue};
+module.exports={MAX_WORKBLOCK_REQUEST,MAX_WORKBLOCK_RESPONSE,captureWorkBlockCommand,captureWorkBlockRequest,decodeWorkBlockEnvelope,decodeWorkBlockReply,validWorkBlockReply,validateWorkBlockValue};
