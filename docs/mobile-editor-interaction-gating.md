@@ -96,3 +96,28 @@ add narrow editor/platform context-menu lifetime ownership; bridge/native edits
 remain separately owned. Proposed guarded-browser fallback and per-editor
 abort/epoch guard were sent for root agreement in `msg_9d2cb2fa3a1b`; no
 unapproved platform/menu implementation is present at this checkpoint.
+
+### Owned menu role fence — final source candidate
+
+Root approved the minimal paired menu solution in `msg_305a1d5f999c`.
+Source `047d568740b80d1948344e84c9f6d8d7f37daad1` adds the narrowly granted
+editor/platform menu files and focused menu regressions. Menus in editors that
+opt into interaction management at construction capture epoch/document/selection
+and a per-session abort signal. Lease refresh retires only that editor's menu,
+without restoring focus. Browser roles validate before and after restoring focus
+and immediately before side effects. Signals from older sessions cannot dismiss
+a replacement menu. Denied editor menus also suppress the default editor menu;
+controls outside the editor body retain their own menu behavior.
+
+Guarded requests use the existing renderer menu even when a desktop bridge is
+present: existing Electron raw roles execute before renderer validation, so they
+cannot satisfy this guard. Default desktop menus without interaction opt-in keep
+the native bridge path. This is an accepted future Electron gated-mode menu
+tradeoff, not native-menu parity. Clipboard behavior/capability checks are
+unchanged; no replacement clipboard implementation or bridge/CJS edits were made.
+All retained router editors must opt in at construction, as already agreed.
+
+Final focused command adds `tests/context-menu.test.ts` to the four files above.
+Observed **91 passed, 0 failed**, exit 0, concurrency 1; same log path. Diff check
+passed. Independent final review requested in `msg_467e3aab9643`; source is
+frozen for that review. No integration or native/runtime claim follows.
