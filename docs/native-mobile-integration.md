@@ -1117,3 +1117,13 @@ Explicit followup cce6ebe0 started; preparation source-only. Offered slot return
 msg62a9ddf75ecd until exact harness ready, no owner compiler run. Root targeted
 Rust checks may proceed. Bounded Share API accepted and focused new test SOURCE
 NativeFileExportTests.swift approved, no registration or execution granted.
+
+
+Physical phone redeployment — 2026-10-18 00:10 UTC: user again requested phone
+build. Connected/available device confirmed through devicectl JSON. Reused exact
+frozen3288 signed Dev9 artifact; actual exec99761 strict/deep signature0, install0,
+launch0. Left app running for user. Private logs mobile-phone9-again-{signature,
+install,launch}.log and devicectl JSON under/private/tmp. No compilation or new
+source included; document tabs/import/menu/loading successors remain outside9.
+Offered two-file typecheck slot returned unconsumed msg3f74b5f9974e; fresh ACK
+required before compiler use. Main untouched.
