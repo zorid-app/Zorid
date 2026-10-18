@@ -3,6 +3,7 @@ import type {TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {registerHooks} from 'node:module';
 import {JSDOM} from 'jsdom';
+import {Calendar} from 'fullcalendar';
 import {createCalendarView,formRange,localDateTime} from '../src/calendar/view.ts';
 import {Workspace} from '../src/ui/workspace.ts';
 import {MemoryAdapter} from '../src/core/memory-adapter.ts';
@@ -80,4 +81,32 @@ test('Workspace Calendar parks/restores through notes, keeps Live Edit default a
   await(workspace as any).openCalendar();await tick();const pane=workspace.activePane,calendar=pane.calendarView;assert.ok(calendar);assert.equal(pane.tabs.find(tab=>tab.id===pane.active)!.kind,'calendar');
   await workspace.openNote('A.md',true);assert.equal(pane.calendarView,undefined);const tab=pane.tabs.find(tab=>tab.kind==='calendar')!;await(workspace as any).selectTab(pane,tab);assert.equal(pane.calendarView,calendar);
   await(workspace as any).toggleReading();assert.equal(tab.mode,'reading');await workspace.openNote('A.md');assert.equal(pane.tabs.find(tab=>tab.id===pane.active)!.mode,'live');
+});
+test('held source inspection cannot open a stale form after date navigation',async t=>{
+  const{host,click,cleanup}=setup(t);let release!:(value:WorkBlockRead)=>void;
+  const{service}=fixture({read:()=>new Promise(done=>release=done)});
+  const view=createCalendarView(host,service,{date:'2026-10-17'});cleanup(()=>view.destroy());await tick();
+  const event=[...host.querySelectorAll<HTMLElement>('.calendar-grid [tabindex]')].find(element=>element.textContent?.includes('Planning'));assert.ok(event);event.click();
+  click('Next');release(sample());await tick();assert.equal(host.querySelector<HTMLElement>('.calendar-editor')!.hidden,true);
+});
+test('all conflict alternatives stay visible and explicit form range resolution submits one whole command',async t=>{
+  const{host,click,field,cleanup}=setup(t),data=fixture(),block=sample();
+  block.block!.titles.push({operation:'private-title-operation',title:'Alternative title'});
+  block.block!.ranges.push({operation:'private-range-operation',range:{...block.block!.ranges[0].range,start_ms:String(new Date(2026,9,17,14).getTime()),end_ms:String(new Date(2026,9,17,15).getTime())}});data.setValue(block);
+  const view=createCalendarView(host,data.service,{date:'2026-10-17'});cleanup(()=>view.destroy());await tick();
+  const event=[...host.querySelectorAll<HTMLElement>('.calendar-grid [tabindex]')].find(element=>element.textContent?.includes('Planning'));assert.ok(event);event.click();await tick();
+  assert.match(host.querySelector('.calendar-candidates')!.textContent!,/Planning.*Alternative title/s);assert.equal(host.textContent!.includes('private-range-operation'),false);
+  const choices=[...host.querySelectorAll<HTMLButtonElement>('.calendar-candidates button')];assert.equal(choices.length,2);choices[1].click();assert.match(field('Start').value,/14:00/);
+  assert.equal(data.calls.some(call=>call.kind==='move'),false);click('Save time');await tick();const moves=data.calls.filter(call=>call.kind==='move');assert.equal(moves.length,1);assert.deepEqual(moves[0].input.range,block.block!.ranges[1].range);assert.deepEqual(moves[0].input.expectedRevision,[1]);assert.equal(block.block!.ranges.length,2);
+});
+test('library move and resize proposals revert immediately and require form confirmation or cancellation',async t=>{
+  const{host,click,cleanup}=setup(t),data=fixture();let current:Calendar|undefined;
+  const render=Calendar.prototype.render;Calendar.prototype.render=function(){current=this;render.call(this);};cleanup(()=>{Calendar.prototype.render=render;});
+  const view=createCalendarView(host,data.service,{date:'2026-10-17'});cleanup(()=>view.destroy());await tick();
+  for(const kind of ['eventDrop','eventResize'] as const){
+    const event=current!.getEvents()[0],start=event.start!,end=event.end!;let reverted=0;
+    event.setDates(new Date(start.getTime()+3_600_000),new Date(end.getTime()+3_600_000));
+    current!.trigger(kind,{event,revert(){reverted++;event.setDates(start,end);}} as any);assert.equal(reverted,1);assert.equal(data.calls.some(call=>call.kind==='move'),false);await tick();
+    assert.equal(host.querySelector<HTMLElement>('.calendar-editor')!.hidden,false);click('Cancel');await view.flush();assert.equal(data.calls.some(call=>call.kind==='move'),false);
+  }
 });
