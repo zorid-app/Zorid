@@ -161,3 +161,223 @@ test('table cell Tab navigation wins over list indentation while nearby embeds r
   assert.equal(editor.getValue(), source);
   assert.equal(host.querySelector('.cm-live-embed'), embed); assert.equal(renders.length, 1); assert.equal(renders[0].destroys, 0);
 });
+
+test('inactive editor rejects authored dispatches and widgets but accepts external snapshots', t => {
+  const source = '- [ ] task\nend';
+  const { editor, view, host, changes, click } = setup(t, source);
+  view.dispatch({ selection: { anchor: source.length } });
+  editor.insert('!');
+  const authored = editor.getValue(), selection = view.state.selection;
+  view.scrollDOM.scrollTop = 73;
+  editor.setInteractionState!({ active: false });
+  assert.equal(EditorView.findFromDOM(host.querySelector('.cm-editor')!), view);
+  assert.equal(view.state.readOnly, true);
+  assert.equal(view.state.facet(EditorView.editable), false);
+  assert.ok(view.state.selection.eq(selection));
+  assert.equal(view.scrollDOM.scrollTop, 73);
+  editor.insert('blocked');
+  view.dispatch({ changes: { from: 0, insert: 'blocked' }, filter: false });
+  click(host.querySelector('.task-list-item-checkbox')!);
+  assert.equal(editor.getValue(), authored);
+  assert.deepEqual(changes, [authored]);
+  editor.setValue(authored + '\nexternal');
+  assert.equal(editor.getValue(), authored + '\nexternal');
+  assert.deepEqual(changes, [authored]);
+  editor.setInteractionState!({ active: true });
+  assert.equal(view.state.readOnly, false);
+  assert.ok(undo(view));
+  assert.equal(editor.getValue(), source + '\nexternal', 'history maps through external snapshot while inactive');
+  assert.ok(redo(view));
+  assert.equal(editor.getValue(), authored + '\nexternal');
+});
+
+test('live writer predicate rejects parent and child programmatic changes without divergence', t => {
+  let writer = true;
+  const source = '| A | B |\n| --- | --- |\n| one | two |';
+  const { editor, view, host, dom, changes } = setup(t, source, { canMutate: () => writer });
+  const cell = host.querySelector<HTMLElement>('.cm-live-table [data-row="1"][data-column="0"]')!;
+  cell.dispatchEvent(new dom.window.MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true }));
+  const child = EditorView.findFromDOM(cell.querySelector('.cm-editor')!)!;
+  writer = false; // Live authority must hold even before readOnly refresh.
+  child.dispatch({ changes: { from: 0, insert: 'blocked' }, filter: false });
+  view.dispatch({ changes: { from: 0, insert: 'blocked' }, filter: false });
+  editor.insert('blocked');
+  assert.equal(child.state.doc.toString(), 'one');
+  assert.equal(editor.getValue(), source);
+  assert.deepEqual(changes, []);
+  editor.setInteractionState!({ active: false });
+  assert.equal(child.state.readOnly, true);
+  assert.equal(child.state.facet(EditorView.editable), false);
+  editor.setValue(source.replace('one', 'remote'));
+  assert.equal(child.state.doc.toString(), 'remote');
+  writer = true;
+  editor.setInteractionState!({ active: true });
+  assert.equal(child.state.readOnly, false);
+  assert.equal(child.state.facet(EditorView.editable), true);
+  child.dispatch({ changes: { from: 0, insert: 'ok' } });
+  assert.equal(editor.getValue(), source.replace('one', 'okremote'));
+});
+
+test('captured formatting target cannot revive after an interaction epoch change', t => {
+  const { editor, view } = setup(t, 'label');
+  view.dispatch({ selection: { anchor: 0, head: 5 } });
+  view.focus();
+  const captured = editor.captureCommandTarget!(() => true);
+  assert.ok(captured);
+  editor.setInteractionState!({ active: false });
+  editor.setInteractionState!({ active: true });
+  assert.equal(captured.run('editor-bold'), false);
+  assert.equal(editor.getValue(), 'label');
+  captured.dispose();
+});
+
+test('initial inactive editor never exposes an authoring surface or steals focus', t => {
+  const { editor, view, changes, dom } = setup(t, 'prewarm', { interactionState: { active: false } });
+  assert.equal(view.state.readOnly, true);
+  assert.equal(view.state.facet(EditorView.editable), false);
+  editor.focus();
+  assert.equal(dom.window.document.activeElement, dom.window.document.body);
+  editor.insert('blocked');
+  view.dispatch({ changes: { from: 0, insert: 'blocked' }, filter: false });
+  assert.equal(editor.getValue(), 'prewarm');
+  assert.deepEqual(changes, []);
+  editor.setInteractionState!({ active: true });
+  assert.equal(dom.window.document.activeElement, dom.window.document.body, 'activation does not raise keyboard');
+  editor.focus();
+  assert.equal(dom.window.document.activeElement, view.contentDOM);
+  editor.setInteractionState!({ active: false });
+  assert.equal(dom.window.document.activeElement, dom.window.document.body);
+});
+
+test('temporary writer freeze keeps active focus while rejecting changes and preserving history', t => {
+  let writer = true;
+  const { editor, view, dom } = setup(t, 'text', { canMutate: () => writer });
+  view.dispatch({ selection: { anchor: 4 } });
+  editor.focus(); editor.insert('!');
+  const selection = view.state.selection;
+  writer = false;
+  editor.setInteractionState!({ active: true });
+  assert.equal(view.state.readOnly, true);
+  assert.equal(view.state.facet(EditorView.editable), true);
+  assert.equal(dom.window.document.activeElement, view.contentDOM);
+  editor.insert('blocked');
+  assert.equal(editor.getValue(), 'text!');
+  writer = true;
+  editor.setInteractionState!({ active: true });
+  assert.ok(view.state.selection.eq(selection));
+  assert.equal(dom.window.document.activeElement, view.contentDOM);
+  assert.ok(undo(view)); assert.equal(editor.getValue(), 'text');
+});
+
+test('throwing writer predicate fails closed during construction and authored dispatch', t => {
+  let throws = true;
+  const { editor, view, changes } = setup(t, 'safe', { canMutate: () => { if (throws) throw new Error('retired'); return true; } });
+  assert.equal(view.state.readOnly, true);
+  editor.insert('blocked');
+  view.dispatch({ changes: { from: 0, insert: 'blocked' }, filter: false });
+  assert.equal(editor.getValue(), 'safe');
+  assert.deepEqual(changes, []);
+  throws = false;
+  editor.setInteractionState!({ active: true });
+  editor.insert('ok');
+  assert.equal(editor.getValue(), 'oksafe');
+});
+
+test('lease refresh retires a delayed context-menu action even when document and selection match', async t => {
+  const { editor, view, dom } = setup(t, 'label');
+  let choose!: (id: string) => void;
+  Object.defineProperty(dom.window, 'zorid', { value: { showContextMenu: () => new Promise<string>(resolve => { choose = resolve; }) } });
+  view.dispatch({ selection: { anchor: 0, head: 5 } });
+  view.contentDOM.dispatchEvent(new dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  assert.equal(typeof choose, 'function');
+  editor.setInteractionState!({ active: false });
+  editor.setInteractionState!({ active: true });
+  choose('format-format-bold');
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(editor.getValue(), 'label');
+});
+
+test('inactive editor rejects undo and a whole batch containing an authored change', t => {
+  const { editor, view, changes } = setup(t, 'one');
+  editor.insert('two');
+  editor.setInteractionState!({ active: false });
+  const before = view.state;
+  undo(view);
+  const select = before.update({ selection: { anchor: 1 } });
+  const edit = select.state.update({ changes: { from: 0, insert: 'blocked' }, filter: false });
+  view.dispatch([select, edit]);
+  assert.equal(view.state, before, 'rejected batch cannot partially move selection');
+  assert.equal(editor.getValue(), 'twoone');
+  assert.deepEqual(changes, ['twoone']);
+});
+
+test('inactive table preserves its child without queued focus restoration and updates editable during freeze', async t => {
+  let writer = true;
+  const source = '| A | B |\n| --- | --- |\n| one | two |';
+  const { editor, host, dom } = setup(t, source, { canMutate: () => writer });
+  const cell = host.querySelector<HTMLElement>('.cm-live-table [data-row="1"][data-column="0"]')!;
+  cell.dispatchEvent(new dom.window.MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true }));
+  const child = EditorView.findFromDOM(cell.querySelector('.cm-editor')!)!;
+  const selection = child.state.selection;
+  writer = false;
+  editor.setInteractionState!({ active: false });
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(dom.window.document.activeElement, dom.window.document.body);
+  assert.equal(EditorView.findFromDOM(cell.querySelector('.cm-editor')!), child);
+  assert.ok(child.state.selection.eq(selection));
+  assert.equal(child.state.facet(EditorView.editable), false);
+  editor.setInteractionState!({ active: true });
+  assert.equal(child.state.readOnly, true);
+  assert.equal(child.state.facet(EditorView.editable), true);
+  assert.equal(dom.window.document.activeElement, dom.window.document.body);
+});
+
+test('live writer loss blocks table structure before optimistic child teardown', t => {
+  let writer = true;
+  const source = '| A | B |\n| --- | --- |\n| one | two |';
+  const { editor, host, dom, click } = setup(t, source, { canMutate: () => writer });
+  const cell = host.querySelector<HTMLElement>('.cm-live-table [data-row="1"][data-column="0"]')!;
+  cell.dispatchEvent(new dom.window.MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true }));
+  const child = cell.querySelector('.cm-editor');
+  writer = false;
+  click(host.querySelector('.cm-table-add-row')!);
+  assert.equal(editor.getValue(), source);
+  assert.equal(cell.querySelector('.cm-editor'), child);
+});
+
+test('native actions sample live writer authority and publish inactive state', t => {
+  let writer = true;
+  const { editor, view } = setup(t, 'label', { canMutate: () => writer, onNativeEditorState() {} });
+  view.dispatch({ selection: { anchor: 0, head: 5 } });
+  view.focus();
+  assert.equal(editor.nativeState!().editable, true);
+  writer = false;
+  assert.equal(editor.nativeAction!('bold'), false);
+  assert.equal(editor.nativeState!().editable, false);
+  editor.setInteractionState!({ active: false });
+  const revision = editor.nativeState!().navigationRevision;
+  writer = true;
+  editor.setInteractionState!({ active: true });
+  assert.ok(editor.nativeState!().navigationRevision > revision);
+  assert.equal(editor.getValue(), 'label');
+});
+
+test('two retained editors accept authored changes only for the current writer token', t => {
+  let writer: 'first' | 'second' = 'first';
+  const { editor: first, host, dom } = setup(t, 'first', { canMutate: () => writer === 'first' });
+  const secondHost = dom.window.document.createElement('section'); host.after(secondHost);
+  const changes: string[] = [];
+  const second = createEditor(secondHost, { value: 'second', mode: 'source', paths: () => [], open() {}, onChange: value => changes.push(value),
+    interactionState: { active: false }, canMutate: () => writer === 'second' });
+  try {
+    first.insert('A'); second.insert('blocked');
+    writer = 'second'; // Revoke outgoing authority before refreshing either view.
+    first.insert('blocked');
+    first.setInteractionState!({ active: false });
+    second.setInteractionState!({ active: true });
+    second.insert('B'); first.insert('blocked');
+    assert.equal(first.getValue(), 'Afirst');
+    assert.equal(second.getValue(), 'Bsecond');
+    assert.deepEqual(changes, ['Bsecond']);
+  } finally { second.destroy(); }
+});

@@ -62,7 +62,8 @@ export function pasteURLs(view: EditorView, text: string): boolean {
 }
 
 /** Shared web transfer path for Electron and Capacitor. Native-only formats are separate adapters. */
-export function editorTransfers(options: TransferOptions): Extension {
+export function editorTransfers(options: TransferOptions,
+  captureAuthoring?: () => (() => boolean) | null): Extension {
   return ViewPlugin.fromClass(class {
     private view: EditorView;
     private disposed = false;
@@ -87,21 +88,27 @@ export function editorTransfers(options: TransferOptions): Extension {
       }
       return view;
     }
+    private canAuthor = () => !this.disposed && !this.view.state.readOnly && (captureAuthoring?.()?.() ?? !captureAuthoring);
     private insertFiles(files: TransferFile[]) {
+      // Capture at the event, not when a queued import eventually starts.
+      const current = captureAuthoring?.() ?? (captureAuthoring ? null : () => true);
+      if (!current || !this.canAuthor()) return;
+      const valid = () => !this.disposed && current() && !this.view.state.readOnly;
       this.pending = this.pending.then(async () => {
         for (let index = 0; index < files.length; index++) {
-          if (this.disposed) return;
+          if (!valid()) return;
           const embed = await options.importFile(files[index]);
           // A completed binary write is retained, but never write into a closed/reused editor.
-          if (this.disposed) return;
+          if (!valid()) return;
           const editor = activeTableEditor(this.view) ?? this.view;
           if (editor.state.readOnly) return;
           replace(editor, embed + (index < files.length - 1 ? '\n\n' : ''), 'input.paste');
         }
-      }).catch(error => { if (!this.disposed) options.onError?.(error); });
+      }).catch(error => { if (valid()) options.onError?.(error); });
     }
     private paste = (event: ClipboardEvent) => {
       if (event.defaultPrevented || !event.clipboardData) return;
+      if (!this.canAuthor()) { event.preventDefault(); return; }
       if (handleTableClipboard(this.view, event)) return;
       const view = this.target(event); if (!view || view.state.readOnly) return;
       const transfer = event.clipboardData, plain = transfer.getData('text/plain'), html = transfer.getData('text/html');
@@ -129,12 +136,13 @@ export function editorTransfers(options: TransferOptions): Extension {
       event.preventDefault(); event.stopPropagation(); this.insertFiles(files);
     };
     private dragOver = (event: DragEvent) => {
-      if (event.defaultPrevented || !event.dataTransfer?.types.includes('Files')) return;
+      if (event.defaultPrevented || !event.dataTransfer?.types.includes('Files') || !this.canAuthor()) return;
       const view = this.target(event); if (!view || view.state.readOnly) return;
       event.preventDefault(); event.dataTransfer.dropEffect = 'copy';
     };
     private drop = (event: DragEvent) => {
       if (event.defaultPrevented || !event.dataTransfer) return;
+      if (!this.canAuthor()) { event.preventDefault(); return; }
       const view = this.target(event); if (!view || view.state.readOnly) return;
       let files: TransferFile[];
       try { files = transferFiles(event.dataTransfer, options.nativePath); }

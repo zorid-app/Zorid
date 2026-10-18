@@ -51,7 +51,11 @@ export interface EditorCommandTarget {
   dispose(): void;
 }
 
+export interface EditorInteractionState { active: boolean }
+
 export interface EditorHandle {
+  /** Refresh writer authority in place; every call retires captured authoring actions. Never focuses. */
+  setInteractionState?(state: EditorInteractionState): void;
   nativeAction?(action: NativeEditorAction): boolean;
   nativeState?(): NativeEditorState;
   /** Capture one note/child selection before a modal takes focus. */
@@ -69,6 +73,10 @@ export interface EditorHandle {
   fold?(action: EditorFoldAction): boolean;
 }
 export interface EditorOptions {
+  /** Pure live writer-token check. Exceptions deny authoring. Desktop defaults to true. */
+  canMutate?: () => boolean;
+  /** Passive views must start inactive, before any extension mounts. */
+  interactionState?: EditorInteractionState;
   onNativeEditorState?: (state: NativeEditorState) => void;
   /** Native actions require the owning active pane/runtime/generation to remain current. */
   isCurrent?: () => boolean;
@@ -90,14 +98,36 @@ const markdownHighlightStyle = HighlightStyle.define(defaultHighlightStyle.specs
 
 export function createEditor(parent: HTMLElement, options: EditorOptions): EditorHandle {
   let native: ReturnType<typeof nativeEditorCommands> | undefined;
-  const nativeCaret=options.onNativeEditorState?nativeCaretVisibility(options.isCurrent):[];
+  let destroyed = false, active = options.interactionState?.active ?? true;
+  // An opaque identity avoids counter wrap and invalidates even same-state lease refreshes.
+  let authoringEpoch = {};
+  const canAuthor = () => {
+    try { return !destroyed && active && (options.canMutate?.() ?? true); }
+    catch { return false; }
+  };
+  const isCurrent = () => active && !destroyed && (options.isCurrent?.() ?? true);
+  const interaction = new Compartment(), menus = new Compartment();
+  const interactionExtensions = () => [canAuthor() ? [] : EditorState.readOnly.of(true), active ? [] : EditorView.editable.of(false)];
+  const captureAuthoring = () => {
+    if (!canAuthor()) return null;
+    const epoch = authoringEpoch;
+    return () => epoch === authoringEpoch && canAuthor();
+  };
+  const nativeCaret=options.onNativeEditorState?nativeCaretVisibility(isCurrent):[];
   const nativeUpdates = options.onNativeEditorState ? EditorView.updateListener.of(() => native?.update()) : [];
   const listConfiguration = new Compartment();
   const wiki = wikiCompletion({ ...options.wiki, paths: options.paths });
   const view = new EditorView({
     parent,
+    // readOnly alone does not reject programmatic changes, and CM filters can
+    // be bypassed with filter:false. Authorize the actual applied batch here.
+    dispatchTransactions(transactions, target) {
+      if (destroyed || transactions.some(transaction => transaction.docChanged
+        && !transaction.annotation(externalChange) && (!canAuthor() || target.state.readOnly))) return;
+      target.update(transactions);
+    },
     state: EditorState.create({ doc: options.value, extensions: [
-      EditorState.allowMultipleSelections.of(true),
+      interaction.of(interactionExtensions()), EditorState.allowMultipleSelections.of(true),
       nativeUpdates, nativeCaret, history(), listConfiguration.of(markdownListKeymap(options.listOptions)), markdown({base: markdownLanguage,addKeymap:false,extensions:[frontmatterMarkdown, liveInlineMarkdown, liveMathMarkdown]}), syntaxHighlighting(markdownHighlightStyle),
       keymap.of([...defaultKeymap.filter(binding => binding.run !== selectParentSyntax), ...historyKeymap, ...searchKeymap]),
       EditorView.lineWrapping, wiki, editorCommandHotkeys(options.hotkeys),
@@ -114,20 +144,28 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
         if (!target) return false;
         options.open(target, 'wiki', event); return true;
       } })] : []),
-      ...(options.transfers ? [editorTransfers(options.transfers)] : []),
-      editorContextMenu(),
+      ...(options.transfers ? [editorTransfers(options.transfers, captureAuthoring)] : []),
+      menus.of(editorContextMenu()),
       ...(options.mode === 'live' ? [liveProperties(), liveCallouts({open: options.open, renderEmbed: options.renderEmbed}),
-        liveTables(options.open, owner => [wiki, editorCommandHotkeys(options.hotkeys, owner), nativeUpdates, nativeCaret], renderedCalloutRanges), liveTasks({excludes: renderedCalloutRanges}), liveLists({excludes: renderedCalloutRanges}),
+        liveTables(options.open, owner => [wiki, editorCommandHotkeys(options.hotkeys, owner), nativeUpdates, nativeCaret], renderedCalloutRanges, canAuthor), liveTasks({excludes: renderedCalloutRanges}), liveLists({excludes: renderedCalloutRanges}),
         liveMath({excludes: renderedCalloutRanges}), liveFences({excludes: renderedCalloutRanges}),
         ...(options.renderEmbed ? [liveEmbeds(options.renderEmbed, {excludes: renderedCalloutRanges})] : []),
-        liveInline({nativeTouch: options.onNativeEditorState ? {isCurrent: options.isCurrent ?? (() => true)} : undefined,open: options.open,isUnresolved: options.isUnresolved,onHover: options.onLinkHover,excludes: renderedCalloutRanges})] : []),
+        liveInline({nativeTouch: options.onNativeEditorState ? {isCurrent} : undefined,open: options.open,isUnresolved: options.isUnresolved,onHover: options.onLinkHover,excludes: renderedCalloutRanges})] : []),
     ]}),
   });
   if (options.mode === 'live' && bodyStart(view.state)) view.dispatch({ selection: { anchor: bodyStart(view.state) } });
-  const disposeEmptyFocus = installEmptyNoteFocus(view, parent, options.onNativeEditorState ? options.isCurrent ?? (() => true) : undefined);
-  let destroyed = false;
-  if (options.onNativeEditorState) native = nativeEditorCommands(view, {onNativeEditorState:options.onNativeEditorState,isCurrent:options.isCurrent});
+  const disposeEmptyFocus = installEmptyNoteFocus(view, parent, options.onNativeEditorState ? isCurrent : undefined);
+  if (options.onNativeEditorState) native = nativeEditorCommands(view, {onNativeEditorState:options.onNativeEditorState,isCurrent:() => isCurrent() && canAuthor()});
   return {
+    setInteractionState(state) {
+      if (destroyed) return;
+      authoringEpoch = {};
+      active = state.active;
+      // A fresh menu plugin retires its outstanding async action witnesses.
+      view.dispatch({ effects: [interaction.reconfigure(interactionExtensions()), menus.reconfigure(editorContextMenu())] });
+      const focused = view.dom.ownerDocument.activeElement;
+      if (!active && focused instanceof HTMLElement && view.dom.contains(focused)) focused.blur();
+    },
     ...(native ? {nativeAction: native.action, nativeState: native.state} : {}),
     captureCommandTarget(isCurrent) {
       const document = view.dom.ownerDocument, focused = document.activeElement;
@@ -137,7 +175,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       const inBody = focused === target.contentDOM;
       const paletteButton = focused instanceof HTMLElement && focused.closest('[data-hotkey-command="command-palette"]');
       if (!inBody && focused !== document.body && !paletteButton) return null;
-      if (destroyed || !isCurrent() || !view.dom.isConnected || !target.dom.isConnected
+      if (!canAuthor() || destroyed || !isCurrent() || !view.dom.isConnected || !target.dom.isConnected
         || view.state.readOnly || target.state.readOnly || view.compositionStarted || target.compositionStarted
         || document.querySelector('.modal-overlay,[aria-modal="true"],[role="menu"]')
         || view.dom.querySelector('.cm-tooltip-autocomplete,.cm-search')) return null;
@@ -145,7 +183,8 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       const doc = target.state.doc, selection = target.state.selection;
       const release = retainTableEditor(view, target.contentDOM);
       let disposed = false;
-      const valid = () => !disposed && !destroyed && isCurrent() && view.dom.isConnected && target.dom.isConnected
+      const epoch = authoringEpoch;
+      const valid = () => epoch === authoringEpoch && canAuthor() && !disposed && !destroyed && isCurrent() && view.dom.isConnected && target.dom.isConnected
         && view.dom.contains(target.dom) && view.state.doc === ownerDoc && target.state.doc === doc
         && view.state.selection.eq(ownerSelection) && target.state.selection.eq(selection)
         && !view.state.readOnly && !target.state.readOnly && !view.compositionStarted && !target.compositionStarted;
@@ -196,7 +235,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       view.dispatch({ changes: textChanges(previous, value),
         annotations: [externalChange.of(true), propertyUpdate.of(true), Transaction.addToHistory.of(false), isolateHistory.of('full')] });
     },
-    focus: () => (activeTableEditor(view) ?? view).focus(), destroy() { if(destroyed)return; destroyed = true; native?.destroy(); disposeEmptyFocus(); view.destroy(); },
-    insert(text) { const target = activeTableEditor(view) ?? view; target.dispatch({ ...target.state.replaceSelection(text), annotations: Transaction.userEvent.of('input') }); target.focus(); },
+    focus: () => { if (active && !destroyed) (activeTableEditor(view) ?? view).focus(); }, destroy() { if(destroyed)return; destroyed = true; native?.destroy(); disposeEmptyFocus(); view.destroy(); },
+    insert(text) { if (!canAuthor() || view.state.readOnly) return; const target = activeTableEditor(view) ?? view; target.dispatch({ ...target.state.replaceSelection(text), annotations: Transaction.userEvent.of('input') }); target.focus(); },
   };
 }

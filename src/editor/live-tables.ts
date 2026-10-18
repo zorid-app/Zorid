@@ -39,15 +39,17 @@ class TableController {
   private selected: { anchor: TableCellPosition; head: TableCellPosition } | null = null;
   private stopGesture: (() => void) | null = null;
   private readOnly = new Compartment();
+  private canMutate: () => boolean;
+  private get authoringBlocked() { return this.owner.state.readOnly || !this.canMutate(); }
   readonly owner: EditorView;
   model: MarkdownTable;
   private open: (target: string) => void;
   private cellExtensions: Extension | ((owner: EditorView) => Extension);
   readonly identity: object;
 
-  constructor(owner: EditorView, model: MarkdownTable, open: (target: string) => void, identity: object, cellExtensions: Extension | ((owner: EditorView) => Extension)) {
+  constructor(owner: EditorView, model: MarkdownTable, open: (target: string) => void, identity: object, cellExtensions: Extension | ((owner: EditorView) => Extension), canMutate: () => boolean) {
     this.owner = owner; this.model = model; this.open = open; this.identity = identity;
-    this.cellExtensions = cellExtensions;
+    this.cellExtensions = cellExtensions; this.canMutate = canMutate;
     this.dom.className = 'cm-live-table';
     this.dom.contentEditable = 'false';
     const wrapper = document.createElement('div'); wrapper.className = 'cm-table-wrapper';
@@ -87,7 +89,7 @@ class TableController {
 
   /** Structural edits share the note's history and reacquire the rebuilt widget. */
   private applyStructure(change: TableEdit, row: number, column: number, preserveSelection = false): boolean {
-    if (this.destroyed || this.owner.state.readOnly) return false;
+    if (this.destroyed || this.authoringBlocked) return false;
     this.deselectCells();
     const from = this.model.from;
     const source = this.model.source.slice(0, change.from - from) + change.insert + this.model.source.slice(change.to - from);
@@ -126,17 +128,17 @@ class TableController {
   }
 
   addRow(index: number, column: number): boolean {
-    if (this.destroyed || this.owner.state.readOnly) return false;
+    if (this.destroyed || this.authoringBlocked) return false;
     return this.applyStructure(insertTableRow(this.model, index), index, column);
   }
 
   addColumn(row: number, index: number, inheritFrom?: number): boolean {
-    if (this.destroyed || this.owner.state.readOnly) return false;
+    if (this.destroyed || this.authoringBlocked) return false;
     return this.applyStructure(insertTableColumn(this.model, index, [], inheritFrom === undefined ? null : this.model.alignments[inheritFrom]), row, index);
   }
 
   runAction(id: TableAction['id'], row: number, column: number): boolean {
-    if (this.destroyed || this.owner.state.readOnly) return false;
+    if (this.destroyed || this.authoringBlocked) return false;
     const model = this.model;
     switch (id) {
       case 'clear-cells': return this.clearSelection();
@@ -235,7 +237,7 @@ class TableController {
   }
   deleteSelection(direction: -1 | 1): boolean {
     const range = this.selectionRange; if (!range) return false;
-    if (this.owner.state.readOnly) return true;
+    if (this.authoringBlocked) return true;
     const head = this.selected!.head, edit = deleteTableCells(this.model, range);
     const fullWidth = range.left === 0 && range.right === this.model.columnCount - 1;
     const fullHeight = range.top === 0 && range.bottom === this.model.rows.length - 1;
@@ -252,7 +254,7 @@ class TableController {
   }
   alignSelection(alignment: 'left' | 'center' | 'right'): boolean {
     const range = this.selectionRange, selected = this.selected;
-    if (!range || !selected || this.owner.state.readOnly) return false;
+    if (!range || !selected || this.authoringBlocked) return false;
     const from = this.model.from;
     if (!this.applyStructure(alignTableCells(this.model, range, alignment), selected.anchor.row, selected.anchor.column)) return false;
     this.currentController(from)?.selectCells(selected.anchor, selected.head, true);
@@ -270,7 +272,7 @@ class TableController {
     }
     const range = this.selectionRange;
     if (event.type === 'paste') {
-      if (this.owner.state.readOnly) return false;
+      if (this.authoringBlocked) return false;
       const data = parseTableClipboard(event.clipboardData.getData('obsidian/table'));
       if (!data || !this.active) return false;
       const start = range ? { row: range.top, column: range.left } : { row: this.active.row, column: this.active.column };
@@ -280,7 +282,7 @@ class TableController {
       catch (error) { if (error instanceof RangeError) return true; throw error; }
       return this.applyStructure(edit, start.row + data.rows.length - 1, start.column + data.alignment.length - 1);
     }
-    if (!range || event.type !== 'copy' && event.type !== 'cut' || event.type === 'cut' && this.owner.state.readOnly) return false;
+    if (!range || event.type !== 'copy' && event.type !== 'cut' || event.type === 'cut' && this.authoringBlocked) return false;
     const data = copyTableCells(this.model, range), markdown = serializeTableClipboard(data);
     const table = this.dom.ownerDocument.createElement('table');
     try {
@@ -373,7 +375,7 @@ class TableController {
     let destination = index;
     const source = this.model.source;
     this.trackGesture(move => {
-      if (this.owner.state.readOnly) return;
+      if (this.authoringBlocked) return;
       const cell = this.nearestCell(move), target = axis === 'row' ? cell.row : cell.column;
       const rect = this.cells[cell.row][cell.column].getBoundingClientRect();
       const rtl = this.dom.ownerDocument.defaultView?.getComputedStyle(this.grid).direction === 'rtl';
@@ -383,7 +385,7 @@ class TableController {
       const nodes = axis === 'row' ? this.cells[target] : this.cells.map(row => row[target]);
       nodes.forEach(node => node.classList.add(`drop-${after ? 'after' : 'before'}-${axis}`));
     }, cancelled => {
-      if (cancelled || this.destroyed || this.owner.state.readOnly || this.model.source !== source || destination === index) return;
+      if (cancelled || this.destroyed || this.authoringBlocked || this.model.source !== source || destination === index) return;
       const from = this.model.from;
       const edit = axis === 'row' ? moveTableRow(this.model, index, destination) : moveTableColumn(this.model, index, destination);
       if (this.applyStructure(edit, axis === 'row' ? destination : 0, axis === 'column' ? destination : 0)) {
@@ -461,7 +463,7 @@ class TableController {
   }
 
   activate(row: number, column: number, selectAll = false, offset = 0) {
-    if (this.destroyed) return;
+    if (this.destroyed || !this.owner.state.facet(EditorView.editable)) return;
     this.deselectCells();
     this.close();
     const cell = this.model.rows[row]?.cells[column]; if (!cell) return;
@@ -471,7 +473,7 @@ class TableController {
     const view = new EditorView({ parent: host,
       state: EditorState.create({ doc: value,
         selection: EditorSelection.single(selectAll ? 0 : Math.min(offset, value.length), selectAll ? value.length : Math.min(offset, value.length)),
-        extensions: [EditorView.lineWrapping, this.readOnly.of(EditorState.readOnly.of(this.owner.state.readOnly)),
+        extensions: [EditorView.lineWrapping, this.readOnly.of([EditorState.readOnly.of(this.authoringBlocked), EditorView.editable.of(this.owner.state.facet(EditorView.editable))]),
           markdown({ base: markdownLanguage, addKeymap: false, extensions: liveInlineMarkdown }), syntaxHighlighting(defaultHighlightStyle),
           EditorView.contentAttributes.of({ 'aria-label': `Table row ${row + 1}, column ${column + 1}`, spellcheck: 'true' }),
           typeof this.cellExtensions === 'function' ? this.cellExtensions(this.owner) : this.cellExtensions,
@@ -493,7 +495,7 @@ class TableController {
         // Read-only commands normally stop at the child's facet. Also guard
         // programmatic input/paste transactions, while allowing owner snapshots
         // to synchronize the child through update()'s explicit syncing path.
-        if (!this.syncing && (this.owner.state.readOnly || this.selected) && transactions.some(t => t.docChanged)) return;
+        if (!this.syncing && (this.authoringBlocked || this.selected) && transactions.some(t => t.docChanged)) return;
         child.update(transactions);
         if (this.syncing || this.destroyed || !this.active || !transactions.some(t => t.docChanged || t.selection)) return;
         const active = this.active;
@@ -527,9 +529,10 @@ class TableController {
 
   syncReadOnly() {
     const child = this.active?.view;
-    const readOnly = this.owner.state.readOnly || !!this.selected;
-    if (child && child.state.readOnly !== readOnly) {
-      child.dispatch({ effects: this.readOnly.reconfigure(EditorState.readOnly.of(readOnly)) });
+    const readOnly = this.authoringBlocked || !!this.selected;
+    const editable = this.owner.state.facet(EditorView.editable);
+    if (child && (child.state.readOnly !== readOnly || child.state.facet(EditorView.editable) !== editable)) {
+      child.dispatch({ effects: this.readOnly.reconfigure([EditorState.readOnly.of(readOnly), EditorView.editable.of(editable)]) });
     }
   }
 
@@ -540,7 +543,7 @@ class TableController {
     else if (direction === 'previous') { if (--column < 0) { column = this.model.columnCount - 1; row--; } }
     else row++;
     if (row < 0 || row === this.model.rows.length) {
-      if (this.owner.state.readOnly) return true;
+      if (this.authoringBlocked) return true;
       const index = Math.max(0, row), change = insertTableRow(this.model, index);
       this.close();
       this.owner.dispatch({ changes: change, annotations: [cellSync.of(true), Transaction.userEvent.of('input')] });
@@ -578,6 +581,7 @@ class TableController {
 
   /** Called after outer transactions, outside CodeMirror's update stack. */
   receiveSelection(restoreFocus = false) {
+    if (!this.canMutate() || !this.owner.state.facet(EditorView.editable)) return;
     if (this.destroyed) return;
     // A child editor owns one cell and one range. Never collapse a parent
     // multicursor selection while transferring focus into that child.
@@ -617,7 +621,7 @@ class TableController {
 
   get editor() { return this.active?.view; }
   private closeIfUnfocused() {
-    if (!this.destroyed && !this.editorRetainers && !this.dom.contains(this.dom.ownerDocument.activeElement)) this.close();
+    if (!this.destroyed && this.owner.state.facet(EditorView.editable) && !this.editorRetainers && !this.dom.contains(this.dom.ownerDocument.activeElement)) this.close();
   }
   /** Menus may temporarily move focus out of the child. Only blur cleanup is
    * retained; explicit navigation, structural changes and teardown still close. */
@@ -656,9 +660,10 @@ class TableWidget extends WidgetType {
   readonly open: (target: string) => void;
   readonly identity: object;
   readonly cellExtensions: Extension | ((owner: EditorView) => Extension);
-  constructor(model: MarkdownTable, open: (target: string) => void, identity: object, cellExtensions: Extension | ((owner: EditorView) => Extension)) { super(); this.model = model; this.open = open; this.identity = identity; this.cellExtensions = cellExtensions; }
+  readonly canMutate: () => boolean;
+  constructor(model: MarkdownTable, open: (target: string) => void, identity: object, cellExtensions: Extension | ((owner: EditorView) => Extension), canMutate: () => boolean) { super(); this.model = model; this.open = open; this.identity = identity; this.cellExtensions = cellExtensions; this.canMutate = canMutate; }
   eq(other: TableWidget) { return this.identity === other.identity && this.model.from === other.model.from && this.model.source === other.model.source; }
-  toDOM(view: EditorView) { return new TableController(view, this.model, this.open, this.identity, this.cellExtensions).dom; }
+  toDOM(view: EditorView) { return new TableController(view, this.model, this.open, this.identity, this.cellExtensions, this.canMutate).dom; }
   updateDOM(dom: HTMLElement) { const controller = controllers.get(dom); if (!controller || controller.identity !== this.identity) return false; controller.update(this.model); return true; }
   ignoreEvent() { return true; }
   destroy(dom: HTMLElement) { controllers.get(dom)?.destroy(); }
@@ -781,7 +786,7 @@ export function tableActionsAt(view: EditorView, target: HTMLElement): TableActi
 }
 
 export function liveTables(open: (target: string) => void, cellExtensions: Extension | ((owner: EditorView) => Extension) = [],
-  excludes?: (state: EditorState) => readonly { from: number; to: number }[]): Extension {
+  excludes?: (state: EditorState) => readonly { from: number; to: number }[], canMutate: () => boolean = () => true): Extension {
   type ExcludedRange = { from: number; to: number };
   const exclusions = (state: EditorState): ExcludedRange[] => {
     const sorted = (excludes?.(state) ?? []).filter(range => range.from < range.to)
@@ -817,7 +822,7 @@ export function liveTables(open: (target: string) => void, cellExtensions: Exten
         range.from <= node.to && range.to >= node.from)) return false;
       const model = previous && !previous.changed && previous.model.to === node.to ? previous.model
         : parseTable(state.doc.sliceString(node.from, node.to), node.from);
-      if (model) decorations.push(Decoration.replace({ widget: new TableWidget(model, open, previous?.identity ?? {}, cellExtensions), block: true }).range(node.from, node.to));
+      if (model) decorations.push(Decoration.replace({ widget: new TableWidget(model, open, previous?.identity ?? {}, cellExtensions, canMutate), block: true }).range(node.from, node.to));
       return false;
     } });
     return Decoration.set(decorations, true);
@@ -855,7 +860,7 @@ export function liveTables(open: (target: string) => void, cellExtensions: Exten
   const selection = ViewPlugin.fromClass(class {
     private version = 0;
     update(update: ViewUpdate) {
-      if (update.startState.readOnly !== update.state.readOnly) {
+      if (update.startState.readOnly !== update.state.readOnly || update.startState.facet(EditorView.editable) !== update.state.facet(EditorView.editable)) {
         for (const dom of update.view.dom.querySelectorAll<HTMLElement>('.cm-live-table')) controllers.get(dom)?.syncReadOnly();
       }
       if ((!update.selectionSet && !update.docChanged) || update.transactions.some(t => t.annotation(cellSync))) return;

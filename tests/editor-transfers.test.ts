@@ -7,12 +7,13 @@ import { EditorView } from '@codemirror/view';
 import { undo } from '@codemirror/commands';
 import { openSearchPanel } from '@codemirror/search';
 import { createEditor } from '../src/ui/editor.ts';
+import type { EditorOptions } from '../src/ui/editor.ts';
 import type { TransferOptions } from '../src/editor/transfers.ts';
 
 // Synthetic DOM paste events exercise the installed transfer plugin and real
 // CodeMirror transactions. File bytes are supplied by arrayBuffer fixtures;
 // these tests establish neither OS clipboard behavior nor layout hit testing.
-function setup(t: TestContext, value: string, options: Partial<TransferOptions> = {}, mode: 'source' | 'live' = 'source') {
+function setup(t: TestContext, value: string, options: Partial<TransferOptions> = {}, mode: 'source' | 'live' = 'source', editorOptions: Partial<EditorOptions> = {}) {
   const dom = new JSDOM('<!doctype html><body><div id="host"></div>', { pretendToBeVisual: true });
   const saved = new Map<string, PropertyDescriptor | undefined>();
   for (const [key, entry] of Object.entries({ window: dom.window, document: dom.window.document,
@@ -33,7 +34,7 @@ function setup(t: TestContext, value: string, options: Partial<TransferOptions> 
     transfers: { async importFile(file) {
       imports.push({ name: file.name, type: file.type, nativePath: file.nativePath, bytes: [...await file.read()] });
       return `![[${file.name}]]`;
-    }, onError: error => errors.push(error), ...options } });
+    }, onError: error => errors.push(error), ...options }, ...editorOptions });
   const view = EditorView.findFromDOM(host.querySelector('.cm-editor')!)!;
   let destroyed = false;
   const destroy = () => { if (!destroyed) { destroyed = true; editor.destroy(); } };
@@ -309,4 +310,52 @@ test('HTML conversion remains inert and falls back to plain text for excluded co
   const { paste, editor } = setup(t, '');
   paste({ 'text/html': '<script>throw new Error("executed")</script>', 'text/plain': 'safe fallback' });
   assert.equal(editor.getValue(), 'safe fallback');
+});
+
+test('inactive editor cannot start file imports or converted paste authoring', async t => {
+  const { editor, paste, file, imports, changes, view, dom } = setup(t, 'original');
+  editor.setInteractionState!({ active: false });
+  paste({}, [file('blocked.png', [1])]);
+  paste({ 'text/html': '<b>blocked</b>', 'text/plain': 'blocked' });
+  const drop = new dom.window.Event('drop', { bubbles: true, cancelable: true });
+  const dropped = file('drop.png', [2]);
+  Object.defineProperty(drop, 'dataTransfer', { value: { files: [dropped], items: [{ kind: 'file', getAsFile: () => dropped }] } });
+  view.contentDOM.dispatchEvent(drop);
+  assert.equal(drop.defaultPrevented, true);
+  await settle();
+  assert.deepEqual(imports, []);
+  assert.equal(editor.getValue(), 'original');
+  assert.deepEqual(changes, []);
+});
+
+test('revoke and reactivate invalidates in-flight and queued file batches', async t => {
+  const gate = deferred<string>(), started: string[] = [];
+  const { editor, paste, file, changes } = setup(t, 'original', {
+    importFile(file) { started.push(file.name); return gate.promise; },
+  });
+  paste({}, [file('first.png', [1]), file('second.png', [2])]);
+  paste({}, [file('queued.png', [3])]);
+  await settle();
+  assert.deepEqual(started, ['first.png']);
+  editor.setInteractionState!({ active: false });
+  editor.setInteractionState!({ active: true });
+  gate.resolve('![[first.png]]');
+  await settle();
+  assert.deepEqual(started, ['first.png'], 'retain dispatched import but start no stale queued imports');
+  assert.equal(editor.getValue(), 'original');
+  assert.deepEqual(changes, []);
+});
+
+
+test('live writer loss before queued import starts prevents storage dispatch without a setter', async t => {
+  let writer = true;
+  const started: string[] = [];
+  const { editor, paste, file } = setup(t, 'original', {
+    async importFile(file) { started.push(file.name); return '![[late.png]]'; },
+  }, 'source', { canMutate: () => writer });
+  paste({}, [file('late.png', [1])]);
+  writer = false;
+  await settle();
+  assert.deepEqual(started, []);
+  assert.equal(editor.getValue(), 'original');
 });
