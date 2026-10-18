@@ -64,7 +64,9 @@ proven same-inventory observed/finished progress or growth of the exact live
 file identity set stop as incomplete. Content imports can advance after the
 inventory has finished; public CLI listings verify that durable growth. Repeated
 per-pass import counters alone do not replenish the budget, and previously
-observed path/ID/revision tuples must remain unchanged.
+observed path/ID/revision tuples must remain unchanged. Full listing artifacts
+stay on disk; report coverage keeps count/hash summaries and only the last
+identity set remains live for continuity checks.
 Setup/import timing remains separate from indexing. The tool records its exact
 logical/physical identity mapping and checks native
 committed bytes for the first/last note and all three extras, builds a cold derived

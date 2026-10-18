@@ -122,7 +122,7 @@ export async function runBaseline({out,binary,notes=100,timeoutMs=60000,buildSha
       // a new inventory; repeated legacy passes are not a continuation claim.
       if(!nativeHost)throw Object.assign(Error('legacy source import incomplete; no durable scan continuation'),{kind:'incomplete-import'});
       const listing=await command(`import-coverage-${pass}`,['list']);
-      const coverage=liveImportCoverage(listing,expectedPaths);report.setup.importCoverage.push(coverage);
+      const coverage=liveImportCoverage(listing,expectedPaths);report.setup.importCoverage.push({files:coverage.length,sha256:sha256(json(coverage))});
       const changed=importProgress(lastScan,scan,lastCoverage,coverage);
       stalls=changed?0:stalls+1;lastScan=scan;lastCoverage=coverage;
       if(stalls>=3)throw Object.assign(Error('bounded family import made no proven source or inventory progress'),{kind:'incomplete-import'});
