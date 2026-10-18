@@ -2,7 +2,8 @@
 
 2026-10-17; source inspection at `1bbc0fb31e4094b1c1bdc038d63403824ee7fb14`.
 Owner: dispatched contract worker `term_ef51c268-5804-46f1-b07c-f634a3c318a7`,
-task `task_443398c0e767`, dispatch `ctx_99a6816f636e`, branch
+initial task `task_443398c0e767`, dispatch `ctx_99a6816f636e`; narrow review
+followup `task_306916121df3`, dispatch `ctx_0badfb67947e`, branch
 `tingkai-c/managed-firstparty-consumer-contract`. Scope: this new document only.
 The sole shared-core integrator owns main. Recommendations below are an internal
 implementation handoff, not a public API freeze or an implementation claim.
@@ -28,10 +29,15 @@ Evidence read: the roadmap execution checkpoint and findings; accepted plan;
 [browser storage seam](browser-storage-seam.md), [browser results](browser-record-results.md)
 and [normal Worker results](browser-worker-host-results.md). Storage is integrated
 through `b5d9d510`; the normal Worker report records `804c9fd5` and actual Chrome
-fixture evidence, with an **empty product registry** and two independent normal
-Workers authoring/exchanging offline changes still unverified at that report.
-Neither report establishes Electron Tasks, native Tasks, deployed relay or complete
-managed-data acceptance. Reconcile newer coordinator proof results before activation.
+fixture evidence and an **empty product registry**. Subsequent fixture
+`46a1a83d` and report `363a7aba` (`docs/managed-data/browser-replica-results.md`
+in that commit) establish four passing actual Chrome groups using independent
+dedicated Workers, strict IndexedDB, shared WASM and encrypted HTTP JSON v1
+reference exchange: offline separate-field convergence, same-field conflicts,
+delete/edit race and Local/Cache isolation/replay. This closes the earlier bounded
+adapter/Worker replica gap, not normal product Worker authoring, protobuf/gRPC,
+Electron Tasks, native/mobile, deployed relay or complete managed-data acceptance.
+Reconcile newer coordinator proof results before activation.
 
 ## Authority, identity and files
 
@@ -183,9 +189,10 @@ Default title is explicit block title, otherwise linked task titles, otherwise
 
 Range is a single atomic value, never separately merged start/end/timezone fields.
 Use canonical decimal strings for epoch milliseconds through JS boundaries;
-Rust checks finite representable instants and `end > start`, timezone is a valid
-IANA identifier (UTC allowed), and both dates fall in the supported UI interval
-1970–2100. Start/end are instants; timezone controls wall-clock display/editing.
+Rust parses checked i64 milliseconds, requires both instants to be representable
+by the pinned chrono library and `end > start`, and validates the IANA timezone
+(UTC allowed). Do not impose a separate arbitrary product year range. Start/end
+are instants; timezone controls wall-clock display/editing.
 Reject nonexistent wall times on local input and require explicit offset selection
 for ambiguous DST times. Resizing writes the entire range. Overlap is permitted;
 calendar query uses half-open intersection `start < until && end > from`.
@@ -205,6 +212,16 @@ Implement a small compiled first-party domain module, proposed new
 owner/collection in `admission.rs`. Validate that this collection's registration
 matches its compiled schema/policy; an alternate registration cannot downgrade
 validation. No serialized callback/validator code or user-selected domain name.
+
+Dependency ownership must be explicit: assign `crates/zorid-records/Cargo.toml`
+to the records Rust owner to add `zorid-core` for `EntryId` and reuse the existing
+exact pins `chrono =0.4.45` and `chrono-tz =0.10.4`, both with
+`default-features = false` and `features = ["std"]`, as already used by
+`crates/zorid-bases/Cargo.toml`. The coordinator must name that records owner
+before the manifest edit. Root `Cargo.lock` is assigned to the sole integration
+coordinator `term_959a4f02-747c-4b9d-820e-3672def55e49` for the corresponding
+reviewed dependency-edge update; no unowned root edits or new version selection. This doc changes neither.
+
 Validate every incoming/local range write and set addition, including operations
 waiting on parents and all concurrent range candidates, not only the chosen
 projection winner. Reject null/unset required ranges, extra range keys in v1,
@@ -225,6 +242,12 @@ require a currently task-capable note when linking, then display missing/changed
 references safely after receipt. No cross-file/record transaction is promised.
 
 ### Trusted activation and bounded reads
+
+Deliver the native Store-backed desktop service first, paging existing
+`managed_export` through a fixed WorkBlock query and admitted Electron commands.
+The browser listing and compiled consumer activation are an independent parallel
+or followup slice, not a prerequisite for the smallest real Electron flow. Both
+adapters use the same domain validation and command/query meaning.
 
 `src/platform/browser-managed-records-registry.ts::browserManagedRecordConsumers`
 is empty; host entries hold private collection handles, and `changed` supplies
@@ -275,14 +298,16 @@ unchanged and receives only a later agreed semantic DTO handoff.
 | Slice / owner to assign | Exact existing seams and proposed new files | Observable exit |
 | --- | --- | --- |
 | 1. Task domain + preset / Types-Bases owner | NEW `crates/zorid-bases/src/types.rs`, `tasks.rs`; wire via existing `lib.rs`, `graph.rs`; NEW `src/tasks/presets.ts`, `src/tasks/types-document.ts`; review `crates/zorid-index/src/generation.rs`, `snapshot.rs`, `crates/zorid-document/src/types.rs`, `frontmatter.rs` without adding a second parser. | Install non-overwriting Type/Base preset; valid typed Markdown appears in the same pinned Base and Tasks projection; malformed configs produce recoverable diagnostics. |
-| 2. WorkBlock validation + commands / records Rust owner | NEW `crates/zorid-records/src/first_party.rs`; existing `lib.rs`, `admission.rs`, `crates/zorid-store/src/managed_records.rs`, `crates/zorid-wasm/src/records.rs`. | Local and encrypted incoming malformed ranges fail identically; valid offline create/move/ref edits persist and retain conflicts/replay semantics. |
-| 3. Real scoped host / browser host + desktop core owners | Existing `src/platform/browser-managed-records-registry.ts`, `browser-managed-records-host.ts`, `browser-core-worker.ts`, `src/core/browser-managed-records.ts`, `browser-sync-streaming.ts`; NEW `crates/zorid-native/src/workblocks.rs`, `crates/zorid-desktop-host/src/workblocks.rs`, `desktop/workblocks.cjs`, `src/core/workblocks.ts`; named owners for `crates/zorid-native/src/lib.rs`, `crates/zorid-desktop-host/src/lib.rs` (existing admitted stdio Command/session dispatch), `desktop/rust-vault-service.cjs`, `vault-dispatch.cjs`, `preload.cjs`, `src/platform/desktop.ts`. | Normal browser Worker and Electron main register compiled WorkBlocks; renderer schedules/queries with scoped commands; restart reads the same records without a fixture host. |
+| 2. WorkBlock validation + commands / records Rust owner | NEW `crates/zorid-records/src/first_party.rs`; existing `lib.rs`, `admission.rs`, `crates/zorid-records/Cargo.toml`, `crates/zorid-store/src/managed_records.rs`, `crates/zorid-wasm/src/records.rs`; root `Cargo.lock` belongs to the integration/dependency owner. | Local and encrypted incoming malformed ranges fail identically; valid offline create/move/ref edits persist and retain conflicts/replay semantics. |
+| 3a. Native Store-backed desktop service first / desktop core owner | NEW `crates/zorid-native/src/workblocks.rs`, `crates/zorid-desktop-host/src/workblocks.rs`, `desktop/workblocks.cjs`, `src/core/workblocks.ts`; named owners for `crates/zorid-native/src/lib.rs`, `crates/zorid-desktop-host/src/lib.rs` (existing admitted stdio Command/session dispatch), `desktop/rust-vault-service.cjs`, `vault-dispatch.cjs`, `preload.cjs`, `src/platform/desktop.ts`. | Electron main privately registers compiled WorkBlocks; renderer schedules/queries through admitted commands; bounded range reads page existing `managed_export`; restart reads the same records without a fixture host. |
+| 3b. Browser listing/activation parallel or followup / browser host owner | Existing `src/platform/browser-managed-records-registry.ts`, `browser-managed-records-host.ts`, `browser-core-worker.ts`, `src/core/browser-managed-records.ts`, `browser-sync-streaming.ts`; shared WASM binding coordinated with records owner. | Normal product Worker uses the compiled consumer, scoped bounded listing and semantic commands; browser activation does not gate 3a or local Electron UI. |
 | 4. Functional desktop Tasks / UI + editor seam owner | NEW `src/tasks/controller.ts`, `view.ts`, `view.css`; existing `src/bases/controller.ts`, `document.ts`, `presentation-common.ts`; named grants for `src/ui/workspace.ts`, `workspace-keymap.ts`, `workspace-menus.ts`, `src/ui/note-buffer.ts` if needed. | Capture, edit mapped status/date, open rich body; saved state agrees in multiple Bases/Tasks; stale/failed saves retain drafts. Avoid NoteBuffer changes if current mutation host suffices. |
 | 5. Local desktop calendar / calendar UI owner | NEW `src/calendar/controller.ts`, `view.ts`, `view.css`, using fixed WorkBlock service; explicit owner for `package.json` / lockfile only if adding FullCalendar dependencies. | FullCalendar day/week visible range, explicit add/edit sheet, task linking, move/resize/cancel, keyboard alternatives, local source toggle and durable reopen. Start with forms before drag; no Google placeholder flow. |
 | 6. Actual delivery / independent reviewer + integration owner | Focused domain/adapter tests beside changed modules; normal Electron/browser interaction evidence and reports. Native followup assigned to existing shell owner only after DTO review. | Integrate coherent reviewed commits through sole main owner, then verify composed normal apps. No parity inference from isolated fixtures. |
 
-Slices 1 and 2 are independent; host work can start against agreed domain functions
-while Tasks UI uses the existing file mutation host. Serialize shared API edits and
+Slices 1 and 2 are independent; 3a starts against agreed domain functions, while
+Tasks UI uses the existing file mutation host. Slices 4–5 use 3a for WorkBlocks
+without waiting for 3b. Serialize shared API edits and
 heavy checks. No new crate, generic schema framework, public plugin API, independent
 sync engine or root build rewrite is needed to start; any genuinely needed binding
 or dependency change gets an explicitly named owner before edit.
