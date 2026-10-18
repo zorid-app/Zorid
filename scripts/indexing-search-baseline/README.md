@@ -53,7 +53,8 @@ node scripts/indexing-search-baseline/cli.mjs \
 ```
 
 The runner creates a fresh fixture and app-local data directory, initializes and
-imports source, records its exact logical/physical identity mapping, checks native
+imports source through the public legacy non-enrolled native authority path,
+records its exact logical/physical identity mapping, checks native
 committed bytes for the first/last note and all three extras, builds a cold derived
 index, opens a fresh CLI status process and executes all eight literals. Repeated
 samples restart the CLI; they do not measure an in-process retained-pin cache.
@@ -68,6 +69,12 @@ coverage. Per-command stdout/stderr files retain full bounded outputs. Physical
 source bytes for every generated file are checked again outside timed work;
 `filesystemSourcePreserved` refers specifically to that check. `authoritySamples`
 identifies the subset separately read and hashed through the actual CLI.
+
+This setup does not measure the enrolled-family or normal Electron admission
+path. In the first real smoke, legacy inline PNG import was classified
+`unreadable` by the existing index, so generation coverage was incomplete while
+all 100 Markdown notes matched the complete literal oracle. Keep that observed
+coverage gap; do not relabel it as successful binary text extraction.
 
 The CLI returns at most 1,000 matches and 1,000 internal pages per invocation.
 Common queries therefore often verify an exact ordered prefix, explicitly labeled
