@@ -88,7 +88,7 @@ On candidate runtime source `1cec325f`:
 - `pnpm build`: blocked before bundling by missing `wasm-bindgen` executable in
   this worker PATH. No Rust compilation or toolchain installation was launched.
 
-## Remaining acceptance
+## Initial source checkpoint before runtime acceptance
 
 Independent U review found no source blocker on exact `1cec325f`, independently
 reran all 21 then-current Calendar cases and passed diff checks. A tests-only
@@ -97,11 +97,11 @@ navigation cannot reopen a stale form; all conflict alternatives remain visible
 and explicit whole-range resolution uses the source revision; library move/resize
 callbacks revert immediately and cancellation performs no durable mutation. All
 10 view tests pass, bringing focused Calendar coverage to 24 cases (14 controller
-plus 10 DOM/workspace). These callbacks are not actual pointer gesture evidence. Root is
+plus 10 DOM/workspace). These callbacks are not actual pointer gesture evidence. At that checkpoint, root was
 assembling native WorkBlock service + B binding + this UI for actual Electron
 schedule/title/range/delete/reopen, uncertainty, gesture cancellation and
 light/dark/narrow visual verification. None of those runtime gates is claimed
-from the isolated tests. This worker launched no Electron app or simulator.
+from the isolated tests. No Electron app or simulator had been launched by this worker at that source checkpoint.
 Task links and unscheduled tasks remain dependent on F's Rust query activation;
 no raw task IDs or invented checkbox model are exposed.
 
@@ -183,7 +183,11 @@ These are disposable fixture images, with no user vault content. All owned
 Electron, renderer/helper and native processes exited; process inventory was
 checked after completion. No extra simulator or iOS build was launched.
 
-Independent U evidence review is requested against this exact final bundle.
+Independent U evidence review **approved** this exact final bundle on 2026-10-18
+03:09 UTC. The reviewer inspected all five final images, the full three-phase
+report and independently recomputed source/desktop/dist/manifest/lock/harness
+digests against the frozen assembly. See the retained
+[review](calendar-desktop-review.md).
 Calendar's renderer uncertainty behavior is established by source/focused tests;
 B's separate actual bridge proof establishes data-envelope error metadata and
 native identical-operation replay/interruption. This UI harness does not itself
