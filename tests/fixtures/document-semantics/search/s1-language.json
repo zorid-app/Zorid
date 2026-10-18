@@ -1,0 +1,630 @@
+{
+  "formatVersion": 1,
+  "sourceRevision": "5c10cbf3f5d0b66a0bf4496acc43a97d6cfc660b",
+  "status": "S1.0 baseline oracles; target support is not shared Rust implementation acceptance",
+  "semantics": {
+    "currentRustLiteral": "literal-lines-exact-v1; exact case-sensitive content substring, first occurrence per LF-delimited line, zero-based line; half-open byte and UTF-16 ranges",
+    "target": "Reviewed Zorid search contract, case-insensitive default; current TS comparison is separate from shared Rust/native/browser acceptance",
+    "unsupportedRegex": "Accepted portable subset; explicit diagnostic category, no silent false/no-match/literal fallback. Public Rust diagnostic code remains implementation work.",
+    "coverage": "Every current literal case uses a complete single-source generation; partial coverage/publication semantics require separate integrated checks."
+  },
+  "cases": [
+    {
+      "id": "literal-case-and-all-occurrences",
+      "query": "cat",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "Cat cat cat\ncatfish\n"
+      },
+      "currentRustLiteral": {
+        "hits": [
+          {
+            "line": 0,
+            "range": {
+              "bytes": [
+                4,
+                7
+              ],
+              "utf16": [
+                4,
+                7
+              ]
+            }
+          },
+          {
+            "line": 1,
+            "range": {
+              "bytes": [
+                12,
+                15
+              ],
+              "utf16": [
+                12,
+                15
+              ]
+            }
+          }
+        ]
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              3
+            ],
+            [
+              4,
+              7
+            ],
+            [
+              8,
+              11
+            ],
+            [
+              12,
+              15
+            ]
+          ]
+        }
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "literal-inside-word",
+      "query": "SUBSTR",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "prefixSUBSTRsuffix\n"
+      },
+      "currentRustLiteral": {
+        "hits": [
+          {
+            "line": 0,
+            "range": {
+              "bytes": [
+                6,
+                12
+              ],
+              "utf16": [
+                6,
+                12
+              ]
+            }
+          }
+        ]
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              6,
+              12
+            ]
+          ]
+        }
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "unicode-crlf-ranges",
+      "query": "café",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "😀 café\r\ncafé"
+      },
+      "currentRustLiteral": {
+        "hits": [
+          {
+            "line": 0,
+            "range": {
+              "bytes": [
+                5,
+                10
+              ],
+              "utf16": [
+                3,
+                7
+              ]
+            }
+          },
+          {
+            "line": 1,
+            "range": {
+              "bytes": [
+                12,
+                17
+              ],
+              "utf16": [
+                9,
+                13
+              ]
+            }
+          }
+        ]
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              3,
+              7
+            ],
+            [
+              9,
+              13
+            ]
+          ]
+        }
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "literal-punctuation",
+      "query": "a.b",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "a.b axb\n"
+      },
+      "currentRustLiteral": {
+        "hits": [
+          {
+            "line": 0,
+            "range": {
+              "bytes": [
+                0,
+                3
+              ],
+              "utf16": [
+                0,
+                3
+              ]
+            }
+          }
+        ]
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              3
+            ]
+          ]
+        }
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "literal-no-match",
+      "query": "absent-marker",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "present\n"
+      },
+      "currentRustLiteral": {
+        "hits": []
+      },
+      "target": {
+        "kind": "match",
+        "value": null
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "implicit-conjunction",
+      "query": "alpha beta",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "alpha beta\n"
+      },
+      "currentRustLiteral": {
+        "hits": [
+          {
+            "line": 0,
+            "range": {
+              "bytes": [
+                0,
+                10
+              ],
+              "utf16": [
+                0,
+                10
+              ]
+            }
+          }
+        ]
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              5
+            ],
+            [
+              6,
+              10
+            ]
+          ]
+        }
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "or-operator",
+      "query": "alpha OR gamma",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "alpha beta\n"
+      },
+      "currentRustLiteral": {
+        "hits": []
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              5
+            ]
+          ]
+        }
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "content-group-negation",
+      "query": "content:(alpha -gamma)",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "alpha beta\n"
+      },
+      "currentRustLiteral": {
+        "hits": []
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              5
+            ]
+          ]
+        }
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "filename-scope",
+      "query": "file:report",
+      "document": {
+        "path": "notes/report.md",
+        "text": ""
+      },
+      "currentRustLiteral": {
+        "hits": []
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "filename": [
+            [
+              0,
+              6
+            ]
+          ]
+        }
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "property-value",
+      "query": "[status: todo]",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "---\nstatus: todo\n---\n",
+        "metadata": {
+          "frontmatter": {
+            "status": "todo"
+          }
+        }
+      },
+      "currentRustLiteral": {
+        "hits": []
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "properties": [
+            {
+              "key": "status",
+              "pos": [
+                0,
+                4
+              ]
+            }
+          ]
+        }
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "tag-descendant",
+      "query": "tag:project",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "#project/sub\n",
+        "metadata": {
+          "tags": [
+            {
+              "tag": "#project/sub",
+              "start": 0,
+              "end": 12
+            }
+          ]
+        }
+      },
+      "currentRustLiteral": {
+        "hits": []
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              12
+            ]
+          ]
+        }
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "line-local-negation",
+      "query": "line:(alpha -beta)",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "alpha beta\nalpha gamma\n"
+      },
+      "currentRustLiteral": {
+        "hits": []
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              11,
+              16
+            ]
+          ]
+        }
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "task-todo-range",
+      "query": "task-todo:Ship",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "- [ ] Ship\n- [x] Ship\n",
+        "metadata": {
+          "listItems": [
+            {
+              "start": 0,
+              "end": 10,
+              "task": " "
+            },
+            {
+              "start": 11,
+              "end": 21,
+              "task": "x"
+            }
+          ]
+        }
+      },
+      "currentRustLiteral": {
+        "hits": []
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              6,
+              10
+            ]
+          ]
+        }
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "regex-portable-multiline",
+      "query": "/^be[a-z]+/",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "alpha\nbeta\n"
+      },
+      "currentRustLiteral": {
+        "hits": []
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              6,
+              10
+            ]
+          ]
+        }
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "quoted-word-boundary",
+      "query": "\"cat\"",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "cat concatenate cat_ cat2 2cat"
+      },
+      "currentRustLiteral": {
+        "hits": []
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              3
+            ],
+            [
+              16,
+              19
+            ]
+          ]
+        }
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "exclusion-only-success",
+      "query": "-missing",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "present"
+      },
+      "currentRustLiteral": {
+        "hits": []
+      },
+      "target": {
+        "kind": "match",
+        "value": {}
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "regex-lookbehind-rejected",
+      "query": "/(?<=alpha )beta/",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "alpha beta"
+      },
+      "currentRustLiteral": {
+        "hits": []
+      },
+      "target": {
+        "kind": "unsupported",
+        "category": "unsupported-regex",
+        "legacyComparison": {
+          "content": [
+            [
+              6,
+              10
+            ]
+          ]
+        },
+        "rewrite": null
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "regex-constant-backreference-rewrite",
+      "query": "/(ab)\\1/",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "abab abac"
+      },
+      "currentRustLiteral": {
+        "hits": []
+      },
+      "target": {
+        "kind": "unsupported",
+        "category": "unsupported-regex",
+        "legacyComparison": {
+          "content": [
+            [
+              0,
+              4
+            ]
+          ]
+        },
+        "rewrite": {
+          "query": "/abab/",
+          "expected": {
+            "content": [
+              [
+                0,
+                4
+              ]
+            ]
+          },
+          "scope": "Exact replacement only for this fixed literal capture/backreference; search exposes spans, not capture groups. No general backreference rewrite."
+        }
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    },
+    {
+      "id": "unknown-operator-error",
+      "query": "unknown:value",
+      "document": {
+        "path": "notes/Example.md",
+        "text": "value"
+      },
+      "currentRustLiteral": {
+        "hits": []
+      },
+      "target": {
+        "kind": "error",
+        "category": "unknown-operator"
+      },
+      "provenance": "Hand-counted source spans and reviewed tests/search-query.test.ts semantics; not evaluator-generated."
+    }
+  ],
+  "baseOracles": [
+    {
+      "file": "../bases/accepted-expressions.json",
+      "sha256": "fbbcd720ff13ae589a4abafbf05f5085bb7305a44834060eddfcdf407f775352",
+      "caseIds": [
+        "nonfinite",
+        "unicode-length",
+        "unicode-reverse",
+        "regex-repeat",
+        "property-case",
+        "clock-pinned",
+        "formula-cycle",
+        "no-ambient-js"
+      ]
+    },
+    {
+      "file": "../bases/accepted-queries.json",
+      "sha256": "a598934dde189f9752d4227754edba8aeb10d75c965127efa2acb863f95d0b90",
+      "caseIds": [
+        "default-natural-order",
+        "typed-group-keys",
+        "empty-or-composed",
+        "group-search-limit-pipeline"
+      ]
+    },
+    {
+      "file": "../bases/accepted-generation-queries.json",
+      "sha256": "be1f1ecfcf17fc648417201d5884d2a9c99d8fe26feee140a8e76358cfea5e62",
+      "caseIds": [
+        "complete-outgoing-embeds-unique-backlinks",
+        "incomplete-graph-is-unavailable",
+        "current-entry-markdown-properties"
+      ]
+    }
+  ]
+}
