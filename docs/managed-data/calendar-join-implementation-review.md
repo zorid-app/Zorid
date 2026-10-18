@@ -10,7 +10,7 @@
 owned file. Root alone integrates; no production/harness edits, compilers,
 builds, apps or runtime checks are authorized for this review.
 
-**In progress; no implementation approval yet.** Early working source is useful
+**In progress; scoped source approvals below, composed UI acceptance pending.** Early working source is useful
 for API feedback but is not a frozen implementation or test result. The accepted
 contract is not reopened, and the already accepted standalone Calendar is not
 audited again. Browser-v1/origin-helper freezes remain untouched.
@@ -231,6 +231,96 @@ Composed proof owner `ctx_ae18ba75a733` / `task_5a14557000ef`, worktree
 report. It has no app/build authorization before coherent freeze. Reviewer sent
 the bounded original composed gate and explicit real-interruption versus mock
 fault distinction (`msg_fc69242911a1`). Runtime acceptance remains separate.
+
+## Dependent source review checkpoint — 04:41 UTC
+
+**No final composed approval yet.** Exact scoped verdicts and new evidence:
+
+| Owner / exact review target | Result and verification boundary |
+| --- | --- |
+| Scheduling `577a1b28` → `896fef8dce4d64bbaf42f02f107f75ec2ff197de` → `e694ae4914d9fb956dc6cb4724cadec078e03924` → `5a81aa8d` → `a1bd3c5a471a05414ff30af2b5b026bd928a718e` | No remaining scheduling-owned blocker. Original first-write/stopped/read/Stop/zone findings addressed; actual codec, deferred safe-stop, unknown-group and read-only DOM tests inspected. Owner reports 48 focused baseline, then 10/11 targeted deltas and full TS. Verdict `msg_a4897deb2c9c`. |
+| Desktop binding `c4c0f40e2e990a1c195c805bcc5a37977a665c4d` + `8490462d25c56e7fa7be3a010e88b7ac47114f5c` | No blocker after unknown-status correction. Deferred pin/client drains, strict nested evidence and actual host harness source inspected. Owner reports 41 Node checks/full TS in durable report; raw output exists only in dispatch transcript. Rust host tests/harness not yet run. Verdict `msg_21e000edf411`. |
+| Workspace `10e897313826e7af052dd34e820736fb074fc8bf` | No Workspace-owned blocker. Scoped singleton/admission/key/open/flush/inspect-reopen implementation and actual Workspace tests inspected. Owner reports 19 focused controlled-transport checks; composed dependencies/full TS remain pending. Verdict `msg_107a2d5ff438`. |
+| Recovery host `e3e291422c1ad696b3128d0a0e723b71ca60ecbe` | No source blocker. Exact main/preload/client-slots and new controlled broker/on-disk registry tests inspected. Owner reports 32 checks; command provenance requested, actual Electron proof separate. Verdict `msg_a2334305bedf`. |
+| Base `be2b6ff05b1ee57be8eddd3e8ea2736024c354bd` | Unknown task grouping and qualified omitted count fixed; original Rust context/serialized cursor chains preserved. Owner reports 18 focused/84 affected/full TS. Final pin-close failure retention still open; successor requested. |
+
+Scheduling's standalone native reader uses one retained pin for split windows and
+task membership, checks independent source/collection evidence, caps both scanned
+and expanded aggregate bytes, and retains failed-close pins for explicit retry.
+Native-selected witnesses now use original row revisions consistently with
+Workspace/Base admission. The shared picker separates absent/present/unknown
+sections without inventing evidence for host rows lacking membership. These are
+source/focused-test findings, not normal Electron UI evidence.
+
+**Remaining concrete Base lifecycle finding:** initial Base override had no
+native reader drain (`msg_561513ce2834`). `be2b6ff0` adds `native.settle()` and waits
+for the read queue, but then destroys the mounted view before `controller.dispose`
+fire-and-forget closes the retained pin. Failed `pin.close` can therefore occur
+after successful BaseSession close/UI removal. Requested awaited retained close
+before destruction plus an actual BaseSession deferred-read/failing-close witness
+(`msg_57ff9a7c46b4`); owner acknowledges in `msg_1b4c435dc4cc`. This is the same
+bounded lifecycle finding, not an expanded audit matrix.
+
+RecoveryHostOwner: `managed-calendar-recovery-host`, dispatch
+`ctx_246625d6ba54`, terminal `term_1971e20d-92e6-4ead-a57b-4c12707bd302`.
+Reopen checks authenticated main-frame caller, retained admission and local Store
+identity, canonical same-vault root and generation across awaits. Existing-only
+serial slot claim checks client/root, preserves main→primary mapping and rejects
+live or retiring owners. Constructor/load failures preserve slot ownership until
+retirement. No journal copy/replay or automatic unknown-slot creation is present.
+
+Coordinator `msg_c6b7b32cacee` names separate composed native verification task
+`task_602b8d1f04ea` / `ctx_7f887a555eed`, initial assembly `dfd1545b`; source/HEAD
+must stay frozen during checks. Electron proof preparation succeeds original task
+with new dispatch `ctx_bd4788bcfc7f`. Its proposed genuine observed-intent/Rust-PID
+interruption is distinct from postcommit lost-ack proof; explicitly labeled gaps
+remain if the timing cannot be witnessed. Reviewer performs no apps or harness
+edits and does not infer runtime acceptance from prepared scripts.
+
+## Final scoped frontend successors — 04:45 UTC
+
+All concrete findings raised in this review are addressed in the exact successors
+listed here. This does not establish composed normal Electron delivery.
+
+- Base close correction `b1d9d682e3f475c2382386ecd250130e17bd87e3` explicitly
+  awaits retained pin retirement before mount destruction. The actual BaseSession
+  deferred-range and failing-close tests retain the same mounted UI and retry
+  successfully. Expanded aggregate data, duplicate/conflicting identities and
+  common grouped membership are also guarded. Owner reports 21 focused/87
+  affected/full TS; scoped verdict `msg_ec51c4223233` closes the lifecycle finding.
+- Base owner subsequently found that range Refresh retained the stale selection.
+  Narrow owned `505b5da30c5bd574fbb0e169e8c0d38bf788a15e` adds an explicit
+  **Refresh saved selection** control, preflights pending work, calls the outer
+  controller, defers mounted replacement, propagates errors and preserves local
+  Day navigation. Detailed diagnostics stay in the typed retained result; display
+  uses a bounded readable summary. Exact source/test delta reviewed; 22 focused/
+  full TS reported; verdict `msg_e5876ef8588d`. No silent new-pin fallback added.
+- Workspace owner independently found failed admission close lost its handle.
+  `f4306cdbb115cc290e17f3019c66a91f8907ed6c` retains each admission pin immediately
+  after open and removes it only after successful close; global flush settles
+  accepted admissions, retries retained cleanup and then flushes the owner. Read
+  the exact source/test delta plus normal Base/named-embed test successor
+  `49a498ab`; read `/tmp/calendar-workspace-successor-tests.txt`, 43/43 pass
+  (Workspace 22 + Base 21), report full TS/diffcheck. This temporary log is not a
+  durable runtime artifact. Verdict `msg_ba0ecbb85f58`; no remaining Workspace
+  source blocker.
+- Recovery report-only `28049671c453252ef27b55aea325bebe1d6cc884` records exact
+  `e3e29142` commands. Owner `msg_7f9d6941be47` reports 32/32 from
+  `node --test --test-concurrency=1 tests/calendar-recovery-host.test.cjs
+  tests/desktop-main.test.cjs tests/client-slots.test.cjs tests/window-broker.test.cjs`:
+  16 new recovery + 5 slots + 1 main + 10 broker, syntax/diff checks clean. These
+  remain controlled host seam tests; no actual renderer journal proof inferred.
+
+Native composed build initially failed before any fixture execution on test-only
+watermark inference E0282. Reviewed one-line
+`03df2996329a375e9af20b12b9deb6bfac8edc43` annotation `Option<Value>`; production,
+expectations and budgets unchanged (`msg_759225f2107a`). Root then split review
+ownership in `msg_154527895904`: a separate NativeComposedReviewer owns native
+nine-test/host/stdIO assembled source/results. This reviewer retains frontend,
+Base, Workspace, recovery and composed UI evidence and does not duplicate that
+native verification or the earlier Store/portable audits. Existing native source
+verdicts remain scoped historical evidence; compiled acceptance belongs to the
+new exact assembly/result review.
 
 ## Required bounded successor review
 
