@@ -8,6 +8,7 @@ them or interrupting the current work.
 
 | Finding / requested behavior | Current state | Next evidence or work |
 | --- | --- | --- |
+| Discuss mobile WebView reuse, dynamic management and caching | User explicitly asks for discussion; current new-realm cost is a hypothesis from source and historical Debug timing | No warm realm/pool/Rust-session lifetime refactor is authorized by this discussion. Preserve current save/close ownership; compare options and settle contracts before implementation |
 | Tabs belong only to the current vault, restoring separately per vault | Direct phone finding relayed by native owner;2f owns model/metadata partition and pending-ticket encoding in isolation | Native owner owns context/coordinator/factory integration. Use trusted vault identity; retain original pending operation/tab recovery without manufacturing a new slot |
 | Home create button must work | Dev10 button has no creation callback; user reports it nonfunctional | Route via current-vault Pages and the same guarded New Note path, or choose/create vault if absent. Do not build a second create engine or rotate uncertain operation IDs |
 | Loading uses skeletons, without loading words or technical details | Direct user steering relayed from phone session | Native owner owns Pages/Mobile presentation changes; keep actionable human error/retry. Caching/module overlap remains measured followup, with no recovery or authority bypass |

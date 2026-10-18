@@ -77,6 +77,21 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Composition checkpoint (2026-10-18 02:37 UTC): WorkBlock portable batch is
+canonical main5ab6d54f..7d375ab4, matching8351b8e8/631dbd28. Domain checks pass,
+not yet desktop service/UI delivery. Native WorkBlock worker owns new services
+and native.rs/lib.rs dispatch plus necessary dependencies; desktop binding owner
+also owns editor-core/client-admission guards and bridge/platform injection, all
+under existing client/window/vault leases. Routine module placement needs no
+repeat grant. Native6a5a6d74 per-vault model/store passed85 actual-source host
+checks but is NOT merged alone: callers require adaptation. TS6d0145e8 strict8
+state passed206 focused/full TS and source review, held for matching Swift paired
+composition; old strict4 consumer rejects it. Link14 clean build/install passed,
+but matching WK tap/caret remains unverified due interaction tooling/route misses.
+Native owner may do one visible short fixture probe; report inconclusive honestly.
+WebView reuse/pooling is discussion only, no lifecycle refactor authorized. Current
+phone remains proven Dev10; newer device build remains conditional on final proof.
+
 First-party implementation checkpoint (2026-10-18 02:26 UTC): root read the full
 5fb80202 consumer map and authorized independent Types/Tasks domain files in
 zorid-bases plus task preset/config modules, and WorkBlock compiled validation in
