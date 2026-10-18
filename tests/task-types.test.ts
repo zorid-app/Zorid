@@ -97,3 +97,19 @@ test('datetime defaults reject normalized invalid calendar dates', () => {
     assert.throws(() => TypesDocument.parse(stringify(value)));
   }
 });
+test('surgical default boundaries support block values, implicit null and flow trailing commas', () => {
+  const suffix='future: {a: 1,b: 2} # untouched\n';
+  const text = (defaultSource:string) => 'version: 1\nid: t\nlabel: Task\nproperties:\n  - id: p\n    key: p\n    label: P\n    datatype: text\n' + defaultSource + suffix;
+  for (const defaultSource of ['    default: |\n      before\n','    default:\n','    default: # own comment\n']) {
+    const doc=TypesDocument.parse(text(defaultSource)); doc.setDefault('p','after');
+    assert.equal(doc.model.properties[0].default,'after'); assert.ok(doc.toString().endsWith(suffix));
+    doc.setDefault('p',undefined); assert.equal(doc.model.properties[0].default,undefined); assert.ok(doc.toString().endsWith(suffix));
+  }
+  const multi=TypesDocument.parse('version: 1\nid: t\nlabel: Task\nproperties:\n  - id: p\n    key: p\n    label: P\n    datatype: multi-select\n    options: [{id: a, label: A}, {id: b, label: B}]\n    default:\n      - a\n' + suffix);
+  multi.setDefault('p',['b']); assert.deepEqual(multi.model.properties[0].default,['b']); assert.ok(multi.toString().endsWith(suffix));
+  multi.setDefault('p',undefined); assert.ok(multi.toString().endsWith(suffix));
+  for (const tail of [',}',', # own comment\n  }']) {
+    const doc=TypesDocument.parse('version: 1\nid: t\nlabel: Task\nproperties: [{id: p, key: p, label: P, datatype: text' + tail + ']\n' + suffix);
+    doc.setDefault('p','new'); assert.equal(doc.model.properties[0].default,'new'); assert.ok(doc.toString().endsWith(suffix));
+  }
+});

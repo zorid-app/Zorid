@@ -114,7 +114,7 @@ function validate(value: TypeValue): NoteType {
 }
 function parse(source: string): Document {
   if (new TextEncoder().encode(source).length > MAX_TYPE_SOURCE_BYTES) return fail('Type YAML exceeds byte limit');
-  return parseDocument(source, { version: '1.2', schema: 'core', stringKeys: true, uniqueKeys: true, resolveKnownTags: false, logLevel: 'silent' });
+  return parseDocument(source, { version: '1.2', schema: 'core', stringKeys: true, uniqueKeys: true, resolveKnownTags: false, keepSourceTokens: true, logLevel: 'silent' });
 }
 /** Source and unknown supported keys/comments survive; failed edits never publish.
  * Rust compile_types is the authority for host-fed interpretation at query time. */
@@ -141,7 +141,13 @@ export class TypesDocument {
     const node = pair?.value;
     if (pair && isNode(keyNode) && keyNode.range) {
       if (!isNode(node) || !node.range) return fail('An explicit value is required before editing');
-      if (value !== undefined) { this.change(node.range[0],node.range[1],JSON.stringify(value)); return; }
+      if (value !== undefined) {
+        const old = this.source.slice(node.range[0],node.range[1]);
+        const prefix = node.range[0] === node.range[1] && this.source[node.range[0] - 1] === ':' ? ' ' : '';
+        const suffix = node.range[0] === node.range[1] && this.source[node.range[1]] === '#' ? ' ' : '';
+        const newline = old.endsWith('\r\n') ? '\r\n' : old.endsWith('\n') ? '\n' : '';
+        this.change(node.range[0],node.range[1],prefix + JSON.stringify(value) + suffix + newline); return;
+      }
       if (map.flow) {
         if (index < map.items.length - 1) {
           const next = map.items[index + 1].key;
@@ -162,7 +168,10 @@ export class TypesDocument {
     if (value === undefined) return;
     if (!map.range) return fail('Invalid mapping range');
     if (map.flow) {
-      this.change(map.range[1] - 1,map.range[1] - 1,`${map.items.length ? ', ' : ''}${key}: ${JSON.stringify(value)}`);
+      const token = map.srcToken;
+      const last = token?.type === 'flow-collection' ? token.items.at(-1) : undefined;
+      const trailingComma = last && !last.key && last.start.some(part => part.type === 'comma');
+      this.change(map.range[1] - 1,map.range[1] - 1,`${map.items.length && !trailingComma ? ', ' : ' '}${key}: ${JSON.stringify(value)}`);
     } else {
       const lineStart = this.source.lastIndexOf('\n',map.range[0] - 1) + 1;
       const indent = ' '.repeat(map.range[0] - lineStart);
