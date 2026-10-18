@@ -116,6 +116,16 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:49UTC: nativeowner granted exclusive bounded13source Swiftfrontend typing
+on immutable /private/tmp/zorid-connected-tabs-source-snapshot, ae81678d plus
+recorded dirty rootwiring snapshot, actual Cheader/cachedSDK26.2 flags. No Rust/
+assets/fullXcode/install; handle forthcoming, slotretained untilterminal/return.
+New factory+getter+latch/root APIs included, unlike earlier12sourcepass. Source
+safety review remains separate: priorwireblockersclosed but latest9100 review
+requires retained foreground-safe nativefailure recovery after actual Pagesclose
+and postUIKit navigation rejection; no autoreopen/navigation. NewNote/history
+still known incomplete, no phone9replacement or UXacceptance implied.
+
 00:48UTC: managed newcrate source uses existing crates/* workspaceglob. Named
 isolated Cargo.lock ownership grant for managedlead ONLY new zorid-records
 package/edges to alreadylocked deps; no existing versions/checksums/edges changes,
