@@ -4,7 +4,7 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {generate,noteSource,noteSize,notePath,noteId,queries,literalOracle,expectedCount,sha256,json} from './workload.mjs';
-import {validateSearch,invoke,buildSource,validateWarmStatus,decodeReadyFrame} from './cli.mjs';
+import {validateSearch,invoke,buildSource,validateWarmStatus,decodeReadyFrame,liveImportCoverage,importProgress} from './cli.mjs';
 
 test('v1 exact template, UTF8 byte budgets and fixed source digest remain reproducible',()=>{
   const expected='---\nproject: project-0\nstatus: todo\nrank: 0\n---\n# Note 000000\n\ncommon-marker café 😀\nunique-000000\nrare-marker\nprefixSUBSTRsuffix\n[[/Notes/G000/Note-000001]]\n- [ ] Task\n';
@@ -56,4 +56,14 @@ test('cold/warm source fence and native ready framing reject mismatched witnesse
  assert.throws(()=>validateWarmStatus({localStoreId:'local',status:{...status,coveredWatermark:'5'}},cold));
  const payload=Buffer.from(JSON.stringify({version:1,request_id:'0',ok:true,result:{transport:'zorid-native-stdio',capabilities:['documents','rescan','local_family_status'],reconciliation:{complete:false}}})),prefix=Buffer.alloc(8);prefix.writeUInt32BE(payload.length,0);const frame=Buffer.concat([prefix,payload]);
  assert.equal(decodeReadyFrame(frame).reconciliation.complete,false);assert.throws(()=>decodeReadyFrame(frame.subarray(1)));assert.throws(()=>decodeReadyFrame(Buffer.concat([frame,frame])));
+});
+
+test('family import observes durable file identity growth after inventory completion',()=>{
+ const scan={run:{scan_id:'same',observed:107,imported:0,finished:true},imported:9};
+ const a={path:'a.md',id:'a',revision:'ra',kind:'file',deleted:false},b={path:'b.md',id:'b',revision:'rb',kind:'file',deleted:false},allowed=new Set(['a.md','b.md']);
+ const before=liveImportCoverage({entries:[a]},allowed),after=liveImportCoverage({entries:[b,a]},allowed);
+ assert.equal(importProgress(scan,scan,before,after),true);
+ assert.equal(importProgress(scan,{...scan,imported:100},before,before),false,'duplicate imported counters are not progress');
+ assert.throws(()=>importProgress(scan,scan,before,[]));assert.throws(()=>importProgress(scan,scan,before,[{...before[0],revision:'changed'}]));
+ assert.throws(()=>liveImportCoverage({entries:[a,a]},allowed));assert.throws(()=>liveImportCoverage({entries:[{...a,path:'unexpected'}]},allowed));
 });

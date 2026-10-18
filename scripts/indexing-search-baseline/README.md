@@ -60,7 +60,11 @@ ready frame and observes normal host exit after stdin EOF. CLI `rescan` then
 continues durable family inventory in bounded passes (5-second soft work budget,
 32 passes by default, `--max-import-passes` 1..1000). Each CLI process still has
 the explicit process timeout. Raw scan progress is retained; three passes without
-proven same-inventory observed/imported/finished progress stop as incomplete.
+proven same-inventory observed/finished progress or growth of the exact live
+file identity set stop as incomplete. Content imports can advance after the
+inventory has finished; public CLI listings verify that durable growth. Repeated
+per-pass import counters alone do not replenish the budget, and previously
+observed path/ID/revision tuples must remain unchanged.
 Setup/import timing remains separate from indexing. The tool records its exact
 logical/physical identity mapping and checks native
 committed bytes for the first/last note and all three extras, builds a cold derived

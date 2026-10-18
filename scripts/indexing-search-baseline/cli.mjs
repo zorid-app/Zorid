@@ -24,6 +24,21 @@ export function validateSearch(reply,query,count,byPath,snapshot,source){
   return {queryId:query.id,expectedFiles:total,verifiedHits:verified,correctness:reply.scanComplete?'complete-oracle':'ordered-prefix-only',coverageComplete:reply.coverageComplete,scanComplete:reply.scanComplete,complete:reply.complete,
     pages:reply.value.pages,documents:reply.value.documents,sourceBytes:reply.value.sourceBytes,snapshot:reply.snapshot,source:reply.source};
 }
+export function liveImportCoverage(listing,expectedPaths){
+  assert.ok(Array.isArray(listing.entries));const ids=new Set(),paths=new Set();
+  const files=listing.entries.filter(e=>e.kind==='file'&&!e.deleted).map(entry=>{
+    assert.ok(expectedPaths.has(entry.path),'unexpected file in owned source fixture');
+    assert.equal(typeof entry.id,'string');assert.equal(typeof entry.revision,'string');
+    assert.ok(!ids.has(entry.id)&&!paths.has(entry.path),'duplicate imported source identity');ids.add(entry.id);paths.add(entry.path);
+    return {path:entry.path,id:entry.id,revision:entry.revision};
+  });files.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);return files;
+}
+export function importProgress(previous,current,before,after){
+  if(before){const byPath=new Map(after.map(e=>[e.path,e]));for(const entry of before)assert.deepEqual(byPath.get(entry.path),entry,'committed source changed during static import');}
+  const sourceGrew=after.length>(before?.length??0);
+  const inventoryGrew=previous&&current.run?.scan_id===previous.run?.scan_id&&(current.run.observed>previous.run.observed||current.run.finished&&!previous.run.finished);
+  return sourceGrew||!!inventoryGrew;
+}
 export function buildSource(cold){
   assert.equal(cold.observedIndex.state,'ready');assert.deepEqual(cold.observedIndex.snapshot,cold.snapshot);
   assert.equal(cold.observedIndex.coveredWatermark,cold.observedIndex.observedSourceHead);
@@ -91,7 +106,8 @@ export async function runBaseline({out,binary,notes=100,timeoutMs=60000,buildSha
       if(result.exitCode!==0||result.signal||result.timedOut||result.outputLimit)throw Object.assign(Error('native initialization did not exit normally'),{kind:'bounded-stop'});
       report.setup.ready=decodeReadyFrame(result.stdout);
     }else await command('init',['init']);
-    let lastScan,stalls=0;report.setup.importPasses=[];
+    let lastScan,lastCoverage,stalls=0;report.setup.importPasses=[];report.setup.importCoverage=[];
+    const expectedPaths=new Set(fixture.manifest.entries.map(e=>e.path));
     for(let pass=0;pass<maxImportPasses;pass++){
       const scan=await command(`import-${pass}`,['rescan','--max-entries','100000','--max-total-bytes',String(fixture.manifest.noteBytes+1024*1024),'--max-duration-ms',String(Math.min(5000,Math.floor(timeoutMs/2)))]);
       report.setup.importPasses.push(scan);
@@ -99,9 +115,11 @@ export async function runBaseline({out,binary,notes=100,timeoutMs=60000,buildSha
       // Local-family inventory has a durable continuation. Legacy rescan starts
       // a new inventory; repeated legacy passes are not a continuation claim.
       if(!nativeHost)throw Object.assign(Error('legacy source import incomplete; no durable scan continuation'),{kind:'incomplete-import'});
-      const changed=lastScan&&scan.run?.scan_id===lastScan.run?.scan_id&&(scan.run.observed>lastScan.run.observed||scan.run.imported>lastScan.run.imported||scan.run.finished&&!lastScan.run.finished);
-      stalls=changed?0:stalls+1;lastScan=scan;
-      if(stalls>=3)throw Object.assign(Error('bounded family import made no proven inventory progress'),{kind:'incomplete-import'});
+      const listing=await command(`import-coverage-${pass}`,['list']);
+      const coverage=liveImportCoverage(listing,expectedPaths);report.setup.importCoverage.push(coverage);
+      const changed=importProgress(lastScan,scan,lastCoverage,coverage);
+      stalls=changed?0:stalls+1;lastScan=scan;lastCoverage=coverage;
+      if(stalls>=3)throw Object.assign(Error('bounded family import made no proven source or inventory progress'),{kind:'incomplete-import'});
     }
     if(!lastScan?.complete)throw Object.assign(Error('bounded source import pass limit reached'),{kind:'incomplete-import'});
     const list=await command('source-map',['list']);assert.ok(Array.isArray(list.entries));
