@@ -1,0 +1,76 @@
+# Retained mobile editor interaction gate
+
+Source checkpoint: 2026-10-18. This successor work leaves frozen phone19 and the
+finite-navigation source untouched. One initialized vault WebView, web-owned
+logical tabs/routes/history and native outer chrome/gesture input are the
+accepted consuming architecture; this change implements only editor admission.
+
+## Ownership and source
+
+- Owner: Orca terminal `term_0f955add-4708-4af3-91a3-10719e9ba77e`.
+- Grant: `msg_d354eee17d1d`; sole main integration remains
+  `run:run_3e72b2c9ab72`.
+- Branch: `mobile-editor-interaction`; worktree:
+  `/Users/ctk/orca/workspaces/Zorid/mobile-editor-interaction`.
+- Base: `0ccab4508f9148af9537eb15c7fe4ead11b2c4b5`.
+- Source commit: `71c362b00d79e9e52fca3949d757091aa18f8cae`.
+- Source ownership: `src/ui/editor.ts`, table child/optimistic authoring propagation
+  in `src/editor/live-tables.ts`, async authoring seam in
+  `src/editor/transfers.ts`, and two focused editor test files. No Workspace,
+  router, Rust, native or root build source changed.
+
+API agreement preceded source edits: native `msg_cc2cc42f9400`, coordinator
+`msg_3cc10632f916` / `msg_714400a7199c`, TS owner
+`msg_b0dfd63ad74a` / exact freeze semantics `msg_b4119c259011`.
+
+## Consuming contract
+
+`EditorOptions.canMutate?: () => boolean` supplies the pure live writer-token
+predicate. Exceptions deny authoring. `interactionState?: {active: boolean}`
+sets the initial state, and real `createEditor` handles implement optional
+`setInteractionState({active})`. The optional handle declaration preserves
+existing stubs; passive routing must require actual support.
+
+Desktop defaults remain active. Construct every passive neighbor with initial
+`active: false` and a denied writer predicate. Active controls focus ownership:
+inactive is read-only/noneditable and blurs only an owned focused surface.
+Active with denied authoring is read-only with contenteditable retained, allowing
+a temporary source freeze without dropping focus. The setter never focuses or
+recreates CodeMirror, and every call retires the command/transfer epoch and old
+async context-menu plugin. The router must revoke outgoing authority before
+activating incoming authority and call the setter at every lease change.
+
+The actual applied parent transaction batch and child table dispatch check live
+admission, including `filter:false` changes. Parent external `setValue` uses a
+private annotation to synchronize passive documents/children without authored
+`onChange` or undo entries. Existing undo maps through external snapshots.
+Already dispatched imports may complete storage; their assets are retained, but
+revoked actions cannot insert text or begin remaining queued imports. This does
+not claim cancellation of dispatched storage writes.
+
+## Verification and review
+
+Focused source command (bounded concurrency 1):
+
+```sh
+node --test --test-concurrency=1 tests/editor-integration.test.ts tests/editor-transfers.test.ts tests/table-context-handoff.test.ts tests/native-editor-commands.test.ts
+```
+
+Observed: **65 passed, 0 failed**, exit 0. Log:
+`/tmp/mobile-editor-interaction-tests.log`. `git diff --check` passed.
+Initial red run had the expected six new failures and 26 existing passes before
+implementation; follow-up regressions cover freeze focus, predicate failure,
+whole-batch rejection, native command state, stale menus, child editable/focus,
+table structural admission, live transfer admission and two retained editors
+sharing one writer token.
+
+Independent reviewer: `term_a0c7b316-8546-4777-95a2-fe08cb519356`, isolated
+`mobile-interaction-review`. Preimplementation seam audit
+`msg_3540f8250b51` informed follow-up coverage; exact source review requested in
+`msg_5cb441634432`. Final review/integration status remains pending at this
+checkpoint; no `merge_ready` claim yet.
+
+No build, full suite, full TypeScript check, Rust compilation, Xcode, simulator,
+phone, visual, performance or integrated router verification was run. Geometry
+shims and synthetic DOM events establish source behavior only. Native/runtime
+acceptance and main integration belong to their named owners.
