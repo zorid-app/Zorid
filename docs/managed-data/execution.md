@@ -143,3 +143,52 @@ No production source changed. Slot explicitly returned; all dispatched workers
 settled and were released/reused through final settlement. Detailed observed
 policies and limitations: [feasibility results](feasibility-results.md).
 Phase0 contract remains provisional; Phase1 durable encrypted slice is not done.
+
+## Phase 1 portable source assignment — continuation
+
+Previous goal turn is **progress**: exact12-fixture run and committed evidence,
+not a wait/status-only turn. Root independently reviewed and integrated the
+entire prior `1a350fd2` ancestry as main `3322d30b`, with exact-byte comparisons
+of test and seven documents (`msg_5a146aa388d8`); no redundant rerun needed.
+
+Root `msg_89203964cf61` assigns NEW `crates/zorid-records/**` for actual internal
+portable schema/patch/causal-state/payload planning. Existing Store/protocol,
+root manifests/lock, browser/native/editor paths remain excluded. No production
+API frozen. [Concrete portable contract](portable-record-contract.md) is under
+independent review alongside source implementation, not bundled retroactively
+into the previous accepted batch.
+
+- Implementation task `task_abc93cd985fe` / `ctx_ff9b09110693`, terminal
+  `term_be44a8bb-0331-440a-b349-1f1a20023b8f`; isolated child worktree
+  `/Users/ctk/orca/workspaces/Zorid/managed-records-engine`. Own new crate only,
+  no compiler until resource grant; source commit/test-count handoff required.
+- Independent contract review `task_8b1ad78f1d79` / `ctx_07f04a40e5aa`, terminal
+  `term_1aa0a1d9-438e-4711-a5f4-024eff657bd3`; read-only, no builds or edits.
+- Retained operation history, concurrent conflict candidates, observed-remove
+  sets, generation tombstones, replay/pending and byte/depth/count admission
+  must be concrete and tested. Encoding choice is explicit and one-authority;
+  no redundant custom mutable field engine beside Yrs.
+
+Concrete review `msg_0834151441e4` supports immediate source and sole typed
+operation-set authority, with required create ancestry, per-field maxima, causal
+tag removal, pending activation/equivocation, aggregate capacity, additive unknown
+fields and planner-binding corrections. Preserved `portable-contract-review.md`,
+resolutions appended to contract, exact findings sent implementation owner in
+`msg_7b646e579cc0`. This choice is internal; sync framing/production seam acceptance
+remains separate. Root informed new crate lock entry requires its named gate.
+
+Independent adversarial source tests committed as
+`2cb477160772a8adc632d17f9539cf146f35f351` in the foundation branch: ONLY
+`crates/zorid-records/tests/adversarial.rs`, nine traces against the actual
+public engine API. Task `task_a9ef6739c237` / `ctx_4a95526c266d` succeeded;
+no compiler run. Reviewer reports no new blocker, preserves explicit invalid
+pending-activation and33-head backpressure limitations. Worker released.
+
+Coordinator source review found full transitive ancestry String/BTreeSet storage
+could grow quadratically in copied variable-length IDs at4096 operations; compact
+ordinal bitsets or an equivalent bounded representation requested before freeze.
+This is a concrete resource correction, not a new benchmark claim.
+Root `msg_440f6dba56ae` grants isolated Cargo.lock change ONLY for the new
+zorid-records package entry and edges to existing locked deps, no version/source/
+checksum changes and no network. Exact lock diff needs root review; compiler
+still requires later exclusive bounded slot, native priority unchanged.
