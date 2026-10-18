@@ -453,3 +453,5 @@ its native Recents/Files landing page like first entry, not blank Choose file or
 vault selection. Factory/root activation follow-up remains open. Actual16 fresh
 A/B Home-tab scope/IDs +B process restart pass, with separate unchanged0600 files;
 that identity proof does NOT establish this newly requested Home presentation.
+
+Scope correction (2026-10-18 03:17 UTC, direct user instruction relayed by managed owner): remove spaced repetition entirely from the implementation goal, rather than defer it. No active implementation was underway.

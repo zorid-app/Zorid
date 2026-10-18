@@ -77,6 +77,12 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Scope correction relayed by managed owner (2026-10-18 03:17 UTC): direct user
+instruction removes spaced repetition entirely from this implementation goal;
+it is not a deferred requirement. No worker was implementing it. Historical
+goal/objective wording does not restore that scope. Managed owner supplies its
+matching implementation-plan amendment; other accepted work remains unchanged.
+
 Navigation implementation ownership (2026-10-18 03:17 UTC): revised one-WK
 contract accepted for a first bounded Markdown same-vault slice. Worker371
 owns mobile-native.ts finite optional request/result channel, mobile-only
