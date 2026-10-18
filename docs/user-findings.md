@@ -1,5 +1,28 @@
 # User findings queue
 
+## Candidate interrupted-rename recovery — investigating 2026-10-18
+
+Read-only inspection of the default recent vault found a captured, unpublished
+namespace move whose destination was superseded by a later logical move. The
+saved inode survives, while source, earlier target and current target are absent;
+current target validation rejects the old recovery destination. Retries alone
+cannot settle this candidate state. All 33 `.previous` files instead correspond
+to completed attempts. One separate unresolved external observation remains.
+
+Evidence: `/private/tmp/zorid-warning-candidate-mp5yzuln/metadata-summary.json`.
+Inspection copied the database without opening SQLite or recovery in the original;
+original metadata was unchanged. This is not confirmed as the screenshot's vault
+or historical cause. `storage_recovery_impl` owns a synthetic regression and safe
+recovery plan in isolation; `architecture_core_audit` reviews causal/identity proof
+and preservation before any implementation. No cleanup or migration in the real
+vault is authorized by this diagnosis. Root coordinates serialized validation.
+
+Native window-close verification independently passed on source `3eabc392`: the
+pending edit was flushed, guarded then allowed close completed, and the host
+drained. Normal macOS app quit remains unverified: a no-window shell did not exit
+after an AppKit request. That is separate from the earlier dirty JavaScript-close
+veto, and did not lose the saved edit. Live-window quit/history checks continue.
+
 ## Clipboard image transfer — fixed 2026-10-18
 
 Integrated `a98cb04f` on main. Concurrent attachment reads and paste uploads could
