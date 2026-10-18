@@ -77,6 +77,21 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Canonical domain and test-candidate checkpoint (2026-10-18 02:46 UTC): main
+319c2238..62e7ad8e integrates all9 Types/Tasks domain/config commits through
+fc711906, exact affected trees, independent source review/21 Node/scoped TS and
+unchanged11 Rust checks. It does not activate task capture/UI. Main e317c196+
+ac2d6763 integrates the paired89/91 link patch; five files match both reviewed91
+and clean build14 source.90 focused checks/scoped TS and actual Vite/copy/Xcode
+build pass, but matching native tap/caret test remains INCONCLUSIVE because
+automation selected folders/audio instead. Do not mark link UX complete. Root
+supersedes its earlier automation-before-phone gate: native owner may deliver one
+clean reviewed Dev phone TEST candidate under existing authorization, recording
+artifact/receipts and explicit unverified behavior, with no diagnostics. Stop
+repeating the unreliable AX campaign. Quiet-loading copy is canonicalf135dee1,
+visual/VoiceOver unverified, no speed claim. Other native paired/scoped source
+remains isolated until caller composition; no WebView reuse authorization.
+
 Composition checkpoint (2026-10-18 02:37 UTC): WorkBlock portable batch is
 canonical main5ab6d54f..7d375ab4, matching8351b8e8/631dbd28. Domain checks pass,
 not yet desktop service/UI delivery. Native WorkBlock worker owns new services
