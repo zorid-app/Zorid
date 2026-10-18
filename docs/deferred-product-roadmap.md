@@ -116,6 +116,15 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:06UTC resource checkpoint: actual-source tab model harness42964 compiled/ran
+terminal0 PASS207 assertions for exact5824bbfe; log tmp/native-tabs-model-harness.log.
+This is model/metadata/persistence proof only, no SwiftUI or editor lease proof.
+Verified861 idle despite queued failure mail; one explicit prompt22a4c192 actually
+started its import collision fix turn.861 owns exclusive single targeted host
+reproduction/fix test slot, existing rootdependencyb21 cherry-pick authorized.
+Native two-file cached Swift frontend typecheck527fe77e requestmsg26599770b5fb
+is queued next, not yet granted. No parallel root/native compiler.
+
 Canonical update00:03UTC: main60ffc972 integrates source-identical3288 native9
 Settings/search/minimum-one and caret batch. Independent review, fulltsc99639exit0,
 focused66/66 tests55162 pass. Actual Simulator8/9 evidence and phoneDev9 repeated
