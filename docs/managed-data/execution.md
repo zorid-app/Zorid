@@ -192,3 +192,20 @@ Root `msg_440f6dba56ae` grants isolated Cargo.lock change ONLY for the new
 zorid-records package entry and edges to existing locked deps, no version/source/
 checksum changes and no network. Exact lock diff needs root review; compiler
 still requires later exclusive bounded slot, native priority unchanged.
+
+## Portable library verified and reviewed
+
+Composed clean candidate `1842c15e99129531baf189af2f15ad3e1bba77a1`:
+independent tests `2cb47716`, reviewed contracts `525c2c1b`, engine cherry-pick
+`d286e0e2` from `5e1c78f3`, exact8-line lock `6cdbd6c8`, compact ancestry
+`1842c15e` from `c1e91bad`. Root approved unchanged lock in `msg_95887dae0a83`.
+
+Granted bounded check `msg_68f3021742d8`, session17018 EXIT0:33/33 PASS
+(9independent+24traces), no source/lock changes or retries. Log
+`/private/tmp/zorid-records-1842c15e-tests.log`; explicit slot return
+`msg_0676fb3dce42`. All owned workers settled/released, no compiler live here.
+Independent root actual-source review APPROVED exact1842 library slice in
+`msg_a8f809191242`. Retained known direct-programmatic input clone memory budget
+limitation; adapter/wire gates remain. See [portable results](portable-record-results.md).
+No Phase1 durable/encrypted/browser/UI completion claim. Batch is ready for sole
+root integration; main result SHA still pending this checkpoint.
