@@ -116,6 +116,13 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:18UTC followup: NativePages-only correction batch4a1e1381+6b67a887+09734eb4
+atop5adb source-ready; independent117 review requested msg_a839409c4848. Requires
+atomic core/wire, no legacy unguarded Move fallback; not compiled/native verified.
+Host Rust session29195 terminal101 before tests: native reexports file-sync
+without declared Cargo dependency. Worker coordinates narrow fix with base_reuse
+and continues independent11 core checks serially, retaining compiler slot.
+
 00:18UTC: native coordinator draft review msg_2c163f17af15 blocks composition
 at SHA7ac8685389cb71233b774bd6750ebe74e91acb0d4426d69d4cd53bf093273df2:
 activation quarantine must survive malformed/stale results; source needs explicit
