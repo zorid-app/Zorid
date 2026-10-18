@@ -77,13 +77,14 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
-Current composition checkpoint (2026-10-18 05:19 UTC): root isolated browser
-candidate `46e7360e` combines the reviewed33-file browser WorkBlocks implementation
+Browser delivery checkpoint (2026-10-18 05:20 UTC): canonical `2972911c`
+integrates the root browser candidate `46e7360e` combines the reviewed33-file browser WorkBlocks implementation
 with canonical `2120024d`. Its actual current-input WASM build and full TypeScript
 check both exit0. Fresh Chrome/IndexedDB/WASM run passes12 selected groups with
 443 strict transactions,43 atomicity snapshots and10 causal ordering pairs;
 Chrome/Vite/profile and12 databases clean up, then runner72675 naturally exits0.
-Independent exact-artifact review approves this bounded source/runtime composition. See
+Independent exact-artifact review approves this bounded source/runtime composition;
+main now has the exact tested generated assets. See
 managed-data/browser-workblocks-main-integration.md and its compact evidence JSON.
 No rendered Calendar/mobile/gRPC/full-matrix result follows from this subset.
 

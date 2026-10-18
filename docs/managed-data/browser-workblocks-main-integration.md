@@ -1,5 +1,9 @@
 # Browser WorkBlocks current-main composition
 
+Integrated into canonical main at `2972911c` on2026-10-18 after scoped source
+and current-artifact review. Main ignored generated assets were updated from the
+exact tested candidate and rehashed; no second compilation was performed.
+
 Root isolated browser-workblocks-main-candidate, base canonicalaab1d5c8,
 2026-10-18. Exact source freeze3f07c9d4; selected33 source/test paths from its
 merge-baseb975c67c under WASM, browser core/platform and bounded harness only.
