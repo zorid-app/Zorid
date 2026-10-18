@@ -116,6 +116,16 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+01:08UTC actualSimulator10 focusedFile/HomePASS: nativevault/Pages→existingnote→
+quiesce/closeoverview→newHome→HomeShowtabs→twoTabs→originalnote/bodypreserved→
+ReturnFiles usable. No typededits inpass (notnewedited-saveproof). Screenshot
+/private/tmp/zorid-mobile-v10-tabs.png, ownedapp/helper77553cleanupterminal0.
+Userdirectvaultlabelheaderremoval queuedtinyreviewedPageshunkbeforephonefreeze.
+Phonepreflightstoppedbeforebuild oldcontractproductionbundle mismatch; existing
+Dev9automaticwildcarddevelopmentsigning allowedwithteam/device/bundleverified,
+no newprovisioning/account/networkchanges. Native slotretained, actualphonebuild
+pending. Rootrequestedcoherentconfirmedmainbatch/dependencyreviewinventory.
+
 01:07UTC: managed Storeowner term6307/ctx856 named source grant now includes
 narrow StoreCargo/lib/schema, family_ledger/family_store Recordsarm,
 immutable_payloads records/nullfiledescriptor, family_ingress exhaustive isolation
