@@ -116,6 +116,15 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+01:15UTC: managed nativeadapter1c8d76bf+semanticwire9dda source-ready; root
+independentStore/native_consumer and wire/markdown_contracts review active. Final
+composedSHA+filtercounts forthcoming, boundedwire13/managed23+family3/affectedledger
+andimmutable tests queued, no compilercurrentlylive. Native configuredhistory
+wiring scope ACKddfa107bf45a:371 scopedPagescallbacks/availability/restore; native
+owner coordinator/picker/loader/factoryonNavigate (bd57metadataonly). No editor/
+Rust/manifests; ONEticket/validatedcursor and existingrootlifecycle required.
+Dev10device-onlydeployment remainsunconfirmed; artifactunchanged, no rebuild.
+
 01:14UTC canonical native integration: maina56c2d16 merges exact2add282b after
 independentcombinedsourceapproval, Simulator39003 build+focusedFile/HomeflowPASS,
 signedDev10build21794+strictartifactverificationPASS. AlliOSfilesbyteidenticalto
