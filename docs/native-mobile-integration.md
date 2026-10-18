@@ -1155,3 +1155,33 @@ Apple bounded diagnostics exec37303 at00:05UTC still returns403
 REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED for apps/bundleIds/users/invitations.
 Existing support case103000040642 remains; no duplicate case or repeated API
 loop. TestFlight/internal tester acceptance remains blocked by account access.
+
+
+Native successor checkpoint — 2026-10-18 00:20 UTC:
+- Actual exclusive-slot frontend exec57718 terminal0, EMPTY diagnostics for
+  EXACT original527fe77e NativeDocumentTabs.swift + NativeTabOverview.swift,
+  extracted by git show into/private/tmp/zorid-tabs-frozen527-typecheck. Swift5
+  arm64-apple-ios15.0-simulator, SDK26.2, cached Simulator9 modulecache. No project
+  build/link/runtime or newer-source proof. Slot returned ee0c71d827be, root
+  ACK3ecb15; root Rust menu worker now owns compiler slot.
+- Reviewed new model9ecedf6f + overview873b4989 composed as1d903448+883d2c7e.
+  Their actual-source binding harness is PREPARED only, not run. Original207
+  proof and original two-file frontend do not cover these successors.
+- Root grantc25665 assigns owner NEW NativeDocumentTabCoordinator.swift and
+  minimal catalog/picker retention hooks; source draft currently UNTRACKED,
+  unregistered and NOT composition accepted. No catalog/picker hook edited yet.
+  Independent2f audit0e5 identified quarantine/identity/persistence/lifecycle/
+  UIKit transition issues; owner correcting explicit source role+assignedtab,
+  exact target witness, metadata-dirty admission gate/retry, foreground epoch,
+  reservation cleanup callback and deferred stack mutations. Final review and
+  actual wiring remain required; do not call this a working tab UI.
+- Lifecycle5742 source held after concrete owner/root review: true saveACK +
+  actual hostclose followed by background epoch failure must expose exact-owner
+  terminal retirement separately from navigation eligibility. Covered editor
+  also misses SceneDelegate top-only background delivery. d809 explicit followup
+  c504bc0a now source correction in progress; opaque retirement query + same-scene
+  background/latch proposal owner/root ACK. No composition/runtime acceptance.
+-371 menu correction batch4a1e1381+6b67a887+09734eb4 source ready, independent
+  source assertions only; requires root atomic folder/status Rust wire actual
+  validation. New tab Pages adapters remain separate followup. Root integrated
+  import library main d1ceed0a (host10/10, ABI5/5); no Swift import UI proof.
