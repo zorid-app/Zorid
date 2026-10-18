@@ -116,6 +116,13 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+01:11UTC: rootreconciling merge-ready native2add282b tocurrentmain. Merge-tree
+dryrun CLEAN d6b1d8b6...,14native/docpaths only; integration source review assigned,
+no Rust/rootmanifest/editor changes. Preserveownerphonebuild21794/sourcefreeze.
+bd57 NEWNativeTabMetadataStore API approvedfixedappsupportZorid json/128KiB,
+atomicfile+dirsync/explicitpostrenameuncertainty/no vaultpaths/migration/fallback;
+sourceonlynewfile, pickerintegrationlaterreview, no livecandidate mutation.
+
 01:10UTC: rootfocusedread corrected durable-adapter-contract SHA2567c638a6c01bc565d5042a94c7e81ac1bd5c454b277e0dff52ed97f7a76b2e0fb
 APPROVED for isolatednativeimplementation. All explicitgenerationtarget/unique
 key+priorcommittedtombstone/replay-beforefreshrevision/exactschema/faircontinuation
