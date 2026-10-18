@@ -209,6 +209,20 @@ pub fn canonical_operation(operation: &Operation) -> Result<Vec<u8>> {
     encode(operation)
 }
 pub fn registration_change(old: &Registration, next: &Registration) -> Result<bool> {
+    // Decoded IDs and declarations are untrusted, including on an exact repeat.
+    for registration in [old, next] {
+        registration.schema.validate()?;
+        for id in [&registration.realm, &registration.vault, &registration.owner] {
+            id.validate()?;
+        }
+    }
+    if old.realm != next.realm
+        || old.vault != next.vault
+        || old.owner != next.owner
+        || old.schema.collection != next.schema.collection
+    {
+        return Err(Error::Scope);
+    }
     if serde_json::to_vec(old).map_err(|_| Error::Codec)?
         == serde_json::to_vec(next).map_err(|_| Error::Codec)?
     {
@@ -221,6 +235,11 @@ pub fn registration_change(old: &Registration, next: &Registration) -> Result<bo
             .fields
             .iter()
             .any(|(id, field)| next.schema.fields.get(id) != Some(field))
+        || next
+            .schema
+            .fields
+            .iter()
+            .any(|(id, field)| !old.schema.fields.contains_key(id) && field.required)
     {
         return Err(Error::InvalidSchema);
     }
