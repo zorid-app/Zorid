@@ -77,6 +77,16 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+iOS slot checkpoint (2026-10-18 03:30 UTC): native owner term_bbf1787b has
+exclusive build17 plus bounded Simulator validation, followed by healthy Dev
+phone delivery under existing authorization. Reviewed candidate c4fc1acd includes
+paired strict8/Pages/editor gestures, Home/header/picker/per-tab source and the
+source-reviewed scene reactivation fix. Reconcile main before freeze/build; no
+runtime success yet. Same-host one-WK navigation is separate and still being
+implemented. Worker371 also owns interface-only optional PlatformVault navigation
+property; Tasks owner coordinates additive eighth openNote expectedEntryId arg,
+preserving existing callers and immutable identity before recovery.
+
 Browser implementation assignment (2026-10-18 03:26 UTC): reviewed current-v1
 WorkBlock contract retained at d1940545; managed coordinator run_7a10da5526b5
 is authorized to name isolated S/W/D/H/P/V workers exactly within the contract
