@@ -60,6 +60,14 @@ enum Command {
         client_id: OperationId,
         family: WireFamilyCommand,
     },
+    FileCommandCompact {
+        client_id: OperationId,
+        family: WireFamilyCommand,
+    },
+    FileCommandStatus {
+        client_id: OperationId,
+        family: WireFamilyCommand,
+    },
     CreateText {
         client_id: OperationId,
         operation_id: OperationId,
@@ -299,6 +307,29 @@ fn reply(
         ),
     }
 }
+fn command_may_commit(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Apply { .. }
+            | Command::Binary { .. }
+            | Command::FixtureFamilyEnroll
+            | Command::FixtureFamilyOnce { .. }
+            | Command::FixtureFamilyApply { .. }
+            | Command::CreateText { .. }
+            | Command::FileCommand { .. }
+            | Command::FileCommandCompact { .. }
+            | Command::ClaimClient { .. }
+            | Command::ReleaseClient { .. }
+            | Command::CheckpointCas { .. }
+            | Command::PrepareIntent { .. }
+            | Command::CommitIntent { .. }
+            | Command::AcknowledgeIntent { .. }
+            | Command::Reconcile { .. }
+            | Command::Recover
+            | Command::Rescan
+    )
+}
+
 fn empty(body: &[u8]) -> Result<(), Value> {
     if body.is_empty() {
         Ok(())
@@ -342,7 +373,9 @@ impl ClientLeases {
             | Command::PrepareIntent { client_id, .. }
             | Command::ListIntents { client_id, .. }
             | Command::CreateText { client_id, .. }
-            | Command::FileCommand { client_id, .. } => Some(client_id),
+            | Command::FileCommand { client_id, .. }
+            | Command::FileCommandCompact { client_id, .. }
+            | Command::FileCommandStatus { client_id, .. } => Some(client_id),
             Command::CommitIntent { reference }
             | Command::QueryIntent { reference }
             | Command::AcknowledgeIntent { reference, .. } => Some(&reference.client_id),
@@ -483,7 +516,9 @@ fn execute(
         | Command::FixtureFamilyOnce { .. }
         | Command::FixtureFamilyApply { .. }
         | Command::CreateText { .. }
-        | Command::FileCommand { .. }) => {
+        | Command::FileCommand { .. }
+        | Command::FileCommandCompact { .. }
+        | Command::FileCommandStatus { .. }) => {
             return family::execute(vault, sync, command, body);
         }
         Command::ClaimClient { client_id } => {
@@ -883,13 +918,14 @@ impl EmbeddedHost {
             Command::FixtureFamilyOnce { .. } | Command::FixtureFamilyApply { .. } |
             Command::FixtureFamilyStatus | Command::Reconcile { .. } |
             Command::Recover | Command::Rescan);
+        let may_commit = command_may_commit(&request.command);
         let answer = if trusted_only { Err(fault("client_operation_unsupported")) }
         else if request.version == 1 {
             self.leases.authorize(&self.vault, &request.command, request.lease.as_ref())
                 .and_then(|()| execute(&mut self.vault, &mut self.leases, None, request.command, body))
         } else { Err(fault("unsupported_protocol")) };
         let mut output = Vec::new();
-        reply(&mut output, &request.request_id, answer, true)?;
+        reply(&mut output, &request.request_id, answer, may_commit)?;
         Ok(output)
     }
 }
@@ -971,7 +1007,7 @@ pub fn run_stdio() -> io::Result<()> {
     };
     write_frame(
         &mut output,
-        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"max_binary_frame":binary::MAX_FRAME,"binary_limits":{"maxFileBytes":"67108864","maxChunkBytes":binary::MAX_CHUNK,"smallReadBytes":binary::SMALL_READ.to_string()},"reconciliation":reconciliation,"capabilities":["documents","binary_streams","reconciliation_status","local_family_status","file_command","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
+        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"max_binary_frame":binary::MAX_FRAME,"binary_limits":{"maxFileBytes":"67108864","maxChunkBytes":binary::MAX_CHUNK,"smallReadBytes":binary::SMALL_READ.to_string()},"reconciliation":reconciliation,"capabilities":["documents","binary_streams","reconciliation_status","local_family_status","file_command","file_command_compact","file_command_status","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
         &[],
     )?;
     let mut input = io::stdin().lock();
@@ -992,25 +1028,7 @@ pub fn run_stdio() -> io::Result<()> {
                 "request identity",
             ));
         }
-        let may_commit = matches!(
-            &request.command,
-            Command::Apply { .. }
-                | Command::Binary { .. }
-                | Command::FixtureFamilyEnroll
-                | Command::FixtureFamilyOnce { .. }
-                | Command::FixtureFamilyApply { .. }
-                | Command::CreateText { .. }
-                | Command::FileCommand { .. }
-                | Command::ClaimClient { .. }
-                | Command::ReleaseClient { .. }
-                | Command::CheckpointCas { .. }
-                | Command::PrepareIntent { .. }
-                | Command::CommitIntent { .. }
-                | Command::AcknowledgeIntent { .. }
-                | Command::Reconcile { .. }
-                | Command::Recover
-                | Command::Rescan
-        );
+        let may_commit = command_may_commit(&request.command);
         let answer = if request.version == 1 {
             leases
                 .authorize(&vault, &request.command, request.lease.as_ref())

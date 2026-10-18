@@ -151,6 +151,21 @@ fn local_job(
     result: &CommitResult,
     completed: bool,
 ) -> Result<ProjectionJob> {
+    let (work, target, affected) = local_job_shape(command, result)?;
+    Ok(ProjectionJob {
+        job_id: OperationId::new(uuid::Uuid::new_v4().to_string())?,
+        ordinal: "0".into(),
+        origin: ProjectionOrigin::LocalCommand {
+            operation_id: command.operation_id.clone(),
+        },
+        work,
+        target,
+        affected,
+        completed,
+    })
+}
+fn local_job_shape(command: &MutationRequest, result: &CommitResult)
+    -> Result<(ProjectionWork, EntryState, Vec<EntryChange>)> {
     result.validate()?;
     if result.operation_id != command.operation_id {
         return Err(StoreError::Corrupt(
@@ -187,17 +202,29 @@ fn local_job(
         })
         .cloned()
         .collect();
-    Ok(ProjectionJob {
-        job_id: OperationId::new(uuid::Uuid::new_v4().to_string())?,
-        ordinal: "0".into(),
-        origin: ProjectionOrigin::LocalCommand {
-            operation_id: command.operation_id.clone(),
-        },
-        work,
-        target,
-        affected,
-        completed,
-    })
+    Ok((work, target, affected))
+}
+/// The original logical job is validated against its exact command/receipt.
+/// Namespace attachment jobs can share the origin, even identical members; they
+/// are not the original responsibility. Completed flags are durable completion
+/// records written by existing coverage/attempt validation, not current listing.
+pub(super) fn original_local_completed(tx: &Connection, command: &MutationRequest,
+    receipt: &CommitResult) -> Result<bool> {
+    let (work, target, affected) = local_job_shape(command, receipt)?;
+    let mut statement = tx.prepare("SELECT p.job_id,p.ordinal,p.entry_id,p.completed,p.record,EXISTS(SELECT 1 FROM family_namespace_attachments a WHERE a.job_id=p.job_id) FROM projection_jobs p WHERE p.entry_id=?1 ORDER BY p.ordinal")?;
+    let mut rows = statement.query([target.id.as_str()])?;
+    let mut original = None;
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        let job = decode(&id, row.get(1)?, &row.get::<_, String>(2)?, row.get(3)?, &row.get::<_, String>(4)?)?;
+        if !matches!(&job.origin, ProjectionOrigin::LocalCommand { operation_id } if operation_id == &command.operation_id) { continue; }
+        if row.get::<_, bool>(5)? { continue; }
+        if job.work != work || job.target != target || job.affected != affected || original.is_some() {
+            return Err(StoreError::Corrupt("original family projection job differs from receipt".into()));
+        }
+        original = Some(job.completed);
+    }
+    original.ok_or_else(|| StoreError::Corrupt("original family projection job missing".into()))
 }
 pub(super) fn enqueue_local(
     tx: &Connection,

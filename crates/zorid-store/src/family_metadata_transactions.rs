@@ -25,9 +25,8 @@ pub(super) struct PreparedFamilyCommand {
     graph: MetadataPlan,
 }
 impl PreparedFamilyCommand {
-    pub(super) fn request(&self) -> &MutationRequest {
-        &self.command.request
-    }
+    pub(super) fn request(&self) -> &MutationRequest { &self.command.request }
+    pub(super) fn changes(&self) -> &[zorid_core::EntryChange] { &self.changes }
 }
 
 /// Exact original command replay precedes mode validation and state planning.
@@ -36,26 +35,34 @@ pub(super) fn replay(
     request: &MutationRequest,
     mode: Option<FamilyCreateMode>,
 ) -> Result<Option<CommitResult>> {
-    let prior: Option<(String,String,Option<String>)> = tx.query_row("SELECT operations.request,operations.result,family_commands.command FROM operations LEFT JOIN family_commands USING(operation_id) WHERE operations.operation_id=?1",[request.operation_id.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-    let Some((raw, receipt, composite)) = prior else {
+    let command = command::FamilyCommand::new(request.clone(), mode).map_err(mapped)?;
+    replay_command(tx, &command)
+}
+pub(super) fn replay_command(tx: &Connection, command: &command::FamilyCommand) -> Result<Option<CommitResult>> {
+    command.validate().map_err(mapped)?;
+    let request = &command.request;
+    let mode = command.create_mode;
+    let prior: Option<(String,String,Option<String>,i64)> = tx.query_row("SELECT operations.request,operations.result,family_commands.command,operations.sequence FROM operations LEFT JOIN family_commands USING(operation_id) WHERE operations.operation_id=?1",[request.operation_id.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+    let Some((raw, receipt, composite, sequence)) = prior else {
         return Ok(None);
     };
     let recorded = operation_request::decode_record(&raw, &receipt, &request.operation_id)?;
+    if sequence <= 0 || recorded.result.sequence != sequence as u64 {
+        return Err(StoreError::Corrupt("family receipt SQL sequence mismatch".into()));
+    }
     if matches!(
         &recorded.request,
         operation_request::OperationRequest::Inline(_)
     ) {
-        let command = command::FamilyCommand::new(request.clone(), mode).map_err(|_| {
-            ContractError::IdempotencyConflict {
-                operation_id: request.operation_id.clone(),
-            }
-        })?;
         let prior_command: command::FamilyCommand =
             serde_json::from_str(&composite.ok_or_else(|| {
                 StoreError::Corrupt(
                     "family operation receipt has no exact composite command".into(),
                 )
             })?)?;
+        if recorded.request.inline() != Some(&prior_command.request) {
+            return Err(StoreError::Corrupt("family composite and operation request differ".into()));
+        }
         command.check_replay(&prior_command).map_err(mapped)?;
     }
     operation_request::replay_inline_with_mode(request, mode, &raw, &receipt).map(Some)
@@ -128,8 +135,13 @@ pub(super) fn prepare_command(
     request: &MutationRequest,
     mode: Option<FamilyCreateMode>,
 ) -> Result<PreparedFamilyCommand> {
-    request.validate()?;
     let command = command::FamilyCommand::new(request.clone(), mode).map_err(mapped)?;
+    prepare_family_command(tx, &command)
+}
+pub(super) fn prepare_family_command(tx: &Connection, command: &command::FamilyCommand) -> Result<PreparedFamilyCommand> {
+    command.validate().map_err(mapped)?;
+    let request = &command.request;
+    let mode = command.create_mode;
     host_intents::check_execution(tx, request)?;
     if blob_stage::operation_reserved(tx, &request.operation_id)? {
         return Err(ContractError::IdempotencyConflict {
@@ -141,6 +153,7 @@ pub(super) fn prepare_command(
     let scope = scope(tx)?;
     let graph = graph(tx, &scope)?;
     let entries = entries(tx)?;
+    command.validate_destination_parent(&entries).map_err(mapped)?;
     let text = if matches!(request.mutation, Mutation::Write { .. }) {
         text_sync::retained(tx, request.mutation.id())?
     } else {
@@ -187,7 +200,7 @@ pub(super) fn prepare_command(
     let (expected_entries, changes, allocated, authored, text, candidate) = prepared.into_parts();
     prepare_parts(
         tx,
-        command,
+        command.clone(),
         allocation,
         expected_entries,
         changes,
@@ -245,7 +258,7 @@ pub(super) fn commit_prepared(
     plan: &PreparedFamilyCommand,
 ) -> Result<CommitResult> {
     let request = &plan.command.request;
-    if let Some(receipt) = replay(tx, request, plan.command.create_mode)? {
+    if let Some(receipt) = replay_command(tx, &plan.command)? {
         return Ok(receipt);
     }
     check_mode_bound_intent(tx, request, plan.command.create_mode)?;
@@ -259,7 +272,9 @@ pub(super) fn commit_prepared(
     let scope = scope(tx)?;
     let actual = graph(tx, &scope)?;
     plan.graph.check_preconditions(&actual, None)?;
-    if entries(tx)? != plan.expected_entries
+    let actual_entries = entries(tx)?;
+    plan.command.validate_destination_parent(&actual_entries).map_err(mapped)?;
+    if actual_entries != plan.expected_entries
         || family_ingress::retained_texts(tx, &scope)? != plan.expected_texts
     {
         return Err(zorid_client_sync::SyncError::VersionConflict.into());
@@ -628,4 +643,108 @@ mod tests {
         );
         assert!(store.family_status().unwrap().graph_records > 0);
     }
+}
+
+#[cfg(test)]
+mod menu_authority_tests {
+    use super::*;
+    use zorid_core::{OperationId, VaultPath};
+    use zorid_file_sync::mutation::{DestinationParent, FamilyCommand};
+    use zorid_sync_protocol::{RealmId, VaultId};
+    fn request(op: &str, mutation: Mutation) -> MutationRequest { MutationRequest { operation_id: OperationId::new(op).unwrap(), mutation } }
+    fn setup() -> (tempfile::TempDir, Store, EntryState, EntryState) {
+        let dir = tempfile::tempdir().unwrap(); let mut store = Store::open(dir.path().join("store")).unwrap();
+        store.family_enroll(&Scope { realm_id: RealmId::new("realm").unwrap(), vault_id: VaultId::new("vault").unwrap() }).unwrap();
+        let folder = store.family_apply(&request("folder-create", Mutation::Create { id: EntryId::new("folder").unwrap(), path: VaultPath::new("P").unwrap(), kind: EntryKind::Folder, content: None }), None).unwrap().changes.into_iter().find(|c| c.after.id.as_str() == "folder").unwrap().after;
+        let source = store.family_apply(&request("source-create", Mutation::Create { id: EntryId::new("source").unwrap(), path: VaultPath::new("source.md").unwrap(), kind: EntryKind::File, content: Some(b"data".to_vec()) }), Some(FamilyCreateMode::Text)).unwrap().changes.into_iter().find(|c| c.after.id.as_str() == "source").unwrap().after;
+        (dir, store, source, folder)
+    }
+    fn move_command(source: &EntryState, folder: &EntryState) -> FamilyCommand {
+        FamilyCommand::new_with_parent(request("guarded-move", Mutation::Move { id: source.id.clone(), expected: source.revision.clone(), path: VaultPath::new("P/target.md").unwrap() }), None,
+            Some(DestinationParent::Folder { id: folder.id.clone(), revision: folder.revision.clone(), path: folder.path.clone() })).unwrap()
+    }
+    fn move_parent(store: &mut Store, folder: &EntryState) {
+        store.family_apply(&request("parent-move", Mutation::Move { id: folder.id.clone(), expected: folder.revision.clone(), path: VaultPath::new("Q").unwrap() }), None).unwrap();
+    }
+    #[test]
+    fn parent_moved_before_preparation_rejects_without_operation() {
+        let (_dir, mut store, source, folder) = setup(); let command = move_command(&source, &folder);
+        move_parent(&mut store, &folder);
+        assert!(store.family_apply_command_compact(&command).is_err());
+        assert!(matches!(store.family_command_status(&command).unwrap(), FamilyCommandStatus::NotCommitted { .. }));
+    }
+    #[test]
+    fn parent_changed_between_prepare_and_immediate_commit_cannot_publish() {
+        let (_dir, mut store, source, folder) = setup(); let command = move_command(&source, &folder);
+        let tx = store.connection.unchecked_transaction().unwrap();
+        let prepared = prepare_family_command(&tx, &command).unwrap(); tx.commit().unwrap();
+        move_parent(&mut store, &folder);
+        let tx = store.connection.transaction_with_behavior(TransactionBehavior::Immediate).unwrap();
+        assert!(commit_prepared(&tx, &prepared).is_err()); tx.rollback().unwrap();
+        assert!(matches!(store.family_command_status(&command).unwrap(), FamilyCommandStatus::NotCommitted { .. }));
+    }
+    #[test]
+    fn original_replay_and_root_summary_survive_later_parent_move() {
+        let (_dir, mut store, source, folder) = setup(); let command = move_command(&source, &folder);
+        let receipt = store.family_apply_command_compact(&command).unwrap();
+        let before = store.family_command_status(&command).unwrap();
+        let FamilyCommandStatus::Committed { source: original, target, sequence, change_count, projection, .. } = &before else { panic!("committed") };
+        assert_eq!(original.as_ref(), Some(&source)); assert_eq!(target.path.as_str(), "P/target.md");
+        assert_eq!(sequence, &receipt.sequence.to_string()); assert_eq!(change_count, &receipt.changes.len().to_string());
+        assert_eq!(*projection, FamilyCommandProjection::Pending);
+        let folder_after = receipt.changes.iter().find(|c| c.after.id == folder.id).unwrap().after.clone();
+        move_parent(&mut store, &folder_after);
+        assert_eq!(store.family_apply_command_compact(&command).unwrap(), receipt);
+        assert_eq!(store.family_command_status(&command).unwrap(), before);
+        let mut changed = command.clone();
+        changed.destination_parent = Some(DestinationParent::Folder { id: folder.id, revision: folder_after.revision, path: folder.path });
+        assert!(matches!(store.family_command_status(&changed), Err(StoreError::Contract(ContractError::IdempotencyConflict { .. }))));
+    }
+    #[test]
+    fn original_projection_requires_exact_logical_job_and_retained_completion() {
+        let (_dir, mut store, source, folder) = setup(); let command = move_command(&source, &folder);
+        let receipt = store.family_apply_command_compact(&command).unwrap();
+        let tx = store.connection.unchecked_transaction().unwrap();
+        assert!(!projection_jobs::original_local_completed(&tx, &command.request, &receipt).unwrap());
+        let jobs: Vec<String> = tx.prepare("SELECT job_id FROM projection_jobs WHERE entry_id=?1").unwrap().query_map([source.id.as_str()], |r| r.get(0)).unwrap().collect::<std::result::Result<_,_>>().unwrap();
+        let job = jobs.into_iter().map(|id| projection_jobs::get(&tx, &OperationId::new(id).unwrap()).unwrap()).find(|job| matches!(&job.origin, ProjectionOrigin::LocalCommand { operation_id } if operation_id == &command.request.operation_id)).unwrap();
+        projection_jobs::finish(&tx, &job).unwrap(); tx.commit().unwrap();
+        assert!(matches!(store.family_command_status(&command).unwrap(), FamilyCommandStatus::Committed { projection: FamilyCommandProjection::Settled, .. }));
+        let tx = store.connection.unchecked_transaction().unwrap();
+        tx.execute("DELETE FROM projection_jobs WHERE job_id=?1", [job.job_id.as_str()]).unwrap(); tx.commit().unwrap();
+        assert!(matches!(store.family_command_status(&command), Err(StoreError::Corrupt(_))));
+    }
+    #[test]
+    fn legacy_unguarded_command_keeps_exact_replay_but_cannot_fresh_compact_move() {
+        let (_dir, mut store, source, folder) = setup(); let mut command = move_command(&source, &folder); command.destination_parent = None;
+        assert!(store.family_apply_command_compact(&command).is_err());
+        let receipt = store.family_apply(&command.request, command.create_mode).unwrap();
+        assert_eq!(store.family_apply_command_compact(&command).unwrap(), receipt);
+        assert!(matches!(store.family_command_status(&command).unwrap(), FamilyCommandStatus::Committed { .. }));
+    }
+    #[test]
+    fn replacement_parent_at_same_path_does_not_rebind_selected_identity() {
+        let (_dir, mut store, source, folder) = setup(); let command = move_command(&source, &folder);
+        store.family_apply(&request("parent-delete", Mutation::Delete { id: folder.id, expected: folder.revision, recursive: false }), None).unwrap();
+        store.family_apply(&request("parent-replacement", Mutation::Create { id: EntryId::new("replacement").unwrap(), path: VaultPath::new("P").unwrap(), kind: EntryKind::Folder, content: None }), None).unwrap();
+        assert!(store.family_apply_command_compact(&command).is_err());
+        assert!(matches!(store.family_command_status(&command).unwrap(), FamilyCommandStatus::NotCommitted { .. }));
+    }
+    #[test]
+    fn status_rejects_mismatched_sequence_and_same_origin_wrong_job_shape() {
+        let (_dir, mut store, source, folder) = setup(); let command = move_command(&source, &folder);
+        let receipt = store.family_apply_command_compact(&command).unwrap();
+        let tx = store.connection.unchecked_transaction().unwrap();
+        let raw: String = tx.query_row("SELECT result FROM operations WHERE operation_id=?1", [command.request.operation_id.as_str()], |row| row.get(0)).unwrap();
+        let mut broken = receipt.clone(); broken.sequence += 1;
+        tx.execute("UPDATE operations SET result=?1 WHERE operation_id=?2", params![serde_json::to_string(&broken).unwrap(), command.request.operation_id.as_str()]).unwrap(); tx.commit().unwrap();
+        assert!(matches!(store.family_command_status(&command), Err(StoreError::Corrupt(_))));
+        let tx = store.connection.unchecked_transaction().unwrap();
+        tx.execute("UPDATE operations SET result=?1 WHERE operation_id=?2", params![raw, command.request.operation_id.as_str()]).unwrap();
+        let target = receipt.changes.iter().find(|change| change.after.id == source.id).unwrap().after.clone();
+        let mut wrong = target.clone(); wrong.path = VaultPath::new("elsewhere.md").unwrap();
+        projection_jobs::insert(&tx, ProjectionJob { job_id: OperationId::new("wrong-same-origin").unwrap(), ordinal: "0".into(), origin: ProjectionOrigin::LocalCommand { operation_id: command.request.operation_id.clone() }, work: ProjectionWork::Move, target: wrong.clone(), affected: vec![zorid_core::EntryChange { before: Some(source), after: wrong }], completed: true }, None).unwrap(); tx.commit().unwrap();
+        assert!(matches!(store.family_command_status(&command), Err(StoreError::Corrupt(_))));
+    }
+
 }
