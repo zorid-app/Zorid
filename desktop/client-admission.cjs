@@ -2,6 +2,7 @@
 const { desktopDurableWrites } = require('./durable-writes.cjs');
 const { desktopTextCreates } = require('./text-create.cjs');
 const { createDesktopDocumentSemantics } = require('./document-semantics.cjs');
+const {captureWorkBlockRequest}=require('./workblocks.cjs');
 const { MAX_BINARY_FRAME } = require('./rust-vault-service.cjs');
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 function fail(code, uncertain = false) { return Object.assign(new Error('Desktop fixture consumer is not admitted.'), { code, commitUncertain: uncertain }); }
@@ -71,12 +72,25 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
       return invoke(()=>guarded.binaryCommand(clientId,bytes),null).finally(()=>{binaryPending=false;});
     };
     const documents=host.capabilities?.includes('documents')?createDesktopDocumentSemantics(guarded,clientId,reference.local_store_id):null;
+    const workblockCommand=input=>invoke(async()=>{
+      const request=captureWorkBlockRequest(input);
+      const value=await guarded.workblockCommand(clientId,request);
+      // A late response to a revoked window must not revive a capability.
+      try{live();}catch(error){
+        // A committed response hidden by revocation still requires identical-ID
+        // replay. Losing renderer admission cannot turn it into a rejection.
+        if(!['read','window','changes'].includes(request.command.op))throw Object.assign(new Error('WorkBlock acknowledgement is uncertain.'),{code:'client_ownership_lost',commitUncertain:true});
+        throw error;
+      }
+      return value;
+    },null);
     const documentCommand=input=>invoke(async()=>{const value=await documents.invoke(input);live();return value;},null);
     const writes = wrap(null);
     async function drain() { while (pending.size) await Promise.allSettled([...pending]); }
     const context = Object.freeze({
       scope, durableWrites: writes, assertActive: () => allowed(),
       ...(documents?{documentCommand}:{}),
+      ...(host.capabilities?.includes('workblocks')?{workblockCommand}:{}),
       ...(host.capabilities?.includes('binary_streams')?{binaryCommand,binaryLimits:host.binaryLimits}:{}),
       ...(creates?{createText:input=>invoke(()=>creates.create(input),null),fileCommand:input=>invoke(()=>creates.execute(input),null)}:{}),
       async retire() {

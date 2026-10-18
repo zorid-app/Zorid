@@ -1,3 +1,5 @@
+import {captureWorkBlockRequest,validateWorkBlockValue} from '../../desktop/workblocks.cjs';
+import type {DesktopWorkBlockRequest,WorkBlockService} from '../core/workblocks.ts';
 import {create,fromBinary,toBinary} from '@bufbuild/protobuf';
 import {BinaryCommandSchema,BinaryResultSchema,ErrorCode} from '../generated/zorid/stream/v1/binary_pb.ts';
 import type {BinaryCommand,BinaryResult,StageLocator,StageStatus,StageCommitted} from '../generated/zorid/stream/v1/binary_pb.ts';
@@ -232,4 +234,42 @@ export function createDesktopBinaryStreams(options:DesktopBinaryOptions):{stream
     }while(cursor);return changed;
   }
   return{streams,recover:()=>run(async()=>{await recoverReads(false);return recoverStages();}),release:()=>run(async()=>{await recoverReads(true);await recoverStages();})};
+}
+
+/** The caller supplies the existing admitted durableInvoke closure. This owns
+ * no file/store authority and never invents an operation ID or retries a write. */
+export function createDesktopWorkBlocks(invoke:(request:DesktopWorkBlockRequest)=>Promise<unknown>):{service:WorkBlockService;release():Promise<void>} {
+  const reject=(code:string)=>Object.assign(new Error('WorkBlock request rejected.'),{code,source:'host',commitUncertain:false});
+  let released=false;
+  const pending=new Set<Promise<unknown>>();
+  const mutations=new Map<string,{encoded:string;call:Promise<unknown>|null}>();
+  function command<T>(op:string,input:object):Promise<T>{
+    if(released)return Promise.reject(reject('client_not_admitted'));
+    let request:DesktopWorkBlockRequest;
+    try{request=captureWorkBlockRequest({schemaVersion:1,command:{...input,op}});}catch(error){return Promise.reject(error);}
+    const operation=request.command.operation as string|undefined,encoded=JSON.stringify(request);
+    const previous=operation?mutations.get(operation):undefined;
+    if(previous&&previous.encoded!==encoded)return Promise.reject(reject('operation_collision'));
+    if(previous?.call)return previous.call as Promise<T>;
+    if(operation&&!previous&&mutations.size>=32)return Promise.reject(reject('request_limit'));
+    const state={encoded,call:null as Promise<unknown>|null};
+    if(operation)mutations.set(operation,state);
+    // Capture before any await, then admit exactly one invocation. A lost reply
+    // retains the fingerprint; only an explicit identical retry can dispatch.
+    const call=Promise.resolve().then(()=>invoke(request)).then(value=>validateWorkBlockValue(request,value)).then(value=>{
+      if(operation)mutations.delete(operation);return value as T;
+    },error=>{
+      state.call=null;
+      // Only explicit, definite native rejections retire an uncertain input.
+      const code=(error as {code?:unknown})?.code,uncertain=(error as {commitUncertain?:unknown})?.commitUncertain;
+      if(operation&&uncertain===false&&['invalid_request','invalid_workblock','stale_revision','operation_collision','client_not_admitted','stale_session','limit'].includes(String(code)))mutations.delete(operation);
+      throw error;
+    });
+    state.call=call;pending.add(call);void call.then(()=>pending.delete(call),()=>pending.delete(call));return call;
+  }
+  return {service:Object.freeze<WorkBlockService>({
+    create:input=>command('create',input),read:input=>command('read',input),windowPage:input=>command('window',input),
+    move:input=>command('move',input),title:input=>command('title',input),addRef:input=>command('add_ref',input),
+    removeRef:input=>command('remove_ref',input),delete:input=>command('delete',input),changes:input=>command('changes',input),
+  }),async release(){released=true;await Promise.allSettled([...pending]);}};
 }

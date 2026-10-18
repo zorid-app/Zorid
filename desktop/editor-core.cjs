@@ -85,7 +85,7 @@ function createEditorCoreManager(environment=process.env, options={}){
       if(record.vaultSelectionPending||!entry||entry.service.root!==expectedRoot)throw fail('durable_scope_changed');
       if(!fixture&&record.persistedVaultRoot!==expectedRoot)throw fail('client_registry_unsettled');
       if(!services.has(entry.service))return null;
-      const existing=contexts.get(record);if(existing){existing.check();return {admissionId:existing.id,scope:existing.admission.scope,...(existing.admission.documentCommand?{documentSemantics:true}:{}),...(existing.admission.binaryLimits?{binaryLimits:existing.admission.binaryLimits}:{})};}
+      const existing=contexts.get(record);if(existing){existing.check();return {admissionId:existing.id,scope:existing.admission.scope,...(existing.admission.documentCommand?{documentSemantics:true}:{}),...(existing.admission.workblockCommand?{workBlocks:true}:{}),...(existing.admission.binaryLimits?{binaryLimits:existing.admission.binaryLimits}:{})};}
       const inFlight=admissions.get(record);if(inFlight)return inFlight;
       const generation=record.generation,service=entry.service;
       const check=()=>{
@@ -99,7 +99,7 @@ function createEditorCoreManager(environment=process.env, options={}){
         try {check();}
         catch(error){await admission.retire();throw error;}
         const saved={id:randomUUID(),admission,service,check};contexts.set(record,saved);
-        return {admissionId:saved.id,scope:admission.scope,...(admission.documentCommand?{documentSemantics:true}:{}),...(admission.binaryLimits?{binaryLimits:admission.binaryLimits}:{})};
+        return {admissionId:saved.id,scope:admission.scope,...(admission.documentCommand?{documentSemantics:true}:{}),...(admission.workblockCommand?{workBlocks:true}:{}),...(admission.binaryLimits?{binaryLimits:admission.binaryLimits}:{})};
       })();
       admissions.set(record,pending);
       try{return await pending;}finally{if(admissions.get(record)===pending)admissions.delete(record);}
@@ -108,6 +108,10 @@ function createEditorCoreManager(environment=process.env, options={}){
       broker.authenticate(event);
       const saved=checked(broker,record,expectedRoot,admissionId);
       if(typeof method!=='string'||!Array.isArray(args)||args.length>2)throw fail('invalid_durable_request');
+      if(method==='workblockCommand'){
+        if(args.length!==1||!saved.admission.workblockCommand)throw fail('invalid_durable_request');
+        return saved.admission.workblockCommand(args[0]);
+      }
       if(method==='documentCommand'){
         if(args.length!==1||!saved.admission.documentCommand)throw fail('invalid_durable_request');
         return saved.admission.documentCommand(args[0]);

@@ -2,7 +2,13 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 const invoke = (name, ...args) => ipcRenderer.invoke(`zorid:${name}`, ...args);
 const durable = async (name, ...args) => {
-  const reply = await invoke(name, ...args);
+  const workblock = name === 'durableInvoke' && args[2] === 'workblockCommand';
+  let reply;
+  try { reply = await invoke(name, ...args); }
+  catch (error) {
+    if (workblock) throw Object.assign(new Error('WorkBlock acknowledgement is uncertain; retain the identical operation ID and request.'), {code:'workblock_transport_lost',source:'host',commitUncertain:true});
+    throw error;
+  }
   if (!reply?.ok) throw Object.assign(new Error('Durable editor request failed; retain pending recovery state.'), reply?.error, {source:'host'});
   return reply.result;
 };

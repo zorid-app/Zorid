@@ -1,4 +1,4 @@
-import {createDesktopBinaryStreams} from './desktop.ts';
+import {createDesktopWorkBlocks,createDesktopBinaryStreams} from './desktop.ts';
 import {createDesktopDocumentService} from './desktop-document-semantics.ts';
 import type {DocumentService} from '../core/document-semantics.ts';
 import type { DurableWrites } from '../core/durable-writes.ts';
@@ -6,6 +6,7 @@ import type { VaultAdapter } from '../core/types';
 import type { DesktopBridge, DesktopVault, DesktopReconciliation } from './bridge';
 
 export interface PlatformVault {
+  readonly workBlocks?:import('../core/workblocks.ts').WorkBlockService;
   readonly documentSemantics?:DocumentService;
   /** Presentation bridge only; native controls execute shared editor commands. */
   nativeEditor?: {
@@ -45,6 +46,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
   let createText: ((path:string,content:string)=>Promise<void>) | undefined;
   let commands:Partial<VaultAdapter>={};
   let binary:ReturnType<typeof createDesktopBinaryStreams>|undefined;
+  let workBlocks:ReturnType<typeof createDesktopWorkBlocks>|undefined;
   let documents:ReturnType<typeof createDesktopDocumentService>|undefined;
   if (binding) {
     if (!bridge.durableInvoke || !bridge.releaseDurableContext || !binding.admissionId || !binding.scope?.vaultId || !binding.scope.clientId) throw new Error('Incomplete durable desktop capability');
@@ -86,12 +88,14 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
         list: options => call('checkpoints.list',options), changes: options => call('checkpoints.changes',options)}),
     });
     let binaryDrained=false,documentsDrained=false;
+    if(binding.workBlocks===true)workBlocks=createDesktopWorkBlocks(request=>call('workblockCommand',request));
     if(binding.documentSemantics)documents=createDesktopDocumentService(request=>call('documentCommand',request));
     if(binding.binaryLimits)binary=createDesktopBinaryStreams({scope,checkpoints:durableWrites.checkpoints,limits:binding.binaryLimits,assertActive:()=>{if(released||binaryDrained)throw new Error('Desktop binary context released');},invoke:bytes=>call<Uint8Array>('binaryCommand',bytes)});
-    release = async () => { if (!released) { if(binary&&!binaryDrained){await binary.release();binaryDrained=true;} if(documents&&!documentsDrained){await documents.release();documentsDrained=true;} await releaseContext(info.path, admissionId); released = true; } };
+    release = async () => { if (!released) { if(workBlocks)await workBlocks.release(); if(binary&&!binaryDrained){await binary.release();binaryDrained=true;} if(documents&&!documentsDrained){await documents.release();documentsDrained=true;} await releaseContext(info.path, admissionId); released = true; } };
   }
   return {
     ...(release ? {release} : {}),
+    ...(workBlocks?{workBlocks:workBlocks.service}:{}),
     ...(documents?{documentSemantics:documents.service}:{}),
     ...(reconciliation?{reconciliation}:{}),
     ...(binary?{recoverCommands:()=>binary!.recover()}:{}),
