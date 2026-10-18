@@ -2,6 +2,11 @@
 
 Date: 2026-10-17. Discussion handoff; not an implementation-completion report.
 
+Scope amendment (2026-10-18 03:17 UTC / 2026-10-17 America/Toronto):
+the user explicitly removed spaced repetition from this implementation goal.
+Do not build it or retain it as a required/deferred acceptance milestone.
+Other phases remain required.
+
 ## Start here
 
 Implement a first-party local-first experience spanning desktop and native mobile, backed by one Rust data core. Features use managed storage for both synced and non-synced data. They must not implement their own Zorid sync engines. External-provider integrations still supply provider-specific behavior.
@@ -27,7 +32,7 @@ The user explicitly requests desktop AND native mobile UI delivery stages. Backe
 11. Desktop calendar uses FullCalendar. iOS calendar is native, visually and interactively informed by Apple Calendar: month/event grid, day and multi-day timelines, week strip, all-day lane, overlapping cards, current-time line, Today/search/add/source controls and native translucent controls. Rich note bodies retain the shared web editor.
 12. Use a managed structured-record platform backed by SQL where appropriate. The final choice supersedes the interim recommendation to make all plugin state file-based. Notes/attachments remain files; structured records need not have corresponding files.
 13. Synced/local/cache data all use host APIs. Secrets use a separate protected service. Features do not own arbitrary SQLite replication.
-14. Spaced repetition is a first-party workload to prove durable histories and derived state. Full study-product scope and scheduling algorithm have not yet been selected.
+14. Removed by direct user instruction on 2026-10-17: spaced repetition is outside this implementation scope.
 
 ## Current evidence and constraints
 
@@ -216,11 +221,12 @@ Deliver actual native generic task lists, Apple-Calendar-style month/day/multi-d
 
 Exit: complete task capture -> schedule -> edit -> complete flow; external-source display and two-way edits; offline/pending/reconnect; drag cancellation, overlap, DST/all-day, typography, keyboard/sheets and accessibility. Measure scrolling, range-load latency and memory with representative synthetic schedules. Agree budgets on actual hardware; no invented performance numbers. Document Android follow-up scope.
 
-### Phase 7 — Spaced repetition workload and UI
+### Phase 7 — Removed from scope
 
-First settle card sources, scheduling algorithm/version, review ratings, duplicate-near-simultaneous review policy and correction history. Implement immutable review events and deterministic derived scheduling. Build desktop/mobile review queue and review interaction, then sync status/recovery. Do not invent a full flashcard product scope from earlier architectural examples.
-
-Exit: offline reviews on two devices survive; replay converges under documented ordering/policy; algorithm upgrades are reproducible; corrections do not silently destroy history; review UX works on both platforms.
+Spaced repetition was explicitly removed by the user on 2026-10-17. No study UI,
+scheduling algorithm, flashcard history implementation or acceptance workload is
+required. The phase number is retained only to keep existing handoff references
+stable; it is not a deferred obligation.
 
 ### Phase 8 — Public plugin API and release integration
 

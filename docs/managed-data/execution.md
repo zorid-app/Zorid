@@ -2,12 +2,14 @@
 
 ## Current state — resume here
 
+Scope amendment (2026-10-18 03:17 UTC): spaced repetition is removed by direct user instruction, not deferred. Historical goal wording does not restore it.
+
 Updated 2026-10-18 02:02 UTC (2026-10-17 America/Toronto). This compact
 section is the resume authority for this feature track; chronological sections
 below are history and may describe superseded reservations/status.
 
 **Goal remains active across the complete handoff plan.** No Phase1 end-to-end,
-desktop/mobile task/calendar, Google, migrations/secrets/jobs, spaced repetition
+desktop/mobile task/calendar, Google, migrations/secrets/jobs
 or public plugin completion claim exists.
 
 | Work | State and authoritative evidence |
@@ -41,7 +43,7 @@ or public plugin completion claim exists.
    actual independent host/encrypted transport and remaining fullbrowser matrices.
    Internal storage/harness proof is not full Phase1/productUI/pluginAPI acceptance.
 4. Continue complete plan through migrations/secrets/jobs, Types/Bases/Tasks,
-   desktop Calendar UI, Google two-way, native mobile UI, spaced repetition and
+   desktop Calendar UI, Google two-way, native mobile UI and
    public plugin contracts. User migration question: v1 planned declarative
    supported schema evolution; arbitrary semantic callbacks deferred, incompatible
    operations currently retained unresolved. Exact public API not frozen.
@@ -559,3 +561,5 @@ lockrewrite. Initial isolatedtsccouldnotresolve packages because Vite had create
 node_modules/.vite before a root-directory link; adding onlymissingdependency
 symlinks fixed environment, no source change. Main2edada relevantcode diffempty.
 Allworkers released, no ownedprocesslive. Ready coherentmainbatch; fullgoalactive.
+
+Scope correction: no study UI, scheduling algorithm or flashcard history workload is required; no worker was implementing it. Current canonical delivery status is recorded in ../deferred-product-roadmap.md.
