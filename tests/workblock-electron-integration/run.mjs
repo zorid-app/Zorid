@@ -72,9 +72,9 @@ async function launch(pass){
   for(const stream of ['stdout','stderr'])child[stream].on('data',bytes=>{if(record[stream].length<128000)record[stream]+=bytes.toString();});
   const port=await until(async()=>{
     if(spawnError)throw spawnError;assert.ok(!exited(),'Owned Electron exited before debugger: '+record.stderr);
-    const file=await fs.readFile(path.join(profile,'DevToolsActivePort'),'utf8');const value=file.split('\n')[0];assert.match(value,/^[1-9][0-9]{0,4}$/);return value;
+    let value;try{value=(await fs.readFile(path.join(profile,'DevToolsActivePort'),'utf8')).split('\n')[0];}catch{value=record.stderr.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//)?.[1];}assert.match(value,/^[1-9][0-9]{0,4}$/);return value;
   },30000);
-  const target=await until(async()=>{const targets=await fetch(`http://127.0.0.1:${port}/json/list`).then(reply=>reply.json());const target=targets.find(value=>value.type==='page'&&value.url.startsWith('file:')&&value.url.includes('/dist/index.html'));assert.ok(target,'Normal application page not ready');return target;},30000);
+  const target=await until(async()=>{const targets=await fetch(`http://127.0.0.1:${port}/json/list`,{signal:AbortSignal.timeout(2000)}).then(reply=>reply.json());const target=targets.find(value=>value.type==='page'&&value.url.startsWith('file:')&&value.url.includes('/dist/index.html'));assert.ok(target,'Normal application page not ready');return target;},30000);
   cdp=new CDP(target.webSocketDebuggerUrl);record.pid=child.pid;record.url=target.url;
   await cdp.call('Runtime.enable');await cdp.call('Log.enable');await cdp.call('Page.enable');
   await until(async()=>{const value=await cdp.evaluate('Boolean(window.zorid&&document.querySelector(".workspace"))');assert.equal(value,true,'Normal Workspace not ready');},30000);

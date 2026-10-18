@@ -3,7 +3,7 @@ export class CDP {
   constructor(url){
     const parsed=new URL(url);if(parsed.protocol!=='ws:'||!['127.0.0.1','localhost'].includes(parsed.hostname))throw Error('Only owned loopback CDP');
     this.ws=new WebSocket(url);this.next=0;this.pending=new Map();this.events=[];
-    this.opened=new Promise((resolve,reject)=>{this.ws.addEventListener('open',resolve,{once:true});this.ws.addEventListener('error',reject,{once:true});});
+    this.opened=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Owned CDP open deadline')),5000);this.ws.addEventListener('open',()=>{clearTimeout(timer);resolve();},{once:true});this.ws.addEventListener('error',()=>{clearTimeout(timer);reject(Error('Owned CDP connection error'));},{once:true});});
     this.ws.addEventListener('message',event=>{
       const value=JSON.parse(event.data);
       if(value.id){const pending=this.pending.get(value.id);if(!pending)return;this.pending.delete(value.id);clearTimeout(pending.timer);value.error?pending.reject(Error(JSON.stringify(value.error))):pending.resolve(value.result);}
