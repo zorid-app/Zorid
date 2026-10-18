@@ -95,7 +95,8 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
         scope:async()=>{const inspected=await vault!.sync.inspect();return inspected.scope;},hasSession:()=>!!sync?.recordsSession(),
         notify:()=>{assertManagedActive();port.postMessage({event:'change',paths:[]});channel?.postMessage({changed:true});},
         failed:error=>{const code=error instanceof BrowserVaultError?error.code:'managed_host_failed';failStorage(code);
-          if(!closing&&!storageFailed)port.postMessage({event:'managed-records-error',code});}});
+          if(['sync_session_revoked','records_retry_key_unavailable','managed_snapshot_conflict','sync_snapshot_conflict'].includes(code))return;
+          if(!closing&&!storageFailed){storageFailed=true;managed?.stop();sync?.revoke();channel?.close();vault?.close();port.postMessage({event:'storage-error',code});}}});
       let recoveredCommit = false;
       for (const intent of await vault.intents(clientId)) if (!intent.acknowledged && ['commit_requested','committed'].includes(intent.status)) {
         try { assertOwner(); await vault.executeIntent(clientId, intent.intent_id); recoveredCommit = true; }

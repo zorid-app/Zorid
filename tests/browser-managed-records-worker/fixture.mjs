@@ -81,7 +81,7 @@ async function main(){
     await h.release();return {changes:after,reacquiredClient:previous.clientId,errors};
   });
 }
-try{await main();report.status='passed-subset';}catch(error){report.status='failed';report.error={message:error.message,stack:error.stack};}
+try{await main();report.status='passed-subset';}catch(error){report.status='failed';report.error={code:error.code,details:error.details,message:error.message,stack:error.stack};}
 finally{
   for(const worker of workers)worker.terminate();workers.clear();key?.free();
   report.cleanup=[];for(const name of names){try{await new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase(name);r.onsuccess=resolve;r.onerror=()=>reject(r.error);setTimeout(()=>reject(new Error('delete timeout')),5000);});report.cleanup.push({name,deleted:true});}catch(error){report.status='failed';report.error={message:String(error)};}}

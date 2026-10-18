@@ -31,6 +31,12 @@ test('one trigger has a finite four-page budget even for endless continuation',a
   const f=fixture();f.retry(async()=>({changed:false,exhausted:false}));await f.host.trigger();assert.equal(f.retries,4);
   await f.host.trigger();assert.equal(f.retries,8);
 });
+test('coalesced external hint gets one bounded follow-up after rejected retained retry',async()=>{
+  const f=fixture(),entered=gate(),release=gate();let calls=0;
+  f.retry(async()=>{calls++;if(calls===1){entered.resolve();await release.promise;throw new Error('revoked retry');}return {changed:false,exhausted:true};});
+  const task=f.host.trigger();await entered.promise;assert.equal(f.host.trigger(),task);release.resolve();await task;
+  assert.equal(calls,2);assert.equal(f.failures.length,1);
+});
 test('absence of key skips retry and still delivers durable change catch-up',async()=>{
   const f=fixture();f.session(false);f.changes(async()=>[{sequence:'1'}]);await f.host.trigger();assert.equal(f.retries,0);assert.equal(f.notifications,1);
 });

@@ -59,7 +59,16 @@ export function createBrowserManagedRecordsHost(host:Host) {
   function trigger():Promise<void> {
     if(stopped||!host.consumers.length)return Promise.resolve();
     if(pending){again=true;return pending;}
-    const task=host.local(maintain);
+    const task=host.local(async()=>{
+      try{await maintain();}
+      catch(error){
+        // A receive hint can arrive off-tail while a retained retry loses its
+        // session/CAS. Honor that external trigger once, without an error loop.
+        const followUp=again;again=false;
+        if(!stopped)host.failed(error);
+        if(followUp&&!stopped)try{await maintain();}catch(next){if(!stopped)host.failed(next);}
+      }
+    });
     pending=task.catch(error=>{if(!stopped)host.failed(error);}).finally(()=>{pending=undefined;});
     return pending;
   }
