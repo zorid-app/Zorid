@@ -77,6 +77,19 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Recovery progress (2026-10-18 03:50 UTC): Stage5 source preparation is saved
+in stage5-enrollment-inventory.md and stage5-history-backup-inventory.md; existing
+local-scope enrollment prevents a simple fixture-config Settings join wrapper.
+Backup library and clean-client recovery acceptance are real, product operator/
+history/join surfaces remain missing. Older recovery/relay docs reconciled;
+Tasks/Bases/Calendar still precede Stage5 implementation. Managed recovered exact
+62c6 host and Electron without compilation; actual Tasks proof resumes. Native
+Simulator17 startup remained inconclusive after reboot, no gesture acceptance;
+user requests physical Dev17 now. Native owner retains exclusive iOS slot for
+owned Simulator cleanup then reviewed-source phone build/sign/install/launch,
+coordinating with live Tasks proof and preserving booted Simulator. No phone17
+success or same-host navigation completion yet.
+
 Restart recovery (2026-10-18 03:44 UTC): machine reboot confirmed; temporary
 builds/evidence and old process handles were lost. Main remains clean0e9c1174.
 Root restored terminal084947b9, native d8fdd76f, managed62fd2871; durable run
