@@ -17,7 +17,42 @@ files and merged canonical editor guards without changing the component.
 | src/ui/mobile-web-router.ts | 89263aa9b0b40876914cc4431242dd6936e68ce1 |
 | tests/mobile-web-router.test.ts | 465533f61c6317a00e42eee5b7f542b169541b63 |
 
-## Verdict: source approval withheld
+## Current successor: portable source approved
+
+Exact14e8e250ea8405e320f1f4e2b670576949c58870 closes the remaining reverse
+lifecycle overlap. Entire drain flush/publication occupies the common queue;
+resume cannot overtake it. Immediate generation/input revocation and source
+identity checks remain; closing prevents reactivation during destroy. The same
+independent reviewer approves this scoped correction after reading20 passing
+cases, without rerunning tests or inspecting unrelated bridge/Workspace changes.
+Root also read the actual20/20 log, zero failures/skips.
+
+Root isolated mobile-web-router-2 at6b9aa4d4 composes originalsaf3b6538,
+4e7a06cf,14e8e250 onto canonical21cdb4bf. All four source/test files exactly match
+approved14e8; no existing platform/Workspace caller is activated. Hash of raw
+web-router-portable-drain.log: 18e4b61596034a3fc20819ff3089280b4e5c5e1c460b94f1f382148668cde3e4.
+Owner reports fullTS0 including the separate bridge WIP, which is excluded here.
+Component tests use controlled host handles, not actual CodeMirror/WebKit views.
+The new renderer module/Workspace adapter and actual native lifecycle/gesture
+proof remain required; this approval must not be promoted to feature acceptance.
+
+## Previous successor: approval withheld at4e7a06cf
+
+Exact successor4e7a06cfbff42b50162c93a4b2ac7cae22c1d64e fixes the original
+held-resume/open/link/new-drain cases. Reviewer read19 passing cases without
+rerunning them. Reverse ordering remains: drain waits the old queue but does not
+register its own full flush/publication operation in that queue. Hold drain's
+host.flush after revocation, then resume; resume can grant A a writer before the
+held drain completes, leaving a successful drain acknowledgment with a writer.
+Keep resume behind the entire active drain (or reject it), with the reverse-order
+regression. Owner notified msg_3d5800bbca89. Same lifecycle finding, no broader audit.
+
+Owner overwrote web-router-portable.log with the19-case successor run. The16-case
+hash below records root's earlier observation, not a current immutable raw file.
+The successor uses web-router-portable-resume.log; do not claim the overwritten
+path still matches the historical hash.
+
+## Original freeze verdict: source approval withheld
 
 P1: router.resume() clears paused and awaits window.resume() outside the route
 queue. Window resume captures A and its epoch. Hold A admission, then open B:

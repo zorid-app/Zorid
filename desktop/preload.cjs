@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('zorid', Object.freeze({
   getPathForFile: file => webUtils.getPathForFile(file),
   getWindowInfo: () => invoke('getWindowInfo'),
   newWindow: () => invoke('newWindow'),
+  reopenCalendarRecovery: request => invoke('reopenCalendarRecovery', request),
   setMenuHotkeys: bindings => invoke('setMenuHotkeys', bindings),
   onCommand: callback => {
     const listener = (_event, id) => { if (id === 'close-tab') callback(id); };
