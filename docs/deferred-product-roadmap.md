@@ -77,6 +77,18 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Actual WK checkpoint (2026-10-18 02:03 UTC): link candidate5bc70762/89be64c8
+frontend/copy/incremental build12 passed, but actual single rendered external
+Markdown link tap with a separate body caret and visible software keyboard FAILS:
+the label becomes Markdown source and no external app opens. Pan remains in the
+source; long-press nonactivation passed. This supersedes any inference of native
+completion from86 Node checks/source review; candidate is NOT on main. d809 owns
+same scoped source followup and temporary numeric-only touch/selection validity
+diagnostics; native owner owns retained iOS build/runtime slot. Do not commit or
+ship diagnostics. Identify actual WebKit timing/guard failure before changing
+gesture semantics. User also questions Files shortcut/arrow controls; queue UX
+decision, preserve accessible parent/back fallback before removing controls.
+
 Canonical integration checkpoint (2026-10-18 01:54 UTC): main71c2bb7d..a49d6d72
 integrates reviewed native history + durable tab metadata batch through1f7ecc59,
 including readiness correction2cdbd86f. Root verified the entire ios/App tree
