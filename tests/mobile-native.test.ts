@@ -1289,3 +1289,26 @@ test('rejected ready retains transaction until awaited source attestation drains
   attestation.resolve();await until(()=>f.navigationResults.length===2);
   assert.deepEqual(f.navigationResults[1],{id:request.id,status:'stale'});await v.release!();
 });
+
+test('webRouting capability is exact, optional and mutually exclusive with finite native authority before claim',async()=>{
+  const old=fixture(),legacy=await openNativeMobileVault(old.plugin);assert.equal(legacy.nativeWebRouting,undefined);await legacy.release!();
+  for(const flag of [true,0,2,'1',null,1]){
+    const f=fixture(),context=f.plugin.context.bind(f.plugin);f.plugin.context=async()=>({...await context(),webRouting:flag as any});
+    await assert.rejects(openNativeMobileVault(f.plugin),{code:'invalid_native_context'});assert.equal(f.requests.some(row=>row.command.method==='claim_client'),false);
+  }
+  const f=fixture();f.navigation();const context=f.plugin.context.bind(f.plugin);f.plugin.context=async()=>({...await context(),webRouting:1});
+  f.plugin.webRouteState=async()=>{};f.plugin.webRouteResult=async()=>{};
+  await assert.rejects(openNativeMobileVault(f.plugin),{code:'invalid_native_context'});assert.equal(f.requests.some(row=>row.command.method==='claim_client'),false);
+});
+
+test('webRouting channel reuses the existing client claim and release drains its admitted handler',async()=>{
+  const f=fixture(),context=f.plugin.context.bind(f.plugin),listen=f.plugin.addListener.bind(f.plugin),events=new Map<string,(input:any)=>void>();
+  f.plugin.context=async()=>({...await context(),webRouting:1});f.plugin.webRouteState=async()=>{};f.plugin.webRouteResult=async()=>{};
+  f.plugin.addListener=async(event:any,handler:any)=>{if(event==='webRouteCommand'||event==='webRouteProgress'){events.set(event,handler);return{remove:async()=>{events.delete(event);}};}return listen(event,handler);};
+  const v=await openNativeMobileVault(f.plugin),entered=deferred(),held=deferred();
+  assert.ok(v.nativeWebRouting);assert.deepEqual(v.nativeWebRouting.scope,{localStoreId:'store',clientId});
+  v.nativeWebRouting.subscribe(async()=>{entered.resolve();await held.promise;},()=>{});
+  events.get('webRouteCommand')!({id:crypto.randomUUID(),webSessionId:crypto.randomUUID(),expectedVersion:'0',action:{type:'newTab'}});await entered.promise;
+  const released=v.release!();await new Promise<void>(done=>setImmediate(done));assert.equal(f.requests.some(row=>row.command.method==='release_client'),false);
+  held.resolve();await released;assert.equal(f.requests.filter(row=>row.command.method==='claim_client').length,1);assert.equal(f.requests.filter(row=>row.command.method==='release_client').length,1);assert.equal(events.size,0);
+});

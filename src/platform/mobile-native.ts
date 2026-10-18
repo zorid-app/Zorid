@@ -8,10 +8,16 @@ import type { PlatformVault } from './index.ts';
 import type { DesktopReconciliation } from './bridge.d.ts';
 import type { DurableWrites, DurableWriteRef, DurableWriteIntent, DurableWriteRead } from '../core/durable-writes.ts';
 import type { Checkpoint, CheckpointMetadata, CheckpointPage, DurableCheckpoints } from '../core/durable-checkpoints.ts';
+import {createNativeWebRoutingChannel} from './mobile-web-routing-bridge.ts';
+import type {NativeWebRoutingChannel,NativeWebRoutingPlugin} from './mobile-web-routing-bridge.ts';
+import type {WebRouteState,WebRouteResult} from './mobile-web-routing.ts';
 
 /** Native chooses/opens the vault before loading the editor. No vault root crosses this API. */
 export interface NativeVaultPlugin {
-  context(): Promise<{ name: string; clientId: string; reconciliation?: DesktopReconciliation; initialPath?: string; initialEntryId?: string; createNoteOnOpen?: boolean; documentSemantics?: true; sameVaultNavigation?: 1 }>;
+  context(): Promise<{ name: string; clientId: string; reconciliation?: DesktopReconciliation; initialPath?: string; initialEntryId?: string; createNoteOnOpen?: boolean; documentSemantics?: true; sameVaultNavigation?: 1;webRouting?:1 }>;
+  webRouteState?(input:WebRouteState):Promise<void>;
+  webRouteResult?(input:WebRouteResult):Promise<void>;
+  addListener(event:'webRouteCommand'|'webRouteProgress',handler:(input:unknown)=>void):Promise<{remove():Promise<void>}>;
   documentOpenResult?(input: NativeDocumentOpenResult): Promise<void>;
   addListener(event: 'documentOpenRequest', handler: (event: NativeDocumentOpenRequest) => void): Promise<{ remove(): Promise<void> }>;
   presentationSettled?(input: NativePresentationSettled): Promise<void>;
@@ -144,6 +150,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   }
   const bridge = plugin;
   let clientId = '';
+  let webRouting:NativeWebRoutingChannel|undefined;
   let navigationGeneration = 0, navigationHandler: Parameters<NativeDocumentNavigation['subscribe']>[0] | undefined;
   let navigationTail: Promise<void> = Promise.resolve();
   let navigationListener: { remove(): Promise<void> } | undefined;
@@ -500,6 +507,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     context = await bridge.context();
     if (typeof context.clientId !== 'string' || !uuid(context.clientId) || typeof context.name !== 'string' || !context.name) throw fail('invalid_native_context');
     if (context.sameVaultNavigation !== undefined && (context.sameVaultNavigation !== 1 || typeof bridge.documentOpenResult !== 'function')) throw fail('invalid_native_context');
+    if(context.webRouting!==undefined&&(context.webRouting!==1||context.sameVaultNavigation!==undefined||typeof bridge.webRouteState!=='function'||typeof bridge.webRouteResult!=='function'))throw fail('invalid_native_context');
     if (context.documentSemantics !== undefined && context.documentSemantics !== true) throw fail('invalid_native_context');
     if (context.createNoteOnOpen !== undefined && typeof context.createNoteOnOpen !== 'boolean') throw fail('invalid_native_context');
     if (context.createNoteOnOpen === true && (context.initialPath !== undefined || context.initialEntryId !== undefined)) throw fail('invalid_native_context');
@@ -519,6 +527,8 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     const authority = (await call('identity')).identity;
     if (authority?.local_store_id !== lease.local_store_id) throw fail('invalid_authority');
     if (context.sameVaultNavigation === 1) navigationListener = await bridge.addListener('documentOpenRequest',onDocumentOpen);
+    if(context.webRouting===1)webRouting=await createNativeWebRoutingChannel(bridge as NativeVaultPlugin&NativeWebRoutingPlugin,
+      {localStoreId:lease.local_store_id,clientId},()=>!closed&&!closing&&!releasePromise);
   } catch (error) {
     closing = true;
     if (lease) await request({ method: 'release_client', reference: lease },undefined,true).catch(() => {});
@@ -887,7 +897,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       return () => { listeners.delete(listener); if (!listeners.size && timer) { watchGeneration++; clearInterval(timer); timer = undefined; } };
     },
   };
-  return { adapter, ...(context.sameVaultNavigation === 1 ? {nativeDocumentNavigation} : {}), ...(documents ? { documentSemantics: documents.service } : {}), mobileLifecycle, nativeEditor, reconciliation, editorOnly: true, ...(createNoteOnOpen === undefined ? {} : { createNoteOnOpen }), ...(initialPath === undefined ? {} : { initialPath, initialEntryId }),
+  return { adapter, ...(webRouting?{nativeWebRouting:webRouting.service}:{}), ...(context.sameVaultNavigation === 1 ? {nativeDocumentNavigation} : {}), ...(documents ? { documentSemantics: documents.service } : {}), mobileLifecycle, nativeEditor, reconciliation, editorOnly: true, ...(createNoteOnOpen === undefined ? {} : { createNoteOnOpen }), ...(initialPath === undefined ? {} : { initialPath, initialEntryId }),
     async presentationSettled(input) {
       if (!input || typeof input !== 'object' || Array.isArray(input) || !sameKeys(input,['path','entryId','state'])) throw fail('invalid_presentation_settled');
       let captured: NativePresentationSettled;
@@ -944,6 +954,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       releasePromise = (async () => {
         // Flush admitted consumers before retiring the native client lease.
         await lifecycleTask;
+        await webRouting?.close();
         await navigationTail;
         await navigationListener?.remove(); navigationListener = undefined; navigationHandler = undefined;
         await editorTail; await Promise.allSettled([...editorRetirements]);
