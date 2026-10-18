@@ -57,7 +57,47 @@ storage evidence and are not fabricated.
 
 ## Actual results
 
-Pending explicit matched-build readiness; no actual Electron claim yet.
+Initial actual pass **FAILED** before mutations at the real error boundary.
+Coordinator supplied frozen assembled `0163d2329fc720e52e6991d364f0052d8f80351e`
+in `msg_8cdef6336453` with matched native rebuild and native-mode frontend build
+witness (frontend built at `745470fb`, intervening changes only harness/docs/stage
+allowlist). Worker verified these executable SHA256 values before launch:
+
+- Native `/private/tmp/zorid-workblock-native-0163d232/zorid-desktop-host`:
+  `6f792bf430846387a61b30bf36ad91899c27f3a6abd8e67f614012f99cc70875`.
+- Electron 44.8.0 `/private/tmp/zorid-managed-electron-44.8.0/Electron.app/Contents/MacOS/Electron`:
+  `12aa325561098c5dc5b175e465225b1b61e8f4090ce6d5dade89887e0eec8ab7`.
+
+Command used the README's explicit arguments, root
+`/Users/ctk/orca/workspaces/Zorid/managed-desktop-integration`, exact HEAD above,
+and output `/private/tmp/zorid-workblock-electron-0163d232`. Harness source was
+`8a74f176`; actual interval 2026-10-18 02:55:58–02:56:11 UTC.
+
+Normal actual Workspace startup, recent-vault selection, completed reconciliation,
+preload bridge, admitted context with `workBlocks:true`, and one real native
+child all succeeded. Three deliberately rejected requests (wrong root, wrong
+admission ID, forbidden DTO owner field) rejected, but renderer-caught Errors
+had **undefined `code` and `commitUncertain`** instead of the typed sanitized
+values. This is consistent with Electron contextBridge copying thrown Errors
+without their custom properties; it invalidates the actual semantic
+error/uncertainty contract despite passing Node/TS boundary mocks. No mutation,
+reopen or replay acceptance was claimed after this failure. Coordinator was
+promptly escalated via `msg_4f57fe259d5f`; product source was not changed.
+
+Retained raw evidence:
+`/private/tmp/zorid-workblock-electron-0163d232/result.json`,
+`provenance-before.json`, and `provenance-after-failure-verification.json`.
+Post-cleanup independent recomputation verified the same HEAD and every recorded
+source/dist/native/Electron/harness digest: `verified:true`, `mismatches:[]`.
+No runtime exceptions or error logs were observed before the failure.
+Owned Electron PID 26074 exited zero via SIGTERM, and its exactly observed
+native child PID 26315 exited without forced child cleanup. Fixture profile and
+vault were deleted. Calendar worker was told no B Electron process remained.
+
+Harness followup `99795c82` (new test files only) now retains rejected error
+messages/own property names before assertions and records after-provenance even
+on a failing pass; syntax check passed. A product error-envelope correction and
+new exact frozen artifact readiness are required before repeating runtime.
 
 ## Remaining gates
 
