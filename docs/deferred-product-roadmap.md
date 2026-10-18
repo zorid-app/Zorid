@@ -116,6 +116,17 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:28UTC canonical integration: mainbb155f3a merges tested583cebce native-menu-wire.
+Final17/17 pass: host6 /private/tmp/native-menu-wire-host-bounded.log, portable2
+parent-retry, Store7 authority-final and Store2 summary-final. Eight source files
+exact tested branch; hostlib differs only earlier import module/export/leasefield,
+reviewed automatic composition. Root combined main cargo check11217 terminal0,
+log /private/tmp/native-import-menu-composed-check.log. No compiler live; slot free.
+Rust endpoint/core verification does not establish composed Swift/mobile behavior.
+Coordinator review prior two retry blockers fixed; last synchronous afterSaving
+publication overwrite sent owner msg_e476c70c4fd3 for one-hunk correction/review.
+Pages/editor header/history/factory source composition remains isolated.
+
 00:26UTC: Pages history cursor stays unchanged on root-routed opens; generation-
 bound actual-close query ACK52d427e4, no navigation authority. Narrow d809 scope
 ACK88c9206ba107 adds native tab/return callbacks and explicit-foreground recovery

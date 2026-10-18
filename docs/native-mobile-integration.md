@@ -1,5 +1,15 @@
 # Native mobile integration
 
+## Native file authority and recovery library — 2026-10-18 00:28 UTC
+
+Main bb155f3a integrates reviewed583cebce: picker-selected parent identity is
+checked atomically for moves; compact commands and read-only status retain the
+original operation/root/projection identity, including oversized full replies.
+All17 focused checks passed (host6, portable2, Store9). Combined main import/menu
+host cargo check11217 exit0; log /private/tmp/native-import-menu-composed-check.log.
+Swift menu/recovery/loader consumers remain isolated pending their own composition,
+typing and native runtime checks. This library merge does not deliver those screens.
+
 ## Native import library — 2026-10-18 00:15 UTC
 
 Main d1ceed0a integrates the reviewed staged-import helper and native C ABI;
