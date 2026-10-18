@@ -63,6 +63,19 @@ test('desktop staging includes runtime assets/notices and excludes source, maps,
   await assert.rejects(fs.access(path.join(result.appDirectory, 'stale.js')));
 });
 
+test('staged desktop loads the real WorkBlock codec through editor-core', async t => {
+  const f = await fixture(t);
+  for (const relative of desktopFiles) {
+    await f.write(relative, await fs.readFile(new URL('../' + relative, import.meta.url)));
+  }
+  const result = await stageDesktop(f.root);
+  const requireStaged = createRequire(path.join(result.appDirectory, 'package.json'));
+  assert.equal(typeof requireStaged('./desktop/workblocks.cjs').captureWorkBlockRequest, 'function');
+  assert.ok(requireStaged('./desktop/editor-core.cjs'));
+  const inputs = JSON.parse(await fs.readFile(result.inputManifest));
+  assert.ok(inputs.files['desktop/workblocks.cjs']);
+});
+
 test('staging rejects incomplete renderer output and mismatched downloaded Electron', async t => {
   const f = await fixture(t);
   await fs.rm(path.join(f.root, 'dist/lib/pdfjs/build/pdf.worker.mjs'));
