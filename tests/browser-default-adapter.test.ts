@@ -105,3 +105,76 @@ test('browser rename forwards the captured witness and retains it in the uncerta
   await adapter.rename('Note.md','Renamed.md',{entryId:'selected',revision:'selected-revision'});
   assert.deepEqual(calls[1],calls[0]);
 });
+
+function binaryGate(){
+  let enter!:()=>void,release!:()=>void;
+  const entered=new Promise<void>(resolve=>{enter=resolve;}),wait=new Promise<void>(resolve=>{release=resolve;});
+  return {entered,release,async pause(){enter();await wait;}};
+}
+type BinaryFixtureFile={id:string;revision:string;bytes:Uint8Array};
+async function binarySchedulingFixture(){
+  const {Vault}=await import('../src/core/vault.ts');
+  const files=new Map<string,BinaryFixtureFile>([
+    ['Held.bin',{id:'held',revision:'held-revision',bytes:Uint8Array.of(4,5)}],
+    ['Existing.bin',{id:'original',revision:'original-revision',bytes:Uint8Array.of(6)}],
+  ]);
+  const retainedFiles=new Map([...files.values()].map(file=>[file.id,file]));
+  const calls:{kind:string;input?:any}[]=[],stages=new Map<string,any>(),pins=new Map<string,any>();
+  let busy=false,readGate:ReturnType<typeof binaryGate>|undefined,queryGate:ReturnType<typeof binaryGate>|undefined,failCommit=false,failQuery=false,metadataReads=0;
+  async function command<T>(kind:string,input:any,action:()=>Promise<T>|T):Promise<T>{
+    if(busy)throw new BrowserVaultError('binary_busy','Another binary command is active');
+    busy=true;calls.push({kind,input:structuredClone(input)});
+    try{return await action();}finally{busy=false;}
+  }
+  const streams={limits:{maxFileBytes:'67108864',maxChunkBytes:2,smallReadBytes:'16'},
+    begin:(input:any)=>command('begin',input,()=>{const ref={localStoreId:'store',clientId:'client',operationId:input.operationId,stageId:'stage-'+input.operationId};stages.set(ref.stageId,{ref,phase:'receiving',acceptedLength:'0',nextSequence:0});return ref;}),
+    append:(ref:any,input:any)=>command('append',{ref,...input},()=>{const row=stages.get(ref.stageId);row.acceptedLength=String(Number(input.offset)+input.bytes.length);row.nextSequence=input.sequence+1;return {sequence:input.sequence,offset:input.offset,bytes:input.bytes.length,digest:'a'.repeat(64),acceptedLength:row.acceptedLength};}),
+    seal:(ref:any,input:any)=>command('seal',{ref,...input},()=>{const finalized={length:input.finalLength,sha256:'a'.repeat(64)};Object.assign(stages.get(ref.stageId),{phase:'sealed',finalized});return finalized;}),
+    commit:(ref:any)=>command('commit',ref,()=>{const row=stages.get(ref.stageId);if(failCommit){row.phase='commit_requested';throw new BrowserVaultError('outcome_unknown','Commit response lost');}Object.assign(row,{phase:'committed',outcome:{status:'committed',receipt:'receipt'}});return 'receipt';}),
+    query:(ref:any)=>command('query',ref,async()=>{const held=queryGate;queryGate=undefined;if(held)await held.pause();if(failQuery){failQuery=false;throw new BrowserVaultError('outcome_unknown','Query response lost');}return structuredClone(stages.get(ref.stageId));}),
+    openRead:(input:any)=>command('openRead',input,()=>{const file=retainedFiles.get(input.entryId);if(!file||file.revision!==input.expectedRevision)throw new BrowserVaultError('revision_conflict','Selected entry changed');const ref={localStoreId:'store',clientId:'client',readId:'pin-'+pins.size,entryId:file.id,entryRevision:file.revision,selectedContentEvent:'event-'+file.id,length:String(file.bytes.length)};pins.set(ref.readId,{ref,bytes:file.bytes.slice()});return ref;}),
+    read:(ref:any,input:any)=>command('read',{ref,...input},async()=>{const held=readGate;readGate=undefined;if(held)await held.pause();const file=pins.get(ref.readId),bytes=file.bytes.slice(Number(input.offset),Number(input.offset)+input.maxBytes),nextOffset=String(Number(input.offset)+bytes.length);return {bytes,nextOffset,eof:Number(nextOffset)===file.bytes.length};}),
+    closeRead:(ref:any)=>command('closeRead',ref,()=>{pins.delete(ref.readId);}),
+    abort:async()=>{throw new Error('Uncertain stages must not be aborted');},
+  };
+  const row=(path:string,file:BinaryFixtureFile)=>({entry:{id:file.id,revision:file.revision,path,kind:'file',deleted:false},presentation:{id:file.id,ctime_ms:1,mtime_ms:1,size_bytes:file.bytes.length}});
+  const runtime={inventory:async()=>[...files].map(([path,file])=>row(path,file)),readMetadata:async(path:string)=>{metadataReads++;const file=files.get(path);return file?structuredClone(row(path,file)):null;},subscribe:()=>()=>{}} as unknown as BrowserCoreRuntime;
+  const context={durableWrites:{},binaryStreams:streams,recoverCommands:async()=>false,fileCommand:async()=>{throw new Error('Legacy dispatch forbidden');}} as unknown as BrowserClientContext;
+  const adapter=defaultBrowserAdapter(runtime,context),vault=new Vault(adapter);await vault.initialize();
+  return {adapter,vault,calls,stages,pins,get metadataReads(){return metadataReads;},
+    holdRead(){return readGate=binaryGate();},holdQuery(fail=false){failQuery=fail;return queryGate=binaryGate();},failCommit(value:boolean){failCommit=value;},
+    replaceDestination(){files.set('Existing.bin',{id:'replacement',revision:'replacement-revision',bytes:Uint8Array.of(9)});},
+  };
+}
+async function binaryMicrotasks(){for(let index=0;index<12;index++)await Promise.resolve();}
+
+test('direct browser helpers share an active Vault transfer while capturing original bytes and metadata before waiting',async()=>{
+  const f=await binarySchedulingFixture(),held=f.holdRead();
+  const reading=f.vault.readBinary('Held.bin');await held.entered;
+  const bytes=Uint8Array.of(0,255,7),writing=f.adapter.writeBinary!('Existing.bin',bytes),duplicate=f.adapter.writeBinary!('Existing.bin',bytes),creating=f.adapter.createBinary!('New.bin',Uint8Array.of(8));
+  const completed=Promise.allSettled([reading,writing,creating]);assert.equal(writing,duplicate);bytes.fill(9);
+  try{
+    await binaryMicrotasks();assert.equal(f.metadataReads,2,'Vault read and direct write select metadata before queued I/O');
+    f.replaceDestination();
+    assert.deepEqual(f.calls.map(call=>call.kind),['openRead','read'],'direct helpers must wait for the whole active read');
+  }finally{held.release();}
+  const results=await completed;for(const result of results)assert.equal(result.status,'fulfilled',result.status==='rejected'?String(result.reason):'');
+  assert.deepEqual(results[0].status==='fulfilled'?[...results[0].value as Uint8Array]:[],[4,5]);
+  const begins=f.calls.filter(call=>call.kind==='begin');assert.equal(begins.length,2);
+  assert.deepEqual(begins[0].input.target,{kind:'write',entryId:'original',expectedRevision:'original-revision',expectedContentEvent:'event-original'});
+  assert.deepEqual(f.calls.filter(call=>call.kind==='append').flatMap(call=>[...call.input.bytes]),[0,255,7,8]);assert.equal(f.pins.size,0);
+});
+
+for(const phase of ['reconciliation','retained retry','failed reconciliation'] as const)test(`direct browser helper retains FIFO through ${phase} query and releases after uncertainty`,async()=>{
+  const f=await binarySchedulingFixture(),bytes=Uint8Array.of(1,2,3);f.failCommit(true);
+  if(phase==='retained retry')await assert.rejects(f.adapter.createBinary!('New.bin',bytes),{code:'outcome_unknown'});
+  const held=f.holdQuery(phase==='failed reconciliation'),writing=f.adapter.createBinary!('New.bin',bytes),rejected=assert.rejects(writing,{code:'outcome_unknown'});
+  await held.entered;
+  const before=f.calls.length,reading=f.vault.readBinary('Held.bin'),readResult=Promise.allSettled([reading]);
+  try{await binaryMicrotasks();assert.equal(f.calls.length,before,'queued Vault I/O cannot overlap the owned query');}finally{held.release();}
+  await rejected;const results=await readResult;assert.equal(results[0].status,'fulfilled',results[0].status==='rejected'?String(results[0].reason):'');
+  const original=f.calls.find(call=>call.kind==='begin')!.input;assert.equal(f.calls.filter(call=>call.kind==='begin').length,1);
+  f.failCommit(false);await f.adapter.createBinary!('New.bin',bytes);
+  assert.equal(f.calls.filter(call=>call.kind==='begin').length,1,'retry must retain the original operation/stage');
+  assert.ok(f.calls.filter(call=>call.kind==='commit').every(call=>call.input.operationId===original.operationId));assert.equal(f.pins.size,0);
+});

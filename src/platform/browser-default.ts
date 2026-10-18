@@ -10,6 +10,7 @@ import { openBrowserClientSlot } from './browser-client-slots.ts';
 import type { BrowserClientSlot } from './browser-client-slots.ts';
 import { legacyBrowserExport } from './browser-legacy-export.ts';
 import { binaryLength, writeBinarySource } from '../core/binary-transfer.ts';
+import { scheduleBinaryTransfer } from '../core/binary-transfer-queue.ts';
 import type { BinaryTarget, BinaryStageRef, BinaryReadRef } from '../core/binary-streams.ts';
 import { vaultPath } from './path.ts';
 import {createDocumentService} from '../core/document-semantics.ts';
@@ -50,15 +51,24 @@ export function defaultBrowserAdapter(runtime:BrowserCoreRuntime,consumer:Browse
       // Snapshot once before metadata, pinning, or any other asynchronous work.
       const owned:BinaryPending=prior??{kind,path,bytes:data.slice(),operationId:crypto.randomUUID(),entryId:crypto.randomUUID()};
       binaryPending.set(path,owned);
-      const result=(async()=>{
+      // Select metadata immediately, even while another transfer owns I/O.
+      // Keep only the original scalar witnesses; retries must not select a replacement.
+      const selected=!owned.target&&!owned.identity&&kind==='writeBinary'?(async()=>{
+        const row=await (runtime.readMetadata?.(path)??runtime.readEntry(path));
+        if(!row)return {target:{kind:'create',entryId:owned.entryId,path} as BinaryTarget};
+        if(row.entry.kind!=='file')throw new BrowserVaultError('not_file','Binary destination is not a file');
+        return {identity:{entryId:row.entry.id,expectedRevision:row.entry.revision}};
+      })():undefined;
+      void selected?.catch(()=>undefined);
+      const transfer=async()=>{
         if(owned.pin&&!owned.target){await streams!.closeRead(owned.pin);owned.pin=undefined;}
         if(!owned.target){
           if(kind==='createBinary')owned.target={kind:'create',entryId:owned.entryId,path};
           else{
             if(!owned.identity){
-              const row=await (runtime.readMetadata?.(path)??runtime.readEntry(path));
-              if(!row)owned.target={kind:'create',entryId:owned.entryId,path};
-              else{if(row.entry.kind!=='file')throw new BrowserVaultError('not_file','Binary destination is not a file');owned.identity={entryId:row.entry.id,expectedRevision:row.entry.revision};}
+              const selection=await selected!;
+              if(selection.target)owned.target=selection.target;
+              else owned.identity=selection.identity;
             }
             if(!owned.target){
               const identity=owned.identity!;
@@ -81,8 +91,9 @@ export function defaultBrowserAdapter(runtime:BrowserCoreRuntime,consumer:Browse
         const source={length:String(owned.bytes.length),async read(max:number){if(offset===owned.bytes.length)return null;const end=Math.min(owned.bytes.length,offset+max),chunk=owned.bytes.slice(offset,end);offset=end;return chunk;}};
         try{const completed=await writeBinarySource(streams!,{operationId:owned.operationId,target:owned.target!},source);owned.ref=completed.ref;}
         catch(error){if(error&&typeof error==='object'&&'binaryStage'in error)owned.ref=structuredClone(error.binaryStage) as BinaryStageRef;throw error;}
-      })();
-      const tracked=result.then(()=>{if(binaryPending.get(path)===owned)binaryPending.delete(path);},async error=>{
+      };
+      // The owning outcome lookup is part of this transfer's FIFO reservation.
+      const result=scheduleBinaryTransfer(streams!,()=>transfer().then(()=>{if(binaryPending.get(path)===owned)binaryPending.delete(path);},async error=>{
         // Only the owning retained stage's terminal evidence can release a
         // binary request. Transport errors and semantic-looking error codes
         // alone never permit a replacement operation.
@@ -98,7 +109,8 @@ export function defaultBrowserAdapter(runtime:BrowserCoreRuntime,consumer:Browse
         // pin/stage uncertainty retains its original request for an exact retry.
         if(!owned.target&&!owned.identity&&!owned.pin&&!owned.ref&&binaryPending.get(path)===owned)binaryPending.delete(path);
         throw error;
-      }).finally(()=>{if(owned.inFlight===tracked)owned.inFlight=undefined;});
+      }));
+      const tracked=result.finally(()=>{if(owned.inFlight===tracked)owned.inFlight=undefined;});
       owned.inFlight=tracked;return tracked;
     }catch(error){return Promise.reject(error);}
   }
