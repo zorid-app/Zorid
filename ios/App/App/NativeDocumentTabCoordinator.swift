@@ -31,6 +31,7 @@ final class NativeDocumentTabCoordinator: ObservableObject {
 
     let model: NativeDocumentTabs
     let snapshots = NativeTabSnapshotCache()
+    var onSourceResumed: (() -> Void)?
     @Published private(set) var isBusy = false
     @Published private(set) var message: String?
     @Published private(set) var canResume = false
@@ -73,6 +74,28 @@ final class NativeDocumentTabCoordinator: ObservableObject {
 
     var canPrepareDestination: Bool {
         activationPending && source == nil && !admissionQuarantined && !metadataPending
+    }
+
+    // This witness authorizes a root UI request only, never a storage claim.
+    // History commits still require the newly installed target's validation.
+    func historyNavigationOwner(for controller: UIViewController) -> UUID? {
+        guard !isBusy, !activationPending, nativeRouteTicket == nil, vaultOpeningTicket == nil,
+              nativeRecovery == nil, pendingBinding == nil, !admissionQuarantined, !metadataPending,
+              UIApplication.shared.applicationState == .active, let source = source,
+              source.controller === controller, source.isCurrent(),
+              controller.viewIfLoaded?.window?.windowScene?.activationState == .foregroundActive,
+              let nav = controller.navigationController, nav.topViewController === controller,
+              nav.transitionCoordinator == nil, controller.presentedViewController == nil,
+              nav.presentedViewController == nil else { return nil }
+        return source.ownerID
+    }
+
+    func setHistoryRouteAvailability(back: Bool, forward: Bool) {
+        guard let source = source, let editor = source.controller as? NativeEditorContainer else { return }
+        // Preserve logical history through UIKit transitions. The container's
+        // leaving guard and factory/root tap gates check current UI admission.
+        guard source.isCurrent() else { return }
+        editor.setRouteAvailability(back: back, forward: forward)
     }
 
     func beginVaultOpening(_ ticket: UUID) throws {
@@ -327,6 +350,7 @@ final class NativeDocumentTabCoordinator: ObservableObject {
             nav.popToViewController(source.controller, animated: !UIAccessibility.isReduceMotionEnabled)
             self.overview = nil
             source.resume()
+            self.onSourceResumed?()
         }
     }
 

@@ -411,3 +411,16 @@ root via msg5e815eb955cf; no native compiler/helper/server remains active.
 above the Recents/Files heading (reference screenshot AhGuxX). Owner removed only
 that decorative row in NativePages; vault identity remains in selection/settings.
 Source review and current phone build verification pending; not yet deployed.
+
+Vault subtitle removal compiled in signed Dev10 artifact at2add282b. Physical
+install is pending reconnect (CoreDevice1011/tunnel unavailable); no actual phone
+visual confirmation yet. Native Simulator tab flow passes are recorded separately
+in native-mobile-integration.md; no broad keyboard/lifecycle parity claim.
+
+2026-10-18 mobile followups: user asks for route swipes. Native edge gestures
+are not implemented or verified yet; they must invoke the same guarded root
+history traversal after transition verification, with no additional editor host.
+User also requests that tapping Markdown links opens the link without placing
+the caret there. Root assigned source-only diagnosis to stage4_contract_review
+(0e1c0611ffda); shared editor/mobile bridge edits await named seam ownership.
+Actual tap/navigation/selection/IME evidence remains required; no fix claim.

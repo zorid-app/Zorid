@@ -40,6 +40,7 @@ final class NativeTabDestinationFactory {
     // These callbacks never authorize preloading or a second host.
     private let showTabs: ((UIViewController) -> Void)?
     private let returnToNativePages: ((UIViewController) -> Void)?
+    private let navigate: ((NativeEditorContainer, UUID, Int) -> Void)?
     private var reservation: Reservation?
     private var retiredOwners: [UUID] = [] // Idempotent cleanup ACKs, bounded RAM only.
 
@@ -49,10 +50,12 @@ final class NativeTabDestinationFactory {
          chooseFile: @escaping (UUID) -> Void,
          validatedDocument: @escaping (NativeTabDocument, UUID) -> Void,
          showTabs: ((UIViewController) -> Void)? = nil,
-         returnToNativePages: ((UIViewController) -> Void)? = nil) {
+         returnToNativePages: ((UIViewController) -> Void)? = nil,
+         navigate: ((NativeEditorContainer, UUID, Int) -> Void)? = nil) {
         self.resolveVault = resolveVault; self.admissionReady = admissionReady
         self.chooseFile = chooseFile; self.validatedDocument = validatedDocument
         self.showTabs = showTabs; self.returnToNativePages = returnToNativePages
+        self.navigate = navigate
     }
 
     // Adapter for Activation: { [weak factory] tab, owner, done in
@@ -160,6 +163,21 @@ final class NativeTabDestinationFactory {
                       current.controller === container, current.session === session,
                       !current.closing, !current.cleanupRequested else { return }
                 self.returnToNativePages?(container)
+            }
+        }
+        if navigate != nil {
+            container.onNavigate = { [weak self, weak current, weak container, weak session] direction in
+                guard let self = self, let current = current, let container = container, let session = session,
+                      direction == -1 || direction == 1,
+                      self.reservation === current, current.ownerID == owner, current.installed,
+                      current.controller === container, current.session === session,
+                      !current.closing, !current.cleanupRequested,
+                      UIApplication.shared.applicationState == .active,
+                      container.viewIfLoaded?.window?.windowScene?.activationState == .foregroundActive,
+                      let nav = container.navigationController, nav.topViewController === container,
+                      nav.transitionCoordinator == nil, container.presentedViewController == nil,
+                      nav.presentedViewController == nil else { return }
+                self.navigate?(container, owner, direction)
             }
         }
         container.onDocumentValidated = { [weak self, weak current, weak container, weak session] validated in

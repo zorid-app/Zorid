@@ -1479,6 +1479,160 @@ final class NativeVaultPicker: UITableViewController {
     private weak var boundPages: NativePagesController?
     private var boundPagesOwner: UUID?
     private var lastVaultID: UUID?
+    private let routeHistory = NativeRouteHistory()
+    private struct HistoryTraversal {
+        let ticket: NativeRouteHistory.Ticket
+        var expectedDocumentOwner: UUID?
+    }
+    private var historyTraversal: HistoryTraversal?
+    private final class InstalledPageReceipt {
+        let id = UUID()
+        weak var pages: NativePagesController?
+        let owner: UUID
+        let route: NativePageRoute
+        let historyID: UUID?
+        var checking = false
+        init(pages: NativePagesController, owner: UUID, route: NativePageRoute, historyID: UUID?) {
+            self.pages = pages; self.owner = owner; self.route = route; self.historyID = historyID
+        }
+    }
+    private var installedPageReceipt: InstalledPageReceipt?
+    private var historyObservers: [NSObjectProtocol] = []
+
+    private func retainInstalledPageRoute(_ route: NativePageRoute, pages: NativePagesController, historyID: UUID?) {
+        guard boundPages === pages, let owner = boundPagesOwner else { return }
+        installedPageReceipt = InstalledPageReceipt(pages: pages, owner: owner, route: route, historyID: historyID)
+        DispatchQueue.main.async { [weak self] in self?.processInstalledPageRoute() }
+    }
+
+    private func processInstalledPageRoute() {
+        guard let receipt = installedPageReceipt, !receipt.checking else { return }
+        guard let pages = receipt.pages, boundPages === pages, boundPagesOwner == receipt.owner else {
+            installedPageReceipt = nil; return
+        }
+        if let request = receipt.historyID, historyTraversal?.ticket.id != request {
+            installedPageReceipt = nil; return
+        }
+        guard let nav = pages.navigationController,
+              UIApplication.shared.applicationState == .active,
+              nav.viewIfLoaded?.window?.windowScene?.activationState == .foregroundActive,
+              nav.topViewController === pages else { return }
+        if let transition = nav.transitionCoordinator {
+            transition.animate(alongsideTransition: nil) { [weak self] _ in
+                DispatchQueue.main.async { [weak self] in self?.processInstalledPageRoute() }
+            }
+            return
+        }
+        guard documentTabs?.historyNavigationOwner(for: pages) == receipt.owner else { return }
+        receipt.checking = true
+        // Revalidate on this SAME owned Pages host after install/foreground.
+        // A retained UI receipt never authorizes another host or a stale cursor.
+        pages.restoreNativePageRoute(receipt.route) { [weak self, weak pages, weak receipt] result in
+            guard let self = self, let pages = pages, let receipt = receipt,
+                  self.installedPageReceipt === receipt else { return }
+            receipt.checking = false
+            guard self.boundPages === pages, self.boundPagesOwner == receipt.owner,
+                  self.documentTabs?.historyNavigationOwner(for: pages) == receipt.owner else { return }
+            switch result {
+            case .success(let validated):
+                guard validated == receipt.route else { return }
+                self.recordNativePageRoute(validated, pages: pages, historyID: receipt.historyID)
+                if self.routeHistory.currentRoute == .page(validated),
+                   receipt.historyID == nil || self.historyTraversal == nil {
+                    self.installedPageReceipt = nil
+                }
+            case .failure:
+                pages.showMessage("Folder navigation paused", "The history position has not changed. Pull down to retry, or return to Vaults to choose another location.")
+            }
+        }
+    }
+
+
+    private func cancelHistoryTraversal() {
+        installedPageReceipt = nil
+        if let traversal = historyTraversal {
+            routeHistory.cancel(traversal.ticket, sourceOwnerID: traversal.ticket.sourceOwnerID)
+        }
+        historyTraversal = nil
+        refreshHistoryControls()
+    }
+
+    private func refreshHistoryControls() {
+        boundPages?.setNativeRouteAvailability(back: routeHistory.canGoBack, forward: routeHistory.canGoForward)
+        documentTabs?.setHistoryRouteAvailability(back: routeHistory.canGoBack, forward: routeHistory.canGoForward)
+    }
+
+    private func recordNativePageRoute(_ route: NativePageRoute, pages: NativePagesController, historyID: UUID? = nil) {
+        guard boundPages === pages, let owner = documentTabs?.historyNavigationOwner(for: pages),
+              owner == boundPagesOwner else { return }
+        do {
+            if let request = historyID {
+                guard let traversal = historyTraversal, traversal.ticket.id == request else { return }
+                try routeHistory.commit(traversal.ticket, validatedRoute: .page(route),
+                                        sourceOwnerID: traversal.ticket.sourceOwnerID)
+                historyTraversal = nil
+            } else {
+                // A restoration owns its one cursor ticket until actual install.
+                guard historyTraversal == nil else { return }
+                try routeHistory.recordValidated(.page(route))
+            }
+            refreshHistoryControls()
+        } catch {
+            pages.showMessage("Navigation needs attention", "The previous route remains in history. Choose a file or return to Vaults to continue.")
+        }
+    }
+
+    private func recordNativeDocumentRoute(_ document: NativeTabDocument, owner: UUID) {
+        guard let controller = navigationController?.topViewController,
+              documentTabs?.historyNavigationOwner(for: controller) == owner else { return }
+        do {
+            let route = try NativeDocumentRoute(vaultID: document.vaultID, localStoreID: document.localStoreID,
+                                                stableFileID: document.stableFileID)
+            if let traversal = historyTraversal {
+                guard traversal.expectedDocumentOwner == owner else { return }
+                if traversal.ticket.targetRoute == .document(route) {
+                    try routeHistory.commit(traversal.ticket, validatedRoute: .document(route),
+                                            sourceOwnerID: traversal.ticket.sourceOwnerID)
+                    historyTraversal = nil
+                } else {
+                    // A newly validated link target is a new route, never proof
+                    // that the originally requested history target activated.
+                    cancelHistoryTraversal()
+                    try routeHistory.recordValidated(.document(route))
+                }
+            } else { try routeHistory.recordValidated(.document(route)) }
+            refreshHistoryControls()
+        } catch {
+            controller.showMessage("Navigation needs attention", "The document is open. Its history position could not be updated.")
+        }
+    }
+
+    private func navigateHistory(_ direction: Int, from presenter: UIViewController, expectedOwner: UUID? = nil) {
+        guard historyTraversal == nil, let tabs = documentTabs,
+              let owner = tabs.historyNavigationOwner(for: presenter),
+              expectedOwner == nil || expectedOwner == owner else { return }
+        do {
+            let ticket = try routeHistory.stage(direction: direction, sourceOwnerID: owner)
+            historyTraversal = HistoryTraversal(ticket: ticket)
+            refreshHistoryControls()
+            switch ticket.targetRoute {
+            case .document(let route):
+                // A display title is presentation only. Fresh Rust activation
+                // resolves this stable identity and supplies its current title.
+                let document = try NativeTabDocument(vaultID: route.vaultID, localStoreID: route.localStoreID,
+                                                     stableFileID: route.stableFileID, displayTitle: "Opening note")
+                tabs.performDocumentTabIntent(.replaceSelected(document))
+                if !tabs.isBusy, let message = tabs.message,
+                   tabs.historyNavigationOwner(for: presenter) == owner {
+                    cancelHistoryTraversal()
+                    presenter.showMessage("Could not navigate", message)
+                }
+            case .page(let route):
+                routeToPages(from: presenter, vaultID: route.vaultID, restoring: route, historyID: ticket.id)
+            }
+        } catch { cancelHistoryTraversal() }
+    }
+
 
     private func ensureDocumentTabs() throws -> NativeDocumentTabCoordinator {
         if let existing = documentTabs { return existing }
@@ -1493,8 +1647,10 @@ final class NativeVaultPicker: UITableViewController {
         chooseFile: { [weak self] tabID in
             guard let self = self, let tabs = self.documentTabs, tabs.model.selectedTabID == tabID,
                   let presenter = self.navigationController?.topViewController else { return }
+            self.cancelHistoryTraversal()
             self.routeToPages(from: presenter, vaultID: nil)
         }, validatedDocument: { [weak self] document, owner in
+            self?.recordNativeDocumentRoute(document, owner: owner)
             do { try self?.documentTabs?.bindValidatedDocument(document, sourceOwnerID: owner) }
             catch {
                 // Let the current native validation/history callback finish
@@ -1503,10 +1659,16 @@ final class NativeVaultPicker: UITableViewController {
                     self?.navigationController?.topViewController?.showMessage("Tab information needs attention", "Your document stays open. Open Show tabs to retry its tab information.")
                 }
             }
-        }, showTabs: { [weak self] presenter in self?.documentTabs?.showDocumentTabs(from: presenter) },
-        returnToNativePages: { [weak self] presenter in
+        }, showTabs: { [weak self] presenter in
+            self?.cancelHistoryTraversal()
+            self?.documentTabs?.showDocumentTabs(from: presenter)
+        }, returnToNativePages: { [weak self] presenter in
             guard let self = self else { return }
-            self.routeToPages(from: presenter, vaultID: self.lastVaultID)
+            let origin = self.routeHistory.pageOrigin
+            self.cancelHistoryTraversal()
+            self.routeToPages(from: presenter, vaultID: origin?.vaultID ?? self.lastVaultID, restoring: origin)
+        }, navigate: { [weak self] presenter, owner, direction in
+            self?.navigateHistory(direction, from: presenter, expectedOwner: owner)
         })
         destinationFactory = factory
         let coordinator = NativeDocumentTabCoordinator(model: model, persist: { data in
@@ -1514,12 +1676,22 @@ final class NativeVaultPicker: UITableViewController {
         }, activate: { [weak factory] tab, owner, done in
             guard let factory = factory else { done(.failure(MobileFailure.unavailable)); return }
             factory.prepare(tab, ownerID: owner, completion: done)
-        }, didInstall: { [weak factory] owner, tab, controller in
-            factory?.didInstall(ownerID: owner, tabID: tab, controller: controller) == true
+        }, didInstall: { [weak self, weak factory] owner, tab, controller in
+            if let self = self, let traversal = self.historyTraversal,
+               case .document(let target) = traversal.ticket.targetRoute,
+               let actual = self.documentTabs?.model.selectedTab.document,
+               actual.vaultID == target.vaultID, actual.localStoreID == target.localStoreID,
+               actual.stableFileID == target.stableFileID {
+                self.historyTraversal?.expectedDocumentOwner = owner
+            }
+            let installed = factory?.didInstall(ownerID: owner, tabID: tab, controller: controller) == true
+            if installed { self?.refreshHistoryControls() }
+            return installed
         }, recoverActivation: { [weak factory] owner, done in
             guard let factory = factory else { done(.failure(MobileFailure.unavailable)); return }
             factory.recoverReservation(owner, completion: done)
         })
+        coordinator.onSourceResumed = { [weak self] in self?.cancelHistoryTraversal() }
         documentTabs = coordinator
         return coordinator
     }
@@ -1534,12 +1706,31 @@ final class NativeVaultPicker: UITableViewController {
         }
         pages.onShowDocumentTabs = { [weak self, weak pages] in
             guard let self = self, let pages = pages, current() else { return }
+            self.cancelHistoryTraversal()
             self.documentTabs?.showDocumentTabs(from: pages)
+        }
+        pages.onNativeRouteNavigate = { [weak self, weak pages] direction in
+            guard let self = self, let pages = pages, current() else { return }
+            self.navigateHistory(direction, from: pages, expectedOwner: owner)
+        }
+        pages.onNativePageRouteValidated = { [weak self, weak pages] route in
+            guard let self = self, let pages = pages, current() else { return }
+            if let receipt = self.installedPageReceipt, receipt.pages === pages {
+                if receipt.route == route { self.processInstalledPageRoute() }
+                else {
+                    // A newly validated user folder/mode choice supersedes the
+                    // old restoration. Its cursor ticket is not permission to
+                    // overwrite the current page with an earlier target.
+                    self.cancelHistoryTraversal()
+                    self.recordNativePageRoute(route, pages: pages)
+                }
+            } else { self.recordNativePageRoute(route, pages: pages) }
         }
         pages.onOpenDocument = { [weak self, weak pages] entry, inNewTab in
             guard let self = self, let pages = pages, current() else { return }
             do {
                 let document = try pages.documentTabDocument(for: entry)
+                self.cancelHistoryTraversal()
                 self.documentTabs?.performDocumentTabIntent(inNewTab ? .openInNewTab(document) : .replaceSelected(document))
                 if let tabs = self.documentTabs, !tabs.isBusy,
                    pages.navigationController?.topViewController === pages, let message = tabs.message {
@@ -1550,6 +1741,7 @@ final class NativeVaultPicker: UITableViewController {
         pages.onChooseVault = { [weak self, weak pages] in
             guard let self = self, let pages = pages, current(),
                   let presenter = pages.navigationController?.topViewController else { return }
+            self.cancelHistoryTraversal()
             self.routeToPages(from: presenter, vaultID: nil)
         }
         // New Note requires a durable Rust creation request before an existing
@@ -1574,11 +1766,12 @@ final class NativeVaultPicker: UITableViewController {
         }
     }
 
-    private func routeToPages(from presenter: UIViewController, vaultID: UUID?) {
+    private func routeToPages(from presenter: UIViewController, vaultID: UUID?,
+                              restoring route: NativePageRoute? = nil, historyID: UUID? = nil) {
         guard let tabs = documentTabs else { return }
         tabs.performNativeRoute(from: presenter, retry: { [weak self] in
             guard let self = self, let current = self.navigationController?.topViewController else { return }
-            self.routeToPages(from: current, vaultID: vaultID)
+            self.routeToPages(from: current, vaultID: vaultID, restoring: route, historyID: historyID)
         }) { [weak self] result in
             guard let self = self, let navigation = self.navigationController else { return }
             switch result {
@@ -1592,7 +1785,7 @@ final class NativeVaultPicker: UITableViewController {
                 do {
                     guard let catalog = self.catalog else { throw MobileFailure.metadata }
                     let (vault, _) = try catalog.resolve(vaultID: vaultID)
-                    self.open(vault)
+                    self.open(vault, restoring: route, historyID: historyID)
                 } catch { self.showMessage("Vault unavailable", "Choose an available vault to continue.") }
             }
         }
@@ -1604,6 +1797,16 @@ final class NativeVaultPicker: UITableViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        for name in [UIApplication.didBecomeActiveNotification, UIScene.didActivateNotification] {
+            historyObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                MainActor.assumeIsolated {
+                    guard let self = self else { return }
+                    if let scene = notification.object as? UIWindowScene,
+                       self.navigationController?.viewIfLoaded?.window?.windowScene !== scene { return }
+                    DispatchQueue.main.async { [weak self] in self?.processInstalledPageRoute() }
+                }
+            })
+        }
         title = "Zorid Vaults"
         tableView.accessibilityIdentifier = "native.vaults.list"
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Create vault", style: .plain, target: self, action: #selector(createVault))
@@ -1676,12 +1879,14 @@ final class NativeVaultPicker: UITableViewController {
         present(alert, animated: true)
     }
 
-    private func open(_ vault: LocalVault) {
+    private func open(_ vault: LocalVault, restoring route: NativePageRoute? = nil, historyID: UUID? = nil) {
+        if historyID == nil { cancelHistoryTraversal() }
+        guard route == nil || route?.vaultID == vault.id else { return }
         guard !opening, documentTabs?.canEnterVault != false,
               let catalog = catalog, let navigation = navigationController,
               navigation.topViewController === self else { return }
         if let alert = presentedViewController as? UIAlertController {
-            alert.dismiss(animated: !UIAccessibility.isReduceMotionEnabled) { [weak self] in self?.open(vault) }
+            alert.dismiss(animated: !UIAccessibility.isReduceMotionEnabled) { [weak self] in self?.open(vault, restoring: route, historyID: historyID) }
             return
         }
         guard presentedViewController == nil else { return }
@@ -1692,8 +1897,13 @@ final class NativeVaultPicker: UITableViewController {
         openingTicket = ticket
         navigationItem.rightBarButtonItem?.isEnabled = false
         navigationItem.backButtonTitle = "Vaults"
-        let destination = NativeVaultOpeningController(vault: vault, root: { try catalog.root(for: vault) },
-            preparePages: { [weak self] pages in
+        let destination = NativeVaultOpeningController(vault: vault, root: { try catalog.root(for: vault) }, restoring: route,
+            didInstallPages: { [weak self] pages, restored in
+                guard let self = self else { return }
+                if let restored = restored { self.retainInstalledPageRoute(restored, pages: pages, historyID: historyID) }
+                else if let current = try? pages.nativePageRoute() { self.recordNativePageRoute(current, pages: pages) }
+                self.refreshHistoryControls()
+            }, preparePages: { [weak self] pages in
                 guard let self = self else { throw MobileFailure.unavailable }
                 try self.bindPages(pages, vault: vault)
             }) { [weak self] in
@@ -1704,6 +1914,8 @@ final class NativeVaultPicker: UITableViewController {
         }
         navigation.pushViewController(destination, animated: !UIAccessibility.isReduceMotionEnabled)
     }
+    deinit { for observer in historyObservers { NotificationCenter.default.removeObserver(observer) } }
+
 }
 
 // This route exists before storage work starts. Only this controller owns its
@@ -1712,6 +1924,11 @@ private final class NativeVaultOpeningController: UIViewController {
     private let vault: LocalVault
     private let resolveRoot: () throws -> URL
     private let preparePages: (NativePagesController) throws -> Void
+    private let restoringRoute: NativePageRoute?
+    private let didInstallPages: (NativePagesController, NativePageRoute?) -> Void
+    private var preparedPages: NativePagesController?
+    private var restoredRoute: NativePageRoute?
+    private var preparingPages = false
     private var hosting: UIHostingController<AnyView>?
     private var observers: [NSObjectProtocol] = []
     private var attempt = 0
@@ -1726,9 +1943,12 @@ private final class NativeVaultOpeningController: UIViewController {
     private var reservationFinished: (() -> Void)?
 
     init(vault: LocalVault, root: @escaping () throws -> URL,
+         restoring route: NativePageRoute? = nil,
+         didInstallPages: @escaping (NativePagesController, NativePageRoute?) -> Void,
          preparePages: @escaping (NativePagesController) throws -> Void,
          reservationFinished: @escaping () -> Void) {
         self.vault = vault; resolveRoot = root; self.preparePages = preparePages
+        restoringRoute = route; self.didInstallPages = didInstallPages
         self.reservationFinished = reservationFinished
         super.init(nibName: nil, bundle: nil)
         title = vault.name
@@ -1789,23 +2009,59 @@ private final class NativeVaultOpeningController: UIViewController {
             return
         }
         guard navigation.viewControllers.last === self else { return }
-        let pages = NativePagesController(vault: vault, root: received.root, session: received.session)
+        guard !preparingPages else { return }
+        if preparedPages == nil {
+            let pages = NativePagesController(vault: vault, root: received.root, session: received.session)
+            preparedPages = pages
+            if let route = restoringRoute {
+                preparingPages = true; openPending = true
+                let ticket = attempt
+                // One existing, unleased host supplies this read. Keep the vault
+                // reservation through its completion and any abandoned close.
+                pages.restoreNativePageRoute(route) { [self, pages] result in
+                    preparingPages = false; openPending = false
+                    guard !abandoned, attempt == ticket else {
+                        closePrepared(received.session, message: nil)
+                        return
+                    }
+                    switch result {
+                    case .success(let validated):
+                        restoredRoute = validated
+                        scheduleSettlement() // Recheck scene/top/transition after IO.
+                    case .failure:
+                        closePrepared(received.session,
+                            message: "The previous folder is unavailable. Return to Vaults to choose another location, or retry its original identity.")
+                    }
+                }
+                return
+            }
+        }
+        guard let pages = preparedPages else { return }
         do { try preparePages(pages) }
         catch {
-            self.received = nil; openPending = true
-            received.session.close { [self] in
-                openPending = false
-                failure = "The previous document session must finish closing before this vault can open."
-                render()
-                if abandoned { finishReservation() }
-            }
+            closePrepared(received.session,
+                message: "The previous document session must finish closing before this vault can open.")
             return
         }
         self.received = nil; replacing = true
         var stack = navigation.viewControllers
         stack[stack.count - 1] = pages
         navigation.setViewControllers(stack, animated: false)
+        preparedPages = nil
         finishReservation()
+        didInstallPages(pages, restoredRoute)
+    }
+    private func closePrepared(_ session: NativeMobileSession, message: String?) {
+        self.received = nil; preparedPages = nil; restoredRoute = nil
+        openPending = true
+        session.close { [self] in
+            openPending = false
+            if abandoned { finishReservation() }
+            else {
+                failure = message ?? "Opening paused. Return to Vaults or retry."
+                render()
+            }
+        }
     }
     private func begin() {
         guard current, !started else { return }
@@ -1840,7 +2096,9 @@ private final class NativeVaultOpeningController: UIViewController {
     }
     private func retry() {
         guard current, failure != nil else { return }
-        failure = nil; started = false; render(); scheduleSettlement()
+        guard !openPending, !preparingPages else { return }
+        failure = nil; started = false; restoredRoute = nil; preparedPages = nil
+        render(); scheduleSettlement()
     }
     private func render() {
         hosting?.rootView = AnyView(ScrollView {
@@ -1858,7 +2116,7 @@ private final class NativeVaultOpeningController: UIViewController {
         guard !abandoned, !replacing else { return }
         abandoned = true; attempt += 1
         guard !openPending else { return }
-        let session = received?.session; received = nil
+        let session = received?.session; received = nil; preparedPages = nil; restoredRoute = nil
         if let session = session { session.close { [self] in finishReservation() } }
         else { finishReservation() }
     }

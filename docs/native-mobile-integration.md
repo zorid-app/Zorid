@@ -1466,3 +1466,35 @@ Device-only deployment retained after build slot release; latest bounded phone
 check01:11 still tunnel unavailable, no install/launch success or user reconnect
 reply. Do not rebuild for connection retry. Use exact ready signed Dev10 artifact
 when live phone connection is restored.
+
+
+Configured history wiring checkpoint — 2026-10-18 01:22 UTC:
+Named root scope ddfa107bf45a: owner coordinator/picker/loader/factory optional
+navigate callback,371 scoped Pages root callback/availability. Reviewed1915
+composed d1d2860e;94fa durable metadata library composed27366b55 plus pendingPBX
+registration, not yet root persistence wiring. ONE scene history and pending
+original ticket/expected installed owner; document history commits only exact
+fresh validated target, ordinary validated navigation records separately.
+Stable folder restoration uses sole prepared Pages host before binding/install.
+
+Independent root-wiring review d1d46 found temporary UIKit readiness overwriting
+logical arrow flags and one-shot installed-page receipt lost on backgrounding.
+Corrected owner source preserves logical flags with dynamic action guards and
+retains weak Pages/exact bound owner/route/history ticket receipt, revalidating
+via SAME owned host on matching foreground/settled install. Superseding native
+intent cancels cursor ticket only, never grants storage ownership. Re-review
+explicitly started c5f82a7b; source acceptance, combined typing and runtime still
+pending. Current source files frozen for that review; no compiler started.
+Managed adapter owner holds resource slot through concrete test fix/retry.
+
+Root prioritizes missing NewNote collision terminal capability with native
+consumer owner012884a15469; generic rejection/status absence remains insufficient.
+Link caret source audit and edge swipe followups tracked in user-findings.
+Phone Dev10 exact2add signed artifact remains ready, last device connection
+unavailable and async user reconnect question pending. No rebuild required.
+
+Configured history source accepted46405425b880 at exact Mobile4ab5cdec,
+Coordinator e46b3ec9 and Factory9d41f71c. Third review correction honors a
+different validated folder/mode as superseding normal intent instead of replaying
+old restoration. Owner verified full hashes before commit; acceptance SOURCE
+only, compiler/actual history UI still pending. Metadata root wiring separate.
