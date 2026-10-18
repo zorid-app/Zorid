@@ -6,6 +6,16 @@ integrates main. Source grants must be acknowledged before edits; this table
 reserves names, not live terminals or acceptance. Actual Task/Dispatch/terminal
 receipts will be appended before each worker starts editing.
 
+Root granted these exact scoped seams in Orca `msg_f1f28718656f` after canonical
+Tasks integration `aa0a2f37` and final reports `b68d8aa5`. The managed coordinator
+records actual worker/Task/Dispatch receipts before edits; planned names below
+are not proof of a running worker. Store and portable projection may start
+independently. Native and binding work follows dependency API freezes. Serialize
+the Store summary hunks against forthcoming origin-adapter edits in
+`managed_records.rs`; one file owner at a time. Workspace Calendar changes preserve
+Tasks/native-navigation hunks and require direct coordination for any overlap.
+The exclusions and bounded acceptance in the reviewed contract remain in force.
+
 | Owner / planned worktree | Exclusive source scope | Dependency / acceptance |
 | --- | --- | --- |
 | CalendarStoreEvidenceOwner / managed-calendar-store-evidence | crates/zorid-store/src/managed_records.rs bounded authorized unresolved summary; new focused Store test | Existing receipt index, no schema/index changes. Receipt-only waiting/incompatible before first state must prevent false absence; stable collection fence and bounded scan. |
