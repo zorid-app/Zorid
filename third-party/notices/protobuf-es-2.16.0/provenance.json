@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/bufbuild/protobuf-es.git",
+  "tag": "v2.16.0",
+  "commit": "b3b232f7f466eda27c66e8f63c82f930578b6cc6",
+  "packages": {
+    "@bufbuild/protobuf": "2.16.0"
+  },
+  "license": "(Apache-2.0 AND BSD-3-Clause)",
+  "notices": [
+    {
+      "file": "LICENSE",
+      "sourcePath": "LICENSE",
+      "sourceUrl": "https://raw.githubusercontent.com/bufbuild/protobuf-es/b3b232f7f466eda27c66e8f63c82f930578b6cc6/LICENSE",
+      "sourceSha256": "c04b4216f1cd4c5a4f7fb2f2a1b0ae70d847e9e0cac7c9dee9bf8cc03177c449",
+      "sha256": "c04b4216f1cd4c5a4f7fb2f2a1b0ae70d847e9e0cac7c9dee9bf8cc03177c449"
+    },
+    {
+      "file": "BSD-3-Clause-varint.txt",
+      "sourcePath": "packages/protobuf/src/wire/varint.ts",
+      "sourceUrl": "https://raw.githubusercontent.com/bufbuild/protobuf-es/b3b232f7f466eda27c66e8f63c82f930578b6cc6/packages/protobuf/src/wire/varint.ts",
+      "sourceSha256": "794a4cffb99eb15483efa73ee038e493d28bea3d247c0be9f13740c546b0c259",
+      "sourceLines": [
+        1,
+        32
+      ],
+      "sha256": "0e952cb110ff6944789fbe47c25b38819a3866c04c7c5cbea8d0c0d8f3a92f0e"
+    }
+  ]
+}

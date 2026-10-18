@@ -116,6 +116,318 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:32UTC: native owner found factory scanComplete API incompatible with current
+NativeVaultListing.reconciliationComplete. Remove global completeness gate only
+for positively fresh-validated live file open; exact store/stableID/live witness
+required, no absence/deletion inference or missingtarget fallback. UUID witness
+fixcb097b8b source-inspected. Next exclusive bounded composed Swift typing slot
+reserved nativeowner: freeze corrected candidate and report command/handle, no
+Rust/web asset rebuild or installation. Actual composed API check prioritized
+over further speculative source loops; latch/Settings/history UX gates remain.
+
+00:31UTC: native coordinator exact accepted content SHA256a83c45cb... committed
+875fc451 plus minimalPBX membership; not main/runtime verified. Root683f90dd
+header source review approved, configuredhistory remains external route gate.
+Factory a83fda5d source review underway. Pages09a4 review found clearing all
+callbacks can reenable legacy routes after root ownership; lifetime latch/failclosed
+correction requested371 msg_00e7c461860f. Fourth onChooseVault callback ACKed in
+371 scope; Settings must use actual rootdrain. No native compiler requested yet.
+
+00:30UTC source checkpoint: Pages tabs09a4ab41 atop09734eb4 source-ready, root
+independent review assigned. Editor hooks683f90dd after5742+a02 source-ready,
+separate root reviewer assigned. Both isolated/uncompiled; Python assertions do
+not establish native execution. Configured history must route original intent
+through coordinator; SettingsChoosevault needs explicit root callback/drain in
+Pages before global composition. Coordinator latest didInstall quarantine bug
+must preserve reservation cleanup when Showtabs opens; review gate relayed
+msg_de7a1905e017 along with prior exclusive afterSaving publication fix. No compiler
+live; main Rust integration complete, mobile candidate acceptance remains pending.
+
+00:28UTC canonical integration: mainbb155f3a merges tested583cebce native-menu-wire.
+Final17/17 pass: host6 /private/tmp/native-menu-wire-host-bounded.log, portable2
+parent-retry, Store7 authority-final and Store2 summary-final. Eight source files
+exact tested branch; hostlib differs only earlier import module/export/leasefield,
+reviewed automatic composition. Root combined main cargo check11217 terminal0,
+log /private/tmp/native-import-menu-composed-check.log. No compiler live; slot free.
+Rust endpoint/core verification does not establish composed Swift/mobile behavior.
+Coordinator review prior two retry blockers fixed; last synchronous afterSaving
+publication overwrite sent owner msg_e476c70c4fd3 for one-hunk correction/review.
+Pages/editor header/history/factory source composition remains isolated.
+
+00:26UTC: Pages history cursor stays unchanged on root-routed opens; generation-
+bound actual-close query ACK52d427e4, no navigation authority. Narrow d809 scope
+ACK88c9206ba107 adds native tab/return callbacks and explicit-foreground recovery
+for alreadyclosed unconfigured legacy container; configured routes stay root-owned.
+No Scene/project/compiler grant. Coordinator corrections under final2f source
+review; file/Home factory remains separate from unresolved Newnote creation mode.
+Optimized host35070 terminal101,5/6 passed: >1MiB full reply/status/count proof
+now works; fixture incorrectly assumed projection pending, actual settled. Worker
+corrects assertion to documented settled|pending and reruns six only; no production
+logic change, no pass claim yet. Core pending/settled evidence covered separately.
+
+00:24UTC: host38747 bounded at2m11s/terminal101 SIGTERM, no pass claim;
+expensive repeated native recovery during setup is being replaced with public
+Store setup on one connection, closed before real leased host endpoints. Preserve
+actual >1MiB reply/status/compact assertions. Next log
+/private/tmp/native-menu-wire-host-optimized.log; Rust worker retains slot.
+Latest native coordinator draft audit msg_472295a52a0c still has concrete route,
+foreground epoch and recovery corrections; owner notified msg_23227ec2562a.
+Native owner assigned bd57 new-file-only NativeTabDestinationFactory.swift for
+file/Home preparation; API ACK msg_d0577b80284b conditional on exact coordinator
+signature agreement. No adapter navigation/hidden Home host; buffer fresh identity
+until root registration if needed. Newnote factory mode remains separate proposal
+until existing durable create identity/uncertain retry behavior is reviewed.
+
+00:23UTC: root independently source-approved fcdb2a78/e0704c2f. Corrective
+portable2 tests passed; final host run38747 live, log
+/private/tmp/native-menu-wire-host-final.log (old retry log records failures).
+Strict-input checks now pass; real >1MiB receipt recovery still executing.
+Native a02 retirement correction fixes the tab seam in source, but global
+composition remains conditional on legacy returnToVaults/traverse recovery or
+complete configured-owner routing. Gate relayed msg_06a7ef702f84. Owner composing
+5742+a02 source-only; Pages callback/drain/witness implementation active, coordinator
+draft still awaits review and native validation. No overlapping native compiler.
+
+00:22UTC: d809 correction a02b7397 after5742f382 source-ready; independent root
+review assigned. Exact-owner terminal retirement receipt and covered-scene
+background correction remain uncompiled; coordinator consumption still required.
+Rust host retry17697 compiled,4/6 passed: exposed real Root witness unknown-field
+decode bug (fixe0704c2f), and invalid oversized fixture (worker correcting to
+bounded components while retaining actual >1MiB reply assertion). Portable2
+tests rerun in27292, then host corrective run; worker retains exclusive slot.
+Root independent review assigned fcdb2a78/e0704c2f before integration. No failed
+host check is treated as acceptance; main runtime unchanged since import library.
+
+00:19UTC: core authority focused checks11/11 passed (parent2, Store authority7,
+compact summary2), logs /private/tmp/native-menu-wire-{parent,authority,summary}.log.
+Compile fixfcdb2a78 reexports types through existing Store dependency, no manifest
+change; host retry remains with exclusive Rust worker. d809 terminal retirement
+receipt proposal ACKed msg_f2cac98dc7cf: exact container/owner/session close fact
+distinct from navigation permission; failure without proof retains reservation.
+Scene observer correction and coordinator consumption require source review.
+Share fixtures57d98193 preserved unregistered/unrun; no extra test-target work.
+
+00:18UTC followup: NativePages-only correction batch4a1e1381+6b67a887+09734eb4
+atop5adb source-ready; independent117 review requested msg_a839409c4848. Requires
+atomic core/wire, no legacy unguarded Move fallback; not compiled/native verified.
+Host Rust session29195 terminal101 before tests: native reexports file-sync
+without declared Cargo dependency. Worker coordinates narrow fix with base_reuse
+and continues independent11 core checks serially, retaining compiler slot.
+
+00:18UTC: native coordinator draft review msg_2c163f17af15 blocks composition
+at SHA7ac8685389cb71233b774bd6750ebe74e91acb0d4426d69d4cd53bf093273df2:
+activation quarantine must survive malformed/stale results; source needs explicit
+role/tab/document witness; metadata persistence failure needs gated retry; recovery
+controls must be executable; scene epoch and UIKit transition/pop ownership must
+be guarded. Relayed native owner msg_2e26bf1ee3d0; source correction only, no build.
+Rust menu worker owns compiler session29195, host focused checks in progress,
+log /private/tmp/native-menu-wire-host.log. No terminal result yet.
+
+00:17UTC: actual frozen527 two-file iOS frontend57718 terminal0, empty diagnostics;
+Swift5 arm64 iOS15 Simulator target, SDK26.2 and cached Sim9 modulecache. No
+project/build/runtime proof; successor883d and coordinator excluded. Native owner
+explicitly returned slot; stage4_native_consumer now owns exclusive bounded Rust
+core/menu-wire focused checks in native-menu-wire, no overlapping native compiler.
+Independent root review confirms5742 background-after-actual-close returns a
+generic failure indistinguishable from retryable live source. Composition held
+until exact-owner terminal retirement and foreground navigation are distinct.
+
+00:16UTC: d809 froze NativeMobile-only tab seams5742f382; root independent
+source review assigned against reachable Git objects. Requires371's exact
+recordNoteOpened(path:entryId:isCurrent:onValidated:completion:) fresh-listing
+witness, guards before/after callback and the frozen NativeTabDocument fields.
+Dependency relayed via msg_7704fa11daad. No standalone Swift compile/runtime
+claim; Python assertions are source/model evidence only. Existing native owner
+frozen527 frontend slot unchanged; no additional compiler grant.
+
+00:15UTC: main d1ceed0a integrates the reviewed native staged-import library/ABI
+from d9836528. All six integrated source files compare exactly with the tested
+candidate. Corrected host module50497 exit0,10/10; ABI63416 exit0,5/5; logs
+tmp/native-import-host-fixed-test.log and tmp/native-import-abi-test.log. Earlier
+authorization collision failure is fixed by querying the same durable stage
+after authorization error; no uncertain outcome allocates replacement identity.
+This is library verification, not Swift provider/import UI acceptance.
+
+Native owner has exclusive frozen527fe77e two-file Swift frontend typecheck slot
+via msg_d0a63534c94f; no Xcode/Rust/assets/install authorized by that slot. Host
+menu wire44497c7f and core12933f3c independently source-approved, focused tests
+await slot return. Tab successor9ecedf6f+873b4989 independently source-approved;
+prepared successor harness remains unrun. Native owner owns new coordinator and
+minimal catalog/picker hooks after bd57 reconciliation, preserving Pages371,
+container/plugin d809 and import/session bd57 scopes. Source work remains isolated.
+
+00:10UTC source checkpoint: import runtime boundary fix5a226480 independently
+reviewed, targeted reproduction101→fixed58276exit0/1pass. Root composed only fix
+as d9836528 in native-import-integration; no duplicate dependency change. Host
+module rerun awaits native two-file frontend check slot return, not main yet.
+Atomic menu authority12933f3c independently source-approved, uncompiled; composed
+as3e88c1da in native-menu-wire. stage4_native_consumer owns only hostfamily/narrow
+lib wire endpoints file_command_compact/status, strict leases and bounded original
+root status. Exact snake_case wire frozen to371; UI retains full selected parent
+witness and same operation journal. No new compiler or schema by source workers.
+
+Tab source integration grants:2f owns only model active-document binding/Home
+replacement and overview busy/error callbacks;371 Pages header/FAB/new-tab/read
+drain;d809 NativeMobile editor close/snapshot/current validation; native owner
+assigns single root/catalog coordinator hunk owner after bd57 reconciliation and
+owns minimal five Swift project registrations. No JS/Rust/entitlement/CI changes.
+New-note unknown outcomes never auto-create another file; metadata retry retains
+the live editor. Existing two-file527fe77e remains frozen during its typecheck.
+
+00:06UTC resource checkpoint: actual-source tab model harness42964 compiled/ran
+terminal0 PASS207 assertions for exact5824bbfe; log tmp/native-tabs-model-harness.log.
+This is model/metadata/persistence proof only, no SwiftUI or editor lease proof.
+Verified861 idle despite queued failure mail; one explicit prompt22a4c192 actually
+started its import collision fix turn.861 owns exclusive single targeted host
+reproduction/fix test slot, existing rootdependencyb21 cherry-pick authorized.
+Native two-file cached Swift frontend typecheck527fe77e requestmsg26599770b5fb
+is queued next, not yet granted. No parallel root/native compiler.
+
+Canonical update00:03UTC: main60ffc972 integrates source-identical3288 native9
+Settings/search/minimum-one and caret batch. Independent review, fulltsc99639exit0,
+focused66/66 tests55162 pass. Actual Simulator8/9 evidence and phoneDev9 repeated
+install/launch65171both0 recorded docs/native-mobile-integration.md. Caret pixel/
+dragUI gaps remain; no menus/import/loader/tabs included. Root checks terminal,
+no compiler live; tab harness requires ready-source exactpath/fresh slot ACK.
+
+Import verification00:00UTC: root5fc59cae compiled officialRust1.95 locked/offline.
+Host49920 terminal101,9/10 pass: known-name binary collision test returned
+import_storage/commit_uncertain at staged_import_step;861 investigating source.
+ABI63416 terminal0,5/5 pass (FD ownership, strict errors, leases and panic fencing).
+Logs tmp/native-import-{host,abi}-test.log. No import/main or native UI acceptance.
+Root returned heavy slot for native owner's bounded tab-model Foundation harness;
+targeted host correction rerun follows only after explicit slot return.
+
+Native menu authority implementation assigned stage4_base_reuse in isolated
+tingkai-c/native-menu-authority, proposal /private/tmp/native-menu-authority-proposal.md:
+optional exact destination-parent witness in whole FamilyCommand, atomic Store/
+native apply and compact original operation status. No schema/core Mutation or
+host/mobile/Swift changes by that worker;861 retains Duplicatehost/FFI, rootowns
+later hostwire. stage4_markdown_contracts independently reviews. Taskmodel held.
+Native9 confirmed source batch composed source-identical3288 in isolated
+tingkai-c/native9-integration HEADe2d8d2fc; source review/typecheck pending, notmain.
+
+Resource update23:56UTC: native owner returned exclusive heavy slot. Frozen3288c1bb
+Simulator9 passes actual final Remove-disabled check; signed phoneDev9 build63961
+and install75081 exit0, strict signature/version checks pass. Launch failed only
+because device was locked, not an app crash; native owner may retry launch without
+rebuild. Root now owns heavy slot for isolated import5fc59cae host10→ABI5 focused
+checks, official Rust1.95 -j1/offline/locked, existing stage4-verified cache.
+Host test session49920 active, log tmp/native-import-host-test.log; no mobile
+compiler/Simulator build may overlap until root explicitly returns slot.
+
+Native resource update23:48UTC: build8 app/helper cleanup confirmed, phone8 skipped.
+Granted continued exclusive Simulator9→signed phoneDev9 slot to native owner for
+frozen3288c1bb (95df87fa + reviewed minimum-one navigation only). Actual8 Settings,
+Rust search/open/return pass; no-typing caret pixel acceptance remains unverified,
+later capture was contaminated by typing. Menu/import/loading/tabs remain outside9.
+Root import candidate5fc59cae checks wait for explicit slot return; no root heavy
+job or shared dependency-tree mutation while native owner holds the slot.
+
+Latest user design supersedes the initial task contract: ordinary Markdown records
+reference configurable vault type definitions; task behavior is an optional type
+capability mapping status categories/planned day/deadline/recurrence/reminders.
+Checkboxes stay separate with explicit conversion. Bases select records and hold
+multiple views/creation defaults; built-in Tasks/Calendar reuse the same system.
+User says "let's discuss": stop new task/calendar implementation and hold all
+isolated candidates. No task or calendar source has reached main. Resolve storage
+and stable type/property/option identity, then recurrence/calendar connection
+ownership before resuming. Native UX/import work remains separately owned.
+
+Native build8 slot granted via msg86316aed4280 at23:32 UTC for frozen reviewed
+95df87fa (search/Settings/navigation and caret). Native owner exclusively runs
+serialized Simulator then phone Dev verification; no imports/menu changes in8.
+Root Rust task fixture run53258 already terminal0 (6/6 for superseded isolated
+model, not integrated). Process observation found no competing actual compiler;
+6.3GiB disk available. Root must not start heavy checks or mutate shared dependency
+trees until native owner returns this slot. Build8 outcomes remain pending.
+
+Native import source checkpoint23:44UTC: independent117 accepted exact
+8c94529d→708012df→c62bc79b→cc3e7721 (terminal text collision recovery fixed).
+Root composed source in isolated tingkai-c/native-import-integration, HEADb21d18d9,
+with existing sha2=0.11.0 promoted to production and standalone mobile lock edge
+added. No new package versions/schema, no main runtime integration, no compiler
+or host10/ABI4 test execution yet; native slot remains owned by mobile session.
+Minimum-one navigation source c1faeda1 reviewed but actual build9 pending.
+Native document tabs source-only new-file scope acknowledged after user answers;
+existing editor/session lifecycle wiring requires a concrete ownership proposal.
+
+Latest Vite completion — main165cf17a +manager-lock60efe609:
+- Vite is the default application renderer build. Actual dev/prod browser, desktop
+  file renderer/save/math/code,307exactvendorassets,347fileASAR/nativearm64 and
+  actual iOS build7 create/save99bytes/reopen/math/Prism/PDF2pages all pass.
+  Final main frozeninstall0/fulltsc0/73affectedchecks pass. First main install
+  required byte-exact original pnpm12.14 manager-lockdoc restoration; application
+  dependency resolutions unchanged, independently reviewed. Main cache activation
+  uses existing source/artifact fingerprint validation. Source/evidence:
+  docs/vite-migration.md, tmp/vite-main-*.log, native msg67c02132f86d.
+- Phone7 EXACTce1e0ace build91966 passed; strict signing/development metadata
+  passed and physical iPhone install/launch12016 both exited0. Native owner returned
+  the exclusive heavy slot in msg5e815eb955cf. Keyboard interaction acceptance,
+  search and new Settings remain separate; those new screens are not in build7.
+- Next active milestone is first-party Bases/tasks/calendar, then Stage5. Task
+  representations optional question has had a reasonable reply window; working
+  default is both inline checkboxes and task notes, pending later user correction.
+  Freeze a narrow source-preserving model before parallel UI/core implementation;
+  no inline schedule syntax invention or speculative plugin records.
+
+
+Current Vite checkpoint — candidate103428be (not main default yet):
+- Root isolated vite-renderer-migration composes independently reviewed native
+ 9c35d6d7/source829cd2c9 with Vite8.3.4. Final source/config and native-preservation
+  reviews pass; fulltsc0 and272 focused consumers pass,34 build/worker/CSP/assets/
+  packaging checks +2 dev MIME/Rust invalidation checks pass. Frozen install0.
+- Actual Electron file renderer startup/edit/math/code/save passes, raw146 bytes
+  confirmed, app37382 closed0. Actual production browser create/rename/save/reload
+  and dev create/save/reload pass; math and actual Prism tokens observed, no
+  observed errors/warnings. Both test tabs closed; servers stopped130. Unchanged
+  Stage4WASM accepted only after existing source/artifact fingerprint validation.
+- Real Vite native build91739 succeeded; staging then hit missing license texts
+  in new protobuf/Connect distributions, assigned scoped pinned-notice source fix
+  to vite-desktop-staging worker. Guard remains strict. Official pinned Electron
+  runtime installed/verified in isolated dependency tree. No release claim.
+- Native owner may merge103428be into reviewedcc13 focus/silent-refresh candidate
+  for ONE simulator7 +phone7 build after composed review/typecheck, under grant
+  msg177a2c088479. This supersedes baseline-only build instruction. Native owns
+  exclusive heavy slot; root source/notices work only, no compiler/app/server.
+  Search remains isolated until independent117 review fixes pass.
+- Root source902bd190 adds only acceptance docs and generic mobile:sync native
+  renderer command beyond frozen103; no renderer/native runtime change.
+
+
+Latest user sequence correction — 2026-10-17:
+- Complete the active Vite migration first, then build the Bases/tasks/calendar
+  product milestone BEFORE Stage5. This supersedes the immediately preceding
+  Vite→Stage5 sequence and older task/calendar discussion-only deferral.
+- Shared Rust Base parsing/query/index semantics are already accepted Stage4;
+  this new milestone concerns usable first-party Bases, task and calendar
+  workflows on that foundation. Use earlier FullCalendar/TaskNotes references
+  as capability input, prioritize Zorid UX, and settle bounded behavior/contracts
+  before parallel implementation. No speculative plugin framework is needed.
+- Native mobile improvements continue independently under its named owner.
+  Preparation/dependency map: docs/bases-tasks-calendar-plan.md.
+  Stage5 enrollment/history/backups/management remain required, resequenced rather
+  than dropped. Built-in active goal text predates this correction; this durable
+  checkpoint is authoritative for execution order after Vite.
+
+
+Latest execution steering — Vite then Stage5 (2026-10-17 22:41 UTC):
+- User authorizes Vite renderer migration now; Stage5 follows it. New built-in
+  goal tracks both in this order. Mobile owner continues UX improvements in
+  parallel; P2P remains deferred. Root owns manifests/locks/root config/assets/
+  packaging, isolated tingkai-c/vite-renderer-migration from4cdafd33. Independent
+  asset slice vite-asset-pipeline and source/packaging reviews proceed separately.
+- Preserve build dist/index.html and relative native assets, native marker
+  routing, automatic validated browser Rust/WASM and independent native core.
+  Keep Electron main/preload/Rust build authority separate from renderer bundler.
+  Required acceptance: dev/production browser +worker/WASM, nativefile renderer/
+  packaging and coordinated iOS asset loading. No default change before checks.
+- Native phone6 built52508/installed+launched24342 exit0 on frozen829cd2c9.
+  Detailed UI checks ongoing, no compiler live at last report. Root requested
+  slot release before heavy Vite proof. Native owns title→body keyboard-bounce
+  finding msg5dc07b64e4ef and mobile-specific source; root avoids focus edits.
+
+
 Latest checkpoint — 2026-10-17 22:25 UTC (supersedes older pending statuses):
 - Stage4 accepted and committed main2604057b; built-in Stage4 goal complete.
   Root test apps/servers/compilers are stopped. Native owner received canonical

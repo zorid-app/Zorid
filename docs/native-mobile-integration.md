@@ -1,5 +1,47 @@
 # Native mobile integration
 
+## Native file authority and recovery library — 2026-10-18 00:28 UTC
+
+Main bb155f3a integrates reviewed583cebce: picker-selected parent identity is
+checked atomically for moves; compact commands and read-only status retain the
+original operation/root/projection identity, including oversized full replies.
+All17 focused checks passed (host6, portable2, Store9). Combined main import/menu
+host cargo check11217 exit0; log /private/tmp/native-import-menu-composed-check.log.
+Swift menu/recovery/loader consumers remain isolated pending their own composition,
+typing and native runtime checks. This library merge does not deliver those screens.
+
+## Native import library — 2026-10-18 00:15 UTC
+
+Main d1ceed0a integrates the reviewed staged-import helper and native C ABI;
+all six source files match tested candidate d9836528. Host tests50497 passed10/10,
+ABI tests63416 passed5/5. Logs: tmp/native-import-host-fixed-test.log and
+tmp/native-import-abi-test.log. Collision authorization now inspects the original
+durable stage before deciding whether failure is terminal or uncertain.
+Swift provider/import UI, composed device execution and full64MiB transfer remain
+unverified. No import screen is claimed delivered by this library integration.
+
+## Canonical native9 integration — 2026-10-18 00:03 UTC
+
+Main60ffc972 integrates only reviewed native9 Settings/search/navigation and caret
+source: b947801b first-parent delta→3f940fc2,0beb0268→2e0d1b0b,
+e0070be2→e2d8d2fc. All four final source files compare byte-identical with frozen
+3288c1bb. Independent composed review approved; full TypeScript99639 exit0 and
+focused native-caret/empty-focus55162 exit0,66/66 pass. Logs:
+tmp/native9-composed-typecheck.log, tmp/native9-composed-focus-tests.log.
+Vite/dependency/package/notices and other platform/workspace seams unchanged.
+
+Actual owner evidence: Simulator8 Settings/config/back and Rust two-hit search
+open/save/return pass; Simulator9 build89358/install/launch pass, final-item Remove
+disabled80842, extracted actual Foundation minimum-one/drop34/34. Signed Dev9
+build63961/signature/version and install75081 pass. Initial launch was Locked;
+repeat install/launch65171 both exit0, user phone left running. This supersedes
+the lock-only status. Caret tap-only pixel visibility and physical drag-out UI
+remain unverified. No general mobile/reference parity claim.
+
+Menus, import, destination loader, native tabs and Share candidates remain
+isolated and absent from this integration. Task/Bases/calendar implementation
+remains held for the user-requested typed-record design discussion.
+
 Owner: terminal `term_bbf1787b-d2e5-402a-b366-24d40a2385c3`, original base
 main `f69dc90`. Current isolated branch `tingkai-c/native-mobile-recovery`, Orca
 worktree `/Users/ctk/orca/workspaces/Zorid/native-mobile-recovery`. Published canonical main through `d94c3ae3` is included in this isolated branch

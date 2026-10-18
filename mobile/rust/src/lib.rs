@@ -8,14 +8,216 @@ use std::{
     ptr,
 };
 use zorid_desktop_host::{
-    EmbeddedFixtureSyncLimits, EmbeddedHost, TrustedFixtureSyncOptions,
-    MAX_EMBEDDED_FIXTURE_RESULT_BYTES,
+    EmbeddedFixtureSyncLimits, EmbeddedHost, TrustedFixtureSyncOptions, TrustedImportSelection,
+    TrustedStagedImportSource, MAX_EMBEDDED_FIXTURE_RESULT_BYTES, MAX_IMPORT_RESULT_BYTES,
 };
 
 #[repr(C)]
 pub struct ZoridBuffer {
     pub data: *mut u8,
     pub len: usize,
+}
+
+fn import_error(code: &'static str, uncertain: bool) -> Value {
+    json!({"code":code,"commit_uncertain":uncertain})
+}
+fn normalized_import_error(value: Value) -> Value {
+    // Shared admission faults may contain a generic message. The native import
+    // ABI has exactly TWO error fields; never forward arbitrary error payloads.
+    let code = match value.get("code").and_then(Value::as_str) {
+        Some("import_invalid_selection") => "import_invalid_selection",
+        Some("import_invalid_destination") => "import_invalid_destination",
+        Some("import_invalid_source") => "import_invalid_source",
+        Some("import_invalid_operation") => "import_invalid_operation",
+        Some("import_too_large") => "import_too_large",
+        Some("import_name_limit") => "import_name_limit",
+        Some("import_checkpoint") => "import_checkpoint",
+        Some("import_idempotency_conflict") => "import_idempotency_conflict",
+        Some("import_invalid_text") => "import_invalid_text",
+        Some("import_unsupported") => "import_unsupported",
+        Some("import_source_changed") => "import_source_changed",
+        Some("import_target_rejected") => "import_target_rejected",
+        Some("import_storage") => "import_storage",
+        Some("import_busy") => "import_busy",
+        Some("import_not_found") => "import_not_found",
+        Some("client_not_admitted") => "client_not_admitted",
+        Some("client_scope_mismatch") => "client_scope_mismatch",
+        Some("invalid_client_id") => "invalid_client_id",
+        Some("client_in_use") => "client_in_use",
+        Some("unsafe_path") => "unsafe_path",
+        Some("filesystem_changed") => "filesystem_changed",
+        Some("unsupported") => "unsupported",
+        Some("lock_timeout") => "lock_timeout",
+        Some("unsupported_schema") => "unsupported_schema",
+        Some("reload_required") => "reload_required",
+        Some("corrupt_storage") => "corrupt_storage",
+        Some("storage_io") => "storage_io",
+        Some("filesystem_io") => "filesystem_io",
+        _ => "import_error",
+    };
+    import_error(
+        code,
+        value
+            .get("commit_uncertain")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+    )
+}
+fn import_reply(
+    result: Result<zorid_desktop_host::ImportProgress, Value>,
+) -> std::io::Result<Vec<u8>> {
+    let value = match result {
+        Ok(result) => json!({"version":1,"ok":true,"result":result}),
+        Err(error) => json!({"version":1,"ok":false,"error":normalized_import_error(error)}),
+    };
+    let bytes = serde_json::to_vec(&value).map_err(|_| std::io::Error::other("import encoding"))?;
+    if bytes.len() <= MAX_IMPORT_RESULT_BYTES {
+        return Ok(bytes);
+    }
+    // Failure to encode a mutation acknowledgement is uncertain, never retryable
+    // under a fresh operation identity. This envelope itself is statically bounded.
+    serde_json::to_vec(&json!({"version":1,"ok":false,
+        "error":import_error("import_response_limit",true)}))
+    .map_err(|_| std::io::Error::other("import encoding"))
+}
+
+/// Duplicate raw native descriptor BEFORE constructing File ownership. Invalid
+/// positive/closed descriptors are ordinary OS failures, never Rust IO-safety UB.
+/// F_DUPFD_CLOEXEC atomically prevents inheritance without a fork/exec race.
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "android"
+))]
+fn duplicate_import_source(fd: i32) -> Result<TrustedStagedImportSource, Value> {
+    use std::os::fd::FromRawFd;
+    unsafe extern "C" {
+        fn fcntl(fd: i32, command: i32, ...) -> i32;
+    }
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    const DUP_CLOEXEC: i32 = 67;
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    const DUP_CLOEXEC: i32 = 1030;
+    if fd < 0 {
+        return Err(import_error("import_invalid_source", false));
+    }
+    let duplicate = unsafe { fcntl(fd, DUP_CLOEXEC, 0i32) };
+    if duplicate < 0 {
+        return Err(import_error("import_invalid_source", false));
+    }
+    // Only successful OS duplication establishes ownership; original is untouched.
+    let file = unsafe { std::fs::File::from_raw_fd(duplicate) };
+    TrustedStagedImportSource::new(file)
+}
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "android"
+)))]
+fn duplicate_import_source(_: i32) -> Result<TrustedStagedImportSource, Value> {
+    Err(import_error("import_unsupported", false))
+}
+
+/// Native-only import capability. Never register this as a renderer/plugin method.
+/// Copy provider data into an immutable app-owned regular file first. The shell
+/// persists exact selection before begin, and retains it on any uncertain result.
+/// borrowed_fd stays open through this call; Rust owns a CLOEXEC duplicate only.
+/// -1 permits source-free recovery of an existing sealed/terminal binary or saved
+/// text intent; it never grants a new import. No source path is decoded here.
+/// # Safety
+/// Session is live/exclusive; selection covers selection_len readable bytes for
+/// this call. Serialize request/import/free/close, drain all accepted work first.
+#[no_mangle]
+pub unsafe extern "C" fn zorid_mobile_import_begin(
+    session: *mut MobileSession,
+    borrowed_fd: i32,
+    selection: *const u8,
+    selection_len: usize,
+) -> ZoridBuffer {
+    if session.is_null() {
+        return ZoridBuffer::empty();
+    }
+    (*session).guarded_request(|host| {
+        if selection.is_null() || selection_len == 0 || selection_len > 8192 {
+            return import_reply(Err(import_error("import_invalid_selection", false)));
+        }
+        let selection = match TrustedImportSelection::from_native_json(std::slice::from_raw_parts(
+            selection,
+            selection_len,
+        )) {
+            Ok(value) => value,
+            Err(error) => return import_reply(Err(error)),
+        };
+        let source = if borrowed_fd == -1 {
+            None
+        } else {
+            match duplicate_import_source(borrowed_fd) {
+                Ok(source) => Some(source),
+                Err(error) => return import_reply(Err(error)),
+            }
+        };
+        import_reply(host.staged_import_begin(source, selection))
+    })
+}
+unsafe fn import_action(
+    session: *mut MobileSession,
+    operation: *const u8,
+    operation_len: usize,
+    action: impl FnOnce(&mut EmbeddedHost, &str) -> Result<zorid_desktop_host::ImportProgress, Value>,
+) -> ZoridBuffer {
+    if session.is_null() {
+        return ZoridBuffer::empty();
+    }
+    (*session).guarded_request(|host| {
+        let operation = match trusted_utf8(operation, operation_len, 36, "import_invalid_operation")
+        {
+            Ok(value) if value.len() == 36 => value,
+            _ => return import_reply(Err(import_error("import_invalid_operation", false))),
+        };
+        import_reply(action(host, operation))
+    })
+}
+/// One bounded source hash/append unit, or one existing durable seal/commit call.
+/// # Safety
+/// Live exclusive session; operation readable for operation_len; serialized/free/close.
+#[no_mangle]
+pub unsafe extern "C" fn zorid_mobile_import_step(
+    session: *mut MobileSession,
+    operation: *const u8,
+    operation_len: usize,
+) -> ZoridBuffer {
+    import_action(session, operation, operation_len, |host, id| {
+        host.staged_import_step(id)
+    })
+}
+/// Native-only status; existing receipt outranks current path/projection state.
+/// # Safety
+/// Same pointer, lifetime and serialization contract as import_step.
+#[no_mangle]
+pub unsafe extern "C" fn zorid_mobile_import_status(
+    session: *mut MobileSession,
+    operation: *const u8,
+    operation_len: usize,
+) -> ZoridBuffer {
+    import_action(session, operation, operation_len, |host, id| {
+        host.staged_import_status(id)
+    })
+}
+/// Precommit abort only. After durable commit intent this reports finishing;
+/// preserve the original selection and drain/replay step, never claim rollback.
+/// # Safety
+/// Same pointer, lifetime and serialization contract as import_step.
+#[no_mangle]
+pub unsafe extern "C" fn zorid_mobile_import_cancel(
+    session: *mut MobileSession,
+    operation: *const u8,
+    operation_len: usize,
+) -> ZoridBuffer {
+    import_action(session, operation, operation_len, |host, id| {
+        host.staged_import_cancel(id)
+    })
 }
 impl ZoridBuffer {
     fn empty() -> Self {
@@ -786,5 +988,256 @@ mod tests {
             check_error(&consume_json(reply), "sync_response_limit", true);
             assert!((*session.0).host.is_some());
         }
+    }
+
+    const IMPORT_OP: &str = "abcdefab-0000-4000-8000-000000000002";
+    unsafe fn import_selection(session: &TestSession, token: &str) -> Vec<u8> {
+        let identity = request_json(session, json!({"method":"identity"}));
+        serde_json::to_vec(&json!({"version":1,"clientId":CLIENT,
+            "localStoreId":identity["result"]["identity"]["local_store_id"],"leaseToken":token,
+            "operationId":IMPORT_OP,"entryId":"abcdefab-0000-4000-8000-000000000003",
+            "destinationFolder":"","fileName":"x.bin","kind":"auto","expectedLength":"1",
+            "sha256":"ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"}))
+        .unwrap()
+    }
+    unsafe fn import_begin_json(session: &TestSession, fd: i32, selection: &[u8]) -> Value {
+        consume_json(zorid_mobile_import_begin(
+            session.0,
+            fd,
+            selection.as_ptr(),
+            selection.len(),
+        ))
+    }
+    unsafe fn import_step_json(session: &TestSession) -> Value {
+        consume_json(zorid_mobile_import_step(
+            session.0,
+            IMPORT_OP.as_ptr(),
+            IMPORT_OP.len(),
+        ))
+    }
+    #[test]
+    #[cfg(unix)]
+    fn import_invalid_and_closed_descriptors_are_nonterminal_and_do_not_close_caller() {
+        use std::os::fd::AsRawFd;
+        let fixture = DisposableFixture::new();
+        unsafe {
+            let session = fixture.open_local();
+            let mut selection = import_selection(&session, CLIENT);
+            let acquired = request_json(
+                &session,
+                json!({"method":"claim_client","client_id":CLIENT}),
+            );
+            assert_eq!(acquired["ok"], true);
+            selection = import_selection(
+                &session,
+                acquired["result"]["lease"]["token"].as_str().unwrap(),
+            );
+            let path = fixture.parent.join("import-source");
+            std::fs::write(&path, b"a").unwrap();
+            let file = std::fs::File::open(&path).unwrap();
+            let fd = file.as_raw_fd();
+            drop(file);
+            for invalid in [-2, fd, i32::MAX] {
+                check_error(
+                    &import_begin_json(&session, invalid, &selection),
+                    "import_invalid_source",
+                    false,
+                );
+                assert!((*session.0).host.is_some());
+            }
+            check_error(
+                &import_begin_json(&session, -1, &selection),
+                "import_invalid_source",
+                false,
+            );
+            let directory = std::fs::File::open(&fixture.parent).unwrap();
+            check_error(
+                &import_begin_json(&session, directory.as_raw_fd(), &selection),
+                "import_invalid_source",
+                false,
+            );
+            assert!(directory.metadata().unwrap().is_dir());
+            let (socket, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            check_error(
+                &import_begin_json(&session, socket.as_raw_fd(), &selection),
+                "import_invalid_source",
+                false,
+            );
+            assert!(socket.peer_addr().is_ok());
+        }
+    }
+    #[test]
+    #[cfg(unix)]
+    fn import_dup_owns_only_duplicate_and_positional_reads_preserve_caller_cursor() {
+        use std::io::{Seek, SeekFrom};
+        use std::os::fd::AsRawFd;
+        let fixture = DisposableFixture::new();
+        unsafe {
+            let session = fixture.open_local();
+            let mut selection = import_selection(&session, CLIENT);
+            let path = fixture.parent.join("import-source");
+            std::fs::write(&path, b"a").unwrap();
+            let mut file = std::fs::File::open(&path).unwrap();
+            file.seek(SeekFrom::Start(1)).unwrap();
+            check_error(
+                &import_begin_json(&session, file.as_raw_fd(), &selection),
+                "client_not_admitted",
+                false,
+            );
+            let claim = request_json(
+                &session,
+                json!({"method":"claim_client","client_id":CLIENT}),
+            );
+            assert_eq!(claim["ok"], true);
+            selection = import_selection(
+                &session,
+                claim["result"]["lease"]["token"].as_str().unwrap(),
+            );
+            let begin = import_begin_json(&session, file.as_raw_fd(), &selection);
+            assert_eq!(begin["ok"], true);
+            assert_eq!(import_step_json(&session)["result"]["state"], "receiving");
+            assert_eq!(file.stream_position().unwrap(), 1);
+            assert_eq!(file.metadata().unwrap().len(), 1);
+            drop(file); // Host's duplicate continues, even after caller closes original.
+            let mut last = Value::Null;
+            for _ in 0..10 {
+                last = import_step_json(&session);
+                if last["result"]["state"] == "committed" {
+                    break;
+                }
+            }
+            assert_eq!(last["result"]["state"], "committed");
+            assert_eq!(last["result"]["canRetryCollision"], false);
+            assert_eq!(std::fs::read(fixture.root.join("x.bin")).unwrap(), b"a");
+            let encoded = serde_json::to_string(&last).unwrap();
+            assert!(!encoded.contains(fixture.parent.to_str().unwrap()));
+            assert!(encoded.len() <= MAX_IMPORT_RESULT_BYTES);
+        }
+    }
+    #[test]
+    #[cfg(unix)]
+    fn import_lease_release_and_reclaim_reject_old_job_and_bad_json_stays_nonterminal() {
+        use std::os::fd::AsRawFd;
+        let fixture = DisposableFixture::new();
+        unsafe {
+            let session = fixture.open_local();
+            let mut selection = import_selection(&session, CLIENT);
+            let claim = request_json(
+                &session,
+                json!({"method":"claim_client","client_id":CLIENT}),
+            );
+            selection = import_selection(
+                &session,
+                claim["result"]["lease"]["token"].as_str().unwrap(),
+            );
+            let path = fixture.parent.join("import-source");
+            std::fs::write(&path, b"a").unwrap();
+            let file = std::fs::File::open(path).unwrap();
+            assert_eq!(
+                import_begin_json(&session, file.as_raw_fd(), &selection)["ok"],
+                true
+            );
+            check_error(
+                &consume_json(zorid_mobile_import_begin(
+                    session.0,
+                    file.as_raw_fd(),
+                    ptr::null(),
+                    100,
+                )),
+                "import_invalid_selection",
+                false,
+            );
+            check_error(
+                &import_begin_json(
+                    &session,
+                    file.as_raw_fd(),
+                    b"{\"sourcePath\":\"secret-sentinel\"}",
+                ),
+                "import_invalid_selection",
+                false,
+            );
+            assert_eq!(
+                request_json(
+                    &session,
+                    json!({"method":"release_client","reference":claim["result"]["lease"]})
+                )["ok"],
+                true
+            );
+            check_error(&import_step_json(&session), "client_not_admitted", false);
+            let acquired = request_json(
+                &session,
+                json!({"method":"claim_client","client_id":CLIENT}),
+            );
+            assert_eq!(acquired["ok"], true);
+            selection = import_selection(
+                &session,
+                acquired["result"]["lease"]["token"].as_str().unwrap(),
+            );
+            check_error(&import_step_json(&session), "client_not_admitted", false);
+            assert!((*session.0).host.is_some());
+        }
+    }
+    #[test]
+    #[cfg(unix)]
+    fn import_panic_fences_host_and_releases_admission_without_erasing_plan() {
+        use std::os::fd::AsRawFd;
+        let fixture = DisposableFixture::new();
+        unsafe {
+            let session = fixture.open_local();
+            let mut selection = import_selection(&session, CLIENT);
+            let acquired = request_json(
+                &session,
+                json!({"method":"claim_client","client_id":CLIENT}),
+            );
+            assert_eq!(acquired["ok"], true);
+            selection = import_selection(
+                &session,
+                acquired["result"]["lease"]["token"].as_str().unwrap(),
+            );
+            let path = fixture.parent.join("import-source");
+            std::fs::write(&path, b"a").unwrap();
+            let file = std::fs::File::open(path).unwrap();
+            assert_eq!(
+                import_begin_json(&session, file.as_raw_fd(), &selection)["ok"],
+                true
+            );
+            let result = (*session.0).guarded_request(|_| panic!("injected import failure"));
+            assert!(result.data.is_null());
+            assert!((*session.0).host.is_none());
+            let reopened = fixture.open_local();
+            let reacquired = request_json(
+                &reopened,
+                json!({"method":"claim_client","client_id":CLIENT}),
+            );
+            assert_eq!(reacquired["ok"], true);
+            selection = import_selection(
+                &reopened,
+                reacquired["result"]["lease"]["token"].as_str().unwrap(),
+            );
+            assert_eq!(
+                import_begin_json(&reopened, file.as_raw_fd(), &selection)["ok"],
+                true
+            );
+        }
+    }
+    #[test]
+    fn import_error_envelope_strips_shared_message_and_unknown_payloads() {
+        let bytes = import_reply(Err(
+            json!({"code":"filesystem_changed","commit_uncertain":false,
+            "message":"secret-sentinel","path":"private-sentinel"}),
+        ))
+        .unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value["error"],
+            json!({"code":"filesystem_changed","commit_uncertain":false})
+        );
+        assert!(!String::from_utf8(bytes).unwrap().contains("sentinel"));
+        let bytes = import_reply(Err(json!({"code":"private-sentinel"}))).unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value["error"],
+            json!({"code":"import_error","commit_uncertain":true})
+        );
     }
 }

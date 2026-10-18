@@ -303,3 +303,101 @@ Locked, pending unlock/retry. No document-tabs/new-menu/destination-loader code
 in9; those remain separate source/review/runtime work. Caret no-typing pixel
 criterion still unverified after contaminated8 observation; source85 checks
 alone do not close it.
+### 2026-10-17 — Vite migration and mobile keyboard continuity
+
+User explicitly authorizes migration to Vite, then Stage5; native mobile UX work
+continues in parallel. Root owns package/lock/root renderer build configuration and
+asset scripts in isolated tingkai-c/vite-renderer-migration (base4cdafd33). Asset
+extraction worker owns isolated vite-asset-pipeline; source/packaging reviewers
+read-only. Native owner freezes root build files and retains mobile source/UI.
+Preserve validated Rust/WASM provenance, worker/vendor assets, relative local URLs,
+Electron security and iOS dist/capcopy interface; verify actual affected clients
+before default integration. No automatic runtime performance improvement claim.
+
+User reports title→body focus while keyboard is already open collapses/reopens
+keyboard. Expected uninterrupted keyboard visibility. Relayed msg5dc07b64e4ef to
+native owner for scoped focus fix and actual software-keyboard verification,
+preserving edits/title commits. Pending implementation and runtime evidence.
+Phone6 source829cd2c9 installed/launched successfully per owner, build52508 and
+install/launch24342 exit0; detailed interaction checks still pending separately.
+
+### 2026-10-17 — Bases/tasks/calendar before Stage5
+
+User explicitly requests Bases, tasks and calendar before Stage5. Accepted order:
+active Vite migration → first-party Bases/task/calendar milestone → Stage5.
+Earlier task/calendar deferral is superseded. Shared Rust Base/index semantics
+remain the foundation, web/native presentation respects existing ownership. This
+request is recorded for implementation after Vite, not marked complete by the
+existing Stage4 query engine. Mobile UX work continues in parallel.
+
+Mobile follow-up per owner msg9bf2f3292f1c: user asks silent refresh on Notes Files
+page (remove Updating vault spinner while retaining list; keep initial skeleton
+and actionable errors). NativePages source assigned371. Actual invalid-PDF build6
+error appears but loading overlay clears only at8s editorTimeout, without ready;
+source-only callbacks were insufficient. Native owner diagnoses bounded shared
+presentation seam; root Vite pdf-view changes only import ignore comments. Neither
+finding is complete until actual behavior passes. Search field leading icon toggle
+confirmed for Zorid app actions, not shell commands; owner notified.
+
+### 2026-10-17 — Native follow-up ownership and phone7
+
+Native menu review23:53UTC (117/msg_ae023f00fdd1) withholds acceptance of5adb0e4a:
+cross-folder Move discards selected destination folder identity before atomic
+dispatch, permitting replacement-folder targeting; native pending action journal
+is not recovered/gated on startup and every editor/import/new-note transfer.
+371 owns native durable recovery/gate fixes, coordinating reserved loader seams.
+Atomic destination precondition and compact original receipt/status for large
+recursive results need exact Rust ownership proposals. Retain unknown operations
+and same IDs; no path-based success inference. These menus remain outside build9.
+
+Native document tabs source checkpoint23:51UTC: worker2f48a270, isolated
+tingkai-c/mobile-document-tabs, ordered5824bbfe(model)/2d5e934e(overview), only two
+new Swift files. Root reviewed complete drafted files and final bounded-metadata/
+adaptive-appearance changes; no source blocker identified. Document tabs use local
+vault UUID plus opaque store/file identity, acknowledged save/close transitions,
+fresh Home on last close, explicit64-tab/128KiB caps and bounded decorative cache.
+No compiler/tests/project registration/editor wiring or runtime acceptance yet;
+not in build9. Existing lifecycle/project seams require named proposal first.
+
+Simulator8 owner evidence23:41UTC (msg814cedb8c784): full native Settings push,
+navigation configuration and back pass; Rust literal search returns two enabled
+hits at lines7/9 and opens the matched note, with return/clear working. Notes was
+restored after testing old empty-bar behavior. That behavior is superseded by the
+minimum-one request below. Caret observation continues; phone8 intentionally
+skipped. These results do not establish build9/minimum-one or phone acceptance.
+
+Latest navigation correction23:38UTC: navigation bar must always contain at least
+one item. This supersedes the earlier explicit-empty configuration. Native371
+prepares a separate minimal patch: normalize empty/malformed preferences to Notes,
+reject removing or dragging out the final item. Independent review/helper checks
+and actual UI acceptance remain pending. Finish Simulator8 checks but skip phone8;
+request exact reviewed build9 candidate before compiling/installing replacement.
+
+Follow-up23:37UTC: opening a vault or file should navigate immediately to its
+destination and show the loading skeleton there. Returning home currently makes
+all rows briefly look active/opened. Native owner assigned destination loading to
+d809 (picker section and NativePages openEditor/transfer/owned loader), with371
+retaining row/menu/session-lending and return-highlight repair. Isolated source
+work only, outside frozen build8; actual UX verification remains pending.
+
+Native owner reports phone7 exact ce1e0ace signed, installed and launched on the
+physical iPhone (build91966 and install/launch12016 exit0). This supersedes phone6;
+full keyboard interaction acceptance remains pending. The heavy slot returned to
+root via msg5e815eb955cf; no native compiler/helper/server remains active.
+
+- Caret should become visible immediately after a tap/selection below the visible
+  editor area, without waiting for typing. Native owner assigned investigation;
+  exact shared-editor file ownership is required before edits. Preserve manual
+  scrolling when the caret does not move. Runtime verification is pending.
+- Full native Settings and configurable navigation bar: source ceef6006 remains
+  isolated under native owner. Extracted production Foundation preference/drop
+  helpers passed34 checks; UIKit drag, gestures, accessibility, empty navigation
+  bar and restart acceptance remain pending. This is not included in phone7.
+- External file/photo/video import: first Rust/native ABI source slice assigned
+  to861, using existing durable stages and text creation, keep-both collisions,
+  bounded streaming and existing64MiB binary limit. Host scope is
+  crates/zorid-desktop-host/src/staged_import.rs plus minimal lib.rs seams;
+  mobile Rust/header ABI belongs to861, native Swift hooks to native coordinator.
+  Root owns manifests. No implementation or runtime acceptance claimed yet.
+  Share extension/AppGroup/project/signing/CI changes require a subsequent scoped
+  coordination decision; the existing wildcard profile does not prove readiness.

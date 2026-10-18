@@ -13,7 +13,7 @@
     "desktop": "electron desktop/main.cjs",
     "desktop:install": "node scripts/install-electron.mjs",
     "desktop:dev": "ZORID_DEV_URL=http://127.0.0.1:5173 electron desktop/main.cjs",
-    "mobile:sync": "npm run build && cap sync",
+    "mobile:sync": "npm run build:desktop && cap sync",
     "mobile:ios": "cap open ios",
     "mobile:android": "cap open android",
     "check": "tsc --noEmit",

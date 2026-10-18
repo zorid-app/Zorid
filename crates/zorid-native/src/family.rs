@@ -80,24 +80,50 @@ impl NativeVault {
         let _guard = self.paths.lock(self.options.lock_timeout)?;
         self.family_apply_locked(request, mode)
     }
-    /// Caller holds the native vault lock. Shared by direct family commands and
-    /// durable editor Write intents; never reacquire the lock during dispatch.
-    pub(super) fn family_apply_locked(
-        &mut self,
-        request: &MutationRequest,
-        mode: Option<FamilyCreateMode>,
-    ) -> Result<ApplyOutcome> {
+    /// Caller holds the native vault lock. Legacy request/mode dispatch keeps
+    /// its ordinary Store error mapping and delegates to the same composite core.
+    pub(super) fn family_apply_locked(&mut self, request: &MutationRequest,
+        mode: Option<FamilyCreateMode>) -> Result<ApplyOutcome> {
         self.paths.verify()?;
         let commit = self.store.family_apply(request, mode)?;
+        Ok(self.family_apply_projection(commit, request.mutation.id()))
+    }
+    pub fn family_apply_command(&mut self, command: &FamilyCommand) -> Result<ApplyOutcome> {
+        let _guard = self.paths.lock(self.options.lock_timeout)?;
+        self.family_apply_command_locked(command)
+    }
+    fn family_apply_command_locked(&mut self, command: &FamilyCommand) -> Result<ApplyOutcome> {
+        self.paths.verify()?;
+        let commit = self.store.family_apply_command(command)?;
+        Ok(self.family_apply_projection(commit, command.request.mutation.id()))
+    }
+    fn family_apply_projection(&mut self, commit: CommitResult, id: &EntryId) -> ApplyOutcome {
         self.point("family_committed");
         let projection = match self.recover_locked() {
             Ok(report) if report.blocked.is_empty() => {
-                self.family_project_status(request.mutation.id())
+                self.family_project_status(id)
             }
             Ok(report) => ProjectionStatus::Pending(report.blocked[0].1.clone()),
             Err(error) => ProjectionStatus::Pending(error.to_string()),
         };
-        Ok(ApplyOutcome { commit, projection })
+        ApplyOutcome { commit, projection }
+    }
+    /// Fresh compact Move/Delete preflights a bounded root summary. The entire
+    /// composite survives Store preparation/receipt replay. Recovery may leave
+    /// original physical responsibility pending; status reads its durable job.
+    pub fn family_apply_command_compact(&mut self, command: &FamilyCommand) -> Result<FamilyCommandStatus> {
+        let _guard = self.paths.lock(self.options.lock_timeout)?;
+        self.paths.verify()?;
+        self.store.family_apply_command_compact(command)?;
+        self.point("family_committed");
+        let _ = self.recover_locked();
+        Ok(self.store.family_command_status(command)?)
+    }
+    /// Pure original-operation status; never projects or substitutes today's entry.
+    pub fn family_command_status(&self, command: &FamilyCommand) -> Result<FamilyCommandStatus> {
+        let _guard = self.paths.lock(self.options.lock_timeout)?;
+        self.paths.verify()?;
+        Ok(self.store.family_command_status(command)?)
     }
     /// Authentication is supplied as an opaque capability. Store atomically
     /// commits wire, graph, prerequisites, jobs and cursor before projection.
