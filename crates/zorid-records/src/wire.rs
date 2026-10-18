@@ -85,24 +85,25 @@ impl Payload {
         self.id().validate()?;
         self.scope().validate()?;
         if self.operations().len() > MAX_HISTORY { return Err(Error::Limit); }
-        // Check the transport budget before allocating the structural union.
+        // Check the transport budget before validating individual operations.
         encode(&self.0)?;
+        // Empty-schema scratch space reuses only static operation validation.
+        // Never union here: causal cycles, tag context and cross-operation/schema
+        // admission belong to the Store's durable unresolved classification, and
+        // must not depend on how the sender groups operations into wire batches.
+        let schema = Schema {
+            collection: self.scope().collection.clone(), version: 1,
+            policy: Policy::Local, fields: BTreeMap::new(),
+        };
+        let structural = State::new(schema, self.scope().clone())?;
         let mut ids = BTreeSet::new();
         for operation in self.operations() {
             if operation.scope != *self.scope() { return Err(Error::Scope); }
             // A wire batch has one immutable row per ID; never silently coalesce
             // duplicate operations when recovering its exact local intent.
             if !ids.insert(&operation.id) { return Err(Error::InvalidOperation); }
+            structural.validate_operation(operation)?;
         }
-        // This empty schema is structural scratch space, not trusted registration
-        // or policy admission. Existing union validates IDs, values, limits,
-        // cross-operation kinds, cycles and available causal relationships while
-        // retaining missing dependencies for the host's durable retry handling.
-        let schema = Schema {
-            collection: self.scope().collection.clone(), version: 1,
-            policy: Policy::Local, fields: BTreeMap::new(),
-        };
-        let mut structural = State::new(schema, self.scope().clone())?;
-        structural.union(self.operations())
+        Ok(())
     }
 }

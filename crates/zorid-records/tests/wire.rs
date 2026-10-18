@@ -1,7 +1,7 @@
 //! Ready for `pub mod wire;`; intentionally uncompiled until registration is granted.
 use serde::Serialize;
 use std::collections::BTreeMap;
-use zorid_records::{wire::Payload, Action, Cell, Command, Error, Id, Operation, Scope,
+use zorid_records::{wire::Payload, Action, Cell, Command, Error, Id, Operation, Policy, Schema, Scope, State,
     Value, MAX_ACTIONS, MAX_BYTES, MAX_DEPTH, MAX_HISTORY, MAX_ID, MAX_PARENTS, MAX_VALUE};
 
 fn id(value: &str) -> Id { Id::new(value).unwrap() }
@@ -34,6 +34,19 @@ fn payload() -> Payload {
     // Reverse causal order deliberately: wrapping must preserve immutable content
     // and batch order rather than turn a local intent into a sorted snapshot.
     Payload::from_intent(id("update"), &intent(vec![patch(), create()])).unwrap()
+}
+fn state() -> State {
+    State::new(Schema { collection: scope().collection, version: 1,
+        policy: Policy::Local, fields: BTreeMap::new() }, scope()).unwrap()
+}
+fn assert_structural_roundtrip(operations: &[Operation]) {
+    let source = intent(operations.to_vec());
+    let wrapped = Payload::from_intent(id("update"), &source).unwrap();
+    let bytes = wrapped.encode().unwrap();
+    let decoded = Payload::decode(&bytes).unwrap();
+    assert_eq!(decoded.operations(), operations);
+    assert_eq!(decoded.intent().unwrap(), source);
+    assert_eq!(decoded.encode().unwrap(), bytes);
 }
 fn replace(bytes: &[u8], from: &str, to: &str) -> Vec<u8> {
     let text = std::str::from_utf8(bytes).unwrap();
@@ -134,7 +147,7 @@ fn malformed_missing_and_trailing_json_are_rejected() {
 }
 
 #[test]
-fn operation_duplicates_bounds_and_cycles_reuse_existing_validation() {
+fn operation_duplicates_bounds_and_static_shapes_reuse_existing_validation() {
     assert_eq!(Payload::from_intent(id("update"), &intent(vec![create(), create()])),
         Err(Error::InvalidOperation));
     assert_eq!(Payload::from_intent(id("update"), &intent(vec![create(); MAX_HISTORY + 1])),
@@ -152,6 +165,71 @@ fn operation_duplicates_bounds_and_cycles_reuse_existing_validation() {
     let mut op = create();
     op.schema_version = 0;
     assert_eq!(Payload::from_intent(id("update"), &intent(vec![op])), Err(Error::InvalidSchema));
+    let mut op = patch();
+    op.parents.clear();
+    assert_eq!(Payload::from_intent(id("update"), &intent(vec![op])), Err(Error::InvalidOperation));
+    let mut op = create();
+    op.parents = vec![id("parent")];
+    assert_eq!(Payload::from_intent(id("update"), &intent(vec![op])), Err(Error::InvalidOperation));
+    let mut op = patch();
+    op.command = Command::Patch(vec![Action::Remove { field: id("labels"),
+        member: id("important"), tags: vec![id("z"), id("a")] }]);
+    assert_eq!(Payload::from_intent(id("update"), &intent(vec![op])), Err(Error::InvalidOperation));
+    let bytes = payload().encode().unwrap();
+    assert_eq!(Payload::decode(&replace(&bytes, "\"parents\":[\"create\"]",
+        "\"parents\":[]")), Err(Error::InvalidOperation));
+    assert_eq!(Payload::decode(&replace(&bytes, "\"tags\":[\"create\"]",
+        "\"tags\":[\"z\",\"a\"]")), Err(Error::InvalidOperation));
+}
+
+#[test]
+fn contextual_remove_invalidity_is_independent_of_wire_grouping() {
+    // The tag exists and is an ancestor, but adds a different member. With the
+    // create absent the same remove is merely pending in the portable engine.
+    let mut bad_remove = patch();
+    bad_remove.command = Command::Patch(vec![Action::Remove { field: id("labels"),
+        member: id("never-added"), tags: vec![id("create")] }]);
+    let operations = vec![create(), bad_remove.clone()];
+    assert_structural_roundtrip(&operations);
+    for op in &operations { assert_structural_roundtrip(std::slice::from_ref(op)); }
+    let mut pending = state();
+    pending.union(&[bad_remove]).unwrap();
+    assert!(pending.projection().unwrap().pending.contains(&id("patch")));
+    assert_eq!(state().union(&operations), Err(Error::InvalidOperation));
+    // Engine rejection is transactional: a valid parent remains independently
+    // admissible and is not poisoned by the separately delivered invalid child.
+    let mut accepted = state();
+    accepted.union(&[create()]).unwrap();
+    let before = accepted.snapshot().unwrap();
+    assert_eq!(accepted.union(&operations[1..]), Err(Error::InvalidOperation));
+    assert_eq!(accepted.snapshot().unwrap(), before);
+}
+
+#[test]
+fn multi_operation_cycle_roundtrips_without_wire_causal_admission() {
+    let mut a = patch();
+    a.id = id("a"); a.parents = vec![id("b")];
+    a.command = Command::Patch(vec![]);
+    let mut b = a.clone();
+    b.id = id("b"); b.parents = vec![id("a")];
+    let operations = vec![a, b];
+    assert_structural_roundtrip(&operations);
+    for op in &operations {
+        assert_structural_roundtrip(std::slice::from_ref(op));
+        state().union(std::slice::from_ref(op)).unwrap();
+    }
+    assert_eq!(state().union(&operations), Err(Error::Cycle));
+}
+
+#[test]
+fn cross_operation_field_kinds_are_engine_admission_not_wire_structure() {
+    let mut incompatible = patch();
+    incompatible.command = Command::Patch(vec![Action::Write { field: id("title"),
+        cell: Cell::Value(Value::Boolean(true)) }]);
+    let operations = vec![create(), incompatible];
+    assert_structural_roundtrip(&operations);
+    for op in &operations { assert_structural_roundtrip(std::slice::from_ref(op)); }
+    assert_eq!(state().union(&operations), Err(Error::InvalidValue));
 }
 
 #[test]
