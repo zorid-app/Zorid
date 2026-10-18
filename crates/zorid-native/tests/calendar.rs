@@ -264,16 +264,68 @@ fn all_time_live_refs_prove_presence_deleted_refs_do_not_count() {
 }
 #[test]
 fn exact_saved_base_selection_precedes_native_task_cap() {
-    let (_dir, mut v, l, mut s) = setup();
+    let (dir, v, l, s) = setup();
+    // Preserve the >1000 real-file counterexample without running whole-vault
+    // native projection recovery after each individual fixture command.
+    drop(s);
+    drop(l);
+    drop(v);
+    let mut store =
+        zorid_store::Store::open_existing(dir.path().join(".zorid/vault.sqlite")).unwrap();
+    let body = "---\ntype: type-task\n---\n";
     for n in 0..1001 {
-        create(
-            &mut v,
-            &format!("unrelated-{n}"),
-            &format!("A{n:04}.md"),
-            "---\ntype: type-task\n---\n",
+        store
+            .family_apply(
+                &MutationRequest {
+                    operation_id: OperationId::new(format!("create-unrelated-{n}")).unwrap(),
+                    mutation: Mutation::Create {
+                        id: id(&format!("unrelated-{n}")),
+                        path: VaultPath::new(format!("A{n:04}.md")).unwrap(),
+                        kind: EntryKind::File,
+                        content: Some(body.as_bytes().to_vec()),
+                    },
+                },
+                Some(FamilyCreateMode::Text),
+            )
+            .unwrap();
+        if n % 250 == 0 {
+            eprintln!("Calendar real fixture authored {}/1001", n + 1);
+        }
+    }
+    let base = "views:\n  - type: calendar\n    name: Selected\n    filters: 'file.name == \"Task\"'\n    limit: 1\n";
+    store
+        .family_apply(
+            &MutationRequest {
+                operation_id: OperationId::new("create-base").unwrap(),
+                mutation: Mutation::Create {
+                    id: id("base"),
+                    path: VaultPath::new("Selected.base").unwrap(),
+                    kind: EntryKind::File,
+                    content: Some(base.as_bytes().to_vec()),
+                },
+            },
+            Some(FamilyCreateMode::Text),
+        )
+        .unwrap();
+    drop(store);
+    let mut v = NativeVault::open_existing(dir.path()).unwrap();
+    let recovered = v.recover().unwrap();
+    assert!(recovered.blocked.is_empty(), "{:?}", recovered.blocked);
+    assert_eq!(v.list().unwrap().len(), 1004);
+    for n in 0..1001 {
+        assert_eq!(
+            std::fs::read(dir.path().join(format!("A{n:04}.md"))).unwrap(),
+            body.as_bytes()
         );
     }
-    create(&mut v,"base","Selected.base","views:\n  - type: calendar\n    name: Selected\n    filters: 'file.name == \"Task\"'\n    limit: 1\n");
+    assert_eq!(
+        std::fs::read(dir.path().join("Selected.base")).unwrap(),
+        base.as_bytes()
+    );
+    let l = v
+        .claim_client(&OperationId::new("10000000-0000-4000-8000-000000000001").unwrap())
+        .unwrap();
+    let mut s = v.open_workblocks(&l).unwrap();
     let p = pin(&mut v);
     let mut j = CalendarJoinState::default();
     let mut q = request();
