@@ -77,6 +77,16 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Core repair delivery (2026-10-18 04:08 UTC): main209368fb preserves validated
+current.entryId during reconcileDurableWrite publication. Root isolated b0c80ab5
+adds direct cache/event identity regression: oldsource9/10 fails, fix10/10 passes;
+independent source approval, no guard/replay change. Core-only extraction avoids
+unintegrated Tasks-test dependencies. Tasks owner retains real save/split proof.
+Next exclusive iOS slot assigned to native owner for source-reviewed priority
+NewNote18 after coherent freeze/composition; actual FAB/edit/save/reopen required,
+unfinished warm source excluded. Coordinate live browser proof/compiler before
+starting, preserve booted Simulator and existing development-phone permission.
+
 Intent/migration assignment (2026-10-18 04:03 UTC): recovered reviewed docs
 903ecfe7/86bd56f9 are canonical; origin-intent-decision.md selects reserved
 host checkpoint namespace, explicit tagged settlement and32live/16MiB plus

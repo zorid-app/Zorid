@@ -476,3 +476,10 @@ native-new-note-ui worker now owns NewNote root/startup, Pages callback/borrow/
 recovery, factory pending inspection and minimal helper/PBX wiring. Reuse reviewed
 d9 helper; actual tap/create/edit/save/reopen remains required. FAB delivery first,
 one warm runtime parallel, then composed per-tab/gesture/save/keyboard proof.
+
+Durable publication identity fix (2026-10-18 04:08 UTC): root isolated
+core-durable-identity-fix extracts C5c58850f's one-line current.entryId publication.
+Direct cache/event identity regression fails old source9/10 then passes corrected
+10/10; foreign readback identity still rejects before publication. Independent
+review approved. Canonical main209368fb; Tasks real saved-body split proof remains
+with the full UI batch, not inferred from these scripted core cases.
