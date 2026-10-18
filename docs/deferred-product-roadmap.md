@@ -18,6 +18,15 @@ here; module-level tests alone do not establish desktop runtime acceptance.
 
 ### Latest integration checkpoint — 2026-10-18
 
+Latest user steering: current runtime verification targets are macOS Electron,
+web and the independent CLI on macOS; defer other OS/mobile runtime verification.
+CLI must be tested both independently and alongside Electron, not treated only as
+a harness. Preserve all-platform architecture without claiming untested parity.
+Sync is E2EE. Roadmap S1A now reserves a later discussion/design gate for sync-group
+creation/membership, joining and leaving/rejoining before S2 enrollment work.
+Group/key/data/pending-edit policies remain open; this is not a request to start
+that implementation or a one-day completion expectation.
+
 Main `eb6d6bb21e3e277745990eaa1b5d6645bda53eac` integrates the reviewed cache/history
 batch. Application source (`src`, `desktop`, `crates`) was verified identical to
 reconciled integration `bf1feb0a`; reconciliation with main changed documentation

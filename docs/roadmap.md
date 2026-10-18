@@ -19,6 +19,12 @@ before resuming iOS implementation. The browser is a connected sync-group client
 with retained local working data, rather than a user-managed filesystem vault.
 Do not reopen all tracks in parallel.
 
+Current verification targets are **macOS Electron, web, and the standalone CLI on
+macOS**. Exercise the CLI as an independent client, including shared-vault access
+with Electron; it is not only a test harness. Windows, Linux, iOS and Android
+runtime verification is deferred. Keep the shared-core design portable without
+claiming those platforms have passed.
+
 ## How a milestone advances
 
 One product milestone is in implementation at a time. Within it, parallel workers
@@ -50,7 +56,8 @@ foundations are credited below; complete S0 acceptance still requires its exit c
 | S0 | Storage layer, saving and local recovery — immediate priority | Current source/retained-artifact inventory |
 | S0A | Modular interfaces and feature-consumer contract review | S0; storage contract design starts within S0 |
 | S1 | Rust parsing, indexing, caching and search performance | S0A |
-| S2 | Shared sync backend and usable self-hosted native-client sync | S1 |
+| S1A | E2EE sync-group lifecycle design — discussion deferred | S1 |
+| S2 | Shared E2EE sync backend and usable self-hosted native-client sync | S1A |
 | S3 | Managed-data services and feature contracts | S2 |
 | S4 | Fully usable desktop Types and Bases | S3 |
 | S5 | Fully usable desktop Tasks | S4 |
@@ -211,7 +218,29 @@ paths. No new Base/Task/Calendar feature UI or paused native mobile implementati
 is smuggled into S1. Execute slices one at a time; source approval alone is not
 runtime or performance acceptance.
 
-## S2 — Sync foundation and self-hosted service
+## S1A — E2EE sync-group lifecycle design
+
+**Status:** planned for later discussion, not implementation now. Sync is
+end-to-end encrypted for both self-hosted and hosted services. Existing encrypted
+sync foundations do not settle the product's group lifecycle.
+
+- [ ] Define group identity, creation, membership and the relationship between
+  accounts, devices, local vaults and browser working state.
+- [ ] Design joining: authorization/invitations, key delivery/unlock, destination
+  selection, existing-data reconciliation and interrupted join/retry behavior.
+- [ ] Design leaving: distinguish local disconnect/sign-out from membership or
+  device revocation and group deletion. Decide retained data/key/cache handling,
+  pending edits, offline devices and rejoining without silently losing work.
+- [ ] Settle E2EE key ownership, recovery and access changes, including what
+  revocation can and cannot prevent for data already downloaded. Define consistent
+  Electron, web and standalone CLI behavior.
+
+**Exit:** discuss and record the lifecycle/state transitions, security boundaries,
+user flows and meaningful acceptance scenarios before S2 enrollment implementation.
+This is a separate design gate with no one-day completion commitment; unresolved
+policy remains explicit until that discussion.
+
+## S2 — E2EE sync foundation and self-hosted service
 
 **Current:** encrypted text/full-vault/managed-record foundations, relay, native
 CLI/desktop and bounded convergence evidence exist. Product enrollment and normal
@@ -221,7 +250,8 @@ user-facing administration/onboarding are not complete.
   distinguish local commit, physical publication and remote acknowledgment.
 - [ ] Make server URL/account/group selection, credential/key handling and sync
   status usable through ordinary client settings and standalone CLI.
-- [ ] First-device group creation and joining an existing group; trusted pairing,
+- [ ] Implement the accepted S1A group lifecycle, including leaving and rejoining.
+  First-device group creation and joining an existing group; trusted pairing,
   invitations/QR/copyable code and recovery-key design. Do not expose reusable
   secrets in invitation codes. Finalize crypto/API details before implementation.
 - [ ] Empty/existing destination bootstrap, interrupted enrollment/resume and safe

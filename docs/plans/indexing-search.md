@@ -69,6 +69,14 @@ or implementing S10 enrollment first. Unsent edits/receipts are not evictable ca
 
 ## Validation discipline
 
+Current runtime acceptance targets are macOS Electron, actual web bindings and
+the standalone CLI on macOS. Verify CLI cold/warm indexing, search and cache reuse
+without a running desktop app, plus CLI-origin updates and concurrent Electron
+access. Web measurements exercise browser workers and retained browser storage;
+native thread results do not substitute for them. Record the actual browser engine
+tested. Windows/Linux and native iOS/Android runtime checks are deferred; portable
+design and core checks do not establish their runtime performance.
+
 Use behavior checks against real storage at changed boundaries, accepted semantic
 fixtures, stale/cancellation/coverage cases and representative actual app flows.
 Measure rather than invent millisecond or memory promises. The 100,000-note run is
@@ -76,7 +84,7 @@ a milestone stress scenario, not a repeated test after every edit. Serialize hea
 work on the 8 GB machine and keep concurrency bounded. Reuse existing proof only
 when its exact relevant source/input composition still applies.
 
-Native mobile follows the desktop gate; S1 verifies portable semantics/bindings
+Native mobile follows the desktop gate; S1 preserves portable semantics/bindings
 without starting paused iOS builds or claiming phone/runtime performance. Record
 scope, owner, branch, tested source and limitations in the execution checkpoint.
 After S1.6 acceptance, update the roadmap and archive detailed logs separately.

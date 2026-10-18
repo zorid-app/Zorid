@@ -1,5 +1,15 @@
 # User findings queue
 
+## Test scope and later E2EE group design — accepted 2026-10-18
+
+User limits current runtime test targets to macOS and web; the independent CLI is
+also a first-class macOS test target, including standalone operation and concurrent
+Electron access. Windows/Linux/iOS/Android runtime checks are deferred, not passed.
+Sync remains E2EE. Added S1A before S2 for a later discussion of sync-group
+identity/membership, joining, leaving, key/data handling, pending edits and rejoin.
+These policies are not selected by recording the stage; no one-day delivery or
+immediate sync-design implementation is promised.
+
 ## S1 core-owned indexing lifecycle — accepted direction 2026-10-18
 
 User requires multicore optimization on every platform where it improves measured
