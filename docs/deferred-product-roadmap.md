@@ -116,6 +116,17 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:26UTC: Pages history cursor stays unchanged on root-routed opens; generation-
+bound actual-close query ACK52d427e4, no navigation authority. Narrow d809 scope
+ACK88c9206ba107 adds native tab/return callbacks and explicit-foreground recovery
+for alreadyclosed unconfigured legacy container; configured routes stay root-owned.
+No Scene/project/compiler grant. Coordinator corrections under final2f source
+review; file/Home factory remains separate from unresolved Newnote creation mode.
+Optimized host35070 terminal101,5/6 passed: >1MiB full reply/status/count proof
+now works; fixture incorrectly assumed projection pending, actual settled. Worker
+corrects assertion to documented settled|pending and reruns six only; no production
+logic change, no pass claim yet. Core pending/settled evidence covered separately.
+
 00:24UTC: host38747 bounded at2m11s/terminal101 SIGTERM, no pass claim;
 expensive repeated native recovery during setup is being replaced with public
 Store setup on one connection, closed before real leased host endpoints. Preserve
