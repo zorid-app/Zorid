@@ -77,6 +77,18 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Portable core checkpoint (2026-10-18 04:52 UTC): main `8133fd2c` integrates
+reviewed WorkBlock service helpers (`6f864a31`/`a4389f5f`) and canonical retained-
+intent helpers (`8e06da2c`/`c38ff2e6`). Independent composition review confirms
+exact original source, only two lib exports, unchanged domain/admission/dependencies
+and no product adapter activation. Original focused S11 result and root-read,
+hash-verified portable5+8 logs are retained in
+`managed-data/core-intent-foundation-integration.md`. Browser transaction/runtime,
+origin capture/issuance/namespace/accounting/settlement and no-old-apply-bypass
+cutover remain separate required work. No repeated root compiler campaign ran.
+Native Calendar check was explicitly incomplete after4 cases while its expensive
+1,001-file fixture was corrected; do not count it as a complete passing suite.
+
 Latest checkpoint (2026-10-18 04:48 UTC): user mobile architecture supersession
 relayed in `msg_f2da5c302596`, acknowledged by root. ONE retained initialized
 WebView per vault owns logical document tabs, selected document, history, live
