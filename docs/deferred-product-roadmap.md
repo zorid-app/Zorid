@@ -77,6 +77,20 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Progress checkpoint (2026-10-18 01:36 UTC): native Simulator11 full build95537
+passed on c8fd423c (runtime bytes equal reviewed588bc), app UI verification is
+active under native owner; no final UIKit/metadata failure-retry proof yet.
+NewNote helper d9f5cfb6/e720f5ed and actual-helper harness fbf954a4 passed source
+review and31/31 bounded macOS host cases, using controlled framed I/O boundaries,
+not the Rust host/UIKit. Native owner is authorized to compose helper, minimal
+project registration and caller durable-metadata/exact-loan handoff after the
+frozen current UI pass. Do not claim working NewNote UI yet. Pages edge routing
+source assigned371 on isolated588bc successor, iOS16+ only initially; iOS15 keeps
+arrows, editor gestures remain outside scope. Managed A/B private seam recorded
+2e6544f8; independent review and source proceed on isolated integration branch.
+B's reviewed opener/dispatcher/type hunks authorized after direct A/B DTO
+agreement; worker-host/public API/UI remain later, main integration only root.
+
 Latest resource steering (2026-10-18 01:31 UTC): direct user clarification relayed
 by managed-data lead says build-slot permission applies ONLY to iOS. Rust/browser
 workers run bounded focused checks independently; do not gate them on iOS slot
