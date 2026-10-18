@@ -107,9 +107,11 @@ capture TOCTOU and observable window consistency gaps. Both were corrected with
 regressions before implementation commit `248e097f`. U then found the renderer
 spread still evaluated input getters before capture, allowing a getter-triggered
 release before pending tracking; `313e9964` adds descriptor-only capture before
-command construction and a no-getter/no-dispatch regression. Exact final source
-review has been requested. Review report lives separately at
-`/tmp/zorid-workblock-binding-review.md` pending U's final result.
+command construction and a no-getter/no-dispatch regression. U approved exact
+HEAD `465335f6670e74378885a294c50d461eb047f299` (source `313e9964`) in
+`msg_ffcdd5c9e9e4`, independently rerunning all 42 bounded checks successfully
+and passing diff check. Approval covers source composition/integration only.
+Review report lives separately at `/tmp/zorid-workblock-binding-review.md`.
 
 The coordinator must compose the independently reviewed native service/host and
 this binding, then run actual Electron schedule/read/reopen verification before
