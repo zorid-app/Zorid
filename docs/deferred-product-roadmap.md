@@ -77,6 +77,15 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Browser implementation assignment (2026-10-18 03:26 UTC): reviewed current-v1
+WorkBlock contract retained at d1940545; managed coordinator run_7a10da5526b5
+is authorized to name isolated S/W/D/H/P/V workers exactly within the contract
+ownership table. Freeze shared Rust DTO and worker/client RPC early. No native
+compatibility, migration, DB/index/wire version, dependency or UI scope added.
+Tasks delivery remains priority. Generated WASM/strictIDB through the normal
+admitted Worker, bounded encrypted convergence and later rendered Calendar are
+separate acceptance gates; source assignment is not browser completion.
+
 Scope correction relayed by managed owner (2026-10-18 03:17 UTC): direct user
 instruction removes spaced repetition entirely from this implementation goal;
 it is not a deferred requirement. No worker was implementing it. Historical
