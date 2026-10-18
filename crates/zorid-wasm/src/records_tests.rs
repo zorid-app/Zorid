@@ -391,3 +391,84 @@ fn stored_operation_validation_retains_conflicting_restore_links_under_same_row_
     )
     .is_err());
 }
+
+#[test]
+fn binding_provenance_rejects_canonical_same_length_value_change_and_wrong_source() {
+    let f = fixture(Policy::Synced);
+    let plan = local(&f, 1);
+    let content = plan.bindings[0].content.as_bytes();
+    let evidence=serde_json::json!({"payload":std::str::from_utf8(plan.payload.as_ref().unwrap()).unwrap(),"registration":null,"accepted":null}).to_string();
+    let scope = raw_scope(&f.scope);
+    assert!(validate_stored_binding_inner(&scope, "create", "create", content, &evidence).is_ok());
+    let changed = std::str::from_utf8(content)
+        .unwrap()
+        .replace("\"value\":1", "\"value\":2");
+    assert_eq!(changed.len(), content.len());
+    assert!(
+        validate_stored_operation_inner(&scope, "create", "create", changed.as_bytes()).is_ok()
+    );
+    assert!(validate_stored_binding_inner(
+        &scope,
+        "create",
+        "create",
+        changed.as_bytes(),
+        &evidence
+    )
+    .is_err());
+    assert!(
+        validate_stored_binding_inner(&scope, "create", "wrong-update", content, &evidence)
+            .is_err()
+    );
+    let wrong_payload = local(&f, 2).payload.unwrap();
+    let wrong=serde_json::json!({"payload":std::str::from_utf8(&wrong_payload).unwrap(),"registration":null,"accepted":null}).to_string();
+    assert!(validate_stored_binding_inner(&scope, "create", "create", content, &wrong).is_err());
+}
+#[test]
+fn local_cache_binding_provenance_requires_exact_complete_history_and_policy() {
+    for policy in [Policy::Local, Policy::Cache] {
+        let f = fixture(policy);
+        let plan = local(&f, i64::MIN);
+        let scope = raw_scope(&f.scope);
+        let evidence=serde_json::json!({"payload":null,"registration":f.registration,"accepted":std::str::from_utf8(plan.state.as_ref().unwrap()).unwrap()}).to_string();
+        let content = plan.bindings[0].content.as_bytes();
+        assert!(
+            validate_stored_binding_inner(&scope, "create", "create", content, &evidence).is_ok()
+        );
+        let changed = std::str::from_utf8(content)
+            .unwrap()
+            .replace("-9223372036854775808", "-9223372036854775807");
+        assert!(validate_stored_binding_inner(
+            &scope,
+            "create",
+            "create",
+            changed.as_bytes(),
+            &evidence
+        )
+        .is_err());
+        assert!(validate_stored_binding_inner(
+            &scope,
+            "create",
+            "wrong-update",
+            content,
+            &evidence
+        )
+        .is_err());
+        let missing =
+            serde_json::json!({"payload":null,"registration":f.registration,"accepted":null})
+                .to_string();
+        assert!(
+            validate_stored_binding_inner(&scope, "create", "create", content, &missing).is_err()
+        );
+    }
+    let f = fixture(Policy::Synced);
+    let plan = local(&f, 1);
+    let evidence=serde_json::json!({"payload":null,"registration":f.registration,"accepted":std::str::from_utf8(plan.state.as_ref().unwrap()).unwrap()}).to_string();
+    assert!(validate_stored_binding_inner(
+        &raw_scope(&f.scope),
+        "create",
+        "create",
+        plan.bindings[0].content.as_bytes(),
+        &evidence
+    )
+    .is_err());
+}

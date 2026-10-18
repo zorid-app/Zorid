@@ -158,6 +158,8 @@ validateRecordsStoredOperation(scopeJson: string, operation: string,
   update: string, canonicalContent: Uint8Array): void;
 validateRecordsStoredReplay(collectionScopeJson: string, operation: string,
   request: Uint8Array, result: Uint8Array): void;
+validateRecordsStoredBinding(scopeJson: string, operation: string, update: string,
+  content: Uint8Array, evidenceJson: string): void;
 prepareRecordsLocal(factsJson: string, command: Uint8Array): RecordsPlan;
 // Member of existing authenticated WasmSyncUpdate:
 recordsReadSetJson(): string; // {scope,operations:string[]}, no values decoded in JS
@@ -349,7 +351,7 @@ Final affected evidence so far (bounded `-j1`, tests serialized):
 | Store family | 3 passed after feature unification |
 | Store numeric persisted/reopen regression | 1 passed: counterexample f64 + object float + i64 extrema |
 | Store common family ledger / immutable payloads | 7 + 6 passed, including exact wire/cursor rollback and file/text source validation |
-| WASM crate native unit tests | 63 passed, including 12 new private-record traces and existing text/file bindings |
+| WASM crate native unit tests | 65 passed, including 14 new private-record traces and existing text/file bindings |
 
 This is native-library and native-target WASM-binding evidence. It does not
 establish actual wasm32 artifact, browser IDB durability, mixed-family browser
@@ -385,12 +387,30 @@ for conflicting restore links under one generation key. Root/coordinator agreed
 in `msg_4f1d0a188c74`; regression checks both valid conflicting links, illegal
 self-restore and wrong key. No source commitment equality is weakened.
 
+Binding provenance was added separately after coherent source commit `fef98838`,
+requested by B `msg_5a4f14c25d76` and acknowledged by coordinator
+`msg_80b9fa30254b`. `validateRecordsStoredBinding` first performs static row
+validation, then consumes strict raw-string evidence
+`{payload:string|null,registration:string|null,accepted:string|null}`. With a
+payload it requires exact canonical Payload update ID and matching full canonical
+operation bytes (which include complete scope). Without one it requires a
+trusted Local/Cache registration, complete accepted State history, update ID equal
+to operation ID and exact canonical operation content. Synced data without its
+immutable payload fails; no payload is fabricated for Local/Cache. Same-length
+canonical integer mutation1->2 passes static shape validation but fails provenance;
+new fixtures cover both source-backed and Local/Cache history-backed evidence.
+
+This final additive source requires an incremental actual WASM rebuild after the
+coordinator's provisional `fef98838` artifact; the provisional build cannot serve
+as acceptance of the new export. Native/manifest source is unchanged by this
+follow-up; the final affected native-target binding suite has65 passing tests.
+
 Final source hashes (SHA256; source code, excluding this report):
 
 - `crates/zorid-records/Cargo.toml`: `3a6d429a5d36d47d25ff21b3a0e802e7df5face69637a2a7ae9bd474e1455e92`
 - `crates/zorid-records/src/admission.rs`: `36bb97fc5e1ffe2ddea8d90690d3466dc2fd5b4db01efc7b334498691ea5254f`
 - `crates/zorid-store/src/managed_records.rs`: `91d93ed5e590fd554b0aa1c523160995b3c3b32339003d92c792e996623d52e2`
-- `crates/zorid-wasm/src/records.rs`: `4afcf4a35b21f412a1f5a03a10a8ebf0c610cf5843a570f9f49c41d3fa6b5ed6`
-- `crates/zorid-wasm/src/records_tests.rs`: `b5128649de9be5fcfe15d8b84b671ff74c22cdd3950cacfe5d1657a86ffbec19`
+- `crates/zorid-wasm/src/records.rs`: `b0bdd7b7a6b2c5428cf8fe42c10bcd5cb18b6f8ec2dd1fcfb7ecf949388bc771`
+- `crates/zorid-wasm/src/records_tests.rs`: `fcd1d67b78683cb1b032761094e3ba0752ca0b38113e06390b82a96db1967295`
 - `crates/zorid-wasm/src/sync.rs`: `4d1d36dc1def753666d867de86bd5f7af85772115fa0e416cdd5dc75889b2a1d`
 - `crates/zorid-wasm/src/sync/streaming/plan.rs`: `501d9f8b2d529a14ed465f7eba6ec245009f558197c92ec095f295f5b78bdbd4`

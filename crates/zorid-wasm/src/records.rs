@@ -746,6 +746,78 @@ pub fn validate_stored_replay(
     validate_stored_replay_inner(collection_json, operation, request, result).map_err(err)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BindingEvidence {
+    payload: Option<String>,
+    registration: Option<String>,
+    accepted: Option<String>,
+}
+fn validate_stored_binding_inner(
+    scope_json: &str,
+    operation: &str,
+    update: &str,
+    content: &[u8],
+    evidence_json: &str,
+) -> Result<()> {
+    validate_stored_operation_inner(scope_json, operation, update, content)?;
+    let evidence: BindingEvidence = decode(evidence_json.as_bytes(), 20 * MAX_BYTES)?;
+    let operation = core(Id::new(operation))?;
+    let update = core(Id::new(update))?;
+    if let Some(exact) = evidence.payload {
+        let payload = core(Payload::decode(exact.as_bytes()))?;
+        if payload.id() != &update {
+            return Err("records binding source update mismatch".into());
+        }
+        // Matching exact canonical operation content includes its complete scope.
+        let op = payload
+            .operations()
+            .iter()
+            .find(|op| op.id == operation)
+            .ok_or("records binding source operation missing")?;
+        if core(admission::canonical_operation(op))? != content {
+            return Err("records binding source content mismatch".into());
+        }
+        return Ok(());
+    }
+    let r = registration(
+        evidence
+            .registration
+            .as_deref()
+            .ok_or("records binding registration missing")?
+            .as_bytes(),
+    )?;
+    if r.schema.policy == zorid_records::Policy::Synced || update != operation {
+        return Err("records binding lacks immutable source".into());
+    }
+    let bytes = evidence
+        .accepted
+        .as_deref()
+        .ok_or("records binding accepted state missing")?
+        .as_bytes();
+    let state = core(State::restore(r.schema.clone(), bytes))?;
+    core(admission::restore_accepted(&r, state.scope(), Some(bytes)))?;
+    let op = state
+        .history()
+        .get(&operation)
+        .ok_or("records binding accepted operation missing")?;
+    if core(admission::canonical_operation(op))? != content {
+        return Err("records binding accepted content mismatch".into());
+    }
+    Ok(())
+}
+#[wasm_bindgen(js_name=validateRecordsStoredBinding)]
+pub fn validate_stored_binding(
+    scope_json: &str,
+    operation: &str,
+    update: &str,
+    content: &[u8],
+    evidence_json: &str,
+) -> std::result::Result<(), JsValue> {
+    validate_stored_binding_inner(scope_json, operation, update, content, evidence_json)
+        .map_err(err)
+}
+
 #[cfg(test)]
 #[path = "records_tests.rs"]
 mod tests;
