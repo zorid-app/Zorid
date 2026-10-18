@@ -1,5 +1,26 @@
 # Native mobile integration
 
+## Canonical connected File/Home tabs — 2026-10-18
+
+Main a56c2d16 integrates exact reviewed native candidate2add282b. All iOS files
+match the frozen candidate; Info.plist/project plutil checks pass. Independent
+integration review confirmed source provenance and project membership, with no
+shared Rust/renderer/build/dependency edits. Current managed-data work is preserved.
+
+Full Simulator build39003 passed at fb1c04d7. Actual native Pages→existingnote→
+close/overview→Home→Showtabs→two tabs→originalnote/body→ReturnFiles passed;
+no new edits were typed in this pass. User subtitle-only correction2add was
+independently reviewed, then full signed Dev10 build21794 and strict artifact,
+bundle/version/signature checks passed. Phone installation remains unconfirmed:
+CoreDevice1011/tunnel unavailable; existing artifact retained for reconnection.
+Simulator app/helper closed; native owner retains device-only deployment authority.
+
+Configured back/forward history, native NewNote helper/UI, import destination
+router, Share and Duplicate UI remain followups. Import staging support is present
+but its router is unregistered. Source/model/compiler proof does not establish
+keyboard, failure-path, background or full mobile parity. Historical checkpoints
+below retain their original evidence and exclusions.
+
 ## Native file authority and recovery library — 2026-10-18 00:28 UTC
 
 Main bb155f3a integrates reviewed583cebce: picker-selected parent identity is

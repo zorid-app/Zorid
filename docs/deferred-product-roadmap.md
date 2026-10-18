@@ -116,6 +116,15 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+01:14UTC canonical native integration: maina56c2d16 merges exact2add282b after
+independentcombinedsourceapproval, Simulator39003 build+focusedFile/HomeflowPASS,
+signedDev10build21794+strictartifactverificationPASS. AlliOSfilesbyteidenticalto
+candidate, plist/projectlintOK; mergedbothledgerspreservingmanageddatawork.
+No newtypededit/failurepath/keyboard/background/fullparity claim. History/NewNote/
+import-router/share/duplicateUI stillrequired; staticimportrouternil. Phoneinstall
+notconfirmed CoreDevice1011connection, nativeownerdevice-onlyretryexistingartifact.
+No compilerlive, rootheavychecksnotneededforunchangedsource; nextadapterworkisolated.
+
 01:12UTC: signedDev10build21794 terminal0 frozen2add282b, verifiedDevbundle/
 version10/development/iPhoneOS+strictcodesign/entitlements. Installattempts both
 terminal1 CoreDevice1011/tunnelunavailable, notsigningfailure; useralreadyasked
