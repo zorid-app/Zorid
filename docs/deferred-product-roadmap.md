@@ -116,6 +116,15 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:58UTC: nativeowner03fc0424 exactreviewed rootwiring committed. Exclusive FULL
+Simulator10 build/install/focusedFile/Home UI slot GRANTED afterrecords17018
+returned. Freeze reviewed HomeShowtabs factory successor ifincluded, reportHEAD/
+commands/handles beforebuild; no hiddenHomehost. ios-build.sh simulator, freshowned
+/private/tmp/zorid-ios-v10-sim-20261018, officialRustlocked-j1 +Vite/capcopy+Xcodejobs1
+serialized; existing1274Simulator only. No phone9replacement/TestFlight; NewNote/
+history/import remain gaps. Root source-only records integration allowed, no heavy
+overlap. Native retains slot through terminals+ownedUIcleanup andexplicitreturn.
+
 00:57UTC: records1842c15e granted tests17018 exit0,33/33 pass (9adversarial,
 24traces), no source/lockchanges; log /private/tmp/zorid-records-1842c15e-tests.log.
 Root independent actualsource review approved library slice, programmaticbatch
