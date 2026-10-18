@@ -116,6 +116,16 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:22UTC: d809 correction a02b7397 after5742f382 source-ready; independent root
+review assigned. Exact-owner terminal retirement receipt and covered-scene
+background correction remain uncompiled; coordinator consumption still required.
+Rust host retry17697 compiled,4/6 passed: exposed real Root witness unknown-field
+decode bug (fixe0704c2f), and invalid oversized fixture (worker correcting to
+bounded components while retaining actual >1MiB reply assertion). Portable2
+tests rerun in27292, then host corrective run; worker retains exclusive slot.
+Root independent review assigned fcdb2a78/e0704c2f before integration. No failed
+host check is treated as acceptance; main runtime unchanged since import library.
+
 00:19UTC: core authority focused checks11/11 passed (parent2, Store authority7,
 compact summary2), logs /private/tmp/native-menu-wire-{parent,authority,summary}.log.
 Compile fixfcdb2a78 reexports types through existing Store dependency, no manifest
