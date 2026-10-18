@@ -9,7 +9,8 @@ const report={status:'running',groups:[],cleanup:[],remainingGates:['No rendered
 window.taskQueriesEvidence=report;
 const names=new Set(),hosts=new Set();
 function assert(value,message){if(!value)throw new Error(message);}
-function equal(a,b,message){assert(JSON.stringify(a)===JSON.stringify(b),message+': '+JSON.stringify({actual:a,expected:b}));}
+function canonical(value){return Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;}
+function equal(a,b,message){assert(JSON.stringify(canonical(a))===JSON.stringify(canonical(b)),message+': '+JSON.stringify({actual:a,expected:b}));}
 async function rejects(action,code){try{await action();}catch(error){assert(error.code===code,`Expected ${code}; observed ${error.code}: ${error}`);return code;}throw new Error('Expected rejection: '+code);}
 async function group(name,run){const evidence=await run();report.groups.push({name,status:'passed',evidence});}
 async function start(name='zorid-core-vault:task-queries-'+crypto.randomUUID(),clientId=crypto.randomUUID()){
