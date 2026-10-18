@@ -77,6 +77,17 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Retained editor checkpoint (2026-10-18 04:55 UTC): canonical `e4d6b297`
+integrates independently approved interaction source047d5687. Root isolated
+composition exactly matches the entire approved src/tests tree;91 focused cases
+and fullTS exit0 are recorded with commands, source hashes and retained logs in
+`docs/verification/mobile-editor-interaction/`. Native/TS owners were notified.
+Opt into canMutate/interactionState at construction, including the first active
+editor; revoke writer before setter. Per-editor menus abort and validate epoch
+before effects; default unmanaged desktop native menus remain unchanged.
+This closes the earlier editor source blockers, not the router/live WebKit/IME
+or physical mobile gates. See mobile-editor-interaction-integration.md.
+
 Portable core checkpoint (2026-10-18 04:52 UTC): main `8133fd2c` integrates
 reviewed WorkBlock service helpers (`6f864a31`/`a4389f5f`) and canonical retained-
 intent helpers (`8e06da2c`/`c38ff2e6`). Independent composition review confirms
