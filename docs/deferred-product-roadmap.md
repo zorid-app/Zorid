@@ -116,6 +116,14 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:31UTC: native coordinator exact accepted content SHA256a83c45cb... committed
+875fc451 plus minimalPBX membership; not main/runtime verified. Root683f90dd
+header source review approved, configuredhistory remains external route gate.
+Factory a83fda5d source review underway. Pages09a4 review found clearing all
+callbacks can reenable legacy routes after root ownership; lifetime latch/failclosed
+correction requested371 msg_00e7c461860f. Fourth onChooseVault callback ACKed in
+371 scope; Settings must use actual rootdrain. No native compiler requested yet.
+
 00:30UTC source checkpoint: Pages tabs09a4ab41 atop09734eb4 source-ready, root
 independent review assigned. Editor hooks683f90dd after5742+a02 source-ready,
 separate root reviewer assigned. Both isolated/uncompiled; Python assertions do
