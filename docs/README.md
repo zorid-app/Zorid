@@ -5,6 +5,7 @@ rendering first, then the shared Rust systems and their storage boundaries.
 
 | Documentation | Purpose |
 | --- | --- |
+| [Roadmap](roadmap.md) | Maintained milestone order, scope and exit gates; storage first |
 | [Architecture](architecture/README.md) | Maintained explanation of how the application fits together |
 | [Platform setup](platforms.md) | Development entry points and build boundaries |
 | [Current decisions](architecture/decisions.md) | Accepted direction, implementation gaps and delivery sequence |

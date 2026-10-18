@@ -1,5 +1,21 @@
 # Product discussions after the editor foundation
 
+## Maintained product roadmap — latest priority
+
+The [roadmap](roadmap.md) is the single high-level delivery order: **S0 storage,
+saving and recovery is immediate**, S1 Rust indexing/search/cache performance next,
+then sync/managed foundations and complete desktop Bases/Tasks/Calendar/Google,
+then hosted/web and native iOS. One milestone implements at a time with explicit
+integrated exit evidence. This is planning, not new implementation acceptance.
+Historical ownership and scope evidence below remain preserved.
+
+Browser product flow: web.zorid.app offers Zorid Cloud login or self-hosted service
+connection, then authorized sync-group selection/unlock and shared feature views.
+After leaving, optional cache can remain. Returning revalidates cache and catches
+up. Pending unsent edits are not disposable cache. Browser persistent-vault parity
+is not required; close/reload/offline and credential-retention policies remain open.
+
+
 ## Latest sequencing and architecture correction — 2026-10-18
 
 **Browser role correction:** browser joins existing sync groups; it is not expected

@@ -42,6 +42,9 @@ selects a service; it must not quietly fall back to another storage authority af
 an error. Rust plans are not commits. Storage transactions establish durability;
 filesystem publication and network delivery are separate outcomes.
 
+Follow the [product roadmap](../roadmap.md) for delivery order: storage is the
+immediate milestone. This manual describes architecture rather than scheduling.
+
 ## Then follow the systems
 
 | Module | Responsibility |

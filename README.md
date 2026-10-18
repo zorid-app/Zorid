@@ -12,7 +12,8 @@ preserved; further native implementation follows desktop completion.
 
 ## Documentation
 
-Start with the [architecture overview](docs/architecture/README.md), organized by
+Follow the [product roadmap](docs/roadmap.md) for the delivery sequence and
+milestone gates. Start with the [architecture overview](docs/architecture/README.md), organized by
 platform and then by Rust system. The [documentation index](docs/README.md) separates
 maintained design, current decisions, execution tracking and historical evidence.
 [Platform setup](docs/platforms.md) lists development/build entry points.

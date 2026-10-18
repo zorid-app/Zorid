@@ -1,5 +1,13 @@
 # Zorid: managed data, Bases, Tasks and Calendar implementation plan
 
+> Capability detail, not the current delivery order. Follow the [product roadmap](roadmap.md):
+> storage first, then Rust performance and gated desktop delivery before iOS.
+> Browser joins existing hosted/self-hosted sync groups and may retain cache;
+> it is not a required persistent local vault. Speculative public plugin APIs
+> remain on a discussion hold. Earlier parallel native/prototype directions and
+> expansive API phases below do not override these current decisions.
+
+
 Date: 2026-10-17. Discussion handoff; not an implementation-completion report.
 
 Scope amendment (2026-10-18 03:17 UTC / 2026-10-17 America/Toronto):

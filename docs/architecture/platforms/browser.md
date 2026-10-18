@@ -26,6 +26,21 @@ or a local database write. Preserve truthful pending/error state and define how
 unconfirmed edits are handled before leaving; no unsaved-data deletion is authorized
 by this architecture correction.
 
+## Entry and departure flow
+
+The planned web.zorid.app entry offers Zorid Cloud sign-in or connection to a
+self-hosted service URL. After authenticating, select/join an authorized sync group,
+unlock its content and show notes, attachments, Bases, Tasks and Calendar through
+the shared UI. Hosted and self-hosted use the same client/protocol. This describes
+the intended product; it does not claim a deployed hosted service or complete UI.
+
+When the user leaves, optional cache can remain to accelerate a later visit. On
+return, authenticate/unlock, validate that cache and fetch current changes. The
+service and durable synced native clients retain the group's data. Cache loss
+must be recoverable by refetching synchronized content; unconfirmed edits are a
+separate pending-data obligation. Sign-out/key retention and cache expiry policies
+remain to be settled. See [S10 in the roadmap](../../roadmap.md#s10--connected-web-workspace).
+
 ## Current implementation — differs from target
 
 The browser loads the same TypeScript Workspace, CodeMirror editor and document

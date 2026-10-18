@@ -11,6 +11,8 @@ contracts/plans and source-addressed documents retain their existing root paths.
 
 ## Files
 
+- [Maintained product roadmap](product-roadmap-2026-10-18.md)
+
 - [Architecture documentation reorganization](architecture-documentation-2026-10-18.md)
 - [audio-embed-style](audio-embed-style.md)
 - [backend-integration-acceptance](backend-integration-acceptance.md)

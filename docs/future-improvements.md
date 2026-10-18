@@ -1,8 +1,9 @@
 # Future improvements
 
-Updated 2026-10-17. This backlog records deferred capabilities and performance
-ideas. It does not expand the current shared-core implementation pass. The
-[delivery roadmap](deferred-product-roadmap.md) remains the source of truth for
+Updated 2026-10-18. This backlog preserves later capabilities and performance
+ideas. Storage is the immediate S0 milestone and indexing/search optimization is
+S1; those items are now explicitly scheduled, not indefinitely deferred. The
+[product roadmap](roadmap.md) remains the source of truth for
 milestones, dependencies and verification.
 
 ## Parallel indexing and bounded scan work
@@ -80,10 +81,9 @@ Native mobile shells, new-device joining, hosted/self-hosted onboarding, full
 version history, coordinated automatic backups and administration remain in the
 delivery roadmap. They have not been dropped or declared complete by this list.
 Backups must include accounts, permissions and recovery-critical configuration,
-as well as encrypted vault data. Latest user steering moves Bases/tasks/calendar
-implementation immediately after Vite and before Stage5; see
-[built-in workflow plan](bases-tasks-calendar-plan.md). They are no longer deferred
-behind Stage5.
+as well as encrypted vault data. Older Vite/Stage5 sequencing is historical;
+follow the maintained [roadmap](roadmap.md), beginning with storage and then Rust
+performance. Desktop feature completion precedes iOS implementation.
 
 ## Renderer startup and lazy loading
 
