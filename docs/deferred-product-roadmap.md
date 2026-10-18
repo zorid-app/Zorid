@@ -116,6 +116,15 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:18UTC: native coordinator draft review msg_2c163f17af15 blocks composition
+at SHA7ac8685389cb71233b774bd6750ebe74e91acb0d4426d69d4cd53bf093273df2:
+activation quarantine must survive malformed/stale results; source needs explicit
+role/tab/document witness; metadata persistence failure needs gated retry; recovery
+controls must be executable; scene epoch and UIKit transition/pop ownership must
+be guarded. Relayed native owner msg_2e26bf1ee3d0; source correction only, no build.
+Rust menu worker owns compiler session29195, host focused checks in progress,
+log /private/tmp/native-menu-wire-host.log. No terminal result yet.
+
 00:17UTC: actual frozen527 two-file iOS frontend57718 terminal0, empty diagnostics;
 Swift5 arm64 iOS15 Simulator target, SDK26.2 and cached Sim9 modulecache. No
 project/build/runtime proof; successor883d and coordinator excluded. Native owner
