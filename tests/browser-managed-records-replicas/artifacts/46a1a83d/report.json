@@ -1,0 +1,436 @@
+{
+  "provenance": {
+    "head": "46a1a83d8dabf829de93f62aecdd279560f8a77a",
+    "fingerprint": "a4027f128c91099071a2744f90a599b9151ee623599f3e4b7c4846283a16e0f8",
+    "files": {
+      "zorid_wasm.js": "1145a203bda8c72a6e017e87f0adda6df4b5c9d992d802c56ece864538ffae31",
+      "zorid_wasm_bg.wasm": "b8e316e2a8d4e8a498c0e8f2d48b844d3b3db4ca51513bbd000674f26283ae2e"
+    },
+    "sourceDigest": "389229541825552f7e12c54baf403304a0d9e2fde0a3483031843c7ecf847f0e",
+    "browser": {
+      "protocolVersion": "1.3",
+      "product": "Chrome/155.0.8059.80",
+      "revision": "@43a195105613ac83c21d3f14de279f4a045c7da0",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36",
+      "jsVersion": "15.5.35.23"
+    }
+  },
+  "evidence": {
+    "status": "passed-subset",
+    "transport": "HTTP JSON v1 reference fixture",
+    "groups": [
+      {
+        "name": "shared initial history then independent offline field edits converge with durable sealed outboxes and replay",
+        "status": "passed",
+        "ms": 356,
+        "evidence": {
+          "pendingA": [
+            "separate-left"
+          ],
+          "pendingB": [
+            "separate-right"
+          ],
+          "sealedBytes": 990,
+          "replayResult": "{\"operation\":\"separate-left\",\"revision\":[145,221,161,62,162,162,18,25,124,119,186,181,27,232,25,47,199,12,139,210,119,88,186,213,170,254,84,167,39,104,51,107],\"sequence\":\"2\"}",
+          "transfer": {
+            "results": [
+              {
+                "uploaded": 1,
+                "received": 1,
+                "complete": true
+              },
+              {
+                "uploaded": 1,
+                "received": 2,
+                "complete": true
+              },
+              {
+                "uploaded": 0,
+                "received": 1,
+                "complete": true
+              }
+            ],
+            "cursor": {
+              "realm_id": "replica-realm",
+              "vault_id": "replica-vault",
+              "server_epoch": "replica-epoch",
+              "after": "3"
+            }
+          },
+          "state": "{\"format\":1,\"scope\":{\"realm\":\"replica-realm\",\"vault\":\"replica-vault\",\"owner\":\"replica-fixture\",\"collection\":\"synced\",\"record\":\"separate\",\"generation\":\"separate-root\",\"restores\":null},\"operations\":[{\"id\":\"separate-left\",\"parents\":[\"separate-root\"],\"scope\":{\"realm\":\"replica-realm\",\"vault\":\"replica-vault\",\"owner\":\"replica-fixture\",\"collection\":\"synced\",\"record\":\"separate\",\"generation\":\"separate-root\",\"restores\":null},\"schema_version\":1,\"command\":{\"command\":\"Patch\",\"actions\":[{\"action\":\"Write\",\"field\":\"left\",\"cell\":{\"state\":\"Value\",\"value\":{\"type\":\"String\",\"value\":\"left-offline\"}}}]}},{\"id\":\"separate-right\",\"parents\":[\"separate-root\"],\"scope\":{\"realm\":\"replica-realm\",\"vault\":\"replica-vault\",\"owner\":\"replica-fixture\",\"collection\":\"synced\",\"record\":\"separate\",\"generation\":\"separate-root\",\"restores\":null},\"schema_version\":1,\"command\":{\"command\":\"Patch\",\"actions\":[{\"action\":\"Write\",\"field\":\"right\",\"cell\":{\"state\":\"Value\",\"value\":{\"type\":\"String\",\"value\":\"right-offline\"}}}]}},{\"id\":\"separate-root\",\"parents\":[],\"scope\":{\"realm\":\"replica-realm\",\"vault\":\"replica-vault\",\"owner\":\"replica-fixture\",\"collection\":\"synced\",\"record\":\"separate\",\"generation\":\"separate-root\",\"restores\":null},\"schema_version\":1,\"command\":{\"command\":\"Create\",\"actions\":[{\"action\":\"Write\",\"field\":\"left\",\"cell\":{\"state\":\"Value\",\"value\":{\"type\":\"String\",\"value\":\"base-left\"}}},{\"action\":\"Write\",\"field\":\"right\",\"cell\":{\"state\":\"Value\",\"value\":{\"type\":\"String\",\"value\":\"base-right\"}}},{\"action\":\"Write\",\"field\":\"title\",\"cell\":{\"state\":\"Value\",\"value\":{\"type\":\"String\",\"value\":\"base\"}}}]}}]}",
+          "projection": "{\"created\":true,\"deleted\":false,\"fields\":{\"left\":[{\"cell\":{\"state\":\"Value\",\"value\":{\"type\":\"String\",\"value\":\"left-offline\"}},\"operation\":\"separate-left\"}],\"right\":[{\"cell\":{\"state\":\"Value\",\"value\":{\"type\":\"String\",\"value\":\"right-offline\"}},\"operation\":\"separate-right\"}],\"title\":[{\"cell\":{\"state\":\"Value\",\"value\":{\"type\":\"String\",\"value\":\"base\"}},\"operation\":\"separate-root\"}]},\"sets\":{}}",
+          "metadata": "{\"status\":\"accepted\",\"revision\":[245,98,195,137,135,161,9,0,164,72,4,52,154,34,139,106,59,165,201,158,186,192,39,156,242,47,215,167,75,245,184,177],\"replay_result\":null,\"payload_bytes\":null,\"conflicting_updates\":[]}"
+        }
+      },
+      {
+        "name": "same-field offline conflict retains both candidates and deterministic display converges",
+        "status": "passed",
+        "ms": 205,
+        "evidence": {
+          "candidates": [
+            {
+              "cell": {
+                "state": "Value",
+                "value": {
+                  "type": "String",
+                  "value": "red-offline"
+                }
+              },
+              "operation": "conflict-left"
+            },
+            {
+              "cell": {
+                "state": "Value",
+                "value": {
+                  "type": "String",
+                  "value": "blue-offline"
+                }
+              },
+              "operation": "conflict-right"
+            }
+          ],
+          "display": "blue-offline",
+          "state": "{\"format\":1,\"scope\":{\"realm\":\"replica-realm\",\"vault\":\"replica-vault\",\"owner\":\"replica-fixture\",\"collection\":\"synced\",\"record\":\"conflict\",\"generation\":\"conflict-root\",\"restores\":null},\"operations\":[{\"id\":\"conflict-left\",\"parents\":[\"conflict-root\"],\"scope\":{\"realm\":\"replica-realm\",\"vault\":\"replica-vault\",\"owner\":\"replica-fixture\",\"collection\":\"synced\",\"record\":\"conflict\",\"generation\":\"conflict-root\",\"restores\":null},\"schema_version\":1,\"command\":{\"command\":\"Patch\",\"actions\":[{\"action\":\"Write\",\"field\":\"title\",\"cell\":{\"state\":\"Value\",\"value\":{\"type\":\"String\",\"value\":\"red-offline\"}}}]}},{\"id\":\"conflict-right\",\"parents\":[\"conflict-root\"],\"scope\":{\"realm\":\"replica-realm\",\"vault\":\"replica-vault\",\"owner\":\"replica-fixture\",\"collection\":\"synced\",\"record\":\"conflict\",\"generation\":\"conflict-root\",\"restores\":null},\"schema_version\":1,\"command\":{\"command\":\"Patch\",\"actions\":[{\"action\":\"Write\",\"field\":\"title\",\"cell\":{\"state\":\"Value\",\"value\":{\"type\":\"String\",\"value\":\"blue-offline\"}}}]}},{\"id\":\"conflict-root\",\"parents\":[],\"scope\":{\"realm\":\"replica-realm\",\"vault\":\"replica-vault\",\"owner\":\"replica-fixture\",\"collection\":\"synced\",\"record\":\"conflict\",\"generation\":\"conflict-root\",\"restores\":null},\"schema_version\":1,\"command\":{\"command\":\"Create\",\"actions\":[{\"action\":\"Write\",\"field\":\"title\",\"cell\":{\"state\":\"Value\",\"value\":{\"type\":\"String\",\"value\":\"base\"}}}]}}]}",
+          "projection": "{\"created\":true,\"deleted\":false,\"fields\":{\"title\":[{\"cell\":{\"state\":\"Value\",\"value\":{\"type\":\"String\",\"value\":\"red-offline\"}},\"operation\":\"conflict-left\"},{\"cell\":{\"state\":\"Value\",\"value\":{\"type\":\"String\",\"value\":\"blue-offline\"}},\"operation\":\"conflict-right\"}]},\"sets\":{}}",
+          "metadata": "{\"status\":\"accepted\",\"revision\":[56,184,60,59,41,1,108,129,70,71,136,70,19,9,205,10,126,18,234,207,120,110,72,75,96,42,251,121,229,85,24,106],\"replay_result\":null,\"payload_bytes\":null,\"conflicting_updates\":[]}"
+        }
+      },
+      {
+        "name": "offline delete/edit race retains tombstone and complete history without resurrection",
+        "status": "passed",
+        "ms": 361,
+        "evidence": {
+          "deleted": true,
+          "history": [
+            "race-delete",
+            "race-edit",
+            "race-root"
+          ],
+          "state": "{\"format\":1,\"scope\":{\"realm\":\"replica-realm\",\"vault\":\"replica-vault\",\"owner\":\"replica-fixture\",\"collection\":\"synced\",\"record\":\"race\",\"generation\":\"race-root\",\"restores\":null},\"operations\":[{\"id\":\"race-delete\",\"parents\":[\"race-root\"],\"scope\":{\"realm\":\"replica-realm\",\"vault\":\"replica-vault\",\"owner\":\"replica-fixture\",\"collection\":\"synced\",\"record\":\"race\",\"generation\":\"race-root\",\"restores\":null},\"schema_version\":1,\"command\":{\"command\":\"Delete\"}},{\"id\":\"race-edit\",\"parents\":[\"race-root\"],\"scope\":{\"realm\":\"replica-realm\",\"vault\":\"replica-vault\",\"owner\":\"replica-fixture\",\"collection\":\"synced\",\"record\":\"race\",\"generation\":\"race-root\",\"restores\":null},\"schema_version\":1,\"command\":{\"command\":\"Patch\",\"actions\":[{\"action\":\"Write\",\"field\":\"title\",\"cell\":{\"state\":\"Value\",\"value\":{\"type\":\"String\",\"value\":\"edited-offline\"}}}]}},{\"id\":\"race-root\",\"parents\":[],\"scope\":{\"realm\":\"replica-realm\",\"vault\":\"replica-vault\",\"owner\":\"replica-fixture\",\"collection\":\"synced\",\"record\":\"race\",\"generation\":\"race-root\",\"restores\":null},\"schema_version\":1,\"command\":{\"command\":\"Create\",\"actions\":[{\"action\":\"Write\",\"field\":\"title\",\"cell\":{\"state\":\"Value\",\"value\":{\"type\":\"String\",\"value\":\"base\"}}}]}}]}",
+          "projection": "{\"created\":true,\"deleted\":true,\"fields\":{\"title\":[{\"cell\":{\"state\":\"Value\",\"value\":{\"type\":\"String\",\"value\":\"edited-offline\"}},\"operation\":\"race-edit\"}]},\"sets\":{}}",
+          "metadata": "{\"status\":\"accepted\",\"revision\":[26,234,58,229,165,180,206,204,241,163,34,178,146,173,138,119,243,3,14,254,165,105,171,96,91,226,177,111,68,88,77,196],\"replay_result\":null,\"payload_bytes\":null,\"conflicting_updates\":[]}"
+        }
+      },
+      {
+        "name": "Local and Cache stay device-local with no new outbox, duplicate receives never echo",
+        "status": "passed",
+        "ms": 119,
+        "evidence": {
+          "authoredA": 6,
+          "authoredB": 3,
+          "relayItems": 9,
+          "localResult": "{\"operation\":\"local-root\",\"revision\":[23,186,58,104,34,34,154,39,170,21,189,43,83,226,115,174,95,124,19,95,110,142,52,205,115,159,197,20,232,29,226,20],\"sequence\":\"10\"}",
+          "cacheResult": "{\"operation\":\"cache-root\",\"revision\":[166,42,195,191,127,208,95,151,112,150,202,222,143,177,207,201,8,50,172,97,135,250,159,59,32,187,205,130,163,4,177,25],\"sequence\":\"11\"}",
+          "finalA": {
+            "authorityId": "6401b888-e0d4-414e-8b83-9fdb7cae8a2d",
+            "cursor": {
+              "realm_id": "replica-realm",
+              "vault_id": "replica-vault",
+              "server_epoch": "replica-epoch",
+              "after": "9"
+            },
+            "pending": [],
+            "transactions": {
+              "begun": 6,
+              "strict": 6,
+              "complete": 6,
+              "abort": 0
+            }
+          },
+          "finalB": {
+            "authorityId": "81705acb-86d1-4e17-88bc-668cee66e0d3",
+            "cursor": {
+              "realm_id": "replica-realm",
+              "vault_id": "replica-vault",
+              "server_epoch": "replica-epoch",
+              "after": "9"
+            },
+            "pending": [],
+            "transactions": {
+              "begun": 4,
+              "strict": 4,
+              "complete": 4,
+              "abort": 0
+            }
+          }
+        }
+      }
+    ],
+    "replicas": [
+      {
+        "name": "zorid-core-vault:replicas-6a1b70fa-cef9-4ee8-a388-676ab637512e-a",
+        "clientId": "a1d1ada6-a2c5-4908-8e9f-52db4a1c6fb9",
+        "authorityId": "6401b888-e0d4-414e-8b83-9fdb7cae8a2d"
+      },
+      {
+        "name": "zorid-core-vault:replicas-6a1b70fa-cef9-4ee8-a388-676ab637512e-b",
+        "clientId": "a20948fb-834e-4fe9-8b08-04dc708fe2b6",
+        "authorityId": "81705acb-86d1-4e17-88bc-668cee66e0d3"
+      }
+    ],
+    "remainingGates": [
+      "Dedicated fixture Workers exercise real adapters; normal product Worker authoring API and active consumer remain absent",
+      "Whole Phase1, full quota/browser matrices, production relay, native and mobile acceptance remain open"
+    ],
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36",
+    "provenance": {
+      "head": "46a1a83d8dabf829de93f62aecdd279560f8a77a",
+      "fingerprint": "a4027f128c91099071a2744f90a599b9151ee623599f3e4b7c4846283a16e0f8",
+      "files": {
+        "zorid_wasm.js": "1145a203bda8c72a6e017e87f0adda6df4b5c9d992d802c56ece864538ffae31",
+        "zorid_wasm_bg.wasm": "b8e316e2a8d4e8a498c0e8f2d48b844d3b3db4ca51513bbd000674f26283ae2e"
+      },
+      "sourceDigest": "389229541825552f7e12c54baf403304a0d9e2fde0a3483031843c7ecf847f0e",
+      "browser": {
+        "protocolVersion": "1.3",
+        "product": "Chrome/155.0.8059.80",
+        "revision": "@43a195105613ac83c21d3f14de279f4a045c7da0",
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36",
+        "jsVersion": "15.5.35.23"
+      }
+    },
+    "relay": {
+      "items": [
+        {
+          "id": "separate-root",
+          "sequence": "1",
+          "bytes": 1181
+        },
+        {
+          "id": "separate-left",
+          "sequence": "2",
+          "bytes": 990
+        },
+        {
+          "id": "separate-right",
+          "sequence": "3",
+          "bytes": 995
+        },
+        {
+          "id": "conflict-root",
+          "sequence": "4",
+          "bytes": 969
+        },
+        {
+          "id": "conflict-left",
+          "sequence": "5",
+          "bytes": 990
+        },
+        {
+          "id": "conflict-right",
+          "sequence": "6",
+          "bytes": 994
+        },
+        {
+          "id": "race-root",
+          "sequence": "7",
+          "bytes": 941
+        },
+        {
+          "id": "race-delete",
+          "sequence": "8",
+          "bytes": 845
+        },
+        {
+          "id": "race-edit",
+          "sequence": "9",
+          "bytes": 961
+        }
+      ],
+      "requests": [
+        {
+          "kind": "upload",
+          "id": "separate-root",
+          "bytes": 1181,
+          "replay": false
+        },
+        {
+          "kind": "pull",
+          "after": "0",
+          "through": "1",
+          "count": 1
+        },
+        {
+          "kind": "pull",
+          "after": "0",
+          "through": "1",
+          "count": 1
+        },
+        {
+          "kind": "pull",
+          "after": "1",
+          "through": "1",
+          "count": 0
+        },
+        {
+          "kind": "upload",
+          "id": "separate-left",
+          "bytes": 990,
+          "replay": false
+        },
+        {
+          "kind": "pull",
+          "after": "1",
+          "through": "2",
+          "count": 1
+        },
+        {
+          "kind": "upload",
+          "id": "separate-right",
+          "bytes": 995,
+          "replay": false
+        },
+        {
+          "kind": "pull",
+          "after": "1",
+          "through": "3",
+          "count": 2
+        },
+        {
+          "kind": "pull",
+          "after": "2",
+          "through": "3",
+          "count": 1
+        },
+        {
+          "kind": "upload",
+          "id": "conflict-root",
+          "bytes": 969,
+          "replay": false
+        },
+        {
+          "kind": "pull",
+          "after": "3",
+          "through": "4",
+          "count": 1
+        },
+        {
+          "kind": "pull",
+          "after": "3",
+          "through": "4",
+          "count": 1
+        },
+        {
+          "kind": "pull",
+          "after": "4",
+          "through": "4",
+          "count": 0
+        },
+        {
+          "kind": "upload",
+          "id": "conflict-left",
+          "bytes": 990,
+          "replay": false
+        },
+        {
+          "kind": "pull",
+          "after": "4",
+          "through": "5",
+          "count": 1
+        },
+        {
+          "kind": "upload",
+          "id": "conflict-right",
+          "bytes": 994,
+          "replay": false
+        },
+        {
+          "kind": "pull",
+          "after": "4",
+          "through": "6",
+          "count": 2
+        },
+        {
+          "kind": "pull",
+          "after": "5",
+          "through": "6",
+          "count": 1
+        },
+        {
+          "kind": "upload",
+          "id": "race-root",
+          "bytes": 941,
+          "replay": false
+        },
+        {
+          "kind": "pull",
+          "after": "6",
+          "through": "7",
+          "count": 1
+        },
+        {
+          "kind": "pull",
+          "after": "6",
+          "through": "7",
+          "count": 1
+        },
+        {
+          "kind": "pull",
+          "after": "7",
+          "through": "7",
+          "count": 0
+        },
+        {
+          "kind": "upload",
+          "id": "race-delete",
+          "bytes": 845,
+          "replay": false
+        },
+        {
+          "kind": "pull",
+          "after": "7",
+          "through": "8",
+          "count": 1
+        },
+        {
+          "kind": "upload",
+          "id": "race-edit",
+          "bytes": 961,
+          "replay": false
+        },
+        {
+          "kind": "pull",
+          "after": "7",
+          "through": "9",
+          "count": 2
+        },
+        {
+          "kind": "pull",
+          "after": "8",
+          "through": "9",
+          "count": 1
+        },
+        {
+          "kind": "pull",
+          "after": "9",
+          "through": "9",
+          "count": 0
+        },
+        {
+          "kind": "pull",
+          "after": "9",
+          "through": "9",
+          "count": 0
+        },
+        {
+          "kind": "pull",
+          "after": "9",
+          "through": "9",
+          "count": 0
+        }
+      ]
+    },
+    "cleanup": [
+      {
+        "name": "zorid-core-vault:replicas-6a1b70fa-cef9-4ee8-a388-676ab637512e-a",
+        "deleted": true
+      },
+      {
+        "name": "zorid-core-vault:replicas-6a1b70fa-cef9-4ee8-a388-676ab637512e-b",
+        "deleted": true
+      }
+    ],
+    "finished": true
+  },
+  "runnerError": null
+}
