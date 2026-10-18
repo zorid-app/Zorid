@@ -56,6 +56,7 @@ export class MobileRecoveryInventory {
   snapshot():MobileRecoveryPage{return structuredClone(this.last);}
   private check(){if(!this.current()||this.checkpoints.scope.vaultId!==this.scope.vaultId||this.checkpoints.scope.clientId!==this.scope.clientId)throw new Error('Recovery inventory owner changed');}
   next():Promise<MobileRecoveryPage>{
+    try{this.check();}catch(error){this.unavailable(error);return Promise.reject(error);}
     if(this.pending)return this.pending;if(this.done)return Promise.resolve(this.snapshot());
     const task=this.read();this.pending=task;void task.finally(()=>{if(this.pending===task)this.pending=undefined;}).catch(()=>{});return task;
   }
@@ -84,10 +85,11 @@ export class MobileRecoveryInventory {
     }catch(error){
       // Keep the last good page/cursor discoverable and retryable; a failed or
       // exhausted read is never represented as clear or zero pending recovery.
-      this.last={...this.last,status:'unavailable',complete:false,error:error instanceof Error?error.message:'Recovery inventory unavailable'};
+      this.unavailable(error);
       throw error;
     }
   }
+  private unavailable(error:unknown):void{this.last={...this.last,status:'unavailable',complete:false,error:error instanceof Error?error.message:'Recovery inventory unavailable'};}
   private validate(row:CheckpointMetadata):void{
     if(!row||row.version!==1||row.vaultId!==this.scope.vaultId||row.clientId!==this.scope.clientId||typeof row.key!=='string'||!row.key||row.key.length>8192
       ||!webRouteToken(row.revision)||!webRouteVersion(row.sequence)||typeof row.deleted!=='boolean'||!Number.isSafeInteger(row.byteLength)||row.byteLength<0||row.byteLength>MAX_BODY)throw new Error('Invalid recovery metadata');

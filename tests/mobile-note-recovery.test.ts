@@ -58,3 +58,17 @@ test('foreign scope or invalid metadata/highwater fails safely without body read
   const f=fixture();f.lists.splice(0,1,{items:[{...metadata(),clientId:'foreign'}],cursor:null,highWater:'1'});
   const inventory=new MobileRecoveryInventory(f.checkpoints,()=>true);await assert.rejects(inventory.next());assert.equal(inventory.snapshot().status,'unavailable');assert.equal(f.loads,0);
 });
+test('completed inventory rejects a retired owner rather than certifying cached metadata',async()=>{
+  const f=fixture();let current=true;const inventory=new MobileRecoveryInventory(f.checkpoints,()=>current);
+  await inventory.next();assert.equal((await inventory.next()).complete,true);current=false;
+  await assert.rejects(inventory.next(),/owner changed/);assert.equal(inventory.snapshot().status,'unavailable');assert.equal(inventory.snapshot().complete,false);
+  assert.equal(f.listCalls.length,1);assert.equal(f.changeCalls.length,1);assert.equal(f.loads,0);
+});
+test('completed inventory rejects client or vault scope drift on the cached terminal path',async()=>{
+  for(const field of ['vaultId','clientId'] as const){
+    const f=fixture(),mutableScope={...scope};Object.assign(f.checkpoints,{scope:mutableScope});
+    const inventory=new MobileRecoveryInventory(f.checkpoints,()=>true);await inventory.next();assert.equal((await inventory.next()).complete,true);
+    mutableScope[field]='foreign';await assert.rejects(inventory.next(),/owner changed/);
+    assert.equal(inventory.snapshot().status,'unavailable');assert.equal(inventory.snapshot().complete,false);assert.equal(f.loads,0);
+  }
+});
