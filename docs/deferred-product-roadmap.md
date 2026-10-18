@@ -77,6 +77,20 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Desktop Tasks delivered (2026-10-18 04:22 UTC): canonical `aa0a2f37` integrates
+isolated `7dda4aa1`. All13 production/test files byte-match actual-tested15ff377b;
+main enhanced core identity assertions are preserved. Root44/44 affected checks,
+fullTS/diffcheck0; actual Electron three groups and independent R acceptance cover
+capture/properties/body/save/split, dirty/stale protection, retained close drafts,
+restart and interrupted create with no automatic duplicate. Exact raw/provenance
+and limitations are in `managed-data/tasks-main-integration.md`; final owner
+runtime/review reports are being imported separately. This is ordinary desktop
+Tasks, not mobile/browser parity, durable form crash recovery, exact-once capture,
+scheduling joins or complete Tasks/Calendar delivery. Next corrected Base Calendar
+contract31aafe8f has independent approval73dee4a3; named shared seam table pending.
+It includes receipt-only unresolved evidence, current-source fencing and one
+bounded continuation owner, without Store schema/index/wire changes.
+
 Coordinator checkpoint (2026-10-18 04:14 UTC): NewNote18 frozen native candidate
 9cf7fe9f includes current main c233362a and byte-matches reviewed4e390d70 app/project
 source. Native owner holds the acknowledged iOS slot; Xcode25844 was observed
