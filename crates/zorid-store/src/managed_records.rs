@@ -8,6 +8,7 @@
 //! No function here commits a receive transaction or advances a second cursor.
 use super::family_ledger::{self, EnvelopeKey, EnvelopeMetadata, Family};
 use super::*;
+use zorid_core::OperationId;
 use zorid_records::wire::Payload;
 use zorid_records::{Command, Id, Operation, Policy, Schema, Scope, State};
 use zorid_sync_protocol::{RealmId, UpdateId, VaultId};
