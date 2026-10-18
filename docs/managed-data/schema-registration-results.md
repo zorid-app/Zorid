@@ -24,6 +24,50 @@ version widening was introduced. `received_gate` remains exact version equality.
 
 ## Verification
 
+### Concrete pre-fix reproduction (proof-only followup)
+
+Followup owner: same worker, task `task_8e5723bfdbe1`. Frozen implementation
+`9f2f29623aabba8d4850e8377c070de54c809553` remained unchanged. Copied the
+standalone `zorid-records` crate and repository Cargo.lock to
+`/tmp/zorid-schema-registration-baseline-9etwnx0n/zorid-records`, then replaced
+only its `src/admission.rs` with:
+
+```sh
+git show 9b9f6479:crates/zorid-records/src/admission.rs
+```
+
+The baseline commit is `9b9f64793819ba4dc31ae64515d599d1fa7e2179` and its
+admission blob is `957890df6b885e381a52469b55c075883c7c518d`. All other scratch
+Rust files were byte-compared against the frozen checkout; the regression test
+blob is `028619fd3796fb1d0116379f084b2661a596bbc1`. No helper was reimplemented.
+Neither source nor Git state in the frozen branch was changed for this run.
+
+Exact bounded offline command:
+
+```sh
+cargo test --offline --manifest-path /tmp/zorid-schema-registration-baseline-9etwnx0n/zorid-records/Cargo.toml --test schema_registration required_additions_fail_without_any_records_or_preexisting_fields -j1 -- --exact --nocapture
+```
+
+Observed exit **101**, with **0 passed, 1 failed, 9 filtered out**:
+
+```text
+thread 'required_additions_fail_without_any_records_or_preexisting_fields' (...) panicked at tests/schema_registration.rs:136:9:
+assertion `left == right` failed
+  left: Ok(true)
+ right: Err(InvalidSchema)
+test required_additions_fail_without_any_records_or_preexisting_fields ... FAILED
+```
+
+The test's first case adds a required String field with no default to a v1
+registration with no fields, bumping to v2; it supplies no records. Schema
+validity passes, but baseline registration incorrectly permits this required
+addition. The assertion stops this baseline run at that first case; defaulted
+required scalar and required Set are covered by the fixed passing regression,
+not claimed as separately executed baseline cases. Full raw output is retained
+at `/tmp/zorid-schema-registration-baseline-9etwnx0n/required-addition-baseline.log`.
+
+### Fixed implementation
+
 Final command (offline, serialized `-j1`, exit 0):
 
 ```sh
