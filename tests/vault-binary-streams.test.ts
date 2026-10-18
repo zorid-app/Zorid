@@ -49,6 +49,15 @@ test('stalled source leaves unrelated Vault writes available',async()=>{
   const work=f.vault.createBinaryStream('new.bin',{length:'1',read:async()=>{if(!first)return null;first=false;entered();await wait;return new Uint8Array([7]);}});
   await started;await f.vault.create('unrelated.md','text');assert.equal(await f.vault.read('unrelated.md'),'text');resume();await work;
 });
+test('modification pin lookup never holds the metadata queue while waiting for binary I/O',async()=>{
+  const f=await fixture(),original=f.streams.openRead;let resume!:()=>void,entered!:()=>void;
+  const started=new Promise<void>(resolve=>{entered=resolve;}),wait=new Promise<void>(resolve=>{resume=resolve;});
+  f.streams.openRead=async input=>{entered();await wait;return original(input);};
+  const modification=f.vault.modifyBinaryStream('file.bin',blobBinarySource(new Blob(['x'])));await started;
+  let written=false;const unrelated=f.vault.create('unrelated.md','text').then(()=>{written=true;});
+  await new Promise(resolve=>setImmediate(resolve));const responsive=written;resume();await Promise.all([modification,unrelated]);
+  assert.equal(responsive,true);assert.equal(await f.vault.read('unrelated.md'),'text');
+});
 test('known commit receipt survives publication failure and no second commit runs',async()=>{
   const f=await fixture(),stat=f.adapter.stat!;let failPublication=false;f.setBeforeCommit(async()=>{failPublication=true;});f.adapter.stat=async path=>{if(failPublication&&path==='new.bin')throw new Error('stat failed');return stat(path);};
   await assert.rejects(f.vault.createBinaryStream('new.bin',blobBinarySource(new Blob(['x']))),error=>{assert.equal((error as any).code,'binary_publication_failed');assert.equal((error as any).binaryCommitted.receipt,'receipt');assert.equal((error as any).binaryCommitted.ref.stageId,'stage');return true;});

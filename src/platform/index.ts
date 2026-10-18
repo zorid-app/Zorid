@@ -1,5 +1,6 @@
 import {decodeWorkBlockEnvelope} from '../../desktop/workblocks.cjs';
 import {createDesktopWorkBlocks,createDesktopBinaryStreams} from './desktop.ts';
+import {scheduleBinaryTransfer} from '../core/binary-transfer-queue.ts';
 import {createDesktopDocumentService} from './desktop-document-semantics.ts';
 import type {DocumentService} from '../core/document-semantics.ts';
 import type { DurableWrites } from '../core/durable-writes.ts';
@@ -94,14 +95,14 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
     if(binding.workBlocks===true)workBlocks=createDesktopWorkBlocks(request=>call('workblockCommand',request).then(reply=>decodeWorkBlockEnvelope(request,reply)));
     if(binding.documentSemantics)documents=createDesktopDocumentService(request=>call('documentCommand',request));
     if(binding.binaryLimits)binary=createDesktopBinaryStreams({scope,checkpoints:durableWrites.checkpoints,limits:binding.binaryLimits,assertActive:()=>{if(released||binaryDrained)throw new Error('Desktop binary context released');},invoke:bytes=>call<Uint8Array>('binaryCommand',bytes)});
-    release = async () => { if (!released) { if(workBlocks)await workBlocks.release(); if(binary&&!binaryDrained){await binary.release();binaryDrained=true;} if(documents&&!documentsDrained){await documents.release();documentsDrained=true;} await releaseContext(info.path, admissionId); released = true; } };
+    release = async () => { if (!released) { if(workBlocks)await workBlocks.release(); if(binary&&!binaryDrained){await scheduleBinaryTransfer(binary.streams,()=>binary!.release());binaryDrained=true;} if(documents&&!documentsDrained){await documents.release();documentsDrained=true;} await releaseContext(info.path, admissionId); released = true; } };
   }
   return {
     ...(release ? {release} : {}),
     ...(workBlocks?{workBlocks:workBlocks.service}:{}),
     ...(documents?{documentSemantics:documents.service}:{}),
     ...(reconciliation?{reconciliation}:{}),
-    ...(binary?{recoverCommands:()=>binary!.recover()}:{}),
+    ...(binary?{recoverCommands:()=>scheduleBinaryTransfer(binary!.streams,()=>binary!.recover())}:{}),
     id: durableWrites ? `desktop-core:${durableWrites.checkpoints.scope.vaultId}:${durableWrites.checkpoints.scope.clientId}` : `desktop:${info.path}`,
     label: info.name,
     adapter: {

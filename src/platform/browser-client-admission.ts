@@ -7,6 +7,7 @@ import type { DurableWrites } from '../core/durable-writes.ts';
 import type { BrowserCoreRuntime } from './browser-core-runtime.ts';
 import type { BrowserCoreBackend } from './browser-core.ts';
 import type { BinaryStreams } from '../core/binary-streams.ts';
+import {scheduleBinaryTransfer} from '../core/binary-transfer-queue.ts';
 import { createBrowserBinaryCommands } from './browser-binary-commands.ts';
 import { browserDurableWrites } from './browser-durable-writes.ts';
 import { createBrowserFileCommands } from './browser-file-commands.ts';
@@ -169,7 +170,7 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
     ...(commands?{fileCommand:(input:BrowserFileCommandInput)=>invoke(()=>commands.execute(input))}:{}),
     ...(binaryStreams?{binaryStreams}:{}),
     get workBlocks(){return admittedWorkBlocks();},
-    ...(commands||binary?{recoverCommands:()=>invoke(async()=>{const files=commands?await commands.recover():false;const stages=binary?await binary.recover():false;return files||stages;})}:{}),
+    ...(commands||binary?{recoverCommands:()=>invoke(async()=>{const files=commands?await commands.recover():false;const stages=binary&&binaryStreams?await scheduleBinaryTransfer(binaryStreams,()=>binary.recover()):false;return files||stages;})}:{}),
     release(flushGate: (context: BrowserFlushContext) => void | Promise<void>): Promise<void> {
       if (phase === 'released') return Promise.resolve();
       if (closing) return closing;

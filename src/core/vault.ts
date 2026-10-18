@@ -1,4 +1,5 @@
 import {binaryLength,writeBinarySource,readBinarySink} from './binary-transfer.ts';
+import {scheduleBinaryTransfer} from './binary-transfer-queue.ts';
 import type {BinarySource,BinarySink} from './binary-transfer.ts';
 import type {BinaryStreams,BinaryReadRef} from './binary-streams.ts';
 import { MetadataCache } from './metadata.ts';
@@ -345,9 +346,19 @@ export class Vault {
 
   readBinaryStream(rawPath:string,sink:BinarySink,options:{validate?:()=>void;maxBytes?:string}={}):Promise<BinaryReadRef> {
     const binding=this.binaryBinding(),path=normalizePath(rawPath);
-    const validate=()=>{binding.validate();options.validate?.();binding.validate();};
-    const identity=this.enqueue(async()=>{validate();this.requireFile(path);const value=await this.binaryIdentity(binding.adapter,path);validate();return value;});
-    return identity.then(value=>readBinarySink(binding.streams,value,sink,{...options,validate}),async error=>{try{await sink.abort(error);}catch{}throw error;});
+    const guard=options.validate,maxBytes=options.maxBytes;
+    const output={write:sink.write.bind(sink),finish:sink.finish.bind(sink),abort:sink.abort.bind(sink)};
+    const validate=()=>{binding.validate();guard?.();binding.validate();};
+    const selected=this.enqueue(async()=>{validate();this.requireFile(path);const value=await this.binaryIdentity(binding.adapter,path);validate();return value;});
+    // Preserve the original metadata selection while another transfer owns I/O.
+    // The original promise is still awaited below; this only handles early rejection.
+    void selected.catch(()=>undefined);
+    return scheduleBinaryTransfer(binding.streams,async()=>{
+      let identity:{entryId:string;expectedRevision:string};
+      try{validate();identity=await selected;validate();}
+      catch(error){try{await output.abort(error);}catch{}throw error;}
+      return readBinarySink(binding.streams,identity,output,{maxBytes,validate});
+    });
   }
 
   async readBinary(rawPath: string, validate?: () => void): Promise<Uint8Array> {
@@ -402,7 +413,8 @@ export class Vault {
 
   createBinaryStream(rawPath:string,source:BinarySource,options:{validate?:()=>void}={}):Promise<VaultEntry> {
     const binding=this.binaryBinding(),path=normalizePath(rawPath),operationId=crypto.randomUUID(),entryId=crypto.randomUUID();
-    const validate=()=>{binding.validate();options.validate?.();binding.validate();};
+    const input={length:source.length,read:source.read.bind(source)},guard=options.validate;
+    const validate=()=>{binding.validate();guard?.();binding.validate();};
     const ready=this.enqueue(async()=>{
       validate();const inventory=new Map<string,VaultEntry>();for(const item of await binding.adapter.list()){const name=normalizePath(item.path);if(inventory.has(name))throw new Error(`Adapter returned duplicate path: ${name}`);inventory.set(name,item);}validate();
       if(inventory.has(path))throw new Error(`Path already exists: ${path}`);
@@ -411,26 +423,30 @@ export class Vault {
       // No async whole-vault refresh may mutate caches after adapter retirement.
       for(let name=parent;name;name=parentPath(name)){const folder=inventory.get(name);if(!folder||folder.type!=='folder')throw new Error(`Parent folder does not exist: ${name}`);this.contents.delete(name);this.metadata.remove(name);this.entries.set(name,{...folder,path:name});}
     });
-    return (async()=>{
-      await ready;validate();const committed=await writeBinarySource(binding.streams,{operationId,target:{kind:'create',entryId,path}},source,validate);
+    void ready.catch(()=>undefined);
+    return scheduleBinaryTransfer(binding.streams,async()=>{
+      await ready;validate();const committed=await writeBinarySource(binding.streams,{operationId,target:{kind:'create',entryId,path}},input,validate);
       try{return await this.enqueue(async()=>{validate();const entry=await this.publishBinary(path,binding.adapter,validate,entryId);validate();this.emit('create',{path,entry});return entry;});}
       catch(error){throw this.binaryPublicationFailure(error,committed);}
-    })();
+    });
   }
 
   modifyBinaryStream(rawPath:string,source:BinarySource,options:{validate?:()=>void}={}):Promise<void> {
     const binding=this.binaryBinding(),path=normalizePath(rawPath),operationId=crypto.randomUUID();
-    const validate=()=>{binding.validate();options.validate?.();binding.validate();};
-    const target=this.enqueue(async()=>{
-      validate();this.requireFile(path);const identity=await this.binaryIdentity(binding.adapter,path);validate();
-      const pin=await binding.streams.openRead(identity);try{validate();if(pin.entryId!==identity.entryId||pin.entryRevision!==identity.expectedRevision||!pin.selectedContentEvent)throw durableFailure('invalid_binary_read','Pinned binary identity does not match');}finally{await binding.streams.closeRead(pin);}
-      validate();return {kind:'write' as const,...identity,expectedContentEvent:pin.selectedContentEvent};
+    const input={length:source.length,read:source.read.bind(source)},guard=options.validate;
+    const validate=()=>{binding.validate();guard?.();binding.validate();};
+    const selected=this.enqueue(async()=>{
+      validate();this.requireFile(path);const value=await this.binaryIdentity(binding.adapter,path);validate();return value;
     });
-    return (async()=>{
-      const captured=await target;validate();const committed=await writeBinarySource(binding.streams,{operationId,target:captured},source,validate);
+    void selected.catch(()=>undefined);
+    return scheduleBinaryTransfer(binding.streams,async()=>{
+      const identity=await selected;validate();
+      const pin=await binding.streams.openRead(identity);try{validate();if(pin.entryId!==identity.entryId||pin.entryRevision!==identity.expectedRevision||!pin.selectedContentEvent)throw durableFailure('invalid_binary_read','Pinned binary identity does not match');}finally{await binding.streams.closeRead(pin);}
+      const captured={kind:'write' as const,...identity,expectedContentEvent:pin.selectedContentEvent};
+      validate();const committed=await writeBinarySource(binding.streams,{operationId,target:captured},input,validate);
       try{await this.enqueue(async()=>{validate();const entry=await this.publishBinary(path,binding.adapter,validate,captured.entryId);validate();this.emit('modify',{path,entry});});}
       catch(error){throw this.binaryPublicationFailure(error,committed);}
-    })();
+    });
   }
 
   createBinary(rawPath: string, data: Uint8Array): Promise<VaultEntry> {
