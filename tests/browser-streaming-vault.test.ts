@@ -96,7 +96,7 @@ async function withFixture(action:(f:ReturnType<typeof databaseFixture>)=>Promis
 test('published pin close replays after a lost ACK; reused requested ID gets a new physical pin immune to stale close',async()=>withFixture(async f=>{
   const mocked=wasmFixture(),vault=await openBrowserStreamingVault({name:'zorid-core-vault:pin-fixture',clientId,assertActive(){},wasm:mocked.wasm});
   try{
-    assert.equal(f.db.version,7);assert.equal(f.definitions.get('binary_reads')!.indexes.get('by_pin')!.unique,true);
+    assert.equal(f.db.version,8);assert.equal(f.definitions.get('binary_reads')!.indexes.get('by_pin')!.unique,true);
     f.seed('sync_state',{key:'config',value:{...scope,key_epoch:1,replica_id:'replica',incarnation_id:'incarnation'}});
     f.seed('sync_state',{key:'metadata-head',value:{scope,version:'graph',record_count:0,activity_count:0}});
     const entry={id:'entry',path:'empty.bin',kind:'file',revision:'revision',deleted:false},presentation={id:'entry',ctime_ms:0,mtime_ms:0,size_bytes:0};
@@ -113,6 +113,14 @@ test('published pin close replays after a lost ACK; reused requested ID gets a n
     await vault.closeBinaryReadRequest(requested,input);assert.equal(f.row('binary_reads',[clientId,requested]),undefined);assert.equal(mocked.disposed(),2);
   }finally{vault.close();}
 }));
-test('fresh schema seven creation preserves an older database when its format upgrade is rejected',async()=>withFixture(async f=>{
-  const before=clone(f.records);await assert.rejects(openBrowserStreamingVault({name:'zorid-core-vault:old-fixture',clientId,assertActive(){},wasm:wasmFixture().wasm}),{code:'storage_schema_mismatch'});assert.equal(f.db.version,6);assert.deepEqual(f.records,before);
-},6));
+for(const oldVersion of [6,7])test(`fresh schema eight preserves format ${oldVersion} when its upgrade is rejected`,async()=>withFixture(async f=>{
+  const before=clone(f.records);await assert.rejects(openBrowserStreamingVault({name:'zorid-core-vault:old-fixture',clientId,assertActive(){},wasm:wasmFixture().wasm}),{code:'storage_schema_mismatch'});assert.equal(f.db.version,oldVersion);assert.deepEqual(f.records,before);
+},oldVersion));
+
+for(const corruption of ['missing','extra'])test(`fresh managed schema inventory rejects ${corruption} index on reopen`,async()=>withFixture(async f=>{
+  const options={name:'zorid-core-vault:managed-inventory',clientId,assertActive(){},wasm:wasmFixture().wasm};
+  const vault=await openBrowserStreamingVault(options),receipt=f.definitions.get('managed_receipts')!;
+  if(corruption==='missing')receipt.indexes.delete('by_retry');else receipt.indexes.set('extra',{keyPath:'status',unique:false});
+  await assert.rejects(openBrowserStreamingVault(options),{code:'storage_schema_mismatch'});
+  vault.close();
+}));

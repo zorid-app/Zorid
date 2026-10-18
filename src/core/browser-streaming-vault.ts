@@ -1,3 +1,5 @@
+import { browserManagedKeyPaths, browserManagedIndexes, createBrowserManagedSchema } from './browser-managed-records.ts';
+import type { BrowserStreamingManagedRecords } from './browser-sync-streaming.ts';
 import {browserDocumentIndex} from './browser-document-index.ts';
 import type {BrowserDocumentIndex,BrowserDocumentIndexWasm} from './browser-document-index.ts';
 import {createBrowserBinaryStageStore} from './browser-binary-stage-store.ts';
@@ -8,11 +10,11 @@ import type {BrowserVault,BrowserVaultOptions,BrowserVaultRead,BrowserVaultInten
 import {browserCheckpoints} from './browser-checkpoints.ts';
 import {browserNormalizedKeyPaths,browserNormalizedStores,createBrowserNormalizedSchema,normalizedTransact,nextDecimalU64,decimalU64,getExactSource} from './browser-normalized-idb.ts';
 import {browserStreamingSync,browserStreamingSyncKeyPaths,browserStreamingSyncStores} from './browser-sync-streaming.ts';
-import type {BrowserStreamingWasm,StreamingPublication,StreamingRetainedRow,PreparedStreamingMutation,PreparedStreamingRead,PreparedStreamingRecoveryRead,StreamingRecoveryReadInput} from './browser-sync-streaming.ts';
+import type {BrowserStreamingSyncHost,BrowserStreamingWasm,StreamingPublication,StreamingRetainedRow,PreparedStreamingMutation,PreparedStreamingRead,PreparedStreamingRecoveryRead,StreamingRecoveryReadInput} from './browser-sync-streaming.ts';
 
 /** Fresh development format; the old database is rejected and retained, never
  * adopted, cleared or silently rebound to an empty logical vault. */
-const VERSION=7,metadataBudget=128*1024*1024,textFileBudget=256*1024,textTotalBudget=4*1024*1024,receiptBudget=24*1024;
+const VERSION=8,metadataBudget=128*1024*1024,textFileBudget=256*1024,textTotalBudget=4*1024*1024,receiptBudget=24*1024;
 const basePaths:Record<string,string|string[]>={metadata:'id',content:'id',receipts:'operation_id',journal:'sequence',control:'key',presentation:'id',intents:['client_id','intent_id'],checkpoint_heads:['clientId','key'],checkpoint_revisions:['clientId','revision']};
 const stores=[...Object.keys(basePaths),...browserStreamingSyncStores];
 const fail=(code:string,message='Browser streaming authority could not complete the operation')=>new BrowserVaultError(code,message);
@@ -26,6 +28,8 @@ function core<T>(action:()=>string):T{
 export interface BrowserRecoveryReadRef {pinId:string;entryId:string;reference:any;witness:PreparedStreamingRecoveryRead['witness'];length:string}
 export interface BrowserStreamingVault extends BrowserVault {
   readonly documentIndex?:BrowserDocumentIndex;
+  /** Internal trusted host seam; no public worker registration endpoint. */
+  readonly managedRecords?:BrowserStreamingManagedRecords;
   openRecoveryBinaryRead(requestedReadId:string,input:StreamingRecoveryReadInput):Promise<BrowserRecoveryReadRef>;
   readRecoveryBinaryRange(ref:BrowserRecoveryReadRef,input:{offset:string;maxBytes:number}):ReturnType<BinaryStreams['read']>;
   closeRecoveryBinaryRead(ref:BrowserRecoveryReadRef):Promise<void>;
@@ -42,6 +46,8 @@ export interface BrowserStreamingVaultOptions extends Omit<BrowserVaultOptions,'
   /** Worker installs this closure before any admitted operation or recovery. */
   assertActive():void;
   clientId:string;
+  /** Trusted internal host key supplier for retained managed-record retry. */
+  managedRecordsSession?:BrowserStreamingSyncHost['recordsSession'];
 }
 export async function openBrowserStreamingVault(options:BrowserStreamingVaultOptions):Promise<BrowserStreamingVault>{
   const {name,wasm,now=Date.now}=options;
@@ -67,6 +73,7 @@ export async function openBrowserStreamingVault(options:BrowserStreamingVaultOpt
       tx.objectStore('sync_authored').createIndex('by_pending_order',['pending','order']);
       tx.objectStore('sync_state').add({key:'authored-sequence',value:'0'});
       createBrowserNormalizedSchema(database);
+      createBrowserManagedSchema(database);
       tx.objectStore('binary_reads').createIndex('by_pin',['clientId','pinId'],{unique:true});
       tx.objectStore('binary_reads').createIndex('by_active','active');
     }catch(error){failure=error;opening.transaction!.abort();}};
@@ -76,11 +83,13 @@ export async function openBrowserStreamingVault(options:BrowserStreamingVaultOpt
       const database=opening.result;
       if(database.version!==VERSION||!same(Array.from(database.objectStoreNames).sort(),[...stores].sort()))throw fail('storage_schema_mismatch');
       const tx=database.transaction(stores,'readonly');
-      for(const [store,path] of Object.entries({...basePaths,...browserStreamingSyncKeyPaths,...browserNormalizedKeyPaths})){
+      for(const [store,path] of Object.entries({...basePaths,...browserStreamingSyncKeyPaths,...browserNormalizedKeyPaths,...browserManagedKeyPaths})){
         const object=tx.objectStore(store);if(!same(object.keyPath,path)||object.autoIncrement)throw fail('storage_schema_mismatch');
-        const expected=store==='metadata'?['by_path']:store==='intents'||store==='binary_stages'?['by_operation']:store==='binary_reads'?['by_active','by_pin']:store==='sync_authored'?['by_pending_order']:store==='checkpoint_revisions'?['by_creation','by_global_sequence','by_key','by_sequence']:[];
+        const managedIndexes=browserManagedIndexes[store as keyof typeof browserManagedIndexes]??[];
+        const expected=managedIndexes.length?managedIndexes.map(index=>index.name):store==='metadata'?['by_path']:store==='intents'||store==='binary_stages'?['by_operation']:store==='binary_reads'?['by_active','by_pin']:store==='sync_authored'?['by_pending_order']:store==='checkpoint_revisions'?['by_creation','by_global_sequence','by_key','by_sequence']:[];
         if(!same(Array.from(object.indexNames).sort(),expected))throw fail('storage_schema_mismatch');
         const indexPaths:Record<string,[string|string[],boolean]>={
+          ...Object.fromEntries(managedIndexes.map(index=>[index.name,[[...index.keyPath],index.unique]])),
           ...(store==='binary_reads'?{by_pin:[['clientId','pinId'],true] as [string[],boolean],by_active:['active',false] as [string,boolean]}:{}),
           ...(store==='metadata'?{by_path:['path',false] as [string,boolean]}:{}),
           ...(store==='intents'?{by_operation:['operation_id',true] as [string,boolean]}:{}),
@@ -114,7 +123,7 @@ export async function openBrowserStreamingVault(options:BrowserStreamingVaultOpt
     rows<EntryState>(tx,'metadata',value=>{entries=value;finish();},abort);rows<BrowserVaultPresentation>(tx,'presentation',value=>{presentation=value;finish();},abort);
     on(tx.objectStore('control').get('sequence'),row=>{sequence=decimalU64(row?.value);finish();},abort);
   }
-  const engine=browserStreamingSync({db,authorityId,wasm,now,assertActive:active,readPublication,publish(tx,retained,origin,forced,current){
+  const engine=browserStreamingSync({db,authorityId,wasm,now,assertActive:active,recordsSession:options.managedRecordsSession,readPublication,publish(tx,retained,origin,forced,current){
     const visible=retained.filter(row=>row.status==='normal'),next:EntryState[]=visible.map(row=>{if(!row.entry||!row.presentation)throw fail('storage_corrupt');return row.entry;});
     wasm.validateSnapshot(JSON.stringify(next));const previous=new Map(current.entries.map(entry=>[entry.id,entry]));
     const changes:{before:EntryState|null;after:EntryState|null}[]=[];
@@ -390,7 +399,7 @@ export async function openBrowserStreamingVault(options:BrowserStreamingVaultOpt
     return binaryCapability;
   }
   const documentIndex=typeof (wasm as unknown as Partial<BrowserDocumentIndexWasm>).WasmDocumentIndexBuilder==='function'?browserDocumentIndex({db,authorityId,clientId:options.clientId,wasm:wasm as unknown as BrowserDocumentIndexWasm,assertActive:active,readPublication}):undefined;
-  const vault:BrowserStreamingVault={authorityId,documentIndex,sync:engine.api,openRecoveryBinaryRead,readRecoveryBinaryRange,closeRecoveryBinaryRead,binaryStreams,openBinaryRead,cleanupReadPins,closeBinaryReadRequest,
+  const vault:BrowserStreamingVault={authorityId,documentIndex,managedRecords:engine.managedRecords,sync:engine.api,openRecoveryBinaryRead,readRecoveryBinaryRange,closeRecoveryBinaryRead,binaryStreams,openBinaryRead,cleanupReadPins,closeBinaryReadRequest,
     validateStorage:()=>engine.validate(),
     checkpoints:clientId=>browserCheckpoints(db,authorityId,clientId),
     inventory,readMetadata,readMetadataById,

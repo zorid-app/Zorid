@@ -33,11 +33,14 @@ export interface SyncScope { realm_id:string; vault_id:string }
 export interface SyncCursor extends SyncScope { server_epoch:string; after:string }
 export interface SyncDelivery { expected:SyncCursor; next:SyncCursor }
 interface Configuration extends SyncScope { key_epoch:number; replica_id:string; incarnation_id:string }
-export interface EnvelopeMetadata {
-  key:SyncScope & {update_id:string}; family:'text'|'files'; format_version:2;
-  payload_digest:number[]; payload_bytes:number;
-  text_binding:null|{entry_id:string;text_bootstrap_id:string;namespace:{bootstrap_id:string;parents:string[]}};
+interface CommonEnvelopeMetadata {
+  key:SyncScope & {update_id:string}; payload_digest:number[]; payload_bytes:number;
 }
+export type EnvelopeMetadata = (CommonEnvelopeMetadata & {
+  family:'text'|'files'; format_version:2;
+  text_binding:null|{entry_id:string;text_bootstrap_id:string;namespace:{bootstrap_id:string;parents:string[]}};
+}) | (CommonEnvelopeMetadata & { family:'records'; format_version:1; text_binding:null });
+
 interface Authored { key:string[]; metadata:EnvelopeMetadata; payload:Uint8Array; sealed:Uint8Array|null; accepted:boolean }
 interface Wire { key:string[]; metadata:EnvelopeMetadata; direction:'authored'|'received'; exact_wire:Uint8Array }
 export interface Retained { id:string; status:'normal'|'pending'|'recovery'|'tombstone'; fingerprint:string; entry:EntryState|null; bytes:Uint8Array|null; presentation:BrowserVaultPresentation|null; reason:Json; witness:{kind:'text';state:Json}|{kind:'binary';event_id:string}|null }
@@ -127,7 +130,7 @@ export function browserSync(host:BrowserSyncHost,assertActive:()=>void=()=>{}):{
       for(const row of tables.sync_text){stored(()=>wasm.materializeTextState(bounded(json(row.state))));if(row.key!==idKey(row.state.identity)||row.state.identity.realm_id!==config.realm_id||row.state.identity.vault_id!==config.vault_id)throw fail('storage_corrupt','Text state identity mismatch');texts.set(row.key,row.state);}
       invariant='envelope_ledger';
       const authored=new Map<string,Authored>(),wires=new Map<string,Wire>();
-      const checkMetadata=(row:Authored|Wire)=>{if(!row?.metadata||!equal(row.key,keyOf(row.metadata.key))||row.metadata.key.realm_id!==config.realm_id||row.metadata.key.vault_id!==config.vault_id)throw fail('storage_corrupt','Envelope scope/key mismatch');};
+      const checkMetadata=(row:Authored|Wire)=>{if(!row?.metadata||row.metadata.family==='records'||!equal(row.key,keyOf(row.metadata.key))||row.metadata.key.realm_id!==config.realm_id||row.metadata.key.vault_id!==config.vault_id)throw fail('storage_corrupt','Envelope scope/key mismatch');};
       for(const row of tables.sync_authored){checkMetadata(row);if(!(row.payload instanceof Uint8Array)||typeof row.accepted!=='boolean'||(row.sealed!==null && !(row.sealed instanceof Uint8Array))||(row.accepted&&!row.sealed))throw fail('storage_corrupt','Invalid authored envelope');stored(()=>wasm.validateAuthoredSyncPayload(json(row.metadata),row.payload));authored.set(json(row.key),row);}
       for(const row of tables.sync_envelopes){checkMetadata(row);if(!(row.exact_wire instanceof Uint8Array)||!['authored','received'].includes(row.direction))throw fail('storage_corrupt','Invalid wire ledger');stored(()=>wasm.validateSyncWire(json(row.metadata),row.exact_wire));wires.set(json(row.key),row);}
       for(const [key,row] of authored){const wire=wires.get(key);if(row.sealed?(!wire||wire.direction!=='authored'||!equal(wire.metadata,row.metadata)||!bytesEqual(row.sealed,wire.exact_wire)):wire!==undefined)throw fail('storage_corrupt','Authored wire and common ledger disagree');}
@@ -333,6 +336,7 @@ export function browserSync(host:BrowserSyncHost,assertActive:()=>void=()=>{}):{
           const cursor=s.cursors.get(json(scopeKey(config)))??null;
           if(delivery){checkCursor(delivery.expected,config);checkCursor(delivery.next,config);if(!equal(cursor,delivery.expected)||delivery.next.server_epoch!==delivery.expected.server_epoch||position(delivery.next.after)!==position(delivery.expected.after)+1n)throw fail('sync_cursor_conflict','Delivery is not the next admitted cursor item');}
           let plan:SyncPlan;const revision=freshRevision(s);
+          if(metadata.family==='records')throw fail('sync_records_requires_streaming','Managed records require normalized streaming storage');
           if(metadata.family==='text'){
             const binding=metadata.text_binding!;const identity=textIdentity(config,binding.entry_id,binding.text_bootstrap_id),state=ensureText(s,identity);
             const previous=prior?{identity,update_id:updateId,exact_wire:Array.from(prior.exact_wire)}:null;

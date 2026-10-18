@@ -1,3 +1,4 @@
+import {createBrowserManagedSchema} from '../src/core/browser-managed-records.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBrowserBinaryStageStore } from '../src/core/browser-binary-stage-store.ts';
@@ -7,7 +8,7 @@ const authority='11111111-1111-4111-8111-111111111111';
 // This fixture tests host transaction plumbing only; opaque WASM doubles below
 // do not implement CRDT, namespace, cryptography or authenticated Rust planning.
 const sourceStores=['sync_source_headers','sync_source_payloads','sync_source_wires'] as const;
-const compare=(a:any,b:any):number=>Array.isArray(a)&&Array.isArray(b)?a.reduce((n,v,i)=>n||compare(v,b[i]),0)||a.length-b.length:a===b?0:a<b?-1:1;
+const compare=(a:any,b:any):number=>Array.isArray(a)!==Array.isArray(b)?(Array.isArray(a)?1:-1):Array.isArray(a)&&Array.isArray(b)?a.reduce((n,v,i)=>n||compare(v,b[i]),0)||a.length-b.length:a===b?0:a<b?-1:1;
 const keyOf=(row:any,path:string|string[])=>Array.isArray(path)?path.map(key=>row[key]):row[path];
 /** Transaction fixture stages writes and delivers the result only on complete. It deliberately
  * has no getAll implementation. These are foundation unit checks, not actual-browser evidence. */
@@ -39,7 +40,7 @@ function fixture(){
             if(aborted||completed)throw new Error('inactive transaction');
             const result:any={};requests.push({store:name,operation,key:structuredClone(key)});pending++;
             const deliver=()=>{if(aborted)return;try{result.result=structuredClone(operationFn());result.onsuccess?.();}catch(error){tx.error=error;tx.abort();}finally{pending--;schedule();}};
-            queueMicrotask(()=>{if(payloadGate&&name==='sync_source_payloads'&&operation==='get'&&mode==='readonly'){const gate=payloadGate;payloadGate=null;gate.release=()=>queueMicrotask(deliver);gate.entered();}else deliver();});return result;
+            queueMicrotask(()=>{if(payloadGate&&name==='sync_source_payloads'&&operation==='get'&&mode===(payloadGate.mode??'readonly')){const gate=payloadGate;payloadGate=null;gate.release=()=>queueMicrotask(deliver);gate.entered();}else deliver();});return result;
           };
           const write=(row:any,add:boolean)=>{
             if(mode!=='readwrite')throw new Error('readonly write');
@@ -60,8 +61,8 @@ function fixture(){
               .filter(row=>(!range||range.lower===undefined||compare(keyOf(row,indexPath),range.lower)>=(range.lowerOpen||range.open?1:0))&&(!range||range.upper===undefined||compare(keyOf(row,indexPath),range.upper)<=(range.upperOpen?-1:0)));
             if(direction==='prev')rows.reverse();let index=0;
             const step=()=>{if(aborted)return;let continued=false;const row=rows[index];
-              result.result=row===undefined?null:{value:structuredClone(row),primaryKey:structuredClone(keyOf(row,paths.get(name)!)),continue(){continued=true;index++;queueMicrotask(step);}};
-              try{result.onsuccess?.();}catch(error){tx.error=error;tx.abort();}if(!continued){pending--;schedule();}};
+              result.result=row===undefined?null:{value:structuredClone(row),primaryKey:structuredClone(keyOf(row,paths.get(name)!)),continue(){if(continued)throw new Error('cursor already continued');continued=true;index++;pending++;queueMicrotask(step);}};
+              try{result.onsuccess?.();}catch(error){tx.error=error;tx.abort();}pending--;schedule();};
             queueMicrotask(step);return result;
           };
           return {get(key:any){return request('get',key,()=>local.get(name)!.get(JSON.stringify(key)));},
@@ -78,13 +79,13 @@ function fixture(){
     },
   };
   records.get('control')!.set(JSON.stringify('binary-stream-usage:v1'),{key:'binary-stream-usage:v1',value:{version:1,stages:0,activeStages:0,sourcePayloadBytes:'0',chunkRecords:0,pageRecords:0}});
-  createBrowserNormalizedSchema(db);
+  createBrowserNormalizedSchema(db);createBrowserManagedSchema(db);
   for(const [name,keyPath] of Object.entries({...browserStreamingSyncKeyPaths,metadata:'id',presentation:'id',content:'id',receipts:'key',journal:'sequence',intents:'key'}))if(!records.has(name))db.createObjectStore(name,{keyPath});
   indexes.set('sync_authored',[{name:'by_pending_order',path:['pending','order'],unique:false}]);
   const run=<T>(stores:readonly string[],action:Parameters<typeof normalizedTransact<T>>[2],mode:IDBTransactionMode='readwrite',owner=authority)=>
     normalizedTransact<T>(db,{authorityId:owner,stores,mode,assertActive(){if(denied)throw Object.assign(new Error('retired'),{code:'owner_retired'});}},action);
   return {db,records,paths,indexes,requests,transactions,run,
-    holdPayloadRead(){let entered!:()=>void;const ready=new Promise<void>(resolve=>entered=resolve);const gate:any={entered,release:null};payloadGate=gate;return {ready,release(){assert.equal(typeof gate.release,'function');gate.release();}};},
+    holdPayloadRead(mode='readonly'){let entered!:()=>void;const ready=new Promise<void>(resolve=>entered=resolve);const gate:any={entered,release:null,mode};payloadGate=gate;return {ready,release(){assert.equal(typeof gate.release,'function');gate.release();}};},
     deny(){denied=true;},relax(){strict=false;},hold(){hold=true;},finish(){hold=false;for(const tx of transactions)tx.finish();},failNextCommit(){fail=true;},
     row(store:string,key:any){return records.get(store)!.get(JSON.stringify(key));},
     seed(store:string,key:any,row:any){records.get(store)!.set(JSON.stringify(key),structuredClone(row));},
@@ -101,7 +102,7 @@ function emission(id:string,payload=new Uint8Array([1,2,3]),binding:any=null){
   const meta=metadata(id,payload,binding);
   return {metadata:meta,payload:payload.slice(),record:binding?null:{payload_bytes:payload.length,payload_digest:digest,body:{kind:'chunk',bytes:payload.length,digest}},activity:binding?{identity:{...scope,entry_id:binding.entry_id,bootstrap_id:binding.text_bootstrap_id},update_id:id,namespace:clone(binding.namespace),payload_digest:digest,payload_bytes:payload.length}:null};
 }
-function harness(){
+function harness(recordsEnabled=false){
   const f=fixture(),updates=new Map<string,any>(),wires=new Map<string,any>(),provided:any[]=[],plans:any[]=[];
   let lease=true,rejectProof=false,sealHook:(()=>void)|undefined,receiveRows:any[]=[];
   let verifyRequests:any[]=[];
@@ -163,6 +164,13 @@ function harness(){
     };plans.push(plan);
     return {free(){},payloadCount(){return emissions.length;},payloadMetadataJson:plan.payloadMetadataJson,payloadBytes:plan.payloadBytes,verificationSession:session,finalize(){return plan;}};
   }
+  const recordScope={realm:'realm',vault:'vault',owner:'app:tasks',collection:'tasks',record:'item',generation:'gen',restores:null};
+  let recordStatus='waiting_dependencies',recordProvider:any;
+  const recordPlan=(factsJson:string)=>({
+    free(){},checkPreconditions(actual:string){assert.equal(actual,factsJson);},resultJson(){return JSON.stringify({status:recordStatus,revision:Array(32).fill(1),conflicting_updates:[]});},
+    nextState(){return recordStatus==='accepted'?new TextEncoder().encode('{}'):undefined;},projection(){return recordStatus==='accepted'?new TextEncoder().encode('{}'):undefined;},
+    operationBindings(){return new TextEncoder().encode('[]');},payload(){},payloadMetadataJson(){},localRequest(){},
+  });
   const wasm:any={
     WasmAuthoredMetadataBatch:class {free(){} pushPayload(){throw new Error('unused fixture capability');}},
     encodeFilePayload(){throw new Error('unused fixture capability');},createEmptyTextState(raw:string){const value=JSON.parse(raw);return JSON.stringify({...value,snapshot:[],actors:{}});},
@@ -177,6 +185,12 @@ function harness(){
     validateSyncWire(raw:string,wire:Uint8Array){assert.deepEqual(JSON.parse(raw),wires.get(wireKey(wire))?.metadata);},
     materializeTextState(){materializationReads++;return new Uint8Array([116,101,120,116]);},rebindTextState(raw:string,_expected:string,next:string){return JSON.stringify({...JSON.parse(raw),version:next});},
   };
+  if(recordsEnabled)Object.assign(wasm,{
+    validateRecordsRegistration(){},validateRecordsAccepted(){},validateRecordsStoredOperation(){},validateRecordsStoredReplay(){},validateRecordsStoredBinding(){},recordsStoredReadSet(){return JSON.stringify({scope:recordScope,operations:[]});},
+    canonicalRecordsLocalRequest(){throw new Error('unused local record fixture');},finalizeRecordsLocalResult(){throw new Error('unused local record fixture');},prepareRecordsLocal(){throw new Error('unused local record fixture');},
+    recordsSnapshot(){return {free(){},nextState(){return new TextEncoder().encode('{}');},projection(){return new TextEncoder().encode('{}');},resultJson(){return '{}';}};},
+    recordsRetryEligible(status:string){return !['accepted','invalid_operation','integrity_conflict'].includes(status);},
+  });
   const host:any={db:f.db,authorityId:authority,wasm,now:()=>123,assertActive(){if(!lease)throw Object.assign(new Error('retired'),{code:'owner_retired'});},
     readPublication(tx:any,done:any,abort:any){const r=tx.objectStore('control').get('test-publication');r.onsuccess=()=>{try{done(r.result?.value??{entries:[],presentation:[],sequence:'0'});}catch(error){abort(error);}};},
     publish(tx:any,rows:any[],_origin:any,_forced:any,current:any){
@@ -190,7 +204,8 @@ function harness(){
   const wire=(e:any,bytes=new Uint8Array([81,82,83]))=>{register(e);wires.set(wireKey(bytes),e);return bytes.slice();};
   const key:any={seal(raw:string,payload:Uint8Array){const id=JSON.parse(raw).update_id,e=updates.get(id);same(payload,e.payload);const result=wire(e,new Uint8Array([91,92,wires.size]));sealHook?.();return result;},
     openSyncUpdate(raw:string,bytes:Uint8Array){const context=JSON.parse(raw),e=wires.get(wireKey(bytes));assert.ok(e,'opaque authentication rejected wire');assert.equal(context.update_id,e.metadata.key.update_id);
-      return {free(){},metadataJson(){return JSON.stringify(e.metadata);},exactWire(){return bytes.slice();},matchesPayload(payload:Uint8Array){return Buffer.from(payload).equals(Buffer.from(e.payload));},exactPlaintext(){return e.payload.slice();},authenticatedDescriptorJson(){return JSON.stringify({record:e.record,activity:e.activity,summary_digest:summary});},
+      return {free(){},metadataJson(){return JSON.stringify(e.metadata);},exactWire(){return bytes.slice();},matchesPayload(payload:Uint8Array){return Buffer.from(payload).equals(Buffer.from(e.payload));},exactPlaintext(){return e.payload.slice();},authenticatedDescriptorJson(){return JSON.stringify({record:e.record,activity:e.activity,summary_digest:e.metadata.family==='records'?null:summary});},
+        recordsReadSetJson(){return JSON.stringify({scope:recordScope,operations:[]});},prepareRecords(facts:string){return recordPlan(facts);},
         prepareMetadataFile(base:any,next:string,prior:Uint8Array){return prior.length?candidate(base,base.version,[],{wire:bytes},receiveRows,[],false):candidate(base,next,[e],{wire:bytes},receiveRows);},
         prepareMetadataText(base:any,raw:string,prior:Uint8Array){
           const input=JSON.parse(raw);
@@ -230,6 +245,7 @@ function harness(){
     tx.objectStore('binary_reads').add({clientId:'client',readId,entryId:token.witness.entry_id,witness:token.witness,reference:token.reference});done(undefined);
   },abort),abort));
   return {f,engine,key,updates,wire,provided,commit,seed,seedStage,commitRead,commitRecoveryRead,
+    setRecordStatus(value:string){recordStatus=value;},setRecordProvider(value:any){recordProvider=value;host.recordsSession=()=>recordProvider;},
     scriptBinary(script:any){binaryScript=script;register(script.final);},
     failBinaryInvoke(){binaryScript.invokeError=true;},
     scriptClassifications(version:string,rows:any[]){classificationRows.set(version,clone(rows));},
@@ -697,4 +713,86 @@ test('Binary preparation early guard copy snapshot and scope errors attempt both
     await assert.rejects(h.engine.prepareBinary(h.input),mode==='copy'?{name:'DataCloneError'}:{code:mode==='guard'?'owner_retired':mode==='snapshot'?'storage_corrupt':'binary_stage_source_mismatch'});
     for(const handle of [h.input.batch,h.input.built])assert.deepEqual(handle.counts,{consumed:0,freed:1},'both cleanup attempts preserve the original failure');
   }
+});
+
+const managedCollection={realmId:'realm',vaultId:'vault',owner:'app:tasks',collection:'tasks'};
+const managedRegistration=new TextEncoder().encode(JSON.stringify({realm:'realm',vault:'vault',owner:'app:tasks',schema:{collection:'tasks',version:1,policy:'synced',fields:{}}}));
+const managedEmission=(id:string)=>{const e=emission(id);return {...e,metadata:{...e.metadata,family:'records',format_version:1},record:null,activity:null};};
+
+test('records facade excludes raw authenticated receive/plan/commit/key mutation hooks',()=>{
+  const h=harness(true),api=h.engine.managedRecords!;
+  assert.deepEqual(Object.keys(api).sort(),['apply','changes','register','retryPage','snapshot']);
+  for(const name of ['receive','prepareReceive','commitReceive','bindSyncKey'])assert.equal((api as any)[name],undefined);
+});
+
+test('records receive and file text share one cursor without adding graph counts or file journal changes',async()=>{
+  const h=harness(true);await h.engine.api.enroll({...scope,key_epoch:1});
+  const cursor={...scope,server_epoch:'epoch',after:'0'};await h.engine.api.setCursor(cursor,null);
+  const record=managedEmission('record_1'),wire=h.wire(record);
+  const result=await h.engine.api.receive('record_1',wire,h.key,{expected:cursor,next:{...cursor,after:'1'}});
+  assert.equal(result.duplicate,false);assert.equal(h.f.row('sync_cursors',['realm','vault']).value.after,'1');
+  assert.equal(h.f.row('sync_state','metadata-head').value.record_count,0);assert.equal(h.f.row('sync_state','metadata-head').value.activity_count,0);
+  assert.equal(h.f.records.get('journal')!.size,0);assert.equal(h.f.records.get('managed_receipts')!.size,1);
+  const next={...cursor,after:'2'};const duplicate=await h.engine.api.receive('record_1',wire,h.key,{expected:{...cursor,after:'1'},next});
+  assert.equal(duplicate.duplicate,true);assert.equal(h.f.records.get('managed_changes')!.size,1);assert.equal(h.f.row('sync_cursors',['realm','vault']).value.after,'2');
+});
+
+test('shared mixed-family envelope cap also fences seal and leaves immutable wire absent',async()=>{
+  const h=harness();await h.engine.api.enroll({...scope,key_epoch:1});
+  const authored=emission('to_seal');h.seed(authored);
+  for(let i=0;i<4096;i++){const metadata=managedEmission(`received_${i}`).metadata;h.f.seed('sync_envelopes',keyOfId(metadata.key.update_id),{key:keyOfId(metadata.key.update_id),metadata,direction:'received'});}
+  const before=clone(h.f.records);await assert.rejects(h.engine.api.seal('to_seal',h.key),{code:'storage_metadata_too_large'});
+  assert.deepEqual(h.f.records,before);assert.equal(h.f.row('sync_authored',keyOfId('to_seal')).sealed,false);assert.equal(h.f.row('sync_source_wires',keyOfId('to_seal')),undefined);
+});
+
+test('original managed adapter reuses bindSession authenticated key and aborts retry on guard loss after open',async()=>{
+  const h=harness(true);await h.engine.api.enroll({...scope,key_epoch:1});
+  const token=await h.engine.managedRecords!.register(managedCollection,managedRegistration);
+  let live=true;const session=h.engine.api.bindSession(()=>{if(!live)throw Object.assign(new Error('revoked'),{code:'sync_revoked'});});
+  const record=managedEmission('waiting_record');await session.receive('waiting_record',h.wire(record),h.key);
+  h.setRecordStatus('accepted');const before=clone(h.f.records),gate=h.f.holdPayloadRead('readwrite');
+  const pending=h.engine.managedRecords!.retryPage(token);await gate.ready;live=false;gate.release();
+  await assert.rejects(pending,{code:'sync_revoked'});assert.deepEqual(h.f.records,before);
+  const replacement=h.engine.api.bindSession(()=>{});await replacement.receive('waiting_record',h.wire(record),h.key);
+  const retried=await h.engine.managedRecords!.retryPage(token);assert.equal(retried.examined,1);assert.equal(retried.changed,true);
+});
+
+test('same-object same-key provider token rotation after AEAD open rejects retry CAS and continuation',async()=>{
+  const h=harness(true);await h.engine.api.enroll({...scope,key_epoch:1});
+  const token=await h.engine.managedRecords!.register(managedCollection,managedRegistration);
+  const record=managedEmission('waiting_record');await h.engine.api.receive('waiting_record',h.wire(record),h.key);
+  const provider={key:h.key,sessionToken:{},assertActive(){}};h.setRecordProvider(provider);h.setRecordStatus('accepted');
+  const before=clone(h.f.records),gate=h.f.holdPayloadRead('readwrite');
+  const pending=h.engine.managedRecords!.retryPage(token);await gate.ready;provider.sessionToken={};gate.release();
+  await assert.rejects(pending,{code:'sync_session_revoked'});assert.deepEqual(h.f.records,before);
+  const retried=await h.engine.managedRecords!.retryPage(token);assert.equal(retried.changed,true);assert.equal(retried.examined,1);
+});
+
+test('configured absent session provider fails despite a cached bindSession authenticated key',async()=>{
+  const h=harness(true);await h.engine.api.enroll({...scope,key_epoch:1});const token=await h.engine.managedRecords!.register(managedCollection,managedRegistration);
+  const session=h.engine.api.bindSession(()=>{}),record=managedEmission('waiting_record');await session.receive('waiting_record',h.wire(record),h.key);
+  h.setRecordProvider(undefined);const before=clone(h.f.records);await assert.rejects(h.engine.managedRecords!.retryPage(token),{code:'records_retry_key_unavailable'});assert.deepEqual(h.f.records,before);
+});
+
+test('startup rejects orphan records receipt after common received ledger removal',async()=>{
+  const h=harness(true);await h.engine.api.enroll({...scope,key_epoch:1});await h.engine.managedRecords!.register(managedCollection,managedRegistration);
+  const record=managedEmission('waiting_record');await h.engine.api.receive('waiting_record',h.wire(record),h.key);await h.engine.validate();
+  h.f.records.get('sync_envelopes')!.delete(JSON.stringify(keyOfId('waiting_record')));
+  await assert.rejects(h.engine.validate(),{code:'storage_corrupt'});
+});
+
+test('new records receive respects mixed common envelope capacity and cannot brick the existing snapshot',async()=>{
+  const h=harness(true);await h.engine.api.enroll({...scope,key_epoch:1});await h.engine.managedRecords!.register(managedCollection,managedRegistration);
+  for(let i=0;i<4096;i++){
+    const file=emission(`file_${i}`);h.seed(file);
+    const row=h.f.row('sync_authored',keyOfId(file.metadata.key.update_id));h.f.seed('sync_authored',row.key,{...row,sealed:true});
+    h.f.seed('sync_envelopes',row.key,{key:row.key,metadata:file.metadata,direction:'authored'});
+    h.f.seed('sync_source_wires',row.key,{realmId:'realm',vaultId:'vault',updateId:file.metadata.key.update_id,bytes:new Uint8Array([1])});
+  }
+  const cursor={...scope,server_epoch:'epoch',after:'0'};await h.engine.api.setCursor(cursor,null);
+  const before=clone(h.f.records),record=managedEmission('one_more_record');
+  await assert.rejects(h.engine.api.receive('one_more_record',h.wire(record),h.key,{expected:cursor,next:{...cursor,after:'1'}}),{code:'storage_metadata_too_large'});
+  assert.deepEqual(h.f.records,before);assert.equal(h.f.records.get('managed_receipts')!.size,0);assert.equal(h.f.row('sync_source_payloads',keyOfId('one_more_record')),undefined);
+  // The prior integrated snapshot remains usable after rejected insertion.
+  await h.engine.validate();
 });

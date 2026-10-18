@@ -1,3 +1,5 @@
+import { createBrowserManagedRecords, browserManagedStores } from './browser-managed-records.ts';
+import type { ManagedRecordsWasm, ManagedScope, ManagedReceiptHead, AuthenticatedRecordsUpdate } from './browser-managed-records.ts';
 import { BrowserVaultError } from './browser-vault.ts';
 import type { EntryState, BrowserVaultPresentation } from './browser-vault.ts';
 import type { BrowserSync, BrowserSyncKey, EnvelopeMetadata, SyncDelivery, SyncCursor, SyncScope } from './browser-sync.ts';
@@ -12,7 +14,7 @@ export const browserStreamingSyncKeyPaths: Record<string, string> = {
   sync_state: 'key', sync_text: 'key', sync_authored: 'key', sync_envelopes: 'key',
   sync_cursors: 'key', sync_revisions: 'revision',
 };
-export const browserStreamingSyncStores = Object.freeze([...Object.keys(browserStreamingSyncKeyPaths), ...browserNormalizedStores]);
+export const browserStreamingSyncStores = Object.freeze([...Object.keys(browserStreamingSyncKeyPaths), ...browserNormalizedStores, ...browserManagedStores]);
 export const streamingSyncKeys = Object.freeze({ configuration: 'config', head: 'metadata-head' });
 export interface StreamingPublication { entries: EntryState[]; presentation: BrowserVaultPresentation[]; sequence: string }
 export type StreamingContent = {kind:'binary';reference:Json} | {kind:'text';bytes:Uint8Array;metadata:Json};
@@ -21,7 +23,7 @@ export interface StreamingRetainedRow {
   entry:EntryState|null; presentation:BrowserVaultPresentation|null; content:StreamingContent|null; reason:Json;
 }
 export interface StreamingSourceDescriptor {
-  version:1; metadata:EnvelopeMetadata; record:Json|null; activity:Json|null; summary_digest:number[];
+  version:1; metadata:EnvelopeMetadata; record:Json|null; activity:Json|null; summary_digest:number[]|null;
 }
 interface Free { free():void }
 export interface StreamingMetadataBuilder extends Free {
@@ -66,7 +68,7 @@ export interface StreamingOpenedUpdate extends Free {
   prepareMetadataFile(state:StreamingMetadataState,nextRevision:string,priorWire:Uint8Array):StreamingCandidate;
   prepareMetadataText(state:StreamingMetadataState,input:string,priorWire:Uint8Array):StreamingCandidate;
 }
-export interface BrowserStreamingWasm {
+export interface BrowserStreamingWasm extends Partial<ManagedRecordsWasm> {
   WasmMetadataStateBuilder: new(scope:string,revision:string)=>StreamingMetadataBuilder;
   WasmAuthoredMetadataBatch: new(scope:string)=>StreamingAuthoredBatch;
   validateFamilyCommand(input:string):string;
@@ -81,6 +83,8 @@ export interface BrowserStreamingWasm {
 export interface BrowserStreamingSyncHost {
   db:IDBDatabase; authorityId:string; wasm:BrowserStreamingWasm;
   now():number; assertActive():void;
+  /** Trusted key getter for retained records retry; never serialized across the worker boundary. */
+  recordsSession?():{key:BrowserSyncKey;sessionToken:object;assertActive():void}|undefined;
   readPublication(tx:IDBTransaction,done:(current:StreamingPublication)=>void,abort:Abort):void;
   publish(tx:IDBTransaction,rows:StreamingRetainedRow[],origin:{kind:'authored'|'received';update_id:string},
     forcedChanges:Json[]|undefined,current:StreamingPublication):{sequence:string};
@@ -112,7 +116,9 @@ export interface PreparedStreamingRecoveryRead {
   length():string; chunkCount():number; chunkJson(index:number):string;
   verifyPayload(index:number,exactPayload:Uint8Array):Uint8Array; dispose():void;
 }
+export type BrowserStreamingManagedRecords = Pick<ReturnType<typeof createBrowserManagedRecords>,'register'|'apply'|'snapshot'|'retryPage'|'changes'>;
 export interface BrowserStreamingSyncEngine {
+  readonly managedRecords?: BrowserStreamingManagedRecords;
   api:BrowserSync & {readonly concurrentPreparation:true};
   prepareLocal(input:StreamingLocalInput):Promise<PreparedStreamingMutation>;
   /** Owns batch and built immediately on call, including every failure path. */
@@ -168,11 +174,11 @@ function digest(value:unknown):Uint8Array {
 }
 function descriptor(header:SourceHeader):StreamingSourceDescriptor {
   const value=header.descriptor as unknown as StreamingSourceDescriptor, metadata=value?.metadata;
-  if(value?.version!==1||!metadata||metadata.format_version!==2||!['text','files'].includes(metadata.family)||
+  if(value?.version!==1||!metadata||!((metadata.family==='records'&&metadata.format_version===1)||(metadata.format_version===2&&['text','files'].includes(metadata.family)))||
     metadata.key?.realm_id!==header.realmId||metadata.key?.vault_id!==header.vaultId||metadata.key?.update_id!==header.updateId||
     !Number.isInteger(metadata.payload_bytes)||metadata.payload_bytes<1||metadata.payload_bytes>1024*1024||
-    (metadata.family==='files'?(!value.record||value.activity!==null||metadata.text_binding!==null):(!value.activity||value.record!==null||!metadata.text_binding)))throw failure('storage_corrupt');
-  digest(metadata.payload_digest);digest(value.summary_digest);
+    (metadata.family==='records'?(value.record!==null||value.activity!==null||value.summary_digest!==null||metadata.text_binding!==null):metadata.family==='files'?(!value.record||value.activity!==null||metadata.text_binding!==null):(!value.activity||value.record!==null||!metadata.text_binding)))throw failure('storage_corrupt');
+  digest(metadata.payload_digest);if(metadata.family==='records')return value;digest(value.summary_digest);
   if(metadata.family==='files'){
     if(value.record.payload_bytes!==metadata.payload_bytes||!equals(value.record.payload_digest,metadata.payload_digest))throw failure('storage_corrupt');
   }else{
@@ -185,14 +191,16 @@ function descriptor(header:SourceHeader):StreamingSourceDescriptor {
 function assertScope(scope:SyncScope,metadata:EnvelopeMetadata):void {
   if(metadata.key.realm_id!==scope.realm_id||metadata.key.vault_id!==scope.vault_id)throw failure('sync_scope_conflict');
 }
+const managedTransactionGuards=new WeakMap<IDBTransaction,()=>void>();
 function read<T>(tx:IDBTransaction,request:IDBRequest<T>,callback:(value:T)=>void,abort:Abort,guard:()=>void):void {
-  request.onsuccess=()=>{try{guard();callback(request.result);}catch(error){abort(error);}};
+  request.onsuccess=()=>{try{guard();managedTransactionGuards.get(tx)?.();callback(request.result);}catch(error){abort(error);}};
 }
 const baseStores=()=>[...browserStreamingSyncStores,'metadata','presentation','content','control','receipts','journal','intents'];
 
 /** Fresh-format engine. Each prepare owns its metadata/proof snapshot; no mutable
  * graph cache or writer transaction spans asynchronous chunk reads. */
-export function browserStreamingSync(host:BrowserStreamingSyncHost):BrowserStreamingSyncEngine {
+interface RecordsSessionContext { current?:{key:BrowserSyncKey;assertActive():void} }
+export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContext:RecordsSessionContext={}):BrowserStreamingSyncEngine {
   for(const name of ['WasmMetadataStateBuilder','WasmAuthoredMetadataBatch','validateFamilyCommand','checkFamilyCommandReplay','validateAuthoredSyncPayload','validateSyncWire','encodeFilePayload','materializeTextState','createEmptyTextState','rebindTextState'] as const)if(typeof host.wasm[name]!=='function')throw failure('sync_bindings_unavailable');
   const prepared=new WeakMap<PreparedStreamingMutation,InternalPrepared>();
   const active=()=>host.assertActive();
@@ -245,14 +253,22 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost):BrowserStrea
     function loadHeaders():void {
       if(s.head&&(s.head.record_count!==s.records.length||s.head.activity_count!==s.activities.length))throw failure('storage_corrupt');
       const rows=[...s.records,...s.activities],graphKeys=new Set(rows.map(keyString));let index=0;
-      if(graphKeys.size!==rows.length||[...authored.keys(),...envelopes.keys()].some(id=>!graphKeys.has(id)))throw failure('storage_corrupt');
+      if(graphKeys.size!==rows.length)throw failure('storage_corrupt');
+      const recordKeys=new Map<string,SourceKey>();
+      for(const [id,ledger] of [...authored,...envelopes]){
+        if(ledger.metadata.family==='records'){
+          if(graphKeys.has(id))throw failure('storage_corrupt');
+          recordKeys.set(id,sourceKey(ledger.metadata));
+        }else if(!graphKeys.has(id))throw failure('storage_corrupt');
+      }
+      const allRows:SourceKey[]=[...rows,...recordKeys.values()];
       for(const row of s.activities){
         const identity=row.activity?.identity;
         if(!identity||!s.config||identity.realm_id!==s.config.realm_id||identity.vault_id!==s.config.vault_id||!s.texts.has(textKey(identity)))throw failure('storage_corrupt');
       }
       for(const text of s.texts.values())if(!s.config||text.identity.realm_id!==s.config.realm_id||text.identity.vault_id!==s.config.vault_id)throw failure('storage_corrupt');
       const next=()=>{
-        if(index===rows.length){
+        if(index===allRows.length){
           if(!s.config){done(s);return;}
           read(tx,tx.objectStore('sync_cursors').get([s.config.realm_id,s.config.vault_id]),row=>{
             s.cursor=row?.value??null;
@@ -263,18 +279,29 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost):BrowserStrea
             },abort,active);
           },abort,active);return;
         }
-        const row=rows[index++],id=keyString(row),local=authored.get(id),envelope=envelopes.get(id);
+        const row=allRows[index++],id=keyString(row),local=authored.get(id),envelope=envelopes.get(id);
         read(tx,tx.objectStore('sync_source_headers').get(key(row)),header=>{
           if(!header)throw failure('source_body_missing');
           const value=descriptor(header);
-          if(!equals(value.record,row.record??null)||!equals(value.activity,row.activity??null)||!equals(value.summary_digest,row.summary_digest)||
+          if((value.metadata.family==='records'?(value.record!==null||value.activity!==null||value.summary_digest!==null):(!equals(value.record,(row as GraphRow).record??null)||!equals(value.activity,(row as GraphRow).activity??null)||!equals(value.summary_digest,(row as GraphRow).summary_digest)))||
             (!local&&!envelope)||(local&&!equals(local.metadata,value.metadata))||(envelope&&!equals(envelope.metadata,value.metadata))||
             (local?(local.sealed?envelope?.direction!=='authored':!!envelope):envelope?.direction!=='received'))throw failure('storage_corrupt');
           s.headers.set(id,header);
           read(tx,tx.objectStore('sync_source_payloads').getKey(key(row)),exists=>{
             if(exists===undefined)throw failure('source_body_missing');
             read(tx,tx.objectStore('sync_source_wires').getKey(key(row)),wire=>{
-              if((wire!==undefined)!==!!envelope)throw failure('storage_corrupt');next();
+              if((wire!==undefined)!==!!envelope)throw failure('storage_corrupt');
+              if(value.metadata.family!=='records'){next();return;}
+              read(tx,tx.objectStore('managed_receipts').get(key(row)),receipt=>{
+                if(envelope?.direction==='received'&&!receipt||local&&receipt)throw failure('storage_corrupt');
+                const validate=()=>{if(receipt&&(receipt.realmId!==row.realmId||receipt.vaultId!==row.vaultId||receipt.updateId!==row.updateId||receipt.payloadBytes!==String(value.metadata.payload_bytes)))throw failure('storage_corrupt');next();};
+                if(!local){validate();return;}
+                let owned=false;const request=tx.objectStore('managed_local_operations').openCursor();
+                read(tx,request,cursor=>{
+                  if(cursor){const operation=cursor.value;if(operation.realmId===row.realmId&&operation.vaultId===row.vaultId&&operation.updateId===row.updateId)owned=true;cursor.continue();return;}
+                  if(!owned)throw failure('storage_corrupt');validate();
+                },abort,active);
+              },abort,active);
             },abort,active);
           },abort,active);
         },abort,active);
@@ -315,7 +342,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost):BrowserStrea
       active();consumed=true;return rust(()=>session.finish());
     }finally{if(!consumed)session.free();}
   }
-  function sourceHeader(metadata:EnvelopeMetadata,record:Json|null,activity:Json|null,summary:number[]):SourceHeader {
+  function sourceHeader(metadata:EnvelopeMetadata,record:Json|null,activity:Json|null,summary:number[]|null):SourceHeader {
     const value:StreamingSourceDescriptor={version:1,metadata:copy(metadata),record:copy(record),activity:copy(activity),summary_digest:copy(summary)};
     const header:SourceHeader={...sourceKey(metadata),descriptor:value as unknown as MetadataValue};descriptor(header);return header;
   }
@@ -595,6 +622,13 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost):BrowserStrea
       };next();
     }
     function writeHeaders():void {
+      const config=enrolled(value!.snapshot),emissions=value!.sources.filter(source=>!value!.incoming),ids=[...new Set<string>(value!.result.allocated_update_ids??[])];
+      const authored:Json[]=[];
+      for(const id of ids){const source=emissions.find(source=>source.header.updateId===id),header=source?.header??value!.pins.get(stringify([config.realm_id,config.vault_id,id]));if(header)authored.push({key:[config.realm_id,config.vault_id,id],metadata:descriptor(header).metadata,pending:1,order:'0'.repeat(20),sealed:false});}
+      const envelopes=value!.incoming&&value!.prior.byteLength===0?[{key:[config.realm_id,config.vault_id,value!.updateId],metadata:descriptor(value!.sources[0].header).metadata,direction:'received'}]:[];
+      admitLedgerRows(tx,'sync_authored',authored,()=>admitLedgerRows(tx,'sync_envelopes',envelopes,writeAdmittedHeaders,reject),reject);
+    }
+    function writeAdmittedHeaders():void {
       const config=enrolled(value!.snapshot),emissions=value!.sources.filter(source=>!value!.incoming),ids=value!.result.allocated_update_ids??[];
       for(const revision of value!.revisions)tx.objectStore('sync_revisions').add({revision});
       for(const [id,text] of value!.texts)if(!equals(value!.snapshot.texts.get(id),text))tx.objectStore('sync_text').put({key:id,state:text});
@@ -640,7 +674,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost):BrowserStrea
       };next();
     }
   }
-  interface ReceivedDuplicate { duplicate:true; sequence:string }
+  interface ReceivedDuplicate { duplicate:boolean; sequence:string }
   function commitReceivedDuplicate(s:Snapshot,header:SourceHeader,wire:Uint8Array,payload:Uint8Array,expectedEnvelope:Json,expectedAuthored:Json|null,delivery:SyncDelivery):Promise<ReceivedDuplicate> {
     // A committed exact receipt can advance delivery without creating any new
     // content proof. Never republish from this path or admit source-only rows.
@@ -675,6 +709,12 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost):BrowserStrea
     try{
       const metadata=boundedJson(opened.metadataJson(),128*1024) as EnvelopeMetadata;assertScope(config,metadata);
       if(metadata.key.update_id!==updateId)throw failure('sync_update_collision');
+      if(metadata.family==='records'){
+        if(!managedRecords)throw failure('records_bindings_unavailable');
+        recordsContext.current={key:keyInput,assertActive:active};
+        const result=await managedAdapter!.receive(opened as unknown as AuthenticatedRecordsUpdate,delivery);
+        return {duplicate:result.duplicate,sequence:s.publication.sequence};
+      }
       const authenticated=boundedJson(opened.authenticatedDescriptorJson(),normalizedLimits.metadataRow),header=sourceHeader(metadata,authenticated.record??null,authenticated.activity??null,authenticated.summary_digest),payload=opened.exactPlaintext();
       const priorRow=await transact<Json>('readonly',(tx,done,abort)=>read(tx,tx.objectStore('sync_envelopes').get(key(header)),row=>done(row??null),abort,active));
       active();let prior:Uint8Array=new Uint8Array();if(priorRow){const retained=await exact(header,'wire');if(!equals(retained.header,header)||!sameBytes(retained.bytes,wire))throw failure('sync_update_collision');prior=retained.bytes;}
@@ -710,7 +750,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost):BrowserStrea
     },abort,active);
   }
   async function seal(updateId:string,keyInput:BrowserSyncKey):Promise<Uint8Array> {
-    active();const initial=await transact<{config:Configuration;row:Json;source:SourceRead}>('readonly',(tx,done,abort)=>loadAuthored(tx,updateId,done,abort));active();
+    active();recordsContext.current={key:keyInput,assertActive:active};const initial=await transact<{config:Configuration;row:Json;source:SourceRead}>('readonly',(tx,done,abort)=>loadAuthored(tx,updateId,done,abort));active();
     const {config,row,source}=initial;
     if(row.sealed){const retained=await exact(source.header,'wire');if(!equals(retained.header,source.header))throw failure('storage_corrupt');validateWire(keyInput,config,row.metadata,source.bytes,retained.bytes);return retained.bytes;}
     const header={envelope_version:1,purpose:'vault_update',suite:'xchacha20poly1305',realm_id:config.realm_id,vault_id:config.vault_id,update_id:updateId,key_epoch:config.key_epoch,
@@ -725,16 +765,145 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost):BrowserStrea
           addImmutableSource(tx,{header:source.header,wire},candidate=>{
             if(!candidate.payload)throw failure('source_body_missing');validateWire(keyInput,config,row.metadata,candidate.payload,wire);
           },()=>{
-            active();tx.objectStore('sync_authored').put({...current.row,sealed:true});
-            tx.objectStore('sync_envelopes').add({key:key(source.header),metadata:row.metadata,direction:'authored'});done(wire.slice());
+            const envelope={key:key(source.header),metadata:row.metadata,direction:'authored'};
+            admitLedgerRows(tx,'sync_envelopes',[envelope],()=>{active();tx.objectStore('sync_authored').put({...current.row,sealed:true});tx.objectStore('sync_envelopes').add(envelope);done(wire.slice());},abort);
           },abort);
         },abort,active);
       }catch(error){abort(error);}
     },abort));
   }
+  // Managed records share every immutable source, outbox order and relay cursor with files/text.
+  function managedConfiguration(tx:IDBTransaction,scope:ManagedScope,required:boolean,done:(config:Configuration|null,cursor:SyncCursor|null)=>void,abort:Abort):void{
+    read(tx,tx.objectStore('sync_state').get(streamingSyncKeys.configuration),row=>{
+      const config=(row?.value??null) as Configuration|null;
+      if(!config||config.realm_id!==scope.realm||config.vault_id!==scope.vault){if(required)throw failure('sync_scope_conflict');done(null,null);return;}
+      read(tx,tx.objectStore('sync_cursors').get([config.realm_id,config.vault_id]),cursor=>done(config,cursor?.value??null),abort,active);
+    },abort,active);
+  }
+  function admitLedgerRows(tx:IDBTransaction,store:'sync_authored'|'sync_envelopes',additions:Json[],done:()=>void,abort:Abort):void{
+    let count=additions.length,bytes=additions.reduce((sum,row)=>sum+textEncoder.encode(stringify(row)).byteLength,0);
+    const request=tx.objectStore(store).openCursor();
+    read(tx,request,cursor=>{
+      if(cursor){count++;bytes+=textEncoder.encode(stringify(cursor.value)).byteLength;}
+      if(count>4096||bytes>128*1024*1024)throw failure('storage_metadata_too_large');
+      if(cursor)cursor.continue();else done();
+    },abort,active);
+  }
+  function managedSource(tx:IDBTransaction,source:SourceInput,done:()=>void,abort:Abort):void{
+    read(tx,tx.objectStore('control').get('binary-stream-usage:v1'),row=>{
+      const usage=row?.value;
+      if(!usage||usage.version!==1||!Number.isInteger(usage.stages)||usage.stages<0||usage.stages>4096||
+        !Number.isInteger(usage.activeStages)||usage.activeStages<0||usage.activeStages>8||usage.activeStages>usage.stages||
+        !Number.isInteger(usage.chunkRecords)||usage.chunkRecords<0||usage.chunkRecords>4096||!Number.isInteger(usage.pageRecords)||usage.pageRecords<0||usage.pageRecords>256||
+        BigInt(decimalU64(usage.sourcePayloadBytes))>536870912n)throw failure('binary_usage_unavailable');
+      read(tx,tx.objectStore('sync_source_payloads').getKey(key(source.header)),body=>{
+        const added=body===undefined?BigInt(source.payload!.byteLength):0n;
+        if(BigInt(usage.sourcePayloadBytes)+added>536870912n)throw failure('binary_quota_exceeded');
+        addImmutableSource(tx,source,candidate=>{
+          const metadata=descriptor(candidate.header).metadata;
+          if(candidate.payload)rust(()=>host.wasm.validateAuthoredSyncPayload(stringify(metadata),candidate.payload!));
+          if(candidate.wire)rust(()=>host.wasm.validateSyncWire(stringify(metadata),candidate.wire!));
+        },()=>{active();tx.objectStore('control').put({key:'binary-stream-usage:v1',value:{...usage,sourcePayloadBytes:String(BigInt(usage.sourcePayloadBytes)+added)}});done();},abort);
+      },abort,active);
+    },abort,active);
+  }
+  const managedBindings=['validateRecordsRegistration','validateRecordsAccepted','canonicalRecordsLocalRequest','finalizeRecordsLocalResult','prepareRecordsLocal','recordsSnapshot','recordsRetryEligible','validateRecordsStoredOperation','validateRecordsStoredReplay','validateRecordsStoredBinding','recordsStoredReadSet'] as const;
+  const managedAdapter=managedBindings.every(name=>typeof host.wasm[name]==='function')?createBrowserManagedRecords({db:host.db,authorityId:host.authorityId,assertActive:active,wasm:host.wasm as ManagedRecordsWasm,common:{
+    stores:baseStores(),
+    storedSource(tx,identity,done,abort){
+      read(tx,tx.objectStore('sync_authored').get(key(identity)),authored=>{
+        read(tx,tx.objectStore('sync_envelopes').get(key(identity)),envelope=>{
+          getExactSource(tx,identity,'payload',source=>{try{
+            active();if(!source||(!authored&&!envelope))throw failure('storage_corrupt');
+            const metadata=descriptor(source.header).metadata;
+            if(metadata.family!=='records'||(authored&&!equals(authored.metadata,metadata))||(envelope&&!equals(envelope.metadata,metadata))||
+              (authored?(authored.sealed?envelope?.direction!=='authored':!!envelope):envelope?.direction!=='received'))throw failure('storage_corrupt');
+            rust(()=>host.wasm.validateAuthoredSyncPayload(stringify(metadata),source.bytes));
+            if(!envelope){read(tx,tx.objectStore('sync_source_wires').getKey(key(identity)),wire=>{if(wire!==undefined)throw failure('storage_corrupt');done({source,authored:true});},abort,active);return;}
+            getExactSource(tx,identity,'wire',wire=>{try{
+              active();if(!wire||!equals(wire.header,source.header))throw failure('storage_corrupt');rust(()=>host.wasm.validateSyncWire(stringify(metadata),wire.bytes));done({source,authored:!!authored});
+            }catch(error){abort(error);}},abort);
+          }catch(error){abort(error);}},abort);
+        },abort,active);
+      },abort,active);
+    },
+    readContext(tx,scope,done,abort){managedConfiguration(tx,scope,false,(_config,cursor)=>done(cursor?{epoch:cursor.server_epoch,position:cursor.after}:null),abort);},
+    authored(tx,raw,payload,done,abort){
+      const metadata=boundedJson(raw,128*1024) as EnvelopeMetadata,identity=sourceKey(metadata);
+      const scope={realm:identity.realmId,vault:identity.vaultId} as ManagedScope;
+      managedConfiguration(tx,scope,true,()=>{
+        const header=sourceHeader(metadata,null,null,null);
+        managedSource(tx,{header,payload},()=>{
+          read(tx,tx.objectStore('sync_state').get('authored-sequence'),row=>{
+            const order=nextDecimalU64(row?.value??'0');
+            const authoredRow={key:key(identity),metadata,pending:1,order:order.padStart(20,'0'),sealed:false};
+            admitLedgerRows(tx,'sync_authored',[authoredRow],()=>{tx.objectStore('sync_authored').add(authoredRow);tx.objectStore('sync_state').put({key:'authored-sequence',value:order});done();},abort);
+          },abort,active);
+        },abort);
+      },abort);
+    },
+    received(tx,input,done,abort){
+      if(input.assertActive){input.assertActive();managedTransactionGuards.set(tx,input.assertActive);}
+      const metadata=boundedJson(input.metadataJson,128*1024) as EnvelopeMetadata,identity=sourceKey(metadata),header=sourceHeader(metadata,null,null,null);
+      managedConfiguration(tx,{realm:identity.realmId,vault:identity.vaultId} as ManagedScope,true,(config,cursor)=>{
+        const delivery=input.delivery as SyncDelivery|undefined;
+        checkDelivery({config,head:{},cursor} as Snapshot,delivery);
+        read(tx,tx.objectStore('sync_envelopes').get(key(identity)),envelope=>{
+          read(tx,tx.objectStore('sync_authored').get(key(identity)),authored=>{
+            if(envelope){
+              if(!equals(envelope.metadata,metadata)||!['authored','received'].includes(envelope.direction)||
+                (envelope.direction==='authored'?(!authored||!authored.sealed||!equals(authored.metadata,metadata)):!!authored))throw failure('sync_update_collision');
+              getExactSource(tx,identity,'payload',payload=>{try{
+                active();if(!payload||!equals(payload.header,header)||!sameBytes(payload.bytes,input.payload))throw failure('immutable_source_conflict');
+                getExactSource(tx,identity,'wire',wire=>{try{
+                  active();if(!wire||!equals(wire.header,header)||!sameBytes(wire.bytes,input.wire))throw failure('sync_update_collision');
+                  if(delivery)tx.objectStore('sync_cursors').put({key:[identity.realmId,identity.vaultId],value:delivery.next});
+                  done({duplicate:true,authored:envelope.direction==='authored'});
+                }catch(error){abort(error);}},abort);
+              }catch(error){abort(error);}},abort);return;
+            }
+            if(authored)throw failure('sync_update_collision');
+            if(input.duplicateOnly){done({duplicate:false,authored:false});return;}
+            managedSource(tx,{header,payload:input.payload,wire:input.wire},()=>{
+              const row={key:key(identity),metadata,direction:'received'};
+              admitLedgerRows(tx,'sync_envelopes',[row],()=>{
+                tx.objectStore('sync_envelopes').add(row);
+                if(delivery)tx.objectStore('sync_cursors').put({key:[identity.realmId,identity.vaultId],value:delivery.next});
+                done({duplicate:false,authored:false});
+              },abort);
+            },abort);
+          },abort,active);
+        },abort,active);
+      },abort);
+    },
+    retainedSession(){
+      const supplied=host.recordsSession?.(),session=host.recordsSession?supplied:recordsContext.current;
+      if(!session)throw failure('records_retry_key_unavailable');
+      const capturedKey=session.key,capturedToken=supplied?.sessionToken,capturedAssert=session.assertActive.bind(session);
+      const admitted=()=>{
+        active();capturedAssert();
+        if(supplied){const current=host.recordsSession?.();if(!current||current.key!==capturedKey||current.sessionToken!==capturedToken)throw failure('sync_session_revoked');}
+        else if(recordsContext.current!==session)throw failure('sync_session_revoked');
+      };
+      admitted();
+      return {assertActive:admitted,async open(receipt:ManagedReceiptHead){
+      admitted();
+      const retainedKey=capturedKey;
+      const config=await transact<Configuration>('readonly',(tx,done,abort)=>read(tx,tx.objectStore('sync_state').get(streamingSyncKeys.configuration),row=>{if(!row?.value)throw failure('sync_not_enrolled');done(row.value);},abort,active)),retained=await exact(receipt,'wire');
+      const opened=rust(()=>retainedKey.openSyncUpdate(stringify({realm_id:config.realm_id,vault_id:config.vault_id,update_id:receipt.updateId,key_epoch:config.key_epoch}),retained.bytes)) as unknown as StreamingOpenedUpdate&AuthenticatedRecordsUpdate;
+      try{const metadata=descriptor(retained.header).metadata;
+        if(!equals(boundedJson(opened.metadataJson()),metadata)||String(opened.exactPlaintext().byteLength)!==receipt.payloadBytes)throw failure('storage_corrupt');
+        admitted();return opened;
+      }catch(error){opened.free();throw error;}
+      }};
+    },
+  }}):undefined;
+
+  const managedRecords:BrowserStreamingManagedRecords|undefined=managedAdapter?Object.freeze({register:managedAdapter.register,apply:managedAdapter.apply,snapshot:managedAdapter.snapshot,retryPage:managedAdapter.retryPage,changes:managedAdapter.changes}):undefined;
+
   const api:BrowserSync & {readonly concurrentPreparation:true}={
     concurrentPreparation:true,
-    bindSession(guard){active();guard();return browserStreamingSync({...host,assertActive(){active();guard();}}).api;},
+    bindSession(guard){active();guard();return browserStreamingSync({...host,assertActive(){active();guard();}},recordsContext).api;},
     enroll(input){const scope=copy(input);return transact<void>('readwrite',(tx,done,abort)=>capture(tx,s=>{
       try{
         if(!Number.isInteger(scope.key_epoch)||scope.key_epoch<1||scope.key_epoch>0xffffffff)throw failure('invalid_sync_epoch');
@@ -931,6 +1100,8 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost):BrowserStrea
     }finally{ownedPlan?.free();recovery?.free();proof?.free();graph.free();}
   }
   async function validate():Promise<void> {
+    if(managedAdapter)await managedAdapter.validate();
+    else await transact<void>('readonly',(tx,done,abort)=>read(tx,tx.objectStore('managed_collections').openCursor(),cursor=>{if(cursor)throw failure('records_bindings_unavailable');done();},abort,active));
     const s=await snapshot();if(!s.config)return;
     const graph=state(s);let proof:StreamingVerifiedSet|undefined,classification:StreamingClassification|undefined;
     try{
@@ -995,5 +1166,5 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost):BrowserStrea
       },abort));active();
     }finally{classification?.free();proof?.free();graph.free();}
   }
-  return {api,prepareLocal,prepareBinary,commitLocal,prepareRead,commitRead,prepareRecoveryRead,commitRecoveryRead,validate};
+  return {api,managedRecords,prepareLocal,prepareBinary,commitLocal,prepareRead,commitRead,prepareRecoveryRead,commitRecoveryRead,validate};
 }
