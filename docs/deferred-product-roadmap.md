@@ -116,6 +116,16 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:30UTC source checkpoint: Pages tabs09a4ab41 atop09734eb4 source-ready, root
+independent review assigned. Editor hooks683f90dd after5742+a02 source-ready,
+separate root reviewer assigned. Both isolated/uncompiled; Python assertions do
+not establish native execution. Configured history must route original intent
+through coordinator; SettingsChoosevault needs explicit root callback/drain in
+Pages before global composition. Coordinator latest didInstall quarantine bug
+must preserve reservation cleanup when Showtabs opens; review gate relayed
+msg_de7a1905e017 along with prior exclusive afterSaving publication fix. No compiler
+live; main Rust integration complete, mobile candidate acceptance remains pending.
+
 00:28UTC canonical integration: mainbb155f3a merges tested583cebce native-menu-wire.
 Final17/17 pass: host6 /private/tmp/native-menu-wire-host-bounded.log, portable2
 parent-retry, Store7 authority-final and Store2 summary-final. Eight source files
