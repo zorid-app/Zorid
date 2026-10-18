@@ -116,6 +116,15 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:57UTC: records1842c15e granted tests17018 exit0,33/33 pass (9adversarial,
+24traces), no source/lockchanges; log /private/tmp/zorid-records-1842c15e-tests.log.
+Root independent actualsource review approved library slice, programmaticbatch
+caller memory bound remains documented; productionstorage/wire adoption separate.
+Slotexplicitly returned, no compilerlive; native fullSimulatorpriority available.
+InitialFile/Home rootwiring sourceaccepted exactcoordinatord6b0a0a9... and
+NativeMobile130cb790..., awaiting frozencommit/buildrequest. NewNote/history/import
+not covered; phone9 stays. Recordsresults/doc batchintegration forthcoming.
+
 00:56UTC: corrected immutable13source Swiftfrontend25349 terminal0, zeroerrors,
 concurrency warnings remain. Artifacts /private/tmp/zorid-connected-tabs-retry-20261018
 {command.json,source-hashes.json,result.log,exit-code.txt}, manifestd1aff3f4...
