@@ -1,0 +1,324 @@
+{
+  "provenance": {
+    "head": "804c9fd53a7417414f8d5fe688f7fd67cb8fd061",
+    "fingerprint": "a4027f128c91099071a2744f90a599b9151ee623599f3e4b7c4846283a16e0f8",
+    "files": {
+      "zorid_wasm.js": "1145a203bda8c72a6e017e87f0adda6df4b5c9d992d802c56ece864538ffae31",
+      "zorid_wasm_bg.wasm": "b8e316e2a8d4e8a498c0e8f2d48b844d3b3db4ca51513bbd000674f26283ae2e"
+    },
+    "sourceDigest": "015cda136021541c30fefc6cee1b0200732ecdbcadf5344e8ed6b81072cafe49"
+  },
+  "evidence": {
+    "status": "passed-subset",
+    "groups": [
+      {
+        "name": "startup registers fixed first-party collection and recovers retained encrypted receipt",
+        "status": "passed",
+        "evidence": {
+          "parent": "accepted",
+          "child": "waiting_dependencies",
+          "registrations": 1
+        }
+      },
+      {
+        "name": "normal network receive triggers retained child recovery on existing local queue",
+        "status": "passed",
+        "evidence": {
+          "swept": {
+            "uploaded": 0,
+            "received": 1,
+            "complete": true
+          },
+          "cursor": {
+            "realm_id": "host-realm",
+            "vault_id": "host-vault",
+            "server_epoch": "host-epoch",
+            "after": "1"
+          },
+          "child": "accepted"
+        }
+      },
+      {
+        "name": "foreground refresh catches durable changes with no BroadcastChannel hint",
+        "status": "passed",
+        "evidence": {
+          "deliveries": 1
+        }
+      },
+      {
+        "name": "release fences maintenance and exact client lease reacquires on worker restart",
+        "status": "passed",
+        "evidence": {
+          "changes": 8,
+          "reacquiredClient": "c288cde8-66c7-41fe-aeb6-158728619262",
+          "errors": []
+        }
+      },
+      {
+        "name": "release drains a held real strict transaction and suppresses stale durable notification",
+        "status": "passed",
+        "evidence": {
+          "outcome": "complete",
+          "afterRelease": "accepted",
+          "afterReopen": "accepted",
+          "completedBeforeAck": true
+        }
+      }
+    ],
+    "remainingGates": [
+      "Product registry is empty: no product UI or public plugin activation",
+      "Full managed-records/browser campaign and native/mobile remain separate"
+    ],
+    "events": [
+      {
+        "name": "zorid-core-vault:host-lifecycle-f821f4c7-dd3f-42d5-a62e-7256deb4d08b",
+        "event": "fixture-registration"
+      },
+      {
+        "name": "zorid-core-vault:host-lifecycle-f821f4c7-dd3f-42d5-a62e-7256deb4d08b",
+        "event": "fixture-durable-changes",
+        "changes": [
+          {
+            "sequence": "1",
+            "status": "missing_registration",
+            "record": "startup",
+            "generation": "startup-parent",
+            "operationId": "startup-parent"
+          },
+          {
+            "sequence": "2",
+            "status": "missing_registration",
+            "record": "parent-recovery",
+            "generation": "z-parent",
+            "operationId": "a-child"
+          }
+        ]
+      },
+      {
+        "name": "zorid-core-vault:host-lifecycle-f821f4c7-dd3f-42d5-a62e-7256deb4d08b",
+        "event": "change",
+        "paths": []
+      },
+      {
+        "name": "zorid-core-vault:host-lifecycle-f821f4c7-dd3f-42d5-a62e-7256deb4d08b",
+        "event": "fixture-durable-changes",
+        "changes": [
+          {
+            "sequence": "3",
+            "status": "waiting_dependencies",
+            "record": "parent-recovery",
+            "generation": "z-parent",
+            "operationId": "a-child"
+          },
+          {
+            "sequence": "4",
+            "status": "accepted",
+            "record": "startup",
+            "generation": "startup-parent",
+            "operationId": "startup-parent"
+          }
+        ]
+      },
+      {
+        "name": "zorid-core-vault:host-lifecycle-f821f4c7-dd3f-42d5-a62e-7256deb4d08b",
+        "event": "change",
+        "paths": []
+      },
+      {
+        "name": "zorid-core-vault:host-lifecycle-f821f4c7-dd3f-42d5-a62e-7256deb4d08b",
+        "event": "fixture-durable-changes",
+        "changes": [
+          {
+            "sequence": "5",
+            "status": "accepted",
+            "record": "parent-recovery",
+            "generation": "z-parent",
+            "operationId": "z-parent"
+          },
+          {
+            "sequence": "6",
+            "status": "accepted",
+            "record": "parent-recovery",
+            "generation": "z-parent",
+            "operationId": "a-child"
+          }
+        ]
+      },
+      {
+        "name": "zorid-core-vault:host-lifecycle-f821f4c7-dd3f-42d5-a62e-7256deb4d08b",
+        "event": "change",
+        "paths": []
+      },
+      {
+        "name": "zorid-core-vault:host-lifecycle-f821f4c7-dd3f-42d5-a62e-7256deb4d08b",
+        "event": "fixture-durable-changes",
+        "changes": [
+          {
+            "sequence": "7",
+            "status": "accepted",
+            "record": "foreground",
+            "generation": "foreground",
+            "operationId": "foreground"
+          }
+        ]
+      },
+      {
+        "name": "zorid-core-vault:host-lifecycle-f821f4c7-dd3f-42d5-a62e-7256deb4d08b",
+        "event": "change",
+        "paths": []
+      },
+      {
+        "name": "zorid-core-vault:host-lifecycle-f821f4c7-dd3f-42d5-a62e-7256deb4d08b",
+        "event": "fixture-registration"
+      },
+      {
+        "name": "zorid-core-vault:host-lifecycle-f821f4c7-dd3f-42d5-a62e-7256deb4d08b",
+        "event": "fixture-durable-changes",
+        "changes": [
+          {
+            "sequence": "1",
+            "status": "missing_registration",
+            "record": "startup",
+            "generation": "startup-parent",
+            "operationId": "startup-parent"
+          },
+          {
+            "sequence": "2",
+            "status": "missing_registration",
+            "record": "parent-recovery",
+            "generation": "z-parent",
+            "operationId": "a-child"
+          },
+          {
+            "sequence": "3",
+            "status": "waiting_dependencies",
+            "record": "parent-recovery",
+            "generation": "z-parent",
+            "operationId": "a-child"
+          },
+          {
+            "sequence": "4",
+            "status": "accepted",
+            "record": "startup",
+            "generation": "startup-parent",
+            "operationId": "startup-parent"
+          },
+          {
+            "sequence": "5",
+            "status": "accepted",
+            "record": "parent-recovery",
+            "generation": "z-parent",
+            "operationId": "z-parent"
+          },
+          {
+            "sequence": "6",
+            "status": "accepted",
+            "record": "parent-recovery",
+            "generation": "z-parent",
+            "operationId": "a-child"
+          },
+          {
+            "sequence": "7",
+            "status": "accepted",
+            "record": "foreground",
+            "generation": "foreground",
+            "operationId": "foreground"
+          },
+          {
+            "sequence": "8",
+            "status": "accepted",
+            "record": "shutdown",
+            "generation": "shutdown",
+            "operationId": "shutdown"
+          }
+        ]
+      },
+      {
+        "name": "zorid-core-vault:host-lifecycle-f821f4c7-dd3f-42d5-a62e-7256deb4d08b",
+        "event": "change",
+        "paths": []
+      },
+      {
+        "name": "zorid-core-vault:host-drain-0d59dc56-19eb-4f36-89c3-16250d3290a2",
+        "event": "fixture-registration"
+      },
+      {
+        "name": "zorid-core-vault:host-drain-0d59dc56-19eb-4f36-89c3-16250d3290a2",
+        "event": "fixture-durable-changes",
+        "changes": [
+          {
+            "sequence": "1",
+            "status": "missing_registration",
+            "record": "drain",
+            "generation": "drain-create",
+            "operationId": "drain-create"
+          }
+        ]
+      },
+      {
+        "name": "zorid-core-vault:host-drain-0d59dc56-19eb-4f36-89c3-16250d3290a2",
+        "event": "change",
+        "paths": []
+      },
+      {
+        "name": "zorid-core-vault:host-drain-0d59dc56-19eb-4f36-89c3-16250d3290a2",
+        "event": "fixture-held-write"
+      },
+      {
+        "name": "zorid-core-vault:host-drain-0d59dc56-19eb-4f36-89c3-16250d3290a2",
+        "event": "fixture-held-finished",
+        "outcome": "complete"
+      },
+      {
+        "name": "zorid-core-vault:host-drain-0d59dc56-19eb-4f36-89c3-16250d3290a2",
+        "event": "fixture-registration"
+      },
+      {
+        "name": "zorid-core-vault:host-drain-0d59dc56-19eb-4f36-89c3-16250d3290a2",
+        "event": "fixture-durable-changes",
+        "changes": [
+          {
+            "sequence": "1",
+            "status": "missing_registration",
+            "record": "drain",
+            "generation": "drain-create",
+            "operationId": "drain-create"
+          },
+          {
+            "sequence": "2",
+            "status": "accepted",
+            "record": "drain",
+            "generation": "drain-create",
+            "operationId": "drain-create"
+          }
+        ]
+      },
+      {
+        "name": "zorid-core-vault:host-drain-0d59dc56-19eb-4f36-89c3-16250d3290a2",
+        "event": "change",
+        "paths": []
+      }
+    ],
+    "provenance": {
+      "head": "804c9fd53a7417414f8d5fe688f7fd67cb8fd061",
+      "fingerprint": "a4027f128c91099071a2744f90a599b9151ee623599f3e4b7c4846283a16e0f8",
+      "files": {
+        "zorid_wasm.js": "1145a203bda8c72a6e017e87f0adda6df4b5c9d992d802c56ece864538ffae31",
+        "zorid_wasm_bg.wasm": "b8e316e2a8d4e8a498c0e8f2d48b844d3b3db4ca51513bbd000674f26283ae2e"
+      },
+      "sourceDigest": "015cda136021541c30fefc6cee1b0200732ecdbcadf5344e8ed6b81072cafe49"
+    },
+    "cleanup": [
+      {
+        "name": "zorid-core-vault:host-lifecycle-f821f4c7-dd3f-42d5-a62e-7256deb4d08b",
+        "deleted": true
+      },
+      {
+        "name": "zorid-core-vault:host-drain-0d59dc56-19eb-4f36-89c3-16250d3290a2",
+        "deleted": true
+      }
+    ],
+    "finished": true
+  },
+  "runnerError": null
+}
