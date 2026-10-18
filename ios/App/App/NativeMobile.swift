@@ -987,6 +987,7 @@ final class NativeEditorContainer: UIViewController {
 final class NativeVaultPicker: UITableViewController {
     private var catalog: LocalVaultCatalog?
     private var opening = false
+    private var openingTicket: UUID?
 
     init() { super.init(style: .insetGrouped) }
     required init?(coder: NSCoder) { super.init(coder: coder) }
@@ -1004,8 +1005,7 @@ final class NativeVaultPicker: UITableViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        opening = false
-        navigationItem.rightBarButtonItem?.isEnabled = true
+        navigationItem.rightBarButtonItem?.isEnabled = !opening
         reloadVaults()
     }
 
@@ -1075,9 +1075,15 @@ final class NativeVaultPicker: UITableViewController {
         }
         guard presentedViewController == nil else { return }
         opening = true
+        let ticket = UUID()
+        openingTicket = ticket
         navigationItem.rightBarButtonItem?.isEnabled = false
         navigationItem.backButtonTitle = "Vaults"
-        let destination = NativeVaultOpeningController(vault: vault, root: { try catalog.root(for: vault) })
+        let destination = NativeVaultOpeningController(vault: vault, root: { try catalog.root(for: vault) }) { [weak self] in
+            guard let self = self, self.openingTicket == ticket else { return }
+            self.openingTicket = nil; self.opening = false
+            self.navigationItem.rightBarButtonItem?.isEnabled = true
+        }
         navigation.pushViewController(destination, animated: !UIAccessibility.isReduceMotionEnabled)
     }
 }
@@ -1097,9 +1103,12 @@ private final class NativeVaultOpeningController: UIViewController {
     private var waitingForTransition = false
     private var received: (session: NativeMobileSession, root: URL)?
     private var failure: String?
+    private var openPending = false
+    private var reservationFinished: (() -> Void)?
 
-    init(vault: LocalVault, root: @escaping () throws -> URL) {
+    init(vault: LocalVault, root: @escaping () throws -> URL, reservationFinished: @escaping () -> Void) {
         self.vault = vault; resolveRoot = root
+        self.reservationFinished = reservationFinished
         super.init(nibName: nil, bundle: nil)
         title = vault.name
     }
@@ -1163,6 +1172,7 @@ private final class NativeVaultOpeningController: UIViewController {
         var stack = navigation.viewControllers
         stack[stack.count - 1] = NativePagesController(vault: vault, root: received.root, session: received.session)
         navigation.setViewControllers(stack, animated: false)
+        finishReservation()
     }
     private func begin() {
         guard current, !started else { return }
@@ -1170,9 +1180,16 @@ private final class NativeVaultOpeningController: UIViewController {
         let ticket = attempt
         do {
             let root = try resolveRoot()
-            NativeMobileSession.open(vault: vault, root: root) { [weak self] result in
-                guard let self = self, !self.abandoned, self.attempt == ticket else {
-                    if case .success(let session) = result { session.close {} }
+            openPending = true
+            // Keep cleanup ownership through the reply and, after Back, close ACK.
+            // Open/close completions retain this loader only while work is outstanding;
+            // its stored reservation callback captures the picker weakly.
+            NativeMobileSession.open(vault: vault, root: root) { [self] result in
+                openPending = false
+                guard !abandoned, attempt == ticket else {
+                    if case .success(let session) = result {
+                        session.close { [self] in finishReservation() }
+                    } else { finishReservation() }
                     return
                 }
                 switch result {
@@ -1207,12 +1224,20 @@ private final class NativeVaultOpeningController: UIViewController {
     private func abandon() {
         guard !abandoned, !replacing else { return }
         abandoned = true; attempt += 1
+        guard !openPending else { return }
         let session = received?.session; received = nil
-        session?.close {}
+        if let session = session { session.close { [self] in finishReservation() } }
+        else { finishReservation() }
+    }
+    private func finishReservation() {
+        let callback = reservationFinished; reservationFinished = nil
+        callback?()
     }
     deinit {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
-        received?.session.close {}
+        let callback = reservationFinished
+        if let session = received?.session { session.close { callback?() } }
+        else { callback?() }
     }
 
 }
