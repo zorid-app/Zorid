@@ -1,4 +1,5 @@
 import type { Vault } from '../core/vault.ts';
+import {DurableWritePlanningError} from '../core/durable-writes.ts';
 import type { DurableWrites, DurableWriteRead, DurableWritePlan, DurableWriteRef, DurableWriteOutcome } from '../core/durable-writes.ts';
 import type { CheckpointChange } from '../core/durable-checkpoints.ts';
 import { boundedUtf8 } from '../core/checkpoint-input.ts';
@@ -57,7 +58,15 @@ export class DurableNoteState {
     if(this.state!.conflict)throw failure('file advanced or write rejected; draft preserved');
     while(this.text!==this.base.content){
       validate();const base=this.base,content=this.text;
-      const plan=await this.writes.planWrite({operationId:crypto.randomUUID(),path:base.path,expectedEntryId:base.entryId,expectedRevision:base.revision,expectedContent:base.content,content});
+      let plan:DurableWritePlan;
+      try{plan=await this.writes.planWrite({operationId:crypto.randomUUID(),path:base.path,expectedEntryId:base.entryId,expectedRevision:base.revision,expectedContent:base.content,content});}
+      catch(error){
+        // A verified definite planning rejection has no prepared/committing
+        // intent to settle. Preserve the original baseline and latest draft;
+        // unknown transport/provider errors remain ordinary pending failures.
+        if(error instanceof DurableWritePlanningError&&error.source==='host'&&error.code==='revision_conflict'&&!error.commitUncertain){this.state!.conflict=true;await this.persist();this.changed();}
+        throw error;
+      }
       this.checkIdentity(plan);boundedUtf8(plan.encodedPlan,8*1024*1024,'plan_too_large');
       this.state!.operation={plan,content};await this.persist();await this.resume(validate);
       if(this.state!.conflict)throw failure('file advanced or write rejected; draft preserved');

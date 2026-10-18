@@ -1,3 +1,4 @@
+import {decodeDesktopNotePlan} from './desktop-note-plan.ts';
 import {decodeWorkBlockEnvelope} from '../../desktop/workblocks.cjs';
 import {createDesktopWorkBlocks,createDesktopBinaryStreams} from './desktop.ts';
 import {scheduleBinaryTransfer} from '../core/binary-transfer-queue.ts';
@@ -85,7 +86,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
     };
     durableWrites = Object.freeze<DurableWrites>({
       readText: path => call('readText',path), readTextById: id => call('readTextById',id),
-      planWrite: input => call('planWrite',input), prepare: plan => call('prepare',plan),
+      planWrite: input => {const captured=Object.freeze({...input});return call('planWrite',captured).then(reply=>decodeDesktopNotePlan(captured,scope,reply));}, prepare: plan => call('prepare',plan),
       commit: ref => call('commit',ref), query: ref => call('query',ref),
       listUnacknowledged: () => call('listUnacknowledged'), acknowledge: (ref,outcome) => call('acknowledge',ref,outcome),
       checkpoints: Object.freeze<DurableWrites['checkpoints']>({scope,load: key => call('checkpoints.load',key),

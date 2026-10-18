@@ -84,8 +84,8 @@ pub use checkpoints::{
 mod namespace;
 pub use namespace::{
     namespace_content_evidence_bytes, NamespaceAttempt, NamespaceAttemptMetadata,
-    NamespaceEvidence, NamespaceMember, NamespaceMemberMetadata, MAX_NAMESPACE_EVIDENCE_BYTES,
-    MAX_NAMESPACE_MEMBERS,
+    NamespaceEvidence, NamespaceMember, NamespaceMemberMetadata, NamespaceSuccessorPlan,
+    MAX_NAMESPACE_EVIDENCE_BYTES, MAX_NAMESPACE_MEMBERS,
 };
 mod host_intents;
 pub use host_intents::{
@@ -118,7 +118,8 @@ use zorid_core::{
     Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
+const PREDECESSOR_SCHEMA_VERSION: i64 = 12;
 pub const DEFAULT_STREAMING_LIMITS: StreamingLimits = StreamingLimits {
     max_active_stages: 8,
     max_stage_records: 4096,
@@ -166,7 +167,7 @@ fn check_schema(connection: &Connection) -> Result<i64> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
     let application: i64 = connection.pragma_query_value(None, "application_id", |r| r.get(0))?;
     // Unreleased formats: reject before changing WAL or database bytes.
-    if !matches!(version, 0 | SCHEMA_VERSION) {
+    if !matches!(version, 0 | PREDECESSOR_SCHEMA_VERSION | SCHEMA_VERSION) {
         return Err(StoreError::UnsupportedSchema(version));
     }
     let names: Vec<String> = connection
@@ -183,7 +184,12 @@ fn check_schema(connection: &Connection) -> Result<i64> {
         if application != APPLICATION_ID {
             return Err(StoreError::Corrupt("wrong application ID".into()));
         }
-        let expected = schema_objects();
+        let expected: Vec<_> = schema_objects()
+            .into_iter()
+            .filter(|(name, _)| {
+                version != PREDECESSOR_SCHEMA_VERSION || *name != "namespace_successions"
+            })
+            .collect();
         // SQLite trigger names occupy a separate namespace. A duplicate name
         // must not hide an extra trigger behind a registered table's SQL.
         if names
@@ -462,6 +468,14 @@ impl Store {
             text_sync::migrate(&tx)?;
             checkpoints::migrate(&tx)?;
             tx.pragma_update(None, "application_id", APPLICATION_ID)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        if version == PREDECESSOR_SCHEMA_VERSION {
+            // Add only the explicit delegation journal after exact old-format
+            // validation, repeated under this writer. Existing evidence is inert.
+            for (_, sql) in namespace::SUCCESSOR_SCHEMA {
+                tx.execute_batch(sql)?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;

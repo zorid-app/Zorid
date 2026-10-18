@@ -1,4 +1,5 @@
 import type { DurableWrites, DurableWritePlan, DurableWriteRef, DurableWriteIntent, DurableWriteInput, DurableWriteOutcome, DurableWriteRead } from '../core/durable-writes.ts';
+import { DurableWritePlanningError } from '../core/durable-writes.ts';
 import type { BrowserVaultIntent } from '../core/browser-vault.ts';
 import { BrowserVaultError } from '../core/browser-vault.ts';
 import type { BrowserCoreBackend } from './browser-core.ts';
@@ -113,8 +114,9 @@ export function browserDurableWrites(backend: BrowserCoreBackend, scope: {vaultI
       const row = await backend.readEntry(path);
       if (!row) throw error('ENOENT',`File not found: ${path}`);
       if (row.entry.kind !== 'file' || !row.bytes) throw error('not_file',`Path is not a file: ${path}`);
-      if (row.entry.id !== expectedEntryId || row.entry.revision !== expectedRevision) throw error('revision_conflict','File identity or revision changed since the persisted observation');
-      if (new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(row.bytes) !== expected) throw error('content_conflict',`File changed outside this editor: ${path}`);
+      // Only these witnessed, inert preflight comparisons establish a definite conflict.
+      if (row.entry.id !== expectedEntryId || row.entry.revision !== expectedRevision) throw new DurableWritePlanningError('revision_conflict', false);
+      if (new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(row.bytes) !== expected) throw new DurableWritePlanningError('revision_conflict', false);
       const bytes = new TextEncoder().encode(content);
       const base = JSON.stringify({operation_id:operationId,mutation:{type:'write',id:row.entry.id,expected:row.entry.revision,content:[]}});
       let encodedSize = textSize(base);

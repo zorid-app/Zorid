@@ -3,9 +3,11 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 const invoke = (name, ...args) => ipcRenderer.invoke(`zorid:${name}`, ...args);
 const durable = async (name, ...args) => {
   const workblock = name === 'durableInvoke' && args[2] === 'workblockCommand';
+  const planning = name === 'durableInvoke' && args[2] === 'planWrite';
   let reply;
   try { reply = await invoke(name, ...args); }
   catch (error) {
+    if (planning) return {notePlanning:true,schemaVersion:1,ok:false,error:{code:'planning_transport_lost',source:'host',commitUncertain:true}};
     if (workblock) return {workblocks:true,schemaVersion:1,ok:false,error:{code:'workblock_transport_lost',source:'host',commitUncertain:true}};
     throw error;
   }
@@ -16,6 +18,13 @@ const durable = async (name, ...args) => {
     const valid = reply?.ok === false && typeof reply.error?.code === 'string'
       && /^[a-z_]{1,64}$/.test(reply.error.code) && typeof reply.error.commitUncertain === 'boolean';
     return {workblocks:true,schemaVersion:1,ok:false,error:{code:valid?reply.error.code:'invalid_workblock_response',source:'host',commitUncertain:valid?reply.error.commitUncertain:true}};
+  }
+  if (planning) {
+    // Return plain data: contextBridge does not preserve custom Error fields.
+    if (reply?.ok === true) return {notePlanning:true,schemaVersion:1,ok:true,value:reply.result};
+    const valid = reply?.ok === false && typeof reply.error?.code === 'string'
+      && /^[a-z_]{1,64}$/.test(reply.error.code) && typeof reply.error.commitUncertain === 'boolean';
+    return {notePlanning:true,schemaVersion:1,ok:false,error:{code:valid?reply.error.code:'invalid_planning_response',source:'host',commitUncertain:valid?reply.error.commitUncertain:true}};
   }
   if (!reply?.ok) throw Object.assign(new Error('Durable editor request failed; retain pending recovery state.'), reply?.error, {source:'host'});
   return reply.result;

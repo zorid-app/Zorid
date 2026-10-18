@@ -244,6 +244,11 @@ let coreClosed = false, coreClosing;
 app.on('will-quit', event => {
   if (editorCore && !coreClosed) {
     event.preventDefault();
-    coreClosing ??= editorCore.close().catch(() => {}).finally(() => { coreClosed = true; broker.dispose(); app.quit(); });
+    coreClosing ??= editorCore.close().catch(() => {}).finally(() => {
+      coreClosed = true; broker.dispose();
+      // A settled close can finish within the original native quit dispatch.
+      // Resume after that turn so Electron can accept the second quit request.
+      setImmediate(() => app.quit());
+    });
   } else broker.dispose();
 });

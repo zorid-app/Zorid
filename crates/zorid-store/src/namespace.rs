@@ -6,6 +6,8 @@ use zorid_core::{EntryChange, OperationId};
 
 #[path = "family_namespace.rs"]
 mod family;
+pub(super) use family::successor::SCHEMA as SUCCESSOR_SCHEMA;
+pub use family::NamespaceSuccessorPlan;
 
 pub(super) const SCHEMA: &[(&str, &str)] = &[
     ("namespace_attempts", "CREATE TABLE namespace_attempts (job_id TEXT PRIMARY KEY NOT NULL REFERENCES projection_jobs(job_id), completed INTEGER NOT NULL CHECK(completed IN (0,1)), work TEXT NOT NULL CHECK(work IN ('move','delete')), member_count INTEGER NOT NULL CHECK(member_count > 0), evidence_bytes INTEGER NOT NULL CHECK(evidence_bytes >= 0), record TEXT NOT NULL)"),
@@ -15,6 +17,7 @@ pub(super) const SCHEMA: &[(&str, &str)] = &[
     family::SCHEMA[0],
     family::SCHEMA[1],
     family::SCHEMA[2],
+    SUCCESSOR_SCHEMA[0],
 ];
 pub const MAX_NAMESPACE_MEMBERS: usize = 10_000;
 pub const MAX_NAMESPACE_EVIDENCE_BYTES: usize = 64 * 1024 * 1024;
@@ -49,6 +52,8 @@ pub struct NamespaceAttempt {
     pub job: ProjectionJob,
     pub members: Vec<NamespaceMember>,
     pub completed: bool,
+    /// Responsibility was explicitly delegated; original physical progress stays exact.
+    pub delegated_to: Option<OperationId>,
 }
 /// Read-only status metadata. Evidence bytes are deliberately not selected or
 /// decoded by this view; physical operations must read the full member.
@@ -69,6 +74,7 @@ pub struct NamespaceAttemptMetadata {
     pub job: ProjectionJob,
     pub members: Vec<NamespaceMemberMetadata>,
     pub completed: bool,
+    pub delegated_to: Option<OperationId>,
 }
 fn invalid(message: &str) -> StoreError {
     StoreError::Corrupt(message.into())
@@ -214,7 +220,7 @@ fn validate(a: &NamespaceAttempt) -> Result<()> {
         || a.members.is_empty()
         || a.members.len() > MAX_NAMESPACE_MEMBERS
         || a.members.len() != a.job.affected.len()
-        || (a.completed && a.members.iter().any(|m| !m.finished))
+        || (a.completed && a.delegated_to.is_none() && a.members.iter().any(|m| !m.finished))
     {
         return Err(invalid("invalid namespace attempt"));
     }
@@ -257,6 +263,7 @@ struct Header {
     completed: bool,
     member_count: usize,
     evidence_bytes: usize,
+    delegated_to: Option<OperationId>,
 }
 fn work_name(work: ProjectionWork) -> Result<&'static str> {
     match work {
@@ -335,6 +342,7 @@ fn header(tx: &Connection, id: &OperationId) -> Result<Header> {
         completed,
         member_count: count as usize,
         evidence_bytes: bytes as usize,
+        delegated_to: family::successor::delegated_to(tx, id)?,
     })
 }
 struct MemberRow {
@@ -419,7 +427,7 @@ fn member_metadata(h: &Header, r: &MemberRow) -> Result<NamespaceMemberMetadata>
         || (m.finished
             && !same
             && (!m.captured || (h.work == ProjectionWork::Move && !m.published)))
-        || (h.completed && !m.finished)
+        || (h.completed && h.delegated_to.is_none() && !m.finished)
     {
         return Err(invalid("invalid namespace member metadata progress"));
     }
@@ -473,11 +481,14 @@ fn metadata(tx: &Connection, id: &OperationId) -> Result<NamespaceAttemptMetadat
     if bytes != h.evidence_bytes {
         return Err(invalid("namespace evidence budget columns mismatch"));
     }
-    Ok(NamespaceAttemptMetadata {
+    let result = NamespaceAttemptMetadata {
         job,
         members,
         completed: h.completed,
-    })
+        delegated_to: h.delegated_to,
+    };
+    family::successor::check_delegated_metadata(tx, &result)?;
+    Ok(result)
 }
 fn internal_parent(tx: &Connection, id: &OperationId, m: &NamespaceMember) -> Result<bool> {
     let Some(parent) = m.change.after.path.parent() else {
@@ -539,12 +550,17 @@ fn get(tx: &Connection, id: &OperationId) -> Result<NamespaceAttempt> {
         job: meta.job,
         members,
         completed: meta.completed,
+        delegated_to: meta.delegated_to,
     };
     validate(&a)?;
+    family::successor::check_delegated_attempt(tx, &a)?;
     Ok(a)
 }
 fn insert_attempt(tx: &Connection, a: &NamespaceAttempt) -> Result<()> {
     validate(a)?;
+    if a.delegated_to.is_some() {
+        return Err(invalid("new attempt cannot begin delegated"));
+    }
     let bytes = a.members.iter().try_fold(0usize, |total, m| {
         total
             .checked_add(evidence_size(&m.evidence)?)
@@ -765,6 +781,9 @@ impl Store {
     pub fn namespace_validate_target(&self, job_id: &OperationId) -> Result<()> {
         let tx = self.connection.unchecked_transaction()?;
         let a = get(&tx, job_id)?;
+        if a.delegated_to.is_some() {
+            return Err(invalid("namespace responsibility is delegated"));
+        }
         if !a.completed && !family::check_finish(&tx, &a)? {
             for member in &a.members {
                 let (current, _) = entry(&tx, &member.change.after.id)?;
@@ -982,6 +1001,7 @@ impl Store {
                 job,
                 members,
                 completed: false,
+                delegated_to: None,
             },
         )?;
         tx.commit()?;
@@ -999,8 +1019,8 @@ impl Store {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let h = header(&tx, job_id)?;
-        if h.completed {
-            return Err(invalid("namespace attempt complete"));
+        if h.completed || h.delegated_to.is_some() {
+            return Err(invalid("namespace attempt complete or delegated"));
         }
         let index: i64 = tx.query_row(
             "SELECT member_index FROM namespace_members WHERE job_id=?1 AND entry_id=?2",
@@ -1047,6 +1067,9 @@ impl Store {
         if a.completed {
             tx.commit()?;
             return Ok(a);
+        }
+        if a.delegated_to.is_some() {
+            return Err(invalid("namespace responsibility is delegated"));
         }
         if a.members.iter().any(|m| !m.finished) {
             return Err(invalid("namespace members unfinished"));

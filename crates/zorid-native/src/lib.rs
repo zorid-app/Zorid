@@ -194,6 +194,8 @@ pub struct Status {
 pub struct NamespaceAttemptStatus {
     pub job_id: OperationId,
     pub completed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_to: Option<OperationId>,
     pub members: Vec<NamespaceMemberStatus>,
 }
 #[derive(Debug, Serialize, Deserialize)]

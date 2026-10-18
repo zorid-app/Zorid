@@ -47,7 +47,7 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
     if (name === './vault-service.cjs') return {VaultService:{open:openService}};
     return require(name);
   };
-  vm.runInNewContext(fs.readFileSync(mainPath, 'utf8'), { require: nativeRequire, __dirname: path.dirname(mainPath), process: { platform: 'darwin', env: {} }, URL, structuredClone });
+  vm.runInNewContext(fs.readFileSync(mainPath, 'utf8'), { require: nativeRequire, __dirname: path.dirname(mainPath), process: { platform: 'darwin', env: {} }, URL, structuredClone, setImmediate });
   await new Promise(resolve => setImmediate(resolve));
   const invoke = (window, name, ...args) => handlers.get(`zorid:${name}`)({ sender: window.webContents, senderFrame: window.webContents.mainFrame }, ...args);
   assert.equal(windows.length, 1);
@@ -107,3 +107,73 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   assert.equal(services.get('/first').stops, 1);
   assert.throws(() => invoke(windows[0], 'getVault'), /Untrusted sender/);
 });
+
+// Execute the real event registration while controlling the native quit boundary.
+// This models native dispatch staying active through microtasks; actual AppKit
+// behavior remains a separate runtime gate.
+function quitFixture(closeSettlement) {
+  const app = new EventEmitter(), turns = [], events = [];
+  let nativeDispatch = false, closeCalls = 0, quits = 0, ignoredQuits = 0, disposals = 0, finishClose;
+  const delayed = new Promise(resolve => { finishClose = resolve; });
+  const core = { close() { closeCalls++; events.push('close'); return closeSettlement === 'immediate' ? Promise.resolve() : delayed; } };
+  function willQuit() {
+    const event = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+    app.emit('will-quit', event);
+    return event.defaultPrevented;
+  }
+  Object.assign(app, {
+    setName() {}, whenReady: () => new Promise(() => {}), requestSingleInstanceLock: () => true,
+    quit() {
+      events.push('resume-quit');
+      if (nativeDispatch) { ignoredQuits++; return; }
+      app.emit('before-quit');
+      if (!willQuit()) { quits++; events.push('quit'); app.emit('quit'); }
+    },
+  });
+  const nativeRequire = name => {
+    if (name === 'electron') return { app };
+    if (name === './editor-core.cjs') return { createEditorCoreManager: () => core };
+    if (name === './window-broker.cjs') return { WindowBroker: class { dispose() { disposals++; events.push('dispose'); } } };
+    if (name === './context-menu.cjs') return { createContextMenuController: () => ({}) };
+    if (name === './vault-service.cjs') return {};
+    if (name === './menu-hotkeys.cjs') return {};
+    return require(name);
+  };
+  const mainPath = path.resolve(__dirname, '../desktop/main.cjs');
+  vm.runInNewContext(fs.readFileSync(mainPath, 'utf8'), {
+    require: nativeRequire, __dirname: path.dirname(mainPath), process: { platform: 'darwin', env: {} }, URL,
+    setImmediate: callback => turns.push(callback),
+  });
+  return {
+    events, get closeCalls() { return closeCalls; }, get quits() { return quits; }, get ignoredQuits() { return ignoredQuits; }, get disposals() { return disposals; },
+    request() { nativeDispatch = true; app.emit('before-quit'); assert.equal(willQuit(), true); },
+    repeat: willQuit, finishClose,
+    leaveNativeDispatch() { nativeDispatch = false; },
+    runNextTurn() { const callbacks = turns.splice(0); for (const callback of callbacks) callback(); },
+  };
+}
+async function settleQuitMicrotasks() { for (let index = 0; index < 8; index++) await Promise.resolve(); }
+for (const settlement of ['immediate', 'delayed']) {
+  test(`main resumes ordinary quit after the native turn when core close is ${settlement}`, async () => {
+    const f = quitFixture(settlement);
+    f.request();
+    assert.equal(f.repeat(), true, 'another will-quit waits for the same close');
+    assert.equal(f.closeCalls, 1);
+    assert.equal(f.disposals, 0, 'broker remains alive until close has settled');
+    await settleQuitMicrotasks();
+    if (settlement === 'delayed') {
+      assert.equal(f.quits, 0);
+      assert.equal(f.disposals, 0);
+      f.runNextTurn();
+      assert.equal(f.quits, 0, 'a new turn cannot bypass unresolved close');
+      f.leaveNativeDispatch();
+      f.finishClose();
+      await settleQuitMicrotasks();
+    } else f.leaveNativeDispatch();
+    f.runNextTurn();
+    assert.equal(f.quits, 1, 'the initial quit completes without another external request');
+    assert.equal(f.ignoredQuits, 0, 'quit must not reenter a still-active native dispatch');
+    assert.equal(f.closeCalls, 1);
+    assert.ok(f.events.indexOf('dispose') < f.events.indexOf('resume-quit'));
+  });
+}

@@ -1,5 +1,17 @@
 import type { DurableCheckpoints } from './durable-checkpoints.ts';
 
+/** Verified provider rejection of inert write planning, before any intent exists.
+ * This type must never be used to classify commit/acknowledgment uncertainty. */
+export class DurableWritePlanningError extends Error {
+  readonly source='host';
+  readonly code:string;
+  readonly commitUncertain:boolean;
+  constructor(code:string,commitUncertain:boolean){
+    super('The note write could not be planned.');this.name='DurableWritePlanningError';this.code=code;this.commitUncertain=commitUncertain;
+  }
+}
+
+
 /** Durable consumer checkpoint data. All identities must survive retries/reload. */
 export interface DurableWritePlan {
   readonly version: 1;

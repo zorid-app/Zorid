@@ -16,6 +16,38 @@ serialized. Implementation commits and integrated verification will be recorded
 here; module-level tests alone do not establish desktop runtime acceptance.
 
 
+### S0 active verification batch — 2026-10-18
+
+Root isolated integration is now `storage-foundation` /
+`tingkai-c/storage-namespace-integration`, application source `687d44f0` plus
+main documentation reconciliation `8be5ea8a`. Native Store/native handoff is
+`0ebd760e`/`048d7a5a` with synthetic repro `af8b07cb` and typed assertion fix
+`41f67afd` (worker sources `c80c2792`, `dd156457`, `dacca86b`, `738f2c27`).
+Independent core source reviews approved the explicit delegation and schema12→13
+migration. Original candidate vault remains untouched.
+
+Verified after composition: Store handoff8, Store library105 +1ignored, native
+family namespace13, document-cache integration22, CLI commands13, desktop-host
+library35, frontend planning10 and existing durable-draft/witness guards16; all
+passed. Initial filename-based Store filters selected zero tests and are not
+credited; compiled test discovery identified `namespace::family::successor::tests`
+and all eight then ran. Host/CLI native build and desktop frontend/TypeScript build
+passed. These are focused checks, not full Rust or large-file performance acceptance.
+
+Desktop conflict fix `687d44f0` (worker `627dd8e4`) preserves definite planWrite
+errors across contextBridge and marks only verified inert planning conflicts.
+Independent source review approved; actual concurrency rerun remains mandatory.
+Browser preflight normalization is a separate UI-owner follow-up, currently under
+review/implementation; no browser runtime parity claimed. Platform auditor owns
+actual hidden lifecycle/concurrency runs after the artifact freeze; no other app
+or heavy Rust build may overlap that slot. No real-vault recovery is run.
+
+S1 direction is settled in main `776a8fd2`: all-platform beneficial multicore,
+cached parsing through shared interfaces, core-owned index/semantic-parse lifecycle
+and clients subscribing to updates. Reviewed preparatory runtime and baseline docs
+are integrated as `f20905e6`/`2c05902d`/`2f633393`; S0/S0A gates still precede live
+S1 replacement. Root retains sole main integration, no push.
+
 ### Latest integration checkpoint — 2026-10-18
 
 Latest user steering: current runtime verification targets are macOS Electron,

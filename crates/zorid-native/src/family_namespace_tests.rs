@@ -55,6 +55,324 @@ fn logical_move(vault: &mut NativeVault) {
         )
         .unwrap();
 }
+
+/// Synthetic interruption only: no user vault or note content participates.
+fn captured_move_then_newer_logical_move(root: &std::path::Path) -> (OperationId, String) {
+    let mut vault = enrolled(root);
+    logical_move(&mut vault);
+    vault.fault = Some(|point| {
+        if point == "namespace_captured" {
+            panic!("synthetic interruption after durable namespace capture");
+        }
+    });
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        vault.recover().unwrap();
+    }))
+    .is_err());
+    vault.fault = None;
+    let attempt = vault
+        .store
+        .namespace_attempts(false)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(attempt.members.len(), 1);
+    assert!(attempt.members[0].captured);
+    assert!(!attempt.members[0].published);
+    assert!(!attempt.members[0].finished);
+    let captured_name = format!("{}.0.namespace", attempt.job.job_id.as_str());
+    assert_eq!(
+        std::fs::read(root.join(".zorid").join(&captured_name)).unwrap(),
+        b"before"
+    );
+    assert!(!root.join("note.md").exists());
+    assert!(!root.join("renamed.md").exists());
+    // Durable family updates may advance while physical recovery is pending.
+    // These are normal core operations, not fabricated journal rows.
+    for (operation, mutation) in [("write-after-capture", false), ("move-after-capture", true)] {
+        let current = vault.store.read(&entry_id()).unwrap().unwrap().state;
+        let mutation = if mutation {
+            Mutation::Move {
+                id: entry_id(),
+                expected: current.revision,
+                path: VaultPath::new("latest.md").unwrap(),
+            }
+        } else {
+            Mutation::Write {
+                id: entry_id(),
+                expected: current.revision,
+                content: b"newer committed content".to_vec(),
+            }
+        };
+        vault
+            .store
+            .family_apply(&request(operation, mutation), None)
+            .unwrap();
+    }
+    assert_eq!(
+        vault
+            .store
+            .read(&entry_id())
+            .unwrap()
+            .unwrap()
+            .state
+            .path
+            .as_str(),
+        "latest.md"
+    );
+    assert!(!root.join("latest.md").exists());
+    (attempt.job.job_id, captured_name)
+}
+
+#[test]
+fn captured_family_move_superseded_by_later_move_recovers_latest_target() {
+    let directory = tempfile::tempdir().unwrap();
+    let (_old_job, _captured_name) = captured_move_then_newer_logical_move(directory.path());
+    let mut vault = NativeVault::open_existing(directory.path()).unwrap();
+    let report = vault.recover().unwrap();
+    assert!(report.blocked.is_empty(), "{report:?}");
+    assert_eq!(
+        std::fs::read(directory.path().join("latest.md")).unwrap(),
+        b"newer committed content"
+    );
+    assert!(!directory.path().join("note.md").exists());
+    assert!(!directory.path().join("renamed.md").exists());
+    assert_eq!(vault.family_status().unwrap().pending_projection, "0");
+    drop(vault);
+    let mut vault = NativeVault::open_existing(directory.path()).unwrap();
+    assert!(vault.recover().unwrap().blocked.is_empty());
+    assert_eq!(
+        std::fs::read(directory.path().join("latest.md")).unwrap(),
+        b"newer committed content"
+    );
+}
+
+#[test]
+fn captured_superseded_move_never_overwrites_a_competing_latest_occupant() {
+    let directory = tempfile::tempdir().unwrap();
+    let (_, captured_name) = captured_move_then_newer_logical_move(directory.path());
+    std::fs::write(directory.path().join("latest.md"), b"independent occupant").unwrap();
+    let mut vault = NativeVault::open_existing(directory.path()).unwrap();
+    let result = vault.recover();
+    if let Ok(report) = result {
+        assert!(!report.blocked.is_empty(), "{report:?}");
+    }
+    assert_eq!(
+        std::fs::read(directory.path().join("latest.md")).unwrap(),
+        b"independent occupant"
+    );
+    assert_eq!(
+        std::fs::read(directory.path().join(".zorid").join(captured_name)).unwrap(),
+        b"before"
+    );
+    assert_eq!(
+        vault
+            .store
+            .read(&entry_id())
+            .unwrap()
+            .unwrap()
+            .content
+            .unwrap(),
+        b"newer committed content"
+    );
+}
+
+#[test]
+fn namespace_successor_restarts_at_durable_handoff_and_rename_boundaries() {
+    thread_local! { static PHASE: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) }; }
+    for phase in [
+        "namespace_successor_prepared",
+        "namespace_successor_relocated_before_record",
+        "namespace_published_before_record",
+        "namespace_before_finish",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let (old_job, _) = captured_move_then_newer_logical_move(directory.path());
+        let mut vault = NativeVault::open_existing(directory.path()).unwrap();
+        PHASE.with(|slot| slot.set(Some(phase)));
+        vault.fault = Some(|point| {
+            PHASE.with(|slot| {
+                if slot.get() == Some(point) {
+                    panic!("synthetic interruption during namespace successor");
+                }
+            });
+        });
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                vault.recover().unwrap();
+            }))
+            .is_err(),
+            "{phase}"
+        );
+        let old = vault.store.namespace_attempt(&old_job).unwrap();
+        assert!(old.delegated_to.is_some(), "{phase}");
+        assert!(old.members[0].captured);
+        assert!(!old.members[0].published);
+        assert!(!old.members[0].finished);
+        drop(vault);
+        let mut vault = NativeVault::open_existing(directory.path()).unwrap();
+        let report = vault.recover().unwrap();
+        assert!(report.blocked.is_empty(), "{phase}: {report:?}");
+        assert_eq!(
+            std::fs::read(directory.path().join("latest.md")).unwrap(),
+            b"newer committed content",
+            "{phase}"
+        );
+        assert_eq!(
+            vault.family_status().unwrap().pending_projection,
+            "0",
+            "{phase}"
+        );
+        let old = vault.store.namespace_attempt(&old_job).unwrap();
+        assert!(old.completed);
+        assert!(old.members[0].captured);
+        assert!(!old.members[0].published);
+        assert!(!old.members[0].finished);
+        let status = vault
+            .status()
+            .unwrap()
+            .namespace_attempts
+            .into_iter()
+            .find(|attempt| attempt.job_id == old_job)
+            .unwrap();
+        assert!(status.completed);
+        assert_eq!(status.delegated_to, old.delegated_to);
+        assert!(vault.recover().unwrap().blocked.is_empty(), "{phase}");
+    }
+}
+
+#[test]
+fn changed_captured_predecessor_remains_durable_without_retargeting() {
+    let directory = tempfile::tempdir().unwrap();
+    let (old_job, captured_name) = captured_move_then_newer_logical_move(directory.path());
+    let retained = directory.path().join(".zorid").join(&captured_name);
+    std::fs::write(&retained, b"external captured edit").unwrap();
+    let mut vault = NativeVault::open_existing(directory.path()).unwrap();
+    let report = vault.recover().unwrap();
+    assert!(!report.blocked.is_empty());
+    assert_eq!(std::fs::read(&retained).unwrap(), b"external captured edit");
+    assert!(!directory.path().join("latest.md").exists());
+    assert!(vault
+        .store
+        .namespace_attempt(&old_job)
+        .unwrap()
+        .delegated_to
+        .is_none());
+    assert!(vault
+        .store
+        .external_observations()
+        .unwrap()
+        .iter()
+        .any(|observation| {
+            vault
+                .test_content_bytes(None, &observation.content)
+                .unwrap()
+                == b"external captured edit"
+        }));
+    assert_eq!(
+        vault
+            .store
+            .read(&entry_id())
+            .unwrap()
+            .unwrap()
+            .content
+            .unwrap(),
+        b"newer committed content"
+    );
+}
+
+#[test]
+fn delegated_namespace_capture_with_multiple_locations_is_never_guessed() {
+    for occupant in ["retained", "destination"] {
+        let directory = tempfile::tempdir().unwrap();
+        let (old_job, captured_name) = captured_move_then_newer_logical_move(directory.path());
+        let mut vault = NativeVault::open_existing(directory.path()).unwrap();
+        vault.fault = Some(|point| {
+            if point == "namespace_successor_prepared" {
+                panic!("synthetic prepared handoff interruption");
+            }
+        });
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            vault.recover().unwrap();
+        }))
+        .is_err());
+        let successor = vault
+            .store
+            .namespace_attempt(&old_job)
+            .unwrap()
+            .delegated_to
+            .unwrap();
+        let path = if occupant == "retained" {
+            directory
+                .path()
+                .join(".zorid")
+                .join(format!("{}.0.namespace", successor.as_str()))
+        } else {
+            directory.path().join("latest.md")
+        };
+        std::fs::write(&path, b"independent occupant").unwrap();
+        drop(vault);
+        let mut vault = NativeVault::open_existing(directory.path()).unwrap();
+        let report = vault.recover().unwrap();
+        assert!(!report.blocked.is_empty(), "{occupant}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"independent occupant");
+        assert_eq!(
+            std::fs::read(directory.path().join(".zorid").join(captured_name)).unwrap(),
+            b"before"
+        );
+        assert_eq!(
+            vault
+                .store
+                .read(&entry_id())
+                .unwrap()
+                .unwrap()
+                .content
+                .unwrap(),
+            b"newer committed content"
+        );
+    }
+}
+
+#[test]
+fn delegated_namespace_capture_rejects_a_replaced_saved_parent() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("vault");
+    std::fs::create_dir(&root).unwrap();
+    let (_, captured_name) = captured_move_then_newer_logical_move(&root);
+    let mut vault = NativeVault::open_existing(&root).unwrap();
+    vault.fault = Some(|point| {
+        if point == "namespace_successor_prepared" {
+            panic!("synthetic prepared handoff interruption");
+        }
+    });
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        vault.recover().unwrap();
+    }))
+    .is_err());
+    drop(vault);
+    let relocated = directory.path().join("old-parent");
+    std::fs::rename(&root, &relocated).unwrap();
+    std::fs::create_dir(&root).unwrap();
+    std::fs::rename(relocated.join(".zorid"), root.join(".zorid")).unwrap();
+    let mut vault = NativeVault::open_existing(&root).unwrap();
+    let report = vault.recover().unwrap();
+    assert!(!report.blocked.is_empty());
+    assert!(!root.join("latest.md").exists());
+    assert_eq!(
+        std::fs::read(root.join(".zorid").join(captured_name)).unwrap(),
+        b"before"
+    );
+    assert_eq!(
+        vault
+            .store
+            .read(&entry_id())
+            .unwrap()
+            .unwrap()
+            .content
+            .unwrap(),
+        b"newer committed content"
+    );
+}
 #[test]
 fn family_move_then_delete_replays_against_original_physical_path_after_restart() {
     let directory = tempfile::tempdir().unwrap();

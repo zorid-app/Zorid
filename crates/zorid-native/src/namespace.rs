@@ -55,6 +55,7 @@ impl NativeVault {
             result.push(NamespaceAttemptStatus {
                 job_id: a.job.job_id,
                 completed: a.completed,
+                delegated_to: a.delegated_to,
                 members,
             });
         }
@@ -320,7 +321,120 @@ impl NativeVault {
             let _ = fs::rename_new(&self.paths.private, name, &parent, &source);
         }
     }
+    /// Transfer only the captured inode named by an immutable Store handoff.
+    /// The link commits before any rename. Either retained locator, or the exact
+    /// admitted published destination, proves restart progress; never scan for it.
+    fn relocate_namespace_predecessor(
+        &mut self,
+        a: &mut NamespaceAttempt,
+        index: usize,
+    ) -> Result<()> {
+        let Some(predecessor) = self.store.namespace_predecessor(&a.job.job_id)? else {
+            return Ok(());
+        };
+        if index != 0
+            || a.members.len() != 1
+            || predecessor.members.len() != 1
+            || predecessor.delegated_to.as_ref() != Some(&a.job.job_id)
+            || predecessor.job.work != ProjectionWork::Move
+            || a.job.work != ProjectionWork::Move
+        {
+            return Err(Error::Busy("namespace predecessor link differs"));
+        }
+        let prior = &predecessor.members[0];
+        let member = a.members[0].clone();
+        if !prior.captured
+            || prior.published
+            || prior.finished
+            || prior.evidence.before.kind != EntryKind::File
+            || member.evidence.before != prior.evidence.before
+            || member.evidence.source_identity != prior.evidence.source_identity
+            || member.evidence.source_parent_identity != prior.evidence.source_parent_identity
+            || member.evidence.content != prior.evidence.content
+            || member.evidence.file_baseline != prior.evidence.file_baseline
+            || member.evidence.directory_baseline != prior.evidence.directory_baseline
+            || member.evidence.physical_binding != prior.evidence.physical_binding
+        {
+            return Err(Error::Busy("namespace predecessor capture differs"));
+        }
+        self.paths.verify()?;
+        // A captured file does not authorize a substituted historical parent.
+        self.namespace_source(prior)?;
+        let (destination_parent, destination_name) = self.namespace_destination(a, 0)?;
+        let private = self.paths.private.try_clone()?;
+        let old_name = retained(&predecessor, 0);
+        let new_name = retained(a, 0);
+        let old = file_snapshot(&private, &old_name)?;
+        let new = file_snapshot(&private, &new_name)?;
+        let destination = file_snapshot(&destination_parent, &destination_name)?;
+        let count = usize::from(old.is_some())
+            + usize::from(new.is_some())
+            + usize::from(destination.is_some());
+        if count != 1 {
+            return Err(Error::Busy(
+                "namespace handoff has ambiguous physical locations",
+            ));
+        }
+        let (snapshot, parent, name) = if let Some(snapshot) = old.as_ref() {
+            (snapshot, &private, old_name.as_str())
+        } else if let Some(snapshot) = new.as_ref() {
+            (snapshot, &private, new_name.as_str())
+        } else {
+            (
+                destination.as_ref().unwrap(),
+                &destination_parent,
+                destination_name.as_str(),
+            )
+        };
+        if snapshot.identity != prior.evidence.source_identity {
+            return Err(Error::Busy("namespace handoff inode differs"));
+        }
+        if prior
+            .evidence
+            .content
+            .as_ref()
+            .is_none_or(|content| !snapshot_matches_content(snapshot, content))
+        {
+            self.namespace_divergence(&predecessor.job.job_id, prior, parent, name, snapshot)?;
+            return Err(Error::Busy("changed namespace handoff content retained"));
+        }
+        if old.is_some() {
+            self.point("namespace_successor_before_relocate");
+            self.paths.verify()?;
+            self.namespace_source(prior)?;
+            self.namespace_destination(a, 0)?;
+            if file_snapshot(&private, &old_name)?.as_ref() != old.as_ref()
+                || fs::node_type(&private, &new_name)?.is_some()
+                || fs::node_type(&destination_parent, &destination_name)?.is_some()
+            {
+                return Err(Error::Busy("namespace handoff changed before relocation"));
+            }
+            fs::rename_new(&private, &old_name, &private, &new_name)?;
+            self.paths.verify()?;
+            self.point("namespace_successor_relocated_before_record");
+        } else if destination.is_some() && !member.captured {
+            // Publication can outlive its progress marker. Admit only the saved
+            // inode/content under its independently saved destination parent.
+            fs::regular(&destination_parent, &destination_name)?
+                .ok_or(Error::Busy("namespace handoff destination disappeared"))?
+                .sync_all()?;
+            destination_parent.sync_all()?;
+            self.paths
+                .verify_parent(&member.change.after.path, &destination_parent)?;
+            if file_snapshot(&destination_parent, &destination_name)?.as_ref()
+                != destination.as_ref()
+            {
+                return Err(Error::Busy("namespace handoff destination changed"));
+            }
+            let mut next = member;
+            next.captured = true;
+            self.save_namespace_member(a, 0, next)?;
+        }
+        Ok(())
+    }
+
     fn capture_namespace_member(&mut self, a: &mut NamespaceAttempt, index: usize) -> Result<()> {
+        self.relocate_namespace_predecessor(a, index)?;
         let m = a.members[index].clone();
         if noop(a, index) || m.captured {
             return Ok(());
@@ -515,6 +629,19 @@ impl NativeVault {
         Ok(())
     }
     pub(super) fn resume_namespace(&mut self, mut a: NamespaceAttempt) -> Result<()> {
+        if let Some(successor) = a.delegated_to.as_ref() {
+            let predecessor = self
+                .store
+                .namespace_predecessor(successor)?
+                .ok_or(Error::Busy(
+                    "namespace delegation has no predecessor witness",
+                ))?;
+            let next = self.store.namespace_attempt(successor)?;
+            if predecessor != a || next.delegated_to.is_some() {
+                return Err(Error::Busy("namespace delegation differs or forms a chain"));
+            }
+            return self.resume_namespace(next);
+        }
         if a.completed {
             return Ok(());
         }
@@ -633,6 +760,7 @@ impl NativeVault {
         Ok(())
     }
     pub(super) fn recover_namespaces(&mut self, report: &mut ReconcileReport) -> Result<()> {
+        self.prepare_namespace_successors(report)?;
         self.attach_family_namespaces(report)?;
         let covered = self.store.family_namespace_covered_jobs()?;
         // Listing and status never load retained byte evidence. A pending job is
@@ -649,6 +777,11 @@ impl NativeVault {
             }
         }
         for a in attempts {
+            if a.delegated_to.is_some() {
+                // Its immutable capture/progress remains audit evidence. The
+                // linked successor alone owns relocation and final settlement.
+                continue;
+            }
             if !a.completed {
                 let target = a.job.target.clone();
                 let attempt = self.store.namespace_attempt(&a.job.job_id)?;
@@ -729,6 +862,88 @@ impl NativeVault {
                         Ok(None) => {}
                     }
                 }
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare_namespace_successors(&mut self, report: &mut ReconcileReport) -> Result<()> {
+        if !self.store.family_is_enrolled()? {
+            return Ok(());
+        }
+        for metadata in self.store.namespace_attempt_metadata(false)? {
+            if metadata.delegated_to.is_some() {
+                continue;
+            }
+            let result = (|| -> Result<()> {
+                let Some(plan) = self.store.namespace_successor_plan(&metadata.job.job_id)? else {
+                    return Ok(());
+                };
+                let predecessor = plan.predecessor();
+                if predecessor.members.len() != 1 {
+                    return Err(Error::Busy("namespace handoff member count differs"));
+                }
+                let member = &predecessor.members[0];
+                self.paths.verify()?;
+                let (source_parent, source_name) = self.namespace_source(member)?;
+                let (old_target_parent, old_target_name) =
+                    self.namespace_destination(predecessor, 0)?;
+                let (destination_parent, destination_name) =
+                    self.paths.parent(&plan.target().path)?;
+                self.paths
+                    .verify_parent(&plan.target().path, &destination_parent)?;
+                if fs::node_type(&source_parent, &source_name)?.is_some()
+                    || fs::node_type(&old_target_parent, &old_target_name)?.is_some()
+                    || fs::node_type(&destination_parent, &destination_name)?.is_some()
+                {
+                    return Err(Error::Busy("namespace handoff public location is occupied"));
+                }
+                let private = self.paths.private.try_clone()?;
+                let old_name = retained(predecessor, 0);
+                let snapshot = file_snapshot(&private, &old_name)?
+                    .ok_or(Error::Busy("namespace handoff retained source missing"))?;
+                if snapshot.identity != member.evidence.source_identity {
+                    return Err(Error::Busy("namespace handoff retained inode differs"));
+                }
+                if member
+                    .evidence
+                    .content
+                    .as_ref()
+                    .is_none_or(|content| !snapshot_matches_content(&snapshot, content))
+                {
+                    self.namespace_divergence(
+                        &predecessor.job.job_id,
+                        member,
+                        &private,
+                        &old_name,
+                        &snapshot,
+                    )?;
+                    return Err(Error::Busy("namespace handoff changed content retained"));
+                }
+                self.point("namespace_successor_before_prepare");
+                self.paths.verify()?;
+                self.paths
+                    .verify_parent(&member.evidence.before.path, &source_parent)?;
+                self.paths
+                    .verify_parent(&member.change.after.path, &old_target_parent)?;
+                self.paths
+                    .verify_parent(&plan.target().path, &destination_parent)?;
+                if file_snapshot(&private, &old_name)?.as_ref() != Some(&snapshot)
+                    || fs::node_type(&source_parent, &source_name)?.is_some()
+                    || fs::node_type(&old_target_parent, &old_target_name)?.is_some()
+                    || fs::node_type(&destination_parent, &destination_name)?.is_some()
+                {
+                    return Err(Error::Busy("namespace handoff changed before preparation"));
+                }
+                self.store
+                    .prepare_namespace_successor(&plan, &fs::identity(&destination_parent)?)?;
+                self.point("namespace_successor_prepared");
+                Ok(())
+            })();
+            if let Err(error) = result {
+                report
+                    .blocked
+                    .push((metadata.job.target.path, error.to_string()));
             }
         }
         Ok(())

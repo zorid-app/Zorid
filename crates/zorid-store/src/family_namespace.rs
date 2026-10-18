@@ -4,6 +4,9 @@
 //! executes a separate physical job without weakening its member invariants.
 use super::*;
 use std::collections::BTreeMap;
+#[path = "family_namespace_successor.rs"]
+pub(super) mod successor;
+pub use successor::NamespaceSuccessorPlan;
 
 pub(super) const SCHEMA: &[(&str, &str)] = &[
     ("family_namespace_attachments", "CREATE TABLE family_namespace_attachments (job_id TEXT PRIMARY KEY NOT NULL REFERENCES namespace_attempts(job_id), record TEXT NOT NULL)"),
@@ -60,7 +63,8 @@ fn check_job(tx: &Connection, job: &ProjectionJob) -> Result<()> {
     }
     Ok(())
 }
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Claim {
     plan: Option<OperationId>,
     satisfied: bool,
@@ -315,6 +319,7 @@ pub(super) fn check_finish(tx: &Connection, attempt: &NamespaceAttempt) -> Resul
     {
         return Err(invalid("family namespace physical targets changed"));
     }
+    successor::check_finish(tx, attempt)?;
     Ok(true)
 }
 pub(super) fn finish_covered(tx: &Connection, attempt: &NamespaceAttempt) -> Result<()> {
@@ -330,7 +335,7 @@ pub(super) fn finish_covered(tx: &Connection, attempt: &NamespaceAttempt) -> Res
     for job in &a.obsolete {
         projection_jobs::finish(tx, job)?;
     }
-
+    successor::finish_delegated(tx, attempt)?;
     Ok(())
 }
 impl Store {
@@ -534,6 +539,7 @@ impl Store {
             job: job.clone(),
             members,
             completed: false,
+            delegated_to: None,
         };
         insert_attempt(&tx, &attempt)?;
         let attachment = Attachment {
