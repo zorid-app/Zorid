@@ -280,12 +280,15 @@ export class Workspace {
     const pane=this.activePane,vault=this.vault,source=this.current(pane);
     if(!control.isCurrent()||this.platform!==platform||generation!==this.vaultGeneration||this.closing||this.root.inert||this.startupFailed||this.platformReleased||this.platformDrained||document.visibilityState==='hidden'||!pane?.viewReady||!source||!this.panes.includes(pane))throw new Error('Native document navigation is unavailable');
     if(this.cachedViews.size)throw new Error('A previous document view still needs cleanup; return to Notes and retry');
+    const sourceRuntime=pane.runtime,sourceContent=pane.content,sourcePath=source.path;
+    const sourceScope=vault.adapter.durableWrites?.checkpoints.scope,sourceStore=sourceScope?.vaultId,sourceClient=sourceScope?.clientId;
+    const sourceEntryId=source.expectedEntryId??(sourcePath?this.buffers.get(sourcePath)?.savedDurableWitness?.entryId??vault.entries.get(sourcePath)?.entryId:undefined);
     const tabs=[...pane.tabs],history=[...pane.history],historyIndex=pane.historyIndex;
     const intent=(this.navigationIntent.get(pane)??0)+1;this.navigationIntent.set(pane,intent);
     const owns=()=>this.platform===platform&&this.vault===vault&&generation===this.vaultGeneration&&!this.platformReleased&&!this.platformDrained&&!this.closing&&this.activePane===pane&&this.panes.includes(pane)&&this.navigationIntent.get(pane)===intent;
     const check=()=>{if(!control.isCurrent()||!owns()||document.visibilityState==='hidden')throw new Error('Native document navigation was superseded');};
     const inert=this.root.inert;this.root.inert=true;this.hideNativeEditorToolbar();
-    let target:Tab|undefined,acknowledged=false;
+    let target:Tab|undefined,acknowledged=false,sourceRestored=false;
     try{
       await this.flushPane(pane);check();
       let observed=await vault.readDurableTextById(request.entryId);check();
@@ -328,7 +331,10 @@ export class Workspace {
         pane.tabs=tabs;pane.active=source.id;pane.history=history;pane.historyIndex=historyIndex;
         if(!this.restoreCachedViewNow(pane,source))throw new Error('The source view could not be restored; return to Notes');
         if(failed){await this.disposePaneViews(failed);this.cachedViews.delete(target);}
+        sourceRestored=true;
       }
+      // Admission/flush failure can leave the original runtime untouched.
+      if(!target)sourceRestored=true;
       throw error;
     }finally{
       if(this.nativeCommandView?.tabId===target?.id)this.nativeCommandView=undefined;
@@ -345,6 +351,28 @@ export class Workspace {
         this.root.inert=inert;
         const state=pane.editor?.nativeState?.();if(state)this.sendNativeEditorState(state,platform);
       }else if(this.platform===platform&&generation===this.vaultGeneration&&!this.closing&&!this.platformReleased&&this.root.inert)this.root.inert=inert;
+      // Native begin invalidated its source snapshot. A terminal failed/stale
+      // packet only proves this transaction drained; reattest the actual source
+      // separately, after restoration/cleanup and inert restoration. Await this
+      // before the adapter sends that terminal packet. Never revive a newer route.
+      const restored=()=>sourceRestored&&!acknowledged&&owns()&&!this.root.inert&&!this.startupFailed
+        &&document.visibilityState!=='hidden'&&!!sourcePath&&!!sourceEntryId&&this.current(pane)===source&&source.path===sourcePath
+        &&pane.viewReady&&pane.viewTabId===source.id&&pane.viewPath===sourcePath&&pane.runtime===sourceRuntime
+        &&pane.content===sourceContent&&!!sourceContent?.isConnected&&pane.element.contains(sourceContent)
+        &&!!sourceRuntime&&sourceRuntime.phase==='active'&&this.nativeReadyViews.has(sourceRuntime)
+        &&vault.adapter.durableWrites?.checkpoints.scope.vaultId===sourceStore&&vault.adapter.durableWrites?.checkpoints.scope.clientId===sourceClient
+        &&!pane.content?.querySelector('.error-message')&&vault.entries.get(sourcePath)?.entryId===sourceEntryId
+        &&(!isMarkdown(sourcePath)||this.buffers.get(sourcePath)?.savedDurableWitness?.entryId===sourceEntryId&&this.buffers.get(sourcePath)?.savedDurableWitness?.path===sourcePath);
+      if(platform.noteOpened&&control.isCurrent()&&restored()){
+        // Bypass the successful-open dedup: this is fresh restored-view proof.
+        this.nativeOpened=undefined;
+        try{
+          await platform.noteOpened(sourcePath!,sourceEntryId!);
+          // noteOpened intentionally invalidates the old command generation.
+          // Its native promise validates the source; later routes keep authority.
+          if(restored())this.nativeOpened={platform,entryId:sourceEntryId!,tabId:source.id};
+        }catch{/* Native keeps the source snapshot fenced; terminal is no proof. */}
+      }
     }
   }
 

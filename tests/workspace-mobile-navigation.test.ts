@@ -403,14 +403,71 @@ test('finite source checkpoint failure leaves exact source runtime and never adm
   f.workspace.buffers.get('A.md')!.flushForNavigation=async()=>{throw new Error('checkpoint unavailable');};
   await assert.rejects(f.navigate(async()=>assert.fail('must not ACK')),/checkpoint unavailable/);
   assert.equal(f.workspace.activePane.editor,source);assert.equal(f.workspace.activePane.viewPath,'A.md');assert.equal(f.workspace.root.inert,false);assert.equal(f.workspace.buffers.has('B.md'),false);
+  assert.deepEqual(f.opened,[['A.md','id_A_md'],['A.md','id_A_md']],'untouched source still needs fresh attestation after native begin');
   f.workspace.buffers.get('A.md')!.flushForNavigation=async()=>{};
+});
+test('missing target reattests the unchanged source without staging another runtime',async t=>{
+  const f=await finiteNavigationFixture(t),runtime=f.workspace.activePane.runtime;
+  f.request.entryId='missing-entry';await assert.rejects(f.navigate(),/unavailable/);
+  assert.equal(f.workspace.activePane.runtime,runtime);assert.equal((f.workspace as any).cachedViews.size,0);
+  assert.deepEqual(f.opened,[['A.md','id_A_md'],['A.md','id_A_md']]);
 });
 for(const failure of ['renderer','native ACK'])test(`finite ${failure} failure restores the retained source without recording target`,async t=>{
   const f=await finiteNavigationFixture(t),source=f.workspace.activePane.editor!;
   if(failure==='renderer')(f.workspace as any).editorFactory=(parent:HTMLElement,options:EditorOptions)=>{if(options.value==='Beta')throw new Error('target renderer failed');return editor(parent,options);};
   await assert.rejects(f.navigate(async()=>{throw new Error('native validation rejected');}));
   assert.equal(f.workspace.activePane.editor,source);assert.equal(f.workspace.activePane.viewPath,'A.md');assert.equal(f.workspace.root.inert,false);
-  assert.deepEqual(f.opened,[['A.md','id_A_md']]);assert.equal((f.workspace as any).cachedViews.size,0);
+  assert.deepEqual(f.opened,[['A.md','id_A_md'],['A.md','id_A_md']],'restored source needs fresh native attestation');assert.equal((f.workspace as any).cachedViews.size,0);
+});
+test('rejected navigation awaits drained target cleanup then fresh source attestation before settling, allowing retry',async t=>{
+  const f=await finiteNavigationFixture(t),source=f.workspace.activePane.editor!,cleanup=gate(),attestation=gate();
+  const dispose=(f.workspace as any).disposePaneViews.bind(f.workspace);let disposing=false,published=false,settled=false;
+  (f.workspace as any).disposePaneViews=async(pane:any)=>{if(pane.viewPath==='B.md'){disposing=true;await cleanup.promise;}return dispose(pane);};
+  f.platform.noteOpened=async(path,id)=>{
+    assert.equal(disposing,true);assert.equal((f.workspace as any).cachedViews.size,0);assert.equal(f.workspace.root.inert,false);
+    assert.equal(f.workspace.activePane.editor,source);assert.deepEqual([path,id],['A.md','id_A_md']);published=true;f.setCurrent(false);await attestation.promise;
+  };
+  const command=f.navigate(async()=>{throw new Error('native rejection');});void command.catch(()=>{settled=true;});
+  await waitFor(()=>disposing);assert.equal(published,false);assert.equal(settled,false);
+  cleanup.resolve();await waitFor(()=>published);assert.equal(settled,false);
+  attestation.resolve();await assert.rejects(command,/native rejection/);assert.equal(settled,true);
+  assert.equal((f.workspace as any).nativeOpened?.entryId,'id_A_md','the attestation itself invalidates command control, not the restored source');f.setCurrent(true);
+  await f.navigate();assert.equal(f.workspace.activePane.viewPath,'B.md');
+});
+for(const fence of ['hidden','detached','identity','binding','ready'] as const)test(`held source attestation cannot mark dedup success after ${fence} changes`,async t=>{
+  const f=await finiteNavigationFixture(t),pending=gate();let entered=false,undo=()=>{};
+  f.platform.noteOpened=async()=>{entered=true;f.setCurrent(false);await pending.promise;};
+  const command=f.navigate(async()=>{throw new Error('native rejection');});await waitFor(()=>entered);
+  if(fence==='hidden')Object.defineProperty(f.dom.window.document,'visibilityState',{configurable:true,value:'hidden'});
+  if(fence==='detached')f.workspace.activePane.content!.remove();
+  if(fence==='identity'){const row=f.workspace.vault.entries.get('A.md')!;f.workspace.vault.entries.set('A.md',{...row,entryId:'replacement'});}
+  if(fence==='binding'){const scope=(f.adapter as any).durableWrites.checkpoints.scope;scope.clientId='other-client';undo=()=>{scope.clientId='client';};}
+  if(fence==='ready')f.workspace.activePane.viewReady=false;
+  pending.resolve();await assert.rejects(command,/native rejection/);
+  assert.equal((f.workspace as any).nativeOpened,undefined);undo();
+});
+test('failed restored-source attestation does not mark native open successful or block terminal settlement',async t=>{
+  const f=await finiteNavigationFixture(t);let attempts=0;
+  f.platform.noteOpened=async()=>{attempts++;throw new Error('source validation failed');};
+  await assert.rejects(f.navigate(async()=>{throw new Error('native rejection');}),/native rejection/);
+  assert.equal(attempts,1);assert.equal((f.workspace as any).nativeOpened,undefined);assert.equal(f.workspace.activePane.viewPath,'A.md');
+});
+for(const fence of ['identity','generation','runtime','hidden','intent','binding','cleanup','restore','detached'] as const)test(`restored source cannot reattest after ${fence} failure`,async t=>{
+  const f=await finiteNavigationFixture(t),workspace=f.workspace as any;let attempts=0,undo=()=>{};
+  f.platform.noteOpened=async()=>{attempts++;};
+  if(fence==='cleanup'){const dispose=workspace.disposePaneViews.bind(workspace);workspace.disposePaneViews=async(pane:any)=>{if(pane.viewPath==='B.md')throw new Error('cleanup failed');return dispose(pane);};undo=()=>{workspace.disposePaneViews=dispose;};}
+  if(fence==='restore'){const restore=workspace.restoreCachedViewNow.bind(workspace);workspace.restoreCachedViewNow=()=>false;undo=()=>{workspace.restoreCachedViewNow=restore;};}
+  if(fence==='detached'){const restore=workspace.restoreCachedViewNow.bind(workspace);workspace.restoreCachedViewNow=(pane:any,tab:any)=>{const result=restore(pane,tab);pane.content?.remove();return result;};undo=()=>{workspace.restoreCachedViewNow=restore;};}
+  await assert.rejects(f.navigate(async()=>{
+    if(fence==='identity'){const row=f.workspace.vault.entries.get('A.md')!;f.workspace.vault.entries.set('A.md',{...row,entryId:'replacement'});}
+    if(fence==='generation'){workspace.vaultGeneration++;undo=()=>{workspace.vaultGeneration--;};}
+    if(fence==='runtime'){const ready=workspace.nativeReadyViews;workspace.nativeReadyViews=new WeakSet();undo=()=>{workspace.nativeReadyViews=ready;};}
+    if(fence==='hidden'){Object.defineProperty(f.dom.window.document,'visibilityState',{configurable:true,value:'hidden'});}
+    if(fence==='intent'){workspace.navigationIntent.set(f.workspace.activePane,999);}
+    if(fence==='binding'){const scope=(f.adapter as any).durableWrites.checkpoints.scope;scope.clientId='other-client';undo=()=>{scope.clientId='client';};}
+    throw new Error('native rejection');
+  }));
+  assert.equal(attempts,0);undo();
 });
 test('finite positive native ACK cannot be rolled back by subsequent cancellation',async t=>{
   const f=await finiteNavigationFixture(t);await f.navigate(async()=>{f.setCurrent(false);});
@@ -424,6 +481,7 @@ test('spontaneous link from a provisional target publishes its own identity and 
   pending.resolve();await assert.rejects(command,/superseded native request/);
   assert.equal(f.workspace.activePane.viewPath,'C.md');assert.equal(f.workspace.activePane.tabs.length,1);
   assert.equal((f.workspace as any).cachedViews.size,0);assert.equal(f.workspace.root.inert,false);
+  assert.deepEqual(f.opened,[['A.md','id_A_md'],['C.md','id_C_md']],'superseded rollback cannot reattest old source');
 });
 test('positive native ACK followed immediately by background retains the accepted target',async t=>{
   const f=await finiteNavigationFixture(t),pending=gate();let ready=false;

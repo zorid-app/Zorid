@@ -1276,3 +1276,16 @@ test('navigation routing UUIDs require lowercase canonical spelling and entry to
   f.navigate({...navigationRequest(),entryId:'Entry_Mixed-Case'});await until(()=>f.navigationResults.length===3);
   assert.equal(f.navigationResults[2].entryId,'Entry_Mixed-Case');assert.equal(f.navigationResults[2].revision,'Revision_Mixed-Case');await v.release!();
 });
+test('rejected ready retains transaction until awaited source attestation drains, then emits correlated stale',async()=>{
+  const f=fixture();f.navigation();const v=await openNativeMobileVault(f.plugin),attestation=deferred(),entered=deferred(),request=navigationRequest();
+  f.onNavigationResult(async result=>{if(result.status==='ready')throw new Error('target rejected without native mutation');});
+  f.onOpened(async()=>{entered.resolve();await attestation.promise;});
+  v.nativeDocumentNavigation!.subscribe(async(req,control)=>{
+    try{await control.ready({path:'Note.md',entryId:req.entryId,revision:'rev1',recovery:'none'});}
+    catch(error){await v.noteOpened('Note.md','entry');throw error;}
+  });
+  f.navigate(request);await entered.promise;
+  assert.deepEqual(f.navigationResults.map(result=>result.status),['ready'],'terminal must wait for source proof attempt');
+  attestation.resolve();await until(()=>f.navigationResults.length===2);
+  assert.deepEqual(f.navigationResults[1],{id:request.id,status:'stale'});await v.release!();
+});
