@@ -455,3 +455,11 @@ A/B Home-tab scope/IDs +B process restart pass, with separate unchanged0600 file
 that identity proof does NOT establish this newly requested Home presentation.
 
 Scope correction (2026-10-18 03:17 UTC, direct user instruction relayed by managed owner): remove spaced repetition entirely from the implementation goal, rather than defer it. No active implementation was underway.
+
+Mobile same-vault navigation review (2026-10-18 03:53 UTC): independent source
+review found rejected expected-EntryId admission mutates NoteBuffer identity
+before checking its loaded witness. Loaded A -> attempted replacement B rejects
+but pins buffer to B, preventing later A/no-argument reuse. Root confirmed exact
+note-buffer blob1c2de404 in isolated mobile-ios-shell; correction and focused
+regressions assigned to restored navigation owner c8bf385c. Not main code and
+not a runtime finding. Preserve source/draft state on rejected admission.
