@@ -116,6 +116,17 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+01:01UTC: native pinnedpnpm12.14 existingabsolute executable verified; isolated
+offline frozeninstall36802 terminal0 in2.5s, no lock/manifest edits/sharedtree
+mutation. Homehook source cherry fb1c04d7, reviewed coordinator/Mobile unchanged.
+FullSimulator10 retry39003 LIVE frozenfb1c04d7, exactcommand
+/private/tmp/zorid-ios-v10b-sim-command.json, log/private/tmp/zorid-ios-v10b-sim-build.log,
+freshoutput/private/tmp/zorid-ios-v10b-sim-20261018, Rust1.95/jobs1. Native retains
+slot, no rootheavyprocess; phone9 unchanged. Earlier broken-lock assertion was
+pnpm9 parse error and retracted, canonicalmulti-doc lock remains intact.
+Managed durableStore/dispatcher seam reservation sent41943ca81d2d, concrete
+contract+namedworker required before existingfile edits; no productionwire grant.
+
 01:00UTC: Simulator10 fullscript16736 terminal1 BEFOREcompilation, pnpm dependency
 workspace verification rejected sharednode_modules. Native retains exclusive slot
 for boundedprep/retry; verify pinnedpnpm12.14/rootcwd --dir (known9.15cwdtrap),
