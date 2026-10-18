@@ -1,5 +1,89 @@
 # Managed data execution checkpoint
 
+## Current resume — 2026-10-18 05:25 UTC
+
+**The amended full goal remains active.** Spaced repetition was removed by direct
+user instruction, not deferred. Google two-way integration, desktop and native
+mobile feature UI, secrets, jobs, version/migration verticals and public plugin
+contracts remain required in [the implementation plan](implementation-plan.md).
+Scoped foundation acceptance below does not complete those requirements.
+
+Canonical `main` observed at this checkpoint: `55051226cf46a7035874d421517b886bec888a32`.
+This documentation worker uses isolated branch/worktree `managed-progress-sync`,
+based on explicit main `8e8732ea2473f98db49da2c3f8a5ccd26943fee7`, and owns only
+this file and `docs/managed-data-tasks-calendar-plan.md`. No main mutation, runtime,
+compiler or new product verification is part of this update.
+
+### Ownership and integration authority
+
+- Sole main integrator: shared-core root, Run `run_3e72b2c9ab72`, terminal
+  `term_084947b9-7643-4f16-87c2-ef4b202456bc`.
+- Managed-data coordinator: Run `run_7a10da5526b5`, terminal
+  `term_62fd2871-cfd3-4810-b01d-5fb39845fce2`. Submit isolated, reviewed batches
+  through root; do not reuse historical terminal ownership below.
+- Current progress sources: the top checkpoints in
+  `/Users/ctk/orca/workspaces/Zorid/managed-data-foundation/docs/managed-data/execution.md`,
+  reconciled with root's canonical integration reports linked below and the
+  newer scoped source/runtime dispatch updates. The old 02:02 resume below is
+  historical; copying the foundation branch over main would lose canonical history.
+
+### Canonical integrations and observed verification
+
+| Integrated scope | Source/integration evidence | Actual verification and limits |
+| --- | --- | --- |
+| Managed records, Types/Tasks foundations and standalone desktop Calendar | Earlier accepted main foundations remain canonical; [Calendar integration](calendar-foundation-integration.md) and preserved history carry their provenance. | These accepted slices do not establish the later joined Base/Task Calendar UI, browser Calendar or native mobile feature UI. |
+| Desktop Tasks | Main `aa0a2f37`; actual assembly `15ff377b`; final source/runtime report `d17fc749`, independent review `f4dc6752`; [root integration](tasks-main-integration.md). | Three real Electron groups accepted; root 44/44 affected tests and full TypeScript passed; actual source match and cleanup confirmed. No multi-client/browser/mobile or exact-once acceptance. |
+| Browser WorkBlocks | Main `2972911c`; original freeze `3f07c9d4`, root reconciled source `46e7360e693b688ff666feed46a6f01ffc45b79c`; [root integration](browser-workblocks-main-integration.md) and [current-main artifact evidence](browser-workblocks-current-main-evidence.json). Source reviews `f9ace587`/`29123c6b` plus independent current-main composition review accepted. | Actual reconciled generated WASM, full TypeScript and 12 normal-Worker browser groups passed: 443 strict write terminals, 436 complete/7 abort, 43 full snapshots, 10 causal pairs and 12 database cleanups. Concrete browser/Vite/profile cleanup and source/generated hashes verified. HTTP1 JSON fixture; no protobuf, rendered Calendar/mobile/full matrix, foreign-scope ciphertext case or saturated 1 MiB proof. |
+| Native Calendar foundation | Main `aab1d5c8`; final report `7e90a219`, independent review `6d825271`; [root integration](calendar-native-foundation-integration.md). | Accepted composition: portable 17, native eight distinct passes across split runs, host two and real stdio three across split runs. Native 1,001-file physical fixture remains **INCOMPLETE**; never report 9/9 native passes or large-vault runtime/performance acceptance. |
+
+### Isolated work — source and runtime gates remain separate
+
+- **Joined Task/Base Calendar UI:** product composition candidate
+  `252f2e5f95604a9f3475a88b4253919fa0913a5e` in
+  `managed-task-calendar-ui-integration` is branch-only, not a main UI delivery.
+  Two actual attempts failed at driver checkpoints: `4864470e` retained an input
+  prefix; `252f2e5f` mismatched the normal `.base` quick-switcher label. The second
+  attempt genuinely created the preset and three Tasks, but **all 11 complete UI
+  cases remain unrun**. No joined Calendar/recovery acceptance follows.
+- UI proof/source owner: `managed-base-calendar-proof`,
+  `task_7357971319af` / `ctx_019d5e5f84f2`; independent reviewer
+  `ctx_3227884a4148`. Test-only quick-selector fix `cdc474f1` has scoped source
+  approval (21 bounded tests); async settlement successor `3adc263b` has 23
+  bounded tests and is pending composed source review. Neither is actual runtime
+  acceptance. Preserve both failed attempts and require a reviewed, frozen
+  successor plus matching provenance before a new actual pass. Detailed source
+  and raw paths: that worktree's `docs/managed-data/base-calendar-electron-results.md`.
+- **Origin Store adapter:** source freeze `6078c333` in
+  `managed-origin-store-adapter`; owner
+  `term_86d19693-a193-4149-bf35-439dccb61a49`,
+  `task_b677f7629e9b` / `ctx_3bbc4d448052`; independent reviewer
+  `task_8241d6d5ec1d` / `ctx_4ef93249788f`. Owned source: Store
+  `src/{managed_records,checkpoints,lib}.rs` and
+  `tests/{managed_intents,checkpoints}.rs`, plus explicitly authorized bounded
+  nondefault fixed-v2 fixture features in records/Store Cargo and
+  `zorid-records/src/local_intent.rs`. Ordinary production v1 registration remains
+  unchanged; no arbitrary catalog or default fixture enablement is authorized.
+  Actual focused 11 SQLite cases, checkpoint regression and four fixed-v2 cases
+  have just begun their bounded validation turn; **no passing outcome is recorded
+  here**. The worktree's `docs/managed-data/origin-store-adapter.md` records the
+  source/fixture contract. No acceptance, integration, adapter activation,
+  old-apply bypass closure or product cutover is claimed.
+
+Next: collect the actual Store results and independent review, finish the UI
+successor review and real frozen 11-case pass, then submit coherent scoped batches
+to the sole main integrator. Retain native 1,001-file verification as an explicit
+open gap and continue all remaining plan requirements. Coordinate actual heavy
+load; explicit validation slots apply to iOS builds/simulator passes only.
+
+---
+
+## Historical checkpoints — preserved canonical history
+
+Everything below is retained verbatim from this checkout's canonical main
+execution file. Earlier “current”/“resume” headings, pending integrations, owner
+handles and scope descriptions are historical where superseded above; historical
+goal wording never restores spaced repetition.
+
 ## Current state — resume here
 
 Scope amendment (2026-10-18 03:17 UTC): spaced repetition is removed by direct user instruction, not deferred. Historical goal wording does not restore it.
