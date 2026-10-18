@@ -116,6 +116,14 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:50UTC: native13 immutable snapshot typing started (handle pendingreport),
+no competing compiler. NewNote NEWhelperf00ebadc source-ready, independent root
+review assigned native_consumer: exact same-intent/CID checkpoint CAS, freshloan
+ack, originalstatus/freshID, no collisioncode invention. Not exposed/compiled;
+occupied-name rejection escape remains explicit functional gate before usable
+NewNote. Per-CID completed checkpoint retention unbounded count is known, no GC
+framework in this slice. Initial File/Home candidate continues independently.
+
 00:49UTC: nativeowner granted exclusive bounded13source Swiftfrontend typing
 on immutable /private/tmp/zorid-connected-tabs-source-snapshot, ae81678d plus
 recorded dirty rootwiring snapshot, actual Cheader/cachedSDK26.2 flags. No Rust/
