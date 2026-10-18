@@ -1540,3 +1540,22 @@ refined under root43d860 (recognize short tap, preserve pan/longpress, consume
 accepted touchend, no blind touchstart prevention). No link fix/runtime claim.
 371 read-only edge gesture proposal6b80 started, no implementation before history
 transition proof. Phone Dev10 artifact remains2add, connection still unavailable.
+
+
+Simulator11 actual history readiness correction — 2026-10-18 01:46 UTC:
+Full project build95537 succeeded at c8fd423c/588bc684. Actual Orca UI confirmed
+subtitle removal, Files listing, folder entry and Nested.md opening. Actual
+Back restored the folder but exposed a startup/menu-loan readiness race, leaving
+a pending history ticket and disabled Forward; failing AX024 and screenshot
+retained in /private/tmp/zorid-history11-evidence. No typed save proof yet.
+Healthy durable tab metadata actual write:334 bytes, mode0600. Original failing
+executable preserved before rebuild. Test app/helper cleanup10993 exited0; owned
+Simulator remains booted.
+
+Root c943/64f grants narrow correction and incremental rebuild within held iOS
+slot. Independent review56ae accepts Mobile307436a1/Pagesbb71e208: defer the
+installed receipt until the same Pages host is idle, its menu recovery clear
+and UI active; coalesce a false-to-true readiness callback and reread current
+route/owner. Preinstall folder reads retain their original idle guard. No new
+host, timer, lease or gesture/link source. Source acceptance only; new build
+and actual Back/Forward/metadata failure recovery remain to verify.

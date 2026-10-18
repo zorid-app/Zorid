@@ -1531,7 +1531,8 @@ final class NativeVaultPicker: UITableViewController {
             }
             return
         }
-        guard documentTabs?.historyNavigationOwner(for: pages) == receipt.owner else { return }
+        guard documentTabs?.historyNavigationOwner(for: pages) == receipt.owner,
+              pages.isNativePageRouteRestorationReady else { return }
         receipt.checking = true
         // Revalidate on this SAME owned Pages host after install/foreground.
         // A retained UI receipt never authorizes another host or a stale cursor.

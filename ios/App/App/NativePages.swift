@@ -650,6 +650,7 @@ private final class NativePagesCoordinator {
     private var historyIndex = -1
     private var pendingHistoryIndex: Int?
     private var awaitingNoteActivation = false
+    private var lastNativeRestoreReadiness = false
     private var routeFailureOnReturn = false
     private var openingDestination: NativeFileOpenDestinationController?
     private var openingDestinationTicket: Int?
@@ -692,6 +693,11 @@ private final class NativePagesCoordinator {
         owner?.setRouteAvailability(back: back, forward: forward,
             rootReady: available && session != nil && !editorActive && !tabOverviewSuspended && !tabSourceClosed)
         activeEditor?.setRouteAvailability(back: back, forward: forward)
+        let restoreReady = isNativePageRouteRestorationReady
+        if restoreReady != lastNativeRestoreReadiness {
+            lastNativeRestoreReadiness = restoreReady
+            if restoreReady { owner?.nativePageRouteReadinessChanged() }
+        }
     }
 
     func traverse(_ direction: Int) {
@@ -769,6 +775,7 @@ private final class NativePagesCoordinator {
         self.visible = visible
         if !visible { cancelSearch() }
         if visible { scheduleAutomaticRefresh() } else { cancelQueuedRefresh() }
+        updateRouteControls()
     }
 
     func cancelQueuedRefresh() {
@@ -1261,9 +1268,16 @@ private final class NativePagesCoordinator {
         drainAutomaticRefresh()
     }
 
+    private var canReadNativePageRoute: Bool {
+        !busy && !editorActive && !tabOverviewSuspended && !tabSourceClosed
+            && !ownershipBlocked && loanTicket == nil && openingDestination == nil && session != nil
+    }
+    var isNativePageRouteRestorationReady: Bool {
+        canReadNativePageRoute && recovery == .clear && pageActive
+    }
+
     func restoreNativePageRoute(_ route: NativePageRoute, completion: @escaping (Result<NativePageRoute, Error>) -> Void) {
-        guard route.vaultID == vault.id, !busy, !editorActive, !tabOverviewSuspended, !tabSourceClosed,
-              !ownershipBlocked, loanTicket == nil, openingDestination == nil, let session = session else {
+        guard route.vaultID == vault.id, canReadNativePageRoute, let session = session else {
             completion(.failure(NativeRouteHistoryError.unavailable)); return
         }
         cancelSearch()
@@ -2409,6 +2423,20 @@ final class NativePagesController: UIViewController {
         navigate(direction) // Root owns the history ticket and all host transitions.
     }
     var onNativePageRouteValidated: ((NativePageRoute) -> Void)?
+    private var nativeRouteReadinessCallbackQueued = false
+    var isNativePageRouteRestorationReady: Bool { coordinator.isNativePageRouteRestorationReady }
+    fileprivate func nativePageRouteReadinessChanged() {
+        guard !nativeRouteReadinessCallbackQueued else { return }
+        nativeRouteReadinessCallbackQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.nativeRouteReadinessCallbackQueued = false
+            guard self.coordinator.isNativePageRouteRestorationReady else { return }
+            // Read the CURRENT route after the owned startup/menu loan settles.
+            // This observer is not permission to claim or open a second host.
+            self.emitNativePageRouteValidated()
+        }
+    }
     func nativePageRoute() throws -> NativePageRoute { try model.nativePageRoute() }
     func restoreNativePageRoute(_ route: NativePageRoute, completion: @escaping (Result<NativePageRoute, Error>) -> Void) {
         coordinator.restoreNativePageRoute(route, completion: completion)
