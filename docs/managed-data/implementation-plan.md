@@ -68,8 +68,6 @@ Provider adapters run on eligible devices and access secrets through the host. T
 | Recurrence occurrence state | Managed structured records linked to task IDs |
 | External event mirror | Provider-derived state, subject to pending local edits |
 | External IDs, pending mutations, receipts | Durable operational records, never disposable cache |
-| Flashcard review history | Durable append-only structured history with correction records |
-| Next-review scheduling | Derived from history and explicit algorithm/config version |
 | UI preferences | Explicit synced or local policy |
 | Secrets | Protected secret store, device-local initially |
 
