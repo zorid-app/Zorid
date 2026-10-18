@@ -77,6 +77,23 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Canonical browser-storage checkpoint (2026-10-18 02:04 UTC): main901c6ff3..
+b5d9d510 integrates the13 reviewed managed-records browser commits through
+8bf1ca06. Root verified all affected crates/src/scripts/manifests/lock/harness/
+managed-doc trees byte-identical to that candidate; no relevant main overlap and
+diff check passes. Separate native history work is preserved. Evidence includes
+portable/native/WASM125 checks, final helper subset16 (overlapping), browser83,
+full TS, actual WASM/Vite builds and eight real Chrome/WASM/strict IDB groups.
+See docs/managed-data/browser-record-results.md and retained raw proof; this is
+an internal storage subset, not whole Phase1/worker/UI completion. The numeric
+round-trip defect has concrete reproduction and float_roundtrip fix, canonical
+validation retained. Managed lead is authorized to implement minimal trusted
+normal-worker registration/startup/foreground retry/change catch-up/shutdown
+draining in named browser-core-worker/browser-sync-worker hunks from the reviewed
+map, on isolated integration branch. Record owner/contract directly; no redundant
+approval loop or exhaustive test campaign before functional host delivery. No
+public plugin API, new replication loop or product UI is implied by this grant.
+
 Actual WK checkpoint (2026-10-18 02:03 UTC): link candidate5bc70762/89be64c8
 frontend/copy/incremental build12 passed, but actual single rendered external
 Markdown link tap with a separate body caret and visible software keyboard FAILS:
