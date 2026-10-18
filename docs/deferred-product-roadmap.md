@@ -116,6 +116,19 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+01:07UTC: managed Storeowner term6307/ctx856 named source grant now includes
+narrow StoreCargo/lib/schema, family_ledger/family_store Recordsarm,
+immutable_payloads records/nullfiledescriptor, family_ingress exhaustive isolation
+only ifneeded, records/lib wire registration and Store->records lockedge. Purewire
+cf5 ownsNEWwire/tests, coordinate one dispatcherowner. Mandatoryreviewcontract:
+explicitrecord/gen target; restore immutable relation notkey and exactsame-record
+prioraccepteddeletedgen; authorizehandle then exactreplay beforecurrentrevision;
+registered schemaversion equality initially, mismatchunresolved; fairretrycursor/
+wrap beyond16blocked; same durable receipt/state/sharedcursor+localintent/sealing.
+No crypto/proto/relay/browser/native/publicplugin/rootmanifest scope. Isolatedsource
+mayproceed, independentreview+affectedchecks beforemain; no heavyjob while native
+Simulator/phoneowns slot. Sourcegrant doesnot mean implementation/integration done.
+
 01:05UTC managed namedowner: records-store/dispatcher term_6307fc89-12c7-4bd1-a490-27eb41bc87ef
 task_2448039200d5/ctx_856b7fa4e164 isolatedmanaged-records-store owns NEWmodule/tests;
 wire term_cf5aebc1/ctx_3cacb97fdb34 isolatedmanaged-records-wire owns NEWwire.rs/tests
