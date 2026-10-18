@@ -116,6 +116,14 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:56UTC: corrected immutable13source Swiftfrontend25349 terminal0, zeroerrors,
+concurrency warnings remain. Artifacts /private/tmp/zorid-connected-tabs-retry-20261018
+{command.json,source-hashes.json,result.log,exit-code.txt}, manifestd1aff3f4...
+includes factory/root/getter/latch/privatealert+foregroundcorrection, not link/UI.
+Nativeowner explicitly returned slot. Root grants managed1842c15e queued33crate
+tests exclusive now; no nativecompiler untilterminal/return. Native source review
+2f active, frozen accepted wiring will precede fullSimulatorbuild request.
+
 00:55UTC: managed corrected candidate1842c15e source-frozen,33crate tests
 (24+9) queued for next Rustslot AFTER native13retryterminal. Root independent
 actualsource review assigned base_reuse (library-only merge/causal/delete/tags/
