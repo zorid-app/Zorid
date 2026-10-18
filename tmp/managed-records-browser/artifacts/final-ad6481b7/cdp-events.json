@@ -1,0 +1,197 @@
+[
+  {
+    "method": "Runtime.executionContextCreated",
+    "params": {
+      "context": {
+        "id": 1,
+        "origin": "://",
+        "name": "",
+        "uniqueId": "-3008936112050644912.2376173687889062035",
+        "auxData": {
+          "isDefault": true,
+          "type": "default",
+          "frameId": "C069606E85CFEB552CB26D7FFB9B095F"
+        }
+      }
+    }
+  },
+  {
+    "method": "Page.frameStartedNavigating",
+    "params": {
+      "frameId": "C069606E85CFEB552CB26D7FFB9B095F",
+      "url": "http://127.0.0.1:61172/tmp/managed-records-browser/",
+      "loaderId": "9A4AD908DE959580FFDA45A5FCE2B21D",
+      "navigationType": "differentDocument"
+    }
+  },
+  {
+    "method": "Page.frameStartedLoading",
+    "params": {
+      "frameId": "C069606E85CFEB552CB26D7FFB9B095F"
+    }
+  },
+  {
+    "method": "Runtime.executionContextsCleared",
+    "params": {}
+  },
+  {
+    "method": "Runtime.executionContextsCleared",
+    "params": {}
+  },
+  {
+    "method": "Page.frameNavigated",
+    "params": {
+      "frame": {
+        "id": "C069606E85CFEB552CB26D7FFB9B095F",
+        "loaderId": "9A4AD908DE959580FFDA45A5FCE2B21D",
+        "url": "http://127.0.0.1:61172/tmp/managed-records-browser/",
+        "domainAndRegistry": "",
+        "securityOrigin": "http://127.0.0.1:61172",
+        "securityOriginDetails": {
+          "isLocalhost": true
+        },
+        "mimeType": "text/html",
+        "adFrameStatus": {
+          "adFrameType": "none"
+        },
+        "secureContextType": "SecureLocalhost",
+        "crossOriginIsolatedContextType": "NotIsolated",
+        "gatedAPIFeatures": []
+      },
+      "type": "Navigation"
+    }
+  },
+  {
+    "method": "Runtime.executionContextCreated",
+    "params": {
+      "context": {
+        "id": 2,
+        "origin": "http://127.0.0.1:61172",
+        "name": "",
+        "uniqueId": "-593258900760672403.-3113737892049592506",
+        "auxData": {
+          "isDefault": true,
+          "type": "default",
+          "frameId": "C069606E85CFEB552CB26D7FFB9B095F"
+        }
+      }
+    }
+  },
+  {
+    "method": "Runtime.consoleAPICalled",
+    "params": {
+      "type": "debug",
+      "args": [
+        {
+          "type": "string",
+          "value": "[vite] connecting..."
+        }
+      ],
+      "executionContextId": 2,
+      "timestamp": 1792288678368.286,
+      "stackTrace": {
+        "callFrames": [
+          {
+            "functionName": "",
+            "scriptId": "4",
+            "url": "http://127.0.0.1:61172/@vite/client",
+            "lineNumber": 934,
+            "columnNumber": 8
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "Page.domContentEventFired",
+    "params": {
+      "timestamp": 25889.561362
+    }
+  },
+  {
+    "method": "Page.loadEventFired",
+    "params": {
+      "timestamp": 25889.564863
+    }
+  },
+  {
+    "method": "Page.frameStoppedLoading",
+    "params": {
+      "frameId": "C069606E85CFEB552CB26D7FFB9B095F"
+    }
+  },
+  {
+    "method": "Runtime.consoleAPICalled",
+    "params": {
+      "type": "debug",
+      "args": [
+        {
+          "type": "string",
+          "value": "[vite] connected."
+        }
+      ],
+      "executionContextId": 2,
+      "timestamp": 1792288678604.167,
+      "stackTrace": {
+        "callFrames": [
+          {
+            "functionName": "handleMessage",
+            "scriptId": "4",
+            "url": "http://127.0.0.1:61172/@vite/client",
+            "lineNumber": 1047,
+            "columnNumber": 11
+          },
+          {
+            "functionName": "",
+            "scriptId": "4",
+            "url": "http://127.0.0.1:61172/@vite/client",
+            "lineNumber": 663,
+            "columnNumber": 41
+          },
+          {
+            "functionName": "dequeue",
+            "scriptId": "4",
+            "url": "http://127.0.0.1:61172/@vite/client",
+            "lineNumber": 685,
+            "columnNumber": 7
+          },
+          {
+            "functionName": "",
+            "scriptId": "4",
+            "url": "http://127.0.0.1:61172/@vite/client",
+            "lineNumber": 677,
+            "columnNumber": 8
+          },
+          {
+            "functionName": "enqueue",
+            "scriptId": "4",
+            "url": "http://127.0.0.1:61172/@vite/client",
+            "lineNumber": 671,
+            "columnNumber": 9
+          },
+          {
+            "functionName": "",
+            "scriptId": "4",
+            "url": "http://127.0.0.1:61172/@vite/client",
+            "lineNumber": 663,
+            "columnNumber": 27
+          },
+          {
+            "functionName": "onMessage",
+            "scriptId": "4",
+            "url": "http://127.0.0.1:61172/@vite/client",
+            "lineNumber": 96,
+            "columnNumber": 5
+          },
+          {
+            "functionName": "",
+            "scriptId": "4",
+            "url": "http://127.0.0.1:61172/@vite/client",
+            "lineNumber": 214,
+            "columnNumber": 4
+          }
+        ]
+      }
+    }
+  }
+]
