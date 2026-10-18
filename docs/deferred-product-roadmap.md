@@ -83,13 +83,18 @@ feature binding reach remains in S3–S7/S10/S11/S12; they are not current APIs.
 S1 is now implementing S1.0 only. Main `66c65aa2` freezes the language matrix and
 19 search cases with separate current-literal/target expectations; real Rust
 Generation/LiteralPageBuilder passes those cases at page sizes1/100, and main
-Node comparison21 passes. No production query behavior changed. Native workload
-tooling `c91106b2` remains isolated pending review; actual100-note CLI smoke used
+Node comparison21 passes. No production query behavior changed. Reviewed native
+workload tooling is integrated through main `36fbc997`; main `d02cf0d6` adds the
+independently reviewed actual-browser harness. Main tooling7 checks pass. The
+CLI tool separately labels legacy versus normal desktop local-family admission,
+validates exact query source watermarks and fences executable hashes at run
+boundaries. Actual100-note legacy CLI smoke used
 the frozen verified binary,18 commands exit0, exact expected text hits/ranges and
 five authority samples, all103 physical files unchanged. Evidence:
 `/private/tmp/zorid-s1-cli-smoke-c91106b2/report.json`. Existing inline imported PNG
 is classified Unreadable, so coverageComplete=false is retained despite full text
-scan completion. This is not the10k representative benchmark or a performance gain.
+scan completion. New local-family and browser runtime passes are still required.
+This is not the10k representative benchmark or a performance gain.
 
 Owners: `s1_execution_audit` owns workload/native CLI baseline tooling;
 `s1_query_audit` owns the integrated language fixtures;

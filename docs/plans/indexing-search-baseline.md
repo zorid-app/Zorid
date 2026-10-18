@@ -1,8 +1,14 @@
 # S1.0 language and performance baseline
 
-Specification only, against main `776a8fd221c70a9c4ccce12c0446e85cffc7afe3`.
-No workload implementation, measurement or performance acceptance is claimed.
-[S0 and S0A acceptance](../roadmap.md) precede execution. Follow the
+Baseline protocol established against main
+`776a8fd221c70a9c4ccce12c0446e85cffc7afe3`; S1.0 implementation is now underway
+after [S0 and S0A acceptance](../roadmap.md). The deterministic workload and
+[native CLI tool](../../scripts/indexing-search-baseline/README.md),
+[actual browser harness](../../scripts/indexing-search-baseline/WEB.md), and
+[language matrix](../reference/query-language-support.md) are integrated.
+These initial tools cover subsets of this protocol; unsupported metrics/scenarios
+remain explicit. No complete representative/stress measurement or performance
+acceptance is claimed. Follow the
 [accepted design](../architecture/indexing-search-design.md) and
 [S1 slices](indexing-search.md); this document defines their baseline evidence.
 
