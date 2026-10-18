@@ -77,6 +77,15 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Mobile priority (2026-10-18 04:00 UTC): direct user finding relayed by native
+owner confirms Dev17 New File FAB inert. Dedicated native-new-note-ui owns only
+NewNote-specific root/startup/Pages borrow/recovery/factory inspection/PBX hunks,
+reusing reviewed d9 helper. Native-warm-editor separately owns same-host channel.
+Native coordinator serializes shared-file composition and later iOS verification;
+FAB first, warm runtime parallel, then combined per-tab/save/keyboard proof and
+next phone delivery. Root has independent reviewers available for frozen UI
+successor; no additional permission is needed for already-authorized wiring.
+
 Physical Dev17 delivery (2026-10-18 03:58 UTC): root inspected persistent
 phone17-build2.exit0, signature_verify_exit0, bundleapp.zorid.notes.dev build17
 and binary SHAa1933a0e385b35c736cefc38e3a2aa562ce630d0b7ac4117c6a7441a3c2d1a60.

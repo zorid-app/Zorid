@@ -468,3 +468,11 @@ Navigation identity correction source accepted (2026-10-18 03:56 UTC): exact
 4d04d082 passed293 focused cases/fullTS and independent delta review, integrated
 as maina2d480e2. Pin changes only after successful admission, including queued
 calls. All eight files match approved source. Paired native runtime remains open.
+
+Mobile priority correction (2026-10-18 04:00 UTC, native user relay
+e4fd2e594a5d): user confirms New File FAB still inert on physical Dev17. Native
+source confirms missing onCreateNote/canRouteCreate binding. Dedicated isolated
+native-new-note-ui worker now owns NewNote root/startup, Pages callback/borrow/
+recovery, factory pending inspection and minimal helper/PBX wiring. Reuse reviewed
+d9 helper; actual tap/create/edit/save/reopen remains required. FAB delivery first,
+one warm runtime parallel, then composed per-tab/gesture/save/keyboard proof.

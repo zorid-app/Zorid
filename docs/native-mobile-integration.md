@@ -1708,3 +1708,34 @@ owner owns current-vault Home factory/root activation follow-up. Per-tab route
 registry source is separate, not yet composed/delivered. Warm-page comparison
 now prioritizes one retained current-vault Workspace/host over per-nav fresh
 initialization; ready adjacent pages do not mandate a fixed WebView count.
+
+
+Imported docs-only evidence from native c8a6dfa6; delivered native source is
+not thereby integrated into canonical main or accepted for interaction parity.
+
+
+Physical Dev17 delivered — 2026-10-18:
+User requests connected-iPhone delivery; device query confirms wired connected
+iPhone16Pro. Root ae6b905b grants slot transition; Simulator terminate6922 and
+helper kill74761 both exit0, preserving exact booted simulator. Root1121 confirms
+no competing compiler/Electron. Source remains reviewed2ccce (docs HEAD649b3acc).
+First script preflight32567 exited1 before compilation because pnpm cache-path
+verification rejects the linked workspace; retained phone17-build.log/exit.
+Second runner uses private pnpm CLI flag only after exact package/lock comparison;
+repository build tooling/cache unmodified. Actual70888 exit0,221.24s: fullTS/native
+Vite, cap copy ios only, official device Rust --locked-j1, Xcode App-Dev Debug-Dev
+jobs1, Automatic existing development signing, provisioning updates disabled.
+Signature deep strict0; Info app.zorid.notes.dev /Zorid Dev/build17. Frozen Swift
+hashes still match after build. Actual22381 terminal0: device install0 AND launch0,
+both devicectl JSON outcomes success. Phone app remains open for user.
+
+Persistent source/command/artifact/signature/install/launch receipts are under
+/Users/ctk/orca/artifacts/zorid-native-20261018 (phone17-command2.json,
+phone17-artifact.json, phone17-signature.log, phone17-install.json,
+phone17-launch.json and matching logs/exits); signed app is phone17-build2/
+DerivedData/Build/Products/Debug-Dev-iphoneos/App.app. Temporary owned cache
+symlinks removed. No production app or unrelated data changed.
+This proves compile/sign/install/launch only, not phone gesture/keyboard/
+loading acceptance. Dev17 includes scoped tab histories/new Home/header/picker/
+strict8 gesture source; it does NOT include optional one-WK channel now in main.
+Simulator post-restart scene-startup issue remains inconclusive, sample retained.
