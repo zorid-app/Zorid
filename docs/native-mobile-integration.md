@@ -1418,3 +1418,51 @@ not that old bundle-specific manual profile. Device wired/paired/tunnel connecte
 and Developer Mode enabled per devicectl01:06. Coordinator0c249 extends exclusive
 slot for signed development build/install/launch after simulator check; no new
 account/production capability changes. Phone remains Dev9 until actual receipt.
+
+
+Signed phone10 artifact checkpoint — 2026-10-18 01:10 UTC:
+Frozen source2add282bf6c79b201ec04259f643dd3749df6ef8, signed development full
+script21794 TERMINAL0. Pinned pnpm12.14, Rust1.95 locked-j1, App-Dev Debug-Dev
+Xcode jobs1, automatic existing development profile, no provisioning updates.
+Exact redacted command /private/tmp/zorid-ios-v10-phone-command.json; private0600
+log /private/tmp/zorid-ios-v10-phone-build.log and exit0 file. Artifact:
+/private/tmp/zorid-ios-v10-phone-20261018/DerivedData/Build/Products/Debug-Dev-iphoneos/App.app.
+Verified Info bundle app.zorid.notes.dev/version10/environmentdevelopment/iPhoneOS,
+codesign strict/deep exit0, actual application entitlement exactteam+Dev bundle
+and get-task-allowtrue. This full compilation includes six-line vault subtitle
+removal. No actual header pixel verification from this phone build.
+
+INSTALL NOT YET SUCCESSFUL. Hardware UDID install and observed CoreDevice UUID
+retry both returned CoreDevice1011 unable to locate ECID. Fresh device details
+show tunnelState unavailable, previously wired+connected; lockState also1011.
+No app launch attempted after failed install. Actual private install logs/JSON
+/private/tmp/zorid-phone-v10-{install,current-install}.* preserve failures.
+User asked asynchronously to reconnect/unlock phone; pending reply. Phone last
+proven installation remains Dev9, not Dev10. No signing/account failure inferred.
+All compiler handles terminal, Simulator app/helper closed, Simulator still booted.
+Reviewed connected source merge_ready a683f5263647 sent sole coordinator; main
+untouched by owner. NewNote/history/import future source remains uncomposed.
+
+
+Next source successor — 2026-10-18 01:11 UTC:
+After all compiler handles terminal and slot returned76a4822c6e49, composed
+independently reviewed371 history77018 as ce6e78cd, plus minimal new Swift project
+membership. NativeRouteHistory exact source161lines / Pages scoped restoration,
+header removal preserved. Owner read both actual diffs; plutil/diffcheck pass.
+This source successor is NOT the frozen2add Dev10 artifact or submitted main
+batch, and has no new compiler/runtime proof. Root editor/history callbacks and
+validated folder-origin restoration still need wiring. Harness source exists
+unexecuted in /private/tmp/zorid-native-route-history-harness.
+
+Metadata store API proposal4e6c owner ACK0682234: bounded128KiB validated existing
+schema, fixed app-owned ApplicationSupport path, checked atomic file/directory
+durability with explicit post-rename uncertainty, no note content authority or
+arbitrary vault writes. bd57 may implement NEW file only after root ACK; owner
+picker integration remains separate. Import destination router proposal d809
+a197/3da received, explicit selection/recovery constraints and owned loan cleanup
+API agreement still pending; no implementation grant inferred.
+
+Device-only deployment retained after build slot release; latest bounded phone
+check01:11 still tunnel unavailable, no install/launch success or user reconnect
+reply. Do not rebuild for connection retry. Use exact ready signed Dev10 artifact
+when live phone connection is restored.

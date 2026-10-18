@@ -12,6 +12,7 @@
 		CE5C06DFD4CA48ECA9359B89 /* NativeImportCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C98DBBF2AEBC4C79BBF6BD9E /* NativeImportCoordinator.swift */; };
 		BB610C65FC774A5DB972FAEE /* NativeDocumentTabCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03BE9176620455F968E8CBF /* NativeDocumentTabCoordinator.swift */; };
 		D6A2F76C6B814A808C21DCFC /* NativeTabOverview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A47C4B65B2644DD9CE6DC2E /* NativeTabOverview.swift */; };
+		2F100A62C3BF41D6951D1C19 /* NativeRouteHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE688EE7F28F4EF89A8783E4 /* NativeRouteHistory.swift */; };
 		2C5840EE8C5446409840312D /* NativeDocumentTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62B11016CF644ADE9A6A105B /* NativeDocumentTabs.swift */; };
         C4918AC6B7374CA39C883D70 /* NativeShellComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D38D54610AD4BE88C5D9C34 /* NativeShellComponents.swift */; };
         111111111111111111111103 /* NativePages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111104 /* NativePages.swift */; };
@@ -37,6 +38,7 @@
 		C98DBBF2AEBC4C79BBF6BD9E /* NativeImportCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeImportCoordinator.swift; sourceTree = "<group>"; };
 		F03BE9176620455F968E8CBF /* NativeDocumentTabCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeDocumentTabCoordinator.swift; sourceTree = "<group>"; };
 		0A47C4B65B2644DD9CE6DC2E /* NativeTabOverview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTabOverview.swift; sourceTree = "<group>"; };
+		BE688EE7F28F4EF89A8783E4 /* NativeRouteHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeRouteHistory.swift; sourceTree = "<group>"; };
 		62B11016CF644ADE9A6A105B /* NativeDocumentTabs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeDocumentTabs.swift; sourceTree = "<group>"; };
         7D38D54610AD4BE88C5D9C34 /* NativeShellComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeShellComponents.swift; sourceTree = "<group>"; };
         111111111111111111111104 /* NativePages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePages.swift; sourceTree = "<group>"; };
@@ -107,6 +109,7 @@
 				C98DBBF2AEBC4C79BBF6BD9E /* NativeImportCoordinator.swift */,
 				F03BE9176620455F968E8CBF /* NativeDocumentTabCoordinator.swift */,
 				0A47C4B65B2644DD9CE6DC2E /* NativeTabOverview.swift */,
+				BE688EE7F28F4EF89A8783E4 /* NativeRouteHistory.swift */,
 				62B11016CF644ADE9A6A105B /* NativeDocumentTabs.swift */,
                 7D38D54610AD4BE88C5D9C34 /* NativeShellComponents.swift */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
@@ -224,6 +227,7 @@
 				CE5C06DFD4CA48ECA9359B89 /* NativeImportCoordinator.swift in Sources */,
 				BB610C65FC774A5DB972FAEE /* NativeDocumentTabCoordinator.swift in Sources */,
 				D6A2F76C6B814A808C21DCFC /* NativeTabOverview.swift in Sources */,
+				2F100A62C3BF41D6951D1C19 /* NativeRouteHistory.swift in Sources */,
 				2C5840EE8C5446409840312D /* NativeDocumentTabs.swift in Sources */,
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 				FD9F126313343F4D57AFAD1B /* NativeKeyboardToolbar.swift in Sources */,
