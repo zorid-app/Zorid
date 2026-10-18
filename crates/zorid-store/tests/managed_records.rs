@@ -603,6 +603,9 @@ fn received_receipt_failpoint_preserves_shared_cursor_and_all_state_on_reopen() 
     let opened = OpenedEnvelope::open(&packet.1, &packet.0, &key()).unwrap();
     assert!(store.family_receive(&opened, Some(&advance)).is_err());
     drop(store);
+    db(&path)
+        .execute_batch("DROP TRIGGER managed_test_abort")
+        .unwrap();
     let mut store = Store::open(&path).unwrap();
     assert_eq!(
         store
@@ -620,9 +623,6 @@ fn received_receipt_failpoint_preserves_shared_cursor_and_all_state_on_reopen() 
     ] {
         assert_eq!(count(&path, table), 0, "{table}");
     }
-    db(&path)
-        .execute_batch("DROP TRIGGER managed_test_abort")
-        .unwrap();
     store.family_receive(&opened, Some(&advance)).unwrap();
     assert_eq!(
         store
