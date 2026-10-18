@@ -63,6 +63,15 @@ private final class LocalVaultCatalog {
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
+    // Document tabs retain only local catalog identity. Resolve the current root
+    // on every activation; the opened Rust session separately validates its store
+    // identity and the stable file ID before a launch path can be used.
+    func resolve(vaultID: UUID) throws -> (LocalVault, URL) {
+        try reload()
+        guard let vault = vaults.first(where: { $0.id == vaultID }) else { throw MobileFailure.metadata }
+        return (vault, try root(for: vault))
+    }
+
     func create(name: String) throws -> LocalVault {
         let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty, cleaned.count <= 80,
