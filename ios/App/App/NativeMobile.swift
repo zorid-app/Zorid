@@ -1471,6 +1471,14 @@ final class NativeEditorContainer: UIViewController {
 }
 
 final class NativeVaultPicker: UITableViewController {
+    // One app-owned main-actor writer, retained across picker lifetimes.
+    private static var tabMetadataStore: NativeTabMetadataStore?
+    private static func retainedTabMetadataStore() throws -> NativeTabMetadataStore {
+        if let store = tabMetadataStore { return store }
+        let store = try NativeTabMetadataStore()
+        tabMetadataStore = store
+        return store
+    }
     private var catalog: LocalVaultCatalog?
     private var opening = false
     private var openingTicket: UUID?
@@ -1636,8 +1644,17 @@ final class NativeVaultPicker: UITableViewController {
 
     private func ensureDocumentTabs() throws -> NativeDocumentTabCoordinator {
         if let existing = documentTabs { return existing }
-        let key = "native.document-tabs.v1"
-        let model = NativeDocumentTabs(restoring: UserDefaults.standard.data(forKey: key))
+        let store = try Self.retainedTabMetadataStore()
+        let restored: Data?
+        switch try store.load() {
+        case .restored(let bytes): restored = bytes
+        case .absent:
+            // Read-only compatibility for the disposable development app. A
+            // corrupt/unreadable existing file never falls back to defaults.
+            restored = AppVariant.current == .development
+                ? UserDefaults.standard.data(forKey: "native.document-tabs.v1") : nil
+        }
+        let model = NativeDocumentTabs(restoring: restored)
         let factory = NativeTabDestinationFactory(resolveVault: { [weak self] id in
             guard let self = self, let catalog = self.catalog else { throw MobileFailure.metadata }
             let resolved = try catalog.resolve(vaultID: id)
@@ -1672,7 +1689,7 @@ final class NativeVaultPicker: UITableViewController {
         })
         destinationFactory = factory
         let coordinator = NativeDocumentTabCoordinator(model: model, persist: { data in
-            UserDefaults.standard.set(data, forKey: key)
+            try store.save(data)
         }, activate: { [weak factory] tab, owner, done in
             guard let factory = factory else { done(.failure(MobileFailure.unavailable)); return }
             factory.prepare(tab, ownerID: owner, completion: done)
@@ -1892,7 +1909,7 @@ final class NativeVaultPicker: UITableViewController {
         guard presentedViewController == nil else { return }
         let ticket = UUID()
         do { try ensureDocumentTabs().beginVaultOpening(ticket) }
-        catch { showMessage("Session is finishing", "Wait for the current document session to finish before opening another vault."); return }
+        catch { showMessage("Could not prepare tabs", error.localizedDescription); return }
         opening = true
         openingTicket = ticket
         navigationItem.rightBarButtonItem?.isEnabled = false

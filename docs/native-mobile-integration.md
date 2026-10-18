@@ -1498,3 +1498,11 @@ Coordinator e46b3ec9 and Factory9d41f71c. Third review correction honors a
 different validated folder/mode as superseding normal intent instead of replaying
 old restoration. Owner verified full hashes before commit; acceptance SOURCE
 only, compiler/actual history UI still pending. Metadata root wiring separate.
+
+Metadata root caller source accepted df59f87afe38 at NativeMobile SHA256
+5e9f48d1e80586440b81ffac4fb0e0e2e963f722c77a39c6ab9a681e533dedf1.
+ONE retained main-actor store, development-only read-only legacy fallback ONLY
+for absent file, existing invalid/unreadable file error propagated before host
+open, persist closure throws into existing metadata Retry. No NewNote ACK/UI.
+Combined15-source compiler +actual history Foundation harness next; no runtime
+filesystem/failure-injection evidence yet.
