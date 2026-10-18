@@ -77,6 +77,16 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Recovery host checkpoint (2026-10-18 05:01 UTC): canonical `c128785f` integrates
+exact independently reviewed e3e29142 desktop main/preload/client-slot foundation.
+Root32/32 affected Node checks, three CJS syntax checks and exact source comparison
+pass. It reclaims only the original authenticated same-vault window/client scope;
+no Workspace caller or journal rewrite/resume is added. Actual original-window
+renderer journal proof stays with composed Calendar acceptance. See
+managed-data/calendar-recovery-host-integration.md. Root native Calendar candidate
+`8857efcd` remains isolated pending its final large-vault fixture and composed
+result review; no duplicate Rust compilation was run by root.
+
 Portable router checkpoint (2026-10-18 04:57 UTC): TS371 freeze af3b6538 has
 16 component checks/fullTS0 but independent review WITHHOLDS source approval:
 async resume outside the route queue can overwrite a newer selected document and
