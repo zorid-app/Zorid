@@ -2114,6 +2114,21 @@ private final class NativePagesModel: ObservableObject {
     var isInFolder: Bool { preferences.selected == .files && !folder.isEmpty }
     var showInitialSkeleton: Bool { loading && listing == nil }
 
+    // A synchronous presentation witness from the last trusted Rust listing.
+    // The activation factory must still resolve this stable identity afresh.
+    func documentTabDocument(for entry: NativeFileEntry) throws -> NativeTabDocument {
+        guard fileActionsAvailable, !ownershipRecoveryBusy, entry.kind == .file, !entry.deleted,
+              let listing = listing,
+              let current = listing.entries.first(where: { $0.id == entry.id }),
+              current.kind == .file, !current.deleted, current.revision == entry.revision,
+              NativeFileEntry.samePath(current.path, entry.path), NativeFileEntry.isVisiblePath(current.path) else {
+            throw NativePageError.unavailable
+        }
+        // Incomplete reconciliation does not invalidate a known listed file.
+        return try NativeTabDocument(vaultID: vault.id, localStoreID: listing.localStoreId,
+                                     stableFileID: current.id, displayTitle: current.name)
+    }
+
     func setLoading() {
         loading = true
         status = listing == nil ? "Loading vault…" : ""
@@ -2277,6 +2292,10 @@ final class NativePagesController: UIViewController {
         model.canRouteCreate = !documentTabRoutingConfigured || onCreateNote != nil
         model.canRouteChooseVault = !documentTabRoutingConfigured || onChooseVault != nil
     }
+    func documentTabDocument(for entry: NativeFileEntry) throws -> NativeTabDocument {
+        try model.documentTabDocument(for: entry)
+    }
+
     // A terminal fact for this exact retained controller. Root must also match
     // its captured owner/source; this is never foreground/navigation authority.
     // Successfully retired instances cannot reopen another host.
