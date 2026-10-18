@@ -271,7 +271,8 @@ fn exact_saved_base_selection_precedes_native_task_cap() {
     drop(l);
     drop(v);
     let mut store =
-        zorid_store::Store::open_existing(dir.path().join(".zorid/vault.sqlite")).unwrap();
+        zorid_store::Store::open_existing_no_follow(dir.path().join(".zorid/vault.sqlite"))
+            .unwrap();
     let body = "---\ntype: type-task\n---\n";
     for n in 0..1001 {
         store
