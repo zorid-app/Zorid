@@ -116,6 +116,16 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:23UTC: root independently source-approved fcdb2a78/e0704c2f. Corrective
+portable2 tests passed; final host run38747 live, log
+/private/tmp/native-menu-wire-host-final.log (old retry log records failures).
+Strict-input checks now pass; real >1MiB receipt recovery still executing.
+Native a02 retirement correction fixes the tab seam in source, but global
+composition remains conditional on legacy returnToVaults/traverse recovery or
+complete configured-owner routing. Gate relayed msg_06a7ef702f84. Owner composing
+5742+a02 source-only; Pages callback/drain/witness implementation active, coordinator
+draft still awaits review and native validation. No overlapping native compiler.
+
 00:22UTC: d809 correction a02b7397 after5742f382 source-ready; independent root
 review assigned. Exact-owner terminal retirement receipt and covered-scene
 background correction remain uncompiled; coordinator consumption still required.
