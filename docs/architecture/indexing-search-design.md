@@ -5,6 +5,45 @@ architecture direction, not an implementation or performance report. S0 storage
 and S0A modular interfaces remain prerequisites to S1 implementation. Follow the
 [implementation slices](../plans/indexing-search.md) and [roadmap](../roadmap.md).
 
+## Latest user requirements — 2026-10-18
+
+Multicore optimization applies to every platform where measured throughput and
+foreground responsiveness improve. Native desktop/mobile can execute Rust worker
+jobs on native threads; browsers need their own bounded worker executor around
+shared Rust/WASM work. A native thread pool alone does not satisfy this direction.
+Budgets consider available cores, memory, power and transfer/startup overhead;
+small workloads may stay sequential. This does not resume paused mobile feature
+implementation or establish unmeasured device performance.
+
+Indexing and semantic parsing lifecycle belongs to the shared Rust core. It owns
+change coalescing, invalidation, dependency tracking, cache policy, job selection,
+priority, cancellation and coherent publication. Platform adapters supply storage,
+executor/timer/lifecycle capabilities and deliver source changes; they do not
+reimplement policy. The editor and feature views subscribe to versioned updates
+and requery affected data rather than manually driving begin/pump/publish loops.
+Those low-level operations may remain internal to core/host execution.
+
+Source changes include successful commits from editor, CLI, external-file import
+and sync, plus rename/delete and extraction-version changes. Index progress is
+reconciled against durable source state on restart or missed events. Notifications
+are hints to refresh; their loss cannot silently leave indexes permanently stale.
+Use the S0A caching interface for reusable extraction, not frontend table access.
+Cache failures/rebuilds must remain independent of source durability and recovery.
+
+Core metadata parsing does not replace CodeMirror's incremental syntax parsing,
+selection, composition, undo or immediate rendering. Shared search/Bases still
+index committed source. Existing UI needs for unsaved semantic metadata require a
+separate transient analysis path tagged with buffer revision; its scheduling and
+parsing policy is core-owned and it never publishes a draft into the shared index.
+Core change notifications must not overwrite dirty editor buffers.
+
+The user accepts a documented regex subset supported by the shared engine, with
+advanced JavaScript-only constructs explicitly unsupported initially. This is an
+intentional compatibility gap, not full Obsidian regex compatibility. Invalid or
+unsupported patterns report an explanation, never empty results masquerading as
+successful evaluation. Suggest an equivalent rewrite only where matching meaning
+is preserved. Full advanced compatibility remains a tracked follow-up.
+
 ## Scope and architecture
 
 Optimize shared Rust Markdown parsing/indexing, search/backlinks and Base query
@@ -23,7 +62,8 @@ Use documented Obsidian Bases YAML/expression/filter syntax and built-ins as the
 language target. Vault-search operators remain a distinct language with the
 Obsidian search reference; shared execution does not merge the languages.
 Supported expressions should produce documented results, not only parse the same
-spelling. Explicitly review existing deliberate dialect deviations before keeping
+spelling. The explicit engine-supported regex subset above is a recorded exception
+to complete JavaScript-flavored regex compatibility. Explicitly review existing deliberate dialect deviations before keeping
 or changing them. Optimization must not silently redefine semantics.
 
 Primary language references checked during discussion:

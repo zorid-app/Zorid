@@ -18,6 +18,27 @@ subtasks/review where the contracts permit them.
 | S1.5 Freshness and first-build behavior | Previous coherent results while updating; clearly incomplete first-build results/counts; time-dependent refresh in selected timezone | Changed results refresh without mixed generations; first-build absence/aggregates aren't presented as complete; midnight/timezone/now dependencies invalidate relevant visible views |
 | S1.6 Integrated performance gate | Same frozen implementation across required desktop/native and actual browser bindings, with retained before/after scenarios | 10,000-note baseline and 100,000-note stress case plus large notes; cold/warm/index/query/memory results; semantic regressions resolved and agreed measured budgets met |
 
+## Core lifecycle and platform execution requirement
+
+S0A defines the shared core lifecycle/caching interfaces before S1 replaces live
+client paths. Within S1.1/S1.4, establish core-owned change coalescing, invalidation,
+job planning, priorities and versioned update subscriptions; migrate editor-driven
+index pumping into that module. Platform hosts execute work and supply storage,
+clock/wake and lifecycle capabilities without duplicating index policy. Changes
+from CLI, external imports and sync receive the same treatment as editor commits.
+Restart/missed-notification reconciliation uses durable source progress.
+
+Multicore work must be evaluated on all platforms where it benefits performance;
+native threads and browser worker executors may differ, while policy/semantics
+remain shared. Do not treat a native pool as browser completion or claim a speedup
+where startup/message/memory overhead makes it slower. Keep immediate CodeMirror
+syntax/rendering local; transient semantic draft analysis is core-owned and tagged
+with its buffer revision, distinct from committed query snapshots.
+
+Search uses the explicitly accepted engine-supported regex subset. The language
+matrix records advanced JavaScript-only forms as unsupported, with clear errors
+and safe equivalent rewrites where possible; no silent fallback or changed matches.
+
 ## Scope and order constraints
 
 The table is the default slice order. If baseline evidence changes the best order,

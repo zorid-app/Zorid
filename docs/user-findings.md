@@ -1,5 +1,29 @@
 # User findings queue
 
+## S1 core-owned indexing lifecycle — accepted direction 2026-10-18
+
+User requires multicore optimization on every platform where it improves measured
+performance, persisted parse reuse through the caching interface, and shared-core
+ownership of when semantic parsing/indexing runs. Platform clients subscribe and
+refresh affected views; they must not duplicate invalidation/scheduling policy.
+Keep CodeMirror's immediate interactive syntax state local. Unsaved semantic
+analysis stays revision-tagged and separate from committed shared indexes.
+The user accepts an engine-supported regex subset, clear unsupported-pattern
+messages and equivalent rewrites only where meaning is preserved. Design and
+implementation slices are updated; S0/S0A gates remain in force.
+
+## CLI/editor conflict recognition — open 2026-10-18
+
+Reviewed actual concurrency harness on frozen `bf1feb0a` observed successful shared
+cache/search, CLI competing commit, exact receipt replay and stale-CAS rejection.
+The editor retained its exact draft but showed a generic save error with conflict
+false instead of conflict/recovery actions within20s. Intentional host interruption
+was not reached. Evidence:
+`/private/tmp/zorid-s0-concurrency-bf1feb0a-evidence/evidence.json`.
+All owned processes closed; source/artifact hashes unchanged. `storage_recovery_ui_impl`
+owns isolated error-classification diagnosis and a deterministic regression before
+any fix. No loss is established, and no user action is blamed.
+
 ## Candidate interrupted-rename recovery — investigating 2026-10-18
 
 Read-only inspection of the default recent vault found a captured, unpublished

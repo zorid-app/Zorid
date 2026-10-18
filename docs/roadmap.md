@@ -189,8 +189,13 @@ compatibility is established by this roadmap.
   identity rebinding; incrementally invalidate changed inputs and survive restart.
 - [ ] Reuse compiled Base programs, graph/generation preparation and eligible query
   answers in bounded memory; include all relevant dependencies and time context.
+- [ ] Move indexing/semantic-parsing lifecycle into shared Rust core: commit-driven
+  invalidation/coalescing, cache access, job scheduling and update subscriptions.
+  Platform adapters execute work; editors refresh relevant views. Retain local
+  interactive syntax parsing and separate revision-tagged draft analysis.
 - [ ] Add measured bounded adaptive multicore work, priority for editing/saves/active
-  queries and real cancellation/bounded chunks without stale publication.
+  queries and real cancellation/bounded chunks without stale publication. Evaluate
+  native and browser executors on every platform where parallelism helps.
 - [ ] Query committed source; retain coherent previous results while updating and
   clearly mark partial first-build results/counts. Refresh time-dependent visible
   views using configured timezone (device-local default), one time context/query.
