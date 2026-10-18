@@ -101,3 +101,38 @@ approval of the paired implementation or a native runtime result. The separate
 NewNote18 candidate `9cf7fe9f` excludes this unfinished warm source; root confirmed
 its native app/project bytes match reviewed `4e390d70` and current main
 `c233362a` is an ancestor before the assigned iOS verification slot.
+
+## Corrected paired source approval — 2026-10-18 04:29 UTC
+
+The independent reviewer approved exact native `20a777e36e25105774ba376f8794951754c34eca`
+in `native-warm-editor`. The root caller now exists. Baseline source reattestation
+checks original path/EntryId/store through a fresh listing on the same physical
+Rust session, keeps the pending barrier, and changes no target binding, history,
+Recents or supersession state. Only the correlated terminal releases the failed
+transaction. Fresh target witness checks precede the synchronous root commit;
+positive ACK remains irrevocable. The prior helper's exact ticket/persistence and
+uncertainty handling are reused. This closes the earlier scoped source finding,
+not native compilation or runtime acceptance.
+
+The paired JS successor initially missed the full source predicate after awaited
+`noteOpened`. Independent review caught that race; the owner corrected it before
+commit. Root approved exact blobs: Workspace `ffcb73f3e43056533f091d0926fc16ffb7eff40a`,
+mobile test `0b841e271d19150d620adbf34597142face4adb1`, navigation test
+`d1784deaec173afc1d298b949b6332aa7a4028de`. Restore/cleanup must succeed before
+reattest; full ownership, visible connected ready runtime, scope and immutable-ID
+checks run before and after the await. Command-current is checked only before:
+successful source attestation intentionally invalidates that old command. A later
+route or rejected attestation cannot mark dedup success. Terminal follows settlement.
+
+Observed owner results:260/260 in the two affected test files, full TypeScript and
+diff check pass. Root inspected the source/test correction and recomputed persistent
+log digests without rerunning unchanged tests: `finite-js-reattest-focused.log`
+SHA256 `7204ab0c376878c3d13a15613fc140c363e1d4b49f5a907192e57ad57bc73672`;
+empty successful typecheck log SHA256 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+Logs remain under `/Users/ctk/orca/artifacts/zorid-native-20261018`.
+
+These sources remain separately isolated pending coherent commits/composition.
+Next gate: paired Swift/JS compilation and bounded positive/rollback interaction
+proof. Two actual adjacent live editors and independent undo/scroll during an
+interactive swipe remain a subsequent required slice. NewNote19 chrome verification
+uses a separate candidate without this unfinished warm source.
