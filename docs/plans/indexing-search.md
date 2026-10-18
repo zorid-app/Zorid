@@ -3,10 +3,12 @@
 [Roadmap](../roadmap.md#s1--rust-parsing-indexing-caching-and-search-performance) ·
 [Confirmed design](../architecture/indexing-search-design.md)
 
-Status: planned. S0 storage and S0A interface acceptance precede this work. Existing
-code and accepted tests are reusable foundations; this plan starts no new feature
-or compiler campaign. Deliver one coherent slice at a time, with independent owned
-subtasks/review where the contracts permit them.
+Status: S1.0 implementing after bounded S0 delivery and S0A contract acceptance.
+The [language matrix](../reference/query-language-support.md) and frozen semantic
+fixtures are integrated; workload/native/browser measurements remain in progress.
+No optimization gain or complete language implementation is claimed. Deliver one
+coherent slice at a time, with independent owned subtasks/review where contracts
+permit them; later slice implementations wait for the measured baseline.
 
 | Slice | Deliverable | Acceptance evidence |
 | --- | --- | --- |

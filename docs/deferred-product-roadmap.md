@@ -71,10 +71,32 @@ power-loss, traffic-light input, browser UI, phone or other-OS runtime parity.
 Original user vault remains untouched and its historical warning cause unconfirmed;
 the reproduced superseded-move failure is fixed with focused exact-proof checks.
 
-Root retains sole main integration and is completing the S0/S0A acceptance record.
-S1.0 workers prepare only the accepted workload/baseline tooling and query-language
-fixtures in isolated worktrees; no optimization or new sync-group design starts
-from those preparation tasks. Heavy builds remain serialized; no push authorized.
+S0's bounded native delivery gate is accepted on the above integrated evidence;
+the original historical-vault diagnosis remains explicitly unconfirmed. S0A is
+accepted as a contract gate after independent operation/consumer-matrix review
+(`4c51e5d5`), browser planning provenance checks, and the reviewed direct binary
+helper FIFO correction integrated `d102dbe2`. Main focused transfer/admission50,
+planning15 and TypeScript checks pass. Browser contract wording is reconciled.
+The audited future runtime/cache/executor/notification seams belong to S1, while
+feature binding reach remains in S3–S7/S10/S11/S12; they are not current APIs.
+
+S1 is now implementing S1.0 only. Main `66c65aa2` freezes the language matrix and
+19 search cases with separate current-literal/target expectations; real Rust
+Generation/LiteralPageBuilder passes those cases at page sizes1/100, and main
+Node comparison21 passes. No production query behavior changed. Native workload
+tooling `c91106b2` remains isolated pending review; actual100-note CLI smoke used
+the frozen verified binary,18 commands exit0, exact expected text hits/ranges and
+five authority samples, all103 physical files unchanged. Evidence:
+`/private/tmp/zorid-s1-cli-smoke-c91106b2/report.json`. Existing inline imported PNG
+is classified Unreadable, so coverageComplete=false is retained despite full text
+scan completion. This is not the10k representative benchmark or a performance gain.
+
+Owners: `s1_execution_audit` owns workload/native CLI baseline tooling;
+`s1_query_audit` owns the integrated language fixtures;
+`architecture_platform_audit` owns actual browser measurement harness;
+`storage_recovery_impl` independently reviews workload/oracle/resource handling.
+Root retains sole main integration. Heavy work stays serialized; no push. Open
+sync-group policies await the user; no new design discussion is started.
 
 Latest user steering: current runtime verification targets are macOS Electron,
 web and the independent CLI on macOS; defer other OS/mobile runtime verification.

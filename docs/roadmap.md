@@ -9,11 +9,12 @@ Older plans remain detailed capability inventories, not competing delivery order
 ## Current focus
 
 **S0 — Storage, saving and local recovery is accepted within the recorded native
-scope. S0A modular-interface gate is verifying.** S0's reviewed implementation and
+scope. S0A modular-interface gate is accepted.** S0's reviewed implementation and
 actual macOS save/close/quit/history/concurrent-CLI/interruption evidence are in the
 [execution checkpoint](deferred-product-roadmap.md#latest-integration-checkpoint--2026-10-18).
-S0A closes the remaining browser binary-helper admission seam before S1 changes
-live paths. S1.0 baseline tooling/fixtures are being prepared in isolation.
+S0A's reviewed consumer matrix and contracts include the integrated browser
+binary-helper admission correction. **S1.0 language/workload baseline is now
+implementing**; optimization follows measured baseline evidence.
 Existing feature/iOS work is preserved.
 
 Design for desktop, browser and mobile now; finish the usable desktop feature set
@@ -50,8 +51,9 @@ that invalidate a closed gate reopen that bounded gate, not every earlier milest
 
 ## Delivery order
 
-S0 is **accepted** within its explicit scope/limitations; S0A is **verifying**.
-Later milestones remain **planned**, with isolated S1.0 preparation underway.
+S0 is **accepted** within its explicit scope/limitations; S0A is **accepted** as a
+contract gate. S1 is **implementing** its first baseline slice. Later milestones
+remain **planned**.
 
 | ID | Milestone | Prerequisite |
 | --- | --- | --- |
@@ -144,32 +146,35 @@ Design: [storage](architecture/storage.md), [SQLite](architecture/sqlite.md),
 
 ## S0A — Modular interfaces and feature-consumer contracts
 
-**Status:** verifying; the reviewed operation/consumer inventory and proposed
-runtime contract are recorded in the review guide. The current browser direct
-binary-helper FIFO seam is being corrected before acceptance. Storage
+**Status:** accepted as a contract review, with implementation gaps explicitly
+assigned to their owning stages. The reviewed operation/consumer inventory and
+runtime requirements are recorded in the review guide; main `d102dbe2` closes the
+direct browser binary-helper FIFO seam (50 focused main checks and TypeScript
+pass). Representative S0 consumer evidence and independent review are recorded
+in the execution checkpoint. This is not browser/mobile runtime acceptance. Storage
 contract review begins during S0 design so we do not build the wrong layer first.
 S0A then checks storage, indexing and caching together against actual consumers
 before S1 changes internals or downstream feature work resumes. Existing milestone
 IDs stay stable.
 
-- [ ] Inventory current Rust service contracts, TypeScript platform capabilities,
+- [x] Inventory current Rust service contracts, TypeScript platform capabilities,
   host/WASM/mobile bindings and consumers. Reuse working interfaces; identify
   concrete gaps rather than inventing a general framework.
-- [ ] Build a supported-operation matrix covering files/attachments, managed records,
+- [x] Build a supported-operation matrix covering files/attachments, managed records,
   retained recovery, disposable caches, parse/index/search and relationships. Map
   Bases/Tasks/Calendar, editor, sync and independent CLI needs to owning services.
-- [ ] Specify inputs/results, identity/revision/scope, transaction boundaries,
+- [x] Specify inputs/results, identity/revision/scope, transaction boundaries,
   local-commit versus publication/sync status, subscriptions, pagination/limits,
   cancellation, release and error/uncertain-retry behavior.
-- [ ] Check indexing snapshots, incremental updates, source/version fences, query
+- [x] Check indexing snapshots, incremental updates, source/version fences, query
   pins and rebuild/progress APIs; features must not read private index tables.
-- [ ] Check cache keys/versioning, hit/miss/stale/error behavior, invalidation,
+- [x] Check cache keys/versioning, hit/miss/stale/error behavior, invalidation,
   eviction/budgets and rebuild APIs. Pending edits, provider receipts and recovery
   history must never be routed through disposable-cache deletion.
-- [ ] Review native durable-vault and browser connected-working-state differences.
+- [x] Review native durable-vault and browser connected-working-state differences.
   Shared services do not require identical persistence guarantees. Document missing
   capabilities explicitly rather than silently falling back to another authority.
-- [ ] Prove representative consumer flows through the service boundary; add focused
+- [x] Prove representative consumer flows through the service boundary; add focused
   behavior/contract checks only for meaningful boundaries. Resolve incompatible
   seams and document each interface in its owning module page.
 
@@ -187,8 +192,8 @@ future feature or a public plugin API freeze.
 
 ## S1 — Rust parsing, indexing, caching and search performance
 
-**Design:** confirmed after user interview; implementation remains planned and
-requires S0/S0A. [Design](architecture/indexing-search-design.md),
+**Design:** confirmed after user interview; S0/S0A gates are accepted and S1.0
+baseline implementation is underway. [Design](architecture/indexing-search-design.md),
 [implementation slices](plans/indexing-search.md),
 [query boundary ADR](adr/0001-shared-query-semantics.md).
 

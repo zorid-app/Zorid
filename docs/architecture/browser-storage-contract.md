@@ -153,12 +153,15 @@ S0A must review these existing consumer seams before broader storage redesign:
   [scheduler](../../src/core/binary-transfer-queue.ts#L1),
   [Vault transfer ownership](../../src/core/vault.ts#L347) and
   [browser recovery admission](../../src/platform/browser-client-admission.ts#L173).
-- The direct browser adapter convenience `createBinary`/`writeBinary` exports still
-  call their own `binary()` helper outside that FIFO. No current first-party
-  production caller was found using these exports directly: ordinary Vault paths
-  choose streams, attachment resources read through Vault, and import uses Vault.
-  Do not claim universal serialization of arbitrary low-level consumers. Review
-  whether to route or narrow that surface during S0A; this map changes no API.
+- The direct browser adapter convenience `createBinary`/`writeBinary` exports now
+  reserve that same FIFO through pin/stage work and terminal-outcome reconciliation
+  (`d102dbe2`). Caller bytes and metadata identity are selected before waiting;
+  retained retries preserve their original IDs and target. Focused direct-helper
+  versus Vault concurrency regressions pass. Ordinary first-party Vault paths use
+  streams, attachment resources read through Vault, and import uses Vault.
+  Arbitrary low-level callers must still follow the reservation contract; raw
+  stream methods alone do not establish universal serialization. This is source/
+  focused behavior evidence, not actual browser UI or mobile runtime acceptance.
   See [adapter helper/exports](../../src/platform/browser-default.ts#L43),
   [Vault selection](../../src/core/vault.ts#L452),
   [attachment resources](../../src/ui/attachments.ts#L50) and
