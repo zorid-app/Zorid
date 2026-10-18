@@ -689,7 +689,8 @@ private final class NativePagesCoordinator {
         let available = pendingHistoryIndex == nil && !busy && (editorActive || recovery == .clear)
         let back = available && historyIndex > 0
         let forward = available && historyIndex + 1 < history.count
-        owner?.setRouteAvailability(back: back, forward: forward)
+        owner?.setRouteAvailability(back: back, forward: forward,
+            rootReady: available && session != nil && !editorActive && !tabOverviewSuspended && !tabSourceClosed)
         activeEditor?.setRouteAvailability(back: back, forward: forward)
     }
 
@@ -2135,11 +2136,29 @@ private final class NativePagesModel: ObservableObject {
     private var listing: NativeVaultListing?
     private var folderId: String?
     var onRouteChanged: ((NativeRoute) -> Void)?
-    @Published private(set) var canGoBack = false
-    @Published private(set) var canGoForward = false
+    @Published private var legacyRouteBack = false
+    @Published private var legacyRouteForward = false
+    @Published private var localRootRouteReady = false
+    @Published private(set) var rootRouteNavigationConfigured = false
+    @Published private var rootRouteCallbackAvailable = false
+    @Published private var desiredRootRouteBack = false
+    @Published private var desiredRootRouteForward = false
+    private var rootRouteReady: Bool { localRootRouteReady && fileActionsAvailable && !ownershipRecoveryBusy && rootRouteCallbackAvailable }
+    var canGoBack: Bool { rootRouteNavigationConfigured ? desiredRootRouteBack && rootRouteReady : legacyRouteBack }
+    var canGoForward: Bool { rootRouteNavigationConfigured ? desiredRootRouteForward && rootRouteReady : legacyRouteForward }
+    var showsNativeRouteControls: Bool { isInFolder || (rootRouteNavigationConfigured && (desiredRootRouteBack || desiredRootRouteForward)) }
     var currentRoute: NativeRoute { .page(preferences.selected, folderId: preferences.selected == .files ? folderId : nil) }
 
-    func setRouteAvailability(back: Bool, forward: Bool) { canGoBack = back; canGoForward = forward }
+    func setRouteAvailability(back: Bool, forward: Bool, rootReady: Bool) {
+        legacyRouteBack = back; legacyRouteForward = forward; localRootRouteReady = rootReady
+    }
+    func configureNativeRouteNavigation(configured: Bool, callbackAvailable: Bool) {
+        if configured { rootRouteNavigationConfigured = true }
+        rootRouteCallbackAvailable = callbackAvailable
+    }
+    func setNativeRouteAvailability(back: Bool, forward: Bool) {
+        desiredRootRouteBack = back; desiredRootRouteForward = forward
+    }
     func supports(_ page: NativePage) -> Bool { NativePage.allCases.contains(page) }
     func applyRoute(page: NativePage, folder: NativeFileEntry?) {
         fieldMode = .search
@@ -2359,6 +2378,36 @@ final class NativePagesController: UIViewController {
     var onOpenDocument: ((NativeFileEntry, Bool) -> Void)? { didSet { updateDocumentTabRouting() } }
     var onCreateNote: (() -> Void)? { didSet { updateDocumentTabRouting() } }
     var onChooseVault: (() -> Void)? { didSet { updateDocumentTabRouting() } }
+    // Root history ownership is also one-way. A cleared callback disables
+    // navigation; it must never revive the retired local history path.
+    private var nativeRouteNavigationConfigured = false
+    var onNativeRouteNavigate: ((Int) -> Void)? {
+        didSet {
+            if onNativeRouteNavigate != nil { nativeRouteNavigationConfigured = true }
+            updateNativeRouteNavigation()
+        }
+    }
+    func setNativeRouteAvailability(back: Bool, forward: Bool) {
+        nativeRouteNavigationConfigured = true
+        updateNativeRouteNavigation()
+        model.setNativeRouteAvailability(back: back, forward: forward)
+    }
+    private func updateNativeRouteNavigation() {
+        model.configureNativeRouteNavigation(configured: nativeRouteNavigationConfigured,
+                                              callbackAvailable: onNativeRouteNavigate != nil)
+    }
+    private func navigateNativeRoute(_ direction: Int) {
+        guard direction == -1 || direction == 1 else { return }
+        guard nativeRouteNavigationConfigured else { coordinator.traverse(direction); return }
+        guard (direction == -1 ? model.canGoBack : model.canGoForward),
+              let navigate = onNativeRouteNavigate, let navigation = navigationController,
+              navigation.topViewController === self, let window = viewIfLoaded?.window,
+              navigation.viewIfLoaded?.window === window, let scene = window.windowScene,
+              scene.activationState == .foregroundActive, UIApplication.shared.applicationState == .active,
+              transitionCoordinator == nil, navigation.transitionCoordinator == nil,
+              presentedViewController == nil, navigation.presentedViewController == nil else { return }
+        navigate(direction) // Root owns the history ticket and all host transitions.
+    }
     var onNativePageRouteValidated: ((NativePageRoute) -> Void)?
     func nativePageRoute() throws -> NativePageRoute { try model.nativePageRoute() }
     func restoreNativePageRoute(_ route: NativePageRoute, completion: @escaping (Result<NativePageRoute, Error>) -> Void) {
@@ -2412,7 +2461,7 @@ final class NativePagesController: UIViewController {
             self?.emitNativePageRouteValidated()
         }
         coordinator.record(model.currentRoute)
-        let pages = NativePagesView(model: model, fileAction: { [weak self] action, entry in self?.fileAction(action, entry: entry) }, retryFileAction: { [weak self] in self?.retryFileAction() }, checkOwnership: { [weak self] in self?.coordinator.recheckOwnership() }, navigate: { [weak self] direction in self?.coordinator.traverse(direction) }, open: { [weak self] entry in
+        let pages = NativePagesView(model: model, fileAction: { [weak self] action, entry in self?.fileAction(action, entry: entry) }, retryFileAction: { [weak self] in self?.retryFileAction() }, checkOwnership: { [weak self] in self?.coordinator.recheckOwnership() }, navigate: { [weak self] direction in self?.navigateNativeRoute(direction) }, open: { [weak self] entry in
             guard let self = self else { return }
             self.requestOpen(entry, inNewTab: false)
         }, showDocumentTabs: { [weak self] in
@@ -2704,7 +2753,9 @@ final class NativePagesController: UIViewController {
     }
     fileprivate func showRouteUnavailable() { model.showRouteUnavailable() }
     fileprivate func resetFolderRoute() { model.applyRoute(page: model.preferences.selected, folder: nil) }
-    fileprivate func setRouteAvailability(back: Bool, forward: Bool) { model.setRouteAvailability(back: back, forward: forward) }
+    fileprivate func setRouteAvailability(back: Bool, forward: Bool, rootReady: Bool) {
+        model.setRouteAvailability(back: back, forward: forward, rootReady: rootReady)
+    }
     fileprivate func setLoading() { model.setLoading() }
     fileprivate func showListing(_ listing: NativeVaultListing) {
         model.showListing(listing)
@@ -2887,7 +2938,7 @@ private struct NativePagesView: View {
 
     private var tabControls: some View {
         HStack(spacing: 8) {
-            if model.isInFolder {
+            if model.showsNativeRouteControls {
                 NativeHistoryControls(backEnabled: model.canGoBack && !model.loading,
                                       forwardEnabled: model.canGoForward && !model.loading,
                                       identifierPrefix: "native.pages", navigate: navigate)
