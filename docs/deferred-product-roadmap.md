@@ -116,6 +116,19 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:46UTC canonical integration: main3322d30b merges exact reviewed1a350fd2
+(a2702e5+aadda867) managed-data feasibility fixture+7docs, byte comparisons pass.
+All12 tests50530 exit0; log /private/tmp/zorid-managed-record-feasibility.log.
+Independent source review approved meaningful negative controls/actualTextReplica
+firewall/provisional contracts. No production records/storage/sync/UI implementation.
+Next NEW crates/zorid-records/** reserved managed lead; root/source manifests and
+existing seams still unassigned. Native compiler priority next, no compiler live.
+NewNote source audit: actual occupied-name create rejects precommit as generic
+invalid_request/false, not typed collision; not_committed isn't durable rejection.
+ExactemptyText create/status replay supported; current recovered file opens by
+stableID/store, not oldfilename. Fresh binding needed after ready loan finishes.
+Audit relayed helper; no unsupported collision phase or automatic new IDs.
+
 00:42UTC resource: managed lead run7a10 granted one exclusive bounded
 managed_record_feasibility fixture run (11+TextReplica firewall case, finalSHA
 forthcoming), official existing Rust1.95 binaries/shared stage4-verified, offline
