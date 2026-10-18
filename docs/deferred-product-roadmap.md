@@ -77,6 +77,22 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Latest coordination checkpoint (2026-10-18 01:21 UTC): managed adapter1597c1ed
+source review passed; actual wire13/13 passed, but focused family tests failed
+2/3 because missing family_materializations was not detected by family_status.
+Batch96924 exited101; managed24/ledger7/immutable6 remain unverified. Managed
+lead retains exclusive bounded diagnosis/fix/retry slot; replacement owner
+term_03e6cf14 owns only family_store.rs in the isolated Store worktree. No main
+adapter integration yet. Native owner queues combined Swift/history checks after
+explicit slot return. Independent reviews approved metadata library94fa86b8 and
+Pages history hooks1915f58f, not their complete runtime wiring. Configured history
+review found temporary transition flags clobber availability and backgrounded
+installed Pages can strand a traversal; native owner fixes both before freezing.
+stage4_native_consumer owns source investigation of minimal New Note terminal
+cancel/rejection; stage4_contract_review audits mobile link tap/caret behavior.
+Phone Dev10 artifact remains ready, but device tunnel unavailable; no physical
+installation proof. Preserve2add header removal while composing Pages patches.
+
 Latest reuse review: the user explicitly requested evaluating Etebase before
 expanding custom sync/E2EE infrastructure. `livesync_audit` owns the source-based
 comparison; `crdt_interop` independently reviews Yrs transport and security
