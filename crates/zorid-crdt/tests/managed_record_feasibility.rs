@@ -1,6 +1,8 @@
 //! Synthetic representation experiments, not a managed-record API or sync engine.
 //! No persistence, encryption, schema migration, permissions, or app integration.
 //! Policy helpers intentionally accept only trusted, bounded fixture operations.
+//! Tags and keys are trusted synthetic identities, not validated host inputs.
+//! Scalar arbitration does not preserve conflict loser history for recovery.
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use yrs::types::ToJson;
@@ -364,4 +366,15 @@ fn dependent_update_survives_pending_snapshot_and_duplicate_delivery() {
     apply(&restored, &first);
     assert!(!restored.transact().has_missing_updates());
     assert_replay(&seed, &[first, second], expected(json!({"title":"second"}), &[], json!({})));
+}
+
+#[test]
+fn structured_snapshot_is_rejected_by_existing_plain_text_boundary() {
+    let structured = replica(11, &seed_fields());
+    let plain = zorid_crdt::TextReplica::new(77);
+    plain.validate_plain_text().unwrap();
+    // Decodable Yrs bytes are not sufficient for admission as plain text.
+    plain.apply(&snapshot(&structured)).unwrap();
+    assert!(!plain.has_missing_updates());
+    assert!(plain.validate_plain_text().is_err());
 }
