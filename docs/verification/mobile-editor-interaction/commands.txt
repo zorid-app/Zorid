@@ -1,0 +1,13 @@
+Source freeze: 047d568740b80d1948344e84c9f6d8d7f37daad1
+Independent review: msg_4041e3080220
+
+node --test --test-concurrency=1 tests/editor-integration.test.ts tests/editor-transfers.test.ts tests/table-context-handoff.test.ts tests/native-editor-commands.test.ts tests/context-menu.test.ts
+Actual execution session 66944: observed terminal exit_code 0.
+91 tests, 91 pass, 0 fail. Output retained in focused-tests.log.
+
+node --max-old-space-size=768 node_modules/typescript/bin/tsc --noEmit
+Requested by root in msg_12f089e8a6a4.
+Actual execution session 1286: observed terminal exit_code 0 through write_stdin.
+Output empty (tsc.log). Result is not inferred from process absence.
+
+No build, native runtime, Rust, Xcode, simulator or full test suite run.

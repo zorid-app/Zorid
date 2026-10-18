@@ -82,7 +82,9 @@ node --test --test-concurrency=1 tests/editor-integration.test.ts tests/editor-t
 ```
 
 Observed **91 passed, 0 failed**, exit 0, bounded concurrency 1. Log:
-`/tmp/mobile-editor-interaction-tests.log`. `git diff --check` passed.
+`/tmp/mobile-editor-interaction-tests.log`. Persistent copy and source/output hashes:
+[verification evidence](verification/mobile-editor-interaction/commands.txt),
+[SHA256SUMS](verification/mobile-editor-interaction/SHA256SUMS). `git diff --check` passed.
 Root explicitly requested one final TypeScript source check in
 `msg_12f089e8a6a4`:
 
@@ -90,7 +92,9 @@ Root explicitly requested one final TypeScript source check in
 node --max-old-space-size=768 node_modules/typescript/bin/tsc --noEmit
 ```
 
-Observed exit **0**, empty `/tmp/mobile-editor-interaction-tsc.log`.
+Observed terminal exit **0** (session `1286`), empty `/tmp/mobile-editor-interaction-tsc.log`;
+persistent copy in `verification/mobile-editor-interaction/tsc.log`. This exit was
+observed from the terminal result, not inferred from process absence.
 
 Independent reviewer `term_a0c7b316-8546-4777-95a2-fe08cb519356`, isolated
 `mobile-interaction-review`, approved exact source `047d5687` cumulatively against
