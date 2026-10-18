@@ -116,6 +116,23 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+Import verification00:00UTC: root5fc59cae compiled officialRust1.95 locked/offline.
+Host49920 terminal101,9/10 pass: known-name binary collision test returned
+import_storage/commit_uncertain at staged_import_step;861 investigating source.
+ABI63416 terminal0,5/5 pass (FD ownership, strict errors, leases and panic fencing).
+Logs tmp/native-import-{host,abi}-test.log. No import/main or native UI acceptance.
+Root returned heavy slot for native owner's bounded tab-model Foundation harness;
+targeted host correction rerun follows only after explicit slot return.
+
+Native menu authority implementation assigned stage4_base_reuse in isolated
+tingkai-c/native-menu-authority, proposal /private/tmp/native-menu-authority-proposal.md:
+optional exact destination-parent witness in whole FamilyCommand, atomic Store/
+native apply and compact original operation status. No schema/core Mutation or
+host/mobile/Swift changes by that worker;861 retains Duplicatehost/FFI, rootowns
+later hostwire. stage4_markdown_contracts independently reviews. Taskmodel held.
+Native9 confirmed source batch composed source-identical3288 in isolated
+tingkai-c/native9-integration HEADe2d8d2fc; source review/typecheck pending, notmain.
+
 Resource update23:56UTC: native owner returned exclusive heavy slot. Frozen3288c1bb
 Simulator9 passes actual final Remove-disabled check; signed phoneDev9 build63961
 and install75081 exit0, strict signature/version checks pass. Launch failed only
