@@ -1,5 +1,17 @@
 # User findings queue
 
+## S1 baseline: imported binary coverage classification — open 2026-10-18
+
+The first real 100-note CLI smoke also imports one PNG through public legacy
+`init`/`rescan`. Its persisted index row is `Unreadable`: invalid UTF-8 is rejected
+before binary exclusion classification. All 100 Markdown notes' expected literal
+hits/ranges pass, but generation `coverageComplete=false` remains truthful in
+`/private/tmp/zorid-s1-cli-smoke-c91106b2/report.json`. Do not omit the attachment
+or relabel coverage to make the baseline pass. Record this profile separately from
+normal desktop local-family admission; check the latter before choosing a fix.
+Owner: S1.0 baseline investigation, then scoped shared classification correction
+with source-mode/invalid-text cases if confirmed relevant. No production fix yet.
+
 ## Test scope and later E2EE group design — accepted 2026-10-18
 
 User limits current runtime test targets to macOS and web; the independent CLI is
