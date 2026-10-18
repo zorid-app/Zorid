@@ -35,7 +35,7 @@ export async function createNativeWebRoutingChannel(plugin:NativeWebRoutingPlugi
   let repumpResults=false;
   let latestProgress:Readonly<WebRouteProgress>|undefined,frame:unknown;
   const calls=new Set<Promise<void>>();
-  const admittedCommands=new Map<string,{fingerprint:string;finished:boolean;collision?:Promise<void>}>();
+  const admittedCommands=new Map<string,string>();
   const active=()=>!stopped&&isCurrent();
   const track=(task:Promise<void>)=>{calls.add(task);void task.finally(()=>calls.delete(task)).catch(()=>{});};
   const pumpResults=():Promise<void>=>{
@@ -58,31 +58,22 @@ export async function createNativeWebRoutingChannel(plugin:NativeWebRoutingPlugi
     const owner=handler,epoch=generation;if(!active()||!owner)return;
     const key=`${captured.webSessionId}/${captured.id}`;
     const fingerprint=JSON.stringify(captured),prior=admittedCommands.get(key);
-    if(prior){
-      if(prior.fingerprint===fingerprint)return;
-      // Same protocol policy as router replay collisions: explicitly stale,
-      // without replacing or invoking the original command. One rejection task
-      // per admitted ID bounds collision floods as well as ordinary admissions.
-      if(!prior.collision){
-        const task=publication.then(async()=>{
-          if(active()&&epoch===generation&&session===captured.webSessionId)await plugin.webRouteResult({id:captured.id,webSessionId:captured.webSessionId,status:'stale',version:String(wantedVersion)});
-        });
-        prior.collision=task;track(task);
-        void task.finally(()=>{if(prior.finished&&admittedCommands.get(key)===prior)admittedCommands.delete(key);}).catch(()=>{});
-      }
-      return;
+    if(prior!==undefined){
+      // Reject conflicting admission without a receipt: results carry only ID,
+      // so a collision receipt could settle the still-running original.
+      if(prior!==fingerprint)return;
+      return; // Only an exact payload is a coalesced retry of the original.
     }
     // Backpressure is admission-only: overflow has no route side effect and no
     // synthetic receipt. Native retains the command ID for an exact retry.
     // Duplicates of an admitted command must not invoke its handler twice.
     if(admittedCommands.size>=128)return;
-    const row={fingerprint,finished:false,collision:undefined as Promise<void>|undefined};
-    admittedCommands.set(key,row);
+    admittedCommands.set(key,fingerprint);
     // The router owns its transaction queue; wrapping it in the storage or
     // publication queue would deadlock begin/end or source-flush admission.
     track(Promise.resolve().then(async()=>{
       try{if(active()&&epoch===generation&&handler===owner)await owner(captured);}
-      finally{row.finished=true;if(!row.collision)admittedCommands.delete(key);else void row.collision.finally(()=>{if(admittedCommands.get(key)===row)admittedCommands.delete(key);}).catch(()=>{});}
+      finally{admittedCommands.delete(key);}
     }));
   };
   const progress=(input:unknown)=>{

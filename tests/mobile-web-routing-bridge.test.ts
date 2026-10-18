@@ -93,7 +93,7 @@ test('command flood is bounded before handler scheduling and overflow retries wi
   f.emit('webRouteCommand',commands[128]);await until(()=>seen.length===129);
   assert.equal(seen[128],commands[128].id);await f.channel.close();
 });
-test('changed payload under an admitted command ID is explicitly stale and cannot replace the original',async()=>{
+test('changed payload under an admitted command ID is denied without settling or replacing the original',async()=>{
   const f=await fixture(),pending=gate(),seen:string[]=[];await f.channel.service.publish(f.state());
   f.channel.service.subscribe(async command=>{
     seen.push(command.action.type);await pending.promise;
@@ -102,8 +102,8 @@ test('changed payload under an admitted command ID is explicitly stale and canno
   const original={id:crypto.randomUUID(),webSessionId:f.webSessionId,expectedVersion:'1',action:{type:'newTab'}};
   f.emit('webRouteCommand',original);await until(()=>seen.length===1);
   for(let n=0;n<1024;n++)f.emit('webRouteCommand',{...original,action:{type:'createNote'}});
-  f.emit('webRouteCommand',{...original});await until(()=>f.results.length===1);
-  assert.deepEqual(seen,['newTab']);assert.deepEqual(f.results.map(row=>row.status),['stale']);
-  pending.resolve();await until(()=>f.results.length===2);
-  assert.deepEqual(f.results.map(row=>row.status),['stale','applied']);assert.deepEqual(seen,['newTab']);await f.channel.close();
+  f.emit('webRouteCommand',{...original});await new Promise<void>(yes=>setImmediate(yes));
+  assert.deepEqual(seen,['newTab']);assert.equal(f.results.length,0);
+  pending.resolve();await until(()=>f.results.length===1);
+  assert.deepEqual(f.results.map(row=>row.status),['applied']);assert.deepEqual(seen,['newTab']);await f.channel.close();
 });
