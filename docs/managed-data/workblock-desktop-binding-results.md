@@ -3,7 +3,8 @@
 Owner: worker `term_dcd608f8-cbcf-41d1-930b-c098d80659ac`, task
 `task_ed5557a983cd`, dispatch `ctx_98a6a0e68ddb`, isolated branch/worktree
 `tingkai-c/managed-workblock-desktop-binding` / `managed-workblock-desktop-binding`.
-Base `7d375ab4`; implementation and focused tests `248e097ffa2c770cf1c2c4d4b92749a3d1aa53b8`.
+Base `7d375ab4`; initial implementation/tests `248e097ffa2c770cf1c2c4d4b92749a3d1aa53b8`,
+renderer capture correction `313e9964` (final source freeze).
 Main integration stays with the shared-core/root coordinator.
 
 ## Ownership and contract
@@ -72,13 +73,13 @@ performed by this worker. Local checks used the existing primary checkout's
 installed node_modules via a temporary worktree symlink, removed after checking.
 
 1. `node --test --test-concurrency=1 tests/desktop-workblocks.test.cjs tests/desktop-workblocks.test.ts`:
-   **15 passed** (9 Node boundary/admission and 6 TS renderer/platform cases).
+   **16 passed** (9 Node boundary/admission and 7 TS renderer/platform cases).
 2. Bounded adjacent regression command, adding
    `tests/desktop-client-admission.test.cjs`,
    `tests/platform-desktop-durable.test.ts`,
    `tests/desktop-document-semantics.test.cjs`,
    `tests/desktop-document-semantics.test.ts`, and
-   `tests/desktop-main.test.cjs`: **41 passed**, including the 15 above.
+   `tests/desktop-main.test.cjs`: **42 passed**, including the 16 above.
 3. `./node_modules/.bin/tsc --noEmit`: **passed**, full configured frontend types.
 4. `git diff --check`: **passed**.
 
@@ -103,7 +104,10 @@ retry, concurrent deduplication, pending capacity and sanitized lost IPC.
 
 Independent reviewer U (`ctx_420ce8258f13`) identified the original descriptor
 capture TOCTOU and observable window consistency gaps. Both were corrected with
-regressions before implementation commit `248e097f`; exact committed source
+regressions before implementation commit `248e097f`. U then found the renderer
+spread still evaluated input getters before capture, allowing a getter-triggered
+release before pending tracking; `313e9964` adds descriptor-only capture before
+command construction and a no-getter/no-dispatch regression. Exact final source
 review has been requested. Review report lives separately at
 `/tmp/zorid-workblock-binding-review.md` pending U's final result.
 
