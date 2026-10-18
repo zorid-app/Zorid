@@ -30,6 +30,7 @@ pub use operation_request::{
     StoredOperation,
 };
 pub use zorid_file_sync::{Manifest as BinaryContentManifest, Sha256Digest};
+pub use zorid_file_sync::mutation::{DestinationParent, FamilyCommand};
 mod blob_index;
 mod blob_stage;
 mod checkpoints;

@@ -30,7 +30,7 @@ pub use zorid_store::{
     FamilyStatus, FamilyCommandKind, FamilyCommandProjection, FamilyCommandStatus,
     MAX_FAMILY_COMMAND_STATUS_BYTES,
 };
-pub use zorid_file_sync::mutation::{DestinationParent, FamilyCommand};
+pub use zorid_store::{DestinationParent, FamilyCommand};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FamilyReceiveOutcome {
     pub commit: FamilyReceiveCommit,
