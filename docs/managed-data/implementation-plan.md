@@ -258,8 +258,7 @@ Use as many agents as genuinely independent work permits. Do not maximize worker
 8. Device authorization and browser secret policy; cross-device secret sharing is not approved implicitly.
 9. Native calendar component selection, iPhone/iPad modes and Android follow-up.
 10. Time tracking allocation across multi-task blocks and interrupted timers.
-11. Flashcard source format, algorithm and concurrent-review semantics.
-12. Permission/runtime model for untrusted plugins, stable publisher identity and update grants.
+11. Permission/runtime model for untrusted plugins, stable publisher identity and update grants.
 
 ## Reuse evaluation and sources
 
