@@ -116,6 +116,18 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+01:04UTC: native Dev10 exactcommand/private signingcontract use ACKed underuser
+phoneinstall extension; no provisioning/accountchanges, afterfocusedSimpass.
+ActualSimnoteopenPASS, tabclose/Home checks71219 pending; native stillowns slot.
+History77018b63 source-ready, rootreviewassigned. Importrouter cancellationreceipt
+refinement ACKed scopedowners; path-only selectedfolder has realreplacementrace.
+Beforefolderimportexposure use explicitroot-only initialdestination OR propose
+minimal core parentID/revision atomicbinding; UIrelisting isn't atomicproof.
+No newRustimplementationgrant yet. Managed durable-adapter-contract readinfull,
+independentrootcontractreviewassigned; existingStore/family edits conditional on
+namedworker+review, newunregisteredmodules sourceallowed. Native frozencheckout
+isolatedfrommanagedbranch; rootnoheavychecks duringSim/phone verification.
+
 01:03UTC direct user phone request reported by nativeowner: installupdatedDevapp.
 Exclusive native slot EXTENDED afterfocusedSimulatorpass for same reviewed
 fb1c04d7 signeddevelopment build/install/launch app.zorid.notes.dev, existing
