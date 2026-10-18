@@ -77,6 +77,18 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Actual UI checkpoint (2026-10-18 01:39 UTC): Simulator11 confirmed native Files,
+folder/nested note, header removal, durable tab metadata save and editor Back
+availability. Back restores the exact folder but Forward stays disabled: root
+fresh restoration runs before Pages listing/menu loan becomes idle; no later
+readiness notification resumes the retained traversal. Native owner owns narrow
+Pages readiness property/deferred existing callback plus root guard, with focused
+2f review and rebuild/reverification authorized under retained iOS slot. Preserve
+this correction when composing371 edge gesture hooks. No typed-edit/no-loss or
+complete history UX claim follows from this partial pass. Link89be64c8 passed
+independent source review plus owner86 focused checks/scoped TS; matching actual
+WK tap/caret/gesture verification remains required before mobile completion.
+
 Progress checkpoint (2026-10-18 01:36 UTC): native Simulator11 full build95537
 passed on c8fd423c (runtime bytes equal reviewed588bc), app UI verification is
 active under native owner; no final UIKit/metadata failure-retry proof yet.
