@@ -1673,3 +1673,38 @@ that one additional guard and no other delta.
 No Xcode compile, A/B vault switch/restart or corrupt-vault UI proof yet for this
 batch. NewNote caller handoff/ACK and strict8 gesture consumer remain queued;
 this batch does not expose or acknowledge NewNote. No warm WebView/pool change.
+
+
+
+Bounded actual16 per-vault tab isolation/restart — 2026-10-18:
+Fresh A CC60CCCC-6DA3-4022-85E9-7A00C42562F2 persisted two Home tab IDs
+75bbf60e-2149-46ed-8177-f8c6b1571662 and e02ce808-4b69-4dcd-bc6c-3bd7e1b0a670,
+selected e02ce808. Actual native Home > Choose file returned same A Files.
+Native Settings > Choose vault closed its Pages source. Picker bar bug required
+explicit unchanged16 process restart48030 solely to expose Create again.
+Fresh B FCF63970-E8E3-47B9-BF39-23D302584E0C opened Files; actual37027 confirms
+its initial overview had one NEW Home ID disjoint from A before adding B's
+second Home tab. B real scoped metadata file persisted two IDs disjoint from A,
+mode0600. Native B Home > Files > Settings > Choose vault94588 exited0.
+Actual B > A5633 then86568 exited0: overview restores EXACT original two A IDs.
+Restart99513 exited0; actual B reopen5094 then33912 exited0: B overview restores
+EXACT original B IDs, no A IDs; both real v2 JSON files retain original selected
+IDs and contents, mode0600. Evidence restart-isolation-pass.json and all AX in
+/private/tmp/zorid-vault16-evidence. No fixture bytes/metadata manually modified.
+
+This proves the bounded fresh-vault Home-tab identity/scope switch/restart gate,
+not file-tab bodies, route swipes, keyboard, old-fixture compatibility or latest
+new-tab Home presentation. Old vault failure and hidden-picker-bar screenshot
+remain retained. Build16 predates header92ce and picker9320; source fixes still
+need next combined compile/runtime. Physical phone remains Dev15. Cleanup19165
+closes owned app/helper, leaves Simulator booted; terminal receipt sent separately.
+
+User's latest new-tab clarification: new tab must show the SAME native current-
+vault Recents/Files landing page as initial vault entry; no blank Choose file
+screen and no vault chooser. Tabs are nested inside a vault. This supersedes
+current Home controller presentation; existing build16 blank Home behavior is
+not accepted as the desired UX despite passing metadata scope checks. Native
+owner owns current-vault Home factory/root activation follow-up. Per-tab route
+registry source is separate, not yet composed/delivered. Warm-page comparison
+now prioritizes one retained current-vault Workspace/host over per-nav fresh
+initialization; ready adjacent pages do not mandate a fixed WebView count.

@@ -446,3 +446,10 @@ no old-global fallback, prior context must fully drain before switching. Same
 vault reuses its coordinator; Home Choose file stays in that vault. Source
 review and syntax checks pass, including final deferred-alert guard ACK4127.
 Actual A/B switch/restart isolation remains unverified; not installed on phone.
+
+
+New-tab clarification: tabs belong inside the current vault. New Home must show
+its native Recents/Files landing page like first entry, not blank Choose file or
+vault selection. Factory/root activation follow-up remains open. Actual16 fresh
+A/B Home-tab scope/IDs +B process restart pass, with separate unchanged0600 files;
+that identity proof does NOT establish this newly requested Home presentation.

@@ -77,6 +77,16 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Native isolation delivery (2026-10-18 03:15 UTC): main35f38950 integrates coherent
+per-vault model/store/picker/factory batch d7265e54. All four Swift files match
+built/tested51fad6d8 exactly. Combined16 build passed; actual fresh-vault A/B
+Home-tab IDs remained disjoint, original IDs restored on switches and B process
+restart, separate metadata stayed unchanged and0600. Runtime evidence is in
+native-mobile-integration.md. Picker hidden-bar required an explicit unchanged-
+artifact restart workaround; its fix and new current-vault Home presentation
+are not proved here. File-body tabs/swipes/keyboard remain outside this pass.
+Owned Simulator app/helper closed; iOS slot returned, phone remains Dev15.
+
 Canonical delivery checkpoint (2026-10-18 03:13 UTC): Task query binding and
 retained Type sources are integrated at f62fa48a/9ed74f18. Desktop Calendar is
 integrated as seven scoped commits 43093c57..3e4c3ae9; all22 changed source,
