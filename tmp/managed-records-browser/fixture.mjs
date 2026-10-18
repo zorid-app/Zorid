@@ -28,13 +28,14 @@ const identity = policy => ({realm:scope.realm_id, vault:scope.vault_id, owner:'
   schema:{collection:policy.toLowerCase(), version:1, policy, fields:{
     max:{kind:'Integer',required:false,nullable:false,default:null},
     min:{kind:'Integer',required:false,nullable:false,default:null},
+    precise:{kind:'Number',required:false,nullable:false,default:null},
     title:{kind:'String',required:false,nullable:true,default:null}}}});
 const recordScope = (policy='Synced', record='record', generation='extrema') => ({
   realm:scope.realm_id,vault:scope.vault_id,owner:'synthetic-fixture',collection:policy.toLowerCase(),record,generation,restores:null});
 const collectionKey = r => ({realmId:r.realm,vaultId:r.vault,owner:r.owner,collection:r.schema.collection});
 const command = (kind,title) => enc(JSON.stringify({command:kind,actions:[{action:'Write',field:'title',cell:{state:'Value',value:{type:'String',value:title}}}]}));
 // Decimal literals are authored directly as UTF-8. Never round-trip an i64 through a JS Number.
-const extrema = enc('{"command":"Create","actions":[{"action":"Write","field":"max","cell":{"state":"Value","value":{"type":"Integer","value":9223372036854775807}}},{"action":"Write","field":"min","cell":{"state":"Value","value":{"type":"Integer","value":-9223372036854775808}}}]}');
+const extrema = enc('{"command":"Create","actions":[{"action":"Write","field":"max","cell":{"state":"Value","value":{"type":"Integer","value":9223372036854775807}}},{"action":"Write","field":"min","cell":{"state":"Value","value":{"type":"Integer","value":-9223372036854775808}}},{"action":"Write","field":"precise","cell":{"state":"Value","value":{"type":"Number","value":51.248178375505404}}}]}');
 const revision = snapshot => {
   const meta = JSON.parse(snapshot.metadata); // Bounded digest metadata only; state/projection stay raw bytes.
   assert(Array.isArray(meta.revision) && meta.revision.length === 32, 'Missing Rust snapshot digest');
@@ -97,10 +98,12 @@ async function group(name, action) {
 }
 let wasm,key;
 async function open(name, clientId=crypto.randomUUID()) {
-  const result=await openAuthority({name,wasm,clientId,assertActive(){}});handles.add(result);
+  let active=true;
+  const result=await openAuthority({name,wasm,clientId,key,assertActive(){assert(active,'Fixture handle closed');}});
+  result.revoke=()=>{active=false;};handles.add(result);
   return {...result,name,clientId};
 }
-function close(handle) { handle.vault.close();for(const h of handles)if(h.vault===handle.vault)handles.delete(h); }
+function close(handle) { handle.revoke();handle.vault.close();for(const h of handles)if(h.vault===handle.vault)handles.delete(h); }
 async function fresh(label) {
   const name=prefix+label+'-'+crypto.randomUUID();names.add(name);
   const h=await open(name);await h.vault.sync.enroll({...scope,key_epoch:1});return h;
@@ -123,15 +126,16 @@ async function status(h,id) {
 async function main() {
   report.provenance=await fetch('/__managed_fixture_provenance').then(r=>{assert(r.ok,'Runner provenance required');return r.json();});
   const moduleUrl='/target/browser-wasm/generated/zorid_wasm.js';wasm=await import(/* @vite-ignore */ moduleUrl);await wasm.default();
-  for(const name of ['prepareRecordsLocal','recordsSnapshot','validateRecordsRegistration','canonicalRecordsLocalRequest','finalizeRecordsLocalResult'])
+  for(const name of ['prepareRecordsLocal','recordsSnapshot','validateRecordsRegistration','canonicalRecordsLocalRequest','finalizeRecordsLocalResult','recordsRetryEligible','recordsLocalReadSet','recordsStoredReadSet','validateRecordsAccepted','validateRecordsStoredOperation','validateRecordsStoredReplay','validateRecordsStoredBinding'])
     assert(typeof wasm[name]==='function',`SOURCE_GATE missing rebuilt WASM export ${name}`);
   key=new wasm.WasmVaultKey(new Uint8Array(32).fill(37));
   const a=await fresh('author'),b=await fresh('receiver'),rs=recordScope();let ta=await register(a),tb=await register(b);
-  await group('local i64 extrema survive exact raw state/projection and reopen',async()=>{
+  await group('local i64 extrema and precise f64 survive exact raw state/projection and reopen',async()=>{
     const result=await apply(a,ta,rs,'extrema',extrema);assert(result.localDurable&&!result.replay,'No durable local result');
     const before=await snap(a,ta,rs);
     for(const bytes of [before.state,before.projection]){
       const text=dec(bytes);assert(text.includes('9223372036854775807')&&text.includes('-9223372036854775808'),'Rounded i64 in durable bytes');
+      assert(text.includes('51.248178375505404'),'Changed f64 in durable bytes');
     }
     close(a);Object.assign(a,await open(a.name,a.clientId));ta=await register(a);
     const after=await snap(a,ta,rs);exact(after,before,'Raw snapshot changed on reopen');
@@ -169,13 +173,23 @@ async function main() {
     for(const row of pending){const id=row.metadata.key.update_id,wire=await a.vault.sync.seal(id,key),next={...cursor,after:String(BigInt(cursor.after)+1n)};
       await b.vault.sync.receive(id,wire,key,{expected:cursor,next});cursor=next;
       exact((await b.vault.sync.inspect()).cursor,cursor,'Mixed cursor failed');await a.vault.sync.acknowledge(id,wire);
-      evidence.push({id,family:row.metadata.family,wireBytes:wire.length,after:cursor.after});
+      const trace={id,family:row.metadata.family,wireBytes:wire.length,after:cursor.after};
+      if(row.metadata.family==='records'){
+        trace.rawPlaintext=dec(key.open(JSON.stringify({...scope,update_id:id,key_epoch:1}),wire));
+        if(id===pending.find(item=>item.metadata.family==='records')?.metadata.key.update_id){
+          for(const literal of ['9223372036854775807','-9223372036854775808','51.248178375505404'])
+            assert(trace.rawPlaintext.includes(literal),'Numeric literal changed in authenticated wire: '+literal);
+        }
+      }
+      evidence.push(trace);
     }
     exact(await b.vault.sync.pending(100),[],'Received updates echoed');
     exact((await snap(b,tb,rs)).state,(await snap(a,ta,rs)).state,'Records diverged');
+    assert(dec((await snap(b,tb,rs)).projection).includes('51.248178375505404'),'Received f64 projection changed');
     exact(dec((await b.vault.readEntryById('note')).bytes),'actual encrypted text 😀','Encrypted text bytes');
     close(b);Object.assign(b,await open(b.name,b.clientId));tb=await register(b);
-    exact((await b.vault.sync.inspect()).cursor,cursor,'Reopen lost mixed cursor');return evidence;
+    exact((await b.vault.sync.inspect()).cursor,cursor,'Reopen lost mixed cursor');
+    assert(dec((await snap(b,tb,rs)).projection).includes('51.248178375505404'),'Received f64 lost on reopen');return evidence;
   });
   await group('tamper, wrong scope, unknown format and cursor gap leave every store unchanged',async()=>{
     const pendingScope=recordScope('Synced','rejected','rejected-create');

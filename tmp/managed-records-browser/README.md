@@ -1,27 +1,18 @@
-# Actual managed-records browser fixture — preparation checkpoint
+# Actual managed-records browser fixture
 
-Owner: dispatched worker task `task_0b9198518388`, dispatch `ctx_35d2ff3330d5`,
-terminal `term_e6ead54a-6d0c-4b5e-aed0-24aad67a2764`.
-Location: `tingkai-c/managed-records-integration`, preparation base `87c85651`.
-Dependencies: A `ctx_a38e351b645a` Rust/WASM, B `ctx_6eb7e997f771` adapter/opener;
-coordinator owns source assembly, freeze, rebuild and subsequent runtime authorization.
-All files here are NEW and only this directory was written. No main mutation,
-product/root manifest/lock/B-test edits, WASM build, server or browser launch occurred.
-`tmp/` is repository-ignored: coordinator must explicitly preserve these files
-(for example, `git add -f tmp/managed-records-browser/{README.md,index.html,opener.mjs,fixture.mjs,run.mjs}`).
-No harness commit was made in the coordinator-owned integration checkout.
-
-## Verification actually performed
-
-Only `node --check` for `run.mjs`, `fixture.mjs`, and `opener.mjs`: all exit 0.
-This is syntax evidence, not TypeScript linkage, browser storage, WASM or feature
-acceptance. Every listed runtime assertion is PREPARED AND UNEXECUTED.
-Current generated WASM predates the feature and is not accepted evidence.
+Owner: task `task_eadeb14c7e04`, dispatch `ctx_beb32c3918c8`, terminal
+`term_a9b70f4e-5734-4bd7-9b54-4427df3a6697`; owned scope is this harness and
+new output proof files only. Integration branch `tingkai-c/managed-records-integration`.
+Coordinator assembled A Rust/WASM and B TypeScript at `13f8e10c588ba02133019cb4a4a410e994401785`
+and authorized committing these harness adaptations before taking the run freeze.
+Actual browser results belong to separate timestamped raw reports; prepared assertions
+below are not runtime evidence. Syntax checks of all three `.mjs` files pass.
+`tmp/` is ignored; preserve only intended harness files using explicit `git add -f`.
 
 ## Later execution after coordinator source freeze
 
 First assemble/review A+B and freeze the integration tree. After coordinating
-heavy compiler load, coordinator rebuilds the real pair using existing tooling:
+heavy compiler load, coordinator rebuilds the real pair using existing tooling (this worker never builds):
 
 ```sh
 node scripts/build-core-wasm.cjs
@@ -67,8 +58,11 @@ The fixture imports the real `src/core/browser-streaming-vault.ts` opener throug
 assembled freeze; if it changes, adapt ONLY `opener.mjs`/fixture call sites, never
 insert a semantic/storage/authentication stand-in.
 
-- `openBrowserStreamingVault({name,wasm,clientId,assertActive})` creates the current
+- `openBrowserStreamingVault({name,wasm,clientId,assertActive,managedRecordsSession})` creates the current
   fresh schema with managed stores and returns `managedRecords`.
+- `managedRecordsSession()` returns the fixture-owned real `WasmVaultKey`, a stable
+  per-open `sessionToken` object, and a lifetime-bound `assertActive`; each reopen
+  creates a fresh token. This is trusted fixture host wiring, not product enrollment.
 - The private trusted `managedRecords.register(collectionKey, registrationBytes)`
   returns a closure-owned token; `apply(token,{scope,operation,expectedRevision,
   command})` returns `{result:Uint8Array,replay,localDurable}`.
@@ -79,7 +73,8 @@ insert a semantic/storage/authentication stand-in.
   B's current common-ledger retained-key behavior must survive reopen; fixture
   will expose a failure if registration/retry cannot acquire that key.
 - Current real WASM exports include the frozen records functions plus
-  `recordsRetryEligible`, `RecordsPlan.payloadMetadataJson`, and authenticated
+  `recordsRetryEligible`, `recordsLocalReadSet`, `recordsStoredReadSet`, all three
+  stored evidence validators, `RecordsPlan.payloadMetadataJson`, and authenticated
   `WasmSyncUpdate.recordsReadSetJson/prepareRecords` (later A/B corrections).
 - Registration field/object order and operation payload fields match existing
   Rust serde documents. Synthetic JSON bytes only author inputs; Rust validates
@@ -94,8 +89,11 @@ fencing requires a separate worker lifecycle pass.
 
 ## Prepared assertions (not yet runtime evidence)
 
-1. Local Synced creation with i64 MAX/MIN literals authored directly into raw UTF-8;
-   exact state/projection and both decimal extrema survive close/reopen.
+1. Local Synced creation with i64 MAX/MIN and Number `51.248178375505404` literals
+   authored directly into raw UTF-8; exact state/projection survive close/reopen.
+   The mixed stream records authenticated decrypted raw wire plaintext, checks all
+   three literals, and checks the received f64 projection before and after reopen.
+   Domain request/state/projection/wire plaintext never pass through JSON.parse.
 2. Lost-response simulation: retain original test receipt but discard it from the
    simulated caller, mutate later, close/reopen and retry the original stale request.
    Assert exact original result bytes, replay marker and byte-identical all-store

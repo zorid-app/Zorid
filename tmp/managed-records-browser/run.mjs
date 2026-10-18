@@ -37,7 +37,7 @@ async function artifactProof(){
     files[name]=sha(await readFile(path.join(generated,name)));if(files[name]!==metadata.files[name])throw new Error('WASM asset hash mismatch: '+name);
   }
   const glue=await readFile(path.join(generated,'zorid_wasm.js'),'utf8');
-  for(const name of ['prepareRecordsLocal','recordsSnapshot','validateRecordsRegistration','canonicalRecordsLocalRequest','finalizeRecordsLocalResult','recordsRetryEligible','recordsReadSetJson','prepareRecords'])
+  for(const name of ['prepareRecordsLocal','recordsSnapshot','validateRecordsRegistration','canonicalRecordsLocalRequest','finalizeRecordsLocalResult','recordsRetryEligible','recordsLocalReadSet','recordsStoredReadSet','validateRecordsAccepted','validateRecordsStoredOperation','validateRecordsStoredReplay','validateRecordsStoredBinding','recordsReadSetJson','prepareRecords'])
     if(!glue.includes(name))throw new Error('Current generated bindings missing '+name);
   return {head:expectedHead,fingerprint:metadata.fingerprint,files,sourceDigest:await sourceDigest()};
 }
