@@ -1,0 +1,245 @@
+{
+  "started": "2026-10-18T03:02:43.070Z",
+  "target": "/Users/ctk/orca/workspaces/Zorid/managed-desktop-integration",
+  "output": "/var/folders/yc/__symlbx5zxd7v1vhwh84z180000gn/T/zorid-calendar-proof-lFPpAm",
+  "provenance": {
+    "commit": "86a1c1a92808048e69f32c42460f6b3d95ca3e95",
+    "source": "37fa7947bb23cc335e6faa44c6481152ac733f7943724439ad6cf4618b4a8e8e",
+    "desktop": "27dc5c5967ab8bbeb629f6204769973808f079517118d7dfcf4f9c3c21ea9e6b",
+    "dist": "865a83e0e8b843726450167bc564ac3af2f97ed7ad891335cd9a5280dc40b718",
+    "native": "62c6fc58b742a23c52b75919a9d8ef94474f81232a51b2ce3775a9d6957ba405",
+    "harness": "31a2e8ce0d6990d97217078233d4c59bc4863a114e0f9bd1e9f2c633de4baa65",
+    "package": "76ae369a62766d91a124ac70d6b3d93a7a0859db9d69305b6403af6c89f5569a",
+    "lock": "6d97823375a0130ffaf1b7fbf86544a53ef740a298cf7e57945fa169626def7a"
+  },
+  "phases": [
+    {
+      "phase": "author",
+      "started": "2026-10-18T03:02:44.553Z",
+      "steps": [
+        {
+          "name": "normal-workspace-opened",
+          "at": "2026-10-18T03:02:50.105Z"
+        },
+        {
+          "name": "create-acknowledged",
+          "at": "2026-10-18T03:02:51.352Z"
+        },
+        {
+          "name": "title-acknowledged",
+          "at": "2026-10-18T03:02:51.641Z"
+        },
+        {
+          "name": "atomic-range-acknowledged",
+          "at": "2026-10-18T03:02:52.008Z"
+        },
+        {
+          "name": "actual-move-cancel",
+          "at": "2026-10-18T03:02:52.463Z",
+          "proposed": {
+            "Title": "Calendar proof edited",
+            "Start": "2026-10-17T12:30",
+            "End": "2026-10-17T14:00",
+            "Time zone": "America/Toronto"
+          }
+        },
+        {
+          "name": "actual-resize-cancel",
+          "at": "2026-10-18T03:02:52.911Z",
+          "proposed": {
+            "Title": "Calendar proof edited",
+            "Start": "2026-10-17T12:00",
+            "End": "2026-10-17T14:30",
+            "Time zone": "America/Toronto"
+          }
+        },
+        {
+          "name": "gesture-cancellation-preserves-time",
+          "at": "2026-10-18T03:02:53.010Z",
+          "final": {
+            "Title": "Calendar proof edited",
+            "Start": "2026-10-17T12:00",
+            "End": "2026-10-17T13:30",
+            "Time zone": "America/Toronto"
+          }
+        },
+        {
+          "name": "view-dayGridMonth",
+          "at": "2026-10-18T03:02:53.277Z"
+        },
+        {
+          "name": "view-timeGridWeek",
+          "at": "2026-10-18T03:02:53.525Z"
+        },
+        {
+          "name": "view-timeGridDay",
+          "at": "2026-10-18T03:02:53.767Z"
+        },
+        {
+          "name": "view-listWeek",
+          "at": "2026-10-18T03:02:54.048Z"
+        },
+        {
+          "name": "normal-split-calendar",
+          "at": "2026-10-18T03:03:02.135Z"
+        }
+      ],
+      "screenshots": [
+        "/private/var/folders/yc/__symlbx5zxd7v1vhwh84z180000gn/T/zorid-calendar-proof-lFPpAm/author-light-list.png",
+        "/private/var/folders/yc/__symlbx5zxd7v1vhwh84z180000gn/T/zorid-calendar-proof-lFPpAm/author-dark-month.png",
+        "/private/var/folders/yc/__symlbx5zxd7v1vhwh84z180000gn/T/zorid-calendar-proof-lFPpAm/author-dark-narrow-split.png"
+      ],
+      "passed": true,
+      "versions": {
+        "node": "24.22.0",
+        "acorn": "8.18.0",
+        "ada": "4.0.0",
+        "amaro": "1.1.11",
+        "ares": "1.34.8",
+        "brotli": "1.2.0",
+        "cldr": "48.0",
+        "icu": "78.2",
+        "llhttp": "9.4.3",
+        "merve": "1.2.2",
+        "modules": "149",
+        "napi": "10",
+        "nbytes": "0.1.4",
+        "ncrypto": "0.0.1",
+        "nghttp2": "1.70.0",
+        "nghttp3": "",
+        "ngtcp2": "",
+        "openssl": "0.0.0",
+        "simdjson": "4.6.11",
+        "simdutf": "7.7.0",
+        "sqlite": "3.53.4",
+        "tz": "2026d",
+        "undici": "7.29.1",
+        "unicode": "17.0",
+        "uv": "1.52.1",
+        "uvwasi": "0.0.23",
+        "v8": "15.2.124.43-electron.0",
+        "zlib": "1.3.2.1-motley",
+        "zstd": "1.6.0",
+        "electron": "44.8.0",
+        "chrome": "152.0.7977.167"
+      },
+      "finished": "2026-10-18T03:03:04.692Z"
+    },
+    {
+      "phase": "reopen-delete",
+      "started": "2026-10-18T03:03:15.810Z",
+      "steps": [
+        {
+          "name": "normal-workspace-opened",
+          "at": "2026-10-18T03:03:32.635Z"
+        },
+        {
+          "name": "durable-reopen-exact-title-range",
+          "at": "2026-10-18T03:03:33.363Z",
+          "actual": {
+            "Title": "Calendar proof edited",
+            "Start": "2026-10-17T12:00",
+            "End": "2026-10-17T13:30",
+            "Time zone": "America/Toronto"
+          }
+        },
+        {
+          "name": "delete-acknowledged",
+          "at": "2026-10-18T03:03:34.759Z"
+        }
+      ],
+      "screenshots": [
+        "/private/var/folders/yc/__symlbx5zxd7v1vhwh84z180000gn/T/zorid-calendar-proof-lFPpAm/reopen-delete-delete-confirmation.png"
+      ],
+      "passed": true,
+      "versions": {
+        "node": "24.22.0",
+        "acorn": "8.18.0",
+        "ada": "4.0.0",
+        "amaro": "1.1.11",
+        "ares": "1.34.8",
+        "brotli": "1.2.0",
+        "cldr": "48.0",
+        "icu": "78.2",
+        "llhttp": "9.4.3",
+        "merve": "1.2.2",
+        "modules": "149",
+        "napi": "10",
+        "nbytes": "0.1.4",
+        "ncrypto": "0.0.1",
+        "nghttp2": "1.70.0",
+        "nghttp3": "",
+        "ngtcp2": "",
+        "openssl": "0.0.0",
+        "simdjson": "4.6.11",
+        "simdutf": "7.7.0",
+        "sqlite": "3.53.4",
+        "tz": "2026d",
+        "undici": "7.29.1",
+        "unicode": "17.0",
+        "uv": "1.52.1",
+        "uvwasi": "0.0.23",
+        "v8": "15.2.124.43-electron.0",
+        "zlib": "1.3.2.1-motley",
+        "zstd": "1.6.0",
+        "electron": "44.8.0",
+        "chrome": "152.0.7977.167"
+      },
+      "finished": "2026-10-18T03:03:34.760Z"
+    },
+    {
+      "phase": "reopen-deleted",
+      "started": "2026-10-18T03:03:37.816Z",
+      "steps": [
+        {
+          "name": "normal-workspace-opened",
+          "at": "2026-10-18T03:03:40.345Z"
+        },
+        {
+          "name": "durable-deletion-reopen",
+          "at": "2026-10-18T03:03:40.972Z"
+        }
+      ],
+      "screenshots": [
+        "/private/var/folders/yc/__symlbx5zxd7v1vhwh84z180000gn/T/zorid-calendar-proof-lFPpAm/reopen-deleted-deleted.png"
+      ],
+      "passed": true,
+      "versions": {
+        "node": "24.22.0",
+        "acorn": "8.18.0",
+        "ada": "4.0.0",
+        "amaro": "1.1.11",
+        "ares": "1.34.8",
+        "brotli": "1.2.0",
+        "cldr": "48.0",
+        "icu": "78.2",
+        "llhttp": "9.4.3",
+        "merve": "1.2.2",
+        "modules": "149",
+        "napi": "10",
+        "nbytes": "0.1.4",
+        "ncrypto": "0.0.1",
+        "nghttp2": "1.70.0",
+        "nghttp3": "",
+        "ngtcp2": "",
+        "openssl": "0.0.0",
+        "simdjson": "4.6.11",
+        "simdutf": "7.7.0",
+        "sqlite": "3.53.4",
+        "tz": "2026d",
+        "undici": "7.29.1",
+        "unicode": "17.0",
+        "uv": "1.52.1",
+        "uvwasi": "0.0.23",
+        "v8": "15.2.124.43-electron.0",
+        "zlib": "1.3.2.1-motley",
+        "zstd": "1.6.0",
+        "electron": "44.8.0",
+        "chrome": "152.0.7977.167"
+      },
+      "finished": "2026-10-18T03:03:41.203Z"
+    }
+  ],
+  "passed": true,
+  "finished": "2026-10-18T03:03:42.421Z"
+}
