@@ -116,6 +116,13 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+01:18UTC: finaladapter1597c1ed independentlySOURCEAPPROVED native library slice,
+including24fixtures+checkedpendingaggregate+testcleanup; wireblobs exact9dda.
+Actual53checks remainpending, samegrantedslot, no browser/host/UIclaim. Native
+Pageshistoryhooks1915f58f source-ready, rootreviewassigned exact58+/7- delta; owner
+composespatchpreserving2addheader, no fullfileoverwrite/newcompiler. Metadata
+94fa86b8 source reviewactive, no sourceapproval/runtimeclaim yet.
+
 01:17UTC: exclusive recordsadapter53focusedchecks GRANTED managedlead860c8b64
 afterknownfailpointfixturecleanup fix+newSHAfreeze (beforefirstexecution). Exact
 four serialcommands wire13/managed24+family3/ledger7/immutable6, official1.95
