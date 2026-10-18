@@ -160,8 +160,15 @@ export class TypesDocument {
         } else this.change(keyNode.range[0],node.range[1],'');
       } else {
         const lineStart = this.source.lastIndexOf('\n',keyNode.range[0] - 1) + 1;
-        if (this.source.slice(lineStart,keyNode.range[0]).trim()) return fail('Cannot remove a key sharing its container line');
-        this.change(lineStart,node.range[2],'');
+        const prefix = this.source.slice(lineStart,keyNode.range[0]);
+        if (prefix.trim() === '-' && index === 0 && map.items.length > 1) {
+          const next = map.items[1].key;
+          if (!isNode(next) || !next.range) return fail('Invalid mapping range');
+          this.change(keyNode.range[0],next.range[0],'');
+        } else {
+          if (prefix.trim()) return fail('Cannot remove a key sharing its container line');
+          this.change(lineStart,node.range[2],'');
+        }
       }
       return;
     }

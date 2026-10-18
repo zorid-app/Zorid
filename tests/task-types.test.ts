@@ -113,3 +113,10 @@ test('surgical default boundaries support block values, implicit null and flow t
     doc.setDefault('p','new'); assert.equal(doc.model.properties[0].default,'new'); assert.ok(doc.toString().endsWith(suffix));
   }
 });
+test('removing first compact mapping default retains its sequence container', () => {
+  const suffix='future: {a: 1,b: 2} # untouched\n';
+  const doc=TypesDocument.parse('version: 1\nid: t\nlabel: Task\nproperties:\n  - default: old\n    id: p\n    key: p\n    label: P\n    datatype: text\n' + suffix);
+  doc.setDefault('p',undefined);
+  assert.equal(doc.model.properties[0].id,'p'); assert.equal(doc.model.properties[0].default,undefined);
+  assert.match(doc.toString(),/properties:\n  - id: p/); assert.ok(doc.toString().endsWith(suffix));
+});
