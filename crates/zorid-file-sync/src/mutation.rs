@@ -68,11 +68,27 @@ pub enum CreateMode {
 }
 /// Exact picker-selected parent. Root is explicit; an omitted witness remains
 /// an older unguarded command and must never be interpreted as Root.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DestinationParent {
     Root,
     Folder { id: EntryId, revision: Revision, path: VaultPath },
+}
+// An internally tagged unit variant ignores extra fields in serde. Decode Root
+// as an empty struct variant so the exact witness shape is enforced as well.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum RawDestinationParent {
+    Root {},
+    Folder { id: EntryId, revision: Revision, path: VaultPath },
+}
+impl<'de> Deserialize<'de> for DestinationParent {
+    fn deserialize<D: serde::Deserializer<'de>>(decoder: D) -> std::result::Result<Self, D::Error> {
+        Ok(match RawDestinationParent::deserialize(decoder)? {
+            RawDestinationParent::Root {} => Self::Root,
+            RawDestinationParent::Folder { id, revision, path } => Self::Folder { id, revision, path },
+        })
+    }
 }
 /// Complete durable local command identity for an enrolled family vault.
 /// Persist this at PREPARE, before authorization. Receipts and prepared intents
@@ -1071,6 +1087,13 @@ mod destination_parent_tests {
         assert!(!json.contains("destination_parent"));
         assert_eq!(serde_json::from_str::<FamilyCommand>(&json).unwrap(), old);
         let guarded = command("target.md", Some(DestinationParent::Root));
+        let mut guarded_json = serde_json::to_value(&guarded).unwrap();
+        assert_eq!(guarded_json["destination_parent"], serde_json::json!({"kind": "root"}));
+        assert_eq!(serde_json::from_value::<FamilyCommand>(guarded_json.clone()).unwrap(), guarded);
+        guarded_json["destination_parent"]["unexpected"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<FamilyCommand>(guarded_json).is_err());
+        assert!(serde_json::from_value::<DestinationParent>(serde_json::json!({"kind": "root", "unexpected": true})).is_err());
+        assert!(serde_json::from_value::<DestinationParent>(serde_json::json!({"kind": "folder", "id": "folder", "revision": "r1", "path": "P", "unexpected": true})).is_err());
         assert!(matches!(guarded.check_replay(&old), Err(Error::Contract(ContractError::IdempotencyConflict { .. }))));
         assert!(serde_json::from_str::<FamilyCommand>(&json.replace(",\"create_mode\":null", "")).is_err());
     }
