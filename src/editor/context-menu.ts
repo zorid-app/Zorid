@@ -9,14 +9,17 @@ import { formatMenuForEditor } from './format-menu.ts';
 import type { FormatMenuItem } from './format-menu.ts';
 
 /** Renderer commands remain local; only bounded menu descriptors cross IPC. */
-export function editorContextMenu(show = showContextMenu, onError: (error: unknown) => void = console.error): Extension {
+export function editorContextMenu(show = showContextMenu, onError: (error: unknown) => void = console.error,
+  captureAuthoring?: () => (() => boolean) | null): Extension {
   return ViewPlugin.fromClass(class {
     private alive = true;
     private serial = 0;
     private view: EditorView;
+    private session?: AbortController;
     constructor(view: EditorView) { this.view = view; view.dom.addEventListener('contextmenu', this.open); }
     private open = (event: MouseEvent) => {
       if (event.defaultPrevented) return;
+      const authoring = captureAuthoring?.();
       const target = tableContextMenuTarget(this.view, event);
       if (!target || target.nodeType !== 1) return;
       const table = tableMenuAt(this.view, target);
@@ -26,6 +29,7 @@ export function editorContextMenu(show = showContextMenu, onError: (error: unkno
       const editorElement = target.closest<HTMLElement>('.cm-editor');
       const editor = editorElement ? EditorView.findFromDOM(editorElement) : this.view;
       if (!editor || !this.view.dom.contains(editor.dom)) return;
+      if (captureAuthoring && !authoring) { event.preventDefault(); event.stopPropagation(); return; }
       const rectangle = tableSelectionAt(this.view, target);
       const version = ++this.serial, readOnly = this.view.state.readOnly || !rectangle && editor.state.readOnly;
       const actions = new Map<string, () => unknown>([['select-all', () => selectAll(editor)]]);
@@ -69,18 +73,23 @@ export function editorContextMenu(show = showContextMenu, onError: (error: unkno
       const rectangleSnapshot = JSON.stringify(tableSelectionRanges(this.view, target));
       const cellEditor = activeTableEditor(this.view);
       const release = retainTableEditor(this.view, target);
+      const current = () => this.alive && version === this.serial && editor.dom.isConnected
+        && (!authoring || authoring()) && editor.state.doc === doc && editor.state.selection.eq(selection)
+        && (!rectangle || JSON.stringify(tableSelectionRanges(this.view, target)) === rectangleSnapshot);
+      const session = new AbortController();
+      this.session?.abort(); this.session = session;
       void (async () => {
         try {
-          const id = await show(event, items);
-          if (!id || !this.alive || version !== this.serial || !editor.dom.isConnected) return;
+          const id = await show(event, items, { signal: session.signal, ...(authoring ? { isCurrent: current } : {}) });
+          if (!id || authoring && !authoring() || !this.alive || version !== this.serial || !editor.dom.isConnected) return;
           if (editor.state.doc !== doc || !editor.state.selection.eq(selection)) return;
           if (rectangle && JSON.stringify(tableSelectionRanges(this.view, target)) !== rectangleSnapshot) return;
           if (id !== 'select-all' && (this.view.state.readOnly || !rectangle && editor.state.readOnly)) return;
           await actions.get(id)?.();
-          if (rectangle && id.startsWith('format-') && cellEditor?.dom.isConnected) cellEditor.focus();
-        } finally { release(); }
+          if ((!authoring || authoring()) && rectangle && id.startsWith('format-') && cellEditor?.dom.isConnected) cellEditor.focus();
+        } finally { if (this.session === session) this.session = undefined; release(); }
       })().catch(onError);
     };
-    destroy() { this.alive = false; this.serial++; this.view.dom.removeEventListener('contextmenu', this.open); }
+    destroy() { this.alive = false; this.session?.abort(); this.serial++; this.view.dom.removeEventListener('contextmenu', this.open); }
   });
 }

@@ -411,3 +411,21 @@ test('rapid deactivate/reactivate invalidates pending table selection focus rest
   assert.equal(dom.window.document.activeElement, dom.window.document.body);
   assert.equal(host.querySelector('.cm-live-table .cm-editor'), null, 'retired callback cannot mount/focus child');
 });
+
+test('interaction-opted editor retires a surviving Cut role across revoke/reactivate', async t => {
+  const { editor, view, dom } = setup(t, 'label', { canMutate: () => true });
+  let cuts = 0, native = 0;
+  dom.window.document.execCommand = () => { cuts++; return true; };
+  Object.defineProperty(dom.window, 'zorid', { value: { showContextMenu: async () => { native++; return null; } } });
+  view.dispatch({ selection: { anchor: 0, head: 5 } }); view.focus();
+  view.contentDOM.dispatchEvent(new dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  const cut = [...dom.window.document.querySelectorAll<HTMLButtonElement>('[role=menuitem]')].find(button => button.textContent === 'Cut');
+  assert.ok(cut); assert.equal(native, 0);
+  editor.setInteractionState!({ active: false });
+  editor.setInteractionState!({ active: true });
+  cut.click(); await Promise.resolve();
+  assert.equal(cuts, 0);
+  assert.equal(editor.getValue(), 'label');
+  assert.equal(dom.window.document.querySelector('[role=menu]'), null);
+  assert.notEqual(dom.window.document.activeElement, view.contentDOM);
+});

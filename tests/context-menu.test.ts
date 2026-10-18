@@ -222,3 +222,50 @@ test('browser command and selection-restoration failures still settle and releas
     doc.dispatchEvent(event); assert.equal(event.defaultPrevented, false); dom.window.close();
   }
 });
+
+test('guarded editor roles use renderer witness and abort without restoring stale focus', async () => {
+  const { dom, doc, input } = setup();
+  let commands = 0, native = 0;
+  doc.execCommand = () => { commands++; return true; };
+  Object.defineProperty(dom.window, 'zorid', { value: { showContextMenu: async () => { native++; return null; } } });
+  const lease = {}, abort = new AbortController();
+  let epoch = lease;
+  const result = showContextMenu({ clientX: 0, clientY: 0 }, [{ role: 'cut' }], {
+    document: doc, signal: abort.signal, isCurrent: () => epoch === lease,
+  });
+  assert.equal(native, 0, 'raw native roles cannot run ahead of renderer witness');
+  const cut = doc.querySelector<HTMLButtonElement>('[role=menuitem]')!;
+  assert.ok(cut); assert.notEqual(doc.activeElement, input);
+  epoch = {}; abort.abort(); epoch = {};
+  assert.equal(await result, null);
+  cut.click();
+  assert.equal(commands, 0);
+  assert.notEqual(doc.activeElement, input, 'aborted owner cannot recover its old focus');
+  assert.equal(doc.querySelector('[role=menu]'), null);
+  dom.window.close();
+});
+
+test('guarded role rechecks authority after focus handlers before running effect', async () => {
+  const { dom, doc, input } = setup();
+  let current = true, commands = 0;
+  doc.execCommand = () => { commands++; return true; };
+  const result = showContextMenu({ clientX: 0, clientY: 0 }, [{ role: 'cut' }], { document: doc, isCurrent: () => current });
+  input.addEventListener('focus', () => { current = false; }, { once: true });
+  doc.querySelector<HTMLButtonElement>('[role=menuitem]')!.click();
+  assert.equal(await result, null);
+  assert.equal(commands, 0);
+  dom.window.close();
+});
+
+test('aborting an older owned session cannot dismiss or refocus another menu', async () => {
+  const { dom, doc } = setup();
+  const firstAbort = new AbortController();
+  const first = showContextMenu({ clientX: 0, clientY: 0 }, [{ id: 'first', label: 'First' }], { document: doc, signal: firstAbort.signal, isCurrent: () => true });
+  const second = showContextMenu({ clientX: 0, clientY: 0 }, [{ id: 'second', label: 'Second' }], { document: doc, isCurrent: () => true });
+  assert.equal(await first, null);
+  firstAbort.abort();
+  assert.equal(doc.activeElement?.textContent, 'Second');
+  doc.querySelector<HTMLButtonElement>('[role=menuitem]')!.click();
+  assert.equal(await second, 'second');
+  dom.window.close();
+});

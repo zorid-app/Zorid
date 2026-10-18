@@ -5,7 +5,16 @@ export type ContextMenuItem =
   | { label: string; submenu: ContextMenuItem[]; enabled?: boolean }
   | { role: ContextMenuRole; label?: string; enabled?: boolean };
 export interface ContextMenuRequest { x: number; y: number; items: ContextMenuItem[] }
-export interface ContextMenuOptions { document?: Document }
+export interface ContextMenuOptions {
+  document?: Document;
+  /** Guarded sessions use renderer roles; raw native roles cannot validate this witness. */
+  isCurrent?: () => boolean;
+  signal?: AbortSignal;
+}
+function menuCurrent(options: ContextMenuOptions): boolean {
+  try { return !options.signal?.aborted && (options.isCurrent?.() ?? true); }
+  catch { return false; }
+}
 const openMenus = new WeakMap<Document, () => void>();
 const roleLabels: Record<ContextMenuRole, string> = {
   undo: 'Undo', redo: 'Redo', cut: 'Cut', copy: 'Copy', paste: 'Paste',
@@ -28,15 +37,18 @@ export function showContextMenu(
   event.stopPropagation?.();
   const target = event.target as Node | null | undefined;
   const doc = options.document || target?.ownerDocument || event.view?.document || document;
+  if (!menuCurrent(options)) return Promise.resolve(null);
   openMenus.get(doc)?.();
   const request = { x: event.clientX, y: event.clientY, items };
   const bridge = doc.defaultView?.zorid;
-  if (bridge?.showContextMenu) return bridge.showContextMenu(request);
+  // Interaction-gated editor roles must execute only after the renderer
+  // witness check. Default desktop callers retain their native menu path.
+  if (bridge?.showContextMenu && !options.isCurrent) return bridge.showContextMenu(request);
   if (!items.length) return Promise.resolve(null);
-  return showBrowserMenu(doc, request);
+  return showBrowserMenu(doc, request, options);
 }
 
-function showBrowserMenu(doc: Document, request: ContextMenuRequest): Promise<string | null> {
+function showBrowserMenu(doc: Document, request: ContextMenuRequest, options: ContextMenuOptions): Promise<string | null> {
   return new Promise(resolve => {
     const prior = doc.activeElement as HTMLElement | null;
     const selection = doc.getSelection();
@@ -63,7 +75,7 @@ function showBrowserMenu(doc: Document, request: ContextMenuRequest): Promise<st
     const validPoint = (value: NonNullable<ReturnType<typeof point>>) => value.node.isConnected &&
       value.node.ownerDocument === doc && value.node.parentNode === value.parent && value.node.textContent === value.text &&
       value.offset <= (value.node.nodeValue !== null ? value.node.nodeValue.length : value.node.childNodes.length);
-    const ownsState = () => !!prior?.isConnected && prior.ownerDocument === doc &&
+    const ownsState = () => menuCurrent(options) && !!prior?.isConnected && prior.ownerDocument === doc &&
       prior.parentNode === ownerParent && prior.contentEditable === editable &&
       (input && inputState ? input.value === inputState.value && input.type === inputState.type &&
         input.disabled === inputState.disabled && input.readOnly === inputState.readOnly :
@@ -114,10 +126,12 @@ function showBrowserMenu(doc: Document, request: ContextMenuRequest): Promise<st
         doc.removeEventListener('contextmenu', outside, true);
         doc.removeEventListener('keydown', keydown, true);
         doc.defaultView?.removeEventListener('blur', dismiss);
-        resolve(id);
+        options.signal?.removeEventListener('abort', abort);
+        resolve(menuCurrent(options) ? id : null);
       }
     };
     const dismiss = () => finish();
+    const abort = () => finish(null, false);
     const outside = (event: Event) => { if (!root.contains(event.target as Node)) finish(null, false); };
     const panels: { menu: HTMLElement; buttons: HTMLButtonElement[]; parent?: HTMLButtonElement }[] = [];
     let current = 0;
@@ -166,6 +180,7 @@ function showBrowserMenu(doc: Document, request: ContextMenuRequest): Promise<st
           row.setAttribute('aria-haspopup', 'menu'); row.setAttribute('aria-expanded', 'false');
           const open = () => {
             if (done || row.disabled) return;
+            if (!menuCurrent(options)) { finish(null, false); return; }
             closeChildren(level);
             const sub = doc.createElement('div'); sub.className = 'context-menu'; sub.role = 'menu';
             sub.setAttribute('aria-label', item.label); sub.style.position = 'fixed';
@@ -178,6 +193,7 @@ function showBrowserMenu(doc: Document, request: ContextMenuRequest): Promise<st
         } else {
           row.addEventListener('pointerenter', () => {
             if (done) return;
+            if (!menuCurrent(options)) { finish(null, false); return; }
             // Move focus before removing a focused descendant submenu.
             if (!row.disabled) row.focus({ preventScroll: true });
             else menu.focus({ preventScroll: true });
@@ -185,9 +201,11 @@ function showBrowserMenu(doc: Document, request: ContextMenuRequest): Promise<st
           });
           row.addEventListener('click', () => {
             if (done || row.disabled) return;
+            if (!menuCurrent(options)) { finish(null, false); return; }
             if ('role' in item) {
               if (!root.contains(doc.activeElement) || !restore()) { finish(null, false); return; }
               try {
+                if (!menuCurrent(options)) return;
                 if (item.role === 'selectAll' && input) input.select();
                 else if (item.role !== 'pasteAndMatchStyle') doc.execCommand?.(item.role);
                 // Browser plain-text paste cannot be emulated synchronously without
@@ -204,7 +222,7 @@ function showBrowserMenu(doc: Document, request: ContextMenuRequest): Promise<st
     const keydown = (event: KeyboardEvent) => {
       // Programmatic focus changes also end menu ownership; do not swallow a
       // key now intended for another control or restore the previous editor.
-      if (!root.contains(doc.activeElement)) { finish(null, false); return; }
+      if (!menuCurrent(options) || !root.contains(doc.activeElement)) { finish(null, false); return; }
       // A menu owns keyboard context until dismissal; application shortcuts
       // must not fire behind it while focus is on a menu item.
       event.preventDefault();
@@ -230,6 +248,7 @@ function showBrowserMenu(doc: Document, request: ContextMenuRequest): Promise<st
     doc.addEventListener('contextmenu', outside, true);
     doc.addEventListener('keydown', keydown, true);
     doc.defaultView?.addEventListener('blur', dismiss);
-    focus(0);
+    options.signal?.addEventListener('abort', abort, { once: true });
+    if (!menuCurrent(options)) abort(); else focus(0);
   });
 }

@@ -101,6 +101,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
   let destroyed = false, active = options.interactionState?.active ?? true;
   // An opaque identity avoids counter wrap and invalidates even same-state lease refreshes.
   let authoringEpoch = {};
+  let interactionManaged = options.canMutate !== undefined || options.interactionState !== undefined;
   const canAuthor = () => {
     try { return !destroyed && active && (options.canMutate?.() ?? true); }
     catch { return false; }
@@ -113,6 +114,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
     const epoch = authoringEpoch;
     return () => epoch === authoringEpoch && canAuthor();
   };
+  const menuExtensions = () => editorContextMenu(undefined, undefined, interactionManaged ? captureAuthoring : undefined);
   const nativeCaret=options.onNativeEditorState?nativeCaretVisibility(isCurrent):[];
   const nativeUpdates = options.onNativeEditorState ? EditorView.updateListener.of(() => native?.update()) : [];
   const listConfiguration = new Compartment();
@@ -145,7 +147,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
         options.open(target, 'wiki', event); return true;
       } })] : []),
       ...(options.transfers ? [editorTransfers(options.transfers, captureAuthoring)] : []),
-      menus.of(editorContextMenu()),
+      menus.of(menuExtensions()),
       ...(options.mode === 'live' ? [liveProperties(), liveCallouts({open: options.open, renderEmbed: options.renderEmbed}),
         liveTables(options.open, owner => [wiki, editorCommandHotkeys(options.hotkeys, owner), nativeUpdates, nativeCaret], renderedCalloutRanges, canAuthor), liveTasks({excludes: renderedCalloutRanges}), liveLists({excludes: renderedCalloutRanges}),
         liveMath({excludes: renderedCalloutRanges}), liveFences({excludes: renderedCalloutRanges}),
@@ -161,8 +163,9 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       if (destroyed) return;
       authoringEpoch = {};
       active = state.active;
+      interactionManaged = true;
       // A fresh menu plugin retires its outstanding async action witnesses.
-      view.dispatch({ effects: [interaction.reconfigure(interactionExtensions()), menus.reconfigure(editorContextMenu()), refreshTableInteraction.of()] });
+      view.dispatch({ effects: [interaction.reconfigure(interactionExtensions()), menus.reconfigure(menuExtensions()), refreshTableInteraction.of()] });
       const focused = view.dom.ownerDocument.activeElement;
       if (!active && focused instanceof HTMLElement && view.dom.contains(focused)) focused.blur();
     },
