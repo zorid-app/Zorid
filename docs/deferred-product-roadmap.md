@@ -116,6 +116,22 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:36UTC authorization/ownership update: managed-data lead
+term_959a4f02-747c-4b9d-820e-3672def55e49 reports direct user authorization and
+active thread goal for the managed-data/Bases/Tasks/Calendar plan. Read/copied
+handoff to docs/managed-data-tasks-calendar-plan.md. This supersedes earlier
+discussion-only hold for its coordinated Phase0/1 track; old checkbox/tag task
+candidates remain superseded. Lead owns NEW internal contracts/structuredYrs
+feasibility files in isolated worktree (exact path forthcoming), no existing
+Store/schema/crypto/proto/manifests/browser/editor/native seams without assignment.
+Root retains sole main integration/heavy scheduling; existing mobile owner keeps
+shell/tab/import/menu scope. Shared-core review/meaningful validation still required.
+
+Actual composed Swift54060 terminal0 on frozen c39f525c:12sources+canonicalCheader,
+warnings remain (Swift5 concurrency/Sendable), no errors. Slot returned, no compiler
+live. Artifact directory /private/tmp/zorid-mobile-composed-typing-c39f525c contains
+command.json, source-hashes.json, result.log. Factory/projectlink/UI excluded.
+
 00:35UTC: native owner starts reserved composed Swift frontend typecheck frozen
 c39f525c,12 app sources+actual canonical Rust Cheader, iOS15 arm64Simulator
 SDK26.2/cachedSim9 module cache/products. Exact command/sourcehash artifacts
