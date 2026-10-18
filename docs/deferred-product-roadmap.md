@@ -77,6 +77,16 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Integration checkpoint (2026-10-18 01:24 UTC): managed wire/native Store batch
+is now on main8f0f0c43..f26eb0b5, corresponding exactly to reviewed2276582d.
+Root verified Cargo.lock and both changed crate trees byte-identical to that
+candidate and inspected terminal logs: wire13, family3, managed24, ledger7,
+immutable6 all pass (53 total). Independent2276 review approved the metadata-only
+publication-cache identity guard. The earlier failed regression is fixed without
+weakening its assertion. Compiler slot returned; native history checks are next
+after corrected source freeze. This establishes the native library adapter, not
+browser host wiring, cross-platform runtime or Tasks/Calendar UI completion.
+
 Latest coordination checkpoint (2026-10-18 01:21 UTC): managed adapter1597c1ed
 source review passed; actual wire13/13 passed, but focused family tests failed
 2/3 because missing family_materializations was not detected by family_status.
