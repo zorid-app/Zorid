@@ -77,6 +77,26 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Store/browser task delivery checkpoint (2026-10-18 13:59 UTC): root combined
+candidate `a2634d61` is accepted for canonical integration after independent
+source and exact-runtime review. Store source6078 matches exactly, original18
+SQLite checks are verified and affected existing managed_records target24/24
+passes. Browser query Rust10/10, current generated WASM build, combined fullTS
+and five actual normal adapter/admission/Worker/WASM/IDB groups pass. Both initial
+test/harness failures are retained and narrowly corrected. Integration installs
+exact tested generated assets, preserving functional browser defaults. See
+managed-data/store-browser-composition-checkpoint.md and browser-task-current-evidence.json.
+No Tasks UI/mobile/provider/cutover completion is inferred from these bounded gates.
+
+Type module/host and desktop draft binding work survives the interruption in
+isolated worktrees. Former internal workers are no longer live; root reassigned
+them explicitly to type_configuration_recovery and type_draft_binding_recovery.
+The Type IME multi-control finding still requires exact successor review before
+integration. Core pure draft validation source is frozen943c/a93/c70, actual Rust
+and host runtime gates pending. No new iOS build is claimed; external native
+owner continues retained physical root fixes and same-client typed transport.
+
+
 Mobile bridge checkpoint (2026-10-18 05:26 UTC): root composition `7f97d7f1`
 exactly matches approved finalf42b5dcb across five source/test files. The retained
 9/9 focused log and root combined fullTS exit0 are recorded in

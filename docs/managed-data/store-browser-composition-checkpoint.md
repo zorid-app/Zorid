@@ -21,3 +21,28 @@ do not leave browser default with a stale generated fingerprint.
 Type draft validation/core+desktop bindings and production Type host are separate
 named isolated work; they are not part of this frozen Rust/browser composition.
 Native Workspace and physical retained host remain their existing owners' scope.
+
+## Accepted current composition — 2026-10-18 13:59 UTC
+
+Frozen actual `a2634d6115318e50d64c3fec4f201fe91b7a1e5f` has current-input
+WASM build exit0, corrected Rust module10/10 and five actual normal browser
+query groups passed with natural runner exit0. Root combined full TypeScript
+was reconfirmed exit0 after the prior session handle disappeared across the
+interruption. Independent final acceptance reviewer recomputed fingerprint,
+source digest, generated asset hashes and raw report SHA and approves bounded
+acceptance. See browser-task-current-evidence.json for exact raw paths/hashes.
+Chrome62710 exits0, Vite50350 closes, owned profile absence is confirmed and the
+fixture database is deleted. No runner/artifact errors remain in the accepted run.
+
+Two failed attempts remain preserved: the initial Rust test assertion compared
+Revision directly with a string (fixed only the assertion via as_str), and the
+first browser fixture compared JSON key insertion order (fixed only recursive
+object-key comparison, preserving array order and values). Neither required a
+production semantic change. The passing run uses unchanged current WASM assets.
+
+Root accepts the coherent Store foundation and browser task queries for canonical
+integration; generated assets must be copied and rehashed immediately with that
+integration. Store generic v1 callers are not converted by this foundation.
+Reserved native/browser claim denial, semantic retained-intent caller adoption,
+old-apply bypass closure and product cutover remain separate. Browser query proof
+is not rendered Tasks UI, Calendar, mobile or multi-browser acceptance.

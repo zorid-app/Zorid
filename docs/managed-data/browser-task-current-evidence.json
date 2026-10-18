@@ -1,0 +1,93 @@
+{
+  "testedHead": "a2634d6115318e50d64c3fec4f201fe91b7a1e5f",
+  "provenance": {
+    "head": "a2634d6115318e50d64c3fec4f201fe91b7a1e5f",
+    "fingerprint": "7467d7daa9b949a116519d9c0df20ae24052837b2e19665a0724de55a27046d0",
+    "files": {
+      "zorid_wasm.js": "163635b8c4f5f7a2cda926c6313b7ad3ff7ee5762968aaa3ca78ee0ad92b3493",
+      "zorid_wasm_bg.wasm": "138a3c2f13bfa21e578d693ce7d8848b7e76dad958d38fa93e81984fcd4430c2"
+    },
+    "sourceDigest": "3011df8286a75a58bdb3f88831219c08903c2028ca3192266a8f29822759fde0"
+  },
+  "groups": [
+    {
+      "name": "same retained generation, exact Type/task witnesses and separate checkboxes",
+      "status": "passed"
+    },
+    {
+      "name": "date-only Today follows explicit clockMs and timezone",
+      "status": "passed"
+    },
+    {
+      "name": "retained Type/note reads survive edits and Type moves",
+      "status": "passed"
+    },
+    {
+      "name": "malformed YAML diagnostics and strict selector/option rejection",
+      "status": "passed"
+    },
+    {
+      "name": "foreign client pins, close, rebuild and reopening enforce lifetimes",
+      "status": "passed"
+    }
+  ],
+  "remainingGates": [
+    "No rendered Tasks UI, Calendar, mobile or multi-browser acceptance"
+  ],
+  "runnerError": null,
+  "artifactFailures": [],
+  "terminal": {
+    "session": 92161,
+    "exitCode": 0,
+    "natural": true
+  },
+  "rustModule": {
+    "session": 78782,
+    "exitCode": 0,
+    "passed": 10
+  },
+  "storeRegression": {
+    "session": 13917,
+    "exitCode": 0,
+    "passed": 24
+  },
+  "wasmBuild": {
+    "session": 83927,
+    "exitCode": 0
+  },
+  "combinedTypeScript": {
+    "exitCode": 0,
+    "note": "Confirmed command returned0 after original session handle was missing; original empty log alone was not used as proof."
+  },
+  "artifacts": {
+    "/Users/ctk/orca/artifacts/zorid-native-20261018/browser-task-current-retry/report.json": {
+      "bytes": 31520,
+      "sha256": "6c842cea0e88b96363793ea7c5fc0697b6da16fd1d0d8a083c757619872d55bb"
+    },
+    "/Users/ctk/orca/artifacts/zorid-native-20261018/browser-task-current-retry/cleanup.json": {
+      "bytes": 1685,
+      "sha256": "ee7dfa59ae832e427be757b8cc237c4457c634458e3ec444ed6ff49f92471ee9"
+    },
+    "/Users/ctk/orca/artifacts/zorid-native-20261018/browser-task-root-rust.log": {
+      "bytes": 11384,
+      "sha256": "d45b740a6bd866b8062a68aea8bab5671e0f6de027c139415a7d715ab372f47f"
+    },
+    "/Users/ctk/orca/artifacts/zorid-native-20261018/browser-task-root-rust-retry.log": {
+      "bytes": 11483,
+      "sha256": "efce048a5bd75ba29a4400f87e7c44d14f83bc15d5239aaf70646a8bc4bbd64c"
+    },
+    "/Users/ctk/orca/artifacts/zorid-native-20261018/browser-task-root-wasm-build.log": {
+      "bytes": 10405,
+      "sha256": "b207bb077a077934b14488c971e6c8bdf39c732505a9964181c9a96ac7819ecf"
+    },
+    "/Users/ctk/orca/artifacts/zorid-native-20261018/browser-task-combined-tsc-confirmed.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "/Users/ctk/orca/artifacts/zorid-origin-store-20261018/root-managed-records-composition.log": {
+      "bytes": 5167,
+      "sha256": "b41adfddcf14a4d9ff78d60133e7f854118e3f3560eb798b675fffde6316b9b9"
+    }
+  },
+  "independentReview": "browser_task_acceptance_review approves exact a263 narrow test/harness fixes and all five bounded runtime groups, no reruns."
+}
