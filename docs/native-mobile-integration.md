@@ -1559,3 +1559,31 @@ and UI active; coalesce a false-to-true readiness callback and reread current
 route/owner. Preinstall folder reads retain their original idle guard. No new
 host, timer, lease or gesture/link source. Source acceptance only; new build
 and actual Back/Forward/metadata failure recovery remain to verify.
+
+
+Focused actual Simulator11 verification at2cdbd86f — 2026-10-18 01:54 UTC:
+Incremental App Debug build exited0 (BUILD SUCCEEDED); command/head and log are
+/private/tmp/zorid-history11-readiness-command.json and -build.log, exit0file.
+Install/launch/attach82359 exited0. Actual34175 exited0: editor Back restored
+exact Orca-folder, Forward enabled and reopened same Nested.md/body, Return to
+Files preserved exact folder. No root readiness error after correction.
+
+Actual41968 exited0: replace disposable Simulator metadata file with an empty
+directory; note activation pauses on opening route with explicit metadata error
+and Retry, no editor activation. finally restored original regular0600 file;
+Retry opens original pending note. No real vault/schema changes.
+Actual typing80858 inserted NativeHistory11Verified into disposable Nested.md,
+but its software-keyboard-dismiss assertion failed because that control was
+absent; do not claim software-keyboard/formatting-toolbar behavior. Followup42179
+exited0: native Return drain saved the edit and reopening shows sentinel.
+Actual85084 exited0: malformed metadata on process restart yields explicit
+Could not prepare tabs/error, no fresh Home fallback; original restored in
+finally. Healthy relaunch retains original selected tab UUID81c2dab5 and opens
+same Nested.md with saved sentinel. AX evidence retained in history11-evidence.
+App/helper cleanup51374 exited0; owned Simulator left booted.
+
+Root b302 grants next bounded retained slot for unchanged approved link89be64c8
+only, after this terminal checkpoint. No edge/NewNote mix; frontend/cap copy
+and incremental Xcode, actual WK tap/caret/pan/longpress still required.
+Phone current details still paired but tunnel unavailable (last connection
+01:08 UTC); signed Dev10 artifact remains uninstalled, no new build needed.
