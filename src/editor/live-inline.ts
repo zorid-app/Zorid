@@ -263,6 +263,7 @@ export function liveInline(options: LiveInlineOptions = {}): Extension {
     private nativeGesture?: {id:number; label:HTMLElement; x:number; y:number; time:number;
       doc:EditorState['doc']; selection:EditorState['selection']; canceled:boolean};
     private nativeClick?: {label:HTMLElement;x:number;y:number;time:number;accepted:boolean};
+    private nativeFinishTimer?: ReturnType<typeof setTimeout>;
     private settling = false;
     private composition = false;
     private destroyed = false;
@@ -293,6 +294,9 @@ export function liveInline(options: LiveInlineOptions = {}): Extension {
       return element?.closest<HTMLElement>('.cm-live-inline-link[data-live-inline-rendered="true"][role="link"]')??null;
     }
     private nativeStart = (event:TouchEvent): void => {
+      // All fingers already ended in capture; a new input can arrive before
+      // that end's fallback task. Retire only the completed gesture first.
+      if (this.nativeFinishTimer!==undefined) this.endNative(false);
       if (this.nativeGesture) { this.cancelNative(); return; }
       this.nativeClick=undefined;
       const point=event.touches[0],label=this.renderedLabel(event.target);
@@ -312,6 +316,7 @@ export function liveInline(options: LiveInlineOptions = {}): Extension {
       if (gesture && (event.touches.length!==1 || !point || Math.hypot(point.clientX-gesture.x,point.clientY-gesture.y)>8)) this.cancelNative();
     };
     private endNative(accepted:boolean, x=this.nativeGesture?.x??0, y=this.nativeGesture?.y??0): void {
+      this.clearNativeFinish();
       const gesture=this.nativeGesture;
       this.nativeGesture=undefined;
       if (gesture) this.nativeClick={label:gesture.label,x,y,time:Date.now(),accepted};
@@ -344,10 +349,17 @@ export function liveInline(options: LiveInlineOptions = {}): Extension {
     private nativeFinish = (event:TouchEvent): void => {
       if (event.touches.length) return;
       const gesture=this.nativeGesture;
-      // Clean up even if another handler consumed touchend before CM saw it.
-      queueMicrotask(()=>{if (gesture && this.nativeGesture===gesture) this.endNative(false);});
+      if (!gesture) return;
+      this.clearNativeFinish();
+      // Native dispatch may checkpoint microtasks between capture and CM's
+      // bubble handler. Only a later task can clean up an unhandled end safely.
+      this.nativeFinishTimer=setTimeout(()=>{
+        this.nativeFinishTimer=undefined;
+        if (!this.destroyed && this.nativeGesture===gesture) this.endNative(false);
+      },0);
     };
-    private nativeKey = (): void => { this.nativeGesture=undefined; this.nativeClick=undefined; this.release(); };
+    private clearNativeFinish(): void { clearTimeout(this.nativeFinishTimer); this.nativeFinishTimer=undefined; }
+    private nativeKey = (): void => { this.clearNativeFinish(); this.nativeGesture=undefined; this.nativeClick=undefined; this.release(); };
     private down = (event: MouseEvent): void => {
       if (event.button !== 0 || !this.owns(event.target)) return;
       this.pointer = true; this.settling = false; clearTimeout(this.timer);
@@ -458,6 +470,7 @@ export function liveInline(options: LiveInlineOptions = {}): Extension {
     }
     destroy(): void {
       this.destroyed = true; clearTimeout(this.timer);
+      this.clearNativeFinish();
       if (options.nativeTouch) {
         const document=this.view.dom.ownerDocument;
         document.removeEventListener('touchstart',this.nativeStart,true);

@@ -544,3 +544,51 @@ for(const modifier of ['ctrlKey','metaKey','shiftKey','altKey'] as const)
   assert.equal(start.defaultPrevented,false);assert.equal(end.defaultPrevented,false);
   compatibilityClick(f,f.label());assert.deepEqual(f.opened,[]);
  });
+
+// Real native dispatch can checkpoint microtasks between document capture and
+// CM's bubble listener. Split/replay the same unconsumed TouchEvent at that
+// boundary; ordinary synchronous jsdom dispatch cannot expose this ordering.
+function pauseNativeEndAtCapture(f:ReturnType<typeof setup>) {
+ let paused=false;
+ const pause=(event:Event)=>{if(!paused){paused=true;event.stopPropagation();}};
+ f.dom.window.document.addEventListener('touchend',pause,{capture:true,once:true});
+}
+
+test('native touch witness survives capture microtasks until the real CM end handler',async t=>{
+ const f=nativeLinkFixture(t),selection=f.view.state.selection;
+ nativeTouch(f,f.label(),'touchstart');pauseNativeEndAtCapture(f);
+ const end=nativeTouch(f,f.label(),'touchend');
+ assert.equal(end.defaultPrevented,false);assert.deepEqual(f.opened,[]);
+ await Promise.resolve(); // Capture fallback microtask runs here in the old code.
+ f.label().dispatchEvent(end);
+ assert.ok(end.defaultPrevented,'the original witness must reach CM after the checkpoint');
+ assert.equal(f.opened.length,1);assert.ok(f.view.state.selection.eq(selection));
+ compatibilityClick(f,f.label());assert.equal(f.opened.length,1);
+});
+
+test('a new touch supersedes only a completed end awaiting fallback cleanup',async t=>{
+ const f=nativeLinkFixture(t);
+ nativeTouch(f,f.label(),'touchstart');pauseNativeEndAtCapture(f);nativeTouch(f,f.label(),'touchend');
+ // Another input task may win over the queued cleanup task. It is not a second
+ // finger in the old gesture: the captured end already had zero active touches.
+ nativeTouch(f,f.label(),'touchstart');await Promise.resolve();
+ assert.ok(nativeTouch(f,f.label(),'touchend').defaultPrevented);
+ assert.equal(f.opened.length,1);
+ await new Promise(resolve=>setTimeout(resolve,10));assert.equal(f.opened.length,1);
+});
+
+test('consumed native end still releases rendering freeze after dispatch',async t=>{
+ const f=nativeLinkFixture(t);
+ nativeTouch(f,f.label(),'touchstart');pauseNativeEndAtCapture(f);nativeTouch(f,f.label(),'touchend');
+ await new Promise(resolve=>setTimeout(resolve,10));
+ f.cursor(4);await new Promise(resolve=>setTimeout(resolve,80));
+ assert.equal(f.label().dataset.liveInlineRendered,'false');assert.deepEqual(f.opened,[]);
+});
+
+test('destroy with native end cleanup pending cannot navigate or update the dead view',async t=>{
+ const f=nativeLinkFixture(t);
+ nativeTouch(f,f.label(),'touchstart');pauseNativeEndAtCapture(f);nativeTouch(f,f.label(),'touchend');
+ const transactions=f.transactions.length;f.destroy();
+ await new Promise(resolve=>setTimeout(resolve,80));
+ assert.deepEqual(f.opened,[]);assert.equal(f.transactions.length,transactions);
+});
