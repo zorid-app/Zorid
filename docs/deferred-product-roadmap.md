@@ -116,6 +116,14 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:55UTC: managed corrected candidate1842c15e source-frozen,33crate tests
+(24+9) queued for next Rustslot AFTER native13retryterminal. Root independent
+actualsource review assigned base_reuse (library-only merge/causal/delete/tags/
+resources and Yrs comparison), no compiler by reviewer. Native owner terminalread
+shows active immutable retry preparation, priorgrant preserved; no takeover or
+overlappingRustbuild. Finalrecordstestcommand uses existingofficial1.95 cache,
+--offline --locked -j1 --test-threads=1, no broader suite/network/dependencychanges.
+
 00:52UTC: native13 typing30104 terminal1 with single showMessage fileprivate
 access error; fixed privately in coordinator. One continuation13source retry
 granted after frozen corrected snapshot, no other compiler. Final foreground
