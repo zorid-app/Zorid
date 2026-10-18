@@ -126,14 +126,17 @@ and its doc test. See [backend-integration-acceptance.md](backend-integration-ac
 for exact commands, scope and limitations. Actual client restoration, scheduling,
 off-host storage and production enrollment remain unfinished.
 
-### Managed backup and restore source (verification pending)
+### Managed backup and restore source and accepted library verification
 
 Privileged local APIs now include `backup_to(new_path)`,
 `restore_new(backup_path, new_path, expected_realm)` and
 `reauthorize_device(account, device)`. There are no HTTP administration endpoints,
 scheduled jobs or live-database overwrite operations. These additions are a
-separate source slice from the nine-test relay verification below; **they have
-not been built or executed yet** while the editor owns the heavy-build slot.
+separate source slice from the older nine-test relay verification below. The
+combined backend acceptance linked above subsequently built and executed them,
+including concurrent WAL snapshots, permission state, fresh restore epoch and
+revoked restored credentials. Scheduling, off-host copies and product operator
+commands/UI remain separate work; source acceptance is not a hosted service.
 
 `backup_to` pins one WAL read transaction and uses the
 [SQLite online backup API](https://www.sqlite.org/backup.html) through

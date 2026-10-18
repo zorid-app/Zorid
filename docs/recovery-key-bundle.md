@@ -77,11 +77,15 @@ old cursor rejection and preserved ciphertext. Only the separately held recovery
 secret unwraps the backup's content key. A new CLI local store receives the note
 and another process resumes without receiving or uploading it again.
 
-The note path, stable ID and text bootstrap are **explicit fixture declarations**.
-Text-v1 deliberately cannot create unknown namespace entries, so this is a
-known-note clean-store recovery test, not full vault/namespace restoration. That
-required gate awaits file-v2/schema8 integration. There is no hidden trusted
-metadata export from the lost client. Multi-key-epoch history/rotation, automatic
+That earlier text-v1 fixture supplied the note path, stable ID and text bootstrap
+explicitly. It is superseded by the file-v2 clean-client fixture in
+`crates/zorid-cli/tests/recovery.rs`: the receiver starts without namespace or
+bootstrap bindings and reconstructs text and a multi-chunk binary attachment
+after original client state removal. Executed acceptance is recorded in
+[shared-core-milestone-acceptance.md](shared-core-milestone-acceptance.md).
+This bounded fixture does not establish every namespace history or product
+recovery setup. There is no hidden trusted metadata export from the lost client.
+Multi-key-epoch history/rotation, automatic
 backup scheduling, production enrollment/recovery UI, recovery-secret custody,
 mobile/browser integration and independent security review remain open.
 
