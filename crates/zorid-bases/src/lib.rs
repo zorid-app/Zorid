@@ -3,6 +3,7 @@
 mod expression;
 pub mod types;
 pub mod tasks;
+pub mod calendar;
 mod files;
 mod graph;
 pub use graph::{query_generation, FilePresentationFacts, MetadataIssue, MAX_RELATIONSHIP_EDGES};
