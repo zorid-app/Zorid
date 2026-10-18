@@ -5,7 +5,8 @@ Owner: dispatched contract worker `term_ef51c268-5804-46f1-b07c-f634a3c318a7`,
 initial task `task_443398c0e767`, dispatch `ctx_99a6816f636e`; narrow review
 followup `task_306916121df3`, dispatch `ctx_0badfb67947e`, branch
 `tingkai-c/managed-firstparty-consumer-contract`. Scope: this new document only.
-The sole shared-core integrator owns main. Recommendations below are an internal
+Canonical main integration belongs solely to `term_2fbd0185-6f86-4649-824c-92faf46852f7`;
+the managed-data coordinator does not own canonical main integration. Recommendations below are an internal
 implementation handoff, not a public API freeze or an implementation claim.
 
 ## Deliverable and dependency boundary
@@ -218,9 +219,12 @@ to the records Rust owner to add `zorid-core` for `EntryId` and reuse the existi
 exact pins `chrono =0.4.45` and `chrono-tz =0.10.4`, both with
 `default-features = false` and `features = ["std"]`, as already used by
 `crates/zorid-bases/Cargo.toml`. The coordinator must name that records owner
-before the manifest edit. Root `Cargo.lock` is assigned to the sole integration
-coordinator `term_959a4f02-747c-4b9d-820e-3672def55e49` for the corresponding
-reviewed dependency-edge update; no unowned root edits or new version selection. This doc changes neither.
+before the manifest edit. The managed-data coordinator
+`term_959a4f02-747c-4b9d-820e-3672def55e49` explicitly grants WorkBlock worker W
+(`ctx_99ac`) only the isolated scoped `zorid-records/Cargo.toml` dependency edits
+and corresponding root `Cargo.lock` edges. This is not canonical main ownership;
+submit those reviewed edges to the canonical integrator. No unowned root edits
+or new version selection. This doc changes neither.
 
 Validate every incoming/local range write and set addition, including operations
 waiting on parents and all concurrent range candidates, not only the chosen
@@ -279,7 +283,8 @@ Browser's existing frozen records facade has only register/apply/snapshot/retryP
 changes, not a collection listing/range query. Add the **necessary bounded scoped
 listing** in the records adapter, authorized by its handle: key-ordered pages with
 explicit count/byte limits and continuation, no unbounded getAll or raw JS JSON
-number decoding. Native can page existing `managed_export`. A shared Rust
+number decoding. Native can page existing `managed_export` (its maximum remains 64 records per page;
+the UI 200-row budget aggregates bounded pages, not a larger Store page). A shared Rust
 WorkBlock query filters/decodes those pages for the visible interval; return a
 continuation and incomplete flag until the scan finishes. Start with maximum
 31-day windows and 200-row/1 MiB pages; existing 1024-record/32 MiB domain quotas
@@ -298,7 +303,7 @@ unchanged and receives only a later agreed semantic DTO handoff.
 | Slice / owner to assign | Exact existing seams and proposed new files | Observable exit |
 | --- | --- | --- |
 | 1. Task domain + preset / Types-Bases owner | NEW `crates/zorid-bases/src/types.rs`, `tasks.rs`; wire via existing `lib.rs`, `graph.rs`; NEW `src/tasks/presets.ts`, `src/tasks/types-document.ts`; review `crates/zorid-index/src/generation.rs`, `snapshot.rs`, `crates/zorid-document/src/types.rs`, `frontmatter.rs` without adding a second parser. | Install non-overwriting Type/Base preset; valid typed Markdown appears in the same pinned Base and Tasks projection; malformed configs produce recoverable diagnostics. |
-| 2. WorkBlock validation + commands / records Rust owner | NEW `crates/zorid-records/src/first_party.rs`; existing `lib.rs`, `admission.rs`, `crates/zorid-records/Cargo.toml`, `crates/zorid-store/src/managed_records.rs`, `crates/zorid-wasm/src/records.rs`; root `Cargo.lock` belongs to the integration/dependency owner. | Local and encrypted incoming malformed ranges fail identically; valid offline create/move/ref edits persist and retain conflicts/replay semantics. |
+| 2. WorkBlock validation + commands / records Rust owner | NEW `crates/zorid-records/src/first_party.rs`; existing `lib.rs`, `admission.rs`, `crates/zorid-records/Cargo.toml`, `crates/zorid-store/src/managed_records.rs`, `crates/zorid-wasm/src/records.rs`; isolated root `Cargo.lock` dependency edges are explicitly granted to WorkBlock worker W (`ctx_99ac`); canonical integration remains with `term_2fbd0185-6f86-4649-824c-92faf46852f7`. | Local and encrypted incoming malformed ranges fail identically; valid offline create/move/ref edits persist and retain conflicts/replay semantics. |
 | 3a. Native Store-backed desktop service first / desktop core owner | NEW `crates/zorid-native/src/workblocks.rs`, `crates/zorid-desktop-host/src/workblocks.rs`, `desktop/workblocks.cjs`, `src/core/workblocks.ts`; named owners for `crates/zorid-native/src/lib.rs`, `crates/zorid-desktop-host/src/lib.rs` (existing admitted stdio Command/session dispatch), `desktop/rust-vault-service.cjs`, `vault-dispatch.cjs`, `preload.cjs`, `src/platform/desktop.ts`. | Electron main privately registers compiled WorkBlocks; renderer schedules/queries through admitted commands; bounded range reads page existing `managed_export`; restart reads the same records without a fixture host. |
 | 3b. Browser listing/activation parallel or followup / browser host owner | Existing `src/platform/browser-managed-records-registry.ts`, `browser-managed-records-host.ts`, `browser-core-worker.ts`, `src/core/browser-managed-records.ts`, `browser-sync-streaming.ts`; shared WASM binding coordinated with records owner. | Normal product Worker uses the compiled consumer, scoped bounded listing and semantic commands; browser activation does not gate 3a or local Electron UI. |
 | 4. Functional desktop Tasks / UI + editor seam owner | NEW `src/tasks/controller.ts`, `view.ts`, `view.css`; existing `src/bases/controller.ts`, `document.ts`, `presentation-common.ts`; named grants for `src/ui/workspace.ts`, `workspace-keymap.ts`, `workspace-menus.ts`, `src/ui/note-buffer.ts` if needed. | Capture, edit mapped status/date, open rich body; saved state agrees in multiple Bases/Tasks; stale/failed saves retain drafts. Avoid NoteBuffer changes if current mutation host suffices. |
