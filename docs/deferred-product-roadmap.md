@@ -77,6 +77,16 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Physical Dev17 delivery (2026-10-18 03:58 UTC): root inspected persistent
+phone17-build2.exit0, signature_verify_exit0, bundleapp.zorid.notes.dev build17
+and binary SHAa1933a0e385b35c736cefc38e3a2aa562ce630d0b7ac4117c6a7441a3c2d1a60.
+Actual devicectl install and launch JSON both outcome success (separate exit0),
+launched PID10215. Evidence under /Users/ctk/orca/artifacts/zorid-native-20261018.
+Source native649b3acc/reviewed2ccce; one-WK channel absent. No gesture/Home/runtime
+acceptance inferred; prior Simulator startup remained inconclusive. Current phone
+app stays open under user request. Heavy Xcode phase ended, allowing reviewed
+Tasks successor frontend build/proof; no requirement to wait for phone UI approval.
+
 Finite navigation source delivery (2026-10-18 03:56 UTC): maina2d480e2
 integrates approved4d04d082 optional-capability TypeScript slice; all eight files
 byte-match freeze.293 focused checks/fullTS pass, independent source/delta review
