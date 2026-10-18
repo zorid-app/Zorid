@@ -77,6 +77,19 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Canonical worker checkpoint (2026-10-18 02:18 UTC): mainbf575275..547036a7
+integrates exactly five normal-worker commits through38539b42. Root verified
+source/tests/results trees byte-identical and raw report SHA616b4bd9 matching,
+read independent final review and actual proof; diff check passes. Actual normal
+Worker + WASM + strict IDB five groups,17 focused and full TS pass. Startup
+retained retry, network-parent child recovery, foreground missed-hint catch-up,
+release/reacquisition and held real transaction drain are covered; not all race
+interleavings. Product registry is empty; no product/UI/public authoring or
+two independent normal-worker offline author convergence completion. The latter
+has a separately owned new fixture/proof followup. Optional-only registration
+guard is separate bounded source work, not included here. Overall goal remains
+active; later native/mobile consumers and type/task/Base/Calendar UX remain.
+
 Runtime checkpoint (2026-10-18 02:15 UTC): diagnostic13 actual touch trace proves
 the fallback cleanup microtask runs before CodeMirror's actual touch-end handler,
 clearing the saved gesture; no default-guard relaxation is justified. d809 owns
