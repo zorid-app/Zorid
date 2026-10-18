@@ -16,6 +16,18 @@ serialized. Implementation commits and integrated verification will be recorded
 here; module-level tests alone do not establish desktop runtime acceptance.
 
 
+### Latest integration checkpoint — 2026-10-18
+
+Main `eb6d6bb21e3e277745990eaa1b5d6645bda53eac` integrates the reviewed cache/history
+batch. Application source (`src`, `desktop`, `crates`) was verified identical to
+reconciled integration `bf1feb0a`; reconciliation with main changed documentation
+only. The matching frontend build passed on main. Earlier clipboard delivery is
+`a98cb04f`; browser contract is `1b4bb432`. No push by this coordinator.
+S0 is still implementing; the open namespace recovery, no-window quit and final
+CLI/interruption checks below remain required. Completed component checkboxes in
+the roadmap are not complete milestone acceptance. Root retains sole main
+integration; all unfinished namespace work stays isolated.
+
 ### S0 continuation ownership
 
 First batch integrated as main `b9f29cc93f12233608036632266661fd0b51c5e2`;

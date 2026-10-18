@@ -74,36 +74,48 @@ choice at the desktop gate rather than silently expanding the prerequisite.
 **Current:** native Store/SQLite authority, physical projection journals and local
 checkpoints exist. Browser uses IndexedDB. The first reviewed S0 batch adds shared
 SQLite connection policy, separate app-local recovery snapshots, automatic opening
-recovery and settled backup retirement. The reviewed second batch separates native disposable document caches into app-local
-`cache.sqlite` and adds entry-scoped version preview/restoration. Clipboard-image
-transfer collision repair and actual dirty-close/quit/history checks are in
-verification. Complete S0 is not accepted.
+recovery and settled backup retirement. The second batch, integrated as `eb6d6bb2`, separates native disposable document
+caches into app-local `cache.sqlite` and adds entry-scoped version preview/restore.
+Clipboard images, native dirty-window close, live-window normal AppKit quit, history
+restoration and restart have passed scoped actual Electron checks. S0 remains
+implementing: superseded-rename recovery, no-window quit and the final concurrent
+CLI/interruption exercise remain open. Complete S0 is not accepted.
 
 Scope:
 
-- [ ] Inventory current transaction boundaries, save state and pending/settled
+- [x] Inventory current transaction boundaries, save state and pending/settled
   `.previous`/`.namespace` artifacts before changing their lifecycle.
 - [ ] Review storage service contracts against existing feature needs before
   implementing the SQLite layer; carry unresolved cross-system seams into S0A.
-- [ ] Introduce shared Rust SQLite infrastructure for native connections,
+- [x] Introduce shared Rust SQLite infrastructure for native connections,
   configuration, transactions, schemas, errors/locking and diagnostics. Keep
   domain operations in services; no arbitrary frontend SQL API.
-- [ ] Keep native authoritative state in vault `.zorid/vault.sqlite`. Define stable
+- [x] Keep native authoritative state in vault `.zorid/vault.sqlite`. Define stable
   local vault identity and app-data path resolution shared with the independent
   CLI; handle moved/copied vaults and identically named vaults explicitly.
-- [ ] Separate app-local per-vault `cache.sqlite` (rebuildable) and
+- [x] Separate app-local per-vault `cache.sqlite` (rebuildable) and
   `recovery.sqlite` (retained history) without breaking authoritative transactions.
 - [ ] Match the inspected Obsidian autosave/File Recovery behavior: coalesced
   roughly two-second saves, blur/close/graceful-quit flush, five-minute snapshots,
   seven-day expiry, unchanged-content dedupe, best-effort failed-save capture and
   manual preview/restore. Do not promise every unsaved keystroke survives a crash.
-- [ ] Stop accumulating per-save backups; reconcile current Rust DB/file authority,
+- [x] Stop accumulating per-save backups; reconcile current Rust DB/file authority,
   external-writer handling and safe artifact cleanup before save-strategy cutover.
 - [ ] Reproduce and fix the persistent import/reconciliation warning's actual cause;
   normal operation should settle automatically. Real unresolved recovery remains
   visible with an actionable message, rather than being hidden.
-- [ ] Specify browser service/storage interfaces for connected working state.
+- [x] Specify browser service/storage interfaces for connected working state.
   Persistent browser SQLite/OPFS is optional and does not block native S0 delivery.
+
+Completed checks refer to the bounded implementation and evidence recorded in
+[the execution checkpoint](deferred-product-roadmap.md), not acceptance of the
+whole milestone. Vault moves currently start a new local-history bucket; aliases
+share a bucket and copies remain separate. Settled backup retirement never sweeps
+unresolved namespace evidence. The [browser contract](architecture/browser-storage-contract.md)
+maps current IndexedDB services; connected onboarding and attachment eviction
+remain later browser work. Autosave/history behavior is implemented and scoped
+checks pass, but the lifecycle gate still includes the separate no-window quit
+case. S0A will complete the cross-feature interface audit.
 
 **Exit:** actual desktop create/edit/save/reopen/restart works through the new
 layer; meaningful interruption, external-change and CLI/application-concurrency
