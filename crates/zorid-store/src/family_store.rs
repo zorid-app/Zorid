@@ -47,6 +47,7 @@ pub struct FamilyStatus {
     pub graph_encoded_bytes: u64,
     /// Counts are canonical decimal strings, never lossy JS u64 values.
     pub pending_authored: String,
+    /// File/text pending publications plus unresolved managed record receipts.
     pub pending_dependencies: String,
     pub pending_projection: String,
     pub recovery_entries: String,
@@ -67,6 +68,7 @@ pub struct FamilyReceiveCommit {
     pub update_id: UpdateId,
     pub duplicate: bool,
     pub changed_entry_ids: Vec<EntryId>,
+    /// Same combined outstanding count as FamilyStatus::pending_dependencies.
     pub pending_prerequisites: u32,
     pub cursor: Option<ReceiveCursor>,
 }
@@ -327,6 +329,14 @@ impl Store {
     }
 }
 
+/// Count every family's outstanding work in the caller's transaction snapshot.
+/// File graph metrics remain file-only; managed snapshots retain record reasons.
+fn pending_count(tx: &Connection) -> Result<u32> {
+    family_materialization::pending_count(tx)?
+        .checked_add(super::managed_records::pending_count(tx)?)
+        .ok_or_else(|| StoreError::Corrupt("combined family pending count overflow".into()))
+}
+
 fn status_in(tx: &Connection) -> Result<FamilyStatus> {
     let authority = text_sync::identity(tx)?;
     let scope = match (authority.realm_id, authority.vault_id) {
@@ -356,9 +366,10 @@ fn status_in(tx: &Connection) -> Result<FamilyStatus> {
         output.graph_encoded_bytes = serde_json::to_vec(&state)?.len() as u64;
         output.cursor = family_ledger::cursor(tx, &scope.realm_id, &scope.vault_id)?;
         let (authored,projection):(i64,i64)=tx.query_row("SELECT (SELECT count(*) FROM authored_envelopes WHERE realm_id=?1 AND vault_id=?2 AND accepted=0),(SELECT count(*) FROM projection_jobs WHERE completed=0)",params![scope.realm_id.as_str(),scope.vault_id.as_str()],|r|Ok((r.get(0)?,r.get(1)?)))?;
-        let pending = family_materialization::pending_count(tx)?;
+        let pending = pending_count(tx)?;
         output.pending_authored = authored.to_string();
-        // Number of retained identities awaiting causal/content prerequisites.
+        // Pending file/text publications and unresolved record receipts. Summary
+        // counts include record errors; managed snapshots expose their reasons.
         output.pending_dependencies = pending.to_string();
         output.recovery_entries = family_materialization::recovery_count(tx)?.to_string();
         output.pending_projection = projection.to_string();
@@ -492,7 +503,7 @@ impl Store {
                 update_id: metadata.key.update_id,
                 duplicate,
                 changed_entry_ids: Vec::new(),
-                pending_prerequisites: super::managed_records::pending_count(&tx)?,
+                pending_prerequisites: pending_count(&tx)?,
                 cursor,
             };
             tx.commit()?;
@@ -530,7 +541,7 @@ impl Store {
         }
         // Pending classification contains the exact graph dependency obligations;
         // graph records and Yrs pending dependencies are retained in this tx too.
-        let pending_prerequisites = family_materialization::pending_count(&tx)?;
+        let pending_prerequisites = pending_count(&tx)?;
         if let Some(delivery) = delivery {
             family_ingress::check_delivery(&tx, &scope, Some(delivery))?;
             family_ledger::compare_cursor(&tx, Some(&delivery.expected), &delivery.next)?;

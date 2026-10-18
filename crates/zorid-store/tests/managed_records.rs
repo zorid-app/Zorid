@@ -1112,3 +1112,135 @@ fn receipt_byte_quota_rejects_without_advancing_shared_cursor_or_losing_prior_re
     assert_eq!(count(&path, "immutable_payloads"), successes);
     assert_eq!(count(&path, "managed_records"), 0);
 }
+
+#[test]
+fn pending_summary_and_both_receive_branches_preserve_other_family_outstanding_work() {
+    use zorid_core::{EntryId, EntryKind, Mutation, MutationRequest, OperationId, VaultPath};
+    use zorid_store::FamilyPayloadKind;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut sender, _) = setup(&dir.path().join("sender"), Policy::Synced);
+    let receiver_path = dir.path().join("receiver");
+    let (mut receiver, handle) = setup(&receiver_path, Policy::Synced);
+    let scope = record_scope(&target());
+    let child = operation(
+        "waiting-child",
+        &scope,
+        &["create"],
+        Command::Patch(write("child")),
+    );
+    let waiting = receive(
+        &mut receiver,
+        &wire(&payload("waiting-record", &scope, &[child])),
+    );
+    assert_eq!(waiting.pending_prerequisites, 1);
+    let before_files = receiver.family_status().unwrap();
+    assert_eq!(before_files.pending_dependencies, "1");
+    assert_eq!(before_files.graph_records, 0);
+
+    sender
+        .family_apply(
+            &MutationRequest {
+                operation_id: OperationId::new("pending-summary-file-create").unwrap(),
+                mutation: Mutation::Create {
+                    id: EntryId::new("file").unwrap(),
+                    path: VaultPath::new("note.md").unwrap(),
+                    kind: EntryKind::File,
+                    content: Some(b"file content".to_vec()),
+                },
+            },
+            Some(FamilyCreateMode::Text),
+        )
+        .unwrap();
+    let mut packets: Vec<_> = sender
+        .family_pending_authored(None, 64)
+        .unwrap()
+        .into_iter()
+        .map(|item| {
+            let expected = ExpectedContext {
+                realm_id: item.scope.realm_id,
+                vault_id: item.scope.vault_id,
+                update_id: item.update_id,
+                key_epoch: 1,
+            };
+            let bytes = sender.family_seal(&expected, &key()).unwrap();
+            (item.family, expected, bytes)
+        })
+        .collect();
+    // Text before namespace/bootstrap creates an independent file publication
+    // dependency while the unrelated managed record remains unresolved.
+    let index = packets
+        .iter()
+        .position(|p| p.0 == FamilyPayloadKind::Text)
+        .unwrap();
+    let (_, expected, bytes) = packets.remove(index);
+    let text_receipt = receive(&mut receiver, &(expected, bytes));
+    assert_eq!(text_receipt.pending_prerequisites, 2);
+    let with_text = receiver.family_status().unwrap();
+    assert_eq!(with_text.pending_dependencies, "2");
+
+    // Inverse direction: an accepted record receipt must still report the file
+    // publication dependency, without adding records to file graph metrics.
+    let other_target = ManagedTarget {
+        record: id("other-record"),
+        generation: id("other-create"),
+        restores: None,
+    };
+    let other_scope = record_scope(&other_target);
+    let other = operation(
+        "other-create",
+        &other_scope,
+        &[],
+        Command::Create(write("accepted")),
+    );
+    let records_receipt = receive(
+        &mut receiver,
+        &wire(&payload("accepted-record", &other_scope, &[other])),
+    );
+    assert_eq!(records_receipt.pending_prerequisites, 2);
+    assert_eq!(
+        receiver.family_status().unwrap().graph_records,
+        with_text.graph_records
+    );
+
+    assert!(!packets.is_empty());
+    let mut final_pending = text_receipt.pending_prerequisites;
+    for (kind, expected, bytes) in packets {
+        assert_eq!(kind, FamilyPayloadKind::Files);
+        let receipt = receive(&mut receiver, &(expected, bytes));
+        assert!(receipt.pending_prerequisites >= 1);
+        assert_eq!(
+            receiver.family_status().unwrap().pending_dependencies,
+            receipt.pending_prerequisites.to_string()
+        );
+        final_pending = receipt.pending_prerequisites;
+    }
+    // Completing the valid file leaves the managed dependency visible in both
+    // the common summary and its detailed record snapshot.
+    assert_eq!(final_pending, 1);
+    assert_eq!(
+        receiver
+            .read(&EntryId::new("file").unwrap())
+            .unwrap()
+            .unwrap()
+            .content
+            .unwrap(),
+        b"file content"
+    );
+    assert_eq!(receiver.family_status().unwrap().pending_dependencies, "1");
+    assert_eq!(
+        initial(&receiver, &handle)
+            .unresolved
+            .get("waiting_dependencies")
+            .map(String::as_str),
+        Some("1")
+    );
+
+    let parent = operation("create", &scope, &[], Command::Create(write("parent")));
+    let settled = receive(
+        &mut receiver,
+        &wire(&payload("record-parent", &scope, &[parent])),
+    );
+    assert_eq!(settled.pending_prerequisites, 0);
+    assert_eq!(receiver.family_status().unwrap().pending_dependencies, "0");
+    assert!(initial(&receiver, &handle).unresolved.is_empty());
+}
