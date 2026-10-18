@@ -390,13 +390,26 @@ mod compact_wire_tests {
         let root = tempfile::tempdir().unwrap();
         let mut host = EmbeddedHost::open_local(root.path()).unwrap();
         create_folder(&mut host, "source", "Source");
-        // Three valid logical names are deliberately too large for filesystem
-        // projection. This keeps fixture size/work bounded while producing a
-        // real recursive authority receipt >1 MiB; pending projection is honest.
-        let suffix = "x".repeat(180_000);
-        for index in 0..3 {
-            create_folder(&mut host, &format!("child_{index}"), &format!("Source/{index}_{suffix}"));
+        // Seed authority through public Store commands on one setup connection,
+        // without attempting physical recovery after each logical create. There
+        // are no concurrent host calls; close setup before the leased endpoints.
+        // Valid bounded names form enough original before/after paths to exceed
+        // 1 MiB without thousands of files. Projection state comes from the
+        // original durable job, not an assumed outcome for these deep paths.
+        let mut setup = zorid_store::Store::open(root.path().join(".zorid/vault.sqlite")).unwrap();
+        let suffix = "x".repeat(230);
+        let mut path = String::from("Source");
+        for index in 0..70 {
+            path.push_str(&format!("/{index}_{suffix}"));
+            setup.family_apply(&MutationRequest {
+                operation_id: OperationId::new(format!("create_child_{index}")).unwrap(),
+                mutation: Mutation::Create {
+                    id: EntryId::new(format!("child_{index}")).unwrap(), path: VaultPath::new(&path).unwrap(),
+                    kind: EntryKind::Folder, content: None,
+                },
+            }, None).unwrap();
         }
+        drop(setup);
         let source = state(&host, "source");
         let lease = claim(&mut host);
         let family = move_family("large_move", &source, "Target", json!({"kind":"root"}));
@@ -408,8 +421,8 @@ mod compact_wire_tests {
         assert_eq!(status["ok"], true, "{status}");
         assert_eq!(status["result"]["source"], json!(source));
         assert_eq!(status["result"]["target"]["path"], "Target");
-        assert_eq!(status["result"]["change_count"], "4");
-        assert_eq!(status["result"]["projection"], "pending");
+        assert_eq!(status["result"]["change_count"], "71");
+        assert!(["settled", "pending"].contains(&status["result"]["projection"].as_str().unwrap()));
         assert!(serde_json::to_vec(&status).unwrap().len() < 2048);
         assert!(status["result"].get("commit").is_none());
         assert!(status["result"].get("changes").is_none());
