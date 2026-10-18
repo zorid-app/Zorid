@@ -77,6 +77,16 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Finite navigation source delivery (2026-10-18 03:56 UTC): maina2d480e2
+integrates approved4d04d082 optional-capability TypeScript slice; all eight files
+byte-match freeze.293 focused checks/fullTS pass, independent source/delta review
+accepted corrected failed-admission pin and stale/link/lifecycle ordering. Report
+mobile-finite-navigation-source-results.md records limits. No listener/service
+is enabled without native sameVaultNavigation:1. Paired Swift and actual one-WK
+navigation remain unproved; current phone17 build predates this channel. Main
+frozen offline pnpm12 install restored seven missing Calendar packages without
+lock/source change. Tasks UI proof remains separate, native owns phone Xcode.
+
 Recovery progress (2026-10-18 03:50 UTC): Stage5 source preparation is saved
 in stage5-enrollment-inventory.md and stage5-history-backup-inventory.md; existing
 local-scope enrollment prevents a simple fixture-config Settings join wrapper.

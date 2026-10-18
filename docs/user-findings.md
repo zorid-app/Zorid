@@ -463,3 +463,8 @@ but pins buffer to B, preventing later A/no-argument reuse. Root confirmed exact
 note-buffer blob1c2de404 in isolated mobile-ios-shell; correction and focused
 regressions assigned to restored navigation owner c8bf385c. Not main code and
 not a runtime finding. Preserve source/draft state on rejected admission.
+
+Navigation identity correction source accepted (2026-10-18 03:56 UTC): exact
+4d04d082 passed293 focused cases/fullTS and independent delta review, integrated
+as maina2d480e2. Pin changes only after successful admission, including queued
+calls. All eight files match approved source. Paired native runtime remains open.
