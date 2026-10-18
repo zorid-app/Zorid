@@ -83,10 +83,16 @@ cases where possible. They need not be multiplied across 100,000 notes.
 
 Run a separate large-note profile with exact 1 MiB, 16 MiB and 16 MiB+1 UTF-8 byte
 sources. Include Unicode before a marker, a long single line and a many-line note;
-use a few named cases rather than a Cartesian product. The oversized case checks
-explicit exclusion/coverage and source preservation, not successful parsing. A
-second small duplicate-content cohort checks cross-entry parse reuse/contextual
-rebinding without making the main corpus an artificial cache-hit best case.
+use a few named cases rather than a Cartesian product. Separate pure extraction
+from source admission: the parser rejects oversized input and the index/WASM
+builder can classify it as SourceLimit. Ordinary native inline admission instead
+returns StreamRequired above 16 MiB; a retained streamed BinaryRef is classified
+Binary by the current native index, regardless of its filename. Check that actual
+admission/classification and exact source preservation rather than claiming a
+native SourceLimit integration pass. Binary exclusion is not proof of text
+extraction coverage. A second small duplicate-content cohort checks cross-entry
+parse reuse/contextual rebinding without making the main corpus an artificial
+cache-hit best case.
 
 ## Query set and expected work
 
@@ -188,15 +194,23 @@ These are current implementation ceilings, not chosen performance budgets:
 | --- | --- |
 | [Document types](../../crates/zorid-document/src/types.rs) | 16 MiB source maximum. |
 | [Index pumps](../../crates/zorid-index/src/snapshot.rs) and [generation](../../crates/zorid-index/src/generation.rs) | 32 documents / 1 MiB soft pump budget; one permitted large document can exceed the soft byte budget; 64 MiB generation metadata ceiling. |
-| [Store index](../../crates/zorid-store/src/document_index.rs) | Four query pins; publication and retained snapshot witnesses remain mandatory. |
+| [Store admission](../../crates/zorid-store/src/entry_content.rs) and [index](../../crates/zorid-store/src/document_index.rs) | 16 MiB inline admission maximum; oversized writes require streaming. BinaryRef is indexed as Binary exclusion. Four query pins; publication and retained snapshot witnesses remain mandatory. |
+| [Browser index host](../../src/core/browser-document-index.ts) | 100,000 records, 256 MiB projection per generation, 512 MiB total projection cache, 64 MiB metadata, 16 MiB header limit, four pins/stages and three generations. Host capture/open can impose further bounded header envelopes. |
 | [Literal search](../../crates/zorid-index/src/literal.rs) | Exact case-sensitive literal, one hit per matching line; bounded pages, 1..1000 requested hits and 4096-byte query maximum. |
 | [Base query](../../crates/zorid-bases/src/query.rs), [graph](../../crates/zorid-bases/src/graph.rs), [library](../../crates/zorid-bases/src/lib.rs) | 50,000 scanned records, 10,000 rows, 5,000 groups, 2 million query steps, 8 MiB output, 100,000 relationship edges and 64 MiB request. |
 | [Current search presentation](../../src/ui/workspace.ts) | Additional bounded scan/page/result display limits. Reaching a display cap is not complete search coverage. |
 
-A 100k vault can legitimately hit current metadata/graph/Base scan ceilings. Record
-the exact stage/reason and source preservation; do not silently take a prefix,
-raise limits or label resource rejection a successful full-vault query. Large-vault
-streaming/planning changes require reviewed bounded-memory contracts.
+The specified 100k note bodies total 291.015625 MiB before Base definitions or
+attachment metadata. This exceeds the browser single-generation projection cap;
+adding the extra files also exceeds its record ceiling. A complete browser
+generation is therefore currently impossible for this fixture, independently of
+possible earlier header/metadata limits. A complete Base scan also exceeds its
+50,000-record ceiling. Record the earliest actual resource rejection, exact scope
+and source preservation; do not report full-coverage latency for these cases.
+The 10k workload supplies current successful-path comparisons where admitted.
+Do not silently take a prefix, raise limits or label resource rejection a successful
+full-vault query. Large-vault streaming/planning changes require reviewed
+bounded-memory contracts.
 
 Current [document interface](../../src/core/document-semantics.ts) publishes only
 ready staged generations and current consumers drive catch-up before querying.
