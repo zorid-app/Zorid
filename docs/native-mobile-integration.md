@@ -1506,3 +1506,37 @@ for absent file, existing invalid/unreadable file error propagated before host
 open, persist closure throws into existing metadata Retry. No NewNote ACK/UI.
 Combined15-source compiler +actual history Foundation harness next; no runtime
 filesystem/failure-injection evidence yet.
+
+
+Combined native compilation/history checks — 2026-10-18 01:29 UTC:
+Frozen588bc684, immutable snapshot /private/tmp/zorid-history-metadata-15-source-20261018
+contains ALL15 Swift sources plus copied actual C/bridging headers, source manifest
+SHA25667c1cf0e2db4e5df72ae9aeec1f28ce860cf72b0e3df05cf854f37ab9f802a66.
+Granted61e/b726 handle54862: Swift frontend TERMINAL0, SDK26.2/Swift5/arm64 iOS15
+Simulator, existing pinned cache/frameworks. Existing actor/Sendable warnings;
+zero errors. Not full project/link/runtime proof.
+
+Initial host harness compile TERMINAL1 unable to load default macOS26 standard
+library; no test executed. Exact original command/failure preserved. Corrected
+ONLY host compiler command66308 with explicit installed MacOSX26.2.sdk, arm64
+macOS13 deployment and task-local module cache; compile0, executable0. PASS193
+actual Foundation history checks. Harness actual source prefix matches
+NativeRouteHistory SHA256447501956850a36a556aa73c4d10fecab2201bd28131e25f505f6b831eb21d26;
+harness SHA25665fe62375fd3b861382a977e638d5ea77f2a8afb633206899f3e3425a322ed87.
+This executes actual history source, not a mirrored model. It does not prove
+UIKit transitions, lease/host close, lifecycle or metadata filesystem behavior.
+Snapshot keeps commands/logs/results for both failure and corrected pass.
+Slot returned b423e36035cc, no compiler live. Full focused Simulator history and
+durable metadata fault/retry/restart checks remain next.
+
+Root approved minimal native-only rejected-intent terminal protocol a38e; bd57
+explicitly resumed d7638a6b, exact plan2baf owner ACKca1e: parsed original create
+invalid_request/false +same-held-loan exact status not_committed, per-CID terminal
+CAS before current terminal CAS, verify both then exact release/fence ACK. This
+is a native journal protocol, not universal core tombstone/collision proof.
+Actual-helper partialCAS/lateCID/release tests required before NewNote exposure.
+Link source worker d809 started isolated main07415616 branch; touch-event plan
+refined under root43d860 (recognize short tap, preserve pan/longpress, consume
+accepted touchend, no blind touchstart prevention). No link fix/runtime claim.
+371 read-only edge gesture proposal6b80 started, no implementation before history
+transition proof. Phone Dev10 artifact remains2add, connection still unavailable.
