@@ -89,6 +89,15 @@ export function editorTransfers(options: TransferOptions,
       return view;
     }
     private canAuthor = () => !this.disposed && !this.view.state.readOnly && (captureAuthoring?.()?.() ?? !captureAuthoring);
+    private preserveControlEvent(event: Event) {
+      const target = event.target as Node | null;
+      if (!target || !this.view.contentDOM.contains(target)) return;
+      // Let the control receive its event before stopping the outer CM fallback.
+      // Clean up even if an earlier target listener stops immediate propagation.
+      const stop = (received: Event) => { if (received === event) received.stopPropagation(); };
+      target.addEventListener(event.type, stop);
+      queueMicrotask(() => target.removeEventListener(event.type, stop));
+    }
     private insertFiles(files: TransferFile[]) {
       // Capture at the event, not when a queued import eventually starts.
       const current = captureAuthoring?.() ?? (captureAuthoring ? null : () => true);
@@ -113,7 +122,7 @@ export function editorTransfers(options: TransferOptions,
         if (view) event.preventDefault();
         // CM's readOnly fallback also cancels paste. Controls outside an
         // editor content target keep their own browser input behavior.
-        else event.stopPropagation();
+        else this.preserveControlEvent(event);
         return;
       }
       if (handleTableClipboard(this.view, event)) return;
@@ -151,7 +160,7 @@ export function editorTransfers(options: TransferOptions,
       if (event.defaultPrevented || !event.dataTransfer) return;
       const view = this.target(event);
       if (!this.canAuthor()) {
-        if (view) event.preventDefault(); else event.stopPropagation();
+        if (view) event.preventDefault(); else this.preserveControlEvent(event);
         return;
       }
       if (!view) return;

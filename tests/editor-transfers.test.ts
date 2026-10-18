@@ -368,12 +368,17 @@ for (const inactive of [false, true]) test(`writer-denied transfer handling pres
   assert.ok(search);
   const control = dom.window.document.createElement('input'); view.contentDOM.append(control);
   for (const target of [search, control]) {
+    let pastes = 0, drops = 0;
+    target.addEventListener('paste', () => { pastes++; });
+    target.addEventListener('drop', () => { drops++; });
     assert.equal(paste({ 'text/plain': 'input text' }, [], target).event.defaultPrevented, false);
     const drop = new dom.window.Event('drop', { bubbles: true, cancelable: true });
     const dropped = file('control.png', [1]);
     Object.defineProperty(drop, 'dataTransfer', { value: { files: [dropped], items: [{ kind: 'file', getAsFile: () => dropped }] } });
     target.dispatchEvent(drop);
     assert.equal(drop.defaultPrevented, false);
+    assert.equal(pastes, 1, 'control receives paste');
+    assert.equal(drops, 1, 'control receives drop');
   }
   assert.equal(editor.getValue(), 'body');
   assert.deepEqual(imports, []);
