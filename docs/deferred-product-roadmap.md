@@ -77,6 +77,19 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Phone/combined-build checkpoint (2026-10-18 02:49 UTC): Dev15 signed build20613,
+install/launch23417 all passed on the physical test phone; it remains open for
+the user. Exact recovery3d80209a/runtime11c91da1 source, no diagnostics or unreviewed
+per-vault/strict8/quiet-loading changes. Link touch behavior is still unverified,
+not a passed Simulator interaction claim. Native owner has next bounded iOS slot
+for coherent d7265e54 per-vault source after reconciling current main, then A/B
+vault switch/restart. Root refreshed mobile/rust/Cargo.lock offline: only missing
+zorid-records package and Store edge, reusing already locked dependencies. Older
+native branch/core builds do not validate this combined source; no repeated85
+host tests are required unchanged. Native WorkBlock/Task query/desktop service
+and Calendar UI ownership is active on isolated managed desktop integration;
+shared Workspace changes must preserve371's disabled-state initializer.
+
 Canonical domain and test-candidate checkpoint (2026-10-18 02:46 UTC): main
 319c2238..62e7ad8e integrates all9 Types/Tasks domain/config commits through
 fc711906, exact affected trees, independent source review/21 Node/scoped TS and

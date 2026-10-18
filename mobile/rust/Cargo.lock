@@ -1819,6 +1819,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zorid-records"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "serde",
+ "serde_json",
+ "zorid-core",
+]
+
+[[package]]
 name = "zorid-store"
 version = "0.1.0"
 dependencies = [
@@ -1831,6 +1842,7 @@ dependencies = [
  "zorid-crypto",
  "zorid-file-sync",
  "zorid-index",
+ "zorid-records",
  "zorid-sync-protocol",
 ]
 
