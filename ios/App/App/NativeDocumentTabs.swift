@@ -110,6 +110,7 @@ final class NativeDocumentTabs: ObservableObject {
     enum Intent: Equatable {
         case select(UUID)
         case replaceSelected(NativeTabDocument)
+        case replaceSelectedWithHome
         case openInNewTab(NativeTabDocument)
         case newHome
         case close(UUID)
@@ -123,6 +124,18 @@ final class NativeDocumentTabs: ObservableObject {
         let sourceTab: NativeDocumentTab
         let destinationTab: NativeDocumentTab
         fileprivate let proposedTabs: [NativeDocumentTab]
+    }
+
+    // An opaque, transient metadata capability, never a save or lease receipt.
+    // Its initializer and full witness are inaccessible outside this source file.
+    struct ActiveDocumentBindingTicket: Equatable, Identifiable {
+        let id: UUID
+        let tabID: UUID
+        let sourceOwnerID: UUID
+        fileprivate let modelID: UUID
+        fileprivate let sourceRevision: UUID
+        fileprivate let admissionRevision: UUID
+        fileprivate let sourceTab: NativeDocumentTab
     }
 
     // These are coordinator assertions, not a save operation. Produce one only
@@ -144,6 +157,9 @@ final class NativeDocumentTabs: ObservableObject {
         let tabs: [NativeDocumentTab]
         let selectedTabID: UUID
     }
+    private let modelID = UUID()
+    // Even a cancelled navigation attempt supersedes an earlier binding event.
+    private var admissionRevision = UUID()
     @Published private var state: State
     @Published private(set) var pendingIntent: IntentTicket?
 
@@ -186,6 +202,9 @@ final class NativeDocumentTabs: ObservableObject {
         case .replaceSelected(let document):
             destination = NativeDocumentTab(id: selectedTabID, document: document)
             proposed[proposed.firstIndex(where: { $0.id == selectedTabID })!] = destination
+        case .replaceSelectedWithHome:
+            destination = NativeDocumentTab(id: selectedTabID)
+            proposed[proposed.firstIndex(where: { $0.id == selectedTabID })!] = destination
         case .openInNewTab(let document):
             guard proposed.count < Self.maximumTabs else { throw NativeDocumentTabsError.tabLimit }
             destination = NativeDocumentTab(document: document)
@@ -213,6 +232,7 @@ final class NativeDocumentTabs: ObservableObject {
         let ticket = IntentTicket(id: UUID(), intent: intent, sourceOwnerID: sourceOwnerID,
                                   sourceRevision: state.revision, sourceTab: selectedTab,
                                   destinationTab: destination, proposedTabs: proposed)
+        admissionRevision = UUID()
         pendingIntent = ticket
         return ticket
     }
@@ -235,6 +255,40 @@ final class NativeDocumentTabs: ObservableObject {
     func cancel(_ ticket: IntentTicket) throws {
         guard pendingIntent == ticket else { throw NativeDocumentTabsError.staleTicket }
         pendingIntent = nil
+    }
+
+    // The caller invokes this only for a freshly validated activation from its
+    // CURRENT single editor/container. No host is closed, opened or authorized.
+    // Preparing a binding neither reserves navigation nor changes persisted state.
+    func prepareActiveDocumentBinding(tabID: UUID, sourceOwnerID: UUID) throws -> ActiveDocumentBindingTicket {
+        guard pendingIntent == nil else { throw NativeDocumentTabsError.busy }
+        guard selectedTabID == tabID else { throw NativeDocumentTabsError.unknownTab }
+        return ActiveDocumentBindingTicket(id: UUID(), tabID: tabID, sourceOwnerID: sourceOwnerID,
+                                           modelID: modelID, sourceRevision: state.revision,
+                                           admissionRevision: admissionRevision, sourceTab: selectedTab)
+    }
+
+    // This is the sole exception to close-before-navigation: update metadata for
+    // an ALREADY active, freshly validated document (new note, rename or link).
+    // currentOwnerID is a coordinator assertion of the current host generation,
+    // not Rust lease authority. Check it again after asynchronous validation.
+    func bindActiveDocument(_ document: NativeTabDocument, using ticket: ActiveDocumentBindingTicket,
+                            currentOwnerID: UUID) throws {
+        guard pendingIntent == nil else { throw NativeDocumentTabsError.busy }
+        guard ticket.modelID == modelID, ticket.sourceRevision == state.revision,
+              ticket.admissionRevision == admissionRevision, ticket.tabID == selectedTabID,
+              ticket.sourceTab == selectedTab else { throw NativeDocumentTabsError.staleTicket }
+        guard ticket.sourceOwnerID == currentOwnerID else { throw NativeDocumentTabsError.invalidAcknowledgement }
+        var proposed = tabs
+        proposed[proposed.firstIndex(where: { $0.id == selectedTabID })!] =
+            NativeDocumentTab(id: selectedTabID, document: document)
+        let metadata = Metadata(version: 1, tabs: proposed, selectedTabID: selectedTabID)
+        guard try JSONEncoder().encode(metadata).count <= Self.maximumMetadataBytes else {
+            throw NativeDocumentTabsError.metadataLimit
+        }
+        // A new revision consumes this ticket and all competing bindings, even
+        // when document metadata is identical. Selection and other tabs stay put.
+        state = State(tabs: proposed, selectedTabID: selectedTabID)
     }
 
     // Only committed metadata is encoded; an in-flight intent never reaches disk.
