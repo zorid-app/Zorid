@@ -64,8 +64,10 @@ mod family_store;
 mod managed_records;
 pub use managed_records::{
     ManagedChange, ManagedChangePage, ManagedCollection, ManagedCommit, ManagedExportPage,
-    ManagedRegistration, ManagedRetryPage, ManagedRevision, ManagedSnapshot, ManagedTarget,
-    ManagedUnresolvedCursor, ManagedUnresolvedEvidence, ManagedUnresolvedSummary,
+    ManagedIntentDisposition, ManagedIntentInput, ManagedIntentPage, ManagedIntentRef,
+    ManagedIntentSettlement, ManagedPendingIntent, ManagedRegistration, ManagedRetryPage,
+    ManagedRevision, ManagedSnapshot, ManagedTarget, ManagedUnresolvedCursor,
+    ManagedUnresolvedEvidence, ManagedUnresolvedSummary,
 };
 mod file_state;
 pub use family_store::{

@@ -289,3 +289,37 @@ unjournaled settlement retry. Receipt is byte-canonical with exact original op,
 positive canonical sequence, immutable source and accepted-change association.
 The metadata16MiB cap is dominated by4096 retained keys at this charge/key bound;
 no artificial impossible metadata-cap fixture will be claimed.
+
+## Implementation source freeze preparation
+
+Independent reviewer approved inventory7d60 and fixed fixture amendment6396;
+source now implements only those granted hunks. Ordinary generic checkpoint ID
+behavior is preserved with reserved-only denial. Current origin Store methods
+remain source-only building blocks; native session/lease/admission/transport and
+old managed_apply cutover are unchanged. Scoped fixture trust is nondefault,
+release-denied and visible only inside Store's own test cfg; source search finds
+exactly the records feature definition and Store forwarding edge, no native/WASM
+or default enablement.
+
+Authored actual-SQLite cases: 11 integration tests for durable capture/reopen,
+non-Create replay/ACK after newer state,32-slot retirement/no-ID-reuse, wrong
+refs/Store/receipt, real precommit SQL abort, corrupted receipt, concurrent
+apply/reconcile, original semantic RemoveRef tags after re-add, foreign tombstone
+predecessor, old tuple rejection and4096 retained-key cap. One generic checkpoint
+regression covers reserved UUID/case variants while preserving nonUUID clients.
+Four explicitly featured inline Store cases cover separate nojournal upgrade,
+postcommit upgrade replay/ACK,32 mismatched originals with explicit retirement,
+and both held IMMEDIATE writer orders using two real connections and zero busy
+wait on the blocked contender. None of these tests has executed at this freeze.
+
+Review corrections are incorporated: no historical/fresh prepare in committed
+replay; canonical exact original result/source/change binding; exact capture or
+capture->retirement history checked by every reserved load, including nojournal
+retirement retry. No unsupported metadata-cap runtime claim is made:4096 key cap
+dominates16MiB logical reservation for this key bound. Request/live byte limits
+are checked but tests must not manufacture unapproved large domain requests.
+
+Checks so far: bounded rustfmt parsing/formatting, git diff --check and manifest
+feature-edge source inspection only. Compiler/tests/apps remain unrun pending
+coordinator load release. Main integration, native/WASM/IDB/encrypted/product
+cutover and parity remain separate required gates.

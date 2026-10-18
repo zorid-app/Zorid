@@ -151,11 +151,67 @@ fn number(value: &str) -> Result<i64> {
     }
     value.parse().map_err(|_| CheckpointError::Invalid)
 }
-fn scope(tx: &Connection, requested: &CheckpointScope) -> Result<()> {
+fn physical_scope(tx: &Connection, requested: &CheckpointScope) -> Result<()> {
     if super::text_sync::identity(tx)?.local_store_id != requested.vault_id {
         return Err(CheckpointError::ScopeMismatch);
     }
     Ok(())
+}
+fn scope(tx: &Connection, requested: &CheckpointScope) -> Result<()> {
+    if zorid_records::local_intent::is_reserved_checkpoint_client(requested.client_id.as_str()) {
+        return Err(CheckpointError::ScopeMismatch);
+    }
+    physical_scope(tx, requested)
+}
+/// Reserved-only helpers; caller owns the IMMEDIATE/FULL transaction and commit.
+pub(super) fn intent_load(tx: &Connection, s: &CheckpointScope, key: &str) -> Result<Option<Head>> {
+    intent_scope(tx, s)?;
+    valid_key(key)?;
+    high_water(tx)?;
+    let bytes: Option<i64> = tx.query_row("SELECT length(CAST(encoded_state AS BLOB)) FROM checkpoint_heads WHERE client_id=?1 AND checkpoint_key=?2",
+        params![s.client_id.as_str(),key], |r| r.get::<_,Option<i64>>(0)).optional()?.flatten();
+    if bytes.is_some_and(|size| size > zorid_records::local_intent::MAX_INTENT_BYTES as i64) {
+        return Err(CheckpointError::Limit);
+    }
+    let head = load(tx, s, key)?;
+    if let Some(head) = &head {
+        // Reserved keys are immutable capture + optional single retirement only.
+        let history: Vec<(String,Option<String>,i64,i64)> = tx.prepare("SELECT revision,expected_revision,deleted,state_bytes FROM checkpoint_revisions WHERE client_id=?1 AND checkpoint_key=?2 ORDER BY sequence LIMIT 3")?
+            .query_map(params![s.client_id.as_str(),key], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?
+            .collect::<std::result::Result<_,_>>()?;
+        let first = history.first().ok_or_else(corrupt)?;
+        valid_revision(&first.0).map_err(|_| corrupt())?;
+        if first.1.is_some()
+            || first.2 != 0
+            || !(1..=zorid_records::local_intent::MAX_INTENT_BYTES as i64).contains(&first.3)
+            || (!head.checkpoint.deleted
+                && (history.len() != 1 || first.0 != head.checkpoint.revision))
+            || (head.checkpoint.deleted
+                && (history.len() != 2 || head.expected.as_deref() != Some(first.0.as_str())))
+        {
+            return Err(corrupt());
+        }
+    }
+    Ok(head)
+}
+fn intent_scope(tx: &Connection, s: &CheckpointScope) -> Result<()> {
+    if s.client_id.as_str() != zorid_records::local_intent::RESERVED_CHECKPOINT_CLIENT {
+        return Err(CheckpointError::ScopeMismatch);
+    }
+    physical_scope(tx, s)?;
+    let synchronous: i64 = tx.pragma_query_value(None, "synchronous", |r| r.get(0))?;
+    if synchronous != 2 {
+        return Err(corrupt());
+    }
+    Ok(())
+}
+pub(super) fn intent_cas(
+    tx: &Connection,
+    s: &CheckpointScope,
+    request: CheckpointWrite<'_>,
+) -> Result<Checkpoint> {
+    intent_scope(tx, s)?;
+    cas(tx, s, request)
 }
 fn high_water(tx: &Connection) -> Result<i64> {
     let (head, allocated, count, first): (i64, i64, i64, i64) = tx.query_row(
@@ -168,9 +224,9 @@ fn high_water(tx: &Connection) -> Result<i64> {
     }
     Ok(head)
 }
-struct Head {
-    checkpoint: Checkpoint,
-    expected: Option<String>,
+pub(super) struct Head {
+    pub(super) checkpoint: Checkpoint,
+    pub(super) expected: Option<String>,
 }
 fn load(tx: &Connection, s: &CheckpointScope, key: &str) -> Result<Option<Head>> {
     // Test the byte length in SQLite before copying a potentially damaged body.
@@ -252,70 +308,11 @@ impl Store {
         s: &CheckpointScope,
         request: CheckpointWrite<'_>,
     ) -> Result<Checkpoint> {
-        valid_key(request.key)?;
-        valid_revision(request.next_revision)?;
-        if let Some(previous) = request.expected_revision {
-            valid_revision(previous)?;
-        }
-        if request
-            .encoded_state
-            .is_some_and(|body| body.len() > MAX_CHECKPOINT_BYTES)
-        {
-            return Err(CheckpointError::Limit);
-        }
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         scope(&tx, s)?;
-        // Store::open configures FULL; fail closed if a future caller changes it.
-        let synchronous: i64 = tx.pragma_query_value(None, "synchronous", |r| r.get(0))?;
-        if synchronous != 2 {
-            return Err(corrupt());
-        }
-        high_water(&tx)?;
-        let current = load(&tx, s, request.key)?;
-        let used: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM checkpoint_revisions WHERE client_id=?1 AND revision=?2)",
-            params![s.client_id.as_str(), request.next_revision],
-            |r| r.get(0),
-        )?;
-        if used {
-            if let Some(head) = current {
-                if head.checkpoint.revision == request.next_revision
-                    && head.expected.as_deref() == request.expected_revision
-                    && head.checkpoint.encoded_state.as_deref() == request.encoded_state
-                {
-                    tx.commit()?;
-                    return Ok(head.checkpoint);
-                }
-            }
-            return Err(CheckpointError::Conflict);
-        }
-        if current
-            .as_ref()
-            .map(|head| head.checkpoint.revision.as_str())
-            != request.expected_revision
-        {
-            return Err(CheckpointError::Conflict);
-        }
-        tx.execute("INSERT INTO checkpoint_revisions(client_id,checkpoint_key,revision,expected_revision,deleted,state_bytes) VALUES(?1,?2,?3,?4,?5,?6)",
-            params![s.client_id.as_str(),request.key,request.next_revision,request.expected_revision,
-                    request.encoded_state.is_none(),request.encoded_state.map_or(0, str::len) as i64])?;
-        let sequence = tx.last_insert_rowid();
-        tx.execute("INSERT INTO checkpoint_heads(client_id,checkpoint_key,revision,encoded_state) VALUES(?1,?2,?3,?4)
-                    ON CONFLICT(client_id,checkpoint_key) DO UPDATE SET revision=excluded.revision,encoded_state=excluded.encoded_state",
-            params![s.client_id.as_str(),request.key,request.next_revision,request.encoded_state])?;
-        let result = Checkpoint {
-            version: 1,
-            vault_id: s.vault_id.clone(),
-            client_id: s.client_id.clone(),
-            key: request.key.into(),
-            revision: request.next_revision.into(),
-            sequence: sequence.to_string(),
-            deleted: request.encoded_state.is_none(),
-            byte_length: request.encoded_state.map_or(0, str::len) as u32,
-            encoded_state: request.encoded_state.map(str::to_owned),
-        };
+        let result = cas(&tx, s, request)?;
         tx.commit()?;
         Ok(result)
     }
@@ -450,4 +447,67 @@ impl Store {
             high_water: water.to_string(),
         })
     }
+}
+
+fn cas(tx: &Connection, s: &CheckpointScope, request: CheckpointWrite<'_>) -> Result<Checkpoint> {
+    valid_key(request.key)?;
+    valid_revision(request.next_revision)?;
+    if let Some(previous) = request.expected_revision {
+        valid_revision(previous)?;
+    }
+    if request
+        .encoded_state
+        .is_some_and(|body| body.len() > MAX_CHECKPOINT_BYTES)
+    {
+        return Err(CheckpointError::Limit);
+    }
+    // Store::open configures FULL; fail closed if a future caller changes it.
+    let synchronous: i64 = tx.pragma_query_value(None, "synchronous", |r| r.get(0))?;
+    if synchronous != 2 {
+        return Err(corrupt());
+    }
+    high_water(tx)?;
+    let current = load(tx, s, request.key)?;
+    let used: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM checkpoint_revisions WHERE client_id=?1 AND revision=?2)",
+        params![s.client_id.as_str(), request.next_revision],
+        |r| r.get(0),
+    )?;
+    if used {
+        if let Some(head) = current {
+            if head.checkpoint.revision == request.next_revision
+                && head.expected.as_deref() == request.expected_revision
+                && head.checkpoint.encoded_state.as_deref() == request.encoded_state
+            {
+                return Ok(head.checkpoint);
+            }
+        }
+        return Err(CheckpointError::Conflict);
+    }
+    if current
+        .as_ref()
+        .map(|head| head.checkpoint.revision.as_str())
+        != request.expected_revision
+    {
+        return Err(CheckpointError::Conflict);
+    }
+    tx.execute("INSERT INTO checkpoint_revisions(client_id,checkpoint_key,revision,expected_revision,deleted,state_bytes) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![s.client_id.as_str(),request.key,request.next_revision,request.expected_revision,
+                    request.encoded_state.is_none(),request.encoded_state.map_or(0, str::len) as i64])?;
+    let sequence = tx.last_insert_rowid();
+    tx.execute("INSERT INTO checkpoint_heads(client_id,checkpoint_key,revision,encoded_state) VALUES(?1,?2,?3,?4)
+                    ON CONFLICT(client_id,checkpoint_key) DO UPDATE SET revision=excluded.revision,encoded_state=excluded.encoded_state",
+            params![s.client_id.as_str(),request.key,request.next_revision,request.encoded_state])?;
+    let result = Checkpoint {
+        version: 1,
+        vault_id: s.vault_id.clone(),
+        client_id: s.client_id.clone(),
+        key: request.key.into(),
+        revision: request.next_revision.into(),
+        sequence: sequence.to_string(),
+        deleted: request.encoded_state.is_none(),
+        byte_length: request.encoded_state.map_or(0, str::len) as u32,
+        encoded_state: request.encoded_state.map(str::to_owned),
+    };
+    Ok(result)
 }

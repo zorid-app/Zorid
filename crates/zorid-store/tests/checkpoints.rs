@@ -622,3 +622,54 @@ fn missing_interior_revision_cannot_remove_cross_key_reuse_fence() {
         1
     );
 }
+
+#[test]
+fn reserved_managed_namespace_is_denied_while_ordinary_operation_ids_stay_valid() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut store = Store::open(temp.path().join("vault.db")).unwrap();
+    let ordinary = scope(&store, "ordinary-client");
+    cas(
+        &mut store,
+        &ordinary,
+        "draft",
+        None,
+        &revision(1),
+        Some("ordinary"),
+    )
+    .unwrap();
+    assert_eq!(
+        store
+            .checkpoint_load(&ordinary, "draft")
+            .unwrap()
+            .unwrap()
+            .encoded_state
+            .as_deref(),
+        Some("ordinary")
+    );
+    for client in [
+        zorid_records::local_intent::RESERVED_CHECKPOINT_CLIENT.to_string(),
+        zorid_records::local_intent::RESERVED_CHECKPOINT_CLIENT.to_uppercase(),
+    ] {
+        let reserved = scope(&store, &client);
+        assert!(store.checkpoint_load(&reserved, "draft").is_err());
+        assert!(cas(
+            &mut store,
+            &reserved,
+            "draft",
+            None,
+            &revision(2),
+            Some("forged")
+        )
+        .is_err());
+        assert!(store.checkpoint_list(&reserved, 1, None).is_err());
+        assert!(store.checkpoint_changes(&reserved, "0", 1, None).is_err());
+    }
+    assert_eq!(
+        store
+            .checkpoint_changes(&ordinary, "0", 10, None)
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+}

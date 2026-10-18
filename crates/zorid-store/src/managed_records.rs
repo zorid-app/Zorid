@@ -9,8 +9,10 @@
 use super::family_ledger::{self, EnvelopeKey, EnvelopeMetadata, Family};
 use super::*;
 use zorid_core::OperationId;
-use zorid_records::wire::Payload;
 use zorid_records::admission::{self, Admission, StateUsage};
+pub use zorid_records::local_intent::ManagedIntentRef;
+use zorid_records::local_intent::{self as origin, LocalIntentV1, ValidatedRegistration};
+use zorid_records::wire::Payload;
 use zorid_records::{Command, Id, Operation, Policy, Schema, Scope, State};
 use zorid_sync_protocol::{RealmId, UpdateId, VaultId};
 
@@ -506,64 +508,21 @@ impl Store {
             tx.commit()?;
             return Ok(result);
         }
-        let state = load(&tx, &handle.key, &registration, scope)?;
-        if Sha256Digest::of(&state.snapshot().map_err(engine)?) != expected.0 {
-            return Err(invalid("stale managed revision"));
-        }
-        if !check_restore(&tx, &handle.key, &registration, scope)? {
-            return Err(invalid("managed restore lacks accepted prior tombstone"));
-        }
-        let prepared = state.prepare(operation.clone(), command).map_err(engine)?;
-        let payload =
-            Payload::from_intent(operation.clone(), prepared.payload()).map_err(engine)?;
-        let plaintext = payload.encode().map_err(engine)?;
-        if plaintext.len() > zorid_sync_protocol::MAX_PLAINTEXT_BYTES {
-            return Err(invalid("managed wrapped payload exceeds transport bound"));
-        }
-        // A remote-authored ID cannot be reused as a new local receipt.
-        if state.history().contains_key(&operation)
-            || has_source(&tx, &handle.key, scope, &operation)?
-        {
-            return Err(invalid("managed operation already has another source"));
-        }
-        let source_count: i64 =
-            tx.query_row("SELECT count(*) FROM managed_local_operations", [], |r| {
-                r.get(0)
-            })?;
-        let source_bytes: i64 = tx.query_row(
-            "SELECT coalesce(sum(length(request)+length(result)),0) FROM managed_local_operations",
-            [],
-            |r| r.get(0),
-        )?;
-        if source_count >= MAX_RECEIPTS
-            || source_bytes + request.len() as i64 + 4096 > MAX_RECEIPT_BYTES
-        {
-            return Err(invalid("managed local replay quota exhausted"));
-        }
-        write_state(&tx, &handle.key, &scope_key(scope)?, prepared.next())?;
-        bind_sources(&tx, &handle.key, &payload)?;
-        let sequence = change(
+        let result = apply_new(
             &tx,
             &handle.key,
-            &scope_key(scope)?,
-            operation.as_str(),
-            "accepted",
+            &registration,
+            scope,
+            operation,
+            expected,
+            command,
+            &request,
+            None,
         )?;
-        if registration.schema.policy == Policy::Synced {
-            family_ledger::insert_authored(&tx, &metadata(&payload, &plaintext)?, &plaintext)?;
-        }
-        let result = ManagedCommit {
-            operation: operation.clone(),
-            revision: ManagedRevision(Sha256Digest::of(
-                &prepared.next().snapshot().map_err(engine)?,
-            )),
-            sequence,
-        };
-        tx.execute("INSERT INTO managed_local_operations(collection_key,operation_id,request,result) VALUES(?1,?2,?3,?4)", params![handle.key, operation.as_str(), request, encode(&result)?])?;
-        retry_in_transaction(&tx, &handle.key, &registration, None, MAX_RETRY_COUNT)?;
         tx.commit()?;
         Ok(result)
     }
+
     /// Collection-scoped fence for bounded host reads; not an independent sync cursor.
     pub fn managed_watermark(&self, handle: &ManagedCollection) -> Result<String> {
         let tx = self.connection.unchecked_transaction()?;
@@ -1089,4 +1048,989 @@ pub(super) fn receive_in_transaction(
         }
     }
     Ok((false, status))
+}
+
+/// Caller owns journal replay, authorization, origin/head fencing and transaction.
+fn apply_new(
+    tx: &Connection,
+    key: &str,
+    registration: &ManagedRegistration,
+    scope: &Scope,
+    operation: Id,
+    expected: &ManagedRevision,
+    command: Command,
+    request: &[u8],
+    fence: Option<&dyn Fn(&Connection) -> Result<()>>,
+) -> Result<ManagedCommit> {
+    let state = load(tx, key, registration, scope)?;
+    if Sha256Digest::of(&state.snapshot().map_err(engine)?) != expected.0 {
+        return Err(invalid("stale managed revision"));
+    }
+    if !check_restore(tx, key, registration, scope)? {
+        return Err(invalid("managed restore lacks accepted prior tombstone"));
+    }
+    let prepared = state.prepare(operation.clone(), command).map_err(engine)?;
+    let payload = Payload::from_intent(operation.clone(), prepared.payload()).map_err(engine)?;
+    let plaintext = payload.encode().map_err(engine)?;
+    if plaintext.len() > zorid_sync_protocol::MAX_PLAINTEXT_BYTES {
+        return Err(invalid("managed wrapped payload exceeds transport bound"));
+    }
+    // A remote-authored ID cannot be reused as a new local receipt.
+    if state.history().contains_key(&operation) || has_source(tx, key, scope, &operation)? {
+        return Err(invalid("managed operation already has another source"));
+    }
+    let source_count: i64 =
+        tx.query_row("SELECT count(*) FROM managed_local_operations", [], |r| {
+            r.get(0)
+        })?;
+    let source_bytes: i64 = tx.query_row(
+        "SELECT coalesce(sum(length(request)+length(result)),0) FROM managed_local_operations",
+        [],
+        |r| r.get(0),
+    )?;
+    if source_count >= MAX_RECEIPTS
+        || source_bytes + request.len() as i64 + 4096 > MAX_RECEIPT_BYTES
+    {
+        return Err(invalid("managed local replay quota exhausted"));
+    }
+    if let Some(fence) = fence {
+        fence(tx)?;
+    }
+    write_state(tx, key, &scope_key(scope)?, prepared.next())?;
+    bind_sources(tx, key, &payload)?;
+    let sequence = change(tx, key, &scope_key(scope)?, operation.as_str(), "accepted")?;
+    if registration.schema.policy == Policy::Synced {
+        family_ledger::insert_authored(tx, &metadata(&payload, &plaintext)?, &plaintext)?;
+    }
+    let result = ManagedCommit {
+        operation: operation.clone(),
+        revision: ManagedRevision(Sha256Digest::of(
+            &prepared.next().snapshot().map_err(engine)?,
+        )),
+        sequence,
+    };
+    tx.execute("INSERT INTO managed_local_operations(collection_key,operation_id,request,result) VALUES(?1,?2,?3,?4)", params![key, operation.as_str(), request, encode(&result)?])?;
+    retry_in_transaction(tx, key, registration, None, MAX_RETRY_COUNT)?;
+    Ok(result)
+}
+
+/// Source-only first-party storage seam. Native admission remains the host's job.
+#[derive(Clone, Debug)]
+pub struct ManagedIntentInput {
+    pub target: ManagedTarget,
+    pub operation: Id,
+    pub expected: ManagedRevision,
+    pub command: Command,
+    pub semantic_request: Option<Vec<u8>>,
+}
+#[derive(Clone, Debug)]
+pub enum ManagedIntentDisposition {
+    AcknowledgedCommitted { original_receipt: ManagedCommit },
+    ReconciledUncommitted,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub enum ManagedIntentSettlement {
+    Retired { retirement_revision: String },
+    Committed { original_receipt: ManagedCommit },
+}
+#[derive(Clone, Debug)]
+pub struct ManagedPendingIntent {
+    pub reference: ManagedIntentRef,
+    pub request: Vec<u8>,
+}
+#[derive(Clone, Debug)]
+pub struct ManagedIntentPage {
+    pub intents: Vec<ManagedPendingIntent>,
+    pub next: Option<String>,
+}
+fn intent_error(e: origin::IntentError) -> StoreError {
+    invalid(e.code())
+}
+fn checkpoint_error(e: CheckpointError) -> StoreError {
+    match e {
+        CheckpointError::Store(e) => e,
+        CheckpointError::Conflict => invalid("intent_head_conflict"),
+        CheckpointError::Limit => invalid("limit"),
+        _ => invalid("intent_origin_invalid"),
+    }
+}
+fn intent_corrupt() -> StoreError {
+    StoreError::Corrupt("invalid managed intent journal association".into())
+}
+fn intent_registration(registration: &ManagedRegistration) -> Result<ValidatedRegistration> {
+    let compiled =
+        origin::compiled_registration(registration.realm.clone(), registration.vault.clone())
+            .map_err(intent_error)?;
+    // Even feature unification cannot enable fixture trust in a normal Store lib.
+    #[cfg(all(test, feature = "intent-test-fixtures"))]
+    let compiled = if registration.owner.as_str() == "origin-store-fixture"
+        && registration.schema.collection.as_str() == "origin-store-fixture-records"
+    {
+        origin::intent_test_registration(
+            registration.realm.clone(),
+            registration.vault.clone(),
+            registration.schema.version,
+        )
+        .map_err(intent_error)?
+    } else {
+        compiled
+    };
+    if encode(&registration.schema)? != encode(&compiled.declaration().schema)?
+        || registration.owner != compiled.declaration().owner
+    {
+        return Err(invalid("intent_origin_invalid"));
+    }
+    Ok(compiled)
+}
+fn intent_scope(handle: &ManagedCollection) -> Result<CheckpointScope> {
+    Ok(CheckpointScope {
+        vault_id: handle.store.clone(),
+        client_id: OperationId::new(origin::RESERVED_CHECKPOINT_CLIENT)?,
+    })
+}
+fn intent_key(registration: &ManagedRegistration, operation: &Id) -> Result<String> {
+    // Portable key intentionally excludes record/generation. They are validated from evidence.
+    let scope = target_scope(
+        registration,
+        &ManagedTarget {
+            record: Id::new("intent-key").map_err(engine)?,
+            generation: Id::new("intent-key").map_err(engine)?,
+            restores: None,
+        },
+    );
+    origin::intent_checkpoint_key(&scope, operation).map_err(intent_error)
+}
+fn decode_intent(
+    current: &ValidatedRegistration,
+    authority: &str,
+    reference: Option<&ManagedIntentRef>,
+    bytes: &[u8],
+) -> Result<LocalIntentV1> {
+    if bytes.len() > origin::MAX_INTENT_BYTES {
+        return Err(invalid("limit"));
+    }
+    // Discovery only: all bytes, duplicate keys, scope and reference are validated below.
+    let value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| invalid("intent_origin_invalid"))?;
+    let scope: Scope = serde_json::from_value(
+        value
+            .get("scope")
+            .cloned()
+            .ok_or_else(|| invalid("intent_origin_invalid"))?,
+    )
+    .map_err(|_| invalid("intent_origin_invalid"))?;
+    let found = ManagedIntentRef {
+        operation: serde_json::from_value(
+            value
+                .get("operation")
+                .cloned()
+                .ok_or_else(|| invalid("intent_origin_invalid"))?,
+        )
+        .map_err(|_| invalid("intent_origin_invalid"))?,
+        capture_revision: value
+            .get("capture_revision")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| invalid("intent_origin_invalid"))?
+            .into(),
+    };
+    origin::validate_retained_intent(
+        current,
+        authority,
+        &scope,
+        reference.unwrap_or(&found),
+        bytes,
+    )
+    .map_err(intent_error)
+}
+fn intent_journal(
+    tx: &Connection,
+    key: &str,
+    operation: &Id,
+) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+    let sizes: Option<(i64,i64)> = tx.query_row("SELECT length(request),length(result) FROM managed_local_operations WHERE collection_key=?1 AND operation_id=?2",
+        params![key, operation.as_str()], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
+    if let Some((request, result)) = sizes {
+        if !(1..=origin::MAX_INTENT_BYTES as i64).contains(&request)
+            || !(1..=4096).contains(&result)
+        {
+            return Err(intent_corrupt());
+        }
+        return Ok(Some(tx.query_row("SELECT request,result FROM managed_local_operations WHERE collection_key=?1 AND operation_id=?2",
+            params![key, operation.as_str()], |r| Ok((r.get(0)?,r.get(1)?)))?));
+    }
+    Ok(None)
+}
+/// Exact original receipt and its source/change binding, independent of CURRENT state.
+fn intent_receipt(
+    tx: &Connection,
+    key: &str,
+    intent: &LocalIntentV1,
+    bytes: &[u8],
+) -> Result<ManagedCommit> {
+    let receipt: ManagedCommit = serde_json::from_slice(bytes).map_err(|_| intent_corrupt())?;
+    if encode(&receipt)? != bytes
+        || receipt.operation != *intent.operation()
+        || decimal(&receipt.sequence)? <= 0
+    {
+        return Err(intent_corrupt());
+    }
+    let associated: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM managed_changes WHERE sequence=?1 AND collection_key=?2 AND record_key=?3 AND update_id=?4 AND status='accepted')",
+        params![receipt.sequence, key, scope_key(intent.scope())?, intent.operation().as_str()], |r| r.get(0))?;
+    if !associated {
+        return Err(intent_corrupt());
+    }
+    let source: Option<Vec<u8>> = tx.query_row("SELECT content FROM managed_operation_sources WHERE collection_key=?1 AND record_key=?2 AND operation_id=?3 AND realm_id=?4 AND vault_id=?5 AND update_id=?3 AND length(content)<=?6",
+        params![key,scope_key(intent.scope())?,intent.operation().as_str(),intent.scope().realm.as_str(),intent.scope().vault.as_str(),zorid_records::MAX_BYTES as i64], |r|r.get(0)).optional()?;
+    let source = source.ok_or_else(intent_corrupt)?;
+    let operation: Operation = serde_json::from_slice(&source).map_err(|_| intent_corrupt())?;
+    if operation.id != *intent.operation()
+        || operation.scope != *intent.scope()
+        || operation.schema_version != intent.origin().declaration().schema.version
+        || admission::canonical_operation(&operation).map_err(|_| intent_corrupt())? != source
+    {
+        return Err(intent_corrupt());
+    }
+    origin::validate_origin_operation(intent.origin(), &operation).map_err(|_| intent_corrupt())?;
+    // The canonical request/result and immutable source/change association were
+    // committed atomically. Never prepare/expand defaults or inspect current state
+    // to reconstruct a historical receipt; its revision is retained verbatim.
+    Ok(receipt)
+}
+fn require_live(
+    tx: &Connection,
+    scope: &CheckpointScope,
+    key: &str,
+    intent: &LocalIntentV1,
+) -> Result<()> {
+    let head = checkpoints::intent_load(tx, scope, key)
+        .map_err(checkpoint_error)?
+        .ok_or_else(|| invalid("intent_origin_missing"))?;
+    if head.checkpoint.deleted
+        || head.checkpoint.revision != intent.capture_revision()
+        || head.expected.is_some()
+        || head.checkpoint.encoded_state.as_deref().map(str::as_bytes)
+            != Some(
+                origin::canonical_intent_request(intent)
+                    .map_err(intent_error)?
+                    .as_slice(),
+            )
+    {
+        return Err(invalid("intent_head_conflict"));
+    }
+    Ok(())
+}
+/// Logical reservation: both revision rows plus the eventual head, body charged separately.
+fn intent_metadata_charge(key_len: usize) -> usize {
+    let client = origin::RESERVED_CHECKPOINT_CLIENT.len();
+    2 * (client + key_len + 36 + 36 + 8 + 8 + 1) + client + key_len + 36 + 8
+}
+fn intent_capacity(
+    tx: &Connection,
+    scope: &CheckpointScope,
+    new_key: &str,
+    new_bytes: usize,
+) -> Result<()> {
+    let keys: Vec<String> = tx.prepare("SELECT checkpoint_key FROM checkpoint_heads WHERE client_id=?1 ORDER BY checkpoint_key LIMIT 4097")?
+        .query_map([scope.client_id.as_str()], |r| r.get(0))?.collect::<std::result::Result<_,_>>()?;
+    if keys.len() >= origin::MAX_RETAINED_INTENT_KEYS {
+        return Err(invalid("limit"));
+    }
+    let mut live = 0usize;
+    let mut live_bytes = 0usize;
+    let mut metadata = intent_metadata_charge(new_key.len());
+    for key in keys {
+        let head = checkpoints::intent_load(tx, scope, &key)
+            .map_err(checkpoint_error)?
+            .ok_or_else(intent_corrupt)?;
+        metadata += intent_metadata_charge(key.len());
+        if !head.checkpoint.deleted {
+            if head.checkpoint.byte_length as usize > origin::MAX_INTENT_BYTES {
+                return Err(intent_corrupt());
+            }
+            live += 1;
+            live_bytes += head.checkpoint.byte_length as usize;
+        }
+    }
+    if live >= origin::MAX_LIVE_INTENTS
+        || live_bytes + new_bytes > origin::MAX_LIVE_INTENT_BYTES
+        || new_bytes > origin::MAX_INTENT_BYTES
+        || metadata > origin::MAX_INTENT_METADATA_BYTES
+    {
+        return Err(invalid("limit"));
+    }
+    Ok(())
+}
+impl Store {
+    /// Persist immutable evidence; this does not dispatch or author a domain mutation.
+    pub fn managed_capture_intent(
+        &mut self,
+        handle: &ManagedCollection,
+        input: ManagedIntentInput,
+    ) -> Result<ManagedIntentRef> {
+        let process = self.document_query_owner.clone();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let registration = authorize(&tx, &process, handle)?;
+        let current = intent_registration(&registration)?;
+        let scope = target_scope(&registration, &input.target);
+        check_scope(&registration, &scope)?;
+        let checkpoint_scope = intent_scope(handle)?;
+        let key = origin::intent_checkpoint_key(&scope, &input.operation).map_err(intent_error)?;
+        let head =
+            checkpoints::intent_load(&tx, &checkpoint_scope, &key).map_err(checkpoint_error)?;
+        if let Some((request, result)) = intent_journal(&tx, &handle.key, &input.operation)? {
+            let original = decode_intent(&current, handle.store.as_str(), None, &request)?;
+            origin::require_matching_input(
+                &original,
+                &scope,
+                &input.operation,
+                &input.expected.0 .0,
+                &input.command,
+                input.semantic_request.as_deref(),
+            )
+            .map_err(intent_error)?;
+            intent_receipt(&tx, &handle.key, &original, &result)?;
+            require_capture_association(head.as_ref(), &original)?;
+            let reference = original.reference();
+            tx.commit()?;
+            return Ok(reference);
+        }
+        if let Some(head) = head {
+            if head.checkpoint.deleted {
+                return Err(invalid("reconciliation_required"));
+            }
+            let original = decode_intent(
+                &current,
+                handle.store.as_str(),
+                None,
+                head.checkpoint
+                    .encoded_state
+                    .as_deref()
+                    .ok_or_else(intent_corrupt)?
+                    .as_bytes(),
+            )?;
+            require_capture_association(Some(&head), &original)?;
+            origin::require_matching_input(
+                &original,
+                &scope,
+                &input.operation,
+                &input.expected.0 .0,
+                &input.command,
+                input.semantic_request.as_deref(),
+            )
+            .map_err(intent_error)?;
+            let reference = original.reference();
+            tx.commit()?;
+            return Ok(reference);
+        }
+        let revision = uuid::Uuid::new_v4().to_string();
+        let intent = origin::capture_local_intent(
+            &current,
+            handle.store.as_str(),
+            &revision,
+            input.operation,
+            scope,
+            input.expected.0 .0,
+            input.command,
+            input.semantic_request.as_deref(),
+        )
+        .map_err(intent_error)?;
+        let bytes = origin::canonical_intent_request(&intent).map_err(intent_error)?;
+        intent_capacity(&tx, &checkpoint_scope, &key, bytes.len())?;
+        let body = std::str::from_utf8(&bytes).map_err(|_| intent_corrupt())?;
+        checkpoints::intent_cas(
+            &tx,
+            &checkpoint_scope,
+            CheckpointWrite {
+                key: &key,
+                expected_revision: None,
+                next_revision: &revision,
+                encoded_state: Some(body),
+            },
+        )
+        .map_err(checkpoint_error)?;
+        tx.commit()?;
+        Ok(intent.reference())
+    }
+    pub fn managed_apply_intent(
+        &mut self,
+        handle: &ManagedCollection,
+        reference: &ManagedIntentRef,
+    ) -> Result<ManagedCommit> {
+        let process = self.document_query_owner.clone();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let registration = authorize(&tx, &process, handle)?;
+        let current = intent_registration(&registration)?;
+        let scope = intent_scope(handle)?;
+        let key = intent_key(&registration, &reference.operation)?;
+        let head = checkpoints::intent_load(&tx, &scope, &key).map_err(checkpoint_error)?;
+        if let Some((request, result)) = intent_journal(&tx, &handle.key, &reference.operation)? {
+            let original =
+                decode_intent(&current, handle.store.as_str(), Some(reference), &request)?;
+            require_capture_association(head.as_ref(), &original)?;
+            let receipt = intent_receipt(&tx, &handle.key, &original, &result)?;
+            tx.commit()?;
+            return Ok(receipt);
+        }
+        let body = head
+            .as_ref()
+            .filter(|h| !h.checkpoint.deleted)
+            .and_then(|h| h.checkpoint.encoded_state.as_deref())
+            .ok_or_else(|| invalid("intent_origin_missing"))?;
+        let original = decode_intent(
+            &current,
+            handle.store.as_str(),
+            Some(reference),
+            body.as_bytes(),
+        )?;
+        require_live(&tx, &scope, &key, &original)?;
+        origin::require_fresh_origin(&current, &original).map_err(intent_error)?;
+        let request = origin::canonical_intent_request(&original).map_err(intent_error)?;
+        let fence = |tx: &Connection| {
+            authorize(tx, &process, handle)?;
+            require_live(tx, &scope, &key, &original)
+        };
+        let receipt = apply_new(
+            &tx,
+            &handle.key,
+            &registration,
+            original.scope(),
+            original.operation().clone(),
+            &ManagedRevision(Sha256Digest(*original.expected_revision())),
+            original.command().clone(),
+            &request,
+            Some(&fence),
+        )?;
+        tx.commit()?;
+        Ok(receipt)
+    }
+    pub fn managed_pending_intents(
+        &self,
+        handle: &ManagedCollection,
+        after: Option<&str>,
+        limit: u32,
+    ) -> Result<ManagedIntentPage> {
+        if !(1..=32).contains(&limit)
+            || after.is_some_and(|key| key.len() > origin::MAX_INTENT_KEY_BYTES)
+        {
+            return Err(invalid("limit"));
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        let registration = authorize(&tx, &self.document_query_owner, handle)?;
+        let current = intent_registration(&registration)?;
+        let scope = intent_scope(handle)?;
+        let keys: Vec<String> = tx.prepare("SELECT checkpoint_key FROM checkpoint_heads WHERE client_id=?1 AND encoded_state IS NOT NULL AND (?2 IS NULL OR checkpoint_key>?2) ORDER BY checkpoint_key LIMIT 4097")?
+            .query_map(params![scope.client_id.as_str(),after], |r|r.get(0))?.collect::<std::result::Result<_,_>>()?;
+        if keys.len() > origin::MAX_RETAINED_INTENT_KEYS {
+            return Err(intent_corrupt());
+        }
+        let mut intents = Vec::new();
+        let mut next = None;
+        let mut bytes = 0usize;
+        for key in keys {
+            // Filter key's collection without parsing or surfacing another collection body.
+            let tuple: (String, Id, Id, Id, Id, Id) =
+                serde_json::from_str(&key).map_err(|_| intent_corrupt())?;
+            if tuple.0 != "managed-record-intent-v1" {
+                return Err(intent_corrupt());
+            }
+            if tuple.1 != registration.realm
+                || tuple.2 != registration.vault
+                || tuple.3 != registration.owner
+                || tuple.4 != registration.schema.collection
+            {
+                continue;
+            }
+            if intents.len() == limit as usize {
+                break;
+            }
+            let head = checkpoints::intent_load(&tx, &scope, &key)
+                .map_err(checkpoint_error)?
+                .ok_or_else(intent_corrupt)?;
+            let body = head
+                .checkpoint
+                .encoded_state
+                .as_deref()
+                .ok_or_else(intent_corrupt)?;
+            bytes += body.len();
+            if bytes > origin::MAX_LIVE_INTENT_BYTES {
+                return Err(invalid("limit"));
+            }
+            let intent = decode_intent(&current, handle.store.as_str(), None, body.as_bytes())?;
+            if origin::intent_checkpoint_key(intent.scope(), intent.operation())
+                .map_err(intent_error)?
+                != key
+            {
+                return Err(intent_corrupt());
+            }
+            require_capture_association(Some(&head), &intent)?;
+            next = Some(key);
+            intents.push(ManagedPendingIntent {
+                reference: intent.reference(),
+                request: body.as_bytes().to_vec(),
+            });
+        }
+        // A full page may require one final empty page; no false completeness promise.
+        if intents.len() < limit as usize {
+            next = None;
+        }
+        tx.commit()?;
+        Ok(ManagedIntentPage { intents, next })
+    }
+    pub fn managed_settle_intent(
+        &mut self,
+        handle: &ManagedCollection,
+        reference: &ManagedIntentRef,
+        expected_pending_revision: &str,
+        disposition: ManagedIntentDisposition,
+    ) -> Result<ManagedIntentSettlement> {
+        if expected_pending_revision != reference.capture_revision {
+            return Err(invalid("intent_head_conflict"));
+        }
+        let process = self.document_query_owner.clone();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let registration = authorize(&tx, &process, handle)?;
+        let current = intent_registration(&registration)?;
+        let scope = intent_scope(handle)?;
+        let key = intent_key(&registration, &reference.operation)?;
+        let head = checkpoints::intent_load(&tx, &scope, &key)
+            .map_err(checkpoint_error)?
+            .ok_or_else(|| invalid("intent_origin_missing"))?;
+        let journal = intent_journal(&tx, &handle.key, &reference.operation)?;
+        let original = if let Some((request, _)) = &journal {
+            Some(decode_intent(
+                &current,
+                handle.store.as_str(),
+                Some(reference),
+                request,
+            )?)
+        } else if !head.checkpoint.deleted {
+            Some(decode_intent(
+                &current,
+                handle.store.as_str(),
+                Some(reference),
+                head.checkpoint
+                    .encoded_state
+                    .as_deref()
+                    .ok_or_else(intent_corrupt)?
+                    .as_bytes(),
+            )?)
+        } else {
+            None
+        };
+        if head.checkpoint.deleted {
+            if head.expected.as_deref() != Some(reference.capture_revision.as_str()) {
+                return Err(invalid("intent_head_conflict"));
+            }
+        } else {
+            require_live(
+                &tx,
+                &scope,
+                &key,
+                original.as_ref().ok_or_else(intent_corrupt)?,
+            )?;
+        }
+        let receipt = match (&journal, &original) {
+            (Some((_, result)), Some(intent)) => {
+                require_capture_association(Some(&head), intent)?;
+                Some(intent_receipt(&tx, &handle.key, intent, result)?)
+            }
+            (None, _) => None,
+            _ => return Err(intent_corrupt()),
+        };
+        match (&disposition, &receipt) {
+            (
+                ManagedIntentDisposition::AcknowledgedCommitted { original_receipt },
+                Some(receipt),
+            ) if encode(original_receipt)? == encode(receipt)? => {}
+            (ManagedIntentDisposition::AcknowledgedCommitted { .. }, _) => {
+                return Err(invalid("intent_receipt_mismatch"))
+            }
+            (ManagedIntentDisposition::ReconciledUncommitted, Some(receipt)) => {
+                let result = ManagedIntentSettlement::Committed {
+                    original_receipt: receipt.clone(),
+                };
+                tx.commit()?;
+                return Ok(result);
+            }
+            (ManagedIntentDisposition::ReconciledUncommitted, None) => {}
+        }
+        let retirement_revision = if head.checkpoint.deleted {
+            head.checkpoint.revision
+        } else {
+            let revision = uuid::Uuid::new_v4().to_string();
+            checkpoints::intent_cas(
+                &tx,
+                &scope,
+                CheckpointWrite {
+                    key: &key,
+                    expected_revision: Some(expected_pending_revision),
+                    next_revision: &revision,
+                    encoded_state: None,
+                },
+            )
+            .map_err(checkpoint_error)?;
+            revision
+        };
+        tx.commit()?;
+        Ok(ManagedIntentSettlement::Retired {
+            retirement_revision,
+        })
+    }
+}
+fn require_capture_association(
+    head: Option<&checkpoints::Head>,
+    original: &LocalIntentV1,
+) -> Result<()> {
+    let head = head.ok_or_else(|| invalid("intent_origin_missing"))?;
+    if head.checkpoint.deleted {
+        if head.expected.as_deref() != Some(original.capture_revision()) {
+            return Err(invalid("intent_head_conflict"));
+        }
+    } else if head.checkpoint.revision != original.capture_revision()
+        || head.expected.is_some()
+        || head.checkpoint.encoded_state.as_deref().map(str::as_bytes)
+            != Some(
+                origin::canonical_intent_request(original)
+                    .map_err(intent_error)?
+                    .as_slice(),
+            )
+    {
+        return Err(invalid("intent_head_conflict"));
+    }
+    Ok(())
+}
+
+#[cfg(all(test, feature = "intent-test-fixtures"))]
+mod origin_sqlite_fixtures {
+    use super::*;
+    fn id(s: &str) -> Id {
+        Id::new(s).unwrap()
+    }
+    fn register(store: &mut Store, version: u32) -> ManagedCollection {
+        let r = origin::intent_test_registration(id("r"), id("v"), version).unwrap();
+        let r = r.declaration();
+        store
+            .managed_register(&ManagedRegistration {
+                realm: r.realm.clone(),
+                vault: r.vault.clone(),
+                owner: r.owner.clone(),
+                schema: r.schema.clone(),
+            })
+            .unwrap()
+    }
+    fn open(path: &std::path::Path, version: u32) -> (Store, ManagedCollection) {
+        let mut store = Store::open(path).unwrap();
+        store
+            .family_enroll(&FamilyScope {
+                realm_id: RealmId::new("r").unwrap(),
+                vault_id: VaultId::new("v").unwrap(),
+            })
+            .unwrap();
+        let handle = register(&mut store, version);
+        (store, handle)
+    }
+    fn input(store: &Store, handle: &ManagedCollection, name: &str) -> ManagedIntentInput {
+        let target = ManagedTarget {
+            record: id(name),
+            generation: id(name),
+            restores: None,
+        };
+        ManagedIntentInput {
+            expected: store.managed_snapshot(handle, &target).unwrap().revision,
+            target,
+            operation: id(name),
+            command: Command::Create(vec![]),
+            semantic_request: None,
+        }
+    }
+    fn effects(store: &Store) -> Vec<i64> {
+        [
+            "managed_records",
+            "managed_operation_sources",
+            "managed_changes",
+            "managed_local_operations",
+            "authored_envelopes",
+            "operations",
+        ]
+        .iter()
+        .map(|table| {
+            store
+                .connection
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap()
+        })
+        .collect()
+    }
+    fn mismatch(error: StoreError) {
+        assert!(
+            matches!(error,StoreError::Contract(zorid_core::ContractError::InvalidMutation {reason}) if reason=="intent_origin_mismatch")
+        );
+    }
+    #[test]
+    fn origin_sqlite_upgrade_nojournal_rejects_before_optional_default_and_preserves_pending() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("vault.db");
+        let (mut store, handle) = open(&path, 1);
+        let original = input(&store, &handle, "create");
+        let empty = original.expected.clone();
+        let reference = store
+            .managed_capture_intent(&handle, original.clone())
+            .unwrap();
+        let before = effects(&store);
+        store.connection.execute_batch("CREATE TRIGGER reject_origin_journal BEFORE INSERT ON managed_local_operations BEGIN SELECT RAISE(ABORT,'injected precommit failure'); END;").unwrap();
+        assert!(store.managed_apply_intent(&handle, &reference).is_err());
+        assert_eq!(effects(&store), before);
+        store
+            .connection
+            .execute_batch("DROP TRIGGER reject_origin_journal")
+            .unwrap();
+        let next = register(&mut store, 2);
+        assert_eq!(
+            store
+                .managed_snapshot(&next, &original.target)
+                .unwrap()
+                .revision,
+            empty
+        );
+        drop(store);
+        let (mut store, handle) = open(&path, 2);
+        mismatch(store.managed_apply_intent(&handle, &reference).unwrap_err());
+        assert_eq!(
+            store
+                .managed_capture_intent(&handle, original.clone())
+                .unwrap(),
+            reference
+        );
+        assert_eq!(effects(&store), before);
+        assert_eq!(
+            store
+                .managed_pending_intents(&handle, None, 32)
+                .unwrap()
+                .intents[0]
+                .reference,
+            reference
+        );
+        store
+            .managed_settle_intent(
+                &handle,
+                &reference,
+                &reference.capture_revision,
+                ManagedIntentDisposition::ReconciledUncommitted,
+            )
+            .unwrap();
+        assert!(store.managed_capture_intent(&handle, original).is_err());
+        let fresh = input(&store, &handle, "fresh");
+        let target = fresh.target.clone();
+        let fresh = store.managed_capture_intent(&handle, fresh).unwrap();
+        store.managed_apply_intent(&handle, &fresh).unwrap();
+        assert!(store
+            .managed_snapshot(&handle, &target)
+            .unwrap()
+            .state
+            .contains("new-default"));
+        assert_eq!(effects(&store)[3], 1);
+        assert_eq!(effects(&store)[4], 1);
+    }
+    #[test]
+    fn origin_sqlite_postcommit_upgrade_replays_exact_original_without_defaults_or_echo() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("vault.db");
+        let (mut store, handle) = open(&path, 1);
+        let original = input(&store, &handle, "create");
+        let target = original.target.clone();
+        let reference = store
+            .managed_capture_intent(&handle, original.clone())
+            .unwrap();
+        let receipt = store.managed_apply_intent(&handle, &reference).unwrap();
+        let before = effects(&store);
+        register(&mut store, 2);
+        drop(store);
+        let (mut store, handle) = open(&path, 2);
+        assert_eq!(
+            store.managed_capture_intent(&handle, original).unwrap(),
+            reference
+        );
+        assert_eq!(
+            store.managed_apply_intent(&handle, &reference).unwrap(),
+            receipt
+        );
+        assert!(!store
+            .managed_snapshot(&handle, &target)
+            .unwrap()
+            .state
+            .contains("new-default"));
+        assert_eq!(effects(&store), before);
+        let retired = store
+            .managed_settle_intent(
+                &handle,
+                &reference,
+                &reference.capture_revision,
+                ManagedIntentDisposition::AcknowledgedCommitted {
+                    original_receipt: receipt.clone(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .managed_settle_intent(
+                    &handle,
+                    &reference,
+                    &reference.capture_revision,
+                    ManagedIntentDisposition::AcknowledgedCommitted {
+                        original_receipt: receipt.clone()
+                    }
+                )
+                .unwrap(),
+            retired
+        );
+        assert_eq!(
+            store.managed_apply_intent(&handle, &reference).unwrap(),
+            receipt
+        );
+        assert_eq!(effects(&store), before);
+    }
+    #[test]
+    fn origin_sqlite_upgrade_full32_explicit_reconciliation_releases_only_live_slots() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("vault.db");
+        let (mut store, handle) = open(&path, 1);
+        let mut refs = Vec::new();
+        for n in 0..32 {
+            let original = input(&store, &handle, &format!("old-{n}"));
+            refs.push(store.managed_capture_intent(&handle, original).unwrap());
+        }
+        let before = effects(&store);
+        let handle = register(&mut store, 2);
+        let overflow = input(&store, &handle, "new");
+        assert!(store
+            .managed_capture_intent(&handle, overflow.clone())
+            .is_err());
+        for reference in refs {
+            mismatch(store.managed_apply_intent(&handle, &reference).unwrap_err());
+            store
+                .managed_settle_intent(
+                    &handle,
+                    &reference,
+                    &reference.capture_revision,
+                    ManagedIntentDisposition::ReconciledUncommitted,
+                )
+                .unwrap();
+            assert!(store.managed_apply_intent(&handle, &reference).is_err());
+        }
+        assert!(store
+            .managed_pending_intents(&handle, None, 32)
+            .unwrap()
+            .intents
+            .is_empty());
+        store.managed_capture_intent(&handle, overflow).unwrap();
+        assert_eq!(effects(&store), before);
+        let revisions: i64 = store
+            .connection
+            .query_row("SELECT count(*) FROM checkpoint_revisions", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(revisions, 65);
+    }
+    #[test]
+    fn origin_sqlite_held_writer_both_orders_fence_apply_and_settlement() {
+        for retire_first in [true, false] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("vault.db");
+            let (mut first, handle) = open(&path, 1);
+            let original = input(&first, &handle, "race");
+            let reference = first.managed_capture_intent(&handle, original).unwrap();
+            let (mut second, second_handle) = open(&path, 1);
+            second
+                .connection
+                .busy_timeout(std::time::Duration::ZERO)
+                .unwrap();
+            let process = first.document_query_owner.clone();
+            let scope = intent_scope(&handle).unwrap();
+            let tx = first
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            let registration = authorize(&tx, &process, &handle).unwrap();
+            let current = intent_registration(&registration).unwrap();
+            let key = intent_key(&registration, &reference.operation).unwrap();
+            let head = checkpoints::intent_load(&tx, &scope, &key)
+                .unwrap()
+                .unwrap();
+            let body = head.checkpoint.encoded_state.as_ref().unwrap();
+            let retained = decode_intent(
+                &current,
+                handle.store.as_str(),
+                Some(&reference),
+                body.as_bytes(),
+            )
+            .unwrap();
+            if retire_first {
+                checkpoints::intent_cas(
+                    &tx,
+                    &scope,
+                    CheckpointWrite {
+                        key: &key,
+                        expected_revision: Some(&reference.capture_revision),
+                        next_revision: &uuid::Uuid::new_v4().to_string(),
+                        encoded_state: None,
+                    },
+                )
+                .unwrap();
+                assert!(second
+                    .managed_apply_intent(&second_handle, &reference)
+                    .is_err());
+                tx.commit().unwrap();
+                assert!(second
+                    .managed_apply_intent(&second_handle, &reference)
+                    .is_err());
+                assert_eq!(effects(&second)[3], 0);
+            } else {
+                require_live(&tx, &scope, &key, &retained).unwrap();
+                origin::require_fresh_origin(&current, &retained).unwrap();
+                let fence = |tx: &Connection| require_live(tx, &scope, &key, &retained);
+                let receipt = apply_new(
+                    &tx,
+                    &handle.key,
+                    &registration,
+                    retained.scope(),
+                    retained.operation().clone(),
+                    &ManagedRevision(Sha256Digest(*retained.expected_revision())),
+                    retained.command().clone(),
+                    body.as_bytes(),
+                    Some(&fence),
+                )
+                .unwrap();
+                assert!(second
+                    .managed_settle_intent(
+                        &second_handle,
+                        &reference,
+                        &reference.capture_revision,
+                        ManagedIntentDisposition::ReconciledUncommitted
+                    )
+                    .is_err());
+                tx.commit().unwrap();
+                assert_eq!(
+                    second
+                        .managed_settle_intent(
+                            &second_handle,
+                            &reference,
+                            &reference.capture_revision,
+                            ManagedIntentDisposition::ReconciledUncommitted
+                        )
+                        .unwrap(),
+                    ManagedIntentSettlement::Committed {
+                        original_receipt: receipt
+                    }
+                );
+                assert_eq!(effects(&second)[3], 1);
+            }
+        }
+    }
 }

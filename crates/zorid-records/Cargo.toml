@@ -5,6 +5,10 @@ edition = "2021"
 license = "AGPL-3.0-only"
 description = "Internal portable immutable managed-record operations"
 
+[features]
+# Explicit nondefault test trust; never enable in product dependency edges.
+intent-test-fixtures = []
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }

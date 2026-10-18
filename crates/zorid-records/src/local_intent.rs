@@ -8,6 +8,11 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
+// Cross-crate fixture dependencies do not inherit cfg(test). Reject any attempt
+// to put this opt-in trust catalog into a release artifact.
+#[cfg(all(feature = "intent-test-fixtures", not(debug_assertions)))]
+compile_error!("intent-test-fixtures must never be enabled in release artifacts");
+
 pub const RESERVED_CHECKPOINT_CLIENT: &str = "f7bca1bf-2a2c-438e-b430-b3f05e5d9324";
 pub const MAX_LINEAGE_DECLARATIONS: usize = 16;
 pub const MAX_REGISTRATION_BYTES: usize = MAX_BYTES;
@@ -639,6 +644,51 @@ pub fn intent_checkpoint_key(scope: &Scope, operation: &Id) -> IntentResult<Stri
         return Err(IntentError::Limit);
     }
     String::from_utf8(bytes).map_err(|_| IntentError::OriginInvalid)
+}
+
+/// Fixed synthetic trust catalog for explicitly enabled downstream SQLite tests.
+/// No arbitrary schema, collection, lineage or catalog input can confer trust.
+#[cfg(feature = "intent-test-fixtures")]
+pub fn intent_test_registration(
+    realm: Id,
+    vault: Id,
+    version: u32,
+) -> IntentResult<ValidatedRegistration> {
+    if !matches!(version, 1 | 2) {
+        return Err(IntentError::UnsupportedSchema);
+    }
+    let owner = Id::new("origin-store-fixture")?;
+    let v1 = Schema {
+        collection: Id::new("origin-store-fixture-records")?,
+        version: 1,
+        policy: crate::Policy::Synced,
+        fields: std::collections::BTreeMap::new(),
+    };
+    let mut v2 = v1.clone();
+    v2.version = 2;
+    v2.fields.insert(
+        Id::new("optional")?,
+        crate::Field {
+            kind: crate::Kind::String,
+            required: false,
+            nullable: false,
+            default: Some(crate::Cell::Value(crate::Value::String(
+                "new-default".into(),
+            ))),
+        },
+    );
+    let catalog = vec![v1, v2];
+    let declaration = LineageRegistration {
+        realm,
+        vault,
+        owner: owner.clone(),
+        schema: catalog[version as usize - 1].clone(),
+        lineage: SchemaLineage {
+            format_version: 1,
+            schemas: catalog[..version as usize].to_vec(),
+        },
+    };
+    validate_with_catalog(&json(&declaration)?, &catalog, &owner)
 }
 
 #[cfg(test)]
