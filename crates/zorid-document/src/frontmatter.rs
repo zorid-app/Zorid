@@ -13,7 +13,7 @@ fn delimiter(line: &str, marker: &str) -> bool {
     })
 }
 
-pub(crate) fn extract(source: &str, positions: &Positions<'_>, result: &mut DocumentMetadata) {
+pub(crate) fn extract(source: &str, positions: &Positions<'_>, result: &mut ParseFacts) {
     let start = if source.starts_with('\u{feff}') { 3 } else { 0 };
     let opening_end = line_end(source, start);
     if !delimiter(&source[start..opening_end], "---") {
@@ -561,7 +561,7 @@ fn infer(key: &str, value: &PropertyValue) -> PropertyType {
         _ => PropertyType::Unknown,
     }
 }
-fn projections(result: &mut DocumentMetadata) {
+fn projections(result: &mut ParseFacts) {
     let selected = |plural: &str, singular: &str| {
         result
             .properties

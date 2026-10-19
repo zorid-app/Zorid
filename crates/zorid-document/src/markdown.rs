@@ -43,7 +43,7 @@ fn comments(masked: &mut [u8], exclusion: &[Range<usize>]) {
     }
 }
 
-pub(crate) fn extract(source: &str, positions: &Positions<'_>, result: &mut DocumentMetadata) {
+pub(crate) fn extract(source: &str, positions: &Positions<'_>, result: &mut ParseFacts) {
     let mut bytes = source.as_bytes().to_vec();
     if source.starts_with('\u{feff}') {
         // Byte-length-preserving semantic document prefix, not indentation.

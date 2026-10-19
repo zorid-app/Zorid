@@ -147,6 +147,51 @@ pub struct Diagnostic {
     pub severity: Severity,
     pub range: SourceRange,
 }
+/// Derived facts for exact source text, independent of an entry or revision.
+///
+/// Binding supplies document identity only; it does not authorize publication or
+/// establish that these facts belong to committed content. Callers retain source
+/// correlation, version validation and stale-publication responsibilities.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ParseFacts {
+    pub schema_version: u32,
+    pub dialect_version: String,
+    pub source_length: SourceLength,
+    pub frontmatter: Frontmatter,
+    pub properties: Vec<Property>,
+    pub aliases: Vec<String>,
+    pub tags: Vec<String>,
+    pub tag_occurrences: Vec<TagOccurrence>,
+    pub headings: Vec<Heading>,
+    pub links: Vec<Link>,
+    pub tasks: Vec<Task>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+impl ParseFacts {
+    /// Attach the caller's typed identity without parsing or changing facts.
+    /// Clone the facts first when they will be reused for another binding.
+    pub fn bind(self, entry_id: EntryId, content_revision: Revision) -> DocumentMetadata {
+        DocumentMetadata {
+            schema_version: self.schema_version,
+            dialect_version: self.dialect_version,
+            entry_id,
+            content_revision,
+            source_length: self.source_length,
+            frontmatter: self.frontmatter,
+            properties: self.properties,
+            aliases: self.aliases,
+            tags: self.tags,
+            tag_occurrences: self.tag_occurrences,
+            headings: self.headings,
+            links: self.links,
+            tasks: self.tasks,
+            diagnostics: self.diagnostics,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DocumentMetadata {

@@ -14,17 +14,23 @@ pub use value::PropertyValue;
 /// publication checks and optional path/vault context. Invalid YAML is metadata
 /// with diagnostics; it is never a refusal to persist or sync the source.
 pub fn parse_markdown(request: &MetadataRequest) -> Result<DocumentMetadata, ExtractionError> {
-    if request.source.len() > MAX_SOURCE_BYTES {
+    Ok(parse_markdown_facts(&request.source)?
+        .bind(request.entry_id.clone(), request.content_revision.clone()))
+}
+
+/// Extract bounded, identity-free facts from exact source text. Invalid YAML
+/// remains successful extraction with diagnostics. No path, store or publication
+/// witness is inferred; callers correlate facts with their source before binding.
+pub fn parse_markdown_facts(source: &str) -> Result<ParseFacts, ExtractionError> {
+    if source.len() > MAX_SOURCE_BYTES {
         return Err(ExtractionError::SourceTooLarge {
             maximum_bytes: MAX_SOURCE_BYTES,
         });
     }
-    let positions = positions::Positions::new(&request.source);
-    let mut result = DocumentMetadata {
+    let positions = positions::Positions::new(source);
+    let mut result = ParseFacts {
         schema_version: SCHEMA_VERSION,
         dialect_version: DIALECT_VERSION.into(),
-        entry_id: request.entry_id.clone(),
-        content_revision: request.content_revision.clone(),
         source_length: positions.length(),
         frontmatter: Frontmatter {
             state: FrontmatterState::Absent,
@@ -40,7 +46,7 @@ pub fn parse_markdown(request: &MetadataRequest) -> Result<DocumentMetadata, Ext
         tasks: Vec::new(),
         diagnostics: Vec::new(),
     };
-    frontmatter::extract(&request.source, &positions, &mut result);
-    markdown::extract(&request.source, &positions, &mut result);
+    frontmatter::extract(source, &positions, &mut result);
+    markdown::extract(source, &positions, &mut result);
     Ok(result)
 }
