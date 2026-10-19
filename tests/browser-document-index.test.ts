@@ -285,13 +285,13 @@ test('cache lookup cannot swallow retired admission or replace the final source 
 test('generation rebuild expires pins and reuses preserved facts without touching source or pending data',async()=>{
   const f=fixture();f.file('a','text');const index=f.open();const first=await prepared(index),old=await index.open(),source=f.source();
   const family=()=>clone(new Map([...f.records.get('control')!].filter(([key])=>key.startsWith('document-parse-cache:v1/'))));
-  const facts=family();assert.equal(parseRows(f).length,1);
+  const facts=family(),before=f.stats();assert.equal(parseRows(f).length,1);
   f.seed('control','pending-checkpoint',{key:'pending-checkpoint',value:'unsent'});f.seed('control','receipt',{key:'receipt',value:'keep'});
   await index.rebuild();assert.deepEqual(family(),facts,'generation rebuild must not clear or rewrite facts');
   assert.equal((await index.status()).snapshot,null);assert.equal([...f.records.get('control')!.keys()].some(key=>key.startsWith('document-index:v1/g/')),false);
   await assert.rejects(index.search({pinId:old.pinId,query:'opaque'}),{code:'index_snapshot_expired'});
   const next=await prepared(index);assert.equal(next.progress.reused,0);assert.deepEqual(next.progress.parseCache,{hits:1,misses:0,unavailable:0,corrupt:0,unsupported:0});assert.notEqual(next.snapshot.generationEpoch,first.snapshot.generationEpoch);
-  assert.deepEqual(f.stats(),{textExtractions:1,reuses:0,cacheBinds:1});assert.deepEqual(family(),facts,'a cache hit retains the exact facts/FIFO state');
+  assert.deepEqual(f.stats(),{textExtractions:before.textExtractions,reuses:before.reuses,cacheBinds:before.cacheBinds+1});assert.deepEqual(family(),facts,'a cache hit retains the exact facts/FIFO state');
   const fresh=await index.open();assert.notEqual(fresh.pinId,old.pinId);assert.deepEqual((await index.search({pinId:fresh.pinId,query:'opaque'}) as any).result.value.observed,['text']);
   await assert.rejects(index.search({pinId:old.pinId,query:'opaque'}),{code:'index_snapshot_expired'});
   assert.equal(f.records.get('control')!.get('pending-checkpoint').value,'unsent');assert.equal(f.records.get('control')!.get('receipt').value,'keep');assert.deepEqual(f.source(),source);await index.close();
