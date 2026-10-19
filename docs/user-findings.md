@@ -1,5 +1,20 @@
 # User findings queue
 
+## S1 search UI reference — requested, implementation pending
+
+User supplied Obsidian screenshots for vault search and in-file find. Vault search
+should group collapsible results by file, show per-file match counts and bordered
+context snippets with every matching range highlighted; include case-sensitive
+toggle, clear/search options and the illustrated count/sort controls. In-file find
+should use the illustrated top-of-note bar with previous/next, options and close,
+preserving note interaction. Implement working behavior with shared search results,
+keyboard/focus/accessibility and correct counts/case semantics; no decorative fake
+controls or new full-index work for every view refresh. REA reference investigation
+owner `architecture_platform_audit`; source artifacts stay outside the repository.
+Zorid implementation/source mapping owner `storage_recovery_ui_impl`, read-only
+until scoped frontend ownership/engine contracts are agreed. Integrate in S1.3;
+this addition does not reopen saving or resume later product stages.
+
 ## Latest execution steering — follow roadmap, skip multicore
 
 User tried the visible current app and reports no problem with latency; current

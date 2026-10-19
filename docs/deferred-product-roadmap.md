@@ -52,6 +52,22 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   generation/facts/source/version keys, current invocation context and explicit
   expiry; never retain a query pin or source-write capability. Existing handoff
   defines accepted contracts; no new authority cache or query language framework.
+  Root approved typed cache API/LRU policy:32MiB total cache-owned generation data,
+  8MiB compiled programs,4/64 entries,5min idle expiry via explicit portable
+  monotonic milliseconds; backwards time clears optional entries. Exact actual
+  generation data and presentation-facts equality protect same-ID aliases; every
+  deep comparison remains charged/cancellable. Externally retained Arc handles
+  are caller-owned and must not become host query pins. Native/WASM wiring must
+  independently validate pin/source admission before and after evaluation.
+  `s1_query_audit` additionally owns a separate reviewed follow-on in index
+  resolver/relationships/lib: sealed owned namespace projections with short
+  borrows, one matching implementation and no self-reference, enabling Bases to
+  reuse preparation rather than rebuilding it. Cold/follow-on commits separate.
+  S1.3 source handoff: `/private/tmp/zorid-s1-search-handoff-5ed9b53c/handoff.md`.
+  Latest screenshot request adds grouped search UI/case toggle and top in-note
+  find bar to S1.3. Reference owner `architecture_platform_audit` uses REA static
+  Obsidian evidence; frontend source mapping owner `storage_recovery_ui_impl`.
+  No proprietary recovered code enters source; user manual app remains untouched.
 - **Integrated:** scoped observation-lookup fix through `2c53a98d`,193
   focused checks/1 existing ignored fixture, release build and normal-family100
   source/search checks pass. Small Base17 semantic-baseline tool is integrated
