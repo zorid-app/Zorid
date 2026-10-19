@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createDocumentDraftService} from '../../src/core/document-drafts.ts';
-import type {DocumentDraftJob,DocumentDraftRequest,DocumentDraftTransport} from '../../src/core/document-drafts.ts';
+import type {DocumentDraftJob,DocumentDraftRequest,DocumentDraftTransport,DocumentDraftService} from '../../src/core/document-drafts.ts';
 export function deferred<T=void>(){let resolve!:(value:T)=>void,reject!:(error:unknown)=>void;const promise=new Promise<T>((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};}
 export async function until(predicate:()=>boolean,label='draft metadata'){const end=Date.now()+4000;while(!predicate()){if(Date.now()>end)assert.fail(`Timed out: ${label}`);await new Promise(resolve=>setTimeout(resolve,2));}}
 /** Actual common facade with a deterministic trusted-host protocol fixture.
@@ -32,5 +32,12 @@ export function draftMetadataHarness(){
     if(input.op==='acknowledge'){jobs.delete(input.job.id);return reply();}
     throw Error('Unexpected feature work control');
   }};
-  return {service:createDocumentDraftService(transport),events,jobs,get subscriptions(){return listeners.size;},holdRequest(){return requestGate=deferred();},holdRelease(){return releaseGate=deferred();},failRelease(lease?:string){if(lease)failedLeases.add(lease);else releaseFailures++;},allowRelease(lease:string){failedLeases.delete(lease);},invalidFacts(){invalid=true;},rejectRequests(){rejectRequest=true;},retire(){for(const entry of [...listeners])entry.retire();}};
+  const facade=createDocumentDraftService(transport);let consumers=0;
+  // The facade owns one transport receiver for its admitted client lifetime.
+  // Count actual projection subscriptions independently, through the real API.
+  const service:DocumentDraftService={...facade,subscribe(listener,onRetire){
+    let active=true;consumers++;const remove=()=>{if(active){active=false;consumers--;}};
+    try{const stop=facade.subscribe(listener,()=>{remove();onRetire?.();});return()=>{remove();stop();};}catch(error){remove();throw error;}
+  }};
+  return {service,events,jobs,get subscriptions(){return consumers;},get transportSubscriptions(){return listeners.size;},holdRequest(){return requestGate=deferred();},holdRelease(){return releaseGate=deferred();},failRelease(lease?:string){if(lease)failedLeases.add(lease);else releaseFailures++;},allowRelease(lease:string){failedLeases.delete(lease);},invalidFacts(){invalid=true;},rejectRequests(){rejectRequest=true;},retire(){for(const entry of [...listeners])entry.retire();}};
 }
