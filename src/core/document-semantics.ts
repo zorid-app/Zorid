@@ -4,6 +4,8 @@ import {searchSpec,searchCompileDiagnostic,richStart,richPreparation,richPage,ri
 import type {SearchCompileDiagnostic} from './document-search-validation.ts';
 import type {SearchSpec,DocumentRichSearchPage} from './document-search-types.ts';
 import {metadataRowsRequest,metadataRowsPage,DocumentMetadataValidationError,METADATA_ROWS_LIMIT} from './document-metadata-projection.ts';
+import {createDocumentDraftService} from './document-drafts.ts';
+import type {DocumentDraftService,DocumentDraftTransport} from './document-drafts.ts';
 /** Shared read-only transport contract for Rust-owned document semantics.
  * IDs and decimal counters are canonical wire values validated by Rust/host
  * admission. A path is never an entry ID, revision, cursor or snapshot identity.
@@ -117,6 +119,8 @@ export interface DocumentPin {
  * Every read stays on its retained generation. Expiry requires explicit reopen;
  * callers must never silently retry against a different generation. */
 export interface DocumentService {
+  readonly draftsAvailable?:boolean;
+  readonly drafts?:DocumentDraftService;
   readonly maintenance?:DocumentMaintenance;
   readonly richSearchAvailable?:boolean;
   readonly metadataRowsAvailable?:boolean;
@@ -135,6 +139,8 @@ export class DocumentSemanticsError extends Error {
 /** Already-admitted host transport. Query payloads come directly from Rust JSON.
  * This seam adds lifecycle ownership and validates retained generation headers. */
 export interface DocumentTransport {
+  readonly draftsAvailable?:boolean;
+  readonly drafts?:DocumentDraftTransport;
   readonly metadataRowsAvailable?:boolean;
   readonly maintenance?:DocumentRuntimeTransport;
   status():Promise<unknown>;initialize():Promise<void>;rebuild():Promise<void>;
@@ -181,13 +187,17 @@ function baseRefreshHint(value:unknown,clockMs:number):DocumentBaseRefreshHint|n
 }
 export function documentErrorCode(error:unknown):string|undefined{return error&&typeof error==='object'&&'code'in error&&typeof error.code==='string'?error.code:undefined;}
 export function createDocumentService(transport:DocumentTransport):DocumentService{
+  if(transport.draftsAvailable!==undefined&&typeof transport.draftsAvailable!=='boolean'||transport.draftsAvailable===true&&!transport.drafts)return invalid();
+  const draftsAvailable=transport.draftsAvailable===true;
   if(transport.metadataRowsAvailable!==undefined&&typeof transport.metadataRowsAvailable!=='boolean'||transport.metadataRowsAvailable===true&&typeof transport.metadataRows!=='function')return invalid();
   const metadataRowsAvailable=transport.metadataRowsAvailable===true;
   const maintenance=transport.maintenance===undefined?undefined:createDocumentMaintenance(transport.maintenance);
+  const drafts=draftsAvailable?createDocumentDraftService(transport.drafts!):undefined;
   const richSearchAvailable=[transport.richStart,transport.richPrepare,transport.richPage,transport.richClose].every(method=>typeof method==='function');
   const call=async<T>(input:unknown,action:()=>Promise<T>):Promise<T>=>{bounded(input,DOCUMENT_REQUEST_BYTES,true);const value=await action();if(value!==undefined)bounded(value,DOCUMENT_RESPONSE_BYTES);return value;};
   const stage=(value:unknown):DocumentStage=>{const row=object(value),p=row.progress===null?null:object(row.progress);return Object.freeze({stageId:text(row.stageId) as DocumentStageId,snapshot:documentSnapshot(row.snapshot),progress:p===null?null:Object.freeze({prepared:integer(p.prepared),total:integer(p.total),reused:p.reused===null?null:integer(p.reused),ready:bool(p.ready),...(p.parseCache===undefined?{}:{parseCache:(()=>{const c=object(p.parseCache);return Object.freeze({hits:integer(c.hits),misses:integer(c.misses),unavailable:integer(c.unavailable),corrupt:integer(c.corrupt),unsupported:integer(c.unsupported)});})()})})});};
   return {
+    draftsAvailable,...(drafts?{drafts}:{}),
     ...(maintenance?{maintenance}:{}),
     richSearchAvailable,metadataRowsAvailable,
     async status(){const row=object(await call({},()=>transport.status()));const source=documentSource(row.source),snapshot=row.snapshot===null?null:documentSnapshot(row.snapshot),coveredSource=row.coveredSource===null?null:documentSource(row.coveredSource);if(snapshot&&snapshot.localStoreId!==source.localStoreId||coveredSource&&coveredSource.localStoreId!==source.localStoreId)return invalid();return {source,snapshot,coveredSource,current:bool(row.current),rebuildRequired:bool(row.rebuildRequired),coverageComplete:row.coverageComplete===null?null:bool(row.coverageComplete)};},
