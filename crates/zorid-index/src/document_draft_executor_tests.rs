@@ -1085,3 +1085,77 @@ fn client_disposal_observation_includes_hidden_jobs_and_preserves_other_clients(
     assert!(!host.executor.client_has_jobs(&id("other-client")));
     assert_eq!(host.executor.snapshot().handles, 0);
 }
+
+#[test]
+fn arc_conversion_overlap_refusal_preserves_upload_until_actual_scratch_release() {
+    let mut host = Host::new();
+    let source = "# Convert";
+    let job = host.reserve(request("buffer", 1, source));
+    host.executor.begin_source_upload(&job).unwrap();
+    host.executor
+        .append_source_upload(&job, 0, source.as_bytes())
+        .unwrap();
+    // Retain a real allocation leaving only the source length available. The
+    // source conversion also needs Arc counters/alignment, so it cannot fit.
+    host.executor.jobs.get_mut(&job.id).unwrap().ingress =
+        Vec::with_capacity(d::MAX_DRAFT_SCRATCH_BYTES - source.len());
+    let upload = host.executor.jobs[&job.id].upload.as_ref().unwrap();
+    let pointer = upload.as_ptr();
+    let capacity = upload.capacity();
+    let before = host.executor.snapshot();
+    assert!(matches!(
+        host.executor.seal_source_upload(&job),
+        Err(DraftExecutorError::Transfer(DraftTransferError::Resource))
+    ));
+    assert_eq!(host.executor.snapshot(), before);
+    let retained = host.executor.jobs[&job.id].upload.as_ref().unwrap();
+    assert_eq!(retained.as_ptr(), pointer);
+    assert_eq!(retained.capacity(), capacity);
+    assert_eq!(retained.as_slice(), source.as_bytes());
+    assert!(host.executor.jobs[&job.id].parser.is_none());
+    assert!(before.runtime.in_flight.is_none());
+    assert_eq!(before.runtime.usage.source_bytes, source.len());
+    // Release the real allocation, then the exact retained upload can seal.
+    host.executor.jobs.get_mut(&job.id).unwrap().ingress = Vec::new();
+    host.executor.seal_source_upload(&job).unwrap();
+    assert!(host.executor.jobs[&job.id].upload.is_none());
+    assert_eq!(host.executor.snapshot().transfer_scratch_bytes, 0);
+    host.drive();
+    assert_eq!(
+        host.executor.facts(&job).unwrap().headings[0].text,
+        "Convert"
+    );
+}
+
+#[test]
+fn facts_writer_accounts_replacement_overlap_and_rejects_encoded_ceiling_before_copy() {
+    let mut writer = FactsWriter {
+        bytes: Vec::new(),
+        headroom: 4096,
+        resource: false,
+    };
+    std::io::Write::write_all(&mut writer, &[b'a'; 1024]).unwrap();
+    assert_eq!(writer.bytes.capacity(), 1024);
+    std::io::Write::write_all(&mut writer, &[b'b'; 1024]).unwrap();
+    assert_eq!(writer.bytes.capacity(), 2048);
+    let pointer = writer.bytes.as_ptr();
+    let previous = writer.bytes.clone();
+    // A final 3072-byte result would fit alone, but the old 2048-byte allocation
+    // must remain charged during replacement. Refuse before growth or copying.
+    assert!(std::io::Write::write_all(&mut writer, &[b'c'; 1024]).is_err());
+    assert!(writer.resource);
+    assert_eq!(writer.bytes, previous);
+    assert_eq!(writer.bytes.as_ptr(), pointer);
+    assert_eq!(writer.bytes.capacity(), 2048);
+
+    let oversized = vec![0; MAX_DRAFT_ENCODED_FACTS_BYTES + 1];
+    let mut ceiling = FactsWriter {
+        bytes: Vec::new(),
+        headroom: d::MAX_DRAFT_SCRATCH_BYTES,
+        resource: false,
+    };
+    assert!(std::io::Write::write_all(&mut ceiling, &oversized).is_err());
+    assert!(ceiling.resource);
+    assert!(ceiling.bytes.is_empty());
+    assert_eq!(ceiling.bytes.capacity(), 0);
+}
