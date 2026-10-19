@@ -6,6 +6,7 @@ const { captureRecoveryList, captureRecoveryRead, validRecoveryReply } = require
 const { checkpointBytes } = require('./durable-checkpoints.cjs');
 const { captureDocumentRequest, captureRichDiagnostic, decodeDocumentReply, validDocumentReply, MAX_RICH_RESPONSE } = require('./document-semantics.cjs');
 const { captureWorkBlockRequest, decodeWorkBlockReply, validWorkBlockReply, MAX_WORKBLOCK_RESPONSE } = require('./workblocks.cjs');
+const {captureRuntimeRequest,decodeRuntimeReply,validRuntimeReply,isRuntimeOp,MAX_RUNTIME_BYTES}=require('./document-runtime.cjs');
 const { familyStatus, syncStatus, syncReport, familyCommand } = require('./family-sync-protocol.cjs');
 
 const MAX_HEADER = 1024 * 1024;
@@ -144,7 +145,7 @@ function successful(command, result, bytes, expectedBytes) {
   if (!['read', 'read_path', 'read_presented', 'checkpoint_load', 'checkpoint_cas', 'binary', 'documents', 'workblocks', 'recovery_read'].includes(command.method) && bytes.length) return false;
   switch (command.method) {
     case 'recovery_list': case 'recovery_read': return validRecoveryReply(command,result,bytes);
-    case 'documents': return validDocumentReply(command, result, bytes);
+    case 'documents': return isRuntimeOp(command.request?.command?.op)?validRuntimeReply(command,result,bytes):validDocumentReply(command,result,bytes);
     case 'workblocks': return validWorkBlockReply(command, result, bytes);
     case 'binary': return result.binary === true && bytes.length > 0 && bytes.length <= MAX_BINARY_FRAME;
     case 'create_text': return successful({method:'apply',operation_id:command.operation_id,mutation:{type:'create',id:command.id,path:command.path,kind:'file'}}, result, bytes, expectedBytes);
@@ -330,7 +331,7 @@ class RustVaultService {
           if (this.prefixUsed < 8) continue;
           this.headerLength = this.prefix.readUInt32BE(0);
           const bodyLength = this.prefix.readUInt32BE(4);
-          const bodyLimit = ['checkpoint_load', 'checkpoint_cas'].includes(this.pending?.command?.method) ? MAX_CHECKPOINT_BODY : this.pending?.command?.method === 'binary' ? MAX_BINARY_FRAME : this.pending?.command?.method === 'workblocks' ? MAX_WORKBLOCK_RESPONSE : this.pending?.command?.method==='documents'&&this.pending.command.request?.command?.op==='rich_page' ? MAX_RICH_RESPONSE : MAX_BODY;
+          const bodyLimit = ['checkpoint_load', 'checkpoint_cas'].includes(this.pending?.command?.method) ? MAX_CHECKPOINT_BODY : this.pending?.command?.method === 'binary' ? MAX_BINARY_FRAME : this.pending?.command?.method === 'workblocks' ? MAX_WORKBLOCK_RESPONSE : this.pending?.command?.method==='documents'&&isRuntimeOp(this.pending.command.request?.command?.op) ? MAX_RUNTIME_BYTES : this.pending?.command?.method==='documents'&&this.pending.command.request?.command?.op==='rich_page' ? MAX_RICH_RESPONSE : MAX_BODY;
           if (!this.headerLength || this.headerLength > MAX_HEADER || bodyLength > bodyLimit) throw failure('response_limit', true);
           this.frame = Buffer.allocUnsafe(this.headerLength + bodyLength);
           this.frameUsed = 0;
@@ -417,7 +418,7 @@ class RustVaultService {
   withClientLease(reference, beforeRequest = () => {}) {
     const captured = Object.freeze({ local_store_id: reference.local_store_id, client_id: reference.client_id, token: reference.token });
     const context = { capabilities: this.capabilities, request: (command, bytes) => { beforeRequest(command); return this.request(command, bytes, captured, () => beforeRequest(command)); } };
-    const methods = ['workblockCommand', 'documentCommand', 'binaryCommand', 'fileCommand', 'createText', 'identity', 'readMetadata', 'readPath', 'readPresentedById', 'readEntryById', 'listSnapshot', 'listEntries', 'prepareIntent', 'commitIntent', 'queryIntent', 'listIntents', 'acknowledgeIntent',
+    const methods = ['documentRuntime', 'changesAfter', 'rescan', 'reconcile', 'workblockCommand', 'documentCommand', 'binaryCommand', 'fileCommand', 'createText', 'identity', 'readMetadata', 'readPath', 'readPresentedById', 'readEntryById', 'listSnapshot', 'listEntries', 'prepareIntent', 'commitIntent', 'queryIntent', 'listIntents', 'acknowledgeIntent',
       'checkpointLoad', 'checkpointCompareAndSwap', 'checkpointList', 'checkpointChanges'];
     return Object.freeze(Object.fromEntries(methods.map(name => [name, (...args) => RustVaultService.prototype[name].apply(context, args)])));
   }
@@ -425,6 +426,12 @@ class RustVaultService {
     const captured = captureWorkBlockRequest(request);
     if (!identity(clientId)) return Promise.reject(failure('invalid_workblock_request'));
     return this.request({method:'workblocks',client_id:clientId,request:captured}).then(({result,bytes})=>decodeWorkBlockReply(captured,result,bytes));
+  }
+  documentRuntime(clientId,op,input={}) {
+    if(!identity(clientId))return Promise.reject(failure('invalid_document_request'));
+    const captured=captureRuntimeRequest(op,input);
+    const request={schemaVersion:1,command:{op,...captured}};
+    return this.request({method:'documents',client_id:clientId,request}).then(({result,bytes})=>decodeRuntimeReply(request,result,bytes));
   }
   documentCommand(clientId, request) {
     const captured = captureDocumentRequest(request);

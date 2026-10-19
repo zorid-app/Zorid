@@ -15,6 +15,68 @@ const keys=(value,allowed,required=allowed)=>object(value)&&Object.keys(value).e
 const fail=code=>Object.assign(new Error('Document semantics request failed.'),{code,commitUncertain:false});
 const same=(a,b)=>snapshot(a)&&snapshot(b)&&['localStoreId','generationEpoch','generation'].every(key=>a[key]===b[key])&&['schema','extraction','resolver','query'].every(key=>a.versions[key]===b.versions[key]);
 const sameSource=(a,b)=>source(a)&&source(b)&&a.localStoreId===b.localStoreId&&a.watermark===b.watermark;
+const runtimeFailure=value=>['staleSource','staleIndex','snapshotExpired','rebuildRequired','uncertain','unavailable','invalidData','fatal'].includes(value);
+const runtimeMethods=['documentRuntimeObserve','documentRuntimeControl','documentRuntimeAckControl','documentRuntimeAckOutcome'];
+function runtimeBounded(value,code){
+  try{
+    const raw=JSON.stringify(value);if(typeof raw!=='string'||raw.length>MAX_DOCUMENT_REQUEST||byteLength(raw)>MAX_DOCUMENT_REQUEST)throw fail(code);
+    const visit=(value,depth)=>{if(depth>32)throw fail(code);if(typeof value==='string'&&!scalar(value)||typeof value==='number'&&!Number.isFinite(value))throw fail(code);if(value&&typeof value==='object')for(const child of Object.values(value))visit(child,depth+1);};visit(value,0);
+  }catch{throw fail(code);}
+}
+function runtimeCommand(value){
+  if(!keys(value,['kind','lifetime','id',...(value?.kind==='request'?['maxPumps','maxRestarts','forceRebuild']:[])])||!id(value.lifetime)||!decimal(value.id))return false;
+  return value.kind==='cancel'||value.kind==='request'&&integer(value.maxPumps,128)&&value.maxPumps>0&&integer(value.maxRestarts,2)&&typeof value.forceRebuild==='boolean';
+}
+/** Renderer controls can request/cancel their own mapped demand only. Owner
+ * Wake/Continue/Retire and issued effects never enter this IPC surface. */
+function captureDocumentRuntimeRequest(method,args){
+  const code='invalid_document_request';runtimeBounded(args,code);
+  if(!runtimeMethods.includes(method)||!Array.isArray(args)||args.length!==(method==='documentRuntimeObserve'?0:1))throw fail(code);
+  const value=args[0];
+  if(method==='documentRuntimeControl'&&(!keys(value,['sequence','command'])||!decimal(value.sequence)||!runtimeCommand(value.command)))throw fail(code);
+  if(method==='documentRuntimeAckControl'&&(!keys(value,['sequence'])||!decimal(value.sequence)))throw fail(code);
+  if(method==='documentRuntimeAckOutcome'&&(!keys(value,['lifetime','id'])||!id(value.lifetime)||!decimal(value.id)))throw fail(code);
+  return structuredClone(args);
+}
+function runtimeObservation(value,localStoreId){
+  return keys(value,['source','published','current','rebuildRequired','coverageComplete'])&&source(value.source)&&value.source.localStoreId===localStoreId
+    &&(value.published===null||snapshot(value.published)&&value.published.localStoreId===localStoreId)&&typeof value.current==='boolean'&&typeof value.rebuildRequired==='boolean'
+    &&(value.coverageComplete===null||typeof value.coverageComplete==='boolean')&&(!value.current||value.published!==null&&!value.rebuildRequired&&value.coverageComplete!==null);
+}
+function runtimeUpdate(value,localStoreId){
+  if(!keys(value,['lifetime','revision','source','published','freshness','phase','progress','coverageComplete','hasForegroundDemand','error'])||!id(value.lifetime)||!decimal(value.revision)
+    ||!(value.source===null||source(value.source)&&value.source.localStoreId===localStoreId)||!(value.published===null||snapshot(value.published)&&value.published.localStoreId===localStoreId)
+    ||!['unknown','current','lagging','unavailable'].includes(value.freshness)||!['idle','observing','initializing','recovering','indexing','publishing','rebuilding','releasing'].includes(value.phase)
+    ||!(value.coverageComplete===null||typeof value.coverageComplete==='boolean')||typeof value.hasForegroundDemand!=='boolean'||!(value.error===null||runtimeFailure(value.error))
+    ||value.freshness==='current'&&(value.source===null||value.published===null||value.coverageComplete===null))return false;
+  return value.progress===null||keys(value.progress,['prepared','total','ready'])&&integer(value.progress.prepared,0xffffffff)&&integer(value.progress.total,0xffffffff)&&value.progress.prepared<=value.progress.total&&typeof value.progress.ready==='boolean';
+}
+function runtimeFrame(value,scope){
+  if(!keys(value,['version','scope','update','outcomes'])||value.version!==1||!keys(value.scope,['localStoreId','clientId'])||!id(value.scope.localStoreId)||!id(value.scope.clientId)
+    ||value.scope.localStoreId!==scope.localStoreId||value.scope.clientId!==scope.clientId||!(value.update===null||runtimeUpdate(value.update,scope.localStoreId))||!Array.isArray(value.outcomes)||value.outcomes.length>32)return false;
+  const seen=new Set();
+  for(const item of value.outcomes){
+    const outcome=item?.outcome;
+    if(!keys(item,['lifetime','outcome'])||!id(item.lifetime)||!object(outcome)||!decimal(outcome.id)||seen.has(`${item.lifetime}:${outcome.id}`))return false;
+    seen.add(`${item.lifetime}:${outcome.id}`);
+    if(outcome.kind==='finished'){if(!keys(outcome,['kind','id','observation'])||!runtimeObservation(outcome.observation,scope.localStoreId))return false;}
+    else if(outcome.kind==='failed'){if(!keys(outcome,['kind','id','failure'])||!runtimeFailure(outcome.failure))return false;}
+    else if(!['cancelled','retired'].includes(outcome.kind)||!keys(outcome,['kind','id']))return false;
+  }
+  return true;
+}
+function captureDocumentRuntimeReply(method,args,value,scope){
+  const code='invalid_document_response';runtimeBounded(value,code);
+  if(!keys(scope,['localStoreId','clientId'])||!id(scope.localStoreId)||!id(scope.clientId))throw fail(code);
+  let valid=false;
+  if(method==='documentRuntimeObserve')valid=runtimeFrame(value,scope);
+  else if(method==='documentRuntimeControl'){
+    const request=args[0],command=value?.command;
+    valid=keys(value,['sequence','command','frame'])&&value.sequence===request?.sequence&&runtimeCommand(command)&&runtimeFrame(value.frame,scope)
+      &&['kind','lifetime','id',...(command?.kind==='request'?['maxPumps','maxRestarts','forceRebuild']:[])].every(key=>command[key]===request.command[key]);
+  }else if(['documentRuntimeAckControl','documentRuntimeAckOutcome'].includes(method))valid=value===true;
+  if(!valid)throw fail(code);return structuredClone(value);
+}
 function snapshot(value){
   return keys(value,['localStoreId','generationEpoch','generation','versions'])&&id(value.localStoreId)&&id(value.generationEpoch)&&decimal(value.generation)&&value.generation!=='0'
     &&keys(value.versions,['schema','extraction','resolver','query'])&&integer(value.versions.schema,0xffffffff)&&value.versions.schema>0
@@ -192,4 +254,4 @@ function createDesktopDocumentSemantics(host,clientId,localStoreId){
     forget(){retired=true;pins.clear();},
   });
 }
-module.exports={MAX_DOCUMENT_REQUEST,MAX_DOCUMENT_RESPONSE,MAX_RICH_PAGE,MAX_RICH_RESPONSE,captureDocumentRequest,captureRichDiagnostic,decodeDocumentReply,validDocumentReply,createDesktopDocumentSemantics};
+module.exports={MAX_DOCUMENT_REQUEST,MAX_DOCUMENT_RESPONSE,MAX_RICH_PAGE,MAX_RICH_RESPONSE,captureDocumentRuntimeRequest,captureDocumentRuntimeReply,captureDocumentRequest,captureRichDiagnostic,decodeDocumentReply,validDocumentReply,createDesktopDocumentSemantics};

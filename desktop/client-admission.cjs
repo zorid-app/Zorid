@@ -15,7 +15,7 @@ function fail(code, uncertain = false) { return Object.assign(new Error('Desktop
 async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwner } = {}) {
   if (fixture !== true || !uuid(clientId) || typeof assertOwner !== 'function') throw fail('invalid_admission');
   const host = service.host;
-  let phase = 'admitting', closing = null, flushed = false, activeFlush = null;
+  let phase = 'admitting', closing = null, flushed = false, releasePrepared = false, activeFlush = null, runtime = null;
   const pending = new Set();
   function live() {
     if (service.closed || host.fatal || host.exited) throw fail('client_ownership_lost', true);
@@ -58,7 +58,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     function wrap(flushToken) {
       const methods = ['readText', 'readTextById', 'planWrite', 'prepare', 'commit', 'query', 'listUnacknowledged', 'acknowledge'];
       return Object.freeze({
-        ...Object.fromEntries(methods.map(name => [name, (...args) => invoke(() => capability[name](...args), flushToken)])),
+        ...Object.fromEntries(methods.map(name => [name, (...args) => invoke(async() => {const value=await capability[name](...args);if(name==='commit')service.documentRuntimeSourceHint?.();return value;}, flushToken)])),
         checkpoints: Object.freeze({ scope,
           ...Object.fromEntries(['load', 'compareAndSwap', 'list', 'changes'].map(name => [name, (...args) => invoke(() => capability.checkpoints[name](...args), flushToken)])),
         }),
@@ -85,20 +85,32 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
       return value;
     },null);
     const documentCommand=input=>invoke(async()=>{const value=await documents.invoke(input);live();return value;},null);
+    if(service.documentRuntimeEnabled){
+      runtime=service.registerDocumentRuntimeOwner({host:guarded,clientId,localStoreId:reference.local_store_id,assertActive:live});
+    }
+    const documentRuntime=runtime?Object.freeze({
+      observe:()=>invoke(()=>runtime.observe(),null),
+      control:input=>invoke(()=>runtime.control(input),null),
+      ackControl:input=>invoke(()=>runtime.ackControl(input),null),
+      ackOutcome:input=>invoke(()=>runtime.ackOutcome(input),null),
+      subscribe:(listener,onRetire)=>{allowed();return runtime.subscribe(listener,onRetire);},
+    }):null;
     const writes = wrap(null);
     async function drain() { while (pending.size) await Promise.allSettled([...pending]); }
     const context = Object.freeze({
       scope, durableWrites: writes, assertActive: () => allowed(),
       ...(documents?{documentCommand}:{}),
+      ...(documentRuntime?{documentRuntime}:{}),
       ...(host.capabilities?.includes('workblocks')?{workblockCommand}:{}),
       ...(host.capabilities?.includes('binary_streams')?{binaryCommand,binaryLimits:host.binaryLimits}:{}),
-      ...(creates?{createText:input=>invoke(()=>creates.create(input),null),fileCommand:input=>invoke(()=>creates.execute(input),null)}:{}),
+      ...(creates?{createText:input=>invoke(async()=>{const value=await creates.create(input);service.documentRuntimeSourceHint?.();return value;},null),fileCommand:input=>invoke(async()=>{const value=await creates.execute(input);service.documentRuntimeSourceHint?.();return value;},null)}:{}),
       async retire() {
         // Window has gone away. Drain accepted calls and drop ownership only;
         // leave every checkpoint/intent intact for the same slot on restart.
         if(phase==='released')return;
         if(closing)await closing.catch(()=>{});
         phase='retiring';activeFlush=null;
+        await runtime?.revoke();
         await drain();await host.releaseClient(reference);documents?.forget();phase='released';
       },
       release(flushGate) {
@@ -107,12 +119,13 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
         if (typeof flushGate !== 'function') return Promise.reject(fail('flush_gate_required'));
         if (phase !== 'active' && phase !== 'release_unknown') return Promise.reject(fail('client_not_admitted'));
         const retryRelease = phase === 'release_unknown' && flushed;
-        phase = retryRelease ? 'releasing' : 'flushing';
+        phase = 'flushing';
         closing = (async () => {
           if (!retryRelease) {
             try {
               // Stop external admission, settle accepted work, then let the
               // editor persist/flush through the dedicated gate capability.
+              await runtime?.pause();
               await drain();
               const token = Symbol('flush-attempt');
               activeFlush = token;
@@ -129,10 +142,19 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
               await drain();
               if (gateFailed) throw gateError;
               flushed = true;
-            } catch (reason) { phase = 'active'; throw reason; }
+            } catch (reason) { phase = 'active';try{runtime?.resume();}catch{}throw reason; }
+          }
+          // Retire only after a successful flush, while the original dispatch
+          // guard still admits already-owned maintenance work. An uncertain
+          // native release retries just the same lease; it never repeats a flush.
+          if(!releasePrepared){
+            try{await runtime?.prepareRelease();releasePrepared=true;}
+            // Retire may already have been accepted. Keep this exact release
+            // retry-only; never resume an irreversibly retired lifetime.
+            catch(reason){phase='release_unknown';throw reason;}
           }
           phase = 'releasing';
-          try { await host.releaseClient(reference); documents?.forget(); phase = 'released'; }
+          try { await host.releaseClient(reference);runtime?.release();documents?.forget();phase='released'; }
           catch (reason) { phase = 'release_unknown'; throw reason; }
         })().finally(() => { closing = null; });
         return closing;
@@ -140,6 +162,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     });
     return context;
   } catch (reason) {
+    await runtime?.revoke();
     phase = 'releasing';
     try { await host.releaseClient(reference); } catch { throw fail('admission_cleanup_unknown', true); }
     throw reason;
