@@ -63,9 +63,8 @@ impl NativeVault {
         }
         let state = self
             .store
-            .list()?
-            .into_iter()
-            .find(|state| state.path == *path);
+            .read_path_metadata(path)?
+            .map(|entry| entry.state);
         let owner = self.store.physical_owner_at(path)?;
         let physical = PhysicalIdentity {
             inode: expected.identity.clone(),

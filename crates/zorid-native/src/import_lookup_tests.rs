@@ -279,3 +279,149 @@ fn hidden_physical_owner_and_replaced_parent_remain_blocked() {
         b"independent replacement"
     );
 }
+
+/// Use the same explicit family enrollment and projected Text creates as the
+/// family observation fixtures, so observe() enters observe_streamed_file().
+fn enrolled_file_fixture() -> (tempfile::TempDir, NativeVault, Connection) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(directory.path()).unwrap();
+    vault
+        .family_enroll(&FamilyScope {
+            realm_id: zorid_sync_protocol::RealmId::new("lookup-realm").unwrap(),
+            vault_id: zorid_sync_protocol::VaultId::new("lookup-vault").unwrap(),
+        })
+        .unwrap();
+    for (id, bytes) in [
+        ("selected", b"selected bytes".as_slice()),
+        ("unrelated", b"unrelated bytes".as_slice()),
+    ] {
+        let outcome = vault
+            .family_apply(
+                &MutationRequest {
+                    operation_id: op(&format!("create-{id}")),
+                    mutation: Mutation::Create {
+                        id: EntryId::new(id).unwrap(),
+                        path: path(&format!("{id}.md")),
+                        kind: EntryKind::File,
+                        content: Some(bytes.to_vec()),
+                    },
+                },
+                Some(FamilyCreateMode::Text),
+            )
+            .unwrap();
+        assert!(matches!(outcome.projection, ProjectionStatus::Projected));
+    }
+    assert!(vault.store.family_is_enrolled().unwrap());
+    {
+        let _guard = vault.paths.lock(vault.options.lock_timeout).unwrap();
+        assert!(vault.observe(&path("selected.md")).unwrap().is_none());
+    }
+    let connection = Connection::open(directory.path().join(".zorid/vault.sqlite")).unwrap();
+    (directory, vault, connection)
+}
+
+#[test]
+fn enrolled_file_noop_does_not_decode_unrelated_state_or_digest() {
+    for change in [
+        "UPDATE entries SET state=json_set(state,'$.unexpected',1) WHERE path='unrelated.md'",
+        "UPDATE entries SET content_digest=NULL WHERE path='unrelated.md'",
+    ] {
+        let (directory, mut vault, connection) = enrolled_file_fixture();
+        assert_eq!(connection.execute(change, []).unwrap(), 1);
+        let before = retained_rows(&connection);
+        // The previous whole-vault list() rejects this unrelated row. The
+        // actual enrolled observation must still verify its selected no-op.
+        assert!(vault.store.list().is_err(), "{change}");
+        let _guard = vault.paths.lock(vault.options.lock_timeout).unwrap();
+        assert!(vault.observe(&path("selected.md")).unwrap().is_none());
+        assert_eq!(retained_rows(&connection), before);
+        assert_eq!(
+            stdfs::read(directory.path().join("selected.md")).unwrap(),
+            b"selected bytes"
+        );
+        assert_eq!(
+            stdfs::read(directory.path().join("unrelated.md")).unwrap(),
+            b"unrelated bytes"
+        );
+    }
+}
+
+#[test]
+fn enrolled_selected_state_path_and_digest_corruption_still_fail_closed() {
+    for change in [
+        "UPDATE entries SET state=json_set(state,'$.unexpected',1) WHERE path='selected.md'",
+        "UPDATE entries SET state=json_set(state,'$.path','different') WHERE path='selected.md'",
+        "UPDATE entries SET content_digest=NULL WHERE path='selected.md'",
+    ] {
+        let (directory, mut vault, connection) = enrolled_file_fixture();
+        assert_eq!(connection.execute(change, []).unwrap(), 1);
+        let before = retained_rows(&connection);
+        assert!(
+            vault
+                .store
+                .read_path_metadata(&path("selected.md"))
+                .is_err(),
+            "{change}"
+        );
+        let _guard = vault.paths.lock(vault.options.lock_timeout).unwrap();
+        assert!(vault.observe(&path("selected.md")).is_err(), "{change}");
+        assert_eq!(retained_rows(&connection), before);
+        assert_eq!(
+            stdfs::read(directory.path().join("selected.md")).unwrap(),
+            b"selected bytes"
+        );
+    }
+}
+
+#[test]
+fn enrolled_hidden_or_deleted_physical_owner_remains_blocked() {
+    for change in [
+        "UPDATE entries SET visible=0 WHERE path='selected.md'",
+        "UPDATE entries SET deleted=1 WHERE path='selected.md'",
+    ] {
+        let (directory, mut vault, connection) = enrolled_file_fixture();
+        assert_eq!(connection.execute(change, []).unwrap(), 1);
+        let before = retained_rows(&connection);
+        assert!(vault
+            .store
+            .read_path_metadata(&path("selected.md"))
+            .unwrap()
+            .is_none());
+        let _guard = vault.paths.lock(vault.options.lock_timeout).unwrap();
+        let error = vault.observe(&path("selected.md")).unwrap_err();
+        assert!(
+            error.to_string().contains("retained physical owner"),
+            "{change}: {error}"
+        );
+        assert_eq!(retained_rows(&connection), before);
+        assert_eq!(
+            stdfs::read(directory.path().join("selected.md")).unwrap(),
+            b"selected bytes"
+        );
+    }
+}
+
+#[test]
+fn enrolled_equal_byte_replacement_does_not_adopt_retained_owner() {
+    let (directory, mut vault, connection) = enrolled_file_fixture();
+    stdfs::rename(
+        directory.path().join("selected.md"),
+        directory.path().join("retained-selected.md"),
+    )
+    .unwrap();
+    stdfs::write(directory.path().join("selected.md"), b"selected bytes").unwrap();
+    let before = retained_rows(&connection);
+    let _guard = vault.paths.lock(vault.options.lock_timeout).unwrap();
+    let error = vault.observe(&path("selected.md")).unwrap_err();
+    assert!(
+        error.to_string().contains("equal-byte replacement"),
+        "{error}"
+    );
+    assert_eq!(retained_rows(&connection), before);
+    for name in ["selected.md", "retained-selected.md"] {
+        assert_eq!(
+            stdfs::read(directory.path().join(name)).unwrap(),
+            b"selected bytes"
+        );
+    }
+}
