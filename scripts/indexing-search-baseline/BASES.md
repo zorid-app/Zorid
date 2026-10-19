@@ -7,17 +7,16 @@ fixtures are not a representative 10k/100k Base performance workload or complete
 S1.0 acceptance. Follow the [baseline specification](../../docs/plans/indexing-search-baseline.md)
 and [language matrix](../../docs/reference/query-language-support.md).
 
-The example is `crates/zorid-bases/examples/s1-baseline.rs`. Build and execute only
+The example is `crates/zorid-bases/examples/s1-bases-baseline.rs`. Build and execute only
 in the coordinator's serialized slot. The wrapper accepts an already-built matching
 example and never invokes Cargo. Example build command: `cargo build --offline
---release -p zorid-bases --example s1-baseline --jobs 1`. This shares the example
-name with the index harness, so retain the exact binary SHA/source for each run;
-building one crate's example can replace the other crate's executable path.
+--release -p zorid-bases --example s1-bases-baseline --jobs 1`. The distinct example name keeps the
+Base executable separate from the pure index baseline in the shared target.
 
 ```sh
 node scripts/indexing-search-baseline/bases.mjs \
   --out /private/tmp/zorid-s1-bases-UNIQUE \
-  --bases /absolute/path/to/already-built/examples/s1-baseline \
+  --bases /absolute/path/to/already-built/examples/s1-bases-baseline \
   --samples 1 --timeout-ms 30000 \
   --build-sha EXACT_40_CHARACTER_SOURCE_SHA --build-mode release
 ```
