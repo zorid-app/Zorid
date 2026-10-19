@@ -2,11 +2,11 @@
 //! outcomes never replace retained bytes with empty or guessed content.
 use super::content::{BinarySourceRef, PublishedBinaryRef, StoredContent};
 use super::*;
-use std::collections::BTreeMap;
+use std::{cell::OnceCell, collections::BTreeMap};
 use zorid_core::EntryChange;
 use zorid_file_sync::binary_stream::VerifiedBinarySet;
 use zorid_file_sync::materialization::{ContentWitness, PendingReason};
-use zorid_file_sync::metadata::MetadataState;
+use zorid_file_sync::metadata::{MetadataState, MetadataView};
 use zorid_file_sync::reference_materialization::{ContentRef, EntryMaterializationRef, OutcomeRef};
 use zorid_file_sync::{EntryIdentity, Sha256Digest};
 use zorid_sync_protocol::UpdateId;
@@ -153,6 +153,27 @@ fn load_metadata(tx: &Connection) -> Result<MetadataState> {
     blob_index::load_metadata(tx, &FamilyScope { realm_id, vault_id })?
         .ok_or_else(|| StoreError::Corrupt("family metadata missing".into()))
 }
+/// One immutable graph per invocation. Only retained Text checks need its view;
+/// binary-only/folder-only validation does not derive an additional graph view.
+/// SQL content, snapshots and verification proofs are always checked afresh.
+struct RetainedGraphView<'g> {
+    graph: &'g MetadataState,
+    view: OnceCell<zorid_file_sync::Result<MetadataView>>,
+}
+impl<'g> RetainedGraphView<'g> {
+    fn new(graph: &'g MetadataState) -> Self {
+        Self {
+            graph,
+            view: OnceCell::new(),
+        }
+    }
+    fn view(&self) -> Result<&MetadataView> {
+        self.view
+            .get_or_init(|| self.graph.metadata_view())
+            .as_ref()
+            .map_err(|error| StoreError::from(error.clone()))
+    }
+}
 fn check_retained_content(
     tx: &Connection,
     graph: &MetadataState,
@@ -161,6 +182,24 @@ fn check_retained_content(
     content: &StoredContent,
     verified: Option<&VerifiedBinarySet>,
 ) -> Result<()> {
+    check_retained_content_with_view(
+        tx,
+        &RetainedGraphView::new(graph),
+        identity,
+        witness,
+        content,
+        verified,
+    )
+}
+fn check_retained_content_with_view(
+    tx: &Connection,
+    context: &RetainedGraphView<'_>,
+    identity: &EntryIdentity,
+    witness: &FamilyContentWitness,
+    content: &StoredContent,
+    verified: Option<&VerifiedBinarySet>,
+) -> Result<()> {
+    let graph = context.graph;
     if content.digest() != witness.digest {
         return Err(StoreError::Corrupt(
             "retained content differs from witness digest".into(),
@@ -175,7 +214,7 @@ fn check_retained_content(
             },
             StoredContent::InlineBytes(bytes),
         ) => {
-            let view = graph.metadata_view()?;
+            let view = context.view()?;
             if view
                 .namespace()
                 .entries
@@ -411,9 +450,9 @@ struct Change {
     visible: bool,
     changed: bool,
 }
-fn candidate(
+fn candidate_with_view(
     tx: &Connection,
-    graph: &MetadataState,
+    context: &RetainedGraphView<'_>,
     verified: &VerifiedBinarySet,
     classified: &EntryMaterializationRef,
 ) -> Result<Change> {
@@ -551,9 +590,9 @@ fn candidate(
                 .content
                 .as_ref()
                 .ok_or_else(|| StoreError::Corrupt("retained content missing".into()))?;
-            check_retained_content(
+            check_retained_content_with_view(
                 tx,
-                graph,
+                context,
                 &classified.identity,
                 witness,
                 content,
@@ -593,8 +632,9 @@ pub(super) fn validate(
             "publication cache identity coverage mismatch".into(),
         ));
     }
+    let context = RetainedGraphView::new(graph);
     for value in &classified {
-        if candidate(tx, graph, verified, value)?.changed {
+        if candidate_with_view(tx, &context, verified, value)?.changed {
             return Err(StoreError::Corrupt(
                 "publication cache differs from causal authority".into(),
             ));
@@ -655,9 +695,10 @@ pub(super) fn apply(
         .into_iter()
         .map(|c| (c.identity.entry_id.clone(), c))
         .collect();
+    let context = RetainedGraphView::new(graph);
     let mut changes: BTreeMap<EntryId, Change> = classified
         .iter()
-        .map(|(id, c)| Ok((id.clone(), candidate(tx, graph, verified, c)?)))
+        .map(|(id, c)| Ok((id.clone(), candidate_with_view(tx, &context, verified, c)?)))
         .collect::<Result<_>>()?;
     // Existing caches may never disappear from the immutable graph identity set.
     let cached: Vec<String> = tx
@@ -1348,6 +1389,16 @@ pub(super) fn prepare_physical_move(
 }
 
 #[cfg(test)]
+fn candidate(
+    tx: &Connection,
+    graph: &MetadataState,
+    verified: &VerifiedBinarySet,
+    classified: &EntryMaterializationRef,
+) -> Result<Change> {
+    candidate_with_view(tx, &RetainedGraphView::new(graph), verified, classified)
+}
+
+#[cfg(test)]
 mod reference_tests {
     use super::*;
     use zorid_file_sync::{
@@ -1474,7 +1525,9 @@ mod reference_tests {
     #[test]
     fn empty_binary_remains_present_as_a_graph_reference() {
         let (db, graph, verified, classified) = fixture();
-        let change = candidate(&db, &graph, &verified, &classified).unwrap();
+        let context = RetainedGraphView::new(&graph);
+        let change = candidate_with_view(&db, &context, &verified, &classified).unwrap();
+        assert!(context.view.get().is_none());
         let row = change.after.as_ref().unwrap();
         assert_eq!(row.state.kind, EntryKind::File);
         assert!(
@@ -1483,10 +1536,11 @@ mod reference_tests {
         retain(&db, &change);
         assert_eq!(retained_entry(&db, &row.state.id).unwrap().unwrap().0, *row);
         assert!(
-            !candidate(&db, &graph, &verified, &classified)
+            !candidate_with_view(&db, &context, &verified, &classified)
                 .unwrap()
                 .changed
         );
+        assert!(context.view.get().is_none());
     }
     #[test]
     fn hidden_and_tombstoned_binary_preserve_exact_source_and_witness() {
@@ -1614,5 +1668,303 @@ mod reference_tests {
         )
         .unwrap();
         assert!(candidate(&db, &changed, &verified, &classified).is_err());
+    }
+}
+
+#[cfg(test)]
+mod retained_view_tests {
+    use super::*;
+    use rusqlite::types::Value;
+    use zorid_core::VaultPath;
+    use zorid_sync_protocol::{RealmId, VaultId};
+
+    const TEXTS: usize = 8;
+    fn create(index: usize) -> MutationRequest {
+        MutationRequest {
+            operation_id: OperationId::new(format!("create_{index:02}")).unwrap(),
+            mutation: Mutation::Create {
+                id: EntryId::new(format!("text_{index:02}")).unwrap(),
+                path: VaultPath::new(format!("note-{index:02}.md")).unwrap(),
+                kind: EntryKind::File,
+                content: Some(format!("distinct body {index} 🦀\r\n").into_bytes()),
+            },
+        }
+    }
+    fn fixture() -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("store")).unwrap();
+        store
+            .family_enroll(&FamilyScope {
+                realm_id: RealmId::new("realm").unwrap(),
+                vault_id: VaultId::new("vault").unwrap(),
+            })
+            .unwrap();
+        for index in 0..TEXTS {
+            store
+                .family_apply(&create(index), Some(FamilyCreateMode::Text))
+                .unwrap();
+        }
+        (dir, store)
+    }
+    // Exact private database comparison includes receipts, payloads, graph/text
+    // history, materializations and jobs, rather than just the visible listing.
+    fn database(db: &Connection) -> Vec<(String, Vec<Vec<Value>>)> {
+        let names = db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").unwrap()
+            .query_map([], |row| row.get::<_, String>(0)).unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>().unwrap();
+        names
+            .into_iter()
+            .map(|name| {
+                assert!(name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'));
+                let mut statement = db
+                    .prepare(&format!("SELECT * FROM {name} ORDER BY rowid"))
+                    .unwrap();
+                let columns = statement.column_count();
+                let rows = statement
+                    .query_map([], |row| {
+                        (0..columns)
+                            .map(|column| row.get(column))
+                            .collect::<rusqlite::Result<Vec<Value>>>()
+                    })
+                    .unwrap()
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .unwrap();
+                (name, rows)
+            })
+            .collect()
+    }
+    fn classified(
+        db: &Connection,
+        graph: &MetadataState,
+        verified: &VerifiedBinarySet,
+    ) -> Vec<EntryMaterializationRef> {
+        zorid_file_sync::reference_materialization::classify_metadata(
+            graph,
+            verified,
+            &family_ingress::retained_texts(db, graph.scope()).unwrap(),
+            zorid_file_sync::MAX_FILE_BYTES,
+            zorid_file_sync::MAX_STATE_BYTES as u64,
+        )
+        .unwrap()
+    }
+    fn parity(db: &Connection) {
+        let graph = load_metadata(db).unwrap();
+        let verified = blob_index::verify_metadata(db, &graph, &[]).unwrap();
+        let values = classified(db, &graph, &verified);
+        assert_eq!(values.len(), TEXTS);
+        let context = RetainedGraphView::new(&graph);
+        assert!(context.view.get().is_none());
+        let mut address = None;
+        for value in &values {
+            let shared = candidate_with_view(db, &context, &verified, value).unwrap();
+            let one_off = candidate(db, &graph, &verified, value).unwrap();
+            assert_eq!(shared.record, one_off.record);
+            assert_eq!(shared.before, one_off.before);
+            assert_eq!(shared.after, one_off.after);
+            assert_eq!(
+                (shared.was_visible, shared.visible, shared.changed),
+                (one_off.was_visible, one_off.visible, one_off.changed)
+            );
+            assert!(!shared.changed);
+            let current = context.view().unwrap() as *const MetadataView;
+            assert_eq!(*address.get_or_insert(current), current);
+        }
+        assert!(context.view.get().is_some());
+        // A separate invocation owns a fresh empty cell, even for the same graph.
+        assert!(RetainedGraphView::new(&graph).view.get().is_none());
+        validate(db, &graph, &verified).unwrap();
+    }
+    #[test]
+    fn many_retained_texts_share_one_view_and_match_one_off_candidates_through_commit_replay() {
+        let (_dir, mut store) = fixture();
+        parity(&store.connection);
+        let id = EntryId::new("text_00").unwrap();
+        let before = store.read(&id).unwrap().unwrap();
+        let request = MutationRequest {
+            operation_id: OperationId::new("write_many").unwrap(),
+            mutation: Mutation::Write {
+                id: id.clone(),
+                expected: before.state.revision,
+                content: b"new body".to_vec(),
+            },
+        };
+        let original = database(&store.connection);
+        let tx = store.connection.unchecked_transaction().unwrap();
+        let prepared = family_commands::prepare_command(&tx, &request, None).unwrap();
+        let expected_changes = prepared.changes().to_vec();
+        tx.commit().unwrap();
+        assert_eq!(database(&store.connection), original);
+        let tx = store
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        let receipt = family_commands::commit_prepared(&tx, &prepared).unwrap();
+        assert_eq!(receipt.changes, expected_changes);
+        tx.commit().unwrap();
+        assert_eq!(
+            store.read(&id).unwrap().unwrap().content.as_deref(),
+            Some(b"new body".as_slice())
+        );
+        parity(&store.connection);
+        let committed = database(&store.connection);
+        assert_eq!(store.family_apply(&request, None).unwrap(), receipt);
+        let tx = store
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        assert_eq!(
+            family_commands::commit_prepared(&tx, &prepared).unwrap(),
+            receipt
+        );
+        tx.commit().unwrap();
+        assert_eq!(database(&store.connection), committed);
+        let jobs = store.pending_projection_jobs(100).unwrap();
+        assert_eq!(jobs.len(), TEXTS + 1);
+        assert_eq!(jobs.last().unwrap().target, receipt.changes[0].after);
+    }
+    #[test]
+    fn late_unrelated_retained_content_or_history_corruption_rejects_and_rolls_back_writer() {
+        for corrupt_history in [false, true] {
+            let (_dir, mut store) = fixture();
+            let request = create(TEXTS);
+            let tx = store.connection.unchecked_transaction().unwrap();
+            let prepared =
+                family_commands::prepare_command(&tx, &request, Some(FamilyCreateMode::Text))
+                    .unwrap();
+            tx.commit().unwrap();
+            let last = EntryId::new(format!("text_{:02}", TEXTS - 1)).unwrap();
+            if corrupt_history {
+                store
+                    .connection
+                    .execute(
+                        "UPDATE family_materialization_history SET record='{}' WHERE entry_id=?1",
+                        [last.as_str()],
+                    )
+                    .unwrap();
+            } else {
+                let bytes = b"different retained bytes";
+                store
+                    .connection
+                    .execute(
+                        "UPDATE entries SET content=?1,content_digest=?2 WHERE id=?3",
+                        params![
+                            bytes.as_slice(),
+                            serde_json::to_string(&Sha256Digest::of(bytes)).unwrap(),
+                            last.as_str()
+                        ],
+                    )
+                    .unwrap();
+            }
+            let corrupted = database(&store.connection);
+            // Preparation and commit each check their own current SQL state.
+            let tx = store.connection.unchecked_transaction().unwrap();
+            assert!(
+                family_commands::prepare_command(&tx, &request, Some(FamilyCreateMode::Text))
+                    .is_err()
+            );
+            tx.rollback().unwrap();
+            let tx = store
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            assert!(family_commands::commit_prepared(&tx, &prepared).is_err());
+            tx.rollback().unwrap();
+            assert_eq!(database(&store.connection), corrupted);
+            assert!(store.read(request.mutation.id()).unwrap().is_none());
+        }
+    }
+    #[test]
+    fn same_bytes_do_not_authorize_other_bootstraps_history_or_hidden_outcomes() {
+        let (_dir, store) = fixture();
+        let graph = load_metadata(&store.connection).unwrap();
+        let verified = blob_index::verify_metadata(&store.connection, &graph, &[]).unwrap();
+        let values = classified(&store.connection, &graph, &verified);
+        let value = &values[TEXTS - 1];
+        let context = RetainedGraphView::new(&graph);
+        let original = candidate_with_view(&store.connection, &context, &verified, value).unwrap();
+        let witness = original.record.retained_content.as_ref().unwrap();
+        let content = original.before.as_ref().unwrap().content.as_ref().unwrap();
+        let mut changed = witness.clone();
+        let ContentWitness::Text { identity, .. } = &mut changed.witness else {
+            panic!()
+        };
+        identity.bootstrap_id = UpdateId::new("other_text_bootstrap").unwrap();
+        assert!(check_retained_content_with_view(
+            &store.connection,
+            &context,
+            &value.identity,
+            &changed,
+            content,
+            Some(&verified)
+        )
+        .is_err());
+        let mut changed = witness.clone();
+        let ContentWitness::Text {
+            snapshot_digest, ..
+        } = &mut changed.witness
+        else {
+            panic!()
+        };
+        *snapshot_digest = Sha256Digest::of(b"unrelated snapshot");
+        assert!(check_retained_content_with_view(
+            &store.connection,
+            &context,
+            &value.identity,
+            &changed,
+            content,
+            Some(&verified)
+        )
+        .is_err());
+        let mut other = value.clone();
+        other.identity.bootstrap_id = UpdateId::new("other_file_bootstrap").unwrap();
+        assert!(candidate_with_view(&store.connection, &context, &verified, &other).is_err());
+        for outcome in [
+            OutcomeRef::Pending {
+                reason: PendingReason::MissingBootstrap,
+            },
+            OutcomeRef::Recovery {
+                reason: zorid_file_sync::RecoveryReason::DeleteConflict,
+            },
+            OutcomeRef::Tombstone,
+        ] {
+            let hidden = EntryMaterializationRef {
+                identity: value.identity.clone(),
+                outcome,
+            };
+            let shared =
+                candidate_with_view(&store.connection, &context, &verified, &hidden).unwrap();
+            let one_off = candidate(&store.connection, &graph, &verified, &hidden).unwrap();
+            assert!(!shared.visible);
+            assert_eq!(shared.after, one_off.after);
+            assert_eq!(
+                shared.after.as_ref().unwrap().content,
+                original.before.as_ref().unwrap().content
+            );
+            assert_eq!(
+                shared.record.retained_content,
+                original.record.retained_content
+            );
+        }
+    }
+    #[test]
+    fn prepared_many_text_command_rejects_peer_change_without_any_writer_effects() {
+        let (dir, mut store) = fixture();
+        let request = create(TEXTS);
+        let tx = store.connection.unchecked_transaction().unwrap();
+        let prepared =
+            family_commands::prepare_command(&tx, &request, Some(FamilyCreateMode::Text)).unwrap();
+        tx.commit().unwrap();
+        let mut peer = Store::open(dir.path().join("store")).unwrap();
+        peer.family_apply(&create(TEXTS + 1), Some(FamilyCreateMode::Text))
+            .unwrap();
+        let advanced = database(&store.connection);
+        let tx = store
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        assert!(family_commands::commit_prepared(&tx, &prepared).is_err());
+        tx.rollback().unwrap();
+        assert_eq!(database(&store.connection), advanced);
+        assert!(store.read(request.mutation.id()).unwrap().is_none());
     }
 }
