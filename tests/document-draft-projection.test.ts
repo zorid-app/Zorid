@@ -13,7 +13,7 @@ interface Owned {job:DocumentDraftJob;source:{bytes:number;utf16:number;sha256:s
 function fixture(){
   const events:DocumentDraftRequest[]=[],jobs=new Map<string,Owned>(),receivers=new Set<{hint:()=>void;retire:()=>void}>();let sequence=0;
   const buffers=new Map<string,{revision:string;id:string;released:boolean}>();
-  const controls={requestGate:undefined as ReturnType<typeof deferred<void>>|undefined,readGate:undefined as ReturnType<typeof deferred<void>>|undefined,releaseFailures:0,retireOnRelease:false,facts:((text:string)=>facts(text)),wireLength:undefined as number|undefined,autoReady:true,syncSnapshotHints:0,snapshotMode:'normal' as 'normal'|'null'|'other-life',snapshotActive:0,snapshotMaximum:0};
+  const controls={requestGate:undefined as ReturnType<typeof deferred<void>>|undefined,readGate:undefined as ReturnType<typeof deferred<void>>|undefined,hold:undefined as {op:'snapshot'|'cancel'|'acknowledge';gate:ReturnType<typeof deferred<void>>;reached:boolean;settled:boolean}|undefined,releaseFailures:0,retireOnRelease:false,lifetime:'owner',facts:((text:string)=>facts(text)),wireLength:undefined as number|undefined,autoReady:true,syncSnapshotHints:0,snapshotMode:'normal' as 'normal'|'null'|'other-life',controlMode:'normal' as 'normal'|'null'|'other-life',snapshotActive:0,snapshotMaximum:0};
   const hint=()=>{for(const slot of [...receivers])slot.hint();};
   const transport:DocumentDraftTransport={scope:{localStoreId:'store',clientId:'client'},subscribe(hint,retire){const slot={hint,retire};receivers.add(slot);return()=>receivers.delete(slot);},invoke:async(input,bytes)=>{
     events.push(input);
@@ -24,17 +24,22 @@ function fixture(){
       if(prior&&(prior.released||BigInt(input.text_revision)<BigInt(prior.revision)||input.text_revision===prior.revision&&!jobs.has(prior.id)))throw {code:'draft_expired'};
       if(prior&&input.text_revision===prior.revision){const captured=reply(jobs.get(prior.id)!.job);captured.result.state.replay=true;return captured;}
       if(prior){const old=jobs.get(prior.id);if(old)old.kind='superseded';}
-      const job={lifetime:'owner',id:String(++sequence),buffer_lifetime:input.buffer_lifetime,text_revision:input.text_revision};
+      const job={lifetime:controls.lifetime,id:String(++sequence),buffer_lifetime:input.buffer_lifetime,text_revision:input.text_revision};
       buffers.set(input.buffer_lifetime,{revision:input.text_revision,id:job.id,released:false});
       jobs.set(job.id,{job,source:input.source,bytes:new Uint8Array(input.source.bytes),received:0,sealed:false});const captured=reply(job);await controls.requestGate?.promise;return captured;
     }
     if(input.op==='snapshot'){
       controls.snapshotActive++;controls.snapshotMaximum=Math.max(controls.snapshotMaximum,controls.snapshotActive);
       try{if(controls.syncSnapshotHints-->0)hint();await Promise.resolve();if(controls.snapshotMode==='null')return {result:{state:null,transfer:null,transfer_scratch_bytes:0},bytes:new Uint8Array()};
-      const value=reply();if(controls.snapshotMode==='other-life')value.result.state.outcomes=[{job:{lifetime:'replacement',id:'1',buffer_lifetime:'other',text_revision:'1'},kind:'ready',reason:null}];return value;
+      const value=reply();if(controls.snapshotMode==='other-life')value.result.state.outcomes=[{job:{lifetime:controls.lifetime,id:'1',buffer_lifetime:'other',text_revision:'1'},kind:'ready',reason:null}];
+      const held=controls.hold;if(held?.op==='snapshot'&&!held.reached){const old=[...jobs.values()][0];if(old)value.result.state.outcomes=[{job:old.job,kind:'cancelled',reason:null}];held.reached=true;await held.gate.promise;held.settled=true;}return value;
       }finally{controls.snapshotActive--;}
     }
     if(input.op==='release_buffer'){if(controls.retireOnRelease){controls.retireOnRelease=false;for(const slot of [...receivers])slot.retire();}const prior=buffers.get(input.buffer_lifetime);if(prior)prior.released=true;for(const [id,row]of jobs)if(row.job.buffer_lifetime===input.buffer_lifetime)jobs.delete(id);if(controls.releaseFailures-->0)throw {code:'release_failed'};return reply();}
+    if(input.op==='cancel'&&controls.controlMode!=='normal'){
+      if(controls.controlMode==='null')return {result:{state:null,transfer:null,transfer_scratch_bytes:0},bytes:new Uint8Array()};
+      const value=reply();value.result.state.outcomes=[{job:{lifetime:controls.lifetime,id:'1',buffer_lifetime:'other',text_revision:'1'},kind:'ready',reason:null}];return value;
+    }
     const row=jobs.get(input.job.id);if(!row)throw {code:'draft_expired'};
     const transfer=()=>({source_bytes_received:row.received,source_bytes_expected:row.source.bytes,source_sealed:row.sealed,facts_bytes:row.wire?controls.wireLength??row.wire.length:null,scratch_bytes:0});
     if(input.op==='upload_begin'||input.op==='progress')return reply(null,transfer());
@@ -46,12 +51,12 @@ function fixture(){
     }
     if(input.op==='facts_prepare')return reply(null,transfer());
     if(input.op==='facts_read'){const offset=Number(input.offset),wire=row.wire!,part=wire.slice(offset,offset+input.maximum),captured={result:{job:row.job,offset:input.offset,bytes:part.length,total_bytes:wire.length,eof:offset+part.length===wire.length},bytes:part};await controls.readGate?.promise;return captured;}
-    if(input.op==='cancel'){row.kind='cancelled';queueMicrotask(hint);return reply();}
-    if(input.op==='acknowledge'){jobs.delete(input.job.id);return reply();}
+    if(input.op==='cancel'){row.kind='cancelled';queueMicrotask(hint);const value=reply(),held=controls.hold;if(held?.op==='cancel'&&!held.reached){held.reached=true;await held.gate.promise;held.settled=true;}return value;}
+    if(input.op==='acknowledge'){jobs.delete(input.job.id);const value=reply(),held=controls.hold;if(held?.op==='acknowledge'&&!held.reached){value.result.state.outcomes=[{job:input.job,kind:'cancelled',reason:null}];held.reached=true;await held.gate.promise;held.settled=true;}return value;}
     throw Error('No feature parser/work controls are allowed');
   }};
   const service=createDocumentDraftService(transport),projections:DocumentDraftProjection[]=[];
-  return {service,events,controls,jobs,hint,receivers,project(capable=true,onChange?:(state:DraftMetadataState)=>void){const value=new DocumentDraftProjection({owner:service,service:capable?service:undefined,capable,onChange});projections.push(value);return value;},retire(){for(const slot of [...receivers])slot.retire();},async close(){for(const projection of projections)await projection.close();}};
+  return {service,events,controls,jobs,hint,receivers,project(capable=true,onChange?:(state:DraftMetadataState)=>void){const value=new DocumentDraftProjection({owner:service,service:capable?service:undefined,capable,onChange});projections.push(value);return value;},resetOwner(){jobs.clear();buffers.clear();sequence=0;controls.lifetime='replacement';},ready(){for(const row of jobs.values())if(row.sealed)row.kind='ready';hint();},retire(){for(const slot of [...receivers])slot.retire();},async close(){for(const projection of projections)await projection.close();}};
 }
 const demand={demand:true},idle={demand:false};
 
@@ -125,11 +130,34 @@ test('synchronous snapshot hints reserve one observer before invoking transport'
   await until(()=>f.events.filter(e=>e.op==='snapshot').length>=2);assert.equal(f.controls.snapshotMaximum,1);assert.equal(projection.state.status,'pending');
 });
 
-for(const mode of ['null','other-life'] as const)test(`authoritative ${mode} observation expires an admitted wait without cross-lifetime ACK`,async t=>{
-  const f=fixture();t.after(()=>f.close());f.controls.autoReady=false;const projection=f.project();projection.update('One.md','waiting',demand);
-  await until(()=>f.events.some(e=>e.op==='snapshot'));f.controls.snapshotMode=mode;f.hint();await until(()=>projection.state.status==='unavailable');
-  assert.equal(projection.state.code,'unavailable');assert.equal(projection.current,undefined);assert.equal(f.events.some(e=>e.op==='acknowledge'),false);
-  const before=f.events.filter(e=>e.op==='request').length;projection.update('One.md','next',demand);assert.equal(f.events.filter(e=>e.op==='request').length,before,'lost owner is not silently retargeted');
+for(const mode of ['null','other-life'] as const)test(`authoritative ${mode} loss permits only explicit renewed analysis and fences old control replies`,async t=>{
+  for(const operation of ['snapshot','cancel','acknowledge'] as const){
+    const f=fixture(),gate=deferred<void>();t.after(()=>{gate.resolve();return f.close();});f.controls.autoReady=false;const projection=f.project();
+    if(operation==='snapshot')f.controls.hold={op:operation,gate,reached:false,settled:false};
+    projection.update('One.md','first',demand);await until(()=>f.events.some(e=>e.op==='snapshot'));
+    if(operation!=='snapshot'){
+      f.controls.hold={op:operation,gate,reached:false,settled:false};projection.update('One.md','waiting',demand);
+      await until(()=>f.events.filter(e=>e.op==='upload_seal').length===2);
+    }
+    await until(()=>!!f.controls.hold?.reached);const held=f.controls.hold!,identity=projection.state.bufferLifetime;
+    // A held snapshot cannot deliver expiry itself. A cancellation response is
+    // an independent authoritative observation of the now-missing owner.
+    f.resetOwner();f.controls.snapshotMode=mode;
+    if(operation==='snapshot')f.controls.controlMode=mode;
+    f.hint();
+    if(operation==='snapshot'){
+      // Allow expiry via a newer admitted run while its old snapshot is held.
+      projection.update('One.md','waiting',demand);
+    }
+    await until(()=>projection.state.status==='unavailable');assert.equal(projection.state.code,'unavailable');assert.equal(projection.current,undefined);
+    const before=f.events.filter(e=>e.op==='request').length;await new Promise(resolve=>setImmediate(resolve));assert.equal(f.events.filter(e=>e.op==='request').length,before,'failed run never retargets itself');
+    f.controls.snapshotMode='normal';f.controls.controlMode='normal';const revision=projection.state.textRevision;
+    if(mode==='null')projection.update('One.md','renewed',demand);else{projection.update('One.md','waiting',idle);projection.update('One.md','waiting',demand);}
+    await until(()=>f.events.filter(e=>e.op==='upload_seal').at(-1)?.job.lifetime==='replacement');assert.equal(projection.state.status,'pending');
+    const next=f.events.filter(e=>e.op==='request').at(-1)!;assert.notEqual(next.buffer_lifetime,(f.events.find(e=>e.op==='request') as any).buffer_lifetime);assert.equal(projection.state.bufferLifetime,identity);if(mode==='other-life')assert.equal(projection.state.textRevision,revision);
+    gate.resolve();await until(()=>held.settled);await new Promise(resolve=>setImmediate(resolve));assert.equal(projection.state.status,'pending','late old snapshot/cancel/ACK cannot relatch loss');
+    f.ready();await until(()=>!!projection.current);assert.deepEqual(projection.current!.aliases,[`core:${mode==='null'?'renewed':'waiting'}`]);
+  }
 });
 
 test('a delayed old facts read cannot replace newer text and its bytes stay charged until settled',async t=>{
