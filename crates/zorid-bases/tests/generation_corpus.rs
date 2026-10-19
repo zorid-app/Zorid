@@ -27,6 +27,27 @@ struct Request {
     configuration: PropertyValue,
     options: QueryOptions,
 }
+// Keep the historical semantic fixture byte-for-byte. Only its explicitly
+// frozen extraction-version leaves are adapted to the current parser contract.
+fn current_corpus() -> Corpus {
+    let mut corpus: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/document-semantics/bases/accepted-generation-queries.json"
+    ))
+    .unwrap();
+    let current = zorid_index::document_extraction_version();
+    for case in corpus["cases"].as_array_mut().unwrap() {
+        let input = case
+            .pointer_mut("/request/snapshotId/versions/extraction")
+            .unwrap();
+        assert_eq!(input.as_str(), Some("zorid-markdown-1:metadata-1"));
+        *input = json!(current);
+        if let Some(expected) = case.pointer_mut("/expected/snapshotId/versions/extraction") {
+            assert_eq!(expected.as_str(), Some("zorid-markdown-1:metadata-1"));
+            *expected = json!(current);
+        }
+    }
+    serde_json::from_value(corpus).unwrap()
+}
 fn subset(actual: &Value, expected: &Value) -> bool {
     match (actual, expected) {
         (Value::Object(a), Value::Object(e)) => e
@@ -72,10 +93,7 @@ fn exact_json(actual: &Value, expected: &Value) -> bool {
 }
 #[test]
 fn generation_factory_canonical_graph_corpus() {
-    let corpus: Corpus = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/document-semantics/bases/accepted-generation-queries.json"
-    ))
-    .unwrap();
+    let corpus = current_corpus();
     let mut failures = Vec::new();
     for case in corpus.cases {
         let r = case.request;
@@ -172,10 +190,7 @@ fn generation_factory_canonical_graph_corpus() {
 }
 #[test]
 fn detached_transport_cannot_import_a_relationship_report() {
-    let corpus: Corpus = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/document-semantics/bases/accepted-generation-queries.json"
-    ))
-    .unwrap();
+    let corpus = current_corpus();
     let id = &corpus.cases[0].request.snapshot_id;
     assert!(serde_json::from_value::<BaseSnapshot>(
         json!({"snapshotId":id,"records":[],"relationships":{}})
@@ -185,10 +200,7 @@ fn detached_transport_cannot_import_a_relationship_report() {
 
 #[test]
 fn current_entry_selection_rejects_missing_conflicting_and_unbounded_contexts() {
-    let corpus: Corpus = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/document-semantics/bases/accepted-generation-queries.json"
-    ))
-    .unwrap();
+    let corpus = current_corpus();
     let request = corpus
         .cases
         .into_iter()

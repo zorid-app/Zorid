@@ -12,7 +12,7 @@ import {generate,sha256,json,queries,literalOracle,expectedCount,checkCount} fro
 const finite=value=>assert.ok(Number.isFinite(value)&&value>=0,'nonnegative finite timing required');
 const uint=(value,max=Number.MAX_SAFE_INTEGER)=>assert.ok(Number.isSafeInteger(value)&&value>=0&&value<=max,'bounded integer required');
 const source=Object.freeze({localStoreId:'s1-core-store',watermark:'1'});
-const snapshot=Object.freeze({localStoreId:'s1-core-store',generationEpoch:'s1-core-epoch',generation:'1',versions:{schema:1,extraction:'zorid-markdown-1:metadata-1',resolver:'link-nfc-lower-segment-utf16-v1',query:'literal-lines-exact-v1'}});
+const snapshot=Object.freeze({localStoreId:'s1-core-store',generationEpoch:'s1-core-epoch',generation:'1',versions:{schema:1,extraction:'zorid-markdown-1:metadata-2',resolver:'link-nfc-lower-segment-utf16-v1',query:'literal-lines-exact-v1'}});
 const mapped=entry=>({id:entry.logicalId,revision:`source-${entry.sha256}`,path:entry.path,kind:'file',deleted:false});
 export class CoreValidator {
   constructor(fixture,samples){this.fixture=fixture;this.samples=samples;this.byPath=new Map(fixture.manifest.entries.map(e=>[e.path,mapped(e)]));this.reports=[];this.seenSetup=false;this.seenGeneration=false;this.done=false;this.active=null;}

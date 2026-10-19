@@ -4,7 +4,7 @@ import {extras,noteId,notePath,CLOCK_MS} from './workload.mjs';
 export const ORACLE_VERSION='zorid-generated-bases-v1';
 export const CLOCK_ORACLE=Object.freeze({file:'accepted-expressions.json',sha256:'fbbcd720ff13ae589a4abafbf05f5085bb7305a44834060eddfcdf407f775352',id:'clock-pinned',expression:'today().toString()',clockMs:1705314030000,timezone:'UTC',expected:'2024-01-15'});
 export const SOURCE=Object.freeze({localStoreId:'s1-generated-bases-store',watermark:'1'});
-export const SNAPSHOT=Object.freeze({localStoreId:'s1-generated-bases-store',generationEpoch:'s1-generated-bases-epoch',generation:'1',versions:{schema:1,extraction:'zorid-markdown-1:metadata-1',resolver:'link-nfc-lower-segment-utf16-v1',query:'literal-lines-exact-v1'}});
+export const SNAPSHOT=Object.freeze({localStoreId:'s1-generated-bases-store',generationEpoch:'s1-generated-bases-epoch',generation:'1',versions:{schema:1,extraction:'zorid-markdown-1:metadata-2',resolver:'link-nfc-lower-segment-utf16-v1',query:'literal-lines-exact-v1'}});
 const number=value=>({type:'number',value}),string=value=>({type:'string',value});
 const status=i=>['todo','doing','done'][i%3];
 const groupKeys=Object.freeze({doing:'base-key-v1:{"type":"string","value":"doing"}',done:'base-key-v1:{"type":"string","value":"done"}',todo:'base-key-v1:{"type":"string","value":"todo"}'});
