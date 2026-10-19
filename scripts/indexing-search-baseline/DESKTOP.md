@@ -51,7 +51,8 @@ read-only requests use the already admitted, root-scoped bridge.
    rendered with `data-state=ready`. Retain raw status/version/watermark samples,
    available UI progress observations and cache file sizes.
 3. **Normal editor save:** click that actual search result. Check its original
-   committed revision/content, then replace its text by keyboard with the exact
+   committed revision/content and wait for its loaded, focused editable body; the
+   title alone is not an editor-readiness witness. Then replace its text by keyboard with the exact
    original source plus one marker line. All original YAML/properties/body stay
    intact. Require a visible pending-save witness and unchanged disk initially.
    Observe the clean save indicator, exact filesystem and committed bridge bytes,
@@ -108,3 +109,10 @@ in force: a query becoming incomplete, unavailable or lagged cannot pass as full
 coverage. Only unique-result presentation is measured here; complete literal
 membership/range/page oracles belong to the shared CLI/browser baseline tools.
 No source/cache deletion manufactures cold state, and no real-vault data is used.
+
+For larger fixtures, the current UI may offer Continue indexing after its bounded
+catch-up budget. This harness does not force further pumps or silently click that
+action. Incomplete/continuation/timeout evidence must be classified as the observed
+UI budget boundary, not proof that the Rust engine cannot index the fixture. A
+later separately measured ordinary continuation flow is needed before extending
+this unique-result UI smoke into a 10k presentation campaign.
