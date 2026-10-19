@@ -17,7 +17,38 @@ define the documented target, not a frozen executable oracle. Existing
 observations. Do not equate those observations, current implementation, approved
 Zorid corrections and documented target behavior.
 
-## Search matrix
+## Shared rich-search implementation checkpoint
+
+As of2026-10-19, `a24a4fa5` adds the pure Rust
+[rich evaluator](../../crates/zorid-index/src/search/mod.rs), dialect
+`zorid-search-rust-unicode-1`. The historical matrix below still describes the
+retained S1.0/live literal path; platform migration is pending. Do not interpret
+that table as the capability inventory of the new pure evaluator.
+
+The new evaluator supports default-insensitive search, the case-sensitive option,
+scoped case modifiers, all-occurrence substring matches, Boolean/group/exclusion
+operators, quotes, file/path/content scopes, typed properties/tags and parser-backed
+line/block/section/task scopes. It reports invalid and unsupported syntax
+separately from unavailable source/metadata. Filename, property and source ranges
+have explicit distinct origins.
+
+Regex uses pinned Rust Unicode scalar/simple-fold semantics, with no locale
+folding or normalization. Lookaround, backreferences and suffix flags diagnose;
+there is no JavaScript fallback. Quotes use Unicode Letter/Decimal_Number
+boundaries. Root empty queries do not fabricate content ranges; headingless files
+form one whole-source section. Frontmatter tag locations preserve the actual
+selected property key. These deliberate provenance/engine choices are documented
+in the module rather than presented as executable Obsidian parity.
+
+The exact candidate `76d8e9d9` passed14 focused checks, covering19 accepted target
+cases and36 explicit Unicode/regex cases, plus the unchanged literal baseline at
+page sizes1/100. A4MiB dense control retains all8192 occurrences for ordinary,
+quoted and plain-slash literals within unchanged work/output caps. Those are
+correctness and work-accounting checks, not a measured CPU or app speedup.
+Rich paging/counts/snippets/order, bindings and the grouped UI remain separate
+implementation/runtime gates. The execution checkpoint tracks their evidence.
+
+## S1.0 search matrix (retained baseline and live literal path)
 
 Current shared Rust search is `literal-lines-exact-v1` in
 [literal.rs](../../crates/zorid-index/src/literal.rs). The live shared desktop/web/CLI
