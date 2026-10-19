@@ -135,3 +135,21 @@ test('shared codec runs without Buffer with identical UTF-8 limits and owner val
   assert.equal(result.value.entry.path,'😀.md');assert.equal(JSON.stringify(Object.keys(result.value.metadata.properties[0].value)),JSON.stringify(['Title','title']));
   await controller.invoke(request('close',{pinId:'1'}));await assert.rejects(controller.invoke(request('metadata',{pinId:'1',id:'note'})),{code:'snapshot_expired'});
 });
+
+test('native pump accepts optional exact parse-cache counters without weakening response validation',()=>{
+  // DocumentIndexProgress and DocumentParseCacheProgress serialize camelCase.
+  const progress={snapshot,preparedDocuments:7,reusedDocuments:2,totalDocuments:10,ready:false};
+  const parseCache={hits:3,misses:1,unavailable:0,corrupt:1,unsupported:0};
+  const pump=request('pump',{snapshot});
+  assert.deepEqual(decodeDocumentReply(pump,...wire('pump',progress)),progress,'older hosts may omit metrics');
+  const current={...progress,parseCache};
+  assert.deepEqual(decodeDocumentReply(pump,...wire('pump',current)),current);
+  assert.deepEqual(decodeDocumentReply(pump,...wire('pump',{...progress,parseCache:{...parseCache,hits:Number.MAX_SAFE_INTEGER}})).parseCache.hits,Number.MAX_SAFE_INTEGER);
+  const invalid=[null,[],{}, {...parseCache,extra:0}];
+  for(const key of Object.keys(parseCache)){
+    const missing={...parseCache};delete missing[key];invalid.push(missing);
+    for(const value of [-1,1.5,'1',null,true,Number.MAX_SAFE_INTEGER+1,NaN,Infinity])invalid.push({...parseCache,[key]:value});
+  }
+  for(const counters of invalid)assert.throws(()=>decodeDocumentReply(pump,...wire('pump',{...progress,parseCache:counters})),{code:'invalid_document_response'});
+  assert.throws(()=>decodeDocumentReply(pump,...wire('pump',{...current,unexpected:true})),{code:'invalid_document_response'});
+});

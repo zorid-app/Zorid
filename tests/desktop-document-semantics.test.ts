@@ -67,3 +67,24 @@ test('normal Base adapter omits unset scalar options before strict IPC capture',
   assert.deepEqual(optionsSeen,[{clockMs:0,maxRows:17},{clockMs:42,viewIndex:0,maxSteps:1,currentEntryId:'entry',timezone:'UTC',maxRows:1000}]);
   await binding.release();
 });
+
+test('desktop pump preserves native parse-cache metrics as immutable service progress and supports older hosts',async()=>{
+  const counters={hits:3,misses:1,unavailable:0,corrupt:1,unsupported:0};
+  let includeMetrics=true;
+  const binding=createDesktopDocumentService(async request=>{
+    if(request.command.op==='begin')return {snapshot};
+    if(request.command.op==='discard')return true;
+    if(request.command.op==='pump')return {snapshot,preparedDocuments:7,reusedDocuments:2,totalDocuments:10,ready:false,...(includeMetrics?{parseCache:counters}:{})};
+    throw Error('Unexpected operation');
+  });
+  const stage=await binding.service.begin(),current=await binding.service.pump(stage.stageId);
+  assert.deepEqual(current.progress,{prepared:7,total:10,reused:2,ready:false,parseCache:{...counters}});
+  assert.equal(Object.isFrozen(current.progress!.parseCache),true);
+  assert.notEqual(current.progress!.parseCache,counters);
+  assert.equal(Object.isFrozen(counters),false,'the caller-owned native response is not frozen or mutated');
+  counters.hits=99;assert.equal(current.progress!.parseCache!.hits,3);
+  includeMetrics=false;const legacy=await binding.service.pump(stage.stageId);
+  assert.deepEqual(legacy.progress,{prepared:7,total:10,reused:2,ready:false});
+  assert.equal(Object.hasOwn(legacy.progress!,'parseCache'),false);
+  await binding.release();
+});

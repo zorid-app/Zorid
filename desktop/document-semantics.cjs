@@ -19,6 +19,7 @@ function snapshot(value){
 function source(value){return keys(value,['localStoreId','watermark'])&&id(value.localStoreId)&&decimal(value.watermark);}
 function entry(value){return keys(value,['id','revision','path','kind','deleted'])&&id(value.id)&&id(value.revision)&&typeof value.path==='string'&&value.path.length>0&&['file','folder'].includes(value.kind)&&value.deleted===false;}
 function strings(value){return Array.isArray(value)&&value.length<=256&&value.every(item=>typeof item==='string'&&byteLength(item)<=4096);}
+function parseCache(value){const fields=['hits','misses','unavailable','corrupt','unsupported'];return keys(value,fields)&&fields.every(key=>integer(value[key]));}
 function captureDocumentRequest(input){
   if(!keys(input,['schemaVersion','command'])||input.schemaVersion!==1||!object(input.command)||typeof input.command.op!=='string')throw fail('invalid_document_request');
   const command=input.command,op=command.op;
@@ -106,7 +107,11 @@ function decodeDocumentReply(request,marker,bytes){
   else if(op==='status')valid=object(value)&&source(value.source)&&['uninitialized','rebuild_required','building','ready'].includes(value.state)
     &&(value.state==='ready'?keys(value,['source','state','snapshot','coveredWatermark','observedSourceHead','coverageComplete'])&&snapshot(value.snapshot)&&value.snapshot.localStoreId===value.source.localStoreId&&decimal(value.coveredWatermark)&&value.observedSourceHead===value.source.watermark&&typeof value.coverageComplete==='boolean':keys(value,['source','state']));
   else if(['begin','resume'].includes(op))valid=keys(value,['snapshot'])&&snapshot(value.snapshot)&&(op!=='resume'||same(value.snapshot,command.snapshot));
-  else if(op==='pump')valid=keys(value,['snapshot','preparedDocuments','reusedDocuments','totalDocuments','ready'])&&snapshot(value.snapshot)&&same(value.snapshot,command.snapshot)&&['preparedDocuments','reusedDocuments','totalDocuments'].every(key=>integer(value[key]))&&value.preparedDocuments<=value.totalDocuments&&value.reusedDocuments<=value.preparedDocuments&&typeof value.ready==='boolean';
+  else if(op==='pump'){
+    const fields=['snapshot','preparedDocuments','reusedDocuments','totalDocuments','ready'];
+    valid=keys(value,[...fields,'parseCache'],fields)&&snapshot(value.snapshot)&&same(value.snapshot,command.snapshot)&&['preparedDocuments','reusedDocuments','totalDocuments'].every(key=>integer(value[key]))&&value.preparedDocuments<=value.totalDocuments&&value.reusedDocuments<=value.preparedDocuments&&typeof value.ready==='boolean'
+      &&(!Object.hasOwn(value,'parseCache')||parseCache(value.parseCache));
+  }
   else if(op==='publish')valid=snapshot(value)&&same(value,command.snapshot);
   else if(op==='stages')valid=Array.isArray(value)&&value.length<=4&&value.every(item=>keys(item,['snapshot'])&&snapshot(item.snapshot));
   else if(op==='open')valid=keys(value,['pinId','snapshot','source','coverageComplete'])&&value.pinId===command.pinId&&snapshot(value.snapshot)&&source(value.source)&&value.snapshot.localStoreId===value.source.localStoreId&&typeof value.coverageComplete==='boolean';

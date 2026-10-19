@@ -37,7 +37,7 @@ export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequ
       const row=object(await command('begin')),snapshot=documentSnapshot(row.snapshot),stageId=`desktop-stage-${++stageSequence}`;
       stages.set(stageId,snapshot);return {stageId,snapshot,progress:null};
     },
-    async pump(stageId){const snapshot=snapshotFor(stageId),row=object(await command('pump',{snapshot}));return {stageId,snapshot:row.snapshot,progress:{prepared:row.preparedDocuments,total:row.totalDocuments,reused:row.reusedDocuments,ready:row.ready}};},
+    async pump(stageId){const snapshot=snapshotFor(stageId),row=object(await command('pump',{snapshot}));return {stageId,snapshot:row.snapshot,progress:{prepared:row.preparedDocuments,total:row.totalDocuments,reused:row.reusedDocuments,ready:row.ready,...(row.parseCache===undefined?{}:{parseCache:row.parseCache})}};},
     async publish(stageId){const value=await command('publish',{snapshot:snapshotFor(stageId)});stages.delete(stageId);return value;},
     async discard(stageId){await command('discard',{snapshot:snapshotFor(stageId)});stages.delete(stageId);},
     open(){
