@@ -9,14 +9,15 @@ const range=(from=0,to=3)=>({bytes:[from,to]as const,utf16:[from,to]as const});
 const spec:SearchSpec={query:'cat',caseSensitive:false,sort:'nameAsc',context:'line',explain:false};
 function group(id:string,path=id+'.md'):DocumentSearchGroup {
   return {entry:{id,revision:'r1',path,kind:'file',deleted:false},occurrenceCount:7,outputComplete:true,
-    locations:[{index:9,locator:{origin:'source',range:range(),kind:'occurrence'},role:'occurrence',occurrences:7}],
-    snippets:[{origin:'source',text:'cat 😀 cat\r\n<script>',originRange:range(0,23),primaryLocationIndex:9,
-      highlights:[{utf16:[0,3],locationIndices:[9]},{utf16:[7,10],locationIndices:[9]}],clippedBefore:true,clippedAfter:true}]};
+    locations:[{index:9,locator:{origin:'source',range:range(),kind:'occurrence'},role:'occurrence',occurrences:1},
+      {index:10,locator:{origin:'source',range:{bytes:[9,12],utf16:[7,10]},kind:'occurrence'},role:'occurrence',occurrences:1}],
+    snippets:[{origin:'source',text:'cat 😀 cat\r\n<script>',originRange:{bytes:[0,22],utf16:[0,20]},primaryLocationIndex:9,
+      highlights:[{utf16:[0,3],locationIndices:[9]},{utf16:[7,10],locationIndices:[10]}],clippedBefore:true,clippedAfter:true}]};
 }
 function frame(changes:Partial<DocumentSearchFrame>={}):DocumentSearchFrame {
   return {scopeId:'vault1',requestId:'request1',spec,phase:'results',groups:[group('z'),group('a')],stale:false,displayTruncated:false,canExplain:true,actions:['loadMore'],
     result:{snapshot:{localStoreId:'store1',generation:'1',generationEpoch:'epoch',versions:{schema:2,extraction:'x',resolver:'r',query:'q'}},source:{localStoreId:'store1',watermark:'1'},
-      totals:{occurrences:{relation:'exact',value:24},files:{relation:'exact',value:4}},coverage:{candidateFiles:4,evaluatedFiles:4,unavailableFiles:0,scanComplete:true,queryCoverageComplete:true},outputComplete:true,complete:true,explanation:null},...changes};
+      totals:{occurrences:{relation:'exact',value:24},files:{relation:'exact',value:4}},coverage:{candidateFiles:4,evaluatedFiles:4,unavailableFiles:0,scanComplete:true,queryCoverageComplete:true},coverageComplete:true,outputComplete:true,complete:true,explanation:null},...changes};
 }
 function deepFreeze<T>(value:T):T {if(value&&typeof value==='object'){Object.freeze(value);for(const child of Object.values(value))deepFreeze(child);}return value;}
 function setup(t:TestContext){
@@ -79,7 +80,7 @@ test('disclosure is separate from open, collapse survives rename and new groups 
 test('no-highlight property Exists/anchor primary opens exact locator; empty group keeps header only',t=>{
   const f=setup(t),base=group('props');const exists:SearchLocation={index:17,locator:{origin:'propertyKey',key:'Status',match:{kind:'exists'}},role:'existence',occurrences:1};
   const anchor:SearchLocation={index:25,locator:{origin:'source',kind:'anchor',range:range(8,8)},role:'anchor',occurrences:0};
-  const props:DocumentSearchGroup={...base,locations:[exists,anchor],snippets:[{...base.snippets[0],origin:'propertyKey',key:'Status',text:'Status',primaryLocationIndex:17,highlights:[]},{...base.snippets[0],primaryLocationIndex:25,highlights:[]}]};
+  const props:DocumentSearchGroup={...base,locations:[exists,anchor],snippets:[{...base.snippets[0],origin:'propertyKey',key:'Status',text:'Status',originRange:range(0,6),primaryLocationIndex:17,highlights:[]},{...base.snippets[0],primaryLocationIndex:25,highlights:[]}]};
   f.view.render(frame({groups:[props,{...group('zero'),occurrenceCount:0,locations:[],snippets:[]}]}));
   const rows=f.doc.querySelectorAll<HTMLButtonElement>('.document-search-snippet');rows[0].click();assert.equal(f.opens[0].location,exists);rows[1].click();assert.equal(f.opens[1].location,anchor);
   assert.equal(f.doc.querySelectorAll('.document-search-title').length,2);assert.equal(f.doc.querySelectorAll('mark').length,0);
@@ -94,6 +95,16 @@ test('incomplete empty pages never claim no results; counts coverage stale and d
   assert.equal(f.doc.querySelector('.document-search-total')!.textContent,'3+ matches in Unknown files');
   const status=f.doc.querySelector('.document-search-status')!.textContent!;for(const phrase of ['still scanning','could not be searched','More results','part of the results','earlier snapshot'])assert.ok(status.includes(phrase));assert.ok(!status.includes('No matching'));
   f.view.render(frame({groups:[],result:{...base.result!,totals:{files:{relation:'exact',value:0},occurrences:{relation:'exact',value:0}}}}));assert.match(f.doc.querySelector('.document-search-status')!.textContent!,/No matching files/);
+});
+
+
+test('generation coverage remains independent from exhaustive query and output coverage',t=>{
+  const f=setup(t),base=frame();f.view.render(frame({groups:[],result:{...base.result!,coverageComplete:false,
+    totals:{files:{relation:'exact',value:0},occurrences:{relation:'exact',value:0}}}}));
+  const text=f.doc.querySelector('.document-search-status')!.textContent!;
+  assert.match(text,/Some vault files have incomplete search data/);
+  assert.match(text,/No matching files/); // This query can be exhaustive despite incomplete generation facts.
+  assert.doesNotMatch(text,/still scanning|could not be searched|More results/);
 });
 
 test('old result/action/disclosure controls are inert after replacement, local repaint and destroy',t=>{

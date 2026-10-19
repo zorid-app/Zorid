@@ -11,7 +11,7 @@ export interface DocumentSearchFrame {
   readonly spec:SearchSpec;
   readonly phase:'idle'|'loading'|'results'|'error';
   readonly groups:readonly DocumentSearchGroup[];
-  readonly result?:Pick<DocumentRichSearchPage, 'snapshot'|'totals'|'coverage'|'outputComplete'|'complete'|'explanation'> & {readonly source:DocumentSourceId};
+  readonly result?:Pick<DocumentRichSearchPage, 'snapshot'|'totals'|'coverage'|'coverageComplete'|'outputComplete'|'complete'|'explanation'> & {readonly source:DocumentSourceId};
   readonly stale:boolean;
   readonly displayTruncated:boolean;
   readonly canExplain:boolean;
@@ -134,6 +134,7 @@ export function createDocumentSearchView(parent:HTMLElement, callbacks:DocumentS
     if(next.message)notes.push(next.message);
     if(next.phase==='loading')notes.push('Searching…');
     if(next.stale)notes.push('Results are from an earlier snapshot. Refresh to update them.');
+    if(result&&!result.coverageComplete)notes.push('Some vault files have incomplete search data.');
     if(result&&!result.coverage.scanComplete)notes.push('Search is still scanning files.');
     if(result&&result.coverage.unavailableFiles>0)notes.push('Some files could not be searched.');
     else if(result&&result.coverage.scanComplete&&!result.coverage.queryCoverageComplete)notes.push('Search coverage is incomplete.');
