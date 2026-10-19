@@ -6,6 +6,8 @@ import { BrowserVaultError } from '../core/browser-vault.ts';
 import type { BrowserVaultIntent, BrowserVaultRead, BrowserVaultOutcome } from '../core/browser-vault.ts';
 import { BINARY_CHUNK_BYTES, BINARY_FORMAT_FILE_BYTES } from '../core/binary-streams.ts';
 import type { BinaryStreams, BinaryStreamLimits, BinaryStageRef, BinaryReadRef } from '../core/binary-streams.ts';
+import type {DocumentRuntimeTransport} from '../core/document-runtime.ts';
+import type {BrowserDocumentIndexProvider} from './browser-core.ts';
 import type { BrowserCoreBackend } from './browser-core.ts';
 import type { DurableCheckpoints, Checkpoint, CheckpointPage, CheckpointListOptions, CheckpointChangesOptions } from '../core/durable-checkpoints.ts';
 import { boundedUtf8, checkpointKey, snapshotCheckpointChange } from '../core/checkpoint-input.ts';
@@ -23,6 +25,8 @@ export interface BrowserCoreRuntimeOptions {
   initializeLocal?: boolean;
   /** Explicit reference fixtures only; normal startup never falls back. */
   legacyFixture?:true;
+  /** Positive opt-in only when the shared facade owns foreground freshness. */
+  documentMaintenance?:true;
   timeoutMs?: number;
 }
 type ReadInput=Parameters<BinaryStreams['openRead']>[0];
@@ -36,8 +40,8 @@ interface Pending { resolve(value: unknown): void; reject(error: unknown): void;
 export class BrowserCoreRuntime implements BrowserCoreBackend {
   private authorityScope?: Readonly<{vaultId:string;clientId:string}>;
   get durableScope(): Readonly<{vaultId:string;clientId:string}> | undefined { return this.authorityScope; }
-  private indexProvider?:Omit<BrowserDocumentIndex,'close'>;
-  get documentIndex():Omit<BrowserDocumentIndex,'close'>|undefined{return this.indexProvider;}
+  private indexProvider?:BrowserDocumentIndexProvider;
+  get documentIndex():BrowserDocumentIndexProvider|undefined{return this.indexProvider;}
   private checkpointProvider?: DurableCheckpoints;
   get checkpoints():DurableCheckpoints|undefined{return this.checkpointProvider;}
   private workBlockBinding?:ReturnType<typeof createBrowserWorkBlocks>;
@@ -51,6 +55,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
   private dispatchTail: Promise<void> = Promise.resolve();
   private queuedCalls = 0;
   private admissionGuard?: () => void;
+  private runtimeListeners=new Set<{nudge:()=>void;retire:()=>void}>();
   private listeners = new Set<(paths?: readonly string[]) => void>();
   private closed = false;
   private releasing = false;
@@ -76,6 +81,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
     this.worker = new Worker(new URL('./browser-core-worker.ts', import.meta.url), {type:'module'});
     this.worker.onmessage = ({data}) => {
       if (data?.event === 'storage-error') { this.fail(new BrowserVaultError(data.code, 'Browser vault could not refresh committed state', data.details)); return; }
+      if(data?.event==='document-runtime-nudge'){for(const listener of this.runtimeListeners){try{listener.nudge();}catch(error){console.error('Document maintenance listener failed',error);}}return;}
       if (data?.event === 'change') {
         for (const listener of this.listeners) { try { listener(data.paths); } catch (error) { console.error('Browser vault listener failed', error); } }
         return;
@@ -105,7 +111,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       // this named client's pending intents, using Rust
       // receipt lookup, before this Promise exposes a ready adapter.
       const clientId = options.clientId;
-      const opened = await runtime.call<{recovery:string[];authorityId:string;binaryLimits?:BinaryStreamLimits;documentIndexAvailable?:boolean;workBlocks?:boolean}>('open', {...options, wasmModuleUrl:moduleUrl.href});
+      const opened = await runtime.call<{recovery:string[];authorityId:string;binaryLimits?:BinaryStreamLimits;documentIndexAvailable?:boolean;documentMaintenance?:boolean;workBlocks?:boolean}>('open', {...options, wasmModuleUrl:moduleUrl.href});
       if (typeof opened.authorityId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(opened.authorityId)) throw new BrowserVaultError('storage_corrupt','Worker returned no valid local storage authority');
       runtime.authorityScope = Object.freeze({vaultId:opened.authorityId,clientId});
       const pageOptions=(input:CheckpointListOptions)=>{
@@ -123,7 +129,11 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
           return runtime.call<CheckpointPage>('checkpoint-changes',{...page,after});
         },
       } satisfies DurableCheckpoints);
-      if(opened.documentIndexAvailable)runtime.indexProvider=Object.freeze<Omit<BrowserDocumentIndex,'close'>>({
+      if(options.documentMaintenance===true&&opened.documentMaintenance!==true)throw new BrowserVaultError('document_runtime_unavailable','Required document maintenance capability is absent');
+      if(opened.documentMaintenance===true&&options.documentMaintenance!==true)throw new BrowserVaultError('invalid_wasm_result','Unrequested maintenance capability');
+      const maintenance=opened.documentMaintenance===true?runtime.createDocumentMaintenanceTransport():undefined;
+      if(opened.documentIndexAvailable)runtime.indexProvider=Object.freeze<BrowserDocumentIndexProvider>({
+        ...(maintenance?{maintenance}:{}),
         initialize:()=>runtime.call('document-index-initialize'),discard:id=>runtime.call('document-index-discard',id),
         status:()=>runtime.call('document-index-status'),begin:()=>runtime.call('document-index-begin'),
         pump:id=>runtime.call('document-index-pump',id),publish:id=>runtime.call('document-index-publish',id),
@@ -144,6 +154,16 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       document.addEventListener('visibilitychange', runtime.visibility);
       return runtime;
     } catch (error) { runtime.close(); throw error; }
+  }
+  private createDocumentMaintenanceTransport():DocumentRuntimeTransport {
+    const scope=this.authorityScope!;let sequence=0n,requestId=0n;
+    const allocate=(kind:'sequence'|'request')=>{this.assertActive();if((kind==='sequence'?sequence:requestId)>=18446744073709551615n)throw new BrowserVaultError('document_runtime_capacity','Document maintenance identifiers exhausted');const value=kind==='sequence'?++sequence:++requestId;return String(value);};
+    return Object.freeze<DocumentRuntimeTransport>({scope:Object.freeze({localStoreId:scope.vaultId,clientId:scope.clientId}),
+      allocateSequence:()=>allocate('sequence'),allocateRequestId:()=>allocate('request'),
+      observe:()=>this.call('document-runtime-observe'),control:input=>this.call('document-runtime-control',input),
+      ackControl:input=>this.call('document-runtime-ack-control',input),ackOutcome:input=>this.call('document-runtime-ack-outcome',input),
+      subscribe:(nudge,onRetire)=>{this.assertActive();const receiver={nudge,retire:onRetire};this.runtimeListeners.add(receiver);return()=>this.runtimeListeners.delete(receiver);},
+    });
   }
   /** Called only after an owner-fenced host readiness acknowledgement. One
    * binding preserves retained mutation identities across sync reconfiguration. */
@@ -374,6 +394,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
     this.workBlockBinding?.stop();
     this.closed = true; document.removeEventListener('visibilitychange', this.visibility);
     this.worker.terminate(); this.listeners.clear();
+    const runtimeListeners=[...this.runtimeListeners];this.runtimeListeners.clear();for(const receiver of runtimeListeners){try{receiver.retire();}catch(error){console.error('Document maintenance retirement listener failed',error);}}
     for (const request of this.pending.values()) {
       clearTimeout(request.timer); request.reject(new BrowserVaultError('outcome_unknown', 'Worker closed before acknowledgement; original intent retained', {operation:request.operation}));
     }

@@ -1,6 +1,7 @@
 import {openBrowserStreamingVault} from '../core/browser-streaming-vault.ts';
 import type {BrowserStreamingVault,BrowserStreamingVaultOptions} from '../core/browser-streaming-vault.ts';
 import type {BinaryStreams} from '../core/binary-streams.ts';
+import {createBrowserDocumentRuntimeHost,createBrowserDocumentRuntimeChannel} from './browser-document-runtime-host.ts';
 import { BrowserSyncWorker } from './browser-sync-worker.ts';
 import type { BrowserSyncCodec } from './browser-sync-worker.ts';
 import { openBrowserVault, BrowserVaultError } from '../core/browser-vault.ts';
@@ -24,6 +25,8 @@ let storageFailed=false,closing=false;
 let binary:BinaryStreams|undefined;
 let managed:ReturnType<typeof createBrowserManagedRecordsHost>|undefined;
 let workBlocks:ReturnType<typeof createBrowserWorkBlocksHost>|undefined;
+let documentRuntime:ReturnType<typeof createBrowserDocumentRuntimeHost>|undefined;
+let documentChannel:ReturnType<typeof createBrowserDocumentRuntimeChannel>|undefined;
 const assertManagedActive=()=>{assertOwner();if(closing)throw new BrowserVaultError('client_not_admitted','Browser client is releasing');};
 let releasingCleanup=false;
 const assertVaultActive=()=>{assertOwner();if(closing&&!releasingCleanup)throw new BrowserVaultError('client_not_admitted','Browser client is releasing');};
@@ -40,7 +43,7 @@ function storageDiagnostic(details:unknown):Record<string,string|boolean>|undefi
 }
 function failStorage(code:string,details?:unknown):void {
   if(closing||storageFailed||!['storage_closed','storage_corrupt','client_ownership_lost'].includes(code))return;
-  storageFailed=true;workBlocks?.stop();managed?.stop();sync?.revoke();channel?.close();vault?.close();
+  storageFailed=true;documentRuntime?.retire();workBlocks?.stop();managed?.stop();sync?.revoke();channel?.close();vault?.close();
   try{const diagnostic=storageDiagnostic(details);port.postMessage({event:'storage-error',code,...(diagnostic?{details:diagnostic}:{})});}catch{/* Worker transport already failed. */}
 }
 function local<T>(operation:()=>Promise<T>):Promise<T> {
@@ -57,7 +60,7 @@ async function refresh(assertSession?:()=>void): Promise<void> {
   const next = await vault.changesSince(sequence);
   assertOwner();
   assertSession?.();
-  if (next.sequence !== sequence) { port.postMessage({event:'change',paths:next.paths}); sequence = next.sequence; }
+  if (next.sequence !== sequence) { port.postMessage({event:'change',paths:next.paths}); sequence = next.sequence; documentRuntime?.sourceHint(); }
   void managed?.trigger();
 }
 async function execute(intentId: string): Promise<string> {
@@ -105,7 +108,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
         notify:()=>{assertManagedActive();port.postMessage({event:'change',paths:[]});channel?.postMessage({changed:true});},
         failed:error=>{const code=error instanceof BrowserVaultError?error.code:'managed_host_failed';failStorage(code);
           if(['sync_session_revoked','records_retry_key_unavailable','managed_snapshot_conflict','sync_snapshot_conflict'].includes(code))return;
-          if(!closing&&!storageFailed){storageFailed=true;workBlocks?.stop();managed?.stop();sync?.revoke();channel?.close();vault?.close();port.postMessage({event:'storage-error',code});}}});
+          if(!closing&&!storageFailed){storageFailed=true;documentRuntime?.retire();workBlocks?.stop();managed?.stop();sync?.revoke();channel?.close();vault?.close();port.postMessage({event:'storage-error',code});}}});
       // Open already holds the local tail; do not recursively queue and await.
       await managed?.initializeOnLocalTail();assertManagedActive();
       if(payload.initializeLocal===true&&payload.legacyFixture!==true&&!workBlocks?.ready)throw new BrowserVaultError('workblocks_unavailable','Compiled WorkBlock consumer was not registered');
@@ -123,8 +126,21 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
       recovery = new Set((await vault.intents(clientId)).filter(intent => !intent.acknowledged && intent.status !== 'prepared').map(intent=>intent.intent_id));
       assertManagedActive();
       void managed?.trigger();
-      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{}),documentIndexAvailable:!!streaming()?.documentIndex,...(workBlocks?.ready?{workBlocks:true}:{})};
+      const maintenance=streaming()?.documentMaintenance;
+      if(payload.documentMaintenance===true&&!maintenance)throw new BrowserVaultError('document_runtime_unavailable','Document maintenance WASM is unavailable');
+      if(payload.documentMaintenance===true&&maintenance){
+        documentRuntime=createBrowserDocumentRuntimeHost({maintenance,assertActive:assertOwner,local,
+          changed:(snapshot,outcomes)=>documentChannel?.adopt(snapshot,outcomes),
+          failed:error=>{const code=error instanceof BrowserVaultError?error.code:'document_runtime_unavailable';failStorage(code);}});
+        documentChannel=createBrowserDocumentRuntimeChannel({scope:{localStoreId:vault.authorityId,clientId},assertActive:assertManagedActive,host:documentRuntime,
+          nudge:()=>{if(!closing&&!storageFailed)port.postMessage({event:'document-runtime-nudge'});}});
+        // First IO joins a later host task after this opening admission returns.
+        documentRuntime.start();
+      }
+      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{}),documentIndexAvailable:!!streaming()?.documentIndex,...(documentChannel?{documentMaintenance:true}:{}),...(workBlocks?.ready?{workBlocks:true}:{})};
     } catch (error) {
+      try{documentRuntime?.retire();await documentRuntime?.drain();}catch{/* Preserve the original opening failure after accepted work settles. */}
+      documentChannel=undefined;documentRuntime=undefined;
       workBlocks?.stop();managed?.stop();await workBlocks?.drain();await managed?.drain();sync?.revoke(); channel?.close(); channel = undefined; vault.close(); vault = undefined;
       if (lease) { try { await lease.release(); } catch { /* Original open failure remains uncertain. */ } }
       throw error;
@@ -134,6 +150,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
   if (operation === 'release-client') {
     if (released) return; // Exact retry after a lost release acknowledgement.
     assertOwner();
+    await documentRuntime?.drain();
     await workBlocks?.drain();
     await managed?.drain();
     await Promise.allSettled([...detached]);
@@ -145,6 +162,16 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
     await lease!.release(); released = true; return;
   }
   assertOwner();
+  if(operation.startsWith('document-runtime-')){
+    assertManagedActive();if(!documentChannel||!documentRuntime)throw new BrowserVaultError('document_runtime_unavailable','Document maintenance is not enabled');
+    switch(operation){
+      case 'document-runtime-observe':return documentChannel.observe();
+      case 'document-runtime-control':return documentChannel.control(payload);
+      case 'document-runtime-ack-control':return documentChannel.ackControl(payload);
+      case 'document-runtime-ack-outcome':return documentChannel.ackOutcome(payload);
+      default:throw new BrowserVaultError('invalid_operation','Unknown document maintenance operation');
+    }
+  }
   if(operation==='workblock-command'){assertManagedActive();if(!workBlocks?.ready)throw new BrowserVaultError('workblocks_unavailable','WorkBlock service is unavailable');return workBlocks.execute(payload);}
   if(operation.startsWith('document-index-')){
     const index=streaming()?.documentIndex;if(!index)throw new BrowserVaultError('index_unavailable','Shared document index WASM is unavailable');
@@ -204,7 +231,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
     case 'intents': return vault.intents(clientId);
     case 'acknowledge':
       await vault.acknowledgeIntent(clientId,payload.intentId,payload.outcome); recovery.delete(payload.intentId); return;
-    case 'refresh': return refresh();
+    case 'refresh':await refresh();documentRuntime?.wake();return;
     default: throw new BrowserVaultError('invalid_operation', 'Unknown browser worker operation');
   }
   throw new BrowserVaultError('binary_streams_unavailable','This worker has no admitted binary stream capability');
@@ -212,7 +239,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
 port.onmessage = ({data}) => {
   const {id, operation, payload} = data;
   // Revoke before queued storage dispatch. Network work never occupies the local-operation tail.
-  if (operation === 'release-client') {closing=true;workBlocks?.stop();managed?.stop();sync?.revoke();}
+  if (operation === 'release-client') {closing=true;documentRuntime?.retire();workBlocks?.stop();managed?.stop();sync?.revoke();}
   if(typeof operation==='string'&&operation.startsWith('binary-')){
     const task=(async()=>{try{if(closing)throw new BrowserVaultError('client_not_admitted','Browser client is releasing');assertOwner();const result=await dispatch(operation,payload);
       const transfer=operation==='binary-read'&&result&&typeof result==='object'&&'bytes'in result&&result.bytes instanceof Uint8Array&&result.bytes.buffer instanceof ArrayBuffer?[result.bytes.buffer]:undefined;

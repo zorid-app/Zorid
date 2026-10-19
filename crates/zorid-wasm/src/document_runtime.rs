@@ -223,6 +223,9 @@ fn encode(v: Value) -> Result<String> {
         Ok(raw)
     }
 }
+fn execution(value: core::Execution) -> &'static str {
+    match value { core::Execution::Dispatch => "dispatch", core::Execution::Yield => "yield", core::Execution::WaitForWake => "waitForWake", core::Execution::Quiesced => "quiesced" }
+}
 fn reduction(v: &core::Reduction) -> Result<String> {
     encode(
         json!({"effect":v.effect.as_ref().map(effect),"update":update(&v.update),"execution":match v.execution{core::Execution::Dispatch=>"dispatch",core::Execution::Yield=>"yield",core::Execution::WaitForWake=>"waitForWake",core::Execution::Quiesced=>"quiesced"},
@@ -237,6 +240,7 @@ struct Replay {
 struct State {
     core: core::DocumentRuntime,
     replay: Option<Replay>,
+    execution: core::Execution,
 }
 #[wasm_bindgen]
 pub struct WasmDocumentRuntimeOwner {
@@ -255,6 +259,7 @@ impl WasmDocumentRuntimeOwner {
             return Err("document_runtime_expired");
         }
         let result = state.core.reduce(input).map_err(contract)?;
+        state.execution = result.execution;
         if retiring {
             state.replay = None;
         }
@@ -308,6 +313,7 @@ impl WasmDocumentRuntimeOwner {
                         versions,
                     }),
                     replay: None,
+                    execution: core::Execution::WaitForWake,
                 })),
                 live: Rc::new(Cell::new(true)),
             })
@@ -345,7 +351,7 @@ impl WasmDocumentRuntimeOwner {
                 serde_json::from_str(&r.report).expect("internally encoded reduction");
             json!({"lifetime":r.lifetime,"effectId":r.id.to_string(),"reduction":report})
         });
-        encode(json!({"update":update(&state.core.update()),"inFlight":state.core.in_flight().map(effect),"lastStep":last_step})).map_err(error)
+        encode(json!({"update":update(&state.core.update()),"inFlight":state.core.in_flight().map(effect),"lastStep":last_step,"execution":execution(state.execution)})).map_err(error)
     }
     /// Only the internal admitted executor receives an issued handle.
     pub fn issued(
@@ -413,6 +419,7 @@ impl WasmDocumentRuntimeIssued {
                 result: result.into(),
             })
             .map_err(contract)?;
+        state.execution = reduced.execution;
         self.consumed = true;
         let report = reduction(&reduced)?;
         if reduced.execution != core::Execution::Quiesced {
@@ -670,5 +677,8 @@ mod tests {
         assert_eq!(saved["inFlight"], discard["effect"]);
         assert_eq!(saved["inFlight"]["effect"]["kind"], "discard");
         assert_eq!(saved["lastStep"]["reduction"], yielded);
+        assert_eq!(saved["execution"], discard["execution"]);
+        assert_eq!(saved["execution"], "dispatch");
+        assert_ne!(saved["execution"], saved["lastStep"]["reduction"]["execution"]);
     }
 }

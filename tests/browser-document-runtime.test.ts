@@ -21,7 +21,7 @@ function fixture(effects:DocumentRuntimeEffect[]=[{kind:'observe'}]){
     constructor(){stats.created++;}
     commandJson(raw:string){const command=JSON.parse(raw);if(command.kind==='retire'&&Object.keys(command).length!==1)throw '{"code":"invalid_request"}';commands.push(command);if(command.kind==='retire'){retired=true;replay=undefined;}return JSON.stringify(report());}
     updateJson(){return JSON.stringify(report().update);}
-    snapshotJson(){return JSON.stringify({update:report().update,inFlight:position<effects.length?issued:null,lastStep:replay?{lifetime:'runtime',effectId:replay.id,reduction:JSON.parse(replay.report)}:null});}
+    snapshotJson(){return JSON.stringify({execution:report().execution,update:report().update,inFlight:position<effects.length?issued:null,lastStep:replay?{lifetime:'runtime',effectId:replay.id,reduction:JSON.parse(replay.report)}:null});}
     replayJson(lifetime:string,id:string){assert.equal(lifetime,'runtime');return replay?.id===id?replay.report:undefined;}
     issued(lifetime:string,id:string){assert.equal(lifetime,'runtime');assert.equal(id,issued.effectId);const captured=structuredClone(issued);return {
       descriptorJson:()=>JSON.stringify(captured),free(){stats.handlesFreed++;},

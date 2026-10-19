@@ -1,6 +1,7 @@
 import type {WorkBlockService} from '../core/workblocks.ts';
 import {workBlockFailure} from './browser-workblocks.ts';
-import type {BrowserDocumentIndex} from '../core/browser-document-index.ts';
+import type {DocumentRuntimeTransport} from '../core/document-runtime.ts';
+import type {BrowserDocumentIndexProvider} from './browser-core.ts';
 import { BrowserVaultError } from '../core/browser-vault.ts';
 import type { CheckpointScope, DurableCheckpoints } from '../core/durable-checkpoints.ts';
 import type { DurableWrites } from '../core/durable-writes.ts';
@@ -19,7 +20,7 @@ export interface BrowserFlushContext {
   assertActive(): void;
 }
 export interface BrowserClientContext extends BrowserFlushContext {
-  readonly documentIndex?:Omit<BrowserDocumentIndex,'close'>;
+  readonly documentIndex?:BrowserDocumentIndexProvider;
   readonly binaryStreams?:BinaryStreams;
   readonly workBlocks?:WorkBlockService;
   fileCommand?(input:BrowserFileCommandInput):Promise<void>;
@@ -61,6 +62,7 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
   const backend: BrowserCoreBackend = {
     durableScope: scope, checkpoints,
     ...(runtime.documentIndex?{documentIndex:Object.freeze({
+      ...(runtime.documentIndex!.maintenance?{maintenance:guardMaintenance(runtime.documentIndex!.maintenance,async action=>dispatch(action),()=>dispatch(()=>undefined))}:{}),
       initialize:()=>dispatch(()=>runtime.documentIndex!.initialize()),discard:(id:string)=>dispatch(()=>runtime.documentIndex!.discard(id)),
       status:()=>dispatch(()=>runtime.documentIndex!.status()),begin:()=>dispatch(()=>runtime.documentIndex!.begin()),
       pump:(id:string)=>dispatch(()=>runtime.documentIndex!.pump(id)),publish:(id:string)=>dispatch(()=>runtime.documentIndex!.publish(id)),
@@ -141,7 +143,8 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
     commit:ref=>invoke(()=>binary.streams.commit(ref)),abort:ref=>invoke(()=>binary.streams.abort(ref)),
     openRead:input=>invoke(()=>binary.streams.openRead(input)),read:(ref,input)=>invoke(()=>binary.streams.read(ref,input)),closeRead:ref=>invoke(()=>binary.streams.closeRead(ref)),
   }):undefined;
-  const documentIndex=backend.documentIndex?Object.freeze<Omit<BrowserDocumentIndex,'close'>>({
+  const documentIndex=backend.documentIndex?Object.freeze<BrowserDocumentIndexProvider>({
+    ...(backend.documentIndex.maintenance?{maintenance:guardMaintenance(backend.documentIndex.maintenance,action=>invoke(action),()=>allowed())}:{}),
     initialize:()=>invoke(()=>backend.documentIndex!.initialize()),discard:id=>invoke(()=>backend.documentIndex!.discard(id)),
     status:()=>invoke(()=>backend.documentIndex!.status()),begin:()=>invoke(()=>backend.documentIndex!.begin()),
     pump:id=>invoke(()=>backend.documentIndex!.pump(id)),publish:id=>invoke(()=>backend.documentIndex!.publish(id)),
@@ -218,4 +221,16 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
 export function admitBrowserFixtureClient(runtime:BrowserCoreRuntime,options:{fixture:true;assertOwner:()=>void}):BrowserClientContext{
   if(options?.fixture!==true)throw failure('invalid_admission');
   return admitBrowserClient(runtime,options);
+}
+
+/** Preserve the complete positive transport through both reconstruction layers.
+ * ACK calls finish on the RPC tail; the facade's final result never joins it. */
+function guardMaintenance(raw:DocumentRuntimeTransport,perform:<T>(action:()=>Promise<T>)=>Promise<T>,guard:()=>void):DocumentRuntimeTransport {
+  const call=<T>(action:()=>Promise<T>)=>perform(async()=>{const value=await action();guard();return value;});
+  return Object.freeze<DocumentRuntimeTransport>({scope:raw.scope,
+    allocateSequence:()=>{guard();return raw.allocateSequence();},allocateRequestId:()=>{guard();return raw.allocateRequestId();},
+    observe:()=>call(()=>raw.observe()),control:input=>call(()=>raw.control(input)),
+    ackControl:input=>call(()=>raw.ackControl(input)),ackOutcome:input=>call(()=>raw.ackOutcome(input)),
+    subscribe:(receiver,onRetire)=>{guard();return raw.subscribe(()=>{try{guard();}catch{return;}receiver();},onRetire);},
+  });
 }

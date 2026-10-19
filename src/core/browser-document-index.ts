@@ -1,3 +1,4 @@
+import {documentSnapshot} from './document-semantics.ts';
 import {browserDocumentRuntime} from './browser-document-runtime.ts';
 import type {BrowserDocumentIndexMaintenance,BrowserDocumentRuntimeWasm,DocumentRuntimeStage} from './browser-document-runtime.ts';
 import {searchSpec,richToken,richPreparation,richPage as decodeRichPage,searchCompileDiagnostic} from './document-search-validation.ts';
@@ -513,10 +514,14 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
     if(stage.failed)throw fail('document_runtime_unavailable');
     return stage;
   }
-  const observation=(stage:Stage):DocumentRuntimeStage=>({source:{...stage.header.source},snapshot:structuredClone(stage.header.nextIndex),progress:{prepared:stage.prepared,total:stage.total,ready:!!stage.generation}});
+  const runtimeSnapshot=(value:BrowserIndexSnapshot):DocumentSnapshotId=>{
+    let result:DocumentSnapshotId;try{result=documentSnapshot(value);}catch{throw fail('invalid_wasm_result');}
+    if(result.localStoreId!==host.authorityId)throw fail('invalid_wasm_result');return result;
+  };
+  const observation=(stage:Stage):DocumentRuntimeStage=>({source:{...stage.header.source},snapshot:runtimeSnapshot(stage.header.nextIndex),progress:{prepared:stage.prepared,total:stage.total,ready:!!stage.generation}});
   const fromResult=(result:BrowserIndexStage):DocumentRuntimeStage=>observation(ownedStage(result.snapshot));
   const createMaintenance=()=>browserDocumentRuntime({authorityId:host.authorityId,wasm:host.wasm,backend:{assertActive:active,
-    async observe(){const result=await api.status();return {source:result.source,published:result.snapshot,current:result.current,rebuildRequired:result.rebuildRequired,coverageComplete:result.coverageComplete};},
+    async observe(){const result=await api.status();return {source:result.source,published:result.snapshot===null?null:runtimeSnapshot(result.snapshot),current:result.current,rebuildRequired:result.rebuildRequired,coverageComplete:result.coverageComplete};},
     initialize:()=>api.initialize(),
     async recoverStage(){
       active();if(stages.size===0)return null;if(stages.size!==1)throw fail('document_runtime_unavailable');
@@ -536,7 +541,7 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
     },
     async begin(){return fromResult(await api.begin());},
     async pump(snapshot){const stage=ownedStage(snapshot);return fromResult(await api.pump(stage.id));},
-    async publish(snapshot){const stage=ownedStage(snapshot);return api.publish(stage.id);},
+    async publish(snapshot){const stage=ownedStage(snapshot);return runtimeSnapshot(await api.publish(stage.id));},
     async discard(snapshot){const stage=stages.get(snapshot.generationEpoch);if(stage&&!equal(stage.header.nextIndex,snapshot))throw fail('index_stage_expired');return api.discard(snapshot.generationEpoch);},
     rebuild:()=>api.rebuild(),
   }});

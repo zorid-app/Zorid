@@ -511,3 +511,12 @@ test('fatal host revocation during an await cannot recreate maintenance or accep
   const f=fixture();f.file('a','original');const script=maintenanceScript(f),{index,maintenance}=f.backend(),source=f.source();maintenance.command({kind:'continue'});await maintenance.step(script.select({kind:'begin'}));const stage=script.completions.at(-1).stage;
   f.afterRead(store=>{if(store==='content')f.fatal();});await assert.rejects(maintenance.step(script.select({kind:'pump',snapshot:stage.snapshot})),{code:'storage_closed'});await index.close();assert.equal(script.created(),1);assert.equal(script.freed(),1);assert.equal(script.completions.at(-1).failure,'fatal');assert.deepEqual(f.source(),source);assert.throws(()=>maintenance.command({kind:'continue'}),{code:'document_runtime_retired'});
 });
+
+test('maintenance typed snapshot boundary rejects invalid actual versions without relabeling or source writes',async()=>{
+  const f=fixture();f.file('a','exact source');const source=f.source();f.wasm.documentIndexVersionsJson=()=>'{"schema":"invalid","extraction":"fixture","resolver":"fixture","query":"fixture"}';
+  const script=maintenanceScript(f),{index,maintenance}=f.backend();maintenance.command({kind:'continue'});await assert.rejects(maintenance.step(script.select({kind:'begin'})),{code:'invalid_wasm_result'});assert.equal(script.completions.at(-1).kind,'failed');assert.equal(script.completions.at(-1).failure,'invalidData');assert.deepEqual(f.source(),source);await index.close();
+});
+test('maintenance rejects a foreign captured snapshot before source IO and preserves the actual stage',async()=>{
+  const f=fixture();f.file('a','exact source');const source=f.source(),script=maintenanceScript(f),{index,maintenance}=f.backend();maintenance.command({kind:'continue'});await maintenance.step(script.select({kind:'begin'}));const stage=script.completions.at(-1).stage;
+  const reads=f.calls.filter(row=>row.store==='content').length;await assert.rejects(maintenance.step(script.select({kind:'pump',snapshot:{...stage.snapshot,localStoreId:'foreign'}})),{code:'index_stage_expired'});assert.equal(f.calls.filter(row=>row.store==='content').length,reads);assert.deepEqual(f.source(),source);await maintenance.step(script.select({kind:'recoverStage'}));assert.deepEqual(script.completions.at(-1).stage.snapshot,stage.snapshot);await index.close();
+});

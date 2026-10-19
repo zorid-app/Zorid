@@ -192,3 +192,26 @@ test('fatal storage event from sync lane terminates runtime and rejects pending 
     await assert.rejects(runtime.prepare('later','{}'),{code:'storage_closed'});
   });
 });
+
+test('positive maintenance transport uses dedicated nudges, monotonic IDs and successful-close retirement',async()=>{
+  const originals=new Map(['Worker','document','location'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+  const calls:any[]=[];let worker:any;const authorityId='12345678-1234-4123-8123-123456789abc';
+  class FixtureWorker {onmessage?: (event:any)=>void;constructor(){worker=this;}postMessage(message:any){calls.push(message);queueMicrotask(()=>this.onmessage?.({data:{id:message.id,ok:true,result:message.operation==='open'?{authorityId,recovery:[],documentIndexAvailable:true,documentMaintenance:true}:message.operation==='document-runtime-observe'?{version:1,scope:{localStoreId:authorityId,clientId:'22222222-2222-4222-8222-222222222222'},update:null,outcomes:[]}:undefined}}));}terminate(){}}
+  try{
+    Object.defineProperty(globalThis,'Worker',{configurable:true,value:FixtureWorker});Object.defineProperty(globalThis,'document',{configurable:true,value:{addEventListener(){},removeEventListener(){},visibilityState:'visible'}});Object.defineProperty(globalThis,'location',{configurable:true,value:{href:'https://zorid.test/',origin:'https://zorid.test'}});
+    const runtime=await BrowserCoreRuntime.open({database:'owned',clientId:'22222222-2222-4222-8222-222222222222',wasmModuleUrl:'/core.js',allowNewVault:true,documentMaintenance:true});
+    const maintenance=runtime.documentIndex!.maintenance!;assert.ok(maintenance);assert.equal(maintenance.allocateSequence(),'1');assert.equal(maintenance.allocateSequence(),'2');assert.equal(maintenance.allocateRequestId(),'1');
+    let nudges=0,changes=0,retired=0;runtime.subscribe(()=>changes++);const off=maintenance.subscribe(()=>nudges++,()=>retired++);
+    worker.onmessage({data:{event:'document-runtime-nudge'}});worker.onmessage({data:{event:'document-runtime-nudge'}});assert.equal(nudges,2);assert.equal(changes,0);
+    await maintenance.observe();await maintenance.ackControl({sequence:'1'});await maintenance.ackOutcome({lifetime:'runtime',id:'1'});assert.deepEqual(calls.slice(-3).map(row=>row.operation),['document-runtime-observe','document-runtime-ack-control','document-runtime-ack-outcome']);
+    await runtime.releaseClient();assert.equal(retired,1);runtime.close();assert.equal(retired,1);assert.throws(()=>maintenance.allocateSequence(),{code:'client_ownership_lost'});off();
+  }finally{for(const [key,value]of originals){if(value)Object.defineProperty(globalThis,key,value);else Reflect.deleteProperty(globalThis,key);}}
+});
+
+test('requested maintenance capability cannot silently fall back when worker marker is missing',async()=>{
+  const originals=new Map(['Worker','document','location'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));let terminated=false;
+  class FixtureWorker {onmessage?:(event:any)=>void;postMessage(message:any){queueMicrotask(()=>this.onmessage?.({data:{id:message.id,ok:true,result:{authorityId:'12345678-1234-4123-8123-123456789abc',recovery:[],documentIndexAvailable:true}}}));}terminate(){terminated=true;}}
+  try{Object.defineProperty(globalThis,'Worker',{configurable:true,value:FixtureWorker});Object.defineProperty(globalThis,'document',{configurable:true,value:{addEventListener(){},removeEventListener(){}}});Object.defineProperty(globalThis,'location',{configurable:true,value:{href:'https://zorid.test/',origin:'https://zorid.test'}});
+    await assert.rejects(BrowserCoreRuntime.open({database:'owned',clientId:'22222222-2222-4222-8222-222222222222',wasmModuleUrl:'/core.js',allowNewVault:true,documentMaintenance:true}),{code:'document_runtime_unavailable'});assert.equal(terminated,true);
+  }finally{for(const[key,value]of originals){if(value)Object.defineProperty(globalThis,key,value);else Reflect.deleteProperty(globalThis,key);}}
+});

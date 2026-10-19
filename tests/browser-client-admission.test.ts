@@ -161,3 +161,13 @@ test('release drains accepted rich work and rejects newly admitted queries befor
 test('owner retirement during a rich RPC preserves the runtime post-await error and cannot dispatch new work',async()=>{
   const wait=deferred(),f=richFixture(wait.promise),context=f.admit(),pending=context.documentIndex!.richPage({pinId:'pin',queryId:'query',cursor:'cursor'});f.retire();wait.resolve();await assert.rejects(pending,{code:'owner_retired'});await assert.rejects(context.documentIndex!.richClose({pinId:'pin',queryId:'query'}),{code:'owner_retired'});assert.equal(f.requests.length,1);
 });
+
+test('both index reconstruction layers preserve complete maintenance with post-await fences and failed-flush liveness',async()=>{
+  const f=fixture(),wait=deferred();let controls=0,seq=0,retire:()=>void=()=>{};
+  const frame={version:1,scope:{localStoreId:f.scope.vaultId,clientId:f.scope.clientId},update:null,outcomes:[]};
+  Object.assign(f.backend,{documentIndex:{maintenance:{scope:frame.scope,allocateSequence:()=>String(++seq),allocateRequestId:()=>String(++seq),
+    async observe(){await wait.promise;return frame;},async control(){controls++;return frame;},async ackControl(){},async ackOutcome(){},subscribe(_nudge:()=>void,onRetire:()=>void){retire=onRetire;return()=>{};}}}});
+  const context=f.admit(),transport=context.documentIndex!.maintenance!;assert.ok(transport);assert.equal(transport.allocateSequence(),'1');let retired=0;transport.subscribe(()=>{},()=>retired++);
+  await assert.rejects(context.release(()=>{throw new Error('flush rejected');}),/flush rejected/);assert.equal(retired,0);assert.equal(transport.allocateSequence(),'2');
+  const observing=transport.observe();f.retire();wait.resolve();await assert.rejects(observing,{code:'owner_retired'});assert.throws(()=>transport.allocateSequence(),{code:'owner_retired'});await assert.rejects(transport.control({sequence:'3',command:{kind:'cancel',lifetime:'runtime',id:'1'}}),{code:'owner_retired'});assert.equal(controls,0);retire();assert.equal(retired,1);
+});

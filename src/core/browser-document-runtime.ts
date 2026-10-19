@@ -1,35 +1,9 @@
 import {BrowserVaultError} from './browser-vault.ts';
-import type {BrowserIndexSnapshot,BrowserIndexSource} from './browser-document-index.ts';
+import type {BrowserIndexSnapshot} from './browser-document-index.ts';
 
-/** Internal host projection of zorid_index::document_runtime, not a public
- * completion protocol. The Worker scheduler and facade are wired separately. */
-export type DocumentRuntimeFailure='staleSource'|'staleIndex'|'snapshotExpired'|'rebuildRequired'|'uncertain'|'unavailable'|'invalidData'|'fatal';
-export interface DocumentRuntimeProgress {readonly prepared:number;readonly total:number;readonly ready:boolean}
-export interface DocumentRuntimeStage {readonly source:BrowserIndexSource;readonly snapshot:BrowserIndexSnapshot;readonly progress:DocumentRuntimeProgress|null}
-export interface DocumentRuntimeObservation {readonly source:BrowserIndexSource;readonly published:BrowserIndexSnapshot|null;readonly current:boolean;readonly rebuildRequired:boolean;readonly coverageComplete:boolean|null}
-export type DocumentRuntimeCommand=
-  |{readonly kind:'wake';readonly monotonicMs:number}|{readonly kind:'continue'|'sourceHint'|'retire'}
-  |{readonly kind:'request';readonly id:string;readonly maxPumps:number;readonly maxRestarts:number;readonly forceRebuild:boolean}
-  |{readonly kind:'cancelRequest';readonly id:string};
-export type DocumentRuntimeEffect=
-  |{readonly kind:'observe'|'recoverStage'|'initialize'|'begin'|'rebuild'}
-  |{readonly kind:'pump'|'publish'|'discard';readonly snapshot:BrowserIndexSnapshot};
-export interface DocumentRuntimeIssued {
-  readonly lifetime:string;readonly effectId:string;readonly priority:'foreground'|'background';
-  readonly targetSource:BrowserIndexSource|null;readonly effect:DocumentRuntimeEffect;
-}
-export interface DocumentRuntimeUpdate {
-  readonly lifetime:string;readonly revision:string;readonly source:BrowserIndexSource|null;readonly published:BrowserIndexSnapshot|null;
-  readonly freshness:'unknown'|'current'|'lagging'|'unavailable';
-  readonly phase:'idle'|'observing'|'initializing'|'recovering'|'indexing'|'publishing'|'rebuilding'|'releasing';
-  readonly progress:DocumentRuntimeProgress|null;readonly coverageComplete:boolean|null;readonly hasForegroundDemand:boolean;readonly error:DocumentRuntimeFailure|null;
-}
-export type DocumentRuntimeOutcome=
-  |{readonly kind:'finished';readonly id:string;readonly observation:DocumentRuntimeObservation}
-  |{readonly kind:'failed';readonly id:string;readonly failure:DocumentRuntimeFailure}
-  |{readonly kind:'cancelled'|'retired';readonly id:string};
-export interface DocumentRuntimeReduction {readonly effect:DocumentRuntimeIssued|null;readonly update:DocumentRuntimeUpdate;readonly requestOutcomes:readonly DocumentRuntimeOutcome[];readonly execution:'dispatch'|'yield'|'waitForWake'|'quiesced'}
-export interface DocumentRuntimeSnapshot {readonly update:DocumentRuntimeUpdate;readonly inFlight:DocumentRuntimeIssued|null;readonly lastStep:{readonly lifetime:string;readonly effectId:string;readonly reduction:DocumentRuntimeReduction}|null}
+/** Internal executor uses the single readonly shared projection. */
+import type {DocumentRuntimeFailure,DocumentRuntimeProgress,DocumentRuntimeStage,DocumentRuntimeObservation,DocumentRuntimeCommand,DocumentRuntimeEffect,DocumentRuntimeIssued,DocumentRuntimeUpdate,DocumentRuntimeOutcome,DocumentRuntimeReduction,DocumentRuntimeSnapshot} from './document-runtime.ts';
+export type {DocumentRuntimeFailure,DocumentRuntimeProgress,DocumentRuntimeStage,DocumentRuntimeObservation,DocumentRuntimeCommand,DocumentRuntimeEffect,DocumentRuntimeIssued,DocumentRuntimeUpdate,DocumentRuntimeOutcome,DocumentRuntimeReduction,DocumentRuntimeSnapshot} from './document-runtime.ts';
 interface Free {free():void}
 export interface BrowserDocumentRuntimeIssuedWasm extends Free {descriptorJson():string;completeJson(result:string):string}
 export interface BrowserDocumentRuntimeOwnerWasm extends Free {commandJson(command:string):string;updateJson():string;snapshotJson():string;issued(lifetime:string,id:string):BrowserDocumentRuntimeIssuedWasm;replayJson(lifetime:string,id:string):string|undefined}
