@@ -301,12 +301,10 @@ impl NativeVault {
         let program = self
             .base_preparation_cache
             .borrow_mut()
-            .compile_source(source, monotonic_ms)?
-            .value()
-            .clone();
+            .compile_source(source, monotonic_ms)?;
         let mut selected = options.clone();
         if let Some(name) = view_name {
-            selected.view_index = program.view_index_by_name(name).ok_or_else(|| {
+            selected.view_index = program.value().view_index_by_name(name).ok_or_else(|| {
                 zorid_bases::ExpressionDiagnostic::new("view_not_found", "Base view was not found")
             })?;
         }
@@ -325,13 +323,21 @@ impl NativeVault {
                 mtime_ms: i64::try_from(presentation.mtime_ms).ok(),
             })
             .collect::<Vec<_>>();
-        let prepared = self
-            .base_preparation_cache
-            .borrow_mut()
-            .prepare_generation(pin.generation(), &facts, &selected, monotonic_ms)?;
-        // No cache borrow or storage transaction spans evaluation. Only pure,
-        // invocation-local handles escape; context/view/clock/formulas rerun.
-        let result = zorid_bases::query_prepared(&program, &prepared, &selected)?;
+        let answer = {
+            let mut cache = self.base_preparation_cache.borrow_mut();
+            let prepared =
+                cache.prepare_generation(pin.generation(), &facts, &selected, monotonic_ms)?;
+            // Both sealed lookups retain their checked dependency/work identity.
+            // Answer reuse still validates this invocation's context and limits.
+            cache.query_prepared_cached(&program, &prepared, &selected, monotonic_ms)?
+        };
+        // Release the cache borrow before hooks or the final retained-pin fence.
+        // No storage transaction or pin capability is held by the pure cache.
+        #[cfg(test)]
+        if answer.outcome() == zorid_bases::PreparationCacheOutcome::Hit {
+            self.point("base_query_answer_hit");
+        }
+        let result = answer.into_value();
         #[cfg(test)]
         self.point("base_query_evaluated");
         self.document_result(

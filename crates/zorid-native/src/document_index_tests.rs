@@ -836,23 +836,48 @@ fn text(value: &str) -> zorid_bases::BaseValue {
     }
 }
 
+thread_local! {
+    static BASE_ANSWER_EVENTS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+fn record_base_answer_event(point: &str) {
+    BASE_ANSWER_EVENTS.with(|events| {
+        let (hits, evaluations) = events.get();
+        events.set(match point {
+            "base_query_answer_hit" => (hits + 1, evaluations),
+            "base_query_evaluated" => (hits, evaluations + 1),
+            _ => (hits, evaluations),
+        });
+    });
+}
+fn answer_events() -> (usize, usize) {
+    BASE_ANSWER_EVENTS.with(std::cell::Cell::get)
+}
+
 #[test]
-fn base_preparation_reuses_across_new_pins_and_reruns_context_view_and_clock() {
+fn base_answers_reuse_across_new_pins_and_validate_context_view_clock_and_cancellation() {
     let dir = tempfile::tempdir().unwrap();
     let mut vault = NativeVault::open(dir.path()).unwrap();
     create_cached_base_fixture(&mut vault);
     let source_before = std::fs::read(dir.path().join("All.base")).unwrap();
     let options = cached_options();
+    BASE_ANSWER_EVENTS.with(|events| events.set((0, 0)));
+    vault.fault = Some(record_base_answer_event);
     let first_pin = vault.open_document_snapshot().unwrap();
     let first = vault
         .query_base_document_view(&first_pin, &id("cached-base"), "Ascending", &options)
         .unwrap();
     assert_eq!(first.value.result.rows.len(), 8);
+    assert_eq!(answer_events(), (0, 1));
     vault.close_document_snapshot(first_pin);
     let second_pin = vault.open_document_snapshot().unwrap();
     let second = vault
         .query_base_document_view(&second_pin, &id("cached-base"), "Ascending", &options)
         .unwrap();
+    assert_eq!(
+        answer_events(),
+        (1, 2),
+        "the actual cross-pin query must hit"
+    );
     assert_eq!(second.snapshot, first.snapshot);
     assert_eq!(second.source, first.source);
     assert_eq!(second.value.definition, first.value.definition);
@@ -874,10 +899,41 @@ fn base_preparation_reuses_across_new_pins_and_reruns_context_view_and_clock() {
     );
     let mut changed = options.clone();
     changed.current_entry_id = Some(id("cached-note-7"));
+    let context = vault
+        .query_base_document_view(&second_pin, &id("cached-base"), "Ascending", &changed)
+        .unwrap();
+    assert_eq!(
+        answer_events(),
+        (1, 3),
+        "current entry must invalidate the answer"
+    );
+    assert_eq!(context.value.result.rows[0].entry_id, id("cached-note-0"));
+    for row in &context.value.result.rows {
+        assert_eq!(row.values["formula.context"], number(7.0));
+        assert_eq!(row.values["formula.today"], text("2024-01-15"));
+    }
+    let view = vault
+        .query_base_document_view(&second_pin, &id("cached-base"), "Descending", &changed)
+        .unwrap();
+    assert_eq!(
+        answer_events(),
+        (1, 4),
+        "selected view must invalidate the answer"
+    );
+    assert_eq!(view.value.result.rows[0].entry_id, id("cached-note-7"));
+    assert_eq!(
+        view.value.result.rows[0].values["formula.today"],
+        text("2024-01-15")
+    );
     changed.evaluation.clock_ms += 86_400_000;
     let different = vault
         .query_base_document_view(&second_pin, &id("cached-base"), "Descending", &changed)
         .unwrap();
+    assert_eq!(
+        answer_events(),
+        (1, 5),
+        "evaluation clock must invalidate this clock-sensitive answer"
+    );
     assert_eq!(different.value.result.rows[0].entry_id, id("cached-note-7"));
     for row in &different.value.result.rows {
         assert_eq!(row.values["formula.context"], number(7.0));
@@ -891,6 +947,11 @@ fn base_preparation_reuses_across_new_pins_and_reruns_context_view_and_clock() {
         second.value.result.rows[0].values["formula.today"],
         text("2024-01-15")
     );
+    let repeated = vault
+        .query_base_document_view(&second_pin, &id("cached-base"), "Descending", &changed)
+        .unwrap();
+    assert_eq!(repeated.value.result.rows, different.value.result.rows);
+    assert_eq!(answer_events(), (2, 6));
     expect_code(
         vault.query_base_document_view(&second_pin, &id("cached-base"), "absent", &changed),
         "view_not_found",
@@ -909,9 +970,15 @@ fn base_preparation_reuses_across_new_pins_and_reruns_context_view_and_clock() {
         "cancelled",
     );
     assert_eq!(
+        answer_events(),
+        (2, 6),
+        "invalid or cancelled calls cannot reuse an answer"
+    );
+    assert_eq!(
         std::fs::read(dir.path().join("All.base")).unwrap(),
         source_before
     );
+    vault.fault = None;
     vault.close_document_snapshot(second_pin);
 }
 
@@ -1057,6 +1124,7 @@ thread_local! {
     static BASE_POST_QUERY_REBUILD: std::cell::RefCell<Option<(std::path::PathBuf,std::path::PathBuf)>> = const { std::cell::RefCell::new(None) };
 }
 fn rebuild_after_base_evaluation(point: &str) {
+    record_base_answer_event(point);
     if point == "base_query_evaluated" {
         let (root, cache) = BASE_POST_QUERY_REBUILD
             .with(|value| value.borrow_mut().take())
@@ -1081,10 +1149,16 @@ fn warm_evaluation_rechecks_pin_after_a_real_independent_rebuild_and_owner_reope
         .unwrap();
     BASE_POST_QUERY_REBUILD
         .with(|value| *value.borrow_mut() = Some((dir.path().to_owned(), cache_path.clone())));
+    BASE_ANSWER_EVENTS.with(|events| events.set((0, 0)));
     vault.fault = Some(rebuild_after_base_evaluation);
     expect_code(
         vault.query_base_document(&pin, &id("cached-base"), &options),
         "snapshot_expired",
+    );
+    assert_eq!(
+        answer_events(),
+        (1, 1),
+        "the hit must still reach the final pin fence"
     );
     vault.fault = None;
     build(&mut vault);
