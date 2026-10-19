@@ -73,7 +73,7 @@ class DocumentRuntimeScheduler{
   constructor({defer=setImmediate,cancel=clearImmediate,now=()=>Math.floor(performance.now()),onError=()=>{},workHost}={}){
     this.defer=defer;this.cancel=cancel;this.now=now;this.onError=onError;this.owners=new Set();this.current=null;this.scheduled=null;this.running=null;this.wakePending=false;this.hintPending=false;this.needsSnapshot=false;this.blocked=false;this.closed=false;this.sequence=1n;this.ownerCommand=null;this.retiring=false;this.retirementLifetime=null;
     if(workHost&&typeof workHost.documentWork!=='function')throw fail('unsupported_host_capability');
-    this.workHost=workHost;this.composite=false;this.work=null;this.workWanted=false;this.workWake=0;this.draftOwners=new Set();this.progress=0;this.progressTicket=null;this.progressWaiters=new Set();this.closePromise=null;
+    this.workHost=workHost;this.composite=false;this.work=null;this.workWanted=false;this.workNeedsSnapshot=false;this.workWake=0;this.draftOwners=new Set();this.progress=0;this.progressTicket=null;this.progressWaiters=new Set();this.closePromise=null;
   }
   addDraftOwner({clientId,localStoreId,assertActive}){
     if(this.closed||!this.workHost||!id(clientId)||!id(localStoreId)||typeof assertActive!=='function')throw fail('unsupported_host_capability');
@@ -97,6 +97,13 @@ class DocumentRuntimeScheduler{
   }
   async workCall(request){if(this.closed||!this.workHost)throw fail('document_runtime_unavailable');return decodeWorkReply(request,await this.workHost.documentWork(request),new Uint8Array());}
   async workTurn(){
+    // A fresh committed Wake can clear a fully retired native F owner. Only
+    // its actual private snapshot may restore the legacy committed delivery.
+    if(this.workNeedsSnapshot){
+      const actual=await this.workCall({op:'snapshot'});this.workNeedsSnapshot=false;
+      if(actual.work===null){this.work=null;this.composite=false;this.workWanted=false;this.progressTicket=null;return;}
+      this.adoptWork(actual.work);this.workWanted=!actual.work.close_ready;return;
+    }
     const wake=this.workWake;
     if(this.work?.selected){
       const ticket=this.work.selected,pending=this.work;let reply;
@@ -169,14 +176,14 @@ class DocumentRuntimeScheduler{
   select(){for(const owner of this.owners)if(!owner.paused&&!owner.released)return owner;return null;}
   assertOwner(owner){try{owner.assertActive();}catch(error){this.remove(owner);throw error;}}
   async call(owner,op,args={}){if(owner.released||this.closed)throw fail('client_not_admitted');this.assertOwner(owner);const captured=captureRuntimeRequest(op,args);const value=await owner.host.documentRuntime(owner.clientId,op,captured);if(owner.released||this.closed)throw fail('client_not_admitted');this.assertOwner(owner);const decoded=rawRuntimeValue(op,captured,copy(value));if(op==='runtime_control')captureDocumentRuntimeReply('documentRuntimeControl',[captured],{sequence:decoded.sequence,command:decoded.command,frame:decoded.frame},{localStoreId:owner.localStoreId,clientId:owner.clientId});if(op==='runtime_observe')return captureDocumentRuntimeReply('documentRuntimeObserve',[],decoded,{localStoreId:owner.localStoreId,clientId:owner.clientId});return decoded;}
-  adopt(value,owner){if(!privateSnapshot(value))throw fail('invalid_document_response');if(value){const visit=v=>{if(!v||typeof v!=='object')return;if(Object.hasOwn(v,'localStoreId')&&v.localStoreId!==owner.localStoreId)throw fail('client_scope_mismatch');for(const child of Object.values(v))visit(child);};visit(value);}this.current=value;this.needsSnapshot=false;if(this.composite&&(value?.inFlight||value?.execution==='yield'))this.workWanted=true;}
+  adopt(value,owner){if(!privateSnapshot(value))throw fail('invalid_document_response');if(value){const visit=v=>{if(!v||typeof v!=='object')return;if(Object.hasOwn(v,'localStoreId')&&v.localStoreId!==owner.localStoreId)throw fail('client_scope_mismatch');for(const child of Object.values(v))visit(child);};visit(value);}this.current=value;this.needsSnapshot=false;if(this.composite&&this.work?.close_ready&&value&&value.update.phase!=='releasing'){this.workNeedsSnapshot=true;this.workWanted=true;}else if(this.composite&&(value?.inFlight||value?.execution==='yield'))this.workWanted=true;}
   nudge(){for(const owner of [...this.owners,...this.draftOwners])if(!owner.released)for(const slot of owner.listeners)try{slot.listener();}catch{/* Observation delivery never undoes work. */}}
   remove(owner){if(owner.released)return;owner.released=true;this.owners.delete(owner);for(const slot of owner.listeners)try{slot.onRetire();}catch{}owner.listeners.clear();if(!this.owners.size){if(!this.composite||!this.workWanted)this.unschedule();else this.schedule();}else{this.needsSnapshot=true;this.schedule();}}
   wake(){if(this.closed)return;this.wakePending=true;if(this.composite)this.workWanted=true;this.blocked=false;this.schedule();}
   sourceHint(){if(this.closed)return;this.hintPending=true;if(this.composite)this.workWanted=true;this.schedule();}
   unschedule(){if(this.scheduled!==null){this.cancel(this.scheduled);this.scheduled=null;}}
   hasWork(){return this.select()&&(this.retiring||this.ownerCommand!==null||this.wakePending||this.hintPending||this.needsSnapshot)|| (this.composite?this.workWanted:this.current?.inFlight!==null&&!!this.current||this.current?.execution==='yield');}
-  schedule(){if(this.closed||this.blocked||this.running||this.scheduled!==null||(!this.select()&&!this.composite)||!this.hasWork())return;this.scheduled=this.defer(()=>{this.scheduled=null;if(this.closed||this.blocked||this.running)return;const owner=this.select();if(!owner&&!this.composite)return;const run=this.turn(owner);this.running=run;void run.catch(error=>{if(owner?.released&&this.select()){this.needsSnapshot=true;this.blocked=false;}else{this.blocked=true;this.rejectProgress(error);}try{this.onError(error);}catch{}}).finally(()=>{if(this.running===run)this.running=null;this.schedule();});});}
+  schedule(){if(this.closed||this.blocked||this.running||this.scheduled!==null||(!this.select()&&!this.composite)||!this.hasWork())return;this.scheduled=this.defer(()=>{this.scheduled=null;if(this.closed||this.blocked||this.running)return;const owner=this.select();if(!owner&&!this.composite)return;const run=this.turn(owner);this.running=run;void run.catch(error=>{if(owner?.released&&this.select()||this.composite&&owner&&(owner.released||owner.paused)&&['client_not_admitted','client_ownership_lost','grant_retired','durable_scope_changed'].includes(error?.code)){this.needsSnapshot=!!this.select();this.blocked=false;}else{this.blocked=true;this.rejectProgress(error);}try{this.onError(error);}catch{}}).finally(()=>{if(this.running===run)this.running=null;this.schedule();});});}
   async controlOwner(owner,command){
     if(!this.ownerCommand){if(this.sequence>MAX_U64)throw fail('document_runtime_capacity');this.ownerCommand={sequence:String(this.sequence++),command:freeze(copy(command)),accepted:false};}
     const pending=this.ownerCommand;if(!pending.accepted){const reply=await this.call(owner,'runtime_owner',{sequence:pending.sequence,command:pending.command});this.adopt(reply.snapshot,owner);if(pending.command.kind==='retire'&&this.retirementLifetime===null&&this.current)this.retirementLifetime=this.current.update.lifetime;pending.accepted=true;this.nudge();}
@@ -219,7 +226,7 @@ class DocumentRuntimeScheduler{
       if(this.workHost){
         this.unschedule();for(const owner of this.owners)owner.paused=true;
         while(this.running)await this.running.catch(()=>{});
-        this.ownerCommand=null;this.retiring=false;this.retirementLifetime=null;this.wakePending=false;this.hintPending=false;this.needsSnapshot=false;
+        this.workNeedsSnapshot=false;this.ownerCommand=null;this.retiring=false;this.retirementLifetime=null;this.wakePending=false;this.hintPending=false;this.needsSnapshot=false;
         // Closing a failed owner is driven by actual trusted snapshots/tickets,
         // never by a revoked client's public callback or a fabricated ACK.
         if(!this.workHost.fatal&&!this.workHost.exited)this.blocked=false;

@@ -3,8 +3,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { CoreVaultFixtureService } = require('../desktop/core-vault-fixture-service.cjs');
 const failure = code => Object.assign(new Error(code), { code });
-function service(host) {
-  return new CoreVaultFixtureService({ root: '/fixture', ...host }, { pollMs: 750, rescanMs: 30000 });
+function service(host, options={}) {
+  return new CoreVaultFixtureService({ root: '/fixture', ...host }, { pollMs: 750, rescanMs: 30000, ...options });
 }
 const state = { id: 'file', revision: 'revision', path: 'a.md', kind: 'file', deleted: false };
 const presented = { state, presentation: { id: 'file', ctime_ms: 1, mtime_ms: 2, size_bytes: 3 } };
@@ -113,14 +113,14 @@ test('metadata stat preserves identity and rejects large convenience reads befor
 });
 
 test('draft owner registration shares one main scheduler and cold close never creates an F owner',async()=>{
-  const calls=[],core=service({capabilities:['document_drafts'],async documentWork(request){calls.push(request);assert.equal(request.op,'snapshot');return {work:null,turn:null};},async close(){calls.push({op:'host-close'});}});
+  const calls=[],core=service({capabilities:['documents','document_runtime','document_drafts'],async documentWork(request){calls.push(request);assert.equal(request.op,'snapshot');return {work:null,turn:null};},async close(){calls.push({op:'host-close'});}},{documentRuntime:true});
   const guarded={async documentDrafts(){throw Error('No public request at registration');}};
   const first=core.registerDocumentDraftOwner({host:guarded,clientId:'client-a',localStoreId:'store',assertActive(){}}),scheduler=core.documentScheduler;
   const second=core.registerDocumentDraftOwner({host:guarded,clientId:'client-b',localStoreId:'store',assertActive(){}});assert.equal(core.documentScheduler,scheduler);assert.deepEqual(calls,[]);
   first.revoke();second.revoke();await core.close();assert.deepEqual(calls,[{op:'snapshot'},{op:'host-close'}]);
 });
 test('draft support fails closed without the stdio capability and complete trusted route',async()=>{
-  for(const host of [{capabilities:[]},{capabilities:['document_drafts']}]){
-    const core=service(host);assert.throws(()=>core.registerDocumentDraftOwner({host:{documentDrafts(){}},clientId:'client',localStoreId:'store',assertActive(){}}),{code:'unsupported_host_capability'});assert.equal(core.documentScheduler,null);
+  for(const host of [{capabilities:[],enabled:false},{capabilities:['documents','document_runtime','document_drafts'],documentWork(){},enabled:false},{capabilities:['documents','document_runtime','document_drafts'],enabled:true}]){
+    const core=service(host,{documentRuntime:host.enabled});assert.throws(()=>core.registerDocumentDraftOwner({host:{documentDrafts(){}},clientId:'client',localStoreId:'store',assertActive(){}}),{code:'unsupported_host_capability'});assert.equal(core.documentScheduler,null);
   }
 });

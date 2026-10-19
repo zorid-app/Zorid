@@ -498,3 +498,42 @@ test('composite close continues trusted turns after all draft observers are revo
   ]);
   f.owner.notify({op:'request'},draftMutationReply);f.owner.revoke();let done=false;const closed=f.scheduler.close().then(()=>{done=true;});await f.settled();assert.equal(done,false);await f.drain();await closed;assert.equal(done,true);assert.deepEqual(f.calls.map(c=>c.op),['close','step']);assert.deepEqual(f.errors,[]);
 });
+
+function addCompositeLegacy(f,{wake=snapshot(),read,step=snapshot()}={}){
+  const host={async documentRuntime(clientId,op,args){
+    f.calls.push({op,clientId,args:clone(args)});
+    if(op==='runtime_owner')return {...clone(args),snapshot:clone(wake)};
+    if(op==='runtime_owner_ack')return true;
+    if(op==='runtime_snapshot')return {snapshot:clone(read?await read:wake)};
+    if(op==='runtime_step')return {snapshot:clone(step)};
+    assert.fail(`Unexpected leased operation: ${op}`);
+  }};
+  return f.scheduler.addOwner({host,clientId:'legacy-client',localStoreId:'store',assertActive(){}});
+}
+test('last leased observer loss cannot block listener-free trusted Drop already awaited by release',async()=>{
+  const a=draftTicket('1'),held=gate(),f=compositeFixture([
+    {op:'next_turn',value:workReply(privateWork(a),'ready')},
+    {op:'step',ticket:a,value:workReply(privateWork(null,a,true,true))},
+  ],{releaseReplies:[{error:{code:'document_drafts_draining'}},{value:{released:true}}]});
+  const legacy=addCompositeLegacy(f,{read:held.promise});await f.turn();f.owner.notify({op:'cancel'},draftMutationReply);await f.turn();await f.turn();
+  assert.equal(f.calls.at(-1).op,'runtime_snapshot');f.owner.revoke();const retired=legacy.revoke();let released=false;
+  const release=f.scheduler.releaseDraftClient({client_id:'client-a',token:'lease'}).then(()=>{released=true;});await f.settled();assert.equal(released,false);
+  held.resolve(snapshot());await retired;await f.settled();await f.drain();await release;
+  assert.equal(released,true);assert.equal(f.calls.filter(c=>c.op==='step').length,1);assert.equal(f.calls.filter(c=>c.op==='runtime_snapshot').length,1);assert.deepEqual(f.errors.map(e=>e.code),['client_not_admitted']);
+});
+test('unrelated native errors still block trusted work even if the leased observer is revoked',async()=>{
+  const a=draftTicket('1');let reject;const held=new Promise((_resolve,no)=>{reject=no;}),f=compositeFixture([{op:'next_turn',value:workReply(privateWork(a),'ready')}],{releaseReplies:[{error:{code:'document_drafts_draining'}}]});
+  const legacy=addCompositeLegacy(f,{read:held});await f.turn();f.owner.notify({op:'cancel'},draftMutationReply);await f.turn();await f.turn();f.owner.revoke();const retired=legacy.revoke();
+  const release=f.scheduler.releaseDraftClient({client_id:'client-a',token:'lease'}),rejected=assert.rejects(release,{code:'timeout'});await f.settled();reject({code:'timeout'});await retired;await rejected;await f.settled();assert.equal(f.queued(),0);assert.equal(f.calls.filter(c=>c.op==='step').length,0);assert.deepEqual(f.errors.map(e=>e.code),['timeout']);
+});
+test('fresh native committed lifetime clears retired composite only after actual null work snapshot',async()=>{
+  const a=draftTicket('1'),f=compositeFixture([
+    {op:'next_turn',value:workReply(privateWork(a,null,true),'ready')},
+    {op:'step',ticket:a,value:workReply(privateWork(null,a,true,true))},
+    {op:'snapshot',value:workReply(null)},
+  ],{releaseReplies:[{error:{code:'document_drafts_draining'}},{value:{released:true}}]});
+  f.owner.revoke();const release=f.scheduler.releaseDraftClient({client_id:'client-a',token:'lease'});await f.settled();await f.drain();await release;assert.equal(f.scheduler.composite,true);
+  const fresh={...snapshot('9'),update:{...update(),lifetime:'fresh-life'},inFlight:{...issued('9'),lifetime:'fresh-life'}},idle={...snapshot(),update:{...update(),lifetime:'fresh-life'}};
+  addCompositeLegacy(f,{wake:fresh,step:idle});await f.drain();assert.equal(f.scheduler.composite,false);
+  const operations=f.calls.map(c=>c.op);assert.ok(operations.lastIndexOf('snapshot')<operations.indexOf('runtime_step'));assert.deepEqual(f.calls.find(c=>c.op==='runtime_step').args,{lifetime:'fresh-life',effectId:'9'});assert.equal(f.calls.filter(c=>c.op==='next_turn').length,1);assert.deepEqual(f.errors,[]);
+});

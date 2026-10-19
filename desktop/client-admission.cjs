@@ -76,7 +76,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     const metadataRowsAvailable=host.capabilities?.includes('document_metadata_rows')===true;
     if(metadataRowsAvailable&&(!host.capabilities?.includes('documents')||typeof guarded.documentCommand!=='function'))throw fail('unsupported_host_capability');
     const documents=host.capabilities?.includes('documents')?createDesktopDocumentSemantics(guarded,clientId,reference.local_store_id,{metadataRowsAvailable}):null;
-    const draftsAvailable=host.capabilities?.includes('document_drafts')===true;
+    const draftsAvailable=service.documentRuntimeEnabled===true&&host.capabilities?.includes('document_drafts')===true;
     if(draftsAvailable){
       if(!documents||typeof guarded.documentDrafts!=='function'||typeof service.registerDocumentDraftOwner!=='function'||typeof service.releaseDocumentDraftClient!=='function')throw fail('unsupported_host_capability');
       const owner=service.registerDocumentDraftOwner({host:guarded,clientId,localStoreId:reference.local_store_id,assertActive:live});
@@ -115,6 +115,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     const documentCommand=input=>invoke(async()=>{const value=await documents.invoke(input);live();return value;},null);
     if(service.documentRuntimeEnabled){
       runtime=service.registerDocumentRuntimeOwner({host:guarded,clientId,localStoreId:reference.local_store_id,assertActive:live});
+      if(draftsAvailable&&(!runtime||!['observe','control','ackControl','ackOutcome','subscribe','pause','resume','prepareRelease','release','revoke'].every(name=>typeof runtime[name]==='function')))throw fail('unsupported_host_capability');
     }
     const documentRuntime=runtime?Object.freeze({
       observe:()=>invoke(()=>runtime.observe(),null),

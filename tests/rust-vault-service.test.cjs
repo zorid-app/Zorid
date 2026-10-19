@@ -458,5 +458,12 @@ test('actual JS subprocess framing preserves draft raw chunks and keeps work out
   await host.close();assert.equal(host.exited,true);
 });
 for(const mode of ['draft_oversized_header','draft_oversized_body'])test(`draft frame preallocation rejects ${mode} from prefix alone`,async t=>{
-  const host=await fixture(t,mode);await assert.rejects(host.documentDrafts('client',{op:'facts_read',job:stdioDraftJob,offset:'0',maximum:131072}),{code:'response_limit',commitUncertain:true});assert.ok(host.fatal);
+  const host=await fixture(t,mode);await assert.rejects(host.documentDrafts('client',{op:'facts_read',job:stdioDraftJob,offset:'0',maximum:131072}),{code:'invalid_response',commitUncertain:true});assert.ok(host.fatal);
+});
+
+test('saturated actual leased host queue rejects a draft chunk before any redundant raw snapshot',async()=>{
+  const host=Object.create(RustVaultService.prototype);Object.assign(host,{sequence:0n,queuedCount:32,queuedBytes:0,tail:Promise.resolve()});
+  let iterations=0;const original=new Uint8Array(131072),bytes=new Proxy(original,{get(target,key){if(key===Symbol.iterator){iterations++;return target[Symbol.iterator].bind(target);}return Reflect.get(target,key,target);}});
+  const scoped=host.withClientLease({local_store_id:'store',client_id:'client',token:'token'});
+  await assert.rejects(scoped.documentDrafts('client',{op:'upload_chunk',job:stdioDraftJob,offset:'0'},bytes),{code:'request_limit'});assert.equal(iterations,0);assert.equal(host.queuedCount,32);assert.equal(host.queuedBytes,0);
 });

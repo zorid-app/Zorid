@@ -7,7 +7,7 @@ const { checkpointBytes } = require('./durable-checkpoints.cjs');
 const { captureDocumentRequest, captureRichDiagnostic, decodeDocumentReply, validDocumentReply, MAX_RICH_RESPONSE } = require('./document-semantics.cjs');
 const { captureWorkBlockRequest, decodeWorkBlockReply, validWorkBlockReply, MAX_WORKBLOCK_RESPONSE } = require('./workblocks.cjs');
 const {captureRuntimeRequest,decodeRuntimeReply,validRuntimeReply,isRuntimeOp,MAX_RUNTIME_BYTES}=require('./document-runtime.cjs');
-const {MAX_DRAFT_CONTROL,MAX_DRAFT_CHUNK,captureDraftRequest,captureDraftBody,decodeDraftReply,validDraftReply,captureWorkRequest,decodeWorkReply,validWorkReply}=require('./document-drafts.cjs');
+const {MAX_DRAFT_CONTROL,MAX_DRAFT_CHUNK,captureDraftRequest,decodeDraftReply,validDraftReply,captureWorkRequest,decodeWorkReply,validWorkReply}=require('./document-drafts.cjs');
 const { familyStatus, syncStatus, syncReport, familyCommand } = require('./family-sync-protocol.cjs');
 
 const MAX_HEADER = 1024 * 1024;
@@ -446,9 +446,10 @@ class RustVaultService {
   }
   documentDrafts(clientId,request,bytes=new Uint8Array()){
     if(!identity(clientId))return Promise.reject(failure('draft_owner_mismatch'));
-    if(this.queuedCount>=MAX_REQUESTS)throw failure('draft_capacity');
-    const captured=captureDraftRequest(request),body=captureDraftBody(captured,bytes);
-    return this.request({method:'document_drafts',client_id:clientId,request:captured},body).then(({result,bytes})=>decodeDraftReply(captured,result,bytes));
+    const captured=captureDraftRequest(request);
+    // request() validates this route and admits the ACTUAL shared queue before
+    // taking its sole raw snapshot; leased contexts do not own queue counters.
+    return this.request({method:'document_drafts',client_id:clientId,request:captured},bytes).then(({result,bytes})=>decodeDraftReply(captured,result,bytes));
   }
   // Trusted main-process only; deliberately absent from withClientLease().
   documentWork(request){const captured=captureWorkRequest(request);return this.request({method:'document_work',request:captured}).then(({result,bytes})=>decodeWorkReply(captured,result,bytes));}

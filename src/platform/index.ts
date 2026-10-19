@@ -106,7 +106,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
     }
     if(binding.metadataRowsAvailable===true&&binding.documentSemantics!==true)throw new Error('Incomplete document metadata capability');
     if(binding.draftsAvailable===true){
-      if(binding.documentSemantics!==true||!bridge.onDocumentRuntimeNudge)throw new Error('Incomplete document draft capability');
+      if(binding.documentSemantics!==true||binding.documentMaintenance!==true||!documentRuntime||!bridge.onDocumentRuntimeNudge)throw new Error('Incomplete document draft capability');
       const subscribe=bridge.onDocumentRuntimeNudge.bind(bridge);
       drafts=createDesktopDocumentDraftTransport({scope:{localStoreId:scope.vaultId,clientId:scope.clientId},invoke:(request,bytes)=>call('documentDrafts',request,bytes),subscribe:(listener,onRetire)=>subscribe(info.path,admissionId,listener,onRetire)});
     }

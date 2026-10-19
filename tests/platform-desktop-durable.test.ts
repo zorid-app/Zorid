@@ -139,7 +139,7 @@ test('desktop pre-open draft capability composes the same common service and ret
   const previous=Object.getOwnPropertyDescriptor(globalThis,'window');let observer=()=>{},retireObserver=()=>{},stops=0,releases=0,invocations=0,resolve!:(value:unknown)=>void;
   Object.defineProperty(globalThis,'window',{configurable:true,value:{zorid:{
     getVault:async()=>({path:'/fixture',name:'Fixture'}),
-    getDurableContext:async()=>({admissionId:'admitted',scope:{vaultId:'authority',clientId:'client'},documentSemantics:true,draftsAvailable:true}),
+    getDurableContext:async()=>({admissionId:'admitted',scope:{vaultId:'authority',clientId:'client'},documentSemantics:true,documentMaintenance:true,draftsAvailable:true}),
     onDocumentRuntimeNudge:(path:string,admission:string,listener:()=>void,onRetire:()=>void)=>{assert.equal(path,'/fixture');assert.equal(admission,'admitted');observer=listener;retireObserver=onRetire;return()=>{stops++;};},
     durableInvoke:(_path:string,_admission:string,method:string,args:unknown[])=>{assert.equal(method,'documentDrafts');assert.deepEqual(args[0],{op:'snapshot'});invocations++;return new Promise<unknown>(yes=>{resolve=yes;});},
     releaseDurableContext:async()=>{releases++;},
