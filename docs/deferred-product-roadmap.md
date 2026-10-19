@@ -278,9 +278,15 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   `family_metadata_transactions.rs`: reuse checked entries through one immutable
   read transaction instead of loading them twice. Observations retain their fresh
   read and final writer/physical/authority/CAS checks remain unchanged. Reviewer
-  `storage_sqlite_impl` independently approves exact `4dd311a2`; it now owns the
-  serialized focused Store validation slot. No runtime acceptance or measured
-  gain yet; this removes one duplicate load, not cumulative whole-vault scans.
+  `storage_sqlite_impl` independently approves exact `4dd311a2`, integrated
+  `078d877d`. All18 focused Store checks pass, including SQL-count1 instead of2,
+  malformed/missing/path/revision mismatch, corruption and independent writer
+  invalidation. All356 source/fixture hashes remain exact and owned group exited.
+  Final process-inventory permission failure prevented serializing minimum disk;
+  floor never tripped, terminal free1.819GB, minimum honestly unavailable.
+  Evidence `/private/tmp/zorid-entry-cse-4dd311a2-dkw4l0mz/validation-summary.json`.
+  This removes one duplicate load, not cumulative whole-vault scans. Normal-family
+  client/performance acceptance and measured gain remain pending.
   S1.4 current core-lifecycle source handoff:
   `/private/tmp/zorid-s1-core-lifecycle-handoff.md` (no implementation yet).
   Concrete ownership and closed reducer-contract refinements:
