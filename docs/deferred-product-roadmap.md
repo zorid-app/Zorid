@@ -9,7 +9,7 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
-Main through `6c0b6d52` integrates grouped search/controller, common transport,
+Main through `ee7821a6` integrates grouped search/controller, common transport,
 pure rich paging, native binding, real WASM/browser binding, standalone rich CLI,
 pure lifecycle reducer and the measured transient snippet projector. The older
 detailed batch notes below describe their original execution points.
@@ -33,23 +33,26 @@ detailed batch notes below describe their original execution points.
   `architecture_core_audit` prepares one canonical all-up validation branch from
   current main in the existing `s1-search-parser` worktree; root integrates main.
 - S1.4A pure scheduler:27 checks pass with public module exported; main
-  `4cbd4be5`. Store source/recovery `9e77753f` and native driver `bcccca8e` are
-  independently source-approved and unintegrated. Store successor `82ed5aec`
-  fixes a test-only SQLite count type:8 new recovery checks pass, but the22 existing
-  checks were interrupted by the disk floor after17 printed successes;5 cache
-  checks and native17 remain pending. Browser lifecycle `e661e42b` passes82 Node
-  checks and TypeScript; hosted Rust found5 passes/1 strict-decoding failure.
-  Source-approved successor `5dcd492b` preserves wire JSON and rejects unknown
-  fields on empty controls; its6-check rerun remains pending. Shared facade/host/
-  frontend scheduling migration has not started. Pure policy is not actual no-listener wake/fairness acceptance.
+  `4cbd4be5`. Store recovery is integrated `0311c7ce`:8 new,22 existing and5
+  cache-snapshot checks pass on exact `82ed5aec`. Native driver is integrated
+  `ee7821a6`:17 checks pass on exact `ef08da08`, including the test-only missing
+  fixture-directory correction. Browser driver is integrated `69bf1577`:6 hosted
+  Rust checks pass on strict-decoder successor `5dcd492b`;82 Node checks and full
+  TypeScript pass again on integrated main. Original failing test evidence is
+  retained. Native/browser adapters remain lazy; automatic host scheduling,
+  common freshness/subscription facade and refresh-only frontend migration are
+  the next S1.4D–F work. These checks do not establish actual no-listener liveness,
+  foreground service, partial first-build results or platform cancellation.
 - Four additional targeted native path lookups `a6d57cb9` are independently
   source-approved, with40 scoped native checks pending. No measured10k admission
   gain is established. Native10k/actual100k factory and broader S1.5/S1.6 gates
   remain open; no multicore or later product implementation is authorized here.
-- Heavy checks remain serialized with1GiB disk floor. A bounded cleanup
-  of verified agent-created disposable fixture payloads is currently assigned to
-  `baseline_resources_impl`; no heavy check until its terminal resource clearance.
-  Preserve all prior archives, active/manual apps, source and unrelated data.
+- Heavy checks remain serialized with1GiB disk floor. The approved cleanup of
+ 12 exact agent-created disposable fixture payloads is complete; reports,
+  manifests, screenshots, logs, source, binaries and all archives were preserved.
+  Evidence `/private/tmp/zorid-s1-strict-fixture-retirement-nd9gqvqk` records
+  exact ownership/tree/process checks; five held fixtures remain untouched.
+  Matching release Electron artifact preparation is next; preserve manual apps.
 
 - **Active goal boundary:** latest explicit user objective is "Complete the full
   roadmap S1. Stop after that." Complete every applicable S1 slice and its actual
