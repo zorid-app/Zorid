@@ -27,12 +27,14 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   and native/browser facts-persistence code are integrated with focused checks.
   Bounded real-client parse-cache acceptance passes Chrome, macOS Electron and
   standalone macOS CLI. S1.2 resolver and preparation/program reuse source and
-  binding checks are integrated; evaluated-answer reuse is under review. S1.3
-  parser/rich-search source and independent find UI are progressing. Full client
+  binding checks are integrated; evaluated-answer reuse core is integrated with
+  focused correctness checks, while host wiring and measurements remain pending. S1.3
+  parser/rich-search evaluator and independent find UI are integrated. Rich paging,
+  grouped-result mounting and full client
   acceptance and core-owned scheduling remain pending;
   multicore is deferred, not a delivery requirement.
 - **S1.2 current scope:** cold resolver and bounded shared Bases preparation/program
-  reuse are integrated; conservative answer reuse is implementing. Baseline relationship resolution
+  reuse are integrated; conservative answer reuse core is integrated. Baseline relationship resolution
   repeatedly scanned the namespace per link, preventing generated Base10k queries.
   Prepared source-ID and normalized-basename lookups now charge
   actual construction/bucket visits/sorting/cancellation, preserve all matching/
@@ -153,9 +155,9 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   projections, with new schema2 raw-source interval fixtures tested independently.
   Parser source `4b8a7aa0` plus restore-topology successor `824dfeec` is independently
   approved:22 initial focused checks/TypeScript and13 affected successor checks
-  pass with frozen fixtures unchanged. Main integration waits for the separately
-  owned Base-cache schema2 accounting bridge. Version-only baseline bridge
-  `0cd1cc24` is root source-approved and must land with schema2, not before it.
+  pass with frozen fixtures unchanged. Parser and strict restore successor are
+  integrated as `f7a2280f`/`d5098749`; version-only baseline bridge `0cd1cc24`
+  is integrated as `48cb6c77` alongside schema2.
   Pure rich search `b2b73a60` is independently source-approved and compiled;
   first run11/13 tests pass, including all19 accepted target and36 Unicode cases.
   Two new test assumptions need correction (optimized literal regex memory and
@@ -179,7 +181,8 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   maintenance units: prepared allocation admission alone exceeds32MiB before
   proof copies; shared namespace was counted twice. Answer successor includes
   factory-proven unique namespace accounting and early bounded admission, still
-  requiring review, tests and new same-workload measurements before any gain claim.
+  independently reviewed and focused-tested; new same-workload measurements are
+  still required before any gain claim.
   Top editor find source `0fad2065` is independently approved and integrated
   `b3df4514`,42 focused checks plus TypeScript pass. User screenshot layout is
   implemented using existing icons/styles and CodeMirror commands, not painted
@@ -194,7 +197,7 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   files remain exact. Archive proof:
   `/private/tmp/zorid-s1-owned-test-archive-qh52me5a/terminal-summary.json`.
   Free space recovered to1.44GiB. Keep heavy checks serialized with1GiB floor;
-  no active slot after the first rich-search test failure. Don't remove archives
+  no active heavy slot after completed focused checks. Don't remove archives
   or assume their old test executable paths still exist without restoring them.
   Subsequent exact rich candidate `76d8e9d9` passes14 rich tests plus unchanged
   literal baseline (19 target/36 Unicode cases; literal19 cases at page1/100).
@@ -202,20 +205,37 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   forms at387,455 work units under unchanged2M/10k/1MiB limits. This fixes false
   quadratic literal accounting, not a measured CPU-speedup claim. Evidence:
   `/private/tmp/zorid-rich-search-76d8e9d9-focused-x8ge2hpk/verification.json`.
+  Exact reviewed eight-file matcher source is integrated as `a24a4fa5`; this is
+  pure-engine correctness, not paged transport or actual-client acceptance.
   Coordinated DTO freeze: `/private/tmp/zorid-s1-rich-search-dto-freeze.md`.
   Follow-on page owner remains `s1_query_audit`; presentation owner
-  `architecture_platform_audit` delivers isolated unmounted `1dfe2430`,9 checks
-  plus TypeScript, under independent `storage_recovery_ui_impl` review. No
+  `architecture_platform_audit` delivers isolated unmounted `1dfe2430` plus
+  `8b72c803`,10 checks plus TypeScript, independently source-approved by
+  `storage_recovery_ui_impl`. Generation/query/output coverage stay independent;
+  snippets render supplied ranges and counts. No
   Workspace/transport migration is accepted yet. Root approves initial separate
   64M order-preparation work ceiling from a deterministic100k comparison model
   (duplicate-name control59.84M); actual Rust bounds/order tests remain required.
   It does not raise the2M per-document evaluator ceiling; sorting must yield.
-  Answer candidate `597cbdb7` is independently source-approved; affected tests
-  then24 units plus3 corpora are running in the sole heavy slot. Earlier failures
+  Final answer candidate `56e558e3` is independently source-approved and its exact
+  six-file source integrated as `af29b01f`. All40 focused checks pass (24 units,
+  corpus7/query5/generation4), none ignored; source/fixtures remain exact and
+  owned processes exited. Evidence:
+  `/private/tmp/zorid-bases-answers-56e558e3-vatyawa7/validation-summary.json`.
+  Native answer wiring owner `architecture_core_audit` uses isolated
+  `tingkai-c/s1-native-answer-cache` from `af29b01f`; WASM owner
+  `architecture_platform_audit` uses a separate isolated branch from that main.
+  Both preserve sealed lookups, unchanged wire results and pre/post admission
+  fences; no client acceptance or answer-cache speedup is established.
+  Measurement owner `baseline_resources_impl` uses isolated
+  `tingkai-c/s1-bases-answer-observation` for the existing opt-in100/10k workload,
+  unchanged frozen oracles/caps. Root retains sole main integration. Earlier failures
   exposed oversized test String capacity and an expanded-year cold-clock panic.
   Test fixtures are corrected without weakening caps; optional cache declines
   unsupported clocks. Underlying panic remains an OPEN S1.5 correctness finding,
   tracked in user-findings; it is not fixed by cache eligibility or ignored as old.
+  Minimal cold-clock correction owner `storage_sqlite_impl`, independent reviewer
+  `s1_execution_audit`; separate isolated source work, no boundary acceptance yet.
   S1.4 current core-lifecycle source handoff:
   `/private/tmp/zorid-s1-core-lifecycle-handoff.md` (no implementation yet).
 - **Integrated:** scoped observation-lookup fix through `2c53a98d`,193

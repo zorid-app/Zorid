@@ -33,8 +33,13 @@ an edit-mode transition;17 focused checks and TypeScript pass. The old lifecycle
 assertion is corrected separately with9/9 checks. Actual CSS Highlight painting,
 native geometry/IME and normal-app acceptance remain pending; the first owned
 painted-fixture attempt stopped at the disk safeguard before capturing results.
-Vault-search implementation awaits the S1.3 shared result contract; the source map
-and static REA audit are complete. Implementation is not visual/runtime acceptance.
+Vault-search pure matcher `76d8e9d9` is integrated as `a24a4fa5`, with14 focused
+checks plus the unchanged literal baseline passing. The shared result DTO is
+frozen; rich paging/order/snippets remain under implementation. Grouped view
+`1dfe2430` plus `8b72c803` is independently source-approved with10 focused checks
+and TypeScript passing, but remains unmounted. It preserves separate generation,
+query and output coverage, supplied snippet ranges, authoritative counts and the
+case toggle. Static REA evidence is complete. Implementation is not visual/runtime acceptance.
 This addition does not reopen saving or resume later product stages.
 
 ## Latest execution steering — follow roadmap, skip multicore
