@@ -95,9 +95,22 @@ These gaps do not justify implementing a new formula engine.
 ## Required semantic decisions before consumer replacement
 
 The corpus records existing results; `retain` is the proposed compatibility
-choice, and `proposed-change` marks deliberate corrections accepted by the coordinator on 2026-10-17 (finite results, Unicode scalars, stateless regex, typed grouping, direct Boolean filters, explicit clock/timezone with default UTC, invalid date null, source-ordered exact-first case lookup and deterministic natural ordering). DST gap/fold policy and final public API remain proposals. Retain
+choice, and `proposed-change` marks deliberate corrections accepted by the coordinator on 2026-10-17 (finite results, Unicode scalars, stateless regex, typed grouping, direct Boolean filters, explicit clock/timezone with default UTC, invalid date null, source-ordered exact-first case lookup and deterministic natural ordering). Broader local-input DST gap/fold policy and final public API remain proposals. Retain
 rows are still unproven against MDBASE. Below are concrete adaptations, not
 claims that the upstream library already matches them.
+
+On 2026-10-19 the root coordinator approved one narrow builtin correction:
+`today()` and `Date.date()` truncate a valid instant to the earliest representable
+instant of the **same local civil date**, choosing the earliest midnight in a
+fold. A midnight gap uses its first valid instant only if that instant remains
+on the requested date; otherwise return `invalid-local-time`. Never reinterpret
+nonexistent local midnight as UTC. This changes the Base compiler version to
+`zorid-base-yaml-expression-v2`. Strict `date(string)`, typed date-property
+parsing and calendar-arithmetic input handling stay unchanged. Refresh deadlines
+have a separate policy: the next wake may cross a wholly skipped civil date.
+New focused literal oracles record this correction; the frozen accepted corpus
+is not regenerated. Source implementation does not establish executable or
+native acceptance.
 
 | Area | Current evidence / upstream difference | Proposed Zorid rule |
 | --- | --- | --- |

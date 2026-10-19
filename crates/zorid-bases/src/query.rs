@@ -14,6 +14,32 @@ pub const MAX_QUERY_SCANNED: usize = 50_000;
 pub const MAX_QUERY_ROWS: usize = 10_000;
 pub const MAX_QUERY_GROUPS: usize = 5_000;
 pub const MAX_QUERY_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+
+/// Conservative time dependency of the selected Base invocation. This controls
+/// visible-view wakeups only; it is not an answer-cache independence proof.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BaseClockDependency {
+    #[default]
+    None,
+    Day,
+    Instant,
+}
+impl BaseClockDependency {
+    pub(crate) fn join(self, other: Self) -> Self {
+        self.max(other)
+    }
+}
+/// A host executes at most one wakeup for this captured query hint. A missing
+/// deadline means no representable future wakeup; the dependency remains explicit.
+/// No ambient clock or device timezone is read by the core.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaseRefreshHint {
+    pub dependency: BaseClockDependency,
+    pub timezone: String,
+    pub next_wake_ms: Option<i64>,
+}
 /// Records and graph are sealed together; deserialization supplies detached rows only.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -158,6 +184,10 @@ pub struct BaseQueryResult {
     pub relationships_available: bool,
     pub metadata_issues: Vec<crate::MetadataIssue>,
     pub metadata_complete: bool,
+    /// Null preserves lazy captures which were not admitted by any evaluated
+    /// row. Valid clock-independent queries carry an explicit no-deadline hint.
+    #[serde(default)]
+    pub refresh_hint: Option<BaseRefreshHint>,
 }
 
 const FILE_PROPERTIES: &[&str] = &[
@@ -939,6 +969,29 @@ pub(crate) fn query_base_validated(
             entry_ids: rows.iter().map(|row| row.entry_id.clone()).collect(),
         });
     }
+    let dependency =
+        program
+            .refresh_dependency(options.view_index)
+            .join(if *clock_sensitive_sort {
+                BaseClockDependency::Instant
+            } else {
+                BaseClockDependency::None
+            });
+    let refresh_hint = refresh_hint_checked(dependency, &options.evaluation, |work| {
+        if options
+            .evaluation
+            .cancellation
+            .as_ref()
+            .is_some_and(|token| token.stop_reason().is_some())
+        {
+            return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+        }
+        steps_used = steps_used
+            .checked_add(work)
+            .filter(|&used| used <= options.max_steps)
+            .ok_or_else(|| budget("Refresh hint exceeds query work budget"))?;
+        Ok(())
+    })?;
     let result = BaseQueryResult {
         snapshot_id: snapshot.snapshot_id.clone(),
         view: view.configuration.clone(),
@@ -957,9 +1010,28 @@ pub(crate) fn query_base_validated(
                 .metadata_issues
                 .iter()
                 .any(|i| i.properties_unavailable),
+        refresh_hint,
     };
     crate::encoded_size(&result, options.max_output_bytes)?;
     Ok(result)
+}
+
+/// Recompute only scheduling metadata for this invocation. This does not prove
+/// answer reuse and never substitutes for the caller's retained source checks.
+pub(crate) fn refresh_hint_checked(
+    dependency: BaseClockDependency,
+    options: &EvaluationOptions,
+    mut check: impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+) -> Result<Option<BaseRefreshHint>, ExpressionDiagnostic> {
+    expression::refresh_deadline(dependency, options.clock_ms, &options.timezone, &mut check).map(
+        |capture| {
+            capture.map(|(timezone, next_wake_ms)| BaseRefreshHint {
+                dependency,
+                timezone,
+                next_wake_ms,
+            })
+        },
+    )
 }
 
 #[cfg(test)]

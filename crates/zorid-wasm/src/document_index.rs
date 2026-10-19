@@ -1581,6 +1581,10 @@ impl WasmDocumentLiteralPage {
 }
 
 #[cfg(test)]
+#[path = "document_clock_tests.rs"]
+mod document_clock_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     fn header() -> String {

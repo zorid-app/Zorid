@@ -2,7 +2,7 @@
 //! remains the document crate's responsibility; this module never writes source.
 use crate::{BaseValue, ExpressionDiagnostic, PropertyValue};
 /// Change whenever Base configuration compilation or language meaning changes.
-pub const BASE_COMPILER_VERSION: &str = "zorid-base-yaml-expression-v1";
+pub const BASE_COMPILER_VERSION: &str = "zorid-base-yaml-expression-v2";
 
 #[derive(Clone, Debug)]
 pub struct BaseProgram {
@@ -30,6 +30,15 @@ impl BaseProgram {
         let index = matches.next()?.0;
         matches.next().is_none().then_some(index)
     }
+    /// Semantic refresh dependence for this compiled view. This is independent
+    /// of the stricter optional-answer cache proof and runtime sort upgrades.
+    pub fn refresh_dependency(&self, view_index: usize) -> crate::query::BaseClockDependency {
+        self.views
+            .get(view_index)
+            .map_or(crate::query::BaseClockDependency::Instant, |view| {
+                view.refresh_dependency
+            })
+    }
 }
 #[derive(Clone, Debug)]
 pub(crate) enum Filter {
@@ -52,6 +61,30 @@ pub(crate) struct View {
     pub group: Option<Criterion>,
     pub group_order: Option<Vec<BaseValue>>,
     pub limit: Option<usize>,
+    pub refresh_dependency: crate::query::BaseClockDependency,
+}
+
+fn filter_clock_dependency(
+    filter: &Filter,
+    check: &mut impl FnMut(usize) -> Option<()>,
+) -> crate::query::BaseClockDependency {
+    use crate::query::BaseClockDependency as Dependency;
+    if check(1).is_none() {
+        return Dependency::Instant;
+    }
+    match filter {
+        Filter::Expression(source) => crate::expression::clock_dependency(source, check),
+        Filter::And(children) | Filter::Or(children) | Filter::Not(children) => {
+            let mut dependency = Dependency::None;
+            for child in children {
+                dependency = dependency.join(filter_clock_dependency(child, check));
+                if dependency == Dependency::Instant {
+                    break;
+                }
+            }
+            dependency
+        }
+    }
 }
 pub(crate) fn clock_independent(
     program: &BaseProgram,
@@ -213,7 +246,7 @@ pub fn compile_base(configuration: PropertyValue) -> Result<BaseProgram, Express
     configuration
         .validate_json_numbers()
         .map_err(|message| error(message))?;
-    let formulas = match get(&configuration, "formulas") {
+    let formulas: Vec<(String, String)> = match get(&configuration, "formulas") {
         None => Vec::new(),
         Some(PropertyValue::Object(values)) => values
             .iter()
@@ -228,6 +261,29 @@ pub fn compile_base(configuration: PropertyValue) -> Result<BaseProgram, Express
     let root_filter = get(&configuration, "filters")
         .map(|value| filter(value, 0))
         .transpose()?;
+    // A finite compile-time proof allowance, separate from query semantic work.
+    // Exhaustion can only make scheduling conservative; it cannot reject lazy
+    // formula errors or claim an unproved expression has no clock dependency.
+    let mut refresh_work = 262_144usize;
+    let mut refresh_check = |work: usize| {
+        refresh_work = refresh_work.checked_sub(work)?;
+        Some(())
+    };
+    let mut common_refresh = crate::query::BaseClockDependency::None;
+    // Current query evaluation includes every formula in its available/needed
+    // cells, including hidden formulas and transitive/dynamic formula members.
+    for (_, source) in &formulas {
+        common_refresh = common_refresh.join(crate::expression::clock_dependency(
+            source,
+            &mut refresh_check,
+        ));
+        if common_refresh == crate::query::BaseClockDependency::Instant {
+            break;
+        }
+    }
+    if let Some(filter) = &root_filter {
+        common_refresh = common_refresh.join(filter_clock_dependency(filter, &mut refresh_check));
+    }
     let defaults = vec![PropertyValue::Object(vec![
         ("type".into(), PropertyValue::String("table".into())),
         ("name".into(), PropertyValue::String("Table".into())),
@@ -289,16 +345,21 @@ pub fn compile_base(configuration: PropertyValue) -> Result<BaseProgram, Express
                 .map(|value| value.trunc() as usize),
             _ => None,
         };
+        let view_filter = get(configuration, "filters")
+            .map(|value| filter(value, 0))
+            .transpose()?;
+        let refresh_dependency = view_filter.as_ref().map_or(common_refresh, |filter| {
+            common_refresh.join(filter_clock_dependency(filter, &mut refresh_check))
+        });
         views.push(View {
             configuration: configuration.clone(),
-            filter: get(configuration, "filters")
-                .map(|value| filter(value, 0))
-                .transpose()?,
+            filter: view_filter,
             order,
             sort,
             group,
             group_order,
             limit,
+            refresh_dependency,
         });
     }
     Ok(BaseProgram {
@@ -326,4 +387,43 @@ pub fn compile_base_source(source: &str) -> Result<BaseProgram, BaseCompileError
     }
     let value = zorid_document::parse_yaml_mapping(source).map_err(BaseCompileError::Yaml)?;
     compile_base(value).map_err(BaseCompileError::Semantic)
+}
+
+#[cfg(test)]
+mod refresh_dependency_tests {
+    use super::*;
+    use crate::query::BaseClockDependency as Dependency;
+
+    #[test]
+    fn summaries_select_view_filter_but_include_common_root_and_hidden_formulas() {
+        let program = compile_base_source(
+            "formulas:\n  pure: file.name.lower()\nviews:\n  - type: table\n    name: Pure\n    filters: file.name.contains('note')\n  - type: table\n    name: Day\n    filters: today() != null\n  - type: table\n    name: Instant\n    filters: now() != null\n",
+        ).unwrap();
+        assert_eq!(program.refresh_dependency(0), Dependency::None);
+        assert_eq!(program.refresh_dependency(1), Dependency::Day);
+        assert_eq!(program.refresh_dependency(2), Dependency::Instant);
+        assert_eq!(program.refresh_dependency(3), Dependency::Instant);
+
+        let hidden = compile_base_source(
+            "formulas:\n  hidden: today()\n  derived: formula.hidden\n  dynamic: formula[note.selected]\nviews:\n  - type: table\n    name: Table\n    order: [file.name]\n",
+        ).unwrap();
+        assert_eq!(hidden.refresh_dependency(0), Dependency::Day);
+        let root = compile_base_source("filters: today() != null\n").unwrap();
+        assert_eq!(root.refresh_dependency(0), Dependency::Day);
+    }
+
+    #[test]
+    fn lazy_formula_parse_errors_and_dynamic_calls_are_conservative_without_rejection() {
+        for expression in ["(", "formula['clock']()", "date('2024-01-01').relative()"] {
+            let program = compile_base(PropertyValue::Object(vec![(
+                "formulas".into(),
+                PropertyValue::Object(vec![(
+                    "hidden".into(),
+                    PropertyValue::String(expression.into()),
+                )]),
+            )]))
+            .unwrap();
+            assert_eq!(program.refresh_dependency(0), Dependency::Instant);
+        }
+    }
 }

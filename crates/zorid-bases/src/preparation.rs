@@ -410,6 +410,58 @@ impl BasePreparationCache {
                     if !options_exact(&answer.options, options, answer.clock_independent) {
                         continue;
                     }
+                    // Scheduling advice is recomputed from this invocation,
+                    // independently of the conservative answer-reuse proof.
+                    // The sealed cold dependency includes runtime duration sort.
+                    let dependency = answer.result.refresh_hint.as_ref().map_or_else(
+                        || program.value.refresh_dependency(options.view_index),
+                        |hint| hint.dependency,
+                    );
+                    let fresh_hint =
+                        match query::refresh_hint_checked(dependency, &options.evaluation, |work| {
+                            stopped(options)?;
+                            maintenance.take(work).ok_or_else(|| {
+                                ExpressionDiagnostic::new(
+                                    "budget",
+                                    "Refresh hint cache work budget",
+                                )
+                            })
+                        }) {
+                            Ok(hint) => hint,
+                            Err(error) if error.code == "cancelled" => return Err(error),
+                            Err(_) => break,
+                        };
+                    let compare_bytes = fresh_hint
+                        .as_ref()
+                        .map_or(0, |h| h.timezone.len())
+                        .saturating_add(
+                            answer
+                                .result
+                                .refresh_hint
+                                .as_ref()
+                                .map_or(0, |h| h.timezone.len()),
+                        );
+                    if maintenance
+                        .take(1usize.saturating_add(compare_bytes / 64))
+                        .is_none()
+                    {
+                        break;
+                    }
+                    if fresh_hint != answer.result.refresh_hint {
+                        // The cached byte-size proof includes the old hint.
+                        // A changed hint falls back to a complete cold query;
+                        // never reuse an unproved encoded output bound.
+                        continue;
+                    }
+                    drop(fresh_hint); // Equal current advice; avoid a duplicate during result copy.
+                    let actual_probe = maintenance.used.saturating_sub(answer_start);
+                    if actual_probe
+                        .checked_add(answer.copy_work)
+                        .is_none_or(|work| work > answer.avoided_work)
+                        || !maintenance.can_take(answer.copy_work)
+                    {
+                        continue;
+                    }
                     // Keep the cold evaluation-only semantic charge for ceiling
                     // admission. Actual optional hit work is separate below;
                     // steps_used is not a claim of executed CPU work.
@@ -1452,6 +1504,9 @@ fn result_heap(r: &BaseQueryResult, m: &mut Maintenance<'_>) -> Option<usize> {
     costs([
         m.bytes(size_of::<BaseQueryResult>())?,
         m.bytes(snapshot_id_heap(&r.snapshot_id))?,
+        r.refresh_hint.as_ref().map_or(Some(0), |hint| {
+            m.retained(hint.timezone.capacity(), hint.timezone.len())
+        })?,
         property_heap(&r.view, m)?,
         vector_cost(&r.rows, m, |r, m| {
             // std's current BTreeMap uses <=16 cells per node. Charge one full
@@ -1700,6 +1755,7 @@ fn copy_result(
         steps_used: r.steps_used,
         relationships_available: r.relationships_available,
         metadata_complete: r.metadata_complete,
+        refresh_hint: r.refresh_hint.clone(),
     })
 }
 

@@ -5,9 +5,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, LazyLock, OnceLock, RwLock};
 
 use chrono::{
-    DateTime, Datelike, FixedOffset, Months, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc,
+    DateTime, Datelike, FixedOffset, LocalResult, Months, NaiveDate, NaiveDateTime, TimeZone,
+    Timelike, Utc,
 };
-use chrono_tz::Tz;
+use chrono_tz::{GapInfo, Tz};
 use regex::{Regex, RegexBuilder};
 use serde_json::{Map, Value};
 
@@ -543,20 +544,44 @@ impl BasesTimezone {
         }
     }
 
-    fn millis_from_local(&self, value: NaiveDateTime) -> i64 {
-        match self {
-            Self::Utc => value.and_utc().timestamp_millis(),
+    /// Resolve a civil midnight forward through a gap. This primitive may move
+    /// across a skipped civil date; value truncation must check the date below.
+    /// A deadline can additionally require the earliest strictly future instant.
+    fn midnight_forward<E>(
+        &self,
+        date: NaiveDate,
+        after: Option<i64>,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Option<i64>, E> {
+        check(1)?;
+        let Some(midnight) = date.and_hms_opt(0, 0, 0) else {
+            return Ok(None);
+        };
+        check(1)?;
+        let candidate = match self {
+            Self::Utc => Some(midnight.and_utc().timestamp_millis()),
             Self::Fixed(offset) => offset
-                .from_local_datetime(&value)
+                .from_local_datetime(&midnight)
                 .single()
-                .expect("fixed offsets are unambiguous")
-                .timestamp_millis(),
-            Self::Named(timezone) => timezone
-                .from_local_datetime(&value)
-                .earliest()
-                .unwrap_or_else(|| timezone.from_utc_datetime(&value))
-                .timestamp_millis(),
-        }
+                .map(|instant| instant.timestamp_millis()),
+            Self::Named(zone) => match zone.from_local_datetime(&midnight) {
+                LocalResult::Single(instant) => Some(instant.timestamp_millis()),
+                LocalResult::Ambiguous(first, second) => {
+                    [first.timestamp_millis(), second.timestamp_millis()]
+                        .into_iter()
+                        .filter(|instant| after.is_none_or(|after| *instant > after))
+                        .min()
+                }
+                LocalResult::None => {
+                    check(1)?;
+                    GapInfo::new(&midnight, zone)
+                        .and_then(|gap| gap.end)
+                        .map(|instant| instant.timestamp_millis())
+                }
+            },
+        };
+        check(1)?;
+        Ok(candidate.filter(|instant| after.is_none_or(|after| *instant > after)))
     }
 }
 
@@ -743,6 +768,327 @@ pub(crate) fn clock_independent(source: &str, check: &mut impl FnMut(usize) -> O
     parse_cached(source)
         .ok()
         .is_some_and(|ast| walk(&ast, check).is_some())
+}
+
+/// Refresh scheduling is separate from the stricter optional-answer reuse proof
+/// above. Known pure calls inherit their operands; an unknown dispatch or an
+/// incomplete proof conservatively needs an instant refresh.
+pub(crate) fn clock_dependency(
+    source: &str,
+    check: &mut impl FnMut(usize) -> Option<()>,
+) -> crate::query::BaseClockDependency {
+    use crate::query::BaseClockDependency as Dependency;
+    fn values(
+        expressions: &[Expr],
+        check: &mut impl FnMut(usize) -> Option<()>,
+    ) -> Option<Dependency> {
+        let mut result = Dependency::None;
+        for expression in expressions {
+            result = result.join(walk(expression, check)?);
+            if result == Dependency::Instant {
+                break;
+            }
+        }
+        Some(result)
+    }
+    fn walk(expression: &Expr, check: &mut impl FnMut(usize) -> Option<()>) -> Option<Dependency> {
+        check(1)?;
+        match expression {
+            Expr::Literal(_) | Expr::Regex(_, _) | Expr::Identifier(_) => Some(Dependency::None),
+            Expr::Array(children) => values(children, check),
+            Expr::Unary(_, child) => walk(child, check),
+            Expr::Binary(_, left, right) => Some(walk(left, check)?.join(walk(right, check)?)),
+            Expr::Member(object, member) => {
+                let object = walk(object, check)?;
+                Some(match member {
+                    Member::Named(_) => object,
+                    Member::Computed(key) => object.join(walk(key, check)?),
+                })
+            }
+            Expr::Call(callee, arguments) => {
+                let callee = match callee.as_ref() {
+                    Expr::Identifier(name) => match name.as_str() {
+                        "now" => Dependency::Instant,
+                        "today" => Dependency::Day,
+                        "if" | "escapeHTML" | "date" | "duration" | "list" | "max" | "min"
+                        | "number" => Dependency::None,
+                        _ => Dependency::Instant,
+                    },
+                    Expr::Member(receiver, Member::Named(method)) => {
+                        let own = match method.as_str() {
+                            // The receiver may be a Date at runtime; relative
+                            // reads the invocation clock even for a static date.
+                            "relative" => Dependency::Instant,
+                            "isTruthy" | "isEmpty" | "toString" | "isType" | "contains"
+                            | "containsAll" | "containsAny" | "endsWith" | "lower" | "replace"
+                            | "repeat" | "reverse" | "slice" | "split" | "startsWith" | "title"
+                            | "trim" | "abs" | "ceil" | "floor" | "round" | "toFixed" | "date"
+                            | "format" | "time" | "filter" | "flat" | "join" | "map" | "reduce"
+                            | "sort" | "unique" | "sum" | "mean" | "keys" | "values"
+                            | "matches" | "hasLink" | "asLink" | "hasProperty" | "hasTag"
+                            | "inFolder" => Dependency::None,
+                            _ => Dependency::Instant,
+                        };
+                        own.join(walk(receiver, check)?)
+                    }
+                    // Computed calls are not supported dispatch today. Do not
+                    // let a future dispatch expansion silently prove them pure.
+                    _ => Dependency::Instant,
+                };
+                if callee == Dependency::Instant {
+                    Some(callee)
+                } else {
+                    Some(callee.join(values(arguments, check)?))
+                }
+            }
+        }
+    }
+    if check(1usize.saturating_add(source.len() / 64)).is_none() {
+        return Dependency::Instant;
+    }
+    parse_cached(source)
+        .ok()
+        .and_then(|ast| walk(&ast, check))
+        .unwrap_or(Dependency::Instant)
+}
+
+/// Pure one-shot scheduling advice for the same captured invocation context.
+/// Invalid time input remains unavailable advice, preserving the established
+/// lazy validation behavior of queries which never evaluate a row.
+pub(crate) fn refresh_deadline(
+    dependency: crate::query::BaseClockDependency,
+    clock_ms: i64,
+    timezone: &str,
+    check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+) -> Result<Option<(String, Option<i64>)>, ExpressionDiagnostic> {
+    use crate::query::BaseClockDependency as Dependency;
+    check(1usize.saturating_add(timezone.len() / 64))?;
+    let Some(clock) = invocation_clock(clock_ms) else {
+        return Ok(None);
+    };
+    check(1)?;
+    let Ok(zone) = BasesTimezone::from_setting(Some(timezone)) else {
+        return Ok(None);
+    };
+    let next = match dependency {
+        Dependency::None => None,
+        // This is the visible-view refresh cadence, not a claim that arbitrary
+        // clock expressions change only once per second.
+        Dependency::Instant => {
+            check(1)?;
+            clock_ms
+                .checked_add(1_000)
+                .filter(|next| invocation_clock(*next).is_some())
+        }
+        Dependency::Day => {
+            check(1)?;
+            let date = match &zone {
+                BasesTimezone::Utc => clock.naive_utc().date(),
+                BasesTimezone::Fixed(offset) => clock.with_timezone(offset).date_naive(),
+                BasesTimezone::Named(zone) => clock.with_timezone(zone).date_naive(),
+            };
+            match date.succ_opt() {
+                None => None,
+                Some(next_date) => {
+                    // Unlike a value truncation, a wake may cross a skipped
+                    // civil date to the first valid instant after the gap.
+                    let candidate = zone.midnight_forward(next_date, Some(clock_ms), check)?;
+                    check(1)?;
+                    candidate.filter(|next| invocation_clock(*next).is_some())
+                }
+            }
+        }
+    };
+    let canonical = match &zone {
+        BasesTimezone::Utc => {
+            check(1)?;
+            "UTC".to_owned()
+        }
+        BasesTimezone::Fixed(offset) if offset.local_minus_utc() == 0 => {
+            check(1)?;
+            "UTC".to_owned()
+        }
+        BasesTimezone::Fixed(offset) => {
+            check(1)?; // Checked input components yield a short minute offset.
+            offset.to_string()
+        }
+        BasesTimezone::Named(zone) => {
+            check(1usize.saturating_add(zone.name().len() / 64))?;
+            zone.name().to_owned()
+        }
+    };
+    Ok(Some((canonical, next)))
+}
+
+#[cfg(test)]
+mod refresh_hint_tests {
+    use super::*;
+    use crate::query::BaseClockDependency as Dependency;
+
+    fn millis(instant: &str) -> i64 {
+        DateTime::parse_from_rfc3339(instant)
+            .unwrap()
+            .timestamp_millis()
+    }
+    fn deadline(dependency: Dependency, instant: &str, zone: &str) -> (String, Option<i64>) {
+        refresh_deadline(dependency, millis(instant), zone, &mut |_| Ok(()))
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn refresh_dependencies_distinguish_known_pure_calls_and_real_clock_reads() {
+        for source in [
+            "file.name.lower().contains('note')",
+            "number('2') + max(3, 4)",
+            "date('2024-01-01').format('YYYY-MM-DD')",
+            "duration('1 month')",
+            "[1, 2].map(value * 2).sum()",
+            "if(note.ready, note.name.trim(), 'today()')",
+            "formula[note.selected]",
+            "note['now()']",
+        ] {
+            assert_eq!(
+                clock_dependency(source, &mut |_| Some(())),
+                Dependency::None,
+                "{source}"
+            );
+        }
+        for source in [
+            "today()",
+            "today().format('YYYY-MM-DD')",
+            "if(note.ready, today(), null)",
+        ] {
+            assert_eq!(
+                clock_dependency(source, &mut |_| Some(())),
+                Dependency::Day,
+                "{source}"
+            );
+        }
+        for source in [
+            "now()",
+            "today() + now()",
+            "date('2024-01-01').relative()",
+            "[1].map(now())",
+            "formula['clock']()",
+            "note['lower']()",
+            "unknown()",
+            "TODAY()",
+        ] {
+            assert_eq!(
+                clock_dependency(source, &mut |_| Some(())),
+                Dependency::Instant,
+                "{source}"
+            );
+        }
+        assert_eq!(clock_dependency("1", &mut |_| None), Dependency::Instant);
+        assert_eq!(
+            clock_dependency("(", &mut |_| Some(())),
+            Dependency::Instant
+        );
+        // Do not weaken the independent optional-answer reuse proof.
+        assert!(!clock_independent("number('2')", &mut |_| Some(())));
+    }
+
+    #[test]
+    fn civil_day_deadlines_handle_short_long_and_non_hour_days() {
+        for (clock, zone, expected, hours) in [
+            (
+                "2024-03-10T05:00:00Z",
+                "America/Toronto",
+                "2024-03-11T04:00:00Z",
+                23.0,
+            ),
+            (
+                "2024-11-03T04:00:00Z",
+                "America/Toronto",
+                "2024-11-04T05:00:00Z",
+                25.0,
+            ),
+            (
+                "2024-10-05T13:30:00Z",
+                "Australia/Lord_Howe",
+                "2024-10-06T13:00:00Z",
+                23.5,
+            ),
+        ] {
+            let (selected, next) = deadline(Dependency::Day, clock, zone);
+            assert_eq!(selected, zone);
+            assert_eq!(next, Some(millis(expected)));
+            assert_eq!(next.unwrap() - millis(clock), (hours * 3_600_000.0) as i64);
+        }
+    }
+
+    #[test]
+    fn civil_day_deadlines_use_gap_end_and_earliest_midnight_fold() {
+        for (clock, zone, expected) in [
+            // Local midnight does not exist: first valid local time is01:00.
+            (
+                "2018-11-03T15:00:00Z",
+                "America/Sao_Paulo",
+                "2018-11-04T03:00:00Z",
+            ),
+            // The entire next civil date was skipped when the date line moved.
+            (
+                "2011-12-29T12:00:00Z",
+                "Pacific/Apia",
+                "2011-12-30T10:00:00Z",
+            ),
+            // Local midnight repeats; select the first future occurrence.
+            (
+                "2024-11-02T12:00:00Z",
+                "America/Havana",
+                "2024-11-03T04:00:00Z",
+            ),
+        ] {
+            assert_eq!(
+                deadline(Dependency::Day, clock, zone).1,
+                Some(millis(expected))
+            );
+        }
+    }
+
+    #[test]
+    fn deadline_capture_canonicalizes_zones_and_preserves_invalid_lazy_inputs() {
+        let clock = "2024-01-01T00:00:00Z";
+        for zone in ["", " UTC ", "utc", "Z", "+00:00", "-00:00"] {
+            assert_eq!(
+                deadline(Dependency::None, clock, zone),
+                ("UTC".into(), None)
+            );
+        }
+        assert_eq!(
+            deadline(Dependency::Day, clock, "+05:30"),
+            ("+05:30".into(), Some(millis("2024-01-01T18:30:00Z")))
+        );
+        assert_eq!(
+            deadline(Dependency::Instant, clock, "UTC").1,
+            Some(millis(clock) + 1_000)
+        );
+        for zone in ["local", "unknown/timezone", "+2147483647:00"] {
+            assert!(
+                refresh_deadline(Dependency::Day, millis(clock), zone, &mut |_| Ok(()))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        assert!(
+            refresh_deadline(Dependency::None, i64::MAX, "UTC", &mut |_| Ok(()))
+                .unwrap()
+                .is_none()
+        );
+        for dependency in [Dependency::Day, Dependency::Instant] {
+            assert_eq!(
+                deadline(dependency, "9999-12-31T23:59:59.999Z", "UTC").1,
+                None
+            );
+        }
+        let cancelled = refresh_deadline(Dependency::Day, millis(clock), "UTC", &mut |_| {
+            Err(ExpressionDiagnostic::new("cancelled", "stop"))
+        })
+        .unwrap_err();
+        assert_eq!(cancelled.code, "cancelled");
+    }
 }
 
 fn constant_member_name(expression: &Expr) -> Option<String> {
@@ -1225,7 +1571,7 @@ impl<'a> Evaluator<'a> {
         Ok(values)
     }
 
-    fn global(&self, name: &str, arguments: &[RuntimeValue]) -> RuntimeValue {
+    fn global(&mut self, name: &str, arguments: &[RuntimeValue]) -> RuntimeValue {
         let first = arguments.first().cloned().unwrap_or(RuntimeValue::Null);
         match name {
             "random" | "file" | "link" | "html" | "image" | "icon" => RuntimeValue::Error(format!(
@@ -1282,7 +1628,12 @@ impl<'a> Evaluator<'a> {
                 RuntimeValue::Null => RuntimeValue::Null,
                 _ => RuntimeValue::Error("type\0Cannot convert value to number".into()),
             },
-            "today" => RuntimeValue::Date(start_of_day(&self.now)),
+            "today" => {
+                let now = self.now.clone();
+                start_of_day(&now, &mut |work| self.charge(work))
+                    .map(RuntimeValue::Date)
+                    .unwrap_or_else(|error| error)
+            }
             _ => RuntimeValue::Error(format!("unknown-function\0Cannot find function \"{name}\"")),
         }
     }
@@ -1494,13 +1845,15 @@ impl<'a> Evaluator<'a> {
     }
 
     fn date_method(
-        &self,
+        &mut self,
         value: &DateValue,
         name: &str,
         arguments: &[RuntimeValue],
     ) -> RuntimeValue {
         match name {
-            "date" => RuntimeValue::Date(start_of_day(value)),
+            "date" => start_of_day(value, &mut |work| self.charge(work))
+                .map(RuntimeValue::Date)
+                .unwrap_or_else(|error| error),
             "format" => try_format_date(
                 value,
                 &arguments.first().map(plain_string).unwrap_or_default(),
@@ -2281,7 +2634,11 @@ fn parse_timezone_offset(value: &str) -> Option<FixedOffset> {
         _ => return None,
     };
     let (hours, minutes) = value.get(1..)?.split_once(':')?;
-    let seconds = sign * (hours.parse::<i32>().ok()? * 3_600 + minutes.parse::<i32>().ok()? * 60);
+    // Keep the existing accepted component spelling, but never let an
+    // untrusted offset overflow before chrono can reject its range.
+    let hours = hours.parse::<i32>().ok()?.checked_mul(3_600)?;
+    let minutes = minutes.parse::<i32>().ok()?.checked_mul(60)?;
+    let seconds = hours.checked_add(minutes)?.checked_mul(sign)?;
     FixedOffset::east_opt(seconds)
 }
 
@@ -2318,13 +2675,231 @@ fn parse_date(value: &str, timezone: &BasesTimezone) -> Option<DateValue> {
     None
 }
 
-fn start_of_day(value: &DateValue) -> DateValue {
+fn civil_day_start(
+    timezone: &BasesTimezone,
+    date: NaiveDate,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<i64, RuntimeValue> {
+    let candidate = timezone.midnight_forward(date, None, check)?;
+    check(1)?;
+    candidate
+        .filter(|millis| timezone.local_datetime(*millis).date() == date)
+        .ok_or_else(|| {
+            RuntimeValue::Error(
+                "invalid-local-time\0Civil date has no representable instant".into(),
+            )
+        })
+}
+
+fn start_of_day(
+    value: &DateValue,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<DateValue, RuntimeValue> {
+    check(1)?;
+    if DateTime::<Utc>::from_timestamp_millis(value.millis).is_none() {
+        return Err(RuntimeValue::Error(
+            "invalid-local-time\0Invalid day-truncation instant".into(),
+        ));
+    }
+    check(1)?;
     let date = value.timezone.local_datetime(value.millis).date();
-    let local = date.and_hms_opt(0, 0, 0).expect("valid midnight");
-    DateValue {
-        millis: value.timezone.millis_from_local(local),
+    let millis = civil_day_start(&value.timezone, date, check)?;
+    Ok(DateValue {
+        millis,
         date_only: true,
         timezone: value.timezone.clone(),
+    })
+}
+
+#[cfg(test)]
+mod civil_day_value_tests {
+    use super::*;
+
+    fn evaluate(
+        source: &str,
+        clock_ms: i64,
+        timezone: &str,
+    ) -> Result<BaseValue, ExpressionDiagnostic> {
+        crate::evaluate_expression(
+            source,
+            &crate::DetachedRecord::default(),
+            &crate::EvaluationOptions {
+                clock_ms,
+                timezone: timezone.into(),
+                ..Default::default()
+            },
+        )
+        .map(|result| result.value)
+    }
+
+    #[test]
+    fn valid_sao_paulo_instant_truncates_to_same_day_after_midnight_gap() {
+        // 2018-11-04T03:30Z is01:30-02; that day's first local instant is01:00.
+        for source in [
+            "today()",
+            "date('2018-11-04T03:30:00Z').date()",
+            "today().date()",
+        ] {
+            assert_eq!(
+                evaluate(source, 1_541_302_200_000, "America/Sao_Paulo").unwrap(),
+                BaseValue::Date {
+                    timestamp: 1_541_300_400_000,
+                    has_time: false
+                },
+                "{source}"
+            );
+        }
+        assert_eq!(
+            evaluate("today().toString()", 1_541_302_200_000, "America/Sao_Paulo").unwrap(),
+            BaseValue::String {
+                value: "2018-11-04".into()
+            }
+        );
+        assert_eq!(
+            evaluate("today() == now()", 1_541_302_200_000, "America/Sao_Paulo").unwrap(),
+            BaseValue::Boolean { value: true }
+        );
+    }
+
+    #[test]
+    fn late_havana_fold_keeps_earliest_midnight_even_when_it_precedes_clock() {
+        // Captured00:30-05 follows both midnights; retain the first,00:00-04.
+        for source in ["today()", "date('2024-11-03T05:30:00Z').date()"] {
+            assert_eq!(
+                evaluate(source, 1_730_611_800_000, "America/Havana").unwrap(),
+                BaseValue::Date {
+                    timestamp: 1_730_606_400_000,
+                    has_time: false
+                },
+                "{source}"
+            );
+        }
+        assert_eq!(
+            evaluate("today().toString()", 1_730_611_800_000, "America/Havana").unwrap(),
+            BaseValue::String {
+                value: "2024-11-03".into()
+            }
+        );
+    }
+
+    #[test]
+    fn skipped_civil_input_and_nonunique_local_arithmetic_keep_strict_policy() {
+        // A valid Apia clock is alreadyDec31; no instant belonged toDec30.
+        assert_eq!(
+            evaluate("today()", 1_325_241_000_000, "Pacific/Apia").unwrap(),
+            BaseValue::Date {
+                timestamp: 1_325_239_200_000,
+                has_time: false
+            }
+        );
+        for (source, zone) in [
+            ("date('2011-12-30')", "Pacific/Apia"),
+            ("date('2018-11-04')", "America/Sao_Paulo"),
+            ("date('2024-11-03')", "America/Havana"),
+            ("date('2024-03-10T02:30:00')", "America/Toronto"),
+            ("date('2024-11-03T01:30:00')", "America/Toronto"),
+        ] {
+            assert_eq!(
+                evaluate(source, 1_541_302_200_000, zone).unwrap(),
+                BaseValue::Null,
+                "{source}"
+            );
+        }
+        assert_eq!(
+            evaluate(
+                "date('2018-11-03') + duration('1d')",
+                1_541_302_200_000,
+                "America/Sao_Paulo"
+            )
+            .unwrap_err()
+            .code,
+            "invalid-local-time"
+        );
+        let record = crate::DetachedRecord {
+            properties: vec![(
+                "plan".into(),
+                crate::PropertyValue::String("2011-12-30".into()),
+            )],
+            property_types: vec![("plan".into(), crate::PropertyType::Date)],
+            ..Default::default()
+        };
+        assert_eq!(
+            crate::evaluate_expression(
+                "plan",
+                &record,
+                &crate::EvaluationOptions {
+                    clock_ms: 1_325_241_000_000,
+                    timezone: "Pacific/Apia".into(),
+                    ..Default::default()
+                }
+            )
+            .unwrap()
+            .value,
+            BaseValue::Null
+        );
+    }
+
+    #[test]
+    fn ordinary_utc_fixed_and_named_day_values_are_preserved() {
+        for (zone, expected) in [
+            ("UTC", 1_705_276_800_000),
+            ("+05:30", 1_705_257_000_000),
+            ("America/Toronto", 1_705_294_800_000),
+        ] {
+            assert_eq!(
+                evaluate("today()", 1_705_314_030_000, zone).unwrap(),
+                BaseValue::Date {
+                    timestamp: expected,
+                    has_time: false
+                },
+                "{zone}"
+            );
+            assert_eq!(
+                evaluate(
+                    "date('2024-01-15T10:20:30Z').date()",
+                    1_705_314_030_000,
+                    zone
+                )
+                .unwrap(),
+                BaseValue::Date {
+                    timestamp: expected,
+                    has_time: false
+                },
+                "{zone}"
+            );
+        }
+    }
+
+    #[test]
+    fn row_day_guard_rejects_skipped_date_but_deadline_can_cross_it() {
+        let zone = BasesTimezone::from_setting(Some("Pacific/Apia")).unwrap();
+        let skipped = NaiveDate::from_ymd_opt(2011, 12, 30).unwrap();
+        let error = civil_day_start(&zone, skipped, &mut |_| Ok(())).unwrap_err();
+        let RuntimeValue::Error(message) = error else {
+            panic!("expected structured error")
+        };
+        assert_eq!(
+            message,
+            "invalid-local-time\0Civil date has no representable instant"
+        );
+        assert_eq!(
+            refresh_deadline(
+                crate::query::BaseClockDependency::Day,
+                1_325_160_000_000,
+                "Pacific/Apia",
+                &mut |_| Ok(())
+            )
+            .unwrap(),
+            Some(("Pacific/Apia".into(), Some(1_325_239_200_000)))
+        );
+        let error = civil_day_start(&zone, skipped, &mut |_| {
+            Err(RuntimeValue::Error("cancelled\0stop".into()))
+        })
+        .unwrap_err();
+        let RuntimeValue::Error(message) = error else {
+            panic!("expected cancellation")
+        };
+        assert_eq!(message, "cancelled\0stop");
     }
 }
 

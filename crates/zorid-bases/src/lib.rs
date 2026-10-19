@@ -20,8 +20,8 @@ pub use program::{
     compile_base, compile_base_source, BaseCompileError, BaseProgram, BASE_COMPILER_VERSION,
 };
 pub use query::{
-    query_base, BaseGroup, BaseQueryResult, BaseRow, BaseSnapshot, GroupOption, QueryCounts,
-    QueryDiagnostic, QueryOptions,
+    query_base, BaseClockDependency, BaseGroup, BaseQueryResult, BaseRefreshHint, BaseRow,
+    BaseSnapshot, GroupOption, QueryCounts, QueryDiagnostic, QueryOptions,
 };
 
 use indexmap::IndexMap;
