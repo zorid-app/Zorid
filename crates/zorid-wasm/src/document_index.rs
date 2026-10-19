@@ -1,6 +1,12 @@
 //! Bounded browser index transport. Persistence and publication remain host-owned.
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeMap,
+    io::{self, Write},
+    rc::Rc,
+    sync::Arc,
+};
 use wasm_bindgen::prelude::*;
 use zorid_core::{EntryId, EntryState};
 use zorid_index::{
@@ -8,6 +14,7 @@ use zorid_index::{
     ContentExtractionOutcome, ContentExtractionResult, EntryWitness, Exclusion, ExtractionDomain,
     ExtractionMode, ExtractionScope, Generation, GenerationBuilder, IndexError, IndexRecord,
     IndexSnapshotId, LiteralPageBuilder, LiteralQuery, LiteralToken, Manifest, MetadataRequest,
+    MetadataRowsError, MetadataRowsMode, MetadataRowsScan, MAX_METADATA_ROWS,
     ParseCacheOutcome, ParseCacheUsage, PersistedIndexRecord, PublicationFence,
     RelationshipDirection, RelationshipToken, ResolutionView, Resolver, SemanticVersions,
     SourceSnapshotId, FACTS_ENCODING_VERSION, INDEX_SCHEMA_VERSION, LITERAL_QUERY_VERSION,
@@ -1527,6 +1534,255 @@ impl WasmDocumentIndexGeneration {
         })
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MetadataRowsBindingError {
+    Contract(MetadataRowsError),
+    InvalidCursor,
+    OutputLimit,
+    Cancelled,
+    Retired,
+    Encoding,
+    CounterLimit,
+}
+impl MetadataRowsBindingError {
+    fn js(self) -> JsValue {
+        let code = match self {
+            Self::Contract(MetadataRowsError::InvalidLimit) => "index_invalid_budget",
+            Self::Contract(MetadataRowsError::ForeignScope) => "index_invalid_target",
+            Self::Contract(MetadataRowsError::ResourceLimit) => "index_generation_limit",
+            Self::Contract(MetadataRowsError::Cancelled) | Self::Cancelled => "index_cancelled",
+            Self::Contract(MetadataRowsError::CheckpointMismatch) | Self::Retired => {
+                "index_snapshot_expired"
+            }
+            Self::Contract(MetadataRowsError::InvalidRecord) => "index_rebuild_required",
+            Self::InvalidCursor => "index_snapshot_expired",
+            Self::OutputLimit => "index_output_limit",
+            Self::Encoding => "index_invalid_record",
+            Self::CounterLimit => "index_token_limit",
+        };
+        error(code)
+    }
+}
+fn metadata_rows_limit(value: f64) -> Result<usize, MetadataRowsBindingError> {
+    if !value.is_finite()
+        || value.fract() != 0.0
+        || !(1.0..=MAX_METADATA_ROWS as f64).contains(&value)
+    {
+        return Err(MetadataRowsBindingError::Contract(
+            MetadataRowsError::InvalidLimit,
+        ));
+    }
+    Ok(value as usize)
+}
+
+/// Unlike the legacy generic encoder, this never allocates an unbounded JSON
+/// response and then checks its length. The complete response is serialized
+/// directly through a checked writer, independently of pure preparation work.
+struct MetadataRowsWriter<'a, F> {
+    bytes: Vec<u8>,
+    limit: usize,
+    check: &'a mut F,
+    failure: Option<MetadataRowsBindingError>,
+}
+impl<F: FnMut() -> bool> Write for MetadataRowsWriter<'_, F> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let failure = if !(self.check)() {
+            Some(MetadataRowsBindingError::Cancelled)
+        } else if bytes.len() > self.limit.saturating_sub(self.bytes.len()) {
+            Some(MetadataRowsBindingError::OutputLimit)
+        } else {
+            None
+        };
+        if let Some(failure) = failure {
+            self.failure = Some(failure);
+            // Interrupted would make Write::write_all retry cancellation.
+            return Err(io::Error::other("metadata response rejected"));
+        }
+        let next = self.bytes.len() + bytes.len();
+        if next > self.bytes.capacity() {
+            let capacity = next
+                .max(self.bytes.capacity().saturating_mul(2).max(4096))
+                .min(self.limit);
+            self.bytes
+                .try_reserve_exact(capacity - self.bytes.len())
+                .map_err(|_| {
+                    self.failure = Some(MetadataRowsBindingError::OutputLimit);
+                    io::Error::other("metadata response allocation rejected")
+                })?;
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+fn encode_metadata_rows_checked(
+    value: &impl Serialize,
+    limit: usize,
+    check: &mut impl FnMut() -> bool,
+) -> Result<String, MetadataRowsBindingError> {
+    if !check() {
+        return Err(MetadataRowsBindingError::Cancelled);
+    }
+    let mut writer = MetadataRowsWriter {
+        bytes: Vec::new(),
+        limit: limit.min(MAX_JSON),
+        check,
+        failure: None,
+    };
+    let result = serde_json::to_writer(&mut writer, value);
+    if let Some(failure) = writer.failure {
+        return Err(failure);
+    }
+    result.map_err(|_| MetadataRowsBindingError::Encoding)?;
+    if !(writer.check)() {
+        return Err(MetadataRowsBindingError::Cancelled);
+    }
+    String::from_utf8(writer.bytes).map_err(|_| MetadataRowsBindingError::Encoding)
+}
+
+/// An immutable-generation scan checkpoint, not a client pin or admission.
+/// The browser owns its existing four actual pins and at most eight opaque
+/// cursor slots. It must validate the destination and used baseline registrations
+/// before preparation and after decoding, then install ONLY the successful fork.
+/// Keeping the original checkpoint makes lost-response retries deterministic;
+/// a failed final pin fence simply drops the private advanced fork.
+#[wasm_bindgen]
+pub struct WasmDocumentMetadataRowsScan {
+    scan: MetadataRowsScan,
+    origin: Rc<()>,
+    ordinal: u64,
+    retired: Rc<Cell<bool>>,
+}
+#[wasm_bindgen]
+impl WasmDocumentMetadataRowsScan {
+    #[wasm_bindgen(constructor)]
+    pub fn new(destination: &WasmDocumentIndexGeneration, limit: f64) -> Result<Self, JsValue> {
+        Self::create(destination, None, limit).map_err(MetadataRowsBindingError::js)
+    }
+    #[wasm_bindgen(js_name=withBaseline)]
+    pub fn with_baseline(
+        destination: &WasmDocumentIndexGeneration,
+        baseline: &WasmDocumentIndexGeneration,
+        limit: f64,
+    ) -> Result<Self, JsValue> {
+        Self::create(destination, Some(baseline), limit).map_err(MetadataRowsBindingError::js)
+    }
+    pub fn fork(&self) -> Result<Self, JsValue> {
+        self.fork_checked().map_err(MetadataRowsBindingError::js)
+    }
+    #[wasm_bindgen(js_name=sameCheckpoint)]
+    pub fn same_checkpoint(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.origin, &other.origin) && self.ordinal == other.ordinal
+    }
+    #[wasm_bindgen(js_name=isNextCheckpointOf)]
+    pub fn is_next_checkpoint_of(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.origin, &other.origin)
+            && other.ordinal.checked_add(1) == Some(self.ordinal)
+    }
+    #[wasm_bindgen(js_name=usesBaseline)]
+    pub fn uses_baseline(&self) -> bool {
+        self.scan.mode() == MetadataRowsMode::Delta
+    }
+    /// next_cursor is the browser registry's opaque continuation, not authority.
+    /// This call advances this PRIVATE fork only after complete bounded encoding.
+    /// A later JS task cannot preempt synchronous WASM execution. The shared
+    /// retirement checks do not claim interruption inside a running call.
+    #[wasm_bindgen(js_name=pageJson)]
+    pub fn page_json(&mut self, next_cursor: &str) -> Result<String, JsValue> {
+        self.page_json_checked(next_cursor, MAX_JSON, &mut || true)
+            .map_err(MetadataRowsBindingError::js)
+    }
+    /// Retiring an owner/pin expires all forked checkpoints from this scan.
+    /// Merely evicting one cursor must free it, not retire surviving checkpoints.
+    pub fn retire(&self) {
+        self.retired.set(true);
+    }
+}
+impl WasmDocumentMetadataRowsScan {
+    fn create(
+        destination: &WasmDocumentIndexGeneration,
+        baseline: Option<&WasmDocumentIndexGeneration>,
+        limit: f64,
+    ) -> Result<Self, MetadataRowsBindingError> {
+        let scan = MetadataRowsScan::new_checked(
+            destination.generation.clone(),
+            baseline.map(|g| g.generation.clone()),
+            metadata_rows_limit(limit)?,
+            &mut || true,
+        )
+        .map_err(MetadataRowsBindingError::Contract)?;
+        Ok(Self {
+            scan,
+            origin: Rc::new(()),
+            ordinal: 0,
+            retired: Rc::new(Cell::new(false)),
+        })
+    }
+    fn fork_checked(&self) -> Result<Self, MetadataRowsBindingError> {
+        if self.retired.get() {
+            return Err(MetadataRowsBindingError::Retired);
+        }
+        Ok(Self {
+            scan: self.scan.clone(),
+            origin: self.origin.clone(),
+            ordinal: self.ordinal,
+            retired: self.retired.clone(),
+        })
+    }
+    fn page_json_checked(
+        &mut self,
+        next_cursor: &str,
+        limit: usize,
+        check: &mut impl FnMut() -> bool,
+    ) -> Result<String, MetadataRowsBindingError> {
+        if self.retired.get() {
+            return Err(MetadataRowsBindingError::Retired);
+        }
+        if next_cursor.is_empty() || next_cursor.len() > 256 {
+            return Err(MetadataRowsBindingError::InvalidCursor);
+        }
+        let ordinal = self
+            .ordinal
+            .checked_add(1)
+            .ok_or(MetadataRowsBindingError::CounterLimit)?;
+        let retired = self.retired.clone();
+        let mut admitted = || !retired.get() && check();
+        let prepared = self
+            .scan
+            .page_checked(&mut admitted)
+            .map_err(MetadataRowsBindingError::Contract)?;
+        #[derive(Serialize)]
+        struct Page<'a> {
+            result: QueryReport<'a, &'a zorid_index::PreparedMetadataRowsPage>,
+            cursor: Option<&'a str>,
+        }
+        let raw = encode_metadata_rows_checked(
+            &Page {
+                result: QueryReport {
+                    snapshot: prepared.snapshot(),
+                    source: prepared.source(),
+                    coverage_complete: prepared.coverage_complete(),
+                    value: &prepared,
+                },
+                cursor: (!prepared.scan_complete()).then_some(next_cursor),
+            },
+            limit,
+            &mut admitted,
+        )?;
+        if !admitted() {
+            return Err(MetadataRowsBindingError::Cancelled);
+        }
+        self.scan
+            .commit_page(prepared)
+            .map_err(MetadataRowsBindingError::Contract)?;
+        self.ordinal = ordinal;
+        Ok(raw)
+    }
+}
+
 #[wasm_bindgen]
 pub struct WasmDocumentLiteralPage {
     page: Option<LiteralPageBuilder<'static>>,
@@ -1583,6 +1839,10 @@ impl WasmDocumentLiteralPage {
 #[cfg(test)]
 #[path = "document_clock_tests.rs"]
 mod document_clock_tests;
+
+#[cfg(test)]
+#[path = "document_metadata_rows_tests.rs"]
+mod document_metadata_rows_tests;
 
 #[cfg(test)]
 mod tests {

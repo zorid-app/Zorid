@@ -1189,3 +1189,129 @@ fn warm_evaluation_rechecks_pin_after_a_real_independent_rebuild_and_owner_reope
     drop(current);
     drop(pin);
 }
+
+#[test]
+fn metadata_rows_use_admitted_facts_without_reading_cache_headers_rows_or_bodies() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let path = cache.path().canonicalize().unwrap().join("cache.sqlite");
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    vault.enable_local_document_cache(&path).unwrap();
+    create(&mut vault, "note", "Note.md", "# Exact retained heading\n");
+    vault.initialize_document_index().unwrap();
+    build(&mut vault);
+    let pin = vault.open_document_snapshot().unwrap();
+    let mut cursor = vault
+        .begin_document_metadata_rows(&pin, None, 32, &mut || true)
+        .unwrap();
+    let before = std::fs::read(dir.path().join("Note.md")).unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        conn.execute(
+            "UPDATE document_index_generations SET record='broken header'",
+            []
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.execute(
+            "UPDATE document_index_rows SET record='broken row',text=x'ff'",
+            []
+        )
+        .unwrap(),
+        1
+    );
+    let page = vault
+        .document_metadata_rows(&pin, None, &cursor, &mut || true)
+        .unwrap();
+    let json = serde_json::to_value(&page).unwrap();
+    assert_eq!(
+        json["value"]["rows"][0]["value"]["metadata"]["headings"][0]["text"],
+        "Exact retained heading"
+    );
+    vault
+        .commit_document_metadata_rows(&pin, None, &mut cursor, page.value, &mut || true)
+        .unwrap();
+    assert_eq!(std::fs::read(dir.path().join("Note.md")).unwrap(), before);
+    // Existing body readers keep their stronger validation and still reject the
+    // corrupted derived header; the new path has not weakened that reader.
+    assert!(vault.document_metadata(&pin, &id("note")).is_err());
+}
+
+#[test]
+fn metadata_rows_bind_actual_pin_arcs_and_retain_old_facts_after_source_advances() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    create(&mut vault, "a", "A.md", "# Old");
+    create(&mut vault, "b", "B.md", "body");
+    vault.initialize_document_index().unwrap();
+    build(&mut vault);
+    let pin = vault.open_document_snapshot().unwrap();
+    let duplicate = vault.open_document_snapshot().unwrap();
+    assert_eq!(pin.generation().id(), duplicate.generation().id());
+    let mut cursor = vault
+        .begin_document_metadata_rows(&pin, None, 1, &mut || true)
+        .unwrap();
+    expect_code(
+        vault.document_metadata_rows(&duplicate, None, &cursor, &mut || true),
+        "query_mismatch",
+    );
+    write(&mut vault, "advance", "a", "# Current");
+    let page = vault
+        .document_metadata_rows(&pin, None, &cursor, &mut || true)
+        .unwrap();
+    assert_eq!(page.value.rows().count(), 1);
+    let json = serde_json::to_value(&page).unwrap();
+    assert_eq!(
+        json["value"]["rows"][0]["value"]["metadata"]["headings"][0]["text"],
+        "Old"
+    );
+    let old = cursor.clone();
+    let mut retry = cursor.clone();
+    let repeated = vault
+        .document_metadata_rows(&pin, None, &retry, &mut || true)
+        .unwrap();
+    vault
+        .commit_document_metadata_rows(&pin, None, &mut cursor, page.value, &mut || true)
+        .unwrap();
+    vault
+        .commit_document_metadata_rows(&pin, None, &mut retry, repeated.value, &mut || true)
+        .unwrap();
+    assert!(cursor == retry && old.has_successor(&cursor) && old != cursor);
+}
+
+#[test]
+fn metadata_rows_cancelled_or_rebuilt_final_fence_does_not_advance_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    create(&mut vault, "a", "A.md", "# heading");
+    vault.initialize_document_index().unwrap();
+    build(&mut vault);
+    let pin = vault.open_document_snapshot().unwrap();
+    let mut cursor = vault
+        .begin_document_metadata_rows(&pin, None, 1, &mut || true)
+        .unwrap();
+    let original = cursor.clone();
+    expect_code(
+        vault.document_metadata_rows(&pin, None, &cursor, &mut || false),
+        "cancelled",
+    );
+    let page = vault
+        .document_metadata_rows(&pin, None, &cursor, &mut || true)
+        .unwrap();
+    expect_code(
+        vault.commit_document_metadata_rows(&pin, None, &mut cursor, page.value, &mut || false),
+        "cancelled",
+    );
+    assert!(cursor == original);
+    let page = vault
+        .document_metadata_rows(&pin, None, &cursor, &mut || true)
+        .unwrap();
+    vault.rebuild_document_index().unwrap();
+    expect_code(
+        vault.commit_document_metadata_rows(&pin, None, &mut cursor, page.value, &mut || true),
+        "snapshot_expired",
+    );
+    assert!(cursor == original);
+}

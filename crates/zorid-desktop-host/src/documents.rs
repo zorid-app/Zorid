@@ -9,8 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use zorid_core::{EntryId, OperationId};
 use zorid_native::{
     DocumentQueryPin, IndexSnapshotId, LiteralQuery, LiteralToken, NativeDocumentError,
-    NativeRichCursor, NativeRichPreparation, NativeRichQuery, NativeVault, QueryOptions,
-    RelationshipToken, RichPageProfile, SearchSpec, TaskFilter, TaskQueryOptions,
+    NativeMetadataRows, NativeRichCursor, NativeRichPreparation, NativeRichQuery, NativeVault,
+    QueryOptions, RelationshipToken, RichPageProfile, SearchSpec, TaskFilter, TaskQueryOptions,
 };
 
 pub(crate) const MAX_REQUEST_BYTES: usize = 64 * 1024;
@@ -72,6 +72,23 @@ enum DocumentCommand {
     Metadata {
         pin_id: OperationId,
         id: EntryId,
+    },
+    MetadataRows {
+        pin_id: OperationId,
+        #[serde(
+            default,
+            deserialize_with = "metadata_baseline",
+            skip_serializing_if = "Option::is_none"
+        )]
+        baseline: Option<MetadataBaseline>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<OperationId>,
+        #[serde(
+            default,
+            deserialize_with = "metadata_limit",
+            skip_serializing_if = "Option::is_none"
+        )]
+        limit: Option<usize>,
     },
     Search {
         pin_id: OperationId,
@@ -256,8 +273,33 @@ fn capture_clock_ms() -> Result<i64, Value> {
         .as_millis();
     safe_clock_ms(i64::try_from(millis).map_err(|_| failure("invalid_clock"))?)
 }
+fn metadata_baseline<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<MetadataBaseline>, D::Error> {
+    MetadataBaseline::deserialize(d).map(Some)
+}
+fn metadata_limit<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<usize>, D::Error> {
+    usize::deserialize(d).map(Some)
+}
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MetadataBaseline {
+    pin_id: OperationId,
+    snapshot: IndexSnapshotId,
+}
+#[derive(Clone, PartialEq, Eq)]
+struct MetadataCursor {
+    // Original request permits exact first-page retries without a second
+    // whole-generation coverage admission. Only effective baseline is fenced.
+    requested: Option<MetadataBaseline>,
+    baseline: Option<MetadataBaseline>,
+    limit: usize,
+    initial: bool,
+    value: NativeMetadataRows,
+}
 #[derive(Clone, PartialEq, Eq)]
 enum Cursor {
+    Metadata(MetadataCursor),
     Search {
         query: String,
         token: LiteralToken,
@@ -453,6 +495,355 @@ struct Paged<T> {
     cursor: Option<OperationId>,
 }
 
+/// Actual encoding has its own complete-envelope byte bound and cancellation
+/// callback. This is separate from the pure pager's2M preparation ledger.
+fn metadata_answer(
+    value: impl Serialize,
+    maximum: usize,
+    check: &mut impl FnMut() -> bool,
+) -> Result<(Value, Vec<u8>), Value> {
+    struct Checked<'a> {
+        bytes: Vec<u8>,
+        maximum: usize,
+        check: &'a mut dyn FnMut() -> bool,
+        cancelled: bool,
+    }
+    impl Write for Checked<'_> {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if !(self.check)() {
+                self.cancelled = true;
+                return Err(io::Error::other("metadata encoding cancelled"));
+            }
+            if self
+                .bytes
+                .len()
+                .checked_add(bytes.len())
+                .is_none_or(|n| n > self.maximum)
+            {
+                return Err(io::Error::other("metadata response limit"));
+            }
+            self.bytes
+                .try_reserve(bytes.len())
+                .map_err(|_| io::Error::other("metadata allocation limit"))?;
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut output = Checked {
+        bytes: Vec::new(),
+        maximum,
+        check,
+        cancelled: false,
+    };
+    if serde_json::to_writer(
+        &mut output,
+        &Response {
+            schema_version: 1,
+            op: "metadata_rows",
+            value,
+        },
+    )
+    .is_err()
+    {
+        return Err(failure(if output.cancelled {
+            "cancelled"
+        } else {
+            "response_limit"
+        }));
+    }
+    if !(output.check)() {
+        return Err(failure("cancelled"));
+    }
+    Ok((
+        json!({"documents":true,"schemaVersion":1,"bytes":output.bytes.len()}),
+        output.bytes,
+    ))
+}
+fn metadata_actual_pins(
+    sessions: &Sessions,
+    client: &OperationId,
+    pin_id: &OperationId,
+    baseline: Option<&MetadataBaseline>,
+) -> Result<(Arc<DocumentQueryPin>, Option<Arc<DocumentQueryPin>>), Value> {
+    let owner = sessions
+        .clients
+        .get(client)
+        .ok_or_else(|| failure("snapshot_expired"))?;
+    let destination = owner
+        .pins
+        .get(pin_id)
+        .ok_or_else(|| failure("snapshot_expired"))?
+        .value
+        .clone();
+    let old = baseline
+        .map(|expected| {
+            let pin = owner
+                .pins
+                .get(&expected.pin_id)
+                .ok_or_else(|| failure("snapshot_expired"))?;
+            if pin.value.generation().id() != &expected.snapshot {
+                return Err(failure("query_mismatch"));
+            }
+            Ok(pin.value.clone())
+        })
+        .transpose()?;
+    Ok((destination, old))
+}
+fn retire_metadata_pin(sessions: &mut Sessions, client: &OperationId, id: &OperationId) {
+    if let Some(owner) = sessions.clients.get_mut(client) {
+        owner.pins.remove(id);
+        for pin in owner.pins.values_mut() {
+            pin.cursors.retain(|_, cursor| {
+                !matches!(cursor,
+                Cursor::Metadata(state) if state.baseline.as_ref().is_some_and(|b| &b.pin_id == id))
+            });
+            pin.cursor_order.retain(|id| pin.cursors.contains_key(id));
+        }
+    }
+}
+fn metadata_rows_checked(
+    vault: &NativeVault,
+    sessions: &mut Sessions,
+    client: &OperationId,
+    pin_id: OperationId,
+    requested: Option<MetadataBaseline>,
+    cursor: Option<OperationId>,
+    limit: Option<usize>,
+    maximum: usize,
+    check: &mut impl FnMut() -> bool,
+) -> Result<(Value, Vec<u8>), Value> {
+    let baseline = if let Some(id) = &cursor {
+        sessions
+            .clients
+            .get(client)
+            .and_then(|c| c.pins.get(&pin_id))
+            .and_then(|p| p.cursors.get(id))
+            .and_then(|entry| match entry {
+                Cursor::Metadata(state) => state.baseline.clone(),
+                _ => None,
+            })
+    } else {
+        requested.clone()
+    };
+    metadata_rows_inner(
+        vault,
+        sessions,
+        client,
+        pin_id.clone(),
+        requested,
+        cursor,
+        limit,
+        maximum,
+        check,
+    )
+    .map_err(|error| {
+        if error["code"] == "snapshot_expired" {
+            // Distinguish a proven expired destination from baseline-only
+            // expiry. Never retire an unrelated still-valid destination.
+            for id in [Some(&pin_id), baseline.as_ref().map(|b| &b.pin_id)]
+                .into_iter()
+                .flatten()
+            {
+                let actual = sessions
+                    .clients
+                    .get(client)
+                    .and_then(|c| c.pins.get(id))
+                    .map(|p| p.value.clone());
+                if actual.as_ref().is_some_and(|p| {
+                    vault
+                        .check_document_metadata_pin_registration(p)
+                        .is_err_and(|e| e.code() == "snapshot_expired")
+                }) {
+                    retire_metadata_pin(sessions, client, id);
+                }
+            }
+        }
+        error
+    })
+}
+fn metadata_rows_inner(
+    vault: &NativeVault,
+    sessions: &mut Sessions,
+    client: &OperationId,
+    pin_id: OperationId,
+    requested: Option<MetadataBaseline>,
+    cursor: Option<OperationId>,
+    limit: Option<usize>,
+    maximum: usize,
+    check: &mut impl FnMut() -> bool,
+) -> Result<(Value, Vec<u8>), Value> {
+    if limit.is_some_and(|n| !(1..=32).contains(&n)) {
+        return Err(failure("invalid_budget"));
+    }
+    if cursor.is_some() && requested.is_some() {
+        return Err(failure("invalid_request"));
+    }
+    let mut state = if let Some(id) = cursor {
+        let pin = pin(sessions, client, &pin_id)?;
+        let state = match pin.cursors.get(&id) {
+            Some(Cursor::Metadata(state)) => state.clone(),
+            Some(_) => return Err(failure("query_mismatch")),
+            None => return Err(failure("cursor_expired")),
+        };
+        if limit.is_some_and(|n| n != state.limit) {
+            return Err(failure("query_mismatch"));
+        }
+        state
+    } else {
+        let (destination, _) = metadata_actual_pins(sessions, client, &pin_id, None)?;
+        vault
+            .check_document_metadata_pin_registration(&destination)
+            .map_err(native)?;
+        let mut effective = None;
+        if let Some(expected) = &requested {
+            if expected.snapshot.local_store_id() != destination.generation().id().local_store_id()
+            {
+                return Err(failure("query_mismatch"));
+            }
+            // IDs belong only to this authenticated client. Unknown IDs cannot
+            // borrow another client's same numeric pin; initial history resets.
+            if let Some(old) = sessions
+                .clients
+                .get(client)
+                .and_then(|c| c.pins.get(&expected.pin_id))
+                .map(|p| p.value.clone())
+            {
+                if old.generation().id() != &expected.snapshot {
+                    return Err(failure("query_mismatch"));
+                }
+                match vault.check_document_metadata_pin_registration(&old) {
+                    Ok(()) => {
+                        // Match the pure factory's compatibility selection before
+                        // looking up an initial retry, including reset profiles.
+                        if old.generation().id().versions()
+                            == destination.generation().id().versions()
+                            && old.generation().id().generation_epoch()
+                                == destination.generation().id().generation_epoch()
+                        {
+                            effective = Some(expected.clone());
+                        }
+                    }
+                    Err(error) if error.code() == "snapshot_expired" => {
+                        retire_metadata_pin(sessions, client, &expected.pin_id)
+                    }
+                    Err(error) => return Err(native(error)),
+                }
+            }
+        }
+        let selected_limit = limit.unwrap_or(32);
+        let cached =
+            pin(sessions, client, &pin_id)?
+                .cursors
+                .values()
+                .find_map(|entry| match entry {
+                    Cursor::Metadata(old)
+                        if old.initial
+                            && old.requested == requested
+                            && old.baseline == effective
+                            && old.limit == selected_limit =>
+                    {
+                        Some(old.clone())
+                    }
+                    _ => None,
+                });
+        if let Some(old) = cached {
+            old
+        } else {
+            let (_, old) = metadata_actual_pins(sessions, client, &pin_id, effective.as_ref())?;
+            let value = vault
+                .begin_document_metadata_rows(&destination, old.as_deref(), selected_limit, check)
+                .map_err(native)?;
+            if !value.uses_baseline() {
+                effective = None;
+            }
+            let state = MetadataCursor {
+                requested,
+                baseline: effective,
+                limit: selected_limit,
+                initial: true,
+                value,
+            };
+            // Retain the unadvanced input checkpoint for first-page retries;
+            // successful page advancement is not installed until after encoding.
+            pin(sessions, client, &pin_id)?.save_cursor(Cursor::Metadata(state.clone()))?;
+            state
+        }
+    };
+    let (destination, baseline) =
+        metadata_actual_pins(sessions, client, &pin_id, state.baseline.as_ref())?;
+    let result = vault
+        .document_metadata_rows(&destination, baseline.as_deref(), &state.value, check)
+        .map_err(native)?;
+    let done = result.value.scan_complete();
+    let next_id = if done {
+        None
+    } else {
+        let pin = pin(sessions, client, &pin_id)?;
+        let existing = pin.cursors.iter().find_map(|(id, entry)| match entry {
+            Cursor::Metadata(old)
+                if !old.initial
+                    && old.baseline == state.baseline
+                    && old.limit == state.limit
+                    && state.value.has_successor(&old.value) =>
+            {
+                Some(id.clone())
+            }
+            _ => None,
+        });
+        Some(match existing {
+            Some(id) => id,
+            None => OperationId::new(format!(
+                "{}-c{}",
+                pin.cursor_prefix,
+                pin.next_cursor
+                    .checked_add(1)
+                    .ok_or_else(|| failure("cursor_capacity"))?
+            ))
+            .map_err(|_| failure("cursor_capacity"))?,
+        })
+    };
+    let encoded = metadata_answer(
+        Paged {
+            result: &result,
+            cursor: next_id.clone(),
+        },
+        maximum,
+        check,
+    )?;
+    // Actual client registrations (not merely matching snapshot labels) still
+    // have to name the same pin allocations after complete response encoding.
+    let (current, old) = metadata_actual_pins(sessions, client, &pin_id, state.baseline.as_ref())?;
+    if !Arc::ptr_eq(&current, &destination)
+        || match (&old, &baseline) {
+            (None, None) => false,
+            (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
+            _ => true,
+        }
+    {
+        return Err(failure("snapshot_expired"));
+    }
+    vault
+        .commit_document_metadata_rows(
+            &destination,
+            baseline.as_deref(),
+            &mut state.value,
+            result.value,
+            check,
+        )
+        .map_err(native)?;
+    if let Some(expected) = next_id {
+        state.initial = false;
+        let actual = pin(sessions, client, &pin_id)?.save_cursor(Cursor::Metadata(state))?;
+        if actual != expected {
+            return Err(failure("cursor_capacity"));
+        }
+    }
+    Ok(encoded)
+}
+
 fn runtime_answer(vault:&mut NativeVault,sessions:&mut Sessions,client:&OperationId,op:&str,command:crate::document_runtime::Command)->Result<(Value,Vec<u8>),Value> {
     let reply=sessions.runtime.execute(vault,client,command)?;
     if reply.rebuilt {for client in sessions.clients.values_mut(){client.pins.clear();}}
@@ -587,8 +978,31 @@ pub(crate) fn execute(
                 if client.pins.remove(&pin_id).is_none() && sequence > client.last_open {
                     return Err(failure("snapshot_expired"));
                 }
+                // Closed history must not remain retained through another
+                // pin's capability-free metadata cursor. At most4*8 slots.
+                for pin in client.pins.values_mut() {
+                    pin.cursors.retain(|_, cursor| !matches!(cursor,
+                        Cursor::Metadata(state) if state.baseline.as_ref().is_some_and(|b| b.pin_id == pin_id)));
+                    pin.cursor_order.retain(|id| pin.cursors.contains_key(id));
+                }
                 answer("close", true)
             }
+            MetadataRows {
+                pin_id,
+                baseline,
+                cursor,
+                limit,
+            } => metadata_rows_checked(
+                vault,
+                sessions,
+                client,
+                pin_id,
+                baseline,
+                cursor,
+                limit,
+                MAX_RESPONSE_BYTES,
+                &mut || true,
+            ),
             Metadata { pin_id, id } => {
                 let pin = pin(sessions, client, &pin_id)?;
                 answer(
@@ -970,10 +1384,10 @@ mod rich_transport_tests {
     use super::*;
     use zorid_core::{EntryKind, Mutation, MutationRequest, VaultPath};
 
-    fn operation(value: &str) -> OperationId {
+    pub(super) fn operation(value: &str) -> OperationId {
         OperationId::new(value).unwrap()
     }
-    fn call(
+    pub(super) fn call(
         vault: &mut NativeVault,
         sessions: &mut Sessions,
         client: &str,
@@ -992,7 +1406,7 @@ mod rich_transport_tests {
     fn spec(query: &str) -> Value {
         json!({"query":query,"caseSensitive":false,"sort":"nameAsc","context":"line","explain":false})
     }
-    fn fixture(documents: usize) -> (tempfile::TempDir, tempfile::TempDir, NativeVault) {
+    pub(super) fn fixture(documents: usize) -> (tempfile::TempDir, tempfile::TempDir, NativeVault) {
         let root = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
         let mut vault = NativeVault::open(root.path()).unwrap();
@@ -1022,7 +1436,7 @@ mod rich_transport_tests {
         }
         panic!("bounded fixture did not publish");
     }
-    fn open(vault: &mut NativeVault, sessions: &mut Sessions, client: &str, pin: &str) {
+    pub(super) fn open(vault: &mut NativeVault, sessions: &mut Sessions, client: &str, pin: &str) {
         call(vault, sessions, client, json!({"op":"open","pinId":pin})).unwrap();
     }
     fn start(vault: &mut NativeVault, sessions: &mut Sessions, client: &str, pin: &str) -> Value {
@@ -1279,6 +1693,351 @@ mod rich_transport_tests {
             native(NativeDocumentError::SearchResource("/private/internal"))
                 .get("details")
                 .is_none()
+        );
+    }
+}
+
+#[cfg(test)]
+mod metadata_rows_transport_tests {
+    use super::rich_transport_tests::{call, fixture, open, operation};
+    use super::*;
+    use zorid_core::{Mutation, MutationRequest};
+    fn decode(reply: (Value, Vec<u8>)) -> Value {
+        assert!(reply.1.len() <= MAX_RESPONSE_BYTES);
+        serde_json::from_slice::<Value>(&reply.1).unwrap()["value"].clone()
+    }
+    fn request(pin: &str, cursor: Option<Value>, limit: Option<usize>) -> Value {
+        let mut value = json!({"op":"metadata_rows","pinId":pin});
+        if let Some(cursor) = cursor {
+            value["cursor"] = cursor;
+        }
+        if let Some(limit) = limit {
+            value["limit"] = json!(limit);
+        }
+        value
+    }
+    fn publish(vault: &mut NativeVault) {
+        let stage = vault.begin_document_index().unwrap();
+        for _ in 0..10 {
+            if vault.pump_document_index(&stage).unwrap().ready {
+                vault.publish_document_index(&stage).unwrap();
+                return;
+            }
+        }
+        panic!("bounded metadata fixture did not publish");
+    }
+    #[test]
+    fn reset_pages_have_exact_retry_handles_and_bounded_unique_rows() {
+        let (_root, _cache, mut vault) = fixture(9);
+        let mut sessions = Sessions::default();
+        open(&mut vault, &mut sessions, "client", "1");
+        let first_request = request("1", None, Some(2));
+        let first = call(&mut vault, &mut sessions, "client", first_request.clone()).unwrap();
+        assert_eq!(
+            first,
+            call(&mut vault, &mut sessions, "client", first_request).unwrap()
+        );
+        assert_eq!(first["result"]["value"]["mode"], "reset");
+        let mut page = first;
+        let mut ids = std::collections::BTreeSet::new();
+        loop {
+            for row in page["result"]["value"]["rows"].as_array().unwrap() {
+                assert!(ids.insert(row["value"]["entry"]["id"].as_str().unwrap().to_owned()));
+            }
+            if page["cursor"].is_null() {
+                break;
+            }
+            let next = request("1", Some(page["cursor"].clone()), None);
+            page = call(&mut vault, &mut sessions, "client", next.clone()).unwrap();
+            assert_eq!(
+                page,
+                call(&mut vault, &mut sessions, "client", next).unwrap()
+            );
+        }
+        assert_eq!(ids.len(), 9);
+        assert!(
+            sessions.clients[&operation("client")].pins[&operation("1")]
+                .cursors
+                .len()
+                <= 8
+        );
+    }
+    #[test]
+    fn delta_uses_actual_baseline_missing_history_resets_and_close_expires_continuation() {
+        let (_root, _cache, mut vault) = fixture(2);
+        let mut sessions = Sessions::default();
+        open(&mut vault, &mut sessions, "client", "1");
+        let old = sessions.clients[&operation("client")].pins[&operation("1")]
+            .value
+            .generation()
+            .id()
+            .clone();
+        let read = vault
+            .read(&EntryId::new("note-0").unwrap())
+            .unwrap()
+            .unwrap();
+        vault
+            .apply(&MutationRequest {
+                operation_id: operation("update"),
+                mutation: Mutation::Write {
+                    id: EntryId::new("note-0").unwrap(),
+                    expected: read.state.revision,
+                    content: b"new metadata\n".to_vec(),
+                },
+            })
+            .unwrap();
+        publish(&mut vault);
+        open(&mut vault, &mut sessions, "client", "2");
+        let mut start = request("2", None, Some(1));
+        start["baseline"] = json!({"pinId":"1","snapshot":old});
+        let first = call(&mut vault, &mut sessions, "client", start.clone()).unwrap();
+        assert_eq!(first["result"]["value"]["mode"], "delta");
+        assert!(!first["cursor"].is_null());
+        let mut bad = request("2", None, None);
+        bad["baseline"] = json!({"pinId":"2","snapshot":old});
+        assert_eq!(
+            call(&mut vault, &mut sessions, "client", bad).unwrap_err()["code"],
+            "query_mismatch"
+        );
+        call(
+            &mut vault,
+            &mut sessions,
+            "client",
+            json!({"op":"close","pinId":"1"}),
+        )
+        .unwrap();
+        assert_eq!(
+            call(
+                &mut vault,
+                &mut sessions,
+                "client",
+                request("2", Some(first["cursor"].clone()), None)
+            )
+            .unwrap_err()["code"],
+            "cursor_expired"
+        );
+        let reset = call(&mut vault, &mut sessions, "client", start).unwrap();
+        assert_eq!(reset["result"]["value"]["mode"], "reset");
+        assert!(reset["result"]["value"]["from"].is_null());
+        // A foreign client's colliding numeric pin is never selected as history.
+        open(&mut vault, &mut sessions, "other", "1");
+        let mut unknown = request("2", None, None);
+        unknown["baseline"] = json!({"pinId":"1","snapshot":old});
+        assert_eq!(
+            call(&mut vault, &mut sessions, "client", unknown).unwrap()["result"]["value"]["mode"],
+            "reset"
+        );
+    }
+    #[test]
+    fn encoding_byte_failure_and_late_cancellation_keep_retry_checkpoint() {
+        let (_root, _cache, mut vault) = fixture(2);
+        let mut sessions = Sessions::default();
+        open(&mut vault, &mut sessions, "client", "1");
+        let args = (operation("client"), operation("1"));
+        assert_eq!(
+            metadata_rows_checked(
+                &vault,
+                &mut sessions,
+                &args.0,
+                args.1.clone(),
+                None,
+                None,
+                Some(1),
+                64,
+                &mut || true
+            )
+            .unwrap_err()["code"],
+            "response_limit"
+        );
+        let expected = decode(
+            metadata_rows_checked(
+                &vault,
+                &mut sessions,
+                &args.0,
+                args.1.clone(),
+                None,
+                None,
+                Some(1),
+                MAX_RESPONSE_BYTES,
+                &mut || true,
+            )
+            .unwrap(),
+        );
+        let mut calls = 0;
+        let repeat = decode(
+            metadata_rows_checked(
+                &vault,
+                &mut sessions,
+                &args.0,
+                args.1.clone(),
+                None,
+                None,
+                Some(1),
+                MAX_RESPONSE_BYTES,
+                &mut || {
+                    calls += 1;
+                    true
+                },
+            )
+            .unwrap(),
+        );
+        assert_eq!(repeat, expected);
+        assert!(calls > 4);
+        let mut seen = 0;
+        assert_eq!(
+            metadata_rows_checked(
+                &vault,
+                &mut sessions,
+                &args.0,
+                args.1.clone(),
+                None,
+                None,
+                Some(1),
+                MAX_RESPONSE_BYTES,
+                &mut || {
+                    seen += 1;
+                    seen != calls - 2
+                }
+            )
+            .unwrap_err()["code"],
+            "cancelled"
+        );
+        assert_eq!(
+            decode(
+                metadata_rows_checked(
+                    &vault,
+                    &mut sessions,
+                    &args.0,
+                    args.1,
+                    None,
+                    None,
+                    Some(1),
+                    MAX_RESPONSE_BYTES,
+                    &mut || true
+                )
+                .unwrap()
+            ),
+            expected
+        );
+    }
+    #[test]
+    fn metadata_shares_four_pin_and_eight_cursor_limits_and_rejects_profile_changes() {
+        for command in [
+            json!({"op":"metadata_rows","pinId":"1","baseline":null}),
+            json!({"op":"metadata_rows","pinId":"1","limit":null}),
+            json!({"op":"metadata_rows","pinId":"1","limit":1.5}),
+            json!({"op":"metadata_rows","pinId":"1","unexpected":true}),
+        ] {
+            assert!(serde_json::from_value::<Request>(
+                json!({"schemaVersion":1,"command":command})
+            )
+            .is_err());
+        }
+        let (_root, _cache, mut vault) = fixture(12);
+        let mut sessions = Sessions::default();
+        for id in ["1", "2", "3", "4"] {
+            open(&mut vault, &mut sessions, "client", id);
+        }
+        assert!(call(
+            &mut vault,
+            &mut sessions,
+            "client",
+            json!({"op":"open","pinId":"5"})
+        )
+        .is_err());
+        let first = call(
+            &mut vault,
+            &mut sessions,
+            "client",
+            request("1", None, Some(1)),
+        )
+        .unwrap();
+        assert_eq!(
+            call(
+                &mut vault,
+                &mut sessions,
+                "client",
+                request("1", Some(first["cursor"].clone()), Some(2))
+            )
+            .unwrap_err()["code"],
+            "query_mismatch"
+        );
+        for limit in 2..=10 {
+            call(
+                &mut vault,
+                &mut sessions,
+                "client",
+                request("1", None, Some(limit)),
+            )
+            .unwrap();
+            assert!(
+                sessions.clients[&operation("client")].pins[&operation("1")]
+                    .cursors
+                    .len()
+                    <= MAX_CURSORS_PER_PIN
+            );
+        }
+        assert_eq!(
+            call(
+                &mut vault,
+                &mut sessions,
+                "client",
+                request("1", Some(first["cursor"].clone()), None)
+            )
+            .unwrap_err()["code"],
+            "cursor_expired"
+        );
+        sessions.release(&operation("client"));
+        assert!(sessions.clients.is_empty());
+        // Pure cursor generation Arcs have not secretly extended the pin count.
+        assert!(vault.open_document_snapshot().is_ok());
+    }
+}
+
+#[cfg(test)]
+mod metadata_rows_expiry_tests {
+    use super::rich_transport_tests::{call, fixture, open, operation};
+    use super::*;
+    #[test]
+    fn independent_rebuild_retires_only_proven_expired_registrations_and_frees_slots() {
+        let (root, cache, mut vault) = fixture(1);
+        let mut sessions = Sessions::default();
+        for id in ["1", "2", "3", "4"] {
+            open(&mut vault, &mut sessions, "client", id);
+        }
+        let mut peer = NativeVault::open_existing(root.path()).unwrap();
+        peer.enable_local_document_cache(cache.path().join("cache.sqlite"))
+            .unwrap();
+        peer.rebuild_document_index().unwrap();
+        for id in ["1", "2", "3", "4"] {
+            let error = call(
+                &mut vault,
+                &mut sessions,
+                "client",
+                json!({"op":"metadata_rows","pinId":id}),
+            )
+            .unwrap_err();
+            assert_eq!(error["code"], "snapshot_expired");
+            assert!(!sessions.clients[&operation("client")]
+                .pins
+                .contains_key(&operation(id)));
+        }
+        let stage = peer.begin_document_index().unwrap();
+        assert!(peer.pump_document_index(&stage).unwrap().ready);
+        peer.publish_document_index(&stage).unwrap();
+        open(&mut vault, &mut sessions, "client", "5");
+        assert_eq!(
+            call(
+                &mut vault,
+                &mut sessions,
+                "client",
+                json!({"op":"metadata_rows","pinId":"5"})
+            )
+            .unwrap()["result"]["value"]["rows"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
         );
     }
 }

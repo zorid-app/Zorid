@@ -275,3 +275,32 @@ pub struct NativeDocumentRuntimeSnapshot {
     pub in_flight: Option<DocumentRuntimeIssuedEffect>,
     pub last_step: Option<NativeDocumentRuntimeStepRecord>,
 }
+
+/// Pure metadata cursor data, sealed to the exact admitted generation Arcs.
+/// Actual pin registration and lifecycle remain with the host. Clones are cheap
+/// retry checkpoints; no DocumentQueryPin capability is retained here.
+#[derive(Clone)]
+pub struct NativeMetadataRows {
+    pub(crate) scan: zorid_index::MetadataRowsScan,
+    pub(crate) destination: std::sync::Arc<zorid_index::Generation>,
+    pub(crate) baseline: Option<std::sync::Arc<zorid_index::Generation>>,
+    pub(crate) checkpoint: std::sync::Arc<()>,
+    pub(crate) next_checkpoint: std::sync::Arc<()>,
+}
+impl PartialEq for NativeMetadataRows {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.checkpoint, &other.checkpoint)
+    }
+}
+impl Eq for NativeMetadataRows {}
+impl NativeMetadataRows {
+    pub fn uses_baseline(&self) -> bool {
+        self.baseline.is_some()
+    }
+    /// O(1) continuation deduplication before encoding. Every clone of this
+    /// checkpoint commits to the same successor identity, without reading facts.
+    pub fn has_successor(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.next_checkpoint, &other.checkpoint)
+    }
+}
+pub use zorid_index::PreparedMetadataRowsPage;

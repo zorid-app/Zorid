@@ -16,6 +16,11 @@ pub use preparation::{
     MAX_PREPARED_GENERATIONS, MAX_PREPARED_GENERATION_BYTES, PREPARATION_IDLE_MS,
 };
 mod query;
+mod preview;
+pub use preview::{
+    query_preview, BasePreviewResult, BasePreviewStatus, CommittedBasePreviewResult,
+    PreviewCountsScope, MAX_PREVIEW_QUERY_OWNED_BYTES,
+};
 pub use program::{
     compile_base, compile_base_source, BaseCompileError, BaseProgram, BASE_COMPILER_VERSION,
 };
@@ -367,6 +372,17 @@ pub(crate) fn with_session<T>(
     relationships: Option<&graph::PreparedRelationships<'_>>,
     run: impl FnOnce(&mut expression::Session<'_>) -> Result<T, ExpressionDiagnostic>,
 ) -> Result<T, ExpressionDiagnostic> {
+    with_session_availability(source, record, options, relationships, None, run)
+}
+
+pub(crate) fn with_session_availability<T>(
+    source: &str,
+    record: &DetachedRecord,
+    options: &EvaluationOptions,
+    relationships: Option<&graph::PreparedRelationships<'_>>,
+    unavailable: Option<&std::collections::HashSet<EntryId>>,
+    run: impl FnOnce(&mut expression::Session<'_>) -> Result<T, ExpressionDiagnostic>,
+) -> Result<T, ExpressionDiagnostic> {
     if options.max_steps == 0 || options.max_steps > MAX_EXPRESSION_STEPS {
         return Err(ExpressionDiagnostic::new(
             "budget",
@@ -403,6 +419,20 @@ pub(crate) fn with_session<T>(
         .transpose()?;
     if let (Some(graph), Some(file)) = (relationships, this_file.as_mut()) {
         graph.attach(file);
+    }
+    // Preview extraction failures are not absent properties. Published callers
+    // keep the existing graph-owned availability behavior by passing None.
+    if let Some(unavailable) = unavailable {
+        file.metadata_unavailable |= record
+            .witness
+            .as_ref()
+            .is_some_and(|w| unavailable.contains(&w.entry_id));
+        if let (Some(current), Some(file)) = (options.current_record.as_ref(), this_file.as_mut()) {
+            file.metadata_unavailable |= current
+                .witness
+                .as_ref()
+                .is_some_and(|w| unavailable.contains(&w.entry_id));
+        }
     }
     let context = expression::BasesEvaluationContext {
         relationships,

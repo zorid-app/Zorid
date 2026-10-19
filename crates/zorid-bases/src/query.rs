@@ -1,9 +1,10 @@
 //! Snapshot query policy around the reused MDBASE expression evaluator. No IO,
-//! callbacks, live vault state or storage ownership enters this reducer.
+//! live vault state or storage ownership enters this reducer. Private callbacks
+//! perform bounded core admission only; they supply no source authority.
 use crate::{
     expression, order,
     program::{self, BaseProgram, Criterion, Filter},
-    with_session, BaseValue, DetachedRecord, EvaluationOptions, ExpressionDiagnostic,
+    with_session_availability, BaseValue, DetachedRecord, EvaluationOptions, ExpressionDiagnostic,
     PropertyValue,
 };
 use serde::{Deserialize, Serialize};
@@ -190,6 +191,253 @@ pub struct BaseQueryResult {
     pub refresh_hint: Option<BaseRefreshHint>,
 }
 
+/// Private borrowed reducer input. A preview has no fabricated snapshot identity.
+pub(crate) struct QueryRows<'a> {
+    pub(crate) records: &'a [DetachedRecord],
+    pub(crate) relationships: Option<&'a zorid_index::ResolutionSnapshot>,
+    pub(crate) metadata_issues: &'a [crate::MetadataIssue],
+    pub(crate) unavailable: Option<&'a HashSet<crate::EntryId>>,
+}
+impl<'a> QueryRows<'a> {
+    fn published(snapshot: &'a BaseSnapshot) -> Self {
+        Self {
+            records: &snapshot.records,
+            relationships: snapshot.relationships.as_ref(),
+            metadata_issues: &snapshot.metadata_issues,
+            unavailable: None,
+        }
+    }
+}
+#[derive(Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct QueryRowsResult {
+    pub(crate) view: PropertyValue,
+    pub(crate) rows: Vec<BaseRow>,
+    pub(crate) groups: Vec<BaseGroup>,
+    pub(crate) group_options: Vec<GroupOption>,
+    pub(crate) properties: Vec<String>,
+    pub(crate) available_properties: Vec<String>,
+    pub(crate) counts: QueryCounts,
+    pub(crate) diagnostics: Vec<QueryDiagnostic>,
+    pub(crate) steps_used: usize,
+    pub(crate) relationships_available: bool,
+    pub(crate) metadata_issues: Vec<crate::MetadataIssue>,
+    pub(crate) metadata_complete: bool,
+    pub(crate) refresh_hint: Option<BaseRefreshHint>,
+}
+
+type Admission<'a> = Option<&'a mut crate::preview::PreviewAdmission>;
+fn admit(
+    admission: &mut Admission<'_>,
+    bytes: impl FnOnce(&mut crate::preview::PreviewAdmission) -> Result<usize, ExpressionDiagnostic>,
+) -> Result<(), ExpressionDiagnostic> {
+    if let Some(admission) = admission.as_deref_mut() {
+        let bytes = bytes(admission)?;
+        admission.charge(bytes)?;
+    }
+    Ok(())
+}
+fn slots<T>(count: usize) -> usize {
+    if count == 0 {
+        return 0;
+    }
+    count
+        .max(4)
+        .saturating_mul(std::mem::size_of::<T>())
+        .saturating_mul(2)
+}
+fn map_slot<K, V>() -> usize {
+    std::mem::size_of::<(K, V)>()
+        .saturating_mul(16)
+        .saturating_add(64)
+}
+fn string_copies<'a>(
+    values: impl IntoIterator<Item = &'a str>,
+    admission: &mut crate::preview::PreviewAdmission,
+) -> Result<usize, ExpressionDiagnostic> {
+    let mut bytes = 0usize;
+    for value in values {
+        admission.charge(0)?;
+        bytes = bytes.saturating_add(crate::preview::string_bytes(value));
+        admission.estimate_fits(bytes)?;
+    }
+    Ok(bytes)
+}
+fn admission_work(admission: &Admission<'_>) -> usize {
+    admission
+        .as_deref()
+        .map_or(0, crate::preview::PreviewAdmission::work_used)
+}
+fn check_query_work(
+    steps: usize,
+    admission: &Admission<'_>,
+    options: &QueryOptions,
+    message: &str,
+) -> Result<(), ExpressionDiagnostic> {
+    if steps.saturating_add(admission_work(admission)) > options.max_steps {
+        return Err(ExpressionDiagnostic::new("budget", message));
+    }
+    Ok(())
+}
+fn canonical_admission(
+    value: &BaseValue,
+    admission: &mut Admission<'_>,
+) -> Result<(), ExpressionDiagnostic> {
+    admit(admission, |admission| {
+        admission.charge(0)?;
+        // Normalization clones the typed value before writing JSON. Its encoded
+        // form cannot grow when negative zero and object order are normalized.
+        let value_bytes = crate::preview::value_bytes(value, admission)?;
+        let encoded = crate::encoded_size(value, crate::MAX_BASE_REQUEST_BYTES)?;
+        Ok(value_bytes
+            .saturating_add(crate::preview::string_bytes(""))
+            .saturating_add(encoded.saturating_mul(2))
+            .saturating_add(128))
+    })
+}
+fn key_id_admission(
+    value: &BaseValue,
+    admission: &mut Admission<'_>,
+) -> Result<(), ExpressionDiagnostic> {
+    canonical_admission(value, admission)?;
+    admit(admission, |admission| {
+        admission.charge(0)?;
+        Ok(crate::encoded_size(value, crate::MAX_BASE_REQUEST_BYTES)?
+            .saturating_mul(2)
+            .saturating_add(128))
+    })
+}
+fn group_value<'a>(view: &program::View, row: &'a BaseRow, null: &'a BaseValue) -> &'a BaseValue {
+    view.group
+        .as_ref()
+        .and_then(|group| row.values.get(&group.property))
+        .unwrap_or(null)
+}
+// A shape-only upper bound for the existing display implementation and its
+// intermediate string/list/map copies. This never interprets expression syntax
+// or substitutes a second renderer. JSON string escaping grows at most sixfold.
+fn display_copy_bytes(
+    value: &BaseValue,
+    depth: usize,
+    admission: &mut crate::preview::PreviewAdmission,
+) -> Result<usize, ExpressionDiagnostic> {
+    admission.charge(0)?;
+    if depth > 128 {
+        return Err(ExpressionDiagnostic::new(
+            "budget",
+            "Preview display nesting exceeds limit",
+        ));
+    }
+    let bytes = match value {
+        BaseValue::String { value } => crate::preview::string_bytes(value),
+        BaseValue::File { path } | BaseValue::Link { path, .. } => {
+            crate::preview::string_bytes(path)
+        }
+        BaseValue::Error { message, .. } => {
+            crate::preview::string_bytes(message).saturating_add(16)
+        }
+        BaseValue::List { value } => {
+            let mut bytes = slots::<String>(value.len()).saturating_add(128);
+            admission.estimate_fits(bytes)?;
+            for child in value {
+                bytes = bytes.saturating_add(
+                    display_copy_bytes(child, depth + 1, admission)?.saturating_mul(2),
+                );
+                admission.estimate_fits(bytes)?;
+            }
+            bytes.saturating_add(value.len().saturating_mul(2))
+        }
+        BaseValue::Object { value } => {
+            let mut bytes =
+                128usize.saturating_add(value.len().saturating_mul(map_slot::<String, String>()));
+            admission.estimate_fits(bytes)?;
+            for (key, child) in value {
+                bytes = bytes.saturating_add(crate::preview::string_bytes(key).saturating_mul(8));
+                admission.estimate_fits(bytes)?;
+                bytes = bytes.saturating_add(
+                    display_copy_bytes(child, depth + 1, admission)?.saturating_mul(8),
+                );
+                admission.estimate_fits(bytes)?;
+            }
+            bytes
+        }
+        BaseValue::Duration { .. } => {
+            crate::preview::value_bytes(value, admission)?.saturating_add(8_192)
+        }
+        // Finite number display (including tiny/large decimal spellings), bool,
+        // null and bounded date formatting fit this conservative scalar reserve.
+        _ => 1_024,
+    };
+    admission.estimate_fits(bytes)?;
+    Ok(bytes)
+}
+
+// Shape-only bound for one side of order::compare. The comparator's temporary
+// buffers are reclaimed between comparisons, so callers reserve the maximum
+// simultaneous pair once per sort, rather than charging every comparison.
+fn comparator_side_scratch(
+    value: &BaseValue,
+    depth: usize,
+    admission: &mut crate::preview::PreviewAdmission,
+) -> Result<usize, ExpressionDiagnostic> {
+    admission.charge(0)?;
+    if depth > 128 {
+        return Err(ExpressionDiagnostic::new(
+            "budget",
+            "Preview comparator nesting exceeds limit",
+        ));
+    }
+    let bytes = match value {
+        BaseValue::String { value } => lowercase_scratch(value),
+        BaseValue::File { path } | BaseValue::Link { path, .. } => lowercase_scratch(path),
+        BaseValue::List { value } => {
+            let mut maximum = 0;
+            for child in value {
+                maximum = maximum.max(comparator_side_scratch(child, depth + 1, admission)?);
+                admission.estimate_fits(maximum)?;
+            }
+            maximum
+        }
+        BaseValue::Object { value } => {
+            let references = slots::<&(String, BaseValue)>(value.len())
+                .saturating_add(std::mem::size_of::<Vec<&(String, BaseValue)>>());
+            let sort_scratch = slots::<&(String, BaseValue)>(value.len());
+            admission.estimate_fits(references.saturating_add(sort_scratch))?;
+            let mut nested = 0;
+            for (_, child) in value {
+                nested = nested.max(comparator_side_scratch(child, depth + 1, admission)?);
+                admission.estimate_fits(references.saturating_add(sort_scratch.max(nested)))?;
+            }
+            // Parent reference vectors survive while a nested pair is compared.
+            // Their key-only sorts need no lowercase buffers and finish first.
+            references.saturating_add(sort_scratch.max(nested))
+        }
+        _ => 0,
+    };
+    admission.estimate_fits(bytes)?;
+    Ok(bytes)
+}
+fn lowercase_scratch(value: &str) -> usize {
+    // Up to three lowercase scalars per input scalar, each four bytes:12xUTF8
+    // payload. slots adds explicit2xgrowth plus minimum Vec capacity; retain its
+    // header too. This deliberately exceeds the Unicode-specific common case.
+    slots::<char>(value.len().saturating_mul(3)).saturating_add(std::mem::size_of::<Vec<char>>())
+}
+fn comparator_scratch_admission<'a>(
+    values: impl IntoIterator<Item = &'a BaseValue>,
+    admission: &mut Admission<'_>,
+) -> Result<(), ExpressionDiagnostic> {
+    if let Some(admission) = admission.as_deref_mut() {
+        let mut maximum = 0;
+        for value in values {
+            maximum = maximum.max(comparator_side_scratch(value, 0, admission)?);
+            admission.estimate_fits(maximum.saturating_mul(2))?;
+        }
+        admission.charge(maximum.saturating_mul(2))?;
+    }
+    Ok(())
+}
+
 const FILE_PROPERTIES: &[&str] = &[
     "file.file",
     "file.name",
@@ -252,7 +500,27 @@ fn report(
     phase: &str,
     property: Option<&str>,
     error: ExpressionDiagnostic,
-) {
+    admission: &mut Admission<'_>,
+) -> Result<(), ExpressionDiagnostic> {
+    admit(admission, |admission| {
+        admission.charge(0)?;
+        Ok(slots::<QueryDiagnostic>(1).saturating_add(string_copies(
+            [
+                phase,
+                record
+                    .witness
+                    .as_ref()
+                    .expect("validated witness")
+                    .entry_id
+                    .as_str(),
+                &record.path,
+                property.unwrap_or(""),
+                &error.code,
+                &error.message,
+            ],
+            admission,
+        )?))
+    })?;
     let diagnostic = QueryDiagnostic {
         phase: phase.into(),
         entry_id: record
@@ -269,6 +537,7 @@ fn report(
     // Each unique entry/property is evaluated once per phase; no quadratic
     // whole-vector de-duplication is needed.
     diagnostics.push(diagnostic);
+    Ok(())
 }
 fn fatal(error: &ExpressionDiagnostic) -> bool {
     ["budget", "cancelled"].contains(&error.code.as_str())
@@ -363,12 +632,16 @@ pub(crate) fn prepare_snapshot(
     snapshot: &BaseSnapshot,
     options: &QueryOptions,
 ) -> Result<QueryPreparation, ExpressionDiagnostic> {
+    prepare_rows(&QueryRows::published(snapshot), options, None)
+}
+pub(crate) fn prepare_rows(
+    input: &QueryRows<'_>,
+    options: &QueryOptions,
+    mut admission: Admission<'_>,
+) -> Result<QueryPreparation, ExpressionDiagnostic> {
     let budget = |message: &str| ExpressionDiagnostic::new("budget", message);
-    let graph_work = snapshot
-        .relationships
-        .as_ref()
-        .map_or(0, |graph| graph.edges().len());
-    if graph_work > options.max_steps {
+    let graph_work = input.relationships.map_or(0, |graph| graph.edges().len());
+    if graph_work.saturating_add(admission_work(&admission)) > options.max_steps {
         return Err(budget("Relationships exceed query work budget"));
     }
     let mut graph_preparation = 0usize;
@@ -382,24 +655,29 @@ pub(crate) fn prepare_snapshot(
             return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
         }
         graph_preparation = graph_preparation.saturating_add(work);
-        if graph_preparation > options.max_steps {
+        if graph_preparation.saturating_add(admission_work(&admission)) > options.max_steps {
             return Err(budget("Relationship preparation exceeds query work budget"));
         }
         Ok(())
     };
-    let relationships = snapshot
+    let relationships = input
         .relationships
-        .as_ref()
         .map(|graph| {
-            crate::graph::OwnedRelationships::new(graph, &snapshot.metadata_issues, &mut check)
+            crate::graph::OwnedRelationships::new(graph, input.metadata_issues, &mut check)
         })
         .transpose()?;
-    let relationship_available = snapshot
-        .relationships
-        .as_ref()
-        .is_some_and(|graph| graph.complete());
+    let relationship_available = input.relationships.is_some_and(|graph| graph.complete());
     let mut discovery = 0usize;
     let mut preparation_work = graph_preparation;
+    admit(&mut admission, |admission| {
+        admission.charge(0)?;
+        Ok(slots::<String>(FILE_PROPERTIES.len() + 3)
+            .saturating_add(string_copies(FILE_PROPERTIES.iter().copied(), admission)?)
+            .saturating_add(string_copies(
+                ["file.links", "file.embeds", "file.backlinks"],
+                admission,
+            )?))
+    })?;
     let mut available = FILE_PROPERTIES
         .iter()
         .map(|value| value.to_string())
@@ -407,8 +685,17 @@ pub(crate) fn prepare_snapshot(
     if relationship_available {
         available.extend(["file.links", "file.embeds", "file.backlinks"].map(String::from));
     }
+    admit(&mut admission, |admission| {
+        admission.charge(0)?;
+        Ok(available
+            .iter()
+            .map(|value| {
+                map_slot::<String, ()>().saturating_add(crate::preview::string_bytes(value))
+            })
+            .fold(0usize, usize::saturating_add))
+    })?;
     let mut available_set = available.iter().cloned().collect::<HashSet<_>>();
-    for record in &snapshot.records {
+    for record in input.records {
         if options
             .evaluation
             .cancellation
@@ -420,7 +707,7 @@ pub(crate) fn prepare_snapshot(
         preparation_work = preparation_work.saturating_add(
             record.properties.len() + record.property_types.len() + record.tags.len() + 1,
         );
-        if preparation_work > options.max_steps {
+        if preparation_work.saturating_add(admission_work(&admission)) > options.max_steps {
             return Err(budget("Property discovery exceeds query work budget"));
         }
         for (key, _) in &record.properties {
@@ -428,11 +715,24 @@ pub(crate) fn prepare_snapshot(
             if discovery > crate::MAX_BASE_REQUEST_BYTES {
                 return Err(budget("Property discovery exceeds byte budget"));
             }
+            admit(&mut admission, |admission| {
+                admission.charge(0)?;
+                Ok(slots::<String>(1)
+                    .saturating_add(map_slot::<String, ()>())
+                    .saturating_add(crate::preview::string_bytes(key).saturating_mul(2))
+                    .saturating_add(32))
+            })?;
             let property = format!("note.{key}");
             if available_set.insert(property.clone()) {
                 available.push(property);
             }
         }
+        check_query_work(
+            preparation_work,
+            &admission,
+            options,
+            "Property discovery exceeds query work budget",
+        )?;
     }
     Ok(QueryPreparation {
         snapshot_bytes: None,
@@ -443,9 +743,12 @@ pub(crate) fn prepare_snapshot(
 }
 
 pub(crate) fn validate_snapshot_rows(snapshot: &BaseSnapshot) -> Result<(), ExpressionDiagnostic> {
+    validate_record_rows(&snapshot.records)
+}
+fn validate_record_rows(records: &[DetachedRecord]) -> Result<(), ExpressionDiagnostic> {
     let mut ids = HashSet::new();
     let mut paths = HashSet::new();
-    for record in &snapshot.records {
+    for record in records {
         let witness = record.witness.as_ref().ok_or_else(|| {
             ExpressionDiagnostic::new("input", "Query records require an entry/revision witness")
         })?;
@@ -510,6 +813,25 @@ pub(crate) fn validate_invocation(
     options: &QueryOptions,
     prepared: Option<&QueryPreparation>,
 ) -> Result<ValidatedInvocation, ExpressionDiagnostic> {
+    validate_rows_invocation(
+        program,
+        &QueryRows::published(snapshot),
+        options,
+        prepared,
+        |options| {
+            request_size(snapshot, options, prepared.and_then(|p| p.snapshot_bytes)).map(|_| ())
+        },
+        None,
+    )
+}
+pub(crate) fn validate_rows_invocation(
+    program: &BaseProgram,
+    input: &QueryRows<'_>,
+    options: &QueryOptions,
+    prepared: Option<&QueryPreparation>,
+    mut request_size: impl FnMut(&QueryOptions) -> Result<(), ExpressionDiagnostic>,
+    mut admission: Admission<'_>,
+) -> Result<ValidatedInvocation, ExpressionDiagnostic> {
     let budget = |message: &str| ExpressionDiagnostic::new("budget", message);
     if options.max_steps == 0
         || options.max_steps > MAX_QUERY_STEPS
@@ -521,22 +843,28 @@ pub(crate) fn validate_invocation(
         return Err(budget("Query ceilings exceed supported maximum"));
     }
 
-    request_size(snapshot, options, prepared.and_then(|p| p.snapshot_bytes))?;
+    request_size(options)?;
     program
         .views
         .get(options.view_index)
         .ok_or_else(|| ExpressionDiagnostic::new("configuration", "View index out of range"))?;
-    if snapshot.records.len() > options.max_scanned {
+    if input.records.len() > options.max_scanned {
         return Err(budget("Snapshot exceeds scanned-record budget"));
     }
     if options.search_terms.iter().map(String::len).sum::<usize>() > 65_536 {
         return Err(budget("Search terms exceed byte budget"));
     }
     if prepared.and_then(|p| p.snapshot_bytes).is_none() {
-        validate_snapshot_rows(snapshot)?;
+        admit(&mut admission, |admission| {
+            admission.charge(0)?;
+            Ok(input.records.len().saturating_mul(
+                map_slot::<&crate::EntryId, ()>().saturating_add(map_slot::<&String, ()>()),
+            ))
+        })?;
+        validate_record_rows(input.records)?;
     }
     let selected_current = options.current_entry_id.as_ref().and_then(|id| {
-        snapshot
+        input
             .records
             .iter()
             .find(|record| record.witness.as_ref().is_some_and(|w| &w.entry_id == id))
@@ -556,9 +884,14 @@ pub(crate) fn validate_invocation(
                 "Current record conflicts with selected entry",
             ));
         }
+        admit(&mut admission, |admission| {
+            admission.charge(0)?;
+            Ok(crate::preview::options_bytes(options, admission)?
+                .saturating_add(crate::preview::record_bytes(current, admission)?))
+        })?;
         let mut selected = options.clone();
         selected.evaluation.current_record = Some(current.clone());
-        request_size(snapshot, &selected, prepared.and_then(|p| p.snapshot_bytes))?;
+        request_size(&selected)?;
         Some(selected)
     } else {
         None
@@ -568,7 +901,7 @@ pub(crate) fn validate_invocation(
         let witness = current.witness.as_ref().ok_or_else(|| {
             ExpressionDiagnostic::new("input", "Current query record requires a witness")
         })?;
-        if !snapshot
+        if !input
             .records
             .iter()
             .any(|row| row.witness.as_ref() == Some(witness) && row == current)
@@ -589,6 +922,44 @@ pub(crate) fn query_base_validated(
     validated: &ValidatedInvocation,
     clock_sensitive_sort: &mut bool,
 ) -> Result<BaseQueryResult, ExpressionDiagnostic> {
+    let rows = query_rows_validated(
+        program,
+        &QueryRows::published(snapshot),
+        options,
+        prepared,
+        validated,
+        clock_sensitive_sort,
+        None,
+    )?;
+    let result = BaseQueryResult {
+        snapshot_id: snapshot.snapshot_id.clone(),
+        view: rows.view,
+        rows: rows.rows,
+        groups: rows.groups,
+        group_options: rows.group_options,
+        properties: rows.properties,
+        available_properties: rows.available_properties,
+        counts: rows.counts,
+        diagnostics: rows.diagnostics,
+        steps_used: rows.steps_used,
+        relationships_available: rows.relationships_available,
+        metadata_issues: rows.metadata_issues,
+        metadata_complete: rows.metadata_complete,
+        refresh_hint: rows.refresh_hint,
+    };
+    let options = validated.selected_options.as_ref().unwrap_or(options);
+    crate::encoded_size(&result, options.max_output_bytes)?;
+    Ok(result)
+}
+pub(crate) fn query_rows_validated(
+    program: &BaseProgram,
+    input: &QueryRows<'_>,
+    options: &QueryOptions,
+    prepared: Option<&QueryPreparation>,
+    validated: &ValidatedInvocation,
+    clock_sensitive_sort: &mut bool,
+    mut admission: Admission<'_>,
+) -> Result<QueryRowsResult, ExpressionDiagnostic> {
     let budget = |message: &str| ExpressionDiagnostic::new("budget", message);
     let options = validated.selected_options.as_ref().unwrap_or(options);
     let view = program
@@ -599,7 +970,7 @@ pub(crate) fn query_base_validated(
     let (prepared, preparation_work) = if let Some(prepared) = prepared {
         (prepared, 0)
     } else {
-        owned = prepare_snapshot(snapshot, options)?;
+        owned = prepare_rows(input, options, admission.as_deref_mut())?;
         let work = owned.work_used;
         (&owned, work)
     };
@@ -608,116 +979,252 @@ pub(crate) fn query_base_validated(
         .as_ref()
         .map(crate::graph::PreparedRelationships::borrowed);
     let relationship_available = relationships.as_ref().is_some_and(|graph| graph.complete());
+    admit(&mut admission, |admission| {
+        admission.charge(0)?;
+        Ok(
+            slots::<String>(prepared.available.len()).saturating_add(string_copies(
+                prepared.available.iter().map(String::as_str),
+                admission,
+            )?),
+        )
+    })?;
     let mut available = prepared.available.clone();
     let mut counts = QueryCounts {
-        scanned: snapshot.records.len(),
+        scanned: input.records.len(),
         ..Default::default()
     };
     for (name, _) in &program.formulas {
+        admit(&mut admission, |admission| {
+            admission.charge(0)?;
+            Ok(slots::<String>(1)
+                .saturating_add(crate::preview::string_bytes(name))
+                .saturating_add(32))
+        })?;
         available.push(format!("formula.{name}"));
     }
+    admit(&mut admission, |admission| {
+        admission.charge(0)?;
+        Ok(
+            slots::<String>(view.order.len()).saturating_add(string_copies(
+                view.order.iter().map(String::as_str),
+                admission,
+            )?),
+        )
+    })?;
     let properties = view
         .order
         .iter()
         .filter(|property| property.starts_with("note.") || available.contains(property))
         .cloned()
         .collect::<Vec<_>>();
+    admit(&mut admission, |admission| {
+        admission.charge(0)?;
+        Ok(available
+            .iter()
+            .chain(properties.iter())
+            .map(|value| {
+                map_slot::<String, ()>().saturating_add(crate::preview::string_bytes(value))
+            })
+            .fold(0usize, usize::saturating_add))
+    })?;
     let mut needed = available
         .iter()
         .chain(properties.iter())
         .cloned()
         .collect::<BTreeSet<_>>();
     if let Some(group) = &view.group {
+        admit(&mut admission, |admission| {
+            admission.charge(0)?;
+            Ok(map_slot::<String, ()>()
+                .saturating_add(crate::preview::string_bytes(&group.property)))
+        })?;
         needed.insert(group.property.clone());
     }
     for sort in &view.sort {
+        admit(&mut admission, |admission| {
+            admission.charge(0)?;
+            Ok(map_slot::<String, ()>()
+                .saturating_add(crate::preview::string_bytes(&sort.property)))
+        })?;
         needed.insert(sort.property.clone());
     }
     if let Some(image) = program::get(&view.configuration, "image").and_then(program::text) {
+        admit(&mut admission, |admission| {
+            admission.charge(0)?;
+            Ok(map_slot::<String, ()>()
+                .saturating_add(crate::preview::string_bytes(image))
+                .saturating_add(32))
+        })?;
         needed.insert(program::property_id(image));
     }
     let mut diagnostics = Vec::new();
     let mut rows = Vec::new();
     let mut steps_used = preparation_work;
     let mut retained_bytes = 0usize;
+    admit(&mut admission, |admission| {
+        admission.charge(0)?;
+        Ok(options
+            .ignore_paths
+            .len()
+            .saturating_mul(map_slot::<&String, ()>()))
+    })?;
     let ignored = options.ignore_paths.iter().collect::<HashSet<_>>();
-    for record in &snapshot.records {
+    for record in input.records {
         if ignored.contains(&record.path) {
             continue;
         }
         let mut invocation = options.evaluation.clone();
         invocation.formulas = program.formulas.clone();
-        invocation.max_steps = invocation
-            .max_steps
-            .min(options.max_steps.saturating_sub(steps_used));
-        let row = with_session("", record, &invocation, relationships.as_ref(), |session| {
-            let filtered = (|| {
-                for filter in [program.filter.as_ref(), view.filter.as_ref()]
-                    .into_iter()
-                    .flatten()
-                {
-                    if !filter_matches(filter, session)? {
-                        return Ok(false);
+        invocation.max_steps = invocation.max_steps.min(
+            options
+                .max_steps
+                .saturating_sub(steps_used)
+                .saturating_sub(admission_work(&admission)),
+        );
+        let row = with_session_availability(
+            "",
+            record,
+            &invocation,
+            relationships.as_ref(),
+            input.unavailable,
+            |session| {
+                let filtered = (|| {
+                    for filter in [program.filter.as_ref(), view.filter.as_ref()]
+                        .into_iter()
+                        .flatten()
+                    {
+                        if !filter_matches(filter, session)? {
+                            return Ok(false);
+                        }
                     }
-                }
-                Ok(true)
-            })();
-            let included = match filtered {
-                Ok(value) => value,
-                Err(error) => {
-                    if fatal(&error) {
-                        return Err(error);
-                    }
-                    report(&mut diagnostics, record, "filter", None, error);
-                    false
-                }
-            };
-            if !included {
-                steps_used = steps_used.saturating_add(session.steps_used());
-                return Ok(None);
-            }
-            let mut values = BTreeMap::new();
-            for property in &needed {
-                let value = match session.evaluate(&value_expression(property)) {
+                    Ok(true)
+                })();
+                let included = match filtered {
                     Ok(value) => value,
                     Err(error) => {
                         if fatal(&error) {
                             return Err(error);
                         }
-                        let value = BaseValue::Error {
-                            code: error.code.clone(),
-                            message: error.message.clone(),
-                        };
-                        report(&mut diagnostics, record, "value", Some(property), error);
-                        value
+                        report(
+                            &mut diagnostics,
+                            record,
+                            "filter",
+                            None,
+                            error,
+                            &mut admission,
+                        )?;
+                        false
                     }
                 };
-                values.insert(property.clone(), value);
-            }
-            steps_used = steps_used.saturating_add(session.steps_used());
-            Ok(Some(BaseRow {
-                entry_id: record
-                    .witness
-                    .as_ref()
-                    .expect("query witness validated")
-                    .entry_id
-                    .clone(),
-                revision: record
-                    .witness
-                    .as_ref()
-                    .expect("query witness validated")
-                    .revision
-                    .clone(),
-                path: record.path.clone(),
-                values,
-            }))
-        })?;
+                if !included {
+                    steps_used = steps_used.saturating_add(session.steps_used());
+                    return Ok(None);
+                }
+                let mut values = BTreeMap::new();
+                for property in &needed {
+                    check_query_work(
+                        steps_used.saturating_add(session.steps_used()),
+                        &admission,
+                        options,
+                        "Preview admission exceeds query work budget",
+                    )?;
+                    admit(&mut admission, |admission| {
+                        admission.charge(0)?;
+                        Ok(crate::preview::string_bytes(property)
+                            .saturating_mul(24)
+                            .saturating_add(256))
+                    })?;
+                    let value = match session.evaluate(&value_expression(property)) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            if fatal(&error) {
+                                return Err(error);
+                            }
+                            admit(&mut admission, |admission| {
+                                admission.charge(0)?;
+                                Ok(string_copies(
+                                    [error.code.as_str(), error.message.as_str()],
+                                    admission,
+                                )?)
+                            })?;
+                            let value = BaseValue::Error {
+                                code: error.code.clone(),
+                                message: error.message.clone(),
+                            };
+                            report(
+                                &mut diagnostics,
+                                record,
+                                "value",
+                                Some(property),
+                                error,
+                                &mut admission,
+                            )?;
+                            value
+                        }
+                    };
+                    admit(&mut admission, |admission| {
+                        admission.charge(0)?;
+                        Ok(map_slot::<String, BaseValue>()
+                            .saturating_add(crate::preview::string_bytes(property))
+                            .saturating_add(crate::preview::value_bytes(&value, admission)?))
+                    })?;
+                    values.insert(property.clone(), value);
+                    check_query_work(
+                        steps_used.saturating_add(session.steps_used()),
+                        &admission,
+                        options,
+                        "Preview admission exceeds query work budget",
+                    )?;
+                }
+                steps_used = steps_used.saturating_add(session.steps_used());
+                admit(&mut admission, |admission| {
+                    admission.charge(0)?;
+                    Ok(slots::<BaseRow>(1).saturating_add(string_copies(
+                        [
+                            record
+                                .witness
+                                .as_ref()
+                                .expect("validated witness")
+                                .entry_id
+                                .as_str(),
+                            record
+                                .witness
+                                .as_ref()
+                                .expect("validated witness")
+                                .revision
+                                .as_str(),
+                            &record.path,
+                        ],
+                        admission,
+                    )?))
+                })?;
+                Ok(Some(BaseRow {
+                    entry_id: record
+                        .witness
+                        .as_ref()
+                        .expect("query witness validated")
+                        .entry_id
+                        .clone(),
+                    revision: record
+                        .witness
+                        .as_ref()
+                        .expect("query witness validated")
+                        .revision
+                        .clone(),
+                    path: record.path.clone(),
+                    values,
+                }))
+            },
+        )?;
         if let Some(row) = row {
-            retained_bytes = retained_bytes.saturating_add(
+            let encoded = if admission.is_some() {
+                crate::encoded_size(&row, options.max_output_bytes)?
+            } else {
                 serde_json::to_vec(&row)
                     .map_err(|error| ExpressionDiagnostic::new("output", error.to_string()))?
-                    .len(),
-            );
+                    .len()
+            };
+            retained_bytes = retained_bytes.saturating_add(encoded);
             if retained_bytes > options.max_output_bytes {
                 return Err(budget("Intermediate query rows exceed byte budget"));
             }
@@ -740,6 +1247,15 @@ pub(crate) fn query_base_validated(
         }
         let mut indexed = BTreeMap::<String, (BaseValue, usize)>::new();
         for row in &rows {
+            admit(&mut admission, |admission| {
+                admission.charge(0)?;
+                crate::preview::value_bytes(group_value(view, row, &null), admission)
+            })?;
+            canonical_admission(group_value(view, row, &null), &mut admission)?;
+            admit(&mut admission, |admission| {
+                admission.charge(0)?;
+                Ok(map_slot::<String, (BaseValue, usize)>())
+            })?;
             let key = group_key(row);
             let entry = indexed.entry(canonical(&key)).or_insert((key, 0));
             entry.1 += 1;
@@ -747,8 +1263,20 @@ pub(crate) fn query_base_validated(
                 return Err(budget("Query exceeds group-option budget"));
             }
         }
+        for key in keys {
+            canonical_admission(key, &mut admission)?;
+            admit(&mut admission, |_| Ok(map_slot::<String, ()>()))?;
+        }
         let listed = keys.iter().map(canonical).collect::<HashSet<_>>();
         for key in keys {
+            key_id_admission(key, &mut admission)?;
+            canonical_admission(key, &mut admission)?; // indexed lookup
+            admit(&mut admission, |admission| {
+                admission.charge(0)?;
+                Ok(slots::<GroupOption>(1)
+                    .saturating_add(crate::preview::value_bytes(key, admission)?)
+                    .saturating_add(32))
+            })?;
             group_options.push(GroupOption {
                 key_id: group_key_id(key),
                 key: key.clone(),
@@ -758,6 +1286,15 @@ pub(crate) fn query_base_validated(
                     .unwrap_or(0),
                 listed: true,
             });
+        }
+        for (key, (value, _)) in &indexed {
+            admit(&mut admission, |admission| {
+                admission.charge(0)?;
+                Ok(slots::<GroupOption>(1)
+                    .saturating_add(crate::preview::string_bytes(key))
+                    .saturating_add(32))
+            })?;
+            key_id_admission(value, &mut admission)?;
         }
         group_options.extend(
             indexed
@@ -770,6 +1307,13 @@ pub(crate) fn query_base_validated(
                     listed: false,
                 }),
         );
+        for row in &rows {
+            admit(&mut admission, |admission| {
+                admission.charge(0)?;
+                crate::preview::value_bytes(group_value(view, row, &null), admission)
+            })?;
+            canonical_admission(group_value(view, row, &null), &mut admission)?;
+        }
         rows.retain(|row| listed.contains(&canonical(&group_key(row))));
     }
     counts.after_group_order = rows.len();
@@ -779,14 +1323,48 @@ pub(crate) fn query_base_validated(
         .saturating_mul(options.search_terms.len())
         .saturating_add(retained_bytes.saturating_mul(options.search_terms.len()) / 256);
     steps_used = steps_used.saturating_add(search_work);
-    if steps_used > options.max_steps {
-        return Err(budget("Search exceeds query work budget"));
-    }
+    check_query_work(
+        steps_used,
+        &admission,
+        options,
+        "Search exceeds query work budget",
+    )?;
+    admit(&mut admission, |admission| {
+        admission.charge(0)?;
+        Ok(slots::<String>(options.search_terms.len()).saturating_add(
+            options
+                .search_terms
+                .iter()
+                .map(|term| {
+                    crate::preview::string_bytes(term)
+                        .saturating_mul(6)
+                        .saturating_add(128)
+                })
+                .fold(0usize, usize::saturating_add),
+        ))
+    })?;
     let terms = options
         .search_terms
         .iter()
         .map(|term| term.to_lowercase())
         .collect::<Vec<_>>();
+    if admission.is_some() && !terms.is_empty() {
+        // The unchanged renderer below may short-circuit. Pre-admit every
+        // possible derived display/lowercase buffer before entering retain.
+        for row in &rows {
+            for property in &properties {
+                if let Some(value) = row.values.get(property) {
+                    admit(&mut admission, |admission| {
+                        admission.charge(0)?;
+                        Ok(display_copy_bytes(value, 0, admission)?
+                            .saturating_mul(8)
+                            .saturating_add(128)
+                            .saturating_mul(terms.len()))
+                    })?;
+                }
+            }
+        }
+    }
     rows.retain(|row| {
         terms.iter().all(|term| {
             properties
@@ -801,11 +1379,26 @@ pub(crate) fn query_base_validated(
         })
     });
     counts.after_search = rows.len();
+    admit(&mut admission, |admission| {
+        admission.charge(0)?;
+        Ok(slots::<String>(FILE_PROPERTIES.len() + 3)
+            .saturating_add(string_copies(FILE_PROPERTIES.iter().copied(), admission)?)
+            .saturating_add(string_copies(
+                ["file.links", "file.embeds", "file.backlinks"],
+                admission,
+            )?)
+            .saturating_add(
+                input
+                    .records
+                    .len()
+                    .saturating_mul(map_slot::<&crate::EntryId, &DetachedRecord>()),
+            ))
+    })?;
     let mut matched_available = FILE_PROPERTIES
         .iter()
         .map(|property| property.to_string())
         .collect::<Vec<_>>();
-    let by_id = snapshot
+    let by_id = input
         .records
         .iter()
         .map(|record| {
@@ -822,10 +1415,26 @@ pub(crate) fn query_base_validated(
     if relationship_available {
         matched_available.extend(["file.links", "file.embeds", "file.backlinks"].map(String::from));
     }
+    admit(&mut admission, |admission| {
+        admission.charge(0)?;
+        Ok(matched_available
+            .iter()
+            .map(|value| {
+                map_slot::<String, ()>().saturating_add(crate::preview::string_bytes(value))
+            })
+            .fold(0usize, usize::saturating_add))
+    })?;
     let mut matched_set = matched_available.iter().cloned().collect::<HashSet<_>>();
     for row in &rows {
         if let Some(record) = by_id.get(&row.entry_id) {
             for (key, _) in &record.properties {
+                admit(&mut admission, |admission| {
+                    admission.charge(0)?;
+                    Ok(slots::<String>(1)
+                        .saturating_add(map_slot::<String, ()>())
+                        .saturating_add(crate::preview::string_bytes(key).saturating_mul(2))
+                        .saturating_add(32))
+                })?;
                 let property = format!("note.{key}");
                 if matched_set.insert(property.clone()) {
                     matched_available.push(property);
@@ -834,23 +1443,61 @@ pub(crate) fn query_base_validated(
         }
     }
     for (name, _) in &program.formulas {
+        admit(&mut admission, |admission| {
+            admission.charge(0)?;
+            Ok(slots::<String>(1)
+                .saturating_add(crate::preview::string_bytes(name))
+                .saturating_add(32))
+        })?;
         matched_available.push(format!("formula.{name}"));
     }
     let available = matched_available;
+    admit(&mut admission, |admission| {
+        admission.charge(0)?;
+        Ok(available
+            .iter()
+            .chain(properties.iter())
+            .map(|value| {
+                map_slot::<String, ()>().saturating_add(crate::preview::string_bytes(value))
+            })
+            .fold(0usize, usize::saturating_add))
+    })?;
     let mut retained = available
         .iter()
         .chain(properties.iter())
         .cloned()
         .collect::<BTreeSet<_>>();
     if let Some(group) = &view.group {
+        admit(&mut admission, |admission| {
+            admission.charge(0)?;
+            Ok(map_slot::<String, ()>()
+                .saturating_add(crate::preview::string_bytes(&group.property)))
+        })?;
         retained.insert(group.property.clone());
     }
     if let Some(image) = program::get(&view.configuration, "image").and_then(program::text) {
+        admit(&mut admission, |admission| {
+            admission.charge(0)?;
+            Ok(map_slot::<String, ()>()
+                .saturating_add(crate::preview::string_bytes(image))
+                .saturating_add(32))
+        })?;
         retained.insert(program::property_id(image));
     }
     for row in &mut rows {
         row.values.retain(|property, _| retained.contains(property));
     }
+    admit(&mut admission, |admission| {
+        admission.charge(0)?;
+        Ok(slots::<Criterion>(view.sort.len().saturating_add(1))
+            .saturating_add(string_copies(
+                view.sort
+                    .iter()
+                    .map(|criterion| criterion.property.as_str()),
+                admission,
+            )?)
+            .saturating_add(crate::preview::string_bytes("file.name")))
+    })?;
     let mut sort = view
         .sort
         .iter()
@@ -868,9 +1515,12 @@ pub(crate) fn query_base_validated(
         .saturating_mul((usize::BITS - rows.len().max(1).leading_zeros()) as usize)
         .saturating_mul(sort.len());
     steps_used = steps_used.saturating_add(sort_work);
-    if steps_used > options.max_steps {
-        return Err(budget("Sorting exceeds query work budget"));
-    }
+    check_query_work(
+        steps_used,
+        &admission,
+        options,
+        "Sorting exceeds query work budget",
+    )?;
     let mut scalars = HashMap::new();
     for row in &rows {
         for criterion in &sort {
@@ -881,10 +1531,39 @@ pub(crate) fn query_base_validated(
             if matches!(value, BaseValue::Duration { .. }) {
                 *clock_sensitive_sort = true;
             }
+            admit(&mut admission, |admission| {
+                admission.charge(0)?;
+                Ok(map_slot::<(&crate::EntryId, &str), BaseValue>()
+                    .saturating_add(crate::preview::value_bytes(value, admission)?))
+            })?;
             let value = scalar_for_sort(value, options)?;
-            scalars.insert((row.entry_id.clone(), criterion.property.clone()), value);
+            // Keys borrow immutable source witnesses and compiled criteria,
+            // remaining stable while the independent result rows are sorted.
+            let source_id = &by_id[&row.entry_id]
+                .witness
+                .as_ref()
+                .expect("validated witness")
+                .entry_id;
+            scalars.insert((source_id, criterion.property.as_str()), value);
         }
     }
+    admit(&mut admission, |_| Ok(slots::<BaseRow>(rows.len())))?;
+    if rows.len() > 1 {
+        let null = &null;
+        comparator_scratch_admission(
+            rows.iter().flat_map(|row| {
+                sort.iter()
+                    .map(move |criterion| row.values.get(&criterion.property).unwrap_or(null))
+            }),
+            &mut admission,
+        )?;
+    }
+    check_query_work(
+        steps_used,
+        &admission,
+        options,
+        "Comparator scratch exceeds query work budget",
+    )?;
     rows.sort_by(|a, b| {
         for criterion in &sort {
             let left = a.values.get(&criterion.property).unwrap_or(&null);
@@ -895,10 +1574,10 @@ pub(crate) fn query_base_validated(
             ) {
                 order::compare(
                     scalars
-                        .get(&(a.entry_id.clone(), criterion.property.clone()))
+                        .get(&(&a.entry_id, criterion.property.as_str()))
                         .unwrap_or(&null),
                     scalars
-                        .get(&(b.entry_id.clone(), criterion.property.clone()))
+                        .get(&(&b.entry_id, criterion.property.as_str()))
                         .unwrap_or(&null),
                     criterion.descending,
                 )
@@ -922,6 +1601,11 @@ pub(crate) fn query_base_validated(
     if let Some(group) = &view.group {
         let mut by_key = HashMap::new();
         for row in &rows {
+            admit(&mut admission, |admission| {
+                admission.charge(0)?;
+                crate::preview::value_bytes(group_value(view, row, &null), admission)
+            })?;
+            canonical_admission(group_value(view, row, &null), &mut admission)?;
             let key = group_key(row);
             let key_id = canonical(&key);
             let index = if let Some(index) = by_key.get(&key_id) {
@@ -931,6 +1615,13 @@ pub(crate) fn query_base_validated(
                     return Err(budget("Query exceeds group budget"));
                 }
                 let index = groups.len();
+                admit(&mut admission, |admission| {
+                    admission.charge(0)?;
+                    Ok(slots::<BaseGroup>(1)
+                        .saturating_add(32)
+                        .saturating_add(crate::preview::string_bytes(&key_id))
+                        .saturating_add(map_slot::<String, usize>()))
+                })?;
                 groups.push(BaseGroup {
                     key_id: Some(format!("base-key-v1:{key_id}")),
                     key: Some(key),
@@ -939,21 +1630,60 @@ pub(crate) fn query_base_validated(
                 by_key.insert(key_id, index);
                 index
             };
+            admit(&mut admission, |admission| {
+                admission.charge(0)?;
+                Ok(slots::<crate::EntryId>(1)
+                    .saturating_add(crate::preview::string_bytes(row.entry_id.as_str())))
+            })?;
             groups[index].entry_ids.push(row.entry_id.clone());
         }
         if let Some(keys) = &view.group_order {
+            for key in keys {
+                canonical_admission(key, &mut admission)?;
+                admit(&mut admission, |_| Ok(map_slot::<String, usize>()))?;
+            }
             let positions = keys
                 .iter()
                 .enumerate()
                 .map(|(index, key)| (canonical(key), index))
                 .collect::<HashMap<_, _>>();
-            groups.sort_by_key(|group| {
-                positions
-                    .get(&canonical(group.key.as_ref().unwrap()))
-                    .copied()
-                    .unwrap_or(usize::MAX)
-            });
+            if admission.is_some() {
+                for group in &groups {
+                    canonical_admission(group.key.as_ref().unwrap(), &mut admission)?;
+                }
+                admit(&mut admission, |admission| {
+                    admission.charge(0)?;
+                    Ok(slots::<(usize, usize)>(groups.len())
+                        .saturating_add(slots::<BaseGroup>(groups.len())))
+                })?;
+                groups.sort_by_cached_key(|group| {
+                    positions
+                        .get(&canonical(group.key.as_ref().unwrap()))
+                        .copied()
+                        .unwrap_or(usize::MAX)
+                });
+            } else {
+                groups.sort_by_key(|group| {
+                    positions
+                        .get(&canonical(group.key.as_ref().unwrap()))
+                        .copied()
+                        .unwrap_or(usize::MAX)
+                });
+            }
         } else {
+            admit(&mut admission, |_| Ok(slots::<BaseGroup>(groups.len())))?;
+            if groups.len() > 1 {
+                comparator_scratch_admission(
+                    groups.iter().filter_map(|group| group.key.as_ref()),
+                    &mut admission,
+                )?;
+            }
+            check_query_work(
+                steps_used,
+                &admission,
+                options,
+                "Comparator scratch exceeds query work budget",
+            )?;
             groups.sort_by(|a, b| {
                 order::compare(
                     a.key.as_ref().unwrap(),
@@ -963,6 +1693,15 @@ pub(crate) fn query_base_validated(
             });
         }
     } else {
+        admit(&mut admission, |admission| {
+            admission.charge(0)?;
+            Ok(slots::<BaseGroup>(1)
+                .saturating_add(slots::<crate::EntryId>(rows.len()))
+                .saturating_add(string_copies(
+                    rows.iter().map(|row| row.entry_id.as_str()),
+                    admission,
+                )?))
+        })?;
         groups.push(BaseGroup {
             key_id: None,
             key: None,
@@ -977,6 +1716,10 @@ pub(crate) fn query_base_validated(
             } else {
                 BaseClockDependency::None
             });
+    admit(&mut admission, |admission| {
+        admission.charge(0)?;
+        Ok(crate::preview::string_bytes(&options.evaluation.timezone).saturating_add(128))
+    })?;
     let refresh_hint = refresh_hint_checked(dependency, &options.evaluation, |work| {
         if options
             .evaluation
@@ -988,12 +1731,28 @@ pub(crate) fn query_base_validated(
         }
         steps_used = steps_used
             .checked_add(work)
-            .filter(|&used| used <= options.max_steps)
+            .filter(|&used| used.saturating_add(admission_work(&admission)) <= options.max_steps)
             .ok_or_else(|| budget("Refresh hint exceeds query work budget"))?;
         Ok(())
     })?;
-    let result = BaseQueryResult {
-        snapshot_id: snapshot.snapshot_id.clone(),
+    admit(&mut admission, |admission| {
+        admission.charge(0)?;
+        let mut bytes = std::mem::size_of::<QueryRowsResult>()
+            .saturating_add(crate::preview::property_bytes(
+                &view.configuration,
+                admission,
+            )?)
+            .saturating_add(slots::<crate::MetadataIssue>(input.metadata_issues.len()));
+        for issue in input.metadata_issues {
+            bytes = bytes.saturating_add(crate::preview::issue_bytes(issue, admission)?);
+        }
+        Ok(bytes)
+    })?;
+    steps_used = steps_used
+        .checked_add(admission_work(&admission))
+        .filter(|used| *used <= options.max_steps)
+        .ok_or_else(|| budget("Preview admission exceeds query work budget"))?;
+    let result = QueryRowsResult {
         view: view.configuration.clone(),
         rows,
         groups,
@@ -1004,15 +1763,14 @@ pub(crate) fn query_base_validated(
         diagnostics,
         steps_used,
         relationships_available: relationship_available,
-        metadata_issues: snapshot.metadata_issues.clone(),
-        metadata_complete: snapshot.relationships.is_some()
-            && !snapshot
+        metadata_issues: input.metadata_issues.to_vec(),
+        metadata_complete: input.relationships.is_some()
+            && !input
                 .metadata_issues
                 .iter()
                 .any(|i| i.properties_unavailable),
         refresh_hint,
     };
-    crate::encoded_size(&result, options.max_output_bytes)?;
     Ok(result)
 }
 
@@ -1032,6 +1790,43 @@ pub(crate) fn refresh_hint_checked(
             })
         },
     )
+}
+
+#[cfg(test)]
+mod comparator_admission_tests {
+    use super::*;
+
+    #[test]
+    fn comparator_scratch_is_bounded_before_comparison_and_reuses_one_maximum_pair() {
+        let options = QueryOptions::default();
+        let long = BaseValue::String {
+            value: "x".repeat(256),
+        };
+        let mut tight = crate::preview::PreviewAdmission::new(1_024, &options).unwrap();
+        let error = comparator_scratch_admission([&long], &mut Some(&mut tight)).unwrap_err();
+        assert_eq!(error.code, "budget");
+
+        let small = BaseValue::String {
+            value: "Ab12".into(),
+        };
+        let mut repeated = crate::preview::PreviewAdmission::new(512, &options).unwrap();
+        // One pair fits512 bytes. Three cumulative pair allocations would not;
+        // only shape visits accumulate because comparison scratch is reclaimed.
+        comparator_scratch_admission([&small, &small, &small], &mut Some(&mut repeated)).unwrap();
+        assert!(repeated.work_used() > 0 && repeated.work_used() < 100);
+
+        let nested = BaseValue::Object {
+            value: vec![(
+                "key".into(),
+                BaseValue::List {
+                    value: vec![BaseValue::String { value: "İ".into() }],
+                },
+            )],
+        };
+        let mut nested_ledger = crate::preview::PreviewAdmission::new(512, &options).unwrap();
+        comparator_scratch_admission([&nested], &mut Some(&mut nested_ledger)).unwrap();
+        assert!(nested_ledger.work_used() > 0 && nested_ledger.work_used() < 100);
+    }
 }
 
 #[cfg(test)]

@@ -147,6 +147,118 @@ impl NativeVault {
             value,
         })
     }
+    /// Bodyless registration check for already admitted immutable metadata.
+    /// Never substitutes a current head or reconstructs a retained manifest.
+    pub fn check_document_metadata_pin_registration(
+        &self,
+        pin: &DocumentQueryPin,
+    ) -> NativeDocumentResult<()> {
+        self.paths.verify()?;
+        self.store.check_document_metadata_pin_registration(pin)?;
+        self.paths.verify()?;
+        Ok(())
+    }
+    pub fn begin_document_metadata_rows(
+        &self,
+        pin: &DocumentQueryPin,
+        baseline: Option<&DocumentQueryPin>,
+        limit: usize,
+        check: &mut impl FnMut() -> bool,
+    ) -> NativeDocumentResult<NativeMetadataRows> {
+        self.check_document_metadata_pin_registration(pin)?;
+        if let Some(old) = baseline {
+            self.check_document_metadata_pin_registration(old)?;
+        }
+        let destination = pin.shared_generation();
+        let mut baseline_data = baseline.map(DocumentQueryPin::shared_generation);
+        let scan = zorid_index::MetadataRowsScan::new_checked(
+            destination.clone(),
+            baseline_data.clone(),
+            limit,
+            check,
+        )
+        .map_err(metadata_error)?;
+        if scan.mode() == zorid_index::MetadataRowsMode::Reset {
+            baseline_data = None;
+        }
+        let cursor = NativeMetadataRows {
+            scan,
+            destination,
+            baseline: baseline_data,
+            checkpoint: std::sync::Arc::new(()),
+            next_checkpoint: std::sync::Arc::new(()),
+        };
+        self.check_metadata_cursor(
+            pin,
+            if cursor.uses_baseline() {
+                baseline
+            } else {
+                None
+            },
+            &cursor,
+        )?;
+        Ok(cursor)
+    }
+    fn check_metadata_cursor(
+        &self,
+        pin: &DocumentQueryPin,
+        baseline: Option<&DocumentQueryPin>,
+        cursor: &NativeMetadataRows,
+    ) -> NativeDocumentResult<()> {
+        if !std::sync::Arc::ptr_eq(&pin.shared_generation(), &cursor.destination)
+            || match (baseline, cursor.baseline.as_ref()) {
+                (None, None) => false,
+                (Some(pin), Some(data)) => !std::sync::Arc::ptr_eq(&pin.shared_generation(), data),
+                _ => true,
+            }
+        {
+            return Err(IndexError::QueryMismatch.into());
+        }
+        self.check_document_metadata_pin_registration(pin)?;
+        if let Some(old) = baseline {
+            self.check_document_metadata_pin_registration(old)?;
+        }
+        Ok(())
+    }
+    pub fn document_metadata_rows(
+        &self,
+        pin: &DocumentQueryPin,
+        baseline: Option<&DocumentQueryPin>,
+        cursor: &NativeMetadataRows,
+        check: &mut impl FnMut() -> bool,
+    ) -> NativeDocumentResult<DocumentQueryResult<PreparedMetadataRowsPage>> {
+        self.check_metadata_cursor(pin, baseline, cursor)?;
+        let page = cursor.scan.page_checked(check).map_err(metadata_error)?;
+        self.check_metadata_cursor(pin, baseline, cursor)?;
+        if !check() {
+            return Err(NativeDocumentError::QueryCancelled);
+        }
+        Ok(DocumentQueryResult {
+            snapshot: page.snapshot().clone(),
+            source: page.source().clone(),
+            coverage_complete: page.coverage_complete(),
+            value: page,
+        })
+    }
+    /// The host encodes the complete response and rechecks its actual client
+    /// registrations BEFORE this final native fence and local checkpoint commit.
+    pub fn commit_document_metadata_rows(
+        &self,
+        pin: &DocumentQueryPin,
+        baseline: Option<&DocumentQueryPin>,
+        cursor: &mut NativeMetadataRows,
+        page: PreparedMetadataRowsPage,
+        check: &mut impl FnMut() -> bool,
+    ) -> NativeDocumentResult<()> {
+        self.check_metadata_cursor(pin, baseline, cursor)?;
+        if !check() {
+            return Err(NativeDocumentError::QueryCancelled);
+        }
+        cursor.scan.commit_page(page).map_err(metadata_error)?;
+        cursor.checkpoint = cursor.next_checkpoint.clone();
+        cursor.next_checkpoint = std::sync::Arc::new(());
+        Ok(())
+    }
     pub fn document_metadata(
         &self,
         pin: &DocumentQueryPin,
@@ -366,3 +478,14 @@ impl NativeVault {
 #[cfg(test)]
 #[path = "document_index_tests.rs"]
 mod tests;
+
+fn metadata_error(error: zorid_index::MetadataRowsError) -> NativeDocumentError {
+    use zorid_index::MetadataRowsError as M;
+    match error {
+        M::Cancelled => NativeDocumentError::QueryCancelled,
+        M::InvalidLimit => IndexError::InvalidBudget.into(),
+        M::ForeignScope | M::CheckpointMismatch => IndexError::QueryMismatch.into(),
+        M::InvalidRecord => IndexError::InvalidRecord.into(),
+        M::ResourceLimit => IndexError::GenerationLimit.into(),
+    }
+}
