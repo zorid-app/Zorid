@@ -9,6 +9,17 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Integrated D/E1 foundations through `1cc636ef`: common facade `f2a1a54d`,
+native/host delivery `8505127a`, desktop scheduler `c23026db`, desktop frontend
+`6b4a454b`, browser delivery `d50ee1ca`, and owned consumer cancellation
+`1cc636ef`. All50 owned files match canonical `030b7cda` byte-for-byte;
+403/403 affected Node checks and full TypeScript pass. Evidence:
+`/private/tmp/zorid-s1-d-canonical-2fbrarkk/rerun-process-proof/validation-summary.json`
+and adjacent `main-integration-proof.json`. Activation stays OFF; these checks
+do not establish actual platform liveness, fairness or generated-WASM acceptance.
+The Find-opening math-focus correction is integrated `b6985fd3` after independent
+review,25/25 focused checks and full TypeScript. Actual app rerun remains pending.
+
 Latest verified work after frozen `b9d4f069` (supersedes older pending counts):
 
 - Electron scoped005 verifies grouped results, case controls, dense count/display

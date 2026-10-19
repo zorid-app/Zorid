@@ -47,7 +47,9 @@ CDP composition trust assertion stops the run; native IME remains unverified.
 The report separately captures a real renderer exception: live-math blur
 dispatches during CodeMirror's Find-panel mount. Fix owner
 `s1_rich_search_controller`, isolated `s1-live-math-focus`; review, tests and
-actual rerun required. Root visually confirms the search toolbar/scroll/contrast
+actual rerun required. Correction is now integrated `b6985fd3`: independent review,
+25 focused tests and full TypeScript pass; actual Electron rerun remains pending.
+Root visually confirms the search toolbar/scroll/contrast
 polish, but Find appears below Properties rather than directly beneath the note
 toolbar. Top placement, Reading Find, native sorts and normal quit remain open.
 Evidence `/private/tmp/zorid-s1-rich-electron-find-b9d4f069-005/report.json`.
