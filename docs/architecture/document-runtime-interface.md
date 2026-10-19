@@ -12,6 +12,14 @@ acceptance and S0A interface review still precede replacement of live consumers.
 This document identifies the seam needed for that replacement. It does not change
 CodeMirror ownership, CLI query behavior, source durability or mobile scope.
 
+Implementation update (2026-10-19): the identity-free parser and scoped
+extraction/key/result/binding plus bounded admission contracts are now integrated
+and tested in S1.1. See [current indexing architecture](indexing.md). Native and
+browser facts-persistence adapters are integrated with focused checks; matching
+WASM and real-client persistence acceptance remain pending. Runtime-owned
+scheduling, subscriptions and migration of feature-owned pumping below are still
+unimplemented; this source-specific audit is not evidence those APIs shipped.
+
 ## Current responsibilities and callers
 
 `DocumentService` exposes status/initialize/rebuild, begin/pump/publish/discard,

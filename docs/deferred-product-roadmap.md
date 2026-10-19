@@ -8,9 +8,10 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 [plans/indexing-search.md](plans/indexing-search.md).
 
 - **Stage:** S0 bounded native delivery and S0A contracts accepted; S1.0 baseline
-  and measured setup prerequisites implementing. S1.1 identity-free parser facts
-  source foundation starts from the retained baseline/known limits; reusable
-  parse-cache persistence, multicore and core scheduling are not implemented yet.
+  and measured setup prerequisites implementing. S1.1 parser/extraction contracts
+  and native/browser facts-persistence code are integrated with focused checks.
+  Real-client persistence acceptance is pending; multicore and core-owned
+  scheduling are not implemented yet.
 - **Integrated:** scoped observation-lookup fix through `2c53a98d`,193
   focused checks/1 existing ignored fixture, release build and normal-family100
   source/search checks pass. Small Base17 semantic-baseline tool is integrated
@@ -21,13 +22,18 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   is established. Pure-core10k and actual-browser100 passed within their stated
   scopes. Generated Base100 passed all eight semantic oracles;10k generation completed,
   but all eight queries rejected the existing preparation budget (limited/incomplete).
-- **Active owner/slot:** the index validation slot is released after37 tests pass,
-  0 failed/ignored; all14 owned processes gone and exact source/input hashes.
-  Source `effeb61f` is integrated `ae227303` (scoped extraction/binding, integrity,
-  preflight and shared bounded cache policy). Evidence:
-  `/private/tmp/zorid-s1-index-effeb61f-tf_k0os0/validation-summary.json`.
-  Native adapter and web/WASM owners are implementing source; independent reviewers
-  assigned. No build/runtime starts until its exact review and next slot grant.
+- **Active owner/slot:** focused test slot released. Shared extraction core
+  `effeb61f` is integrated `ae227303`,37 tests pass. Native facts persistence
+  `0ba607c1` is integrated `cbba5096` after exact-main composition `effbffad`
+  passes34 checks (12 new +22 existing), no failures/ignored, hashes exact,
+  owned processes gone. Evidence:
+  `/private/tmp/zorid-native-cache-composed-0ba607c1-2f799pin/validation-summary.json`.
+  Browser/WASM through `8ce4509d` is integrated `b4cf40f2`:42 Node checks +tsc
+  pass, and16 native-hosted Rust checks on identical Rust source. Evidence:
+  `/private/tmp/zorid-s1-browser-a29622a0-validation-p7usgo95/rebuild-per-pump-result.json`.
+  Both use generation-only rebuild preserving facts and per-pump new counters;
+  old reuse-counter semantics stay unchanged. Normal matching WASM build and
+  actual browser/native-client cache acceptance are NEXT, not already passed.
 - **Combined native result:** release `b3ed4400` passed build115.545s and family100
   correctness (all eight full literal oracles, complete coverage, exact physical/
   authority sources and watermark108). Rust inputs match integrated `2fb58f33`;
@@ -56,20 +62,22 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 - **S1.1 ownership:** parser facts `ae342a51` is source reviewed and integrated
   `343a6c1b` after19 focused parser/corpus/bounds tests pass, no ignored tests;
   hashes exact and owned processes gone. Evidence:
-  `/private/tmp/zorid-s1-parse-facts-ae342a51/verification.json`. typed scoped extraction/key/binding and bounded cache policy are integrated; `storage_sqlite_impl` owns new
-  isolated native cache-only persistence, `architecture_platform_audit` browser/
-  WASM adapter and optional validated cache counters. Source-only until slots;
-  no reusable parse cache or multicore runtime acceptance yet. Preserve existing
+  `/private/tmp/zorid-s1-parse-facts-ae342a51/verification.json`. Typed scoped
+  extraction/key/binding and bounded cache policy are integrated;
+  `storage_sqlite_impl` owns new
+  native cache-only persistence, `architecture_platform_audit` browser/WASM
+  adapter and optional validated cache counters. These are now integrated with
+  focused checks; no actual reusable-facts client/runtime or multicore acceptance yet. Preserve existing
   parser output, source fences and separate authority/cache schemas. Root sole
   main integrator; no push.
-- **Residual admission CSE:** `s1_execution_audit` implements source-only removal
-  of a duplicate complete retained-Text load in one preparation/read snapshot.
-  Private validation returns its own checked vector for the existing expected-Text
-  CAS witness; final writer still reloads and compares fresh authority. Owned
-  files: `family_materialization.rs`, `family_metadata_transactions.rs`, focused
-  private tests. `architecture_core_audit` reviews; no new persistent cache,
-  schema/public API/batch semantics or promised performance gain. No extra release
-  campaign; validate before considering the next combined cache build.
+- **Residual admission CSE:** `397e011c` is integrated `5bb1d4f0` after24
+  focused checks pass. Old two-load preparation fails the intended real SQL-count
+  assertion (2 versus1); exact source restored before green. All four Cargo
+  groups gone. Private validation returns its own complete checked Text vector;
+  final writer still reloads and compares fresh authority. No new cache/schema/
+  public API/batch semantics or measured gain. Evidence:
+  `/private/tmp/zorid-retained-text-cse-397e011c-validation-4a9jkbtx/validation-summary.json`.
+  Fold into the next combined client build; no separate benchmark campaign.
 - **Desktop verification:** corrected normal100 passes exact save/file/native/
   checkpoint, fresh search and retained warm index/revision gates. Three apps quit
   normally; source/build hashes unchanged, no survivors. Evidence:
@@ -90,15 +98,22 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   other OS checks stay deferred. Sync remains E2EE; new group-lifecycle policy
   discussion waits for the user. Original real vault remains untouched.
 
-Current isolated source ownership (all depend on reviewed parser/index contracts;
+Current component ownership (all depend on reviewed parser/index contracts;
 source approval is distinct from compilation and real-client acceptance):
 
 | Owner | Branch/worktree under `/Users/ctk/orca/workspaces/Zorid` | Verification |
 | --- | --- | --- |
-| `storage_sqlite_impl` | `tingkai-c/storage-parse-cache` / `storage-parse-cache` | Native facts persistence implementing; reviewer `storage_recovery_impl`; no tests/build yet |
-| `architecture_platform_audit` | `tingkai-c/s1-browser-parse-cache` / `s1-browser-parse-cache` | Browser/WASM facts persistence implementing; reviewer `s1_query_audit`; no tests/build yet |
-| `s1_execution_audit` | New isolated residual-CSE worktree from `2f37f56c` | Source implementing; reviewer `architecture_core_audit`; no tests/build yet |
+| `storage_sqlite_impl` | `tingkai-c/storage-parse-cache` / `storage-parse-cache` | Integrated `cbba5096`; reviewer `storage_recovery_impl`; composed34 checks pass, actual CLI/Electron pending |
+| `architecture_platform_audit` | `tingkai-c/s1-browser-parse-cache` / `s1-browser-parse-cache` | Integrated `b4cf40f2`;42 Node +tsc +16 hosted Rust pass; actual WASM/browser pending |
+| `s1_execution_audit` | `tingkai-c/storage-retained-text-cse` / `storage-retained-text-cse`, base `2f37f56c` | Integrated `5bb1d4f0`;24 focused checks +old-red/restore pass; no measured gain |
 | `baseline_resources_impl` | `tingkai-c/s1-index-extraction` / `s1-index-extraction` | Core integrated `ae227303`,37 tests pass; preparing tiny CLI cache acceptance using existing commands |
+
+Disk maintenance: three completed legacy10k fixture `vault`/`local-data` trees
+(`80dfce28`, `51060b1d`, `d0de1c83`) were archived after no-open-file checks to
+recover space. Their `disposable-data.tar.gz` archives are byte-verified against
+per-file hashes in each `fixture-retirement.json`; reports, manifests and raw logs
+remain unchanged. No shared targets, real vaults or manual playgrounds were removed.
+Old evidence paths now require archive extraction for live fixture access.
 
 Detailed evidence, ownership and limitations follow. Earlier checkpoint sections
 retain their original dated decisions and are superseded by this current summary.

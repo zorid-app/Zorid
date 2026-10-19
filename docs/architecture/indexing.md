@@ -48,9 +48,12 @@ Oversized supported facts still extract/bind normally and skip caching. This cac
 budget is separate from existing generation/metadata and bounded transport limits.
 These are initial resource bounds, not measured memory or latency promises.
 
-The pure extraction/policy layer is integrated and tested. New native reusable
-facts tables and the browser derived prefix are **being implemented**; persistent
-content-derived reuse is not yet an accepted runtime capability. Existing
+The extraction/policy layer, native reusable-facts tables and browser derived
+prefix are integrated with focused tests. Actual matching WASM/browser and native
+client checks remain pending; persistent content-derived reuse is not yet an
+accepted real-client capability. Generation-only rebuild preserves valid reusable
+facts; full disposal of that cache family clears them. New cache-outcome counters
+are per pump, and callers sum separate pump reports explicitly. Existing
 same-entry generation reuse remains distinct. Browser retains joined-group working
 data and persisted derived indexes between visits; its storage engine need not
 mirror native databases. Cache failures and eviction must preserve source,

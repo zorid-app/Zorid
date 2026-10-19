@@ -13,8 +13,9 @@ scope. S0A modular-interface gate is accepted.** S0's reviewed implementation an
 actual macOS save/close/quit/history/concurrent-CLI/interruption evidence are in the
 [execution checkpoint](deferred-product-roadmap.md#latest-integration-checkpoint--2026-10-18).
 S0A's reviewed consumer matrix and contracts include the integrated browser
-binary-helper admission correction. **S1.0 language/workload baseline is now
-implementing**; optimization follows measured baseline evidence.
+binary-helper admission correction. **S1.0 has retained baseline observations and known limits; S1.1 reusable
+parsing/cache implementation is underway.** The typed extraction foundation is
+integrated; native and browser persistence still need their runtime gates.
 Existing feature/iOS work is preserved.
 
 Design for desktop, browser and mobile now; finish the usable desktop feature set
@@ -52,7 +53,8 @@ that invalidate a closed gate reopen that bounded gate, not every earlier milest
 ## Delivery order
 
 S0 is **accepted** within its explicit scope/limitations; S0A is **accepted** as a
-contract gate. S1 is **implementing** its first baseline slice. Later milestones
+contract gate. S1 is **implementing** reusable parse persistence from retained baselines;
+full performance acceptance remains open. Later milestones
 remain **planned**.
 
 | ID | Milestone | Prerequisite |
@@ -192,20 +194,29 @@ future feature or a public plugin API freeze.
 
 ## S1 — Rust parsing, indexing, caching and search performance
 
-**Design:** confirmed after user interview; S0/S0A gates are accepted and S1.0
-baseline implementation is underway. [Design](architecture/indexing-search-design.md),
+**Design:** confirmed after user interview; S0/S0A gates are accepted. S1.0
+known-limit observations support S1.1 implementation without establishing the full
+representative/stress acceptance gate. [Design](architecture/indexing-search-design.md),
 [implementation slices](plans/indexing-search.md),
 [query boundary ADR](adr/0001-shared-query-semantics.md).
 
 **Current:** portable parsing/index generations and native prior-generation reuse
 exist; pumps are sequential, Rust literal search scans text and Bases rebuilds
-substantial state per call. No new measured improvement or complete Obsidian query
-compatibility is established by this roadmap.
+substantial state per call. Identity-free parser facts and scoped extraction/
+binding/cache-admission contracts are integrated and focused tests pass. Native
+and browser reusable-facts storage is integrated with focused checks; actual
+client acceptance remains pending. Normal10k admission
+remains incomplete before indexing; full app speedup and complete Obsidian query
+compatibility are not established.
 
 - [ ] Preserve distinct documented Obsidian Bases/search languages and results in
   shared Rust; inventory supported syntax, gaps and deliberate differences first.
 - [ ] Measure 10,000-note baseline/100,000-note stress plus large-note workflows:
   cold/warm startup, indexing, incremental edits, search/Base latency and memory.
+- [x] Separate identity-free parsed facts from current entry witnesses; implement
+  scoped/versioned extraction keys, integrity/range validation and shared bounded
+  optional-cache admission. Parser19 and index37 focused tests pass; this does not
+  establish persistent reuse or runtime-owned scheduling.
 - [ ] Persist content-derived parse/index reuse with semantic-version keys and safe
   identity rebinding; incrementally invalidate changed inputs and survive restart.
 - [ ] Reuse compiled Base programs, graph/generation preparation and eligible query
