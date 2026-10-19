@@ -29,19 +29,27 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   standalone macOS CLI. S1.2 starts with prepared resolver lookups, then bounded
   query-preparation/program reuse. Core-owned scheduling remains pending;
   multicore is deferred, not a delivery requirement.
-- **S1.2 current scope:** cold relationship resolution repeatedly scans the entire
-  namespace per link, preventing generated Base10k preparation under the existing
-  work budget. Prepare source-ID and normalized-basename lookups once, charge
+- **S1.2 current scope:** cold resolver prerequisites are integrated; bounded shared
+  Bases preparation/program reuse is implementing. Baseline relationship resolution
+  repeatedly scanned the namespace per link, preventing generated Base10k queries.
+  Prepared source-ID and normalized-basename lookups now charge
   actual construction/bucket visits/sorting/cancellation, preserve all matching/
   ordering/ranges and complete graph semantics. No raised budgets/dropped links,
-  schema, authority cache, language redesign or new benchmark framework. Planned
+  schema, authority cache, language redesign or new benchmark framework. Implementation
   implementation owner `s1_query_audit`, isolated `s1-generated-bases` worktree on
   `tingkai-c/s1-prepared-resolver` from253b1433; reviewer `architecture_core_audit`. Root
-  retains sole main integration. Query handoff remains source-current (no resolver/
-  relationship/snapshot changes since255caa28):
-  `/private/tmp/zorid-s1-query-preparation-handoff.md`. Focused resolver tests and
-  existing generated Base100/10k semantic oracles are the gates; actual platform
-  bindings and complete S1.2 reuse remain separate. Manual user app untouched.
+  retains sole main integration. Sources `8a16ed9b`/`b9cb0d4c`/`9a1accdd` are
+  integrated `15946258`/`080a6ca7`/`8b17233e`, all affected Rust/Cargo/fixture
+  hashes exact,27 focused tests pass and matching release example builds17.88s.
+  Existing generated Base100 and10k now pass all eight unchanged full semantic
+  oracles;10k has10003 complete records, max1,404,011 steps under unchanged2M,
+  query observations65–88ms (one pure-engine sample). This is not native admission,
+  UI, cross-query cache reuse or full S1.2 acceptance. All owned processes exited;
+  source clean/runtime slot released. Evidence:
+  `/private/tmp/zorid-s1-resolver-9a1accdd-focused/verification.json` and
+  `/private/tmp/zorid-s1-resolver-release-8b17233e-build/terminal-summary.json`.
+  Handoff `/private/tmp/zorid-s1-query-preparation-handoff.md` sections2/3 remain
+  the next contract; section1's old resolver map is historical. Manual app untouched.
   Independent S1.2 shared Bases preparation/cache owner `storage_sqlite_impl`
   prepares a minimal typed API first in isolated `storage-parse-cache`, new branch
   from current main; then owns Bases graph/query/program/cache internals and
@@ -77,7 +85,8 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   versus3,383/240.256s and initially2,378/240.316s. No native10k index/search result or completion gain
   is established. Pure-core10k and actual-browser100 passed within their stated
   scopes. Generated Base100 passed all eight semantic oracles;10k generation completed,
-  but all eight queries rejected the existing preparation budget (limited/incomplete).
+  and all eight queries now pass after the resolver prerequisite above. Native
+  full-vault admission and the broader S1 performance gate remain unresolved.
 - **Active owner/slot:** focused test slot released. Shared extraction core
   `effeb61f` is integrated `ae227303`,37 tests pass. Native facts persistence
   `0ba607c1` is integrated `cbba5096` after exact-main composition `effbffad`

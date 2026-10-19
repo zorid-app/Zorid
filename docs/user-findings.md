@@ -107,22 +107,30 @@ Evidence `/private/tmp/zorid-desktop-parse-cache-validation.json`. Actual Electr
 acceptance now passes the normal100 bridge/save/search/warm-restart subset on
 `255caa28`; cache presence is verified separately, not treated as a hit count.
 
-## S1 generated Base queries eagerly prepare the full graph — confirmed baseline limitation
+## S1 generated Base resolver scans — addressed within generated-engine scope
 
-`query_generation` prepares relationships even for a property-only query. Current
-resolution charges/scans the namespace for each link. The frozen10k workload's
+`query_generation` prepares relationships even for a property-only query. Baseline
+resolution charged/scanned the namespace for each link. The frozen10k workload's
 5,000 links and10,003 entries imply at least50,015,000 resolver work against the
-normal2,000,000 query ceiling. Actual release execution now confirms all eight
+normal2,000,000 query ceiling. Baseline release execution confirmed all eight
 queries reject preparation, after successful generation of10,003 records; timings
 are rejection latency only, and the run is limited/incomplete. Evidence:
 `/private/tmp/zorid-s1-generated-bases-release10000-ffaee3ad/generated-bases-report.json`.
 The same generated tool passes all eight semantic oracles at100 notes; source and
 binary hashes remain exact. Tool integrated `9235ab46`, not an engine optimization.
 
-Keep the full linked fixture and existing limits. Later accepted S1.2 work can
-address conservative dependency-aware graph preparation, indexed resolution and
-bounded generation-keyed reuse, preserving tie/normalization semantics. No engine
-optimization or budget change has been implemented here.
+Integrated `15946258`/`080a6ca7`/`8b17233e` prepares ID/basename lookups once and
+shares a sealed exact-manifest namespace with graph consumers. Independent review
+and27 focused checks pass. Matching release example and unchanged100/10k linked
+fixtures now pass all eight semantic oracles,10003 complete records at10k, max
+1,404,011 steps under the same2M ceiling. One pure-engine query observation is
+65–88ms. No budget/oracle/source corpus changes; no native admission/app speedup
+or complete S1.2 cache acceptance claimed. Evidence:
+`/private/tmp/zorid-s1-resolver-9a1accdd-focused/verification.json` and
+`/private/tmp/zorid-s1-resolver-release-8b17233e-build/terminal-summary.json`.
+The frozen comparison wrapper's50,015,000 inference remains historical in its
+original reports; later report annotations label it correctly. Generation/program
+and eligible answer reuse remain required S1.2 work.
 
 ## S1 normal storage repeatedly validates metadata graph views — measured setup bottleneck
 

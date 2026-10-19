@@ -61,14 +61,20 @@ shrunk, work ceilings raised or detached snapshot substituted. Fixed synthetic
 presentation facts come from the manifest and bind to exact input revisions. Pure
 fixture source/epoch tokens are benchmark identities, not storage edit capabilities.
 
-The current `query_generation` always prepares the complete relationship snapshot,
+The baseline `query_generation` prepares the complete relationship snapshot,
 including for a property-only filter. `graph.rs` calls `ResolutionView::snapshot_checked`;
 `relationships.rs` invokes `Resolver::candidates_checked` per link. That resolver
-charges at least the namespace size for each edge and performs namespace scans.
+charged at least the namespace size for each edge and performed namespace scans.
 For frozen 10k input, 5,000 links × 10,003 entries already implies 50,015,000 minimum
-resolver work versus the current 2,000,000 query ceiling. This is source inference,
-not an observed run or a measured counter. The separate generation metadata and
-scan ceilings still apply.
+resolver work versus the unchanged 2,000,000 query ceiling. This is historical
+source inference, not a current measured counter. Prepared namespace lookups and
+sharing integrated at `8b17233e` remove those scans/repeated construction. The same
+frozen10k workload now passes all eight semantic checks, at most1,404,011 steps;
+one pure-engine observation is65–88ms per query. Retained reports from that run
+still contain the old wrapper's inference field, explicitly qualified by its
+terminal summary. Later reports label the formula as historical. This establishes
+neither query-cache reuse nor native admission/UI performance. Separate generation
+metadata and scan ceilings still apply.
 
 The tool records actual outcomes individually. A budget error is never zero
 matches or successful full-query latency. Its report field is
