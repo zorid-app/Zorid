@@ -118,7 +118,8 @@ use zorid_core::{
     Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
+const NAMESPACE_SCHEMA_VERSION: i64 = 13;
 const PREDECESSOR_SCHEMA_VERSION: i64 = 12;
 pub const DEFAULT_STREAMING_LIMITS: StreamingLimits = StreamingLimits {
     max_active_stages: 8,
@@ -167,7 +168,10 @@ fn check_schema(connection: &Connection) -> Result<i64> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
     let application: i64 = connection.pragma_query_value(None, "application_id", |r| r.get(0))?;
     // Unreleased formats: reject before changing WAL or database bytes.
-    if !matches!(version, 0 | PREDECESSOR_SCHEMA_VERSION | SCHEMA_VERSION) {
+    if !matches!(
+        version,
+        0 | PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION | SCHEMA_VERSION
+    ) {
         return Err(StoreError::UnsupportedSchema(version));
     }
     let names: Vec<String> = connection
@@ -187,7 +191,8 @@ fn check_schema(connection: &Connection) -> Result<i64> {
         let expected: Vec<_> = schema_objects()
             .into_iter()
             .filter(|(name, _)| {
-                version != PREDECESSOR_SCHEMA_VERSION || *name != "namespace_successions"
+                (version != PREDECESSOR_SCHEMA_VERSION || *name != "namespace_successions")
+                    && (version == SCHEMA_VERSION || *name != projection::EXTERNAL_UNRESOLVED_INDEX.0)
             })
             .collect();
         // SQLite trigger names occupy a separate namespace. A duplicate name
@@ -229,6 +234,12 @@ fn check_schema(connection: &Connection) -> Result<i64> {
             if normalize(&actual) != normalize(sql) {
                 return Err(StoreError::Corrupt(format!("invalid schema object {name}")));
             }
+        }
+        if matches!(
+            version,
+            PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION
+        ) {
+            projection::check_observation_index_inputs(connection)?;
         }
     }
     Ok(version)
@@ -476,6 +487,12 @@ impl Store {
             for (_, sql) in namespace::SUCCESSOR_SCHEMA {
                 tx.execute_batch(sql)?;
             }
+        }
+        if matches!(
+            version,
+            PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION
+        ) {
+            tx.execute_batch(projection::EXTERNAL_UNRESOLVED_INDEX.1)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;

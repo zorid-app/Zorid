@@ -6,12 +6,33 @@ use crate::physical_bindings::{
 use zorid_core::{OperationId, VaultPath};
 use zorid_file_sync::Sha256Digest;
 
+pub(super) const EXTERNAL_UNRESOLVED_INDEX: (&str, &str) = (
+    "external_observation_unresolved_path",
+    "CREATE INDEX external_observation_unresolved_path ON external_observations(json_extract(record,'$.path')) WHERE json_extract(record,'$.resolution') IS NULL",
+);
 pub(super) const SCHEMA: &[(&str, &str)] = &[
     ("projection_baselines", "CREATE TABLE projection_baselines (entry_id TEXT PRIMARY KEY NOT NULL REFERENCES entries(id), record TEXT NOT NULL)"),
     ("projection_attempts", "CREATE TABLE projection_attempts (attempt_id TEXT PRIMARY KEY NOT NULL, entry_id TEXT NOT NULL REFERENCES entries(id), completed INTEGER NOT NULL CHECK(completed IN (0,1)), record TEXT NOT NULL)"),
     ("active_projection", "CREATE UNIQUE INDEX active_projection ON projection_attempts(entry_id) WHERE completed = 0"),
     ("external_observations", "CREATE TABLE external_observations (observation_id TEXT PRIMARY KEY NOT NULL, record TEXT NOT NULL)"),
+    EXTERNAL_UNRESOLVED_INDEX,
 ];
+
+/// Old accepted schemas did not require an expression index. Reject malformed
+/// JSON before WAL changes rather than fail midway through index creation.
+pub(super) fn check_observation_index_inputs(connection: &Connection) -> Result<()> {
+    let malformed: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM external_observations WHERE NOT json_valid(record))",
+        [],
+        |row| row.get(0),
+    )?;
+    if malformed {
+        return Err(StoreError::Corrupt(
+            "external observation JSON cannot be indexed".into(),
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -879,22 +900,29 @@ pub(super) fn record_external_transaction(
         validate_baseline(baseline, baseline.state.id.as_str())?;
         entry_content::validate_stored_content(tx, &baseline.content, false)?;
     }
-    let records: Vec<(String, String)> = tx
-        .prepare("SELECT observation_id,record FROM external_observations")?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<std::result::Result<_, _>>()?;
-    for (id, record) in records {
-        let old = decode_observation(&id, &record)?;
-        if !matches!(
-            &content,
-            StoredContent::BinaryRef(BinarySourceRef::Capture(_))
-        ) && old.path == *path
-            && old.baseline == base
-            && old.content == content
-            && old.resolution.is_none()
-            && physical_bindings::observation_proof(tx, &old.observation_id)?.as_ref() == proof
-        {
-            return Ok(old);
+    if !matches!(
+        &content,
+        StoredContent::BinaryRef(BinarySourceRef::Capture(_))
+    ) {
+        // The index selects candidates only. Identity reuse still requires all
+        // typed causal/byte/physical proofs. Stream one candidate at a time: an
+        // unrelated or resolved retained history is neither a lookup nor a DB audit.
+        let mut statement = tx.prepare(
+            "SELECT observation_id,record FROM external_observations WHERE json_extract(record,'$.path')=?1 AND json_extract(record,'$.resolution') IS NULL ORDER BY rowid",
+        )?;
+        let mut rows = statement.query([path.as_str()])?;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let record: String = row.get(1)?;
+            let old = decode_observation(&id, &record)?;
+            if old.path == *path
+                && old.resolution.is_none()
+                && old.baseline == base
+                && old.content == content
+                && physical_bindings::observation_proof(tx, &old.observation_id)?.as_ref() == proof
+            {
+                return Ok(old);
+            }
         }
     }
     let value = ExternalObservation {
@@ -1179,5 +1207,272 @@ mod typed_content_tests {
             ),
             Err(StoreError::FileSync(zorid_file_sync::Error::TooLarge))
         ));
+        // Existing bounded read policy must not become a new write quota.
+        assert_eq!(
+            store.record_external(&path, None, vec![]).unwrap(),
+            original
+        );
+        assert_ne!(
+            store
+                .record_external(&path, None, b"different".to_vec())
+                .unwrap()
+                .observation_id,
+            original.observation_id
+        );
+    }
+    #[test]
+    fn record_lookup_skips_large_unrelated_and_resolved_history_without_decoding_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("db")).unwrap();
+        // Valid JSON but intentionally not a typed observation: any decode of
+        // these retained bodies would fail. They precede the new candidate.
+        for resolved in [false, true] {
+            store.connection.execute(
+                "WITH RECURSIVE n(value) AS (SELECT 1 UNION ALL SELECT value+1 FROM n WHERE value<64) INSERT INTO external_observations(observation_id,record) SELECT ?1||value,json_object('path',CASE WHEN ?2 THEN 'selected.txt' ELSE 'unrelated-'||value END,'resolution',CASE WHEN ?2 THEN 'resolved' ELSE NULL END,'unrelated_payload',replace(hex(zeroblob(16384)),'00','x')) FROM n",
+                params![if resolved {"resolved-"} else {"unrelated-"},resolved],
+            ).unwrap();
+        }
+        let retained: Vec<(String, String)> = store
+            .connection
+            .prepare("SELECT observation_id,record FROM external_observations ORDER BY rowid")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(retained.len(), 128);
+        let path = VaultPath::new("selected.txt").unwrap();
+        let first = store
+            .record_external(&path, None, b"selected bytes".to_vec())
+            .unwrap();
+        assert_eq!(
+            store
+                .record_external(&path, None, b"selected bytes".to_vec())
+                .unwrap(),
+            first
+        );
+        assert_eq!(
+            store
+                .find_matching_external_observation(
+                    &op("client"),
+                    &path,
+                    None,
+                    None,
+                    14,
+                    &Sha256Digest::of(b"selected bytes")
+                )
+                .unwrap(),
+            Some(first)
+        );
+        for (id, raw) in retained {
+            assert_eq!(
+                store
+                    .connection
+                    .query_row(
+                        "SELECT record FROM external_observations WHERE observation_id=?1",
+                        [id],
+                        |r| r.get::<_, String>(0)
+                    )
+                    .unwrap(),
+                raw
+            );
+        }
+        let plans: Vec<String> = store.connection.prepare("EXPLAIN QUERY PLAN SELECT observation_id,record FROM external_observations WHERE json_extract(record,'$.path')=?1 AND json_extract(record,'$.resolution') IS NULL ORDER BY rowid").unwrap().query_map([path.as_str()],|r|r.get(3)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert!(
+            plans
+                .iter()
+                .any(|plan| plan.contains("SEARCH") && plan.contains(EXTERNAL_UNRESOLVED_INDEX.0)),
+            "{plans:?}"
+        );
+    }
+    #[test]
+    fn eligible_invalid_candidate_fails_closed_without_new_observation() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("db")).unwrap();
+        store.connection.execute("INSERT INTO external_observations VALUES('malformed',json_object('path','selected.txt','resolution',NULL,'unexpected',1))",[]).unwrap();
+        assert!(store
+            .record_external(
+                &VaultPath::new("selected.txt").unwrap(),
+                None,
+                b"body".to_vec()
+            )
+            .is_err());
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT count(*) FROM external_observations", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+    #[test]
+    fn unresolved_dedupe_keeps_earliest_rowid_and_typed_baseline_content_and_physical_proofs() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("db")).unwrap();
+        let path = VaultPath::new("selected.txt").unwrap();
+        let proof = ObservationPhysical {
+            physical: PhysicalIdentity {
+                inode: "original".into(),
+                parent_inode: "parent".into(),
+            },
+            expected_binding: None,
+        };
+        let first = store
+            .record_external_bound(&path, None, b"body".to_vec(), &proof)
+            .unwrap();
+        let mut duplicate = first.clone();
+        duplicate.observation_id = op("duplicate");
+        store
+            .connection
+            .execute(
+                "INSERT INTO external_observations VALUES(?1,?2)",
+                params![
+                    duplicate.observation_id.as_str(),
+                    serde_json::to_string(&duplicate).unwrap()
+                ],
+            )
+            .unwrap();
+        physical_bindings::put_observation_proof(
+            &store.connection,
+            &duplicate.observation_id,
+            &proof,
+        )
+        .unwrap();
+        assert_eq!(
+            store
+                .record_external_bound(&path, None, b"body".to_vec(), &proof)
+                .unwrap(),
+            first
+        );
+        let changed_proof = ObservationPhysical {
+            physical: PhysicalIdentity {
+                inode: "changed".into(),
+                parent_inode: "parent".into(),
+            },
+            expected_binding: None,
+        };
+        assert_ne!(
+            store
+                .record_external_bound(&path, None, b"body".to_vec(), &changed_proof)
+                .unwrap()
+                .observation_id,
+            first.observation_id
+        );
+        assert_ne!(
+            store
+                .record_external_bound(&path, None, b"other".to_vec(), &proof)
+                .unwrap()
+                .observation_id,
+            first.observation_id
+        );
+        let mut baseline_state = state();
+        baseline_state.path = path.clone();
+        let baseline = ProjectionBaseline {
+            state: baseline_state,
+            content: StoredContent::InlineBytes(b"base".to_vec()),
+        };
+        assert_ne!(
+            store
+                .record_external(&path, Some(baseline), b"body".to_vec())
+                .unwrap()
+                .observation_id,
+            first.observation_id
+        );
+        store.connection.execute("UPDATE external_observations SET record=json_set(record,'$.resolution','resolved') WHERE observation_id IN (?1,?2)",params![first.observation_id.as_str(),duplicate.observation_id.as_str()]).unwrap();
+        let fresh = store
+            .record_external_bound(&path, None, b"body".to_vec(), &proof)
+            .unwrap();
+        assert_ne!(fresh.observation_id, first.observation_id);
+        assert_ne!(fresh.observation_id, duplicate.observation_id);
+    }
+    #[test]
+    fn capture_ids_do_not_cross_dedupe_and_exact_resolved_capture_replay_keeps_proof_cas() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("db")).unwrap();
+        let scope = scope();
+        store
+            .family_enroll(&FamilyScope {
+                realm_id: scope.realm_id,
+                vault_id: scope.vault_id,
+            })
+            .unwrap();
+        let client = op("client");
+        let path = VaultPath::new("empty.bin").unwrap();
+        let mut contents = Vec::new();
+        for name in ["capture-first", "capture-second"] {
+            let stage = store
+                .begin_binary_capture(
+                    &client,
+                    &op(name),
+                    &BinaryCaptureRequest {
+                        path: path.clone(),
+                        expected_length: 0,
+                        expected_digest: Sha256Digest::of(&[]),
+                    },
+                    StreamingLimits {
+                        max_active_stages: 4,
+                        max_stage_records: 8,
+                        max_staged_bytes: 1024,
+                        max_chunk_records: 8,
+                        max_page_records: 8,
+                    },
+                )
+                .unwrap();
+            store.seal_binary_stage(&stage, 0, None).unwrap();
+            contents.push(StoredContent::BinaryRef(BinarySourceRef::Capture(
+                store.captured_binary_ref(&stage).unwrap(),
+            )));
+        }
+        let first = store
+            .retain_external_content(&client, &path, None, &contents[0], None)
+            .unwrap();
+        // A different capture ID never scans even eligible other observations.
+        store.connection.execute("INSERT INTO external_observations VALUES('other-eligible',json_object('path','empty.bin','resolution',NULL,'unexpected',1))",[]).unwrap();
+        let second = store
+            .retain_external_content(&client, &path, None, &contents[1], None)
+            .unwrap();
+        assert_eq!(first.observation_id, op("capture-first"));
+        assert_eq!(second.observation_id, op("capture-second"));
+        store.connection.execute("UPDATE external_observations SET record=json_set(record,'$.resolution','resolved') WHERE observation_id=?1",[first.observation_id.as_str()]).unwrap();
+        let replay = store
+            .retain_external_content(&client, &path, None, &contents[0], None)
+            .unwrap();
+        assert_eq!(replay.observation_id, first.observation_id);
+        assert_eq!(replay.resolution, Some(op("resolved")));
+        let baseline = ProjectionBaseline {
+            state: state(),
+            content: StoredContent::InlineBytes(vec![]),
+        };
+        let physical = ObservationPhysical {
+            physical: PhysicalIdentity {
+                inode: "other".into(),
+                parent_inode: "parent".into(),
+            },
+            expected_binding: None,
+        };
+        let mut changed = contents[0].clone();
+        if let StoredContent::BinaryRef(BinarySourceRef::Capture(capture)) = &mut changed {
+            capture.manifest.digest = Sha256Digest::of(b"different");
+        }
+        for result in [
+            store.retain_external_content(
+                &client,
+                &VaultPath::new("different.bin").unwrap(),
+                None,
+                &contents[0],
+                None,
+            ),
+            store.retain_external_content(&client, &path, Some(&baseline), &contents[0], None),
+            store.retain_external_content(&client, &path, None, &contents[0], Some(&physical)),
+            store.retain_external_content(&client, &path, None, &changed, None),
+        ] {
+            assert!(matches!(
+                result,
+                Err(StoreError::Contract(
+                    ContractError::IdempotencyConflict { .. }
+                ))
+            ));
+        }
     }
 }
