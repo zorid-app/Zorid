@@ -15,6 +15,12 @@ sparse coordinate map and indexed interval associations; preserve exact output,
 source fences, cancellation and existing work/memory limits. No retained body or
 response cache and no multicore. Independent review and matching dense comparison
 remain required. These pure debug observations are not actual app latency.
+Implemented and integrated `300564c5` after independent review:22 snippet tests,
+the unchanged dense oracle,49 integration and8 native rich-search checks pass.
+Dense observations now10 pages/40MiB reads and~1.7s debug per query, preserving
+all8192 exact locations/counts under unchanged limits. This removes92% of source
+bytes and presentation work. Actual Electron/browser latency remains unverified;
+no more speculative projector optimization before those platform gates.
 
 ## S1 clock boundary validation — core fix integrated, platform checks pending
 

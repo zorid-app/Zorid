@@ -7,6 +7,47 @@ is historical where it conflicts with this checkpoint. The maintained stage
 sequence is in [roadmap.md](roadmap.md); S1 scope is in
 [plans/indexing-search.md](plans/indexing-search.md).
 
+### Latest execution update
+
+Main through `300564c5` integrates grouped search/controller, common transport,
+pure rich paging, native binding, real WASM/browser binding, standalone rich CLI,
+pure lifecycle reducer and the measured transient snippet projector. The older
+detailed batch notes below describe their original execution points.
+
+- Rich core reference:75 focused/dense checks. Projector successor:22 snippet
+  tests, unchanged dense oracle,49 integration and8 native rich-search tests pass.
+  The4MiB/8192-match case uses10 pages/40MiB reads versus128/512MiB; debug single
+  observations~1.7s versus26–27s. This is measured pure-engine work reduction,
+  not actual app latency. Exact-source evidence lives under
+  `/private/tmp/zorid-rich-projector-reviewed-56pwwu5n` and
+  `/private/tmp/zorid-projector-consumers-d134-r3_ff0qn`.
+- Browser/WASM binding:26 hosted Rust checks,66 Node checks and full TypeScript
+  pass; the latter checks pass again on main. Actual generated wasm32/browser
+  acceptance remains pending. CLI4 unit+7 actual process checks pass on frozen
+  `9a9a78d2`; source is main `1690ddb3`. Evidence
+  `/private/tmp/zorid-cli-rich-fcntl-8q7rtifc`. macOS pipe status test correction
+  preserves production flag restoration and exact UTF8 output.
+- Desktop transport:reviewed43 JS/TS checks; Rust host source plus truthful
+  resource-capacity test `1f96a7d6` awaits3 native-backed checks. Actual Electron
+  grouped search/Find/sort/navigation/input acceptance remains pending. Owner
+  `architecture_core_audit` prepares one canonical all-up validation branch from
+  current main in the existing `s1-search-parser` worktree; root integrates main.
+- S1.4A pure scheduler:27 checks pass with public module exported; main
+  `4cbd4be5`. Store source/recovery `9e77753f` and native driver `bcccca8e` are
+  independently source-approved but unexecuted/unintegrated. Owners
+  `storage_sqlite_impl` and `s1_lifecycle_core`; Store35 and native17 checks await
+  the exclusive heavy slot. Browser lifecycle owner `architecture_platform_audit`
+  prepares the concrete contract; shared facade/host/frontend scheduling migration
+  has not started. Pure policy is not actual no-listener wake/fairness acceptance.
+- Four additional targeted native path lookups `a6d57cb9` are independently
+  source-approved, with40 scoped native checks pending. No measured10k admission
+  gain is established. Native10k/actual100k factory and broader S1.5/S1.6 gates
+  remain open; no multicore or later product implementation is authorized here.
+- Heavy checks remain serialized with1GiB disk floor. A bounded lossless archive
+  of nonheld Cargo cache artifacts is currently assigned to
+  `baseline_resources_impl`; no heavy check until its terminal resource clearance.
+  Preserve all prior archives, active/manual apps, source and unrelated data.
+
 - **Active goal boundary:** latest explicit user objective is "Complete the full
   roadmap S1. Stop after that." Complete every applicable S1 slice and its actual
   platform/performance gates, with multicore excluded by latest steering. Stop
