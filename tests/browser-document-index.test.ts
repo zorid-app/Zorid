@@ -208,6 +208,15 @@ test('Base cache does not replace current pin admission before or after evaluati
   const fresh=await index.open();f.afterBase(()=>f.deny());await assert.rejects(index.base({pinId:fresh.pinId,id:'base'}),{code:'owner_retired'});
   assert.equal(f.preparationStats.freed,1);await index.close();assert.equal(f.preparationStats.freed,1);
 });
+test('close or rebuild during pending Base admission cannot recreate the owner cache',async()=>{
+  for(const action of ['close','rebuild'] as const){
+    const f=fixture();f.file('base','definition',{path:'Links.base'});const index=f.open();await f.build(index);const pin=await index.open();await index.base({pinId:pin.pinId,id:'base'});
+    const source=f.source();let ending:Promise<void>|undefined;
+    f.afterRead((store,key)=>{if(!ending&&store==='control'&&key==='document-index:v1/catalog')ending=index[action]();});
+    await assert.rejects(index.base({pinId:pin.pinId,id:'base'}),(error:any)=>['index_closed','index_snapshot_expired'].includes(error.code));
+    await ending;assert.ok(ending);assert.equal(f.preparationStats.created,1);assert.equal(f.preparationStats.freed,1);assert.equal(f.preparationCalls.length,1);assert.deepEqual(f.source(),source);await index.close();
+  }
+});
 test('Base selectors are captured before asynchronous admission and TTL clock is independent',async()=>{
   const f=fixture();f.file('base','definition',{path:'Links.base'});const index=f.open();await f.build(index);const pin=await index.open();
   const request={pinId:pin.pinId,id:'base',viewName:'Original',options:{clockMs:0,searchTerms:['needle']}};

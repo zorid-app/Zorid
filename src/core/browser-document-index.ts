@@ -189,7 +189,8 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
   })();}
   async function assertPin(pinId:string):Promise<Generation>{
     active();const pin=pins.get(pinId);if(!pin)throw fail('index_snapshot_expired');
-    await run<void>('readonly',['control'],(tx,done,abort)=>readCatalog(tx,c=>{if(!c.pins.some(p=>p.id===pinId&&p.clientId===host.clientId&&p.generation===pin.generation))throw fail('index_snapshot_expired');done();},abort));return pin.value;
+    await run<void>('readonly',['control'],(tx,done,abort)=>readCatalog(tx,c=>{if(!c.pins.some(p=>p.id===pinId&&p.clientId===host.clientId&&p.generation===pin.generation))throw fail('index_snapshot_expired');done();},abort));
+    active();if(pins.get(pinId)!==pin)throw fail('index_snapshot_expired');return pin.value;
   }
   function tokenForPin(pinId:string,token:unknown):string {
     if(token===undefined)return '';const value=inputText(token,256),prefix=pinId+'/';
@@ -369,7 +370,9 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
       // Capture caller-owned selectors before any await. Admission remains per
       // invocation; neither the pure-data cache nor an old result admits a pin.
       const pinId=inputText(input.pinId,128),id=inputText(input.id,128),options=baseOptions(input.options),viewName=input.viewName==null?undefined:inputText(input.viewName,1024);
-      const g=await assertPin(pinId),pin=pins.get(pinId)!,entry=pin.header.entries.find(e=>e.id===id&&e.kind==='file');if(!entry)throw fail('index_missing_source');
+      const g=await assertPin(pinId);active();const pin=pins.get(pinId);if(!pin||pin.value!==g)throw fail('index_snapshot_expired');
+      const admitted=()=>{active();if(pins.get(pinId)!==pin)throw fail('index_snapshot_expired');};
+      const entry=pin.header.entries.find(e=>e.id===id&&e.kind==='file');if(!entry)throw fail('index_missing_source');
       const files=pin.header.entries.filter(e=>e.kind==='file');if(files.length>LIMITS.baseRecords)throw fail('index_input_limit');
       const presentations=new Map<string,BrowserVaultPresentation>();for(const row of pin.capture.publication.presentation){if(presentations.has(row.id))throw fail('index_rebuild_required');presentations.set(row.id,row);}
       const facts=[];let factsBytes=2;for(const e of files){const presentation=presentations.get(e.id);if(!presentation)throw fail('index_rebuild_required');
@@ -378,8 +381,8 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
       await assertPin(pinId);
       // No await after acquiring this owner handle: close/rebuild cannot free it
       // during use. Rust rechecks retained bytes/UTF8 before lookup and after eval.
-      active();const result=json<unknown>(rust(()=>{preparation??=new host.wasm.WasmDocumentIndexPreparationCache();return preparation.baseJson(g,id,row.projection!,factsJson,options,monotonicMs(),viewName);}));
-      await assertPin(pinId);return result;
+      admitted();const result=json<unknown>(rust(()=>{preparation??=new host.wasm.WasmDocumentIndexPreparationCache();return preparation.baseJson(g,id,row.projection!,factsJson,options,monotonicMs(),viewName);}));
+      await assertPin(pinId);admitted();return result;
     },
     async rebuild(){active();releasePreparation();for(const stage of stages.values()){stage.builder?.free();stage.generation?.free();}stages.clear();for(const pin of pins.values())pin.value.free();pins.clear();
       // Explicit rebuild expires every old pin; fresh epochs prevent token ABA.
