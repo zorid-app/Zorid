@@ -42,6 +42,16 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   `/private/tmp/zorid-s1-query-preparation-handoff.md`. Focused resolver tests and
   existing generated Base100/10k semantic oracles are the gates; actual platform
   bindings and complete S1.2 reuse remain separate. Manual user app untouched.
+  Independent S1.2 shared Bases preparation/cache owner `storage_sqlite_impl`
+  prepares a minimal typed API first in isolated `storage-parse-cache`, new branch
+  from current main; then owns Bases graph/query/program/cache internals and
+  focused Bases tests. Resolver public matching contract stays unchanged. Host
+  wiring remains unassigned until the shared API is agreed; no native/WASM edits
+  by this owner yet. Root owns shared API decisions and main integration; reviewer
+  `baseline_resources_impl`. Use session-owned bounded immutable data, full
+  generation/facts/source/version keys, current invocation context and explicit
+  expiry; never retain a query pin or source-write capability. Existing handoff
+  defines accepted contracts; no new authority cache or query language framework.
 - **Integrated:** scoped observation-lookup fix through `2c53a98d`,193
   focused checks/1 existing ignored fixture, release build and normal-family100
   source/search checks pass. Small Base17 semantic-baseline tool is integrated
