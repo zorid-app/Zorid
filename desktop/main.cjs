@@ -6,6 +6,7 @@ const { randomUUID } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { VaultService } = require('./vault-service.cjs');
 const { WindowBroker } = require('./window-broker.cjs');
+const { captureRichDiagnostic } = require('./document-semantics.cjs');
 const editorCore = require('./editor-core.cjs').createEditorCoreManager(process.env,{isPackaged:app.isPackaged,resourcesPath:process.resourcesPath});
 let clientSlots;
 const { createContextMenuController } = require('./context-menu.cjs');
@@ -120,8 +121,21 @@ function registerIPC() {
     catch (error) { return { ok: false, error: { code: typeof error?.code === 'string' && /^[a-z_]{1,64}$/.test(error.code) ? error.code : 'durable_request_failed', commitUncertain: error?.commitUncertain === true } }; }
   };
   handle('getDurableContext', (record, _event, expectedRoot) => durableReply(() => editorCore ? editorCore.context(broker, record, expectedRoot) : null));
-  handle('durableInvoke', (record, event, expectedRoot, admissionId, method, args) => durableReply(() => {
+  handle('durableInvoke', (record, event, expectedRoot, admissionId, method, args) => durableReply(async () => {
     if (!editorCore) throw new Error('No Rust editor context');
+    if(method==='documentCommand'&&['rich_start','rich_prepare','rich_page','rich_close'].includes(args?.[0]?.command?.op)){
+      // Return plain data through the existing preload pass-through: Electron's
+      // contextBridge does not preserve custom properties on thrown Errors.
+      try { return {documents:true,schemaVersion:1,ok:true,value:await editorCore.invoke(broker, record, event, expectedRoot, admissionId, method, args)}; }
+      catch(error){
+        const failure={code:typeof error?.code==='string'&&/^[a-z_]{1,64}$/.test(error.code)?error.code:'invalid_document_response',commitUncertain:error?.commitUncertain===true};
+        if(failure.code==='search_compile'){
+          try {if(!error.details||Object.keys(error.details).length!==1||!Object.hasOwn(error.details,'diagnostic'))throw new Error();failure.details={diagnostic:captureRichDiagnostic(error.details.diagnostic)};}
+          catch {failure.code='invalid_document_response';}
+        }
+        return {documents:true,schemaVersion:1,ok:false,error:failure};
+      }
+    }
     return editorCore.invoke(broker, record, event, expectedRoot, admissionId, method, args);
   }));
   handle('releaseDurableContext', (record, event, expectedRoot, admissionId) => durableReply(() => {

@@ -2,9 +2,13 @@
 // Transport validation only. Markdown, URL resolution and Base evaluation stay
 // in Rust; native pins/cursors are represented only by owner-bound locators.
 const MAX_DOCUMENT_REQUEST=64*1024,MAX_DOCUMENT_RESPONSE=16*1024*1024;
+const MAX_RICH_PAGE=1024*1024,MAX_RICH_RESPONSE=2*1024*1024;
 const utf8=new TextEncoder(),byteLength=value=>utf8.encode(value).byteLength;
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const id=value=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(value);
+const scalar=value=>typeof value==='string'&&!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
+const opaque=value=>scalar(value)&&byteLength(value)>0&&byteLength(value)<=256;
+const richOp=op=>['rich_start','rich_prepare','rich_page','rich_close'].includes(op);
 const decimal=value=>typeof value==='string'&&/^(0|[1-9][0-9]{0,19})$/.test(value)&&BigInt(value)<=18446744073709551615n;
 const integer=(value,max=Number.MAX_SAFE_INTEGER)=>Number.isSafeInteger(value)&&value>=0&&value<=max;
 const keys=(value,allowed,required=allowed)=>object(value)&&Object.keys(value).every(key=>allowed.includes(key))&&required.every(key=>Object.hasOwn(value,key));
@@ -20,11 +24,16 @@ function source(value){return keys(value,['localStoreId','watermark'])&&id(value
 function entry(value){return keys(value,['id','revision','path','kind','deleted'])&&id(value.id)&&id(value.revision)&&typeof value.path==='string'&&value.path.length>0&&['file','folder'].includes(value.kind)&&value.deleted===false;}
 function strings(value){return Array.isArray(value)&&value.length<=256&&value.every(item=>typeof item==='string'&&byteLength(item)<=4096);}
 function parseCache(value){const fields=['hits','misses','unavailable','corrupt','unsupported'];return keys(value,fields)&&fields.every(key=>integer(value[key]));}
+function captureRichDiagnostic(diagnostic){
+  const range=value=>keys(value,['bytes','utf16'])&&['bytes','utf16'].every(key=>Array.isArray(value[key])&&value[key].length===2&&value[key].every(n=>integer(n,4096))&&value[key][0]<=value[key][1]);
+  if(!keys(diagnostic,['code','queryRange','message'])||!['unknown-operator','invalid-nesting','invalid-operand','invalid-regex','unsupported-regex','resource','invalid-document'].includes(diagnostic.code)||!range(diagnostic.queryRange)||!scalar(diagnostic.message)||byteLength(diagnostic.message)>4096)throw fail('invalid_document_response');
+  return {code:diagnostic.code,queryRange:{bytes:[...diagnostic.queryRange.bytes],utf16:[...diagnostic.queryRange.utf16]},message:diagnostic.message};
+}
 function captureDocumentRequest(input){
   if(!keys(input,['schemaVersion','command'])||input.schemaVersion!==1||!object(input.command)||typeof input.command.op!=='string')throw fail('invalid_document_request');
   const command=input.command,op=command.op;
-  const fields={status:[],initialize:[],rebuild:[],begin:[],stages:[],resume:['snapshot'],pump:['snapshot'],publish:['snapshot'],discard:['snapshot'],open:['pinId'],close:['pinId'],metadata:['pinId','id'],search:['pinId','query','cursor','limit'],backlinks:['pinId','id','cursor','limit'],base:['pinId','id','viewName','options'],tasks:['pinId','typeIds','options']}[op];
-  if(!fields||!keys(command,['op',...fields],['op',...fields.filter(key=>!['cursor','viewName','options'].includes(key))]))throw fail('invalid_document_request');
+  const fields={status:[],initialize:[],rebuild:[],begin:[],stages:[],resume:['snapshot'],pump:['snapshot'],publish:['snapshot'],discard:['snapshot'],open:['pinId'],close:['pinId'],metadata:['pinId','id'],search:['pinId','query','cursor','limit'],backlinks:['pinId','id','cursor','limit'],base:['pinId','id','viewName','options'],tasks:['pinId','typeIds','options'],rich_start:['pinId','spec'],rich_prepare:['pinId','queryId'],rich_page:['pinId','queryId','cursor'],rich_close:['pinId','queryId']}[op];
+  if(!fields||!keys(command,['op',...fields],['op',...fields.filter(key=>!['viewName','options',...(op==='rich_page'?[]:['cursor'])].includes(key))]))throw fail('invalid_document_request');
   const captured={op};
   for(const key of fields){
     const value=command[key];
@@ -32,7 +41,12 @@ function captureDocumentRequest(input){
     else if(key==='pinId'){if(!decimal(value)||value==='0')throw fail('invalid_pin_id');captured[key]=value;}
     else if(key==='typeIds'){if(!Array.isArray(value)||value.length>128||value.some(item=>!id(item))||new Set(value).size!==value.length)throw fail('invalid_document_request');captured[key]=[...value];}
     else if(key==='id'){if(!id(value))throw fail('invalid_document_request');captured[key]=value;}
-    else if(key==='cursor'){if(value!==undefined&&value!==null&&!id(value))throw fail('invalid_document_request');captured[key]=value??null;}
+    else if(key==='queryId'){if(!opaque(value))throw fail('invalid_document_request');captured[key]=value;}
+    else if(key==='spec'){
+      if(!keys(value,['query','caseSensitive','sort','context','explain'])||!scalar(value.query)||byteLength(value.query)>4096||typeof value.caseSensitive!=='boolean'||typeof value.explain!=='boolean'||!['nameAsc','nameDesc','modifiedDesc','modifiedAsc','createdDesc','createdAsc'].includes(value.sort)||!['line','section'].includes(value.context))throw fail('invalid_document_request');
+      captured.spec={...value};
+    }
+    else if(key==='cursor'){if(op==='rich_page'?!opaque(value):value!==undefined&&value!==null&&!id(value))throw fail('invalid_document_request');captured[key]=value??null;}
     else if(key==='query'){if(typeof value!=='string'||!value||byteLength(value)>4096||/[\r\n]/.test(value))throw fail('invalid_query');captured[key]=value;}
     else if(key==='limit'){if(!integer(value,1000)||value===0)throw fail('invalid_budget');captured[key]=value;}
     else if(key==='viewName'){if(value!==undefined&&value!==null&&(typeof value!=='string'||byteLength(value)>1024))throw fail('invalid_document_request');captured[key]=value??null;}
@@ -98,12 +112,13 @@ function taskRead(value,command){
 }
 function decodeDocumentReply(request,marker,bytes){
   if(!keys(marker,['documents','schemaVersion','bytes'])||marker.documents!==true||marker.schemaVersion!==1||!integer(marker.bytes,MAX_DOCUMENT_RESPONSE)||!(bytes instanceof Uint8Array)||marker.bytes!==bytes.length||!bytes.length)throw fail('invalid_document_response');
+  if(request.command.op==='rich_page'&&bytes.length>MAX_RICH_RESPONSE)throw fail('invalid_document_response');
   let reply;try{reply=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{throw fail('invalid_document_response');}
   const command=request.command,op=command.op;
   if(!keys(reply,['schemaVersion','op','value'])||reply.schemaVersion!==1||reply.op!==op)throw fail('invalid_document_response');
   const value=reply.value;
   let valid=false;
-  if(['initialize','rebuild','close','discard'].includes(op))valid=value===true;
+  if(['initialize','rebuild','close','discard','rich_close'].includes(op))valid=value===true;
   else if(op==='status')valid=object(value)&&source(value.source)&&['uninitialized','rebuild_required','building','ready'].includes(value.state)
     &&(value.state==='ready'?keys(value,['source','state','snapshot','coveredWatermark','observedSourceHead','coverageComplete'])&&snapshot(value.snapshot)&&value.snapshot.localStoreId===value.source.localStoreId&&decimal(value.coveredWatermark)&&value.observedSourceHead===value.source.watermark&&typeof value.coverageComplete==='boolean':keys(value,['source','state']));
   else if(['begin','resume'].includes(op))valid=keys(value,['snapshot'])&&snapshot(value.snapshot)&&(op!=='resume'||same(value.snapshot,command.snapshot));
@@ -115,6 +130,14 @@ function decodeDocumentReply(request,marker,bytes){
   else if(op==='publish')valid=snapshot(value)&&same(value,command.snapshot);
   else if(op==='stages')valid=Array.isArray(value)&&value.length<=4&&value.every(item=>keys(item,['snapshot'])&&snapshot(item.snapshot));
   else if(op==='open')valid=keys(value,['pinId','snapshot','source','coverageComplete'])&&value.pinId===command.pinId&&snapshot(value.snapshot)&&source(value.source)&&value.snapshot.localStoreId===value.source.localStoreId&&typeof value.coverageComplete==='boolean';
+  else if(op==='rich_start')valid=keys(value,['queryId'])&&opaque(value.queryId);
+  else if(op==='rich_prepare')valid=keys(value,['state'],['state'])&&value.state==='preparing'||keys(value,['state','cursor'])&&value.state==='ready'&&opaque(value.cursor);
+  else if(op==='rich_page'){
+    const report=value?.result,inner=report?.value;
+    // The common facade owns the strict DTO decoder. This boundary checks only
+    // bounded framing and envelope/continuation identity, before IPC delivery.
+    valid=keys(value,['result','cursor'])&&(value.cursor===null||opaque(value.cursor))&&envelope(report)&&object(inner)&&snapshot(inner.snapshot)&&same(inner.snapshot,report.snapshot)&&inner.coverageComplete===report.coverageComplete&&inner.next===null&&typeof inner.scanComplete==='boolean'&&typeof inner.outputComplete==='boolean'&&(inner.scanComplete&&inner.outputComplete)===(value.cursor===null)&&byteLength(JSON.stringify(inner))<=MAX_RICH_PAGE;
+  }
   else if(op==='metadata')valid=envelope(value)&&keys(value.value,['entry','metadata','exclusion'])&&entry(value.value.entry)&&value.value.entry.id===command.id
     &&(value.value.metadata===null||object(value.value.metadata)&&value.value.metadata.entryId===command.id&&value.value.metadata.contentRevision===value.value.entry.revision&&Array.isArray(value.value.metadata.properties))
     &&(value.value.exclusion===null||['binary','unreadable','sourceLimit','extractionLimit'].includes(value.value.exclusion));
@@ -131,29 +154,42 @@ function decodeDocumentReply(request,marker,bytes){
 function validDocumentReply(command,marker,bytes){try{decodeDocumentReply(command.request,marker,bytes);return true;}catch{return false;}}
 function createDesktopDocumentSemantics(host,clientId,localStoreId){
   if(!id(clientId)||!id(localStoreId))throw fail('client_scope_mismatch');
-  const pins=new Map();
+  const pins=new Map();let retired=false;
   return Object.freeze({
     async invoke(input){
       const request=captureDocumentRequest(input),command=request.command,op=command.op;
+      if(retired)throw fail('client_not_admitted');
+      const selected=pins.get(command.pinId);
       if(command.pinId&&!['open','close'].includes(op)&&!pins.has(command.pinId))throw fail('snapshot_expired');
+      if(op==='close'&&selected)selected.closing=true;
+      if(richOp(op)&&selected.closing)throw fail('search_expired');
+      let query;
+      if(richOp(op)&&op!=='rich_start'){query=selected.queries.get(command.queryId);if(!query||query.closing&&op!=='rich_close')throw fail('search_expired');if(op==='rich_page'&&!query.cursors.has(command.cursor))throw fail('search_expired');if(op==='rich_close')query.closing=true;}
       let value;
       try{value=await host.documentCommand(clientId,request);}
       catch(error){if(error?.code==='snapshot_expired'&&command.pinId)pins.delete(command.pinId);throw error;}
+      if(retired)throw fail('client_not_admitted');
+      if(richOp(op)&&(pins.get(command.pinId)!==selected||op!=='rich_start'&&selected.queries.get(command.queryId)!==query))throw fail('search_expired');
+      if(richOp(op)&&op!=='rich_close'&&(selected.closing||query?.closing))throw fail('search_expired');
       if(op==='status'&&value.source.localStoreId!==localStoreId)throw fail('invalid_document_response');
       if(op==='open'){
         const previous=pins.get(command.pinId);
         if(value.snapshot.localStoreId!==localStoreId||value.source.localStoreId!==localStoreId||previous&&(!same(previous.snapshot,value.snapshot)||!sameSource(previous.source,value.source)||previous.coverageComplete!==value.coverageComplete))throw fail('invalid_document_response');
-        pins.set(command.pinId,structuredClone({snapshot:value.snapshot,source:value.source,coverageComplete:value.coverageComplete}));
+        if(!previous)pins.set(command.pinId,{...structuredClone({snapshot:value.snapshot,source:value.source,coverageComplete:value.coverageComplete}),queries:new Map()});
       }else if(op==='close')pins.delete(command.pinId);
       else if(op==='rebuild')pins.clear();
-      else if(['metadata','base','tasks','search','backlinks'].includes(op)){
-        const envelope=['search','backlinks'].includes(op)?value.result:value;
+      else if(op==='rich_start'){if(!keys(value,['queryId'])||!opaque(value.queryId)||selected.queries.has(value.queryId)||selected.queries.size>=4)throw fail('invalid_document_response');selected.queries.set(value.queryId,{closing:false,cursors:new Set()});}
+      else if(op==='rich_prepare'){if(value.state==='ready'){if(!opaque(value.cursor))throw fail('invalid_document_response');query.cursors.add(value.cursor);if(query.cursors.size>8)query.cursors.delete(query.cursors.values().next().value);}}
+      else if(op==='rich_close')selected.queries.delete(command.queryId);
+      if(['metadata','base','tasks','search','backlinks','rich_page'].includes(op)){
+        const envelope=['search','backlinks','rich_page'].includes(op)?value.result:value;
         const selected=pins.get(command.pinId);
         if(!selected||!same(envelope.snapshot,selected.snapshot)||!sameSource(envelope.source,selected.source)||envelope.coverageComplete!==selected.coverageComplete)throw fail('invalid_document_response');
+        if(op==='rich_page'&&value.cursor!==null){query.cursors.add(value.cursor);if(query.cursors.size>8)query.cursors.delete(query.cursors.values().next().value);}
       }
       return value;
     },
-    forget(){pins.clear();},
+    forget(){retired=true;pins.clear();},
   });
 }
-module.exports={MAX_DOCUMENT_REQUEST,MAX_DOCUMENT_RESPONSE,captureDocumentRequest,decodeDocumentReply,validDocumentReply,createDesktopDocumentSemantics};
+module.exports={MAX_DOCUMENT_REQUEST,MAX_DOCUMENT_RESPONSE,MAX_RICH_PAGE,MAX_RICH_RESPONSE,captureDocumentRequest,captureRichDiagnostic,decodeDocumentReply,validDocumentReply,createDesktopDocumentSemantics};

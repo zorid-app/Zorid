@@ -88,3 +88,41 @@ test('desktop pump preserves native parse-cache metrics as immutable service pro
   assert.equal(Object.hasOwn(legacy.progress!,'parseCache'),false);
   await binding.release();
 });
+
+const richSpec={query:'file:note',caseSensitive:false,sort:'nameAsc',context:'line',explain:false} as const;
+const richWire=(ok:boolean,value:unknown)=>({documents:true,schemaVersion:1,ok,...(ok?{value}:{error:value})});
+const emptyRichPage=()=>({result:{snapshot,source,coverageComplete:true,value:{snapshot,next:null,scanComplete:true,coverageComplete:true,complete:true,dialect:'zorid-search-rust-unicode-1',spec:richSpec,explanation:null,files:[],totals:{files:{relation:'exact',value:0},occurrences:{relation:'exact',value:0}},coverage:{candidateFiles:0,evaluatedFiles:0,unavailableFiles:0,scanComplete:true,queryCoverageComplete:true},outputComplete:true,work:{documents:0,sourceBytes:0,units:0}}},cursor:null});
+test('desktop rich forwarding unwraps marked IPC data and closes query before pin',async()=>{
+  const seen:unknown[]=[];let preparing=true;
+  const binding=createDesktopDocumentService(async input=>{
+    const c=captureDocumentRequest(structuredClone(input)).command;seen.push(c);
+    if(c.op==='open')return opened(c.pinId);
+    if(c.op==='rich_start')return richWire(true,{queryId:'q'});
+    if(c.op==='rich_prepare'){if(preparing){preparing=false;return richWire(true,{state:'preparing'});}return richWire(true,{state:'ready',cursor:'c'});}
+    if(c.op==='rich_page')return richWire(true,emptyRichPage());
+    if(c.op==='rich_close')return richWire(true,true);
+    if(c.op==='close')return true;
+    throw Error('Unexpected operation');
+  });
+  assert.equal(binding.service.richSearchAvailable,true);
+  const pin=await binding.service.open(),query=await pin.richSearch!({spec:richSpec});
+  assert.equal(query.queryId,'q');assert.deepEqual(await query.prepare(),{state:'preparing'});const ready=await query.prepare();assert.equal(ready.state,'ready');
+  if(ready.state==='ready')assert.equal((await query.page(ready.cursor)).result.value.totals.files.value,0);
+  await pin.close();await binding.release();
+  assert.deepEqual(seen,[{op:'open',pinId:'1'},{op:'rich_start',pinId:'1',spec:richSpec},{op:'rich_prepare',pinId:'1',queryId:'q'},{op:'rich_prepare',pinId:'1',queryId:'q'},{op:'rich_page',pinId:'1',queryId:'q',cursor:'c'},{op:'rich_close',pinId:'1',queryId:'q'},{op:'close',pinId:'1'}]);
+});
+
+test('desktop IPC rich errors preserve typed compile diagnostics and reject malformed markers',async()=>{
+  const diagnostic={code:'unsupported-regex',queryRange:{bytes:[0,3],utf16:[0,3]},message:'Unsupported expression'};
+  let reply:unknown=richWire(false,{code:'search_compile',commitUncertain:false,details:{diagnostic}});
+  const binding=createDesktopDocumentService(async input=>input.command.op==='open'?opened(input.command.pinId):input.command.op==='close'?true:reply);
+  const pin=await binding.service.open();
+  await assert.rejects(()=>pin.richSearch!({spec:richSpec}),error=>{assert.equal((error as any).code,'search_compile');assert.deepEqual((error as any).diagnostic,diagnostic);return true;});
+  for(const malformed of [
+    {...richWire(true,{queryId:'q'}),documents:false},
+    {...richWire(true,{queryId:'q'}),extra:true},
+    richWire(false,{code:'search_resource',commitUncertain:false,details:{raw:'/private/internal'}}),
+    richWire(false,{code:'search_compile',commitUncertain:false,details:{diagnostic:{...diagnostic,extra:true}}}),
+  ]){reply=malformed;await assert.rejects(()=>pin.richSearch!({spec:richSpec}),error=>(error as any).code==='invalid_document_response');}
+  await binding.release();
+});

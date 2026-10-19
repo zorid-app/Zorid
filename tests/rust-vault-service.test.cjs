@@ -30,6 +30,13 @@ process.stdin.on('data', chunk => {buffer=Buffer.concat([buffer,chunk]); while(b
  if(mode==='exit'){process.exit(1);return;}
  if(mode==='stall')continue;
  if(mode==='oversized'){process.stdout.write(Buffer.alloc(8,255));continue;}
+ if(mode.startsWith('rich_diagnostic')){
+  const diagnostic={code:'unsupported-regex',queryRange:{bytes:[0,3],utf16:[0,3]},message:'Unsupported regular expression.'};
+  if(mode==='rich_diagnostic_bad')diagnostic.queryRange.bytes=[0,4097];
+  if(mode==='rich_diagnostic_extra')diagnostic.internal='/private/secret';
+  send({version:1,request_id:req.request_id,ok:false,error:{code:'search_compile',commit_uncertain:false,details:{diagnostic},message:'/private/raw recovery'}});continue;
+ }
+ if(mode==='rich_oversized'){const prefix=Buffer.alloc(8);prefix.writeUInt32BE(2,0);prefix.writeUInt32BE(2097153,4);process.stdout.write(prefix);continue;}
  if(mode==='reject'){send({version:1,request_id:req.request_id,ok:false,error:{code:'revision_conflict',commit_uncertain:false}});continue;}
  if((mode==='document_rejection'||mode==='document_bad_rejection')&&req.command.method==='documents'){send({version:1,request_id:req.request_id,ok:false,error:{code:mode==='document_rejection'?'stale_source':'stale-source',commit_uncertain:false}});continue;}
  let responseBody = Buffer.alloc(0);
@@ -398,4 +405,28 @@ test('targeted metadata preserves small-read allocation and body identity guards
     await assert.rejects(service.readBinary('Note.bin'),{code:mode==='stat_large'?'stream_required':'revision_conflict'});
     const {result}=await host.request({method:'status'});assert.equal(result.counts.stat_path,1);assert.equal(result.counts.list_snapshot,undefined);assert.equal(result.counts.read_path,mode==='stat_large'?undefined:1);
   }
+});
+
+
+test('rich framed compile errors preserve only bounded typed diagnostic details',async t=>{
+  const host=await fixture(t,'rich_diagnostic');
+  const command={method:'documents',client_id:'client',request:{schemaVersion:1,command:{op:'rich_start',pinId:'1',spec:{query:'/(?=a)/',caseSensitive:false,sort:'nameAsc',context:'line',explain:false}}}};
+  await assert.rejects(host.request(command),error=>{
+    assert.equal(error.code,'search_compile');assert.equal(error.commitUncertain,false);
+    assert.deepEqual(error.details,{diagnostic:{code:'unsupported-regex',queryRange:{bytes:[0,3],utf16:[0,3]},message:'Unsupported regular expression.'}});
+    assert.equal(error.message.includes('/private'),false);return true;
+  });
+  for(const command of [{method:'status'},{method:'documents',request:{command:{op:'search'}}},{method:'apply'}]){
+    await assert.rejects(host.request(command),error=>{assert.equal(error.code,'search_compile');assert.equal(Object.hasOwn(error,'details'),false);return true;});
+  }
+});
+for(const mode of ['rich_diagnostic_bad','rich_diagnostic_extra'])test(`reject malformed framed rich diagnostic: ${mode}`,async t=>{
+  const host=await fixture(t,mode);
+  await assert.rejects(host.request({method:'documents',request:{command:{op:'rich_start'}}}),{code:'invalid_response'});
+});
+
+
+test('rich page frame rejects oversized declared body before reading or allocating it',async t=>{
+  const host=await fixture(t,'rich_oversized');
+  await assert.rejects(host.request({method:'documents',request:{command:{op:'rich_page'}}}),{code:'invalid_response'});
 });

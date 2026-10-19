@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { captureRecoveryList, captureRecoveryRead, validRecoveryReply } = require('./recovery-history.cjs');
 const { checkpointBytes } = require('./durable-checkpoints.cjs');
-const { captureDocumentRequest, decodeDocumentReply, validDocumentReply } = require('./document-semantics.cjs');
+const { captureDocumentRequest, captureRichDiagnostic, decodeDocumentReply, validDocumentReply, MAX_RICH_RESPONSE } = require('./document-semantics.cjs');
 const { captureWorkBlockRequest, decodeWorkBlockReply, validWorkBlockReply, MAX_WORKBLOCK_RESPONSE } = require('./workblocks.cjs');
 const { familyStatus, syncStatus, syncReport, familyCommand } = require('./family-sync-protocol.cjs');
 
@@ -29,6 +29,15 @@ const object = value => value !== null && typeof value === 'object' && !Array.is
 const exactKeys = (value, fields) => object(value) && Object.keys(value).length === fields.length && fields.every(key => Object.hasOwn(value, key));
 const identity = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const decimal = value => typeof value === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(value) && BigInt(value) <= 18446744073709551615n;
+// Preserve only the bounded shared search diagnostic. Exact query-coordinate
+// semantics are decoded once by the common document facade.
+function richCompileDetails(command, error) {
+  if(command?.method!=='documents'||!['rich_start','rich_prepare','rich_page','rich_close'].includes(command.request?.command?.op)||error.code!=='search_compile')return undefined;
+  const details=error.details;
+  if(!exactKeys(details,['diagnostic']))throw failure('invalid_response',true);
+  return {diagnostic:captureRichDiagnostic(details.diagnostic)};
+}
+
 function reconciliationStatus(value) {
   const count=value=>Number.isSafeInteger(value)&&value>=0;
   const relative=value=>value===null||typeof value==='string'&&Buffer.byteLength(value,'utf8')<=2048&&value.length>0
@@ -321,7 +330,7 @@ class RustVaultService {
           if (this.prefixUsed < 8) continue;
           this.headerLength = this.prefix.readUInt32BE(0);
           const bodyLength = this.prefix.readUInt32BE(4);
-          const bodyLimit = ['checkpoint_load', 'checkpoint_cas'].includes(this.pending?.command?.method) ? MAX_CHECKPOINT_BODY : this.pending?.command?.method === 'binary' ? MAX_BINARY_FRAME : this.pending?.command?.method === 'workblocks' ? MAX_WORKBLOCK_RESPONSE : MAX_BODY;
+          const bodyLimit = ['checkpoint_load', 'checkpoint_cas'].includes(this.pending?.command?.method) ? MAX_CHECKPOINT_BODY : this.pending?.command?.method === 'binary' ? MAX_BINARY_FRAME : this.pending?.command?.method === 'workblocks' ? MAX_WORKBLOCK_RESPONSE : this.pending?.command?.method==='documents'&&this.pending.command.request?.command?.op==='rich_page' ? MAX_RICH_RESPONSE : MAX_BODY;
           if (!this.headerLength || this.headerLength > MAX_HEADER || bodyLength > bodyLimit) throw failure('response_limit', true);
           this.frame = Buffer.allocUnsafe(this.headerLength + bodyLength);
           this.frameUsed = 0;
@@ -337,9 +346,14 @@ class RustVaultService {
           if (!pending || header.version !== 1 || header.request_id !== pending.requestId || typeof header.ok !== 'boolean') throw failure('invalid_response', true);
           if (!header.ok && (bytes.length || typeof header.error?.code !== 'string' || !/^[a-z_]{1,64}$/.test(header.error.code) || typeof header.error.commit_uncertain !== 'boolean')) throw failure('invalid_response', true);
           if (header.ok && !successful(pending.command, header.result, bytes, pending.body)) throw failure('invalid_response', true);
+          const details=header.ok?undefined:richCompileDetails(pending.command,header.error);
           clearTimeout(pending.timer); this.pending = null;
           if (header.ok) pending.resolve({ result: header.result, bytes });
-          else pending.reject(failure(header.error.code, header.error.commit_uncertain === true));
+          else {
+            const error=failure(header.error.code, header.error.commit_uncertain === true);
+            if(details!==undefined)error.details=details;
+            pending.reject(error);
+          }
         }
       }
     } catch { this.abort(failure('invalid_response', true)); }

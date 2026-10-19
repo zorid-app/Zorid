@@ -31,14 +31,15 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
     Menu: { buildFromTemplate: value => { template = value; return value; }, setApplicationMenu() {} }, shell: { openExternal() {} } };
   const mainPath = path.resolve(__dirname, '../desktop/main.cjs');
   let slotNumber=0;
-  const retirements=[];
+  const retirements=[];let coreFailure;
   const openService=async root=>{
     if (!services.has(root)) services.set(root, { root, watchers: 0, stops: 0, subscribe() { this.watchers++; return () => { this.watchers--; this.stops++; }; }, read: async () => 'base', write: async () => {}, recoveryList:async(entryId,options)=>({entryId,options}),recoveryRead:async(entryId,snapshotId)=>({entryId,snapshotId,content:'old'}), remove: async (target, force) => { removals.push([root, target, force]); } });
     return services.get(root);
   };
   const nativeRequire = name => {
-    if (name === './editor-core.cjs') return { createEditorCoreManager: () => ({open:openService,owns:()=>false,requireReleased(){},retire:async(_broker,_record,service)=>{retirements.push(service.root);},close:async()=>{}}) };
+    if (name === './editor-core.cjs') return { createEditorCoreManager: () => ({open:openService,owns:()=>false,requireReleased(){},async invoke(){if(coreFailure)throw coreFailure;return {queryId:'query'};},retire:async(_broker,_record,service)=>{retirements.push(service.root);},close:async()=>{}}) };
     if (name === './client-slots.cjs') return {openClientSlots:async()=>({listRestorable:async()=>[],claim:async({primary}={})=>({slotId:primary?'primary':`window-${++slotNumber}`,clientId:'client',vaultPath:null}),setVault:async()=>{},release:async()=>{}})};
+    if (name === './document-semantics.cjs') return require('../desktop/document-semantics.cjs');
     if (name === 'electron') return electron;
     if (name === 'node:fs/promises') return { readFile: async () => '{"path":"/first"}', mkdir: async () => {}, writeFile: async () => {} };
     if (name === './menu-hotkeys.cjs') return require('../desktop/menu-hotkeys.cjs');
@@ -84,6 +85,27 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   assert.throws(()=>handlers.get('zorid:setMenuHotkeys')({sender:windows[0].webContents,senderFrame:{}},[]),/Untrusted/);
   newWindowMenu.click(); await new Promise(resolve => setImmediate(resolve));
   assert.equal(windows.length, 3); assert.equal(invoke(windows[2], 'getVault').path, '/first');
+  // Exercise the real main handler and sandbox preload pass-through. Only
+  // rich document calls use plain data to survive contextBridge Error copying.
+  const richRequest={schemaVersion:1,command:{op:'rich_start',pinId:'1',spec:{query:'/(?=a)/',caseSensitive:false,sort:'nameAsc',context:'line',explain:false}}};
+  const diagnostic={code:'unsupported-regex',queryRange:{bytes:[0,3],utf16:[0,3]},message:'Unsupported regular expression.'};
+  coreFailure=Object.assign(new Error('/private/internal recovery'),{code:'search_compile',commitUncertain:false,details:{diagnostic}});
+  const richReply=await invoke(windows[0],'durableInvoke','/first','admitted','documentCommand',[richRequest]);
+  assert.deepEqual(structuredClone(richReply),{ok:true,result:{documents:true,schemaVersion:1,ok:false,error:{code:'search_compile',commitUncertain:false,details:{diagnostic}}}});
+  let exposed;
+  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../desktop/preload.cjs'),'utf8'),{require:name=>{
+    assert.equal(name,'electron');return {contextBridge:{exposeInMainWorld(_name,value){exposed=value;}},ipcRenderer:{invoke:(name,...args)=>handlers.get(name)({sender:windows[0].webContents,senderFrame:windows[0].webContents.mainFrame},...args)},webUtils:{}};
+  }});
+  assert.deepEqual(structuredClone(await exposed.durableInvoke('/first','admitted','documentCommand',[richRequest])),structuredClone(richReply.result));
+  const legacy=await invoke(windows[0],'durableInvoke','/first','admitted','fileCommand',[{}]);
+  assert.deepEqual(structuredClone(legacy),{ok:false,error:{code:'search_compile',commitUncertain:false}},'other RPCs do not gain raw details');
+  coreFailure.details={diagnostic:{...diagnostic,internal:'/private/secret'}};
+  const malformed=await exposed.durableInvoke('/first','admitted','documentCommand',[richRequest]);
+  assert.deepEqual(structuredClone(malformed),{documents:true,schemaVersion:1,ok:false,error:{code:'invalid_document_response',commitUncertain:false}});
+  coreFailure=Object.assign(new Error('/private/internal'),{code:'cancelled',commitUncertain:false,details:{internal:true}});
+  assert.deepEqual(structuredClone(await exposed.durableInvoke('/first','admitted','documentCommand',[richRequest])),{documents:true,schemaVersion:1,ok:false,error:{code:'cancelled',commitUncertain:false}});
+  coreFailure=undefined;
+  assert.deepEqual(structuredClone(await exposed.durableInvoke('/first','admitted','documentCommand',[richRequest])),{documents:true,schemaVersion:1,ok:true,value:{queryId:'query'}});
   const savedURL = windows[0].webContents.mainFrame.url;
   windows[0].webContents.mainFrame.url = savedURL.replace('index.html', 'other.html');
   assert.throws(() => invoke(windows[0], 'getVault'), /Untrusted page/);
@@ -131,6 +153,7 @@ function quitFixture(closeSettlement) {
     },
   });
   const nativeRequire = name => {
+    if (name === './document-semantics.cjs') return require('../desktop/document-semantics.cjs');
     if (name === 'electron') return { app };
     if (name === './editor-core.cjs') return { createEditorCoreManager: () => core };
     if (name === './window-broker.cjs') return { WindowBroker: class { dispose() { disposals++; events.push('dispose'); } } };

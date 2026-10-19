@@ -11,7 +11,18 @@ export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequ
   const object=(value:unknown):Record<string,unknown>=>{if(!value||typeof value!=='object'||Array.isArray(value))throw new DocumentSemanticsError('invalid_document_response');return value as Record<string,unknown>;};
   let phase:'active'|'releasing'|'released'='active',releasing:Promise<void>|undefined;
   const pendingCalls=new Set<Promise<unknown>>(),pins=new Set<string>();
-  const raw=(op:string,fields:Record<string,unknown>={})=>invoke({schemaVersion:1,command:{op,...fields}});
+  const raw=(op:string,fields:Record<string,unknown>={})=>invoke({schemaVersion:1,command:{op,...fields}}).then(value=>{
+    // Direct admitted callbacks (including the native mobile binding) retain
+    // their raw result contract. Only the explicit rich IPC marker is unwrapped.
+    if(!['rich_start','rich_prepare','rich_page','rich_close'].includes(op)||!value||typeof value!=='object'||!('documents'in value))return value;
+    const row=object(value),exact=(value:Record<string,unknown>,keys:string[])=>Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));
+    if(row.documents!==true||row.schemaVersion!==1||typeof row.ok!=='boolean'||!exact(row,['documents','schemaVersion','ok',row.ok?'value':'error']))throw new DocumentSemanticsError('invalid_document_response');
+    if(row.ok)return row.value;
+    const error=object(row.error),hasDetails=Object.hasOwn(error,'details');
+    if(!exact(error,['code','commitUncertain',...(hasDetails?['details']:[])])||typeof error.code!=='string'||!/^[a-z_]{1,64}$/.test(error.code)||typeof error.commitUncertain!=='boolean'||hasDetails&&error.code!=='search_compile')throw new DocumentSemanticsError('invalid_document_response');
+    // The common facade validates compile details against this exact query.
+    throw Object.assign(new Error('Document query failed.'),{code:error.code,commitUncertain:error.commitUncertain,...(hasDetails?{details:error.details}:{})});
+  });
   const command=(op:string,fields:Record<string,unknown>={}):Promise<unknown>=>{
     if(phase!=='active')return Promise.reject(new DocumentSemanticsError('client_not_admitted'));
     const call=Promise.resolve().then(()=>raw(op,fields)).then(value=>{if(op==='open')pins.add(String(fields.pinId));else if(op==='close')pins.delete(String(fields.pinId));return value;});
@@ -51,6 +62,10 @@ export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequ
     async closePin(pinId){await command('close',{pinId});},
     metadata:input=>command('metadata',input),
     search:input=>command('search',{...input,limit:input.limit??100}),
+    richStart:input=>command('rich_start',input),
+    richPrepare:input=>command('rich_prepare',input),
+    richPage:input=>command('rich_page',input),
+    richClose:async input=>{await command('rich_close',input);},
     backlinks:({targetId,...input})=>command('backlinks',{...input,id:targetId,limit:input.limit??100}),
     tasks:input=>command('tasks',input),
     base:input=>command('base',input),

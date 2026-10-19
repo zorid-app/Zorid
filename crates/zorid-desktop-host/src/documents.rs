@@ -4,11 +4,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, Write};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use zorid_core::{EntryId, OperationId};
 use zorid_native::{
     DocumentQueryPin, IndexSnapshotId, LiteralQuery, LiteralToken, NativeDocumentError,
-    NativeVault, QueryOptions, RelationshipToken, TaskFilter, TaskQueryOptions,
+    NativeRichCursor, NativeRichPreparation, NativeRichQuery, NativeVault, QueryOptions,
+    RelationshipToken, RichPageProfile, SearchSpec, TaskFilter, TaskQueryOptions,
 };
 
 pub(crate) const MAX_REQUEST_BYTES: usize = 64 * 1024;
@@ -17,6 +19,10 @@ pub(crate) const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 // native Store also enforces its global four-pin ceiling across all clients.
 const MAX_PINS_PER_CLIENT: usize = 4;
 const MAX_CURSORS_PER_PIN: usize = 8;
+const MAX_RICH_QUERIES_PER_PIN: usize = 4;
+const MAX_RICH_PAGE_BYTES: usize = 1024 * 1024;
+const MAX_RICH_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const RICH_PREPARE_WORK: usize = 2_000_000;
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -64,6 +70,23 @@ enum DocumentCommand {
         query: String,
         cursor: Option<OperationId>,
         limit: usize,
+    },
+    RichStart {
+        pin_id: OperationId,
+        spec: SearchSpec,
+    },
+    RichPrepare {
+        pin_id: OperationId,
+        query_id: OperationId,
+    },
+    RichPage {
+        pin_id: OperationId,
+        query_id: OperationId,
+        cursor: OperationId,
+    },
+    RichClose {
+        pin_id: OperationId,
+        query_id: OperationId,
     },
     Backlinks {
         pin_id: OperationId,
@@ -237,11 +260,52 @@ enum Cursor {
     },
 }
 struct Pin {
-    value: DocumentQueryPin,
+    value: Arc<DocumentQueryPin>,
+    rich_queries: BTreeMap<OperationId, RichQuery>,
+    next_query: u64,
     cursors: BTreeMap<OperationId, Cursor>,
     cursor_order: VecDeque<OperationId>,
     next_cursor: u64,
     cursor_prefix: String,
+}
+// The actual guard owns this pin's Arc, not merely its snapshot identity.
+struct RichQuery {
+    guard: NativeRichQuery,
+    cursors: BTreeMap<OperationId, NativeRichCursor>,
+    cursor_order: VecDeque<OperationId>,
+    next_cursor: u64,
+    prefix: String,
+}
+impl RichQuery {
+    fn save_cursor(&mut self, cursor: NativeRichCursor) -> Result<OperationId, Value> {
+        if let Some((id, _)) = self.cursors.iter().find(|(_, old)| **old == cursor) {
+            return Ok(id.clone());
+        }
+        self.next_cursor = self
+            .next_cursor
+            .checked_add(1)
+            .ok_or_else(|| failure("search_resource"))?;
+        let id = OperationId::new(format!("{}-c{}", self.prefix, self.next_cursor))
+            .map_err(|_| failure("search_resource"))?;
+        if self.cursors.len() == MAX_CURSORS_PER_PIN {
+            let oldest = self
+                .cursor_order
+                .pop_front()
+                .expect("registered rich cursor");
+            self.cursors.remove(&oldest);
+        }
+        self.cursor_order.push_back(id.clone());
+        self.cursors.insert(id.clone(), cursor);
+        Ok(id)
+    }
+}
+impl Drop for Pin {
+    fn drop(&mut self) {
+        // Query Drop closes core state before releasing its Arc pin. Retire all
+        // guards and opaque cursors before the containing close acknowledges.
+        self.rich_queries.clear();
+        self.cursors.clear();
+    }
 }
 impl Pin {
     fn save_cursor(&mut self, cursor: Cursor) -> Result<OperationId, Value> {
@@ -298,12 +362,16 @@ fn native_transport_code(code: &str) -> String {
     code.replace('-', "_")
 }
 fn native(error: NativeDocumentError) -> Value {
-    failure(&native_transport_code(error.code()))
+    let mut value = failure(&native_transport_code(error.code()));
+    if let NativeDocumentError::SearchCompile(diagnostic) = error {
+        value["details"] = json!({"diagnostic": diagnostic});
+    }
+    value
 }
-struct Capped(Vec<u8>);
+struct Capped(Vec<u8>, usize);
 impl Write for Capped {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if self.0.len().saturating_add(bytes.len()) > MAX_RESPONSE_BYTES {
+        if self.0.len().saturating_add(bytes.len()) > self.1 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "document response limit",
@@ -324,7 +392,14 @@ struct Response<'a, T> {
     value: T,
 }
 fn answer<T: Serialize>(op: &str, value: T) -> Result<(Value, Vec<u8>), Value> {
-    let mut body = Capped(Vec::new());
+    answer_with_limit(op, value, MAX_RESPONSE_BYTES)
+}
+fn answer_with_limit<T: Serialize>(
+    op: &str,
+    value: T,
+    limit: usize,
+) -> Result<(Value, Vec<u8>), Value> {
+    let mut body = Capped(Vec::new(), limit);
     serde_json::to_writer(
         &mut body,
         &Response {
@@ -382,6 +457,10 @@ pub(crate) fn execute(
         | Close { pin_id }
         | Metadata { pin_id, .. }
         | Search { pin_id, .. }
+        | RichStart { pin_id, .. }
+        | RichPrepare { pin_id, .. }
+        | RichPage { pin_id, .. }
+        | RichClose { pin_id, .. }
         | Backlinks { pin_id, .. }
         | Base { pin_id, .. }
         | Tasks { pin_id, .. } => Some(pin_id.clone()),
@@ -445,7 +524,9 @@ pub(crate) fn execute(
                     client.pins.insert(
                         pin_id.clone(),
                         Pin {
-                            value,
+                            value: Arc::new(value),
+                            rich_queries: BTreeMap::new(),
+                            next_query: 0,
                             cursors: BTreeMap::new(),
                             cursor_order: VecDeque::new(),
                             next_cursor: 0,
@@ -510,6 +591,115 @@ pub(crate) fn execute(
                     .map(|token| pin.save_cursor(Cursor::Search { query, token }))
                     .transpose()?;
                 answer("search", Paged { result, cursor })
+            }
+            RichStart { pin_id, spec } => {
+                let pin = pin(sessions, client, &pin_id)?;
+                if pin.rich_queries.len() >= MAX_RICH_QUERIES_PER_PIN {
+                    return Err(failure("search_resource"));
+                }
+                // Reserve the host locator before creating native state, so a
+                // failed handle allocation cannot orphan a live native query.
+                let sequence = pin
+                    .next_query
+                    .checked_add(1)
+                    .ok_or_else(|| failure("search_resource"))?;
+                let query_id = OperationId::new(format!("{}-q{}", pin.cursor_prefix, sequence))
+                    .map_err(|_| failure("search_resource"))?;
+                let guard = vault
+                    .start_rich_document_query(
+                        Arc::clone(&pin.value),
+                        spec,
+                        RichPageProfile::default(),
+                        |_| Ok(()),
+                    )
+                    .map_err(native)?;
+                pin.next_query = sequence;
+                pin.rich_queries.insert(
+                    query_id.clone(),
+                    RichQuery {
+                        guard,
+                        cursors: BTreeMap::new(),
+                        cursor_order: VecDeque::new(),
+                        next_cursor: 0,
+                        prefix: query_id.as_str().to_owned(),
+                    },
+                );
+                answer("rich_start", json!({"queryId": query_id}))
+            }
+            RichPrepare { pin_id, query_id } => {
+                let pin = pin(sessions, client, &pin_id)?;
+                let query = pin
+                    .rich_queries
+                    .get_mut(&query_id)
+                    .ok_or_else(|| failure("search_expired"))?;
+                match vault
+                    .prepare_rich_document_query(&query.guard, RICH_PREPARE_WORK, |_| Ok(()))
+                    .map_err(native)?
+                {
+                    NativeRichPreparation::Preparing => {
+                        answer("rich_prepare", json!({"state":"preparing"}))
+                    }
+                    NativeRichPreparation::Ready(cursor) => {
+                        let cursor = query.save_cursor(cursor)?;
+                        answer("rich_prepare", json!({"state":"ready", "cursor":cursor}))
+                    }
+                }
+            }
+            RichPage {
+                pin_id,
+                query_id,
+                cursor,
+            } => {
+                let pin = pin(sessions, client, &pin_id)?;
+                let query = pin
+                    .rich_queries
+                    .get_mut(&query_id)
+                    .ok_or_else(|| failure("search_expired"))?;
+                let cursor = query
+                    .cursors
+                    .get(&cursor)
+                    .ok_or_else(|| failure("search_expired"))?;
+                let page = vault
+                    .rich_document_page(&query.guard, cursor, |_| Ok(()))
+                    .map_err(native)?;
+                // Enforce the inner encoding independently of the outer frame.
+                // A failed encoding never returns a continuation; retry retains
+                // the original immutable Rust checkpoint and identical page.
+                let mut inner = Capped(Vec::new(), MAX_RICH_PAGE_BYTES);
+                serde_json::to_writer(&mut inner, &page.result.value)
+                    .map_err(|_| failure("response_limit"))?;
+                drop(inner);
+                let cursor = page
+                    .next
+                    .map(|cursor| query.save_cursor(cursor))
+                    .transpose()?;
+                answer_with_limit(
+                    "rich_page",
+                    Paged {
+                        result: page.result,
+                        cursor,
+                    },
+                    MAX_RICH_RESPONSE_BYTES,
+                )
+            }
+            RichClose { pin_id, query_id } => {
+                let pin = pin(sessions, client, &pin_id)?;
+                if let Some(query) = pin.rich_queries.remove(&query_id) {
+                    // Explicit Drop before acknowledgement, including all cursor handles.
+                    drop(query);
+                } else {
+                    // Constant-size retry fence, scoped to this exact pin/lease.
+                    let prefix = format!("{}-q", pin.cursor_prefix);
+                    let sequence = query_id.as_str().strip_prefix(&prefix).and_then(|s| {
+                        s.parse::<u64>()
+                            .ok()
+                            .filter(|n| *n > 0 && n.to_string() == s)
+                    });
+                    if !sequence.is_some_and(|n| n <= pin.next_query) {
+                        return Err(failure("search_expired"));
+                    }
+                }
+                answer("rich_close", true)
             }
             Backlinks {
                 pin_id,
@@ -738,5 +928,323 @@ mod clock_tests {
             assert_eq!(native_transport_code(shared), wire);
         }
         assert_eq!(native_transport_code("not/a/code"), "document_query_failed");
+    }
+}
+
+#[cfg(test)]
+mod rich_transport_tests {
+    use super::*;
+    use zorid_core::{EntryKind, Mutation, MutationRequest, VaultPath};
+
+    fn operation(value: &str) -> OperationId {
+        OperationId::new(value).unwrap()
+    }
+    fn call(
+        vault: &mut NativeVault,
+        sessions: &mut Sessions,
+        client: &str,
+        command: Value,
+    ) -> Result<Value, Value> {
+        let request = serde_json::from_value(json!({"schemaVersion":1,"command":command})).unwrap();
+        let (_, body) = execute(
+            vault,
+            sessions,
+            &operation(client),
+            &operation(client),
+            request,
+        )?;
+        Ok(serde_json::from_slice::<Value>(&body).unwrap()["value"].clone())
+    }
+    fn spec(query: &str) -> Value {
+        json!({"query":query,"caseSensitive":false,"sort":"nameAsc","context":"line","explain":false})
+    }
+    fn fixture(documents: usize) -> (tempfile::TempDir, tempfile::TempDir, NativeVault) {
+        let root = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let mut vault = NativeVault::open(root.path()).unwrap();
+        vault
+            .enable_local_document_cache(cache.path().join("cache.sqlite"))
+            .unwrap();
+        for index in 0..documents {
+            vault
+                .apply(&MutationRequest {
+                    operation_id: operation(&format!("create-{index}")),
+                    mutation: Mutation::Create {
+                        id: EntryId::new(format!("note-{index}")).unwrap(),
+                        path: VaultPath::new(format!("Note-{index:03}.md")).unwrap(),
+                        kind: EntryKind::File,
+                        content: Some(b"needle\n".to_vec()),
+                    },
+                })
+                .unwrap();
+        }
+        vault.initialize_document_index().unwrap();
+        let stage = vault.begin_document_index().unwrap();
+        for _ in 0..100 {
+            if vault.pump_document_index(&stage).unwrap().ready {
+                vault.publish_document_index(&stage).unwrap();
+                return (root, cache, vault);
+            }
+        }
+        panic!("bounded fixture did not publish");
+    }
+    fn open(vault: &mut NativeVault, sessions: &mut Sessions, client: &str, pin: &str) {
+        call(vault, sessions, client, json!({"op":"open","pinId":pin})).unwrap();
+    }
+    fn start(vault: &mut NativeVault, sessions: &mut Sessions, client: &str, pin: &str) -> Value {
+        call(
+            vault,
+            sessions,
+            client,
+            json!({"op":"rich_start","pinId":pin,"spec":spec("file:Note")}),
+        )
+        .unwrap()["queryId"]
+            .clone()
+    }
+    fn ready(
+        vault: &mut NativeVault,
+        sessions: &mut Sessions,
+        client: &str,
+        pin: &str,
+        query: &Value,
+    ) -> Value {
+        for _ in 0..100 {
+            let value = call(
+                vault,
+                sessions,
+                client,
+                json!({"op":"rich_prepare","pinId":pin,"queryId":query}),
+            )
+            .unwrap();
+            if value["state"] == "ready" {
+                return value["cursor"].clone();
+            }
+            assert_eq!(value, json!({"state":"preparing"}));
+        }
+        panic!("bounded query did not prepare");
+    }
+    #[test]
+    fn rich_guards_scope_actual_client_pin_query_and_retry_cursor() {
+        let (_root, _cache, mut vault) = fixture(36);
+        let mut sessions = Sessions::default();
+        open(&mut vault, &mut sessions, "client-a", "1");
+        open(&mut vault, &mut sessions, "client-a", "2");
+        open(&mut vault, &mut sessions, "client-b", "1");
+        let query = start(&mut vault, &mut sessions, "client-a", "1");
+        let cursor = ready(&mut vault, &mut sessions, "client-a", "1", &query);
+        for (client, pin) in [("client-a", "2"), ("client-b", "1")] {
+            let error = call(
+                &mut vault,
+                &mut sessions,
+                client,
+                json!({"op":"rich_prepare","pinId":pin,"queryId":query}),
+            )
+            .unwrap_err();
+            assert_eq!(error["code"], "search_expired");
+        }
+        let other_query = start(&mut vault, &mut sessions, "client-a", "1");
+        let foreign = call(
+            &mut vault,
+            &mut sessions,
+            "client-a",
+            json!({"op":"rich_page","pinId":"1","queryId":other_query,"cursor":cursor}),
+        )
+        .unwrap_err();
+        assert_eq!(foreign["code"], "search_expired");
+        let command = json!({"op":"rich_page","pinId":"1","queryId":query,"cursor":cursor});
+        let page = call(&mut vault, &mut sessions, "client-a", command.clone()).unwrap();
+        assert_eq!(
+            call(&mut vault, &mut sessions, "client-a", command).unwrap(),
+            page,
+            "input retry reuses exact opaque next handle"
+        );
+        assert_eq!(page["result"]["value"]["next"], Value::Null);
+        assert!(
+            !page["cursor"].is_null(),
+            "default document budget requires continuation"
+        );
+        let first_pin = &sessions.clients[&operation("client-a")].pins[&operation("1")];
+        let second_pin = &sessions.clients[&operation("client-a")].pins[&operation("2")];
+        assert_eq!(
+            first_pin.value.generation().id(),
+            second_pin.value.generation().id()
+        );
+        assert!(
+            !Arc::ptr_eq(&first_pin.value, &second_pin.value),
+            "same snapshot does not imply same pin authority"
+        );
+        assert_eq!(
+            first_pin.rich_queries[&serde_json::from_value::<OperationId>(query.clone()).unwrap()]
+                .cursors
+                .len(),
+            2
+        );
+        call(
+            &mut vault,
+            &mut sessions,
+            "client-a",
+            json!({"op":"rich_close","pinId":"1","queryId":query}),
+        )
+        .unwrap();
+        call(
+            &mut vault,
+            &mut sessions,
+            "client-a",
+            json!({"op":"rich_close","pinId":"1","queryId":query}),
+        )
+        .unwrap();
+        assert_eq!(
+            call(
+                &mut vault,
+                &mut sessions,
+                "client-a",
+                json!({"op":"rich_prepare","pinId":"1","queryId":query})
+            )
+            .unwrap_err()["code"],
+            "search_expired"
+        );
+        sessions.release(&operation("client-a"));
+        assert_eq!(
+            call(
+                &mut vault,
+                &mut sessions,
+                "client-a",
+                json!({"op":"rich_prepare","pinId":"1","queryId":other_query})
+            )
+            .unwrap_err()["code"],
+            "snapshot_expired"
+        );
+    }
+    #[test]
+    fn rich_close_pin_and_rebuild_drop_guards_before_ack_and_compile_details_stay_typed() {
+        let (_root, _cache, mut vault) = fixture(1);
+        let mut sessions = Sessions::default();
+        open(&mut vault, &mut sessions, "client", "1");
+        let error = call(
+            &mut vault,
+            &mut sessions,
+            "client",
+            json!({"op":"rich_start","pinId":"1","spec":spec("/(?=a)/")}),
+        )
+        .unwrap_err();
+        assert_eq!(error["code"], "search_compile");
+        assert_eq!(error["details"]["diagnostic"]["code"], "unsupported-regex");
+        assert!(error["details"]["diagnostic"]["queryRange"].is_object());
+        assert_eq!(
+            sessions.clients[&operation("client")].pins[&operation("1")]
+                .rich_queries
+                .len(),
+            0
+        );
+        // Four is an upper bound, not a guaranteed admission count: the
+        // unchanged native byte reservation may reject unprepared queries first.
+        fn admitted_until_resource(
+            vault: &mut NativeVault,
+            sessions: &mut Sessions,
+            pin: &str,
+        ) -> Vec<Value> {
+            let mut queries = Vec::new();
+            for _ in 0..=MAX_RICH_QUERIES_PER_PIN {
+                match call(
+                    vault,
+                    sessions,
+                    "client",
+                    json!({"op":"rich_start","pinId":pin,"spec":spec("file:Note")}),
+                ) {
+                    Ok(value) => queries.push(value["queryId"].clone()),
+                    Err(error) => {
+                        assert_eq!(error["code"], "search_resource");
+                        assert!(
+                            !queries.is_empty(),
+                            "the isolated fixture must admit one query"
+                        );
+                        assert!(queries.len() <= MAX_RICH_QUERIES_PER_PIN);
+                        assert_eq!(
+                            sessions.clients[&operation("client")].pins[&operation(pin)]
+                                .rich_queries
+                                .len(),
+                            queries.len(),
+                            "failed admission must not register an orphan host guard",
+                        );
+                        return queries;
+                    }
+                }
+            }
+            panic!("rich query admission exceeded its unchanged upper bound");
+        }
+        let admitted_before = admitted_until_resource(&mut vault, &mut sessions, "1");
+        call(
+            &mut vault,
+            &mut sessions,
+            "client",
+            json!({"op":"close","pinId":"1"}),
+        )
+        .unwrap();
+        assert!(sessions.clients[&operation("client")].pins.is_empty());
+        open(&mut vault, &mut sessions, "client", "2");
+        let admitted_after = admitted_until_resource(&mut vault, &mut sessions, "2");
+        assert_eq!(
+            admitted_after.len(),
+            admitted_before.len(),
+            "pin close acknowledgement must release every actual native guard/reservation",
+        );
+        let query = &admitted_after[0];
+        call(&mut vault, &mut sessions, "client", json!({"op":"rebuild"})).unwrap();
+        assert!(sessions.clients[&operation("client")].pins.is_empty());
+        assert_eq!(
+            call(
+                &mut vault,
+                &mut sessions,
+                "client",
+                json!({"op":"rich_prepare","pinId":"2","queryId":query})
+            )
+            .unwrap_err()["code"],
+            "snapshot_expired"
+        );
+    }
+    #[test]
+    fn rich_transport_keeps_strict_request_and_independent_encoding_bounds() {
+        for command in [
+            json!({"op":"rich_page","pinId":"1","queryId":"q","cursor":{"offset":0}}),
+            json!({"op":"rich_start","pinId":"1","spec":{"query":"x","caseSensitive":false,"sort":"nameAsc","context":"line","explain":false,"offset":0}}),
+            json!({"op":"rich_prepare","pinId":"1","queryId":"q","maxWork":1}),
+        ] {
+            assert!(serde_json::from_value::<Request>(
+                json!({"schemaVersion":1,"command":command})
+            )
+            .is_err());
+        }
+        let mut inner = Capped(Vec::new(), MAX_RICH_PAGE_BYTES);
+        assert!(serde_json::to_writer(&mut inner, &"x".repeat(MAX_RICH_PAGE_BYTES)).is_err());
+        assert_eq!(
+            answer_with_limit(
+                "rich_page",
+                "x".repeat(MAX_RICH_RESPONSE_BYTES),
+                MAX_RICH_RESPONSE_BYTES
+            )
+            .unwrap_err()["code"],
+            "response_limit"
+        );
+        assert!(
+            answer("metadata", "x".repeat(MAX_RICH_RESPONSE_BYTES)).is_ok(),
+            "generic ceiling is unchanged"
+        );
+        assert_eq!(
+            native(NativeDocumentError::QueryCancelled)["code"],
+            "cancelled"
+        );
+        assert_eq!(
+            native(NativeDocumentError::SearchBusy)["code"],
+            "search_busy"
+        );
+        assert_eq!(
+            native(NativeDocumentError::SearchExpired)["code"],
+            "search_expired"
+        );
+        assert!(
+            native(NativeDocumentError::SearchResource("/private/internal"))
+                .get("details")
+                .is_none()
+        );
     }
 }

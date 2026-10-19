@@ -153,3 +153,123 @@ test('native pump accepts optional exact parse-cache counters without weakening 
   for(const counters of invalid)assert.throws(()=>decodeDocumentReply(pump,...wire('pump',{...progress,parseCache:counters})),{code:'invalid_document_response'});
   assert.throws(()=>decodeDocumentReply(pump,...wire('pump',{...current,unexpected:true})),{code:'invalid_document_response'});
 });
+
+const richSpec={query:'[title:😀] OR file:note',caseSensitive:false,sort:'modifiedDesc',context:'section',explain:true};
+const richEnvelope=(cursor=null)=>({result:{snapshot,source,coverageComplete:false,value:{snapshot,next:null,coverageComplete:false,scanComplete:cursor===null,outputComplete:true,complete:true}},cursor});
+test('rich requests capture exact spec and opaque bounded locators without accepting offsets',()=>{
+  const input=request('rich_start',{pinId:'1',spec:{...richSpec}}),captured=captureDocumentRequest(input);
+  input.command.spec.query='mutated';assert.deepEqual(captured.command.spec,richSpec);
+  assert.equal(captureDocumentRequest(request('rich_page',{pinId:'1',queryId:'q',cursor:'😀'.repeat(64)})).command.cursor,'😀'.repeat(64));
+  for(const input of [
+    request('rich_start',{pinId:'1',spec:{...richSpec,offset:0}}),
+    request('rich_start',{pinId:'1',spec:{...richSpec,sort:'live'}}),
+    request('rich_start',{pinId:'1',spec:{...richSpec,query:'\ud800'}}),
+    request('rich_start',{pinId:'1',spec:{...richSpec,query:'😀'.repeat(1025)}}),
+    request('rich_page',{pinId:'1',queryId:'q',cursor:{offset:0}}),
+    request('rich_page',{pinId:'1',queryId:'q',cursor:null}),
+    request('rich_page',{pinId:'1',queryId:'q'}),
+    request('rich_prepare',{pinId:'1',queryId:'q',cursor:'c'}),
+    request('rich_close',{pinId:'1',queryId:'😀'.repeat(65)}),
+  ])assert.throws(()=>captureDocumentRequest(input),{code:'invalid_document_request'});
+});
+
+test('rich frames enforce independent caps and identity without duplicating DTO traversal',()=>{
+  const input=request('rich_page',{pinId:'1',queryId:'q',cursor:'c'});
+  const value=richEnvelope();
+  assert.deepEqual(decodeDocumentReply(input,...wire('rich_page',value)),value,'generation extraction coverage may differ from rich completion');
+  const chunkContinuation={result:{...value.result,value:{...value.result.value,outputComplete:false,complete:false}},cursor:'next'};
+  assert.deepEqual(decodeDocumentReply(input,...wire('rich_page',chunkContinuation)),chunkContinuation,'an exhausted scan may still emit pending chunks');
+  for(const invalid of [
+    {...value,cursor:'c'}, {...value,extra:true},
+    {...value,result:{...value.result,value:{...value.result.value,next:{offset:1}}}},
+    {...value,result:{...value.result,value:{...value.result.value,snapshot:{...snapshot,generationEpoch:'other'}}}},
+    {...value,result:{...value.result,value:{...value.result.value,payload:'x'.repeat(1024*1024)}}},
+  ])assert.throws(()=>decodeDocumentReply(input,...wire('rich_page',invalid)),{code:'invalid_document_response'});
+  const bytes=Buffer.alloc(2*1024*1024+1,32);
+  assert.throws(()=>decodeDocumentReply(input,{documents:true,schemaVersion:1,bytes:bytes.length},bytes),{code:'invalid_document_response'});
+  assert.deepEqual(decodeDocumentReply(request('rich_prepare',{pinId:'1',queryId:'q'}),...wire('rich_prepare',{state:'preparing'})),{state:'preparing'});
+  for(const invalid of [{state:'preparing',cursor:'c'},{state:'ready'},{state:'ready',cursor:{offset:0}}])assert.throws(()=>decodeDocumentReply(request('rich_prepare',{pinId:'1',queryId:'q'}),...wire('rich_prepare',invalid)),{code:'invalid_document_response'});
+});
+
+test('rich controller scopes query/cursors to actual pin and query, and closes with retry',async()=>{
+  let failClose=true,pageCalls=0;
+  const controller=createDesktopDocumentSemantics({async documentCommand(_client,input){const c=input.command;
+    if(c.op==='open')return {pinId:c.pinId,snapshot,source,coverageComplete:false};
+    if(c.op==='rich_start')return {queryId:'q'+c.pinId};
+    if(c.op==='rich_prepare')return {state:'ready',cursor:'c'+c.queryId};
+    if(c.op==='rich_page'){pageCalls++;return richEnvelope();}
+    if(c.op==='rich_close'&&failClose){failClose=false;throw {code:'transport_error'};}
+    return true;
+  }},'client','store');
+  for(const pinId of ['1','2'])await controller.invoke(request('open',{pinId}));
+  for(const pinId of ['1','2'])await controller.invoke(request('rich_start',{pinId,spec:richSpec}));
+  await controller.invoke(request('rich_prepare',{pinId:'1',queryId:'q1'}));
+  await assert.rejects(controller.invoke(request('rich_prepare',{pinId:'2',queryId:'q1'})),{code:'search_expired'});
+  await assert.rejects(controller.invoke(request('rich_page',{pinId:'1',queryId:'q1',cursor:'cq2'})),{code:'search_expired'});
+  await controller.invoke(request('rich_page',{pinId:'1',queryId:'q1',cursor:'cq1'}));assert.equal(pageCalls,1);
+  await assert.rejects(controller.invoke(request('rich_close',{pinId:'1',queryId:'q1'})),{code:'transport_error'});
+  await assert.rejects(controller.invoke(request('rich_prepare',{pinId:'1',queryId:'q1'})),{code:'search_expired'});
+  await controller.invoke(request('rich_close',{pinId:'1',queryId:'q1'}));
+  await assert.rejects(controller.invoke(request('rich_prepare',{pinId:'1',queryId:'q1'})),{code:'search_expired'});
+  await controller.invoke(request('rebuild'));
+  await assert.rejects(controller.invoke(request('rich_prepare',{pinId:'2',queryId:'q2'})),{code:'snapshot_expired'});
+});
+
+test('late rich start/page replies cannot recreate closed pin, query, or retired client',async()=>{
+  let finish,pendingOp;
+  const controller=createDesktopDocumentSemantics({async documentCommand(_client,input){const c=input.command;
+    if(c.op==='open')return {pinId:c.pinId,snapshot,source,coverageComplete:false};
+    if(c.op===pendingOp)return new Promise(resolve=>{finish=resolve;});
+    if(c.op==='rich_start')return {queryId:'q'};
+    if(c.op==='rich_prepare')return {state:'ready',cursor:'c'};
+    return true;
+  }},'client','store');
+  await controller.invoke(request('open',{pinId:'1'}));pendingOp='rich_start';
+  const start=controller.invoke(request('rich_start',{pinId:'1',spec:richSpec}));
+  await controller.invoke(request('close',{pinId:'1'}));finish({queryId:'q'});
+  await assert.rejects(start,{code:'search_expired'});
+  pendingOp=null;await controller.invoke(request('open',{pinId:'2'}));
+  await controller.invoke(request('rich_start',{pinId:'2',spec:richSpec}));await controller.invoke(request('rich_prepare',{pinId:'2',queryId:'q'}));
+  pendingOp='rich_page';const page=controller.invoke(request('rich_page',{pinId:'2',queryId:'q',cursor:'c'}));
+  await controller.invoke(request('rich_close',{pinId:'2',queryId:'q'}));finish(richEnvelope());await assert.rejects(page,{code:'search_expired'});
+  pendingOp='rich_start';const late=controller.invoke(request('rich_start',{pinId:'2',spec:richSpec}));controller.forget();finish({queryId:'q2'});
+  await assert.rejects(late,{code:'client_not_admitted'});await assert.rejects(controller.invoke(request('open',{pinId:'3'})),{code:'client_not_admitted'});
+});
+
+test('pin close starts retiring rich operations immediately and retains cleanup ownership after failed ack',async()=>{
+  let finish,failClose=true;
+  const controller=createDesktopDocumentSemantics({async documentCommand(_client,input){const c=input.command;
+    if(c.op==='open')return {pinId:c.pinId,snapshot,source,coverageComplete:false};
+    if(c.op==='rich_start')return {queryId:'q'};
+    if(c.op==='close'&&failClose)return new Promise((_resolve,reject)=>{finish=()=>{failClose=false;reject({code:'transport_error'});};});
+    return true;
+  }},'client','store');
+  await controller.invoke(request('open',{pinId:'1'}));await controller.invoke(request('rich_start',{pinId:'1',spec:richSpec}));
+  const closing=controller.invoke(request('close',{pinId:'1'}));
+  await assert.rejects(controller.invoke(request('rich_prepare',{pinId:'1',queryId:'q'})),{code:'search_expired'});
+  finish();await assert.rejects(closing,{code:'transport_error'});
+  await controller.invoke(request('close',{pinId:'1'}));
+  await assert.rejects(controller.invoke(request('rich_prepare',{pinId:'1',queryId:'q'})),{code:'snapshot_expired'});
+});
+
+for(const delayedOp of ['rich_start','rich_prepare','rich_page'])test(`pending ${delayedOp} rejects when pin close starts before either acknowledgment`,async()=>{
+  let finishRich,finishClose,pending=false;
+  const controller=createDesktopDocumentSemantics({async documentCommand(_client,input){const c=input.command;
+    if(c.op==='open')return {pinId:c.pinId,snapshot,source,coverageComplete:false};
+    if(pending&&c.op===delayedOp)return new Promise(resolve=>{finishRich=resolve;});
+    if(c.op==='close')return new Promise(resolve=>{finishClose=resolve;});
+    if(c.op==='rich_start')return {queryId:'q'};
+    if(c.op==='rich_prepare')return {state:'ready',cursor:'c'};
+    return true;
+  }},'client','store');
+  await controller.invoke(request('open',{pinId:'1'}));
+  if(delayedOp!=='rich_start')await controller.invoke(request('rich_start',{pinId:'1',spec:richSpec}));
+  if(delayedOp==='rich_page')await controller.invoke(request('rich_prepare',{pinId:'1',queryId:'q'}));
+  pending=true;
+  const input=delayedOp==='rich_start'?{spec:richSpec}:delayedOp==='rich_page'?{queryId:'q',cursor:'c'}:{queryId:'q'};
+  const late=controller.invoke(request(delayedOp,{pinId:'1',...input}));
+  const close=controller.invoke(request('close',{pinId:'1'}));
+  finishRich(delayedOp==='rich_start'?{queryId:'late'}:delayedOp==='rich_prepare'?{state:'ready',cursor:'late'}:richEnvelope());
+  await assert.rejects(late,{code:'search_expired'});
+  finishClose(true);await close;
+});
