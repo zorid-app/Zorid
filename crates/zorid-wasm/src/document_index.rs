@@ -1466,7 +1466,10 @@ mod tests {
             Some((Miss, Miss))
         );
     }
-    const ANSWER_DEFINITION: &[u8] = b"filters: file.hasLink(\"b\")\nformulas:\n  selected: this.file.path\nviews:\n  - type: table\n    name: Links\n    order: [file.path, formula.selected]\n  - type: table\n    name: Paths\n    order: [file.path]\n";
+    // No call expressions: the shared exhaustive AST proof deliberately treats
+    // every Expr::Call (including hasLink) as clock-dependent. The original
+    // fixture therefore correctly missed when its invocation clock changed.
+    const ANSWER_DEFINITION: &[u8] = b"formulas:\n  selected: this.file.path\nviews:\n  - type: table\n    name: Links\n    order: [file.path, formula.selected]\n  - type: table\n    name: Paths\n    order: [file.path]\n";
     fn same_base_semantics(
         mut actual: zorid_bases::BaseQueryResult,
         mut expected: zorid_bases::BaseQueryResult,
@@ -1710,7 +1713,12 @@ mod tests {
         assert_eq!(outcome.unwrap().answer, Miss);
         let changed = String::from_utf8(ANSWER_DEFINITION.to_vec())
             .unwrap()
-            .replace("file.hasLink(\"b\")", "true");
+            .replace("selected: this.file.path", "selected: file.path");
+        // A YAML boolean `filters: true` is not this Base grammar's textual
+        // expression. Keep the changed definition valid, with explicit compile
+        // witnesses, while retaining the new-source miss and full-result oracle.
+        zorid_bases::compile_base_source(std::str::from_utf8(ANSWER_DEFINITION).unwrap()).unwrap();
+        zorid_bases::compile_base_source(&changed).unwrap();
         let fresh = base_generation(changed.as_bytes());
         let (actual, outcome) = evaluate_base(
             &fresh.generation,
