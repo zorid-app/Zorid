@@ -650,7 +650,9 @@ test('metadata final used-baseline catalog fence rejects an already encoded delt
 test('metadata owner revocation after encoding cannot publish a late checkpoint or recreate it',async()=>{
   const f=await metadataFixture(),first=await f.index.metadataRows!({pinId:f.pin.pinId,limit:1}) as any;f.afterMetadataPage(()=>f.deny());
   await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}),{code:'owner_retired'});assert.equal(f.metadataStats.live,0);const created=f.metadataStats.created;
-  await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}),{code:'owner_retired'});assert.equal(f.metadataStats.created,created);await f.index.close();
+  // Revocation synchronously closes maintenance; later public calls hit the
+  // existing closed-phase gate before they can recreate a checkpoint.
+  await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}),{code:'index_closed'});assert.equal(f.metadataStats.created,created);await f.index.close();
 });
 test('metadata rebuild and close retire every retained checkpoint and reject late continuations',async()=>{
   const f=await metadataFixture(),first=await f.index.metadataRows!({pinId:f.pin.pinId,limit:1}) as any;await f.index.rebuild();assert.equal(f.metadataStats.live,0);
