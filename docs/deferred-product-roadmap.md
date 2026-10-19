@@ -9,38 +9,46 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
-Current source checkpoint after the entries below (2026-10-19):
+Current integration `4da43cf7` (2026-10-19):
 
-- Main documentation is `87befd89`; application source remains `cce43207`.
-  Actual browser attempt 003 now passes exact production Worker identification
-  and lifecycle reporting, then fails its first Search with “Saved search is
-  unavailable.” Later browser functional checks were not reached. Source and
-  artifacts stayed exact; all owned browser/Node processes are gone. Evidence:
+- The reviewed pure foundation is on main: phased document extraction, draft
+  reducer, metadata pager, bodyless Store registration fence, rich first-build
+  preview query and borrowed preview facts. All 216 scoped checks pass: 50 and
+  145 carried through unchanged dependency closures, plus 21 final Store checks.
+  All 395 source/Cargo/test/fixture inputs match tested candidate `402bbfa8`
+  and integrated main. Evidence:
+  `/private/tmp/zorid-s1-store21-402bbfa8-retry-wpiqthu3/aggregate216.json` and
+  adjacent `source395-closure.json`. Earlier fixture failures and resource hold
+  remain preserved. These pure checks do not establish platform activation.
+- Actual desktop's 32 functional phases passed on `bc013e3b` as recorded below.
+  Browser attempt 003 passes exact production Worker/lifecycle identification,
+  then fails its first Search with “Saved search is unavailable.” Later browser
+  checks were not reached. Source/artifacts stayed exact and owned processes
+  are gone. Evidence:
   `/private/tmp/zorid-s1-rich-web-watch-8vdiwjdp/acceptance-terminal-summary.json`.
   Owner `s1_browser_runtime_review` diagnoses in isolated
-  `/private/tmp/zorid-s1-browser-search-diagnosis`, based on `87befd89`; no fix yet.
-- Pure candidate `6371b6d8` has 195 verified checks: 50 carried with unchanged
-  dependency closure plus 145 matching checks. Four initial preview failures
-  were independently confirmed test assumptions; test-only `476ed7a6` preserves
-  existing empty-query and memory-admission semantics. Original failures remain.
-  Evidence `/private/tmp/zorid-s1-pure166-6371b6d8-m1op7j08/aggregate195.json`.
-- Eight Store registration tests stopped before assertions because the new
-  fixture used a symlinked macOS temporary path with SQLite no-follow enabled.
-  Test-only `d23345fd` canonicalizes fixture parents; production security and
-  assertions are unchanged. Isolated candidate `402bbfa8` incorporates it, with
-  the 195-check closure intact. Remaining 21 Store checks have not run: their
-  preflight held at about 1.29 GB free, below the 2 GB start requirement. Hard
-  floor stays 1 GiB. No compiler or app was launched by that held attempt.
-- Dependency-specific source work can proceed independently: F parser/reducer
-  and its independent document corpus passed all 50 relevant checks, and preview
-  facts/query/index checks passed. `s1_lifecycle_core` owns the isolated minimal
-  core arbiter; `s1_query_audit` owns the isolated Base partial-preview body with
-  `s1_execution_audit` reviewing. This supersedes the provisional blanket wait
-  for the entire 216-check batch for those source-only tasks. Neither task is
-  integrated or activated; Store/platform/runtime gates remain required.
-- Resource owner `architecture_core_audit` inventories disposable passed test
-  executables for safe reclamation. Preserve actual CLI/host/browser artifacts,
-  source, evidence and all user/manual apps. No heavy validation runs concurrently.
+  `/private/tmp/zorid-s1-browser-search-diagnosis`, based on `87befd89`.
+  Held browser/native builds remain labeled by their original source; they do
+  not establish parity with the newly integrated core.
+- Active isolated source work: `s1_lifecycle_core` owns the minimal core arbiter
+  (`aa1f4f10`, 15 authored checks unrun); `s1_query_audit` owns the shared Base
+  partial-preview body, with `s1_execution_audit` reviewing. The independently
+  passed parser/index dependencies permitted these tasks before the unrelated
+  Store fixture correction; all pure dependencies now pass.
+- E2 adapters: `baseline_resources_impl` owns common contract/strict projection,
+  `storage_sqlite_impl` owns native/host metadata batching, and
+  `s1_desktop_scheduler_review` owns WASM. Independent reviewers are named.
+  Browser routing/index leaves remain held by the actual Search diagnosis;
+  E2 must reconcile that fix before editing them. Vault/Workspace migration and
+  F native/transient transport have not started. No adapter is activated.
+- Normal core runtime flags remain OFF. Base first-build platform/UI mounting,
+  per-pane visibility/configured clocks, actual scheduling fairness/liveness,
+  CLI concurrency and S1.6 retained workloads remain open. Overall S1 is not
+  accepted. Stop after S1; later desktop features and E2EE sync remain deferred.
+- Store's final run was serialized, jobs 1, minimum free disk about 2.15 GB;
+  owned processes are gone. The resource audit deleted nothing: disk headroom
+  recovered during read-only inspection, with no causal attribution. Preserve
+  actual artifacts/source/evidence and all manual/user apps; hard floor is 1 GiB.
 
 The earlier update below records its own source and verification points.
 

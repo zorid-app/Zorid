@@ -6,8 +6,11 @@
 Status: S1 in progress after bounded S0 delivery and S0A contract acceptance.
 S1.1 bounded client cache checks pass; S1.2 core and host answer reuse are
 integrated with focused checks, while full client acceptance remains pending.
-S1.3 pure rich search and in-note Find source are integrated; paging and the
-grouped view's app wiring/visual acceptance remain pending. S1.4–S1.6 are open.
+S1.3 rich search and in-note Find are integrated; 32 actual desktop functional
+phases pass on their recorded freeze. Browser production execution reaches Search
+but its first query fails; diagnosis remains open. The pure phased-parser, draft,
+metadata and preview foundation passes 216 scoped checks on main `4da43cf7`.
+Platform wiring/activation and S1.4–S1.6 acceptance remain open.
 The [execution checkpoint](../deferred-product-roadmap.md) records exact evidence
 and remaining10k admission/cache limitations. No overall app speedup or complete
 language implementation is claimed. Deliver one
