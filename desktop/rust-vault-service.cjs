@@ -26,6 +26,7 @@ function failure(code, uncertain = false) {
 }
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const exactKeys = (value, fields) => object(value) && Object.keys(value).length === fields.length && fields.every(key => Object.hasOwn(value, key));
 const identity = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const decimal = value => typeof value === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(value) && BigInt(value) <= 18446744073709551615n;
 function reconciliationStatus(value) {
@@ -187,6 +188,11 @@ function successful(command, result, bytes, expectedBytes) {
     }
     case 'read': return entry(result.entry) && result.entry.id === command.id && !result.entry.deleted
       && result.has_content === (result.entry.kind === 'file') && (result.has_content || bytes.length === 0);
+    case 'stat_path': return bytes.length === 0 && (result.entry === null ? exactKeys(result, ['entry'])
+      : exactKeys(result, ['entry', 'presentation', 'has_content']) && exactKeys(result.entry, ['id', 'revision', 'path', 'kind', 'deleted'])
+        && entry(result.entry) && result.entry.path === command.path && !result.entry.deleted
+        && exactKeys(result.presentation, ['id', 'ctime_ms', 'mtime_ms', 'size_bytes']) && presentation(result.presentation, result.entry)
+        && result.has_content === (result.entry.kind === 'file'));
     case 'read_path': return result.entry === null ? bytes.length === 0 : entry(result.entry) && result.entry.path === command.path && !result.entry.deleted
       && presentation(result.presentation, result.entry) && result.presentation.size_bytes === bytes.length
       && result.has_content === (result.entry.kind === 'file');
@@ -344,6 +350,7 @@ class RustVaultService {
     let body, header;
     try {
       if (!(bytes instanceof Uint8Array) || bytes.byteLength > (command?.method === 'checkpoint_cas' ? MAX_CHECKPOINT_BODY : command?.method === 'binary' ? MAX_BINARY_FRAME : MAX_BODY)) throw failure('request_limit');
+      if (command?.method === 'stat_path' && bytes.byteLength !== 0) throw failure('invalid_request');
       const requestId = (++this.sequence).toString();
       // Serialize/copy before enqueue: later caller changes cannot alter a retry.
       header = Buffer.from(JSON.stringify({ version: 1, request_id: requestId, command, ...(lease ? { lease } : {}) }));
@@ -395,7 +402,7 @@ class RustVaultService {
   releaseClient(reference) { return this.request({ method: 'release_client', reference }).then(reply => reply.result); }
   withClientLease(reference, beforeRequest = () => {}) {
     const captured = Object.freeze({ local_store_id: reference.local_store_id, client_id: reference.client_id, token: reference.token });
-    const context = { request: (command, bytes) => { beforeRequest(command); return this.request(command, bytes, captured, () => beforeRequest(command)); } };
+    const context = { capabilities: this.capabilities, request: (command, bytes) => { beforeRequest(command); return this.request(command, bytes, captured, () => beforeRequest(command)); } };
     const methods = ['workblockCommand', 'documentCommand', 'binaryCommand', 'fileCommand', 'createText', 'identity', 'readMetadata', 'readPath', 'readPresentedById', 'readEntryById', 'listSnapshot', 'listEntries', 'prepareIntent', 'commitIntent', 'queryIntent', 'listIntents', 'acknowledgeIntent',
       'checkpointLoad', 'checkpointCompareAndSwap', 'checkpointList', 'checkpointChanges'];
     return Object.freeze(Object.fromEntries(methods.map(name => [name, (...args) => RustVaultService.prototype[name].apply(context, args)])));
@@ -435,9 +442,11 @@ class RustVaultService {
   listIntents(clientId, cursor = '0', limit = 100) { return this.request({ method: 'list_intents', client_id: clientId, cursor, limit }).then(reply => reply.result); }
   acknowledgeIntent(reference, expected) { return this.request({ method: 'acknowledge_intent', reference, expected }).then(reply => reply.result.intent); }
   readMetadata(path) {
-    // The existing snapshot is payload-free. Keep namespace/existence checks
-    // independent of legacy whole-file reads; native indexed lookup may replace
-    // this implementation without changing the caller contract.
+    if (this.capabilities?.includes('stat_path')) {
+      return this.request({method:'stat_path',path}).then(({result})=>result.entry===null?null:result);
+    }
+    // Older hosts explicitly omit this capability. Never retry a failed stat
+    // through a full snapshot or substitute the service's cached namespace.
     return this.request({method:'list_snapshot'}).then(({result})=>{const row=result.entries.find(row=>row.state.path===path);return row?{entry:row.state,presentation:row.presentation,has_content:row.state.kind==='file'}:null;});
   }
   readPath(path) {

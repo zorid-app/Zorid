@@ -21,18 +21,44 @@ function send(header, body = Buffer.alloc(0)) {
 }
 const reconciliation=mode.startsWith('reconciliation_')?{scanId:'scan',complete:false,scanComplete:false,finished:true,observed:12,imported:0,namespaceApplied:0,issueCount:1,issuesTruncated:false,issues:[{path:null,code:'scan_limit'}]}:null;
 if(mode==='reconciliation_bad_path')reconciliation.issues[0].path='/private/secret';
-send({version:1,request_id:'0',ok:true,result:{reconciliation,transport:'zorid-native-stdio',max_header:1048576,max_body:16777216,capabilities:reconciliation?['reconciliation_status']:[]}});
-let buffer=Buffer.alloc(0);
+send({version:1,request_id:'0',ok:true,result:{reconciliation,transport:'zorid-native-stdio',max_header:1048576,max_body:16777216,capabilities:reconciliation?['reconciliation_status']:mode.startsWith('stat_')&&mode!=='stat_legacy'?['stat_path']:[]}});
+let buffer=Buffer.alloc(0),counts={};
 process.stdin.on('data', chunk => {buffer=Buffer.concat([buffer,chunk]); while(buffer.length>=8){
  const h=buffer.readUInt32BE(0),b=buffer.readUInt32BE(4); if(buffer.length<8+h+b)return;
  const req=JSON.parse(buffer.subarray(8,8+h)), body=Buffer.from(buffer.subarray(8+h,8+h+b)); buffer=buffer.subarray(8+h+b);
+ counts[req.command.method]=(counts[req.command.method]||0)+1;if(req.lease&&req.command.method==='stat_path')counts.leasedStat=(counts.leasedStat||0)+1;
  if(mode==='exit'){process.exit(1);return;}
  if(mode==='stall')continue;
  if(mode==='oversized'){process.stdout.write(Buffer.alloc(8,255));continue;}
  if(mode==='reject'){send({version:1,request_id:req.request_id,ok:false,error:{code:'revision_conflict',commit_uncertain:false}});continue;}
  if((mode==='document_rejection'||mode==='document_bad_rejection')&&req.command.method==='documents'){send({version:1,request_id:req.request_id,ok:false,error:{code:mode==='document_rejection'?'stale_source':'stale-source',commit_uncertain:false}});continue;}
  let responseBody = Buffer.alloc(0);
- let result = req.command.method==='apply' ? {commit:{operation_id:req.command.operation_id,sequence:'1',changes:[{before:null,after:{id:req.command.mutation.id,path:req.command.mutation.path,kind:'file',revision:'new',deleted:false}}]},projection:{state:'pending'},captured:[...body]} : {pending_outbox:'0',pending_projection:'0',attempts:[],observations:[],command:req.command};
+ let result = req.command.method==='apply' ? {commit:{operation_id:req.command.operation_id,sequence:'1',changes:[{before:null,after:{id:req.command.mutation.id,path:req.command.mutation.path,kind:'file',revision:'new',deleted:false}}]},projection:{state:'pending'},captured:[...body]} : {pending_outbox:'0',pending_projection:'0',attempts:[],observations:[],command:req.command,counts};
+ if(mode.startsWith('stat_')&&['stat_path','list_snapshot','read_path'].includes(req.command.method)) {
+  const kind=mode==='stat_folder'||mode==='stat_bad_folder_size'?'folder':'file';
+  const state={id:'entry',revision:'revision',path:req.command.path||'Note.bin',kind,deleted:false};
+  const presentation={id:'entry',ctime_ms:1,mtime_ms:2,size_bytes:kind==='folder'?0:mode==='stat_large'?20971520:4};
+  if(req.command.method==='list_snapshot')result={cursor:'0',entries:mode==='stat_missing'?[]:[{state,presentation}]};
+  else if(req.command.method==='read_path') {
+   responseBody=Buffer.from('base');result={entry:state,presentation,has_content:true};
+   if(mode==='stat_read_changed_id'){result.entry.id='replacement';result.presentation.id='replacement';}
+   if(mode==='stat_read_changed_revision')result.entry.revision='new-revision';
+  } else {
+   if(mode==='stat_reject'){send({version:1,request_id:req.request_id,ok:false,error:{code:'not_found',commit_uncertain:false}});continue;}
+   result=mode==='stat_missing'||mode==='stat_bad_null_extra'?{entry:null}:{entry:state,presentation,has_content:kind==='file'};
+   if(mode==='stat_bad_body')responseBody=Buffer.from([1]);
+   if(mode==='stat_bad_null_extra')result.presentation=presentation;
+   if(mode==='stat_bad_path')result.entry.path='Other.bin';
+   if(mode==='stat_bad_deleted')result.entry.deleted=true;
+   if(mode==='stat_bad_kind')result.entry.kind='other';
+   if(mode==='stat_bad_size')result.presentation.size_bytes=-1;
+   if(mode==='stat_bad_folder_size')result.presentation.size_bytes=4;
+   if(mode==='stat_bad_presentation')result.presentation.id='other';
+   if(mode==='stat_bad_has_content')result.has_content=false;
+   if(mode==='stat_bad_extra')result.extra=true;
+   if(mode==='stat_bad_missing')delete result.has_content;
+  }
+ }
  if(mode.startsWith('family_journal_') && req.command.method==='changes_after') {
   const origin=mode==='family_journal_remote'?{kind:'received_update',realm_id:'realm',vault_id:'vault',update_id:'update'}:{kind:'local_command',operation_id:'operation'};
   result={changes:[{cursor:'1',origin,requires_full_reload:true,entries:[]}],next_cursor:'1',head_cursor:'1',has_more:false};
@@ -323,4 +349,53 @@ for(const mode of ['history_wrong_entry','history_wrong_length'])test('history m
 });
 test('malformed UTF-8 history cannot be decoded or offered for restoration',async t=>{
   const host=await fixture(t,'history_utf8');await assert.rejects(host.recoveryRead('note','2'),/encoded data/i);assert.equal(host.fatal,null);
+});
+
+
+test('advertised metadata stat returns file, folder and missing observations without full snapshots or bodies',async t=>{
+  for(const mode of ['stat_file','stat_folder','stat_missing']){
+    const host=await fixture(t,mode),value=await host.readMetadata('Note.bin');
+    if(mode==='stat_missing')assert.equal(value,null);
+    else{
+      assert.deepEqual(value,{entry:{id:'entry',revision:'revision',path:'Note.bin',kind:mode==='stat_folder'?'folder':'file',deleted:false},presentation:{id:'entry',ctime_ms:1,mtime_ms:2,size_bytes:mode==='stat_folder'?0:4},has_content:mode!=='stat_folder'});
+      assert.equal(Object.hasOwn(value,'bytes'),false);
+    }
+    const {result}=await host.request({method:'status'});assert.equal(result.counts.stat_path,1);assert.equal(result.counts.list_snapshot,undefined);
+  }
+});
+test('metadata stat capability survives an owned lease wrapper and preserves dispatch authorization',async t=>{
+  const host=await fixture(t,'stat_file'),reference={local_store_id:'store',client_id:'client',token:'token'};let checks=0;
+  const scoped=host.withClientLease(reference,()=>{checks++;});reference.token='mutated';
+  assert.equal((await scoped.readMetadata('Note.bin')).entry.id,'entry');
+  assert.equal(checks,2,'authorization is checked at call and actual dispatch');
+  const {result}=await host.request({method:'status'});assert.equal(result.counts.stat_path,1);assert.equal(result.counts.leasedStat,1);assert.equal(result.counts.list_snapshot,undefined);
+});
+test('old host metadata falls back only when stat capability is absent',async t=>{
+  const host=await fixture(t,'stat_legacy');
+  assert.equal((await host.readMetadata('Note.bin')).presentation.size_bytes,4);
+  const scoped=host.withClientLease({local_store_id:'store',client_id:'client',token:'token'});
+  assert.equal((await scoped.readMetadata('Note.bin')).entry.id,'entry');
+  const {result}=await host.request({method:'status'});assert.equal(result.counts.list_snapshot,2);assert.equal(result.counts.stat_path,undefined);
+});
+test('advertised stat failure propagates without list fallback and leaves transport usable',async t=>{
+  const host=await fixture(t,'stat_reject');await assert.rejects(host.readMetadata('Note.bin'),{code:'not_found',commitUncertain:false});
+  const {result}=await host.request({method:'status'});assert.equal(result.counts.stat_path,1);assert.equal(result.counts.list_snapshot,undefined);
+});
+for(const mode of ['stat_bad_body','stat_bad_null_extra','stat_bad_path','stat_bad_deleted','stat_bad_kind','stat_bad_size','stat_bad_folder_size','stat_bad_presentation','stat_bad_has_content','stat_bad_extra','stat_bad_missing']){
+  test('malformed metadata stat '+mode+' rejects without a compatibility retry',async t=>{
+    const host=await fixture(t,mode),methods=[],request=host.request.bind(host);host.request=(command,...args)=>{methods.push(command.method);return request(command,...args);};
+    await assert.rejects(host.readMetadata('Note.bin'),{code:'invalid_response',commitUncertain:true});assert.deepEqual(methods,['stat_path']);
+  });
+}
+test('metadata stat rejects a nonempty request body before transport dispatch',async t=>{
+  const host=await fixture(t,'stat_file');await assert.rejects(host.request({method:'stat_path',path:'Note.bin'},Uint8Array.of(1)),{code:'invalid_request',commitUncertain:false});
+  assert.equal(host.queuedCount,0);assert.equal((await host.request({method:'status'})).result.counts.stat_path,undefined);
+});
+test('targeted metadata preserves small-read allocation and body identity guards',async t=>{
+  const {CoreVaultFixtureService}=require('../desktop/core-vault-fixture-service.cjs');
+  for(const mode of ['stat_large','stat_read_changed_id','stat_read_changed_revision']){
+    const host=await fixture(t,mode),service=new CoreVaultFixtureService(host,{pollMs:750,rescanMs:30000});
+    await assert.rejects(service.readBinary('Note.bin'),{code:mode==='stat_large'?'stream_required':'revision_conflict'});
+    const {result}=await host.request({method:'status'});assert.equal(result.counts.stat_path,1);assert.equal(result.counts.list_snapshot,undefined);assert.equal(result.counts.read_path,mode==='stat_large'?undefined:1);
+  }
 });
