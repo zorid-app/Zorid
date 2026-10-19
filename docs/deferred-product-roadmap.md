@@ -21,12 +21,16 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   is established. Pure-core10k and actual-browser100 passed within their stated
   scopes. Generated Base100 passed all eight semantic oracles;10k generation completed,
   but all eight queries rejected the existing preparation budget (limited/incomplete).
-- **Active owner/slot:** `storage_recovery_impl` owns serialized focused Rust
-  validation on composed `b391179a`, whose four Store files exactly match reviewed
-  release candidate `a55bb5e5`. Invocation-local immutable graph-view reuse through
-  `61fa42af` is source approved; compiled/runtime evidence pending. No release
-  build or new native runtime yet. Normal-family10k remains terminal incomplete:
-  224 live files/32 passes, inventory3030/unfinished, sources exact, no survivors.
+- **Active owner/slot:** `s1_execution_audit` owns serialized release build and
+  bounded native family100→10k comparison at frozen `b3ed4400`. Its Rust/Cargo/
+  proto inputs exactly match main `2fb58f33` before the parser-only foundation.
+  Preserve old D0 binaries; same5s soft/30s hard/32pass default profile, no raised
+  limits or new benchmark tools. No new speedup result yet. Composed family
+  source through `980bf556` passed24 unique focused tests; old per-row derivation
+  failed the intended assertion, exact source restored and four new tests green.
+  All seven Cargo PIDs gone. Evidence:
+  `/private/tmp/zorid-family-view-validation-61fa/summary.json`.
+  Normal-family10k baseline remains224 live files/32 passes, inventory3030/unfinished.
 - **Loader integration:** reviewed source through `028bc96d` is integrated
   `667c4f48`.202 unique scoped checks pass/1 existing ignored. Three broader test
   expectations fail identically on unchanged main: schema3 presentation migration,
@@ -36,8 +40,10 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   reader assertions; its reviewed fixture-only correction now passes. Evidence:
   `/private/tmp/zorid-metadata-loader-028bc96d-validation-q3dn7zjm/validation-summary.json`.
   All tracked hashes remain exact;19 owned Cargo PIDs are gone.
-- **S1.1 ownership:** `s1_query_audit` parser facts `ae342a51` is source reviewed,
-  awaiting compiled corpus tests. `baseline_resources_impl` owns typed scoped
+- **S1.1 ownership:** parser facts `ae342a51` is source reviewed and integrated
+  `343a6c1b` after19 focused parser/corpus/bounds tests pass, no ignored tests;
+  hashes exact and owned processes gone. Evidence:
+  `/private/tmp/zorid-s1-parse-facts-ae342a51/verification.json`. `baseline_resources_impl` owns typed scoped
   extraction/key/binding and bounded cache policy; `storage_sqlite_impl` owns new
   isolated native cache-only persistence, `architecture_platform_audit` browser/
   WASM adapter and optional validated cache counters. Source-only until slots;

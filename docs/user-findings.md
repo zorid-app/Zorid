@@ -31,11 +31,13 @@ One authorized1s setup sample attributes repeated work to
 sample window, not a whole-run fraction. It differs from legacy import's full
 SQL snapshot loading, so legacy partial-throughput gains are not desktop startup
 speedup evidence. Owner `storage_recovery_impl` has isolated invocation-local
-lazy immutable view reuse through `3b416f3b`; exact source review passes, including
-valid-but-mismatched history and allocation rollback fixtures. Compiled tests and
-runtime validation remain pending. Each validate/apply invocation
-retains fresh graph/proof/head/CAS boundaries; no persistent authority cache. No
-family-path optimization is integrated yet; no cache authority change is proposed.
+lazy immutable view reuse through `980bf556`, integrated `2fb58f33`.24 unique
+composed focused tests pass, including valid-but-mismatched history, allocation
+rollback, stale head and replay checks. Restoring old per-row derivation fails the
+intended assertion; exact source restoration and new tests pass. Evidence:
+`/private/tmp/zorid-family-view-validation-61fa/summary.json`. Each validate/apply
+invocation retains fresh graph/proof/head/CAS boundaries; no persistent authority
+cache. Comparable release/runtime performance measurement remains pending.
 
 ## S1 native setup scales with repeated full-store work — two fixes integrated
 
