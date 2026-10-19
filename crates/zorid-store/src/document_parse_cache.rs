@@ -293,19 +293,18 @@ pub(crate) fn write(cache: &DocumentCache, fact: PreparedFact) {
                 }
                 ParseCacheAdmission::Write => break,
                 ParseCacheAdmission::EvictOldest => {
-                    let victim: Option<(i64, String, i64, i64)> = tx.query_row(
-                        "SELECT ordinal,storage_key,payload_bytes,length(CAST(record AS BLOB)) FROM document_parse_cache_rows NOT INDEXED WHERE storage_key<>?1 ORDER BY ordinal LIMIT 1",
+                    // Do not fetch an untrusted locator as a Rust String. CASE
+                    // bounds SQL shape validation; deletion uses only rowid.
+                    let victim: Option<(i64, i64, i64, bool)> = tx.query_row(
+                        "SELECT ordinal,payload_bytes,length(CAST(record AS BLOB)),CASE WHEN typeof(storage_key)='text' AND length(CAST(storage_key AS BLOB))=64 THEN storage_key NOT GLOB '*[^0-9a-f]*' ELSE 0 END FROM document_parse_cache_rows NOT INDEXED WHERE storage_key<>?1 ORDER BY ordinal LIMIT 1",
                         [&fact.locator],
                         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                     ).optional()?;
-                    let Some((ordinal, key, bytes, actual)) = victim else {
+                    let Some((ordinal, bytes, actual, key_valid)) = victim else {
                         return Err(CacheError::Corrupt);
                     };
                     if ordinal <= 0
-                        || key.len() != 64
-                        || !key
-                            .bytes()
-                            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+                        || !key_valid
                         || bytes != actual
                         || !(1..=MAX_PARSE_CACHE_ROW_BYTES as i64).contains(&bytes)
                     {
@@ -316,10 +315,13 @@ pub(crate) fn write(cache: &DocumentCache, fact: PreparedFact) {
                         .bytes
                         .checked_sub(bytes as usize)
                         .ok_or(CacheError::Corrupt)?;
-                    tx.execute(
-                        "DELETE FROM document_parse_cache_rows WHERE storage_key=?1",
-                        [key],
+                    let deleted = tx.execute(
+                        "DELETE FROM document_parse_cache_rows WHERE ordinal=?1 AND storage_key<>?2",
+                        params![ordinal, &fact.locator],
                     )?;
+                    if deleted != 1 {
+                        return Err(CacheError::Corrupt);
+                    }
                     evicted += 1;
                 }
             }

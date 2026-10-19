@@ -514,6 +514,32 @@ fn fifo_replacement_and_bounded_eviction_use_only_owned_fact_rows() {
         )
         .unwrap();
         tx.commit().unwrap();
+        if !full_bytes {
+            let connection = &store.document_cache.connection;
+            let oldest: i64 = connection
+                .query_row(
+                    "SELECT min(ordinal) FROM document_parse_cache_rows",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let usage_before = read_usage(connection, key.scope()).unwrap();
+            for expression in [
+                "CAST(zeroblob(1048577) AS TEXT)",
+                "CAST(printf('%064x',1) AS BLOB)",
+            ] {
+                connection.execute(&format!("UPDATE document_parse_cache_rows SET storage_key={expression} WHERE ordinal=?1"), [oldest]).unwrap();
+                let shape_before: (String,i64) = connection.query_row("SELECT typeof(storage_key),length(CAST(storage_key AS BLOB)) FROM document_parse_cache_rows WHERE ordinal=?1", [oldest], |row| Ok((row.get(0)?,row.get(1)?))).unwrap();
+                write(&store.document_cache, prepare(&result).unwrap());
+                assert_eq!(read_usage(connection, key.scope()).unwrap(), usage_before);
+                let shape_after: (String,i64) = connection.query_row("SELECT typeof(storage_key),length(CAST(storage_key AS BLOB)) FROM document_parse_cache_rows WHERE ordinal=?1", [oldest], |row| Ok((row.get(0)?,row.get(1)?))).unwrap();
+                assert_eq!(shape_after, shape_before);
+                let (rows, incoming_present): (i64,bool) = connection.query_row("SELECT count(*),EXISTS(SELECT 1 FROM document_parse_cache_rows WHERE storage_key=?1) FROM document_parse_cache_rows", [key.storage_key().unwrap()], |row| Ok((row.get(0)?,row.get(1)?))).unwrap();
+                assert_eq!(rows, MAX_PARSE_CACHE_ROWS as i64);
+                assert!(!incoming_present);
+                connection.execute("UPDATE document_parse_cache_rows SET storage_key=printf('%064x',1) WHERE ordinal=?1", [oldest]).unwrap();
+            }
+        }
         let before = authority(&store);
         write(&store.document_cache, prepare(&result).unwrap());
         let connection = &store.document_cache.connection;
@@ -579,7 +605,7 @@ fn fifo_replacement_and_bounded_eviction_use_only_owned_fact_rows() {
             .unwrap();
         assert_eq!(actual, (usage.rows as i64, usage.bytes as i64));
         assert_eq!(authority(&store), before);
-        let plan:Vec<String>=connection.prepare("EXPLAIN QUERY PLAN SELECT storage_key,payload_bytes,length(CAST(record AS BLOB)) FROM document_parse_cache_rows NOT INDEXED WHERE storage_key<>?1 ORDER BY ordinal LIMIT 1").unwrap().query_map([key.storage_key().unwrap()],|r|r.get(3)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        let plan:Vec<String>=connection.prepare("EXPLAIN QUERY PLAN SELECT ordinal,payload_bytes,length(CAST(record AS BLOB)),CASE WHEN typeof(storage_key)='text' AND length(CAST(storage_key AS BLOB))=64 THEN storage_key NOT GLOB '*[^0-9a-f]*' ELSE 0 END FROM document_parse_cache_rows NOT INDEXED WHERE storage_key<>?1 ORDER BY ordinal LIMIT 1").unwrap().query_map([key.storage_key().unwrap()],|r|r.get(3)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
         assert!(plan.iter().all(|p| !p.contains("TEMP B-TREE")), "{plan:?}");
     }
 }
