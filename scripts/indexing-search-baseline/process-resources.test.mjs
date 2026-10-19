@@ -70,3 +70,9 @@ test('normal wrapper exit with inherited pipes has bounded group cleanup',runtim
 test('direct spawn failure settles without signalling an arbitrary process',runtime,()=>fixture(async directory=>{
   const handle=await startOwnedMeasuredProcess({binary:path.join(directory,'missing'),args:[],timeoutMs:1000});const {result}=await outcome(handle);assert.ok(result.spawnError);assert.equal(result.pid,null);assert.deepEqual(result.signals,[]);assert.equal(result.measurement.metrics.availability,'unavailable');
 }));
+
+test('normal wrapper cannot silently leave same-group descendants with closed pipes',runtime,()=>fixture(async directory=>{
+  const script="const child=require('node:child_process').spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"],{stdio:'ignore'});child.unref();process.stdout.write(String(child.pid));";
+  const {result,stdout}=await outcome(await start(directory,script));const descendant=Number(stdout);assert.ok(Number.isSafeInteger(descendant)&&descendant>0);assert.equal(result.exitCode,0);assert.equal(result.stopReason,'remaining-owned-process-group');assert.equal(result.measurement.metrics.availability,'unavailable');assert.ok(result.signals.some(s=>s.signal==='SIGTERM'));
+  let alive;try{process.kill(descendant,0);alive=true;}catch(error){assert.equal(error.code,'ESRCH');alive=false;}assert.ok(!alive||result.cleanup.ownedGroupRemaining!==false,'live descendant must not be reported gone');
+}));

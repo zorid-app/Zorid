@@ -111,7 +111,7 @@ export async function startOwnedMeasuredProcess({binary,args=[],cwd,env=process.
   const finalize=async()=>{
     if(finalized)return;finalized=true;
     for(const timer of timers)clearTimeout(timer);timers.clear();
-    const processWallMs=performance.now()-started,ownedGroupRemaining=stopReason?groupExists():null;
+    const processWallMs=performance.now()-started,ownedGroupRemaining=groupExists();
     const result={pid:child.pid??null,observedProcessRole:measureResources?'darwin-time-wrapper':'direct-utility',exitObserved,exitCode,signal,...(spawnError?{spawnError}:{}),wallMs:processWallMs,timedOut,stopReason,signals,
       pipesDrained:pipesDone()&&!postKillExpired,pipeErrors,cleanup:{groupContainment:'new detached POSIX process group only; escaped descendants are outside this claim',ownedGroupRemaining,postKillDrainExpired:postKillExpired},
       measurement:{mode:measureResources?'instrumented-darwin-time':'unmeasured',wallScope:measureResources?'Node-observed wrapper lifetime including time instrumentation overhead':'Node-observed direct utility lifetime',utility:binary,
@@ -128,7 +128,11 @@ export async function startOwnedMeasuredProcess({binary,args=[],cwd,env=process.
   };
   const maybeFinish=()=>{
     if(finalized)return;
-    if(exitObserved&&pipesDone()&&(!stopReason||groupExists()===false))void finalize();
+    if(exitObserved&&pipesDone()){
+      const remaining=groupExists();
+      if(remaining===false)void finalize();
+      else if(!stopReason)stop('remaining-owned-process-group');
+    }
   };
   const postKill=()=>{
     if(finalized)return;
