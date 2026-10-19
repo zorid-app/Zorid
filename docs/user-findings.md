@@ -17,8 +17,12 @@ panel searches unsaved text, preserves shortcuts/focus/IME state and adds workin
 navigation/options/close. All42 focused behavior/regression checks and TypeScript
 pass. Counts are bounded and explicitly unavailable for large notes; navigation
 continues. Painted layout/native IME and actual app behavior remain unverified.
-Reading-mode implementation is a separately owned follow-on: rendered-text ranges,
-refresh/disposal and keyboard routing, without forcing an edit-mode transition.
+Reading source `4e76fa21` is independently approved and integrated `c746914c`:
+rendered-text ranges, refresh/disposal and keyboard routing work without forcing
+an edit-mode transition;17 focused checks and TypeScript pass. The old lifecycle
+assertion is corrected separately with9/9 checks. Actual CSS Highlight painting,
+native geometry/IME and normal-app acceptance remain pending; the first owned
+painted-fixture attempt stopped at the disk safeguard before capturing results.
 Vault-search implementation awaits the S1.3 shared result contract; the source map
 and static REA audit are complete. Implementation is not visual/runtime acceptance.
 This addition does not reopen saving or resume later product stages.

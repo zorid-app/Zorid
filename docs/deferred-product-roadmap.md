@@ -26,11 +26,13 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   baselines have explicit large-vault limitations. S1.1 parser/extraction contracts
   and native/browser facts-persistence code are integrated with focused checks.
   Bounded real-client parse-cache acceptance passes Chrome, macOS Electron and
-  standalone macOS CLI. S1.2 starts with prepared resolver lookups, then bounded
-  query-preparation/program reuse. Core-owned scheduling remains pending;
+  standalone macOS CLI. S1.2 resolver and preparation/program reuse source and
+  binding checks are integrated; evaluated-answer reuse is under review. S1.3
+  parser/rich-search source and independent find UI are progressing. Full client
+  acceptance and core-owned scheduling remain pending;
   multicore is deferred, not a delivery requirement.
-- **S1.2 current scope:** cold resolver prerequisites are integrated; bounded shared
-  Bases preparation/program reuse is implementing. Baseline relationship resolution
+- **S1.2 current scope:** cold resolver and bounded shared Bases preparation/program
+  reuse are integrated; conservative answer reuse is implementing. Baseline relationship resolution
   repeatedly scanned the namespace per link, preventing generated Base10k queries.
   Prepared source-ID and normalized-basename lookups now charge
   actual construction/bucket visits/sorting/cancellation, preserve all matching/
@@ -114,12 +116,12 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   S1.3 source handoff: `/private/tmp/zorid-s1-search-handoff-5ed9b53c/handoff.md`.
   Latest screenshot request adds grouped search UI/case toggle and top in-note
   find bar to S1.3. Reference owner `architecture_platform_audit` completed REA
-  static Obsidian evidence; frontend owner `storage_recovery_ui_impl` starts the
-  independent CodeMirror top find panel in an isolated branch, owning new find
-  module/styles/tests, narrow editor integration and one main stylesheet import.
+  static Obsidian evidence; frontend owner `storage_recovery_ui_impl` delivered the
+  independent CodeMirror/Reading find panels in isolated branches, owning new find
+  modules/styles/tests, narrow editor/Workspace integration and stylesheet imports.
   This presentation work does not depend on the new shared search evaluator and
-  can overlap S1.2 validation without changing index policy. Reading-mode find
-  remains required; vault-search implementation waits for its shared result DTO.
+  can overlap S1.2 validation without changing index policy. Vault-search
+  implementation waits for its shared paged-result DTO.
   No proprietary recovered code enters source; user manual app remains untouched.
   Completed static REA reference handoff:
   `/private/tmp/zorid-obsidian-search-static-hznlv_yk/handoff.md`, hash477e08b5.
@@ -149,6 +151,19 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   index restore validation, typed TS metadata DTO and focused affected tests;
   frozen historical49 fixtures remain checked through explicit test-only legacy
   projections, with new schema2 raw-source interval fixtures tested independently.
+  Parser source `4b8a7aa0` plus restore-topology successor `824dfeec` is independently
+  approved:22 initial focused checks/TypeScript and13 affected successor checks
+  pass with frozen fixtures unchanged. Main integration waits for the separately
+  owned Base-cache schema2 accounting bridge. Version-only baseline bridge
+  `0cd1cc24` is root source-approved and must land with schema2, not before it.
+  Pure rich search `b2b73a60` is independently source-approved and compiled;
+  first run11/13 tests pass, including all19 accepted target and36 Unicode cases.
+  Two new test assumptions need correction (optimized literal regex memory and
+  unquoted negative comparison grammar); old literal phase correctly did not run.
+  Dense large-note literal work accounting is also being checked before acceptance.
+  Evidence: `/private/tmp/zorid-rich-search-b2b73a60-focused-oxevq553/verification.json`.
+  Rich paging/result proposal `/private/tmp/zorid-s1-rich-page-contract.md` remains
+  under review, including honest counts, retained sorts and snippet provenance.
   `storage_sqlite_impl` separately owns conservative answer reuse in Bases only;
   `baseline_resources_impl` owns the opt-in existing generated-Base preparation
   measurement path and reviews the answer cache. Neither changes existing frozen
@@ -160,13 +175,27 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   Uncached on all16 attempts; no10k preparation reuse gain is established. Both
   reuse compiled programs. No cap/oracle changes or client-speedup claim. Evidence:
   `/private/tmp/zorid-bases-cache-observation-055c82c1-k_blpv0b/acceptance-summary.json`.
-  All owned processes exited; reviewer is diagnosing repeated large-generation
-  admission overhead before proposing any additional optimization.
+  All owned processes exited. Read-only diagnosis reproduced690,032 optional
+  maintenance units: prepared allocation admission alone exceeds32MiB before
+  proof copies; shared namespace was counted twice. Answer successor includes
+  factory-proven unique namespace accounting and early bounded admission, still
+  requiring review, tests and new same-workload measurements before any gain claim.
   Top editor find source `0fad2065` is independently approved and integrated
   `b3df4514`,42 focused checks plus TypeScript pass. User screenshot layout is
   implemented using existing icons/styles and CodeMirror commands, not painted
-  verified yet. Reading-mode find remains separately implementing; vault-search
+  verified yet. Reading source `4e76fa21` is independently approved/integrated
+  `c746914c`;17 focused checks/TypeScript pass. Proved stale lifecycle expectation
+  is separately corrected `b6def323`/`50cac67d`,9/9 lifecycle checks pass. Vault-search
   result UI remains pending rich-engine transport. Do not claim screenshot parity.
+  Painted editor-only Chrome attempt stopped at disk floor before results; no
+  screenshots/acceptance, all owned processes exited, manual apps untouched.
+  Completed50 Cargo test executables are now verified lossless gzip archives,
+  reclaiming711MiB; source/reports/release binaries and100 fingerprint/depinfo
+  files remain exact. Archive proof:
+  `/private/tmp/zorid-s1-owned-test-archive-qh52me5a/terminal-summary.json`.
+  Free space recovered to1.44GiB. Keep heavy checks serialized with1GiB floor;
+  no active slot after the first rich-search test failure. Don't remove archives
+  or assume their old test executable paths still exist without restoring them.
   S1.4 current core-lifecycle source handoff:
   `/private/tmp/zorid-s1-core-lifecycle-handoff.md` (no implementation yet).
 - **Integrated:** scoped observation-lookup fix through `2c53a98d`,193
