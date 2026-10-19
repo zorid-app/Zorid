@@ -215,6 +215,17 @@ harness `f8bafbac` is source approved; its next pass will use matching integrate
 candidate native binaries to verify the actual final app rather than repeat an
 extra old-native save pass. No native setup speedup or full S1 gate is claimed yet.
 
+Base semantic-baseline `18722402` passed its actual release build and seventeen
+declared corpus assertions (ten detached, seven generation queries;32 returned
+rows). Evidence `/private/tmp/zorid-s1-bases-release17-18722402/bases-report.json`
+and build provenance; exact corpus and executable hashes stayed stable and all
+owned children exited. It is integrated through main `da536a82`; main Node checks
+pin17 cases and reject14 adversarial protocol cases, with integrated tooling bytes
+identical to reviewed source. These small fixtures are not representative Base
+performance or independent full-result oracles. The serialized slot now belongs
+to `s1_execution_audit` for frozen `51060b1d` native CLI/host release build, normal
+family100 and same-caps legacy10k; baseline binaries are preserved before rebuild.
+
 Owners: `s1_execution_audit` owns workload/native CLI baseline tooling;
 `s1_query_audit` owns the integrated language fixtures;
 `architecture_platform_audit` owns actual browser/normal Electron measurement

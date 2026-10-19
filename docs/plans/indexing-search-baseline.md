@@ -6,6 +6,11 @@ after [S0 and S0A acceptance](../roadmap.md). The deterministic workload and
 [native CLI tool](../../scripts/indexing-search-baseline/README.md),
 [actual browser harness](../../scripts/indexing-search-baseline/WEB.md), and
 [language matrix](../reference/query-language-support.md) are integrated.
+The [pure-core tool](../../scripts/indexing-search-baseline/CORE.md) and
+[existing-corpus Base tool](../../scripts/indexing-search-baseline/BASES.md)
+separate engine work from client/storage setup. The Base tool checks only the
+seventeen frozen cases' declared assertions; it is not the representative Base
+query workload specified below.
 These initial tools cover subsets of this protocol; unsupported metrics/scenarios
 remain explicit. No complete representative/stress measurement or performance
 acceptance is claimed. Follow the
