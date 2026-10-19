@@ -40,6 +40,18 @@ checks remain pending; do not claim general platform acceptance from core tests.
 
 ## S1 search UI reference — editor find integrated, broader verification pending
 
+Actual release Electron `d38af6cf` runs002/003 verify grouped33-file results,
+per-file counts, ordinary continuation, case toggle and group controls. Native
+HTML sort input remains inconclusive: trusted focused key events produce no
+select change; other sorts, dense navigation and Find are not verified by these
+runs. Failure cleanup leaves no owned processes; normal quit was not reached.
+Root visually reviewed actual002 screenshots and identified the unrelated file
+toolbar in Search, search controls scrolling away, and low-contrast default
+highlight marks. Reviewed two-file fix integrated `a38416db`; actual repaint and
+scroll verification remains pending. Preserve this distinction from source/test
+completion. Evidence `/private/tmp/zorid-s1-rich-electron-d38af6cf-003/report.json`.
+
+
 User supplied Obsidian screenshots for vault search and in-file find. Vault search
 should group collapsible results by file, show per-file match counts and bordered
 context snippets with every matching range highlighted; include case-sensitive
