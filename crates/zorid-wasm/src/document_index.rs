@@ -812,7 +812,10 @@ impl WasmDocumentRichSearchOwner {
                 .ok_or(zorid_index::RichSearchError::Expired)?
                 .id
                 .clone();
-            match state.core.prepare_query(&id, zorid_index::MAX_SEARCH_ORDER_PUMP_WORK, |_| Ok(()))? {
+            match state
+                .core
+                .prepare_query(&id, zorid_index::MAX_SEARCH_ORDER_PUMP_WORK, |_| Ok(()))?
+            {
                 zorid_index::RichPreparation::Preparing => {
                     rich_encode(&serde_json::json!({"state":"preparing"}), 65536)
                 }
@@ -1708,56 +1711,140 @@ mod tests {
         );
         assert_eq!(report["value"]["result"]["rows"][0]["entryId"], "a");
     }
-    fn rich_fixture(query:&str)->(WasmDocumentIndexGeneration,WasmDocumentRichSearchOwner,String,String){
-        let generation=base_generation(b"views:\n  - type: table\n    name: All\n    order: [file.path]\n");
-        let owner=WasmDocumentRichSearchOwner::new("wasm-rich-owner").unwrap();
+    fn rich_fixture(
+        query: &str,
+    ) -> (
+        WasmDocumentIndexGeneration,
+        WasmDocumentRichSearchOwner,
+        String,
+        String,
+    ) {
+        let generation =
+            base_generation(b"views:\n  - type: table\n    name: All\n    order: [file.path]\n");
+        let owner = WasmDocumentRichSearchOwner::new("wasm-rich-owner").unwrap();
         let spec=serde_json::json!({"query":query,"caseSensitive":false,"sort":"nameAsc","context":"line","explain":false}).to_string();
         let facts=generation.generation.manifest().entries().iter().filter(|entry|entry.kind==zorid_core::EntryKind::File).map(|entry|serde_json::json!({"entryId":entry.id,"revision":entry.revision,"ctimeMs":0,"mtimeMs":1})).collect::<Vec<_>>();
-        let id=owner.start(&generation,&spec,&serde_json::to_string(&facts).unwrap()).unwrap();
-        let mut cursor=None;
-        for _ in 0..16{let result:serde_json::Value=serde_json::from_str(&owner.prepare_json(&id).unwrap()).unwrap();if result["state"]=="ready"{cursor=Some(result["cursor"].as_str().unwrap().to_string());break;}}
-        (generation,owner,id,cursor.expect("bounded fixture order becomes ready"))
-    }
-    fn rich_complete(owner:&WasmDocumentRichSearchOwner,query:&str,cursor:&str)->String{
-        let mut drive=owner.open_drive(query,cursor).unwrap();
-        for _ in 0..16{
-            let action:serde_json::Value=serde_json::from_str(&drive.next_action_json().unwrap()).unwrap();
-            if action["kind"]!="readText"{break;}
-            let bytes:&[u8]=match action["entry"]["id"].as_str().unwrap(){"a"=>b"---\ntitle: Original\n---\n[[b]]\n","b"=>b"target\n","base"=>b"views:\n  - type: table\n    name: All\n    order: [file.path]\n",_=>panic!("unexpected retained read")};
-            assert_eq!(action["bytes"],bytes.len());drive.accept(bytes).unwrap();
+        let id = owner
+            .start(&generation, &spec, &serde_json::to_string(&facts).unwrap())
+            .unwrap();
+        let mut cursor = None;
+        for _ in 0..16 {
+            let result: serde_json::Value =
+                serde_json::from_str(&owner.prepare_json(&id).unwrap()).unwrap();
+            if result["state"] == "ready" {
+                cursor = Some(result["cursor"].as_str().unwrap().to_string());
+                break;
+            }
         }
-        let mut prepared=drive.finish().unwrap();owner.commit_json(&mut prepared).unwrap()
+        (
+            generation,
+            owner,
+            id,
+            cursor.expect("bounded fixture order becomes ready"),
+        )
+    }
+    fn rich_complete(owner: &WasmDocumentRichSearchOwner, query: &str, cursor: &str) -> String {
+        let mut drive = owner.open_drive(query, cursor).unwrap();
+        for _ in 0..16 {
+            let action: serde_json::Value =
+                serde_json::from_str(&drive.next_action_json().unwrap()).unwrap();
+            if action["kind"] != "readText" {
+                break;
+            }
+            let bytes: &[u8] = match action["entry"]["id"].as_str().unwrap() {
+                "a" => b"---\ntitle: Original\n---\n[[b]]\n",
+                "b" => b"target\n",
+                "base" => b"views:\n  - type: table\n    name: All\n    order: [file.path]\n",
+                _ => panic!("unexpected retained read"),
+            };
+            assert_eq!(action["bytes"], bytes.len());
+            drive.accept(bytes).unwrap();
+        }
+        let mut prepared = drive.finish().unwrap();
+        owner.commit_json(&mut prepared).unwrap()
     }
     #[test]
-    fn rich_wasm_handles_read_exact_projection_and_reproduce_immutable_checkpoint(){
-        let (generation,owner,query,cursor)=rich_fixture("target");
-        let first=rich_complete(&owner,&query,&cursor),retry=rich_complete(&owner,&query,&cursor);assert_eq!(first,retry);
-        let page:serde_json::Value=serde_json::from_str(&first).unwrap();
-        assert_eq!(page["cursor"],serde_json::Value::Null);assert_eq!(page["result"]["snapshot"],serde_json::to_value(generation.generation.id()).unwrap());
-        assert_eq!(page["result"]["value"]["next"],serde_json::Value::Null);assert_eq!(page["result"]["value"]["complete"],true);
-        assert_eq!(page["result"]["value"]["totals"]["files"]["value"],1);assert_eq!(page["result"]["value"]["totals"]["occurrences"]["value"],1);
-        assert_eq!(page["result"]["value"]["files"][0]["entry"]["id"],"b");
-        owner.close_query(&query).unwrap();assert!(owner.state.borrow().queries.is_empty());assert!(owner.state.borrow().cursors.is_empty());
+    fn rich_wasm_handles_read_exact_projection_and_reproduce_immutable_checkpoint() {
+        let (generation, owner, query, cursor) = rich_fixture("target");
+        let first = rich_complete(&owner, &query, &cursor);
+        let retry = rich_complete(&owner, &query, &cursor);
+        assert_eq!(first, retry);
+        let page: serde_json::Value = serde_json::from_str(&first).unwrap();
+        assert_eq!(page["cursor"], serde_json::Value::Null);
+        assert_eq!(
+            page["result"]["snapshot"],
+            serde_json::to_value(generation.generation.id()).unwrap()
+        );
+        assert_eq!(page["result"]["value"]["next"], serde_json::Value::Null);
+        assert_eq!(page["result"]["value"]["complete"], true);
+        assert_eq!(page["result"]["value"]["totals"]["files"]["value"], 1);
+        assert_eq!(page["result"]["value"]["totals"]["occurrences"]["value"], 1);
+        assert_eq!(page["result"]["value"]["files"][0]["entry"]["id"], "b");
+        owner.close_query(&query).unwrap();
+        assert!(owner.state.borrow().queries.is_empty());
+        assert!(owner.state.borrow().cursors.is_empty());
     }
     #[test]
-    fn rich_wasm_metadata_is_body_free_and_owner_drop_retires_live_handles(){
-        let (_generation,owner,query,cursor)=rich_fixture("file:a.md");let mut drive=owner.open_drive(&query,&cursor).unwrap();
-        let action:serde_json::Value=serde_json::from_str(&drive.next_action_json().unwrap()).unwrap();assert_eq!(action["kind"],"done");assert!(drive.pending.is_none());
-        let prepared=drive.finish().unwrap();let weak=Rc::downgrade(&owner.state);drop(owner);assert!(!prepared.live.get());assert!(weak.upgrade().is_some());drop(prepared);drop(drive);assert!(weak.upgrade().is_none());
-        let (_generation,owner,query,cursor)=rich_fixture("target");let drive=owner.open_drive(&query,&cursor).unwrap();let weak=Rc::downgrade(&owner.state);drop(owner);assert!(matches!(drive.active(),Err(zorid_index::RichSearchError::Expired)));drop(drive);assert!(weak.upgrade().is_none());
+    fn rich_wasm_metadata_is_body_free_and_owner_drop_retires_live_handles() {
+        let (_generation, owner, query, cursor) = rich_fixture("file:a.md");
+        let mut drive = owner.open_drive(&query, &cursor).unwrap();
+        let action: serde_json::Value =
+            serde_json::from_str(&drive.next_action_json().unwrap()).unwrap();
+        assert_eq!(action["kind"], "done");
+        assert!(drive.pending.is_none());
+        let prepared = drive.finish().unwrap();
+        let weak = Rc::downgrade(&owner.state);
+        drop(owner);
+        assert!(!prepared.live.get());
+        assert!(weak.upgrade().is_some());
+        drop(prepared);
+        drop(drive);
+        assert!(weak.upgrade().is_none());
+        let (_generation, owner, query, cursor) = rich_fixture("target");
+        let drive = owner.open_drive(&query, &cursor).unwrap();
+        let weak = Rc::downgrade(&owner.state);
+        drop(owner);
+        assert!(matches!(
+            drive.active(),
+            Err(zorid_index::RichSearchError::Expired)
+        ));
+        drop(drive);
+        assert!(weak.upgrade().is_none());
     }
     #[test]
-    fn rich_wasm_wrong_facts_and_tampered_retained_read_cannot_commit(){
-        let (generation,owner,query,cursor)=rich_fixture("target");
-        let wrong=serde_json::json!([{"entryId":"b","revision":"r2","ctimeMs":0,"mtimeMs":1}]).to_string();
+    fn rich_wasm_wrong_facts_and_tampered_retained_read_cannot_commit() {
+        let (generation, owner, query, cursor) = rich_fixture("target");
+        let wrong = serde_json::json!([{"entryId":"b","revision":"r2","ctimeMs":0,"mtimeMs":1}])
+            .to_string();
         let spec=serde_json::json!({"query":"target","caseSensitive":false,"sort":"nameAsc","context":"line","explain":false}).to_string();
-        assert!(matches!(owner.start(&generation,&spec,&wrong),Err(zorid_index::RichSearchError::Invalid(_))));
-        let mut drive=owner.open_drive(&query,&cursor).unwrap();let _:serde_json::Value=serde_json::from_str(&drive.next_action_json().unwrap()).unwrap();
-        let request=drive.pending.take().unwrap();let changed=vec![b'x';request.bytes()];
-        assert!(matches!(drive.inner.as_mut().unwrap().accept_text(&request,&changed,|_|Ok::<_,&'static str>(())),Err(zorid_index::RichSearchError::Index(_))));
-        assert!(drive.inner.take().unwrap().finish::<&'static str>().is_err());drop(drive);
+        assert!(matches!(
+            owner.start(&generation, &spec, &wrong),
+            Err(zorid_index::RichSearchError::Invalid(_))
+        ));
+        let mut drive = owner.open_drive(&query, &cursor).unwrap();
+        let _: serde_json::Value =
+            serde_json::from_str(&drive.next_action_json().unwrap()).unwrap();
+        let request = drive.pending.take().unwrap();
+        let changed = vec![b'x'; request.bytes()];
+        assert!(matches!(
+            drive.inner.as_mut().unwrap().accept_text(
+                &request,
+                &changed,
+                |_| Ok::<_, &'static str>(())
+            ),
+            Err(zorid_index::RichSearchError::Index(_))
+        ));
+        assert!(drive
+            .inner
+            .take()
+            .unwrap()
+            .finish::<&'static str>()
+            .is_err());
+        drop(drive);
         // Failed drive releases busy guard without advancing its input cursor.
-        let valid=rich_complete(&owner,&query,&cursor);let page:serde_json::Value=serde_json::from_str(&valid).unwrap();assert_eq!(page["result"]["value"]["complete"],true);
+        let valid = rich_complete(&owner, &query, &cursor);
+        let page: serde_json::Value = serde_json::from_str(&valid).unwrap();
+        assert_eq!(page["result"]["value"]["complete"], true);
     }
     fn base_generation(definition: &[u8]) -> WasmDocumentIndexGeneration {
         let mut h: serde_json::Value = serde_json::from_str(&header()).unwrap();
