@@ -8,6 +8,78 @@ use zorid_file_sync::binary_stream::{
 
 pub const FAMILY_MAX_INLINE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_REFERENCE_BYTES: i64 = 1024 * 1024;
+const MAX_DIGEST_BYTES: i64 = 256;
+
+// A rowid scan cannot spool bounded references into a path-order SQL sorter.
+// Lengths remain separate from CASE-projected values so invalid authority is
+// rejected before any Rust String getter; CASE preserves the original SQL type.
+const READ_STATES_SQL: &str = "SELECT
+    length(content),length(CAST(content_ref AS BLOB)),length(CAST(content_digest AS BLOB)),
+    id,path,deleted,state,
+    CASE WHEN length(CAST(content_ref AS BLOB)) BETWEEN 1 AND ?2 THEN content_ref END,
+    CASE WHEN length(CAST(content_digest AS BLOB)) BETWEEN 1 AND ?3 THEN content_digest END
+    FROM entries NOT INDEXED WHERE visible=1 AND (?1 OR deleted=0) ORDER BY rowid";
+
+struct MetadataColumns {
+    path: String,
+    deleted: i64,
+    state: String,
+    reference: Option<String>,
+    digest: Option<String>,
+}
+impl MetadataColumns {
+    fn read(row: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Self> {
+        Ok(Self {
+            path: row.get(offset)?,
+            deleted: row.get(offset + 1)?,
+            state: row.get(offset + 2)?,
+            reference: row.get(offset + 3)?,
+            digest: row.get(offset + 4)?,
+        })
+    }
+}
+fn check_metadata_lengths(
+    inline_length: Option<i64>,
+    reference_length: Option<i64>,
+    digest_length: Option<i64>,
+) -> Result<()> {
+    if inline_length.is_some_and(|n| n < 0)
+        || reference_length.is_some_and(|n| !(1..=MAX_REFERENCE_BYTES).contains(&n))
+        || digest_length.is_some_and(|n| !(1..=MAX_DIGEST_BYTES).contains(&n))
+        || (inline_length.is_some() && reference_length.is_some())
+    {
+        return Err(corrupt("invalid entry content authority or metadata bounds"));
+    }
+    Ok(())
+}
+
+/// Complete transaction-current visible metadata, including tombstones when
+/// requested. Never select bodies or substitute a partial planner snapshot.
+/// Physical overflow pages can still be read by SQLite for later columns.
+pub(super) fn read_states(tx: &Connection, include_deleted: bool) -> Result<Vec<EntryState>> {
+    let mut entries = Vec::new();
+    {
+        let mut statement = tx.prepare(READ_STATES_SQL)?;
+        let mut rows = statement.query(params![
+            include_deleted,
+            MAX_REFERENCE_BYTES,
+            MAX_DIGEST_BYTES,
+        ])?;
+        while let Some(row) = rows.next()? {
+            let inline_length = row.get(0)?;
+            check_metadata_lengths(inline_length, row.get(1)?, row.get(2)?)?;
+            let id = EntryId::new(row.get::<_, String>(3)?)?;
+            let columns = MetadataColumns::read(row, 4)?;
+            // Validate reference ownership/backing in the same transaction, then
+            // discard content metadata rather than retaining it for a sort.
+            entries.push(decode_metadata(tx, &id, inline_length, columns)?.state);
+        }
+    }
+    // Stable sorting retains rowid order for equal paths (retained tombstones),
+    // matching the original path sort's rowid-ordered table-scan input.
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(entries)
+}
 fn corrupt(reason: &str) -> StoreError {
     StoreError::Corrupt(reason.into())
 }
@@ -125,26 +197,28 @@ pub(super) fn read_metadata_row(
     let Some((inline_length, reference_length, digest_length)) = lengths else {
         return Ok(None);
     };
-    if inline_length.is_some_and(|n| n < 0)
-        || reference_length.is_some_and(|n| !(1..=MAX_REFERENCE_BYTES).contains(&n))
-        || digest_length.is_some_and(|n| !(1..=256).contains(&n))
-        || (inline_length.is_some() && reference_length.is_some())
-    {
-        return Err(corrupt(
-            "invalid entry content authority or metadata bounds",
-        ));
-    }
-    let (path, deleted, json, reference, digest): (
-        String,
-        i64,
-        String,
-        Option<String>,
-        Option<String>,
-    ) = tx.query_row(
+    check_metadata_lengths(inline_length, reference_length, digest_length)?;
+    let columns = tx.query_row(
         "SELECT path,deleted,state,content_ref,content_digest FROM entries WHERE id=?1",
         [id.as_str()],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        |row| MetadataColumns::read(row, 0),
     )?;
+    decode_metadata(tx, id, inline_length, columns).map(Some)
+}
+
+fn decode_metadata(
+    tx: &Connection,
+    id: &EntryId,
+    inline_length: Option<i64>,
+    columns: MetadataColumns,
+) -> Result<StoredEntryMetadata> {
+    let MetadataColumns {
+        path,
+        deleted,
+        state: json,
+        reference,
+        digest,
+    } = columns;
     let has_content = inline_length.is_some() || reference.is_some();
     let state = decode_state(id.as_str(), &path, deleted, &json, has_content)?;
     if has_content != digest.is_some() {
@@ -179,7 +253,7 @@ pub(super) fn read_metadata_row(
         (None, None, None) => None,
         _ => return Err(corrupt("entry content columns disagree")),
     };
-    Ok(Some(StoredEntryMetadata { state, content }))
+    Ok(StoredEntryMetadata { state, content })
 }
 
 /// Retained content; references remain references and inline bodies are bounded.
@@ -307,6 +381,10 @@ impl Store {
         Ok(result)
     }
 }
+
+#[cfg(test)]
+#[path = "entry_content_bulk_tests.rs"]
+mod bulk_tests;
 
 #[cfg(test)]
 mod tests {

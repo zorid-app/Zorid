@@ -2,6 +2,7 @@
 //! adapters; a database commit must never be mistaken for either of those outcomes.
 
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use entry_content::read_states;
 
 mod binary_commit;
 mod blob_read;
@@ -278,20 +279,6 @@ fn decode_state(
         ));
     }
     Ok(state)
-}
-
-fn read_states(connection: &Connection, include_deleted: bool) -> Result<Vec<EntryState>> {
-    let ids = connection
-        .prepare("SELECT id FROM entries WHERE visible=1 AND (?1 OR deleted=0) ORDER BY path")?
-        .query_map([include_deleted], |r| r.get::<_, String>(0))?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    ids.into_iter()
-        .map(|id| {
-            entry_content::read_metadata_row(connection, &EntryId::new(id)?)?
-                .map(|entry| entry.state)
-                .ok_or_else(|| StoreError::Corrupt("listed entry disappeared".into()))
-        })
-        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
