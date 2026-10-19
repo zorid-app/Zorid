@@ -15,8 +15,7 @@ actual macOS save/close/quit/history/concurrent-CLI/interruption evidence are in
 S0A's reviewed consumer matrix and contracts include the integrated browser
 binary-helper admission correction. **S1.0 has retained baseline observations and known limits; S1.1 reusable
 parsing/cache implementation is underway.** The typed extraction foundation is
-integrated; actual Chrome cache checks pass, while native CLI/Electron cache
-acceptance remains pending.
+integrated; bounded actual Chrome/CLI/Electron cache correctness checks pass.
 Existing feature/iOS work is preserved.
 
 Design for desktop, browser and mobile now; finish the usable desktop feature set
@@ -207,7 +206,8 @@ substantial state per call. Identity-free parser facts and scoped extraction/
 binding/cache-admission contracts are integrated and focused tests pass. Native
 and browser reusable-facts storage is integrated with focused checks. The matching
 WASM build, actual Chrome100 smoke and tiny nine-phase persisted-cache cohort
-pass on `6f2b177b`; native CLI/Electron cache acceptance remains pending. Normal10k admission
+pass on `6f2b177b`; matching native build, Electron100 and CLI14-phase cache
+acceptance pass through `44181d1c` within their bounded scopes. Normal10k admission
 remains incomplete before indexing; full app speedup and complete Obsidian query
 compatibility are not established.
 
@@ -219,8 +219,9 @@ compatibility are not established.
   scoped/versioned extraction keys, integrity/range validation and shared bounded
   optional-cache admission. Parser19 and index37 focused tests pass; this does not
   establish persistent reuse or runtime-owned scheduling.
-- [ ] Persist content-derived parse/index reuse with semantic-version keys and safe
+- [x] Persist content-derived parse/index reuse with semantic-version keys and safe
   identity rebinding; incrementally invalidate changed inputs and survive restart.
+  Bounded real-client checks pass; representative/stress performance gates remain open.
 - [ ] Reuse compiled Base programs, graph/generation preparation and eligible query
   answers in bounded memory; include all relevant dependencies and time context.
 - [ ] Move indexing/semantic-parsing lifecycle into shared Rust core: commit-driven

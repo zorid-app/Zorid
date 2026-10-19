@@ -10,8 +10,8 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 - **Stage:** S0 bounded native delivery and S0A contracts accepted; S1.0 baseline
   and measured setup prerequisites implementing. S1.1 parser/extraction contracts
   and native/browser facts-persistence code are integrated with focused checks.
-  Actual Chrome persistence checks pass; native-client persistence acceptance is
-  pending. Multicore and core-owned
+  Bounded real-client parse-cache acceptance passes Chrome, macOS Electron and
+  standalone macOS CLI. Multicore and core-owned
   scheduling are not implemented yet.
 - **Integrated:** scoped observation-lookup fix through `2c53a98d`,193
   focused checks/1 existing ignored fixture, release build and normal-family100
@@ -54,11 +54,15 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   workspace invalidation preserved source bytes and fixed the matching build.
   Later Electron launches still record reconciliation scan-limit warnings and
   guarded read errors; these remain open, not an error-free runtime claim.
-  Standalone CLI14-phase cache acceptance is NEXT: private runner `b3124f79`
-  is independently reviewed; prior attempts stopped on tool/environment gates
-  (Darwin time syscall, system Python SQLite open, disk floor), not passed tests.
-  Completed disposable fixtures are being byte-verified/archived for disk margin;
-  no targets, manual playgrounds or real vaults are removed. No app/build is live.
+  Standalone CLI14-phase cache acceptance now passes frozen `44181d1c` with
+  matching immutable `255caa28` binary: restart/rebuild hits with same-entry reuse
+  zero, contextual binding, invalidation, disposal/corrupt/unsupported fallback
+  and exact receipt replay. All source/authority/history/receipt/recovery and
+  other-vault cache fingerprints remain exact;240 invocations exit normally and
+  owned processes are gone. Evidence:
+  `/private/tmp/zorid-s1-cli-cache-acceptance-runtime-7XcZbG/acceptance-summary.json`.
+  Earlier tool/disk failures remain retained, not credited as passing tests.
+  This accepts bounded reusable-facts correctness, not performance or full S1.
   Desktop transport compatibility fix `f22d162f` is integrated `a70c8202`:
   permit validated optional native `parseCache` counters and preserve them in
   frontend progress. Owner `storage_recovery_ui_impl`, isolated
@@ -67,7 +71,20 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   failures; candidate11/11 and TypeScript pass. Four integrated file hashes match
   validated source; Rust/browser inputs are unchanged from the tested freeze.
   Evidence `/private/tmp/zorid-desktop-parse-cache-validation.json`. Actual
-  matching CLI cache acceptance still pending; Electron compatibility passes.
+  matching CLI cache acceptance and Electron compatibility now pass.
+- **Next practical increment:** remove capture's duplicate metadata validation
+  within the same transaction (`entry_content.rs` / `document_index.rs`). The
+  current Electron100 observation is5.7s cold search and1.8s post-save index
+  refresh; these are single observations, not a performance comparison.
+  Source audit confirms capture validates/decodes the bounded metadata scan,
+  discards it, then rereads each row. Reuse only that invocation's checked rows;
+  retain every fresh stage/publication capture. No new authority cache/API.
+  This small native indexing prerequisite precedes S1.2 Base preparation work
+  because it targets the observed ordinary app flow. Owner `storage_sqlite_impl`,
+  independent reviewer `s1_execution_audit`; isolated branch/worktree assigned
+  next. Existing before binary and Electron100 harness provide comparison;
+  no new benchmark framework. Audit:
+  `/private/tmp/zorid-s1-native-index-source-audit-255caa28/audit.md`.
 - **Combined native result:** release `b3ed4400` passed build115.545s and family100
   correctness (all eight full literal oracles, complete coverage, exact physical/
   authority sources and watermark108). Rust inputs match integrated `2fb58f33`;
@@ -101,8 +118,8 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   `storage_sqlite_impl` owns new
   native cache-only persistence, `architecture_platform_audit` browser/WASM
   adapter and optional validated cache counters. These are now integrated with
-  focused checks and actual Chrome cache correctness; native-client and multicore
-  acceptance remain pending. Preserve existing
+  focused checks and bounded actual Chrome/CLI/Electron correctness; multicore
+  and overall S1 performance acceptance remain pending. Preserve existing
   parser output, source fences and separate authority/cache schemas. Root sole
   main integrator; no push.
 - **Residual admission CSE:** `397e011c` is integrated `5bb1d4f0` after24

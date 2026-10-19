@@ -53,8 +53,10 @@ prefix are integrated with focused tests. On frozen `6f2b177b`, the normal WASM
 build, TypeScript check, actual Chrome100-note smoke and nine-phase tiny cache
 cohort pass. Fresh-process generation rebuild reuses persisted facts; identity/
 rename binding, byte/mode/scope invalidation and checksum-corruption fallback
-preserve public results and source/checkpoint/receipt data. Native CLI/Electron
-cache acceptance remains pending. These are Chrome correctness checks, not
+preserve public results and source/checkpoint/receipt data. Matching native build,
+normal Electron100 flow and standalone CLI14-phase cache checks also pass through
+`44181d1c`; disposal, corrupt/unsupported fallback and replay preserve source,
+authority, receipts and recovery. These are bounded correctness checks, not
 measured performance or other-browser acceptance. Generation-only rebuild preserves valid reusable
 facts; full disposal of that cache family clears them. New cache-outcome counters
 are per pump, and callers sum separate pump reports explicitly. Existing
