@@ -39,6 +39,17 @@ intended assertion; exact source restoration and new tests pass. Evidence:
 invocation retains fresh graph/proof/head/CAS boundaries; no persistent authority
 cache. Comparable release/runtime performance measurement remains pending.
 
+Combined release `b3ed4400` now passes normal-family100 full source/search
+correctness. The same bounded10k profile still stops at32 passes,276 live files
+versus224 before; inventory2385/unfinished, no index/query phase. External run
+197.420s; all10,003 physical files and binary/tool hashes exact, owned children
+gone. Prior run included an observer window and a different unfinished inventory,
+so this is partial progress, not full-vault or desktop-startup speedup acceptance.
+Evidence `/private/tmp/zorid-s1-cli-family-release-b3ed4400-10000/report.json`.
+The remaining normal admission bottleneck is **open and required for S1**; moving
+to the accepted parse-cache implementation does not close or silently defer it.
+No new authority snapshot cache, mutation planner or batch API is selected here.
+
 ## S1 native setup scales with repeated full-store work — two fixes integrated
 
 The indexed unresolved-observation lookup is integrated through `2c53a98d`

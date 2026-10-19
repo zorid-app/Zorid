@@ -21,16 +21,26 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   is established. Pure-core10k and actual-browser100 passed within their stated
   scopes. Generated Base100 passed all eight semantic oracles;10k generation completed,
   but all eight queries rejected the existing preparation budget (limited/incomplete).
-- **Active owner/slot:** `s1_execution_audit` owns serialized release build and
-  bounded native family100→10k comparison at frozen `b3ed4400`. Its Rust/Cargo/
-  proto inputs exactly match main `2fb58f33` before the parser-only foundation.
-  Preserve old D0 binaries; same5s soft/30s hard/32pass default profile, no raised
-  limits or new benchmark tools. No new speedup result yet. Composed family
-  source through `980bf556` passed24 unique focused tests; old per-row derivation
-  failed the intended assertion, exact source restored and four new tests green.
-  All seven Cargo PIDs gone. Evidence:
+- **Active owner/slot:** `baseline_resources_impl` owns serialized focused
+  index-crate validation at source-reviewed `effeb61f` (scoped extraction/binding,
+  integrity, preflight and shared bounded cache policy). Native adapter and web/
+  WASM owners remain source-only; independent reviewers assigned.
+- **Combined native result:** release `b3ed4400` passed build115.545s and family100
+  correctness (all eight full literal oracles, complete coverage, exact physical/
+  authority sources and watermark108). Rust inputs match integrated `2fb58f33`;
+  later parser facts remain separately validated. Same default family10k profile
+  stops at32 passes with276 live files versus prior224, no index/query phase.
+  Host5.166s +rescans180.081s; external run197.420s. Inventory2385/unfinished
+  differs from prior3030 and prior run included one observer window: partial
+  admission progress is not full-vault or desktop-startup speedup acceptance.
+  All10,003 physical files, executable/tool hashes exact; owned processes gone.
+  Evidence `/private/tmp/zorid-s1-cli-family-release-b3ed4400-10000/report.json`,
+  `/private/tmp/zorid-s1-candidate-release-b3ed4400/build.json`.
+  Remaining native admission scalability is still required for S1 acceptance.
+  Further import architecture changes remain a separate scoped review; this
+  batch selects no new authority snapshot cache or batch API.
+  Composed family24-test +old-red/restored-source proof remains at
   `/private/tmp/zorid-family-view-validation-61fa/summary.json`.
-  Normal-family10k baseline remains224 live files/32 passes, inventory3030/unfinished.
 - **Loader integration:** reviewed source through `028bc96d` is integrated
   `667c4f48`.202 unique scoped checks pass/1 existing ignored. Three broader test
   expectations fail identically on unchanged main: schema3 presentation migration,

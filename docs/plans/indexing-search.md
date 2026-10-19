@@ -52,14 +52,17 @@ semantic gaps without requiring the later Bases feature UI. The language referen
 must separate documented upstream behavior, current implementation and planned
 support; broad historical audits are not a complete public grammar.
 
-Measured S1.0 setup prerequisite (2026-10-18): a release10k legacy CLI import used
-its explicit240s setup budget before indexing began. One setup-only CPU sample
-identified a global scan/decode of retained external observations on each observed
-path. A narrow indexed path/unresolved lookup is being validated in isolation
-before repeating the same native workload. Preserve history, typed proofs, capture
-replay and existing admission; this is not a new retention policy or evidence that
-the Rust index cannot handle10k (the pure-core10k oracle run passed). Parse-cache,
-query-cache and executor implementations have not been launched in parallel.
+Measured S1.0 setup prerequisites (2026-10-18/19): release10k import is still
+incomplete before indexing. Scoped observation/native path selectors, complete
+metadata bulk loading and invocation-local graph-view reuse are integrated and
+validated within their recorded scopes. Legacy same-cap admission reached6,167
+versus2,378 originally; normal-family10k reached276 versus224 in32 bounded passes.
+These are partial import results, not full-vault latency or indexing speedups.
+Keep the unresolved normal admission scalability requirement in S1's performance
+gate; don't expand into a new trusted mutation cache or batch-command API without
+resolving that design. Pure-core10k literal oracles pass independently. The accepted
+parse-cache source slice proceeds from these retained known-limit baselines;
+query-cache/executor implementations still wait for their owning slices.
 
 S1.1 source foundation starts after the retained S1.0 observations: pure-core10k
 full literal oracles passed, generated Base10k truthfully rejects its preparation
