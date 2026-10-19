@@ -481,6 +481,14 @@ pub(crate) struct DateValue {
     timezone: BasesTimezone,
 }
 
+// Invocation clocks round-trip through the evaluator's RFC3339 parser, which
+// accepts four-digit nonnegative years. Validate that domain before formatting
+// instead of letting Evaluator::new panic on chrono's wider date range.
+// File timestamps retain their separate serialization/interpretation behavior.
+pub(crate) fn invocation_clock(millis: i64) -> Option<DateTime<Utc>> {
+    DateTime::<Utc>::from_timestamp_millis(millis).filter(|date| (0..=9999).contains(&date.year()))
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) enum BasesTimezone {
     #[default]

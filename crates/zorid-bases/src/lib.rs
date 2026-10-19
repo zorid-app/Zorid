@@ -411,7 +411,13 @@ pub(crate) fn with_session<T>(
         this_file,
         files: Arc::new(files::BasesFiles::new(vec![file])),
         formulas: Arc::new(formulas),
-        now: Some(instant(options.clock_ms)?),
+        now: Some(
+            expression::invocation_clock(options.clock_ms)
+                .ok_or_else(|| {
+                    ExpressionDiagnostic::new("input", "Clock or timestamp is out of range")
+                })?
+                .to_rfc3339(),
+        ),
         timezone,
         work_limit: Some(options.max_steps),
         cancellation: options.cancellation.clone(),

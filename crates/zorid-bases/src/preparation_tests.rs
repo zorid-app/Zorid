@@ -1407,3 +1407,111 @@ fn exact_capacity_fallible_copies_stay_within_measured_nested_retention() {
         "unused capacity cannot be credited as avoided cold construction"
     );
 }
+
+#[test]
+fn invocation_clock_domain_is_structured_and_shared_by_all_base_paths() {
+    let r = first();
+    let generation = r.generation();
+    let mut cache = BasePreparationCache::new();
+    let (program, prepared) = answer_inputs(&mut cache, &r, STATIC_ANSWER_BASE, 0);
+    assert_eq!(
+        cache
+            .query_prepared_cached(&program, &prepared, &r.options, 0)
+            .unwrap()
+            .outcome(),
+        PreparationCacheOutcome::Miss
+    );
+    let first = chrono::DateTime::parse_from_rfc3339("0000-01-01T00:00:00Z")
+        .unwrap()
+        .timestamp_millis();
+    let last = chrono::DateTime::parse_from_rfc3339("9999-12-31T23:59:59.999Z")
+        .unwrap()
+        .timestamp_millis();
+    for clock in [first, 0, last] {
+        let mut options = r.options.clone();
+        options.evaluation.clock_ms = clock;
+        assert_eq!(
+            crate::evaluate_expression("now()", &DetachedRecord::default(), &options.evaluation)
+                .unwrap()
+                .value,
+            crate::BaseValue::Date {
+                timestamp: clock,
+                has_time: true
+            }
+        );
+        let cold =
+            crate::query_generation(program.value(), &generation, &r.facts, &options).unwrap();
+        assert_eq!(
+            semantics(query_prepared(program.value(), &prepared, &options).unwrap()),
+            semantics(cold.clone())
+        );
+        let hit = cache
+            .query_prepared_cached(&program, &prepared, &options, 1)
+            .unwrap();
+        assert_eq!(hit.outcome(), PreparationCacheOutcome::Hit);
+        assert_eq!(semantics(hit.into_value()), semantics(cold));
+    }
+    let expected = ExpressionDiagnostic::new("input", "Clock or timestamp is out of range");
+    for clock in [
+        first - 1,
+        last + 1,
+        chrono::DateTime::<chrono::Utc>::MIN_UTC.timestamp_millis(),
+        chrono::DateTime::<chrono::Utc>::MAX_UTC.timestamp_millis(),
+        i64::MIN,
+        i64::MAX,
+    ] {
+        let mut options = r.options.clone();
+        options.evaluation.clock_ms = clock;
+        assert_eq!(
+            crate::evaluate_expression("1", &DetachedRecord::default(), &options.evaluation).err(),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            crate::query_generation(program.value(), &generation, &r.facts, &options).err(),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            query_prepared(program.value(), &prepared, &options).err(),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            cache
+                .query_prepared_cached(&program, &prepared, &options, 2)
+                .err(),
+            Some(expected.clone())
+        );
+        // Clock validation remains lazy when the query evaluates no rows.
+        options.ignore_paths = r
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str().into())
+            .collect();
+        let cold =
+            crate::query_generation(program.value(), &generation, &r.facts, &options).unwrap();
+        assert!(cold.rows.is_empty());
+        assert_eq!(
+            semantics(query_prepared(program.value(), &prepared, &options).unwrap()),
+            semantics(cold.clone())
+        );
+        let uncached = cache
+            .query_prepared_cached(&program, &prepared, &options, 2)
+            .unwrap();
+        assert_eq!(uncached.outcome(), PreparationCacheOutcome::Uncached);
+        assert_eq!(semantics(uncached.into_value()), semantics(cold));
+    }
+    // Invocation validation does not narrow file timestamp serialization.
+    let record = DetachedRecord {
+        path: "sample.md".into(),
+        ctime_ms: Some(chrono::DateTime::<chrono::Utc>::MIN_UTC.timestamp_millis()),
+        mtime_ms: Some(chrono::DateTime::<chrono::Utc>::MAX_UTC.timestamp_millis()),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::evaluate_expression("file.name", &record, &r.options.evaluation)
+            .unwrap()
+            .value,
+        crate::BaseValue::String {
+            value: "sample".into()
+        }
+    );
+}

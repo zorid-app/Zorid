@@ -1671,12 +1671,10 @@ fn copy_result(
     })
 }
 
-// Evaluator::new parses the invocation's RFC3339 serialization. Chrono also
-// represents expanded/negative years which that parser rejects. Never let an
-// optional clock-independent hit bypass the established cold clock domain.
+// Optional answers use exactly the same invocation-clock domain as cold
+// evaluation; they cannot bless a clock which the evaluator would reject.
 fn answer_clock_representable(clock_ms: i64) -> bool {
-    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(clock_ms)
-        .is_some_and(|date| (0..=9999).contains(&chrono::Datelike::year(&date)))
+    crate::expression::invocation_clock(clock_ms).is_some()
 }
 
 fn decimal_bytes(n: usize) -> usize {
