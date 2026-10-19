@@ -291,3 +291,66 @@ test('failed platform release preserves old-owner close retries', async t => {
   assert.equal(f.pins.length, 1, 'failed closes still block replacement pins from the same service');
   ui.workspace.platform.release = async () => {};
 });
+
+function richFixture(){
+  const f=fixture(async()=>{throw new Error('Literal fallback forbidden');});let starts=0,pages=0;
+  const original=f.service.open;
+  Object.assign(f.service,{richSearchAvailable:true,open:async()=>({...await original(),richSearch:async({spec}:any)=>{
+    starts++;return {queryId:String(starts),prepare:async()=>({state:'ready',cursor:'ready'}),close:async()=>{},page:async()=>{pages++;return {cursor:null,result:{snapshot,source,coverageComplete:true,value:{snapshot,next:null,scanComplete:true,coverageComplete:true,complete:true,dialect:'zorid-search-rust-unicode-1',spec,explanation:null,
+      files:[{entry:hit().entry,chunk:0,lastChunk:true,occurrenceCount:9,locations:[],snippets:[]}],totals:{files:{relation:'exact',value:1},occurrences:{relation:'exact',value:9}},coverage:{candidateFiles:1,evaluatedFiles:1,unavailableFiles:0,scanComplete:true,queryCoverageComplete:true},outputComplete:true,work:{documents:1,sourceBytes:1,units:1}}}};}};
+  }})});return {...f,get starts(){return starts;},get pages(){return pages;}};
+}
+
+test('Workspace mounts rich capability and preserves query/pin/view during sidebar refresh and note opening',async t=>{
+  const ui=await setup(t),f=richFixture();ui.setService(f.service);
+  const input=ui.root.querySelector<HTMLInputElement>('.document-search input[type="search"]')!;assert.ok(input);input.value='needle';input.dispatchEvent(new window.Event('input',{bubbles:true}));
+  await until(()=>f.pages===1,'first rich page');assert.equal(ui.root.querySelector('.document-search-badge')?.textContent,'9');
+  ui.internal.renderSidebar();await ui.workspace.openNote('Note.md');ui.internal.renderSidebar();
+  assert.equal(ui.root.querySelector('.document-search input[type="search"]'),input);assert.equal(f.pins.length,1);assert.equal(f.starts,1);
+  ui.root.querySelector<HTMLButtonElement>('.document-search-case')!.click();await until(()=>f.starts===2,'case query');assert.equal(f.pins.length,1);
+});
+
+test('Workspace refreshes rich search for committed source changes and closes on leaving Search',async t=>{
+  const ui=await setup(t),f=richFixture();ui.setService(f.service);await ui.search('needle');await until(()=>f.pages===1,'rich search');
+  await ui.workspace.vault.create('New.md','saved');await until(()=>f.pages===2,'committed source refresh');assert.equal(f.pins.length,2);assert.equal(f.pins[0].closed,1);
+  ui.internal.treeTab='files';ui.internal.renderSidebar();await until(()=>f.pins[1].closed===1,'close rich sidebar');assert.equal(ui.root.querySelector('.document-search'),null);
+});
+
+test('Workspace rich failure never invokes legacy evaluator',async t=>{
+  const ui=await setup(t),f=richFixture();Object.assign(f.service,{open:async()=>{throw new Error('SQL raw secret');}});ui.setService(f.service);
+  ui.workspace.vault.read=async()=>assert.fail('No frontend fallback');await ui.search('needle');await until(()=>!!ui.root.querySelector('.document-search-status')?.textContent?.includes('unavailable'),'rich error');
+  assert.doesNotMatch(ui.root.querySelector('.document-search-status')!.textContent!,/SQL raw secret/);assert.equal(f.queries.length,0);
+});
+
+function prepareRichNavigation(ui:Awaited<ReturnType<typeof setup>>,options:{path?:string;dirty?:boolean;revision?:string}={}){
+  const {workspace,adapter,internal}=ui,path=options.path??'Note.md';const saved=workspace.vault.entries.get('Note.md')!;
+  workspace.vault.entries.set(path,{...saved,path,entryId:'note',revision:options.revision??'revision-note'});
+  adapter.stat=async()=>workspace.vault.entries.get(path)!;
+  const selections:any[]=[];let opens=0,reads=0;
+  const pane=workspace.activePane;
+  pane.editor={getValue:()=> 'needle',getViewState:()=>({selection:{ranges:[{anchor:0,head:0}],mainIndex:0},scrollTop:0,scrollLeft:0}),restoreViewState:(state:any)=>{selections.push(state);},destroy(){},focus(){},setValue(){},insert(){}};
+  workspace.buffers.set(path,{dirty:options.dirty??false,error:null,text:'needle',savedText:'needle',savedDurableWitness:{entryId:'note',revision:options.revision??'revision-note',path},dispose:async()=>{},flush:async()=>{},flushForNavigation:async()=>{}} as any);
+  workspace.vault.readDurableTextById=async()=>{reads++;return {entryId:'note',revision:options.revision??'revision-note',path,content:'needle',stat:{ctime:0,mtime:0,size:6}};};
+  internal.openNote=async()=>{opens++;internal.current(pane).path=path;internal.navigationIntent.set(pane,(internal.navigationIntent.get(pane)??0)+1);};
+  const entry={...hit().entry,path};
+  return {entry,selections,get opens(){return opens;},get reads(){return reads;},invoke:(location:any)=>internal.openRichDocumentSearchEntry(entry,location,false,()=>true)};
+}
+
+test('rich binary and non-source matches admit stable stat identity without text reads or fabricated selection',async t=>{
+  const ui=await setup(t),nav=prepareRichNavigation(ui,{path:'Picture.png'});
+  await nav.invoke({index:0,locator:{origin:'filename',range:{bytes:[0,1],utf16:[0,1]}},role:'occurrence',occurrences:1});assert.equal(nav.opens,1);assert.equal(nav.reads,0);assert.equal(nav.selections.length,0);
+  ui.adapter.stat=async()=>({...ui.workspace.vault.entries.get('Picture.png')!,entryId:'replacement'});await nav.invoke(undefined);assert.equal(nav.opens,1);
+});
+
+test('rich source selection requires exact current saved revision, clean corresponding buffer and editor',async t=>{
+  const ui=await setup(t),nav=prepareRichNavigation(ui);const location={index:0,locator:{origin:'source',range:{bytes:[1,3],utf16:[1,3]},kind:'occurrence'},role:'occurrence',occurrences:1};
+  await nav.invoke(location);assert.equal(nav.selections.length,1);assert.deepEqual(nav.selections[0].selection.ranges,[{anchor:1,head:3}]);
+  ui.workspace.buffers.get('Note.md')!.dirty=true;await nav.invoke(location);assert.equal(nav.selections.length,1);
+  ui.workspace.buffers.get('Note.md')!.dirty=false;ui.workspace.vault.readDurableTextById=async()=>({entryId:'note',revision:'newer',path:'Note.md',content:'changed',stat:{ctime:0,mtime:0,size:7}});await nav.invoke(location);assert.equal(nav.selections.length,1);assert.equal(nav.opens,3);
+});
+
+test('rich source navigation retires a late durable read after a new navigation intent',async t=>{
+  const ui=await setup(t),nav=prepareRichNavigation(ui),pending=deferred<any>();ui.workspace.vault.readDurableTextById=()=>pending.promise;
+  const opening=nav.invoke({locator:{origin:'source',range:{bytes:[0,1],utf16:[0,1]}}});await Promise.resolve();await Promise.resolve();
+  ui.internal.navigationIntent.set(ui.workspace.activePane,99);pending.resolve({entryId:'note',revision:'revision-note',path:'Note.md',content:'needle'});await opening;assert.equal(nav.opens,0);assert.equal(nav.selections.length,0);
+});

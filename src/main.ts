@@ -22,6 +22,7 @@ import './editor/wiki-completion.css';
 import './editor/folding.css';
 import './editor/find-panel.css';
 import './ui/reading-find.css';
+import './ui/document-search.css';
 import './editor/live-math.css';
 import './editor/live-fences.css';
 import './editor/live-callouts.css';

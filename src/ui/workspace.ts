@@ -4,6 +4,10 @@ import type {TaskPreset} from '../tasks/presets.ts';
 import {planTaskPreset} from '../tasks/presets.ts';
 import {readProperties, setProperty, removeProperty} from '../core/properties.ts';
 import type {CalendarView, CalendarViewState} from '../calendar/view.ts';
+import { mountDocumentSearch, initialDocumentSearchSpec } from './document-search-controller.ts';
+import type { DocumentSearchController } from './document-search-controller.ts';
+import type { SearchLocation, SearchSpec } from '../core/document-search-types.ts';
+import type { DocumentEntry } from '../core/document-semantics.ts';
 import { mountDocumentBacklinks } from './document-backlinks.ts';
 import { catchUpDocumentIndex, documentErrorCode, DocumentSemanticsError } from '../core/document-semantics.ts';
 import type { DocumentCursor, DocumentPin, DocumentService, DocumentSnapshotId, DocumentSourceId, DocumentTaskWitness } from '../core/document-semantics.ts';
@@ -140,6 +144,9 @@ export class Workspace {
   private searchGeneration = 0;
   private documentSearchSuspended = false;
   private documentSearchOwners = new Set<DocumentSearchOwner>();
+  private richDocumentSearch?:{vault:Vault;service:DocumentService;controller?:DocumentSearchController};
+  private richDocumentSearchOwners=new Set<{vault:Vault;controller:DocumentSearchController}>();
+  private richSearchSpec:SearchSpec=initialDocumentSearchSpec;
   private reverseSort = false;
   private autoRevealFiles = false;
   private disposers: (() => void)[] = [];
@@ -761,7 +768,7 @@ export class Workspace {
         for (const pane of this.loadedViews()) if (pane.viewPath === change.path) { if (pane.viewMode === 'reading') pane.refreshPreview?.(); else pane.editor?.setValue(buffer.text); } this.renderRight();
       });
     }));
-    for(const event of ['create','delete','rename','modify'] as const)this.disposers.push(this.vault.on(event,()=>{for(const pane of this.loadedViews())pane.editor?.refreshLinks?.();}));
+    for(const event of ['create','delete','rename','modify'] as const)this.disposers.push(this.vault.on(event,()=>{this.richDocumentSearch?.controller?.invalidateSource();for(const pane of this.loadedViews())pane.editor?.refreshLinks?.();}));
     const generation = this.vaultGeneration;
     const changedPaths = new Set<string>();
     let needsFullReload = false;
@@ -1482,7 +1489,9 @@ export class Workspace {
   }
 
   private renderSidebar():void{
-    this.clearDocumentSearch();
+    const retained=this.treeTab==='search'&&!this.documentSearchSuspended&&this.richDocumentSearch?.vault===this.vault
+      &&this.richDocumentSearch.service===this.vault?.adapter.documentSemantics?this.richDocumentSearch:undefined;
+    this.clearDocumentSearch(!!retained);
     if(!this.vault)return;
     const activePath=this.activePane&&this.current()?.path;
     if(this.autoRevealFiles&&activePath){let folder=parentOf(activePath);while(folder){this.collapsed.delete(folder);folder=parentOf(folder);}}
@@ -1493,8 +1502,22 @@ export class Workspace {
     this.sidebar.querySelectorAll<HTMLElement>('.sidebar-tabs button').forEach(node=>node.classList.toggle('is-active',node.dataset.type===this.treeTab));
     const renameHadFocus=!!this.treeRename&&this.sidebarContent.contains(this.root.ownerDocument.activeElement)&&this.root.ownerDocument.activeElement?.getAttribute('contenteditable')==='true';
     this.treeRows=[];
+    if(retained){retained.controller?.setSpec({...this.richSearchSpec,query:this.query});return;}
     this.sidebarContent.replaceChildren();
     if(this.treeTab==='search'){
+      const service=this.vault.adapter.documentSemantics;
+      if(service?.richSearchAvailable){
+        const vault=this.vault,scope=String(++this.searchGeneration),mount={vault,service} as NonNullable<Workspace['richDocumentSearch']>;
+        this.richDocumentSearch=mount;
+        const current=()=>this.richDocumentSearch===mount&&this.vault===vault&&this.treeTab==='search'&&!this.documentSearchSuspended&&!this.platformReleased&&!this.closing;
+        const controller=mountDocumentSearch(this.sidebarContent,{service,scopeId:scope,spec:{...this.richSearchSpec,query:this.query},isCurrent:current,
+          acquireFresh:async(isCurrent,rebuild)=>{const value=await catchUpDocumentIndex(service,{isCurrent,rebuild});if(value.rebuildRequired)throw new DocumentSemanticsError('rebuild_required');return !!value.snapshot;},
+          beforeOpen:async()=>{for(const owner of this.richDocumentSearchOwners)if(owner.vault===vault&&owner.controller!==mount.controller&&owner.controller.service===service){await owner.controller.close();this.richDocumentSearchOwners.delete(owner);}},
+          onSpec:spec=>{if(current()){this.richSearchSpec=spec;this.query=spec.query;}},
+          onOpen:(entry,location,modifiers,isCurrent)=>this.openRichDocumentSearchEntry(entry,location,modifiers.primary,isCurrent),
+        });
+        mount.controller=controller;this.richDocumentSearchOwners.add({vault,controller});return;
+      }
       const input=el('input','search-box');input.placeholder='Search…';input.value=this.query;input.type='search';input.setAttribute('aria-label',this.vault.adapter.documentSemantics?'Search text (case-sensitive)':'Search all files');if(this.vault.adapter.documentSemantics)input.placeholder='Search text (case-sensitive)';input.oninput=()=>{this.query=input.value;this.run(()=>this.search());};this.sidebarContent.append(input,el('div','search-results'));this.run(()=>this.search());return;
     }
     if(this.treeTab==='bookmarks'){
@@ -1568,12 +1591,14 @@ export class Workspace {
     }
   }
 
-  private clearDocumentSearch():void {
+  private clearDocumentSearch(keepRich=false):void {
+    if(!keepRich&&this.richDocumentSearch){const retired=this.richDocumentSearch;this.richDocumentSearch=undefined;void retired.controller?.close().then(()=>{for(const owner of this.richDocumentSearchOwners)if(owner.controller===retired.controller)this.richDocumentSearchOwners.delete(owner);}).catch(()=>{});}
     this.searchGeneration++;
     void this.closeDocumentSearchPins().catch(()=>{});
   }
 
   private releaseDocumentSearchOwner(vault:Vault):void {
+    for(const owner of this.richDocumentSearchOwners)if(owner.vault===vault){owner.controller.release();this.richDocumentSearchOwners.delete(owner);}
     // Successful platform release is the final backend cleanup acknowledgment,
     // including opens whose transport responses have not reached the renderer.
     for(const owner of this.documentSearchOwners)if(owner.vault===vault){
@@ -1610,8 +1635,45 @@ export class Workspace {
     await this.openNote(observed.path,false,pane,true,'',activation,()=>current()&&vault.entries.get(observed.path)?.entryId===id);
   }
 
+  private async openRichDocumentSearchEntry(entry:DocumentEntry,location:SearchLocation|undefined,newTab:boolean,admit:()=>boolean):Promise<void>{
+    const vault=this.vault,pane=this.activePane,activation=this.paneActivationRevision,generation=this.vaultGeneration;
+    const originalNavigation=this.navigationIntent.get(pane);
+    const active=()=>admit()&&this.vault===vault&&generation===this.vaultGeneration&&this.activePane===pane&&this.paneActivationRevision===activation&&this.panes.includes(pane);
+    const before=()=>active()&&this.navigationIntent.get(pane)===originalNavigation;
+    if(!before())return;
+    // entries is only a cached path hint. Admit identity using the existing
+    // adapter stat/source protocol before opening, never text-decode a binary.
+    const hinted=[...vault.entries.values()].find(value=>value.type==='file'&&value.entryId===entry.id);
+    if(!hinted){notice('This result moved or was removed. Refresh search.');return;}
+    const observed=vault.adapter.stat?await vault.adapter.stat(hinted.path):undefined;if(!before())return;
+    if(!observed||observed.type!=='file'||observed.entryId!==entry.id){notice('This result moved or changed. Refresh search.');return;}
+    const path=observed.path,token=this.treeEntryToken(path);
+    let source=location?.locator.origin==='source'&&isMarkdown(path)?await vault.readDurableTextById(entry.id):undefined;
+    if(!before())return;
+    if(source&&(source.entryId!==entry.id||source.path!==path)){notice('This result moved. Refresh search.');return;}
+    const guarded=()=>active()&&this.treeEntryToken(path)===token&&vault.entries.get(path)?.entryId===entry.id;
+    await this.openNote(path,newTab,pane,true,'',activation,guarded,entry.id);
+    const expectedNavigation=(originalNavigation??0)+1;
+    if(!guarded()||this.navigationIntent.get(pane)!==expectedNavigation||this.current(pane)?.path!==path)return;
+    if(location?.locator.origin!=='source')return;
+    if(isMarkdown(path))source=await vault.readDurableTextById(entry.id);
+    if(!guarded()||this.navigationIntent.get(pane)!==expectedNavigation||this.current(pane)?.path!==path)return;
+    const buffer=this.buffers.get(path),saved=buffer?.savedDurableWitness;
+    const range=location.locator.range.utf16;
+    if(!source||source.path!==path||source.entryId!==entry.id||source.revision!==entry.revision||!buffer||buffer.dirty||buffer.error||saved?.entryId!==entry.id||saved.revision!==entry.revision
+      ||saved.path!==path||buffer.savedText!==source.content||buffer.text!==source.content||pane.editor?.getValue()!==source.content||range[1]>source.content.length){
+      notice('The note changed since this result. Refresh search to select its current match.');return;
+    }
+    const state=pane.editor.getViewState?.();
+    if(state)pane.editor.restoreViewState?.({...state,selection:{ranges:[{anchor:range[0],head:range[1]}],mainIndex:0}});
+  }
+
   private async search(rebuild=false):Promise<void>{
     if(this.documentSearchSuspended)return;
+    if(this.vault.adapter.documentSemantics?.richSearchAvailable){
+      if(!this.richDocumentSearch)this.renderSidebar();
+      this.richDocumentSearch?.controller?.setSpec({...this.richSearchSpec,query:this.query});return;
+    }
     this.clearDocumentSearch();
     const generation=this.searchGeneration,vault=this.vault,query=this.query;
     const results=this.sidebarContent.querySelector<HTMLElement>('.search-results');if(!results)return;
