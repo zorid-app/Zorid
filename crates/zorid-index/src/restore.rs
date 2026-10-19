@@ -206,6 +206,9 @@ pub(crate) fn validate_metadata(
             .last()
             .is_some_and(|old| old.bytes[1] <= item.range.bytes[0])
         {
+            if stack.last().unwrap().utf16[1] > item.range.utf16[0] {
+                return Err(IndexError::InvalidRecord);
+            }
             stack.pop();
         }
         if stack

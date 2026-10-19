@@ -279,3 +279,45 @@ fn structural_intervals_are_required_versioned_and_strictly_validated() {
     invalid_kind["blocks"][0]["kind"] = "list".into();
     assert!(serde_json::from_value::<DocumentMetadata>(invalid_kind).is_err());
 }
+
+#[test]
+fn list_item_disjointness_must_agree_in_both_coordinate_spaces() {
+    let request = MetadataRequest {
+        entry_id: EntryId::new("unicode-items").unwrap(),
+        content_revision: Revision::new("revision").unwrap(),
+        source: format!("- {}\n- {}\n", "é".repeat(20), "é".repeat(20)),
+    };
+    let mut parsed = parse_markdown(&request).unwrap();
+    assert!(parsed.blocks.is_empty());
+    assert!(parsed.tasks.is_empty());
+    assert_eq!(parsed.list_items.len(), 2);
+    assert_eq!(parsed.list_items[0].range.bytes, [0, 42]);
+    assert_eq!(parsed.list_items[0].range.utf16, [0, 22]);
+    assert_eq!(parsed.list_items[1].range.bytes, [43, 85]);
+    assert_eq!(parsed.list_items[1].range.utf16, [23, 45]);
+    let manifest = Manifest::new(
+        source(),
+        vec![entry(
+            &request.entry_id,
+            &request.content_revision,
+            "Unicode.md",
+        )],
+    )
+    .unwrap();
+    let witness = manifest.witness(&request.entry_id).unwrap();
+    let digest: [u8; 32] = Sha256::digest(request.source.as_bytes()).into();
+    let restore = |metadata| {
+        IndexRecord::from_persisted(
+            witness.clone(),
+            Some(metadata),
+            Some(digest),
+            request.source.len(),
+            None,
+        )
+    };
+    assert!(restore(parsed.clone()).is_ok());
+    // Both individual ranges remain plausible, and their bytes remain disjoint.
+    // Only the UTF16 topology now crosses the preceding item.
+    parsed.list_items[1].range.utf16[0] -= 2;
+    assert!(matches!(restore(parsed), Err(IndexError::InvalidRecord)));
+}
