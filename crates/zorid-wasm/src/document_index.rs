@@ -661,7 +661,7 @@ impl RichBindingState {
             .values()
             .filter(|value| value.query == query)
             .count()
-            >= 8
+            >= zorid_index::MAX_SEARCH_CHECKPOINTS
         {
             let oldest = self
                 .cursors
