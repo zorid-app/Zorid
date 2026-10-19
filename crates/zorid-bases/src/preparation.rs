@@ -14,6 +14,18 @@ pub const MAX_COMPILED_PROGRAM_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PREPARED_GENERATIONS: usize = 4;
 pub const MAX_COMPILED_PROGRAMS: usize = 64;
 pub const PREPARATION_IDLE_MS: u64 = 5 * 60 * 1000;
+const MAX_PREPARED_ANSWERS: usize = 16;
+const MAX_PREPARED_ANSWER_BYTES: usize = 8 * 1024 * 1024;
+const MAX_PREPARED_ANSWER_ENTRY_BYTES: usize = 1024 * 1024;
+// Arc allocation identity is private and live as long as any stale lookup can
+// exist. Clear/owner recreation therefore cannot reuse a claimed numeric ID.
+#[derive(Clone)]
+struct LookupIdentity {
+    owner: Arc<()>,
+    dependency: Arc<()>,
+}
+const TOKEN_BYTES: usize = 64;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PreparationCacheOutcome {
     Hit,
@@ -26,14 +38,22 @@ pub struct PreparationLookup<T> {
     outcome: PreparationCacheOutcome,
     work_used: usize,
     cache_work: usize,
+    identity: Option<LookupIdentity>,
 }
 impl<T> PreparationLookup<T> {
+    pub fn into_value(self) -> T {
+        self.value
+    }
     pub fn value(&self) -> &T {
         &self.value
     }
     pub fn outcome(&self) -> PreparationCacheOutcome {
         self.outcome
     }
+    /// Semantic charge against max_steps. An answer hit retains the seed's
+    /// evaluation-only charge plus the fresh preparation charge; it does not
+    /// claim that the avoided evaluator actually ran. Optional probe/copy
+    /// units remain separate in cache_work_used (also not a CPU-time measure).
     pub fn work_used(&self) -> usize {
         self.work_used
     }
@@ -66,12 +86,15 @@ struct GenerationProof {
     retained_bytes: usize,
 }
 struct GenerationEntry {
+    token: Arc<()>,
     proof: GenerationProof,
     value: Arc<PreparedBaseGeneration>,
     bytes: usize,
     touched: u64,
 }
 struct ProgramEntry {
+    token: Arc<()>,
+    clock_independent: bool,
     version: &'static str,
     source: String,
     value: Arc<BaseProgram>,
@@ -82,7 +105,23 @@ struct ProgramEntry {
 /// namespace allocations. Returned Arcs are invocation-local host data: callers
 /// retaining them can delay reclamation after eviction/clear/drop. They must not
 /// be stored on pins or treated as bounded host-wide memory/admission authority.
+struct AnswerEntry {
+    program: Arc<()>,
+    generation: Arc<()>,
+    options: QueryOptions,
+    clock_independent: bool,
+    result: BaseQueryResult,
+    encoded_base_bytes: usize,
+    evaluation_work: usize,
+    avoided_work: usize,
+    key_work: usize,
+    copy_work: usize,
+    bytes: usize,
+    touched: u64,
+}
 pub struct BasePreparationCache {
+    owner: Arc<()>,
+    answers: VecDeque<AnswerEntry>,
     generations: VecDeque<GenerationEntry>,
     programs: VecDeque<ProgramEntry>,
     last_clock: Option<u64>,
@@ -90,6 +129,8 @@ pub struct BasePreparationCache {
 impl Default for BasePreparationCache {
     fn default() -> Self {
         Self {
+            owner: Arc::new(()),
+            answers: VecDeque::with_capacity(MAX_PREPARED_ANSWERS),
             generations: VecDeque::with_capacity(MAX_PREPARED_GENERATIONS),
             programs: VecDeque::with_capacity(MAX_COMPILED_PROGRAMS),
             last_clock: None,
@@ -142,6 +183,8 @@ impl BasePreparationCache {
         Self::default()
     }
     pub fn clear(&mut self) {
+        self.owner = Arc::new(());
+        self.answers.clear();
         self.generations.clear();
         self.programs.clear();
     }
@@ -154,6 +197,27 @@ impl BasePreparationCache {
             .retain(|e| now.saturating_sub(e.touched) < PREPARATION_IDLE_MS);
         self.programs
             .retain(|e| now.saturating_sub(e.touched) < PREPARATION_IDLE_MS);
+        self.answers
+            .retain(|e| now.saturating_sub(e.touched) < PREPARATION_IDLE_MS);
+        self.prune_answers();
+    }
+    fn prune_answers(&mut self) {
+        let programs = &self.programs;
+        let generations = &self.generations;
+        self.answers.retain(|answer| {
+            programs
+                .iter()
+                .any(|p| Arc::ptr_eq(&p.token, &answer.program))
+                && generations
+                    .iter()
+                    .any(|g| Arc::ptr_eq(&g.token, &answer.generation))
+        });
+    }
+    fn identity(&self, dependency: &Arc<()>) -> LookupIdentity {
+        LookupIdentity {
+            owner: Arc::clone(&self.owner),
+            dependency: Arc::clone(dependency),
+        }
     }
     /// Exact UTF8 is supplied only after the host's retained definition check.
     /// Typed YAML/semantic errors are unchanged and are never cached.
@@ -164,7 +228,7 @@ impl BasePreparationCache {
     ) -> Result<PreparationLookup<Arc<BaseProgram>>, BaseCompileError> {
         self.expire(monotonic_ms);
         let mut maintenance = Maintenance::new(None);
-        if let Some(index) = self.programs.iter().position(|e| {
+        if let Some(index) = self.programs.iter().rposition(|e| {
             maintenance.bytes(e.source.len()).is_some()
                 && e.version == program::BASE_COMPILER_VERSION
                 && e.source == source
@@ -172,24 +236,30 @@ impl BasePreparationCache {
             let mut entry = self.programs.remove(index).expect("found");
             entry.touched = monotonic_ms;
             let value = Arc::clone(&entry.value);
+            let identity = Some(self.identity(&entry.token));
             self.programs.push_back(entry);
             return Ok(PreparationLookup {
                 value,
                 outcome: PreparationCacheOutcome::Hit,
                 work_used: 0,
                 cache_work: maintenance.used,
+                identity,
             });
         }
         let value = Arc::new(crate::compile_base_source(source)?);
         let bytes = maintenance
             .bytes(source.len())
             .and_then(|_| program_bytes(&value, &mut maintenance))
-            .and_then(|n| n.checked_add(source.len()));
-        let overhead = size_of::<Self>().saturating_add(
-            self.programs
-                .capacity()
-                .saturating_mul(size_of::<ProgramEntry>()),
-        );
+            .and_then(|n| n.checked_add(source.len()))
+            .and_then(|n| n.checked_add(TOKEN_BYTES));
+        let overhead = size_of::<Self>()
+            .saturating_add(TOKEN_BYTES)
+            .saturating_add(
+                self.programs
+                    .capacity()
+                    .saturating_mul(size_of::<ProgramEntry>()),
+            );
+        let mut identity = None;
         let outcome = if let Some(bytes) =
             bytes.filter(|n| n.saturating_add(overhead) <= MAX_COMPILED_PROGRAM_BYTES)
         {
@@ -205,7 +275,13 @@ impl BasePreparationCache {
             {
                 self.programs.pop_front();
             }
+            let token = Arc::new(());
+            identity = Some(self.identity(&token));
+            let clock_independent =
+                program::clock_independent(&value, &mut |work| maintenance.take(work));
             self.programs.push_back(ProgramEntry {
+                token,
+                clock_independent,
                 version: program::BASE_COMPILER_VERSION,
                 source: source.into(),
                 value: Arc::clone(&value),
@@ -216,11 +292,274 @@ impl BasePreparationCache {
         } else {
             PreparationCacheOutcome::Uncached
         };
+        self.prune_answers();
         Ok(PreparationLookup {
             value,
             outcome,
+            identity,
             work_used: 0,
             cache_work: maintenance.used,
+        })
+    }
+    /// Optional complete-answer reuse over the same independently admitted
+    /// immutable inputs. This never admits a pin/source or caches a response
+    /// wrapper. Hosts must perform their existing final freshness check.
+    pub fn query_prepared_cached(
+        &mut self,
+        program: &PreparationLookup<Arc<BaseProgram>>,
+        preparation: &PreparationLookup<Arc<PreparedBaseGeneration>>,
+        options: &QueryOptions,
+        monotonic_ms: u64,
+    ) -> Result<PreparationLookup<BaseQueryResult>, ExpressionDiagnostic> {
+        limits(options)?;
+        self.expire(monotonic_ms);
+        let mut invocation = options.clone();
+        invocation.max_steps = invocation
+            .max_steps
+            .checked_sub(preparation.work_used)
+            .ok_or_else(|| {
+                ExpressionDiagnostic::new("budget", "Preparation exceeds current query work budget")
+            })?;
+        let validated = query::validate_invocation(
+            &program.value,
+            &preparation.value.snapshot,
+            &invocation,
+            Some(&preparation.value.query),
+        )?;
+        let mut maintenance = Maintenance::new(Some(options));
+        maintenance.used = preparation.cache_work.min(MAX_PREPARATION_CACHE_WORK);
+        let answer_start = maintenance.used;
+        let dependencies = (|| {
+            maintenance.take(1)?;
+            let p = program.identity.as_ref()?;
+            let g = preparation.identity.as_ref()?;
+            if !Arc::ptr_eq(&p.owner, &self.owner) || !Arc::ptr_eq(&g.owner, &self.owner) {
+                return None;
+            }
+            let mut compiled = None;
+            for entry in self.programs.iter().rev() {
+                maintenance.take(1)?;
+                if Arc::ptr_eq(&entry.token, &p.dependency)
+                    && Arc::ptr_eq(&entry.value, &program.value)
+                {
+                    compiled = Some(entry);
+                    break;
+                }
+            }
+            let compiled = compiled?;
+            let mut generation_live = false;
+            for entry in self.generations.iter().rev() {
+                maintenance.take(1)?;
+                if Arc::ptr_eq(&entry.token, &g.dependency)
+                    && Arc::ptr_eq(&entry.value, &preparation.value)
+                {
+                    generation_live = true;
+                    break;
+                }
+            }
+            generation_live.then(|| {
+                (
+                    Arc::clone(&p.dependency),
+                    Arc::clone(&g.dependency),
+                    compiled.clock_independent,
+                )
+            })
+        })();
+        stopped(options)?;
+        // Invalid clocks/timezones still flow through the evaluator (including
+        // its established empty/ignored-row behavior and diagnostic ordering).
+        let time_valid = dependencies.is_some()
+            && maintenance
+                .take(1usize.saturating_add(options.evaluation.timezone.len() / 64))
+                .is_some()
+            && answer_clock_representable(options.evaluation.clock_ms)
+            && crate::expression::BasesTimezone::from_setting(Some(&options.evaluation.timezone))
+                .is_ok();
+        stopped(options)?;
+        if let Some((p, g, _)) = &dependencies {
+            if time_valid {
+                for index in (0..self.answers.len()).rev() {
+                    if maintenance.take(1).is_none() {
+                        break;
+                    }
+                    let answer = &self.answers[index];
+                    if !Arc::ptr_eq(&answer.program, p) || !Arc::ptr_eq(&answer.generation, g) {
+                        continue;
+                    }
+                    let planned = maintenance
+                        .used
+                        .saturating_sub(answer_start)
+                        .checked_add(answer.key_work)
+                        .and_then(|n| n.checked_add(answer.copy_work));
+                    let Some(_hit_work) = planned.filter(|n| *n <= answer.avoided_work) else {
+                        continue;
+                    };
+                    if answer
+                        .evaluation_work
+                        .checked_add(preparation.work_used)
+                        .is_none_or(|n| n > options.max_steps)
+                        || !maintenance.can_take(answer.key_work.saturating_add(answer.copy_work))
+                    {
+                        continue;
+                    }
+                    if maintenance.take(answer.key_work).is_none() {
+                        stopped(options)?;
+                        break;
+                    }
+                    stopped(options)?;
+                    if !options_exact(&answer.options, options, answer.clock_independent) {
+                        continue;
+                    }
+                    // Keep the cold evaluation-only semantic charge for ceiling
+                    // admission. Actual optional hit work is separate below;
+                    // steps_used is not a claim of executed CPU work.
+                    let steps = preparation
+                        .work_used
+                        .checked_add(answer.evaluation_work)
+                        .ok_or_else(|| {
+                            ExpressionDiagnostic::new(
+                                "budget",
+                                "Answer hit exceeds query work budget",
+                            )
+                        })?;
+                    let encoded = answer
+                        .encoded_base_bytes
+                        .checked_add(decimal_bytes(steps))
+                        .filter(|n| *n <= options.max_output_bytes)
+                        .ok_or_else(|| {
+                            ExpressionDiagnostic::new("budget", "Base encoded byte budget exceeded")
+                        })?;
+                    let _ = encoded;
+                    if maintenance.take(answer.copy_work).is_none() {
+                        stopped(options)?;
+                        break;
+                    }
+                    let mut result = copy_result(&answer.result, options)?;
+                    result.steps_used = steps;
+                    stopped(options)?;
+                    let mut answer = self.answers.remove(index).expect("found");
+                    answer.touched = monotonic_ms;
+                    self.answers.push_back(answer);
+                    return Ok(PreparationLookup {
+                        value: result,
+                        outcome: PreparationCacheOutcome::Hit,
+                        work_used: steps,
+                        cache_work: maintenance.used,
+                        identity: None,
+                    });
+                }
+            }
+        }
+        stopped(options)?;
+        // Failed optional probes never spend the cold semantic work budget.
+        let mut clock_sensitive_sort = false;
+        let mut result = query::query_base_validated(
+            &program.value,
+            &preparation.value.snapshot,
+            &invocation,
+            Some(&preparation.value.query),
+            &validated,
+            &mut clock_sensitive_sort,
+        )?;
+        let evaluation_work = result.steps_used;
+        result.steps_used = result.steps_used.saturating_add(preparation.work_used);
+        let encoded = crate::encoded_size(&result, options.max_output_bytes)?;
+        stopped(options)?;
+        let retained = (|| {
+            let (p, g, static_program) = dependencies?;
+            if !time_valid {
+                return None;
+            }
+            let independent = static_program
+                && !clock_sensitive_sort
+                && options.evaluation.formulas.iter().all(|(_, source)| {
+                    crate::expression::clock_independent(source, &mut |work| maintenance.take(work))
+                });
+            let before = maintenance.used;
+            let key_bytes = options_heap(options, &mut maintenance)?;
+            let key_work = maintenance.used - before;
+            let before = maintenance.used;
+            let slack_before = maintenance.slack_work;
+            let result_bytes = result_heap(&result, &mut maintenance)?;
+            let copy_work = maintenance.used - before;
+            // The cold evaluator must construct the same initialized output.
+            // Exclude every measured unused-capacity block from this lower
+            // bound; no unoccupied source capacity is credited as avoided work.
+            let construction_work =
+                copy_work.checked_sub(maintenance.slack_work.checked_sub(slack_before)?)?;
+            let avoided_work = evaluation_work.checked_add(construction_work)?;
+            let bytes = key_bytes
+                .checked_add(result_bytes)?
+                .checked_add(size_of::<AnswerEntry>())?
+                .checked_add(TOKEN_BYTES.checked_mul(2)?)?;
+            if bytes > MAX_PREPARED_ANSWER_ENTRY_BYTES
+                || key_work.checked_add(copy_work)?.checked_add(1)? > avoided_work
+            {
+                return None;
+            }
+            let copy = key_work.checked_add(copy_work)?;
+            maintenance.take(copy)?; // Whole key+answer memory/work admitted first.
+            Some((p, g, independent, bytes, key_work, copy_work, avoided_work))
+        })();
+        stopped(options)?;
+        let outcome =
+            if let Some((p, g, independent, bytes, key_work, copy_work, avoided_work)) = retained {
+                let key = copy_options(options, independent)?;
+                let mut stored = copy_result(&result, options)?;
+                stored.steps_used = 0;
+                let overhead = size_of::<Self>()
+                    .saturating_add(
+                        self.answers
+                            .capacity()
+                            .saturating_mul(size_of::<AnswerEntry>()),
+                    )
+                    .saturating_add(TOKEN_BYTES);
+                while self.answers.len() >= MAX_PREPARED_ANSWERS
+                    || self
+                        .answers
+                        .iter()
+                        .map(|a| a.bytes)
+                        .fold(0usize, usize::saturating_add)
+                        .saturating_add(bytes)
+                        .saturating_add(overhead)
+                        > MAX_PREPARED_ANSWER_BYTES
+                {
+                    self.answers.pop_front();
+                }
+                stopped(options)?;
+                self.answers.push_back(AnswerEntry {
+                    program: p,
+                    generation: g,
+                    options: key,
+                    clock_independent: independent,
+                    result: stored,
+                    evaluation_work,
+                    avoided_work,
+                    key_work,
+                    copy_work,
+                    bytes,
+                    touched: monotonic_ms,
+                    encoded_base_bytes: encoded.saturating_sub(decimal_bytes(result.steps_used)),
+                });
+                PreparationCacheOutcome::Miss
+            } else {
+                PreparationCacheOutcome::Uncached
+            };
+        if let Err(error) = stopped(options) {
+            // A cancellation observed after optional insertion cannot leave an
+            // answer seeded by an invocation that returned an error.
+            if outcome == PreparationCacheOutcome::Miss {
+                self.answers.pop_back();
+            }
+            return Err(error);
+        }
+        let work_used = result.steps_used;
+        Ok(PreparationLookup {
+            value: result,
+            outcome,
+            work_used,
+            cache_work: maintenance.used,
+            identity: None,
         })
     }
     pub fn prepare_generation(
@@ -300,7 +639,10 @@ impl BasePreparationCache {
                         unreachable!("comparison allowance pre-admitted");
                     }
                     stopped(options)?;
-                    if actual.next() != Some(saved) {
+                    if !actual
+                        .next()
+                        .is_some_and(|actual| record_exact(actual, saved, options))
+                    {
                         equal = false;
                         break;
                     }
@@ -321,12 +663,14 @@ impl BasePreparationCache {
                 entry.touched = monotonic_ms;
                 let work_used = entry.proof.compare_work;
                 let value = Arc::clone(&entry.value);
+                let identity = Some(self.identity(&entry.token));
                 self.generations.push_back(entry);
                 return Ok(PreparationLookup {
                     value,
                     outcome: PreparationCacheOutcome::Hit,
                     work_used,
                     cache_work: maintenance.used,
+                    identity,
                 });
             }
         }
@@ -351,18 +695,30 @@ impl BasePreparationCache {
             query: prepared_query,
             cold_work: options.max_steps - remaining,
         });
-        let overhead = size_of::<Self>().saturating_add(
-            self.generations
-                .capacity()
-                .saturating_mul(size_of::<GenerationEntry>()),
-        );
-        let retained = prepared_bytes(&value, &mut maintenance).and_then(|bytes| {
-            let allowance =
-                MAX_PREPARED_GENERATION_BYTES.checked_sub(bytes.checked_add(overhead)?)?;
-            let proof = GenerationProof::new(generation, facts, &mut maintenance, allowance)?;
-            Some((bytes.checked_add(proof.retained_bytes())?, proof))
-        });
+        let overhead = size_of::<Self>()
+            .saturating_add(TOKEN_BYTES)
+            .saturating_add(
+                self.generations
+                    .capacity()
+                    .saturating_mul(size_of::<GenerationEntry>()),
+            );
+        let minimum = preparation_minimum_bytes(&value, generation, facts, overhead);
+        let retained = minimum
+            .filter(|n| *n <= MAX_PREPARED_GENERATION_BYTES)
+            .and_then(|_| prepared_bytes(&value, &mut maintenance))
+            .and_then(|bytes| {
+                let allowance = MAX_PREPARED_GENERATION_BYTES
+                    .checked_sub(bytes.checked_add(overhead)?.checked_add(TOKEN_BYTES)?)?;
+                let proof = GenerationProof::new(generation, facts, &mut maintenance, allowance)?;
+                Some((
+                    bytes
+                        .checked_add(proof.retained_bytes())?
+                        .checked_add(TOKEN_BYTES)?,
+                    proof,
+                ))
+            });
         stopped(options)?;
+        let mut identity = None;
         let outcome = if let Some((bytes, proof)) = retained {
             while self.generations.len() >= MAX_PREPARED_GENERATIONS
                 || self
@@ -376,7 +732,10 @@ impl BasePreparationCache {
             {
                 self.generations.pop_front();
             }
+            let token = Arc::new(());
+            identity = Some(self.identity(&token));
             self.generations.push_back(GenerationEntry {
+                token,
                 proof,
                 value: Arc::clone(&value),
                 bytes,
@@ -386,9 +745,11 @@ impl BasePreparationCache {
         } else {
             PreparationCacheOutcome::Uncached
         };
+        self.prune_answers();
         Ok(PreparationLookup {
             value,
             outcome,
+            identity,
             work_used: options.max_steps - remaining,
             cache_work: maintenance.used,
         })
@@ -544,10 +905,23 @@ const MAX_PREPARATION_CACHE_WORK: usize = crate::MAX_QUERY_STEPS;
 struct Maintenance<'a> {
     options: Option<&'a QueryOptions>,
     used: usize,
+    slack_work: usize,
 }
 impl<'a> Maintenance<'a> {
     fn new(options: Option<&'a QueryOptions>) -> Self {
-        Self { options, used: 0 }
+        Self {
+            options,
+            used: 0,
+            slack_work: 0,
+        }
+    }
+    fn retained(&mut self, capacity: usize, initialized: usize) -> Option<usize> {
+        capacity.checked_sub(initialized)?;
+        let bytes = self.bytes(capacity)?;
+        self.slack_work = self
+            .slack_work
+            .checked_add(capacity / 64 - initialized / 64)?;
+        Some(bytes)
     }
     fn can_take(&self, work: usize) -> bool {
         self.used
@@ -588,7 +962,10 @@ fn vector_cost<T>(
     m: &mut Maintenance<'_>,
     mut item: impl FnMut(&T, &mut Maintenance<'_>) -> Option<usize>,
 ) -> Option<usize> {
-    let mut bytes = slots::<T>(v.capacity(), m)?;
+    let mut bytes = m.retained(
+        v.capacity().checked_mul(size_of::<T>())?,
+        v.len().checked_mul(size_of::<T>())?,
+    )?;
     for value in v {
         bytes = costs([bytes, item(value, m)?])?;
     }
@@ -615,10 +992,10 @@ fn fact_work(f: &FilePresentationFacts) -> usize {
 }
 fn property_heap(v: &PropertyValue, m: &mut Maintenance<'_>) -> Option<usize> {
     match v {
-        PropertyValue::String(s) => m.bytes(s.capacity()),
+        PropertyValue::String(s) => m.retained(s.capacity(), s.len()),
         PropertyValue::Array(v) => vector_cost(v, m, property_heap),
         PropertyValue::Object(v) => vector_cost(v, m, |(k, v), m| {
-            costs([m.bytes(k.capacity())?, property_heap(v, m)?])
+            costs([m.retained(k.capacity(), k.len())?, property_heap(v, m)?])
         }),
         _ => m.bytes(0),
     }
@@ -655,6 +1032,10 @@ fn record_heap(r: &IndexRecord, m: &mut Maintenance<'_>) -> Option<usize> {
                 l.destination.capacity(),
             ])?)
         })?,
+        slots::<zorid_document::MarkdownBlock>(d.blocks.capacity(), m)?,
+        vector_cost(&d.list_items, m, |item, m| {
+            m.bytes(item.task_status.as_ref().map_or(0, String::capacity))
+        })?,
         vector_cost(&d.tasks, m, |t, m| {
             m.bytes(t.status.capacity().saturating_add(t.text.capacity()))
         })?,
@@ -677,38 +1058,85 @@ fn record_row_heap(r: &DetachedRecord, m: &mut Maintenance<'_>) -> Option<usize>
         vector_cost(&r.tags, m, |s, m| m.bytes(s.capacity()))?,
     ])
 }
-fn prepared_bytes(p: &PreparedBaseGeneration, m: &mut Maintenance<'_>) -> Option<usize> {
-    costs([
-        m.bytes(
-            size_of::<PreparedBaseGeneration>()
-                .saturating_add(2usize.saturating_mul(size_of::<usize>())),
-        )?,
-        vector_cost(&p.snapshot.records, m, record_row_heap)?,
-        m.bytes(
-            p.snapshot
-                .relationships
-                .as_ref()
-                .map_or(0, |g| g.retained_bytes()),
-        )?,
-        vector_cost(&p.snapshot.metadata_issues, m, |i, m| {
-            costs([
-                m.bytes(
-                    i.witness
-                        .entry_id
-                        .as_str()
-                        .len()
-                        .saturating_add(i.witness.revision.as_str().len()),
-                )?,
-                slots::<zorid_document::Diagnostic>(i.diagnostics.capacity(), m)?,
-            ])
-        })?,
-        p.query
+fn preparation_minimum_bytes(
+    p: &PreparedBaseGeneration,
+    generation: &Generation,
+    facts: &[FilePresentationFacts],
+    overhead: usize,
+) -> Option<usize> {
+    // Includes the namespace once through the graph and real independent row /
+    // proof buffers. This lower-bounds the full conservative admission charge,
+    // not process RSS; omit unknown heap costs and still perform full admission.
+    [
+        overhead,
+        TOKEN_BYTES,
+        p.snapshot
             .relationships
             .as_ref()
-            .map_or(Some(0), |g| g.retained_bytes(&mut |work| m.take(work)))?,
-        vector_cost(&p.query.available, m, |s, m| m.bytes(s.capacity()))?,
-        m.bytes(snapshot_id_heap(&p.snapshot.snapshot_id))?,
-    ])
+            .map_or(0, |g| g.retained_bytes()),
+        p.snapshot
+            .records
+            .capacity()
+            .checked_mul(size_of::<DetachedRecord>())?,
+        generation
+            .manifest()
+            .entries()
+            .len()
+            .checked_mul(size_of::<EntryState>())?,
+        p.snapshot
+            .records
+            .len()
+            .checked_mul(size_of::<IndexRecord>())?,
+        generation
+            .manifest()
+            .entries()
+            .len()
+            .checked_mul(size_of::<usize>())?,
+        facts
+            .len()
+            .checked_mul(size_of::<FilePresentationFacts>())?,
+    ]
+    .into_iter()
+    .try_fold(0usize, usize::checked_add)
+}
+fn prepared_bytes(p: &PreparedBaseGeneration, m: &mut Maintenance<'_>) -> Option<usize> {
+    let mut bytes = 0usize;
+    // Check the running admitted size after each section, instead of eagerly
+    // evaluating all heap walks in an array even after a preceding section fails.
+    macro_rules! add {
+        ($value:expr) => {
+            bytes = costs([bytes, $value])?;
+        };
+    }
+    add!(m.bytes(
+        size_of::<PreparedBaseGeneration>()
+            .saturating_add(2usize.saturating_mul(size_of::<usize>()))
+    )?);
+    add!(m.bytes(
+        p.snapshot
+            .relationships
+            .as_ref()
+            .map_or(0, |g| g.retained_bytes())
+    )?);
+    add!(vector_cost(&p.snapshot.records, m, record_row_heap)?);
+    add!(vector_cost(&p.snapshot.metadata_issues, m, |i, m| costs(
+        [
+            m.bytes(
+                i.witness
+                    .entry_id
+                    .as_str()
+                    .len()
+                    .saturating_add(i.witness.revision.as_str().len())
+            )?,
+            slots::<zorid_document::Diagnostic>(i.diagnostics.capacity(), m)?,
+        ]
+    ))?);
+    add!(p.query.relationships.as_ref().map_or(Some(0), |g| {
+        g.retained_additional_bytes(&mut |work| m.take(work))
+    })?);
+    add!(vector_cost(&p.query.available, m, |s, m| m.bytes(s.capacity()))?);
+    add!(m.bytes(snapshot_id_heap(&p.snapshot.snapshot_id))?);
+    Some(bytes)
 }
 fn snapshot_id_heap(id: &IndexSnapshotId) -> usize {
     [
@@ -784,6 +1212,479 @@ fn program_bytes(p: &BaseProgram, m: &mut Maintenance<'_>) -> Option<usize> {
             ])
         })?,
     ])
+}
+
+// PropertyValue's derived equality uses Number equality, which deliberately
+// equates floating -0/+0. Cache identities must preserve that distinction and
+// integer/float representation; neither JSON coercion nor a claimed hash is a
+// substitute for the exact ordered typed input.
+fn property_exact_checked(
+    a: &PropertyValue,
+    b: &PropertyValue,
+    check: &mut impl FnMut() -> bool,
+) -> bool {
+    if !check() {
+        return false;
+    }
+    match (a, b) {
+        (PropertyValue::Null, PropertyValue::Null) => true,
+        (PropertyValue::Bool(a), PropertyValue::Bool(b)) => a == b,
+        (PropertyValue::Number(a), PropertyValue::Number(b)) => {
+            if a.is_f64() || b.is_f64() {
+                a.is_f64() == b.is_f64()
+                    && a.as_f64().map(f64::to_bits) == b.as_f64().map(f64::to_bits)
+            } else {
+                a == b
+            }
+        }
+        (PropertyValue::String(a), PropertyValue::String(b)) => a == b,
+        (PropertyValue::Array(a), PropertyValue::Array(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|(a, b)| property_exact_checked(a, b, check))
+        }
+        (PropertyValue::Object(a), PropertyValue::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|((ak, a), (bk, b))| ak == bk && property_exact_checked(a, b, check))
+        }
+        _ => false,
+    }
+}
+fn record_exact(a: &IndexRecord, b: &IndexRecord, options: &QueryOptions) -> bool {
+    if a.witness() != b.witness()
+        || a.text_digest() != b.text_digest()
+        || a.text_bytes() != b.text_bytes()
+        || a.exclusion() != b.exclusion()
+    {
+        return false;
+    }
+    match (a.metadata(), b.metadata()) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            a.schema_version == b.schema_version
+                && a.dialect_version == b.dialect_version
+                && a.entry_id == b.entry_id
+                && a.content_revision == b.content_revision
+                && a.source_length == b.source_length
+                && a.frontmatter == b.frontmatter
+                && a.properties.len() == b.properties.len()
+                && a.properties.iter().zip(&b.properties).all(|(a, b)| {
+                    a.key == b.key
+                        && a.property_type == b.property_type
+                        && a.key_range == b.key_range
+                        && property_exact_checked(&a.value, &b.value, &mut || {
+                            stopped(options).is_ok()
+                        })
+                })
+                && a.aliases == b.aliases
+                && a.tags == b.tags
+                && a.tag_occurrences == b.tag_occurrences
+                && a.headings == b.headings
+                && a.links == b.links
+                && a.tasks == b.tasks
+                && a.blocks == b.blocks
+                && a.list_items == b.list_items
+                && a.diagnostics == b.diagnostics
+        }
+        _ => false,
+    }
+}
+fn detached_exact(a: &DetachedRecord, b: &DetachedRecord, options: &QueryOptions) -> bool {
+    a.witness == b.witness
+        && a.path == b.path
+        && a.properties.len() == b.properties.len()
+        && a.properties
+            .iter()
+            .zip(&b.properties)
+            .all(|((ak, a), (bk, b))| {
+                ak == bk && property_exact_checked(a, b, &mut || stopped(options).is_ok())
+            })
+        && a.property_types == b.property_types
+        && a.tags == b.tags
+        && a.size == b.size
+        && a.ctime_ms == b.ctime_ms
+        && a.mtime_ms == b.mtime_ms
+}
+fn options_exact(a: &QueryOptions, b: &QueryOptions, independent: bool) -> bool {
+    let options = b;
+    a.view_index == b.view_index
+        && a.search_terms == b.search_terms
+        && a.ignore_paths == b.ignore_paths
+        && a.current_entry_id == b.current_entry_id
+        && a.max_steps == b.max_steps
+        && a.max_scanned == b.max_scanned
+        && a.max_rows == b.max_rows
+        && a.max_groups == b.max_groups
+        && a.max_output_bytes == b.max_output_bytes
+        && (independent || a.evaluation.clock_ms == b.evaluation.clock_ms)
+        && a.evaluation.timezone == b.evaluation.timezone
+        && a.evaluation.max_steps == b.evaluation.max_steps
+        && a.evaluation.formulas == b.evaluation.formulas
+        && match (&a.evaluation.current_record, &b.evaluation.current_record) {
+            (None, None) => true,
+            (Some(a), Some(b)) => detached_exact(a, b, options),
+            _ => false,
+        }
+}
+fn options_heap(o: &QueryOptions, m: &mut Maintenance<'_>) -> Option<usize> {
+    costs([
+        m.bytes(size_of::<QueryOptions>())?,
+        vector_cost(&o.search_terms, m, |s, m| m.bytes(s.capacity()))?,
+        vector_cost(&o.ignore_paths, m, |s, m| m.bytes(s.capacity()))?,
+        m.bytes(
+            o.current_entry_id
+                .as_ref()
+                .map_or(0, |id| id.as_str().len()),
+        )?,
+        m.bytes(o.evaluation.timezone.capacity())?,
+        vector_cost(&o.evaluation.formulas, m, |(k, v), m| {
+            m.bytes(k.capacity().saturating_add(v.capacity()))
+        })?,
+        o.evaluation
+            .current_record
+            .as_ref()
+            .map_or(Some(0), |r| record_row_heap(r, m))?,
+    ])
+}
+fn value_heap(v: &crate::BaseValue, m: &mut Maintenance<'_>) -> Option<usize> {
+    use crate::BaseValue as V;
+    match v {
+        V::Error { .. } => None,
+        V::Number { value } if !value.is_finite() => None,
+        V::Duration {
+            years,
+            months,
+            weeks,
+            days,
+            hours,
+            minutes,
+            seconds,
+            milliseconds,
+        } if ![
+            years,
+            months,
+            weeks,
+            days,
+            hours,
+            minutes,
+            seconds,
+            milliseconds,
+        ]
+        .into_iter()
+        .all(|v| v.is_finite()) =>
+        {
+            None
+        }
+        V::String { value } | V::File { path: value } => m.retained(value.capacity(), value.len()),
+        V::List { value } => vector_cost(value, m, value_heap),
+        V::Object { value } => vector_cost(value, m, |(k, v), m| {
+            costs([m.retained(k.capacity(), k.len())?, value_heap(v, m)?])
+        }),
+        V::Link {
+            path,
+            target,
+            display,
+            ..
+        } => m.retained(
+            costs([
+                path.capacity(),
+                target.as_ref().map_or(0, |w| {
+                    w.entry_id
+                        .as_str()
+                        .len()
+                        .saturating_add(w.revision.as_str().len())
+                }),
+                display.as_ref().map_or(0, String::capacity),
+            ])?,
+            costs([
+                path.len(),
+                target.as_ref().map_or(0, |w| {
+                    w.entry_id
+                        .as_str()
+                        .len()
+                        .saturating_add(w.revision.as_str().len())
+                }),
+                display.as_ref().map_or(0, String::len),
+            ])?,
+        ),
+        _ => m.bytes(0),
+    }
+}
+fn result_heap(r: &BaseQueryResult, m: &mut Maintenance<'_>) -> Option<usize> {
+    if !r.metadata_complete || !r.relationships_available || !r.diagnostics.is_empty() {
+        return None;
+    }
+    costs([
+        m.bytes(size_of::<BaseQueryResult>())?,
+        m.bytes(snapshot_id_heap(&r.snapshot_id))?,
+        property_heap(&r.view, m)?,
+        vector_cost(&r.rows, m, |r, m| {
+            // std's current BTreeMap uses <=16 cells per node. Charge one full
+            // node per entry conservatively rather than pretending len is its
+            // allocation capacity. Work counts initialized entries, not unused
+            // node slots. Cache policy is disposable, never authority evidence.
+            let cell = size_of::<(String, crate::BaseValue)>().checked_add(size_of::<usize>())?;
+            let nodes = r
+                .values
+                .len()
+                .checked_mul(16)?
+                .checked_mul(cell)?
+                .checked_add(64)?;
+            m.bytes(r.values.len().checked_mul(cell)?)?;
+            let mut bytes = costs([
+                nodes,
+                m.retained(
+                    r.entry_id
+                        .as_str()
+                        .len()
+                        .saturating_add(r.revision.as_str().len())
+                        .saturating_add(r.path.capacity()),
+                    r.entry_id
+                        .as_str()
+                        .len()
+                        .saturating_add(r.revision.as_str().len())
+                        .saturating_add(r.path.len()),
+                )?,
+            ])?;
+            for (key, value) in &r.values {
+                bytes = costs([
+                    bytes,
+                    m.retained(key.capacity(), key.len())?,
+                    value_heap(value, m)?,
+                ])?;
+            }
+            Some(bytes)
+        })?,
+        vector_cost(&r.groups, m, |g, m| {
+            costs([
+                m.retained(
+                    g.key_id.as_ref().map_or(0, String::capacity),
+                    g.key_id.as_ref().map_or(0, String::len),
+                )?,
+                g.key.as_ref().map_or(Some(0), |v| value_heap(v, m))?,
+                vector_cost(&g.entry_ids, m, |id, m| m.bytes(id.as_str().len()))?,
+            ])
+        })?,
+        vector_cost(&r.group_options, m, |g, m| {
+            costs([
+                m.retained(g.key_id.capacity(), g.key_id.len())?,
+                value_heap(&g.key, m)?,
+            ])
+        })?,
+        vector_cost(&r.properties, m, |s, m| m.retained(s.capacity(), s.len()))?,
+        vector_cost(&r.available_properties, m, |s, m| {
+            m.retained(s.capacity(), s.len())
+        })?,
+        m.retained(
+            r.diagnostics
+                .capacity()
+                .checked_mul(size_of::<crate::QueryDiagnostic>())?,
+            r.diagnostics
+                .len()
+                .checked_mul(size_of::<crate::QueryDiagnostic>())?,
+        )?,
+        vector_cost(&r.metadata_issues, m, |issue, m| {
+            m.take(1)?;
+            if !matches!(issue.exclusion, Some(zorid_index::Exclusion::Binary))
+                || issue.properties_unavailable
+                || !issue.diagnostics.is_empty()
+            {
+                return None;
+            }
+            costs([
+                m.bytes(
+                    issue
+                        .witness
+                        .entry_id
+                        .as_str()
+                        .len()
+                        .saturating_add(issue.witness.revision.as_str().len()),
+                )?,
+                m.retained(
+                    issue
+                        .diagnostics
+                        .capacity()
+                        .checked_mul(size_of::<zorid_document::Diagnostic>())?,
+                    issue
+                        .diagnostics
+                        .len()
+                        .checked_mul(size_of::<zorid_document::Diagnostic>())?,
+                )?,
+            ])
+        })?,
+    ])
+}
+
+// Result's fallible iterator adapter has a zero lower size_hint on Rust1.99;
+// collect can grow cap1 to cap4. Allocate the preadmitted exact destination
+// length instead, so every retained Vec capacity stays <= its measured source.
+fn copy_vec<T, U>(
+    source: &[T],
+    options: &QueryOptions,
+    mut copy: impl FnMut(&T) -> Result<U, ExpressionDiagnostic>,
+) -> Result<Vec<U>, ExpressionDiagnostic> {
+    stopped(options)?;
+    let mut out = Vec::with_capacity(source.len());
+    for value in source {
+        stopped(options)?;
+        out.push(copy(value)?);
+    }
+    Ok(out)
+}
+fn copy_property(
+    v: &PropertyValue,
+    options: &QueryOptions,
+) -> Result<PropertyValue, ExpressionDiagnostic> {
+    stopped(options)?;
+    Ok(match v {
+        PropertyValue::Array(v) => {
+            PropertyValue::Array(copy_vec(v, options, |v| copy_property(v, options))?)
+        }
+        PropertyValue::Object(v) => PropertyValue::Object(copy_vec(v, options, |(k, v)| {
+            Ok((k.clone(), copy_property(v, options)?))
+        })?),
+        _ => v.clone(),
+    })
+}
+fn copy_value(
+    v: &crate::BaseValue,
+    options: &QueryOptions,
+) -> Result<crate::BaseValue, ExpressionDiagnostic> {
+    stopped(options)?;
+    Ok(match v {
+        crate::BaseValue::List { value } => crate::BaseValue::List {
+            value: copy_vec(value, options, |v| copy_value(v, options))?,
+        },
+        crate::BaseValue::Object { value } => crate::BaseValue::Object {
+            value: copy_vec(value, options, |(k, v)| {
+                Ok((k.clone(), copy_value(v, options)?))
+            })?,
+        },
+        _ => v.clone(),
+    })
+}
+fn copy_strings(v: &[String], options: &QueryOptions) -> Result<Vec<String>, ExpressionDiagnostic> {
+    copy_vec(v, options, |v| Ok(v.clone()))
+}
+fn copy_record(
+    r: &DetachedRecord,
+    options: &QueryOptions,
+) -> Result<DetachedRecord, ExpressionDiagnostic> {
+    stopped(options)?;
+    Ok(DetachedRecord {
+        witness: r.witness.clone(),
+        path: r.path.clone(),
+        properties: copy_vec(&r.properties, options, |(k, v)| {
+            Ok((k.clone(), copy_property(v, options)?))
+        })?,
+        property_types: copy_vec(&r.property_types, options, |v| Ok(v.clone()))?,
+        tags: copy_strings(&r.tags, options)?,
+        size: r.size,
+        ctime_ms: r.ctime_ms,
+        mtime_ms: r.mtime_ms,
+    })
+}
+fn copy_options(o: &QueryOptions, independent: bool) -> Result<QueryOptions, ExpressionDiagnostic> {
+    stopped(o)?;
+    Ok(QueryOptions {
+        view_index: o.view_index,
+        search_terms: copy_strings(&o.search_terms, o)?,
+        ignore_paths: copy_strings(&o.ignore_paths, o)?,
+        current_entry_id: o.current_entry_id.clone(),
+        max_steps: o.max_steps,
+        max_scanned: o.max_scanned,
+        max_rows: o.max_rows,
+        max_groups: o.max_groups,
+        max_output_bytes: o.max_output_bytes,
+        evaluation: crate::EvaluationOptions {
+            clock_ms: if independent {
+                0
+            } else {
+                o.evaluation.clock_ms
+            },
+            timezone: o.evaluation.timezone.clone(),
+            max_steps: o.evaluation.max_steps,
+            formulas: copy_vec(&o.evaluation.formulas, o, |v| Ok(v.clone()))?,
+            current_record: o
+                .evaluation
+                .current_record
+                .as_ref()
+                .map(|r| copy_record(r, o))
+                .transpose()?,
+            cancellation: None,
+        },
+    })
+}
+fn copy_result(
+    r: &BaseQueryResult,
+    o: &QueryOptions,
+) -> Result<BaseQueryResult, ExpressionDiagnostic> {
+    stopped(o)?;
+    Ok(BaseQueryResult {
+        snapshot_id: r.snapshot_id.clone(),
+        view: copy_property(&r.view, o)?,
+        rows: copy_vec(&r.rows, o, |r| {
+            Ok(crate::BaseRow {
+                entry_id: r.entry_id.clone(),
+                revision: r.revision.clone(),
+                path: r.path.clone(),
+                values: r
+                    .values
+                    .iter()
+                    .map(|(k, v)| Ok((k.clone(), copy_value(v, o)?)))
+                    .collect::<Result<_, ExpressionDiagnostic>>()?,
+            })
+        })?,
+        groups: copy_vec(&r.groups, o, |g| {
+            Ok(crate::BaseGroup {
+                key_id: g.key_id.clone(),
+                key: g.key.as_ref().map(|v| copy_value(v, o)).transpose()?,
+                entry_ids: copy_vec(&g.entry_ids, o, |id| Ok(id.clone()))?,
+            })
+        })?,
+        group_options: copy_vec(&r.group_options, o, |g| {
+            Ok(crate::GroupOption {
+                key_id: g.key_id.clone(),
+                key: copy_value(&g.key, o)?,
+                count: g.count,
+                listed: g.listed,
+            })
+        })?,
+        properties: copy_strings(&r.properties, o)?,
+        available_properties: copy_strings(&r.available_properties, o)?,
+        counts: r.counts.clone(),
+        diagnostics: Vec::new(),
+        metadata_issues: copy_vec(&r.metadata_issues, o, |issue| {
+            Ok(crate::MetadataIssue {
+                witness: issue.witness.clone(),
+                exclusion: issue.exclusion.clone(),
+                diagnostics: Vec::new(),
+                properties_unavailable: issue.properties_unavailable,
+            })
+        })?,
+        steps_used: r.steps_used,
+        relationships_available: r.relationships_available,
+        metadata_complete: r.metadata_complete,
+    })
+}
+
+// Evaluator::new parses the invocation's RFC3339 serialization. Chrono also
+// represents expanded/negative years which that parser rejects. Never let an
+// optional clock-independent hit bypass the established cold clock domain.
+fn answer_clock_representable(clock_ms: i64) -> bool {
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(clock_ms)
+        .is_some_and(|date| (0..=9999).contains(&chrono::Datelike::year(&date)))
+}
+
+fn decimal_bytes(n: usize) -> usize {
+    if n == 0 {
+        1
+    } else {
+        n.ilog10() as usize + 1
+    }
 }
 
 #[cfg(test)]

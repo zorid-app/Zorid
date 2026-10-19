@@ -282,13 +282,16 @@ pub(crate) struct PreparedRelationships<'a> {
     data: &'a OwnedRelationships,
 }
 impl OwnedRelationships {
-    pub(crate) fn retained_bytes(
+    // The sealed preparation factory builds this adjacency from the exact
+    // snapshot graph, and prepare_namespace_checked only clones its existing
+    // namespace Arcs. The graph's retained_bytes already accounts that shared
+    // allocation. Count only this adjacency's additional allocations here.
+    pub(crate) fn retained_additional_bytes(
         &self,
         check: &mut impl FnMut(usize) -> Option<()>,
     ) -> Option<usize> {
         use std::mem::size_of;
         let mut bytes = size_of::<Self>()
-            .checked_add(self.namespace.retained_bytes())?
             .checked_add(self.files.capacity().checked_mul(2)?.checked_mul(
                 size_of::<(EntryId, FileRelations)>().checked_add(size_of::<usize>())?,
             )?)?

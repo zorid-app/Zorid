@@ -4,7 +4,6 @@ use crate::{BaseValue, ExpressionDiagnostic, PropertyValue};
 /// Change whenever Base configuration compilation or language meaning changes.
 pub const BASE_COMPILER_VERSION: &str = "zorid-base-yaml-expression-v1";
 
-
 #[derive(Clone, Debug)]
 pub struct BaseProgram {
     pub(crate) formulas: Vec<(String, String)>,
@@ -54,6 +53,30 @@ pub(crate) struct View {
     pub group_order: Option<Vec<BaseValue>>,
     pub limit: Option<usize>,
 }
+pub(crate) fn clock_independent(
+    program: &BaseProgram,
+    check: &mut impl FnMut(usize) -> Option<()>,
+) -> bool {
+    fn filter(value: &Filter, check: &mut impl FnMut(usize) -> Option<()>) -> bool {
+        if check(1).is_none() {
+            return false;
+        }
+        match value {
+            Filter::Expression(source) => crate::expression::clock_independent(source, check),
+            Filter::And(v) | Filter::Or(v) | Filter::Not(v) => v.iter().all(|f| filter(f, check)),
+        }
+    }
+    program
+        .formulas
+        .iter()
+        .all(|(_, source)| crate::expression::clock_independent(source, check))
+        && program.filter.as_ref().is_none_or(|f| filter(f, check))
+        && program
+            .views
+            .iter()
+            .all(|view| view.filter.as_ref().is_none_or(|f| filter(f, check)))
+}
+
 fn error(message: &str) -> ExpressionDiagnostic {
     ExpressionDiagnostic::new("configuration", message)
 }

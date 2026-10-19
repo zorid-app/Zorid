@@ -587,8 +587,17 @@ pub(crate) struct Session<'a> {
     evaluator: Evaluator<'a>,
     initial_steps: usize,
 }
+#[cfg(test)]
+thread_local! { static SESSION_STARTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(crate) fn session_starts() -> usize {
+    SESSION_STARTS.get()
+}
+
 impl<'a> Session<'a> {
     pub(crate) fn new(context: &'a BasesEvaluationContext<'a>) -> Self {
+        #[cfg(test)]
+        SESSION_STARTS.set(SESSION_STARTS.get().saturating_add(1));
         Self {
             evaluator: Evaluator::new(context),
             initial_steps: context.work_limit.unwrap_or(100_000),
@@ -689,6 +698,43 @@ pub(crate) fn uses_backlinks(expression: &str) -> bool {
     parse_cached(expression)
         .map(|expression| expression_uses_backlinks(expression.as_ref()))
         .unwrap_or(true)
+}
+
+// Conservative proof for optional answer reuse. Refuse every call, including
+// computed/unknown dispatch. This exhaustive match must be updated deliberately
+// when syntax grows; it never treats an unparsed expression as independent.
+pub(crate) fn clock_independent(source: &str, check: &mut impl FnMut(usize) -> Option<()>) -> bool {
+    fn walk(expression: &Expr, check: &mut impl FnMut(usize) -> Option<()>) -> Option<()> {
+        check(1)?;
+        match expression {
+            Expr::Literal(_) | Expr::Regex(_, _) | Expr::Identifier(_) => Some(()),
+            Expr::Array(values) => {
+                for value in values {
+                    walk(value, check)?;
+                }
+                Some(())
+            }
+            Expr::Unary(_, value) => walk(value, check),
+            Expr::Binary(_, left, right) => {
+                walk(left, check)?;
+                walk(right, check)
+            }
+            Expr::Member(value, member) => {
+                walk(value, check)?;
+                match member {
+                    Member::Named(_) => Some(()),
+                    Member::Computed(value) => walk(value, check),
+                }
+            }
+            Expr::Call(_, _) => None,
+        }
+    }
+    if check(1usize.saturating_add(source.len() / 64)).is_none() {
+        return false;
+    }
+    parse_cached(source)
+        .ok()
+        .is_some_and(|ast| walk(&ast, check).is_some())
 }
 
 fn constant_member_name(expression: &Expr) -> Option<String> {

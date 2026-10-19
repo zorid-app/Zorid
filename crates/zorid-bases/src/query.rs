@@ -465,6 +465,21 @@ pub(crate) fn query_base_prepared(
     options: &QueryOptions,
     prepared: Option<&QueryPreparation>,
 ) -> Result<BaseQueryResult, ExpressionDiagnostic> {
+    let validated = validate_invocation(program, snapshot, options, prepared)?;
+    query_base_validated(program, snapshot, options, prepared, &validated, &mut false)
+}
+
+// Private proof that the existing dynamic request/current-row checks ran. It
+// contains only invocation data, never authority/pin/source capabilities.
+pub(crate) struct ValidatedInvocation {
+    selected_options: Option<QueryOptions>,
+}
+pub(crate) fn validate_invocation(
+    program: &BaseProgram,
+    snapshot: &BaseSnapshot,
+    options: &QueryOptions,
+    prepared: Option<&QueryPreparation>,
+) -> Result<ValidatedInvocation, ExpressionDiagnostic> {
     let budget = |message: &str| ExpressionDiagnostic::new("budget", message);
     if options.max_steps == 0
         || options.max_steps > MAX_QUERY_STEPS
@@ -477,7 +492,7 @@ pub(crate) fn query_base_prepared(
     }
 
     request_size(snapshot, options, prepared.and_then(|p| p.snapshot_bytes))?;
-    let view = program
+    program
         .views
         .get(options.view_index)
         .ok_or_else(|| ExpressionDiagnostic::new("configuration", "View index out of range"))?;
@@ -496,8 +511,7 @@ pub(crate) fn query_base_prepared(
             .iter()
             .find(|record| record.witness.as_ref().is_some_and(|w| &w.entry_id == id))
     });
-    let selected_options;
-    let options = if options.current_entry_id.is_some() {
+    let selected_options = if options.current_entry_id.is_some() {
         let current = selected_current.ok_or_else(|| {
             ExpressionDiagnostic::new("stale-source", "Current entry is absent from this snapshot")
         })?;
@@ -515,11 +529,11 @@ pub(crate) fn query_base_prepared(
         let mut selected = options.clone();
         selected.evaluation.current_record = Some(current.clone());
         request_size(snapshot, &selected, prepared.and_then(|p| p.snapshot_bytes))?;
-        selected_options = selected;
-        &selected_options
+        Some(selected)
     } else {
-        options
+        None
     };
+    let options = selected_options.as_ref().unwrap_or(options);
     if let Some(current) = &options.evaluation.current_record {
         let witness = current.witness.as_ref().ok_or_else(|| {
             ExpressionDiagnostic::new("input", "Current query record requires a witness")
@@ -535,6 +549,22 @@ pub(crate) fn query_base_prepared(
             ));
         }
     }
+    Ok(ValidatedInvocation { selected_options })
+}
+pub(crate) fn query_base_validated(
+    program: &BaseProgram,
+    snapshot: &BaseSnapshot,
+    options: &QueryOptions,
+    prepared: Option<&QueryPreparation>,
+    validated: &ValidatedInvocation,
+    clock_sensitive_sort: &mut bool,
+) -> Result<BaseQueryResult, ExpressionDiagnostic> {
+    let budget = |message: &str| ExpressionDiagnostic::new("budget", message);
+    let options = validated.selected_options.as_ref().unwrap_or(options);
+    let view = program
+        .views
+        .get(options.view_index)
+        .expect("validated view");
     let owned;
     let (prepared, preparation_work) = if let Some(prepared) = prepared {
         (prepared, 0)
@@ -815,6 +845,12 @@ pub(crate) fn query_base_prepared(
     for row in &rows {
         for criterion in &sort {
             let value = row.values.get(&criterion.property).unwrap_or(&null);
+            // Duration ordering applies the value to the invocation clock, even
+            // for no-call formulas and rows later removed by limit/truncation.
+            // Keep this dependency with the checked evaluation, not final cells.
+            if matches!(value, BaseValue::Duration { .. }) {
+                *clock_sensitive_sort = true;
+            }
             let value = scalar_for_sort(value, options)?;
             scalars.insert((row.entry_id.clone(), criterion.property.clone()), value);
         }
