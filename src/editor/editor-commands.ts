@@ -1,3 +1,4 @@
+import { searchPanelOpen } from '@codemirror/search';
 import { Compartment, Prec } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
 import { isolateHistory, selectParentSyntax } from '@codemirror/commands';
@@ -36,7 +37,7 @@ function surfaceBlocked(view: EditorView, owner: EditorView): boolean {
   const document = view.dom.ownerDocument;
   return !view.hasFocus || !view.dom.isConnected || owner.state.readOnly
     || !!document.querySelector('.modal-overlay,[aria-modal="true"],[role="menu"]')
-    || !!owner.dom.querySelector('.cm-tooltip-autocomplete,.cm-search');
+    || searchPanelOpen(owner.state) || !!owner.dom.querySelector('.cm-tooltip-autocomplete,.cm-search');
 }
 
 /** Internal commands only. A recognized unavailable action is consumed, so a

@@ -3,12 +3,12 @@ import { nativeEditorCommands } from './native-editor-commands.ts';
 import type { NativeEditorAction, NativeEditorState } from './native-editor-commands.ts';
 export type { NativeEditorAction, NativeEditorState } from './native-editor-commands.ts';
 import { Annotation, Compartment, EditorSelection, EditorState, Transaction } from '@codemirror/state';
-import { EditorView, keymap } from '@codemirror/view';
+import { EditorView, keymap, panels } from '@codemirror/view';
 import { defaultKeymap, selectParentSyntax, history, historyKeymap, isolateHistory } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { defaultHighlightStyle, HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
-import { searchKeymap } from '@codemirror/search';
+import { searchKeymap, searchPanelOpen } from '@codemirror/search';
 import { noteFindPanel } from '../editor/find-panel.ts';
 import { editorCommandHotkeys, runEditorCommand } from '../editor/editor-commands.ts';
 import type { EditorHotkeySource } from './hotkeys.ts';
@@ -74,6 +74,8 @@ export interface EditorHandle {
   fold?(action: EditorFoldAction): boolean;
 }
 export interface EditorOptions {
+  /** Workspace-owned top panel container; embedded editors keep local panels when omitted. */
+  findPanelHost?: HTMLElement;
   /** Pure live writer-token check. Exceptions deny authoring. Desktop defaults to true. */
   canMutate?: () => boolean;
   /** Passive views must start inactive, before any extension mounts. */
@@ -132,6 +134,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
     state: EditorState.create({ doc: options.value, extensions: [
       interaction.of(interactionExtensions()), EditorState.allowMultipleSelections.of(true),
       nativeUpdates, nativeCaret, history(), listConfiguration.of(markdownListKeymap(options.listOptions)), markdown({base: markdownLanguage,addKeymap:false,extensions:[frontmatterMarkdown, liveInlineMarkdown, liveMathMarkdown]}), syntaxHighlighting(markdownHighlightStyle),
+      ...(options.findPanelHost ? [panels({ topContainer: options.findPanelHost })] : []),
       noteFindPanel(),
       keymap.of([...defaultKeymap.filter(binding => binding.run !== selectParentSyntax), ...historyKeymap, ...searchKeymap]),
       EditorView.lineWrapping, wiki, editorCommandHotkeys(options.hotkeys),
@@ -183,7 +186,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       if (!canAuthor() || destroyed || !isCurrent() || !view.dom.isConnected || !target.dom.isConnected
         || view.state.readOnly || target.state.readOnly || view.compositionStarted || target.compositionStarted
         || document.querySelector('.modal-overlay,[aria-modal="true"],[role="menu"]')
-        || view.dom.querySelector('.cm-tooltip-autocomplete,.cm-search')) return null;
+        || searchPanelOpen(view.state) || view.dom.querySelector('.cm-tooltip-autocomplete,.cm-search')) return null;
       const ownerDoc = view.state.doc, ownerSelection = view.state.selection;
       const doc = target.state.doc, selection = target.state.selection;
       const release = retainTableEditor(view, target.contentDOM);

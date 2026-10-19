@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { Workspace } from '../src/ui/workspace.ts';
 import { MemoryAdapter } from '../src/core/memory-adapter.ts';
-import type { EditorHandle } from '../src/ui/editor.ts';
+import type { EditorHandle, EditorOptions } from '../src/ui/editor.ts';
 
 async function settle() { for (let i = 0; i < 24; i++) await Promise.resolve(); }
 async function setup(t: TestContext) {
@@ -18,7 +18,9 @@ async function setup(t: TestContext) {
   Object.defineProperty(dom.window, 'CSS', { value: { highlights: registry } }); Object.defineProperty(dom.window, 'Highlight', { value: class extends Set<Range> { priority = 0; } });
   dom.window.matchMedia = media as any; dom.window.HTMLElement.prototype.scrollIntoView = () => {};
   const source = '# Own heading\n\ncat **cat** [cat](Other.md)', adapter = new MemoryAdapter({ 'Note.md': source, 'Other.md': 'other text' });
+  const editorOptions: EditorOptions[] = [];
   const workspace = new Workspace(doc.querySelector('main')!, (parent, options): EditorHandle => {
+    editorOptions.push(options);
     const input = doc.createElement('textarea'); input.value = options.value; parent.append(input);
     return { getValue: () => input.value, setValue: value => input.value = value, focus: () => input.focus(), destroy: () => input.remove(), insert: value => { input.value += value; options.onChange(input.value); } };
   });
@@ -30,7 +32,7 @@ async function setup(t: TestContext) {
   const press = (target: Element, key: string, extra: KeyboardEventInit = {}) => { const event = new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...extra }); target.dispatchEvent(event); return event; };
   const field = () => workspace.activePane.element.querySelector<HTMLInputElement>('.zorid-reading-find input[name="search"]')!;
   const input = (text: string) => { field().value = text; field().dispatchEvent(new dom.window.Event('input', { bubbles: true })); };
-  return { dom, doc, workspace, adapter, registry, source, primary, press, field, input, destroy };
+  return { dom, doc, workspace, adapter, registry, source, primary, press, field, input, destroy, editorOptions };
 }
 
 test('Workspace routes primary-F to Reading without switching mode, writing source or replacing the preview', async t => {
@@ -67,4 +69,25 @@ test('split panes keep independent Reading searches; closing or changing vault r
 test('Workspace destroy cancels Reading ranges and leaves no find controls or style registrations', async t => {
   const f = await setup(t); f.workspace.activePane.readingFind!.open(); await settle(); f.input('cat'); assert.equal(f.registry.size, 2);
   await f.destroy(); assert.equal(f.registry.size, 0); assert.equal(f.doc.querySelector('style[data-reading-find]'), null); assert.equal(f.doc.querySelector('.zorid-reading-find'), null);
+});
+
+
+test('Reading and Live Find use the workspace host directly below toolbar and above title/properties', async t => {
+  const f = await setup(t), pane = f.workspace.activePane;
+  const assertHost = () => {
+    const content = pane.element.querySelector<HTMLElement>('.tab-view-content')!;
+    const toolbar = content.querySelector(':scope > .pane-toolbar')!;
+    const findHost = content.querySelector<HTMLElement>(':scope > .note-find-host')!;
+    const scroll = content.querySelector(':scope > .note-scroll')!;
+    assert.ok(findHost); assert.equal(toolbar.nextElementSibling, findHost);
+    assert.equal(findHost.nextElementSibling, scroll);
+    assert.ok(scroll.querySelector('.note-title')); assert.ok(scroll.querySelector('.properties-host'));
+    return findHost;
+  };
+  const readingHost = assertHost();
+  assert.equal(readingHost.querySelector('.zorid-reading-find')?.parentElement, readingHost);
+  await (f.workspace as any).toggleReading(); const liveHost = assertHost();
+  assert.equal(f.editorOptions.at(-1)?.findPanelHost, liveHost);
+  assert.equal(liveHost.querySelector('.zorid-reading-find'), null);
+  assert.equal(await f.adapter.read('Note.md'), f.source);
 });

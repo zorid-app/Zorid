@@ -1108,6 +1108,7 @@ export class Workspace {
       else host.append(el('p','muted native-unavailable-view',`No viewer is available yet for ${path.split('.').at(-1)?.toUpperCase()||'this file type'}.`));
       pane.viewReady=true;this.renderStatus();return;
     }
+    const findHost=el('div','note-find-host');content.append(findHost);
     const scroll=el('div','note-scroll');scroll.classList.toggle('readable-width',this.settings.readableWidth);
     const title=el('input','note-title');title.value=nameOf(path);title.setAttribute('aria-label','Note title');title.hidden=!this.settings.showInlineTitle;
     const titleGeneration=this.vaultGeneration;let titleNavigation=this.noteNavigation.get(pane),titlePath=path;ownerChanged=()=>{titleNavigation=this.noteNavigation.get(pane);};
@@ -1132,7 +1133,7 @@ export class Workspace {
       const createEmbeds=()=>new MarkdownEmbeds({bases:{sessions:baseSessions,identity:target=>this.treeEntryToken(target)},vault:this.vault,resources:this.attachments,pdfFactory:this.viewFactories.pdf,generatePdfLink:(target,fragment,alias)=>generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase!=='disposed'?pdfMarkdownLink(this.vault,target,fragment,alias,this.settings):null,contextMenu:(event,request,source)=>{const target=this.vault.metadata.resolveLink(source,request.target,request.kind);const entry=target?this.vault.entries.get(target):undefined;if(entry){const point=this.menuPoint(event);event.preventDefault();event.stopPropagation();this.fileMenu(entry,point.x,point.y);}},open:(source,target,kind)=>this.run(()=>this.followLink(source,target,pane,kind)),read:async target=>{const loaded=this.buffers.get(target);if(loaded){await loaded.load();if(loaded.dirty)return loaded.text;}return this.vault.cachedRead(target);},taskChange:(target,line,checked)=>this.changeTask(target,line,checked)});
       if(tab.mode==='reading'){
         const preview=el('div','markdown-preview');preview.tabIndex=-1;scroll.append(preview);
-        const findHost=el('div','zorid-reading-find-host');content.insertBefore(findHost,scroll);
+        findHost.classList.add('zorid-reading-find-host');
         pane.readingFind=createReadingFind(findHost,preview,{isCurrent:()=>generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path&&pane.runtime===runtime&&runtime.phase!=='disposed'&&this.panes.includes(pane)&&this.current(pane)?.id===tab.id&&!this.closing&&!this.root.inert&&!this.platformReleased,returnFocus:()=>{if(this.activePane===pane)preview.focus({preventScroll:true});}});
         pane.refreshPreview=()=>{
           if(version!==pane.renderVersion||pane.viewPath!==path||!pane.runtime||pane.runtime.phase==='disposed')return;
@@ -1152,7 +1153,7 @@ export class Workspace {
         const embeds=createEmbeds();pane.embeds=embeds;const generation=this.vaultGeneration;
         const ownsEditor=()=>generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path;
         const nativeCurrent=()=>ownsEditor()&&this.activePane===pane&&pane.runtime===runtime&&runtime.phase!=='disposed'&&this.current(pane)?.id===tab.id&&!this.closing&&!this.root.inert&&!this.startupFailed&&!this.platformReleased;
-        pane.editor=factory(host,{...(this.platform.nativeEditor?{isCurrent:nativeCurrent,onNativeEditorState:(state:NativeEditorState)=>{if(nativeCurrent())this.sendNativeEditorState(state);}}:{}),hotkeys:this.hotkeys,value:buffer.text,mode:tab.mode,paths:()=>ownsEditor()?[...this.vault.entries.keys()]:[],
+        pane.editor=factory(host,{findPanelHost:findHost,...(this.platform.nativeEditor?{isCurrent:nativeCurrent,onNativeEditorState:(state:NativeEditorState)=>{if(nativeCurrent())this.sendNativeEditorState(state);}}:{}),hotkeys:this.hotkeys,value:buffer.text,mode:tab.mode,paths:()=>ownsEditor()?[...this.vault.entries.keys()]:[],
           wiki:{sourcePath:()=>ownsEditor()?path:null,
             metadata:target=>{if(!ownsEditor())return;const dirty=this.buffers.get(target),metadata=dirty?.dirty?parseMetadata(target,dirty.text):this.vault.metadata.get(target);return{aliases:metadata?.aliases,headings:metadata?.headings,mtime:this.vault.entries.get(target)?.mtime};},
             resolvePath:(target,source)=>ownsEditor()?this.vault.metadata.resolveLink(source,target):null,

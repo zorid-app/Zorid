@@ -1,3 +1,4 @@
+import { searchPanelOpen } from '@codemirror/search';
 import type { EditorSelection, Text } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { undo, redo, undoDepth, redoDepth } from '@codemirror/commands';
@@ -59,7 +60,7 @@ export function nativeEditorCommands(owner: EditorView, options: {
     || !owner.state.facet(EditorView.editable) || !target.state.facet(EditorView.editable)
     || composing || owner.compositionStarted || target.compositionStarted || owner.composing || target.composing
     || !!document.querySelector('.modal-overlay,[aria-modal="true"],[role="menu"]')
-    || !!owner.dom.querySelector('.cm-tooltip-autocomplete,.cm-search');
+    || searchPanelOpen(owner.state) || !!owner.dom.querySelector('.cm-tooltip-autocomplete,.cm-search');
   const capture = () => {
     const target = body();
     if (!target || dismissed || !current()) return;

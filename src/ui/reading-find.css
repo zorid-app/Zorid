@@ -1,3 +1,3 @@
-.zorid-reading-find-host { flex: none; }
+.note-find-host, .zorid-reading-find-host { flex: none; }
 .zorid-reading-find[hidden] { display: none !important; }
 .zorid-reading-find { border-bottom: 1px solid var(--background-modifier-border); }

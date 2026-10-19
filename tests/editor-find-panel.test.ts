@@ -7,11 +7,12 @@ import { SearchQuery, openSearchPanel, searchPanelOpen, getSearchQuery, setSearc
 import { undoDepth, undo } from '@codemirror/commands';
 import { noteFindPanel } from '../src/editor/find-panel.ts';
 import { createEditor } from '../src/ui/editor.ts';
+import { runEditorCommand } from '../src/editor/editor-commands.ts';
 
 // Actual CodeMirror integration with DOM geometry shims. This does not establish
 // painted layout, native keyboard/IME or Reading-mode behavior.
-function setup(t: TestContext, text: string, readOnly = false, plain = false) {
-  const dom = new JSDOM('<!doctype html><body><div id="host"></div></body>', { pretendToBeVisual: true });
+function setup(t: TestContext, text: string, readOnly = false, plain = false, external = false) {
+  const dom = new JSDOM('<!doctype html><body><div id="find-host"></div><div id="host"></div></body>', { pretendToBeVisual: true });
   const saved = new Map<string, PropertyDescriptor | undefined>();
   for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document,
     navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement, Node: dom.window.Node,
@@ -24,8 +25,9 @@ function setup(t: TestContext, text: string, readOnly = false, plain = false) {
   dom.window.Range.prototype.getBoundingClientRect = () => ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON() {} });
   dom.window.Range.prototype.getClientRects = () => Object.assign([], { item: () => null });
   const host = document.querySelector<HTMLElement>('#host')!, changes: string[] = [];
+  const findHost = document.querySelector<HTMLElement>('#find-host')!, panelRoot = external ? findHost : host;
   let view: EditorView;
-  const editor = plain ? (() => { view = new EditorView({ parent: host, doc: text, extensions: [noteFindPanel()] }); return { destroy: () => view.destroy(), getValue: () => view.state.doc.toString() }; })() : createEditor(host, { value: text, mode: 'source', paths: () => [], open() {}, onChange: value => changes.push(value), canMutate: () => !readOnly });
+  const editor = plain ? (() => { view = new EditorView({ parent: host, doc: text, extensions: [noteFindPanel()] }); return { destroy: () => view.destroy(), getValue: () => view.state.doc.toString() }; })() : createEditor(host, { value: text, mode: 'source', paths: () => [], open() {}, onChange: value => changes.push(value), canMutate: () => !readOnly, ...(external ? { findPanelHost: findHost, onNativeEditorState() {} } : {}) });
   view = EditorView.findFromDOM(host.querySelector('.cm-editor')!)!;
   let destroyed = false;
   const destroy = () => { if (!destroyed) { editor.destroy(); destroyed = true; } };
@@ -36,12 +38,12 @@ function setup(t: TestContext, text: string, readOnly = false, plain = false) {
   const press = (target: Element, key: string, extra: KeyboardEventInit = {}) => {
     const event = new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...extra }); target.dispatchEvent(event); return event;
   };
-  const field = () => host.querySelector<HTMLInputElement>('input[name="search"]')!;
+  const field = () => panelRoot.querySelector<HTMLInputElement>('input[name="search"]')!;
   const input = (text: string) => { field().value = text; field().dispatchEvent(new dom.window.InputEvent('input', { bubbles: true, data: text })); };
-  const button = (label: string) => { const node = host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`); assert.ok(node, label); return node; };
-  const count = () => host.querySelector('.zorid-find-count')!.textContent;
-  const option = (name: string, checked: boolean) => { const node = host.querySelector<HTMLInputElement>(`input[name="${name}"]`)!; node.checked = checked; node.dispatchEvent(new dom.window.Event('change', { bubbles: true })); };
-  return { dom, host, editor, view, changes, destroy, press, field, input, button, count, option };
+  const button = (label: string) => { const node = panelRoot.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`); assert.ok(node, label); return node; };
+  const count = () => panelRoot.querySelector('.zorid-find-count')!.textContent;
+  const option = (name: string, checked: boolean) => { const node = panelRoot.querySelector<HTMLInputElement>(`input[name="${name}"]`)!; node.checked = checked; node.dispatchEvent(new dom.window.Event('change', { bubbles: true })); };
+  return { dom, host, findHost, editor, view, changes, destroy, press, field, input, button, count, option };
 }
 
 test('primary-F opens the top panel with seeded selection; navigation wraps and close restores focus without edits', t => {
@@ -166,4 +168,28 @@ test('selection and replace-field changes reuse counted matches; document change
   replacement.value = 'dog'; replacement.dispatchEvent(new f.dom.window.Event('input', { bubbles: true }));
   assert.equal(scans, counted);
   f.view.dispatch({ changes: { from: f.view.state.doc.length, insert: ' cat' } }); assert.equal(scans, counted + 1);
+});
+
+
+test('workspace panel host keeps CM ownership, focus, command guards and teardown outside editor DOM', t => {
+  const f = setup(t, 'cat cat', false, false, true);
+  f.view.dispatch({ selection: { anchor: 0, head: 3 } }); f.view.focus();
+  const depth = undoDepth(f.view.state), content = f.view.contentDOM;
+  openSearchPanel(f.view);
+  assert.ok(f.findHost.querySelector('.cm-panels-top .cm-search.zorid-find-panel'));
+  assert.equal(f.host.querySelector('.cm-search'), null);
+  assert.equal(document.activeElement, f.field()); assert.equal(f.count(), '1 / 2');
+  f.button('Next match').click(); assert.equal(f.count(), '2 / 2');
+  // Focusing the body while Find remains open must retain all existing guards.
+  f.view.focus(); assert.equal(searchPanelOpen(f.view.state), true);
+  assert.equal(runEditorCommand('editor-bold', f.view), true);
+  assert.equal(f.editor.nativeAction!('bold'), false);
+  assert.equal(f.editor.captureCommandTarget!(() => true), null);
+  assert.equal(f.editor.getValue(), 'cat cat'); assert.equal(undoDepth(f.view.state), depth);
+  f.field().focus(); f.press(f.field(), 'Escape');
+  assert.equal(searchPanelOpen(f.view.state), false); assert.equal(document.activeElement, content);
+  assert.equal(f.findHost.querySelector('.cm-panels'), null);
+  openSearchPanel(f.view); const retained = f.button('Next match'); f.destroy();
+  assert.equal(f.findHost.querySelector('.cm-panels'), null);
+  assert.doesNotThrow(() => retained.click()); assert.deepEqual(f.changes, []);
 });
