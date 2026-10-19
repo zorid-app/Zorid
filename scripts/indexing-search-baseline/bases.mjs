@@ -97,7 +97,7 @@ export async function runBases({out,binary,samples=1,timeoutMs=30000,buildSha='u
   const validator=new BasesValidator(corpora,samples),log=await open(path.join(out,'bases.stdout.ndjson'),'wx',0o600);
   try{
     report.process=await execute(binary,['--corpus-dir',corpusDirectory,'--samples',String(samples)],validator,log,timeoutMs);report.setup.core=validator.setup;report.preparations=validator.preparations;report.results=validator.results;
-    for(const c of corpora)assert.equal(sha256(await readFile(path.join(corpusDirectory,c.name))),c.sha256,'captured corpus changed');report.corpusPreserved=true;assert.equal(sha256(await readFile(binary)),binaryHash,'executable changed');
+    for(const c of corpora)assert.equal(sha256(await readFile(path.join(corpusDirectory,c.name))),c.sha256,'captured corpus changed');report.corpusPreserved=true;report.binary.afterSha256=sha256(await readFile(binary));report.binary.stable=report.binary.afterSha256===binaryHash;assert.equal(report.binary.stable,true,'executable changed');
     assert.equal(report.process.spawnError,undefined);assert.equal(report.process.validationError,undefined,report.process.validationError?.message);assert.equal(report.process.timedOut,false);assert.equal(report.process.signal,null);assert.equal(report.process.exitCode,0);assert.equal(validator.done,true);report.status='passed';
   }catch(error){report.status='failed-or-incomplete';report.error={message:error.message,kind:error.kind,phase:error.phase};}
   finally{await log.close();await writeFile(path.join(out,'bases-report.json'),json(report),{flag:'wx',mode:0o600});}
