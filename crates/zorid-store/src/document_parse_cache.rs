@@ -296,7 +296,7 @@ pub(crate) fn write(cache: &DocumentCache, fact: PreparedFact) {
                     // Do not fetch an untrusted locator as a Rust String. CASE
                     // bounds SQL shape validation; deletion uses only rowid.
                     let victim: Option<(i64, i64, i64, bool)> = tx.query_row(
-                        "SELECT ordinal,payload_bytes,length(CAST(record AS BLOB)),CASE WHEN typeof(storage_key)='text' AND length(CAST(storage_key AS BLOB))=64 THEN storage_key NOT GLOB '*[^0-9a-f]*' ELSE 0 END FROM document_parse_cache_rows NOT INDEXED WHERE storage_key<>?1 ORDER BY ordinal LIMIT 1",
+                        "SELECT ordinal,payload_bytes,length(CAST(record AS BLOB)),CASE WHEN typeof(storage_key)='text' AND length(CAST(storage_key AS BLOB))=64 AND length(storage_key)=64 THEN storage_key NOT GLOB '*[^0-9a-f]*' ELSE 0 END FROM document_parse_cache_rows NOT INDEXED WHERE storage_key<>?1 ORDER BY ordinal LIMIT 1",
                         [&fact.locator],
                         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                     ).optional()?;
