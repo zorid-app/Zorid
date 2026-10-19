@@ -71,6 +71,9 @@ async function retainSidecar(filename){
 export async function startOwnedMeasuredProcess({binary,args=[],cwd,env=process.env,sidecarDirectory,timeoutMs,termGraceMs=1000,drainGraceMs=1000,measureResources=false,stdin='ignore'}){
   assert.ok(typeof binary==='string'&&path.isAbsolute(binary),'absolute utility executable required');
   assert.ok(Array.isArray(args)&&args.every(arg=>typeof arg==='string'),'argument string array required');
+  assert.ok(env&&typeof env==='object'&&!Array.isArray(env),'environment object required');
+  // Admission inputs are owned before the first filesystem await.
+  args=[...args];env={...env};
   assert.ok(process.platform!=='win32','owned POSIX process groups required');
   assert.ok(typeof measureResources==='boolean');
   boundedMs(timeoutMs,'timeoutMs');boundedMs(termGraceMs,'termGraceMs');boundedMs(drainGraceMs,'drainGraceMs');
