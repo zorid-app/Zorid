@@ -201,3 +201,37 @@ test('desktop lost admission ACK retries the exact sequence before cancelling an
   assert.ok(acks.some(([method])=>method==='documentRuntimeAckOutcome'));assert.equal(frame.update.revision,'9007199254740993');
   await binding.release();runtime.retire();
 });
+
+const metadataPage=(cursor:string|null=null)=>({result:{snapshot,source,coverageComplete:true,value:{snapshot,next:null,scanComplete:cursor===null,coverageComplete:true,complete:cursor===null,mode:'reset',from:null,rows:[],removedEntryIds:[]}},cursor});
+test('desktop metadata capability is opt-in before open and forwards bounded metadata_rows through the real codec',async()=>{
+  for(const advertised of [undefined,false,true]){
+    const calls:DesktopDocumentRequest[]=[];
+    const binding=createDesktopDocumentService(async input=>{const captured=captureDocumentRequest(input);calls.push(captured);const c=captured.command;
+      if(c.op==='open')return opened(c.pinId);if(c.op==='close')return true;if(c.op==='metadata_rows')return richWire(true,metadataPage());throw Error('Unexpected operation');
+    },undefined,{metadataRowsAvailable:advertised});
+    assert.equal(binding.service.metadataRowsAvailable===true,advertised===true);assert.equal(calls.length,0,'capability must not open a generation');
+    const pin=await binding.service.open();assert.equal(typeof pin.metadataRows,advertised===true?'function':'undefined');
+    if(advertised){const result=await pin.metadataRows!({limit:2});assert.equal(result.result.value.mode,'reset');assert.deepEqual(calls.at(-1)!.command,{op:'metadata_rows',pinId:'1',cursor:null,limit:2});}
+    await binding.release();
+  }
+  assert.throws(()=>createDesktopDocumentService(undefined as any,undefined,{metadataRowsAvailable:true}),{code:'invalid_document_response'});
+});
+
+test('metadata NotReady and malformed plain IPC replies remain errors rather than a legacy fallback',async()=>{
+  let reply:unknown=richWire(false,{code:'not_ready',commitUncertain:false});
+  const binding=createDesktopDocumentService(async input=>input.command.op==='open'?opened(input.command.pinId):input.command.op==='close'?true:reply,undefined,{metadataRowsAvailable:true});
+  const pin=await binding.service.open();await assert.rejects(pin.metadataRows!(),{code:'not_ready'});
+  for(const malformed of [{...richWire(true,metadataPage()),documents:false},richWire(false,{code:'search_compile',commitUncertain:false,details:{diagnostic:{}}}),richWire(false,{code:'not_ready',commitUncertain:false,internal:'secret'})]){
+    reply=malformed;await assert.rejects(pin.metadataRows!(),{code:'invalid_document_response'});
+  }
+  reply=metadataPage();assert.equal((await pin.metadataRows!()).cursor,null,'raw admitted fixtures retain their documented reply contract');await binding.release();
+});
+
+for(const outcome of ['success','rejection'])test(`release drains metadata ${outcome} and rejects its retired reply before closing the pin`,async()=>{
+  const gate=deferred<unknown>(),entered=deferred<void>(),closed:string[]=[];let fail!:(error:unknown)=>void;
+  const pending=outcome==='success'?gate.promise:new Promise<unknown>((_resolve,reject)=>{fail=reject;});
+  const binding=createDesktopDocumentService(async input=>{const c=input.command;if(c.op==='open')return opened(c.pinId);if(c.op==='metadata_rows'){entered.resolve();return pending;}if(c.op==='close'){closed.push(String(c.pinId));return true;}throw Error('Unexpected operation');},undefined,{metadataRowsAvailable:true});
+  const pin=await binding.service.open(),read=pin.metadataRows!();await entered.promise;const rejecting=assert.rejects(read,{code:'client_not_admitted'}),release=binding.release();assert.deepEqual(closed,[]);
+  await assert.rejects(pin.metadataRows!(),{code:'client_not_admitted'});
+  if(outcome==='success')gate.resolve(metadataPage());else fail({code:'cancelled'});await rejecting;await release;assert.deepEqual(closed,['1']);
+});

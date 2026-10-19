@@ -86,7 +86,7 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   newWindowMenu.click(); await new Promise(resolve => setImmediate(resolve));
   assert.equal(windows.length, 3); assert.equal(invoke(windows[2], 'getVault').path, '/first');
   // Exercise the real main handler and sandbox preload pass-through. Only
-  // rich document calls use plain data to survive contextBridge Error copying.
+  // Rich and metadata rows calls use plain data through contextBridge.
   const richRequest={schemaVersion:1,command:{op:'rich_start',pinId:'1',spec:{query:'/(?=a)/',caseSensitive:false,sort:'nameAsc',context:'line',explain:false}}};
   const diagnostic={code:'unsupported-regex',queryRange:{bytes:[0,3],utf16:[0,3]},message:'Unsupported regular expression.'};
   coreFailure=Object.assign(new Error('/private/internal recovery'),{code:'search_compile',commitUncertain:false,details:{diagnostic}});
@@ -106,6 +106,13 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   assert.deepEqual(structuredClone(await exposed.durableInvoke('/first','admitted','documentCommand',[richRequest])),{documents:true,schemaVersion:1,ok:false,error:{code:'cancelled',commitUncertain:false}});
   coreFailure=undefined;
   assert.deepEqual(structuredClone(await exposed.durableInvoke('/first','admitted','documentCommand',[richRequest])),{documents:true,schemaVersion:1,ok:true,value:{queryId:'query'}});
+  const metadataRequest={schemaVersion:1,command:{op:'metadata_rows',pinId:'1',limit:32}};
+  coreFailure=Object.assign(new Error('/private/native recovery'),{code:'not_ready',commitUncertain:false,details:{internal:true}});
+  assert.deepEqual(structuredClone(await exposed.durableInvoke('/first','admitted','documentCommand',[metadataRequest])),{documents:true,schemaVersion:1,ok:false,error:{code:'not_ready',commitUncertain:false}});
+  coreFailure=Object.assign(new Error('/private/native recovery'),{code:'search_compile',commitUncertain:true,details:{diagnostic}});
+  assert.deepEqual(structuredClone(await exposed.durableInvoke('/first','admitted','documentCommand',[metadataRequest])),{documents:true,schemaVersion:1,ok:false,error:{code:'search_compile',commitUncertain:true}},'metadata never acquires compile diagnostics');
+  coreFailure=undefined;
+  assert.deepEqual(structuredClone(await exposed.durableInvoke('/first','admitted','documentCommand',[metadataRequest])),{documents:true,schemaVersion:1,ok:true,value:{queryId:'query'}});
   const savedURL = windows[0].webContents.mainFrame.url;
   windows[0].webContents.mainFrame.url = savedURL.replace('index.html', 'other.html');
   assert.throws(() => invoke(windows[0], 'getVault'), /Untrusted page/);

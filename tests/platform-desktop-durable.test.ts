@@ -121,3 +121,16 @@ test('legacy desktop rename cannot silently drop an expected identity',async()=>
     assert.equal(calls,0);await adapter.rename('Note.md','Renamed.md');assert.equal(calls,1);
   }finally{if(previous)Object.defineProperty(globalThis,'window',previous);else Reflect.deleteProperty(globalThis,'window');}
 });
+
+test('desktop bridge preserves pre-open metadata capability without granting it to legacy contexts',async()=>{
+  const previous=Object.getOwnPropertyDescriptor(globalThis,'window');
+  try{
+    for(const metadataRowsAvailable of [undefined,false,true]){
+      let commands=0;
+      Object.defineProperty(globalThis,'window',{configurable:true,value:{zorid:{getVault:async()=>({path:'/fixture',name:'Fixture'}),getDurableContext:async()=>({admissionId:'admitted',scope:{vaultId:'authority',clientId:'client'},documentSemantics:true,metadataRowsAvailable}),durableInvoke:async()=>{commands++;throw Error('No generation should open for capability discovery');},releaseDurableContext:async()=>{}}}});
+      const platform=(await createPlatformAdapter())!;assert.equal(platform.documentSemantics!.metadataRowsAvailable===true,metadataRowsAvailable===true);assert.equal(commands,0);await platform.release!();
+    }
+    Object.defineProperty(globalThis,'window',{configurable:true,value:{zorid:{getVault:async()=>({path:'/fixture',name:'Fixture'}),getDurableContext:async()=>({admissionId:'admitted',scope:{vaultId:'authority',clientId:'client'},metadataRowsAvailable:true}),durableInvoke:async()=>{},releaseDurableContext:async()=>{}}}});
+    await assert.rejects(createPlatformAdapter(),/Incomplete document metadata capability/);
+  }finally{if(previous)Object.defineProperty(globalThis,'window',previous);else Reflect.deleteProperty(globalThis,'window');}
+});

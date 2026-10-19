@@ -4,6 +4,8 @@ import type {BrowserDocumentIndexMaintenance,BrowserDocumentRuntimeWasm,Document
 import {searchSpec,richToken,richPreparation,richPage as decodeRichPage,searchCompileDiagnostic} from './document-search-validation.ts';
 import type {SearchSpec} from './document-search-types.ts';
 import type {DocumentTaskOptions,DocumentParseCacheCounters,DocumentSnapshotId} from './document-semantics.ts';
+import type {DocumentTransport,DocumentSourceId} from './document-semantics.ts';
+import {metadataRowsRequest,metadataRowsPage,METADATA_ROWS_BYTES,METADATA_ROWS_LIMIT} from './document-metadata-projection.ts';
 import {browserDocumentParseCache} from './browser-document-parse-cache.ts';
 import type {BrowserParseCachePolicy,BrowserParseCacheAdmission} from './browser-document-parse-cache.ts';
 import {BrowserVaultError} from './browser-vault.ts';
@@ -15,7 +17,7 @@ import type {StreamingPublication} from './browser-sync-streaming.ts';
  * consult these keys. No source envelopes, receipts or sync exports contain them. */
 const PREFIX='document-index:v1/', CATALOG=PREFIX+'catalog';
 const LIMITS=Object.freeze({header:16*1024*1024,row:16*1024*1024,text:16*1024*1024,records:100000,
-  metadata:64*1024*1024,baseRecords:50000,baseFacts:8*1024*1024,projection:256*1024*1024,cache:512*1024*1024,pins:4,stages:4,generations:3});
+  metadata:64*1024*1024,baseRecords:50000,baseFacts:8*1024*1024,projection:256*1024*1024,cache:512*1024*1024,pins:4,metadataCursors:8,stages:4,generations:3});
 const fail=(code:string,details?:unknown)=>new BrowserVaultError(code,'Disposable document index is unavailable; source files remain authoritative',details);
 const size=(text:string)=>new TextEncoder().encode(text).byteLength;
 // Rust Manifest orders valid UTF8 strings by Unicode scalar value. JavaScript's
@@ -46,14 +48,16 @@ interface LiteralPage extends Free {nextReadJson():string;accept(bytes:Uint8Arra
 interface RichPrepared extends Free {}
 interface RichDrive extends Free {nextActionJson():string;accept(bytes:Uint8Array):void;finish():RichPrepared}
 interface RichOwner extends Free {clear():void;startQuery(generation:Generation,spec:string,facts:string):string;prepareJson(query:string):string;openDrive(query:string,cursor:string):RichDrive;commitJson(prepared:RichPrepared):string;closeQuery(query:string):void}
-export interface BrowserDocumentIndexWasm extends BrowserDocumentRuntimeWasm {documentIndexVersionsJson():string;documentParseCachePolicyJson():string;documentParseCacheAdmissionJson(input:string):string;WasmDocumentIndexBuilder:new(input:string)=>Builder;WasmDocumentIndexPreparationCache:new()=>PreparationCache;WasmDocumentRichSearchOwner:new(nonce:string)=>RichOwner}
+interface MetadataScan extends Free {fork():MetadataScan;sameCheckpoint(other:MetadataScan):boolean;isNextCheckpointOf(other:MetadataScan):boolean;usesBaseline():boolean;pageJson(nextOpaqueCursor:string):string;retire():void}
+interface MetadataScanConstructor {new(destination:Generation,limit:number):MetadataScan;readonly prototype:MetadataScan;withBaseline(destination:Generation,baseline:Generation,limit:number):MetadataScan}
+export interface BrowserDocumentIndexWasm extends BrowserDocumentRuntimeWasm {documentIndexVersionsJson():string;documentParseCachePolicyJson():string;documentParseCacheAdmissionJson(input:string):string;WasmDocumentIndexBuilder:new(input:string)=>Builder;WasmDocumentIndexPreparationCache:new()=>PreparationCache;WasmDocumentRichSearchOwner:new(nonce:string)=>RichOwner;WasmDocumentMetadataRowsScan?:MetadataScanConstructor}
 export interface BrowserDocumentIndexHost {
   db:IDBDatabase;authorityId:string;clientId:string;wasm:BrowserDocumentIndexWasm;assertActive():void;
   readPublication(tx:IDBTransaction,done:(value:StreamingPublication)=>void,abort:(error:unknown)=>void):void;
 }
 export interface BrowserIndexStage {stageId:string;snapshot:BrowserIndexSnapshot;progress:{prepared:number;total:number;reused:number;ready:boolean;parseCache:DocumentParseCacheCounters};prepared:number;total:number;ready:boolean}
 export interface BrowserIndexPin {pinId:string;snapshot:BrowserIndexSnapshot;source:BrowserIndexSource;coverageComplete:boolean}
-export interface BrowserDocumentIndex {
+export interface BrowserDocumentIndex extends Pick<DocumentTransport,'metadataRowsAvailable'|'metadataRows'> {
   initialize():Promise<void>;discard(stageId:string):Promise<void>;
   status():Promise<{sourceWatermark:string;snapshot:BrowserIndexSnapshot|null;coveredWatermark:string|null;rebuildRequired:boolean;current:boolean;source:BrowserIndexSource;coveredSource:BrowserIndexSource|null;coverageComplete:boolean|null}>;
   begin():Promise<BrowserIndexStage>;pump(stageId:string):Promise<BrowserIndexStage>;publish(stageId:string):Promise<BrowserIndexSnapshot>;
@@ -115,6 +119,15 @@ export function captureBrowserTaskQuery(input:Parameters<BrowserDocumentIndex['t
   if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['pinId','typeIds','options'].includes(key))||!validId(input.pinId)||!Array.isArray(input.typeIds)||input.typeIds.length>128||input.typeIds.some(id=>!validId(id))||new Set(input.typeIds).size!==input.typeIds.length)throw fail('index_invalid_request');
   return {pinId:input.pinId,typeIds:[...input.typeIds],options:JSON.parse(taskOptions(input.options)) as DocumentTaskOptions};
 }
+/** Capture and bound the complete request before posting it to the worker. */
+export function captureBrowserMetadataRows(input:Parameters<NonNullable<DocumentTransport['metadataRows']>>[0]):Parameters<NonNullable<DocumentTransport['metadataRows']>>[0] {
+  if(!input||typeof input!=='object'||Array.isArray(input)||![Object.prototype,null].includes(Object.getPrototypeOf(input))||Object.keys(input).some(key=>!['pinId','baseline','cursor','limit'].includes(key))||Object.values(Object.getOwnPropertyDescriptors(input)).some(field=>!('value'in field)||!field.enumerable)||!validId(input.pinId))throw fail('index_invalid_request');
+  try {
+    const {pinId,...page}=input,checked=metadataRowsRequest(page),captured={pinId,...(checked.baseline?{baseline:checked.baseline}:{}),...(checked.cursor==null?{}:{cursor:checked.cursor}),...(checked.limit===undefined?{}:{limit:checked.limit})};
+    if(size(JSON.stringify(captured))>65536)throw fail('index_invalid_request');
+    return captured;
+  } catch {throw fail('index_invalid_request');}
+}
 function inputText(value:unknown,maxBytes:number):string{if(typeof value!=='string'||value.length>maxBytes||size(value)>maxBytes)throw fail('index_invalid_request');for(let i=0;i<value.length;i++){const code=value.charCodeAt(i);if(code>=0xd800&&code<=0xdbff){const next=value.charCodeAt(++i);if(!(next>=0xdc00&&next<=0xdfff))throw fail('index_invalid_request');}else if(code>=0xdc00&&code<=0xdfff)throw fail('index_invalid_request');}return value;}
 const validId=(id:unknown):id is string=>typeof id==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(id);
 function json<T>(raw:string,max=LIMITS.header):T {if(typeof raw!=='string'||size(raw)>max)throw fail('index_rebuild_required');try{return JSON.parse(raw) as T;}catch{throw fail('index_rebuild_required');}}
@@ -142,16 +155,22 @@ function richAction(raw:string,snapshot:BrowserIndexSnapshot,entries:ReadonlyMap
   return {kind:'readText',entry,bytes:Number(value.bytes)};
 }
 export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost):{index:BrowserDocumentIndex;maintenance:BrowserDocumentIndexMaintenance} {
-  const stages=new Map<string,Stage>(),pins=new Map<string,{generation:string;value:Generation;header:BrowserIndexHeader;capture:SourceCapture}>();
+  const stages=new Map<string,Stage>(),pins=new Map<string,{generation:string;value:Generation;header:BrowserIndexHeader;capture:SourceCapture;coverageComplete:boolean}>();
   type Pin=ReturnType<typeof pins.get> & {};
+  interface MetadataBinding {pinId:string;pin:Pin;baseline?:{pinId:string;pin:Pin};requested?:NonNullable<Parameters<NonNullable<DocumentTransport['metadataRows']>>[0]['baseline']>;limit:number;initial:boolean;scan:MetadataScan}
+  const metadataCursors=new Map<string,Map<string,MetadataBinding>>(),metadataBusy=new Set<string>();
+  const MetadataRows=host.wasm.WasmDocumentMetadataRowsScan;
+  if(MetadataRows!==undefined&&(typeof MetadataRows!=='function'||typeof MetadataRows.withBaseline!=='function'||(['fork','pageJson','sameCheckpoint','isNextCheckpointOf','usesBaseline','retire','free'] as const).some(method=>typeof MetadataRows.prototype?.[method]!=='function')))throw fail('index_rebuild_required');
+  function releaseMetadata(){for(const slots of metadataCursors.values())for(const binding of slots.values()){binding.scan.retire();binding.scan.free();}metadataCursors.clear();}
+  function retireMetadataPin(pinId:string){for(const [destination,slots]of metadataCursors){for(const [cursor,binding]of slots)if(destination===pinId||binding.baseline?.pinId===pinId){binding.scan.retire();binding.scan.free();slots.delete(cursor);}if(!slots.size)metadataCursors.delete(destination);}}
   interface RichSession {value:RichOwner;alive:boolean}
   interface RichQueryBinding {pinId:string;pin:Pin;session:RichSession;core:string;spec:SearchSpec;entries:ReadonlyMap<string,EntryState>;retired:boolean;busy:boolean}
   const richQueries=new Map<string,RichQueryBinding>();let richOwner:RichSession|undefined;
   const releaseRich=()=>{const session=richOwner;richOwner=undefined;for(const query of richQueries.values())query.retired=true;richQueries.clear();if(session){session.alive=false;try{session.value.clear();}finally{session.value.free();}}};
   let closed=false,preparation:PreparationCache|undefined;let maintenance:BrowserDocumentIndexMaintenance|undefined;
   const releasePreparation=()=>{const owned=preparation;preparation=undefined;owned?.free();};
-  const releaseQueryOwners=()=>{releaseRich();releasePreparation();for(const pin of pins.values())pin.value.free();pins.clear();};
-  const active=()=>{if(closed)throw fail('index_closed');try{host.assertActive();}catch(error){void maintenance?.close().catch(()=>{});try{releasePreparation();}catch{/* Preserve the owner/lease error. */}try{releaseRich();}catch{/* Preserve the owner/lease error. */}throw error;}};
+  const releaseQueryOwners=()=>{releaseMetadata();releaseRich();releasePreparation();for(const pin of pins.values())pin.value.free();pins.clear();};
+  const active=()=>{if(closed)throw fail('index_closed');try{host.assertActive();}catch(error){void maintenance?.close().catch(()=>{});try{releaseMetadata();}catch{/* Preserve the owner/lease error. */}try{releasePreparation();}catch{/* Preserve the owner/lease error. */}try{releaseRich();}catch{/* Preserve the owner/lease error. */}throw error;}};
   const monotonicMs=()=>{const value=Math.floor(performance.now());if(!Number.isSafeInteger(value)||value<0)throw fail('index_invalid_budget');return value;};
   const richSession=()=>{active();if(!richOwner)richOwner={value:new host.wasm.WasmDocumentRichSearchOwner(crypto.randomUUID()),alive:true};return richOwner;};
   function admittedRichPin(pinId:string,pin:Pin,session:RichSession){active();if(pins.get(pinId)!==pin||richOwner!==session||!session.alive)throw richFail('search_expired');}
@@ -255,6 +274,44 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
   }
   function envelope(pinId:string,value:unknown):unknown{const pin=pins.get(pinId);if(!pin)throw fail('index_snapshot_expired');return {snapshot:pin.header.nextIndex,source:pin.header.source,coverageComplete:rust(()=>pin.value.coverageComplete()),value};}
   function pinPage(pinId:string,raw:string):unknown {const page=json<Record<string,unknown>>(raw);let cursor:string|null=null;if(page.next!==null&&page.next!==undefined){if(typeof page.next!=='string')throw fail('index_rebuild_required');cursor=pinId+'/'+page.next;}page.next=null;return {result:envelope(pinId,page),cursor};}
+  const metadataExpired=()=>fail('index_snapshot_expired');
+  function metadataLocal(binding:MetadataBinding){active();if(pins.get(binding.pinId)!==binding.pin||binding.baseline&&pins.get(binding.baseline.pinId)!==binding.baseline.pin)throw metadataExpired();}
+  /** One catalog read fences both actual registrations. Matching snapshots and
+   * surviving Rust generation Arcs alone do not grant pin admission. */
+  async function metadataPins(binding:MetadataBinding){
+    metadataLocal(binding);
+    await run<void>('readonly',['control'],(tx,done,abort)=>readCatalog(tx,c=>{
+      for(const target of [{pinId:binding.pinId,pin:binding.pin},...(binding.baseline?[binding.baseline]:[])])if(!c.pins.some(p=>p.id===target.pinId&&p.clientId===host.clientId&&p.generation===target.pin.generation))throw metadataExpired();
+      done();
+    },abort));
+    metadataLocal(binding);
+  }
+  async function initialMetadata(pinId:string,requested:MetadataBinding['requested'],limit:number):Promise<MetadataBinding>{
+    active();const pin=pins.get(pinId);if(!pin)throw metadataExpired();
+    if(requested&&requested.snapshot.localStoreId!==host.authorityId)throw fail('index_invalid_target');
+    const candidate=requested?pins.get(requested.pinId):undefined;
+    if(candidate&&!equal(candidate.header.nextIndex,requested!.snapshot))throw fail('index_invalid_target');
+    const baseline=await run<MetadataBinding['baseline']>('readonly',['control'],(tx,done,abort)=>readCatalog(tx,c=>{
+      if(!c.pins.some(p=>p.id===pinId&&p.clientId===host.clientId&&p.generation===pin.generation))throw metadataExpired();
+      if(requested&&c.pins.some(p=>p.id===requested.pinId&&p.clientId!==host.clientId))throw fail('index_invalid_target');
+      done(candidate&&requested&&c.pins.some(p=>p.id===requested.pinId&&p.clientId===host.clientId&&p.generation===candidate.generation)?{pinId:requested.pinId,pin:candidate}:undefined);
+    },abort));
+    active();if(pins.get(pinId)!==pin||baseline&&pins.get(baseline.pinId)!==baseline.pin)throw metadataExpired();
+    const slots=metadataCursors.get(pinId);
+    // Only bounded request descriptors are compared. Cursor progression/retry
+    // identity remains the private O(1) Rust origin and checked ordinal.
+    for(const old of slots?.values()??[])if(old.initial&&old.limit===limit&&equal(old.requested,requested)&&(!old.baseline||old.baseline.pin===baseline?.pin))return old;
+    const scan=rust(()=>baseline?MetadataRows!.withBaseline(pin.value,baseline.pin.value,limit):new MetadataRows!(pin.value,limit));
+    try{const usesBaseline=rust(()=>scan.usesBaseline());if(usesBaseline&&!baseline)throw fail('index_rebuild_required');const binding:MetadataBinding={pinId,pin,requested,limit,initial:true,scan,...(usesBaseline?{baseline}:{} )};await metadataPins(binding);saveMetadata(crypto.randomUUID(),binding);return binding;}catch(error){scan.retire();scan.free();throw error;}
+  }
+  function saveMetadata(cursor:string,binding:MetadataBinding){
+    metadataLocal(binding);let slots=metadataCursors.get(binding.pinId);if(!slots){slots=new Map();metadataCursors.set(binding.pinId,slots);}
+    if(slots.has(cursor))throw fail('index_token_limit');
+    // This is the browser's sole retained generic cursor registry; legacy
+    // literal/backlink tokens are stateless. The initial retry counts too.
+    if(slots.size===LIMITS.metadataCursors){const oldest=slots.entries().next().value!;slots.delete(oldest[0]);oldest[1].scan.free();}
+    slots.set(cursor,binding);
+  }
   const api:BrowserDocumentIndex={
     initialize(){active();return recover();},
     async discard(stageId){active();if(!validId(stageId))throw fail('index_stage_expired');
@@ -400,10 +457,34 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
         // Canonicalize this already-owned immutable pin header once. Keep the
         // captured authority inventory and persisted header in their original order.
         h.entries.sort((a,b)=>manifestStringOrder(a.path,b.path)||manifestStringOrder(a.id,b.id));
-        pins.set(pinId,{generation:captured.id,value:generation,header:h,capture:stored.capture});return {pinId,snapshot:captured.snapshot,source:h.source,coverageComplete:rust(()=>generation.coverageComplete())};
+        const coverageComplete=rust(()=>generation.coverageComplete());pins.set(pinId,{generation:captured.id,value:generation,header:h,capture:stored.capture,coverageComplete});return {pinId,snapshot:captured.snapshot,source:h.source,coverageComplete};
       }catch(error){await api.closePin(pinId);throw error;}finally{builder?.free();}
     },
-    async closePin(pinId){active();retireRichPin(pinId);pins.get(pinId)?.value.free();pins.delete(pinId);await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{c.pins=c.pins.filter(p=>p.id!==pinId||p.clientId!==host.clientId);putCatalog(tx,c);done();},abort));},
+    async closePin(pinId){active();retireMetadataPin(pinId);retireRichPin(pinId);pins.get(pinId)?.value.free();pins.delete(pinId);await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{c.pins=c.pins.filter(p=>p.id!==pinId||p.clientId!==host.clientId);putCatalog(tx,c);done();},abort));},
+    async metadataRows(input){
+      if(!MetadataRows)throw fail('index_unavailable');
+      active();
+      const {pinId,...captured}=captureBrowserMetadataRows(input);
+      if(metadataBusy.has(pinId))throw fail('index_busy');metadataBusy.add(pinId);let advanced:MetadataScan|undefined;
+      try{
+        let binding:MetadataBinding;
+        if(captured.cursor){const existing=metadataCursors.get(pinId)?.get(captured.cursor);if(!existing)throw fail('index_snapshot_expired');binding=existing;if(captured.limit!==undefined&&captured.limit!==binding.limit)throw fail('index_invalid_request');}
+        else binding=await initialMetadata(pinId,captured.baseline,captured.limit??METADATA_ROWS_LIMIT);
+        await metadataPins(binding);
+        const slots=metadataCursors.get(pinId)!;let next:string|undefined;
+        for(const [cursor,other]of slots)if(!other.initial&&rust(()=>other.scan.isNextCheckpointOf(binding.scan))){next=cursor;break;}
+        next??=crypto.randomUUID();
+        advanced=rust(()=>binding.scan.fork());
+        const raw=rust(()=>advanced!.pageJson(next!));
+        const mode=binding.baseline?'delta' as const:'reset' as const,from=binding.baseline?documentSnapshot(binding.baseline.pin.header.nextIndex):null;
+        let response:ReturnType<typeof metadataRowsPage>;
+        try{response=metadataRowsPage(json(raw,METADATA_ROWS_BYTES),{snapshot:documentSnapshot(binding.pin.header.nextIndex),source:binding.pin.header.source as DocumentSourceId,coverageComplete:binding.pin.coverageComplete,limit:binding.limit,continuation:{mode,from}});if(response.cursor!==null&&response.cursor!==next)throw fail('index_rebuild_required');}catch{throw fail('index_rebuild_required');}
+        await metadataPins(binding);
+        let retained=false;for(const current of metadataCursors.get(pinId)?.values()??[])if(current===binding){retained=true;break;}if(!retained)throw metadataExpired();
+        if(response.cursor!==null){const existing=metadataCursors.get(pinId)?.get(next);if(existing){if(!rust(()=>existing.scan.sameCheckpoint(advanced!)))throw fail('index_rebuild_required');}else{saveMetadata(next,{...binding,initial:false,scan:advanced});advanced=undefined;}}
+        return response;
+      }finally{advanced?.free();metadataBusy.delete(pinId);}
+    },
     async search(input){const g=await assertPin(input.pinId),pin=pins.get(input.pinId)!;const page=rust(()=>g.openLiteral(inputText(input.query,4096),tokenForPin(input.pinId,input.cursor),pageLimit(input.limit)));try{
       for(;;){const entry=json<EntryState|null>(rust(()=>page.nextReadJson()));if(!entry)break;const row=await readRow(pin.generation,entry);if(!row.projection)throw fail('index_rebuild_required');rust(()=>page.accept(row.projection!));}
       const result=pinPage(input.pinId,rust(()=>page.finishJson()));await assertPin(input.pinId);return result;
@@ -577,7 +658,7 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
     if(rebuilding)return Promise.reject(fail('document_runtime_busy'));
     return Reflect.apply(operation,api,args);
   });
-  const index:BrowserDocumentIndex={...publicApi,
+  const index:BrowserDocumentIndex={...publicApi,metadataRowsAvailable:MetadataRows!==undefined,
     rebuild(){
       active();if(maintenanceClosed)throw fail('index_closed');if(rebuilding)return rebuilding;
       releaseQueryOwners();const previous=driver;

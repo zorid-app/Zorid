@@ -273,3 +273,98 @@ for(const delayedOp of ['rich_start','rich_prepare','rich_page'])test(`pending $
   await assert.rejects(late,{code:'search_expired'});
   finishClose(true);await close;
 });
+
+const metadataDestination={...snapshot,generation:'9007199254740994'};
+function metadataRowsReply({mode='reset',from=null,cursor=null,rows=[],removedEntryIds=[],coverageComplete=true}={}){
+  return {result:{snapshot:metadataDestination,source,coverageComplete,value:{snapshot:metadataDestination,next:null,scanComplete:cursor===null,coverageComplete,complete:cursor===null&&coverageComplete,mode,from,rows,removedEntryIds}},cursor};
+}
+function metadataRowsController(){
+  const calls=[];let respond=()=>metadataRowsReply(),close=()=>true;
+  const controller=createDesktopDocumentSemantics({async documentCommand(client,input){const c=input.command;calls.push({client,command:structuredClone(c)});
+    if(c.op==='open')return {pinId:c.pinId,snapshot:c.pinId==='1'?snapshot:metadataDestination,source,coverageComplete:true};
+    if(c.op==='close')return close(c);if(c.op==='rebuild')return true;return respond(c);
+  }},'client','store',{metadataRowsAvailable:true});
+  return {controller,calls,set respond(value){respond=value;},set close(value){close=value;},async open(){await controller.invoke(request('open',{pinId:'1'}));await controller.invoke(request('open',{pinId:'2'}));}};
+}
+
+test('metadata rows requests capture only the frozen optional baseline, opaque cursor and32-row budget',()=>{
+  const input=request('metadata_rows',{pinId:'2',baseline:{pinId:'1',snapshot},limit:2});
+  const captured=captureDocumentRequest(input);input.command.baseline.snapshot={...snapshot,generation:'2'};
+  assert.deepEqual(captured.command,{op:'metadata_rows',pinId:'2',baseline:{pinId:'1',snapshot},cursor:null,limit:2});
+  assert.deepEqual(captureDocumentRequest(request('metadata_rows',{pinId:'2',cursor:'opaque:cursor'})).command,{op:'metadata_rows',pinId:'2',cursor:'opaque:cursor'});
+  for(const fields of [{limit:0},{limit:33},{limit:1.5},{baseline:null},{baseline:{pinId:'0',snapshot}},{baseline:{pinId:'1',snapshot,expectedSnapshot:snapshot}},{baseline:{pinId:'1',snapshot},cursor:'c'},{expectedSnapshot:snapshot},{cursor:'x'.repeat(257)}])
+    assert.throws(()=>captureDocumentRequest(request('metadata_rows',{pinId:'2',...fields})),error=>!!error.code);
+});
+
+test('metadata rows codec bounds outer framing and structural file/folder envelopes without a second metadata parser',()=>{
+  const rows=[{kind:'file',value:{entry:{...entry,path:'plain.txt'},metadata:null,exclusion:null}},{kind:'folder',entry:{...entry,id:'folder',kind:'folder',path:'Folder'}}];
+  const input=captureDocumentRequest(request('metadata_rows',{pinId:'2',limit:2})),value=metadataRowsReply({rows});
+  assert.deepEqual(decodeDocumentReply(input,...wire('metadata_rows',value)),value);
+  const progress=metadataRowsReply({cursor:'opaque:next'});assert.deepEqual(decodeDocumentReply(input,...wire('metadata_rows',progress)),progress);
+  for(const bad of [
+    {...value,cursor:'next'},
+    {...value,result:{...value.result,value:{...value.result.value,mode:'reset',from:snapshot}}},
+    {...value,result:{...value.result,value:{...value.result.value,next:'leaked-offset'}}},
+    {...value,result:{...value.result,value:{...value.result.value,removedEntryIds:['removed']}}},
+    metadataRowsReply({rows:[{kind:'folder',entry}]}),
+    metadataRowsReply({mode:'delta',from:{...snapshot,localStoreId:'other'}}),
+  ])assert.throws(()=>decodeDocumentReply(input,...wire('metadata_rows',bad)),{code:'invalid_document_response'});
+  assert.throws(()=>decodeDocumentReply(input,{documents:true,schemaVersion:1,bytes:MAX_DOCUMENT_RESPONSE+1},new Uint8Array(1)),{code:'invalid_document_response'});
+});
+
+test('metadata capability is positive before open and a missing route fails closed',async()=>{
+  let calls=0;const legacy=createDesktopDocumentSemantics({async documentCommand(){calls++;return {pinId:'2',snapshot:metadataDestination,source,coverageComplete:true};}},'client','store');
+  assert.equal(legacy.metadataRowsAvailable,undefined);await legacy.invoke(request('open',{pinId:'2'}));
+  await assert.rejects(legacy.invoke(request('metadata_rows',{pinId:'2'})),{code:'unsupported_host_capability'});assert.equal(calls,1);
+  assert.throws(()=>createDesktopDocumentSemantics({},'client','store',{metadataRowsAvailable:true}),{code:'unsupported_host_capability'});
+  const f=metadataRowsController();assert.equal(f.controller.metadataRowsAvailable,true);assert.equal(f.calls.length,0);
+});
+
+test('metadata delta binds the actual baseline pin and fixed continuation profile',async()=>{
+  const f=metadataRowsController();await f.open();f.respond=()=>metadataRowsReply({mode:'delta',from:snapshot,cursor:'opaque:1'});
+  const initial={pinId:'2',baseline:{pinId:'1',snapshot},limit:2};await f.controller.invoke(request('metadata_rows',initial));
+  await f.controller.invoke(request('metadata_rows',{pinId:'2',cursor:'opaque:1'}));assert.equal(f.calls.at(-1).command.limit,2);
+  const n=f.calls.length;
+  await assert.rejects(f.controller.invoke(request('metadata_rows',{pinId:'2',cursor:'opaque:1',limit:3})),{code:'query_mismatch'});
+  await assert.rejects(f.controller.invoke(request('metadata_rows',{pinId:'2',baseline:{pinId:'1',snapshot:{...snapshot,generation:'7'}}})),{code:'snapshot_expired'});
+  await assert.rejects(f.controller.invoke(request('metadata_rows',{pinId:'2',baseline:{pinId:'1',snapshot:{...snapshot,localStoreId:'other'}}})),{code:'client_scope_mismatch'});
+  assert.equal(f.calls.length,n);
+  await f.controller.invoke(request('close',{pinId:'1'}));
+  await assert.rejects(f.controller.invoke(request('metadata_rows',{pinId:'2',cursor:'opaque:1'})),{code:'snapshot_expired'});
+});
+
+test('unknown baseline selects only host reset; reset continuation drops the unused baseline',async()=>{
+  const f=metadataRowsController();await f.open();f.respond=()=>metadataRowsReply({cursor:'reset:next'});
+  await f.controller.invoke(request('metadata_rows',{pinId:'2',baseline:{pinId:'1',snapshot},limit:1}));
+  await f.controller.invoke(request('close',{pinId:'1'}));await f.controller.invoke(request('metadata_rows',{pinId:'2',cursor:'reset:next'}));
+  await f.controller.invoke(request('metadata_rows',{pinId:'2',baseline:{pinId:'99',snapshot}}));
+  f.respond=()=>metadataRowsReply({mode:'delta',from:snapshot,cursor:'foreign'});
+  await assert.rejects(f.controller.invoke(request('metadata_rows',{pinId:'2',baseline:{pinId:'99',snapshot}})),{code:'invalid_document_response'});
+  await assert.rejects(f.controller.invoke(request('metadata_rows',{pinId:'2',cursor:'foreign'})),{code:'cursor_expired'});
+});
+
+test('metadata cursors are opaque, pin-local, bounded8 and unchanged by failure or exact retry',async()=>{
+  const f=metadataRowsController();await f.open();let token='c1';f.respond=()=>metadataRowsReply({cursor:token});
+  for(let n=1;n<=8;n++){token='c'+n;await f.controller.invoke(request('metadata_rows',{pinId:'2',limit:1}));}
+  token='c1';await f.controller.invoke(request('metadata_rows',{pinId:'2',cursor:'c1'}));
+  f.respond=()=>{throw {code:'cancelled'};};await assert.rejects(f.controller.invoke(request('metadata_rows',{pinId:'2',cursor:'c1'})),{code:'cancelled'});
+  f.respond=()=>metadataRowsReply({cursor:'c9'});await f.controller.invoke(request('metadata_rows',{pinId:'2',limit:1}));
+  await assert.rejects(f.controller.invoke(request('metadata_rows',{pinId:'2',cursor:'c1'})),{code:'cursor_expired'});
+  await assert.rejects(f.controller.invoke(request('metadata_rows',{pinId:'1',cursor:'c9'})),{code:'cursor_expired'});
+  f.respond=()=>metadataRowsReply({mode:'delta',from:snapshot,cursor:'bad'});
+  await assert.rejects(f.controller.invoke(request('metadata_rows',{pinId:'2',cursor:'c9'})),{code:'invalid_document_response'});
+  await assert.rejects(f.controller.invoke(request('metadata_rows',{pinId:'2',cursor:'bad'})),{code:'cursor_expired'});
+  f.respond=()=>metadataRowsReply();await f.controller.invoke(request('metadata_rows',{pinId:'2',cursor:'c9'}));
+});
+
+for(const outcome of ['success','rejection'])for(const retired of ['destination-close','baseline-close','rebuild','forget'])test(`pending metadata ${outcome} cannot survive ${retired}`,async()=>{
+  const f=metadataRowsController();await f.open();let finish,fail,finishClose;
+  f.respond=()=>new Promise((resolve,reject)=>{finish=resolve;fail=reject;});
+  const pending=f.controller.invoke(request('metadata_rows',{pinId:'2',baseline:{pinId:'1',snapshot},limit:1}));
+  let closing;
+  if(retired.endsWith('close')){f.close=()=>new Promise(resolve=>{finishClose=resolve;});closing=f.controller.invoke(request('close',{pinId:retired==='destination-close'?'2':'1'}));}
+  else if(retired==='rebuild')await f.controller.invoke(request('rebuild'));else f.controller.forget();
+  if(outcome==='success')finish(metadataRowsReply({mode:'delta',from:snapshot,cursor:'late'}));else fail({code:'cancelled'});
+  await assert.rejects(pending,{code:retired==='forget'?'client_not_admitted':'snapshot_expired'});
+  if(closing){finishClose(true);await closing;}
+});

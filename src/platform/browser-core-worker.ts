@@ -137,7 +137,9 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
         // First IO joins a later host task after this opening admission returns.
         documentRuntime.start();
       }
-      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{}),documentIndexAvailable:!!streaming()?.documentIndex,...(documentChannel?{documentMaintenance:true}:{}),...(workBlocks?.ready?{workBlocks:true}:{})};
+      const index=streaming()?.documentIndex;
+      if(index?.metadataRowsAvailable===true&&typeof index.metadataRows!=='function')throw new BrowserVaultError('index_rebuild_required','Invalid metadata page capability');
+      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{}),documentIndexAvailable:!!index,...(index?.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(documentChannel?{documentMaintenance:true}:{}),...(workBlocks?.ready?{workBlocks:true}:{})};
     } catch (error) {
       try{documentRuntime?.retire();await documentRuntime?.drain();}catch{/* Preserve the original opening failure after accepted work settles. */}
       documentChannel=undefined;documentRuntime=undefined;
@@ -190,6 +192,9 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
       case 'document-index-rich-page':return index.richPage(payload);
       case 'document-index-rich-close':return index.richClose(payload);
       case 'document-index-metadata':return index.metadata(payload);
+      case 'document-index-metadata-rows':
+        if(index.metadataRowsAvailable!==true||typeof index.metadataRows!=='function')throw new BrowserVaultError('index_unavailable','Committed metadata pages are unavailable');
+        return index.metadataRows(payload);
       case 'document-index-tasks':return index.tasks(payload);
       case 'document-index-base':return index.base(payload);
       case 'document-index-resolve':return index.resolve(payload);

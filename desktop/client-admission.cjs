@@ -71,7 +71,9 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
       binaryPending=true;
       return invoke(()=>guarded.binaryCommand(clientId,bytes),null).finally(()=>{binaryPending=false;});
     };
-    const documents=host.capabilities?.includes('documents')?createDesktopDocumentSemantics(guarded,clientId,reference.local_store_id):null;
+    const metadataRowsAvailable=host.capabilities?.includes('document_metadata_rows')===true;
+    if(metadataRowsAvailable&&(!host.capabilities?.includes('documents')||typeof guarded.documentCommand!=='function'))throw fail('unsupported_host_capability');
+    const documents=host.capabilities?.includes('documents')?createDesktopDocumentSemantics(guarded,clientId,reference.local_store_id,{metadataRowsAvailable}):null;
     const workblockCommand=input=>invoke(async()=>{
       const request=captureWorkBlockRequest(input);
       const value=await guarded.workblockCommand(clientId,request);
@@ -100,6 +102,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     const context = Object.freeze({
       scope, durableWrites: writes, assertActive: () => allowed(),
       ...(documents?{documentCommand}:{}),
+      ...(metadataRowsAvailable?{metadataRowsAvailable:true}:{}),
       ...(documentRuntime?{documentRuntime}:{}),
       ...(host.capabilities?.includes('workblocks')?{workblockCommand}:{}),
       ...(host.capabilities?.includes('binary_streams')?{binaryCommand,binaryLimits:host.binaryLimits}:{}),

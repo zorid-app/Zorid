@@ -171,3 +171,49 @@ test('both index reconstruction layers preserve complete maintenance with post-a
   await assert.rejects(context.release(()=>{throw new Error('flush rejected');}),/flush rejected/);assert.equal(retired,0);assert.equal(transport.allocateSequence(),'2');
   const observing=transport.observe();f.retire();wait.resolve();await assert.rejects(observing,{code:'owner_retired'});assert.throws(()=>transport.allocateSequence(),{code:'owner_retired'});await assert.rejects(transport.control({sequence:'3',command:{kind:'cancel',lifetime:'runtime',id:'1'}}),{code:'owner_retired'});assert.equal(controls,0);retire();assert.equal(retired,1);
 });
+
+
+function metadataFixture(wait?:Promise<void>){
+  const f=fixture(),requests:unknown[]=[];let guard:()=>void=()=>{};
+  Object.assign(f.backend,{installAdmissionGuard(next:()=>void){guard=next;},documentIndex:{metadataRowsAvailable:true,
+    async metadataRows(input:unknown){const captured=structuredClone(input);guard();requests.push(captured);if(wait)await wait;guard();return {metadata:'page'};},
+  }});
+  return Object.assign(f,{requests});
+}
+test('both admitted index layers preserve positive metadata capability before any pin opens',async()=>{
+  const f=metadataFixture(),context=f.admit(),index=context.documentIndex!;
+  assert.equal(index.metadataRowsAvailable,true);assert.equal(typeof index.metadataRows,'function');assert.equal(Object.isFrozen(index),true);assert.deepEqual(f.requests,[]);
+  const input={pinId:'destination',baseline:{pinId:'baseline',snapshot:{localStoreId:f.scope.vaultId,generationEpoch:'epoch',generation:'1',versions:{schema:2,extraction:'x',resolver:'r',query:'q'}}},limit:2};
+  const expected=structuredClone(input),pending=index.metadataRows!(input);input.baseline.snapshot.generation='9';input.baseline.snapshot.versions.query='mutated';input.limit=32;
+  assert.deepEqual(await pending,{metadata:'page'});assert.deepEqual(f.requests,[expected]);
+  f.retire();await assert.rejects(index.metadataRows!({pinId:'destination'}),{code:'owner_retired'});assert.equal(f.requests.length,1);
+});
+test('broken positive metadata capability fails before admission and does not consume the runtime',()=>{
+  for(const method of [undefined,null,'not callable']){
+    const f=fixture();let installed=0;
+    Object.assign(f.backend,{installAdmissionGuard(){installed++;},documentIndex:{metadataRowsAvailable:true,metadataRows:method}});
+    assert.throws(()=>f.admit(),{code:'invalid_document_response'});assert.equal(installed,0);assert.deepEqual(f.events,[]);
+    Object.assign(f.backend,{documentIndex:{metadataRowsAvailable:true,async metadataRows(){return null;}}});
+    assert.equal(f.admit().documentIndex!.metadataRowsAvailable,true,'failed admission must not reserve this runtime');assert.equal(installed,1);
+  }
+});
+test('unadvertised metadata methods stay legacy through both admission reconstruction layers',()=>{
+  for(const advertisement of [{},{metadataRowsAvailable:false}]){
+    const f=fixture();Object.assign(f.backend,{documentIndex:{...advertisement,async metadataRows(){assert.fail('unadvertised route must not be used');}}});
+    const index=f.admit().documentIndex!;assert.notEqual(index.metadataRowsAvailable,true);assert.equal(index.metadataRows,undefined);
+  }
+});
+test('release drains accepted metadata pages and rejects new pages before runtime ownership release',async()=>{
+  const wait=deferred(),f=metadataFixture(wait.promise),context=f.admit(),index=context.documentIndex!;
+  const pending=index.metadataRows!({pinId:'destination',cursor:'original'}),closing=context.release(async()=>{});
+  await assert.rejects(index.metadataRows!({pinId:'destination',cursor:'new'}),{code:'client_not_admitted'});
+  assert.equal(f.requests.length,1);assert.equal(f.releaseCount,0);
+  wait.resolve();assert.deepEqual(await pending,{metadata:'page'});await closing;assert.equal(f.releaseCount,1);
+  await assert.rejects(index.metadataRows!({pinId:'destination'}),{code:'client_not_admitted'});assert.equal(f.requests.length,1);
+});
+test('owner retirement during accepted metadata page preserves post-await fence and blocks later work',async()=>{
+  const wait=deferred(),f=metadataFixture(wait.promise),context=f.admit(),index=context.documentIndex!;
+  const pending=assert.rejects(index.metadataRows!({pinId:'destination',cursor:'original'}),{code:'owner_retired'});
+  f.retire();wait.resolve();await pending;
+  await assert.rejects(index.metadataRows!({pinId:'destination'}),{code:'owner_retired'});assert.equal(f.requests.length,1);assert.equal(f.releaseCount,0);
+});

@@ -13,7 +13,7 @@ const range=(globalThis as any).IDBKeyRange;
 (globalThis as any).IDBKeyRange={bound:(lower:string,upper:string)=>({lower,upper})};
 /** Transaction/opaque-WASM doubles test host storage and transport only. No JS
  * parser, resolver or query evaluator stands in for Rust corpus parity. */
-function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:number;evictions?:number;pauseCacheBindOnce?:boolean;richRead?:boolean;richCompile?:boolean;richInvalidPage?:boolean}={}){
+function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:number;evictions?:number;pauseCacheBindOnce?:boolean;richRead?:boolean;richCompile?:boolean;richInvalidPage?:boolean;metadataRows?:boolean;metadataDelta?:boolean}={}){
   const records=new Map<string,Map<string,any>>(['control','metadata','presentation','content','sync_materialization_refs'].map(n=>[n,new Map()]));
   const seed=(store:string,key:string,value:any)=>records.get(store)!.set(key,clone(value));
   seed('control','local-store-id',{key:'local-store-id',value:authority});seed('control','sequence',{key:'sequence',value:'0'});
@@ -58,7 +58,7 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
     addPersisted(id:string,row:string){reuses++;this.rows.set(id,JSON.parse(row));}
     rowJson(id:string){return JSON.stringify(this.rows.get(id));}ready(){return this.header.entries.filter(e=>e.kind==='file').length===this.rows.size;}
     finish(){const header=this.header,rows=this.rows;assert.ok(this.ready());return {
-      free(){},headerJson:()=>JSON.stringify(header),snapshotJson:()=>JSON.stringify(header.nextIndex),coverageComplete:()=>true,rowJson:(id:string)=>JSON.stringify(rows.get(id)),
+      free(){},headerJson:()=>JSON.stringify(header),snapshotJson:()=>JSON.stringify(header.nextIndex),coverageComplete:()=>{metadataStats.coverageReads++;return true;},rowJson:(id:string)=>JSON.stringify(rows.get(id)),
       metadataJson:(id:string)=>JSON.stringify({fixture:'opaque-metadata-transport',id,snapshot:header.nextIndex}),
       tasksJson:(sources:string,options:string)=>{const captured=JSON.parse(sources);for(const source of captured)assert.deepEqual(sha(new TextEncoder().encode(source.source)),rows.get(source.id).digest);taskCalls.push({sources:captured,options:JSON.parse(options),snapshot:header.nextIndex});return JSON.stringify({fixture:'opaque-tasks-transport',snapshot:header.nextIndex});},
       baseJson:(id:string,bytes:Uint8Array,facts:string,options:string,viewName?:string|null)=>{assert.deepEqual(sha(bytes),rows.get(id).digest);baseCalls.push({id,text:new TextDecoder().decode(bytes),facts:JSON.parse(facts),options:JSON.parse(options),viewName});return JSON.stringify({fixture:'opaque-base-transport',snapshot:header.nextIndex});},
@@ -102,8 +102,28 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
       const page={result:{snapshot:header.nextIndex,source:header.source,coverageComplete:true,value:{snapshot:header.nextIndex,next:null,scanComplete:true,coverageComplete:true,complete:true,dialect:'zorid-search-rust-unicode-1',spec:q.spec,explanation:null,files:[],totals:{files:{relation:'exact',value:0},occurrences:{relation:'exact',value:0}},coverage:{candidateFiles:count,evaluatedFiles:count,unavailableFiles:0,scanComplete:true,queryCoverageComplete:true},outputComplete:true,work:{documents:count,sourceBytes:0,units:1}}},cursor:null};
       if(options.richInvalidPage)(page.result.value as any).unknown=true;afterRichCommit?.();return JSON.stringify(page);}
   }
+  // Opaque checkpoint/transport double only. It does not parse source or select
+  // real reset/delta changes; the shared Rust pager has its own corpus gates.
+  const metadataStats={created:0,freed:0,retired:0,pages:0,live:0,coverageReads:0};let metadataInvalid=false,metadataThrow=false,afterMetadataPage:(()=>void)|undefined;
+  class MockMetadataScan {
+    header:any;origin={};ordinal=0;retirement={value:false};freed=false;baseline:any=null;limit:number;
+    constructor(destination:any,limit:number){this.header=JSON.parse(destination.headerJson());this.limit=limit;metadataStats.created++;metadataStats.live++;}
+    static withBaseline(destination:any,baseline:any,limit:number){const scan=new MockMetadataScan(destination,limit);if(options.metadataDelta)scan.baseline=JSON.parse(baseline.headerJson()).nextIndex;return scan;}
+    live(){assert.equal(this.freed,false);if(this.retirement.value)throw JSON.stringify({code:'index_snapshot_expired'});}
+    fork(){this.live();const next=new MockMetadataScan({headerJson:()=>JSON.stringify(this.header)},this.limit);next.origin=this.origin;next.ordinal=this.ordinal;next.retirement=this.retirement;next.baseline=this.baseline;return next;}
+    sameCheckpoint(other:MockMetadataScan){this.live();other.live();return this.origin===other.origin&&this.ordinal===other.ordinal;}
+    isNextCheckpointOf(other:MockMetadataScan){this.live();other.live();return this.origin===other.origin&&this.ordinal===other.ordinal+1;}
+    usesBaseline(){this.live();return this.baseline!==null;}
+    pageJson(cursor:string){this.live();metadataStats.pages++;if(metadataThrow){metadataThrow=false;throw JSON.stringify({code:'index_output_limit'});}const rows=this.header.entries.slice(this.ordinal*this.limit,(this.ordinal+1)*this.limit).map((entry:any)=>entry.kind==='folder'?{kind:'folder',entry}:{kind:'file',value:{entry,metadata:null,exclusion:null}}),scanComplete=(this.ordinal+1)*this.limit>=this.header.entries.length;
+      const value:any={snapshot:this.header.nextIndex,next:null,scanComplete,coverageComplete:true,complete:scanComplete,mode:this.baseline?'delta':'reset',from:this.baseline,rows,removedEntryIds:[]};if(metadataInvalid)value.unknown=true;
+      const encoded=JSON.stringify({result:{snapshot:this.header.nextIndex,source:this.header.source,coverageComplete:true,value},cursor:scanComplete?null:cursor});this.ordinal++;afterMetadataPage?.();return encoded;
+    }
+    retire(){assert.equal(this.freed,false);metadataStats.retired++;this.retirement.value=true;}
+    free(){assert.equal(this.freed,false);this.freed=true;metadataStats.freed++;metadataStats.live--;}
+  }
   const policy={formatVersion:1,maxRows:options.cacheRows??100000,maxBytes:options.cacheBytes??64*1024*1024,maxRowBytes:options.cacheRowBytes??1024*1024,maxEvictionsPerWrite:options.evictions??32};
   const wasm={documentParseCachePolicyJson:()=>JSON.stringify(policy),documentParseCacheAdmissionJson:(input:string)=>{const {usage,replacedPayloadBytes:replaced,incomingPayloadBytes:incoming,evictedRows:evicted}=JSON.parse(input),rows=usage.rows-(replaced===null?0:1)+1,bytes=usage.bytes-(replaced??0)+incoming;return JSON.stringify(incoming>policy.maxRowBytes?'skipOversized':rows<=policy.maxRows&&bytes<=policy.maxBytes?'write':evicted===policy.maxEvictionsPerWrite?'skipEvictionLimit':'evictOldest');},documentIndexVersionsJson:()=>'{"schema":1,"extraction":"fixture","resolver":"fixture","query":"fixture"}',WasmDocumentIndexBuilder:MockBuilder,WasmDocumentIndexPreparationCache:MockPreparationCache,WasmDocumentRichSearchOwner:MockRichOwner} as unknown as BrowserDocumentIndexWasm;
+  if(options.metadataRows)wasm.WasmDocumentMetadataRowsScan=MockMetadataScan;
   const backend=(clientId='client-a')=>createBrowserDocumentIndexBackend({db,authorityId:authority,clientId,wasm,assertActive(){if(fatal)throw new BrowserVaultError('storage_closed','fatal host close');if(denied)throw Object.assign(new Error('retired'),{code:'owner_retired'});},
     readPublication(tx,done,abort){let entries:any[]|undefined,presentation:any[]|undefined,sequence:string|undefined;
       const finish=()=>{if(entries&&presentation&&sequence!==undefined)done({entries,presentation,sequence});};
@@ -120,7 +140,7 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
   }
   const source=()=>clone(new Map([...records].filter(([n])=>n!=='control').map(([n,m])=>[n,m])));
   const build=async(index:ReturnType<typeof open>)=>{let stage=await index.begin();do{stage=await index.pump(stage.stageId);}while(!stage.ready);return index.publish(stage.stageId);};
-  return {records,calls,transactions,file,open,backend,wasm,build,source,seed,richCalls,richStats,afterRichCommit(action:()=>void){afterRichCommit=action;},baseCalls,taskCalls,preparationCalls,preparationStats,afterBase(action:()=>void){afterBase=action;},stats:()=>({textExtractions,reuses,cacheBinds}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},cacheUnavailable(){cacheReadUnavailable=true;},deny(){denied=true;},fatal(){fatal=true;},afterRead(action:(store:string,key:any)=>void){afterRead=action;}};
+  return {records,calls,transactions,file,open,backend,wasm,build,source,seed,metadataStats,metadataInvalid(value:boolean){metadataInvalid=value;},metadataThrow(){metadataThrow=true;},afterMetadataPage(action?:()=>void){afterMetadataPage=action;},richCalls,richStats,afterRichCommit(action:()=>void){afterRichCommit=action;},baseCalls,taskCalls,preparationCalls,preparationStats,afterBase(action:()=>void){afterBase=action;},stats:()=>({textExtractions,reuses,cacheBinds}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},cacheUnavailable(){cacheReadUnavailable=true;},deny(){denied=true;},fatal(){fatal=true;},afterRead(action:(store:string,key:any)=>void){afterRead=action;}};
 }
 
 test('strict derived publication retains source bytes and uses no aggregate control scan',async()=>{
@@ -542,4 +562,107 @@ test('maintenance typed snapshot boundary rejects invalid actual versions withou
 test('maintenance rejects a foreign captured snapshot before source IO and preserves the actual stage',async()=>{
   const f=fixture();f.file('a','exact source');const source=f.source(),script=maintenanceScript(f),{index,maintenance}=f.backend();maintenance.command({kind:'continue'});await maintenance.step(script.select({kind:'begin'}));const stage=script.completions.at(-1).stage;
   const reads=f.calls.filter(row=>row.store==='content').length;await assert.rejects(maintenance.step(script.select({kind:'pump',snapshot:{...stage.snapshot,localStoreId:'foreign'}})),{code:'index_stage_expired'});assert.equal(f.calls.filter(row=>row.store==='content').length,reads);assert.deepEqual(f.source(),source);await maintenance.step(script.select({kind:'recoverStage'}));assert.deepEqual(script.completions.at(-1).stage.snapshot,stage.snapshot);await index.close();
+});
+
+async function metadataFixture(options:{metadataDelta?:boolean}={},count=3){
+  const f=fixture({metadataRows:true,...options});for(let n=0;n<count;n++)f.file('entry-'+n,'opaque source '+n,{path:`Note ${n}.txt`});
+  const index=f.open();await f.build(index);const pin=await index.open();return {...f,index,pin};
+}
+test('metadata support is positive before first open and NotReady never becomes unsupported',async()=>{
+  const f=fixture({metadataRows:true}),index=f.open();assert.equal(index.metadataRowsAvailable,true);assert.equal(typeof index.metadataRows,'function');
+  await assert.rejects(index.open(),{code:'index_not_ready'});assert.equal(index.metadataRowsAvailable,true);await index.close();
+  const legacy=fixture().open();assert.equal(legacy.metadataRowsAvailable,false);await legacy.close();
+  for(const partial of [class {},class {static withBaseline(){}}]){const malformed=fixture({metadataRows:true});malformed.wasm.WasmDocumentMetadataRowsScan=partial as any;assert.throws(()=>malformed.open(),{code:'index_rebuild_required'});assert.equal(malformed.metadataStats.created,0);}
+  for(const method of ['fork','pageJson','sameCheckpoint','isNextCheckpointOf','usesBaseline','retire','free']){const malformed=fixture({metadataRows:true}),Full=malformed.wasm.WasmDocumentMetadataRowsScan!;class Partial extends Full {}Object.defineProperty(Partial.prototype,method,{value:undefined});malformed.wasm.WasmDocumentMetadataRowsScan=Partial;assert.throws(()=>malformed.open(),{code:'index_rebuild_required'});assert.equal(malformed.metadataStats.created,0);}
+});
+test('metadata pages read only pin registrations and reuse cached coverage across every page',async()=>{
+  const f=await metadataFixture(),before=f.stats(),coverage=f.metadataStats.coverageReads,source=f.source();f.calls.length=0;f.transactions.length=0;
+  const rows:any[]=[];let cursor:string|undefined;
+  do{const page=await f.index.metadataRows!({pinId:f.pin.pinId,limit:1,...(cursor?{cursor}:{})}) as any;rows.push(...page.result.value.rows);cursor=page.cursor??undefined;}while(cursor);
+  assert.deepEqual(rows.map(row=>row.value.entry.id),['entry-0','entry-1','entry-2']);assert.equal(f.metadataStats.coverageReads,coverage);assert.deepEqual(f.stats(),before);assert.deepEqual(f.source(),source);
+  assert.ok(f.calls.every(call=>call.store==='control'&&call.op==='get'&&['local-store-id','document-index:v1/catalog'].includes(call.key)));assert.ok(f.transactions.every(names=>names.length===1&&names[0]==='control'));
+  await f.index.close();assert.equal(f.metadataStats.live,0);
+});
+test('metadata transport retains structural folders without pretending they have file facts',async()=>{
+  const f=fixture({metadataRows:true});f.file('file','text',{path:'Folder/Note.txt'});const entry={id:'folder',path:'Folder',kind:'folder',revision:'r1',deleted:false},presentation={id:'folder',ctime_ms:1,mtime_ms:1,size_bytes:0};
+  f.seed('metadata','folder',entry);f.seed('presentation','folder',presentation);f.seed('sync_materialization_refs','folder',{id:'folder',status:'normal',entry,presentation,content:null});
+  const index=f.open();await f.build(index);const pin=await index.open(),page=await index.metadataRows!({pinId:pin.pinId}) as any;
+  assert.deepEqual(page.result.value.rows.find((row:any)=>row.kind==='folder'),{kind:'folder',entry});assert.equal(page.cursor,null);await index.close();assert.equal(f.metadataStats.live,0);
+});
+test('metadata initial and continuation retries preserve exact opaque successor and page bytes',async()=>{
+  const f=await metadataFixture(),first=await f.index.metadataRows!({pinId:f.pin.pinId,limit:1}) as any;
+  assert.deepEqual(await f.index.metadataRows!({pinId:f.pin.pinId,limit:1}),first);
+  const second=await f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}) as any;
+  assert.deepEqual(await f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor,limit:1}),second);
+  const last=await f.index.metadataRows!({pinId:f.pin.pinId,cursor:second.cursor}) as any;assert.equal(last.cursor,null);assert.equal(last.result.value.rows[0].value.entry.id,'entry-2');await f.index.close();assert.equal(f.metadataStats.live,0);
+});
+test('metadata bounds and continuation profile failures do not advance any checkpoint',async()=>{
+  const f=await metadataFixture(),first=await f.index.metadataRows!({pinId:f.pin.pinId,limit:1}) as any;
+  for(const input of [{cursor:first.cursor,limit:2},{cursor:first.cursor,baseline:{pinId:f.pin.pinId,snapshot:f.pin.snapshot}},{cursor:'unknown'},{limit:33},{limit:0},{limit:1.5},{unexpected:true}])await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,...input} as any));
+  const next=await f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}) as any;assert.equal(next.result.value.rows[0].value.entry.id,'entry-1');await f.index.close();
+});
+test('metadata encoding and strict decoder failures preserve original retry checkpoints',async()=>{
+  const f=await metadataFixture(),first=await f.index.metadataRows!({pinId:f.pin.pinId,limit:1}) as any,live=f.metadataStats.live;
+  f.metadataThrow();await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}),{code:'index_output_limit'});assert.equal(f.metadataStats.live,live);
+  f.metadataInvalid(true);await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}),{code:'index_rebuild_required'});assert.equal(f.metadataStats.live,live);f.metadataInvalid(false);
+  const next=await f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}) as any;assert.equal(next.result.value.rows[0].value.entry.id,'entry-1');await f.index.close();assert.equal(f.metadataStats.live,0);
+});
+test('metadata keeps at most eight checkpoints per destination and evicts without retiring surviving forks',async()=>{
+  const f=await metadataFixture({},12),first=await f.index.metadataRows!({pinId:f.pin.pinId,limit:1}) as any;let page=first;
+  for(let n=0;n<8;n++){page=await f.index.metadataRows!({pinId:f.pin.pinId,cursor:page.cursor}) as any;assert.ok(f.metadataStats.live<=8);}
+  await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}),{code:'index_snapshot_expired'});
+  const next=await f.index.metadataRows!({pinId:f.pin.pinId,cursor:page.cursor}) as any;assert.equal(next.result.value.rows[0].value.entry.id,[...f.records.get('metadata')!.keys()].sort()[9]);await f.index.close();assert.equal(f.metadataStats.live,0);
+});
+test('metadata uses the existing four total pin registrations and scopes cursors to their destination',async()=>{
+  const f=await metadataFixture(),pins=[f.pin,await f.index.open(),await f.index.open(),await f.index.open()];await assert.rejects(f.index.open(),{code:'index_pin_limit'});
+  const first=await f.index.metadataRows!({pinId:pins[0]!.pinId,limit:1}) as any;await assert.rejects(f.index.metadataRows!({pinId:pins[1]!.pinId,cursor:first.cursor}),{code:'index_snapshot_expired'});
+  assert.equal((f.records.get('control')!.get('document-index:v1/catalog').value.pins as any[]).length,4);await f.index.close();assert.equal(f.metadataStats.live,0);
+});
+test('metadata rejects wrong expected baseline snapshots and foreign client registrations',async()=>{
+  const f=await metadataFixture({metadataDelta:true}),baseline=await f.index.open();
+  await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,baseline:{pinId:baseline.pinId,snapshot:{...baseline.snapshot,generation:'2'} as any}}),{code:'index_invalid_target'});
+  await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,baseline:{pinId:'missing',snapshot:{...baseline.snapshot,localStoreId:'foreign'} as any}}),{code:'index_invalid_target'});
+  const foreign=f.open('client-b'),foreignPin=await foreign.open();await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,baseline:{pinId:foreignPin.pinId,snapshot:foreignPin.snapshot as any}}),{code:'index_invalid_target'});
+  await foreign.close();await f.index.close();
+});
+test('metadata unavailable initial history resets while a used baseline is fenced for its entire transfer',async()=>{
+  const f=await metadataFixture({metadataDelta:true}),baseline=await f.index.open();
+  const reset=await f.index.metadataRows!({pinId:f.pin.pinId,baseline:{pinId:'missing',snapshot:baseline.snapshot as any},limit:1}) as any;assert.equal(reset.result.value.mode,'reset');
+  const delta=await f.index.metadataRows!({pinId:f.pin.pinId,baseline:{pinId:baseline.pinId,snapshot:baseline.snapshot as any},limit:1}) as any;assert.equal(delta.result.value.mode,'delta');
+  await f.index.closePin(baseline.pinId);await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:delta.cursor}),{code:'index_snapshot_expired'});
+  const next=await f.index.metadataRows!({pinId:f.pin.pinId,cursor:reset.cursor}) as any;assert.equal(next.result.value.mode,'reset');await f.index.close();assert.equal(f.metadataStats.live,0);
+});
+test('metadata pure-selected reset drops unused baseline and survives its later explicit close',async()=>{
+  const f=await metadataFixture(),baseline=await f.index.open(),first=await f.index.metadataRows!({pinId:f.pin.pinId,baseline:{pinId:baseline.pinId,snapshot:baseline.snapshot as any},limit:1}) as any;
+  assert.equal(first.result.value.mode,'reset');assert.equal(first.result.value.from,null);await f.index.closePin(baseline.pinId);
+  assert.equal((await f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}) as any).result.value.rows[0].value.entry.id,'entry-1');await f.index.close();
+});
+test('metadata final destination catalog fence rejects an already encoded response',async()=>{
+  const f=await metadataFixture(),first=await f.index.metadataRows!({pinId:f.pin.pinId,limit:1}) as any,live=f.metadataStats.live;
+  f.afterMetadataPage(()=>{const row=clone(f.records.get('control')!.get('document-index:v1/catalog'));row.value.pins=row.value.pins.filter((p:any)=>p.id!==f.pin.pinId);f.seed('control','document-index:v1/catalog',row);});
+  await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}),{code:'index_snapshot_expired'});assert.equal(f.metadataStats.live,live);await f.index.close();assert.equal(f.metadataStats.live,0);
+});
+test('metadata final used-baseline catalog fence rejects an already encoded delta response',async()=>{
+  const f=await metadataFixture({metadataDelta:true}),baseline=await f.index.open(),first=await f.index.metadataRows!({pinId:f.pin.pinId,baseline:{pinId:baseline.pinId,snapshot:baseline.snapshot as any},limit:1}) as any,live=f.metadataStats.live;
+  f.afterMetadataPage(()=>{const row=clone(f.records.get('control')!.get('document-index:v1/catalog'));row.value.pins=row.value.pins.filter((p:any)=>p.id!==baseline.pinId);f.seed('control','document-index:v1/catalog',row);});
+  await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}),{code:'index_snapshot_expired'});assert.equal(f.metadataStats.live,live);await f.index.close();assert.equal(f.metadataStats.live,0);
+});
+test('metadata owner revocation after encoding cannot publish a late checkpoint or recreate it',async()=>{
+  const f=await metadataFixture(),first=await f.index.metadataRows!({pinId:f.pin.pinId,limit:1}) as any;f.afterMetadataPage(()=>f.deny());
+  await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}),{code:'owner_retired'});assert.equal(f.metadataStats.live,0);const created=f.metadataStats.created;
+  await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}),{code:'owner_retired'});assert.equal(f.metadataStats.created,created);await f.index.close();
+});
+test('metadata rebuild and close retire every retained checkpoint and reject late continuations',async()=>{
+  const f=await metadataFixture(),first=await f.index.metadataRows!({pinId:f.pin.pinId,limit:1}) as any;await f.index.rebuild();assert.equal(f.metadataStats.live,0);
+  await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}),{code:'index_snapshot_expired'});await f.index.close();await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}),{code:'index_closed'});
+});
+test('metadata rejects concurrent direct calls for one destination without advancing twice',async()=>{
+  const f=await metadataFixture(),pending=f.index.metadataRows!({pinId:f.pin.pinId,limit:1});
+  await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,limit:1}),{code:'index_busy'});const first=await pending as any;
+  assert.deepEqual(await f.index.metadataRows!({pinId:f.pin.pinId,limit:1}),first);await f.index.close();assert.equal(f.metadataStats.live,0);
+});
+test('metadata explicit used-baseline close during final handoff rejects late data and frees forks',async()=>{
+  const f=await metadataFixture({metadataDelta:true}),baseline=await f.index.open(),first=await f.index.metadataRows!({pinId:f.pin.pinId,baseline:{pinId:baseline.pinId,snapshot:baseline.snapshot as any},limit:1}) as any;let closing:Promise<void>|undefined;
+  f.afterMetadataPage(()=>{closing=f.index.closePin(baseline.pinId);});await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}),{code:'index_snapshot_expired'});await closing;
+  assert.equal(f.metadataStats.live,0);f.afterMetadataPage();await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}),{code:'index_snapshot_expired'});await f.index.close();
 });

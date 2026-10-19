@@ -53,7 +53,7 @@ test('worker runtime gates recovered commands until exact outcome acknowledgemen
 });
 
 
-async function runtimeFixture(action: (runtime:BrowserCoreRuntime,calls:any[],worker:any)=>Promise<void>, timeoutMs=20000) {
+async function runtimeFixture(action: (runtime:BrowserCoreRuntime,calls:any[],worker:any)=>Promise<void>, timeoutMs=20000, openFields:Record<string,unknown>={}) {
   const originals=new Map(['Worker','document','location'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
   const calls:any[]=[];let worker:any;const listeners=new Map<string,()=>void>();
   class FixtureWorker {
@@ -61,10 +61,10 @@ async function runtimeFixture(action: (runtime:BrowserCoreRuntime,calls:any[],wo
     block?:string;blocked:any;onPosted?: (message:any)=>void;
     visibility(){listeners.get('visibilitychange')?.();}
     constructor(){worker=this;}
-    completeBlocked(){const message=this.blocked;this.block=undefined;this.blocked=undefined;this.onmessage?.({data:{id:message.id,ok:true,result:[]}});}
+    completeBlocked(error?:{code:string;message:string}){const message=this.blocked;this.block=undefined;this.blocked=undefined;this.onmessage?.({data:error?{id:message.id,ok:false,error}:{id:message.id,ok:true,result:[]}});}
     postMessage(message:any){calls.push(message);this.onPosted?.(message);if(this.block===message.operation){this.blocked=message;return;}queueMicrotask(()=>{
       if(message.operation==='release-client' && ++this.releaseCount===1){this.onmessage?.({data:{id:message.id,ok:false,error:{code:'outcome_unknown',message:'lost release ACK'}}});return;}
-      this.onmessage?.({data:{id:message.id,ok:true,result:message.operation==='open'?{authorityId:'12345678-1234-4123-8123-123456789abc',recovery:[]}:undefined}});
+      this.onmessage?.({data:{id:message.id,ok:true,result:message.operation==='open'?{authorityId:'12345678-1234-4123-8123-123456789abc',recovery:[],...openFields}:undefined}});
     });}
     terminate(){this.terminated=true;}
   }
@@ -214,4 +214,76 @@ test('requested maintenance capability cannot silently fall back when worker mar
   try{Object.defineProperty(globalThis,'Worker',{configurable:true,value:FixtureWorker});Object.defineProperty(globalThis,'document',{configurable:true,value:{addEventListener(){},removeEventListener(){}}});Object.defineProperty(globalThis,'location',{configurable:true,value:{href:'https://zorid.test/',origin:'https://zorid.test'}});
     await assert.rejects(BrowserCoreRuntime.open({database:'owned',clientId:'22222222-2222-4222-8222-222222222222',wasmModuleUrl:'/core.js',allowNewVault:true,documentMaintenance:true}),{code:'document_runtime_unavailable'});assert.equal(terminated,true);
   }finally{for(const[key,value]of originals){if(value)Object.defineProperty(globalThis,key,value);else Reflect.deleteProperty(globalThis,key);}}
+});
+
+
+const metadataCapability={documentIndexAvailable:true,metadataRowsAvailable:true};
+const metadataSnapshot=()=>({localStoreId:'12345678-1234-4123-8123-123456789abc',generationEpoch:'epoch',generation:'1',versions:{schema:2,extraction:'extract-v1',resolver:'resolve-v1',query:'query-v1'}});
+test('metadata rows capability and method are available before opening a document pin',async()=>{
+  await runtimeFixture(async(runtime,calls)=>{
+    assert.equal(runtime.documentIndex!.metadataRowsAvailable,true);
+    assert.equal(typeof runtime.documentIndex!.metadataRows,'function');
+    assert.deepEqual(calls.map(call=>call.operation),['open']);
+    await runtime.documentIndex!.metadataRows!({pinId:'destination',limit:1});
+    assert.deepEqual(calls.map(call=>call.operation),['open','document-index-metadata-rows']);
+    assert.deepEqual(calls.at(-1).payload,{pinId:'destination',limit:1});
+  },20000,metadataCapability);
+});
+test('metadata rows absent or false advertisement preserves legacy capability without a method',async()=>{
+  for(const marker of [{documentIndexAvailable:true},{documentIndexAvailable:true,metadataRowsAvailable:false}]){
+    await runtimeFixture(async(runtime,calls)=>{
+      assert.notEqual(runtime.documentIndex!.metadataRowsAvailable,true);
+      assert.equal(runtime.documentIndex!.metadataRows,undefined);
+      assert.deepEqual(calls.map(call=>call.operation),['open']);
+    },20000,marker);
+  }
+});
+test('malformed or unsupported positive metadata capability fails runtime opening closed',async()=>{
+  for(const marker of [{documentIndexAvailable:true,metadataRowsAvailable:'true'},{documentIndexAvailable:true,metadataRowsAvailable:null},{metadataRowsAvailable:true},{documentIndexAvailable:false,metadataRowsAvailable:true}]){
+    await assert.rejects(runtimeFixture(async()=>assert.fail('malformed worker reply must not expose a runtime'),20000,marker),{code:'invalid_wasm_result'});
+  }
+});
+test('metadata rows captures the exact nested baseline and limit before waiting for another RPC',async()=>{
+  await runtimeFixture(async(runtime,calls,worker)=>{
+    worker.block='inventory';const entered=enteredRequest(worker,'inventory'),first=runtime.inventory();await entered;
+    const request={pinId:'destination',baseline:{pinId:'baseline',snapshot:metadataSnapshot()},limit:7};
+    const expected=structuredClone(request),pending=runtime.documentIndex!.metadataRows!(request);
+    request.pinId='replacement';request.baseline.pinId='replacement';request.baseline.snapshot.generation='9';request.baseline.snapshot.versions.query='replacement';request.limit=32;
+    assert.equal(calls.length,2);worker.completeBlocked();await first;await pending;
+    assert.equal(calls.at(-1).operation,'document-index-metadata-rows');assert.deepEqual(calls.at(-1).payload,expected);
+    await runtime.documentIndex!.metadataRows!({pinId:'destination',cursor:'opaque-continuation'});
+    assert.deepEqual(calls.at(-1).payload,{pinId:'destination',cursor:'opaque-continuation'},'omitted continuation limit stays omitted for the host profile');
+  },20000,metadataCapability);
+});
+test('metadata rows rejects malformed, oversized and continuation-baseline requests before worker dispatch',async()=>{
+  await runtimeFixture(async(runtime,calls)=>{
+    const page=runtime.documentIndex!.metadataRows!;
+    const baseline={pinId:'baseline',snapshot:metadataSnapshot()};
+    const invalid:unknown[]=[null,[],{pinId:''},{pinId:'bad pin'},{pinId:'destination',limit:0},{pinId:'destination',limit:33},{pinId:'destination',limit:1.5},
+      {pinId:'destination',cursor:'cursor',baseline},{pinId:'destination',baseline:{snapshot:metadataSnapshot()}},{pinId:'destination',baseline:{pinId:'baseline'}},
+      {pinId:'destination',baseline:{...baseline,expectedSnapshot:metadataSnapshot()}},{pinId:'destination',expectedSnapshot:metadataSnapshot()},
+      {pinId:'destination',cursor:'x'.repeat(65537)},{pinId:'destination',baseline:{pinId:'baseline',snapshot:{...metadataSnapshot(),generation:'01'}}},
+      {pinId:'destination',baseline:{pinId:'baseline',snapshot:{...metadataSnapshot(),versions:{...metadataSnapshot().versions,query:'雪'.repeat(23000)}}}}];
+    for(const request of invalid)await assert.rejects(async()=>page(request as never),{code:'index_invalid_request'});
+    assert.deepEqual(calls.map(call=>call.operation),['open'],'invalid metadata input never reaches postMessage or its structured clone');
+    await page({pinId:'destination',baseline,limit:32});assert.equal(calls.at(-1).operation,'document-index-metadata-rows');
+  },20000,metadataCapability);
+});
+test('queued metadata rows rechecks owner before worker dispatch',async()=>{
+  await runtimeFixture(async(runtime,calls,worker)=>{
+    let owner=true;runtime.installAdmissionGuard(()=>{if(!owner)throw Object.assign(new Error('retired'),{code:'owner_retired'});});
+    worker.block='inventory';const entered=enteredRequest(worker,'inventory'),first=runtime.inventory();await entered;
+    const page=assert.rejects(runtime.documentIndex!.metadataRows!({pinId:'destination'}),{code:'owner_retired'});
+    owner=false;worker.completeBlocked();await first;await page;
+    assert.deepEqual(calls.map(call=>call.operation),['open','inventory']);
+  },20000,metadataCapability);
+});
+test('accepted metadata rows fences both success and failure replies after owner retirement',async()=>{
+  for(const replyError of [undefined,{code:'index_not_ready',message:'not ready'}])await runtimeFixture(async(runtime,calls,worker)=>{
+    let owner=true;runtime.installAdmissionGuard(()=>{if(!owner)throw Object.assign(new Error('retired'),{code:'owner_retired'});});
+    worker.block='document-index-metadata-rows';const entered=enteredRequest(worker,worker.block);
+    const page=assert.rejects(runtime.documentIndex!.metadataRows!({pinId:'destination'}),{code:'owner_retired'});await entered;
+    owner=false;worker.completeBlocked(replyError);await page;
+    assert.deepEqual(calls.map(call=>call.operation),['open','document-index-metadata-rows']);
+  },20000,metadataCapability);
 });

@@ -153,3 +153,13 @@ test('authoritative runtime retirement before a lost release ACK preserves only 
   await f.manager.release(f.broker,a,event,'/vault',context.admissionId);await f.manager.release(f.broker,a,event,'/vault',context.admissionId);
   assert.equal(calls,2);assert.equal(stopped,1);f.closed.resolve();await f.manager.close();
 });
+
+test('editor admission carries positive metadata capability before open and rejects a missing document method',async()=>{
+  for(const advertised of [undefined,false,true]){
+    const admission={scope:{vaultId:'store',clientId:'client'},metadataRowsAvailable:advertised,async documentCommand(){assert.fail('No pre-open metadata call');},async retire(){}};
+    const f=fixture({admission}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';const context=await f.manager.context(f.broker,a,'/vault');
+    assert.equal(context.metadataRowsAvailable,advertised===true?true:undefined);assert.equal(context.documentSemantics,true);f.closed.resolve();await f.manager.close();
+  }
+  let retired=0;const f=fixture({admission:{scope:{vaultId:'store',clientId:'client'},metadataRowsAvailable:true,async retire(){retired++;}}}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  await assert.rejects(f.manager.context(f.broker,a,'/vault'),{code:'unsupported_host_capability'});assert.equal(retired,1);f.closed.resolve();await f.manager.close();
+});

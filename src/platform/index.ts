@@ -102,7 +102,8 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
       documentRuntime=createDesktopDocumentRuntime({scope:{localStoreId:scope.vaultId,clientId:scope.clientId},invoke:(method,args)=>call(method,...args),
         subscribe:(listener,onRetire)=>subscribe(info.path,admissionId,listener,onRetire)});
     }
-    if(binding.documentSemantics)documents=createDesktopDocumentService(request=>call('documentCommand',request),documentRuntime?.transport);
+    if(binding.metadataRowsAvailable===true&&binding.documentSemantics!==true)throw new Error('Incomplete document metadata capability');
+    if(binding.documentSemantics)documents=createDesktopDocumentService(request=>call('documentCommand',request),documentRuntime?.transport,{metadataRowsAvailable:binding.metadataRowsAvailable===true});
     if(binding.binaryLimits)binary=createDesktopBinaryStreams({scope,checkpoints:durableWrites.checkpoints,limits:binding.binaryLimits,assertActive:()=>{if(released||binaryDrained)throw new Error('Desktop binary context released');},invoke:bytes=>call<Uint8Array>('binaryCommand',bytes)});
     release = async () => { if (!released) { if(workBlocks)await workBlocks.release(); if(binary&&!binaryDrained){await scheduleBinaryTransfer(binary.streams,()=>binary!.release());binaryDrained=true;} if(documents&&!documentsDrained){await documents.release();documentsDrained=true;} await releaseContext(info.path, admissionId); documentRuntime?.retire();released = true; } };
   }

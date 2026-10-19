@@ -48,6 +48,9 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
   const provider = runtime.checkpoints;
   if (provider.scope.vaultId !== authoritative.vaultId || provider.scope.clientId !== authoritative.clientId) throw failure('client_scope_mismatch');
   const scope = Object.freeze({ vaultId: authoritative.vaultId, clientId: authoritative.clientId });
+  // A broken positive capability must not become a legacy parser fallback.
+  const metadataProvider=runtime.documentIndex;
+  if(metadataProvider?.metadataRowsAvailable===true&&typeof metadataProvider.metadataRows!=='function')throw failure('invalid_document_response');
   // Every underlying RPC rechecks the captured owner after provider awaits.
   function dispatch<T>(action: () => T): T {
     if (phase !== 'active' && phase !== 'flushing') throw failure('client_not_admitted');
@@ -62,6 +65,7 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
   const backend: BrowserCoreBackend = {
     durableScope: scope, checkpoints,
     ...(runtime.documentIndex?{documentIndex:Object.freeze({
+      ...(metadataProvider?.metadataRowsAvailable===true?{metadataRowsAvailable:true,metadataRows:(input:Parameters<NonNullable<BrowserDocumentIndexProvider['metadataRows']>>[0])=>dispatch(()=>metadataProvider.metadataRows!(input))}:{}),
       ...(runtime.documentIndex!.maintenance?{maintenance:guardMaintenance(runtime.documentIndex!.maintenance,async action=>dispatch(action),()=>dispatch(()=>undefined))}:{}),
       initialize:()=>dispatch(()=>runtime.documentIndex!.initialize()),discard:(id:string)=>dispatch(()=>runtime.documentIndex!.discard(id)),
       status:()=>dispatch(()=>runtime.documentIndex!.status()),begin:()=>dispatch(()=>runtime.documentIndex!.begin()),
@@ -144,6 +148,7 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
     openRead:input=>invoke(()=>binary.streams.openRead(input)),read:(ref,input)=>invoke(()=>binary.streams.read(ref,input)),closeRead:ref=>invoke(()=>binary.streams.closeRead(ref)),
   }):undefined;
   const documentIndex=backend.documentIndex?Object.freeze<BrowserDocumentIndexProvider>({
+    ...(backend.documentIndex.metadataRowsAvailable===true?{metadataRowsAvailable:true,metadataRows:(input:Parameters<NonNullable<BrowserDocumentIndexProvider['metadataRows']>>[0])=>invoke(()=>backend.documentIndex!.metadataRows!(input))}:{}),
     ...(backend.documentIndex.maintenance?{maintenance:guardMaintenance(backend.documentIndex.maintenance,action=>invoke(action),()=>allowed())}:{}),
     initialize:()=>invoke(()=>backend.documentIndex!.initialize()),discard:id=>invoke(()=>backend.documentIndex!.discard(id)),
     status:()=>invoke(()=>backend.documentIndex!.status()),begin:()=>invoke(()=>backend.documentIndex!.begin()),

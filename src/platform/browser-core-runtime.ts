@@ -1,6 +1,6 @@
 import {createBrowserWorkBlocks,workBlockFailure} from './browser-workblocks.ts';
 import type {WorkBlockService} from '../core/workblocks.ts';
-import {captureBrowserTaskQuery,type BrowserDocumentIndex} from '../core/browser-document-index.ts';
+import {captureBrowserTaskQuery,captureBrowserMetadataRows,type BrowserDocumentIndex} from '../core/browser-document-index.ts';
 import type { BrowserSyncFixtureCredentials, BrowserSyncSweep } from './browser-sync-worker.ts';
 import { BrowserVaultError } from '../core/browser-vault.ts';
 import type { BrowserVaultIntent, BrowserVaultRead, BrowserVaultOutcome } from '../core/browser-vault.ts';
@@ -111,7 +111,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       // this named client's pending intents, using Rust
       // receipt lookup, before this Promise exposes a ready adapter.
       const clientId = options.clientId;
-      const opened = await runtime.call<{recovery:string[];authorityId:string;binaryLimits?:BinaryStreamLimits;documentIndexAvailable?:boolean;documentMaintenance?:boolean;workBlocks?:boolean}>('open', {...options, wasmModuleUrl:moduleUrl.href});
+      const opened = await runtime.call<{recovery:string[];authorityId:string;binaryLimits?:BinaryStreamLimits;documentIndexAvailable?:boolean;metadataRowsAvailable?:boolean;documentMaintenance?:boolean;workBlocks?:boolean}>('open', {...options, wasmModuleUrl:moduleUrl.href});
       if (typeof opened.authorityId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(opened.authorityId)) throw new BrowserVaultError('storage_corrupt','Worker returned no valid local storage authority');
       runtime.authorityScope = Object.freeze({vaultId:opened.authorityId,clientId});
       const pageOptions=(input:CheckpointListOptions)=>{
@@ -132,8 +132,10 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       if(options.documentMaintenance===true&&opened.documentMaintenance!==true)throw new BrowserVaultError('document_runtime_unavailable','Required document maintenance capability is absent');
       if(opened.documentMaintenance===true&&options.documentMaintenance!==true)throw new BrowserVaultError('invalid_wasm_result','Unrequested maintenance capability');
       const maintenance=opened.documentMaintenance===true?runtime.createDocumentMaintenanceTransport():undefined;
+      if(opened.metadataRowsAvailable!==undefined&&typeof opened.metadataRowsAvailable!=='boolean'||opened.metadataRowsAvailable===true&&opened.documentIndexAvailable!==true)throw new BrowserVaultError('invalid_wasm_result','Invalid metadata page capability');
       if(opened.documentIndexAvailable)runtime.indexProvider=Object.freeze<BrowserDocumentIndexProvider>({
         ...(maintenance?{maintenance}:{}),
+        ...(opened.metadataRowsAvailable===true?{metadataRowsAvailable:true,metadataRows:async(input:Parameters<NonNullable<BrowserDocumentIndex['metadataRows']>>[0])=>{const captured=captureBrowserMetadataRows(input);try{return await runtime.call('document-index-metadata-rows',captured);}finally{runtime.assertDispatch('document-index-metadata-rows');}}}:{}),
         initialize:()=>runtime.call('document-index-initialize'),discard:id=>runtime.call('document-index-discard',id),
         status:()=>runtime.call('document-index-status'),begin:()=>runtime.call('document-index-begin'),
         pump:id=>runtime.call('document-index-pump',id),publish:id=>runtime.call('document-index-publish',id),

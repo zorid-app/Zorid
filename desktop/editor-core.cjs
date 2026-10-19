@@ -25,7 +25,7 @@ function createEditorCoreManager(environment=process.env, options={}){
   // capability remains absent while the legacy frontend planner is active.
   const documentRuntime=options.documentRuntime===true&&typeof options.onDocumentRuntimeNudge==='function';
   const contexts=new Map(), admissions=new Map(), released=new WeakMap(), services=new Set(), openings=new Map(), retirements=new Map();
-  const describe=saved=>({admissionId:saved.id,scope:saved.admission.scope,...(saved.admission.documentCommand?{documentSemantics:true}:{}),...(documentRuntime&&runtimeAvailable(saved.admission)?{documentMaintenance:true}:{}),...(saved.admission.workblockCommand?{workBlocks:true}:{}),...(saved.admission.binaryLimits?{binaryLimits:saved.admission.binaryLimits}:{})});
+  const describe=saved=>({admissionId:saved.id,scope:saved.admission.scope,...(saved.admission.documentCommand?{documentSemantics:true}:{}),...(saved.admission.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(documentRuntime&&runtimeAvailable(saved.admission)?{documentMaintenance:true}:{}),...(saved.admission.workblockCommand?{workBlocks:true}:{}),...(saved.admission.binaryLimits?{binaryLimits:saved.admission.binaryLimits}:{})});
   const executable=()=>require('./host-location.cjs').resolveDesktopHost({...options,override:config.executable});
   function checked(broker,record,expectedRoot,admissionId,allowRetired=false){
     broker.assertLive(record);
@@ -108,6 +108,7 @@ function createEditorCoreManager(environment=process.env, options={}){
         catch(error){await admission.retire();throw error;}
         const saved={id:randomUUID(),admission,service,check:(allowRetired=false)=>{check();if(saved.runtimeRetired&&!allowRetired)throw fail('client_not_admitted');}};contexts.set(record,saved);
         try{
+          if(admission.metadataRowsAvailable===true&&typeof admission.documentCommand!=='function')throw fail('unsupported_host_capability');
           if(documentRuntime){
             if(!runtimeAvailable(admission))throw fail('unsupported_host_capability');
             const publish=retired=>{

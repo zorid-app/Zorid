@@ -3,6 +3,7 @@ import type { DocumentMaintenance, DocumentRuntimeTransport, DocumentFreshnessHa
 import {searchSpec,searchCompileDiagnostic,richStart,richPreparation,richPage,richToken,DocumentSearchValidationError} from './document-search-validation.ts';
 import type {SearchCompileDiagnostic} from './document-search-validation.ts';
 import type {SearchSpec,DocumentRichSearchPage} from './document-search-types.ts';
+import {metadataRowsRequest,metadataRowsPage,DocumentMetadataValidationError,METADATA_ROWS_LIMIT} from './document-metadata-projection.ts';
 /** Shared read-only transport contract for Rust-owned document semantics.
  * IDs and decimal counters are canonical wire values validated by Rust/host
  * admission. A path is never an entry ID, revision, cursor or snapshot identity.
@@ -41,6 +42,9 @@ export interface DocumentRelationship {readonly source:DocumentEntry;readonly ta
 export interface DocumentPageStatus {readonly snapshot:DocumentSnapshotId;readonly next:null;readonly scanComplete:boolean;readonly coverageComplete:boolean;readonly complete:boolean}
 export interface DocumentLiteralPage extends DocumentPageStatus {readonly hits:readonly DocumentLiteralHit[];readonly sourceBytes:number;readonly documents:number}
 export interface DocumentRelationshipPage extends DocumentPageStatus {readonly edges:readonly DocumentRelationship[]}
+export type DocumentMetadataRowsItem={readonly kind:'file';readonly value:DocumentMetadataRow}|{readonly kind:'folder';readonly entry:DocumentEntry};
+export interface DocumentMetadataRowsPage extends DocumentPageStatus {readonly mode:'reset'|'delta';readonly from:DocumentSnapshotId|null;readonly rows:readonly DocumentMetadataRowsItem[];readonly removedEntryIds:readonly string[]}
+export interface DocumentMetadataRowsInput {readonly baseline?:{readonly pinId:DocumentPinId;readonly snapshot:DocumentSnapshotId};readonly cursor?:DocumentCursor|null;readonly limit?:number}
 /** Only this outer cursor is a continuation. The inner Rust page.next is null. */
 export interface DocumentPage<T extends DocumentPageStatus> {readonly result:DocumentQueryResult<T>;readonly cursor:DocumentCursor|null}
 export type DocumentBaseValue=
@@ -103,6 +107,7 @@ export interface DocumentPin {
   close():Promise<void>;
   richSearch?(input:{readonly spec:SearchSpec}):Promise<DocumentRichQuery>;
   metadata(id:string):Promise<DocumentQueryResult<DocumentMetadataRow>>;
+  metadataRows?(input?:DocumentMetadataRowsInput):Promise<DocumentPage<DocumentMetadataRowsPage>>;
   search(input:{readonly query:string;readonly cursor?:DocumentCursor|null;readonly limit?:number}):Promise<DocumentPage<DocumentLiteralPage>>;
   backlinks(input:{readonly targetId:string;readonly cursor?:DocumentCursor|null;readonly limit?:number}):Promise<DocumentPage<DocumentRelationshipPage>>;
   tasks?(input:{readonly typeIds:readonly string[];readonly options?:DocumentTaskOptions}):Promise<DocumentQueryResult<DocumentTasksRead>>;
@@ -114,6 +119,7 @@ export interface DocumentPin {
 export interface DocumentService {
   readonly maintenance?:DocumentMaintenance;
   readonly richSearchAvailable?:boolean;
+  readonly metadataRowsAvailable?:boolean;
   status():Promise<DocumentStatus>;initialize():Promise<void>;open():Promise<DocumentPin>;rebuild():Promise<void>;
   begin():Promise<DocumentStage>;pump(stageId:DocumentStageId):Promise<DocumentStage>;publish(stageId:DocumentStageId):Promise<DocumentSnapshotId>;discard(stageId:DocumentStageId):Promise<void>;
 }
@@ -129,6 +135,7 @@ export class DocumentSemanticsError extends Error {
 /** Already-admitted host transport. Query payloads come directly from Rust JSON.
  * This seam adds lifecycle ownership and validates retained generation headers. */
 export interface DocumentTransport {
+  readonly metadataRowsAvailable?:boolean;
   readonly maintenance?:DocumentRuntimeTransport;
   status():Promise<unknown>;initialize():Promise<void>;rebuild():Promise<void>;
   begin():Promise<unknown>;pump(stageId:string):Promise<unknown>;publish(stageId:string):Promise<unknown>;discard(stageId:string):Promise<void>;
@@ -138,6 +145,7 @@ export interface DocumentTransport {
   richPage?(input:{pinId:string;queryId:string;cursor:string}):Promise<unknown>;
   richClose?(input:{pinId:string;queryId:string}):Promise<void>;
   metadata(input:{pinId:string;id:string}):Promise<unknown>;
+  metadataRows?(input:{pinId:string;baseline?:{pinId:string;snapshot:DocumentSnapshotId};cursor?:string;limit?:number}):Promise<unknown>;
   search(input:{pinId:string;query:string;cursor?:string;limit?:number}):Promise<unknown>;
   backlinks(input:{pinId:string;targetId:string;cursor?:string;limit?:number}):Promise<unknown>;
   tasks?(input:{pinId:string;typeIds:string[];options?:DocumentTaskOptions}):Promise<unknown>;
@@ -173,13 +181,15 @@ function baseRefreshHint(value:unknown,clockMs:number):DocumentBaseRefreshHint|n
 }
 export function documentErrorCode(error:unknown):string|undefined{return error&&typeof error==='object'&&'code'in error&&typeof error.code==='string'?error.code:undefined;}
 export function createDocumentService(transport:DocumentTransport):DocumentService{
+  if(transport.metadataRowsAvailable!==undefined&&typeof transport.metadataRowsAvailable!=='boolean'||transport.metadataRowsAvailable===true&&typeof transport.metadataRows!=='function')return invalid();
+  const metadataRowsAvailable=transport.metadataRowsAvailable===true;
   const maintenance=transport.maintenance===undefined?undefined:createDocumentMaintenance(transport.maintenance);
   const richSearchAvailable=[transport.richStart,transport.richPrepare,transport.richPage,transport.richClose].every(method=>typeof method==='function');
   const call=async<T>(input:unknown,action:()=>Promise<T>):Promise<T>=>{bounded(input,DOCUMENT_REQUEST_BYTES,true);const value=await action();if(value!==undefined)bounded(value,DOCUMENT_RESPONSE_BYTES);return value;};
   const stage=(value:unknown):DocumentStage=>{const row=object(value),p=row.progress===null?null:object(row.progress);return Object.freeze({stageId:text(row.stageId) as DocumentStageId,snapshot:documentSnapshot(row.snapshot),progress:p===null?null:Object.freeze({prepared:integer(p.prepared),total:integer(p.total),reused:p.reused===null?null:integer(p.reused),ready:bool(p.ready),...(p.parseCache===undefined?{}:{parseCache:(()=>{const c=object(p.parseCache);return Object.freeze({hits:integer(c.hits),misses:integer(c.misses),unavailable:integer(c.unavailable),corrupt:integer(c.corrupt),unsupported:integer(c.unsupported)});})()})})});};
   return {
     ...(maintenance?{maintenance}:{}),
-    richSearchAvailable,
+    richSearchAvailable,metadataRowsAvailable,
     async status(){const row=object(await call({},()=>transport.status()));const source=documentSource(row.source),snapshot=row.snapshot===null?null:documentSnapshot(row.snapshot),coveredSource=row.coveredSource===null?null:documentSource(row.coveredSource);if(snapshot&&snapshot.localStoreId!==source.localStoreId||coveredSource&&coveredSource.localStoreId!==source.localStoreId)return invalid();return {source,snapshot,coveredSource,current:bool(row.current),rebuildRequired:bool(row.rebuildRequired),coverageComplete:row.coverageComplete===null?null:bool(row.coverageComplete)};},
     initialize:()=>call({},()=>transport.initialize()),rebuild:()=>maintenance?requestDocumentRebuild(maintenance):call({},()=>transport.rebuild()),
     async begin(){return stage(await call({},()=>transport.begin()));},async pump(stageId){return stage(await call({stageId},()=>transport.pump(stageId)));},
@@ -188,6 +198,7 @@ export function createDocumentService(transport:DocumentTransport):DocumentServi
       const row=object(await call({},()=>transport.open())),pinId=text(row.pinId) as DocumentPinId,snapshot=documentSnapshot(row.snapshot),source=documentSource(row.source),coverageComplete=bool(row.coverageComplete);
       if(snapshot.localStoreId!==source.localStoreId)return invalid();let closed=false,retiring=false,closing:Promise<void>|undefined;
       const queries=new Set<DocumentRichQuery>(),starts=new Set<Promise<unknown>>();
+      const metadataCursors=new Map<string,{limit:number;mode:'reset'|'delta';from:DocumentSnapshotId|null}>();
       const live=()=>{if(closed||retiring)throw new DocumentSemanticsError('snapshot_expired');};
       const report=<T>(value:unknown):DocumentQueryResult<T>=>{const result=object(value);if(!sameSnapshot(documentSnapshot(result.snapshot),snapshot)||!sameSource(documentSource(result.source),source)||bool(result.coverageComplete)!==coverageComplete)return invalid();return result as unknown as DocumentQueryResult<T>;};
       const page=<T extends DocumentPageStatus>(value:unknown):DocumentPage<T>=>{const row=object(value),result=report<T>(row.result),p=object(result.value);if(!sameSnapshot(documentSnapshot(p.snapshot),snapshot)||p.next!==null||bool(p.coverageComplete)!==coverageComplete)return invalid();bool(p.complete);bool(p.scanComplete);if(row.cursor!==null)text(row.cursor);return {result,cursor:row.cursor as DocumentCursor|null};};
@@ -196,7 +207,7 @@ export function createDocumentService(transport:DocumentTransport):DocumentServi
       const requestDecode=<T>(action:()=>T):T=>{try{return action();}catch(error){if(error instanceof DocumentSearchValidationError)throw new DocumentSemanticsError('invalid_request');throw error;}};
       const richCall=async<T>(query:string,input:unknown,action:()=>Promise<T>):Promise<T>=>{try{return await call(input,action);}catch(error){if(documentErrorCode(error)==='search_compile'){const details=object((error as {details?:unknown}).details);if(Object.keys(details).length!==1||!Object.hasOwn(details,'diagnostic'))return invalid();throw new DocumentSemanticsError('search_compile',decode(()=>searchCompileDiagnostic(details.diagnostic,query)));}throw error;}};
       return Object.freeze({pinId,snapshot,source,coverageComplete,
-        close(){if(closed)return Promise.resolve();if(closing)return closing;retiring=true;closing=(async()=>{await Promise.allSettled([...starts]);for(const query of [...queries])await query.close();await call({pinId},()=>transport.closePin(pinId));closed=true;})().finally(()=>{closing=undefined;});return closing;},
+        close(){if(closed)return Promise.resolve();if(closing)return closing;retiring=true;closing=(async()=>{await Promise.allSettled([...starts]);for(const query of [...queries])await query.close();await call({pinId},()=>transport.closePin(pinId));closed=true;metadataCursors.clear();})().finally(()=>{closing=undefined;});return closing;},
         ...(richSearchAvailable?{richSearch(input:{spec:SearchSpec}){
           live();if(!input||typeof input!=='object'||Object.keys(input).length!==1||!Object.hasOwn(input,'spec'))throw new DocumentSemanticsError('invalid_request');const spec=requestDecode(()=>searchSpec(input.spec));
           const start=(async()=>{
@@ -212,6 +223,23 @@ export function createDocumentService(transport:DocumentTransport):DocumentServi
             queries.add(query);live();return query;
           })();
           starts.add(start);void start.finally(()=>starts.delete(start)).catch(()=>{});return start;
+        }}:{}),
+        ...(metadataRowsAvailable?{metadataRows(input:DocumentMetadataRowsInput={}){
+          live();let supplied:DocumentMetadataRowsInput;
+          try{supplied=metadataRowsRequest(input);}catch(error){if(error instanceof DocumentMetadataValidationError)throw new DocumentSemanticsError('invalid_request');throw error;}
+          const prior=supplied.cursor==null?undefined:metadataCursors.get(supplied.cursor);
+          if(supplied.cursor!=null&&!prior)throw new DocumentSemanticsError('cursor_expired');
+          if(prior&&supplied.limit!==undefined&&supplied.limit!==prior.limit)throw new DocumentSemanticsError('invalid_request');
+          const pageLimit=prior?.limit??supplied.limit??METADATA_ROWS_LIMIT;
+          if(supplied.baseline&&supplied.baseline.snapshot.localStoreId!==snapshot.localStoreId)throw new DocumentSemanticsError('invalid_request');
+          const request={pinId,...(supplied.baseline?{baseline:supplied.baseline}:{}),...(supplied.cursor==null?{}:{cursor:supplied.cursor}),limit:pageLimit};
+          const pending=(async()=>{
+            let response:unknown;try{bounded(request,DOCUMENT_REQUEST_BYTES,true);response=await transport.metadataRows!(request);}catch(error){live();throw error;}live(); // The strict decoder owns the response byte bound; avoid serializing it twice.
+            let result:DocumentPage<DocumentMetadataRowsPage>;try{result=metadataRowsPage(response,{snapshot,source,coverageComplete,limit:pageLimit,...(supplied.baseline?{baseline:supplied.baseline.snapshot}:{}),...(prior?{continuation:prior}:{})});}catch(error){if(error instanceof DocumentMetadataValidationError)return invalid();throw error;}
+            live();if(result.cursor!==null){const next={limit:pageLimit,mode:result.result.value.mode,from:result.result.value.from},known=metadataCursors.get(result.cursor);if(known&&(known.limit!==next.limit||known.mode!==next.mode||(known.from===null)!==(next.from===null)||known.from!==null&&next.from!==null&&!sameSnapshot(known.from,next.from)))return invalid();if(!known){if(metadataCursors.size===8)metadataCursors.delete(metadataCursors.keys().next().value!);metadataCursors.set(result.cursor,next);}}
+            return result;
+          })();
+          starts.add(pending);void pending.finally(()=>starts.delete(pending)).catch(()=>{});return pending;
         }}:{}),
         async metadata(id:string){live();return report<DocumentMetadataRow>(await call({pinId,id},()=>transport.metadata({pinId,id})));},
         async search(input:{query:string;cursor?:DocumentCursor|null;limit?:number}){live();limit(input.limit);const request={pinId,query:input.query,...(input.cursor==null?{}:{cursor:input.cursor}),limit:input.limit};return page<DocumentLiteralPage>(await call(request,()=>transport.search(request)));},

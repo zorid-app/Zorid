@@ -94,12 +94,17 @@ function captureRichDiagnostic(diagnostic){
 function captureDocumentRequest(input){
   if(!keys(input,['schemaVersion','command'])||input.schemaVersion!==1||!object(input.command)||typeof input.command.op!=='string')throw fail('invalid_document_request');
   const command=input.command,op=command.op;
-  const fields={status:[],initialize:[],rebuild:[],begin:[],stages:[],resume:['snapshot'],pump:['snapshot'],publish:['snapshot'],discard:['snapshot'],open:['pinId'],close:['pinId'],metadata:['pinId','id'],search:['pinId','query','cursor','limit'],backlinks:['pinId','id','cursor','limit'],base:['pinId','id','viewName','options'],tasks:['pinId','typeIds','options'],rich_start:['pinId','spec'],rich_prepare:['pinId','queryId'],rich_page:['pinId','queryId','cursor'],rich_close:['pinId','queryId']}[op];
-  if(!fields||!keys(command,['op',...fields],['op',...fields.filter(key=>!['viewName','options',...(op==='rich_page'?[]:['cursor'])].includes(key))]))throw fail('invalid_document_request');
+  const fields={status:[],initialize:[],rebuild:[],begin:[],stages:[],resume:['snapshot'],pump:['snapshot'],publish:['snapshot'],discard:['snapshot'],open:['pinId'],close:['pinId'],metadata:['pinId','id'],metadata_rows:['pinId','baseline','cursor','limit'],search:['pinId','query','cursor','limit'],backlinks:['pinId','id','cursor','limit'],base:['pinId','id','viewName','options'],tasks:['pinId','typeIds','options'],rich_start:['pinId','spec'],rich_prepare:['pinId','queryId'],rich_page:['pinId','queryId','cursor'],rich_close:['pinId','queryId']}[op];
+  if(!fields||!keys(command,['op',...fields],['op',...fields.filter(key=>!['viewName','options',...(op==='metadata_rows'?['baseline','limit']:[]),...(op==='rich_page'?[]:['cursor'])].includes(key))]))throw fail('invalid_document_request');
   const captured={op};
   for(const key of fields){
     const value=command[key];
     if(key==='snapshot'){if(!snapshot(value))throw fail('invalid_document_request');captured[key]=structuredClone(value);}
+    else if(key==='baseline'){
+      if(value===undefined)continue;
+      if(!keys(value,['pinId','snapshot'])||!decimal(value.pinId)||value.pinId==='0'||!snapshot(value.snapshot))throw fail('invalid_document_request');
+      captured.baseline={pinId:value.pinId,snapshot:structuredClone(value.snapshot)};
+    }
     else if(key==='pinId'){if(!decimal(value)||value==='0')throw fail('invalid_pin_id');captured[key]=value;}
     else if(key==='typeIds'){if(!Array.isArray(value)||value.length>128||value.some(item=>!id(item))||new Set(value).size!==value.length)throw fail('invalid_document_request');captured[key]=[...value];}
     else if(key==='id'){if(!id(value))throw fail('invalid_document_request');captured[key]=value;}
@@ -108,9 +113,9 @@ function captureDocumentRequest(input){
       if(!keys(value,['query','caseSensitive','sort','context','explain'])||!scalar(value.query)||byteLength(value.query)>4096||typeof value.caseSensitive!=='boolean'||typeof value.explain!=='boolean'||!['nameAsc','nameDesc','modifiedDesc','modifiedAsc','createdDesc','createdAsc'].includes(value.sort)||!['line','section'].includes(value.context))throw fail('invalid_document_request');
       captured.spec={...value};
     }
-    else if(key==='cursor'){if(op==='rich_page'?!opaque(value):value!==undefined&&value!==null&&!id(value))throw fail('invalid_document_request');captured[key]=value??null;}
+    else if(key==='cursor'){if(op==='rich_page'?!opaque(value):value!==undefined&&value!==null&&!(op==='metadata_rows'?opaque(value):id(value)))throw fail('invalid_document_request');captured[key]=value??null;}
     else if(key==='query'){if(typeof value!=='string'||!value||byteLength(value)>4096||/[\r\n]/.test(value))throw fail('invalid_query');captured[key]=value;}
-    else if(key==='limit'){if(!integer(value,1000)||value===0)throw fail('invalid_budget');captured[key]=value;}
+    else if(key==='limit'){if(op==='metadata_rows'&&value===undefined)continue;if(!integer(value,op==='metadata_rows'?32:1000)||value===0)throw fail('invalid_budget');captured[key]=value;}
     else if(key==='viewName'){if(value!==undefined&&value!==null&&(typeof value!=='string'||byteLength(value)>1024))throw fail('invalid_document_request');captured[key]=value??null;}
     else if(key==='options'){
       if(op==='tasks'&&value===null)throw fail('invalid_document_request');
@@ -125,10 +130,22 @@ function captureDocumentRequest(input){
     }
   }
   const result={schemaVersion:1,command:captured};
+  if(op==='metadata_rows'&&captured.cursor!==null&&captured.baseline!==undefined)throw fail('invalid_document_request');
   if(byteLength(JSON.stringify(result))>MAX_DOCUMENT_REQUEST)throw fail('request_limit');
   return result;
 }
 function envelope(value){return keys(value,['snapshot','source','coverageComplete','value'])&&snapshot(value.snapshot)&&source(value.source)&&value.snapshot.localStoreId===value.source.localStoreId&&typeof value.coverageComplete==='boolean';}
+// Framing and owner identity only. The common facade deeply validates the
+// existing metadata DTO once; this boundary never parses source or installs it.
+function metadataRowsPage(value,limit){
+  const report=value?.result,inner=report?.value;
+  return keys(value,['result','cursor'])&&(value.cursor===null||opaque(value.cursor))&&envelope(report)
+    &&keys(inner,['snapshot','next','scanComplete','coverageComplete','complete','mode','from','rows','removedEntryIds'])&&same(inner.snapshot,report.snapshot)&&inner.next===null
+    &&['scanComplete','coverageComplete','complete'].every(key=>typeof inner[key]==='boolean')&&inner.coverageComplete===report.coverageComplete&&inner.complete===(inner.scanComplete&&inner.coverageComplete)&&inner.scanComplete===(value.cursor===null)
+    &&['reset','delta'].includes(inner.mode)&&(inner.mode==='reset'?inner.from===null: snapshot(inner.from)&&inner.from.localStoreId===report.snapshot.localStoreId)
+    &&Array.isArray(inner.rows)&&Array.isArray(inner.removedEntryIds)&&inner.rows.length+inner.removedEntryIds.length<=limit&&inner.removedEntryIds.every(id)
+    &&(inner.mode!=='reset'||inner.removedEntryIds.length===0)&&inner.rows.every(row=>row?.kind==='folder'?keys(row,['kind','entry'])&&entry(row.entry)&&row.entry.kind==='folder':keys(row,['kind','value'])&&row.kind==='file'&&object(row.value)&&entry(row.value.entry)&&row.value.entry.kind==='file');
+}
 function page(value,op,limit){
   const collection=op==='search'?'hits':'edges';
   const fields=['snapshot',collection,'next','scanComplete','coverageComplete','complete',...(op==='search'?['sourceBytes','documents']:[])];
@@ -193,6 +210,7 @@ function decodeDocumentReply(request,marker,bytes){
   else if(op==='stages')valid=Array.isArray(value)&&value.length<=4&&value.every(item=>keys(item,['snapshot'])&&snapshot(item.snapshot));
   else if(op==='open')valid=keys(value,['pinId','snapshot','source','coverageComplete'])&&value.pinId===command.pinId&&snapshot(value.snapshot)&&source(value.source)&&value.snapshot.localStoreId===value.source.localStoreId&&typeof value.coverageComplete==='boolean';
   else if(op==='rich_start')valid=keys(value,['queryId'])&&opaque(value.queryId);
+  else if(op==='metadata_rows')valid=metadataRowsPage(value,command.limit??32);
   else if(op==='rich_prepare')valid=keys(value,['state'],['state'])&&value.state==='preparing'||keys(value,['state','cursor'])&&value.state==='ready'&&opaque(value.cursor);
   else if(op==='rich_page'){
     const report=value?.result,inner=report?.value;
@@ -214,40 +232,77 @@ function decodeDocumentReply(request,marker,bytes){
   return value;
 }
 function validDocumentReply(command,marker,bytes){try{decodeDocumentReply(command.request,marker,bytes);return true;}catch{return false;}}
-function createDesktopDocumentSemantics(host,clientId,localStoreId){
+function createDesktopDocumentSemantics(host,clientId,localStoreId,{metadataRowsAvailable=false}={}){
   if(!id(clientId)||!id(localStoreId))throw fail('client_scope_mismatch');
+  if(metadataRowsAvailable===true&&typeof host.documentCommand!=='function')throw fail('unsupported_host_capability');
   const pins=new Map();let retired=false;
   return Object.freeze({
+    ...(metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),
     async invoke(input){
       const request=captureDocumentRequest(input),command=request.command,op=command.op;
       if(retired)throw fail('client_not_admitted');
       const selected=pins.get(command.pinId);
       if(command.pinId&&!['open','close'].includes(op)&&!pins.has(command.pinId))throw fail('snapshot_expired');
+      let metadataProfile,baseline;
+      if(op==='metadata_rows'){
+        if(metadataRowsAvailable!==true)throw fail('unsupported_host_capability');
+        if(selected.closing)throw fail('snapshot_expired');
+        if(command.cursor!==null){
+          metadataProfile=selected.metadataCursors.get(command.cursor);if(!metadataProfile)throw fail('cursor_expired');
+          if(command.limit!==undefined&&command.limit!==metadataProfile.limit)throw fail('query_mismatch');
+          command.limit=metadataProfile.limit;baseline=metadataProfile.baseline;
+        }else{
+          command.limit??=32;
+          if(command.baseline){
+            if(command.baseline.snapshot.localStoreId!==localStoreId)throw fail('client_scope_mismatch');
+            const actual=pins.get(command.baseline.pinId);
+            if(actual&&(!same(actual.snapshot,command.baseline.snapshot)||actual.closing))throw fail('snapshot_expired');
+            if(actual)baseline={pinId:command.baseline.pinId,actual,snapshot:command.baseline.snapshot};
+          }
+        }
+        if(baseline&&(pins.get(baseline.pinId)!==baseline.actual||baseline.actual.closing))throw fail('snapshot_expired');
+      }
       if(op==='close'&&selected)selected.closing=true;
       if(richOp(op)&&selected.closing)throw fail('search_expired');
       let query;
       if(richOp(op)&&op!=='rich_start'){query=selected.queries.get(command.queryId);if(!query||query.closing&&op!=='rich_close')throw fail('search_expired');if(op==='rich_page'&&!query.cursors.has(command.cursor))throw fail('search_expired');if(op==='rich_close')query.closing=true;}
       let value;
       try{value=await host.documentCommand(clientId,request);}
-      catch(error){if(error?.code==='snapshot_expired'&&command.pinId)pins.delete(command.pinId);throw error;}
+      catch(error){
+        if(op==='metadata_rows'&&(retired||pins.get(command.pinId)!==selected||selected.closing||baseline&&(pins.get(baseline.pinId)!==baseline.actual||baseline.actual.closing)))throw fail(retired?'client_not_admitted':'snapshot_expired');
+        if(error?.code==='snapshot_expired'&&command.pinId&&op!=='metadata_rows')pins.delete(command.pinId);throw error;
+      }
       if(retired)throw fail('client_not_admitted');
+      if(op==='metadata_rows'&&(pins.get(command.pinId)!==selected||selected.closing||baseline&&(pins.get(baseline.pinId)!==baseline.actual||baseline.actual.closing)))throw fail('snapshot_expired');
       if(richOp(op)&&(pins.get(command.pinId)!==selected||op!=='rich_start'&&selected.queries.get(command.queryId)!==query))throw fail('search_expired');
       if(richOp(op)&&op!=='rich_close'&&(selected.closing||query?.closing))throw fail('search_expired');
       if(op==='status'&&value.source.localStoreId!==localStoreId)throw fail('invalid_document_response');
       if(op==='open'){
         const previous=pins.get(command.pinId);
         if(value.snapshot.localStoreId!==localStoreId||value.source.localStoreId!==localStoreId||previous&&(!same(previous.snapshot,value.snapshot)||!sameSource(previous.source,value.source)||previous.coverageComplete!==value.coverageComplete))throw fail('invalid_document_response');
-        if(!previous)pins.set(command.pinId,{...structuredClone({snapshot:value.snapshot,source:value.source,coverageComplete:value.coverageComplete}),queries:new Map()});
+        if(!previous)pins.set(command.pinId,{...structuredClone({snapshot:value.snapshot,source:value.source,coverageComplete:value.coverageComplete}),queries:new Map(),metadataCursors:new Map()});
       }else if(op==='close')pins.delete(command.pinId);
       else if(op==='rebuild')pins.clear();
       else if(op==='rich_start'){if(!keys(value,['queryId'])||!opaque(value.queryId)||selected.queries.has(value.queryId)||selected.queries.size>=4)throw fail('invalid_document_response');selected.queries.set(value.queryId,{closing:false,cursors:new Set()});}
       else if(op==='rich_prepare'){if(value.state==='ready'){if(!opaque(value.cursor))throw fail('invalid_document_response');query.cursors.add(value.cursor);if(query.cursors.size>8)query.cursors.delete(query.cursors.values().next().value);}}
       else if(op==='rich_close')selected.queries.delete(command.queryId);
-      if(['metadata','base','tasks','search','backlinks','rich_page'].includes(op)){
-        const envelope=['search','backlinks','rich_page'].includes(op)?value.result:value;
+      if(['metadata','metadata_rows','base','tasks','search','backlinks','rich_page'].includes(op)){
+        const envelope=['search','backlinks','rich_page','metadata_rows'].includes(op)?value.result:value;
         const selected=pins.get(command.pinId);
         if(!selected||!same(envelope.snapshot,selected.snapshot)||!sameSource(envelope.source,selected.source)||envelope.coverageComplete!==selected.coverageComplete)throw fail('invalid_document_response');
         if(op==='rich_page'&&value.cursor!==null){query.cursors.add(value.cursor);if(query.cursors.size>8)query.cursors.delete(query.cursors.values().next().value);}
+        if(op==='metadata_rows'){
+          if(!metadataRowsPage(value,command.limit))throw fail('invalid_document_response');
+          const inner=envelope.value;
+          if(metadataProfile?(inner.mode!==metadataProfile.mode||(inner.from===null)!==(metadataProfile.from===null)||inner.from!==null&&!same(inner.from,metadataProfile.from)):
+            inner.mode==='delta'&&(!baseline||!same(inner.from,baseline.snapshot)))throw fail('invalid_document_response');
+          if(value.cursor!==null){
+            const profile=metadataProfile??{limit:command.limit,mode:inner.mode,from:inner.from===null?null:structuredClone(inner.from),baseline:inner.mode==='delta'?baseline:undefined};
+            const previous=selected.metadataCursors.get(value.cursor);
+            if(previous&&(previous.limit!==profile.limit||previous.mode!==profile.mode||previous.baseline?.actual!==profile.baseline?.actual||(previous.from===null)!==(profile.from===null)||previous.from!==null&&!same(previous.from,profile.from)))throw fail('invalid_document_response');
+            selected.metadataCursors.set(value.cursor,previous??profile);if(selected.metadataCursors.size>8)selected.metadataCursors.delete(selected.metadataCursors.keys().next().value);
+          }
+        }
       }
       return value;
     },

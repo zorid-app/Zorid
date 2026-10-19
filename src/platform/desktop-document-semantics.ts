@@ -47,7 +47,9 @@ export function createDesktopDocumentRuntime(options:{
 /** One instance per admitted desktop context. The invocation closure must retain
  * that admission and its normal release guard; it is not an unrestricted IPC. */
 export interface DesktopDocumentBinding {readonly service:DocumentService;release():Promise<void>}
-export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequest)=>Promise<unknown>,maintenance?:DocumentRuntimeTransport):DesktopDocumentBinding{
+export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequest)=>Promise<unknown>,maintenance?:DocumentRuntimeTransport,capabilities:{readonly metadataRowsAvailable?:boolean}={}):DesktopDocumentBinding{
+  const metadataRowsAvailable=capabilities.metadataRowsAvailable===true;
+  if(metadataRowsAvailable&&typeof invoke!=='function')throw new DocumentSemanticsError('invalid_document_response');
   const stages=new Map<string,DocumentSnapshotId>();let stageSequence=0n,pinSequence=0n;
   let opening:Promise<unknown>|undefined,pendingPin:string|undefined;
   const object=(value:unknown):Record<string,unknown>=>{if(!value||typeof value!=='object'||Array.isArray(value))throw new DocumentSemanticsError('invalid_document_response');return value as Record<string,unknown>;};
@@ -55,19 +57,19 @@ export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequ
   const pendingCalls=new Set<Promise<unknown>>(),pins=new Set<string>();
   const raw=(op:string,fields:Record<string,unknown>={})=>invoke({schemaVersion:1,command:{op,...fields}}).then(value=>{
     // Direct admitted callbacks (including the native mobile binding) retain
-    // their raw result contract. Only the explicit rich IPC marker is unwrapped.
-    if(!['rich_start','rich_prepare','rich_page','rich_close'].includes(op)||!value||typeof value!=='object'||!('documents'in value))return value;
+    // their raw result contract. Only explicitly marked query IPC is unwrapped.
+    if(!['rich_start','rich_prepare','rich_page','rich_close','metadata_rows'].includes(op)||!value||typeof value!=='object'||!('documents'in value))return value;
     const row=object(value),exact=(value:Record<string,unknown>,keys:string[])=>Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));
     if(row.documents!==true||row.schemaVersion!==1||typeof row.ok!=='boolean'||!exact(row,['documents','schemaVersion','ok',row.ok?'value':'error']))throw new DocumentSemanticsError('invalid_document_response');
     if(row.ok)return row.value;
     const error=object(row.error),hasDetails=Object.hasOwn(error,'details');
-    if(!exact(error,['code','commitUncertain',...(hasDetails?['details']:[])])||typeof error.code!=='string'||!/^[a-z_]{1,64}$/.test(error.code)||typeof error.commitUncertain!=='boolean'||hasDetails&&error.code!=='search_compile')throw new DocumentSemanticsError('invalid_document_response');
+    if(!exact(error,['code','commitUncertain',...(hasDetails?['details']:[])])||typeof error.code!=='string'||!/^[a-z_]{1,64}$/.test(error.code)||typeof error.commitUncertain!=='boolean'||hasDetails&&(error.code!=='search_compile'||op==='metadata_rows'))throw new DocumentSemanticsError('invalid_document_response');
     // The common facade validates compile details against this exact query.
     throw Object.assign(new Error('Document query failed.'),{code:error.code,commitUncertain:error.commitUncertain,...(hasDetails?{details:error.details}:{})});
   });
   const command=(op:string,fields:Record<string,unknown>={}):Promise<unknown>=>{
     if(phase!=='active')return Promise.reject(new DocumentSemanticsError('client_not_admitted'));
-    const call=Promise.resolve().then(()=>raw(op,fields)).then(value=>{if(op==='open')pins.add(String(fields.pinId));else if(op==='close')pins.delete(String(fields.pinId));return value;});
+    const call=Promise.resolve().then(()=>raw(op,fields)).then(value=>{if(op==='metadata_rows'&&phase!=='active')throw new DocumentSemanticsError('client_not_admitted');if(op==='open')pins.add(String(fields.pinId));else if(op==='close')pins.delete(String(fields.pinId));return value;},error=>{if(op==='metadata_rows'&&phase!=='active')throw new DocumentSemanticsError('client_not_admitted');throw error;});
     pendingCalls.add(call);void call.then(()=>pendingCalls.delete(call),()=>pendingCalls.delete(call));return call;
   };
   const runtimeActive=()=>{if(phase!=='active')throw new DocumentRuntimeError('client_not_admitted');};
@@ -84,6 +86,7 @@ export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequ
   const snapshotFor=(id:string)=>{const snapshot=stages.get(id);if(!snapshot)throw new DocumentSemanticsError('stage_expired');return snapshot;};
   const transport:DocumentTransport={
     ...(runtimeTransport?{maintenance:runtimeTransport}:{}),
+    ...(metadataRowsAvailable?{metadataRowsAvailable:true,metadataRows:(input:Parameters<NonNullable<DocumentTransport['metadataRows']>>[0])=>command('metadata_rows',input)}:{}),
     async status(){
       const value=object(await command('status'));
       // The host supplies an exact source capture even before a cache exists.

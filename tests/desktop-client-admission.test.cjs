@@ -199,3 +199,15 @@ test('binary admission drains one bounded call before release and rejects overla
   gate.resolve();assert.deepEqual([...await pending],[8,1]);await closing;assert.equal(f.active,null);
   await assert.rejects(context.binaryCommand(new Uint8Array([8,1])),{code:'client_not_admitted'});
 });
+
+test('metadata advertisement comes only from frozen positive host capability before any pin opens',async()=>{
+  for(const capabilities of [[],['documents'],['documents','document_metadata_rows']]){
+    const f=fixture();f.host.capabilities=capabilities;const context=await admitDesktopFixtureClient(f.service,f.options);
+    assert.equal(context.metadataRowsAvailable,capabilities.includes('document_metadata_rows')?true:undefined);
+    assert.equal(typeof context.documentCommand,capabilities.includes('documents')?'function':'undefined');assert.equal(f.calls.includes('documents'),false);
+    f.host.capabilities=[];assert.equal(context.metadataRowsAvailable,capabilities.includes('document_metadata_rows')?true:undefined,'admitted capability does not follow later mutable host fields');
+    await context.release(()=>{});assert.equal(f.active,null);
+  }
+  const broken=fixture();broken.host.capabilities=['document_metadata_rows'];
+  await assert.rejects(admitDesktopFixtureClient(broken.service,broken.options),{code:'unsupported_host_capability'});assert.equal(broken.active,null);
+});
