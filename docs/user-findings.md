@@ -1,5 +1,20 @@
 # User findings queue
 
+## S1 normal-family workload — whole-graph capacity boundary
+
+The retained276/10k admission observation predates the integrated Text-vector,
+bulk-loading and indexed binding improvements; it is not a current timing result.
+Source audit on `f29c302b` finds an independent capacity boundary: Store
+`blob_index::restore_members` loads the whole realm/vault graph, whose combined
+namespace-record/Text-activity limit is4096. A normal Markdown Text create adds
+one namespace record and one Text activity, so10,000 notes require at least
+20,000 members before folders/history. CPU improvements alone cannot complete
+that workload under the existing model. Owner `s1_desktop_runtime_review` records
+the exact code/evidence and assesses a scalable correction; no limit increase,
+new trusted mutation cache or full-workload acceptance is authorized by this note.
+Its separately scoped removal of duplicate graph derivation preserves current
+validation and limits. Both implementation and measured acceptance remain open.
+
 ## S1 browser metadata projection — epoch allocation audit
 
 Metadata adapters are integrated through `4887a970` after275 focused Node checks
