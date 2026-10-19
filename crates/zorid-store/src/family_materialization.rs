@@ -1766,6 +1766,9 @@ mod retained_view_tests {
                 (one_off.was_visible, one_off.visible, one_off.changed)
             );
             assert!(!shared.changed);
+            // The candidate itself must initialize the shared cell. This fails
+            // if retained Text checks regress to per-row graph derivation.
+            assert!(context.view.get().is_some());
             let current = context.view().unwrap() as *const MetadataView;
             assert_eq!(*address.get_or_insert(current), current);
         }
