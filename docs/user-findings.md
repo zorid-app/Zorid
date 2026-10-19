@@ -1,5 +1,21 @@
 # User findings queue
 
+## S1 dense search — correct output, repeated projection work remains
+
+Frozen pure/native source composition `06d0de82` passes all50 integration cases,
+including the actual4MiB/8192-match paging oracle for plain, quoted and regex
+forms. Each returns every exact byte/UTF16 range and authoritative counts under
+unchanged limits. Each also takes128 pages/source reads (512MiB total body reads)
+with debug single observations26.328/27.520/26.436s. This is a practical excess-work
+finding, not performance acceptance. Evidence:
+`/private/tmp/zorid-rich-dense-06d0de82-rplqq8qa/summary.json` and
+`/private/tmp/zorid-rich-focused-06d0de82-czo97z1k/summary.json`.
+Owner `s1_query_audit` implements a transient per-row snippet projector with one
+sparse coordinate map and indexed interval associations; preserve exact output,
+source fences, cancellation and existing work/memory limits. No retained body or
+response cache and no multicore. Independent review and matching dense comparison
+remain required. These pure debug observations are not actual app latency.
+
 ## S1 clock boundary validation — core fix integrated, platform checks pending
 
 Answer-cache testing exposed a pre-existing cold evaluator panic: chrono accepts
