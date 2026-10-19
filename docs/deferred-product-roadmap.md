@@ -147,6 +147,18 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   Independent after-result review confirms raw pairing/counts and saved data;
   save app uses200 stat calls outside the save window and only4 full snapshots
   overall (prior330); current save window has one full snapshot, zero stat calls.
+  User-requested manual app is visible: PID37059/native37123, isolated source
+  snapshot175f7b6c with accepted nativece73, root
+  `/private/tmp/zorid-manual-latest-GXjJD5`, vault `Zorid Latest` (11 disposable
+  notes), profile/data under that root. Normal desktop path, no instrumentation
+  or automation. `/private/tmp/zorid-current-manual-playground.json` points there;
+  preserve prior manualPID66932 as well. Exclude both from automated control,
+  sampling and cleanup. User owns this window; do not close it after verification.
+  Next profiling plan is independently reviewed at
+  `/private/tmp/zorid-s1-native-commit-sample-plan.md`; platform owner may prepare
+  a minimal private implementation for review only. Competing app/profiling/build
+  runtime is not granted while the user is trying the manual app. Independent
+  source preparation/review continues; this does not pause the roadmap goal.
   Evidence `/private/tmp/zorid-s1-electron-fifo-diagnostic-7caf7cd4/summary.json`.
   The app/runtime slot is released. Frontend313 required inputs/dist333 files are
   unchanged from accepted `255caa28`; raw main CJS changed deliberately and is
