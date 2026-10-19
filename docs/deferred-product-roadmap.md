@@ -11,6 +11,12 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   avoid further save-performance detours and continue the maintained roadmap.
   Skip multicore implementation; reduce unnecessary computations. This supersedes
   older multicore requirements below. Core-owned lifecycle/scheduling remains.
+  Deliver managed-data foundations and usable local desktop Types/Bases/Tasks/
+  Calendar/Google integration before sync-group design and Zorid sync services.
+  Stable existing stage IDs remain, but [roadmap.md](roadmap.md) table/section order
+  defines delivery; S3 depends on S1, desktop S8 excludes S1A/S2, sync design S1A
+  follows S8. Keep local storage sync-ready without requiring transport for local
+  feature acceptance. Later sync verifies remote feature/provider-job behavior.
 - **Stage:** S0 bounded native delivery and S0A contracts accepted; S1.0 retained
   baselines have explicit large-vault limitations. S1.1 parser/extraction contracts
   and native/browser facts-persistence code are integrated with focused checks.
@@ -25,7 +31,7 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   ordering/ranges and complete graph semantics. No raised budgets/dropped links,
   schema, authority cache, language redesign or new benchmark framework. Planned
   implementation owner `s1_query_audit`, isolated `s1-generated-bases` worktree on
-  a new branch from this checkpoint; reviewer `architecture_core_audit`. Root
+  `tingkai-c/s1-prepared-resolver` from253b1433; reviewer `architecture_core_audit`. Root
   retains sole main integration. Query handoff remains source-current (no resolver/
   relationship/snapshot changes since255caa28):
   `/private/tmp/zorid-s1-query-preparation-handoff.md`. Focused resolver tests and

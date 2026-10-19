@@ -8,7 +8,9 @@ not a reason to stall the roadmap. The earlier sub100ms expectation remains
 historical context, not a newly proven measurement or current blocking gate.
 Explicitly skip multicore and focus on reducing unnecessary computations.
 Continue S1.2 query preparation reuse, then shared search and core-owned lifecycle;
-keep Bases/Tasks/Calendar and sync stages in the maintained delivery order.
+managed-data foundations, local Types/Bases/Tasks/Calendar and Google integration
+come before sync-group design/self-hosted/hosted Zorid sync. Local acceptance must
+not require remote transport; stable sync-ready data boundaries remain.
 Native commit profiling is deferred; its private plan has no implemented sampler.
 
 ## Ordinary local saves should be below100ms — open performance target

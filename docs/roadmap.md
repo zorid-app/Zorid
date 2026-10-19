@@ -1,6 +1,6 @@
 # Product roadmap
 
-Updated 2026-10-18. This is the maintained delivery order and scope register for
+Updated 2026-10-19. This is the maintained delivery order and scope register for
 Zorid. The [architecture manual](architecture/README.md) explains system design;
 the [execution checkpoint](deferred-product-roadmap.md) records owners, branches
 and evidence; [user findings](user-findings.md) records incoming bugs/requests.
@@ -13,9 +13,10 @@ scope. S0A modular-interface gate is accepted.** S0's reviewed implementation an
 actual macOS save/close/quit/history/concurrent-CLI/interruption evidence are in the
 [execution checkpoint](deferred-product-roadmap.md#latest-integration-checkpoint--2026-10-18).
 S0A's reviewed consumer matrix and contracts include the integrated browser
-binary-helper admission correction. **S1.0 has retained baseline observations and known limits; S1.1 reusable
-parsing/cache implementation is underway.** The typed extraction foundation is
-integrated; bounded actual Chrome/CLI/Electron cache correctness checks pass.
+binary-helper admission correction. **S1.0 has retained baseline observations and
+known limits; bounded S1.1 parsing/cache correctness passes and S1.2 query
+preparation reuse is implementing.** The typed extraction foundation is integrated;
+bounded actual Chrome/CLI/Electron cache correctness checks pass.
 Existing feature/iOS work is preserved.
 
 Design for desktop, browser and mobile now; finish the usable desktop feature set
@@ -53,8 +54,8 @@ that invalidate a closed gate reopen that bounded gate, not every earlier milest
 ## Delivery order
 
 S0 is **accepted** within its explicit scope/limitations; S0A is **accepted** as a
-contract gate. S1 is **implementing** reusable parse persistence from retained baselines;
-full performance acceptance remains open. Later milestones
+contract gate. S1 is **implementing** query-preparation reuse after bounded
+parse-cache acceptance; full performance acceptance remains open. Later milestones
 remain **planned**.
 
 | ID | Milestone | Prerequisite |
@@ -62,21 +63,24 @@ remain **planned**.
 | S0 | Storage layer, saving and local recovery — immediate priority | Current source/retained-artifact inventory |
 | S0A | Modular interfaces and feature-consumer contract review | S0; storage contract design starts within S0 |
 | S1 | Rust parsing, indexing, caching and search performance | S0A |
-| S1A | E2EE sync-group lifecycle design — discussion deferred | S1 |
-| S2 | Shared E2EE sync backend and usable self-hosted native-client sync | S1A |
-| S3 | Managed-data services and feature contracts | S2 |
+| S3 | Managed-data services and feature contracts | S1 |
 | S4 | Fully usable desktop Types and Bases | S3 |
 | S5 | Fully usable desktop Tasks | S4 |
 | S6 | Fully usable desktop Calendar and planning | S5 |
 | S7 | Google Calendar two-way integration | S6; provider job/credential decisions |
-| S8 | Complete desktop experience and distribution gate | S0–S7, including S0A |
+| S8 | Complete desktop experience and distribution gate | S0, S0A, S1, S3–S7 |
+| S1A | E2EE sync-group lifecycle design — discussion deferred | S8 |
+| S2 | Shared E2EE sync backend and usable self-hosted native-client sync | S1A |
 | S9 | Hosted Zorid Cloud service | S2 and S8 |
 | S10 | Connected web client at web.zorid.app | S9; self-hosted service from S2 |
 | S11 | Native iOS app | S8; hosted/web completion is not a hard prerequisite |
 | S12 | Complete history, backup/recovery and administration | S11; basic operational backup already required in S2/S9 |
 
-The dependency order is an execution plan, not a demand to rewrite accepted core
-work. Reconcile each stage with current main and retained isolated changes first.
+Latest user steering places usable local desktop Types/Bases/Tasks/Calendar and
+Google integration before Zorid sync. Stable IDs and storage boundaries remain
+sync-ready; remote transport is not a prerequisite for local feature acceptance.
+Existing stage IDs are retained for links; table and section order define delivery
+order. Reconcile each stage with current main and retained isolated changes first.
 Google-specific authorization is distinct from logging into Zorid sync.
 S9/S10 before S11 is a proposed scheduling order, not an additional user-required
 gate: the hard iOS requirement is desktop completion at S8. Revisit that scheduling
@@ -247,68 +251,14 @@ paths. No new Base/Task/Calendar feature UI or paused native mobile implementati
 is smuggled into S1. Execute slices one at a time; source approval alone is not
 runtime or performance acceptance.
 
-## S1A — E2EE sync-group lifecycle design
-
-**Status:** planned for later discussion, not implementation now. Sync is
-end-to-end encrypted for both self-hosted and hosted services. Existing encrypted
-sync foundations do not settle the product's group lifecycle.
-
-- [ ] Define group identity, creation, membership and the relationship between
-  accounts, devices, local vaults and browser working state.
-- [ ] Design joining: authorization/invitations, key delivery/unlock, destination
-  selection, existing-data reconciliation and interrupted join/retry behavior.
-- [ ] Design leaving: distinguish local disconnect/sign-out from membership or
-  device revocation and group deletion. Decide retained data/key/cache handling,
-  pending edits, offline devices and rejoining without silently losing work.
-- [ ] Settle E2EE key ownership, recovery and access changes, including what
-  revocation can and cannot prevent for data already downloaded. Define consistent
-  Electron, web and standalone CLI behavior.
-
-**Exit:** discuss and record the lifecycle/state transitions, security boundaries,
-user flows and meaningful acceptance scenarios before S2 enrollment implementation.
-This is a separate design gate with no one-day completion commitment; unresolved
-policy remains explicit until that discussion.
-
-## S2 — E2EE sync foundation and self-hosted service
-
-**Current:** encrypted text/full-vault/managed-record foundations, relay, native
-CLI/desktop and bounded convergence evidence exist. Product enrollment and normal
-user-facing administration/onboarding are not complete.
-
-- [ ] Reconcile native storage changes with E2EE sync for files and managed records;
-  distinguish local commit, physical publication and remote acknowledgment.
-- [ ] Make server URL/account/group selection, credential/key handling and sync
-  status usable through ordinary client settings and standalone CLI.
-- [ ] Implement the accepted S1A group lifecycle, including leaving and rejoining.
-  First-device group creation and joining an existing group; trusted pairing,
-  invitations/QR/copyable code and recovery-key design. Do not expose reusable
-  secrets in invitation codes. Finalize crypto/API details before implementation.
-- [ ] Empty/existing destination bootstrap, interrupted enrollment/resume and safe
-  reconciliation; preserve differing same-path files without destructive guesses.
-- [ ] Reconnect/catch-up, offline native edits, deletion/move conflicts, revocation,
-  wrong key/server/group rejection and live update delivery into the editor.
-- [ ] Deployable self-hosted package/configuration, transport security, operator
-  provisioning and a documented minimum backup/restore procedure. Production
-  hosting is not implied by the current loopback fixture server.
-- [ ] Decide server-push wake/catch-up transport from measured product needs;
-  notifications never replace durable progress/acknowledgment.
-
-**Exit:** independently running native clients and CLI join a controlled
-self-hosted group and converge files/records after offline changes and server
-restart. Bootstrap/retry/revocation cases preserve local work. A new operator can
-follow setup and restore instructions; secrets are kept out of logs and synced
-ordinary records. No browser durable replica is required.
-
-Design: [sync/security](architecture/sync.md); detailed
-[joining discussion](deferred-product-roadmap.md#device-joining--proposed-ux-and-implementation-slot-2026-10-17).
-
 ## S3 — Managed-data services and contracts
 
 **Current:** portable record semantics, native/browser transactions and WorkBlock
 foundations exist; complete production consumer wiring remains unfinished.
 
 - [ ] Finish core-owned scoped records, transactions, subscriptions, revisions,
-  tombstones/conflicts, sync and bounded queries; explicitly label local/cache data.
+  tombstones/conflicts and bounded local queries; explicitly label local/cache data.
+  Preserve sync-compatible identities/export; remote transport acceptance is in S2.
 - [ ] Finalize first-party Types/Base/Task/Calendar contracts using existing
   foundations; retain unknown supported fields and source-preserving file edits.
 - [ ] Establish required schema/version handling, export and finite operation-log/
@@ -317,7 +267,7 @@ foundations exist; complete production consumer wiring remains unfinished.
   jobs and coordination/fencing only for actual provider requirements; do not
   freeze a speculative public plugin framework.
 
-**Exit:** a first-party record flows through actual native storage, sync, consumer
+**Exit:** a first-party record flows through actual native storage, consumer
 subscription and reopen; conflicts, scoped access and interrupted retries have
 meaningful checks. Source/component acceptance alone does not activate a UI.
 
@@ -378,7 +328,8 @@ have focused checks. No Google/provider completion inferred from a local calenda
 - [ ] Incoming Google edits and outgoing Zorid edits, Base publishing mappings and
   per-view display toggles. Displaying an event does not automatically create a note.
 - [ ] Retry-safe provider jobs, stable external IDs, conditional writes and
-  reconciliation after uncertain outcomes; multi-device ownership/fencing as needed.
+  reconciliation after uncertain outcomes; local concurrent-client ownership as needed.
+  Validate cross-device provider ownership/fencing with Zorid sync in S2.
   Do not claim exactly-once Google effects.
 - [ ] Define pending mutation/receipt/mapping retention separately from disposable
   expanded occurrence caches. Browser/provider credential execution policy is open.
@@ -386,7 +337,8 @@ have focused checks. No Google/provider completion inferred from a local calenda
 **Exit:** controlled Google calendars demonstrate create/update/delete both ways,
 recurrence/all-day/DST behavior, restart/retry and token reset without losing pending
 changes or duplicating events. Multiple views do not start competing fetch loops;
-multiple eligible devices preserve one coherent outcome. Use authorized test
+concurrent local clients preserve one coherent outcome. Cross-device cases remain
+an explicit S2 integration gate. Use authorized test
 accounts/calendars, not real calendars by assumption.
 
 ## S8 — Desktop completion gate
@@ -395,7 +347,7 @@ Close outstanding user findings that affect normal use of delivered features:
 vault create/open/recent selection, saving/recovery, file operations, tabs/splits,
 links/embeds/Canvas/media, commands/settings, keyboard/IME, undo and accessibility.
 Preserve mostly-correct editor behavior; do not turn this into endless reference
-pixel matching. Confirm S0–S7 together against the same integrated build and
+pixel matching. Confirm S0/S0A/S1 and S3–S7 together against the same integrated build and
 representative vault; fix integration seams before native mobile expansion.
 
 Distribution includes the selected supported runtime, signed/notarized desktop
@@ -410,6 +362,63 @@ build reproduces the essential workflow. Remaining limitations are explicit and
 must not contradict a required feature's usability. iOS implementation may resume
 only after this desktop gate. The proposed later hosted/web-before-iOS schedule
 is not an additional hard acceptance gate.
+
+## S1A — E2EE sync-group lifecycle design
+
+**Status:** planned for later discussion, not implementation now. Sync is
+end-to-end encrypted for both self-hosted and hosted services. Existing encrypted
+sync foundations do not settle the product's group lifecycle.
+
+- [ ] Define group identity, creation, membership and the relationship between
+  accounts, devices, local vaults and browser working state.
+- [ ] Design joining: authorization/invitations, key delivery/unlock, destination
+  selection, existing-data reconciliation and interrupted join/retry behavior.
+- [ ] Design leaving: distinguish local disconnect/sign-out from membership or
+  device revocation and group deletion. Decide retained data/key/cache handling,
+  pending edits, offline devices and rejoining without silently losing work.
+- [ ] Settle E2EE key ownership, recovery and access changes, including what
+  revocation can and cannot prevent for data already downloaded. Define consistent
+  Electron, web and standalone CLI behavior.
+
+**Exit:** discuss and record the lifecycle/state transitions, security boundaries,
+user flows and meaningful acceptance scenarios before S2 enrollment implementation.
+This is a separate design gate with no one-day completion commitment; unresolved
+policy remains explicit until that discussion.
+
+## S2 — E2EE sync foundation and self-hosted service
+
+**Current:** encrypted text/full-vault/managed-record foundations, relay, native
+CLI/desktop and bounded convergence evidence exist. Product enrollment and normal
+user-facing administration/onboarding are not complete.
+
+- [ ] Reconcile native storage changes with E2EE sync for files and managed records;
+  distinguish local commit, physical publication and remote acknowledgment.
+- [ ] Verify Types/Bases/Tasks/Calendar records and provider-job ownership across
+  devices; remote propagation must preserve the locally accepted feature behavior.
+- [ ] Make server URL/account/group selection, credential/key handling and sync
+  status usable through ordinary client settings and standalone CLI.
+- [ ] Implement the accepted S1A group lifecycle, including leaving and rejoining.
+  First-device group creation and joining an existing group; trusted pairing,
+  invitations/QR/copyable code and recovery-key design. Do not expose reusable
+  secrets in invitation codes. Finalize crypto/API details before implementation.
+- [ ] Empty/existing destination bootstrap, interrupted enrollment/resume and safe
+  reconciliation; preserve differing same-path files without destructive guesses.
+- [ ] Reconnect/catch-up, offline native edits, deletion/move conflicts, revocation,
+  wrong key/server/group rejection and live update delivery into the editor.
+- [ ] Deployable self-hosted package/configuration, transport security, operator
+  provisioning and a documented minimum backup/restore procedure. Production
+  hosting is not implied by the current loopback fixture server.
+- [ ] Decide server-push wake/catch-up transport from measured product needs;
+  notifications never replace durable progress/acknowledgment.
+
+**Exit:** independently running native clients and CLI join a controlled
+self-hosted group and converge files/records after offline changes and server
+restart. Bootstrap/retry/revocation cases preserve local work. A new operator can
+follow setup and restore instructions; secrets are kept out of logs and synced
+ordinary records. No browser durable replica is required.
+
+Design: [sync/security](architecture/sync.md); detailed
+[joining discussion](deferred-product-roadmap.md#device-joining--proposed-ux-and-implementation-slot-2026-10-17).
 
 ## S9 — Hosted Zorid Cloud
 
