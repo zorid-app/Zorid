@@ -73,6 +73,8 @@ mod document_index;
 mod document_search;
 #[path = "document_runtime.rs"]
 mod document_runtime;
+#[path = "document_drafts.rs"]
+mod document_drafts;
 
 #[path = "workblocks.rs"]
 mod workblocks;
@@ -96,6 +98,8 @@ pub struct NativeVault {
     // One committed-maintenance owner per native/cache lifetime, independent
     // of feature subscriptions. IO executes only through explicit bounded steps.
     document_runtime: Option<document_runtime::NativeDocumentRuntime>,
+    // Transient parser/facts ownership; no storage or save authority.
+    document_drafts: Option<document_drafts::NativeDocumentDrafts>,
     #[cfg(test)]
     pub(crate) fault: Option<fn(&str)>,
 }
@@ -144,6 +148,7 @@ impl NativeVault {
                 zorid_index::RichSearchOwner::new(new_op()),
             )),
             document_runtime: None,
+            document_drafts: None,
             #[cfg(test)]
             fault: None,
         })

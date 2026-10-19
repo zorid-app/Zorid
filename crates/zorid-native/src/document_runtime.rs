@@ -14,12 +14,12 @@ use zorid_index::{
 };
 
 pub(super) struct NativeDocumentRuntime {
-    core: DocumentRuntime,
+    pub(super) core: DocumentRuntime,
     stage: Option<DocumentIndexStage>,
     // One bounded acknowledgment report, never a body, pin or authority proof.
     last_step: Option<NativeDocumentRuntimeStepRecord>,
     pump_receipt: Option<std::sync::Arc<DocumentIndexProgress>>,
-    execution: DocumentRuntimeExecution,
+    pub(super) execution: DocumentRuntimeExecution,
 }
 impl NativeDocumentRuntime {
     fn reduce(&mut self, input: Input) -> NativeDocumentRuntimeResult<DocumentRuntimeReduction> {
@@ -30,15 +30,33 @@ impl NativeDocumentRuntime {
         }
         Ok(result)
     }
+    pub(super) fn expire_step_receipt(&mut self) {
+        self.last_step = None;
+    }
+    pub(super) fn record(
+        &mut self,
+        reduction: DocumentRuntimeReduction,
+        receipt: NativeDocumentRuntimeReceipt,
+    ) -> NativeDocumentRuntimeStepRecord {
+        self.execution = reduction.execution;
+        if self.core.stage().is_none() {
+            self.stage = None;
+        }
+        let record = NativeDocumentRuntimeStepRecord {
+            lifetime: receipt.issued.lifetime.clone(),
+            effect_id: receipt.issued.id,
+            reduction,
+            receipt,
+        };
+        if record.reduction.execution != DocumentRuntimeExecution::Quiesced {
+            self.last_step = Some(record.clone());
+        }
+        record
+    }
 }
 
 impl NativeVault {
-    /// Start lazily after local-cache selection. Controls cannot manufacture an
-    /// observation or complete an effect. No IO effect runs inside this call.
-    pub fn document_runtime_command(
-        &mut self,
-        command: DocumentRuntimeCommand,
-    ) -> NativeDocumentRuntimeResult<DocumentRuntimeReduction> {
+    pub(super) fn ensure_document_runtime(&mut self) -> NativeDocumentRuntimeResult<()> {
         if self.document_runtime.is_none() {
             let identity = self.identity().map_err(NativeDocumentError::from)?;
             let versions = SemanticVersions::new(
@@ -59,6 +77,21 @@ impl NativeVault {
                 pump_receipt: None,
                 execution: DocumentRuntimeExecution::WaitForWake,
             });
+        }
+        Ok(())
+    }
+    /// Start lazily after local-cache selection. Controls cannot manufacture an
+    /// observation or complete an effect. No IO effect runs inside this call.
+    pub fn document_runtime_command(
+        &mut self,
+        command: DocumentRuntimeCommand,
+    ) -> NativeDocumentRuntimeResult<DocumentRuntimeReduction> {
+        self.ensure_document_runtime()?;
+        if matches!(&command, DocumentRuntimeCommand::Retire) && self.document_drafts.is_some() {
+            return self
+                .document_work_begin_close()
+                .map(|close| close.committed)
+                .map_err(super::document_drafts::legacy_error);
         }
         let retiring = matches!(&command, DocumentRuntimeCommand::Retire);
         let input = match command {
@@ -98,6 +131,12 @@ impl NativeVault {
     /// A trusted host may start a new owner lifetime after the previous owner
     /// fully retired. No active demand/effect/ACK can be reset by this method.
     pub fn restart_document_runtime(&mut self) -> NativeDocumentRuntimeResult<()> {
+        if self.document_drafts.is_some() {
+            if !self.document_work_close_ready() {
+                return Err(DocumentRuntimeContractError::InvalidRequest.into());
+            }
+            self.document_drafts = None;
+        }
         let snapshot = self
             .document_runtime_snapshot()
             .ok_or(NativeDocumentRuntimeError::NotStarted)?;
@@ -126,6 +165,9 @@ impl NativeVault {
         lifetime: &OperationId,
         effect_id: u64,
     ) -> NativeDocumentRuntimeResult<NativeDocumentRuntimeStepRecord> {
+        if self.document_drafts.is_some() {
+            return self.document_work_legacy_step_record(lifetime, effect_id);
+        }
         let owner = self
             .document_runtime
             .as_ref()
@@ -143,38 +185,37 @@ impl NativeVault {
         if &issued.lifetime != lifetime || issued.id != effect_id {
             return Err(DocumentRuntimeContractError::UnexpectedCompletion.into());
         }
-        // No runtime borrow survives IO. Existing NativeVault methods retain
-        // root verification and Store source/head/epoch/publication fencing.
+        let receipt = self.execute_document_runtime_receipt(&issued);
+        let owner = self
+            .document_runtime
+            .as_mut()
+            .expect("effect cannot remove owner");
+        let reduction = owner.reduce(Input::Complete {
+            lifetime: issued.lifetime.clone(),
+            effect_id: issued.id,
+            result: receipt.completion.clone(),
+        })?;
+        Ok(owner.record(reduction, receipt))
+    }
+    /// Actual IO result only: composite completion belongs to the core arbiter.
+    /// Existing root/Store fences and typed error mapping remain unchanged.
+    pub(super) fn execute_document_runtime_receipt(
+        &mut self,
+        issued: &IssuedEffect,
+    ) -> NativeDocumentRuntimeReceipt {
         self.document_runtime.as_mut().expect("owner").pump_receipt = None;
         let result = self
-            .execute_document_runtime_effect(&issued)
+            .execute_document_runtime_effect(issued)
             .unwrap_or_else(|error| EffectResult::Failed(effect_failure(&error)));
         let owner = self
             .document_runtime
             .as_mut()
             .expect("effect cannot remove owner");
-        let receipt = NativeDocumentRuntimeReceipt {
+        NativeDocumentRuntimeReceipt {
             issued: issued.clone(),
-            completion: result.clone(),
+            completion: result,
             pump: owner.pump_receipt.take(),
-        };
-        let reduction = owner.reduce(Input::Complete {
-            lifetime: issued.lifetime.clone(),
-            effect_id: issued.id,
-            result,
-        })?;
-        let record = NativeDocumentRuntimeStepRecord {
-            lifetime: issued.lifetime,
-            effect_id: issued.id,
-            reduction,
-            receipt,
-        };
-        // Retirement expires earlier ACK ownership. The caller may inspect its
-        // actual final receipt, but this owner retains no quiesced report.
-        if record.reduction.execution != DocumentRuntimeExecution::Quiesced {
-            owner.last_step = Some(record.clone());
         }
-        Ok(record)
     }
     fn execute_document_runtime_effect(
         &mut self,
@@ -301,6 +342,13 @@ impl NativeVault {
     /// Retire the old pure token (not yet executed) without touching its durable
     /// stage/source. A later owner gets a fresh lifetime and cannot complete it.
     pub(super) fn retire_document_runtime_for_cache_change(&mut self) {
+        if self.document_drafts.take().is_some() {
+            // &mut NativeVault excludes a running synchronous parser or IO.
+            // Drop actual transient payloads and expire the composite ticket;
+            // do not synthesize completion for an authoritative replacement.
+            self.document_runtime = None;
+            return;
+        }
         if let Some(mut owner) = self.document_runtime.take() {
             let _ = owner.reduce(Input::Retire);
             if let Some(issued) = owner.core.in_flight().cloned() {

@@ -2100,6 +2100,7 @@ dependencies = [
  "zorid-client-sync",
  "zorid-core",
  "zorid-crypto",
+ "zorid-document",
  "zorid-index",
  "zorid-records",
  "zorid-recovery",

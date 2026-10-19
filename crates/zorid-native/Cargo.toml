@@ -9,6 +9,7 @@ description = "Conservative native filesystem projection for Zorid's vault autho
 [dependencies]
 zorid-recovery = { path = "../zorid-recovery" }
 zorid-index = { path = "../zorid-index" }
+zorid-document = { path = "../zorid-document" }
 zorid-bases = { path = "../zorid-bases" }
 zorid-records = { path = "../zorid-records" }
 zorid-core = { path = "../zorid-core" }
