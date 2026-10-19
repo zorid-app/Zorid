@@ -9,7 +9,7 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
-Current integration `8a6d20d0` (2026-10-19):
+Current integration `a43e7055` (2026-10-19):
 
 User authorized obsolete-build cleanup and resumed execution on2026-10-19.
 Cleanup removed719 exact generated files,628,330,496 allocated bytes combined;
@@ -19,37 +19,47 @@ Evidence: `/private/tmp/zorid-repo-older-builds-cleanup/terminal.json` and
 `/private/tmp/zorid-obsolete-generated-files-delete-20261019/terminal.json`.
 
 Canonical buffer64032dc6 passes62 focused Node checks and full TypeScript;
-its exact six-file boundary is integrated through2759322c. Editor hooks remain
-isolated with owner `s1_rich_search_controller`: NoteBuffer/Workspace and a narrow
-EditorHandle metadata refresh seam; independent review `baseline_resources_impl`.
-No normal runtime activation or app verification is implied.
+its exact six-file boundary is integrated through2759322c. Editor hook successor
+8fb4670e passes113 focused Node checks and full TypeScript; its exact seven files
+are integrated througha43e7055. The original b5 five-test failure remains recorded:
+four fixture counters measured the persistent transport subscription instead of
+buffer consumer subscriptions; the ABA fixture expected draft facts after returning
+to saved text. Independently reviewed test-only corrections retain real consumer
+cleanup and dirty ABA assertions; all19 new hook checks actually reran green.
+Evidence: `/private/tmp/zorid-s1-f-buffer-hooks-8fb4670e/terminal-result.json`.
+No normal runtime activation or actual app verification is implied.
 
-Rust166 now has145 planned checks passed, plus12 incidental search-preview
-passes kept separate. The canonical successor is60e868ac: test-only SQL count
-type correction7808beb3 and independently reviewed strict empty-command decoder
-fix36a01be3 (integrated as60e868ac) preserve original failure evidence. All31 host
-checks pass after the decoder correction. Remaining21 hosted-WASM checks are
-source-reviewed and ready, but fresh disk is below the1.5GB package-start floor.
-Evidence: `/private/tmp/zorid-s1-canonical-f-preview-aea13f96/continuation52-run/summary.json`.
-Six completed test executables were retired after exact identity/handle checks;
-source, warm dependencies and evidence remain. Optional installed Rust HTML docs
-were also retired, preserving compiler/WASM tools/licenses; observed reclaim was
-only15.3MB, not their812.5MB summed allocation. Do not assume summed file blocks
-are net free space. A pending-WASM-only graph inventory and unused Electron-copy
-inventory are underway; do not delete current dependencies or manual apps.
+All166 planned Rust checks pass on60e868ac, plus12 incidental search-preview
+passes reported separately. The exact29-file Rust/Cargo composition is integrated
+through6d59c8d6; other381 source inputs matched. Source410, natural exits and
+process cleanup are verified. The original filter-count mismatch, SQL test-only
+i64 correction and real strict empty-command decoder failure/fix remain recorded.
+Evidence: `/private/tmp/zorid-s1-canonical-f-preview-aea13f96/aggregate166.json` and
+`integration-plan.json`. Hosted-WASM checks do not establish actual wasm32/browser
+binding acceptance. Remaining reviewed browserF13 source composition with current
+main is owned by `s1_browser_runtime_review`; preview remains separate.
 
-Hook candidateb5dd53de is independently source-approved after fixing single- and
-multi-buffer teardown retry. Its113 focused Node/full-TypeScript plan is unrun,
-waiting for the serialized slot and disk. Prior62 boundary checks carry only
-through their unchanged relevant closure. Store sealed preview prerequisite
-01bd11d0 is also source-approved, with7 new checks and6 affected producer checks
-pending. Both actual generated-WASM and app verification remain open.
+Disk headroom was restored enough to execute the remaining gates by retiring the
+unused secondary Electron44.8 generated copy and14 native-only debug library
+payloads outside the pending WASM dependency packages. Primary runtime, current
+binaries, third-party dependencies, WASM-needed variants, source, data and evidence
+are retained. Proofs: `/private/tmp/zorid-secondary-electron-cleanup/terminal.json`
+and `/private/tmp/zorid-post145-wasm-package-cargo-proposal/terminal.json`.
+Free space remains tight; keep checks serialized and revalidate before builds.
+Optional Rust HTML removal reclaimed only15.3MB, not812.5MB summed allocation.
+
+Store sealed preview prerequisite01bd11d0 is independently source-approved, with
+7 new checks and6 affected producer checks pending. Native/host and WASM/browser
+preview implementation/review continue isolated; frontend Bases preview consumption
+is owned by `s1_rich_desktop_transport`, reviewed by `s1_rich_ui_review`. Preserve
+prior coherent published results and read-only partial first-build classification.
+Both actual generated-WASM and rebuilt app verification remain open.
 
 Remaining implementation ownership is isolated from the frozen validation tree:
 `s1_query_audit` owns the sealed Store preview prerequisite; `storage_sqlite_impl`
 owns native/host preview; `s1_desktop_scheduler_review` owns WASM/browser preview
-and the common preview DTO leaf; `s1_desktop_runtime_review` assesses the unresolved
-normal10k durable-graph capacity correction before authority edits. Heavy checks
+and the common preview DTO leaf; `s1_desktop_runtime_review` implements the independently reviewed schema15 durable
+graph correction (A+B+C) in isolation; facts/migration alone do not clear normal10k. Heavy checks
 remain serialized. These implementations and actual platform acceptance are open.
 User asked to stop the size investigation and focus on delivery; no broad rewrite
 or additional abstractions are authorized by that earlier concern. Historical

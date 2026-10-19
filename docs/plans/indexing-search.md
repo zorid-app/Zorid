@@ -17,10 +17,11 @@ Vault/Workspace metadata consumption additionally passes132 focused Node checks
 and TypeScript and is integrated through `b3930388`; portable executor extraction
 and duplicate Store graph-derivation removal pass67 checks through `2bf929f9`.
 Portable Rust draft transfer/bindings, buffer projection and preview platform/UI
-mounting are the current implementation work. The buffer-boundary62 checks and TypeScript pass and are integrated through
-2759322c. Rust166 validation resumed after obsolete-build cleanup:145 planned
-checks pass on60e868ac; the remaining21 hosted-WASM checks await sufficient disk.
-Original filter-count, compile and strict-decoder failures remain recorded.
+mounting are the current implementation work. The buffer-boundary62 and editor-hook113 checks plus full TypeScript pass,
+integrated througha43e7055. All166 planned Rust checks pass on60e868ac; its exact
+29-file composition is integrated through6d59c8d6. Original filter-count, compile,
+strict-decoder and hook-fixture failures remain recorded. Actual generated-WASM
+and rebuilt app acceptance remain pending.
 The common/desktop transport subset is additionally integrated through
 `8a6d20d0`, with190 applicable focused checks and exact-subset TypeScript. The full
 browser composition passes374 focused Node checks and TypeScript in isolation;
