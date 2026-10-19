@@ -125,3 +125,32 @@ action. Incomplete/continuation/timeout evidence must be classified as the obser
 UI budget boundary, not proof that the Rust engine cannot index the fixture. A
 later separately measured ordinary continuation flow is needed before extending
 this unique-result UI smoke into a 10k presentation campaign.
+
+## One-note input diagnosis
+
+Before another full smoke, an input-contract failure can be isolated with
+`--notes 1 --diagnose-input multiline` or `--notes 1 --diagnose-input enter`.
+Each invocation requires its own new output/profile/vault and a coordinator slot.
+The normal app/import and cold-search setup remain; input diagnosis has a hard
+30-second deadline after the loaded editor opens. Failure capture and exact-owned
+cleanup follow that deadline. The two modes are separate runs, with no automatic
+fallback, reset, oracle change or conversion into a 100-note acceptance pass.
+
+Both require the original actual CodeMirror document and native/physical bytes to
+match the generator before input, then record a collapsed document-end caret.
+`multiline` inserts the unchanged suffix through one CDP `Input.insertText` call.
+`enter` sends ordinary Enter, inserts only the marker's single line, then sends
+Enter. Both retain the same exact expected original source plus suffix.
+Diagnostic passive listeners record `beforeinput`/`input` type, actual data,
+selection, rendered DOM and available document state. A read-only internal
+`cmTile.root.view` lookup is identity-checked against the current editor's
+`contentDOM`; it never dispatches, replaces handlers or writes editor state.
+A missing lookup fails the diagnosis rather than inventing a document snapshot.
+
+The report records before/after physical/native source and durable checkpoint,
+intermediate renderer documents and selections, plus separate exact-match flags
+against the unchanged oracle. `diagnostic-observed` means the observations and
+settled write were captured, including a mismatch if present; it does not assert
+acceptance or identify a product cause. Source/build fences, other fixture file
+hashes, normal quit and cleanup still apply. This diagnostic cannot establish
+foreground OS input parity or performance measurements.
