@@ -81,6 +81,11 @@ highlighted snippets, case toggle and count/sort controls; compact Find directly
 above the note. Reuse the retained REA reference evidence and the recorded desktop
 acceptance below. Matching browser acceptance remains open; this confirmation
 does not restart an already implemented UI slice or reopen saving work.
+The follow-up source audit found poor dark-theme Reading Find contrast and
+always-plural singular Search totals. Reviewed two-file fix `57baa7f1` is now on
+main: Reading Find shares the translucent Search/Live highlight fallback, and
+only exact1 uses singular labels. Lower-bound counts retain their meaning.
+No new app run or screenshot validation is claimed for this small style/copy fix.
 Browser Search correction `48d81168` is now integrated: pin presentation facts
 are canonicalized once to Rust's UTF-8 path order. The original real-WASM probe
 reproduced `invalid_request` for opposed ID/path order; the regression fails

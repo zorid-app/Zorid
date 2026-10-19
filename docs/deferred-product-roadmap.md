@@ -21,6 +21,9 @@ Current integration `b3930388` (2026-10-19):
   remain recorded. The fixture now asserts existing quiet automatic recovery;
   production recovery behavior did not change. Both metadata paging and a real
   maintenance subscription are required, so normal activation remains OFF.
+  Main's seven consumer files match the accepted source and all378 Rust/Cargo
+  inputs match `2bf929f9`; proof:
+  `/private/tmp/zorid-main-b393-consumer-integration-proof.json`.
 - Next canonical Rust source `aea13f96` composes independently reviewed portable
   F transfer, native host, WASM F, stable allocation and retained preview producer
   changes. All scoped owner source acknowledgments are received. Its166 focused
@@ -36,6 +39,13 @@ Current integration `b3930388` (2026-10-19):
   source approval is not execution or actual platform acceptance. Existing
   runtime activation remains OFF, with no additional draft activation flag.
   Buffer projection and first-build preview platform/UI mounting remain open.
+- Repeated Search/Find screenshots reaffirm the existing UI contract. The retained
+  REA report and desktop32 evidence were reused; six view/style files matched the
+  accepted desktop source before the small follow-up. Reviewed `57baa7f1` fixes
+  Reading Find dark-theme highlight contrast and exact singular Search counts.
+  No matching rebuilt app pass is claimed. Source-only canonical Node `8d318908`
+  now composes36 reviewed F/browser-allocation files; its374 affected checks and
+  TypeScript remain held for disk headroom, independently of Rust `aea13f96`.
 
 The following entries retain the earlier batch evidence; the updates above
 supersede their pending consumer and source-review statuses.
