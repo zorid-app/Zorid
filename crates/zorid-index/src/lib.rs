@@ -1,6 +1,7 @@
 //! Portable derived index contracts: no storage, IO, clock or network.
 //! Pure publication checks are not durable commits. Hosts must recheck heads and
 //! publish rows/head atomically in the same source/index storage transaction.
+pub mod document_runtime;
 mod extraction;
 mod generation;
 mod import;
