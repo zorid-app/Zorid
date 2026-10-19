@@ -1,3 +1,5 @@
+import { createDocumentMaintenance } from './document-runtime.ts';
+import type { DocumentMaintenance, DocumentRuntimeTransport, DocumentFreshnessHandle, DocumentRuntimeUpdate } from './document-runtime.ts';
 import {searchSpec,searchCompileDiagnostic,richStart,richPreparation,richPage,richToken,DocumentSearchValidationError} from './document-search-validation.ts';
 import type {SearchCompileDiagnostic} from './document-search-validation.ts';
 import type {SearchSpec,DocumentRichSearchPage} from './document-search-types.ts';
@@ -105,6 +107,7 @@ export interface DocumentPin {
  * Every read stays on its retained generation. Expiry requires explicit reopen;
  * callers must never silently retry against a different generation. */
 export interface DocumentService {
+  readonly maintenance?:DocumentMaintenance;
   readonly richSearchAvailable?:boolean;
   status():Promise<DocumentStatus>;initialize():Promise<void>;open():Promise<DocumentPin>;rebuild():Promise<void>;
   begin():Promise<DocumentStage>;pump(stageId:DocumentStageId):Promise<DocumentStage>;publish(stageId:DocumentStageId):Promise<DocumentSnapshotId>;discard(stageId:DocumentStageId):Promise<void>;
@@ -121,6 +124,7 @@ export class DocumentSemanticsError extends Error {
 /** Already-admitted host transport. Query payloads come directly from Rust JSON.
  * This seam adds lifecycle ownership and validates retained generation headers. */
 export interface DocumentTransport {
+  readonly maintenance?:DocumentRuntimeTransport;
   status():Promise<unknown>;initialize():Promise<void>;rebuild():Promise<void>;
   begin():Promise<unknown>;pump(stageId:string):Promise<unknown>;publish(stageId:string):Promise<unknown>;discard(stageId:string):Promise<void>;
   open():Promise<unknown>;closePin(pinId:string):Promise<void>;
@@ -155,13 +159,15 @@ function bounded(value:unknown,maximum:number,request=false):void{
 }
 export function documentErrorCode(error:unknown):string|undefined{return error&&typeof error==='object'&&'code'in error&&typeof error.code==='string'?error.code:undefined;}
 export function createDocumentService(transport:DocumentTransport):DocumentService{
+  const maintenance=transport.maintenance===undefined?undefined:createDocumentMaintenance(transport.maintenance);
   const richSearchAvailable=[transport.richStart,transport.richPrepare,transport.richPage,transport.richClose].every(method=>typeof method==='function');
   const call=async<T>(input:unknown,action:()=>Promise<T>):Promise<T>=>{bounded(input,DOCUMENT_REQUEST_BYTES,true);const value=await action();if(value!==undefined)bounded(value,DOCUMENT_RESPONSE_BYTES);return value;};
   const stage=(value:unknown):DocumentStage=>{const row=object(value),p=row.progress===null?null:object(row.progress);return Object.freeze({stageId:text(row.stageId) as DocumentStageId,snapshot:documentSnapshot(row.snapshot),progress:p===null?null:Object.freeze({prepared:integer(p.prepared),total:integer(p.total),reused:p.reused===null?null:integer(p.reused),ready:bool(p.ready),...(p.parseCache===undefined?{}:{parseCache:(()=>{const c=object(p.parseCache);return Object.freeze({hits:integer(c.hits),misses:integer(c.misses),unavailable:integer(c.unavailable),corrupt:integer(c.corrupt),unsupported:integer(c.unsupported)});})()})})});};
   return {
+    ...(maintenance?{maintenance}:{}),
     richSearchAvailable,
     async status(){const row=object(await call({},()=>transport.status()));const source=documentSource(row.source),snapshot=row.snapshot===null?null:documentSnapshot(row.snapshot),coveredSource=row.coveredSource===null?null:documentSource(row.coveredSource);if(snapshot&&snapshot.localStoreId!==source.localStoreId||coveredSource&&coveredSource.localStoreId!==source.localStoreId)return invalid();return {source,snapshot,coveredSource,current:bool(row.current),rebuildRequired:bool(row.rebuildRequired),coverageComplete:row.coverageComplete===null?null:bool(row.coverageComplete)};},
-    initialize:()=>call({},()=>transport.initialize()),rebuild:()=>call({},()=>transport.rebuild()),
+    initialize:()=>call({},()=>transport.initialize()),rebuild:()=>maintenance?requestDocumentRebuild(maintenance):call({},()=>transport.rebuild()),
     async begin(){return stage(await call({},()=>transport.begin()));},async pump(stageId){return stage(await call({stageId},()=>transport.pump(stageId)));},
     async publish(stageId){return documentSnapshot(await call({stageId},()=>transport.publish(stageId)));},discard:stageId=>call({stageId},()=>transport.discard(stageId)),
     async open(){
@@ -216,7 +222,7 @@ export function createDocumentService(transport:DocumentTransport):DocumentServi
 }
 
 export interface DocumentIndexProgress {readonly phase:'initialize'|'rebuild'|'indexing'|'publish';readonly prepared?:number;readonly total?:number}
-export interface CatchUpDocumentOptions {readonly isCurrent:()=>boolean;readonly onProgress?:(progress:DocumentIndexProgress)=>void;readonly maxPumps?:number;readonly maxRestarts?:number;readonly rebuild?:boolean}
+export interface CatchUpDocumentOptions {readonly isCurrent:()=>boolean;readonly onProgress?:(progress:DocumentIndexProgress)=>void;readonly maxPumps?:number;readonly maxRestarts?:number;readonly rebuild?:boolean;readonly signal?:AbortSignal}
 interface Maintenance {stage?:DocumentStage;running?:Promise<DocumentStatus>;rebuildAttempted:boolean;rebuilding:boolean;explicitRebuild:boolean;listeners:Set<CatchUpDocumentOptions>}
 const maintenance=new WeakMap<DocumentService,Maintenance>();
 const cancelled=()=>new DocumentSemanticsError('document_request_cancelled');
@@ -226,13 +232,14 @@ const rebuildCodes=new Set(['rebuild_required','index_rebuild_required']);
  * Partial stages survive bounded returns and cancellation. No pin is opened,
  * closed or silently replaced. A rebuild explicitly invalidates existing pins. */
 export async function catchUpDocumentIndex(service:DocumentService,options:CatchUpDocumentOptions):Promise<DocumentStatus>{
-  if(!options.isCurrent())throw cancelled();
+  if(options.signal?.aborted||!options.isCurrent())throw cancelled();
   const pumps=options.maxPumps??8,restarts=options.maxRestarts??1;
   if(!Number.isInteger(pumps)||pumps<1||pumps>128||!Number.isInteger(restarts)||restarts<0||restarts>2)throw new DocumentSemanticsError('invalid_request');
+  if(service.maintenance)return catchUpRuntimeDocumentIndex(service,service.maintenance,options,pumps,restarts);
   let state=maintenance.get(service);if(!state){state={rebuildAttempted:false,rebuilding:false,explicitRebuild:false,listeners:new Set()};maintenance.set(service,state);}
   const owned=state;owned.listeners.add(options);if(options.rebuild&&!owned.rebuilding)owned.explicitRebuild=true;
-  const active=()=>{if(![...owned.listeners].some(listener=>listener.isCurrent()))throw cancelled();};
-  const progress=(value:DocumentIndexProgress)=>{for(const listener of owned.listeners)if(listener.isCurrent())listener.onProgress?.(value);};
+  const active=()=>{if(![...owned.listeners].some(listener=>!listener.signal?.aborted&&listener.isCurrent()))throw cancelled();};
+  const progress=(value:DocumentIndexProgress)=>{for(const listener of owned.listeners)if(!listener.signal?.aborted&&listener.isCurrent())listener.onProgress?.(value);};
   const step=async<T>(action:()=>Promise<T>):Promise<T>=>{active();const result=await action();active();return result;};
   const reset=async()=>{owned.rebuilding=true;try{progress({phase:'rebuild'});active();await service.rebuild();owned.stage=undefined;active();}finally{owned.rebuilding=false;}};
   if(!owned.running){
@@ -286,6 +293,44 @@ export async function catchUpDocumentIndex(service:DocumentService,options:Catch
       }
     })().finally(()=>{owned.running=undefined;});
   }
-  try{const result=await owned.running;if(!options.isCurrent())throw cancelled();return result;}
+  try{const result=await owned.running;if(options.signal?.aborted||!options.isCurrent())throw cancelled();return result;}
   finally{owned.listeners.delete(options);}
+}
+
+
+async function requestDocumentRebuild(runtime:DocumentMaintenance):Promise<void> {
+  const demand=runtime.requestFreshness({forceRebuild:true});let failed=false;
+  try{await demand.result;}catch(error){failed=true;throw error;}
+  finally{try{await demand.cancel();}catch(error){if(!failed)throw error;}}
+}
+
+/** Positive capability path: demand/observation delivery only. A RuntimeObservation
+ * has no coveredSource; read actual status once when the legacy DTO is needed. */
+async function catchUpRuntimeDocumentIndex(service:DocumentService,runtime:DocumentMaintenance,options:CatchUpDocumentOptions,maxPumps:number,maxRestarts:number):Promise<DocumentStatus> {
+  let stopped=false,unsubscribe:(()=>void)|undefined,demand:DocumentFreshnessHandle|undefined,cancelling:Promise<void>|undefined,failed=false;
+  let abort!:(reason:unknown)=>void;const aborted=new Promise<never>((_resolve,reject)=>{abort=reject;});void aborted.catch(()=>{});
+  const active=()=>{if(stopped||options.signal?.aborted||!options.isCurrent())throw cancelled();};
+  const cancelDemand=()=>{if(demand&&!cancelling){try{cancelling=demand.cancel();}catch(error){cancelling=Promise.reject(error);}void cancelling.catch(()=>{});}};
+  const onAbort=()=>{cancelDemand();abort(cancelled());};
+  const progress=(update:DocumentRuntimeUpdate|null)=>{
+    if(stopped||options.signal?.aborted||!options.isCurrent()||!update)return;
+    const phase=({initializing:'initialize',rebuilding:'rebuild',indexing:'indexing',publishing:'publish'} as const)[update.phase as 'initializing'|'rebuilding'|'indexing'|'publishing'];
+    if(phase)options.onProgress?.({phase,...(update.progress?{prepared:update.progress.prepared,total:update.progress.total}:{})});
+  };
+  options.signal?.addEventListener('abort',onAbort,{once:true});
+  try{
+    active();
+    // Late registration after abort still relinquishes exactly that listener.
+    const registering=runtime.observeAndSubscribe(progress);
+    void registering.then(value=>{if(stopped)value.unsubscribe();else unsubscribe=value.unsubscribe;},()=>{});
+    const registered=await Promise.race([registering,aborted]);active();unsubscribe=registered.unsubscribe;progress(registered.snapshot);
+    active();demand=runtime.requestFreshness({maxPumps,maxRestarts,forceRebuild:options.rebuild??false});
+    if(options.signal?.aborted)onAbort();
+    await Promise.race([demand.result,aborted]);active();
+    const result=await Promise.race([service.status(),aborted]);active();return result;
+  }catch(error){failed=true;throw error;}
+  finally{
+    stopped=true;options.signal?.removeEventListener('abort',onAbort);const stop=unsubscribe;unsubscribe=undefined;stop?.();
+    cancelDemand();try{await cancelling;}catch(error){if(!failed)throw error;}
+  }
 }
