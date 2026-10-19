@@ -126,6 +126,12 @@ fn activity(tx: &Connection, scope: &Scope, id: &UpdateId) -> Result<StoredActiv
 }
 
 pub(super) fn check_limits(state: &MetadataState) -> Result<()> {
+    check_quotas(state)?;
+    state.metadata_view()?;
+    Ok(())
+}
+
+fn check_quotas(state: &MetadataState) -> Result<()> {
     if state
         .records()
         .len()
@@ -160,7 +166,6 @@ pub(super) fn check_limits(state: &MetadataState) -> Result<()> {
     {
         return Err(corrupt("metadata declared quota exceeded"));
     }
-    state.metadata_view()?;
     Ok(())
 }
 
@@ -205,7 +210,9 @@ fn restore_members(
         text.insert(id.clone(), activity(tx, scope, id)?);
     }
     let state = MetadataState::from_records(scope.clone(), revision.clone(), files, text)?;
-    check_limits(&state)?;
+    // The constructor already derived and validated this exact immutable graph.
+    // Store-specific quotas still apply, without deriving the same view again.
+    check_quotas(&state)?;
     check_retained_quota(tx)?;
     Ok(state)
 }
@@ -782,6 +789,41 @@ mod tests {
         )
         .unwrap();
         assert!(snapshot.restore(&db).is_err());
+    }
+
+    #[test]
+    fn restoration_preserves_store_chunk_quota_after_graph_validation() {
+        let db = db();
+        let scope = scope();
+        let revision = revision("chunk-quota");
+        file_state::initialize(&db, &scope, &revision).unwrap();
+        let mut records = BTreeMap::new();
+        for index in 0..=MAX_CHUNKS {
+            let (id, record, exact) = chunk(&format!("chunk-{index:04}"), b"x");
+            retain(&db, &id, &record, &exact);
+            db.execute(
+                "INSERT INTO family_file_records VALUES(?1,?2,?3)",
+                params![scope.realm_id.as_str(), scope.vault_id.as_str(), id.as_str()],
+            )
+            .unwrap();
+            records.insert(id, record);
+        }
+        db.execute(
+            "UPDATE family_graph_heads SET record_count=?1",
+            [records.len() as i64],
+        )
+        .unwrap();
+        // Valid graph descriptors do not imply the stricter Store quota.
+        let state =
+            MetadataState::from_records(scope.clone(), revision, records, BTreeMap::new()).unwrap();
+        assert!(matches!(
+            check_limits(&state),
+            Err(StoreError::Corrupt(reason)) if reason == "metadata declared quota exceeded"
+        ));
+        assert!(matches!(
+            load_metadata(&db, &scope),
+            Err(StoreError::Corrupt(reason)) if reason == "metadata declared quota exceeded"
+        ));
     }
 
     #[test]
