@@ -70,6 +70,7 @@ export function createDocumentSearchView(parent:HTMLElement, callbacks:DocumentS
   settings.addEventListener('click',()=>{if(!live())return;options.hidden=!options.hidden;settings.setAttribute('aria-expanded',String(!options.hidden));});
   collapse.addEventListener('change',()=>{if(!live())return;for(const group of frame!.groups)collapsed.set(groupKey(group),collapse.checked);paintGroups();});
   const countText=(count:DocumentRichSearchPage['totals']['files'])=>count.relation==='unknown'?'Unknown':`${count.value.toLocaleString('en-US')}${count.relation==='atLeast'?'+':''}`;
+  const countLabel=(count:DocumentRichSearchPage['totals']['files'],singular:string,plural:string)=>`${countText(count)} ${count.relation==='exact'&&count.value===1?singular:plural}`;
   function open(group:DocumentSearchGroup, location:SearchLocation|undefined,event:MouseEvent,stamp:number,groupStamp:number):void{
     if(!live(stamp)||groupStamp!==groupEpoch)return;callbacks.onOpen(identity(),group.entry,location,{primary:event.metaKey||event.ctrlKey,shift:event.shiftKey,alt:event.altKey});
   }
@@ -129,7 +130,7 @@ export function createDocumentSearchView(parent:HTMLElement, callbacks:DocumentS
     if(!composing&&field.value!==next.spec.query)field.value=next.spec.query;
     clear.disabled=composing||!field.value;caseButton.setAttribute('aria-pressed',String(next.spec.caseSensitive));sort.value=next.spec.sort;context.checked=next.spec.context==='section';explain.checked=next.spec.explain;explain.disabled=!next.canExplain;
     explain.title=next.canExplain?'':'Search explanations are unavailable.';
-    const result=next.result;totals.textContent=result?`${countText(result.totals.occurrences)} matches in ${countText(result.totals.files)} files`:'';
+    const result=next.result;totals.textContent=result?`${countLabel(result.totals.occurrences,'match','matches')} in ${countLabel(result.totals.files,'file','files')}`:'';
     const notes:string[]=[];
     if(next.message)notes.push(next.message);
     if(next.phase==='loading')notes.push('Searching…');

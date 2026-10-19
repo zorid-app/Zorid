@@ -117,7 +117,7 @@ export function createReadingFind(host: HTMLElement, preview: HTMLElement, optio
     if (!live() || !supported || !query.valid || !projection) return;
     if (!style) {
       style = doc.createElement('style'); style.dataset.readingFind = String(id);
-      style.textContent = `::highlight(${baseName}) { background-color: var(--text-highlight-bg, #ffe08a); color: var(--text-normal); } ::highlight(${activeName}) { background-color: var(--interactive-accent, #7358df); color: var(--text-on-accent, white); }`;
+      style.textContent = `::highlight(${baseName}) { background-color: var(--text-highlight-bg, #d6b23455); color: var(--text-normal); } ::highlight(${activeName}) { background-color: var(--interactive-accent, #7358df); color: var(--text-on-accent, white); }`;
       doc.head.append(style);
     }
     if (rebuild) {
