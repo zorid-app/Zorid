@@ -111,3 +111,18 @@ test('same-zone backwards clock wakes refresh affected views, while None and fix
     } finally { f.controller.dispose(); }
   }
 });
+
+test('a queued refresh cannot open a replacement pin after the view becomes hidden', async () => {
+  const f = await fixture(); try {
+    const release = f.holdMetadata(), pending = f.controller.refresh();
+    await settled(() => f.pins.length === 2);
+    const queued = f.controller.refresh();
+    f.clock.visible = false; f.clock.wake(); release();
+    await pending; await queued;
+    assert.equal(f.pins.length, 2); assert.equal(f.calls.length, 1);
+    assert.ok(f.pins.every(pin => pin.closed === 1)); assert.equal(f.clock.timers.size, 0);
+    f.clock.visible = true; f.clock.wake();
+    await settled(() => f.calls.length === 2 && f.clock.timers.size === 1);
+    assert.equal(f.pins.length, 3);
+  } finally { f.controller.dispose(); }
+});

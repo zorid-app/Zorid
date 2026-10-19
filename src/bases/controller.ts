@@ -181,7 +181,7 @@ export class BaseController {
     this.clearWake(); this.stale = true;
     if (this.timer !== undefined) { clearTimeout(this.timer); this.timer = undefined; }
     const refresh = async () => {
-      if (this.disposed) return;
+      if (this.disposed || !this.clock.isVisible()) return;
       const epoch = this.epoch;
       try {
         const service = this.options.vault.adapter.documentSemantics;
