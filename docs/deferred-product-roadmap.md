@@ -62,6 +62,14 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   no reusable parse cache or multicore runtime acceptance yet. Preserve existing
   parser output, source fences and separate authority/cache schemas. Root sole
   main integrator; no push.
+- **Residual admission CSE:** `s1_execution_audit` implements source-only removal
+  of a duplicate complete retained-Text load in one preparation/read snapshot.
+  Private validation returns its own checked vector for the existing expected-Text
+  CAS witness; final writer still reloads and compares fresh authority. Owned
+  files: `family_materialization.rs`, `family_metadata_transactions.rs`, focused
+  private tests. `architecture_core_audit` reviews; no new persistent cache,
+  schema/public API/batch semantics or promised performance gain. No extra release
+  campaign; validate before considering the next combined cache build.
 - **Desktop verification:** corrected normal100 passes exact save/file/native/
   checkpoint, fresh search and retained warm index/revision gates. Three apps quit
   normally; source/build hashes unchanged, no survivors. Evidence:
@@ -81,6 +89,16 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   targets are macOS Electron, web and standalone macOS CLI. Native mobile and
   other OS checks stay deferred. Sync remains E2EE; new group-lifecycle policy
   discussion waits for the user. Original real vault remains untouched.
+
+Current isolated source ownership (all depend on reviewed parser/index contracts;
+source approval is distinct from compilation and real-client acceptance):
+
+| Owner | Branch/worktree under `/Users/ctk/orca/workspaces/Zorid` | Verification |
+| --- | --- | --- |
+| `storage_sqlite_impl` | `tingkai-c/storage-parse-cache` / `storage-parse-cache` | Native facts persistence implementing; reviewer `storage_recovery_impl`; no tests/build yet |
+| `architecture_platform_audit` | `tingkai-c/s1-browser-parse-cache` / `s1-browser-parse-cache` | Browser/WASM facts persistence implementing; reviewer `s1_query_audit`; no tests/build yet |
+| `s1_execution_audit` | New isolated residual-CSE worktree from `2f37f56c` | Source implementing; reviewer `architecture_core_audit`; no tests/build yet |
+| `baseline_resources_impl` | `tingkai-c/s1-index-extraction` / `s1-index-extraction` | Core integrated `ae227303`,37 tests pass; preparing tiny CLI cache acceptance using existing commands |
 
 Detailed evidence, ownership and limitations follow. Earlier checkpoint sections
 retain their original dated decisions and are superseded by this current summary.
