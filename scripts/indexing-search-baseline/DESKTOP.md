@@ -46,7 +46,7 @@ read-only requests use the already admitted, root-scoped bridge.
 2. **Derived-cold process:** restart that profile and existing committed authority
    while the index is still uninitialized. Enter a unique literal in the ordinary
    Search box for note 42, or the last note if the fixture is smaller. The normal
-   UI drives catch-up and queries. Read-only index status observes publication;
+   UI drives catch-up and queries. Read-only status verifies the current index after result visibility;
    require complete/current coverage and exactly the expected entry/path/snippet
    rendered with `data-state=ready`. Retain raw status/version/watermark samples,
    available UI progress observations and cache file sizes.
@@ -60,8 +60,9 @@ read-only requests use the already admitted, root-scoped bridge.
    or conflict. No other manifest source may change.
 4. **Saved edit → index → visible result:** type the marker in the ordinary Search
    box. Observe the source-current index and exact visible unique result separately.
-   Keep original input, verified-save, current-index and visible-result timing
-   witnesses. No read-only observer calls initialize or pump the index.
+   Keep original input, verified-save, visible-result and post-visible current-index
+   verification witnesses. Exact publication timing is unavailable. No read-only
+   observer calls initialize or pump the index.
 5. **Warm restart:** switch back to Files and quit normally, then restart the same
    vault/profile/app-local data. Require the same current snapshot and exact saved
    note revision/bytes before searching. The ordinary marker search must render
@@ -85,14 +86,19 @@ from a filename. Frozen inputs must remain equal after execution.
 Milestones are observed bounds, not exact backend event timestamps:
 
 - Input dispatch and CDP acknowledgment are recorded separately. DOM listeners
-  retain actual input/state observations without wrapping product handlers.
+  retain actual input/state observations without wrapping product handlers. During search,
+  the harness waits on DOM state only; it does not inject native status RPCs while
+  the UI is indexing/querying.
 - Input → clean save is the visible indicator observation. Input → verified
   durable save additionally includes exact disk/bridge revision/content and the
   settled checkpoint readback. It includes observation and transport cost.
-- Verified save → current index and → visible result are measured separately,
-  along with editor input → those endpoints. Read-only status and DOM polling
-  run at 100 ms intervals, adding queue/observation overhead. If freshness occurred
-  before observation, the harness reports the observed upper bound.
+- Verified save → visible result and → post-visible index verification are
+  reported separately, along with editor input → those endpoints. DOM polling
+  runs at 100 ms intervals. Exactly one read-only status capture before the query
+  and one after visibility provide source/cache witnesses; native capture/probe
+  cost is recorded separately. This avoids repeated expensive host captures
+  changing UI latency. Exact index publication time is unavailable/null, and the
+  later verification must not be presented as the moment the index became fresh.
 - Warm startup is spawn → normal workspace ready, followed by status/query work;
   it is not a breakdown of Electron/native startup, SQL validation and parsing.
 
