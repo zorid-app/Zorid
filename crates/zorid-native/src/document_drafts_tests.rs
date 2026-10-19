@@ -661,50 +661,41 @@ fn failed_cache_provider_selection_preserves_actual_parser_and_selected_ticket()
 }
 
 #[test]
-fn unexpected_cancelled_or_finished_actual_parser_is_not_fabricated_resource_failure() {
-    for unexpectedly_finished in [false, true] {
-        let (_root, _cache, mut vault) = open();
-        let source: Arc<str> = Arc::from("# Draft");
-        let job = attach(&mut vault, "buffer", 1, &source);
-        let ticket = next(&mut vault);
-        // One narrow corruption fixture: disturb the real parser without a core
-        // completion. The executor must fail closed rather than synthesize an
-        // ordinary resource outcome, consume the ticket, or advance fairness.
-        let parser = vault
-            .document_drafts
-            .as_mut()
-            .unwrap()
-            .jobs
-            .get_mut(&job.id)
-            .unwrap()
-            .parser
-            .as_mut()
-            .unwrap();
-        if unexpectedly_finished {
-            for _ in 0..7 {
-                parser
-                    .step(zorid_document::ParseFactsStepBudget {
-                        max_scratch_bytes: d::MAX_DRAFT_SCRATCH_BYTES,
-                        max_facts_bytes: d::MAX_DRAFT_FACTS_BYTES,
-                    })
-                    .unwrap();
-            }
-        } else {
-            parser.cancel();
-        }
-        let before = vault.document_draft_snapshot().unwrap();
+fn portable_executor_errors_preserve_native_and_legacy_classification() {
+    use zorid_index::document_draft_executor::DraftExecutorError as E;
+    let cases = [
+        (E::SourceMismatch, "SourceMismatch"),
+        (E::Expired, "Expired"),
+        (E::NotReady, "NotReady"),
+        (E::Closed, "Closed"),
+        (E::UnexpectedParserState, "UnexpectedParserState"),
+        (E::Work(w::WorkError::WrongTicket), "Work(WrongTicket)"),
+        (
+            E::Draft(d::RuntimeError::InvalidCompletion),
+            "Draft(InvalidCompletion)",
+        ),
+    ];
+    for (portable, expected) in cases {
+        let native = NativeDocumentWorkError::from(portable);
+        assert_eq!(format!("{native:?}"), expected);
         assert!(matches!(
-            vault.document_work_step(&ticket),
-            Err(NativeDocumentWorkError::UnexpectedParserState)
+            legacy_error(native),
+            NativeDocumentRuntimeError::Contract(
+                DocumentRuntimeContractError::UnexpectedCompletion
+            )
         ));
-        assert_snapshot_eq(&vault, &before);
-        assert!(!before.runtime.outcomes.iter().any(|outcome| matches!(
-            outcome.kind,
-            d::OutcomeKind::Unavailable(d::UnavailableCode::Resource)
-        )));
-        vault.document_work_begin_close().unwrap();
-        // Closing an inconsistent already-finished parser cannot invent the
-        // old expected counter. Preserve the exact failure/selection; disposal
-        // of this intentionally corrupted fixture happens with NativeVault.
     }
+    let native = NativeDocumentWorkError::from(E::Work(w::WorkError::Committed(
+        c::RuntimeError::UnexpectedCompletion,
+    )));
+    assert!(matches!(
+        native,
+        NativeDocumentWorkError::Work(w::WorkError::Committed(
+            c::RuntimeError::UnexpectedCompletion
+        ))
+    ));
+    assert!(matches!(
+        legacy_error(native),
+        NativeDocumentRuntimeError::Contract(DocumentRuntimeContractError::UnexpectedCompletion)
+    ));
 }

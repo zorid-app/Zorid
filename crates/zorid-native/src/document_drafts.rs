@@ -5,42 +5,17 @@
 //! does not prove a caller's earlier allocation/conversion was memory bounded.
 use super::NativeVault;
 use crate::document_api::*;
-use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use zorid_core::OperationId;
-use zorid_document::{ParseFacts, ParseFactsJob, ParseFactsJobError};
+use zorid_document::ParseFacts;
 use zorid_index::{document_work_runtime as w, draft_runtime as d};
 
-// Future document_api.rs export leaf (that file is owned by the E2 batch):
-// NativeDraftCommand, NativeDraftSnapshot, NativeDraftStepRecord,
-// NativeDocumentWorkError, NativeWorkReceipt, NativeWorkStepRecord.
-#[derive(Clone, Debug)]
-pub enum NativeDraftCommand {
-    Request(d::DraftRequest),
-    Cancel {
-        client: OperationId,
-        job: d::JobToken,
-    },
-    Acknowledge {
-        client: OperationId,
-        job: d::JobToken,
-    },
-    ReleaseBuffer(d::BufferKey),
-    ReleaseClient(OperationId),
-}
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NativeDraftSnapshot {
-    pub runtime: d::Reduction,
-    pub work: w::Snapshot,
-    pub handles: usize,
-}
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NativeDraftStepRecord {
-    pub issued: d::IssuedEffect,
-    pub completion: d::Completion,
-    pub reduction: d::Reduction,
-}
+use zorid_index::document_draft_executor::{DocumentDraftExecutor, DraftExecutorError};
+pub use zorid_index::document_draft_executor::{
+    DraftCommand as NativeDraftCommand, DraftSnapshot as NativeDraftSnapshot,
+    DraftStepRecord as NativeDraftStepRecord,
+};
+
 #[derive(Clone, Debug)]
 pub enum NativeWorkReceipt {
     Committed(NativeDocumentRuntimeStepRecord),
@@ -92,21 +67,20 @@ pub(super) fn legacy_error(error: NativeDocumentWorkError) -> NativeDocumentRunt
         _ => DocumentRuntimeContractError::UnexpectedCompletion.into(),
     }
 }
-struct OwnedJob {
-    token: d::JobToken,
-    source: d::SourceDescriptor,
-    parser: Option<ParseFactsJob>,
-    // Moved out of the Ready parser, never cloned into a receipt or snapshot.
-    // The core's pre-transfer phase usage stays charged until actual Drop.
-    facts: Option<ParseFacts>,
+impl From<DraftExecutorError> for NativeDocumentWorkError {
+    fn from(error: DraftExecutorError) -> Self {
+        match error {
+            DraftExecutorError::Draft(error) => Self::Draft(error),
+            DraftExecutorError::Work(error) => Self::Work(error),
+            DraftExecutorError::SourceMismatch => Self::SourceMismatch,
+            DraftExecutorError::Expired => Self::Expired,
+            DraftExecutorError::NotReady => Self::NotReady,
+            DraftExecutorError::Closed => Self::Closed,
+            DraftExecutorError::UnexpectedParserState => Self::UnexpectedParserState,
+        }
+    }
 }
-pub(super) struct NativeDocumentDrafts {
-    core: d::DraftRuntime,
-    work: w::DocumentWorkRuntime,
-    jobs: BTreeMap<u64, OwnedJob>,
-    // One bounded actual draft receipt; no source or facts payload.
-    last_step: Option<NativeDraftStepRecord>,
-}
+pub(super) type NativeDocumentDrafts = DocumentDraftExecutor;
 impl NativeVault {
     fn ensure_document_drafts(&mut self) -> Result<(), NativeDocumentWorkError> {
         self.ensure_document_runtime()?;
@@ -118,12 +92,8 @@ impl NativeVault {
             {
                 return Err(NativeDocumentWorkError::Closed);
             }
-            self.document_drafts = Some(NativeDocumentDrafts {
-                core: d::DraftRuntime::new(super::new_op()),
-                work: w::DocumentWorkRuntime::new(super::new_op()),
-                jobs: BTreeMap::new(),
-                last_step: None,
-            });
+            self.document_drafts =
+                Some(NativeDocumentDrafts::new(super::new_op(), super::new_op()));
         }
         Ok(())
     }
@@ -134,41 +104,7 @@ impl NativeVault {
         command: NativeDraftCommand,
     ) -> Result<d::Reduction, NativeDocumentWorkError> {
         self.ensure_document_drafts()?;
-        let owner = self.document_drafts.as_mut().unwrap();
-        if matches!(&command, NativeDraftCommand::Request(_)) && owner.work.snapshot().closing {
-            return Err(NativeDocumentWorkError::Closed);
-        }
-        let request = match &command {
-            NativeDraftCommand::Request(request) => Some(request.clone()),
-            _ => None,
-        };
-        let input = match command {
-            NativeDraftCommand::Request(request) => d::Input::Request(request),
-            NativeDraftCommand::Cancel { client, job } => d::Input::Cancel { client, job },
-            NativeDraftCommand::Acknowledge { client, job } => {
-                d::Input::Acknowledge { client, job }
-            }
-            NativeDraftCommand::ReleaseBuffer(buffer) => d::Input::ReleaseBuffer(buffer),
-            NativeDraftCommand::ReleaseClient(client) => d::Input::ReleaseClient(client),
-        };
-        let result = owner.core.reduce(input)?;
-        if let Some(request) = request {
-            let token = result.admitted.as_ref().expect("request admitted");
-            // Exact same-revision replay reuses the actual parser/Arc/facts.
-            // Do not recreate an empty job after its actual payload was dropped.
-            if !result.replay {
-                owner.jobs.insert(
-                    token.id,
-                    OwnedJob {
-                        token: token.clone(),
-                        source: request.source,
-                        parser: None,
-                        facts: None,
-                    },
-                );
-            }
-        }
-        Ok(result)
+        Ok(self.document_drafts.as_mut().unwrap().command(command)?)
     }
     /// Attach one immutable source to its PREVIOUSLY reserved input. The Arc is
     /// moved into the parser, without a source copy. UTF8 is guaranteed by str;
@@ -179,42 +115,11 @@ impl NativeVault {
         token: &d::JobToken,
         source: Arc<str>,
     ) -> Result<d::Reduction, NativeDocumentWorkError> {
-        let owner = self
+        Ok(self
             .document_drafts
             .as_mut()
-            .ok_or(NativeDocumentWorkError::NotStarted)?;
-        if owner.work.snapshot().closing {
-            return Err(NativeDocumentWorkError::Closed);
-        }
-        let owned = owner
-            .jobs
-            .get(&token.id)
-            .filter(|job| job.token == *token)
-            .ok_or(NativeDocumentWorkError::Expired)?;
-        if source.len() != owned.source.bytes
-            || source.len() > d::MAX_DRAFT_SOURCE_BYTES
-            || source.encode_utf16().count() != owned.source.utf16
-            || <[u8; 32]>::from(Sha256::digest(source.as_bytes())) != owned.source.sha256
-        {
-            return Err(NativeDocumentWorkError::SourceMismatch);
-        }
-        if owned.parser.is_some() {
-            // Replay validates the actual source but never replaces the real
-            // parser, resets its counter, or adds another retained source Arc.
-            return Ok(owner.core.reduce(d::Input::Seal {
-                job: token.clone(),
-                actual: owned.source.clone(),
-            })?);
-        }
-        let actual = owned.source.clone();
-        let parser =
-            ParseFactsJob::new(source).map_err(|_| NativeDocumentWorkError::SourceMismatch)?;
-        let result = owner.core.reduce(d::Input::Seal {
-            job: token.clone(),
-            actual,
-        })?;
-        owner.jobs.get_mut(&token.id).unwrap().parser = Some(parser);
-        Ok(result)
+            .ok_or(NativeDocumentWorkError::NotStarted)?
+            .attach_source(token, source)?)
     }
     /// Borrow current exact Ready facts. The Rust borrow prevents quota release
     /// while this reference is held. Transport encoding/copying is a separate
@@ -223,37 +128,16 @@ impl NativeVault {
         &self,
         token: &d::JobToken,
     ) -> Result<&ParseFacts, NativeDocumentWorkError> {
-        let owner = self
+        Ok(self
             .document_drafts
             .as_ref()
-            .ok_or(NativeDocumentWorkError::NotStarted)?;
-        if owner.work.snapshot().closing {
-            return Err(NativeDocumentWorkError::Closed);
-        }
-        let current = owner
-            .core
-            .snapshot()
-            .outcomes
-            .iter()
-            .any(|outcome| outcome.job == *token && outcome.kind == d::OutcomeKind::Ready);
-        if !current {
-            return Err(NativeDocumentWorkError::NotReady);
-        }
-        owner
-            .jobs
-            .get(&token.id)
-            .filter(|job| job.token == *token)
-            .and_then(|job| job.facts.as_ref())
-            .ok_or(NativeDocumentWorkError::Expired)
+            .ok_or(NativeDocumentWorkError::NotStarted)?
+            .facts(token)?)
     }
     pub fn document_draft_snapshot(&self) -> Option<NativeDraftSnapshot> {
         self.document_drafts
             .as_ref()
-            .map(|owner| NativeDraftSnapshot {
-                runtime: owner.core.snapshot(),
-                work: owner.work.snapshot(),
-                handles: owner.jobs.len(),
-            })
+            .map(DocumentDraftExecutor::snapshot)
     }
     /// One newly admitted host turn. A returned pure Continue reduction may
     /// contain actual finished demand outcomes and must be delivered by hosts.
@@ -266,11 +150,7 @@ impl NativeVault {
             .document_drafts
             .as_mut()
             .ok_or(NativeDocumentWorkError::NotStarted)?;
-        Ok(draft.work.select_next_turn(
-            &mut committed.core,
-            &mut committed.execution,
-            &draft.core,
-        )?)
+        Ok(draft.next_turn(&mut committed.core, &mut committed.execution)?)
     }
     /// Validate the exact global selection before work, then settle the actual
     /// result once. This method never calls a complete-and-step wrapper or
@@ -287,75 +167,41 @@ impl NativeVault {
             .document_drafts
             .as_ref()
             .ok_or(NativeDocumentWorkError::NotStarted)?;
-        if let w::Admission::Replay(lane) =
-            draft.work.admit(ticket, &committed.core, &draft.core)?
-        {
-            let receipt = match (&ticket.effect, lane) {
-                (w::ChildEffect::Committed(effect), w::Lane::Committed) => {
+        let receipt = match &ticket.effect {
+            w::ChildEffect::Committed(effect) => {
+                let admission = draft.admit(ticket, &committed.core)?;
+                if let w::Admission::Replay(lane) = admission {
+                    if lane != w::Lane::Committed {
+                        return Err(NativeDocumentWorkError::Expired);
+                    }
                     let record = self
                         .document_runtime_snapshot()
                         .and_then(|s| s.last_step)
                         .filter(|record| record.receipt.issued == *effect)
                         .ok_or(NativeDocumentWorkError::Expired)?;
-                    NativeWorkReceipt::Committed(record)
+                    return Ok(NativeWorkStepRecord {
+                        ticket: ticket.clone(),
+                        receipt: NativeWorkReceipt::Committed(record),
+                    });
                 }
-                (w::ChildEffect::Draft(effect), w::Lane::Draft) => {
-                    let record = draft
-                        .last_step
-                        .as_ref()
-                        .filter(|record| record.issued == *effect)
-                        .cloned()
-                        .ok_or(NativeDocumentWorkError::Expired)?;
-                    NativeWorkReceipt::Draft(record)
-                }
-                _ => return Err(NativeDocumentWorkError::Expired),
-            };
-            return Ok(NativeWorkStepRecord {
-                ticket: ticket.clone(),
-                receipt,
-            });
-        }
-        let receipt = match &ticket.effect {
-            w::ChildEffect::Committed(effect) => {
-                // Preserve actual typed errors, successful pump metrics and the
-                // call-owned final Rebuild receipt; do not complete here.
+                // Actual native IO is separate from the shared once-only settlement.
                 let actual = self.execute_document_runtime_receipt(effect);
                 let committed = self.document_runtime.as_mut().unwrap();
-                let draft = self.document_drafts.as_mut().unwrap();
-                let settlement = draft.work.settle(
+                let reduction = self.document_drafts.as_mut().unwrap().settle_committed(
                     ticket,
-                    w::Completion::Committed(actual.completion.clone()),
+                    actual.completion.clone(),
                     &mut committed.core,
                     &mut committed.execution,
-                    &mut draft.core,
                 )?;
-                let w::Settlement::Committed(reduction) = settlement else {
-                    return Err(NativeDocumentWorkError::UnexpectedParserState);
-                };
                 NativeWorkReceipt::Committed(committed.record(reduction, actual))
             }
-            w::ChildEffect::Draft(effect) => {
-                let draft = self.document_drafts.as_mut().unwrap();
-                let actual = execute_draft_effect(draft, effect)?;
+            w::ChildEffect::Draft(_) => {
                 let committed = self.document_runtime.as_mut().unwrap();
-                let settlement = draft.work.settle(
+                let record = self.document_drafts.as_mut().unwrap().step_draft(
                     ticket,
-                    w::Completion::Draft(actual.clone()),
                     &mut committed.core,
                     &mut committed.execution,
-                    &mut draft.core,
                 )?;
-                let w::Settlement::Draft(reduction) = settlement else {
-                    return Err(NativeDocumentWorkError::UnexpectedParserState);
-                };
-                let record = NativeDraftStepRecord {
-                    issued: effect.clone(),
-                    completion: actual,
-                    reduction,
-                };
-                if record.reduction.execution != d::Execution::Quiesced {
-                    draft.last_step = Some(record.clone());
-                }
                 NativeWorkReceipt::Draft(record)
             }
         };
@@ -375,28 +221,15 @@ impl NativeVault {
             .document_drafts
             .as_mut()
             .ok_or(NativeDocumentWorkError::NotStarted)?;
-        // Match existing child retirement: older receipt ownership expires.
         committed.expire_step_receipt();
-        draft.last_step = None;
-        Ok(draft.work.begin_close(
-            &mut committed.core,
-            &mut committed.execution,
-            &mut draft.core,
-        )?)
+        Ok(draft.begin_close(&mut committed.core, &mut committed.execution)?)
     }
     /// Pure core drain AND actual payload disposal are required. This is not a
     /// lease release or a claim that external encoded handles have been added.
     pub fn document_work_close_ready(&self) -> bool {
         match (&self.document_runtime, &self.document_drafts) {
             (Some(committed), Some(draft)) => {
-                draft.work.snapshot().closing
-                    && draft.work.snapshot().selected.is_none()
-                    && committed.execution == DocumentRuntimeExecution::Quiesced
-                    && committed.core.update().phase == DocumentRuntimePhase::Releasing
-                    && committed.core.in_flight().is_none()
-                    && draft.core.snapshot().execution == d::Execution::Quiesced
-                    && draft.core.in_flight().is_none()
-                    && draft.jobs.is_empty()
+                draft.close_ready(&committed.core, committed.execution)
             }
             _ => false,
         }
@@ -414,7 +247,7 @@ impl NativeVault {
                 .document_drafts
                 .as_ref()
                 .ok_or(NativeDocumentWorkError::NotStarted)?;
-            let state = owner.work.snapshot();
+            let state = owner.work_snapshot();
             let matches = |ticket: &w::Ticket| match &ticket.effect {
                 w::ChildEffect::Committed(effect) => {
                     &effect.lifetime == lifetime && effect.id == effect_id
@@ -451,76 +284,6 @@ impl NativeVault {
             }
         })();
         result.map_err(legacy_error)
-    }
-}
-fn execute_draft_effect(
-    owner: &mut NativeDocumentDrafts,
-    effect: &d::IssuedEffect,
-) -> Result<d::Completion, NativeDocumentWorkError> {
-    match &effect.kind {
-        d::Effect::DropJob => {
-            if let Some(job) = owner.jobs.get(&effect.job.id) {
-                if job.token != effect.job {
-                    return Err(NativeDocumentWorkError::Expired);
-                }
-            }
-            // Removal really drops the parser/source/facts before quota release.
-            owner.jobs.remove(&effect.job.id);
-            Ok(d::Completion::Dropped)
-        }
-        d::Effect::ParsePhase {
-            phase,
-            budget,
-            phases_completed,
-        } => {
-            let current = owner.core.phase_is_current(effect)?;
-            let job = owner
-                .jobs
-                .get_mut(&effect.job.id)
-                .filter(|job| job.token == effect.job)
-                .ok_or(NativeDocumentWorkError::Expired)?;
-            if !current {
-                let actual = if let Some(parser) = job.parser.as_mut() {
-                    parser.cancel();
-                    (parser.usage(), parser.phases_completed())
-                } else {
-                    (zorid_document::ParseFactsUsage::default(), 0)
-                };
-                job.facts = None;
-                return Ok(d::Completion::Stopped {
-                    usage: actual.0,
-                    phases_completed: actual.1,
-                });
-            }
-            let parser = job
-                .parser
-                .as_mut()
-                .ok_or(NativeDocumentWorkError::UnexpectedParserState)?;
-            if parser.phase() != *phase || parser.phases_completed() != *phases_completed {
-                return Err(NativeDocumentWorkError::UnexpectedParserState);
-            }
-            match parser.step(*budget) {
-                Ok(step) => {
-                    if step.ready {
-                        job.facts = Some(
-                            parser
-                                .take_facts()
-                                .ok_or(NativeDocumentWorkError::UnexpectedParserState)?,
-                        );
-                    }
-                    // Keep the PRE-transfer actual step usage in core even
-                    // though take_facts emptied the parser's own usage field.
-                    Ok(d::Completion::Parsed(step))
-                }
-                Err(ParseFactsJobError::Resource { .. }) => Ok(d::Completion::Resource {
-                    usage: parser.usage(),
-                    phases_completed: parser.phases_completed(),
-                }),
-                Err(ParseFactsJobError::Cancelled | ParseFactsJobError::Finished) => {
-                    Err(NativeDocumentWorkError::UnexpectedParserState)
-                }
-            }
-        }
     }
 }
 #[cfg(test)]
