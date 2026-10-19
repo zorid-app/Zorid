@@ -54,9 +54,9 @@ read-only requests use the already admitted, root-scoped bridge.
    committed revision/content and wait for its loaded, focused editable body; the
    title alone is not an editor-readiness witness. Live Edit protects the YAML
    prefix and clamps selection to the body, so select-all does not select the
-   full source. Use ordinary macOS Cmd+ArrowDown to reach document end and insert
-   only one marker suffix by keyboard. Require exact original source plus that
-   suffix on save; all original YAML/properties/body stay intact. Require a visible
+   full source. Use ordinary macOS Cmd+ArrowDown to reach document end, then
+   Enter, single-line marker input and Enter. Require exact original source plus
+   the unchanged newline/marker/newline suffix on save; all original YAML/properties/body stay intact. Require a visible
    pending-save witness and unchanged disk initially.
    Observe the clean save indicator, exact filesystem and committed bridge bytes,
    changed revision and settled durable note checkpoint with no pending operation
@@ -88,7 +88,10 @@ from a filename. Frozen inputs must remain equal after execution.
 
 Milestones are observed bounds, not exact backend event timestamps:
 
-- Input dispatch and CDP acknowledgment are recorded separately. DOM listeners
+- Input dispatch and CDP acknowledgment are recorded separately. For the editor
+  edit this interval covers the complete Enter, single-line marker and Enter
+  sequence, starting before its first keydown and ending after its final keyup.
+  DOM listeners
   retain actual input/state observations without wrapping product handlers. During search,
   the harness waits on DOM state only; it does not inject native status RPCs while
   the UI is indexing/querying.
@@ -154,3 +157,12 @@ settled write were captured, including a mismatch if present; it does not assert
 acceptance or identify a product cause. Source/build fences, other fixture file
 hashes, normal quit and cleanup still apply. This diagnostic cannot establish
 foreground OS input parity or performance measurements.
+
+The one-note diagnoses on frozen `8060f275` reproduced a leading-newline difference
+with multiline CDP `Input.insertText` already in the renderer document; disk,
+native source and checkpoint preserved that same document. The separate ordinary
+Enter/marker/Enter mode matched the unchanged expected bytes in all five places.
+This supports using the ordinary key path for this typing baseline; it does not
+establish OS clipboard/paste behavior or justify changing the byte oracle. Both
+raw diagnostic reports remain external runtime evidence, and the 100-note
+save/index/restart acceptance still requires its own complete successful run.
