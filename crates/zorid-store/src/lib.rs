@@ -9,6 +9,7 @@ mod blob_read;
 mod capture_authorization;
 pub mod document_index;
 mod document_cache;
+mod document_parse_cache;
 mod entry_content;
 mod family_metadata_transactions;
 mod immutable_payloads;

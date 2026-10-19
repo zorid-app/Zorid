@@ -2,12 +2,13 @@
 //! Parsing and generation preparation run outside SQLite write transactions.
 use super::*;
 use crate::document_cache::{DocumentCache, DocumentTransaction};
+use crate::document_parse_cache;
 use zorid_core::OperationId;
 use zorid_index::{
-    document_extraction_version, EntryWitness, Exclusion, Generation, GenerationBuilder,
+    document_extraction_version, EntryWitness, Exclusion, ExtractionMode, Generation, GenerationBuilder,
     IndexError, IndexRecord, IndexSnapshotId, LiteralPage, LiteralPageBuilder, LiteralQuery,
     LiteralToken, Manifest, MetadataProjection, MetadataRequest, PublicationFence,
-    SemanticVersions, SourceSnapshotId, SourceWatermark, INDEX_SCHEMA_VERSION,
+    ParseCacheOutcome, SemanticVersions, SourceSnapshotId, SourceWatermark, INDEX_SCHEMA_VERSION,
     LITERAL_QUERY_VERSION, MAX_GENERATION_METADATA_BYTES, MAX_PUMP_BYTES, RESOLVER_VERSION,
 };
 
@@ -221,6 +222,28 @@ impl DocumentIndexStage {
         &self.snapshot
     }
 }
+/// Disjoint outcomes for eligible content-facts lookups in this pump only.
+/// Same-entry generation reuse and skipped optional writes are independent.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentParseCacheProgress {
+    pub hits: usize,
+    pub misses: usize,
+    pub unavailable: usize,
+    pub corrupt: usize,
+    pub unsupported: usize,
+}
+impl DocumentParseCacheProgress {
+    fn record(&mut self, outcome: ParseCacheOutcome) {
+        match outcome {
+            ParseCacheOutcome::Hit => self.hits += 1,
+            ParseCacheOutcome::Miss => self.misses += 1,
+            ParseCacheOutcome::Unavailable => self.unavailable += 1,
+            ParseCacheOutcome::Corrupt => self.corrupt += 1,
+            ParseCacheOutcome::Unsupported => self.unsupported += 1,
+        }
+    }
+}
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentIndexProgress {
@@ -228,6 +251,7 @@ pub struct DocumentIndexProgress {
     pub prepared_documents: usize,
     /// Unchanged parser records reused during this pump (bodies remain bounded).
     pub reused_documents: usize,
+    pub parse_cache: DocumentParseCacheProgress,
     pub total_documents: usize,
     pub ready: bool,
 }
@@ -979,7 +1003,8 @@ impl Store {
         let mut source_bytes = 0usize;
         let mut encoded_bytes = 0usize;
         let mut reused_documents = 0;
-        for witness in b.pending_entries() {
+        let mut parse_cache = DocumentParseCacheProgress::default();
+        'pending: for witness in b.pending_entries() {
             let original = h
                 .manifest
                 .entries
@@ -1056,7 +1081,22 @@ impl Store {
                                     .as_str()
                                     .to_ascii_lowercase()
                                     .ends_with(".md");
-                                let row = IndexRecord::text(witness, &request, markdown)?;
+                                match b.preflight_extraction(&witness, request.source.len()) {
+                                    Ok(()) => {},
+                                    Err(IndexError::PumpLimit) if !prepared.is_empty() => break 'pending,
+                                    Err(error) => return Err(error.into()),
+                                }
+                                let mode = if markdown {
+                                    ExtractionMode::Markdown
+                                } else {
+                                    ExtractionMode::PlainText
+                                };
+                                let (row, outcome) = document_parse_cache::extract(
+                                    &self.document_cache, witness, &request, mode,
+                                )?;
+                                if let Some(outcome) = outcome {
+                                    parse_cache.record(outcome);
+                                }
                                 let text = row
                                     .text_digest()
                                     .is_some()
@@ -1094,6 +1134,7 @@ impl Store {
             snapshot: stage.snapshot.clone(),
             prepared_documents: b.prepared_records(),
             reused_documents,
+            parse_cache,
             total_documents: h
                 .manifest
                 .entries

@@ -10,7 +10,7 @@ const VERSION: i64 = 1;
 const SCOPE_SQL: &str = "CREATE TABLE document_cache_scope (singleton INTEGER PRIMARY KEY CHECK(singleton=1), local_store_id TEXT NOT NULL)";
 
 pub(crate) struct DocumentCache {
-    connection: Connection,
+    pub(super) connection: Connection,
 }
 
 impl DocumentCache {
@@ -69,7 +69,7 @@ pub(crate) fn validate(connection: &Connection, local: &OperationId) -> IndexRes
     let normalize = |sql: &str| sql.split_whitespace().collect::<Vec<_>>().join(" ");
     if application != APPLICATION_ID
         || version != VERSION
-        || objects.len() > SCHEMA.len() + 1
+        || objects.len() > SCHEMA.len() + crate::document_parse_cache::SCHEMA.len() + 1
         || !objects.iter().any(|(kind, name, sql)| {
             kind == "table"
                 && name == "document_cache_scope"
@@ -79,6 +79,7 @@ pub(crate) fn validate(connection: &Connection, local: &OperationId) -> IndexRes
             kind != "table"
                 || !std::iter::once(("document_cache_scope", SCOPE_SQL))
                     .chain(SCHEMA.iter().copied())
+                    .chain(crate::document_parse_cache::SCHEMA.iter().copied())
                     .any(|(expected, registered)| {
                         name == expected && normalize(sql) == normalize(registered)
                     })
