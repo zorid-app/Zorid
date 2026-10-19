@@ -1037,3 +1037,51 @@ fn current_job_policy_fences_hidden_acknowledged_uploads_before_late_io() {
     assert_eq!(host.executor.snapshot().handles, 0);
     assert_eq!(host.executor.snapshot().transfer_scratch_bytes, 0);
 }
+
+#[test]
+fn client_disposal_observation_includes_hidden_jobs_and_preserves_other_clients() {
+    let mut host = Host::new();
+    let first = host.reserve(request("first", 1, "first source"));
+    let mut other_request = request("other", 1, "other source");
+    other_request.tag.buffer.client = id("other-client");
+    let other = host.reserve(other_request);
+    host.executor.begin_source_upload(&first).unwrap();
+    host.executor
+        .append_source_upload(&first, 0, b"first")
+        .unwrap();
+    host.executor.begin_source_upload(&other).unwrap();
+    host.executor
+        .append_source_upload(&other, 0, b"other")
+        .unwrap();
+    assert!(host.executor.client_has_jobs(&id("client")));
+    assert!(host.executor.client_has_jobs(&id("other-client")));
+    assert!(!host.executor.client_has_jobs(&id("foreign")));
+    host.executor
+        .command(DraftCommand::ReleaseClient(id("client")))
+        .unwrap();
+    assert!(host.executor.snapshot().runtime.outcomes.is_empty());
+    assert!(host.executor.client_has_jobs(&id("client")));
+    let ticket = host.next();
+    let record = host.step(&ticket);
+    assert_eq!(record.issued.job, first);
+    assert_eq!(record.completion, d::Completion::Dropped);
+    assert!(!host.executor.client_has_jobs(&id("client")));
+    assert!(host.executor.client_has_jobs(&id("other-client")));
+    assert_eq!(
+        host.executor
+            .transfer_progress(&other)
+            .unwrap()
+            .source_bytes_received,
+        5
+    );
+    assert_eq!(
+        host.executor.snapshot().runtime.usage.source_bytes,
+        "other source".len()
+    );
+    host.executor
+        .command(DraftCommand::ReleaseClient(id("other-client")))
+        .unwrap();
+    host.drive();
+    assert!(!host.executor.client_has_jobs(&id("other-client")));
+    assert_eq!(host.executor.snapshot().handles, 0);
+}

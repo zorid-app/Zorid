@@ -215,6 +215,11 @@ impl NativeVault {
             .ok_or(NativeDocumentWorkError::NotStarted)?
             .transfer_progress(token)?)
     }
+    pub fn document_draft_client_has_jobs(&self, client: &OperationId) -> bool {
+        self.document_drafts
+            .as_ref()
+            .is_some_and(|owner| owner.client_has_jobs(client))
+    }
     pub fn document_draft_snapshot(&self) -> Option<NativeDraftSnapshot> {
         self.document_drafts
             .as_ref()

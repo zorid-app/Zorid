@@ -521,6 +521,14 @@ impl DocumentDraftExecutor {
             transfer_scratch_bytes: self.transfer_scratch_bytes(),
         }
     }
+    /// Actual registry ownership, including ACK-hidden jobs awaiting real Drop.
+    /// This is disposal evidence only; trusted hosts still settle accepted work
+    /// and require whole-owner close readiness for the last lease.
+    pub fn client_has_jobs(&self, client: &OperationId) -> bool {
+        self.jobs
+            .values()
+            .any(|job| job.token.tag.buffer.client == *client)
+    }
     pub fn work_snapshot(&self) -> w::Snapshot {
         self.work.snapshot()
     }
