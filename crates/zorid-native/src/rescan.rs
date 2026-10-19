@@ -221,7 +221,7 @@ impl NativeVault {
                             let imported = self
                                 .observe_snapshot(&path, &directory, Some(snapshot))?
                                 .is_some();
-                            let state = self.store.list()?.into_iter().find(|s| s.path == path);
+                            let state = self.store.read_path_metadata(&path)?.map(|entry| entry.state);
                             let baseline = match &state {
                                 Some(s) => self
                                     .store
@@ -246,7 +246,7 @@ impl NativeVault {
                             let imported = self.observe_directory(&path)?.is_some();
                             let folder = self.paths.directory(&path)?;
                             let folder_identity = fs::identity(&folder)?;
-                            let state = self.store.list()?.into_iter().find(|s| s.path == path);
+                            let state = self.store.read_path_metadata(&path)?.map(|entry| entry.state);
                             let baseline = match &state {
                                 Some(s) => self
                                     .store

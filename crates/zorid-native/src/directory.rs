@@ -14,7 +14,7 @@ impl NativeVault {
             parent_inode: fs::identity(&parent)?,
         };
         self.paths.verify_parent(path, &parent)?;
-        let existing = self.store.list()?.into_iter().find(|s| s.path == *path);
+        let existing = self.store.read_path_metadata(path)?.map(|entry| entry.state);
         if let Some(owner) = self.store.physical_owner_at(path)? {
             if existing
                 .as_ref()

@@ -24,6 +24,9 @@ pub use external_create::{select_external_file_mode, ExternalFileMode};
 #[path = "directory.rs"]
 mod directory;
 #[cfg(test)]
+#[path = "import_lookup_tests.rs"]
+mod import_lookup_tests;
+#[cfg(test)]
 #[path = "external_create_tests.rs"]
 mod external_create_tests;
 #[path = "external_namespace.rs"]
@@ -501,7 +504,7 @@ impl NativeVault {
         }
         self.namespace_clear(path)?;
         self.paths.verify_parent(path, &parent)?;
-        let state = self.store.list()?.into_iter().find(|s| s.path == *path);
+        let state = self.store.read_path_metadata(path)?.map(|entry| entry.state);
         if let Some(owner) = self.store.physical_owner_at(path)? {
             if state
                 .as_ref()
