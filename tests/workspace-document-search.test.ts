@@ -349,8 +349,41 @@ test('rich source selection requires exact current saved revision, clean corresp
   ui.workspace.buffers.get('Note.md')!.dirty=false;ui.workspace.vault.readDurableTextById=async()=>({entryId:'note',revision:'newer',path:'Note.md',content:'changed',stat:{ctime:0,mtime:0,size:7}});await nav.invoke(location);assert.equal(nav.selections.length,1);assert.equal(nav.opens,3);
 });
 
-test('rich source navigation retires a late durable read after a new navigation intent',async t=>{
-  const ui=await setup(t),nav=prepareRichNavigation(ui),pending=deferred<any>();ui.workspace.vault.readDurableTextById=()=>pending.promise;
-  const opening=nav.invoke({locator:{origin:'source',range:{bytes:[0,1],utf16:[0,1]}}});await Promise.resolve();await Promise.resolve();
-  ui.internal.navigationIntent.set(ui.workspace.activePane,99);pending.resolve({entryId:'note',revision:'revision-note',path:'Note.md',content:'needle'});await opening;assert.equal(nav.opens,0);assert.equal(nav.selections.length,0);
+test('rich source selection retires a late durable read after a new navigation intent',async t=>{
+  const ui=await setup(t),nav=prepareRichNavigation(ui),pending=deferred<any>();let reading=false;ui.workspace.vault.readDurableTextById=()=>{reading=true;return pending.promise;};
+  const opening=nav.invoke({locator:{origin:'source',range:{bytes:[0,1],utf16:[0,1]}}});await until(()=>reading,'post-open source read');
+  ui.internal.navigationIntent.set(ui.workspace.activePane,99);pending.resolve({entryId:'note',revision:'revision-note',path:'Note.md',content:'needle'});await opening;assert.equal(nav.opens,1);assert.equal(nav.selections.length,0);
+});
+
+test('rich result click survives its own dirty-pane committed flush',async t=>{
+  const ui=await setup(t),f=richFixture();ui.setService(f.service);await ui.search('needle');await until(()=>f.pages===1,'rich search ready');
+  const pane=ui.workspace.activePane;
+  ui.workspace.vault.entries.get('Note.md')!.entryId='note';ui.workspace.vault.entries.get('Note.md')!.revision='revision-note';
+  ui.adapter.stat=async()=>ui.workspace.vault.entries.get('Note.md')!;
+  // Exercise the real openNote post-flush gate. A committed edit to the active
+  // note refreshes search while that click is still waiting to open its target.
+  ui.internal.flushPane=async()=>{await ui.workspace.vault.modify('Note.md','committed dirty edit');};
+  let admitted=false;
+  ui.internal.bufferFor=async()=>({});
+  const realOpen=ui.workspace.openNote.bind(ui.workspace);
+  ui.workspace.openNote=async(...args)=>{await realOpen(...args);admitted=ui.internal.current(pane).path==='Note.md';};
+  ui.root.querySelector<HTMLButtonElement>('.document-search-title')!.click();
+  await until(()=>admitted,'search result admitted after flush');
+  assert.equal(ui.internal.current(pane).path,'Note.md');
+});
+
+test('source-only committed refresh preserves a live IME search draft through compositionend',async t=>{
+  const ui=await setup(t),f=richFixture();ui.setService(f.service);await ui.search('needle');await until(()=>f.pages===1,'rich search ready');
+  const input=ui.root.querySelector<HTMLInputElement>('.document-search input[type="search"]')!;
+  input.dispatchEvent(new window.CompositionEvent('compositionstart',{bubbles:true}));input.value='漢字';input.dispatchEvent(new window.InputEvent('input',{bubbles:true,isComposing:true}));
+  await ui.workspace.vault.create('New.md','saved');assert.equal(input.value,'漢字');
+  input.dispatchEvent(new window.CompositionEvent('compositionend',{bubbles:true,data:'漢字'}));assert.equal(ui.internal.query,'漢字');
+  await until(()=>f.pages===2,'new composed query');assert.equal(input.value,'漢字');
+});
+
+test('a later rich result click reserves navigation before an older stat lookup can finish',async t=>{
+  const ui=await setup(t),nav=prepareRichNavigation(ui),pending=deferred<any>();let calls=0;
+  ui.adapter.stat=async()=>++calls===1?pending.promise:ui.workspace.vault.entries.get('Note.md')!;
+  const first=nav.invoke(undefined);await until(()=>calls===1,'first stat pending');await nav.invoke(undefined);assert.equal(nav.opens,1);
+  pending.resolve(ui.workspace.vault.entries.get('Note.md'));await first;assert.equal(nav.opens,1);
 });

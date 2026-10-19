@@ -45,7 +45,7 @@ const locationPayload=(location:SearchLocation):string=>{
  * only admits ordered chunks and bounds the projection retained for display. */
 export function mountDocumentSearch(parent:HTMLElement,options:DocumentSearchControllerOptions):DocumentSearchController {
   const MAX_GROUPS=200,MAX_SNIPPETS=1000,MAX_BYTES=4*1024*1024;
-  let spec={...(options.spec??initialDocumentSearchSpec)},request=0,sourceEpoch=0,pinEpoch=-1;
+  let spec={...(options.spec??initialDocumentSearchSpec)},request=0,sourceEpoch=0,pinEpoch=-1,navigationEpoch=0;
   let disposed=false,released=false,timer:ReturnType<typeof setTimeout>|undefined;
   let pin:DocumentPin|undefined,query:DocumentRichQuery|undefined,cursor:DocumentCursor|null=null;
   let querySpec:SearchSpec|undefined,queryEpoch=-1,queryPrepared=false,queryHasPage=false;
@@ -66,7 +66,7 @@ export function mountDocumentSearch(parent:HTMLElement,options:DocumentSearchCon
     onAction(id,action){if(!admit(id))return;if(action==='loadMore'){enqueue();}else{if(action==='rebuild')rebuild=true;invalidate();}},
     onOpen(id,entry,location,modifiers){
       if(!admit(id))return;
-      const current=()=>admit(id);
+      const intent=++navigationEpoch,current=()=>live()&&navigationEpoch===intent;
       void Promise.resolve().then(()=>current()?options.onOpen(entry,location,modifiers,current):undefined).catch(()=>{
         if(current()){message='This result could not be opened. Refresh search and try again.';paint();}
       });
@@ -87,14 +87,14 @@ export function mountDocumentSearch(parent:HTMLElement,options:DocumentSearchCon
     paint();
   }
   function setSpec(next:SearchSpec):void {
-    if(!live()||sameSpec(spec,next))return;spec={...next};request++;options.onSpec?.(spec);
+    if(!live()||sameSpec(spec,next))return;spec={...next};request++;navigationEpoch++;options.onSpec?.(spec);
     message=undefined;needsRefresh=false;phase=spec.query.length?'loading':'idle';stale=!!result;
     if(!spec.query.length){resetResults();stale=false;}
     paint();if(timer!==undefined)clearTimeout(timer);
     timer=setTimeout(()=>{timer=undefined;enqueue();},options.debounceMs??120);
   }
   function invalidate():void {
-    if(!live())return;sourceEpoch++;request++;stale=!!result;message=undefined;needsRefresh=false;
+    if(!live())return;sourceEpoch++;stale=!!result;message=undefined;needsRefresh=false;
     phase=spec.query.length?'loading':'idle';paint();
     if(timer!==undefined)clearTimeout(timer);
     timer=setTimeout(()=>{timer=undefined;enqueue();},options.debounceMs??120);
@@ -195,7 +195,7 @@ export function mountDocumentSearch(parent:HTMLElement,options:DocumentSearchCon
       scheduled=false;if(!live())return;
       // A queued latest request consumes the most recent input, not a captured
       // debounce callback. In-flight replies remain owned but cannot repaint.
-      const stamp=request;try{await drive();}catch(error){if(stamp===request)failure(error);}
+      const stamp=request,epoch=sourceEpoch;try{await drive();}catch(error){if(stamp===request&&epoch===sourceEpoch)failure(error);}
     });
   }
   paint();if(spec.query.length)enqueue();

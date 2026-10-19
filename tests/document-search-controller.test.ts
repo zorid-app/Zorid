@@ -14,7 +14,7 @@ function page(spec:SearchSpec,files:readonly SearchFileChunk[]=[chunk()],cursor:
 }
 function deferred<T>(){let resolve!:(v:T)=>void;const promise=new Promise<T>(r=>resolve=r);return {promise,resolve};}
 async function until(predicate:()=>boolean){const end=Date.now()+2000;while(!predicate()){if(Date.now()>end)assert.fail('Timed out');await new Promise(r=>setTimeout(r,2));}}
-function fixture(config:{query?:(spec:SearchSpec,index:number)=>Promise<DocumentRichQuery>;open?:()=>Promise<void>;closePin?:()=>Promise<void>;acquire?:()=>Promise<boolean>}={}){
+function fixture(config:{query?:(spec:SearchSpec,index:number)=>Promise<DocumentRichQuery>;open?:()=>Promise<void>;closePin?:()=>Promise<void>;acquire?:()=>Promise<boolean>;onOpen?:()=>Promise<void>}={}){
   const frames:DocumentSearchFrame[]=[],events:string[]=[],opened:any[]=[];let callbacks!:DocumentSearchCallbacks,opens=0,fresh=0,alive=true;
   const unused=async():Promise<never>=>{throw new Error('unexpected');};
   const query=(spec:SearchSpec):DocumentRichQuery=>({queryId:spec.query,prepare:async()=>({state:'ready',cursor:'start' as DocumentCursor}),page:async()=>page(spec),close:async()=>{events.push(`close:${spec.query}`);}});
@@ -25,7 +25,7 @@ function fixture(config:{query?:(spec:SearchSpec,index:number)=>Promise<Document
   }};
   const controller=mountDocumentSearch({} as HTMLElement,{service,scopeId:'scope',isCurrent:()=>alive,debounceMs:0,
     acquireFresh:async()=>{fresh++;return config.acquire?config.acquire():true;},
-    onOpen:async(...args)=>{opened.push(args);},viewFactory:(_,next)=>{callbacks=next;return {render(frame){frames.push(structuredClone(frame));},focusQuery(){},destroy(){events.push('destroy');}};}});
+    onOpen:async(...args)=>{opened.push(args);await config.onOpen?.();},viewFactory:(_,next)=>{callbacks=next;return {render(frame){frames.push(structuredClone(frame));},focusQuery(){},destroy(){events.push('destroy');}};}});
   const spec=(query:string,extra:Partial<SearchSpec>={})=>({...initialDocumentSearchSpec,query,...extra});
   return {controller,frames,events,opened,spec,get callbacks(){return callbacks;},get frame(){return frames.at(-1)!;},get opens(){return opens;},get fresh(){return fresh;},set alive(value:boolean){alive=value;},async search(query:string,extra:Partial<SearchSpec>={}){controller.setSpec(spec(query,extra));await until(()=>frames.at(-1)?.phase!=='loading');await controller.ready;}};
 }
@@ -96,7 +96,7 @@ test('inconsistent continuation counts reject without corrupting earlier coheren
 });
 
 test('typed safe diagnostic copy and rich failures never invoke literal fallback',async()=>{
-  const ui=fixture({query:async()=>{throw new DocumentSemanticsError('search_compile',{code:'malformed',queryRange:{bytes:[0,1],utf16:[0,1]},message:'Check the search expression.'});}});
+  const ui=fixture({query:async()=>{throw new DocumentSemanticsError('search_compile',{code:'invalid-nesting',queryRange:{bytes:[0,1],utf16:[0,1]},message:'Check the search expression.'});}});
   await ui.search('(');assert.equal(ui.frame.message,'Check the search expression.');assert.equal(ui.frame.phase,'error');await ui.controller.close();
 });
 
@@ -135,4 +135,24 @@ test('conflicting payload for a repeated per-file location rejects without corru
   const ui=fixture({query:async spec=>({queryId:'q',prepare:async()=>({state:'ready',cursor:'0' as DocumentCursor}),page:async()=>++calls===1?page(spec,[first],'1'):page(spec,[second]),close:async()=>{}})});
   await ui.search('x');ui.callbacks.onAction(ui.frame,'loadMore');await ui.controller.ready;
   assert.equal(ui.frame.phase,'error');assert.equal(ui.frame.groups[0].locations.length,1);assert.equal(ui.frame.groups[0].locations[0].occurrences,1);assert.equal(ui.frame.groups[0].snippets.length,1);await ui.controller.close();
+});
+
+test('admitted navigation survives committed source refresh, while query/options replacement retires it',async()=>{
+  const ui=fixture();await ui.search('x');ui.callbacks.onOpen(ui.frame,entry,undefined,{primary:false,shift:false,alt:false});await Promise.resolve();await Promise.resolve();
+  const current=ui.opened[0][3];assert.equal(current(),true);ui.controller.invalidateSource();assert.equal(current(),true);
+  ui.controller.setSpec(ui.spec('x',{caseSensitive:true}));assert.equal(current(),false);await ui.controller.close();
+});
+
+test('source epoch retires late old errors even when request identity stays stable for IME',async()=>{
+  const pending=deferred<void>();let started=0;
+  const ui=fixture({query:async spec=>{const index=++started;return {queryId:String(index),prepare:async()=>({state:'ready',cursor:'0' as DocumentCursor}),page:async()=>{if(index===1){await pending.promise;throw new Error('old source failure');}return page(spec);},close:async()=>{}};}});
+  ui.controller.setSpec(ui.spec('x'));await until(()=>started===1);const request=ui.frame.requestId;ui.controller.invalidateSource();assert.equal(ui.frame.requestId,request);
+  await new Promise(r=>setTimeout(r,5));pending.resolve();await until(()=>ui.frame.phase==='results');assert.equal(ui.frames.some(frame=>frame.phase==='error'),false);assert.equal(ui.opens,2);await ui.controller.close();
+});
+
+test('newer admitted navigation retires older errors before they can repaint the latest successful click',async()=>{
+  const pending=deferred<void>();let calls=0;const ui=fixture({onOpen:async()=>{if(++calls===1){await pending.promise;throw new Error('old navigation');}}});await ui.search('x');
+  const activate=()=>ui.callbacks.onOpen(ui.frame,entry,undefined,{primary:false,shift:false,alt:false});
+  activate();await until(()=>calls===1);const oldCurrent=ui.opened[0][3];activate();await until(()=>calls===2);assert.equal(oldCurrent(),false);
+  pending.resolve();await new Promise(r=>setTimeout(r,5));assert.equal(ui.frame.message,undefined);await ui.controller.close();
 });

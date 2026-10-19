@@ -1637,10 +1637,10 @@ export class Workspace {
 
   private async openRichDocumentSearchEntry(entry:DocumentEntry,location:SearchLocation|undefined,newTab:boolean,admit:()=>boolean):Promise<void>{
     const vault=this.vault,pane=this.activePane,activation=this.paneActivationRevision,generation=this.vaultGeneration;
-    const originalNavigation=this.navigationIntent.get(pane);
     const active=()=>admit()&&this.vault===vault&&generation===this.vaultGeneration&&this.activePane===pane&&this.paneActivationRevision===activation&&this.panes.includes(pane);
-    const before=()=>active()&&this.navigationIntent.get(pane)===originalNavigation;
-    if(!before())return;
+    if(!active())return;
+    const navigation=(this.navigationIntent.get(pane)??0)+1;this.navigationIntent.set(pane,navigation);
+    const before=()=>active()&&this.navigationIntent.get(pane)===navigation;
     // entries is only a cached path hint. Admit identity using the existing
     // adapter stat/source protocol before opening, never text-decode a binary.
     const hinted=[...vault.entries.values()].find(value=>value.type==='file'&&value.entryId===entry.id);
@@ -1648,16 +1648,14 @@ export class Workspace {
     const observed=vault.adapter.stat?await vault.adapter.stat(hinted.path):undefined;if(!before())return;
     if(!observed||observed.type!=='file'||observed.entryId!==entry.id){notice('This result moved or changed. Refresh search.');return;}
     const path=observed.path,token=this.treeEntryToken(path);
-    let source=location?.locator.origin==='source'&&isMarkdown(path)?await vault.readDurableTextById(entry.id):undefined;
-    if(!before())return;
-    if(source&&(source.entryId!==entry.id||source.path!==path)){notice('This result moved. Refresh search.');return;}
     const guarded=()=>active()&&this.treeEntryToken(path)===token&&vault.entries.get(path)?.entryId===entry.id;
     await this.openNote(path,newTab,pane,true,'',activation,guarded,entry.id);
-    const expectedNavigation=(originalNavigation??0)+1;
+    const expectedNavigation=navigation+1;
     if(!guarded()||this.navigationIntent.get(pane)!==expectedNavigation||this.current(pane)?.path!==path)return;
-    if(location?.locator.origin!=='source')return;
-    if(isMarkdown(path))source=await vault.readDurableTextById(entry.id);
+    if(location?.locator.origin!=='source'||!pane.editor||!isMarkdown(path))return;
+    const source=await vault.readDurableTextById(entry.id);
     if(!guarded()||this.navigationIntent.get(pane)!==expectedNavigation||this.current(pane)?.path!==path)return;
+    if(!pane.editor)return;
     const buffer=this.buffers.get(path),saved=buffer?.savedDurableWitness;
     const range=location.locator.range.utf16;
     if(!source||source.path!==path||source.entryId!==entry.id||source.revision!==entry.revision||!buffer||buffer.dirty||buffer.error||saved?.entryId!==entry.id||saved.revision!==entry.revision
