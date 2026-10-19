@@ -282,6 +282,7 @@ impl<'a> Resolver<'a> {
         let manifest = Arc::new(self.manifest.clone());
         let mut retained_bytes = size_of::<PreparedNamespace>()
             .saturating_add(size_of::<Manifest>())
+            .saturating_add(manifest.derived_index_heap_bytes())
             .saturating_add(2 * size_of::<usize>())
             .saturating_add(
                 manifest

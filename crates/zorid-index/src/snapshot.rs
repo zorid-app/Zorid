@@ -163,6 +163,9 @@ impl IndexSnapshotId {
 pub struct Manifest {
     source: SourceSnapshotId,
     entries: Vec<EntryState>,
+    // Offsets into the immutable path-ordered rows, sorted by exact EntryId.
+    // No identity/path strings or authority state are duplicated.
+    entries_by_id: Vec<usize>,
 }
 impl Manifest {
     pub fn new(source: SourceSnapshotId, mut entries: Vec<EntryState>) -> Result<Self, IndexError> {
@@ -173,7 +176,17 @@ impl Manifest {
             }
         }
         entries.sort_by(|a, b| a.path.cmp(&b.path).then(a.id.cmp(&b.id)));
-        Ok(Self { source, entries })
+        let mut entries_by_id = Vec::new();
+        entries_by_id
+            .try_reserve_exact(entries.len())
+            .map_err(|_| IndexError::GenerationLimit)?;
+        entries_by_id.extend(0..entries.len());
+        entries_by_id.sort_unstable_by(|&a, &b| entries[a].id.cmp(&entries[b].id));
+        Ok(Self {
+            source,
+            entries,
+            entries_by_id,
+        })
     }
     pub fn source(&self) -> &SourceSnapshotId {
         &self.source
@@ -181,8 +194,20 @@ impl Manifest {
     pub fn entries(&self) -> &[EntryState] {
         &self.entries
     }
+    pub(crate) fn derived_index_heap_bytes(&self) -> usize {
+        self.entries_by_id
+            .capacity()
+            .saturating_mul(std::mem::size_of::<usize>())
+    }
     pub fn entry(&self, id: &EntryId) -> Option<&EntryState> {
-        self.entries.iter().find(|entry| &entry.id == id)
+        self.entries_by_id
+            .binary_search_by(|&index| {
+                #[cfg(test)]
+                manifest_lookup_tests::record_comparison();
+                self.entries[index].id.cmp(id)
+            })
+            .ok()
+            .map(|index| &self.entries[self.entries_by_id[index]])
     }
     pub fn witness(&self, id: &EntryId) -> Result<EntryWitness, IndexError> {
         let entry = self
@@ -336,5 +361,189 @@ impl From<IndexSnapshotId> for IndexSnapshotWire {
             generation: value.generation.to_string(),
             versions: value.versions,
         }
+    }
+}
+
+#[cfg(test)]
+mod manifest_lookup_tests {
+    use super::*;
+    use std::cell::Cell;
+    use zorid_core::{Revision, VaultPath};
+
+    thread_local! {
+        static COMPARISONS: Cell<usize> = const { Cell::new(0) };
+    }
+    pub(super) fn record_comparison() {
+        COMPARISONS.with(|value| value.set(value.get() + 1));
+    }
+    fn source(store: &str, watermark: &str) -> SourceSnapshotId {
+        SourceSnapshotId::new(
+            OperationId::new(store).unwrap(),
+            SourceWatermark::new(watermark).unwrap(),
+        )
+    }
+    fn row(index: usize, path_index: usize) -> EntryState {
+        EntryState {
+            id: EntryId::new(format!("entry-{index:05}")).unwrap(),
+            revision: Revision::new(format!("revision-{index}")).unwrap(),
+            path: VaultPath::new(format!("Notes/Path-{path_index:05}.md")).unwrap(),
+            kind: if index % 7 == 0 {
+                EntryKind::Folder
+            } else {
+                EntryKind::File
+            },
+            deleted: false,
+        }
+    }
+    fn assert_linear_parity(manifest: &Manifest, ids: &[EntryId]) {
+        for id in ids {
+            assert_eq!(
+                manifest.entry(id),
+                manifest.entries().iter().find(|entry| &entry.id == id),
+                "exact whole state for {}",
+                id.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn id_lookup_preserves_path_order_and_full_state_across_adversarial_permutations() {
+        // 73 permutes all residues modulo257; ID and path order disagree.
+        let mut rows: Vec<_> = (0..257).map(|i| row(i, (i * 73) % 257)).collect();
+        rows[0].path = VaultPath::new("a/é.md").unwrap();
+        rows[1].path = VaultPath::new("A/😀.md").unwrap();
+        rows[2].path = VaultPath::new("a/É.md").unwrap();
+        rows[3].id = EntryId::new("ENTRY-00003").unwrap();
+        let expected = Manifest::new(source("store", "7"), rows.clone()).unwrap();
+        let mut ordered = rows.clone();
+        ordered.sort_by(|a, b| a.path.cmp(&b.path).then(a.id.cmp(&b.id)));
+        assert_eq!(expected.entries(), ordered);
+        let mut ids: Vec<_> = rows.iter().map(|row| row.id.clone()).collect();
+        ids.extend(
+            ["entry-00003", "ENTRY-00004", "missing", "entry-99999"]
+                .map(|s| EntryId::new(s).unwrap()),
+        );
+        for mode in 0..5 {
+            let mut input = rows.clone();
+            match mode {
+                0 => {}
+                1 => input.reverse(),
+                2 => input.rotate_left(113),
+                3 => input.sort_by(|a, b| b.id.cmp(&a.id)),
+                4 => input.sort_by_key(|entry| entry.revision.as_str().len()),
+                _ => unreachable!(),
+            }
+            let manifest = Manifest::new(source("store", "7"), input).unwrap();
+            assert_eq!(manifest, expected);
+            assert_eq!(manifest.clone(), manifest);
+            assert_linear_parity(&manifest, &ids);
+            assert_eq!(manifest.entries_by_id.len(), rows.len());
+            assert!(manifest
+                .entries_by_id
+                .windows(2)
+                .all(|pair| manifest.entries[pair[0]].id < manifest.entries[pair[1]].id));
+            assert_eq!(
+                manifest.derived_index_heap_bytes(),
+                manifest.entries_by_id.capacity() * std::mem::size_of::<usize>()
+            );
+        }
+    }
+
+    #[test]
+    fn lookup_comparison_count_is_logarithmic_for_present_and_missing_ids() {
+        for count in [0usize, 1, 2, 3, 31, 4096] {
+            let rows = (0..count).map(|i| row(i * 2, count - i)).collect();
+            let manifest = Manifest::new(source("store", "7"), rows).unwrap();
+            let mut ids: Vec<_> = (0..count)
+                .map(|i| EntryId::new(format!("entry-{:05}", i * 2)).unwrap())
+                .collect();
+            ids.extend(["ENTRY", "entry-00001", "entry-99999"].map(|s| EntryId::new(s).unwrap()));
+            let bound = if count == 0 {
+                0
+            } else {
+                usize::BITS as usize - count.leading_zeros() as usize + 1
+            };
+            for id in ids {
+                COMPARISONS.with(|value| value.set(0));
+                let actual = manifest.entry(&id);
+                let comparisons = COMPARISONS.with(Cell::get);
+                assert_eq!(
+                    actual,
+                    manifest.entries().iter().find(|entry| entry.id == id)
+                );
+                assert!(
+                    comparisons <= bound,
+                    "{count} rows: {comparisons} comparisons exceed {bound}"
+                );
+                assert_eq!(comparisons == 0, count == 0);
+            }
+        }
+    }
+
+    #[test]
+    fn selected_rows_keep_file_requirement_and_full_namespace_witness_preconditions() {
+        let original = Manifest::new(source("store", "7"), vec![row(1, 2), row(0, 1)]).unwrap();
+        let id = original
+            .entries()
+            .iter()
+            .find(|row| row.kind == EntryKind::File)
+            .unwrap()
+            .id
+            .clone();
+        let witness = original.witness(&id).unwrap();
+        assert_eq!(original.check_witness(&witness), Ok(()));
+        assert_eq!(
+            original.witness(&EntryId::new("entry-00000").unwrap()),
+            Err(IndexError::MissingSource)
+        );
+        assert_eq!(
+            original.witness(&EntryId::new("missing").unwrap()),
+            Err(IndexError::MissingSource)
+        );
+        for change in 0..7 {
+            let mut rows = original.entries().to_vec();
+            let selected = rows.iter_mut().find(|row| row.id == id).unwrap();
+            let mut head = source("store", "7");
+            match change {
+                0 => selected.path = VaultPath::new("Moved.md").unwrap(),
+                1 => selected.revision = Revision::new("changed").unwrap(),
+                2 => selected.kind = EntryKind::Folder,
+                3 => selected.id = EntryId::new("replacement").unwrap(),
+                4 => rows.retain(|row| row.id != id),
+                5 => head = source("store", "8"),
+                6 => head = source("other-store", "7"),
+                _ => unreachable!(),
+            }
+            let current = Manifest::new(head, rows).unwrap();
+            assert_eq!(
+                current.check_witness(&witness),
+                Err(IndexError::StaleSource),
+                "case {change}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_duplicates_or_deleted_rows_never_gain_a_derived_index() {
+        let first = row(1, 1);
+        let mut duplicate_id = row(1, 2);
+        duplicate_id.kind = EntryKind::Folder;
+        let duplicate_path = row(2, 1);
+        let mut deleted = row(3, 3);
+        deleted.deleted = true;
+        for rows in [
+            vec![first.clone(), duplicate_id],
+            vec![first, duplicate_path],
+            vec![deleted],
+        ] {
+            assert_eq!(
+                Manifest::new(source("store", "7"), rows),
+                Err(IndexError::InvalidManifest)
+            );
+        }
+        let empty = Manifest::new(source("store", "7"), Vec::new()).unwrap();
+        assert!(empty.entries().is_empty());
+        assert_eq!(empty.derived_index_heap_bytes(), 0);
+        assert_eq!(empty.entry(&EntryId::new("missing").unwrap()), None);
     }
 }
