@@ -43,7 +43,22 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   Evidence `/private/tmp/zorid-s1-browser-cache-6f2b177b-build/final-proof.json`,
   `/private/tmp/zorid-s1-web-cache-100-6f2b177b-evidence/report.json` and
   `/private/tmp/zorid-s1-browser-cache-tiny-6f2b177b-evidence/report.json`.
-  Runtime slot released. Native build/CLI/Electron cache acceptance is NEXT.
+  Matching native release `255caa28` passes in104.363s; desktop frontend and
+  unchanged normal Electron100 pass all five phases, including exact save,
+  checkpoint, search and retained warm generation. Three normal quits drain
+  native hosts; no owned processes remain. Read-only inspection validates103
+  source-corresponding fact versions, not observed cache hits. Evidence:
+  `/private/tmp/zorid-s1-release-255caa28-retry-4icis0if/build.json` and
+  `/private/tmp/zorid-s1-cache-desktop-255caa28-evidence/acceptance-summary.json`.
+  Shared Cargo artifacts initially contained older parser exports; metadata-only
+  workspace invalidation preserved source bytes and fixed the matching build.
+  Later Electron launches still record reconciliation scan-limit warnings and
+  guarded read errors; these remain open, not an error-free runtime claim.
+  Standalone CLI14-phase cache acceptance is NEXT: private runner `b3124f79`
+  is independently reviewed; prior attempts stopped on tool/environment gates
+  (Darwin time syscall, system Python SQLite open, disk floor), not passed tests.
+  Completed disposable fixtures are being byte-verified/archived for disk margin;
+  no targets, manual playgrounds or real vaults are removed. No app/build is live.
   Desktop transport compatibility fix `f22d162f` is integrated `a70c8202`:
   permit validated optional native `parseCache` counters and preserve them in
   frontend progress. Owner `storage_recovery_ui_impl`, isolated
@@ -52,7 +67,7 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   failures; candidate11/11 and TypeScript pass. Four integrated file hashes match
   validated source; Rust/browser inputs are unchanged from the tested freeze.
   Evidence `/private/tmp/zorid-desktop-parse-cache-validation.json`. Actual
-  matching native build and CLI/Electron acceptance still pending.
+  matching CLI cache acceptance still pending; Electron compatibility passes.
 - **Combined native result:** release `b3ed4400` passed build115.545s and family100
   correctness (all eight full literal oracles, complete coverage, exact physical/
   authority sources and watermark108). Rust inputs match integrated `2fb58f33`;
@@ -134,6 +149,10 @@ recover space. Their `disposable-data.tar.gz` archives are byte-verified against
 per-file hashes in each `fixture-retirement.json`; reports, manifests and raw logs
 remain unchanged. No shared targets, real vaults or manual playgrounds were removed.
 Old evidence paths now require archive extraction for live fixture access.
+The same verified retirement now covers the `vault`/`local-data` children of
+normal-family10k `b3ed4400` and `d0de1c83`, and only `vault` in pure-core10k
+`3f41fe08` and generated-Base10k `ffaee3ad`. Each root retains its complete
+`fixture-retirement.json`, compressed archive and unchanged top-level evidence.
 
 Detailed evidence, ownership and limitations follow. Earlier checkpoint sections
 retain their original dated decisions and are superseded by this current summary.

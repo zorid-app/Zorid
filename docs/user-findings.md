@@ -1,5 +1,17 @@
 # User findings queue
 
+## S1 normal reopen still reaches scan limits — open
+
+Electron100 on `255caa28` passes save/search/warm-generation checks, but its later
+launches record reconciliation `complete=false`, `scan_limit` at notes55/52.
+This is not evidence of a persistent visible banner: later UI checks are quiet.
+Eight guarded read-handler errors (`vault_closed` / `Untrusted sender`) also occur
+without timestamps establishing their exact phase. Retain the admission/lifecycle
+gap; do not describe this run as error-free. Evidence:
+`/private/tmp/zorid-s1-cache-desktop-255caa28-evidence/report.json`.
+Source audit is checking repeated index/source reads within existing transactions;
+separate-transaction observations must still capture fresh authority.
+
 ## S1 desktop pump rejects new cache counters — focused fix integrated
 
 Source audit after native cache integration found that the Electron response
@@ -11,7 +23,8 @@ counters, preserves legacy absence and returns immutable copied service metrics.
 Independent source review approves `f22d162f`; parent-source tests have two intended
 failures, candidate11/11 plus TypeScript pass, and integrated file hashes match.
 Evidence `/private/tmp/zorid-desktop-parse-cache-validation.json`. Actual Electron
-acceptance remains pending; Chrome checks do not establish desktop compatibility.
+acceptance now passes the normal100 bridge/save/search/warm-restart subset on
+`255caa28`; cache presence is verified separately, not treated as a hit count.
 
 ## S1 generated Base queries eagerly prepare the full graph — confirmed baseline limitation
 
