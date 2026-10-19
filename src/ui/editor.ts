@@ -9,6 +9,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { defaultHighlightStyle, HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { searchKeymap, searchPanelOpen } from '@codemirror/search';
+import { completionStatus, closeCompletion, startCompletion } from '@codemirror/autocomplete';
 import { noteFindPanel } from '../editor/find-panel.ts';
 import { editorCommandHotkeys, runEditorCommand } from '../editor/editor-commands.ts';
 import type { EditorHotkeySource } from './hotkeys.ts';
@@ -71,6 +72,8 @@ export interface EditorHandle {
   insert(text: string): void;
   configureLists?(options: MarkdownListOptions): void;
   refreshLinks?(): void;
+  /** Re-read supplied metadata for an already open completion, without focus. */
+  refreshMetadata?(): void;
   fold?(action: EditorFoldAction): boolean;
 }
 export interface EditorOptions {
@@ -88,6 +91,7 @@ export interface EditorOptions {
   isUnresolved?: LiveInlineOptions['isUnresolved'];
   onLinkHover?: LiveInlineOptions['onHover'];
   wiki?: Omit<WikiCompletionOptions, 'paths'>;
+  subscribeMetadata?: (listener:()=>void)=>()=>void;
   transfers?: TransferOptions;
   listOptions?: MarkdownListOptions;
   hotkeys?: EditorHotkeySource;
@@ -163,6 +167,19 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
   if (options.mode === 'live' && bodyStart(view.state)) view.dispatch({ selection: { anchor: bodyStart(view.state) } });
   const disposeEmptyFocus = installEmptyNoteFocus(view, parent, options.onNativeEditorState ? isCurrent : undefined);
   if (options.onNativeEditorState) native = nativeEditorCommands(view, {onNativeEditorState:options.onNativeEditorState,isCurrent:() => isCurrent() && canAuthor()});
+  let metadataTimer:ReturnType<typeof setTimeout>|undefined;
+  const refreshMetadata=()=>{
+    if(destroyed||metadataTimer!==undefined)return;
+    metadataTimer=setTimeout(()=>{
+      metadataTimer=undefined;if(destroyed||!isCurrent()||!view.dom.isConnected)return;
+      view.dispatch({effects:refreshLiveInline.of()});
+      if(destroyed||!isCurrent())return;
+      const target=activeTableEditor(view)??view;
+      if(!target.hasFocus||target.compositionStarted||completionStatus(target.state)===null)return;
+      closeCompletion(target);startCompletion(target);
+    },0);
+  };
+  const stopMetadata=options.subscribeMetadata?.(refreshMetadata);
   return {
     setInteractionState(state) {
       if (destroyed) return;
@@ -225,6 +242,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       if (Number.isFinite(saved?.scrollLeft)) view.scrollDOM.scrollLeft = Math.max(0, saved.scrollLeft);
     },
     refreshLinks() { view.dispatch({ effects: refreshLiveInline.of() }); },
+    refreshMetadata,
     fold(action) {
       if (!Object.hasOwn(foldCommands, action)) return false;
       const child = activeTableEditor(view), childFocused = child?.hasFocus;
@@ -243,7 +261,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       view.dispatch({ changes: textChanges(previous, value),
         annotations: [externalChange.of(true), propertyUpdate.of(true), Transaction.addToHistory.of(false), isolateHistory.of('full')] });
     },
-    focus: () => { if (active && !destroyed) (activeTableEditor(view) ?? view).focus(); }, destroy() { if(destroyed)return; destroyed = true; native?.destroy(); disposeEmptyFocus(); view.destroy(); },
+    focus: () => { if (active && !destroyed) (activeTableEditor(view) ?? view).focus(); }, destroy() { if(destroyed)return; destroyed = true;clearTimeout(metadataTimer);stopMetadata?.(); native?.destroy(); disposeEmptyFocus(); view.destroy(); },
     insert(text) { if (!canAuthor() || view.state.readOnly) return; const target = activeTableEditor(view) ?? view; target.dispatch({ ...target.state.replaceSelection(text), annotations: Transaction.userEvent.of('input') }); target.focus(); },
   };
 }

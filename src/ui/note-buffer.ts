@@ -1,6 +1,9 @@
 import { DurableNoteState } from './note-durable-state.ts';
 import type { Vault } from '../core/vault.ts';
-import { normalizePath } from '../core/types.ts';
+import { isMarkdown, normalizePath } from '../core/types.ts';
+import type { NoteMetadata } from '../core/types.ts';
+import { DocumentDraftProjection } from './document-draft-projection.ts';
+import type { DraftMetadataState } from './document-draft-projection.ts';
 
 export interface StorageLike {
   getItem(key: string): string | null;
@@ -13,6 +16,8 @@ export interface NoteBufferOptions {
   storageKey?: string;
   debounceMs?: number;
   onState?: () => void;
+  /** Display facts changed; independent of save/error notifications. */
+  onMetadata?: () => void;
 }
 interface Draft { base: string; content: string; pending?: string }
 
@@ -39,6 +44,37 @@ export class NoteBuffer {
   private writeIntent?: string;
   private conflict = false;
   private writeValidators = new Set<() => void>();
+  private metadataProjection?:DocumentDraftProjection;
+  private metadataDemand=false;
+  private metadataRetired=false;
+  private metadataNotificationPending=false;
+
+  /** Clean buffers use committed facts. Only an actual unsaved Markdown read
+   * starts transient analysis; subsequent revisions share this buffer owner. */
+  getMetadata():NoteMetadata|undefined {
+    if(this.disposed||this.metadataRetired||!this.loaded||!isMarkdown(this.path))return undefined;
+    if(this.text===this.savedText)return this.vault.metadata.get(this.path);
+    this.metadataDemand=true;
+    if(!this.metadataProjection){
+      const service=this.vault.adapter.documentSemantics;
+      this.metadataProjection=new DocumentDraftProjection({owner:this.vault,service:service?.drafts,capable:service?.draftsAvailable===true,onChange:()=>this.metadataChanged()});
+      this.metadataProjection.update(this.path,this.savedText,{demand:false});
+    }
+    this.observeMetadata();return this.metadataProjection.current;
+  }
+  get metadataState():DraftMetadataState|undefined{return this.metadataProjection?.state;}
+  private observeMetadata():void {
+    if(this.text===this.savedText)this.metadataDemand=false;
+    this.metadataProjection?.update(this.path,this.text,{demand:this.metadataDemand&&isMarkdown(this.path)&&this.text!==this.savedText&&!this.metadataRetired});
+  }
+  private metadataChanged():void {
+    if(this.metadataNotificationPending||this.metadataRetired||this.disposed)return;
+    this.metadataNotificationPending=true;
+    queueMicrotask(()=>{this.metadataNotificationPending=false;if(!this.metadataRetired&&!this.disposed)try{this.options.onMetadata?.();}catch(error){console.error('Note metadata listener failed',error);}});
+  }
+  /** Retire facts without changing the durable draft or save error. A failed
+   * close remains owned by this buffer and is retried by calling again. */
+  async closeMetadataProjection():Promise<void>{this.metadataRetired=true;await this.metadataProjection?.close();}
 
   private validateWrite(): void { for (const validate of this.writeValidators) validate(); }
 
@@ -65,6 +101,7 @@ export class NoteBuffer {
     return `${this.options.storageKey ?? 'zorid:draft'}:${encodeURIComponent(path)}`;
   }
   private notify(): void {
+    this.observeMetadata();
     try { this.options.onState?.(); } catch (error) { console.error('Note state listener failed', error); }
   }
   private rememberError(error: unknown): Error {
@@ -337,11 +374,14 @@ export class NoteBuffer {
     });
   }
 
-  dispose(): Promise<void> {
-    return this.enqueue(async () => {
+  async dispose(): Promise<void> {
+    await this.enqueue(async () => {
       if (this.disposed) return;
       try { await this.save(); this.disposed = true; }
       finally { this.cancelTimer(); }
     });
+    // Facts cleanup must never become a durable save failure. The disposed
+    // buffer still owns failed cleanup and later dispose calls retry it.
+    await this.closeMetadataProjection();
   }
 }

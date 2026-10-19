@@ -27,7 +27,7 @@ import { createFileTreeDrag, executeFileTreeMove } from './file-tree-drag.ts';
 import type { FileTreeDragRow } from './file-tree-drag.ts';
 import { shouldOverrideInputContextMenu } from '../platform/input-context-menu.ts';
 import { bindNoteTitleFocus } from './note-title-focus.ts';
-import { Vault, parseMetadata } from '../core/index.ts';
+import { Vault } from '../core/index.ts';
 import type { VaultEntry } from '../core/index.ts';
 import { pickDesktopVault, createPlatformAdapter } from '../platform/index.ts';
 import type { PlatformVault } from '../platform/index.ts';
@@ -177,6 +177,18 @@ export class Workspace {
   private vaultTransition: Promise<void> = Promise.resolve();
   private canvasMarkdownEmbeds = new Set<MarkdownEmbeds>();
   private bufferSubscriptions = new NoteBufferSubscriptions();
+  private metadataListeners=new Set<()=>void>();
+  private subscribeDraftMetadata=(listener:()=>void):(()=>void)=>{this.metadataListeners.add(listener);return()=>this.metadataListeners.delete(listener);};
+  private draftBufferStateChanged(buffer:NoteBuffer,vault:Vault):void {
+    if(this.vault!==vault||this.buffers.get(buffer.path)!==buffer)return;
+    this.bufferSubscriptions.publish(buffer);this.renderStatus();
+    if(this.rightTab==='outline'&&this.current()?.path===buffer.path)this.renderRight();
+  }
+  private draftMetadataChanged(buffer:NoteBuffer,vault:Vault):void {
+    if(this.vault!==vault||this.buffers.get(buffer.path)!==buffer||this.platformReleased||this.platformDrained)return;
+    if(this.rightTab==='outline'&&this.current()?.path===buffer.path)this.renderRight();
+    for(const listener of [...this.metadataListeners])listener();
+  }
   private bufferRevisions = new WeakMap<NoteBuffer,number>();
   private bufferEntries = new WeakMap<NoteBuffer,symbol>();
   private initialized = false;
@@ -479,7 +491,7 @@ export class Workspace {
       const current=await vault.readDurableTextById(entryId);
       if(!current){if(raw.operation||raw.draft!==raw.base.content)throw new Error('Recovered note entry is missing; draft retained');continue;}
       let buffer:NoteBuffer;
-      buffer=new NoteBuffer(vault,current.path,{onState:()=>{if(this.vault===vault){this.bufferSubscriptions.publish(buffer);this.renderStatus();}}});
+      buffer=new NoteBuffer(vault,current.path,{onMetadata:()=>this.draftMetadataChanged(buffer,vault),onState:()=>this.draftBufferStateChanged(buffer,vault)});
       await buffer.load(entryId);result.set(current.path,buffer);
     }
     return result;
@@ -1005,9 +1017,10 @@ export class Workspace {
       if(expectedEntryId!==undefined&&!buffer.savedDurableWitness)throw new Error('The selected note is still loading; retry navigation');
       await buffer.load(expectedEntryId,validate);validate();return buffer;
     }
-    buffer=new NoteBuffer(this.vault,path,{storage:localStorage,storageKey:this.storageScope.draftPrefix(this.platform.id),onState:()=>{if(buffer)this.bufferSubscriptions.publish(buffer);this.renderStatus();}});
+    const vault=this.vault;
+    buffer=new NoteBuffer(vault,path,{onMetadata:()=>this.draftMetadataChanged(buffer!,vault),storage:localStorage,storageKey:this.storageScope.draftPrefix(this.platform.id),onState:()=>{if(buffer)this.draftBufferStateChanged(buffer,vault);}});
     this.buffers.set(path,buffer);const token=this.treeEntryToken(path);if(token)this.bufferEntries.set(buffer,token);
-    try{await buffer.load(expectedEntryId,validate);validate();return buffer;}catch(error){if(this.buffers.get(path)===buffer&&!buffer.savedDurableWitness)this.buffers.delete(path);throw error;}
+    try{await buffer.load(expectedEntryId,validate);validate();return buffer;}catch(error){if(this.buffers.get(path)===buffer&&!buffer.savedDurableWitness){await buffer.closeMetadataProjection();this.buffers.delete(path);}throw error;}
   }
 
   private renderTabBar(pane:Pane):void{
@@ -1212,9 +1225,9 @@ export class Workspace {
         const embeds=createEmbeds();pane.embeds=embeds;const generation=this.vaultGeneration;
         const ownsEditor=()=>generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path;
         const nativeCurrent=()=>ownsEditor()&&this.activePane===pane&&pane.runtime===runtime&&runtime.phase!=='disposed'&&this.current(pane)?.id===tab.id&&!this.closing&&!this.root.inert&&!this.startupFailed&&!this.platformReleased;
-        pane.editor=factory(host,{findPanelHost:findHost,...(this.platform.nativeEditor?{isCurrent:nativeCurrent,onNativeEditorState:(state:NativeEditorState)=>{if(nativeCurrent())this.sendNativeEditorState(state);}}:{}),hotkeys:this.hotkeys,value:buffer.text,mode:tab.mode,paths:()=>ownsEditor()?[...this.vault.entries.keys()]:[],
+        pane.editor=factory(host,{subscribeMetadata:this.subscribeDraftMetadata,findPanelHost:findHost,...(this.platform.nativeEditor?{isCurrent:nativeCurrent,onNativeEditorState:(state:NativeEditorState)=>{if(nativeCurrent())this.sendNativeEditorState(state);}}:{}),hotkeys:this.hotkeys,value:buffer.text,mode:tab.mode,paths:()=>ownsEditor()?[...this.vault.entries.keys()]:[],
           wiki:{sourcePath:()=>ownsEditor()?path:null,
-            metadata:target=>{if(!ownsEditor())return;const dirty=this.buffers.get(target),metadata=dirty?.dirty?parseMetadata(target,dirty.text):this.vault.metadata.get(target);return{aliases:metadata?.aliases,headings:metadata?.headings,mtime:this.vault.entries.get(target)?.mtime};},
+            metadata:target=>{if(!ownsEditor())return;const metadata=this.buffers.get(target)?.getMetadata()??(this.buffers.has(target)?undefined:this.vault.metadata.get(target));return{aliases:metadata?.aliases,headings:metadata?.headings,mtime:this.vault.entries.get(target)?.mtime};},
             resolvePath:(target,source)=>ownsEditor()?this.vault.metadata.resolveLink(source,target):null,
             linkText:(target,source)=>{
               if(!ownsEditor())return target.replace(/\.md$/i,'');
@@ -1299,11 +1312,11 @@ export class Workspace {
       taskChange:(target,line,checked)=>{validate();return this.changeTask(target,line,checked,validate);},
       contextMenu:(event,request,source)=>{if(!available())return;const target=vault.metadata.resolveLink(source,request.target,request.kind),entry=target?vault.entries.get(target):undefined;if(entry){const point=this.menuPoint(event);event.preventDefault();event.stopPropagation();this.fileMenu(entry,point.x,point.y);}},
     });
-    const options:Omit<EditorOptions,'value'|'mode'|'onChange'>={hotkeys:this.hotkeys,paths:()=>available()?[...vault.entries.keys()]:[],open,
+    const options:Omit<EditorOptions,'value'|'mode'|'onChange'>={subscribeMetadata:this.subscribeDraftMetadata,hotkeys:this.hotkeys,paths:()=>available()?[...vault.entries.keys()]:[],open,
         get listOptions(){return{useTab:workspace.settings.useTab,tabSize:workspace.settings.tabSize,smartIndentList:workspace.settings.smartIndentList};},
         isUnresolved:(target,kind)=>!available()||!vault.metadata.resolveLink(path,target,kind),
         wiki:{sourcePath:()=>available()?path:null,
-          metadata:target=>{if(!available())return;const dirty=this.buffers.get(target),metadata=dirty?.dirty?parseMetadata(target,dirty.text):vault.metadata.get(target);return{aliases:metadata?.aliases,headings:metadata?.headings,mtime:vault.entries.get(target)?.mtime};},
+          metadata:target=>{if(!available())return;const metadata=this.buffers.get(target)?.getMetadata()??(this.buffers.has(target)?undefined:vault.metadata.get(target));return{aliases:metadata?.aliases,headings:metadata?.headings,mtime:vault.entries.get(target)?.mtime};},
           resolvePath:(target,source)=>available()?vault.metadata.resolveLink(source,target):null,
           linkText:(target,source)=>{
             if(!available())return target.replace(/\.md$/i,'');
@@ -1915,8 +1928,12 @@ export class Workspace {
       this.rightContent.append(el('h3','right-heading','Linked mentions'));const links=path?this.vault.metadata.backlinks(path):[];
       const unique=[...new Set(links.map(link=>link.source))];for(const source of unique){const row=textButton(nameOf(source),()=>this.run(()=>this.openNote(source)),'backlink-row');row.prepend(icon('file',14));this.rightContent.append(row);}if(!unique.length)this.rightContent.append(el('p','sidebar-empty','No backlinks found.'));
     }else if(this.rightTab==='outline'){
-      const headings=path?this.vault.metadata.get(path)?.headings||[]:[];this.rightContent.append(el('h3','right-heading','Outline'));
-      for(const heading of headings){const row=textButton(heading.heading,()=>{const target=this.activePane.element.querySelector(`#heading-${heading.line}`);target?.scrollIntoView({block:'start',behavior:'smooth'});},'outline-row');row.style.paddingLeft=`${12+(heading.level-1)*12}px`;this.rightContent.append(row);}if(!headings.length)this.rightContent.append(el('p','sidebar-empty','No headings found.'));
+      const buffer=path?this.buffers.get(path):undefined,metadata=path?(buffer?buffer.getMetadata():this.vault.metadata.get(path)):undefined;
+      const state=buffer&&buffer.text!==buffer.savedText?buffer.metadataState:undefined,headings=metadata?.headings??[];
+      this.rightContent.append(el('h3','right-heading','Outline'));
+      if(state&&state.status!=='current'){this.rightContent.dataset.metadataStatus=state.status;const message=state.status==='pending'?'Updating outline…':state.code==='resource'?'Outline exceeds available resources.':'Outline is unavailable for these edits.';const status=el('p','sidebar-empty metadata-projection-status',message);status.setAttribute('role','status');this.rightContent.append(status);return;}
+      const source=buffer?.text,pane=this.activePane;
+      for(const heading of headings){const row=textButton(heading.heading,()=>{if(this.activePane!==pane||this.current()?.path!==path||buffer&&(this.buffers.get(path!)!==buffer||buffer.text!==source||buffer.getMetadata()!==metadata))return;const target=pane.element.querySelector(`#heading-${heading.line}`);target?.scrollIntoView({block:'start',behavior:'smooth'});},'outline-row');row.style.paddingLeft=`${12+(heading.level-1)*12}px`;this.rightContent.append(row);}if(!headings.length)this.rightContent.append(el('p','sidebar-empty','No headings found.'));
     }else{
       this.rightContent.append(el('h3','right-heading','Tags'));
       const state=this.vault.metadataFrame,frame=state?.frame,metadata=state?frame?.metadata:this.vault.metadata;
@@ -2113,7 +2130,7 @@ export class Workspace {
     if(/[\\/]/.test(name))throw new Error('Use the file menu to move files between folders.');const folder=parentOf(path);const suffix=this.vault.entries.get(path)?.type==='file'&&path.endsWith('.md')&&!name.endsWith('.md')?'.md':'';const next=`${folder?folder+'/':''}${name}${suffix}`;
     if(next===path)return next;await this.flush();const buffer=this.buffers.get(path);if(buffer)await buffer.rename(next);else await this.vault.rename(path,next);for(const pane of this.panes)await this.renderPane(pane);return next;
   }
-  private async deletePath(path:string):Promise<void>{await this.flush();await this.vault.trash(path);this.buffers.delete(path);notice('Moved to vault trash.');}
+  private async deletePath(path:string):Promise<void>{await this.flush();await this.vault.trash(path);await this.buffers.get(path)?.closeMetadataProjection();this.buffers.delete(path);notice('Moved to vault trash.');}
   private async newTab(pane=this.activePane):Promise<void>{await this.flushPane(pane);const tab:Tab={id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'};pane.tabs.push(tab);pane.active=tab.id;this.renderRight();this.run(()=>this.renderPane(pane));this.saveSession();}
   private async closeTab(pane:Pane,tab:Tab):Promise<void>{
     if(this.tasksRetiring)return;
