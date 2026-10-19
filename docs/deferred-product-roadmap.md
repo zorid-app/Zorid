@@ -21,10 +21,13 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   is established. Pure-core10k and actual-browser100 passed within their stated
   scopes. Generated Base100 passed all eight semantic oracles;10k generation completed,
   but all eight queries rejected the existing preparation budget (limited/incomplete).
-- **Active owner/slot:** `baseline_resources_impl` owns serialized focused
-  index-crate validation at source-reviewed `effeb61f` (scoped extraction/binding,
-  integrity, preflight and shared bounded cache policy). Native adapter and web/
-  WASM owners remain source-only; independent reviewers assigned.
+- **Active owner/slot:** the index validation slot is released after37 tests pass,
+  0 failed/ignored; all14 owned processes gone and exact source/input hashes.
+  Source `effeb61f` is integrated `ae227303` (scoped extraction/binding, integrity,
+  preflight and shared bounded cache policy). Evidence:
+  `/private/tmp/zorid-s1-index-effeb61f-tf_k0os0/validation-summary.json`.
+  Native adapter and web/WASM owners are implementing source; independent reviewers
+  assigned. No build/runtime starts until its exact review and next slot grant.
 - **Combined native result:** release `b3ed4400` passed build115.545s and family100
   correctness (all eight full literal oracles, complete coverage, exact physical/
   authority sources and watermark108). Rust inputs match integrated `2fb58f33`;
@@ -53,8 +56,7 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 - **S1.1 ownership:** parser facts `ae342a51` is source reviewed and integrated
   `343a6c1b` after19 focused parser/corpus/bounds tests pass, no ignored tests;
   hashes exact and owned processes gone. Evidence:
-  `/private/tmp/zorid-s1-parse-facts-ae342a51/verification.json`. `baseline_resources_impl` owns typed scoped
-  extraction/key/binding and bounded cache policy; `storage_sqlite_impl` owns new
+  `/private/tmp/zorid-s1-parse-facts-ae342a51/verification.json`. typed scoped extraction/key/binding and bounded cache policy are integrated; `storage_sqlite_impl` owns new
   isolated native cache-only persistence, `architecture_platform_audit` browser/
   WASM adapter and optional validated cache counters. Source-only until slots;
   no reusable parse cache or multicore runtime acceptance yet. Preserve existing

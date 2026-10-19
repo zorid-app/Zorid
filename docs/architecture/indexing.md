@@ -7,6 +7,9 @@
 `zorid-document` extracts source-aware Markdown metadata: properties/frontmatter,
 aliases, tags, headings, links and task occurrences. Parsing is derived work;
 invalid YAML produces metadata diagnostics rather than a refusal to save the note.
+The parser exposes identity-free `ParseFacts` through `parse_markdown_facts`;
+explicit binding supplies the current entry ID and revision. The existing
+`parse_markdown` facade returns the same document metadata and diagnostics.
 
 `zorid-index` defines source manifests, immutable generations, semantic versions,
 publication fences, retained snapshots and metadata projection. Pure generation
@@ -30,14 +33,28 @@ queries, memory and UI responsiveness before claiming improvement. Add bounded
 parallel Rust extraction where independent documents permit it. Keep storage
 publication coordinated and reject results for stale revisions/generations.
 
-Reuse content-derived parse results using content hashes plus parser/schema and
-relevant semantic options. Reattach path/entry/revision context correctly; cached
-metadata from another identity is not an authority witness. A future cache key
-must account for all inputs that affect extraction, not only file modification time.
-Native app-local cache separation is implemented independently of the upcoming
-parallel parsing/search work. Browser retains joined-group working data and persisted derived
-indexes between visits, with incremental catch-up; its storage engine need not
-mirror native databases.
+The shared [extraction boundary](../../crates/zorid-index/src/extraction.rs)
+now provides typed keys/results and validated binding. Keys include the local
+store scope, exact source SHA-256 and byte/UTF-16 lengths, Markdown/plain-text
+mode, parser schema/dialect/extraction versions and facts encoding version.
+Current parser options are compiled into those semantic versions. Facts retain
+raw links and source positions without entry identity, path, resolved targets or
+generation context. Binding checks integrity and structural ranges, then attaches
+the captured current witness; cache data never authorizes a source mutation.
+
+Shared optional cache admission uses a1MiB encoded-row cap,64MiB total payload
+and100,000 rows, with FIFO admission order and at most32 victim removals per write.
+Oversized supported facts still extract/bind normally and skip caching. This cache
+budget is separate from existing generation/metadata and bounded transport limits.
+These are initial resource bounds, not measured memory or latency promises.
+
+The pure extraction/policy layer is integrated and tested. New native reusable
+facts tables and the browser derived prefix are **being implemented**; persistent
+content-derived reuse is not yet an accepted runtime capability. Existing
+same-entry generation reuse remains distinct. Browser retains joined-group working
+data and persisted derived indexes between visits; its storage engine need not
+mirror native databases. Cache failures and eviction must preserve source,
+receipts, pending writes, recovery and pinned generations.
 
 The [confirmed performance design](indexing-search-design.md) includes Bases query
 execution and search/backlinks. Persist parse/search-index reuse; keep compiled
@@ -58,6 +75,7 @@ design as well; the gate must not wait until an incompatible layer is built.
 
 [Parser](../../crates/zorid-document/src/lib.rs),
 [index contracts](../../crates/zorid-index/src/lib.rs),
+[typed extraction/cache policy](../../crates/zorid-index/src/extraction.rs),
 [native persistence/pump](../../crates/zorid-store/src/document_index.rs),
 [native query facade](../../crates/zorid-native/src/document_index.rs),
 [browser cache host](../../src/core/browser-document-index.ts).
