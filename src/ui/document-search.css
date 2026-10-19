@@ -1,4 +1,6 @@
-.document-search { display:flex; flex-direction:column; min-height:0; color:var(--text-normal); font:13px var(--font-interface); }
+.sidebar-content.is-document-search { display:flex; flex-direction:column; overflow:hidden; padding:0; }
+.document-search { display:flex; flex-direction:column; flex:1; min-height:0; min-width:0; overflow:hidden; color:var(--text-normal); font:13px var(--font-interface); }
+.document-search > :not(.document-search-results):not(.document-search-explanation) { flex-shrink:0; }
 .document-search [hidden] { display:none !important; }
 .document-search-bar { display:flex; gap:4px; align-items:center; padding:10px; }
 .document-search-field { display:flex; align-items:center; flex:1; min-width:0; gap:6px; padding:2px 7px; border:1px solid var(--background-modifier-border); border-radius:20px; background:var(--background-input); }
@@ -17,7 +19,7 @@
 .document-search-sort { max-width:100%; min-width:0; padding:3px 1px; border:0; border-radius:0; box-shadow:none; background:transparent; color:var(--text-muted); font:inherit; }
 .document-search-status { margin:0; padding:0 10px 8px; color:var(--text-muted); font-size:12px; }
 .document-search-status:empty { display:none; }
-.document-search-results { overflow:auto; min-height:0; }
+.document-search-results { flex:1; overflow:auto; min-height:0; padding-bottom:8px; overscroll-behavior:contain; scrollbar-gutter:stable; }
 .document-search-file { margin:0 8px 10px; }
 .document-search-file-header { display:flex; align-items:center; gap:3px; min-width:0; }
 .document-search-file-header > .document-search-button[aria-expanded=true] > svg { transform:rotate(90deg); }
@@ -31,10 +33,11 @@
 .document-search-snippet:last-child { border-bottom:0; }
 .document-search-snippet:hover { background:var(--background-modifier-hover); }
 .document-search-excerpt { white-space:pre-wrap; overflow-wrap:anywhere; }
-.document-search-excerpt mark { color:inherit; background:var(--text-highlight-bg,#ffe08a); border-radius:2px; }
+.document-search-excerpt mark { color:inherit; background:var(--text-highlight-bg,#d6b23455); border-radius:2px; }
 .document-search-ellipsis,.document-search-origin { color:var(--text-muted); font-size:11px; }
 .document-search-snippet > .document-search-origin { display:block; margin-bottom:3px; }
 .document-search-file-pending { padding:6px 8px; margin:0; font-size:11px; color:var(--text-muted); }
 .document-search-actions { display:flex; gap:6px; padding:8px; flex-wrap:wrap; }
-.document-search-explanation { margin:0 10px 8px; padding:6px; border:1px solid var(--background-modifier-border); border-radius:5px; overflow-wrap:anywhere; }
+.document-search-actions:empty { display:none; }
+.document-search-explanation { min-height:0; max-height:min(25%,160px); overflow:auto; margin:0 10px 8px; padding:6px; border:1px solid var(--background-modifier-border); border-radius:5px; overflow-wrap:anywhere; }
 .document-search-explanation ul { padding-left:18px; margin:2px 0; }

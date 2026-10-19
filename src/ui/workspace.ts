@@ -1493,6 +1493,8 @@ export class Workspace {
       &&this.richDocumentSearch.service===this.vault?.adapter.documentSemantics?this.richDocumentSearch:undefined;
     this.clearDocumentSearch(!!retained);
     if(!this.vault)return;
+    const fileTools=this.sidebar.querySelector<HTMLElement>(':scope > .sidebar-toolbar');if(fileTools)fileTools.hidden=this.treeTab==='search';
+    this.sidebarContent.classList.toggle('is-document-search',this.treeTab==='search'&&this.vault.adapter.documentSemantics?.richSearchAvailable===true);
     const activePath=this.activePane&&this.current()?.path;
     if(this.autoRevealFiles&&activePath){let folder=parentOf(activePath);while(folder){this.collapsed.delete(folder);folder=parentOf(folder);}}
     const autoReveal=this.sidebar.querySelector<HTMLButtonElement>('[data-action="auto-reveal"]');autoReveal?.classList.toggle('is-active',this.autoRevealFiles);autoReveal?.setAttribute('aria-pressed',String(this.autoRevealFiles));
