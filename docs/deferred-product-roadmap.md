@@ -23,12 +23,21 @@ Current integration `8a6d20d0` (2026-10-19):
   `/private/tmp/zorid-s1-f-canonical-node-93c0b133/aggregate374.json`.
   Existing activation stays OFF; missing native F support keeps the legacy path.
 - Buffer projection owner `s1_rich_search_controller` has a staged standalone
-  boundary at `ca40bd92`, not integrated or approved. Review found same-text
+  boundary at `ca40bd92` with frozen successor `f924d98e`, not integrated or
+  approved. Reviewer `baseline_resources_impl` is explicitly reactivated for
+  the successor. Initial review found same-text
   demand reacquisition, observer reentry, decoder admission and lost-owner wake
   gaps. The approved frontend-only successor keeps exact cached views and uses
   renewable private core leases without inventing text revisions or changing
   core replay policy. NoteBuffer/Workspace hooks wait for that boundary's review
   and checks. Durable save ownership remains unchanged.
+  The source-bound next plan is62 focused Node checks plus TypeScript,29 newly
+  authored and33 affected existing checks, at
+  `/private/tmp/zorid-s1-f-buffer-boundary-plan-f924d98e/validation-plan.json`.
+  No execution is granted: observed free disk fell below1GiB again. Required
+  start headroom is1.3GB for this boundary; Rust166 and actual app builds also
+  remain held. Do not expand into dependent hooks/preview implementation or
+  repeat tiny cleanup attempts while those validation dependencies are held.
 - Preview platform plans are preserved, without implementation, at
   `/private/tmp/zorid-s1-native-base-preview-scope.md` and
   `/private/tmp/zorid-s1-browser-base-preview-scope.md`. Browser's bounded current
