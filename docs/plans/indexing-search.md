@@ -16,7 +16,7 @@ permit them; later slice implementations wait for the measured baseline.
 | S1.1 Reusable parse/index persistence | Versioned content-derived cache behind S0/S0A services, correct contextual rebinding, incremental invalidation and restart reuse | Observe warm reuse; unrelated edits avoid unnecessary parsing; changed content/version invalidates; cache clearing/corruption preserves authority and rebuilds correctly |
 | S1.2 Base/query preparation reuse | Bounded in-memory compiled Base programs, generation adapters/relationships and eligible answer reuse | Compare results with accepted semantics; edits/rename/context/view/relationship changes invalidate; snapshots/pins release correctly; dependency keys include relevant versions/facts/time |
 | S1.3 Shared search execution | Intended Obsidian search syntax in Rust over retained indexed source; choose acceleration only after defining matches/ranges/coverage | Correct text/metadata/filter/substring cases and coherent pagination; unsupported/missing capability explicit; no silent word-only or case-semantics regression |
-| S1.4 Scheduling and multicore work | Bounded adaptive extraction/queries, interactive priorities, bounded chunks and actual cancellation where supported | Measure foreground typing/save/query latency during indexing; stale work cannot publish; cancellation doesn't erase committed operations; resources remain bounded |
+| S1.4 Core-owned scheduling | Coalesced incremental extraction/queries, interactive priorities, bounded chunks and actual cancellation where supported | Measure foreground typing/save/query latency during indexing; stale work cannot publish; cancellation doesn't erase committed operations; resources remain bounded |
 | S1.5 Freshness and first-build behavior | Previous coherent results while updating; clearly incomplete first-build results/counts; time-dependent refresh in selected timezone | Changed results refresh without mixed generations; first-build absence/aggregates aren't presented as complete; midnight/timezone/now dependencies invalidate relevant visible views |
 | S1.6 Integrated performance gate | Same frozen implementation across required desktop/native and actual browser bindings, with retained before/after scenarios | 10,000-note baseline and 100,000-note stress case plus large notes; cold/warm/index/query/memory results; semantic regressions resolved and agreed measured budgets met |
 
@@ -33,10 +33,10 @@ clock/wake and lifecycle capabilities without duplicating index policy. Changes
 from CLI, external imports and sync receive the same treatment as editor commits.
 Restart/missed-notification reconciliation uses durable source progress.
 
-Multicore work must be evaluated on all platforms where it benefits performance;
-native threads and browser worker executors may differ, while policy/semantics
-remain shared. Do not treat a native pool as browser completion or claim a speedup
-where startup/message/memory overhead makes it slower. Keep immediate CodeMirror
+Latest user steering (2026-10-19) skips multicore implementation. Optimize away
+repeated scans, parsing and preparation; native pools and browser parallel
+executors are outside current delivery scope. Shared core ownership of lifecycle,
+priorities and bounded work remains required. Keep immediate CodeMirror
 syntax/rendering local; transient semantic draft analysis is core-owned and tagged
 with its buffer revision, distinct from committed query snapshots.
 

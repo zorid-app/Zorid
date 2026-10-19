@@ -228,9 +228,10 @@ compatibility are not established.
   invalidation/coalescing, cache access, job scheduling and update subscriptions.
   Platform adapters execute work; editors refresh relevant views. Retain local
   interactive syntax parsing and separate revision-tagged draft analysis.
-- [ ] Add measured bounded adaptive multicore work, priority for editing/saves/active
-  queries and real cancellation/bounded chunks without stale publication. Evaluate
-  native and browser executors on every platform where parallelism helps.
+- [ ] Remove unnecessary computation with coalesced incremental work, priority for
+  editing/saves/active queries and real cancellation/bounded chunks without stale
+  publication. Multicore implementation is deferred by latest explicit user
+  steering (2026-10-19); no native pool or browser parallel executor is required.
 - [ ] Query committed source; retain coherent previous results while updating and
   clearly mark partial first-build results/counts. Refresh time-dependent visible
   views using configured timezone (device-local default), one time context/query.

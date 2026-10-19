@@ -5,15 +5,14 @@ architecture direction, not an implementation or performance report. S0 storage
 and S0A modular interfaces remain prerequisites to S1 implementation. Follow the
 [implementation slices](../plans/indexing-search.md) and [roadmap](../roadmap.md).
 
-## Latest user requirements — 2026-10-18
+## Latest user requirements — 2026-10-19
 
-Multicore optimization applies to every platform where measured throughput and
-foreground responsiveness improve. Native desktop/mobile can execute Rust worker
-jobs on native threads; browsers need their own bounded worker executor around
-shared Rust/WASM work. A native thread pool alone does not satisfy this direction.
-Budgets consider available cores, memory, power and transfer/startup overhead;
-small workloads may stay sequential. This does not resume paused mobile feature
-implementation or establish unmeasured device performance.
+Latest explicit steering: skip multicore implementation and focus on reducing
+unnecessary computation. This supersedes the earlier all-platform multicore
+requirement. Prioritize indexed lookups, incremental invalidation and reusable
+parse/query preparation; do not add native pools or browser parallel executors.
+Preserve bounded work, cancellation and foreground responsiveness. Mobile feature
+implementation remains deferred; no unmeasured platform performance is claimed.
 
 Indexing and semantic parsing lifecycle belongs to the shared Rust core. It owns
 change coalescing, invalidation, dependency tracking, cache policy, job selection,

@@ -1,5 +1,16 @@
 # User findings queue
 
+## Latest execution steering — follow roadmap, skip multicore
+
+User tried the visible current app and reports no problem with latency; current
+foreground saving UX is acceptable qualitatively. Further optimization is optional,
+not a reason to stall the roadmap. The earlier sub100ms expectation remains
+historical context, not a newly proven measurement or current blocking gate.
+Explicitly skip multicore and focus on reducing unnecessary computations.
+Continue S1.2 query preparation reuse, then shared search and core-owned lifecycle;
+keep Bases/Tasks/Calendar and sync stages in the maintained delivery order.
+Native commit profiling is deferred; its private plan has no implemented sampler.
+
 ## Ordinary local saves should be below100ms — open performance target
 
 User expects a small local note save below100ms. Track edit-to-verified-durable

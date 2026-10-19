@@ -7,12 +7,30 @@ is historical where it conflicts with this checkpoint. The maintained stage
 sequence is in [roadmap.md](roadmap.md); S1 scope is in
 [plans/indexing-search.md](plans/indexing-search.md).
 
-- **Stage:** S0 bounded native delivery and S0A contracts accepted; S1.0 baseline
-  and measured setup prerequisites implementing. S1.1 parser/extraction contracts
+- **Latest steering:** user accepts saving latency after trying the visible app;
+  avoid further save-performance detours and continue the maintained roadmap.
+  Skip multicore implementation; reduce unnecessary computations. This supersedes
+  older multicore requirements below. Core-owned lifecycle/scheduling remains.
+- **Stage:** S0 bounded native delivery and S0A contracts accepted; S1.0 retained
+  baselines have explicit large-vault limitations. S1.1 parser/extraction contracts
   and native/browser facts-persistence code are integrated with focused checks.
   Bounded real-client parse-cache acceptance passes Chrome, macOS Electron and
-  standalone macOS CLI. Multicore and core-owned
-  scheduling are not implemented yet.
+  standalone macOS CLI. S1.2 starts with prepared resolver lookups, then bounded
+  query-preparation/program reuse. Core-owned scheduling remains pending;
+  multicore is deferred, not a delivery requirement.
+- **S1.2 current scope:** cold relationship resolution repeatedly scans the entire
+  namespace per link, preventing generated Base10k preparation under the existing
+  work budget. Prepare source-ID and normalized-basename lookups once, charge
+  actual construction/bucket visits/sorting/cancellation, preserve all matching/
+  ordering/ranges and complete graph semantics. No raised budgets/dropped links,
+  schema, authority cache, language redesign or new benchmark framework. Planned
+  implementation owner `s1_query_audit`, isolated `s1-generated-bases` worktree on
+  a new branch from this checkpoint; reviewer `architecture_core_audit`. Root
+  retains sole main integration. Query handoff remains source-current (no resolver/
+  relationship/snapshot changes since255caa28):
+  `/private/tmp/zorid-s1-query-preparation-handoff.md`. Focused resolver tests and
+  existing generated Base100/10k semantic oracles are the gates; actual platform
+  bindings and complete S1.2 reuse remain separate. Manual user app untouched.
 - **Integrated:** scoped observation-lookup fix through `2c53a98d`,193
   focused checks/1 existing ignored fixture, release build and normal-family100
   source/search checks pass. Small Base17 semantic-baseline tool is integrated
