@@ -1641,7 +1641,7 @@ mod cache_snapshot_tests {
                 |row| row.get(0),
             )
             .unwrap();
-        let headers: u64 = tx
+        let headers: i64 = tx
             .query_row("SELECT count(*) FROM document_index_generations", [], |row| row.get(0))
             .unwrap();
         assert_eq!(after, before);
