@@ -71,20 +71,14 @@ Current integration `8a6d20d0` (2026-10-19):
   artifacts. It permitted the bounded Node checks above; Rust166 and matching
   app builds still need more disk headroom. Cleanup evidence:
   `/private/tmp/zorid-s1-changing-local-cargo-output-proposal/terminal.json`.
-- Common F facade `194c666d` and desktop adapter/scheduler `f3dd317f` have
-  independent source approval; their41 new cases remain unrun. Browser F awaits
-  its narrow work-turn reentry correction and final review. Owner
-  `s1_rich_desktop_transport` prepares the next canonical Node composition;
-  source approval is not execution or actual platform acceptance. Existing
-  runtime activation remains OFF, with no additional draft activation flag.
-  Buffer projection and first-build preview platform/UI mounting remain open.
 - Repeated Search/Find screenshots reaffirm the existing UI contract. The retained
   REA report and desktop32 evidence were reused; six view/style files matched the
   accepted desktop source before the small follow-up. Reviewed `57baa7f1` fixes
   Reading Find dark-theme highlight contrast and exact singular Search counts.
-  No matching rebuilt app pass is claimed. Source-only canonical Node `8d318908`
-  now composes36 reviewed F/browser-allocation files; its374 affected checks and
-  TypeScript remain held for disk headroom, independently of Rust `aea13f96`.
+  No matching rebuilt app pass is claimed. The subsequently validated platform
+  composition and its integrated desktop subset are recorded above. The matching
+  generated-WASM/browser UI pass remains pending, independently of those Node
+  checks and held Rust `aea13f96`.
 
 The following entries retain the earlier batch evidence; the updates above
 supersede their pending consumer and source-review statuses.

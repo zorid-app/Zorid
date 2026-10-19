@@ -16,9 +16,9 @@ focused Node checks and TypeScript; native draft execution passes40 checks.
 Vault/Workspace metadata consumption additionally passes132 focused Node checks
 and TypeScript and is integrated through `b3930388`; portable executor extraction
 and duplicate Store graph-derivation removal pass67 checks through `2bf929f9`.
-Portable draft transfer/transport, buffer projection and preview platform/UI
-mounting are the current implementation work. Their next source-reviewed batches
-remain unrun; disk headroom currently holds the heavier validation gate.
+Portable Rust draft transfer/bindings, buffer projection and preview platform/UI
+mounting are the current implementation work. The Rust166 and buffer-boundary62
+checks remain unrun; available disk is below the validation floor.
 The common/desktop transport subset is additionally integrated through
 `8a6d20d0`, with190 applicable focused checks and exact-subset TypeScript. The full
 browser composition passes374 focused Node checks and TypeScript in isolation;
