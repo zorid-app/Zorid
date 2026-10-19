@@ -198,6 +198,23 @@ corpus cases, explicitly partial declared-field oracles; Node validation/lifecyc
 checks pass, actual Rust compile/execution is queued after Store checks. It adds
 no language/cache behavior or representative Base-performance acceptance.
 
+Scoped Store validation is now terminal green, candidate final
+`51060b1ddc52d8a6ca6741447a5d268174d8529a` (production unchanged from reviewed
+`9d2d3704`). Evidence `/private/tmp/zorid-observation-9d2d3704-validation-aw4ubom9`:
+old-function regression failed on unrelated retained payload decoding, then exact
+approved source was restored; Store unit109 pass/1 ignored, unchanged-production
+boundaries53 pass, native successor13 plus cache/source/history1 pass. Test-only
+successors `b951cca6`, `2b9156c8`, `51060b1d` repair stale typed-content fixtures
+and schema1 success/error expectations to the already-existing rejection policy;
+independent core review approved each. Affected projection6 and transactions11
+pass on final source. This is a composed scoped result, not a rerun of every suite
+on the final SHA. All owned check processes exited. Base17 release compile/runtime
+now owns the serialized slot; native candidate CLI/host build and family100 plus
+same-caps legacy10k follow before integration. Corrected Electron suffix-only
+harness `f8bafbac` is source approved; its next pass will use matching integrated
+candidate native binaries to verify the actual final app rather than repeat an
+extra old-native save pass. No native setup speedup or full S1 gate is claimed yet.
+
 Owners: `s1_execution_audit` owns workload/native CLI baseline tooling;
 `s1_query_audit` owns the integrated language fixtures;
 `architecture_platform_audit` owns actual browser/normal Electron measurement
