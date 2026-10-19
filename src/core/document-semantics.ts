@@ -180,12 +180,13 @@ export function createDocumentService(transport:DocumentTransport):DocumentServi
         ...(richSearchAvailable?{richSearch(input:{spec:SearchSpec}){
           live();if(!input||typeof input!=='object'||Object.keys(input).length!==1||!Object.hasOwn(input,'spec'))throw new DocumentSemanticsError('invalid_request');const spec=requestDecode(()=>searchSpec(input.spec));
           const start=(async()=>{
-            const request={pinId,spec},response=await richCall(spec.query,request,()=>transport.richStart!(request)),queryId=decode(()=>richStart(response));
+            const request={pinId,spec};let response:unknown;try{response=await richCall(spec.query,request,()=>transport.richStart!(request));}catch(error){live();throw error;}const queryId=decode(()=>richStart(response));
             let queryClosed=false,queryRetiring=false,queryClosing:Promise<void>|undefined;
             const queryLive=()=>{live();if(queryClosed||queryRetiring)throw new DocumentSemanticsError('search_expired');};
+            const read=async<T>(action:()=>Promise<T>):Promise<T>=>{try{const result=await action();queryLive();return result;}catch(error){queryLive();throw error;}};
             const query:DocumentRichQuery=Object.freeze({queryId,
-              async prepare(){queryLive();const request={pinId,queryId},response=await richCall(spec.query,request,()=>transport.richPrepare!(request));queryLive();return decode(()=>richPreparation(response)) as Awaited<ReturnType<DocumentRichQuery['prepare']>>;},
-              async page(cursor:DocumentCursor){queryLive();requestDecode(()=>richToken(cursor));const request={pinId,queryId,cursor},response=await richCall(spec.query,request,()=>transport.richPage!(request));queryLive();return decode(()=>richPage(response,{snapshot,source,coverageComplete,spec}));},
+              async prepare(){queryLive();const request={pinId,queryId},response=await read(()=>richCall(spec.query,request,()=>transport.richPrepare!(request)));queryLive();return decode(()=>richPreparation(response)) as Awaited<ReturnType<DocumentRichQuery['prepare']>>;},
+              async page(cursor:DocumentCursor){queryLive();requestDecode(()=>richToken(cursor));const request={pinId,queryId,cursor},response=await read(()=>richCall(spec.query,request,()=>transport.richPage!(request)));queryLive();return decode(()=>richPage(response,{snapshot,source,coverageComplete,spec}));},
               close(){if(queryClosed)return Promise.resolve();if(queryClosing)return queryClosing;queryRetiring=true;queryClosing=call({pinId,queryId},()=>transport.richClose!({pinId,queryId})).then(()=>{queryClosed=true;queries.delete(query);}).finally(()=>{queryClosing=undefined;});return queryClosing;},
             });
             queries.add(query);live();return query;
