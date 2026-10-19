@@ -10,15 +10,18 @@ use zorid_native::{ExternalFileMode, NativeVault, ScanOptions};
 use zorid_native_sync::{FixtureSync, SyncLimits};
 
 static STOP: AtomicBool = AtomicBool::new(false);
+pub(super) fn stopped() -> bool {
+    STOP.load(Ordering::Relaxed)
+}
 extern "C" fn stop(_: libc::c_int) {
     STOP.store(true, Ordering::Relaxed);
 }
-struct Signals {
+pub(super) struct Signals {
     interrupt: libc::sigaction,
     terminate: libc::sigaction,
 }
 impl Signals {
-    fn install() -> Result<Self> {
+    pub(super) fn install() -> Result<Self> {
         STOP.store(false, Ordering::Relaxed);
         unsafe {
             let mut action: libc::sigaction = std::mem::zeroed();
@@ -69,7 +72,7 @@ fn emit(value: Value) -> Result<()> {
 fn retryable(error: &Failure) -> bool {
     matches!(
         error.code,
-        "lock_timeout" | "filesystem_changed" | "sync_transport"
+        "lock_timeout" | "filesystem_changed" | "sync_transport" | "index_unavailable"
     )
 }
 fn pause(milliseconds: u64) {
@@ -112,6 +115,7 @@ fn cycle(
         return Ok(None);
     }
     super::enable_local_recovery(&mut vault, root, snapshot_due);
+    super::enable_local_document_cache(&mut vault, root);
     let scan = if family.scope.is_some() {
         // Discover before recovery. Recovering an unobserved external move or
         // deletion can recreate the old physical path and lose its evidence.
@@ -159,6 +163,12 @@ fn cycle(
         sync.map(|sync| sync.once(&mut vault, limits)).transpose()?
     };
     if STOP.load(Ordering::Relaxed) {
+        return Ok(None);
+    }
+    // Source is already durably reconciled (and synced when configured). Drive
+    // one core-selected maintenance quantum; do not repeat the filesystem scan.
+    super::documents::runtime::maintain(&mut vault, stopped)?;
+    if stopped() {
         return Ok(None);
     }
     let local = vault.status()?;
@@ -254,7 +264,9 @@ mod tests {
         ] {
             assert!(!retryable(&Failure::new(code, "redacted", 1)), "{code}");
         }
-        for code in ["sync_transport", "filesystem_changed", "lock_timeout"] {
+        for code in [
+            "sync_transport", "filesystem_changed", "lock_timeout", "index_unavailable",
+        ] {
             assert!(retryable(&Failure::new(code, "redacted", 1)), "{code}");
         }
     }

@@ -11,10 +11,13 @@ use std::{
 };
 use zorid_core::{EntryId, OperationId};
 use zorid_native::{
-    DocumentIndexError, DocumentIndexProgress, DocumentIndexStage, DocumentIndexStatus,
+    DocumentIndexError, DocumentIndexProgress, DocumentIndexStatus,
     DocumentQueryPin, IndexSnapshotId, LiteralQuery, NativeDocumentError, NativeVault,
     QueryOptions, SourceSnapshotId,
 };
+
+#[path = "document_runtime.rs"]
+pub(super) mod runtime;
 
 const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 const IDENTITY_RESERVE: usize = 16 * 1024;
@@ -150,31 +153,64 @@ pub fn index(vault: &mut NativeVault, command: IndexCommand) -> Result<Vec<u8>> 
         IndexCommand::Rebuild { max_pumps } => (true, max_pumps),
         IndexCommand::Status => unreachable!(),
     };
-    if rebuild {
-        vault.rebuild_document_index().map_err(failure)?;
-    } else {
-        vault.initialize_document_index().map_err(failure)?;
-    }
-    let (stage, resumed) = stage(vault)?;
-    let mut pumps = 1;
-    let mut progress = vault.pump_document_index(&stage).map_err(failure)?;
-    while !progress.ready && pumps < max_pumps {
-        progress = vault.pump_document_index(&stage).map_err(failure)?;
-        pumps += 1;
-    }
-    let published = progress.ready;
-    if published {
-        vault.publish_document_index(&stage).map_err(failure)?;
-    }
+    let _signals = crate::watch::Signals::install()?;
+    let run = runtime::build(vault, rebuild, max_pumps, crate::watch::stopped)?;
+    let published = run.publication.is_some();
+    let build_complete = published || run.observation.current;
+    let snapshot = run
+        .publication
+        .clone()
+        .or_else(|| {
+            if run.observation.current {
+                run.observation.published.clone()
+            } else {
+                run.snapshot.clone()
+            }
+        })
+        .ok_or_else(|| {
+            Failure::new(
+                "no_progress",
+                "No document staging or admitted published snapshot was produced",
+                3,
+            )
+        })?;
+    let progress = match run
+        .progress
+        .filter(|progress| progress.snapshot == snapshot)
+    {
+        Some(progress) => progress,
+        None if run.observation.current => {
+            // A current fast path did no pump. Count actual admitted immutable
+            // records without reindexing or attributing another producer's work.
+            let pin = vault.open_document_snapshot().map_err(failure)?;
+            if pin.generation().id() != &snapshot {
+                return Err(Failure::new(
+                    "stale_index",
+                    "Published snapshot changed before reporting current progress",
+                    3,
+                ));
+            }
+            let prepared = pin.generation().records().count();
+            vault.close_document_snapshot(pin);
+            runtime::zero_progress(snapshot.clone(), prepared, prepared, true)
+        }
+        None => {
+            return Err(Failure::new(
+                "no_progress",
+                "No actual document progress was acknowledged",
+                3,
+            ))
+        }
+    };
     let observed_index = vault.document_index_status().map_err(failure)?;
-    // Another indexer may publish after us. Never use its coverage to label our
-    // stage complete: unknown is explicit while the successful publication stays true.
+    // Another indexer may publish after admission. Its coverage cannot label
+    // our reported snapshot; successful publication attribution remains exact.
     let coverage_complete = match &observed_index {
         DocumentIndexStatus::Ready {
             snapshot,
             coverage_complete,
             ..
-        } if published && snapshot == stage.snapshot() => Some(*coverage_complete),
+        } if build_complete && snapshot == &progress.snapshot => Some(*coverage_complete),
         _ => None,
     };
     encode(BuildOutput {
@@ -184,31 +220,17 @@ pub fn index(vault: &mut NativeVault, command: IndexCommand) -> Result<Vec<u8>> 
             "document_index_build"
         },
         local_store_id: vault.identity()?.local_store_id,
-        snapshot: stage.snapshot().clone(),
+        snapshot,
         progress,
-        pumps,
-        resumed,
+        pumps: run.pumps,
+        resumed: run.resumed,
         published,
-        build_complete: published,
+        build_complete,
         coverage_complete,
-        complete: published && coverage_complete == Some(true),
+        complete: build_complete && coverage_complete == Some(true),
         observed_index,
         synced: false,
     })
-}
-fn stage(vault: &mut NativeVault) -> Result<(DocumentIndexStage, bool)> {
-    for candidate in vault.document_index_stages().map_err(failure)? {
-        match vault.resume_document_index(candidate.snapshot()) {
-            Ok(stage) => return Ok((stage, true)),
-            Err(error)
-                if matches!(
-                    error.code(),
-                    "stale_source" | "stale_index" | "snapshot_expired"
-                ) => {}
-            Err(error) => return Err(failure(error)),
-        }
-    }
-    Ok((vault.begin_document_index().map_err(failure)?, false))
 }
 pub(super) fn open(vault: &NativeVault, expected: Option<&str>) -> Result<DocumentQueryPin> {
     let expected = expected
