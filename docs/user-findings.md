@@ -1,14 +1,20 @@
 # User findings queue
 
-## S1 clock boundary validation — open internal correctness finding
+## S1 clock boundary validation — core fix integrated, platform checks pending
 
 Answer-cache testing exposed a pre-existing cold evaluator panic: chrono accepts
 expanded-year epoch clocks, but the evaluator formats then reparses a four-digit
 RFC3339 clock and reaches an `expect` failure. Normal app clocks are unaffected;
-accepted API inputs must still produce structured outcomes. Track the underlying
-validation/domain consistency fix in S1.5, with raw cold/native/WASM boundary
-checks. The answer-cache successor conservatively declines reuse outside the
-actual parser clock domain; that guard does not fix the cold evaluator panic.
+accepted API inputs must still produce structured outcomes. The initial
+answer-cache guard declined reuse outside the parser clock domain, leaving the
+underlying validation/domain consistency fix tracked separately in S1.5.
+Correction `9301db0a` is independently reviewed and integrated `da9b31eb`:
+cold evaluation and optional reuse share one private invocation-clock validator,
+with the existing structured input diagnostic for unsupported epochs. All41
+focused checks pass, including accepted year boundaries, cold/prepared/live-cache
+errors, unchanged file timestamps and lazy ignored-row behavior. Source and frozen
+fixtures stayed exact; owned test processes exited. Actual native/WASM boundary
+checks remain pending; do not claim general platform acceptance from core tests.
 
 ## S1 search UI reference — editor find integrated, broader verification pending
 

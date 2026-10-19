@@ -227,17 +227,55 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   `architecture_platform_audit` uses a separate isolated branch from that main.
   Both preserve sealed lookups, unchanged wire results and pre/post admission
   fences; no client acceptance or answer-cache speedup is established.
+  Native exact `8d89d55e` is independently approved and integrated `2cfe17be`:
+  all12 focused native checks pass, including actual cross-pin answer hits,
+  changed context/view/clock, cancellation/budget and late independent rebuild
+  expiry. Source/Cargo/fixtures remain exact; owned group exited, minfree2.016GB.
+  Evidence `/private/tmp/zorid-native-answers-8d89d55e-u493gjqq/summary.json`.
+  WASM exact `3998e64c` is source-approved but first hosted run is21/23:
+  two new fixture assumptions need correction (a Call-containing query was
+  assumed clock-independent, and a YAML Boolean was used where a filter
+  expression is required). Do not infer accepted wiring or force cache hits.
+  Source remained exact and owned processes exited.
+  Evidence `/private/tmp/zorid-s1-wasm-answer-3998e64c-3wlijk3m/result.json`.
   Measurement owner `baseline_resources_impl` uses isolated
   `tingkai-c/s1-bases-answer-observation` for the existing opt-in100/10k workload,
   unchanged frozen oracles/caps. Root retains sole main integration. Earlier failures
   exposed oversized test String capacity and an expanded-year cold-clock panic.
   Test fixtures are corrected without weakening caps; optional cache declines
-  unsupported clocks. Underlying panic remains an OPEN S1.5 correctness finding,
-  tracked in user-findings; it is not fixed by cache eligibility or ignored as old.
-  Minimal cold-clock correction owner `storage_sqlite_impl`, independent reviewer
-  `s1_execution_audit`; separate isolated source work, no boundary acceptance yet.
+  unsupported clocks. Cache eligibility alone did not fix the underlying panic;
+  it was tracked separately rather than ignored as pre-existing.
+  Minimal cold-clock correction `9301db0a`, owner `storage_sqlite_impl` and
+  reviewer `s1_execution_audit`, is integrated `da9b31eb`. All41 focused checks
+  pass (25 preparation plus corpus7/query5/generation4), including valid year
+  boundaries, unsupported epoch diagnostics across cold/prepared/live cache,
+  lazy ignored rows and unchanged file timestamp behavior. Source/Cargo/frozen
+  fixtures remain exact, groups exited; evidence:
+  `/private/tmp/zorid-bases-clock-9301db0a-rkg0fuhh/validation-summary.json`.
+  Native/WASM runtime boundary acceptance remains separate. WASM test-only
+  successor `0874604f` is independently approved;23/23 hosted checks pass,
+  with all1545 source hashes exact and owned group exited (minfree1.965GB).
+  Ordered wiring/fixture sources are integrated `f3a5799c`/`1b38c14b`;
+  no product semantics changed to force fixture hits. Evidence:
+  `/private/tmp/zorid-s1-wasm-answer-0874604f-r0ue6fvy/result.json`.
+  Actual generated wasm32/browser acceptance remains pending. Measurement
+  source `b6f1e69d` is independently approved,18 Node checks pass; composed
+  source `b6b428a4` includes main `da9b31eb` with identical three-file patch.
+  It now owns the sole release build/100/10k measurement slot; no observed
+  outcome or speedup is assumed before its report.
+  Separate measured10k admission prerequisite owner `storage_recovery_ui_impl`
+  uses isolated `tingkai-c/s1-family-entry-cse` from `0d0bb27d`, solely
+  `family_metadata_transactions.rs`: reuse checked entries through one immutable
+  read transaction instead of loading them twice. Observations retain their fresh
+  read and final writer/physical/authority/CAS checks remain unchanged. Reviewer
+  `storage_sqlite_impl`; no implementation acceptance or measured gain yet.
   S1.4 current core-lifecycle source handoff:
   `/private/tmp/zorid-s1-core-lifecycle-handoff.md` (no implementation yet).
+  Concrete ownership and closed reducer-contract refinements:
+  `/private/tmp/zorid-s1-lifecycle-execution-breakdown.md` and
+  `/private/tmp/zorid-s1-lifecycle-reducer-contract.md`. These are preparatory;
+  native captured-stage-source/bounded discovery and legacy TS metadata/draft
+  parsing remain real migration gaps, not accepted runtime behavior.
 - **Integrated:** scoped observation-lookup fix through `2c53a98d`,193
   focused checks/1 existing ignored fixture, release build and normal-family100
   source/search checks pass. Small Base17 semantic-baseline tool is integrated
