@@ -40,6 +40,19 @@ checks remain pending; do not claim general platform acceptance from core tests.
 
 ## S1 search UI reference — editor find integrated, broader verification pending
 
+Latest actual `b9d4f069` scoped005 passes grouped/case/dense/search navigation,
+filename/property safe-open and pending-edit save followed by fresh results.
+Live Find's count/navigation/options/focus/caret/paint assertions pass before a
+CDP composition trust assertion stops the run; native IME remains unverified.
+The report separately captures a real renderer exception: live-math blur
+dispatches during CodeMirror's Find-panel mount. Fix owner
+`s1_rich_search_controller`, isolated `s1-live-math-focus`; review, tests and
+actual rerun required. Root visually confirms the search toolbar/scroll/contrast
+polish, but Find appears below Properties rather than directly beneath the note
+toolbar. Top placement, Reading Find, native sorts and normal quit remain open.
+Evidence `/private/tmp/zorid-s1-rich-electron-find-b9d4f069-005/report.json`.
+Owned test processes are gone; artifact/source fences match.
+
 Actual release Electron `d38af6cf` runs002/003 verify grouped33-file results,
 per-file counts, ordinary continuation, case toggle and group controls. Native
 HTML sort input remains inconclusive: trusted focused key events produce no

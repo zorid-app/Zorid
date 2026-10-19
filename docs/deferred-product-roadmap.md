@@ -9,6 +9,41 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest verified work after frozen `b9d4f069` (supersedes older pending counts):
+
+- Electron scoped005 verifies grouped results, case controls, dense count/display
+  limits, exact source navigation, filename/property safe-open and pending-edit
+  save followed by fresh search. Live Find reaches counts, previous/next,
+  case/word/regex, focus/caret and painted matches. A real renderer exception
+  remains: live-math's synchronous blur dispatch re-enters CodeMirror while Find
+  mounts. Owner `s1_rich_search_controller` fixes that bridge in isolated
+  `s1-live-math-focus`; independent review and actual rerun remain required.
+  CDP's untrusted composition-end event does not establish failed text commit;
+  physical IME, Reading Find, native sort selection and normal quit remain
+  unverified. Actual screenshot also exposes Find below Properties rather than
+  the requested top-of-note position. Preserve these separate acceptance gaps.
+  Evidence: `/private/tmp/zorid-s1-rich-electron-find-b9d4f069-005/report.json`.
+- Matching b9 frontend build and actual screenshots verify the integrated search
+  toolbar/scroll/highlight polish. Its source and all frozen artifacts remained
+  exact after scoped005; owned app/native processes are gone. Main is unfrozen.
+- Validated isolated D/E1 batches: common `9d5a4367` 92 Node + TypeScript;
+  native `c52c1521` 22 Rust; host test-only successor `1ef639a5` 11 Rust;
+  scheduler `3f763282` 124 Node; desktop delivery composition `61be3e1d`
+  77 Node + TypeScript; browser `e83cf312` 110 Node and corrected/common-composed
+  `53bb7c27` TypeScript; consumer cancellation `83bb4b7d` 145 Node + TypeScript.
+  Base clock/cancellation `6105979b` passes30 Node + TypeScript. Root delegates
+  canonical D/E1 composition/checks to `s1_execution_audit`; normal platform
+  activation remains OFF until complete integration and actual runtime gates.
+- CLI visibility correction `35bc72e7` is source-approved; execution remains
+  pending. Core clock/refresh hints, inode lookup and eight preview-capture tests
+  remain unexecuted. `architecture_core_audit` prepares one canonical Rust batch;
+  this is not authorization to run overlapping heavy checks.
+- The exact rebuildable `target/stage4-verified/debug` cache was evicted after
+  process/handle ownership proofs, recovering2.85GB. Held actual CLI binaries,
+  release/WASM caches, source, archives and evidence remain intact. Free disk was
+  about3.15GB after scoped005; hard floor remains1GiB. Future Rust checks require
+  recompilation. Never close user/manual apps to recover resources.
+
 Current integration update after `a38416db`:
 
 - Actual matching release Electron `d38af6cf`: import34/34, grouped33/33
