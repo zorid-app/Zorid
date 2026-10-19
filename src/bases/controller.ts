@@ -168,8 +168,10 @@ export class BaseController {
     const capture = this.clock.capture(this.query.timezone);
     const zoneChanged = this.lastCapture !== undefined && capture.timezone !== this.lastCapture.timezone;
     const hint = this.current.result?.shared?.refreshHint;
-    const missed = !this.query.now && hint && hint.dependency !== 'none' && hint.nextWakeMs !== null && hint.nextWakeMs <= capture.clockMs;
-    if (this.stale || zoneChanged || missed) {
+    const affected = !this.query.now && hint && hint.dependency !== 'none';
+    const missed = affected && hint.nextWakeMs !== null && hint.nextWakeMs <= capture.clockMs;
+    const backwards = affected && this.lastCapture !== undefined && capture.clockMs < this.lastCapture.clockMs;
+    if (this.stale || zoneChanged || missed || backwards) {
       this.stale = true; this.epoch++; this.sharedQueries.cancel(); void this.refresh();
     } else this.armWake();
   }

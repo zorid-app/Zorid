@@ -93,3 +93,21 @@ test('invocation capture waits for retained metadata; fixed query clocks stay fi
     assert.equal(f.clock.captures.at(-1), 9_000); assert.equal(f.calls[1].options!.clockMs, 42); assert.equal(f.clock.timers.size, 0);
   } finally { f.controller.dispose(); }
 });
+
+test('same-zone backwards clock wakes refresh affected views, while None and fixed clocks stay quiet', async () => {
+  for (const dependency of ['day', 'instant'] as const) {
+    const f = await fixture(dependency); try {
+      f.clock.visible = false; f.clock.wake(); f.clock.now = -1_000;
+      f.clock.visible = true; f.clock.wake();
+      await settled(() => f.calls.length === 2 && f.clock.timers.size === 1);
+      assert.equal(f.calls[1].options!.clockMs, -1_000);
+      assert.equal(f.calls[1].options!.timezone, 'America/Toronto');
+    } finally { f.controller.dispose(); }
+  }
+  for (const [dependency, query] of [['none', {}], ['day', { now: () => new Date(42) }]] as const) {
+    const f = await fixture(dependency, query); try {
+      f.clock.now = -1_000; f.clock.wake(); await Promise.resolve();
+      assert.equal(f.calls.length, 1); assert.equal(f.clock.timers.size, 0);
+    } finally { f.controller.dispose(); }
+  }
+});
