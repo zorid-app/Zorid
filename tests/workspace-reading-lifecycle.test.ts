@@ -86,7 +86,8 @@ test('partial Reading render failure disposes already-created asynchronous outpu
   }) as typeof ui.doc.createElement;
   await ui.workspace.openNote('Old.md');ui.doc.createElement=original;
   const failed=ui.pane.element.querySelector<HTMLElement>('.math')!;
-  assert.ok(failed);assert.match(ui.pane.element.textContent??'',/injected renderer failure/);
+  assert.ok(failed);assert.equal(ui.pane.element.querySelector('.error-message')?.textContent,'This note couldn’t be opened. Please try opening it again.');
+  assert.doesNotMatch(ui.pane.element.textContent??'',/injected renderer failure/);
   assert.equal(ui.pane.refreshPreview,undefined);await ui.finish();
   assert.equal(failed.textContent,'old');assert.equal(failed.classList.contains('is-loaded'),false);
 });
