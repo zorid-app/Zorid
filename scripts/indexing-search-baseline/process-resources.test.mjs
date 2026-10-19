@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,rm,stat} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,stat,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
 import {parseDarwinTime,RESOURCE_SIDECAR_LIMIT,startOwnedMeasuredProcess} from './process-resources.mjs';
+import {invoke} from './cli.mjs';
+import {runCore} from './core.mjs';
+import {runBases} from './bases.mjs';
 
 const raw=(replace={})=>Buffer.from(Object.entries({real:'0.03',user:'0.01',sys:'0.00',...replace}).map(([key,value])=>`${key} ${value}\n`).join('')+'           123456  maximum resident set size\n           999999  peak memory footprint\n');
 const unavailable=value=>assert.equal(parseDarwinTime(value).availability,'unavailable');
@@ -75,4 +78,25 @@ test('normal wrapper cannot silently leave same-group descendants with closed pi
   const script="const child=require('node:child_process').spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"],{stdio:'ignore'});child.unref();process.stdout.write(String(child.pid));";
   const {result,stdout}=await outcome(await start(directory,script));const descendant=Number(stdout);assert.ok(Number.isSafeInteger(descendant)&&descendant>0);assert.equal(result.exitCode,0);assert.equal(result.stopReason,'remaining-owned-process-group');assert.equal(result.measurement.metrics.availability,'unavailable');assert.ok(result.signals.some(s=>s.signal==='SIGTERM'));
   let alive;try{process.kill(descendant,0);alive=true;}catch(error){assert.equal(error.code,'ESRCH');alive=false;}assert.ok(!alive||result.cleanup.ownedGroupRemaining!==false,'live descendant must not be reported gone');
+}));
+
+test('CLI opt-in preserves binary stdout and enforces the original combined output bound',runtime,()=>fixture(async directory=>{
+  const args=['-e',"process.stdout.write(Buffer.from([0,0,0,2,0,0,0,0,123,125]));process.stderr.write('err')"];
+  for(const measureResources of [false,true]){
+    const result=await invoke(process.execPath,args,{environment:process.env,timeoutMs:3000,stdoutEncoding:'buffer',measureResources,sidecarDirectory:directory});
+    assert.deepEqual(result.stdout,Buffer.from([0,0,0,2,0,0,0,0,123,125]));assert.equal(result.stderr,'err');assert.equal(result.exitCode,0);assert.equal(result.signal,null);assert.equal(result.outputLimit,false);
+    if(measureResources){assert.equal(result.observedProcessRole,'darwin-time-wrapper');assert.equal(result.measurement.metrics.availability,'available');assert.equal(result.processIncomplete,false);}else assert.equal(result.measurement,undefined);
+  }
+  const overflow=await invoke(process.execPath,['-e',"process.on('SIGTERM',()=>{});process.stdout.write('x'.repeat(100));setInterval(()=>{},1000)"],{environment:process.env,timeoutMs:3000,maxOutputBytes:16,measureResources:true,sidecarDirectory:directory});
+  assert.equal(overflow.outputLimit,true);assert.equal(overflow.processIncomplete,true);assert.equal(overflow.stopReason,'output-limit');assert.equal(overflow.measurement.metrics.availability,'unavailable');assert.ok(overflow.stdout.length<=16);
+}));
+test('valid time stats and exit0 never replace missing core/Base final protocol acknowledgment',runtime,()=>fixture(async directory=>{
+  const binary=path.join(directory,'empty-utility');await writeFile(binary,'#!/usr/bin/env node\nprocess.exitCode=0;\n',{flag:'wx',mode:0o700});
+  for(const measureResources of [false,true]){
+    const core=await runCore({out:path.join(directory,`core-${measureResources}`),binary,notes:1,timeoutMs:3000,measureResources});
+    assert.equal(core.report.status,'failed-or-incomplete');assert.equal(core.report.filesystemSourcePreserved,true);assert.equal(core.report.process.exitCode,0);assert.equal(core.report.process.signal,null);assert.equal(core.report.queries.length,0);
+    const bases=await runBases({out:path.join(directory,`bases-${measureResources}`),binary,timeoutMs:3000,measureResources});
+    assert.equal(bases.report.status,'failed-or-incomplete');assert.equal(bases.report.corpusPreserved,true);assert.equal(bases.report.process.exitCode,0);assert.equal(bases.report.process.signal,null);assert.equal(bases.report.results.length,0);
+    if(measureResources){assert.equal(core.report.process.measurement.metrics.availability,'available');assert.equal(bases.report.process.measurement.metrics.availability,'available');}
+  }
 }));
