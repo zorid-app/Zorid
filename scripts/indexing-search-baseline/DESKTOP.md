@@ -52,9 +52,12 @@ read-only requests use the already admitted, root-scoped bridge.
    available UI progress observations and cache file sizes.
 3. **Normal editor save:** click that actual search result. Check its original
    committed revision/content and wait for its loaded, focused editable body; the
-   title alone is not an editor-readiness witness. Then replace its text by keyboard with the exact
-   original source plus one marker line. All original YAML/properties/body stay
-   intact. Require a visible pending-save witness and unchanged disk initially.
+   title alone is not an editor-readiness witness. Live Edit protects the YAML
+   prefix and clamps selection to the body, so select-all does not select the
+   full source. Use ordinary macOS Cmd+ArrowDown to reach document end and insert
+   only one marker suffix by keyboard. Require exact original source plus that
+   suffix on save; all original YAML/properties/body stay intact. Require a visible
+   pending-save witness and unchanged disk initially.
    Observe the clean save indicator, exact filesystem and committed bridge bytes,
    changed revision and settled durable note checkpoint with no pending operation
    or conflict. No other manifest source may change.
