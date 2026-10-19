@@ -1,5 +1,8 @@
 import {BrowserVaultError} from './browser-vault.ts';
 import type {BrowserIndexSnapshot} from './browser-document-index.ts';
+import {browserDraftMethodsAvailable,browserDraftFrames,draftJson,draftWasm} from './browser-document-drafts.ts';
+import type {BrowserDraftOwnerWasm,BrowserDocumentWorkFrame,BrowserDocumentWorkIssuedWasm} from './browser-document-drafts.ts';
+import type {DocumentDraftRequest,DocumentDraftScope} from './document-drafts.ts';
 
 /** Internal executor uses the single readonly shared projection. */
 import type {DocumentRuntimeFailure,DocumentRuntimeProgress,DocumentRuntimeStage,DocumentRuntimeObservation,DocumentRuntimeCommand,DocumentRuntimeEffect,DocumentRuntimeIssued,DocumentRuntimeUpdate,DocumentRuntimeOutcome,DocumentRuntimeReduction,DocumentRuntimeSnapshot} from './document-runtime.ts';
@@ -7,7 +10,7 @@ export type {DocumentRuntimeFailure,DocumentRuntimeProgress,DocumentRuntimeStage
 interface Free {free():void}
 export interface BrowserDocumentRuntimeIssuedWasm extends Free {descriptorJson():string;completeJson(result:string):string}
 export interface BrowserDocumentRuntimeOwnerWasm extends Free {commandJson(command:string):string;updateJson():string;snapshotJson():string;issued(lifetime:string,id:string):BrowserDocumentRuntimeIssuedWasm;replayJson(lifetime:string,id:string):string|undefined}
-export interface BrowserDocumentRuntimeWasm {WasmDocumentRuntimeOwner?:new(lifetime:string,localStore:string)=>BrowserDocumentRuntimeOwnerWasm}
+export interface BrowserDocumentRuntimeWasm {WasmDocumentRuntimeOwner?:new(lifetime:string,localStore:string)=>BrowserDocumentRuntimeOwnerWasm;WasmDocumentWorkIssued?:{prototype:BrowserDocumentWorkIssuedWasm}}
 export interface BrowserDocumentRuntimeBackend {
   assertActive():void;
   observe():Promise<DocumentRuntimeObservation>;initialize():Promise<void>;recoverStage():Promise<DocumentRuntimeStage|null>;
@@ -15,6 +18,13 @@ export interface BrowserDocumentRuntimeBackend {
   publish(snapshot:BrowserIndexSnapshot):Promise<BrowserIndexSnapshot>;discard(snapshot:BrowserIndexSnapshot):Promise<void>;rebuild():Promise<void>;
 }
 export interface BrowserDocumentIndexMaintenance {
+  readonly draftsAvailable?:boolean;
+  configureDrafts?(scope:DocumentDraftScope):void;
+  draft?(input:DocumentDraftRequest,bytes?:Uint8Array):{result:unknown;bytes:Uint8Array;release():void};
+  workSnapshot?():BrowserDocumentWorkFrame;
+  /** Called once after joining one actual later host task. */
+  workTurn?(adopt?:(value:DocumentRuntimeReduction)=>void):Promise<{state:'ready'|'waiting'|'quiesced';reductions:readonly DocumentRuntimeReduction[];error?:unknown}>;
+  releaseDrafts?():BrowserDocumentWorkFrame;
   command(command:DocumentRuntimeCommand):DocumentRuntimeReduction;
   step(token:{readonly lifetime:string;readonly effectId:string}):Promise<DocumentRuntimeReduction>;
   update():DocumentRuntimeUpdate|null;
@@ -41,9 +51,16 @@ function failure(error:unknown):DocumentRuntimeFailure {
 export function browserDocumentRuntime(options:{authorityId:string;wasm:BrowserDocumentRuntimeWasm;backend:BrowserDocumentRuntimeBackend}):BrowserDocumentIndexMaintenance {
   type Owner={value:BrowserDocumentRuntimeOwnerWasm;alive:boolean;broken?:boolean;failed?:{key:string;code:string;source:'host'|'rust'}};
   let owner:Owner|undefined,closing=false,closePromise:Promise<void>|undefined;
+  const draftsAvailable=browserDraftMethodsAvailable(options.wasm.WasmDocumentRuntimeOwner,options.wasm.WasmDocumentWorkIssued);
+  let draftScope:Readonly<DocumentDraftScope>|undefined,draftLifetime='',workIncarnation='',draftReleaseStarted=false;
+  let workPending:Promise<{state:'ready'|'waiting'|'quiesced';reductions:readonly DocumentRuntimeReduction[];error?:unknown}>|undefined;
   let pending:{key:string;promise:Promise<DocumentRuntimeReduction>}|undefined;
   function active(owned?:Owner){options.backend.assertActive();if(owned&&(!owned.alive||owner!==owned))throw fail('document_runtime_expired');}
-  function acquire():Owner {active();if(closing)throw fail('document_runtime_retired');if(!owner){const Constructor=options.wasm.WasmDocumentRuntimeOwner;if(!Constructor)throw fail('document_runtime_unavailable');owner={value:wasm(()=>new Constructor(crypto.randomUUID(),options.authorityId)),alive:true};}return owner;}
+  function acquire():Owner {active();if(closing)throw fail('document_runtime_retired');if(!owner){const Constructor=options.wasm.WasmDocumentRuntimeOwner;if(!Constructor)throw fail('document_runtime_unavailable');owner={value:wasm(()=>new Constructor(crypto.randomUUID(),options.authorityId)),alive:true};if(draftScope)draftWasm(()=>draftOwner(owner!).configureDrafts(draftScope!.clientId,draftLifetime,workIncarnation));}return owner;}
+  function draftOwner(owned:Owner):BrowserDraftOwnerWasm {active(owned);if(owned.broken)throw fail('document_runtime_expired');if(!draftsAvailable||!draftScope)throw fail('document_runtime_unavailable');return owned.value as BrowserDocumentRuntimeOwnerWasm&BrowserDraftOwnerWasm;}
+  const emptyWork=():BrowserDocumentWorkFrame=>({work:null,turn:null,continued:null});
+  const workSnapshot=():BrowserDocumentWorkFrame=>owner&&draftScope?draftJson(draftWasm(()=>draftOwner(owner!).workSnapshotJson())):emptyWork();
+  const frames=browserDraftFrames({assertActive:()=>{active();if(closing||draftReleaseStarted)throw fail('draft_closed');if(pending||workPending)throw fail('document_runtime_busy');},owner:()=>draftOwner(acquire())});
   const command=(input:DocumentRuntimeCommand):DocumentRuntimeReduction=>{
     const owned=acquire();let captured:unknown=input;
     if(input?.kind==='wake'){if(!Number.isSafeInteger(input.monotonicMs)||input.monotonicMs<0)throw fail('invalid_request');captured={...input,monotonicMs:String(input.monotonicMs)};}
@@ -62,9 +79,62 @@ export function browserDocumentRuntime(options:{authorityId:string;wasm:BrowserD
       default:throw fail('document_runtime_invalid_result');
     }
   }
-  const maintenance:BrowserDocumentIndexMaintenance={command,
+  const maintenance:BrowserDocumentIndexMaintenance={command,draftsAvailable,
+    configureDrafts(scope){
+      active();if(!draftsAvailable||closing||draftReleaseStarted||!scope||scope.localStoreId!==options.authorityId||typeof scope.clientId!=='string')throw fail('document_runtime_unavailable');
+      if(draftScope){if(scope.localStoreId!==draftScope.localStoreId||scope.clientId!==draftScope.clientId)throw fail('draft_owner_mismatch');return;}
+      draftScope=Object.freeze({...scope});draftLifetime=crypto.randomUUID();workIncarnation=crypto.randomUUID();
+      if(owner)draftWasm(()=>draftOwner(owner!).configureDrafts(scope.clientId,draftLifetime,workIncarnation));
+    },
+    draft:(input,bytes)=>frames.invoke(input,bytes),workSnapshot,
+    workTurn(adopt){
+      active();if(workPending)return workPending;if(pending)return Promise.reject(fail('document_runtime_busy'));
+      // Reserve the one pending operation before next_turn, an adoption
+      // callback or any synchronous backend prefix can re-enter this binding.
+      const task=Promise.resolve().then(async()=>{
+        active();const owned=owner;if(!owned||!draftScope)return {state:'waiting' as const,reductions:[]};
+        const work=draftOwner(owned),reductions:DocumentRuntimeReduction[]=[];
+        const record=(value:DocumentRuntimeReduction)=>{reductions.push(value);adopt?.(value);};
+        // next_turn alone advances shared selection/Continue policy. No JS lane
+        // ordering, budget or completion is inferred from child snapshots.
+        const next=draftJson<BrowserDocumentWorkFrame>(draftWasm(()=>work.workNextTurnJson()));
+        if(next.continued)record(next.continued);
+        const ticket=next.work?.selected;
+        if(next.turn?.state==='ready'&&!ticket)throw fail('draft_contract');
+        if(!ticket||next.turn?.state!=='ready')return {state:next.turn?.state??'waiting',reductions};
+        if(ticket.lane==='draft'){
+          try{draftWasm(()=>work.workStepDraftJson(bounded(ticket)));}catch(error){owned.broken=true;throw error;}
+          active(owned);return {state:'ready' as const,reductions};
+        }
+        const issued:BrowserDocumentWorkIssuedWasm=draftWasm(()=>work.workIssued(bounded(ticket)));
+        try{
+          const replay=draftWasm(()=>issued.replayJson());
+          if(replay!==undefined){record(decode<DocumentRuntimeReduction>(replay));return {state:'ready' as const,reductions};}
+          const descriptor=decode<DocumentRuntimeIssued>(draftWasm(()=>issued.descriptorJson()));
+          if(descriptor.lifetime!==ticket.lifetime||descriptor.effectId!==ticket.id)throw fail('document_runtime_expired');
+          let result:unknown,operationError:unknown,failed=false;
+          try{result=await execute(descriptor.effect);}catch(error){operationError=error;failed=true;}
+          // Real lease revocation stops all further private calls. An IO error
+          // under a still-live lease can be settled as the actual Failed result.
+          try{active(owned);}catch(error){owned.broken=true;throw error;}
+          if(failed){
+            try{record(decode<DocumentRuntimeReduction>(draftWasm(()=>issued.completeJson(bounded({kind:'failed',failure:failure(operationError)})))));}catch(error){owned.broken=true;throw error;}
+            return {state:'ready' as const,reductions,error:operationError};
+          }
+          try{record(decode<DocumentRuntimeReduction>(draftWasm(()=>issued.completeJson(bounded(result)))));}catch(error){owned.broken=true;throw error;}
+          return {state:'ready' as const,reductions};
+        }finally{issued.free();}
+      });
+      const accepted=task.finally(()=>{if(workPending===accepted)workPending=undefined;});workPending=accepted;return accepted;
+    },
+    releaseDrafts(){
+      active();if(!owner||!draftScope)return emptyWork();
+      if(!draftReleaseStarted){const frame=draftJson<BrowserDocumentWorkFrame>(draftWasm(()=>draftOwner(owner!).draftReleaseClientJson()));draftReleaseStarted=true;return frame;}
+      return workSnapshot();
+    },
     step(input){
       active();if(closing)return Promise.reject(fail('document_runtime_retired'));
+      if(workPending)return Promise.reject(fail('document_runtime_busy'));
       if(!input||typeof input!=='object'||Object.keys(input).length!==2||typeof input.lifetime!=='string'||typeof input.effectId!=='string')return Promise.reject(fail('invalid_request'));
       const lifetime=input.lifetime,id=input.effectId,key=bounded({lifetime,effectId:id});
       if(pending)return pending.key===key?pending.promise:Promise.reject(fail('document_runtime_busy'));
@@ -94,9 +164,11 @@ export function browserDocumentRuntime(options:{authorityId:string;wasm:BrowserD
     },
     update(){if(!owner)return null;active(owner);return decode(wasm(()=>owner!.value.updateJson()));},
     snapshot(){if(!owner)return null;active(owner);return decode(wasm(()=>owner!.value.snapshotJson()));},
-    close(){if(closePromise)return closePromise;closing=true;const owned=owner;
-      if(owned){owned.failed=undefined;try{wasm(()=>owned.value.commandJson('{"kind":"retire"}'));}catch{/* Retirement still drops this owner after its accepted step unwinds. */}}
-      closePromise=(async()=>{try{await pending?.promise.catch(()=>{});}finally{if(owned){owned.alive=false;owned.value.free();if(owner===owned)owner=undefined;}}})();return closePromise;
+    close(){if(closePromise)return closePromise;
+      const current=workSnapshot();if(current.work&&!current.work.close_ready)return Promise.reject(fail('draft_not_ready'));
+      closing=true;const owned=owner;
+      if(owned){owned.failed=undefined;if(!current.work)try{wasm(()=>owned.value.commandJson('{"kind":"retire"}'));}catch{/* Retirement still drops this owner after its accepted step unwinds. */}}
+      closePromise=(async()=>{try{await pending?.promise.catch(()=>{});await workPending?.catch(()=>{});}finally{if(owned){owned.alive=false;owned.value.free();if(owner===owned)owner=undefined;}}})();return closePromise;
     },
   };return maintenance;
 }

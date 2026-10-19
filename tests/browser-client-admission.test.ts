@@ -217,3 +217,35 @@ test('owner retirement during accepted metadata page preserves post-await fence 
   f.retire();wait.resolve();await pending;
   await assert.rejects(index.metadataRows!({pinId:'destination'}),{code:'owner_retired'});assert.equal(f.requests.length,1);assert.equal(f.releaseCount,0);
 });
+
+function draftFixture(wait?:Promise<void>,reject=false){
+  const f=fixture(),requests:unknown[]=[],draftScope=Object.freeze({localStoreId:f.scope.vaultId,clientId:f.scope.clientId});
+  let retire:()=>void=()=>{};
+  const drafts={scope:draftScope,async invoke(request:unknown,bytes?:Uint8Array){requests.push({request,bytes});if(wait)await wait;if(reject)throw failure('draft_resource');return {result:{state:null,transfer:null,transfer_scratch_bytes:0},bytes:new Uint8Array()};},subscribe(_receiver:()=>void,onRetire:()=>void){retire=onRetire;return()=>{};}};
+  const index={draftsAvailable:true,drafts};Object.assign(f.backend,{documentIndex:index});
+  return Object.assign(f,{index,drafts,requests,retireDrafts(){retire();}});
+}
+test('both browser admission reconstruction layers preserve positive scoped drafts and reject partial or foreign capability',async()=>{
+  const f=draftFixture(),context=f.admit(),drafts=context.documentIndex!.drafts!;
+  assert.equal(context.documentIndex!.draftsAvailable,true);assert.deepEqual(drafts.scope,f.drafts.scope);
+  assert.deepEqual(await drafts.invoke({op:'snapshot'}),{result:{state:null,transfer:null,transfer_scratch_bytes:0},bytes:new Uint8Array()});
+  assert.equal(f.requests.length,1);let retired=0;drafts.subscribe(()=>{},()=>retired++);f.retireDrafts();assert.equal(retired,1);
+  const partial=draftFixture();Object.assign(partial.index,{drafts:undefined});assert.throws(()=>partial.admit(),{code:'document_runtime_unavailable'});
+  const foreign=draftFixture();Object.assign(foreign.drafts,{scope:{...foreign.drafts.scope,clientId:'other'}});assert.throws(()=>foreign.admit(),{code:'document_runtime_unavailable'});
+  const legacy=draftFixture();legacy.index.draftsAvailable=false;assert.equal(legacy.admit().documentIndex!.drafts,undefined);
+});
+test('browser admitted draft replies recheck actual owner after both success and failure awaits',async()=>{
+  for(const reject of [false,true]){
+    const wait=deferred(),f=draftFixture(wait.promise,reject),context=f.admit();
+    const pending=context.documentIndex!.drafts!.invoke({op:'snapshot'});f.retire();wait.resolve();
+    await assert.rejects(pending,{code:'owner_retired'});assert.equal(f.requests.length,1);
+  }
+});
+test('browser admitted draft calls join release drain before scoped flush and lease release',async()=>{
+  const wait=deferred(),f=draftFixture(wait.promise),context=f.admit();let flushed=false;
+  const pending=context.documentIndex!.drafts!.invoke({op:'snapshot'});
+  const closing=context.release(()=>{flushed=true;});
+  await assert.rejects(context.documentIndex!.drafts!.invoke({op:'snapshot'}),{code:'client_not_admitted'});
+  assert.equal(flushed,false);assert.equal(f.releaseCount,0);wait.resolve();await pending;await closing;
+  assert.equal(flushed,true);assert.equal(f.releaseCount,1);assert.equal(f.requests.length,1);
+});

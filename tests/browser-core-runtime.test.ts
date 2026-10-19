@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createDocumentDraftService} from '../src/core/document-drafts.ts';
 import { BrowserCoreRuntime } from '../src/platform/browser-core-runtime.ts';
 
 test('worker runtime gates recovered commands until exact outcome acknowledgement and scopes opening identity', async () => {
@@ -53,17 +54,19 @@ test('worker runtime gates recovered commands until exact outcome acknowledgemen
 });
 
 
-async function runtimeFixture(action: (runtime:BrowserCoreRuntime,calls:any[],worker:any)=>Promise<void>, timeoutMs=20000, openFields:Record<string,unknown>={}) {
+async function runtimeFixture(action: (runtime:BrowserCoreRuntime,calls:any[],worker:any)=>Promise<void>, timeoutMs=20000, openFields:Record<string,unknown>={}, options:Partial<Parameters<typeof BrowserCoreRuntime.open>[0]>={}) {
   const originals=new Map(['Worker','document','location'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
   const calls:any[]=[];let worker:any;const listeners=new Map<string,()=>void>();
   class FixtureWorker {
     onmessage?: (event:any)=>void;onerror?:()=>void;terminated=false;releaseCount=0;
     block?:string;blocked:any;onPosted?: (message:any)=>void;
+    draftReply=(_message:any)=>({result:{state:null,transfer:null,transfer_scratch_bytes:0},bytes:new Uint8Array()});
     visibility(){listeners.get('visibilitychange')?.();}
     constructor(){worker=this;}
-    completeBlocked(error?:{code:string;message:string}){const message=this.blocked;this.block=undefined;this.blocked=undefined;this.onmessage?.({data:error?{id:message.id,ok:false,error}:{id:message.id,ok:true,result:[]}});}
-    postMessage(message:any){calls.push(message);this.onPosted?.(message);if(this.block===message.operation){this.blocked=message;return;}queueMicrotask(()=>{
+    completeBlocked(error?:{code:string;message:string}){const message=this.blocked;this.block=undefined;this.blocked=undefined;this.onmessage?.({data:error?{id:message.id,ok:false,error}:{id:message.id,ok:true,...(message.operation==='document-drafts'?this.draftReply(message):{result:[]})}});}
+    postMessage(message:any,transfer?:ArrayBuffer[]){if(transfer?.length)message=structuredClone(message,{transfer});calls.push(message);this.onPosted?.(message);if(this.block===message.operation){this.blocked=message;return;}queueMicrotask(()=>{
       if(message.operation==='release-client' && ++this.releaseCount===1){this.onmessage?.({data:{id:message.id,ok:false,error:{code:'outcome_unknown',message:'lost release ACK'}}});return;}
+      if(message.operation==='document-drafts'){this.onmessage?.({data:{id:message.id,ok:true,...this.draftReply(message)}});return;}
       this.onmessage?.({data:{id:message.id,ok:true,result:message.operation==='open'?{authorityId:'12345678-1234-4123-8123-123456789abc',recovery:[],...openFields}:undefined}});
     });}
     terminate(){this.terminated=true;}
@@ -73,7 +76,7 @@ async function runtimeFixture(action: (runtime:BrowserCoreRuntime,calls:any[],wo
     Object.defineProperty(globalThis,'Worker',{configurable:true,value:FixtureWorker});
     Object.defineProperty(globalThis,'document',{configurable:true,value:{addEventListener(name:string,fn:()=>void){listeners.set(name,fn);},removeEventListener(name:string){listeners.delete(name);},visibilityState:'visible'}});
     Object.defineProperty(globalThis,'location',{configurable:true,value:{href:'https://zorid.test/',origin:'https://zorid.test'}});
-    runtime=await BrowserCoreRuntime.open({database:'zorid-core-vault:fixture',clientId:'22222222-2222-4222-8222-222222222222',wasmModuleUrl:'/core.js',allowNewVault:true,timeoutMs});
+    runtime=await BrowserCoreRuntime.open({database:'zorid-core-vault:fixture',clientId:'22222222-2222-4222-8222-222222222222',wasmModuleUrl:'/core.js',allowNewVault:true,timeoutMs,...options});
     await action(runtime,calls,worker);
   } finally {
     runtime?.close();
@@ -286,4 +289,75 @@ test('accepted metadata rows fences both success and failure replies after owner
     owner=false;worker.completeBlocked(replyError);await page;
     assert.deepEqual(calls.map(call=>call.operation),['open','document-index-metadata-rows']);
   },20000,metadataCapability);
+});
+
+const draftOptions={documentMaintenance:true} as const;
+const draftCapabilities={documentIndexAvailable:true,documentMaintenance:true,draftsAvailable:true};
+const draftJob={lifetime:'draft-life',id:'1',buffer_lifetime:'buffer',text_revision:'1'};
+const emptyDraftState={admitted:null,replay:false,execution:'wait_for_input',outcomes:[],usage:{source_bytes:3,scratch_bytes:0,facts_bytes:0}};
+test('browser drafts follow existing maintenance opt-in and preserve legacy backends without F',async()=>{
+  await runtimeFixture(async runtime=>{assert.equal(runtime.documentIndex!.drafts,undefined);assert.notEqual(runtime.documentIndex!.draftsAvailable,true);},20000,{documentIndexAvailable:true,documentMaintenance:true},draftOptions);
+  await assert.rejects(runtimeFixture(async()=>assert.fail('F without requested maintenance must not open'),20000,{documentIndexAvailable:true,draftsAvailable:true}),{code:'document_runtime_unavailable'});
+  await assert.rejects(runtimeFixture(async()=>assert.fail('F without an index owner must not open'),20000,{documentMaintenance:true,draftsAvailable:true},draftOptions),{code:'document_runtime_unavailable'});
+  await assert.rejects(runtimeFixture(async()=>assert.fail('malformed positive F marker must not open'),20000,{documentIndexAvailable:true,documentMaintenance:true,draftsAvailable:'yes'},draftOptions),{code:'document_runtime_unavailable'});
+  await runtimeFixture(async runtime=>assert.equal(runtime.documentIndex,undefined));
+});
+test('browser draft raw route transfers only the exclusive captured chunk and preserves FIFO',async()=>{
+  await runtimeFixture(async(runtime,calls,worker)=>{
+    assert.equal(calls[0].payload.documentMaintenance,true);
+    const transport=runtime.documentIndex!.drafts!,service=createDocumentDraftService(transport);
+    assert.deepEqual(transport.scope,{localStoreId:runtime.durableScope!.vaultId,clientId:runtime.durableScope!.clientId});
+    worker.draftReply=()=>({result:{state:emptyDraftState,transfer:{source_bytes_received:3,source_bytes_expected:3,source_sealed:false,facts_bytes:null,scratch_bytes:0},transfer_scratch_bytes:0},bytes:new Uint8Array()});
+    worker.block='inventory';const entered=enteredRequest(worker,'inventory'),first=runtime.inventory();await entered;
+    const original=new Uint8Array([1,2,3]),pending=service.uploadChunk({job:draftJob,offset:'0'},original);original[0]=9;
+    assert.equal(calls.length,2);worker.completeBlocked();await first;await pending;
+    assert.deepEqual([...calls.at(-1).bytes],[1,2,3]);assert.deepEqual([...original],[9,2,3]);
+    assert.equal(calls.at(-1).operation,'document-drafts');assert.equal(calls.some(call=>call.operation.startsWith('binary-')),false);
+    const owned=new Uint8Array([4,5,6]);await transport.invoke({op:'upload_chunk',job:draftJob,offset:'0'},owned);
+    assert.equal(owned.byteLength,0,'exact exclusively owned snapshot is moved, without a second body copy');
+  },20000,draftCapabilities,draftOptions);
+});
+test('browser draft route bounds held calls, releases credits and rejects oversized or partial buffers',async()=>{
+  await runtimeFixture(async(runtime,calls,worker)=>{
+    const drafts=runtime.documentIndex!.drafts!;
+    await assert.rejects(drafts.invoke({op:'upload_chunk',job:draftJob,offset:'0'},new Uint8Array(0)),{code:'draft_invalid_chunk'});
+    await assert.rejects(drafts.invoke({op:'upload_chunk',job:draftJob,offset:'0'},new Uint8Array(131073)),{code:'draft_invalid_chunk'});
+    await assert.rejects(drafts.invoke({op:'upload_chunk',job:draftJob,offset:'0'},new Uint8Array(3).subarray(1)),{code:'draft_invalid_chunk'});
+    worker.block='document-drafts';const entered=enteredRequest(worker,'document-drafts');
+    const first=drafts.invoke({op:'snapshot'});await entered;
+    const queued=Array.from({length:7},()=>drafts.invoke({op:'snapshot'}));
+    await assert.rejects(drafts.invoke({op:'snapshot'}),{code:'draft_capacity'});assert.equal(calls.length,2);
+    worker.completeBlocked();await Promise.all([first,...queued]);await drafts.invoke({op:'snapshot'});
+    assert.equal(calls.filter(call=>call.operation==='document-drafts').length,9);
+    worker.block='document-drafts';const retryEntered=enteredRequest(worker,'document-drafts'),failed=drafts.invoke({op:'snapshot'});await retryEntered;
+    worker.completeBlocked({code:'draft_resource',message:'temporary'});await assert.rejects(failed,{code:'draft_resource'});
+    await drafts.invoke({op:'snapshot'});assert.equal(worker.terminated,false,'transient draft rejection never poisons durable storage');
+    await assert.rejects((runtime as any).call('document-drafts',{op:'snapshot'}),{code:'draft_invalid_request'});
+    await assert.rejects(drafts.invoke({op:'Complete'} as any),{code:'draft_invalid_request'});
+  },20000,draftCapabilities,draftOptions);
+});
+test('browser draft responses fence ownership on success and failure and validate bounded raw facts',async()=>{
+  await runtimeFixture(async(runtime,calls,worker)=>{
+    let owner=true;runtime.installAdmissionGuard(()=>{if(!owner)throw Object.assign(new Error('retired'),{code:'owner_retired'});});
+    const drafts=runtime.documentIndex!.drafts!;
+    worker.draftReply=()=>({result:{job:draftJob,offset:'0',bytes:2,total_bytes:2,eof:true},bytes:new Uint8Array([1,2])});
+    await assert.rejects(drafts.invoke({op:'facts_read',job:draftJob,offset:'0',maximum:1}),{code:'invalid_document_response'});
+    const read=await drafts.invoke({op:'facts_read',job:draftJob,offset:'0',maximum:2}) as {bytes:Uint8Array};assert.deepEqual([...read.bytes],[1,2]);
+    worker.draftReply=()=>({result:{job:draftJob,offset:'0',bytes:2,total_bytes:2,eof:true},bytes:new Uint8Array(128).subarray(0,2)});
+    await assert.rejects(drafts.invoke({op:'facts_read',job:draftJob,offset:'0',maximum:2}),{code:'invalid_document_response'});
+    worker.block='document-drafts';const entered=enteredRequest(worker,'document-drafts'),pending=drafts.invoke({op:'snapshot'});await entered;
+    owner=false;worker.completeBlocked({code:'draft_resource',message:'transient'});await assert.rejects(pending,{code:'owner_retired'});
+    owner=true;worker.block='document-drafts';const next=enteredRequest(worker,'document-drafts'),success=drafts.invoke({op:'snapshot'});await next;
+    owner=false;worker.completeBlocked();await assert.rejects(success,{code:'owner_retired'});
+  },20000,draftCapabilities,draftOptions);
+});
+test('browser release drains accepted draft frames before worker release and retires observers',async()=>{
+  await runtimeFixture(async(runtime,calls,worker)=>{
+    worker.releaseCount=1;const drafts=runtime.documentIndex!.drafts!;let nudges=0,retired=0;
+    drafts.subscribe(()=>nudges++,()=>retired++);worker.onmessage({data:{event:'document-drafts-nudge'}});assert.equal(nudges,1);
+    worker.block='document-drafts';const entered=enteredRequest(worker,'document-drafts'),pending=drafts.invoke({op:'snapshot'});await entered;
+    const closing=runtime.releaseClient();await assert.rejects(drafts.invoke({op:'snapshot'}),{code:'client_not_admitted'});
+    assert.equal(calls.some(call=>call.operation==='release-client'),false);worker.completeBlocked();await pending;await closing;
+    assert.equal(calls.at(-1).operation,'release-client');assert.equal(retired,1);
+  },20000,draftCapabilities,draftOptions);
 });

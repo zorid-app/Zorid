@@ -7,6 +7,7 @@ import type { BrowserVaultIntent, BrowserVaultRead, BrowserVaultOutcome } from '
 import { BINARY_CHUNK_BYTES, BINARY_FORMAT_FILE_BYTES } from '../core/binary-streams.ts';
 import type { BinaryStreams, BinaryStreamLimits, BinaryStageRef, BinaryReadRef } from '../core/binary-streams.ts';
 import type {DocumentRuntimeTransport} from '../core/document-runtime.ts';
+import {DOCUMENT_DRAFT_CHUNK_BYTES,DocumentDraftError,documentDraftRequest,documentDraftReply,type DocumentDraftRequest,type DocumentDraftTransport} from '../core/document-drafts.ts';
 import type {BrowserDocumentIndexProvider} from './browser-core.ts';
 import type { BrowserCoreBackend } from './browser-core.ts';
 import type { DurableCheckpoints, Checkpoint, CheckpointPage, CheckpointListOptions, CheckpointChangesOptions } from '../core/durable-checkpoints.ts';
@@ -55,6 +56,10 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
   private dispatchTail: Promise<void> = Promise.resolve();
   private queuedCalls = 0;
   private admissionGuard?: () => void;
+  private readonly draftInFlight=new Set<Promise<unknown>>();
+  private draftCalls=0;
+  private draftBytes=0;
+  private draftListeners=new Set<{nudge:()=>void;retire:()=>void}>();
   private runtimeListeners=new Set<{nudge:()=>void;retire:()=>void}>();
   private listeners = new Set<(paths?: readonly string[]) => void>();
   private closed = false;
@@ -81,6 +86,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
     this.worker = new Worker(new URL('./browser-core-worker.ts', import.meta.url), {type:'module'});
     this.worker.onmessage = ({data}) => {
       if (data?.event === 'storage-error') { this.fail(new BrowserVaultError(data.code, 'Browser vault could not refresh committed state', data.details)); return; }
+      if(data?.event==='document-drafts-nudge'){for(const listener of this.draftListeners){try{listener.nudge();}catch(error){console.error('Document analysis listener failed',error);}}return;}
       if(data?.event==='document-runtime-nudge'){for(const listener of this.runtimeListeners){try{listener.nudge();}catch(error){console.error('Document maintenance listener failed',error);}}return;}
       if (data?.event === 'change') {
         for (const listener of this.listeners) { try { listener(data.paths); } catch (error) { console.error('Browser vault listener failed', error); } }
@@ -89,7 +95,10 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       const request = this.pending.get(data?.id);
       if (!request) return;
       this.pending.delete(data.id); clearTimeout(request.timer);
-      if(request.operation==='workblock-command'){
+      if(request.operation==='document-drafts'){
+        if(data.ok===true)request.resolve({result:data.result,bytes:data.bytes});
+        else request.reject(new DocumentDraftError(typeof data?.error?.code==='string'&&data.error.code.length<=64&&/^(draft_[a-z_]+|document_runtime_unavailable|client_not_admitted)$/.test(data.error.code)?data.error.code:'document_runtime_unavailable'));
+      }else if(request.operation==='workblock-command'){
         if(data.ok===true){request.resolve(data.result);return;}
         const error=data?.error;
         request.reject(data.ok===false&&error&&typeof error.code==='string'&&/^[a-z_]{1,64}$/.test(error.code)&&(error.source==='host'||error.source==='rust')&&typeof error.commitUncertain==='boolean'
@@ -111,7 +120,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       // this named client's pending intents, using Rust
       // receipt lookup, before this Promise exposes a ready adapter.
       const clientId = options.clientId;
-      const opened = await runtime.call<{recovery:string[];authorityId:string;binaryLimits?:BinaryStreamLimits;documentIndexAvailable?:boolean;metadataRowsAvailable?:boolean;documentMaintenance?:boolean;workBlocks?:boolean}>('open', {...options, wasmModuleUrl:moduleUrl.href});
+      const opened = await runtime.call<{recovery:string[];authorityId:string;binaryLimits?:BinaryStreamLimits;documentIndexAvailable?:boolean;metadataRowsAvailable?:boolean;documentMaintenance?:boolean;draftsAvailable?:boolean;workBlocks?:boolean}>('open', {...options, wasmModuleUrl:moduleUrl.href});
       if (typeof opened.authorityId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(opened.authorityId)) throw new BrowserVaultError('storage_corrupt','Worker returned no valid local storage authority');
       runtime.authorityScope = Object.freeze({vaultId:opened.authorityId,clientId});
       const pageOptions=(input:CheckpointListOptions)=>{
@@ -131,10 +140,13 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       } satisfies DurableCheckpoints);
       if(options.documentMaintenance===true&&opened.documentMaintenance!==true)throw new BrowserVaultError('document_runtime_unavailable','Required document maintenance capability is absent');
       if(opened.documentMaintenance===true&&options.documentMaintenance!==true)throw new BrowserVaultError('invalid_wasm_result','Unrequested maintenance capability');
+      if(opened.draftsAvailable!==undefined&&typeof opened.draftsAvailable!=='boolean'||opened.draftsAvailable===true&&(options.documentMaintenance!==true||opened.documentMaintenance!==true||opened.documentIndexAvailable!==true))throw new DocumentDraftError('document_runtime_unavailable');
+      const drafts=opened.draftsAvailable===true?runtime.createDocumentDraftTransport():undefined;
       const maintenance=opened.documentMaintenance===true?runtime.createDocumentMaintenanceTransport():undefined;
       if(opened.metadataRowsAvailable!==undefined&&typeof opened.metadataRowsAvailable!=='boolean'||opened.metadataRowsAvailable===true&&opened.documentIndexAvailable!==true)throw new BrowserVaultError('invalid_wasm_result','Invalid metadata page capability');
       if(opened.documentIndexAvailable)runtime.indexProvider=Object.freeze<BrowserDocumentIndexProvider>({
         ...(maintenance?{maintenance}:{}),
+        ...(drafts?{draftsAvailable:true,drafts}:{}),
         ...(opened.metadataRowsAvailable===true?{metadataRowsAvailable:true,metadataRows:async(input:Parameters<NonNullable<BrowserDocumentIndex['metadataRows']>>[0])=>{const captured=captureBrowserMetadataRows(input);try{return await runtime.call('document-index-metadata-rows',captured);}finally{runtime.assertDispatch('document-index-metadata-rows');}}}:{}),
         initialize:()=>runtime.call('document-index-initialize'),discard:id=>runtime.call('document-index-discard',id),
         status:()=>runtime.call('document-index-status'),begin:()=>runtime.call('document-index-begin'),
@@ -167,6 +179,41 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       subscribe:(nudge,onRetire)=>{this.assertActive();const receiver={nudge,retire:onRetire};this.runtimeListeners.add(receiver);return()=>this.runtimeListeners.delete(receiver);},
     });
   }
+  private createDocumentDraftTransport():DocumentDraftTransport {
+    const scope=this.authorityScope!;
+    return Object.freeze<DocumentDraftTransport>({scope:Object.freeze({localStoreId:scope.vaultId,clientId:scope.clientId}),
+      invoke:(request,bytes)=>this.callDraft(request,bytes),
+      subscribe:(nudge,retire)=>{this.assertDraftDispatch();if(typeof nudge!=='function'||typeof retire!=='function')throw new DocumentDraftError('draft_invalid_request');const slot={nudge,retire};this.draftListeners.add(slot);return()=>{this.draftListeners.delete(slot);};},
+    });
+  }
+  private assertDraftDispatch(accepted=false):void {
+    if(this.closed||this.releasing&&!accepted)throw new DocumentDraftError('client_not_admitted');
+    this.admissionGuard?.();
+  }
+  /** Only this raw route may move the facade's exclusive bounded byte snapshot.
+   * Credits cover actual pending bridge frames, separately from Rust quotas. */
+  private callDraft(input:DocumentDraftRequest,bytes?:Uint8Array):Promise<unknown> {
+    let request:DocumentDraftRequest,size:number;
+    try {
+      this.assertDraftDispatch();request=documentDraftRequest(input);
+      if(request.op==='upload_chunk'?!(bytes instanceof Uint8Array)||bytes.byteLength===0||bytes.byteLength>DOCUMENT_DRAFT_CHUNK_BYTES||!(bytes.buffer instanceof ArrayBuffer)||bytes.byteOffset!==0||bytes.byteLength!==bytes.buffer.byteLength:bytes!==undefined)throw new DocumentDraftError('draft_invalid_chunk');
+      size=request.op==='facts_read'?request.maximum:bytes?.byteLength??0;
+      if(this.draftCalls>=8||this.draftBytes+size>8*DOCUMENT_DRAFT_CHUNK_BYTES)throw new DocumentDraftError('draft_capacity');
+    } catch(error){return Promise.reject(error);}
+    this.draftCalls++;this.draftBytes+=size;
+    const result=this.dispatchTail.then(()=>{
+      this.assertDraftDispatch(true);const id=crypto.randomUUID();
+      return new Promise<unknown>((resolve,reject)=>{
+        const timer=setTimeout(()=>this.fail(new BrowserVaultError('document_runtime_unavailable','Browser document analysis response timed out',{request_id:id,operation:'document-drafts'})),this.timeoutMs);
+        this.pending.set(id,{resolve,reject,timer,operation:'document-drafts'});
+        try{this.worker.postMessage({id,operation:'document-drafts',payload:request,...(bytes===undefined?{}:{bytes})},bytes?[bytes.buffer as ArrayBuffer]:[]);}
+        catch(error){clearTimeout(timer);this.pending.delete(id);reject(error);}
+      });
+    }).then(value=>{this.assertDraftDispatch(true);const frame=value as {bytes?:unknown};if(!(frame?.bytes instanceof Uint8Array)||!(frame.bytes.buffer instanceof ArrayBuffer)||frame.bytes.byteOffset!==0||frame.bytes.byteLength!==frame.bytes.buffer.byteLength)throw new DocumentDraftError('invalid_document_response');documentDraftReply(request,value);return value;},error=>{this.assertDraftDispatch(true);throw error;});
+    this.dispatchTail=result.then(()=>undefined,()=>undefined);
+    const tracked=result.finally(()=>{this.draftCalls--;this.draftBytes-=size;this.draftInFlight.delete(tracked);});
+    this.draftInFlight.add(tracked);return tracked;
+  }
   /** Called only after an owner-fenced host readiness acknowledgement. One
    * binding preserves retained mutation identities across sync reconfiguration. */
   private installWorkBlocks():void {
@@ -193,6 +240,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
   private call<T>(operation: string, payload?: unknown, network = false): Promise<T> {
     let snapshot: unknown;
     try {
+      if(operation==='document-drafts')throw new DocumentDraftError('draft_invalid_request');
       this.assertDispatch(operation);
       // Bound retained structured-clone payloads while the worker is stalled.
       if (this.queuedCalls >= 8 && operation !== 'sync-revoke') throw new BrowserVaultError('client_queue_full', 'Browser consumer request queue is full; retain the original operation');
@@ -312,7 +360,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
     });
   }
   private fail(error: BrowserVaultError): void {
-    for (const request of this.pending.values()) { clearTimeout(request.timer); request.reject(error); }
+    for (const request of this.pending.values()) { clearTimeout(request.timer); request.reject(request.operation==='document-drafts'?new DocumentDraftError('document_runtime_unavailable'):error); }
     this.pending.clear(); this.close();
   }
   assertActive(): void {
@@ -327,7 +375,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
     this.workBlockBinding?.stop();
     this.releasing=true;this.workBlockDraining=true;
     document.removeEventListener('visibilitychange', this.visibility);
-    this.releasePending = (async()=>{await this.workBlockBinding?.drain();this.workBlockDraining=false;while(this.binaryInFlight.size)await Promise.allSettled([...this.binaryInFlight]);await this.call<void>('release-client');this.close();})()
+    this.releasePending = (async()=>{await this.workBlockBinding?.drain();this.workBlockDraining=false;while(this.draftInFlight.size)await Promise.allSettled([...this.draftInFlight]);while(this.binaryInFlight.size)await Promise.allSettled([...this.binaryInFlight]);await this.call<void>('release-client');this.close();})()
       .finally(() => { this.releasePending = undefined; });
     return this.releasePending;
   }
@@ -396,9 +444,10 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
     this.workBlockBinding?.stop();
     this.closed = true; document.removeEventListener('visibilitychange', this.visibility);
     this.worker.terminate(); this.listeners.clear();
+    const draftListeners=[...this.draftListeners];this.draftListeners.clear();for(const receiver of draftListeners){try{receiver.retire();}catch(error){console.error('Document analysis retirement listener failed',error);}}
     const runtimeListeners=[...this.runtimeListeners];this.runtimeListeners.clear();for(const receiver of runtimeListeners){try{receiver.retire();}catch(error){console.error('Document maintenance retirement listener failed',error);}}
     for (const request of this.pending.values()) {
-      clearTimeout(request.timer); request.reject(new BrowserVaultError('outcome_unknown', 'Worker closed before acknowledgement; original intent retained', {operation:request.operation}));
+      clearTimeout(request.timer); request.reject(request.operation==='document-drafts'?new DocumentDraftError('document_runtime_unavailable'):new BrowserVaultError('outcome_unknown', 'Worker closed before acknowledgement; original intent retained', {operation:request.operation}));
     }
     this.pending.clear();
   }

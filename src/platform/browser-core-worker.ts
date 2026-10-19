@@ -13,9 +13,10 @@ import { createBrowserManagedRecordsHost } from './browser-managed-records-host.
 import { createBrowserManagedRecordConsumers } from './browser-managed-records-registry.ts';
 import { createBrowserWorkBlocksHost } from './browser-workblocks-host.ts';
 import type { BrowserWorkBlocksWasm } from './browser-workblocks-host.ts';
+import {documentDraftRequest,DocumentDraftError,DOCUMENT_DRAFT_CHUNK_BYTES} from '../core/document-drafts.ts';
 
 // DOM builds and worker builds share this file without mixing lib.dom/lib.webworker.
-const port = self as unknown as {onmessage: ((event: MessageEvent) => void) | null; postMessage(value: unknown): void};
+const port = self as unknown as {onmessage: ((event: MessageEvent) => void) | null; postMessage(value: unknown,transfer?:Transferable[]): void};
 let vault: BrowserVault | undefined, clientId = '', channel: BroadcastChannel | undefined;
 let sequence = '0', queue: Promise<unknown> = Promise.resolve();
 let recovery = new Set<string>();
@@ -27,9 +28,11 @@ let managed:ReturnType<typeof createBrowserManagedRecordsHost>|undefined;
 let workBlocks:ReturnType<typeof createBrowserWorkBlocksHost>|undefined;
 let documentRuntime:ReturnType<typeof createBrowserDocumentRuntimeHost>|undefined;
 let documentChannel:ReturnType<typeof createBrowserDocumentRuntimeChannel>|undefined;
+let draftsEnabled=false,draftPending=0,draftPendingBytes=0,releasePromise:Promise<void>|undefined;
 const assertManagedActive=()=>{assertOwner();if(closing)throw new BrowserVaultError('client_not_admitted','Browser client is releasing');};
-let releasingCleanup=false;
-const assertVaultActive=()=>{assertOwner();if(closing&&!releasingCleanup)throw new BrowserVaultError('client_not_admitted','Browser client is releasing');};
+// Public closing admission belongs at the message/producer boundaries. Private
+// cleanup continues only under the original real lease and actual core ticket.
+const assertVaultActive=()=>assertOwner();
 const detached=new Set<Promise<unknown>>();
 const streaming=()=>vault&&'validateStorage'in vault?vault as BrowserStreamingVault:undefined;
 function storageDiagnostic(details:unknown):Record<string,string|boolean>|undefined {
@@ -42,7 +45,7 @@ function storageDiagnostic(details:unknown):Record<string,string|boolean>|undefi
   return result;
 }
 function failStorage(code:string,details?:unknown):void {
-  if(closing||storageFailed||!['storage_closed','storage_corrupt','client_ownership_lost'].includes(code))return;
+  if(storageFailed||!['storage_closed','storage_corrupt','client_ownership_lost'].includes(code))return;
   storageFailed=true;documentRuntime?.retire();workBlocks?.stop();managed?.stop();sync?.revoke();channel?.close();vault?.close();
   try{const diagnostic=storageDiagnostic(details);port.postMessage({event:'storage-error',code,...(diagnostic?{details:diagnostic}:{})});}catch{/* Worker transport already failed. */}
 }
@@ -55,7 +58,7 @@ function assertOwner(): void {
   lease.assertActive();
 }
 async function refresh(assertSession?:()=>void): Promise<void> {
-  if (!vault || released) return;
+  if (!vault || released || closing) return;
   assertOwner();
   const next = await vault.changesSince(sequence);
   assertOwner();
@@ -121,16 +124,22 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
       if (recoveredCommit) channel.postMessage({changed:true});
       channel.onmessage = () => {
         // Serialize hints with operations; lost hints are repaired on visibility.
-        queue = queue.then(()=>refresh()).catch(error => port.postMessage({event:'storage-error', code:error.code ?? 'storage_failure'}));
+        if(closing||released||storageFailed)return;
+        queue = queue.then(()=>{if(closing||released||storageFailed)return;return refresh();}).catch(error => port.postMessage({event:'storage-error', code:error.code ?? 'storage_failure'}));
       };
       recovery = new Set((await vault.intents(clientId)).filter(intent => !intent.acknowledged && intent.status !== 'prepared').map(intent=>intent.intent_id));
       assertManagedActive();
       void managed?.trigger();
       const maintenance=streaming()?.documentMaintenance;
+      if(payload.documentMaintenance===true&&maintenance?.draftsAvailable===true){
+        if(['configureDrafts','draft','workSnapshot','workTurn','releaseDrafts'].some(name=>typeof (maintenance as unknown as Record<string,unknown>)[name]!=='function'))throw new BrowserVaultError('document_runtime_unavailable','Required transient document capability is unavailable');
+        maintenance.configureDrafts!({localStoreId:vault.authorityId,clientId});draftsEnabled=true;
+      }
       if(payload.documentMaintenance===true&&!maintenance)throw new BrowserVaultError('document_runtime_unavailable','Document maintenance WASM is unavailable');
       if(payload.documentMaintenance===true&&maintenance){
         documentRuntime=createBrowserDocumentRuntimeHost({maintenance,assertActive:assertOwner,local,
           changed:(snapshot,outcomes)=>documentChannel?.adopt(snapshot,outcomes),
+          draftChanged:()=>{if(!closing&&!storageFailed&&draftsEnabled)port.postMessage({event:'document-drafts-nudge'});},
           failed:error=>{const code=error instanceof BrowserVaultError?error.code:'document_runtime_unavailable';failStorage(code);}});
         documentChannel=createBrowserDocumentRuntimeChannel({scope:{localStoreId:vault.authorityId,clientId},assertActive:assertManagedActive,host:documentRuntime,
           nudge:()=>{if(!closing&&!storageFailed)port.postMessage({event:'document-runtime-nudge'});}});
@@ -139,7 +148,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
       }
       const index=streaming()?.documentIndex;
       if(index?.metadataRowsAvailable===true&&typeof index.metadataRows!=='function')throw new BrowserVaultError('index_rebuild_required','Invalid metadata page capability');
-      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{}),documentIndexAvailable:!!index,...(index?.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(documentChannel?{documentMaintenance:true}:{}),...(workBlocks?.ready?{workBlocks:true}:{})};
+      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{}),documentIndexAvailable:!!index,...(index?.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(documentChannel?{documentMaintenance:true}:{}),...(draftsEnabled?{draftsAvailable:true}:{}),...(workBlocks?.ready?{workBlocks:true}:{})};
     } catch (error) {
       try{documentRuntime?.retire();await documentRuntime?.drain();}catch{/* Preserve the original opening failure after accepted work settles. */}
       documentChannel=undefined;documentRuntime=undefined;
@@ -156,9 +165,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
     await workBlocks?.drain();
     await managed?.drain();
     await Promise.allSettled([...detached]);
-    releasingCleanup=true;
-    try{if(streaming()){await streaming()!.documentIndex?.close();await streaming()!.cleanupReadPins();}}
-    finally{releasingCleanup=false;}
+    if(streaming()){await streaming()!.documentIndex?.close();await streaming()!.cleanupReadPins();}
     // Serialized behind all earlier dispatches, including timed-out RPCs/hints.
     sync?.revoke(); channel?.close(); channel = undefined; vault.close();
     await lease!.release(); released = true; return;
@@ -244,7 +251,39 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
 port.onmessage = ({data}) => {
   const {id, operation, payload} = data;
   // Revoke before queued storage dispatch. Network work never occupies the local-operation tail.
-  if (operation === 'release-client') {closing=true;documentRuntime?.retire();workBlocks?.stop();managed?.stop();sync?.revoke();}
+  const reject=(error:unknown)=>{const failure=error instanceof BrowserVaultError?error:new BrowserVaultError(error instanceof DocumentDraftError?error.code:'draft_invalid_request','Browser request was not admitted');try{port.postMessage({id,ok:false,error:{code:failure.code,message:failure.message,source:failure.source}});}catch{};};
+  if (operation === 'release-client') {
+    if(!releasePromise){
+      // Capture foreground FIFO before scheduling any private close turn. The
+      // drain waits outside this queue so later macrotasks can enter it.
+      const tail=queue;closing=true;documentRuntime?.retire();workBlocks?.stop();managed?.stop();sync?.revoke();
+      const releasing=tail.catch(()=>undefined).then(()=>dispatch('release-client',undefined)).then(()=>undefined);
+      const tracked=releasing.catch(error=>{if(releasePromise===tracked)releasePromise=undefined;throw error;});releasePromise=tracked;
+    }
+    void releasePromise.then(()=>{port.postMessage({id,ok:true,result:undefined});},reject);return;
+  }
+  if(closing||released||storageFailed){reject(new BrowserVaultError('client_not_admitted','Browser client is releasing'));return;}
+  if(operation==='document-drafts'){
+    let request:ReturnType<typeof documentDraftRequest>,reserved=0;
+    try{
+      assertManagedActive();if(!draftsEnabled||!documentRuntime||!streaming()?.documentMaintenance?.draft)throw new BrowserVaultError('document_runtime_unavailable','Transient document capability is not enabled');
+      request=documentDraftRequest(payload);
+      if(request.op==='upload_chunk'?!(data.bytes instanceof Uint8Array)||data.bytes.byteLength===0||data.bytes.byteLength>DOCUMENT_DRAFT_CHUNK_BYTES||!(data.bytes.buffer instanceof ArrayBuffer)||data.bytes.byteOffset!==0||data.bytes.byteLength!==data.bytes.buffer.byteLength:data.bytes!==undefined)throw new BrowserVaultError('draft_invalid_chunk','Invalid transient document frame');
+      reserved=request.op==='upload_chunk'?data.bytes.byteLength:request.op==='facts_read'?request.maximum:0;
+      if(draftPending>=8||draftPendingBytes+reserved>8*DOCUMENT_DRAFT_CHUNK_BYTES)throw new BrowserVaultError('draft_capacity','Transient document bridge is full');
+      // No body allocation occurs before this actual bridge admission.
+      assertManagedActive();draftPending++;draftPendingBytes+=reserved;
+    }catch(error){reject(error);return;}
+    const body=data.bytes as Uint8Array|undefined;
+    void local(async()=>{
+      let frame:ReturnType<NonNullable<NonNullable<BrowserStreamingVault['documentMaintenance']>['draft']>>|undefined;
+      try{
+        assertManagedActive();frame=streaming()!.documentMaintenance!.draft!(request,body);assertManagedActive();
+        documentRuntime!.draftsChanged!();
+        port.postMessage({id,ok:true,result:frame.result,bytes:frame.bytes},[frame.bytes.buffer as ArrayBuffer]);
+      }catch(error){reject(error);}finally{frame?.release();draftPending--;draftPendingBytes-=reserved;}
+    }).catch(error=>{reject(error);draftPending--;draftPendingBytes-=reserved;});return;
+  }
   if(typeof operation==='string'&&operation.startsWith('binary-')){
     const task=(async()=>{try{if(closing)throw new BrowserVaultError('client_not_admitted','Browser client is releasing');assertOwner();const result=await dispatch(operation,payload);
       const transfer=operation==='binary-read'&&result&&typeof result==='object'&&'bytes'in result&&result.bytes instanceof Uint8Array&&result.bytes.buffer instanceof ArrayBuffer?[result.bytes.buffer]:undefined;
@@ -286,7 +325,7 @@ port.onmessage = ({data}) => {
     return;
   }
   queue = queue.catch(() => undefined).then(async () => {
-    try { port.postMessage({id, ok:true, result:await dispatch(operation, payload)}); }
+    try { if(closing||released||storageFailed)throw new BrowserVaultError('client_not_admitted','Browser client is releasing');port.postMessage({id, ok:true, result:await dispatch(operation, payload)}); }
     catch (error) {
       const failure = error instanceof BrowserVaultError ? error : new BrowserVaultError('storage_failure', error instanceof Error ? error.message : String(error));
       try { port.postMessage({id, ok:false, error:{code:failure.code, message:failure.message, details:failure.details, source:failure.source,...(operation==='workblock-command'?{commitUncertain:(failure as BrowserVaultError&{commitUncertain?:boolean}).commitUncertain===true}:{})}}); }

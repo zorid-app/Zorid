@@ -17,7 +17,7 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
   const records=new Map<string,Map<string,any>>(['control','metadata','presentation','content','sync_materialization_refs'].map(n=>[n,new Map()]));
   const seed=(store:string,key:string,value:any)=>records.get(store)!.set(key,clone(value));
   seed('control','local-store-id',{key:'local-store-id',value:authority});seed('control','sequence',{key:'sequence',value:'0'});
-  const calls:{store:string;op:string;key?:any}[]=[],transactions:string[][]=[];let failCommit=false,denied=false,fatal=false,cacheReadUnavailable=false;let afterRead:((store:string,key:any)=>void)|undefined;
+  const calls:{store:string;op:string;key?:any}[]=[],transactions:string[][]=[];let failCommit=false,denied=false,fatal=false,cacheReadUnavailable=false;let afterRead:((store:string,key:any)=>void)|undefined,afterCommit:(()=>void)|undefined;
   const db:any={transaction(names:string[],mode:string,options:any){
     if(mode==='readwrite')assert.deepEqual(options,{durability:'strict'});transactions.push(names);
     const local=new Map(names.map(n=>[n,clone(records.get(n)!)])),writes=new Set<string>();let pending=0,aborted=false,completed=false,scheduled=false;
@@ -40,7 +40,7 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
         };
       },
     };
-    function schedule(){if(scheduled)return;scheduled=true;queueMicrotask(()=>{scheduled=false;if(aborted||completed||pending)return;if(failCommit&&mode==='readwrite'){failCommit=false;tx.abort();return;}completed=true;for(const n of writes)records.set(n,local.get(n)!);tx.oncomplete?.();});}schedule();return tx;
+    function schedule(){if(scheduled)return;scheduled=true;queueMicrotask(()=>{scheduled=false;if(aborted||completed||pending)return;if(failCommit&&mode==='readwrite'){failCommit=false;tx.abort();return;}completed=true;for(const n of writes)records.set(n,local.get(n)!);if(mode==='readwrite')afterCommit?.();tx.oncomplete?.();});}schedule();return tx;
   }};
   let textExtractions=0,reuses=0,cacheBinds=0,pauseCacheBindOnce=!!options.pauseCacheBindOnce;const taskCalls:{sources:{id:string;source:string}[];options:any;snapshot:unknown}[]= [];
   const baseCalls:{id:string;text:string;facts:any[];options:any;viewName?:string|null}[]=[];
@@ -123,6 +123,9 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
   }
   const policy={formatVersion:1,maxRows:options.cacheRows??100000,maxBytes:options.cacheBytes??64*1024*1024,maxRowBytes:options.cacheRowBytes??1024*1024,maxEvictionsPerWrite:options.evictions??32};
   const wasm={documentParseCachePolicyJson:()=>JSON.stringify(policy),documentParseCacheAdmissionJson:(input:string)=>{const {usage,replacedPayloadBytes:replaced,incomingPayloadBytes:incoming,evictedRows:evicted}=JSON.parse(input),rows=usage.rows-(replaced===null?0:1)+1,bytes=usage.bytes-(replaced??0)+incoming;return JSON.stringify(incoming>policy.maxRowBytes?'skipOversized':rows<=policy.maxRows&&bytes<=policy.maxBytes?'write':evicted===policy.maxEvictionsPerWrite?'skipEvictionLimit':'evictOldest');},documentIndexVersionsJson:()=>'{"schema":1,"extraction":"fixture","resolver":"fixture","query":"fixture"}',WasmDocumentIndexBuilder:MockBuilder,WasmDocumentIndexPreparationCache:MockPreparationCache,WasmDocumentRichSearchOwner:MockRichOwner} as unknown as BrowserDocumentIndexWasm;
+  // This double exposes reservation inputs/outputs for transaction assertions.
+  // Arithmetic and actual WASM wire semantics have independent Rust gates.
+  const allocationCalls:any[]=[];wasm.documentIndexAllocateJson=(input:string)=>{const clock=JSON.parse(input);allocationCalls.push(clone(clock));if(clock.allocated==='18446744073709551615')throw JSON.stringify({code:'index_rebuild_required'});return JSON.stringify({localStoreId:clock.localStoreId,generationEpoch:clock.generationEpoch,generation:String(BigInt(clock.allocated)+1n),versions:JSON.parse(wasm.documentIndexVersionsJson())});};
   if(options.metadataRows)wasm.WasmDocumentMetadataRowsScan=MockMetadataScan;
   const backend=(clientId='client-a')=>createBrowserDocumentIndexBackend({db,authorityId:authority,clientId,wasm,assertActive(){if(fatal)throw new BrowserVaultError('storage_closed','fatal host close');if(denied)throw Object.assign(new Error('retired'),{code:'owner_retired'});},
     readPublication(tx,done,abort){let entries:any[]|undefined,presentation:any[]|undefined,sequence:string|undefined;
@@ -140,7 +143,8 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
   }
   const source=()=>clone(new Map([...records].filter(([n])=>n!=='control').map(([n,m])=>[n,m])));
   const build=async(index:ReturnType<typeof open>)=>{let stage=await index.begin();do{stage=await index.pump(stage.stageId);}while(!stage.ready);return index.publish(stage.stageId);};
-  return {records,calls,transactions,file,open,backend,wasm,build,source,seed,metadataStats,metadataInvalid(value:boolean){metadataInvalid=value;},metadataThrow(){metadataThrow=true;},afterMetadataPage(action?:()=>void){afterMetadataPage=action;},richCalls,richStats,afterRichCommit(action:()=>void){afterRichCommit=action;},baseCalls,taskCalls,preparationCalls,preparationStats,afterBase(action:()=>void){afterBase=action;},stats:()=>({textExtractions,reuses,cacheBinds}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},cacheUnavailable(){cacheReadUnavailable=true;},deny(){denied=true;},fatal(){fatal=true;},afterRead(action:(store:string,key:any)=>void){afterRead=action;}};
+  const descriptor=(snapshot:{generationEpoch:string;generation:string})=>records.get('control')!.get('document-index:v1/catalog').value.generations.find((g:any)=>g.snapshot.generationEpoch===snapshot.generationEpoch&&g.snapshot.generation===snapshot.generation);
+  return {records,calls,transactions,file,open,backend,wasm,build,source,seed,descriptor,allocationCalls,metadataStats,metadataInvalid(value:boolean){metadataInvalid=value;},metadataThrow(){metadataThrow=true;},afterMetadataPage(action?:()=>void){afterMetadataPage=action;},richCalls,richStats,afterRichCommit(action:()=>void){afterRichCommit=action;},baseCalls,taskCalls,preparationCalls,preparationStats,afterBase(action:()=>void){afterBase=action;},stats:()=>({textExtractions,reuses,cacheBinds}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},cacheUnavailable(){cacheReadUnavailable=true;},deny(){denied=true;},allow(){denied=false;},fatal(){fatal=true;},afterCommit(action?:()=>void){afterCommit=action;},afterRead(action:(store:string,key:any)=>void){afterRead=action;}};
 }
 
 test('strict derived publication retains source bytes and uses no aggregate control scan',async()=>{
@@ -217,7 +221,7 @@ test('continuations are bound to the exact random pin nonce',async()=>{
 
 test('discard is idempotent and removes only the owning unpublished stage',async()=>{
   const f=fixture();f.file('a','text');const a=f.open(),b=f.open('client-b');await a.initialize();await a.initialize();const snapshot=await f.build(a),pin=await a.open(),stage=await a.begin();await a.pump(stage.stageId);
-  await assert.rejects(b.discard(stage.stageId),{code:'index_stage_expired'});const before=structuredClone(f.records.get('control'));await a.discard(snapshot.generationEpoch);assert.deepEqual(f.records.get('control'),before);await assert.rejects(b.discard(snapshot.generationEpoch),{code:'index_stage_expired'});
+  await assert.rejects(b.discard(stage.stageId),{code:'index_stage_expired'});const before=structuredClone(f.records.get('control'));await a.discard(f.descriptor(snapshot).id);assert.deepEqual(f.records.get('control'),before);await assert.rejects(b.discard(f.descriptor(snapshot).id),{code:'index_stage_expired'});
   await a.discard(stage.stageId);await a.discard(stage.stageId);assert.deepEqual((await a.status()).snapshot,snapshot);assert.deepEqual((await a.search({pinId:pin.pinId,query:'opaque'}) as any).result.value.observed,['text']);
   const next=await a.begin();assert.ok(next.stageId);await a.discard(next.stageId);await a.close();await b.close();
 });
@@ -283,14 +287,14 @@ test('normal consumer close retires only its unpublished cache reservations',asy
 });
 
 test('own already-published discard validates its exact header before no-op success',async()=>{
-  const f=fixture();f.file('a','text');const index=f.open();const snapshot=await f.build(index),pin=await index.open();await index.discard(snapshot.generationEpoch);assert.deepEqual((await index.status()).snapshot,snapshot);assert.deepEqual((await index.search({pinId:pin.pinId,query:'opaque'}) as any).result.value.observed,['text']);
-  const header=f.records.get('control')!.get('document-index:v1/g/'+snapshot.generationEpoch+'/header');header.value+=' ';await assert.rejects(index.discard(snapshot.generationEpoch),{code:'index_rebuild_required'});await index.close();
+  const f=fixture();f.file('a','text');const index=f.open();const snapshot=await f.build(index),pin=await index.open();await index.discard(f.descriptor(snapshot).id);assert.deepEqual((await index.status()).snapshot,snapshot);assert.deepEqual((await index.search({pinId:pin.pinId,query:'opaque'}) as any).result.value.observed,['text']);
+  const header=f.records.get('control')!.get('document-index:v1/g/'+f.descriptor(snapshot).id+'/header');header.value+=' ';await assert.rejects(index.discard(f.descriptor(snapshot).id),{code:'index_rebuild_required'});await index.close();
 });
 
 test('discard of an already-pruning own published locator makes no cache writes',async()=>{
   const f=fixture();f.file('a','text');const index=f.open(),foreign=f.open('client-b');const older=await f.build(index),current=await f.build(index),pin=await index.open();
-  const control=f.records.get('control')!,catalog=control.get('document-index:v1/catalog');catalog.value.generations.find((g:any)=>g.id===older.generationEpoch).state='deleting';control.delete('document-index:v1/g/'+older.generationEpoch+'/header');
-  const before=structuredClone(control);await index.discard(older.generationEpoch);assert.deepEqual(f.records.get('control'),before);await assert.rejects(foreign.discard(older.generationEpoch),{code:'index_stage_expired'});
+  const control=f.records.get('control')!,catalog=control.get('document-index:v1/catalog');const olderId=f.descriptor(older).id;catalog.value.generations.find((g:any)=>g.id===olderId).state='deleting';control.delete('document-index:v1/g/'+olderId+'/header');
+  const before=structuredClone(control);await index.discard(olderId);assert.deepEqual(f.records.get('control'),before);await assert.rejects(foreign.discard(olderId),{code:'index_stage_expired'});
   assert.deepEqual((await index.status()).snapshot,current);assert.deepEqual((await index.search({pinId:pin.pinId,query:'opaque'}) as any).result.value.observed,['text']);await foreign.close();await index.close();
 });
 
@@ -667,4 +671,116 @@ test('metadata explicit used-baseline close during final handoff rejects late da
   const f=await metadataFixture({metadataDelta:true}),baseline=await f.index.open(),first=await f.index.metadataRows!({pinId:f.pin.pinId,baseline:{pinId:baseline.pinId,snapshot:baseline.snapshot as any},limit:1}) as any;let closing:Promise<void>|undefined;
   f.afterMetadataPage(()=>{closing=f.index.closePin(baseline.pinId);});await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}),{code:'index_snapshot_expired'});await closing;
   assert.equal(f.metadataStats.live,0);f.afterMetadataPage();await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}),{code:'index_snapshot_expired'});await f.index.close();
+});
+
+
+const allocationCatalogKey='document-index:v1/catalog';
+const allocationCatalog=(f:ReturnType<typeof fixture>)=>f.records.get('control')!.get(allocationCatalogKey).value;
+function seedAllocationCatalog(f:ReturnType<typeof fixture>,change:(catalog:any)=>void){const row=clone(f.records.get('control')!.get(allocationCatalogKey));change(row.value);f.seed('control',allocationCatalogKey,row);}
+const parseFamily=(f:ReturnType<typeof fixture>)=>clone([...f.records.get('control')!].filter(([key])=>key.startsWith('document-parse-cache:v1/')));
+
+// These tests cover host reservation/transaction/lifetime behavior. The opaque
+// WASM double does not establish real Rust delta selection or browser IDB races.
+test('stable index epoch advances semantic generations while physical row identities stay distinct',async()=>{
+  const f=fixture();f.file('a','retained text');const source=f.source(),index=f.open();
+  const first=await f.build(index),physicalFirst=f.descriptor(first).id,pin=await index.open(),before=f.stats();
+  const second=await f.build(index),physicalSecond=f.descriptor(second).id;
+  assert.equal(first.generation,'1');assert.equal(second.generation,'2');assert.equal(second.generationEpoch,first.generationEpoch);
+  assert.notEqual(physicalFirst,physicalSecond);assert.notEqual(physicalFirst,first.generationEpoch);assert.notEqual(physicalSecond,second.generationEpoch);
+  assert.equal(allocationCatalog(f).head,physicalSecond);assert.equal(allocationCatalog(f).allocated,'2');
+  assert.equal(f.stats().textExtractions,before.textExtractions);assert.equal(f.stats().reuses,before.reuses+1);
+  assert.deepEqual((await index.search({pinId:pin.pinId,query:'opaque'}) as any).result.value.observed,['retained text']);assert.deepEqual(pin.snapshot,first);assert.deepEqual(f.source(),source);
+  await index.close();
+});
+test('discarded and failed stage reservations survive normal close and provider replacement',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open(),first=await f.build(index),discarded=await index.begin();
+  assert.equal(discarded.snapshot.generation,'2');await index.discard(discarded.stageId);
+  const failed=await index.begin();assert.equal(failed.snapshot.generation,'3');f.fail();await assert.rejects(index.pump(failed.stageId),{code:'storage_failure'});
+  await index.close();assert.equal(allocationCatalog(f).allocated,'3');
+  const replacement=f.open(),next=await replacement.begin();assert.equal(next.snapshot.generation,'4');assert.equal(next.snapshot.generationEpoch,first.generationEpoch);
+  assert.deepEqual((await replacement.status()).snapshot,first);assert.equal(allocationCatalog(f).head,f.descriptor(first).id);await replacement.close();
+});
+test('reservation transaction abort leaves the allocation clock and durable headers untouched',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();await index.initialize();const initial=clone(allocationCatalog(f));
+  f.afterCommit(()=>{f.afterCommit();f.fail();});
+  await assert.rejects(index.begin(),{code:'storage_failure'});
+  assert.deepEqual(allocationCatalog(f),initial);assert.equal(allocationCatalog(f).allocated,'0');
+  assert.equal([...f.records.get('control')!.keys()].some(key=>key.startsWith('document-index:v1/g/')),false);assert.equal(f.allocationCalls.at(-1).allocated,'0');
+  const retry=await index.begin();assert.equal(retry.snapshot.generation,'1');assert.equal(retry.snapshot.generationEpoch,initial.epoch);await index.close();
+});
+test('durable reservation followed by owner loss consumes the generation despite a rejected begin reply',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();await index.initialize();const epoch=allocationCatalog(f).epoch;
+  f.afterCommit(()=>{if(allocationCatalog(f).allocated==='1'){f.afterCommit();f.deny();}});
+  await assert.rejects(index.begin(),{code:'owner_retired'});assert.equal(allocationCatalog(f).allocated,'1');assert.equal(allocationCatalog(f).generations.length,1);
+  await index.close();f.allow();const replacement=f.open(),next=await replacement.begin();assert.equal(next.snapshot.generation,'2');assert.equal(next.snapshot.generationEpoch,epoch);await replacement.close();
+});
+test('pump commit abort cannot turn a builder-only row into published or recovered facts',async()=>{
+  const f=fixture();f.file('a','text');const source=f.source(),script=maintenanceScript(f),{index,maintenance}=f.backend();maintenance.command({kind:'continue'});
+  await maintenance.step(script.select({kind:'begin'}));const stage=script.completions.at(-1).stage,physical=f.descriptor(stage.snapshot).id;
+  f.fail();await assert.rejects(index.pump(physical),{code:'storage_failure'});assert.equal(f.stats().textExtractions,1,'double already accepted the row before the IDB abort');
+  assert.equal(f.records.get('control')!.has('document-index:v1/g/'+physical+'/row/a'),false);assert.equal(f.descriptor(stage.snapshot).rows,0);assert.equal(allocationCatalog(f).head,null);
+  await assert.rejects(index.pump(physical),{code:'index_rebuild_required'});await assert.rejects(index.publish(physical),{code:'index_rebuild_required'});
+  await assert.rejects(maintenance.step(script.select({kind:'recoverStage'})),{code:'document_runtime_unavailable'});
+  assert.deepEqual(f.source(),source);assert.equal(allocationCatalog(f).allocated,'1');await index.close();
+});
+test('prune failure after publication preserves the committed head and consumed allocation',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open(),first=await f.build(index),stage=await index.begin();await index.pump(stage.stageId);
+  f.afterCommit(()=>{if(allocationCatalog(f).head===stage.stageId){f.afterCommit();f.fail();}});
+  await assert.rejects(index.publish(stage.stageId),{code:'storage_failure'});
+  assert.equal(allocationCatalog(f).head,stage.stageId);assert.equal(allocationCatalog(f).allocated,'2');assert.deepEqual((await index.status()).snapshot,stage.snapshot);
+  const next=await index.begin();assert.equal(next.snapshot.generation,'3');assert.equal(next.snapshot.generationEpoch,first.generationEpoch);await index.close();
+});
+test('modeled competing durable reservation rejects an obsolete allocator proposal despite unchanged head and source',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();await index.initialize();const initial=clone(allocationCatalog(f)),source=f.source(),allocate=f.wasm.documentIndexAllocateJson;let competing=false;
+  f.wasm.documentIndexAllocateJson=(input:string)=>{
+    const proposal=allocate(input);
+    if(!competing){competing=true;const clock=JSON.parse(input);seedAllocationCatalog(f,c=>{c.allocated=String(BigInt(clock.allocated)+1n);});}
+    return proposal;
+  };
+  // Model a different owner having committed and then pruned its reservation.
+  // The double does not claim actual cross-worker IndexedDB serialization.
+  await assert.rejects(index.begin(),{code:'index_head_changed'});
+  assert.equal(allocationCatalog(f).allocated,'1');assert.equal(allocationCatalog(f).head,initial.head);assert.deepEqual(allocationCatalog(f).generations,[]);assert.deepEqual(f.source(),source);
+  assert.equal([...f.records.get('control')!.keys()].some(key=>key.startsWith('document-index:v1/g/')),false,'the obsolete proposal never installs a stage header');
+  f.wasm.documentIndexAllocateJson=allocate;const next=await index.begin();assert.equal(next.snapshot.generation,'2');assert.equal(next.snapshot.generationEpoch,initial.epoch);
+  assert.equal(allocationCatalog(f).generations.length,1);assert.equal(f.descriptor(next.snapshot).id,next.stageId);await index.close();
+});
+test('pruning old generations and discarding the highest reservation never rewinds the clock',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();let current=await f.build(index);const epoch=current.generationEpoch;
+  for(let n=2;n<=6;n++){current=await f.build(index);assert.equal(current.generation,String(n));}
+  assert.ok(allocationCatalog(f).generations.length<=3);assert.equal(allocationCatalog(f).allocated,'6');
+  const highest=await index.begin();assert.equal(highest.snapshot.generation,'7');await index.discard(highest.stageId);assert.equal(allocationCatalog(f).allocated,'7');
+  const next=await index.begin();assert.equal(next.snapshot.generation,'8');assert.equal(next.snapshot.generationEpoch,epoch);assert.deepEqual((await index.status()).snapshot,current);await index.close();
+});
+test('explicit rebuild expires old pin cursors and resets only the generation clock with a fresh epoch',async()=>{
+  const f=await metadataFixture({},3),source=f.source(),beforeParse=parseFamily(f),oldEpoch=f.pin.snapshot.generationEpoch,first=await f.index.metadataRows!({pinId:f.pin.pinId,limit:1}) as any;
+  assert.ok(first.cursor);assert.ok(beforeParse.length>0);await f.index.rebuild();const rebuilt=allocationCatalog(f);
+  assert.notEqual(rebuilt.epoch,oldEpoch);assert.equal(rebuilt.allocated,'0');assert.equal(rebuilt.head,null);assert.deepEqual(rebuilt.generations,[]);assert.deepEqual(rebuilt.pins,[]);
+  assert.deepEqual(f.source(),source);assert.deepEqual(parseFamily(f),beforeParse);await assert.rejects(f.index.metadataRows!({pinId:f.pin.pinId,cursor:first.cursor}),{code:'index_snapshot_expired'});
+  const next=await f.index.begin();assert.equal(next.snapshot.generation,'1');assert.equal(next.snapshot.generationEpoch,rebuilt.epoch);await f.index.close();
+});
+test('legacy catalog version one requires explicit derived rebuild instead of inferring a clock',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();await f.build(index);const source=f.source();
+  seedAllocationCatalog(f,c=>{c.version=1;delete c.allocated;delete c.epoch;});
+  assert.equal((await index.status()).rebuildRequired,true);await assert.rejects(index.begin(),{code:'index_rebuild_required'});await assert.rejects(index.open(),{code:'index_rebuild_required'});
+  await index.rebuild();assert.equal(allocationCatalog(f).version,2);assert.equal(allocationCatalog(f).allocated,'0');const next=await f.build(index);assert.equal(next.generation,'1');assert.deepEqual(f.source(),source);await index.close();
+});
+test('malformed decimal allocation clocks fail closed until explicit rebuild',async()=>{
+  for(const allocated of ['-1','01','18446744073709551616',7,null,undefined]){
+    const f=fixture();f.file('a','text');const index=f.open();await index.initialize();const source=f.source();seedAllocationCatalog(f,c=>{c.allocated=allocated;});
+    assert.equal((await index.status()).rebuildRequired,true);await assert.rejects(index.begin(),{code:'index_rebuild_required'});assert.equal(f.allocationCalls.length,0);
+    await index.rebuild();assert.equal(allocationCatalog(f).allocated,'0');assert.equal((await index.begin()).snapshot.generation,'1');assert.deepEqual(f.source(),source);await index.close();
+  }
+});
+test('different physical descriptors cannot claim the same stable semantic generation',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open(),snapshot=await f.build(index),physical=f.descriptor(snapshot).id;
+  seedAllocationCatalog(f,c=>{c.generations.push({...clone(c.generations[0]),id:crypto.randomUUID()});});
+  assert.equal((await index.status()).rebuildRequired,true);await assert.rejects(index.open(),{code:'index_rebuild_required'});await assert.rejects(index.begin(),{code:'index_rebuild_required'});
+  assert.equal(allocationCatalog(f).head,physical);await index.rebuild();assert.equal(allocationCatalog(f).allocated,'0');assert.equal((await index.begin()).snapshot.generation,'1');await index.close();
+});
+test('allocation beyond JavaScript safe integer remains decimal-exact and maximum exhaustion cannot wrap',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();await index.initialize();seedAllocationCatalog(f,c=>{c.allocated='9007199254740992';});const epoch=allocationCatalog(f).epoch;
+  const stage=await index.begin();assert.equal(stage.snapshot.generation,'9007199254740993');assert.equal(allocationCatalog(f).allocated,'9007199254740993');assert.equal(f.allocationCalls.at(-1).allocated,'9007199254740992');await index.discard(stage.stageId);
+  seedAllocationCatalog(f,c=>{c.allocated='18446744073709551615';});const before=clone(allocationCatalog(f));await assert.rejects(index.begin(),{code:'index_rebuild_required'});
+  assert.deepEqual(allocationCatalog(f),before);assert.equal(f.allocationCalls.at(-1).allocated,'18446744073709551615');assert.equal(allocationCatalog(f).epoch,epoch);await index.close();
 });

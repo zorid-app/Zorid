@@ -12,6 +12,8 @@ export interface BrowserDocumentRuntimeHost {
   snapshot():DocumentRuntimeSnapshot|null;
   /** True only around the one already admitted raw maintenance effect. */
   executing():boolean;
+  /** A command/source upload is a wake hint, never a scheduling decision. */
+  draftsChanged?():void;
   retire():void;drain():Promise<void>;
 }
 export interface BrowserDocumentRuntimeHostOptions {
@@ -20,6 +22,7 @@ export interface BrowserDocumentRuntimeHostOptions {
   local<T>(operation:()=>Promise<T>):Promise<T>;
   changed(snapshot:DocumentRuntimeSnapshot,outcomes:readonly DocumentRuntimeOutcome[]):void;
   failed(error:unknown):void;
+  draftChanged?():void;
   now?():number;
   /** Same30s repair cadence as the existing native rescan default. A repair
    * submits Wake, not another journal scan or feature-owned index loop. */
@@ -34,6 +37,8 @@ export function createBrowserDocumentRuntimeHost(options:BrowserDocumentRuntimeH
   if(!Number.isSafeInteger(repairMs)||repairMs<1000||repairMs>3600000)throw new BrowserVaultError('invalid_request','Invalid owner repair cadence');
   let started=false,retired=false,executing=false,task:Timer|undefined,repair:Timer|undefined;
   let active:Promise<void>|undefined,adoptedStep='';
+  let draining:Promise<void>|undefined,resolveDrain:(()=>void)|undefined,rejectDrain:((error:unknown)=>void)|undefined;
+  let closeAttempt:Promise<void>|undefined;
   function guard(){options.assertActive();if(retired)throw new BrowserVaultError('document_runtime_retired','Document owner is retiring');}
   function clock(){const value=Math.floor(options.now?.()??performance.now());if(!Number.isSafeInteger(value)||value<0)throw new BrowserVaultError('invalid_request','Invalid captured monotonic time');return value;}
   function failure(error:unknown){try{options.failed(error);}catch{/* An observer cannot change effect settlement. */}}
@@ -51,13 +56,30 @@ export function createBrowserDocumentRuntimeHost(options:BrowserDocumentRuntimeH
     notify(snapshot,outcomes);return snapshot;
   }
   function command(input:DocumentRuntimeCommand){const reduction=options.maintenance.command(input);const snapshot=adopt(reduction);queue(snapshot);return reduction;}
-  function queue(snapshot?:DocumentRuntimeSnapshot){
-    if(retired||!started||task!==undefined||active)return;
+  const composite=()=>options.maintenance.workSnapshot?.().work??null;
+  function completeDrain(){
+    if(!retired||!draining||active||task!==undefined||closeAttempt)return;
+    const work=composite();if(work&&!work.close_ready)return;
+    const attempt=options.maintenance.close().then(()=>{resolveDrain?.();resolveDrain=undefined;rejectDrain=undefined;},error=>{rejectDrain?.(error);draining=undefined;resolveDrain=undefined;rejectDrain=undefined;}).finally(()=>{if(closeAttempt===attempt)closeAttempt=undefined;});closeAttempt=attempt;
+  }
+  function queue(snapshot?:DocumentRuntimeSnapshot,force=false){
+    const work=composite();
+    if(retired&&!work||!started||task!==undefined||active)return;
+    if(retired&&work?.close_ready){completeDrain();return;}
     const current=snapshot??options.maintenance.snapshot();
-    if(!current||!current.inFlight&&current.execution!=='yield')return;
-    task=schedule(()=>{task=undefined;if(retired)return;
+    if(!force&&!work?.selected&&(!current||!current.inFlight&&current.execution!=='yield'))return;
+    task=schedule(()=>{task=undefined;if(retired&&!composite())return;
+      let continueWork=false;
       const accepted=options.local(async()=>{
-        if(retired)return;guard();let current=options.maintenance.snapshot();
+        if(retired&&!composite())return;options.assertActive();
+        if(composite()){
+          executing=true;
+          try{const turn=await options.maintenance.workTurn!(value=>{adopt(value);});continueWork=turn.state==='ready';if(continueWork)options.draftChanged?.();if(turn.error!==undefined)failure(turn.error);}
+          catch(error){try{adopt();}catch(admission){failure(admission);}failure(error);rejectDrain?.(error);draining=undefined;resolveDrain=undefined;rejectDrain=undefined;}
+          finally{executing=false;}
+          return;
+        }
+        guard();let current=options.maintenance.snapshot();
         if(current&&!current.inFlight&&current.execution==='yield'){const continued=options.maintenance.command({kind:'continue'});current=adopt(continued)??null;}
         const issued=current?.inFlight;if(!issued)return;
         executing=true;
@@ -68,7 +90,7 @@ export function createBrowserDocumentRuntimeHost(options:BrowserDocumentRuntimeH
           try{adopt();}catch(admission){failure(admission);}failure(error);
         }finally{executing=false;}
       });
-      const finished=accepted.catch(failure).finally(()=>{if(active===finished)active=undefined;if(!retired){try{queue();}catch(error){failure(error);}}});active=finished;
+      const finished=accepted.catch(error=>{failure(error);rejectDrain?.(error);draining=undefined;resolveDrain=undefined;rejectDrain=undefined;}).finally(()=>{if(active===finished)active=undefined;try{queue(undefined,continueWork);completeDrain();}catch(error){failure(error);rejectDrain?.(error);draining=undefined;}});active=finished;
     },0);
   }
   function repairLater(){if(retired||repair!==undefined)return;repair=schedule(()=>{repair=undefined;if(retired)return;try{host.wake();}catch(error){failure(error);}repairLater();},repairMs);}
@@ -80,12 +102,21 @@ export function createBrowserDocumentRuntimeHost(options:BrowserDocumentRuntimeH
     cancel(id){guard();return command({kind:'cancelRequest',id});},
     snapshot(){options.assertActive();return options.maintenance.snapshot();},
     executing:()=>executing,
+    draftsChanged(){guard();if(!started)throw new BrowserVaultError('document_runtime_unavailable','Document owner has not been activated');options.draftChanged?.();queue(undefined,true);},
     retire(){if(retired)return;retired=true;if(task!==undefined){cancel(task);task=undefined;}if(repair!==undefined){cancel(repair);repair=undefined;}
       // No future effect is dispatched. A step already admitted on the local
       // tail may settle, and the caller adopts these explicit Retired outcomes.
-      if(started){try{adopt(options.maintenance.command({kind:'retire'}));}catch(error){failure(error);}}
+      if(started){try{if(composite()){
+        const frame=options.maintenance.releaseDrafts!();if(frame.committed)adopt(frame.committed);queue(undefined,true);
+      }else adopt(options.maintenance.command({kind:'retire'}));}catch(error){failure(error);}}
     },
-    async drain(){host.retire();await active;await options.maintenance.close();},
+    drain(){host.retire();if(draining)return draining;
+      if(!composite())return (async()=>{await active;await options.maintenance.close();})();
+      if(!composite()!.closing){const frame=options.maintenance.releaseDrafts!();if(frame.committed)adopt(frame.committed);}
+      draining=new Promise<void>((resolve,reject)=>{resolveDrain=resolve;rejectDrain=reject;});
+      try{queue(undefined,true);completeDrain();}catch(error){rejectDrain?.(error);draining=undefined;}
+      return draining??Promise.reject(new BrowserVaultError('document_runtime_unavailable','Document owner could not drain'));
+    },
   };return host;
 }
 

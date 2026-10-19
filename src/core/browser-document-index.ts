@@ -50,7 +50,7 @@ interface RichDrive extends Free {nextActionJson():string;accept(bytes:Uint8Arra
 interface RichOwner extends Free {clear():void;startQuery(generation:Generation,spec:string,facts:string):string;prepareJson(query:string):string;openDrive(query:string,cursor:string):RichDrive;commitJson(prepared:RichPrepared):string;closeQuery(query:string):void}
 interface MetadataScan extends Free {fork():MetadataScan;sameCheckpoint(other:MetadataScan):boolean;isNextCheckpointOf(other:MetadataScan):boolean;usesBaseline():boolean;pageJson(nextOpaqueCursor:string):string;retire():void}
 interface MetadataScanConstructor {new(destination:Generation,limit:number):MetadataScan;readonly prototype:MetadataScan;withBaseline(destination:Generation,baseline:Generation,limit:number):MetadataScan}
-export interface BrowserDocumentIndexWasm extends BrowserDocumentRuntimeWasm {documentIndexVersionsJson():string;documentParseCachePolicyJson():string;documentParseCacheAdmissionJson(input:string):string;WasmDocumentIndexBuilder:new(input:string)=>Builder;WasmDocumentIndexPreparationCache:new()=>PreparationCache;WasmDocumentRichSearchOwner:new(nonce:string)=>RichOwner;WasmDocumentMetadataRowsScan?:MetadataScanConstructor}
+export interface BrowserDocumentIndexWasm extends BrowserDocumentRuntimeWasm {documentIndexAllocateJson(input:string):string;documentIndexVersionsJson():string;documentParseCachePolicyJson():string;documentParseCacheAdmissionJson(input:string):string;WasmDocumentIndexBuilder:new(input:string)=>Builder;WasmDocumentIndexPreparationCache:new()=>PreparationCache;WasmDocumentRichSearchOwner:new(nonce:string)=>RichOwner;WasmDocumentMetadataRowsScan?:MetadataScanConstructor}
 export interface BrowserDocumentIndexHost {
   db:IDBDatabase;authorityId:string;clientId:string;wasm:BrowserDocumentIndexWasm;assertActive():void;
   readPublication(tx:IDBTransaction,done:(value:StreamingPublication)=>void,abort:(error:unknown)=>void):void;
@@ -74,12 +74,12 @@ export interface BrowserDocumentIndex extends Pick<DocumentTransport,'metadataRo
   richClose(input:{pinId:string;queryId:string}):Promise<void>;
   rebuild():Promise<void>;close():Promise<void>;
 }
-interface Catalog {rebuilding?:string;version:1;localStoreId:string;head:string|null;generations:Descriptor[];pins:{id:string;clientId:string;generation:string}[]}
+interface Catalog {rebuilding?:string;version:2;localStoreId:string;epoch:string;allocated:string;head:string|null;generations:Descriptor[];pins:{id:string;clientId:string;generation:string}[]}
 interface Descriptor {id:string;clientId:string;state:'staging'|'published'|'deleting';snapshot:BrowserIndexSnapshot;sourceWatermark:string;coverageComplete:boolean;wasPublished:boolean;rows:number;bytes:number;metadataBytes:number}
 interface CachedRow {sourceDescriptor:unknown;entry:EntryState;presentation:BrowserVaultPresentation;record:string;projection?:Uint8Array}
 interface SourceCapture {publication:StreamingPublication;descriptors:{id:string;content:any}[]}
 interface StoredHeader {rust:string;capture:SourceCapture}
-interface Stage {failed?:boolean;capture:SourceCapture;id:string;header:BrowserIndexHeader;builder?:Builder;generation?:Generation;prepared:number;total:number;reused:number;parseCache:{hits:number;misses:number;unavailable:number;corrupt:number;unsupported:number}}
+interface Stage {failed?:boolean;capture:SourceCapture;id:string;previous:string|null;header:BrowserIndexHeader;builder?:Builder;generation?:Generation;prepared:number;total:number;reused:number;parseCache:{hits:number;misses:number;unavailable:number;corrupt:number;unsupported:number}}
 type ParseCacheOutcome='hit'|'miss'|'unavailable'|'corrupt'|'unsupported';
 const root=(id:string)=>PREFIX+'g/'+id+'/';
 const rowKey=(id:string,entryId:string)=>root(id)+'row/'+entryId;
@@ -187,14 +187,15 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
   const run=<T>(mode:IDBTransactionMode,stores:readonly string[],start:(tx:IDBTransaction,done:(value:T)=>void,abort:(error:unknown)=>void)=>void)=>
     normalizedTransact(host.db,{authorityId:host.authorityId,stores,mode,assertActive:active},start);
   const on=<T>(request:IDBRequest<T>,action:(result:T)=>void,abort:(error:unknown)=>void)=>{request.onsuccess=()=>{try{active();action(request.result);}catch(error){abort(error);}};};
-  const empty=():Catalog=>({version:1,localStoreId:host.authorityId,head:null,generations:[],pins:[]});
+  const empty=(epoch:string):Catalog=>({version:2,localStoreId:host.authorityId,epoch,allocated:'0',head:null,generations:[],pins:[]});
   function catalog(value:any):Catalog {
-    if(value===undefined)return empty();
+    if(value===undefined)return empty(crypto.randomUUID());
     if(value?.key!==CATALOG||size(JSON.stringify(value))>16384)throw fail('index_rebuild_required');
     const c=value.value as Catalog;
-    if(!c||c.version!==1||c.localStoreId!==host.authorityId||!Array.isArray(c.generations)||c.generations.length>LIMITS.generations+LIMITS.stages||!Array.isArray(c.pins)||c.pins.length>LIMITS.pins)throw fail('index_rebuild_required');
-    const ids=new Set<string>();let bytes=0;
-    for(const g of c.generations){if(!validId(g.id)||ids.has(g.id)||!validId(g.clientId)||!['staging','published','deleting'].includes(g.state)||g.snapshot?.localStoreId!==host.authorityId||g.snapshot?.generationEpoch!==g.id||g.snapshot?.generation!=='1'||typeof g.coverageComplete!=='boolean'||typeof g.wasPublished!=='boolean'||g.state==='published'&&!g.wasPublished||g.state==='staging'&&g.wasPublished||![g.rows,g.bytes,g.metadataBytes].every(n=>Number.isSafeInteger(n)&&n>=0)||g.rows>LIMITS.records||g.bytes>LIMITS.projection||g.metadataBytes>LIMITS.metadata)throw fail('index_rebuild_required');decimalU64(g.sourceWatermark);ids.add(g.id);bytes+=g.bytes;}
+    if(!c||c.version!==2||c.localStoreId!==host.authorityId||!validId(c.epoch)||!Array.isArray(c.generations)||c.generations.length>LIMITS.generations+LIMITS.stages||!Array.isArray(c.pins)||c.pins.length>LIMITS.pins)throw fail('index_rebuild_required');
+    let highwater:bigint;try{highwater=BigInt(decimalU64(c.allocated));}catch{throw fail('index_rebuild_required');}
+    const ids=new Set<string>(),snapshots=new Set<string>();let bytes=0;
+    for(const g of c.generations){let snapshot:DocumentSnapshotId;try{snapshot=documentSnapshot(g.snapshot);}catch{throw fail('index_rebuild_required');}if(!validId(g.id)||ids.has(g.id)||!validId(g.clientId)||!['staging','published','deleting'].includes(g.state)||snapshot.localStoreId!==host.authorityId||snapshot.generationEpoch!==c.epoch||BigInt(snapshot.generation)===0n||BigInt(snapshot.generation)>highwater||snapshots.has(snapshot.generation)||typeof g.coverageComplete!=='boolean'||typeof g.wasPublished!=='boolean'||g.state==='published'&&!g.wasPublished||g.state==='staging'&&g.wasPublished||![g.rows,g.bytes,g.metadataBytes].every(n=>Number.isSafeInteger(n)&&n>=0)||g.rows>LIMITS.records||g.bytes>LIMITS.projection||g.metadataBytes>LIMITS.metadata)throw fail('index_rebuild_required');decimalU64(g.sourceWatermark);ids.add(g.id);snapshots.add(snapshot.generation);bytes+=g.bytes;}
     if(bytes>LIMITS.cache||c.head!==null&&!c.generations.some(g=>g.id===c.head&&g.state==='published'))throw fail('index_rebuild_required');
     const pinIds=new Set<string>();for(const p of c.pins){if(!validId(p.id)||pinIds.has(p.id)||!validId(p.clientId)||!c.generations.some(g=>g.id===p.generation&&g.state==='published'))throw fail('index_rebuild_required');pinIds.add(p.id);}
     return c;
@@ -354,18 +355,22 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
         captureSource(tx,source=>readCatalog(tx,c=>done({source,catalog:c}),abort),abort);
       });
       if(capture.catalog.rebuilding)throw fail('index_rebuild_required');
-      const id=crypto.randomUUID(),versions=json<unknown>(rust(()=>host.wasm.documentIndexVersionsJson()));
-      const h:BrowserIndexHeader={source:{localStoreId:host.authorityId,watermark:capture.source.publication.sequence},entries:capture.source.publication.entries,expectedIndex:head(capture.catalog),nextIndex:{localStoreId:host.authorityId,generationEpoch:id,generation:'1',versions}};
+      const id=crypto.randomUUID();if(typeof host.wasm.documentIndexAllocateJson!=='function')throw fail('index_unavailable');
+      let nextIndex:DocumentSnapshotId;try{nextIndex=documentSnapshot(json<unknown>(rust(()=>host.wasm.documentIndexAllocateJson(JSON.stringify({localStoreId:host.authorityId,generationEpoch:capture.catalog.epoch,allocated:capture.catalog.allocated}))),65536));}catch(error){if(error instanceof BrowserVaultError)throw error;throw fail('invalid_wasm_result');}
+      if(nextIndex.localStoreId!==host.authorityId||nextIndex.generationEpoch!==capture.catalog.epoch||BigInt(nextIndex.generation)<=BigInt(capture.catalog.allocated))throw fail('index_rebuild_required');
+      const h:BrowserIndexHeader={source:{localStoreId:host.authorityId,watermark:capture.source.publication.sequence},entries:capture.source.publication.entries,expectedIndex:head(capture.catalog),nextIndex};
       if(h.entries.length>LIMITS.records)throw fail('index_generation_limit');
       const header=JSON.stringify(h);if(size(header)>LIMITS.header)throw fail('index_generation_limit');
       const builder=rust(()=>new host.wasm.WasmDocumentIndexBuilder(header)),canonicalHeader=rust(()=>builder.headerJson()),storedHeader=JSON.stringify({rust:canonicalHeader,capture:capture.source} satisfies StoredHeader),headerDigest=await digest(storedHeader);
       try{await run<void>('readwrite',['control','metadata','presentation','sync_materialization_refs'],(tx,done,abort)=>readCatalog(tx,c=>sourceFence(tx,h,c,capture.source,()=>{
         if(c.rebuilding)throw fail('index_rebuild_required');
+        if(c.epoch!==capture.catalog.epoch||c.allocated!==capture.catalog.allocated)throw fail('index_head_changed');
         if(c.generations.filter(g=>g.state==='staging').length>=LIMITS.stages||c.generations.length>=LIMITS.generations+LIMITS.stages)throw fail('index_cache_limit');
         c.generations.push({id,clientId:host.clientId,state:'staging',snapshot:h.nextIndex,sourceWatermark:h.source.watermark,coverageComplete:false,wasPublished:false,rows:0,bytes:0,metadataBytes:0});
-        tx.objectStore('control').add({key:headerKey(id),value:storedHeader,digest:headerDigest});putCatalog(tx,c);done();
+        c.allocated=nextIndex.generation;tx.objectStore('control').add({key:headerKey(id),value:storedHeader,digest:headerDigest});putCatalog(tx,c);done();
       },abort),abort));}catch(error){builder.free();throw error;}
-      const stage:Stage={id,capture:capture.source,header:h,builder,prepared:0,total:h.entries.filter(e=>e.kind==='file').length,reused:0,parseCache:{hits:0,misses:0,unavailable:0,corrupt:0,unsupported:0}};if(rust(()=>builder.ready())){stage.generation=rust(()=>builder.finish());builder.free();stage.builder=undefined;}stages.set(id,stage);return stageInfo(stage);
+      try{active();}catch(error){builder.free();throw error;}
+      const stage:Stage={id,previous:capture.catalog.head,capture:capture.source,header:h,builder,prepared:0,total:h.entries.filter(e=>e.kind==='file').length,reused:0,parseCache:{hits:0,misses:0,unavailable:0,corrupt:0,unsupported:0}};if(rust(()=>builder.ready())){stage.generation=rust(()=>builder.finish());builder.free();stage.builder=undefined;}stages.set(id,stage);return stageInfo(stage);
     },
     async pump(stageId){
       const stage=liveStage(stageId);
@@ -390,8 +395,8 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
         let reused=false,cachePayload:string|undefined,cacheLocator:string|undefined;try{
           // Unchanged witnesses and presentation reuse validated Rust facts and
           // the old immutable projection. Changed identities bind content facts below.
-          if(stage.header.expectedIndex){
-            const previousId=stage.header.expectedIndex.generationEpoch;
+          if(stage.previous){
+            const previousId=stage.previous;
             try{const previous=await readRow(previousId,entry);if(equal(previous.presentation,source.presentation)&&equal(previous.sourceDescriptor,sourceDescriptor)){
               rust(()=>builder.addPersisted(entry.id,previous.record));reused=true;
             }}catch(error){if(error instanceof BrowserVaultError&&error.code==='index_pump_limit')throw error;/* Cache miss/corruption permits reparsing committed source. */}
@@ -592,10 +597,10 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
     },
     async rebuild(){active();releaseQueryOwners();for(const stage of stages.values()){stage.builder?.free();stage.generation?.free();}stages.clear();
       // Explicit rebuild expires every old pin; fresh epochs prevent token ABA.
-      recovery=undefined;const nonce=crypto.randomUUID();await run<void>('readwrite',['control'],(tx,done)=>{putCatalog(tx,{...empty(),rebuilding:nonce});done();});
+      recovery=undefined;const nonce=crypto.randomUUID();await run<void>('readwrite',['control'],(tx,done)=>{putCatalog(tx,{...empty(nonce),rebuilding:nonce});done();});
       // Generation rebuild preserves the separate validated content-facts family.
       await cleanupPrefix(PREFIX+'g/');
-      await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{if(c.rebuilding===nonce)putCatalog(tx,empty());done();},abort));
+      await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{if(c.rebuilding===nonce){const {rebuilding,...ready}=c;putCatalog(tx,ready);}done();},abort));
     },
     async close(){if(closed)return;releaseQueryOwners();for(const stage of stages.values()){stage.builder?.free();stage.generation?.free();}stages.clear();
       try{await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{c.pins=c.pins.filter(p=>p.clientId!==host.clientId);for(const g of c.generations)if(g.clientId===host.clientId&&g.state==='staging')g.state='deleting';putCatalog(tx,c);done();},abort));}catch{/* Cache cleanup never blocks source close. Explicit rebuild repairs derived state. */}finally{closed=true;}
@@ -604,7 +609,7 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
   // This executor uses raw low-level effects, not the public close wrapper.
   // Stage source is the captured header source, never a later status value.
   function ownedStage(snapshot:BrowserIndexSnapshot):Stage {
-    active();const stage=stages.get(snapshot.generationEpoch);
+    active();const stage=[...stages.values()].find(stage=>equal(stage.header.nextIndex,snapshot));
     if(!stage||!equal(stage.header.nextIndex,snapshot))throw fail('index_stage_expired');
     if(stage.failed)throw fail('document_runtime_unavailable');
     return stage;
@@ -615,7 +620,8 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
   };
   const observation=(stage:Stage):DocumentRuntimeStage=>({source:{...stage.header.source},snapshot:runtimeSnapshot(stage.header.nextIndex),progress:{prepared:stage.prepared,total:stage.total,ready:!!stage.generation}});
   const fromResult=(result:BrowserIndexStage):DocumentRuntimeStage=>observation(ownedStage(result.snapshot));
-  const createMaintenance=()=>browserDocumentRuntime({authorityId:host.authorityId,wasm:host.wasm,backend:{assertActive:active,
+  let configuredDraftScope:import('./document-drafts.ts').DocumentDraftScope|undefined;
+  const createMaintenance=()=>{const created=browserDocumentRuntime({authorityId:host.authorityId,wasm:host.wasm,backend:{assertActive:active,
     async observe(){const result=await api.status();return {source:result.source,published:result.snapshot===null?null:runtimeSnapshot(result.snapshot),current:result.current,rebuildRequired:result.rebuildRequired,coverageComplete:result.coverageComplete};},
     initialize:()=>api.initialize(),
     async recoverStage(){
@@ -637,12 +643,22 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
     async begin(){return fromResult(await api.begin());},
     async pump(snapshot){const stage=ownedStage(snapshot);return fromResult(await api.pump(stage.id));},
     async publish(snapshot){const stage=ownedStage(snapshot);return runtimeSnapshot(await api.publish(stage.id));},
-    async discard(snapshot){const stage=stages.get(snapshot.generationEpoch);if(stage&&!equal(stage.header.nextIndex,snapshot))throw fail('index_stage_expired');return api.discard(snapshot.generationEpoch);},
+    async discard(snapshot){
+      active();if(snapshot.localStoreId!==host.authorityId)throw fail('index_stage_expired');
+      const id=await run<string|null>('readonly',['control'],(tx,done,abort)=>readCatalog(tx,c=>{const descriptor=c.generations.find(g=>equal(g.snapshot,snapshot));if(descriptor&&descriptor.clientId!==host.clientId)throw fail('index_stage_expired');if(snapshot.generationEpoch===c.epoch&&BigInt(decimalU64(snapshot.generation))>BigInt(c.allocated))throw fail('index_stage_expired');done(descriptor?.id??null);},abort));
+      if(id!==null)await api.discard(id);
+    },
     rebuild:()=>api.rebuild(),
-  }});
+  }});if(configuredDraftScope)created.configureDrafts!(configuredDraftScope);return created;};
   let driver=createMaintenance(),maintenanceClosed=false,rebuilding:Promise<void>|undefined,maintenanceClosing:Promise<void>|undefined;
   const gateMaintenance=()=>{if(maintenanceClosed)throw fail('document_runtime_retired');if(rebuilding)throw fail('document_runtime_busy');};
   maintenance={
+    get draftsAvailable(){return driver.draftsAvailable===true;},
+    configureDrafts(scope){gateMaintenance();driver.configureDrafts!(scope);configuredDraftScope=Object.freeze({...scope});},
+    draft(input,bytes){gateMaintenance();return driver.draft!(input,bytes);},
+    workSnapshot(){gateMaintenance();return driver.workSnapshot!();},
+    workTurn(adopt){try{gateMaintenance();return driver.workTurn!(adopt);}catch(error){return Promise.reject(error);}},
+    releaseDrafts(){gateMaintenance();return driver.releaseDrafts!();},
     command(input){gateMaintenance();return driver.command(input);},
     step(token){try{gateMaintenance();return driver.step(token);}catch(error){return Promise.reject(error);}},
     update(){return rebuilding?null:driver.update();},
