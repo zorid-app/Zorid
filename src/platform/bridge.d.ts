@@ -2,7 +2,7 @@ import type { CheckpointScope } from '../core/durable-checkpoints.ts';
 import type { VaultEntry } from '../core/types';
 import type { ContextMenuRequest } from './context-menu';
 
-export interface DesktopDurableContext { workBlocks?:true; documentSemantics?:true; admissionId: string; scope: CheckpointScope; binaryLimits?:import('../core/binary-streams.ts').BinaryStreamLimits }
+export interface DesktopDurableContext { workBlocks?:true; documentSemantics?:true; documentMaintenance?:true; admissionId: string; scope: CheckpointScope; binaryLimits?:import('../core/binary-streams.ts').BinaryStreamLimits }
 export interface DesktopReconciliation {
   scanId: string; complete: boolean; scanComplete: boolean; finished: boolean;
   observed: number; imported: number; namespaceApplied: number; issueCount: number; issuesTruncated: boolean;
@@ -36,6 +36,8 @@ export interface DesktopBridge {
   getDurableContext?(vault: string): Promise<DesktopDurableContext | null>;
   /** WorkBlock commands resolve a versioned plain-data envelope; decode after this bridge. */
   durableInvoke?(vault: string, admissionId: string, method: string, args: readonly unknown[]): Promise<unknown>;
+  /** Dedicated derived-state hints; these must never become VaultChange events. */
+  onDocumentRuntimeNudge?(vault:string,admissionId:string,callback:()=>void,onRetire:()=>void):()=>void;
   releaseDurableContext?(vault: string, admissionId: string): Promise<void>;
   openVault(): Promise<DesktopVault | null>;
   list(vault: string): Promise<VaultEntry[]>;

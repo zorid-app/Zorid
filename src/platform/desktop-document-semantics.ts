@@ -1,11 +1,53 @@
 import {createDocumentService,documentSnapshot,documentSource,DocumentSemanticsError,documentErrorCode} from '../core/document-semantics.ts';
 import type {DocumentService,DocumentSnapshotId,DocumentTransport} from '../core/document-semantics.ts';
+import {DocumentRuntimeError} from '../core/document-runtime.ts';
+import type {DocumentRuntimeScope,DocumentRuntimeTransport} from '../core/document-runtime.ts';
 
 export interface DesktopDocumentRequest {schemaVersion:1;command:Readonly<Record<string,unknown>>&{op:string}}
+type RuntimeMethod='documentRuntimeObserve'|'documentRuntimeControl'|'documentRuntimeAckControl'|'documentRuntimeAckOutcome';
+export interface DesktopDocumentRuntimeBinding {readonly transport:DocumentRuntimeTransport;retire():void}
+/** Allocate once per admitted desktop context; facade reconstruction reuses this
+ * transport, preserving both independent monotonic counters and release identity. */
+export function createDesktopDocumentRuntime(options:{
+  readonly scope:DocumentRuntimeScope;
+  readonly invoke:(method:RuntimeMethod,args:readonly unknown[])=>Promise<unknown>;
+  readonly subscribe:(listener:()=>void,onRetire:()=>void)=>()=>void;
+}):DesktopDocumentRuntimeBinding{
+  let sequence=0n,requestId=0n,retired=false;
+  const subscriptions=new Set<{stop:()=>void;onRetire:()=>void}>();
+  const active=()=>{if(retired)throw new DocumentRuntimeError('client_not_admitted');};
+  const next=(value:bigint)=>{active();if(value===18446744073709551615n)throw new DocumentRuntimeError('document_runtime_capacity');return value+1n;};
+  const retire=()=>{if(retired)return;retired=true;for(const item of [...subscriptions]){subscriptions.delete(item);try{item.stop();}catch{/* Retire every admitted receiver. */}try{item.onRetire();}catch{/* One receiver cannot prevent retiring another. */}}};
+  const exact=(value:Record<string,unknown>,keys:readonly string[])=>Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));
+  const object=(value:unknown):Record<string,unknown>=>{if(!value||typeof value!=='object'||Array.isArray(value))throw new DocumentRuntimeError('document_runtime_invalid_result');return value as Record<string,unknown>;};
+  const invoke=async(method:RuntimeMethod,args:readonly unknown[]):Promise<unknown>=>{
+    active();const raw=await options.invoke(method,structuredClone(args));active();const row=object(raw);
+    if(row.documentRuntime!==true||row.schemaVersion!==1||typeof row.ok!=='boolean'||!exact(row,['documentRuntime','schemaVersion','ok',row.ok?'value':'error']))throw new DocumentRuntimeError('document_runtime_invalid_result');
+    if(row.ok)return row.value;
+    const error=object(row.error);
+    if(!exact(error,['code','source','commitUncertain'])||typeof error.code!=='string'||!/^[a-z_]{1,64}$/.test(error.code)||error.source!=='host'||typeof error.commitUncertain!=='boolean')throw new DocumentRuntimeError('document_runtime_invalid_result');
+    throw Object.assign(new DocumentRuntimeError(error.code),{source:'host',commitUncertain:error.commitUncertain});
+  };
+  const ack=async(method:RuntimeMethod,input:unknown)=>{if(await invoke(method,[input])!==true)throw new DocumentRuntimeError('document_runtime_invalid_result');};
+  const transport:DocumentRuntimeTransport={scope:Object.freeze({...options.scope}),
+    allocateSequence:()=>String(sequence=next(sequence)),allocateRequestId:()=>String(requestId=next(requestId)),
+    observe:()=>invoke('documentRuntimeObserve',[]),control:input=>invoke('documentRuntimeControl',[input]),
+    ackControl:input=>ack('documentRuntimeAckControl',input),ackOutcome:input=>ack('documentRuntimeAckOutcome',input),
+    subscribe(listener,onRetire){
+      if(retired){onRetire();return()=>{};}
+      const item={stop:()=>{},onRetire};subscriptions.add(item);
+      try{const stop=options.subscribe(()=>{if(!retired&&subscriptions.has(item))listener();},retire);if(typeof stop!=='function')throw new DocumentRuntimeError('document_runtime_invalid_result');item.stop=stop;}
+      catch(error){subscriptions.delete(item);throw error;}
+      if(retired){subscriptions.delete(item);item.stop();}
+      return()=>{if(subscriptions.delete(item))item.stop();};
+    },
+  };
+  return {transport:Object.freeze(transport),retire};
+}
 /** One instance per admitted desktop context. The invocation closure must retain
  * that admission and its normal release guard; it is not an unrestricted IPC. */
 export interface DesktopDocumentBinding {readonly service:DocumentService;release():Promise<void>}
-export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequest)=>Promise<unknown>):DesktopDocumentBinding{
+export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequest)=>Promise<unknown>,maintenance?:DocumentRuntimeTransport):DesktopDocumentBinding{
   const stages=new Map<string,DocumentSnapshotId>();let stageSequence=0n,pinSequence=0n;
   let opening:Promise<unknown>|undefined,pendingPin:string|undefined;
   const object=(value:unknown):Record<string,unknown>=>{if(!value||typeof value!=='object'||Array.isArray(value))throw new DocumentSemanticsError('invalid_document_response');return value as Record<string,unknown>;};
@@ -28,8 +70,20 @@ export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequ
     const call=Promise.resolve().then(()=>raw(op,fields)).then(value=>{if(op==='open')pins.add(String(fields.pinId));else if(op==='close')pins.delete(String(fields.pinId));return value;});
     pendingCalls.add(call);void call.then(()=>pendingCalls.delete(call),()=>pendingCalls.delete(call));return call;
   };
+  const runtimeActive=()=>{if(phase!=='active')throw new DocumentRuntimeError('client_not_admitted');};
+  const runtimeCall=<T>(action:()=>Promise<T>):Promise<T>=>{
+    try{runtimeActive();const call=action();pendingCalls.add(call);void call.then(()=>pendingCalls.delete(call),()=>pendingCalls.delete(call));return call;}
+    catch(error){return Promise.reject(error);}
+  };
+  const runtimeTransport:DocumentRuntimeTransport|undefined=maintenance?{...maintenance,
+    allocateSequence:()=>{runtimeActive();return maintenance.allocateSequence();},allocateRequestId:()=>{runtimeActive();return maintenance.allocateRequestId();},
+    observe:()=>runtimeCall(()=>maintenance.observe()),control:input=>runtimeCall(()=>maintenance.control(input)),
+    ackControl:input=>runtimeCall(()=>maintenance.ackControl(input)),ackOutcome:input=>runtimeCall(()=>maintenance.ackOutcome(input)),
+    subscribe(listener,onRetire){runtimeActive();return maintenance.subscribe(listener,onRetire);},
+  }:undefined;
   const snapshotFor=(id:string)=>{const snapshot=stages.get(id);if(!snapshot)throw new DocumentSemanticsError('stage_expired');return snapshot;};
   const transport:DocumentTransport={
+    ...(runtimeTransport?{maintenance:runtimeTransport}:{}),
     async status(){
       const value=object(await command('status'));
       // The host supplies an exact source capture even before a cache exists.

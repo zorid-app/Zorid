@@ -4,12 +4,20 @@ const invoke = (name, ...args) => ipcRenderer.invoke(`zorid:${name}`, ...args);
 const durable = async (name, ...args) => {
   const workblock = name === 'durableInvoke' && args[2] === 'workblockCommand';
   const planning = name === 'durableInvoke' && args[2] === 'planWrite';
+  const runtime = name === 'durableInvoke' && ['documentRuntimeObserve','documentRuntimeControl','documentRuntimeAckControl','documentRuntimeAckOutcome'].includes(args[2]);
   let reply;
   try { reply = await invoke(name, ...args); }
   catch (error) {
     if (planning) return {notePlanning:true,schemaVersion:1,ok:false,error:{code:'planning_transport_lost',source:'host',commitUncertain:true}};
     if (workblock) return {workblocks:true,schemaVersion:1,ok:false,error:{code:'workblock_transport_lost',source:'host',commitUncertain:true}};
+    if (runtime) return {documentRuntime:true,schemaVersion:1,ok:false,error:{code:'document_runtime_transport_lost',source:'host',commitUncertain:true}};
     throw error;
+  }
+  if (runtime) {
+    if (reply?.ok === true) return {documentRuntime:true,schemaVersion:1,ok:true,value:reply.result};
+    const valid = reply?.ok === false && typeof reply.error?.code === 'string'
+      && /^[a-z_]{1,64}$/.test(reply.error.code) && typeof reply.error.commitUncertain === 'boolean';
+    return {documentRuntime:true,schemaVersion:1,ok:false,error:{code:valid?reply.error.code:'invalid_document_response',source:'host',commitUncertain:valid?reply.error.commitUncertain:true}};
   }
   if (workblock) {
     // contextBridge copies Error objects without custom properties. Transfer
@@ -69,6 +77,17 @@ contextBridge.exposeInMainWorld('zorid', Object.freeze({
   },
   getDurableContext: vault => durable('getDurableContext', vault),
   durableInvoke: (vault, admissionId, method, args) => durable('durableInvoke', vault, admissionId, method, args),
+  onDocumentRuntimeNudge: (vault, admissionId, callback, onRetire) => {
+    if(typeof vault!=='string'||!vault||typeof admissionId!=='string'||!admissionId||typeof callback!=='function'||typeof onRetire!=='function')throw new TypeError('Admitted runtime receiver required');
+    let retired=false;
+    const listener = (_event, message) => {
+      if(retired||!message||typeof message!=='object'||Array.isArray(message)||message.vault!==vault||message.admissionId!==admissionId)return;
+      if(Object.keys(message).length===2)callback();
+      else if(Object.keys(message).length===3&&message.retired===true){retired=true;onRetire();}
+    };
+    ipcRenderer.on('zorid:document-runtime',listener);
+    return ()=>ipcRenderer.removeListener('zorid:document-runtime',listener);
+  },
   releaseDurableContext: (vault, admissionId) => durable('releaseDurableContext', vault, admissionId),
   openVault: () => invoke('openVault'),
   list: vault => invoke('list', vault),

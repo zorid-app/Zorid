@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 const {captureDocumentRequest}=createRequire(import.meta.url)('../desktop/document-semantics.cjs');
-import {createDesktopDocumentService} from '../src/platform/desktop-document-semantics.ts';
+import {createDesktopDocumentService,createDesktopDocumentRuntime} from '../src/platform/desktop-document-semantics.ts';
 import type {DesktopDocumentRequest} from '../src/platform/desktop-document-semantics.ts';
 const snapshot={localStoreId:'store',generationEpoch:'epoch',generation:'1',versions:{schema:1,extraction:'v1',resolver:'v1',query:'v1'}};
 const source={localStoreId:'store',watermark:'2'};
@@ -125,4 +125,79 @@ test('desktop IPC rich errors preserve typed compile diagnostics and reject malf
     richWire(false,{code:'search_compile',commitUncertain:false,details:{diagnostic:{...diagnostic,extra:true}}}),
   ]){reply=malformed;await assert.rejects(()=>pin.richSearch!({spec:richSpec}),error=>(error as any).code==='invalid_document_response');}
   await binding.release();
+});
+
+const runtimeScope={localStoreId:'store',clientId:'client'};
+const runtimeUpdate={lifetime:'runtime-life',revision:'9007199254740993',source,published:snapshot,freshness:'current',phase:'idle',progress:null,coverageComplete:true,hasForegroundDemand:false,error:null} as const;
+const runtimeFrame=()=>({version:1,scope:runtimeScope,update:runtimeUpdate,outcomes:[]});
+const runtimeWire=(value:unknown)=>({documentRuntime:true,schemaVersion:1,ok:true,value});
+
+test('desktop runtime transport owns admission counters across facades and preserves strict plain IPC replies',async()=>{
+  const calls:unknown[]=[],runtime=createDesktopDocumentRuntime({scope:runtimeScope,subscribe:()=>()=>{},invoke:async(method,args)=>{calls.push([method,args]);return runtimeWire(method==='documentRuntimeObserve'?runtimeFrame():true);}});
+  assert.equal(runtime.transport.allocateSequence(),'1');assert.equal(runtime.transport.allocateRequestId(),'1');
+  const unused=async()=>{throw new Error('legacy planner forbidden');};
+  const first=createDesktopDocumentService(unused,runtime.transport),second=createDesktopDocumentService(unused,runtime.transport);
+  assert.ok(first.service.maintenance);assert.ok(second.service.maintenance);
+  assert.equal(runtime.transport.allocateSequence(),'2');assert.equal(runtime.transport.allocateRequestId(),'2');
+  assert.deepEqual(await runtime.transport.observe(),runtimeFrame());
+  await runtime.transport.ackControl({sequence:'18446744073709551615'});await runtime.transport.ackOutcome({lifetime:'runtime-life',id:'9007199254740993'});
+  assert.deepEqual(calls,[['documentRuntimeObserve',[]],['documentRuntimeAckControl',[{sequence:'18446744073709551615'}]],['documentRuntimeAckOutcome',[{lifetime:'runtime-life',id:'9007199254740993'}]]]);
+  await first.release();await second.release();runtime.retire();
+});
+
+test('desktop runtime ignores malformed envelopes and requires true ACK before retiring delivery ownership',async()=>{
+  let value:unknown=runtimeWire(true);
+  const runtime=createDesktopDocumentRuntime({scope:runtimeScope,subscribe:()=>()=>{},invoke:async()=>value});
+  for(const malformed of [
+    {documentRuntime:false,schemaVersion:1,ok:true,value:true}, {...runtimeWire(true),extra:true},
+    {documentRuntime:true,schemaVersion:1,ok:false,error:{code:'document_runtime_busy',source:'host',commitUncertain:false,raw:'/secret'}},
+    {documentRuntime:true,schemaVersion:1,ok:false,error:{code:'private path /secret',source:'host',commitUncertain:false}},
+    runtimeWire({accepted:true}),
+  ]){value=malformed;await assert.rejects(()=>runtime.transport.ackControl({sequence:'1'}),(error:any)=>error.code==='document_runtime_invalid_result');}
+  value={documentRuntime:true,schemaVersion:1,ok:false,error:{code:'document_runtime_transport_lost',source:'host',commitUncertain:true}};
+  await assert.rejects(()=>runtime.transport.observe(),(error:any)=>error.code==='document_runtime_transport_lost'&&error.commitUncertain===true);
+  value=runtimeWire(true);await runtime.transport.ackOutcome({lifetime:'runtime-life',id:'1'});runtime.retire();
+});
+
+test('desktop runtime retirement is authoritative and once-only; unsubscribing removes only that receiver',()=>{
+  const receivers:{changed:()=>void;retired:()=>void;stops:number}[]=[];
+  const runtime=createDesktopDocumentRuntime({scope:runtimeScope,invoke:async()=>runtimeWire(runtimeFrame()),subscribe(changed,retired){const receiver={changed,retired,stops:0};receivers.push(receiver);return()=>receiver.stops++;}});
+  let changed=0,retired=0;
+  const stop=runtime.transport.subscribe(()=>changed++,()=>retired++);receivers[0].changed();assert.equal(changed,1);stop();receivers[0].changed();assert.equal(changed,1);assert.equal(retired,0);
+  runtime.transport.subscribe(()=>changed++,()=>retired++);receivers[1].retired();receivers[1].retired();runtime.retire();
+  assert.equal(retired,1);assert.equal(receivers[0].stops,1);assert.equal(receivers[1].stops,1);
+  assert.throws(()=>runtime.transport.allocateSequence(),(error:any)=>error.code==='client_not_admitted');
+  runtime.transport.subscribe(()=>assert.fail('retired change'),()=>retired++);assert.equal(retired,2);
+});
+
+test('desktop freshness cancels before admission without issuing a backend request and retires after final release',async()=>{
+  let observes=0,controls=0;const runtime=createDesktopDocumentRuntime({scope:runtimeScope,subscribe:()=>()=>{},invoke:async(method)=>{if(method==='documentRuntimeObserve'){observes++;return runtimeWire(runtimeFrame());}controls++;return runtimeWire(true);}});
+  const binding=createDesktopDocumentService(async()=>assert.fail('No low-level maintenance'),runtime.transport);
+  const handle=binding.service.maintenance!.requestFreshness();assert.equal(typeof handle.cancel,'function');await handle.cancel();
+  await assert.rejects(handle.result,(error:any)=>error.code==='document_runtime_cancelled');assert.equal(observes,0);assert.equal(controls,0);
+  const listener=await binding.service.maintenance!.observeAndSubscribe(()=>{});assert.equal(listener.snapshot?.revision,'9007199254740993');
+  await binding.release();runtime.retire();
+  assert.throws(()=>binding.service.maintenance!.requestFreshness(),(error:any)=>error.code==='document_runtime_retired');
+});
+
+test('desktop lost admission ACK retries the exact sequence before cancelling and consumes same-revision outcomes',async()=>{
+  const controls:any[]=[],acks:any[]=[];let admitted=0;
+  const frame:any=runtimeFrame();
+  const runtime=createDesktopDocumentRuntime({scope:runtimeScope,subscribe:()=>()=>{},invoke:async(method,args)=>{
+    if(method==='documentRuntimeObserve')return runtimeWire(structuredClone(frame));
+    if(method==='documentRuntimeControl'){
+      const input=structuredClone(args[0]) as any;controls.push(input);
+      if(input.command.kind==='request'){
+        if(admitted++===0)return {documentRuntime:true,schemaVersion:1,ok:false,error:{code:'document_runtime_transport_lost',source:'host',commitUncertain:true}};
+      }else frame.outcomes=[{lifetime:input.command.lifetime,outcome:{kind:'cancelled',id:input.command.id}}];
+      return runtimeWire({...input,frame:structuredClone(frame)});
+    }
+    acks.push([method,structuredClone(args[0])]);return runtimeWire(true);
+  }});
+  const binding=createDesktopDocumentService(async()=>assert.fail('No legacy planner'),runtime.transport),handle=binding.service.maintenance!.requestFreshness();
+  await assert.rejects(handle.result,(error:any)=>error.code==='document_runtime_transport_lost');
+  await handle.cancel();assert.equal(controls.length,3);assert.deepEqual(controls[0],controls[1]);assert.equal(controls[2].command.kind,'cancel');
+  assert.equal(controls[2].command.id,controls[0].command.id);assert.equal(controls[2].command.lifetime,controls[0].command.lifetime);assert.notEqual(controls[2].sequence,controls[0].sequence);
+  assert.ok(acks.some(([method])=>method==='documentRuntimeAckOutcome'));assert.equal(frame.update.revision,'9007199254740993');
+  await binding.release();runtime.retire();
 });

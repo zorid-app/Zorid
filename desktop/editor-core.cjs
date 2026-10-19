@@ -7,10 +7,13 @@ const {randomUUID}=require('node:crypto');
 const {MAX_BINARY_FRAME}=require('./rust-vault-service.cjs');
 const {VaultService}=require('./vault-service.cjs');
 const {admitDesktopFixtureClient}=require('./client-admission.cjs');
+const {captureDocumentRuntimeRequest,captureDocumentRuntimeReply}=require('./document-semantics.cjs');
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 const fail=code=>Object.assign(new Error('Rust vault operation failed.'),{code});
 const methods=new Set(['readText','readTextById','planWrite','prepare','commit','query','listUnacknowledged','acknowledge']);
 const checkpointMethods=new Set(['load','compareAndSwap','list','changes']);
+const runtimeMethods={documentRuntimeObserve:'observe',documentRuntimeControl:'control',documentRuntimeAckControl:'ackControl',documentRuntimeAckOutcome:'ackOutcome'};
+const runtimeAvailable=admission=>admission.documentRuntime&&['observe','control','ackControl','ackOutcome','subscribe'].every(name=>typeof admission.documentRuntime[name]==='function');
 function createEditorCoreManager(environment=process.env, options={}){
   if(environment.ZORID_DESKTOP_FAMILY_FIXTURE==='1')return null;
   const config={root:environment.ZORID_FIXTURE_VAULT,executable:environment.ZORID_DESKTOP_HOST_BIN,
@@ -18,13 +21,17 @@ function createEditorCoreManager(environment=process.env, options={}){
   const fixture=environment.ZORID_EDITOR_RUST==='1'&&!!config.root;
   if(fixture&&(!['root','executable','fixtureSyncConfig'].every(key=>typeof config[key]==='string'&&path.isAbsolute(config[key]))||!uuid(config.clientId)))throw fail('invalid_editor_core_configuration');
   let closePromise,closed=false;
+  // A trusted integration switch, never a renderer-provided option. The host
+  // capability remains absent while the legacy frontend planner is active.
+  const documentRuntime=options.documentRuntime===true&&typeof options.onDocumentRuntimeNudge==='function';
   const contexts=new Map(), admissions=new Map(), released=new WeakMap(), services=new Set(), openings=new Map(), retirements=new Map();
+  const describe=saved=>({admissionId:saved.id,scope:saved.admission.scope,...(saved.admission.documentCommand?{documentSemantics:true}:{}),...(documentRuntime&&runtimeAvailable(saved.admission)?{documentMaintenance:true}:{}),...(saved.admission.workblockCommand?{workBlocks:true}:{}),...(saved.admission.binaryLimits?{binaryLimits:saved.admission.binaryLimits}:{})});
   const executable=()=>require('./host-location.cjs').resolveDesktopHost({...options,override:config.executable});
-  function checked(broker,record,expectedRoot,admissionId){
+  function checked(broker,record,expectedRoot,admissionId,allowRetired=false){
     broker.assertLive(record);
     const saved=contexts.get(record);
     if(closed||!saved||saved.id!==admissionId||saved.service.root!==expectedRoot)throw fail('durable_scope_changed');
-    saved.check();return saved;
+    saved.check(allowRetired);return saved;
   }
   async function isCoreRoot(input){await fs.realpath(input);return true;}
   function retire(broker,record,selectedService){
@@ -40,6 +47,7 @@ function createEditorCoreManager(environment=process.env, options={}){
       if(admission)await admission.catch(()=>{});
       const saved=contexts.get(record)??released.get(record)??initial;
       released.delete(record);contexts.delete(record);
+      saved.stopRuntime?.();
       if(saved.admission)await saved.admission.retire();
       const current=broker.vaults.get(root);
       if(current?.service===service&&current.members.size||[...contexts.values()].some(value=>value.service===service))return;
@@ -70,7 +78,7 @@ function createEditorCoreManager(environment=process.env, options={}){
         const pending=(async()=>{
           const fixtureSelected=fixture&&canonical===await fs.realpath(config.root);
           const service=await VaultService.open(canonical,{coreFixture:{executable:await executable(),
-            ...(fixtureSelected?{fixtureSyncConfig:config.fixtureSyncConfig}:{initializeLocal:true}),familyMode:true}});
+            ...(fixtureSelected?{fixtureSyncConfig:config.fixtureSyncConfig}:{initializeLocal:true}),familyMode:true,documentRuntime}});
           if(closed){await service.close();throw fail('editor_core_closed');}
           services.add(service);return service;
         })();
@@ -85,7 +93,7 @@ function createEditorCoreManager(environment=process.env, options={}){
       if(record.vaultSelectionPending||!entry||entry.service.root!==expectedRoot)throw fail('durable_scope_changed');
       if(!fixture&&record.persistedVaultRoot!==expectedRoot)throw fail('client_registry_unsettled');
       if(!services.has(entry.service))return null;
-      const existing=contexts.get(record);if(existing){existing.check();return {admissionId:existing.id,scope:existing.admission.scope,...(existing.admission.documentCommand?{documentSemantics:true}:{}),...(existing.admission.workblockCommand?{workBlocks:true}:{}),...(existing.admission.binaryLimits?{binaryLimits:existing.admission.binaryLimits}:{})};}
+      const existing=contexts.get(record);if(existing){existing.check();return describe(existing);}
       const inFlight=admissions.get(record);if(inFlight)return inFlight;
       const generation=record.generation,service=entry.service;
       const check=()=>{
@@ -98,8 +106,28 @@ function createEditorCoreManager(environment=process.env, options={}){
         const admission=await admitDesktopFixtureClient(service,{fixture:true,clientId:fixture&&record.id==='main'?config.clientId:record.clientSlot?.clientId,assertOwner:check});
         try {check();}
         catch(error){await admission.retire();throw error;}
-        const saved={id:randomUUID(),admission,service,check};contexts.set(record,saved);
-        return {admissionId:saved.id,scope:admission.scope,...(admission.documentCommand?{documentSemantics:true}:{}),...(admission.workblockCommand?{workBlocks:true}:{}),...(admission.binaryLimits?{binaryLimits:admission.binaryLimits}:{})};
+        const saved={id:randomUUID(),admission,service,check:(allowRetired=false)=>{check();if(saved.runtimeRetired&&!allowRetired)throw fail('client_not_admitted');}};contexts.set(record,saved);
+        try{
+          if(documentRuntime){
+            if(!runtimeAvailable(admission))throw fail('unsupported_host_capability');
+            const publish=retired=>{
+              try{
+                if(contexts.get(record)!==saved||saved.runtimeRetired)return;
+                if(retired){
+                  broker.assertLive(record);
+                  if(record.vaultSelectionPending||record.vault!==entry||record.generation!==generation||!broker.allowedURL(record.window.webContents.mainFrame.url))return;
+                  saved.runtimeRetired=true;
+                }else check();
+                options.onDocumentRuntimeNudge(record,{vault:expectedRoot,admissionId:saved.id,...(retired?{retired:true}:{})});
+              }catch{/* A revoked window cannot receive a late derived-state hint. */}
+            };
+            const stopRuntime=admission.documentRuntime.subscribe(()=>publish(false),()=>publish(true));
+            if(typeof stopRuntime!=='function')throw fail('invalid_document_response');
+            saved.stopRuntime=stopRuntime;
+            saved.check();
+          }
+        }catch(error){if(contexts.get(record)===saved)contexts.delete(record);try{saved.stopRuntime?.();}finally{await admission.retire();}throw error;}
+        return describe(saved);
       })();
       admissions.set(record,pending);
       try{return await pending;}finally{if(admissions.get(record)===pending)admissions.delete(record);}
@@ -108,6 +136,14 @@ function createEditorCoreManager(environment=process.env, options={}){
       broker.authenticate(event);
       const saved=checked(broker,record,expectedRoot,admissionId);
       if(typeof method!=='string'||!Array.isArray(args)||args.length>2)throw fail('invalid_durable_request');
+      if(Object.hasOwn(runtimeMethods,method)){
+        if(!documentRuntime||!runtimeAvailable(saved.admission)||args.length!==(method==='documentRuntimeObserve'?0:1))throw fail('invalid_durable_request');
+        const captured=captureDocumentRuntimeRequest(method,args);
+        const value=await saved.admission.documentRuntime[runtimeMethods[method]](...captured);
+        checked(broker,record,expectedRoot,admissionId);
+        if(contexts.get(record)!==saved)throw fail('durable_scope_changed');
+        return captureDocumentRuntimeReply(method,captured,value,{localStoreId:saved.admission.scope.vaultId,clientId:saved.admission.scope.clientId});
+      }
       if(method==='workblockCommand'){
         if(args.length!==1||!saved.admission.workblockCommand)throw fail('invalid_durable_request');
         return saved.admission.workblockCommand(args[0]);
@@ -138,10 +174,13 @@ function createEditorCoreManager(environment=process.env, options={}){
       broker.authenticate(event);
       const previous=released.get(record);
       if(previous?.id===admissionId&&previous.root===expectedRoot)return;
-      const saved=checked(broker,record,expectedRoot,admissionId);
+      // Authoritative retirement may precede a lost outer release ACK. Keep
+      // exact release retry available without readmitting public operations.
+      const saved=checked(broker,record,expectedRoot,admissionId,true);
       // Renderer lifecycle owner has awaited its final checkpoint/flush before
       // requesting release. The admission layer drains already accepted RPCs.
       await saved.admission.release(()=>{});
+      saved.stopRuntime?.();
       if(contexts.get(record)===saved)contexts.delete(record);
       released.set(record,{id:admissionId,root:expectedRoot,service:saved.service,admission:saved.admission});
     },
@@ -151,7 +190,7 @@ function createEditorCoreManager(environment=process.env, options={}){
       closed=true;
       closePromise=(async()=>{
         await Promise.allSettled([...openings.values(),...admissions.values(),...retirements.values()].filter(Boolean));
-        contexts.clear();await Promise.all([...services].map(service=>service.close()));services.clear();
+        for(const saved of contexts.values())saved.stopRuntime?.();contexts.clear();await Promise.all([...services].map(service=>service.close()));services.clear();
       })();return closePromise;
     },
   };
