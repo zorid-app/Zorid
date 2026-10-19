@@ -11,6 +11,13 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 Current integration `8a6d20d0` (2026-10-19):
 
+Execution is resource-blocked after three consecutive goal turns with insufficient
+stable disk capacity. Fresh free space is about1.12GB; the next frontend62 gate
+requires1.3GB and the Rust166 package starts require1.5GB. All workers are terminal,
+both isolated candidates are clean/frozen, and no owned validation is running.
+S1 remains incomplete. Resume after capacity changes, revalidating the candidates
+and serialization before running the required gates; keep the full S1 scope.
+
 - Common/desktop F adapters are integrated as the23-file `8a6d20d0` subset.
   Full TypeScript passes on that exact subset;190 applicable common/desktop
   checks carry from validated `93c0b133` with exact selected dependency closures.
