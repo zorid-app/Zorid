@@ -198,8 +198,9 @@ pub(super) fn prepare_family_command(tx: &Connection, command: &command::FamilyC
     )
     .map_err(mapped)?;
     let (expected_entries, changes, allocated, authored, text, candidate) = prepared.into_parts();
-    prepare_parts(
+    prepare_parts_with_entries(
         tx,
+        &entries,
         command.clone(),
         allocation,
         expected_entries,
@@ -217,6 +218,29 @@ pub(super) fn prepare_parts(
     tx: &Connection,
     command: command::FamilyCommand,
     allocation: command::Allocation,
+    expected_entries: Vec<EntryState>,
+    changes: Vec<zorid_core::EntryChange>,
+    allocated_update_ids: Vec<UpdateId>,
+    authored_files: Vec<command::AuthoredFile>,
+    text: Option<command::TextChange>,
+    candidate: MetadataCandidate,
+) -> Result<PreparedFamilyCommand> {
+    let checked_entries = entries(tx)?;
+    prepare_parts_with_entries(
+        tx, &checked_entries, command, allocation, expected_entries, changes,
+        allocated_update_ids, authored_files, text, candidate,
+    )
+}
+/// Same preparation snapshot only. The local planner has no database handle or
+/// callback, so its complete original checked entries remain current here. Keep
+/// the cross-module wrapper above loading its own snapshot; final writers always
+/// reload independently and compare the complete retained authority again.
+#[allow(clippy::too_many_arguments)]
+fn prepare_parts_with_entries(
+    tx: &Connection,
+    checked_entries: &[EntryState],
+    command: command::FamilyCommand,
+    allocation: command::Allocation,
     mut expected_entries: Vec<EntryState>,
     changes: Vec<zorid_core::EntryChange>,
     allocated_update_ids: Vec<UpdateId>,
@@ -225,7 +249,7 @@ pub(super) fn prepare_parts(
     candidate: MetadataCandidate,
 ) -> Result<PreparedFamilyCommand> {
     expected_entries.sort_by(|a, b| a.id.cmp(&b.id));
-    if entries(tx)? != expected_entries {
+    if checked_entries != expected_entries.as_slice() {
         return Err(zorid_client_sync::SyncError::VersionConflict.into());
     }
     let verified_old = blob_index::verify_metadata(tx, candidate.expected_state(), &[])?;
@@ -444,15 +468,19 @@ mod tests {
             },
         }
     }
-    // Connection-local observation of real full Text snapshot SELECTs. The Box
+    // Connection-local observation of real complete snapshot SELECTs. The Box
     // keeps callback context stable if this guard moves; Drop unregisters before
     // freeing it, including on assertion panic. No production hook/global counter.
-    struct TextSnapshotReads<'a> {
+    struct SnapshotReads<'a> {
         connection: &'a Connection,
-        count: Box<std::cell::Cell<usize>>,
+        state: Box<SnapshotReadState>,
     }
-    impl<'a> TextSnapshotReads<'a> {
-        fn new(connection: &'a Connection) -> Self {
+    struct SnapshotReadState {
+        count: std::cell::Cell<usize>,
+        prefix: &'static [u8],
+    }
+    impl<'a> SnapshotReads<'a> {
+        fn new(connection: &'a Connection, prefix: &'static [u8]) -> Self {
             unsafe extern "C" fn observe(
                 event: u32,
                 context: *mut std::ffi::c_void,
@@ -465,19 +493,16 @@ mod tests {
                     // this event. The connection executes synchronously while
                     // the guard owns its Cell; no allocation/panic in callback.
                     let sql = unsafe { std::ffi::CStr::from_ptr(sql.cast()) };
-                    if sql
-                        .to_bytes()
-                        .starts_with(b"SELECT entry_id FROM text_bindings WHERE realm_id=")
-                    {
-                        let count = unsafe { &*context.cast::<std::cell::Cell<usize>>() };
-                        count.set(count.get().saturating_add(1));
+                    let state = unsafe { &*context.cast::<SnapshotReadState>() };
+                    if sql.to_bytes().starts_with(state.prefix) {
+                        state.count.set(state.count.get().saturating_add(1));
                     }
                 }
                 0
             }
             let guard = Self {
                 connection,
-                count: Box::new(std::cell::Cell::new(0)),
+                state: Box::new(SnapshotReadState { count: std::cell::Cell::new(0), prefix }),
             };
             // This fixture connection has no other trace callback. It outlives
             // the guard, and callback context points into the stable Box above.
@@ -486,7 +511,7 @@ mod tests {
                     connection.handle(),
                     rusqlite::ffi::SQLITE_TRACE_STMT,
                     Some(observe),
-                    (&*guard.count as *const std::cell::Cell<usize>)
+                    (&*guard.state as *const SnapshotReadState)
                         .cast_mut()
                         .cast(),
                 )
@@ -495,13 +520,13 @@ mod tests {
             guard
         }
         fn reset(&self) {
-            self.count.set(0);
+            self.state.count.set(0);
         }
         fn get(&self) -> usize {
-            self.count.get()
+            self.state.count.get()
         }
     }
-    impl Drop for TextSnapshotReads<'_> {
+    impl Drop for SnapshotReads<'_> {
         fn drop(&mut self) {
             unsafe {
                 rusqlite::ffi::sqlite3_trace_v2(
@@ -566,6 +591,101 @@ mod tests {
             .collect()
     }
     #[test]
+    fn preparation_reuses_one_complete_checked_entry_snapshot() {
+        let (_dir, store) = snapshot_fixture();
+        let before = database(&store.connection);
+        let tx = store.connection.unchecked_transaction().unwrap();
+        let expected = entries(&tx).unwrap();
+        let reads = SnapshotReads::new(&tx, b"SELECT\n    length(content),length(CAST(content_ref AS BLOB))");
+        let prepared = prepare_command(&tx, &text("new_entry", "new.md"), Some(FamilyCreateMode::Text)).unwrap();
+        assert_eq!(reads.get(), 1, "preparation reloaded the complete checked entries");
+        assert_eq!(prepared.expected_entries, expected);
+        assert_eq!(expected.iter().map(|entry| entry.id.as_str()).collect::<Vec<_>>(), vec!["a_entry", "b_entry"]);
+        drop(reads);
+        tx.commit().unwrap();
+        assert_eq!(database(&store.connection), before, "preparation must remain read-only");
+    }
+
+    // Real portable Create output lets the host boundary reject a forged or
+    // incomplete expected snapshot without changing the candidate authority.
+    fn planned_create(tx: &Connection) -> (Vec<EntryState>, command::FamilyCommand, command::Allocation, zorid_file_sync::metadata_mutation::PreparedMetadataMutation) {
+        let checked = entries(tx).unwrap();
+        let graph = graph(tx, &scope(tx).unwrap()).unwrap();
+        let request = text("new_entry", "new.md");
+        let mode = Some(FamilyCreateMode::Text);
+        let need = zorid_file_sync::metadata_mutation::requirements(&request, &checked, &graph, mode, None).unwrap();
+        let allocation = command::Allocation {
+            metadata_revision: fresh_revision().unwrap(), graph_revision: fresh_revision().unwrap(),
+            update_ids: (0..need.update_count).map(|_| fresh_update().unwrap()).collect(),
+            text: Some(command::TextAllocation { actor: commands::actor(tx, None).unwrap(), new_text: Some(command::NewText { bootstrap_id: fresh_update().unwrap(), empty_revision: fresh_revision().unwrap() }) }),
+        };
+        let planned = zorid_file_sync::metadata_mutation::prepare_mutation(&request, &checked, &graph, mode, None, &allocation).unwrap();
+        (checked, command::FamilyCommand::new(request, mode).unwrap(), allocation, planned)
+    }
+
+    #[test]
+    fn same_snapshot_and_fresh_wrapper_still_reject_planner_entry_mismatch() {
+        for wrapper in [false, true] {
+            for mismatch in ["missing", "revision", "path"] {
+                let (_dir, store) = snapshot_fixture();
+                let before = database(&store.connection);
+                let tx = store.connection.unchecked_transaction().unwrap();
+                let (checked, command, allocation, planned) = planned_create(&tx);
+                let (mut expected, changes, allocated, authored, text, candidate) = planned.into_parts();
+                match mismatch {
+                    "missing" => { expected.pop(); }
+                    "revision" => expected[0].revision = Revision::new("wrong_revision").unwrap(),
+                    "path" => expected[0].path = VaultPath::new("wrong.md").unwrap(),
+                    _ => unreachable!(),
+                }
+                let reads = SnapshotReads::new(&tx, b"SELECT\n    length(content),length(CAST(content_ref AS BLOB))");
+                let result = if wrapper {
+                    prepare_parts(&tx, command, allocation, expected, changes, allocated, authored, text, candidate)
+                } else {
+                    prepare_parts_with_entries(&tx, &checked, command, allocation, expected, changes, allocated, authored, text, candidate)
+                };
+                assert!(matches!(result, Err(StoreError::Sync(zorid_client_sync::SyncError::VersionConflict))), "{wrapper}/{mismatch}");
+                assert_eq!(reads.get(), usize::from(wrapper), "cross-module wrapper must load independently");
+                drop(reads); tx.rollback().unwrap();
+                assert_eq!(database(&store.connection), before, "{wrapper}/{mismatch}");
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_checked_entry_still_rejects_preparation() {
+        let (_dir, store) = snapshot_fixture();
+        store.connection.execute("UPDATE entries SET path='different.md' WHERE id='a_entry'", []).unwrap();
+        let before = database(&store.connection);
+        let tx = store.connection.unchecked_transaction().unwrap();
+        assert!(prepare_command(&tx, &text("new_entry", "new.md"), Some(FamilyCreateMode::Text)).is_err());
+        tx.rollback().unwrap();
+        assert_eq!(database(&store.connection), before);
+    }
+
+    #[test]
+    fn entry_only_peer_change_still_rejects_fresh_final_writer() {
+        let (dir, mut store) = snapshot_fixture();
+        let tx = store.connection.unchecked_transaction().unwrap();
+        let prepared = prepare_command(&tx, &text("new_entry", "new.md"), Some(FamilyCreateMode::Text)).unwrap();
+        tx.commit().unwrap();
+        let peer = Store::open(dir.path().join("store")).unwrap();
+        let mut entry = prepared.expected_entries[0].clone();
+        entry.revision = Revision::new("peer_entry_only_revision").unwrap();
+        peer.connection.execute("UPDATE entries SET state=?1 WHERE id=?2", params![serde_json::to_string(&entry).unwrap(), entry.id.as_str()]).unwrap();
+        let before = database(&store.connection);
+        let tx = store.connection.transaction_with_behavior(TransactionBehavior::Immediate).unwrap();
+        let actual = graph(&tx, &scope(&tx).unwrap()).unwrap();
+        prepared.graph.check_preconditions(&actual, None).unwrap();
+        assert_eq!(family_ingress::retained_texts(&tx, actual.scope()).unwrap(), prepared.expected_texts);
+        let reads = SnapshotReads::new(&tx, b"SELECT\n    length(content),length(CAST(content_ref AS BLOB))");
+        assert!(matches!(commit_prepared(&tx, &prepared), Err(StoreError::Sync(zorid_client_sync::SyncError::VersionConflict))));
+        assert_eq!(reads.get(), 1, "writer must independently reload checked entries");
+        drop(reads); tx.rollback().unwrap();
+        assert_eq!(database(&store.connection), before);
+    }
+
+    #[test]
     fn preparation_reuses_one_complete_text_snapshot_including_tombstones() {
         let (_dir, mut store) = snapshot_fixture();
         let original = database(&store.connection);
@@ -577,7 +697,7 @@ mod tests {
         let tx = store.connection.unchecked_transaction().unwrap();
         let graph = graph(&tx, &scope(&tx).unwrap()).unwrap();
         let verified = blob_index::verify_metadata(&tx, &graph, &[]).unwrap();
-        let reads = TextSnapshotReads::new(&tx);
+        let reads = SnapshotReads::new(&tx, b"SELECT entry_id FROM text_bindings WHERE realm_id=");
         // The former production shape performs two actual snapshot queries.
         family_materialization::validate(&tx, &graph, &verified).unwrap();
         let expected = family_ingress::retained_texts(&tx, graph.scope()).unwrap();
