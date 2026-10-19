@@ -52,6 +52,15 @@ semantic gaps without requiring the later Bases feature UI. The language referen
 must separate documented upstream behavior, current implementation and planned
 support; broad historical audits are not a complete public grammar.
 
+Measured S1.0 setup prerequisite (2026-10-18): a release10k legacy CLI import used
+its explicit240s setup budget before indexing began. One setup-only CPU sample
+identified a global scan/decode of retained external observations on each observed
+path. A narrow indexed path/unresolved lookup is being validated in isolation
+before repeating the same native workload. Preserve history, typed proofs, capture
+replay and existing admission; this is not a new retention policy or evidence that
+the Rust index cannot handle10k (the pure-core10k oracle run passed). Parse-cache,
+query-cache and executor implementations have not been launched in parallel.
+
 S1.1 separates reusable extraction from entry/path/revision witnesses. Hash equality
 alone does not authorize mutation or cross-vault reuse. S1.2 cache reuse includes
 all relevant source/configuration/view/context/graph/presentation/time inputs;

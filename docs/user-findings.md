@@ -1,5 +1,16 @@
 # User findings queue
 
+## S1 native setup scales with unrelated retained observations — source fix isolated
+
+The release10k legacy CLI attempt reached only2,378 entries within its explicit
+240s setup budget; no index/query latency was measured. All10,003 physical sources
+remain exact. Report: `/private/tmp/zorid-s1-cli-legacy-release-80dfce28-10000/report.json`.
+One setup-only sample points to `record_external_transaction` reading/decoding the
+entire external-observation history before checking path/unresolved state.
+`storage_sqlite_impl` owns source-reviewed isolated `9d2d3704`: indexed scoped
+candidate streaming, preserved typed proofs/history/replay/admission and strict
+known12/13→14 migration. Tests/runtime are pending; no speedup or main delivery yet.
+
 ## S1 baseline: imported binary coverage classification — open 2026-10-18
 
 The first real 100-note CLI smoke also imports one PNG through public legacy

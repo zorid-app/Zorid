@@ -146,6 +146,35 @@ normal-client10k pass. Normal Electron harness `3d528d03` is source reviewed but
 still isolated pending actual runtime. No complete S1.0 acceptance or engine
 optimization gain is claimed by these tools/smokes.
 
+The first10k legacy release CLI attempt stopped as designed after its explicit
+240s untimed setup budget (rescan240.316s,2,378 entries). Init/rescan exited0; the
+harness exited2 for incomplete setup. No index/query phase ran. All10,003 physical
+sources and binary hashes remained exact; exact owned PIDs are gone. Evidence:
+`/private/tmp/zorid-s1-cli-legacy-release-80dfce28-10000/report.json`. A single1s
+setup-only sample found `record_external_transaction` fetching/decoding all
+retained observations before checking the requested path/unresolved state. This
+is not a whole-run percentage or an indexing profile.
+
+Measured S1.0 setup dependency: `storage_sqlite_impl` owns isolated
+`storage-observation-lookup` / `tingkai-c/storage-observation-lookup`, base
+`378afb3f`, source-approved `9d2d3704`. Scope is an indexed exact-path unresolved
+candidate lookup, streaming typed comparisons, retained proofs/history/capture
+replay and unchanged write admission; no new per-path quota. Additive authority
+schema14 strictly migrates both known12 and13, with unknown/partial/malformed
+legacy schema rejection before WAL. Owned files: Store projection/lib and three
+existing successor-test fixture/version adjustments. Independent core review
+approved source; Rust checks and comparable actual runtime remain required before
+integration. No live authority/vault was changed by this isolated work.
+
+Normal Electron100 first run passed automatic import/all-source readback and cold
+unique search, then stopped on a harness title-before-editor-body readiness race
+before any keyboard edit. Evidence
+`/private/tmp/zorid-s1-desktop-100-378afb3f-evidence/report.json`. All owned apps/
+hosts are closed. Source-only successors `86d7ed4d` / `82d5e76f` wait for the actual
+focused body and use passive DOM search observations with one post-visible status
+probe (exact publication time remains unavailable). Original save/source assertions
+stay intact; the corrected normal-app pass is still required.
+
 Owners: `s1_execution_audit` owns workload/native CLI baseline tooling;
 `s1_query_audit` owns the integrated language fixtures;
 `architecture_platform_audit` owns actual browser/normal Electron measurement
