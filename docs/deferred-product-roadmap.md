@@ -1,5 +1,44 @@
 # Product discussions after the editor foundation
 
+## Execution checkpoint — shared-core coordinator
+
+Current as of2026-10-19. Read this summary first; dated execution evidence below
+is historical where it conflicts with this checkpoint. The maintained stage
+sequence is in [roadmap.md](roadmap.md); S1 scope is in
+[plans/indexing-search.md](plans/indexing-search.md).
+
+- **Stage:** S0 bounded native delivery and S0A contracts accepted; S1.0 baseline
+  and measured setup prerequisites implementing. Cached parse facts, multicore
+  execution and core-owned scheduling are not implemented yet.
+- **Integrated:** first scoped observation-lookup fix through `2c53a98d`,193
+  focused checks/1 existing ignored fixture, release build and normal-family100
+  source/search checks pass. Small Base17 semantic-baseline tool is integrated
+  through `da536a82` and passed real release execution.
+- **Current limitation:** legacy10k still stops at import,3,383 entries/240.256s
+  versus earlier2,378/240.316s. No native10k index/search result or completion gain
+  is established. Pure-core10k and actual-browser100 passed within their stated
+  scopes. Generated Base10k graph-budget rejection is source-predicted, not yet
+  executed.
+- **Active owner/slot:** `s1_execution_audit` builds/runs frozen native candidate
+  `d0de1c83` in `native-import-lookup` (four indexed path selectors, independently
+  reviewed,35 focused native checks pass). Release build, family100 and same-caps
+  legacy10k must finish before integration. Root is sole main integrator; no push.
+- **Desktop verification:** one-note ordinary typing preserves renderer/file/
+  native/checkpoint bytes. Multiline CDP insertion loses a newline before saving;
+  source-approved harness `c58c1383` uses ordinary Enter/typing with the original
+  byte oracle. Full100 save/index/warm restart remains queued.
+- **Other isolated work:** generated-Base baseline `ffaee3ad` is source reviewed,
+  Node10 checks pass; real Rust100/10k runs pending. Opt-in process resource
+  tooling through `c2f2b75a` is source reviewed; child/time tests and real smokes
+  pending. Source-only approval is not runtime acceptance.
+- **Boundaries:** serialize heavy builds/timing on the8GB Mac. Current runtime
+  targets are macOS Electron, web and standalone macOS CLI. Native mobile and
+  other OS checks stay deferred. Sync remains E2EE; new group-lifecycle policy
+  discussion waits for the user. Original real vault remains untouched.
+
+Detailed evidence, ownership and limitations follow. Earlier checkpoint sections
+retain their original dated decisions and are superseded by this current summary.
+
 ## Active S0 execution — 2026-10-18
 
 User authorizes implementation and requires automatic recovery with no technical
@@ -541,7 +580,7 @@ paths and Rust systems. Accepted SQLite/cache/recovery placement and implementat
 gates are in [decisions](architecture/decisions.md). Keep execution ownership and
 verification here rather than growing the architecture pages into another diary.
 
-## Execution checkpoint — shared-core coordinator
+## Historical execution checkpoint — shared-core coordinator
 
 Updated 2026-10-17. Read this section before resuming after a context reset;
 earlier discussion restrictions below are historical where superseded here.

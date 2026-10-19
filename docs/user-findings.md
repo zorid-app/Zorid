@@ -26,20 +26,17 @@ or completion-speedup claim follows. All10,003 physical sources remain exact.
 Evidence `/private/tmp/zorid-s1-cli-legacy-release-51060b1d-10000/report.json`.
 
 One authorized1s setup sample now identifies repeated `Store::list` calls used to
-find individual directory/file paths. `storage_sqlite_impl` is preparing four
-native selector replacements using the existing indexed `read_path_metadata`
+find individual directory/file paths. `storage_sqlite_impl` prepared four
+native selector replacements (`d0de1c83`) using existing indexed `read_path_metadata`
 API, preserving selected-row validation, physical proofs, full recovery scans
-and absence inventories. No new schema/cache/API is required. Implementation and
-runtime verification of that follow-up remain separate from the first fix.
+and absence inventories. No new schema/cache/API is required. Independent source
+review and35 focused native checks pass; release/runtime verification of this
+follow-up remains separate from the first fix.
 
-The release10k legacy CLI attempt reached only2,378 entries within its explicit
-240s setup budget; no index/query latency was measured. All10,003 physical sources
-remain exact. Report: `/private/tmp/zorid-s1-cli-legacy-release-80dfce28-10000/report.json`.
-One setup-only sample points to `record_external_transaction` reading/decoding the
-entire external-observation history before checking path/unresolved state.
-`storage_sqlite_impl` owns source-reviewed isolated `9d2d3704`: indexed scoped
-candidate streaming, preserved typed proofs/history/replay/admission and strict
-known12/13→14 migration. Tests/runtime are pending; no speedup or main delivery yet.
+The original incomplete setup evidence is retained at
+`/private/tmp/zorid-s1-cli-legacy-release-80dfce28-10000/report.json`. Its global
+observation scan motivated the first fix above; strict known12/13→14 migration,
+typed proofs, retained history, replay and admission checks remain preserved.
 
 ## S1 baseline: imported binary coverage classification — open 2026-10-18
 
