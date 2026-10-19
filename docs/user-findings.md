@@ -1,5 +1,16 @@
 # User findings queue
 
+## S1 save latency during background work — open comparison finding
+
+Normal Electron100 single observations `255caa28`→`fa76b894`: cold search5.706→
+1.042s and post-save search1.838→1.018s, but input→verified durable save1.994→
+6.657s and input→updated visible result3.873→7.713s. Correctness passes; opening/
+import is roughly unchanged. This is not an overall speedup or proven causal
+regression. Source audit owner `s1_execution_audit` is checking whether long
+background reconciliation blocks the serial native host while saving. No new
+scheduling design or implementation is selected before diagnosis. Evidence:
+`/private/tmp/zorid-s1-cache-desktop-fa76b894-evidence/comparison-summary.json`.
+
 ## S1 normal reopen still reaches scan limits — open
 
 Electron100 on `255caa28` passes save/search/warm-generation checks, but its later
@@ -12,8 +23,10 @@ gap; do not describe this run as error-free. Evidence:
 Capture CSE is integrated `89fb84c5` with31 focused checks; enrolled-family targeted
 lookup is integrated `b57e6f5a` with48 composed checks. The latter uses the existing
 fresh path reader; ownership/proof/CAS checks remain intact. Actual app comparison
-is next. Separate-transaction observations still capture fresh authority; full
-inode-ownership inventory remains unchanged and the reconciliation gap stays open.
+passes correctness on `fa76b894`, but later scans still stop at notes88/90 instead
+of55/52; opening is roughly unchanged. Separate-transaction observations still
+capture fresh authority; full inode-ownership inventory remains unchanged and the
+reconciliation gap stays open.
 
 ## S1 desktop pump rejects new cache counters — focused fix integrated
 

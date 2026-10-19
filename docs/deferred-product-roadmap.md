@@ -72,7 +72,7 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   validated source; Rust/browser inputs are unchanged from the tested freeze.
   Evidence `/private/tmp/zorid-desktop-parse-cache-validation.json`. Actual
   matching CLI cache acceptance and Electron compatibility now pass.
-- **Native read fixes — integrated, app comparison next:** remove capture's duplicate metadata validation
+- **Native read fixes — integrated, mixed app result:** remove capture's duplicate metadata validation
   within the same transaction (`entry_content.rs` / `document_index.rs`). The
   current Electron100 observation is5.7s cold search and1.8s post-save index
   refresh; these are single observations, not a performance comparison.
@@ -101,11 +101,21 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   old-selector regression fails as intended. All five integrated Rust files match
   the tested composition. Evidence:
   `/private/tmp/zorid-family-lookup-7f30b2d5-v79uygow/validation-summary.json`.
-  These small disjoint fixes share one matching native build/app comparison;
-  no measured gain yet. Frontend314 component inputs/dist333 files are unchanged
+  These fixes pass a matching native release build on `fa76b894` and unchanged
+  normal Electron100 comparison. All five correctness phases pass; three normal
+  quits drain hosts, no survivors, source/native/frontend hashes exact. Single
+  observations: cold search5.706→1.042s, post-save search1.838→1.018s, but durable
+  save1.994→6.657s and editor-input→visible3.873→7.713s are worse. Import/opening
+  is roughly unchanged; reopen scans still hit limits, now notes88/90 versus55/52.
+  Do not claim an overall speedup or attribute all phase changes to these fixes.
+  Evidence `/private/tmp/zorid-s1-release-fa76b894-cgo65brr/build.json` and
+  `/private/tmp/zorid-s1-cache-desktop-fa76b894-evidence/comparison-summary.json`.
+  `s1_execution_audit` is tracing background rescan/RPC serialization against the
+  save delay; contention is a hypothesis, no scheduling implementation selected.
+  The app/runtime slot is released. Frontend314 inputs/dist333 files are unchanged
   from accepted `255caa28`; native Vite mode excludes WASM, so reuse that frontend.
-  Native build owner `storage_sqlite_impl`, subsequent app owner
-  `architecture_platform_audit`; no new framework or unrelated rebuild.
+  Build owner `storage_sqlite_impl`, app owner `architecture_platform_audit`;
+  no new framework or unrelated rebuild.
 - **Combined native result:** release `b3ed4400` passed build115.545s and family100
   correctness (all eight full literal oracles, complete coverage, exact physical/
   authority sources and watermark108). Rust inputs match integrated `2fb58f33`;
