@@ -22,7 +22,10 @@ index/writer contract and full-workload acceptance remain open.
 ## S1 browser metadata projection — epoch allocation audit
 
 Metadata adapters are integrated through `4887a970` after275 focused Node checks
-and TypeScript. Vault consumption and actual platform verification remain open.
+and TypeScript. Vault/Workspace consumption is integrated through `b3930388`
+after132 focused Node checks and TypeScript. Actual platform activation and
+verification remain open. Reviewed stable browser allocation `5190017e` has23
+new authored checks awaiting the next Rust/Node gates and actual IDB acceptance.
 
 Source inspection during E2 binding work found that browser `begin()` allocates a
 fresh generation epoch for every publication. The shared metadata pager correctly
@@ -73,9 +76,11 @@ checks remain pending; do not claim general platform acceptance from core tests.
 
 ## S1 search UI reference — editor find integrated, broader verification pending
 
-
-
-
+The repeated screenshots reaffirm the existing target: grouped file results,
+highlighted snippets, case toggle and count/sort controls; compact Find directly
+above the note. Reuse the retained REA reference evidence and the recorded desktop
+acceptance below. Matching browser acceptance remains open; this confirmation
+does not restart an already implemented UI slice or reopen saving work.
 Browser Search correction `48d81168` is now integrated: pin presentation facts
 are canonicalized once to Rust's UTF-8 path order. The original real-WASM probe
 reproduced `invalid_request` for opposed ID/path order; the regression fails

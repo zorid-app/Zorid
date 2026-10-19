@@ -13,8 +13,12 @@ with a matching browser rebuild and full UI rerun pending. The pure phased-parse
 draft, metadata and preview foundation passes216 scoped checks on `4da43cf7`.
 Rust metadata/preview bindings pass114 checks; metadata client adapters pass275
 focused Node checks and TypeScript; native draft execution passes40 checks.
-These batches are integrated through `8917d66c`. Vault metadata consumption and
-portable draft execution/transport are the current implementation work.
+Vault/Workspace metadata consumption additionally passes132 focused Node checks
+and TypeScript and is integrated through `b3930388`; portable executor extraction
+and duplicate Store graph-derivation removal pass67 checks through `2bf929f9`.
+Portable draft transfer/transport, buffer projection and preview platform/UI
+mounting are the current implementation work. Their next source-reviewed batches
+remain unrun; disk headroom currently holds the heavier validation gate.
 Platform wiring/activation and S1.4–S1.6 acceptance remain open.
 The [execution checkpoint](../deferred-product-roadmap.md) records exact evidence
 and remaining10k admission/cache limitations. No overall app speedup or complete

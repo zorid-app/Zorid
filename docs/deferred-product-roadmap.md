@@ -9,7 +9,36 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
-Current integration `2bf929f9` (2026-10-19):
+Current integration `b3930388` (2026-10-19):
+
+- Vault/Workspace metadata consumption is now integrated as `9988b0c1`,
+  `cf97f170` and `b3930388`, matching canonical `28567494`. All132 focused
+  Node checks and full TypeScript pass. Completed121 checks carried forward
+  only after their unchanged dependency closures were confirmed; the remaining
+  checks ran on the final source. Evidence:
+  `/private/tmp/zorid-s1-vault-workspace-node-03093422-validation/aggregate132.json`.
+  The original Node constructor-syntax failure and stale warning fixture failure
+  remain recorded. The fixture now asserts existing quiet automatic recovery;
+  production recovery behavior did not change. Both metadata paging and a real
+  maintenance subscription are required, so normal activation remains OFF.
+- Next canonical Rust source `aea13f96` composes independently reviewed portable
+  F transfer, native host, WASM F, stable allocation and retained preview producer
+  changes. All scoped owner source acknowledgments are received. Its166 focused
+  checks are unrun: Core2, Index56, Store8, native40, host31, hosted WASM21 and
+  Bases preview8. Owner `storage_recovery_impl` prepares the single serialized
+  gate in the existing `s1-canonical-draft-store` worktree. Compilation is held:
+  current disk headroom cannot cover observed link peaks above the1GiB floor.
+  Sequential disposal of passed test executables alone does not prove safety.
+- Common F facade `194c666d` and desktop adapter/scheduler `f3dd317f` have
+  independent source approval; their41 new cases remain unrun. Browser F awaits
+  its narrow work-turn reentry correction and final review. Owner
+  `s1_rich_desktop_transport` prepares the next canonical Node composition;
+  source approval is not execution or actual platform acceptance. Existing
+  runtime activation remains OFF, with no additional draft activation flag.
+  Buffer projection and first-build preview platform/UI mounting remain open.
+
+The following entries retain the earlier batch evidence; the updates above
+supersede their pending consumer and source-review statuses.
 
 - Main includes the pure foundation (`4da43cf7`, 216 checks), work arbiter
   (`24eca3a2`, 15 new +27 reducer checks), browser Search ordering correction
