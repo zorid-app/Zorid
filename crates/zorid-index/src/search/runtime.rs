@@ -849,6 +849,50 @@ impl RichSearchDrive {
         if matches_bytes.saturating_add(self.owned_files) > MAX_DRIVE_BYTES - 2 * 1024 * 1024 {
             return Err(RichSearchError::Resource("search pending result bytes"));
         }
+        // Reuse only bounded derived interval/coordinate facts while this
+        // exact admitted source is borrowed by the current synchronous call.
+        // The projector owns no body or authority and is dropped before any
+        // host await or checkpoint transfer.
+        let projection_before = projection;
+        let projector = super::snippet::SnippetProjector::new_checked(
+            matches,
+            SearchDocument {
+                path: document.path,
+                source: document.source,
+                metadata: document.metadata,
+            },
+            MAX_DRIVE_BYTES
+                .saturating_sub(matches_bytes)
+                .saturating_sub(self.owned_files)
+                .saturating_sub(1024 * 1024),
+            |n| {
+                let next = projection
+                    .checked_add(n)
+                    .filter(|&n| n <= MAX_PROJECTION_WORK)
+                    .ok_or(SearchError::Resource("search projection work"))?;
+                check(n).map_err(SearchError::Host)?;
+                projection = next;
+                Ok(())
+            },
+        );
+        let prepared_work = (projection - projection_before) as u64;
+        self.work.units = self.work.units.saturating_add(prepared_work);
+        self.breakdown.presentation_units = self
+            .breakdown
+            .presentation_units
+            .saturating_add(prepared_work);
+        let mut projector = match projector.map_err(|e| match e {
+            SearchError::Host(e) => search_error(e),
+            SearchError::Resource(s) => RichSearchError::Resource(s),
+            SearchError::InvalidDocument(s) => RichSearchError::Invalid(s),
+        }) {
+            Ok(projector) => projector,
+            Err(RichSearchError::Resource(_)) if !self.files.is_empty() => {
+                self.blocked = true;
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
         let mut batch_limit = self.data().profile.locations_per_chunk;
         loop {
             if self.files.len() >= self.data().profile.chunks {
@@ -879,6 +923,7 @@ impl RichSearchDrive {
                 if matches_bytes
                     .saturating_add(self.owned_files)
                     .saturating_add(copy_bound)
+                    .saturating_add(projector.retained_bytes())
                     > MAX_DRIVE_BYTES - 2 * 1024 * 1024
                 {
                     return Err(RichSearchError::Resource("search locator chunk bytes"));
@@ -894,27 +939,22 @@ impl RichSearchDrive {
                 let super::snippet::SnippetChunk {
                     locations,
                     snippets,
-                } = super::snippet::snippets_checked(
-                    matches,
-                    locations,
-                    SearchDocument {
-                        path: document.path,
-                        source: document.source,
-                        metadata: document.metadata,
-                    },
-                    self.data().spec.context,
-                    MAX_DRIVE_BYTES
-                        .saturating_sub(matches_bytes)
-                        .saturating_sub(self.owned_files)
-                        .saturating_sub(copy_bound)
-                        .saturating_sub(1024 * 1024),
-                    |n| charge(n),
-                )
-                .map_err(|e| match e {
-                    SearchError::Host(e) => search_error(e),
-                    SearchError::Resource(s) => RichSearchError::Resource(s),
-                    SearchError::InvalidDocument(s) => RichSearchError::Invalid(s),
-                })?;
+                } = projector
+                    .project_checked(
+                        locations,
+                        self.data().spec.context,
+                        MAX_DRIVE_BYTES
+                            .saturating_sub(matches_bytes)
+                            .saturating_sub(self.owned_files)
+                            .saturating_sub(copy_bound)
+                            .saturating_sub(1024 * 1024),
+                        |n| charge(n),
+                    )
+                    .map_err(|e| match e {
+                        SearchError::Host(e) => search_error(e),
+                        SearchError::Resource(s) => RichSearchError::Resource(s),
+                        SearchError::InvalidDocument(s) => RichSearchError::Invalid(s),
+                    })?;
                 charge(1 + entry.path.as_str().len() / 64).map_err(search_error)?;
                 if entry.path.as_str().len() > self.data().profile.bytes {
                     return Err(RichSearchError::Resource("search output entry bytes"));
@@ -942,6 +982,7 @@ impl RichSearchDrive {
                 if matches_bytes
                     .saturating_add(self.owned_files)
                     .saturating_add(chunk_heap)
+                    .saturating_add(projector.retained_bytes())
                     > MAX_DRIVE_BYTES - 1024 * 1024
                 {
                     return Err(RichSearchError::Resource("search projected retained bytes"));

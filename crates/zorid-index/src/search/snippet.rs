@@ -23,8 +23,8 @@ const STRIDE: usize = 512;
 const POINT_LOOKUP_WORK: usize = 32;
 const RANGE_LOOKUP_WORK: usize = POINT_LOOKUP_WORK * 2;
 
-// Conservatively account allocations across this invocation, including scratch
-// that has already been dropped. Admission precedes allocation; actual capacity
+// Conservatively account allocations across one projection, including persistent
+// projector capacities and scratch that has already been dropped. Admission precedes allocation; actual capacity
 // is checked immediately afterward. Initial caller-owned locators are excluded.
 struct OwnedBudget {
     used: usize,
@@ -237,6 +237,182 @@ struct Window {
     primary: u32,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum OriginKey {
+    Source,
+    Filename,
+    Path,
+    PropertyKey(usize),
+    PropertyValue(usize),
+}
+impl OriginKey {
+    fn of(proof: &LocationProof) -> Self {
+        match proof {
+            LocationProof::Source { .. } => Self::Source,
+            LocationProof::Filename { .. } => Self::Filename,
+            LocationProof::Path { .. } => Self::Path,
+            LocationProof::Key { property, .. } => Self::PropertyKey(*property),
+            LocationProof::Value { property, .. } => Self::PropertyValue(*property),
+        }
+    }
+    fn group(group: &Group<'_>) -> Option<Self> {
+        Some(match group.origin {
+            SearchSnippetOrigin::Source => Self::Source,
+            SearchSnippetOrigin::Filename => Self::Filename,
+            SearchSnippetOrigin::Path => Self::Path,
+            SearchSnippetOrigin::PropertyKey => Self::PropertyKey(group.property?),
+            SearchSnippetOrigin::PropertyValue => Self::PropertyValue(group.property?),
+        })
+    }
+}
+struct Interval {
+    origin: OriginKey,
+    start: u32,
+    end: u32,
+    prefix_end: u32,
+    index: u32,
+    range_index: usize,
+}
+
+/// Transient preparation for one admitted synchronous document invocation.
+/// Borrows exact retained inputs; owns only interval descriptors and a lazy sparse
+/// source coordinate map. It stores no body, source reader, pin or cursor.
+pub struct SnippetProjector<'a> {
+    matches: &'a SearchMatches,
+    document: SearchDocument<'a>,
+    intervals: Vec<Interval>,
+    source_coordinates: Option<Coordinates<'a>>,
+}
+impl<'a> SnippetProjector<'a> {
+    pub fn new_checked<E>(
+        matches: &'a SearchMatches,
+        document: SearchDocument<'a>,
+        owned_byte_limit: usize,
+        mut check: impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Self, SearchError<E>> {
+        charge(&mut check, matches.locations.len().saturating_add(1))?;
+        let usable = |p: &LocationProof| {
+            !matches!(p, LocationProof::Source { .. })
+                || matches!(document.source, SearchSource::Text(_))
+        };
+        let count = matches
+            .locations
+            .iter()
+            .filter(|p| usable(p))
+            .try_fold(0usize, |n, p| n.checked_add(proof_ranges(p).0.len()))
+            .ok_or(SearchError::Resource("Snippet interval count overflow"))?;
+        let mut owned = OwnedBudget {
+            used: 0,
+            limit: owned_byte_limit.min(MAX_OWNED_BYTES),
+        };
+        charge(&mut check, count.saturating_add(matches.locations.len()))?;
+        let mut intervals = owned.vector(count)?;
+        for (index, proof) in matches
+            .locations
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| usable(p))
+        {
+            for (range_index, range) in proof_ranges(proof).0.iter().enumerate() {
+                if range.bytes[0] > range.bytes[1] {
+                    return Err(SearchError::InvalidDocument("Invalid snippet interval"));
+                }
+                intervals.push(Interval {
+                    origin: OriginKey::of(proof),
+                    start: range.bytes[0],
+                    end: range.bytes[1],
+                    prefix_end: 0,
+                    index: index as u32,
+                    range_index,
+                });
+            }
+        }
+        charge(&mut check, sort_work(intervals.len()))?;
+        intervals.sort_unstable_by_key(|i| (i.origin, i.start, i.end, i.index, i.range_index));
+        charge(&mut check, intervals.len())?;
+        let mut previous = None;
+        let mut prefix_end = 0;
+        for interval in &mut intervals {
+            if previous != Some(interval.origin) {
+                prefix_end = 0;
+                previous = Some(interval.origin);
+            }
+            prefix_end = prefix_end.max(interval.end);
+            interval.prefix_end = prefix_end;
+        }
+        Ok(Self {
+            matches,
+            document,
+            intervals,
+            source_coordinates: None,
+        })
+    }
+    /// Actual owned heap capacities. Inline stack fields and borrowed input data
+    /// are excluded; callers already account their matches and initial locators.
+    pub fn retained_bytes(&self) -> usize {
+        self.intervals.capacity() * std::mem::size_of::<Interval>()
+            + self
+                .source_coordinates
+                .as_ref()
+                .map_or(0, |c| c.points.capacity() * std::mem::size_of::<Point>())
+    }
+    pub fn project_checked<E>(
+        &mut self,
+        locations: Vec<SearchLocation>,
+        context: SearchContext,
+        owned_byte_limit: usize,
+        mut check: impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<SnippetChunk, SearchError<E>> {
+        charge(&mut check, 1)?;
+        if locations.len() > MAX_LOCATIONS {
+            return Err(SearchError::Resource("Snippet chunk location limit"));
+        }
+        charge(&mut check, locations.len().saturating_mul(locations.len()))?;
+        for (position, location) in locations.iter().enumerate() {
+            if location.index as usize >= self.matches.locations_len()
+                || locations[..position]
+                    .iter()
+                    .any(|p| p.index == location.index)
+            {
+                return Err(SearchError::InvalidDocument(
+                    "Invalid snippet location ordinal",
+                ));
+            }
+        }
+        let mut owned = OwnedBudget {
+            used: self.retained_bytes(),
+            limit: owned_byte_limit.min(MAX_OWNED_BYTES),
+        };
+        owned.admit(0)?;
+        if self.source_coordinates.is_none()
+            && locations
+                .iter()
+                .any(|l| matches!(l.locator, SearchLocator::Source { .. }))
+        {
+            if let SearchSource::Text(text) = self.document.source {
+                if text.len() > MAX_FIELD_BYTES {
+                    return Err(SearchError::Resource("Snippet field byte limit"));
+                }
+                self.source_coordinates = Some(Coordinates::new(text, &mut check, &mut owned)?);
+            }
+        }
+        project(
+            self.matches,
+            locations,
+            SearchDocument {
+                path: self.document.path,
+                source: self.document.source,
+                metadata: self.document.metadata,
+            },
+            context,
+            &self.intervals,
+            self.source_coordinates.as_ref(),
+            owned,
+            &mut check,
+        )
+    }
+}
+
 /// `locations` must be the caller's bounded chunk projection of `matches`.
 /// Stable ordinals are checked here; the caller constructs payloads with
 /// `SearchMatches::location` rather than accepting externally authored locators.
@@ -247,37 +423,29 @@ struct Window {
 /// this invocation, even after an earlier field has been dropped.
 pub fn snippets_checked<E>(
     matches: &SearchMatches,
-    mut locations: Vec<SearchLocation>,
+    locations: Vec<SearchLocation>,
     document: SearchDocument<'_>,
     context: SearchContext,
     owned_byte_limit: usize,
     mut check: impl FnMut(usize) -> Result<(), E>,
 ) -> Result<SnippetChunk, SearchError<E>> {
-    charge(
-        &mut check,
-        locations
-            .len()
-            .saturating_mul(locations.len())
-            .saturating_add(1),
-    )?;
-    if locations.len() > MAX_LOCATIONS {
-        return Err(SearchError::Resource("Snippet chunk location limit"));
-    }
-    let mut owned = OwnedBudget {
-        used: 0,
-        limit: owned_byte_limit.min(MAX_OWNED_BYTES),
-    };
+    let mut projector =
+        SnippetProjector::new_checked(matches, document, owned_byte_limit, &mut check)?;
+    projector.project_checked(locations, context, owned_byte_limit, check)
+}
+
+fn project<E>(
+    matches: &SearchMatches,
+    mut locations: Vec<SearchLocation>,
+    document: SearchDocument<'_>,
+    context: SearchContext,
+    intervals: &[Interval],
+    source_coordinates: Option<&Coordinates<'_>>,
+    mut owned: OwnedBudget,
+    mut check: impl FnMut(usize) -> Result<(), E>,
+) -> Result<SnippetChunk, SearchError<E>> {
     let mut groups: Vec<Group<'_>> = Vec::new();
-    for (position, location) in locations.iter().enumerate() {
-        if location.index as usize >= matches.locations_len()
-            || locations[..position]
-                .iter()
-                .any(|p| p.index == location.index)
-        {
-            return Err(SearchError::InvalidDocument(
-                "Invalid snippet location ordinal",
-            ));
-        }
+    for location in &locations {
         let (origin, text, key, array_path) = match &location.locator {
             SearchLocator::Source { .. } => match document.source {
                 SearchSource::Text(text) => (SearchSnippetOrigin::Source, text, None, None),
@@ -364,12 +532,17 @@ pub fn snippets_checked<E>(
             snippets: result,
         });
     }
-    charge(&mut check, matches.locations.len() + 1)?;
-    let mut needed: Vec<bool> = owned.vector(matches.locations.len())?;
-    needed.resize(matches.locations.len(), false);
-    let mut needed_count = 0usize;
+    let mut needed: Vec<usize> = owned.vector(MAX_ASSOCIATED_LOCATIONS)?;
     for group in groups {
-        let coordinates = Coordinates::new(group.text, &mut check, &mut owned)?;
+        let temporary_coordinates;
+        let coordinates = if group.origin == SearchSnippetOrigin::Source {
+            source_coordinates.ok_or(SearchError::InvalidDocument(
+                "Missing prepared source coordinates",
+            ))?
+        } else {
+            temporary_coordinates = Coordinates::new(group.text, &mut check, &mut owned)?;
+            &temporary_coordinates
+        };
         let window_count = group
             .locations
             .iter()
@@ -449,66 +622,43 @@ pub fn snippets_checked<E>(
             }
             merged.push(w);
         }
-        // Borrow proofs, never materialize property value strings while scanning.
-        charge(&mut check, matches.locations.len().saturating_mul(2))?;
-        let associated_capacity = matches
-            .locations
-            .iter()
-            .filter(|p| same_origin(p, &group))
-            .count()
-            .min(MAX_ASSOCIATED_LOCATIONS);
-        let mut associated = owned.vector(associated_capacity)?;
-        for (index, proof) in matches.locations.iter().enumerate() {
-            if !same_origin(proof, &group) {
-                continue;
-            }
-            let (ranges, anchor) = proof_ranges(proof);
-            charge(
-                &mut check,
-                ranges.len().saturating_mul(merged.len()).saturating_add(1),
-            )?;
-            if ranges
-                .iter()
-                .any(|r| merged.iter().any(|w| intersects(r, w)))
-            {
-                // Validate every associated proof before it supplies highlights.
-                charge(&mut check, ranges.len().saturating_mul(RANGE_LOOKUP_WORK))?;
-                for range in ranges {
-                    coordinates.range::<E>(range)?;
-                }
-                if !needed[index] {
-                    needed[index] = true;
-                    needed_count += 1;
-                }
-                if needed_count > MAX_ASSOCIATED_LOCATIONS {
-                    return Err(SearchError::Resource("Snippet associated location limit"));
-                }
-                associated.push(Association {
-                    index: index as u32,
-                    ranges,
-                    anchor,
-                });
-            }
-        }
+        let origin = OriginKey::group(&group).ok_or(SearchError::InvalidDocument(
+            "Missing snippet origin identity",
+        ))?;
         for w in merged {
-            let range_count = associated.iter().map(|a| a.ranges.len()).sum::<usize>();
-            // Endpoint partitioning below is quadratic in admitted intersecting
-            // spans; precharge it before endpoint allocation/sorting/work.
-            charge(&mut check, range_count)?;
-            let active_spans = associated
+            let active =
+                active_intersections(intervals, origin, &w, matches, &mut owned, &mut check)?;
+            for item in &active {
+                charge(&mut check, log_work(needed.len()).saturating_add(1))?;
+                if let Err(position) = needed.binary_search(&(item.index as usize)) {
+                    if needed.len() >= MAX_ASSOCIATED_LOCATIONS {
+                        return Err(SearchError::Resource("Snippet associated location limit"));
+                    }
+                    let (ranges, _) = proof_ranges(&matches.locations[item.index as usize]);
+                    charge(
+                        &mut check,
+                        ranges
+                            .len()
+                            .saturating_mul(RANGE_LOOKUP_WORK)
+                            .saturating_add(needed.len() - position),
+                    )?;
+                    // Keep the complete locator/all its ranges, even though only
+                    // this window's intersections are used for normalization.
+                    for range in ranges {
+                        coordinates.range::<E>(range)?;
+                    }
+                    needed.insert(position, item.index as usize);
+                }
+            }
+            charge(&mut check, active.len())?;
+            let active_spans = active
                 .iter()
-                .filter(|a| !a.anchor)
-                .map(|a| a.ranges.iter().filter(|r| intersects(r, &w)).count())
-                .sum::<usize>();
+                .filter(|a| !a.anchor && a.range.bytes[0] < a.range.bytes[1])
+                .count();
             charge(
                 &mut check,
-                range_count
+                active_spans
                     .saturating_mul(RANGE_LOOKUP_WORK)
-                    .saturating_add(
-                        active_spans
-                            .saturating_mul(active_spans)
-                            .saturating_mul(4 + 2 * (active_spans.max(1).ilog2() as usize + 1)),
-                    )
                     .saturating_add(MAX_SCALARS),
             )?;
             let copy = w.end - w.start
@@ -521,7 +671,7 @@ pub fn snippets_checked<E>(
             charge(&mut check, POINT_LOOKUP_WORK * 3)?;
             let origin_range = coordinates.origin_range(w.start, w.end);
             let highlights = highlights(
-                &associated,
+                &active,
                 &coordinates,
                 w.start,
                 w.end,
@@ -552,10 +702,7 @@ pub fn snippets_checked<E>(
     }
     // All borrows into the initial vector have ended before augmentation.
     charge(&mut check, needed.len())?;
-    for (index, included) in needed.into_iter().enumerate() {
-        if !included {
-            continue;
-        }
+    for index in needed {
         charge(&mut check, locations.len())?;
         if locations.iter().any(|l| l.index as usize == index) {
             continue;
@@ -580,6 +727,17 @@ pub fn snippets_checked<E>(
         locations,
         snippets: result,
     })
+}
+
+fn log_work(n: usize) -> usize {
+    if n <= 1 {
+        0
+    } else {
+        usize::BITS as usize - (n - 1).leading_zeros() as usize
+    }
+}
+fn sort_work(n: usize) -> usize {
+    n.saturating_mul(log_work(n))
 }
 
 fn sort_locations<E>(
@@ -713,14 +871,55 @@ fn section_bounds<E>(
     }
     Ok((0, coordinates.text.len()))
 }
-struct Association<'a> {
+struct ActiveSpan<'a> {
     index: u32,
-    ranges: &'a [SourceRange],
+    range: &'a SourceRange,
     anchor: bool,
 }
-fn intersects(range: &SourceRange, w: &Window) -> bool {
-    let (a, b) = (range.bytes[0] as usize, range.bytes[1] as usize);
-    (a < w.end && w.start < b) || (a == b && w.start <= a && a <= w.end)
+fn active_intersections<'a, E>(
+    intervals: &[Interval],
+    origin: OriginKey,
+    window: &Window,
+    matches: &'a SearchMatches,
+    owned: &mut OwnedBudget,
+    check: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<Vec<ActiveSpan<'a>>, SearchError<E>> {
+    // Binary search is prepaid independently from actual candidate visits. A
+    // long enclosing interval can widen the prefix bucket; those visits remain
+    // fully charged rather than being called logarithmic or silently dropped.
+    charge(
+        check,
+        log_work(intervals.len())
+            .saturating_mul(4)
+            .saturating_add(4),
+    )?;
+    let first = intervals.partition_point(|i| i.origin < origin);
+    let last = intervals.partition_point(|i| i.origin <= origin);
+    let origin_intervals = &intervals[first..last];
+    let upper = origin_intervals.partition_point(|i| i.start as usize <= window.end);
+    let lower =
+        origin_intervals[..upper].partition_point(|i| (i.prefix_end as usize) < window.start);
+    let bucket = &origin_intervals[lower..upper];
+    charge(check, bucket.len())?;
+    let hit = |i: &&Interval| {
+        ((i.start as usize) < window.end && window.start < i.end as usize)
+            || (i.start == i.end
+                && window.start <= i.start as usize
+                && i.start as usize <= window.end)
+    };
+    let count = bucket.iter().filter(hit).count();
+    let mut active = owned.vector(count)?;
+    charge(check, bucket.len().saturating_add(count))?;
+    for interval in bucket.iter().filter(hit) {
+        let proof = &matches.locations[interval.index as usize];
+        let (ranges, anchor) = proof_ranges(proof);
+        active.push(ActiveSpan {
+            index: interval.index,
+            range: &ranges[interval.range_index],
+            anchor,
+        });
+    }
+    Ok(active)
 }
 fn proof_ranges(proof: &LocationProof) -> (&[SourceRange], bool) {
     match proof {
@@ -739,19 +938,6 @@ fn proof_ranges(proof: &LocationProof) -> (&[SourceRange], bool) {
             key_match: SearchKeyMatch::Exists,
             ..
         } => (&[], false),
-    }
-}
-fn same_origin(proof: &LocationProof, group: &Group<'_>) -> bool {
-    match proof {
-        LocationProof::Source { .. } => group.origin == SearchSnippetOrigin::Source,
-        LocationProof::Filename { .. } => group.origin == SearchSnippetOrigin::Filename,
-        LocationProof::Path { .. } => group.origin == SearchSnippetOrigin::Path,
-        LocationProof::Key { property, .. } => {
-            group.origin == SearchSnippetOrigin::PropertyKey && group.property == Some(*property)
-        }
-        LocationProof::Value { property, .. } => {
-            group.origin == SearchSnippetOrigin::PropertyValue && group.property == Some(*property)
-        }
     }
 }
 fn materialized_bytes(proof: &LocationProof, matches: &SearchMatches) -> usize {
@@ -778,8 +964,13 @@ fn materialized_bytes(proof: &LocationProof, matches: &SearchMatches) -> usize {
         _ => 0,
     }
 }
+struct HighlightEvent {
+    point: u32,
+    index: u32,
+    starts: bool,
+}
 fn highlights<E>(
-    locations: &[Association<'_>],
+    locations: &[ActiveSpan<'_>],
     coordinates: &Coordinates<'_>,
     start: usize,
     end: usize,
@@ -788,52 +979,80 @@ fn highlights<E>(
     check: &mut impl FnMut(usize) -> Result<(), E>,
 ) -> Result<Vec<SearchSnippetHighlight>, SearchError<E>> {
     let base = coordinates.point(start).unwrap().utf16;
-    let mut spans = owned.vector(active_spans)?;
+    let mut events = owned.vector(active_spans.saturating_mul(2))?;
+    charge(check, locations.len())?;
     for location in locations {
         if location.anchor {
             continue;
         }
-        for range in location.ranges {
-            let a = (range.bytes[0] as usize).max(start);
-            let b = (range.bytes[1] as usize).min(end);
-            if a < b {
-                spans.push((
-                    coordinates.point(a).unwrap().utf16 - base,
-                    coordinates.point(b).unwrap().utf16 - base,
-                    location.index,
-                ));
-            }
+        let a = (location.range.bytes[0] as usize).max(start);
+        let b = (location.range.bytes[1] as usize).min(end);
+        if a < b {
+            events.push(HighlightEvent {
+                point: coordinates.point(a).unwrap().utf16 - base,
+                index: location.index,
+                starts: true,
+            });
+            events.push(HighlightEvent {
+                point: coordinates.point(b).unwrap().utf16 - base,
+                index: location.index,
+                starts: false,
+            });
         }
     }
-    let mut endpoints: Vec<u32> = owned.vector(spans.len() * 2)?;
-    endpoints.extend(spans.iter().flat_map(|(a, b, _)| [*a, *b]));
-    endpoints.sort_unstable();
-    endpoints.dedup();
-    let mut result: Vec<SearchSnippetHighlight> = owned.vector(endpoints.len())?;
-    for pair in endpoints.windows(2) {
-        charge(check, spans.len() + 1)?;
-        let mut indices: Vec<u32> = owned.vector(spans.len())?;
-        indices.extend(
-            spans
-                .iter()
-                .filter(|(a, b, _)| *a <= pair[0] && pair[1] <= *b)
-                .map(|(_, _, i)| *i),
-        );
-        if indices.is_empty() {
-            continue;
-        }
-        indices.sort_unstable();
-        indices.dedup();
-        if let Some(last) = result.last_mut() {
-            if last.utf16[1] == pair[0] && last.location_indices == indices {
-                last.utf16[1] = pair[1];
-                continue;
+    charge(check, sort_work(events.len()))?;
+    events.sort_unstable_by_key(|e| (e.point, e.index, e.starts));
+    let mut active: Vec<(u32, usize)> = owned.vector(active_spans)?;
+    let mut result: Vec<SearchSnippetHighlight> = owned.vector(events.len())?;
+    charge(check, events.len())?;
+    let mut previous = events.first().map_or(0, |e| e.point);
+    for event in events {
+        if previous < event.point && !active.is_empty() {
+            charge(check, active.len())?;
+            let same = result.last().is_some_and(|last| {
+                last.utf16[1] == previous
+                    && last
+                        .location_indices
+                        .iter()
+                        .copied()
+                        .eq(active.iter().map(|(i, _)| *i))
+            });
+            if same {
+                result.last_mut().unwrap().utf16[1] = event.point;
+            } else {
+                charge(check, active.len())?;
+                let mut indices = owned.vector(active.len())?;
+                indices.extend(active.iter().map(|(i, _)| *i));
+                result.push(SearchSnippetHighlight {
+                    utf16: [previous, event.point],
+                    location_indices: indices,
+                });
             }
         }
-        result.push(SearchSnippetHighlight {
-            utf16: [pair[0], pair[1]],
-            location_indices: indices,
-        });
+        charge(check, log_work(active.len()).saturating_add(1))?;
+        match active.binary_search_by_key(&event.index, |(i, _)| *i) {
+            Ok(position) => {
+                if event.starts {
+                    active[position].1 += 1;
+                } else {
+                    active[position].1 -= 1;
+                    if active[position].1 == 0 {
+                        charge(check, active.len() - position)?;
+                        active.remove(position);
+                    }
+                }
+            }
+            Err(position) if event.starts => {
+                charge(check, active.len() - position)?;
+                active.insert(position, (event.index, 1));
+            }
+            Err(_) => {
+                return Err(SearchError::InvalidDocument(
+                    "Unbalanced snippet highlight interval",
+                ))
+            }
+        }
+        previous = event.point;
     }
     Ok(result)
 }
@@ -1311,41 +1530,64 @@ mod tests {
         let text = format!("{}hit", "x".repeat(1024 * 1024));
         let start = text.len() - 3;
         let matches = matched(vec![occurrence(&text, start, start + 3)]);
-        let mut scan_fences = 0;
-        let output = snippets_checked(
-            &matches,
+        let mut projector = raw_projector(&matches, &text);
+        let prepared_bytes = projector.retained_bytes();
+        let interval_capacity = projector.intervals.capacity();
+        let intervals = projector.intervals.as_ptr();
+        assert!(projector.source_coordinates.is_none());
+        let map_bytes = (text.len() / STRIDE + 2) * std::mem::size_of::<Point>();
+        assert!(prepared_bytes + map_bytes > 32 * 1024);
+        let output = projector.project_checked(
             vec![matches.location(0).unwrap()],
-            SearchDocument {
-                path: "x.md",
-                source: SearchSource::Text(&text),
-                metadata: SearchMetadataInput::NotApplicable,
-            },
             SearchContext::Line,
             32 * 1024,
-            |n| {
-                if n == 0 {
-                    scan_fences += 1;
-                }
-                Ok::<_, ()>(())
-            },
+            |_| Ok::<_, ()>(()),
         );
         assert!(matches!(output, Err(SearchError::Resource(_))));
-        assert_eq!(scan_fences, 0);
-        let unavailable = snippets_checked(
+        // Coordinates::new admits its complete point allocation before its
+        // character loop. This limit rejects that allocation; the prepared
+        // intervals survive unchanged and no source map is installed.
+        assert!(projector.source_coordinates.is_none());
+        assert_eq!(projector.retained_bytes(), prepared_bytes);
+        assert_eq!(projector.intervals.capacity(), interval_capacity);
+        assert_eq!(projector.intervals.as_ptr(), intervals);
+
+        let mut unavailable_units = 0usize;
+        let mut unavailable_projector = SnippetProjector::new_checked(
             &matches,
-            vec![matches.location(0).unwrap()],
             SearchDocument {
                 path: "x.md",
                 source: SearchSource::Unavailable,
                 metadata: SearchMetadataInput::NotApplicable,
             },
-            SearchContext::Line,
             0,
-            |_| Ok::<_, ()>(()),
+            |n| {
+                unavailable_units += n;
+                Ok::<_, ()>(())
+            },
         )
         .unwrap();
+        assert_eq!(unavailable_projector.retained_bytes(), 0);
+        assert!(unavailable_projector.source_coordinates.is_none());
+        let unavailable = unavailable_projector
+            .project_checked(
+                vec![matches.location(0).unwrap()],
+                SearchContext::Line,
+                0,
+                |n| {
+                    unavailable_units += n;
+                    Ok::<_, ()>(())
+                },
+            )
+            .unwrap();
+        assert_eq!(unavailable_projector.retained_bytes(), 0);
+        assert!(unavailable_projector.source_coordinates.is_none());
         assert!(unavailable.snippets.is_empty());
-        assert_eq!(unavailable.locations.len(), 1);
+        assert_eq!(unavailable.locations, vec![matches.location(0).unwrap()]);
+        // Unavailable source uses bounded descriptor work even though this
+        // original locator belongs to a body larger than1MiB. Zero-unit
+        // cancellation callbacks are allowed and are not scan sentinels.
+        assert!(unavailable_units > 0 && unavailable_units < 64);
     }
 
     #[test]
@@ -1435,5 +1677,366 @@ mod tests {
                 matches.location(location.index as usize).unwrap()
             );
         }
+    }
+
+    fn raw_projector<'a>(matches: &'a SearchMatches, source: &'a str) -> SnippetProjector<'a> {
+        SnippetProjector::new_checked(
+            matches,
+            SearchDocument {
+                path: "notes/x.md",
+                source: SearchSource::Text(source),
+                metadata: SearchMetadataInput::NotApplicable,
+            },
+            MAX_OWNED_BYTES,
+            |_| Ok::<_, ()>(()),
+        )
+        .unwrap()
+    }
+    #[test]
+    fn raw_projector_reuses_the_sparse_source_scan_across_chunks() {
+        let prefix = "x".repeat(1024 * 1024);
+        let text = format!("{}{}", prefix, "hit ".repeat(128));
+        let matches = matched(
+            (0..128)
+                .map(|i| occurrence(&text, prefix.len() + i * 4, prefix.len() + i * 4 + 3))
+                .collect(),
+        );
+        let mut projector = raw_projector(&matches, &text);
+        let prepared_bytes = projector.retained_bytes();
+        assert!(projector.source_coordinates.is_none());
+        let mut cold_units = 0usize;
+        let cold = projector
+            .project_checked(
+                vec![matches.location(0).unwrap()],
+                SearchContext::Line,
+                3 * 1024 * 1024,
+                |n| {
+                    cold_units += n;
+                    Ok::<_, ()>(())
+                },
+            )
+            .unwrap();
+        assert_retained(&text, &cold.snippets[0]);
+        let cached_bytes = projector.retained_bytes();
+        let coordinates = projector.source_coordinates.as_ref().unwrap();
+        let cached_points = coordinates.points.as_ptr();
+        let cached_capacity = coordinates.points.capacity();
+        let cached_contents: Vec<_> = coordinates
+            .points
+            .iter()
+            .map(|p| (p.byte, p.utf16, p.scalar))
+            .collect();
+        assert!(cached_bytes > prepared_bytes);
+        let mut warm_units = 0usize;
+        let warm = projector
+            .project_checked(
+                vec![matches.location(0).unwrap()],
+                SearchContext::Line,
+                3 * 1024 * 1024,
+                |n| {
+                    warm_units += n;
+                    Ok::<_, ()>(())
+                },
+            )
+            .unwrap();
+        let source_prepaid = text.len().div_ceil(64) + 1;
+        assert_eq!(cold_units.checked_sub(warm_units), Some(source_prepaid));
+        assert!(warm_units < source_prepaid);
+        assert_eq!(warm.locations, cold.locations);
+        assert_eq!(warm.snippets, cold.snippets);
+        assert_eq!(projector.retained_bytes(), cached_bytes);
+        let coordinates = projector.source_coordinates.as_ref().unwrap();
+        assert_eq!(coordinates.points.as_ptr(), cached_points);
+        assert_eq!(coordinates.points.capacity(), cached_capacity);
+        assert_eq!(
+            coordinates
+                .points
+                .iter()
+                .map(|p| (p.byte, p.utf16, p.scalar))
+                .collect::<Vec<_>>(),
+            cached_contents
+        );
+        assert!(
+            projector.retained_bytes() + cold.retained_bytes() + warm.retained_bytes()
+                < 3 * 1024 * 1024
+        );
+        drop(cold);
+        drop(warm);
+
+        let later = projector
+            .project_checked(
+                vec![matches.location(1).unwrap()],
+                SearchContext::Line,
+                3 * 1024 * 1024,
+                |_| Ok::<_, ()>(()),
+            )
+            .unwrap();
+        assert_eq!(later.snippets[0].primary_location_index, 1);
+        assert_retained(&text, &later.snippets[0]);
+        assert_eq!(projector.retained_bytes(), cached_bytes);
+        assert_eq!(
+            projector
+                .source_coordinates
+                .as_ref()
+                .unwrap()
+                .points
+                .as_ptr(),
+            cached_points
+        );
+    }
+    #[test]
+    fn dense_disjoint_windows_visit_local_intersections_and_preserve_all_snippets() {
+        let text = "hit\n".repeat(1024);
+        let matches = matched(
+            (0..1024)
+                .map(|i| occurrence(&text, i * 4, i * 4 + 3))
+                .collect(),
+        );
+        let mut projector = raw_projector(&matches, &text);
+        let mut units = 0usize;
+        let output = projector
+            .project_checked(
+                (0..64).map(|i| matches.location(i).unwrap()).collect(),
+                SearchContext::Line,
+                MAX_OWNED_BYTES,
+                |n| {
+                    units += n;
+                    Ok::<_, ()>(())
+                },
+            )
+            .unwrap();
+        assert_eq!(output.snippets.len(), 64);
+        assert_eq!(output.locations.len(), 64);
+        // Unchanged64 occurrence-window preparations cost~72k; indexed
+        // associations/coordinates/sweeps and headers add<~70k. This bound
+        // leaves margin; source arithmetic for the former cross-window loops
+        // exceeds400k (an inference, not a measured baseline).
+        assert!(units < 200_000, "dense chunk work {units}");
+        for (index, snippet) in output.snippets.iter().enumerate() {
+            assert_eq!(snippet.text, "hit");
+            assert_eq!(snippet.primary_location_index, index as u32);
+            assert_eq!(snippet.highlights.len(), 1);
+            assert_eq!(snippet.highlights[0].utf16, [0, 3]);
+            assert_eq!(snippet.highlights[0].location_indices, [index as u32]);
+            assert_retained(&text, snippet);
+        }
+    }
+    #[test]
+    fn enclosing_interval_bucket_visits_are_charged_before_pathological_scan() {
+        let text = "hit\n".repeat(512);
+        let mut proofs = vec![occurrence(&text, 0, text.len())];
+        proofs.extend((1..512).map(|i| occurrence(&text, i * 4, i * 4 + 3)));
+        let matches = matched(proofs);
+        let projector = raw_projector(&matches, &text);
+        let window = Window {
+            start: 500 * 4,
+            end: 500 * 4 + 3,
+            primary: 500,
+        };
+        let mut owned = OwnedBudget {
+            used: projector.retained_bytes(),
+            limit: MAX_OWNED_BYTES,
+        };
+        let mut units = 0;
+        let active = active_intersections(
+            &projector.intervals,
+            OriginKey::Source,
+            &window,
+            &matches,
+            &mut owned,
+            &mut |n| {
+                units += n;
+                Ok::<_, ()>(())
+            },
+        )
+        .unwrap();
+        assert_eq!(active.iter().map(|a| a.index).collect::<Vec<_>>(), [0, 500]);
+        assert!(units >= 2 * 501);
+        let mut owned = OwnedBudget {
+            used: projector.retained_bytes(),
+            limit: MAX_OWNED_BYTES,
+        };
+        let mut spent = 0;
+        let stopped = active_intersections(
+            &projector.intervals,
+            OriginKey::Source,
+            &window,
+            &matches,
+            &mut owned,
+            &mut |n| {
+                spent += n;
+                if spent > 700 {
+                    Err("bucket budget")
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert!(matches!(stopped, Err(SearchError::Host("bucket budget"))));
+    }
+    #[test]
+    fn endpoint_sweep_keeps_one_association_for_overlapping_ranges_of_same_key() {
+        let key = "abcdef";
+        let key_match = SearchKeyMatch::Ranges {
+            ranges: vec![range(key, 0, 4), range(key, 2, 6)],
+        };
+        let mut matches = matched(vec![LocationProof::Key {
+            property: 0,
+            key_match: key_match.clone(),
+            count: 1,
+        }]);
+        matches.properties.push(SearchPropertyMatch {
+            key: key.into(),
+            key_match: Some(key_match),
+            array_path: vec![],
+            value: None,
+        });
+        let output = project(
+            &matches,
+            &[0],
+            SearchSource::Unavailable,
+            SearchContext::Line,
+        );
+        assert_eq!(output.snippets[0].highlights.len(), 1);
+        assert_eq!(output.snippets[0].highlights[0].utf16, [0, 6]);
+        assert_eq!(output.snippets[0].highlights[0].location_indices, [0]);
+        assert_eq!(output.locations[0], matches.location(0).unwrap());
+    }
+    #[test]
+    fn persistent_capacities_and_cancel_are_admitted_before_repeated_chunk_work() {
+        let text = format!("{}hit", "x".repeat(1024 * 1024));
+        let start = text.len() - 3;
+        let matches = matched(vec![occurrence(&text, start, start + 3)]);
+        assert!(matches!(
+            SnippetProjector::new_checked(
+                &matches,
+                SearchDocument {
+                    path: "x.md",
+                    source: SearchSource::Text(&text),
+                    metadata: SearchMetadataInput::NotApplicable
+                },
+                1,
+                |_| Ok::<_, ()>(())
+            ),
+            Err(SearchError::Resource(_))
+        ));
+        let mut projector = raw_projector(&matches, &text);
+        let prepared = projector.retained_bytes();
+        assert!(prepared > 0);
+        let rejected = projector.project_checked(
+            vec![matches.location(0).unwrap()],
+            SearchContext::Line,
+            prepared - 1,
+            |_| Ok::<_, ()>(()),
+        );
+        assert!(matches!(rejected, Err(SearchError::Resource(_))));
+        assert!(projector.source_coordinates.is_none());
+        let first = projector
+            .project_checked(
+                vec![matches.location(0).unwrap()],
+                SearchContext::Line,
+                MAX_OWNED_BYTES,
+                |_| Ok::<_, ()>(()),
+            )
+            .unwrap();
+        drop(first);
+        let cached = projector.retained_bytes();
+        let cached_points = projector
+            .source_coordinates
+            .as_ref()
+            .unwrap()
+            .points
+            .as_ptr();
+        let stopped = projector.project_checked(
+            vec![matches.location(0).unwrap()],
+            SearchContext::Line,
+            MAX_OWNED_BYTES,
+            |_| Err("cancelled chunk"),
+        );
+        assert!(matches!(stopped, Err(SearchError::Host("cancelled chunk"))));
+        assert_eq!(projector.retained_bytes(), cached);
+        assert_eq!(
+            projector
+                .source_coordinates
+                .as_ref()
+                .unwrap()
+                .points
+                .as_ptr(),
+            cached_points
+        );
+    }
+
+    #[test]
+    fn indexed_zero_points_include_both_window_boundaries_without_adjacent_positive_span() {
+        let text = "hitx";
+        let matches = matched(vec![
+            occurrence(text, 0, 3),
+            LocationProof::Source {
+                range: range(text, 0, 0),
+                kind: SearchContentKind::Anchor,
+                count: 0,
+            },
+            LocationProof::Source {
+                range: range(text, 3, 3),
+                kind: SearchContentKind::Anchor,
+                count: 0,
+            },
+            occurrence(text, 3, 4),
+        ]);
+        let projector = raw_projector(&matches, text);
+        let mut owned = OwnedBudget {
+            used: projector.retained_bytes(),
+            limit: MAX_OWNED_BYTES,
+        };
+        let active = active_intersections(
+            &projector.intervals,
+            OriginKey::Source,
+            &Window {
+                start: 0,
+                end: 3,
+                primary: 0,
+            },
+            &matches,
+            &mut owned,
+            &mut |_| Ok::<_, ()>(()),
+        )
+        .unwrap();
+        let mut indices: Vec<_> = active.iter().map(|a| a.index).collect();
+        indices.sort_unstable();
+        assert_eq!(indices, [0, 1, 2]);
+    }
+    #[test]
+    fn indexed_empty_property_value_keeps_zero_count_primary_without_highlight() {
+        let mut matches = matched(vec![LocationProof::Value {
+            property: 0,
+            range: range("", 0, 0),
+            count: 0,
+        }]);
+        matches.properties.push(SearchPropertyMatch {
+            key: "empty".into(),
+            key_match: None,
+            array_path: vec![1],
+            value: Some(SearchPropertyValueMatch {
+                text: "".into(),
+                ranges: vec![range("", 0, 0)],
+            }),
+        });
+        let output = project(&matches, &[0], SearchSource::NotText, SearchContext::Line);
+        assert_eq!(output.locations.len(), 1);
+        assert_eq!(
+            output.locations[0].role,
+            super::super::SearchLocationRole::Predicate
+        );
+        assert_eq!(output.locations[0].occurrences, 0);
+        assert_eq!(output.snippets.len(), 1);
+        assert_eq!(
+            output.snippets[0].origin,
+            SearchSnippetOrigin::PropertyValue
+        );
+        assert_eq!(output.snippets[0].text, "");
+        assert_eq!(output.snippets[0].array_path, Some(vec![1]));
+        assert_eq!(output.snippets[0].primary_location_index, 0);
+        assert!(output.snippets[0].highlights.is_empty());
+        assert_retained("", &output.snippets[0]);
     }
 }
