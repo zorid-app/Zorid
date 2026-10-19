@@ -15,6 +15,23 @@ accepted S1.2 work can address conservative dependency-aware graph preparation,
 indexed resolution and bounded generation-keyed reuse, preserving tie/normalization
 semantics. No engine optimization or budget change has been implemented here.
 
+## S1 normal storage repeatedly validates metadata graph views — measured setup bottleneck
+
+The first bounded normal-family10k baseline stops after32 passes with224 live
+files admitted (inventory3030/unfinished), before indexing. Limits remain5s soft
+per pass/30s hard per command; all10,003 physical source files and executable hashes
+remain exact. Evidence:
+`/private/tmp/zorid-s1-cli-family-release-d0de1c83-10000/report.json`.
+
+One authorized1s setup sample attributes repeated work to
+`family_materialization::candidate` → `check_retained_content` →
+`MetadataState::metadata_view` during command preparation and commit. This is one
+sample window, not a whole-run fraction. It differs from legacy import's full
+SQL snapshot loading, so legacy partial-throughput gains are not desktop startup
+speedup evidence. Owner `architecture_core_audit` is investigating safe reuse of
+validated immutable views within the existing proof/head/CAS boundaries. No
+family-path optimization or cache authority change is implemented yet.
+
 ## S1 native setup scales with repeated full-store work — two fixes integrated
 
 The indexed unresolved-observation lookup is integrated through `2c53a98d`

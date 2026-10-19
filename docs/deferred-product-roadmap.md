@@ -20,13 +20,14 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   is established. Pure-core10k and actual-browser100 passed within their stated
   scopes. Generated Base10k graph-budget rejection is source-predicted, not yet
   executed.
-- **Active owner/slot:** `s1_execution_audit` next runs the normal-family10k
-  admission baseline with existing d0 binaries (5s passes,32 passes,30s per command;
-  no profiling/retry/cap increases). Matching release build, family100, legacy10k
-  and corrected Electron100 are terminal with all owned processes gone.
-  `storage_sqlite_impl` is auditing the remaining complete-snapshot metadata loader
-  cost; no planner-invariant/cache/schema change is approved. Root is sole main
-  integrator; no push.
+- **Active owner/slot:** `s1_query_audit` now release-builds/runs generated Base100
+  then the bounded10k outcome. Normal-family10k is terminal incomplete at32 passes:
+  224 live files admitted, inventory3030/unfinished, no index/query stage, all
+  sources/hashes exact and all owned PIDs gone. Its one authorized sample points
+  to repeated metadata graph-view validation, unlike the legacy SQL bottleneck.
+  `architecture_core_audit` owns that read-only family-path investigation.
+  Store bulk-loader source through `7858cb20` is reviewed but untested; no planner,
+  mutation-cache or schema change is approved. Root is sole main integrator; no push.
 - **Desktop verification:** corrected normal100 passes exact save/file/native/
   checkpoint, fresh search and retained warm index/revision gates. Three apps quit
   normally; source/build hashes unchanged, no survivors. Evidence:
@@ -34,7 +35,7 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   through `8a03b0d5`; earlier CDP multiline-loss diagnosis is retained separately.
   This is hidden macOS correctness scope, not10k or foreground performance parity.
 - **Other isolated work:** generated-Base baseline `ffaee3ad` is source reviewed,
-  Node10 checks pass; real Rust100/10k runs pending. Opt-in process resource
+  Node10 checks pass; real Rust100/10k slot is active. Opt-in process resource
   tooling through `c2f2b75a` is source reviewed; child/time tests and real smokes
   pending. Source-only approval is not runtime acceptance.
 - **Boundaries:** serialize heavy builds/timing on the8GB Mac. Current runtime
