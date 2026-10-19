@@ -122,6 +122,19 @@ impl PreviewSnapshot {
         check(1)?;
         Ok(PreviewFactsView { snapshot: self })
     }
+    /// Check exact retained text bytes for a committed member of this capture.
+    /// Pending/unknown IDs return MissingSource; excluded records reject text.
+    /// This is an integrity comparison, not source-read or publication authority.
+    /// The host bounds/charges the supplied bytes before this synchronous digest
+    /// calculation. Membership uses the sealed rows' existing binary lookup.
+    pub fn check_text(&self, entry_id: &EntryId, bytes: &[u8]) -> Result<(), IndexError> {
+        let record = self.record(entry_id).ok_or(IndexError::MissingSource)?;
+        // Impossible length/mode matches need no source scan or digest work.
+        if record.text_digest().is_none() || record.text_bytes() != bytes.len() {
+            return Err(IndexError::ContentMismatch);
+        }
+        record.check_text(bytes)
+    }
     pub(crate) fn manifest(&self) -> &Manifest {
         &self.backing.manifest
     }
@@ -254,6 +267,104 @@ impl PreviewCaptureOwner {
             + arc_bytes::<CaptureIdentity>()
             + self.identity.owner_nonce.as_str().len()
             + self.identity.stage_id.as_str().len()
+    }
+    /// Capture every prepared row without materializing or sorting ID copies.
+    /// Hosts MUST call only after a successful durable pump commit has validated
+    /// that every builder row belongs to persisted committed membership. If the
+    /// builder also contains rows awaiting commit, use capture_checked with the
+    /// exact committed subset instead. This API does not certify durability.
+    /// Stage facts remain shared; only the bounded row-handle vector is copied.
+    pub fn capture_prepared_checked<E>(
+        &mut self,
+        builder: &GenerationBuilder,
+        owned_byte_limit: usize,
+        mut check: impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<PreviewSnapshot, PreviewCaptureError<E>> {
+        charge(&mut check, 1)?;
+        if !Arc::ptr_eq(&self.manifest, builder.preview_manifest()) {
+            return Err(PreviewCaptureError::Index(IndexError::StaleSource));
+        }
+        let next_serial = self
+            .next_serial
+            .checked_add(1)
+            .ok_or(PreviewCaptureError::Resource(
+                "preview capture serial exhausted",
+            ))?;
+        let mut budget = CaptureBudget {
+            used: 0,
+            limit: owned_byte_limit.min(MAX_SEARCH_OWNED_BYTES),
+        };
+        let base = size_of::<PreviewSnapshot>()
+            .checked_add(arc_bytes::<PreviewBacking>())
+            .ok_or(PreviewCaptureError::Resource("preview capture bytes"))?;
+        budget.admit::<E>(base)?;
+        charge(&mut check, self.manifest.entries().len().saturating_add(1))?;
+        let total = self
+            .manifest
+            .entries()
+            .iter()
+            .filter(|entry| entry.kind == EntryKind::File)
+            .count();
+        let records = builder.preview_records_by_id();
+        let count = records.len();
+        if count > total {
+            return Err(PreviewCaptureError::Index(IndexError::InvalidRecord));
+        }
+        let total = u32::try_from(total)
+            .map_err(|_| PreviewCaptureError::Resource("preview file count"))?;
+        // Reserve typed iterator visits before row allocation/iteration. Each
+        // actual Arc acquisition also has its own pre-copy cancellation check.
+        charge(&mut check, count.saturating_add(1))?;
+        let mut rows = budget.vector(count)?;
+        let lookup_work = log_work(self.manifest.entries().len())
+            .saturating_add(1)
+            .saturating_mul(5);
+        for record in records {
+            charge(&mut check, lookup_work)?;
+            let witness = record.witness();
+            let entry = self
+                .manifest
+                .entry(&witness.entry().id)
+                .ok_or(PreviewCaptureError::Index(IndexError::MissingSource))?;
+            if entry.kind != EntryKind::File {
+                return Err(PreviewCaptureError::Index(IndexError::InvalidTarget));
+            }
+            let comparison_bytes = entry
+                .path
+                .as_str()
+                .len()
+                .saturating_add(witness.entry().path.as_str().len())
+                .saturating_add(2 * 128 * 3 + 2 * 20);
+            charge(&mut check, comparison_bytes.div_ceil(64).saturating_add(8))?;
+            if witness.source() != self.manifest.source() || witness.entry() != entry {
+                return Err(PreviewCaptureError::Index(IndexError::StaleSource));
+            }
+            charge(&mut check, 1)?;
+            rows.push(record.clone());
+        }
+        let prepared = u32::try_from(rows.len())
+            .map_err(|_| PreviewCaptureError::Resource("preview file count"))?;
+        charge(&mut check, 3)?;
+        let backing = Arc::new(PreviewBacking {
+            manifest: self.manifest.clone(),
+            rows,
+            progress: PreviewProgress {
+                prepared_files: prepared,
+                total_files: total,
+                pending_files: total - prepared,
+            },
+        });
+        let snapshot = PreviewSnapshot {
+            id: PreviewSnapshotId {
+                owner: self.identity.clone(),
+                serial: self.next_serial,
+                backing: Arc::downgrade(&backing),
+            },
+            backing,
+        };
+        charge(&mut check, 0)?;
+        self.next_serial = next_serial;
+        Ok(snapshot)
     }
     /// `committed_ids` is the exact membership validated by the trusted adapter
     /// against persisted staging rows AFTER its durable pump commit. It is not

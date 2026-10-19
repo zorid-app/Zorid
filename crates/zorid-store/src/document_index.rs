@@ -5,11 +5,12 @@ use crate::document_cache::{DocumentCache, DocumentTransaction};
 use crate::document_parse_cache;
 use zorid_core::OperationId;
 use zorid_index::{
-    document_extraction_version, EntryWitness, Exclusion, ExtractionMode, Generation, GenerationBuilder,
-    IndexError, IndexRecord, IndexSnapshotId, LiteralPage, LiteralPageBuilder, LiteralQuery,
-    LiteralToken, Manifest, MetadataProjection, MetadataRequest, PublicationFence,
-    ParseCacheOutcome, SemanticVersions, SourceSnapshotId, SourceWatermark, INDEX_SCHEMA_VERSION,
-    LITERAL_QUERY_VERSION, MAX_GENERATION_METADATA_BYTES, MAX_PUMP_BYTES, RESOLVER_VERSION,
+    document_extraction_version, EntryWitness, Exclusion, ExtractionMode, Generation,
+    GenerationBuilder, IndexError, IndexRecord, IndexSnapshotId, LiteralPage, LiteralPageBuilder,
+    LiteralQuery, LiteralToken, Manifest, MetadataProjection, MetadataRequest, PublicationFence,
+    ParseCacheOutcome, PreviewCaptureError, PreviewCaptureOwner, PreviewSnapshot, SemanticVersions,
+    SourceSnapshotId, SourceWatermark, INDEX_SCHEMA_VERSION, LITERAL_QUERY_VERSION,
+    MAX_GENERATION_METADATA_BYTES, MAX_PUMP_BYTES, RESOLVER_VERSION,
 };
 
 /// Control is tiny; each generation's header/manifest plus encoded facts share
@@ -271,6 +272,25 @@ pub struct DocumentIndexProgress {
     pub parse_cache: DocumentParseCacheProgress,
     pub total_documents: usize,
     pub ready: bool,
+}
+/// Optional caller-owned capture request. These labels supply no authority;
+/// the capture binds the actual restored builder/manifest and private backing.
+/// The host supplies a fresh incarnation nonce and charges retained captures in
+/// its existing preview/query owner, tightening the shared capture byte cap.
+#[derive(Clone, Debug)]
+pub struct DocumentPreviewCaptureRequest {
+    pub owner_nonce: OperationId,
+    pub stage_id: OperationId,
+    pub owned_byte_limit: usize,
+}
+/// Durable pump progress cannot become ambiguous merely because optional
+/// post-commit capture runs out of bytes/work or is cancelled. The outer error
+/// concerns the existing pump; a requested capture has its separate outcome.
+/// This data is not an ordinary pin or a current-source admission certificate.
+#[derive(Debug)]
+pub struct DocumentIndexPumpResult<E> {
+    pub progress: DocumentIndexProgress,
+    pub preview: Option<Result<PreviewSnapshot, PreviewCaptureError<E>>>,
 }
 #[derive(Debug, Serialize)]
 #[serde(
@@ -1113,6 +1133,28 @@ impl Store {
         &mut self,
         stage: &DocumentIndexStage,
     ) -> IndexResult<DocumentIndexProgress> {
+        self.pump_document_index_with_preview(stage, None, |_| {
+            Ok::<(), std::convert::Infallible>(())
+        })
+        .map(|result| result.progress)
+    }
+    /// Reuse this pump's already restored builder only after its durable cache
+    /// transaction commits. No second restore/source read or query publication
+    /// occurs. `check` controls ONLY optional post-commit capture work; existing
+    /// pump IO/commit semantics are unchanged. None performs no capture work.
+    /// The returned capture is immutable data; native/browser admission must
+    /// still verify its live stage/source/client before and after every query.
+    /// The byte request covers new capture/identity allocations, not the
+    /// already restored stage facts/manifest. Returning a capture retains that
+    /// shared stage backing after this builder drops; consumers must retain
+    /// its separate stage/generation component admission too. This is not a
+    /// global owner pool or a total retained-heap/RSS guarantee.
+    pub fn pump_document_index_with_preview<E>(
+        &mut self,
+        stage: &DocumentIndexStage,
+        capture: Option<DocumentPreviewCaptureRequest>,
+        check: impl FnMut(usize) -> Result<(), E>,
+    ) -> IndexResult<DocumentIndexPumpResult<E>> {
         let (h, mut b, previous) = {
             let tx = self.document_transaction(TransactionBehavior::Deferred)?;
             let h = header(&tx, &stage.snapshot)?;
@@ -1307,7 +1349,30 @@ impl Store {
             )?;
         }
         tx.commit()?;
-        Ok(progress)
+        // All rows in this exact restored builder are now persisted: old rows
+        // were restored from the stage, and this pump's added rows committed
+        // above. Failed commit exits before any capture callback/allocation.
+        let preview = capture.map(|request| {
+            let mut check = check;
+            check(1).map_err(PreviewCaptureError::Host)?;
+            // This producer creates a fresh capture incarnation rather than
+            // borrowing a long-lived owner's already admitted identity. Reserve
+            // its Arc/header and retained token payloads before allocation.
+            let identity_bytes = std::mem::size_of::<DocumentPreviewCaptureRequest>()
+                .saturating_add(8 * std::mem::size_of::<usize>())
+                .saturating_add(request.owner_nonce.as_str().len())
+                .saturating_add(request.stage_id.as_str().len());
+            let capture_bytes = request
+                .owned_byte_limit
+                .checked_sub(identity_bytes)
+                .filter(|_| request.owned_byte_limit <= zorid_index::MAX_SEARCH_OWNED_BYTES)
+                .ok_or(PreviewCaptureError::Resource(
+                    "preview identity byte budget",
+                ))?;
+            PreviewCaptureOwner::new(request.owner_nonce, request.stage_id, &b)
+                .capture_prepared_checked(&b, capture_bytes, check)
+        });
+        Ok(DocumentIndexPumpResult { progress, preview })
     }
     pub fn publish_document_index(
         &mut self,
@@ -1470,6 +1535,10 @@ impl Store {
         Ok(result)
     }
 }
+
+#[cfg(test)]
+#[path = "document_preview_tests.rs"]
+mod preview_capture_tests;
 
 #[cfg(test)]
 mod cache_snapshot_tests {

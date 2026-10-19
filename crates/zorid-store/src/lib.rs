@@ -24,7 +24,8 @@ pub use blob_read::{
 };
 pub use document_index::{
     DocumentIndexError, DocumentIndexProgress, DocumentIndexStage, DocumentIndexStatus,
-    DocumentManifest, DocumentQueryPin, DocumentSourceRead, DocumentStageProgress,
+    DocumentIndexPumpResult, DocumentManifest, DocumentPreviewCaptureRequest, DocumentQueryPin,
+    DocumentSourceRead, DocumentStageProgress,
 };
 pub use entry_content::FAMILY_MAX_INLINE_BYTES;
 pub use family_external_create::ExternalCreateIntent;

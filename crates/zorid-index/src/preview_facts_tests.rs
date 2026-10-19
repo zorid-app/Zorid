@@ -321,3 +321,275 @@ fn facts_view_128_of_100k_has_constant_admission_and_visits_only_prepared_rows()
     assert_eq!(ids, selected);
     assert_eq!(Arc::strong_count(&snapshot.backing.rows[0]), strong);
 }
+
+#[test]
+fn preview_check_text_preserves_exact_utf8_bom_crlf_astral_and_empty_bytes() {
+    for source in ["", "plain UTF8 text\n", "\u{feff}heading\r\n😀 non-BMP\r\n"] {
+        let mut builder = small();
+        text(&mut builder, "z", source, false);
+        let snapshot = capture(&builder, &["z"]);
+        assert_eq!(snapshot.check_text(&id("z"), source.as_bytes()), Ok(()));
+        assert_eq!(
+            snapshot.check_text(&id("z"), format!("{source}x").as_bytes()),
+            Err(IndexError::ContentMismatch)
+        );
+        if !source.is_empty() {
+            let mut same_length = source.as_bytes().to_vec();
+            same_length[0] ^= 1;
+            assert_eq!(same_length.len(), source.len());
+            assert_eq!(
+                snapshot.check_text(&id("z"), &same_length),
+                Err(IndexError::ContentMismatch)
+            );
+        }
+        if source.starts_with('\u{feff}') {
+            let normalized = source.trim_start_matches('\u{feff}').replace("\r\n", "\n");
+            assert_eq!(
+                snapshot.check_text(&id("z"), normalized.as_bytes()),
+                Err(IndexError::ContentMismatch)
+            );
+        }
+    }
+}
+
+#[test]
+fn preview_check_text_rejects_pending_unknown_folder_and_excluded_members() {
+    let mut builder = small();
+    text(&mut builder, "z", "ready", false);
+    text(
+        &mut builder,
+        "pending",
+        "already added but not committed",
+        false,
+    );
+    let witness = builder.manifest().witness(&id("a")).unwrap();
+    builder
+        .add(IndexRecord::excluded(witness, Exclusion::Binary))
+        .unwrap();
+    let snapshot = capture(&builder, &["a", "z"]);
+    assert_eq!(
+        snapshot.check_text(&id("pending"), b"already added but not committed"),
+        Err(IndexError::MissingSource)
+    );
+    for name in ["pending", "unknown", "folder"] {
+        assert_eq!(
+            snapshot.check_text(&id(name), b"ready"),
+            Err(IndexError::MissingSource)
+        );
+    }
+    assert_eq!(
+        snapshot.check_text(&id("a"), b""),
+        Err(IndexError::ContentMismatch)
+    );
+    assert_eq!(
+        snapshot.check_text(&id("a"), b"ready"),
+        Err(IndexError::ContentMismatch)
+    );
+
+    let mut unreadable = small();
+    let witness = unreadable.manifest().witness(&id("z")).unwrap();
+    unreadable
+        .add(IndexRecord::excluded(witness, Exclusion::Unreadable))
+        .unwrap();
+    let snapshot = capture(&unreadable, &["z"]);
+    assert_eq!(
+        snapshot.check_text(&id("z"), b""),
+        Err(IndexError::ContentMismatch)
+    );
+    assert_eq!(
+        snapshot.check_text(&id("z"), b"ready"),
+        Err(IndexError::ContentMismatch)
+    );
+}
+
+#[test]
+fn preview_check_text_remains_bound_to_old_membership_after_growth_and_finish() {
+    let mut builder = small();
+    text(&mut builder, "z", "\u{feff}old 😀\r\n", false);
+    let mut owner =
+        PreviewCaptureOwner::new(op("integrity-incarnation"), op("integrity-stage"), &builder);
+    let old = owner
+        .capture_checked(&builder, &[id("z")], MAX_SEARCH_OWNED_BYTES, ok)
+        .unwrap();
+    text(&mut builder, "a", "new", false);
+    text(&mut builder, "pending", "later", false);
+    let new = owner
+        .capture_checked(
+            &builder,
+            &[id("a"), id("z"), id("pending")],
+            MAX_SEARCH_OWNED_BYTES,
+            ok,
+        )
+        .unwrap();
+    assert_ne!(old.id(), new.id());
+    assert_eq!(old.source(), new.source());
+    assert_eq!(
+        old.check_text(&id("a"), b"new"),
+        Err(IndexError::MissingSource)
+    );
+    assert_eq!(new.check_text(&id("a"), b"new"), Ok(()));
+    let prepared = builder.finish().unwrap();
+    assert_eq!(
+        old.check_text(&id("z"), "\u{feff}old 😀\r\n".as_bytes()),
+        Ok(())
+    );
+    assert_eq!(
+        new.check_text(&id("z"), "\u{feff}old 😀\r\n".as_bytes()),
+        Ok(())
+    );
+    assert_eq!(
+        old.check_text(&id("pending"), b"later"),
+        Err(IndexError::MissingSource)
+    );
+    assert_eq!(new.check_text(&id("pending"), b"later"), Ok(()));
+    assert_eq!(
+        prepared
+            .generation()
+            .record(&id("a"))
+            .unwrap()
+            .check_text(b"new"),
+        Ok(())
+    );
+}
+
+#[test]
+fn capture_prepared_matches_explicit_committed_rows_progress_and_shared_facts() {
+    fn compare(owner: &mut PreviewCaptureOwner, builder: &GenerationBuilder, names: &[&str]) {
+        let mut direct_work = 0usize;
+        let direct = owner
+            .capture_prepared_checked(builder, MAX_SEARCH_OWNED_BYTES, |n| {
+                direct_work += n;
+                Ok::<_, &'static str>(())
+            })
+            .unwrap();
+        let ids: Vec<_> = names.iter().map(|name| id(name)).collect();
+        let mut explicit_work = 0usize;
+        let explicit = owner
+            .capture_checked(builder, &ids, MAX_SEARCH_OWNED_BYTES, |n| {
+                explicit_work += n;
+                Ok::<_, &'static str>(())
+            })
+            .unwrap();
+        assert_eq!(direct.progress(), explicit.progress());
+        assert_eq!(direct.source(), explicit.source());
+        assert_eq!(
+            direct.id().capture_serial() + 1,
+            explicit.id().capture_serial()
+        );
+        assert!(!direct.same_capture(&explicit));
+        assert_eq!(direct.progress().total_files, 3);
+        let direct_view = direct.facts_view_checked(&mut ok).unwrap();
+        let explicit_view = explicit.facts_view_checked(&mut ok).unwrap();
+        let direct_rows: Vec<_> = direct_view.rows().collect();
+        let explicit_rows: Vec<_> = explicit_view.rows().collect();
+        assert_eq!(direct_rows.len(), names.len());
+        assert_eq!(direct_rows.len(), explicit_rows.len());
+        let mut expected = names.to_vec();
+        expected.sort();
+        assert_eq!(
+            direct_rows
+                .iter()
+                .map(|row| row.entry_id().as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        for (left, right) in direct_rows.iter().zip(&explicit_rows) {
+            assert_eq!(left.entry_id(), right.entry_id());
+            assert_eq!(left.revision(), right.revision());
+            assert_eq!(left.path(), right.path());
+            assert_eq!(left.source_text_bytes(), right.source_text_bytes());
+            assert!(std::ptr::eq(
+                left.metadata().unwrap(),
+                right.metadata().unwrap()
+            ));
+        }
+        // Declared callback work includes the same namespace count and exact
+        // witness validation. The direct path omits ID sorting and map relookup.
+        assert!(direct_work <= explicit_work);
+        if !names.is_empty() {
+            assert!(direct_work < explicit_work);
+        }
+    }
+    let mut builder = small();
+    let mut owner =
+        PreviewCaptureOwner::new(op("direct-incarnation"), op("direct-stage"), &builder);
+    compare(&mut owner, &builder, &[]);
+    text(&mut builder, "z", "# first\n", true);
+    compare(&mut owner, &builder, &["z"]);
+    text(&mut builder, "a", "# second\n", true);
+    text(&mut builder, "pending", "# third\n", true);
+    compare(&mut owner, &builder, &["z", "pending", "a"]);
+}
+
+#[test]
+fn capture_prepared_budget_and_cancellation_do_not_advance_serial_or_retain_partial_rows() {
+    let mut builder = small();
+    text(&mut builder, "z", "# first", true);
+    let mut owner =
+        PreviewCaptureOwner::new(op("direct-incarnation"), op("direct-stage"), &builder);
+    let original = owner
+        .capture_prepared_checked(&builder, MAX_SEARCH_OWNED_BYTES, ok)
+        .unwrap();
+    let serial = owner.next_serial;
+    let strong = Arc::strong_count(&original.backing.rows[0]);
+    assert!(matches!(
+        owner.capture_prepared_checked(&builder, 0, ok),
+        Err(PreviewCaptureError::Resource(_))
+    ));
+    assert_eq!(owner.next_serial, serial);
+    assert!(matches!(
+        owner.capture_prepared_checked(&builder, MAX_SEARCH_OWNED_BYTES, |_| Err("before")),
+        Err(PreviewCaptureError::Host("before"))
+    ));
+    assert_eq!(owner.next_serial, serial);
+    assert!(matches!(
+        owner.capture_prepared_checked(&builder, MAX_SEARCH_OWNED_BYTES, |n| if n == 0 {
+            Err("after copies")
+        } else {
+            Ok(())
+        }),
+        Err(PreviewCaptureError::Host("after copies"))
+    ));
+    assert_eq!(owner.next_serial, serial);
+    assert_eq!(Arc::strong_count(&original.backing.rows[0]), strong);
+    let next = owner
+        .capture_prepared_checked(&builder, MAX_SEARCH_OWNED_BYTES, ok)
+        .unwrap();
+    assert_eq!(next.id().capture_serial(), serial);
+    assert_ne!(original.id(), next.id());
+    assert_eq!(original.check_text(&id("z"), b"# first"), Ok(()));
+
+    let mut exhausted =
+        PreviewCaptureOwner::new(op("exhausted-incarnation"), op("direct-stage"), &builder);
+    exhausted.next_serial = u64::MAX;
+    assert!(matches!(
+        exhausted.capture_prepared_checked(&builder, MAX_SEARCH_OWNED_BYTES, ok),
+        Err(PreviewCaptureError::Resource(
+            "preview capture serial exhausted"
+        ))
+    ));
+    assert_eq!(exhausted.next_serial, u64::MAX);
+}
+
+#[test]
+fn capture_prepared_rejects_other_builder_backing_without_changing_existing_capture() {
+    let mut builder = small();
+    text(&mut builder, "z", "first", false);
+    let mut owner =
+        PreviewCaptureOwner::new(op("direct-incarnation"), op("direct-stage"), &builder);
+    let original = owner
+        .capture_prepared_checked(&builder, MAX_SEARCH_OWNED_BYTES, ok)
+        .unwrap();
+    let serial = owner.next_serial;
+    let foreign = small();
+    assert_eq!(builder.manifest().source(), foreign.manifest().source());
+    assert_eq!(builder.manifest().entries(), foreign.manifest().entries());
+    assert!(matches!(
+        owner.capture_prepared_checked(&foreign, MAX_SEARCH_OWNED_BYTES, ok),
+        Err(PreviewCaptureError::Index(IndexError::StaleSource))
+    ));
+    assert_eq!(owner.next_serial, serial);
+    assert_eq!(original.progress().prepared_files, 1);
+    assert_eq!(original.progress().pending_files, 2);
+    assert_eq!(original.check_text(&id("z"), b"first"), Ok(()));
+}

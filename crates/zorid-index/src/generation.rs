@@ -243,6 +243,9 @@ impl GenerationBuilder {
     pub(crate) fn preview_record(&self, id: &EntryId) -> Option<&Arc<IndexRecord>> {
         self.records.get(id)
     }
+    pub(crate) fn preview_records_by_id(&self) -> impl ExactSizeIterator<Item = &Arc<IndexRecord>> {
+        self.records.values()
+    }
     pub fn prepared_records(&self) -> usize {
         self.records.len()
     }
