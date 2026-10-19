@@ -95,6 +95,12 @@ fn assert_matches_points(store: &Store) {
             point_states(&tx, include_deleted).unwrap()
         );
     }
+    let expected = point_states(&tx, false)
+        .unwrap()
+        .into_iter()
+        .map(|state| read_metadata_row(&tx, &state.id).unwrap().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(read_visible_metadata(&tx).unwrap(), expected);
     tx.commit().unwrap();
 }
 // All authoritative table values, including bodies, receipts, retained proofs
@@ -262,6 +268,7 @@ fn every_visible_row_keeps_canonical_and_content_checks_before_mutation() {
                 "{sql}"
             );
         }
+        assert!(read_visible_metadata(&store.connection).is_err(), "{sql}");
         assert!(
             store
                 .apply(&create("unrelated", "unrelated.md", EntryKind::File))
@@ -318,6 +325,7 @@ fn bounds_precede_string_getters_and_original_sql_types_are_preserved() {
         for error in [
             read_metadata_row(&store.connection, &EntryId::new("file").unwrap()).unwrap_err(),
             read_states(&store.connection, true).unwrap_err(),
+            read_visible_metadata(&store.connection).unwrap_err(),
         ] {
             if bounds_error {
                 assert!(
@@ -462,6 +470,10 @@ fn graph_references_keep_owner_digest_and_immutable_source_checks() {
                 "{tamper}"
             );
         }
+        assert!(
+            read_visible_metadata(&store.connection).is_err(),
+            "{tamper}"
+        );
         assert_eq!(authority(&store), before, "{tamper}");
     }
 }

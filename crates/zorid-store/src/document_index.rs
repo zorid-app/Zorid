@@ -422,13 +422,7 @@ fn capture_authority(tx: &Connection) -> IndexResult<DocumentManifest> {
     if minimum < 0 || minimum as u64 > MAX_GENERATION_METADATA_BYTES as u64 {
         return Err(IndexError::GenerationLimit.into());
     }
-    let entries = read_states(tx, false)?
-        .into_iter()
-        .map(|state| {
-            entry_content::read_metadata_row(tx, &state.id)?
-                .ok_or_else(|| StoreError::Corrupt("manifest entry missing".into()))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let entries = entry_content::read_visible_metadata(tx)?;
     let presentations = entries
         .iter()
         .map(|e| presentation::presentation(tx, &e.state))
@@ -1313,6 +1307,142 @@ mod cache_snapshot_tests {
         let stage = store.begin_document_index().unwrap();
         while !store.pump_document_index(&stage).unwrap().ready {}
         store.publish_document_index(&stage).unwrap();
+    }
+
+    // Same connection-local trace pattern as the retained Text tests. The Box
+    // stays live until Drop unregisters the callback, including assertion panic.
+    struct CaptureReads<'a> {
+        connection: &'a Connection,
+        counts: Box<std::cell::Cell<(usize, usize)>>,
+    }
+    impl<'a> CaptureReads<'a> {
+        fn new(connection: &'a Connection) -> Self {
+            unsafe extern "C" fn observe(
+                event: u32,
+                context: *mut std::ffi::c_void,
+                _statement: *mut std::ffi::c_void,
+                sql: *mut std::ffi::c_void,
+            ) -> i32 {
+                if event == rusqlite::ffi::SQLITE_TRACE_STMT && !context.is_null() && !sql.is_null()
+                {
+                    // SQLite owns the synchronous NUL-terminated statement; the
+                    // guard owns this stable Cell. No allocation/panic here.
+                    let bytes = unsafe { std::ffi::CStr::from_ptr(sql.cast()) }.to_bytes();
+                    let counts = unsafe { &*context.cast::<std::cell::Cell<(usize, usize)>>() };
+                    let (bulk, point) = counts.get();
+                    if bytes.starts_with(b"SELECT\n    length(content),") {
+                        counts.set((bulk.saturating_add(1), point));
+                    } else if bytes.starts_with(b"SELECT length(content),length(CAST(content_ref AS BLOB))")
+                        || bytes.starts_with(b"SELECT path,deleted,state,content_ref,content_digest FROM entries WHERE id=") {
+                        counts.set((bulk, point.saturating_add(1)));
+                    }
+                }
+                0
+            }
+            let guard = Self {
+                connection,
+                counts: Box::new(std::cell::Cell::new((0, 0))),
+            };
+            let status = unsafe {
+                rusqlite::ffi::sqlite3_trace_v2(
+                    connection.handle(),
+                    rusqlite::ffi::SQLITE_TRACE_STMT,
+                    Some(observe),
+                    (&*guard.counts as *const std::cell::Cell<(usize, usize)>)
+                        .cast_mut()
+                        .cast(),
+                )
+            };
+            assert_eq!(status, rusqlite::ffi::SQLITE_OK);
+            guard
+        }
+    }
+    impl Drop for CaptureReads<'_> {
+        fn drop(&mut self) {
+            unsafe {
+                rusqlite::ffi::sqlite3_trace_v2(
+                    self.connection.handle(),
+                    0,
+                    None,
+                    std::ptr::null_mut(),
+                );
+            }
+        }
+    }
+    #[test]
+    fn capture_keeps_one_checked_metadata_scan_and_exact_point_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("store.sqlite")).unwrap();
+        for name in ["z", "A", "a", "hidden", "deleted", "folder"] {
+            let mut request = create(name);
+            if name == "folder" {
+                if let Mutation::Create { kind, content, .. } = &mut request.mutation {
+                    *kind = EntryKind::Folder;
+                    *content = None;
+                }
+            }
+            store.apply(&request).unwrap();
+        }
+        let deleted = store
+            .read_metadata(&EntryId::new("deleted").unwrap())
+            .unwrap()
+            .unwrap()
+            .state;
+        store
+            .apply(&MutationRequest {
+                operation_id: OperationId::new("delete").unwrap(),
+                mutation: Mutation::Delete {
+                    id: deleted.id,
+                    expected: deleted.revision,
+                    recursive: false,
+                },
+            })
+            .unwrap();
+        store
+            .connection
+            .execute("UPDATE entries SET visible=0 WHERE id='hidden'", [])
+            .unwrap();
+        let tx = store.connection.unchecked_transaction().unwrap();
+        let trace = CaptureReads::new(&tx);
+        let actual = capture_authority(&tx).unwrap();
+        assert_eq!(
+            trace.counts.get(),
+            (1, 0),
+            "one bulk metadata scan and no point reloads"
+        );
+        drop(trace);
+        // Independent original point reader over the same transaction, including
+        // presentation facts and every metadata field in exact manifest order.
+        let ids = tx
+            .prepare("SELECT id FROM entries WHERE visible=1 AND deleted=0 ORDER BY path")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        let entries = ids
+            .into_iter()
+            .map(|id| {
+                entry_content::read_metadata_row(&tx, &EntryId::new(id).unwrap())
+                    .unwrap()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let presentations = entries
+            .iter()
+            .map(|entry| presentation::presentation(&tx, &entry.state).unwrap())
+            .collect();
+        let source = source_authority(&tx).unwrap();
+        let expected = DocumentManifest {
+            local_store_id: source.local_store_id().clone(),
+            watermark: source.watermark().as_str().into(),
+            entries,
+            presentations,
+        };
+        assert_eq!(actual, expected);
+        assert_eq!(actual.entries.len(), 4);
+        actual.manifest().unwrap();
+        tx.commit().unwrap();
     }
 
     #[test]

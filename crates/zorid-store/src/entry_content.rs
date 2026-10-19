@@ -53,33 +53,50 @@ fn check_metadata_lengths(
     Ok(())
 }
 
+// Each visitor receives only metadata decoded and backing-validated in this
+// transaction. State-only callers discard content metadata before the next row.
+fn visit_metadata(
+    tx: &Connection,
+    include_deleted: bool,
+    mut accept: impl FnMut(StoredEntryMetadata),
+) -> Result<()> {
+    let mut statement = tx.prepare(READ_STATES_SQL)?;
+    let mut rows = statement.query(params![
+        include_deleted,
+        MAX_REFERENCE_BYTES,
+        MAX_DIGEST_BYTES,
+    ])?;
+    while let Some(row) = rows.next()? {
+        let inline_length = row.get(0)?;
+        check_metadata_lengths(inline_length, row.get(1)?, row.get(2)?)?;
+        let id = EntryId::new(row.get::<_, String>(3)?)?;
+        let columns = MetadataColumns::read(row, 4)?;
+        accept(decode_metadata(tx, &id, inline_length, columns)?);
+    }
+    Ok(())
+}
+
 /// Complete transaction-current visible metadata, including tombstones when
 /// requested. Never select bodies or substitute a partial planner snapshot.
 /// Physical overflow pages can still be read by SQLite for later columns.
 pub(super) fn read_states(tx: &Connection, include_deleted: bool) -> Result<Vec<EntryState>> {
     let mut entries = Vec::new();
-    {
-        let mut statement = tx.prepare(READ_STATES_SQL)?;
-        let mut rows = statement.query(params![
-            include_deleted,
-            MAX_REFERENCE_BYTES,
-            MAX_DIGEST_BYTES,
-        ])?;
-        while let Some(row) = rows.next()? {
-            let inline_length = row.get(0)?;
-            check_metadata_lengths(inline_length, row.get(1)?, row.get(2)?)?;
-            let id = EntryId::new(row.get::<_, String>(3)?)?;
-            let columns = MetadataColumns::read(row, 4)?;
-            // Validate reference ownership/backing in the same transaction, then
-            // discard content metadata rather than retaining it for a sort.
-            entries.push(decode_metadata(tx, &id, inline_length, columns)?.state);
-        }
-    }
+    visit_metadata(tx, include_deleted, |entry| entries.push(entry.state))?;
     // Stable sorting retains rowid order for equal paths (retained tombstones),
     // matching the original path sort's rowid-ordered table-scan input.
     entries.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(entries)
 }
+
+/// Capture the same complete live selection without decoding its metadata a
+/// second time. This private read still validates every row in its current tx.
+pub(super) fn read_visible_metadata(tx: &Connection) -> Result<Vec<StoredEntryMetadata>> {
+    let mut entries = Vec::new();
+    visit_metadata(tx, false, |entry| entries.push(entry))?;
+    entries.sort_by(|a, b| a.state.path.cmp(&b.state.path));
+    Ok(entries)
+}
+
 fn corrupt(reason: &str) -> StoreError {
     StoreError::Corrupt(reason.into())
 }
