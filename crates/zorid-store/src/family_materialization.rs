@@ -617,10 +617,23 @@ pub(super) fn validate(
     graph: &MetadataState,
     verified: &VerifiedBinarySet,
 ) -> Result<()> {
+    validate_and_return_texts(tx, graph, verified).map(|_| ())
+}
+/// Return this invocation's complete owned Text snapshot only after all existing
+/// publication checks pass. Preparation moves this exact vector into its CAS
+/// witness; final writers must still load and compare their own fresh snapshot.
+/// Retaining the vector through validation extends its lifetime, not its scope
+/// of trust, and does not imply a lower transient memory peak.
+pub(super) fn validate_and_return_texts(
+    tx: &Connection,
+    graph: &MetadataState,
+    verified: &VerifiedBinarySet,
+) -> Result<Vec<zorid_client_sync::TextState>> {
+    let texts = family_ingress::retained_texts(tx, graph.scope())?;
     let classified = zorid_file_sync::reference_materialization::classify_metadata(
         graph,
         verified,
-        &family_ingress::retained_texts(tx, graph.scope())?,
+        &texts,
         zorid_file_sync::MAX_FILE_BYTES,
         zorid_file_sync::MAX_STATE_BYTES as u64,
     )?;
@@ -640,7 +653,7 @@ pub(super) fn validate(
             ));
         }
     }
-    Ok(())
+    Ok(texts)
 }
 pub(super) fn pending_count(tx: &Connection) -> Result<u32> {
     let raws: Vec<String> = tx

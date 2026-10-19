@@ -229,8 +229,11 @@ pub(super) fn prepare_parts(
         return Err(zorid_client_sync::SyncError::VersionConflict.into());
     }
     let verified_old = blob_index::verify_metadata(tx, candidate.expected_state(), &[])?;
-    family_materialization::validate(tx, candidate.expected_state(), &verified_old)?;
-    let expected_texts = family_ingress::retained_texts(tx, candidate.expected_state().scope())?;
+    let expected_texts = family_materialization::validate_and_return_texts(
+        tx,
+        candidate.expected_state(),
+        &verified_old,
+    )?;
     let overlay: Vec<_> = authored_files
         .iter()
         .map(|a| (a.update_id.clone(), a.payload_bytes.clone()))
@@ -441,6 +444,316 @@ mod tests {
             },
         }
     }
+    // Connection-local observation of real full Text snapshot SELECTs. The Box
+    // keeps callback context stable if this guard moves; Drop unregisters before
+    // freeing it, including on assertion panic. No production hook/global counter.
+    struct TextSnapshotReads<'a> {
+        connection: &'a Connection,
+        count: Box<std::cell::Cell<usize>>,
+    }
+    impl<'a> TextSnapshotReads<'a> {
+        fn new(connection: &'a Connection) -> Self {
+            unsafe extern "C" fn observe(
+                event: u32,
+                context: *mut std::ffi::c_void,
+                _statement: *mut std::ffi::c_void,
+                sql: *mut std::ffi::c_void,
+            ) -> i32 {
+                if event == rusqlite::ffi::SQLITE_TRACE_STMT && !context.is_null() && !sql.is_null()
+                {
+                    // SQLite supplies a live NUL-terminated statement string for
+                    // this event. The connection executes synchronously while
+                    // the guard owns its Cell; no allocation/panic in callback.
+                    let sql = unsafe { std::ffi::CStr::from_ptr(sql.cast()) };
+                    if sql
+                        .to_bytes()
+                        .starts_with(b"SELECT entry_id FROM text_bindings WHERE realm_id=")
+                    {
+                        let count = unsafe { &*context.cast::<std::cell::Cell<usize>>() };
+                        count.set(count.get().saturating_add(1));
+                    }
+                }
+                0
+            }
+            let guard = Self {
+                connection,
+                count: Box::new(std::cell::Cell::new(0)),
+            };
+            // This fixture connection has no other trace callback. It outlives
+            // the guard, and callback context points into the stable Box above.
+            let status = unsafe {
+                rusqlite::ffi::sqlite3_trace_v2(
+                    connection.handle(),
+                    rusqlite::ffi::SQLITE_TRACE_STMT,
+                    Some(observe),
+                    (&*guard.count as *const std::cell::Cell<usize>)
+                        .cast_mut()
+                        .cast(),
+                )
+            };
+            assert_eq!(status, rusqlite::ffi::SQLITE_OK);
+            guard
+        }
+        fn reset(&self) {
+            self.count.set(0);
+        }
+        fn get(&self) -> usize {
+            self.count.get()
+        }
+    }
+    impl Drop for TextSnapshotReads<'_> {
+        fn drop(&mut self) {
+            unsafe {
+                rusqlite::ffi::sqlite3_trace_v2(
+                    self.connection.handle(),
+                    0,
+                    None,
+                    std::ptr::null_mut(),
+                );
+            }
+        }
+    }
+    fn snapshot_fixture() -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = enrolled(&dir.path().join("store"));
+        for id in ["b_entry", "a_entry", "c_entry"] {
+            store
+                .family_apply(&text(id, &format!("{id}.md")), Some(FamilyCreateMode::Text))
+                .unwrap();
+        }
+        let last = store
+            .read(&EntryId::new("c_entry").unwrap())
+            .unwrap()
+            .unwrap();
+        store
+            .family_apply(
+                &MutationRequest {
+                    operation_id: OperationId::new("delete_c").unwrap(),
+                    mutation: Mutation::Delete {
+                        id: last.state.id,
+                        expected: last.state.revision,
+                    },
+                },
+                None,
+            )
+            .unwrap();
+        (dir, store)
+    }
+    fn database(db: &Connection) -> Vec<(String, Vec<Vec<rusqlite::types::Value>>)> {
+        let names = db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND (name NOT LIKE 'sqlite_%' OR name='sqlite_sequence') ORDER BY name").unwrap()
+            .query_map([], |row| row.get::<_, String>(0)).unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>().unwrap();
+        names
+            .into_iter()
+            .map(|name| {
+                assert!(name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'));
+                let mut query = db
+                    .prepare(&format!("SELECT * FROM {name} ORDER BY rowid"))
+                    .unwrap();
+                let columns = query.column_count();
+                let rows = query
+                    .query_map([], |row| {
+                        (0..columns)
+                            .map(|column| row.get(column))
+                            .collect::<rusqlite::Result<Vec<rusqlite::types::Value>>>()
+                    })
+                    .unwrap()
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .unwrap();
+                (name, rows)
+            })
+            .collect()
+    }
+    #[test]
+    fn preparation_reuses_one_complete_text_snapshot_including_tombstones() {
+        let (_dir, mut store) = snapshot_fixture();
+        let original = database(&store.connection);
+        let sequence: i64 = store
+            .connection
+            .query_row("SELECT max(sequence) FROM operations", [], |r| r.get(0))
+            .unwrap();
+        let request = text("new_entry", "new.md");
+        let tx = store.connection.unchecked_transaction().unwrap();
+        let graph = graph(&tx, &scope(&tx).unwrap()).unwrap();
+        let verified = blob_index::verify_metadata(&tx, &graph, &[]).unwrap();
+        let reads = TextSnapshotReads::new(&tx);
+        // The former production shape performs two actual snapshot queries.
+        family_materialization::validate(&tx, &graph, &verified).unwrap();
+        let expected = family_ingress::retained_texts(&tx, graph.scope()).unwrap();
+        assert_eq!(reads.get(), 2);
+        reads.reset();
+        let prepared = prepare_command(&tx, &request, Some(FamilyCreateMode::Text)).unwrap();
+        assert_eq!(
+            reads.get(),
+            1,
+            "preparation loaded the complete Text snapshot twice"
+        );
+        assert_eq!(prepared.expected_texts, expected);
+        assert_eq!(
+            expected
+                .iter()
+                .map(|s| s.identity.entry_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a_entry", "b_entry", "c_entry"]
+        );
+        let hidden = expected
+            .iter()
+            .find(|s| s.identity.entry_id.as_str() == "c_entry")
+            .unwrap();
+        assert_eq!(hidden.materialized_utf8().unwrap(), b"original");
+        let visible: i64 = tx
+            .query_row("SELECT visible FROM entries WHERE id='c_entry'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(visible, 0);
+        assert!(matches!(
+            family_materialization::get(&tx, &hidden.identity.entry_id)
+                .unwrap()
+                .unwrap()
+                .publication,
+            FamilyPublication::Tombstone
+        ));
+        drop(reads);
+        tx.commit().unwrap();
+        assert_eq!(database(&store.connection), original);
+        let tx = store
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        let receipt = commit_prepared(&tx, &prepared).unwrap();
+        assert_eq!(receipt.changes, prepared.changes);
+        assert_eq!(receipt.sequence, sequence as u64 + 1);
+        tx.commit().unwrap();
+        let committed = database(&store.connection);
+        assert_eq!(
+            store
+                .family_apply(&request, Some(FamilyCreateMode::Text))
+                .unwrap(),
+            receipt
+        );
+        assert_eq!(database(&store.connection), committed);
+    }
+    #[test]
+    fn hidden_text_or_history_corruption_still_rejects_preparation_and_writer() {
+        for corruption in [
+            "entry",
+            "scope",
+            "bootstrap",
+            "actors",
+            "snapshot",
+            "history",
+        ] {
+            let (_dir, mut store) = snapshot_fixture();
+            let request = text("new_entry", "new.md");
+            let tx = store.connection.unchecked_transaction().unwrap();
+            let prepared = prepare_command(&tx, &request, Some(FamilyCreateMode::Text)).unwrap();
+            tx.commit().unwrap();
+            let id = EntryId::new("c_entry").unwrap();
+            if corruption == "history" {
+                let mut record = family_materialization::get(&store.connection, &id)
+                    .unwrap()
+                    .unwrap();
+                record.identity.bootstrap_id = UpdateId::new("different_history").unwrap();
+                store
+                    .connection
+                    .execute(
+                        "UPDATE family_materialization_history SET record=?1 WHERE entry_id=?2",
+                        params![serde_json::to_string(&record).unwrap(), id.as_str()],
+                    )
+                    .unwrap();
+            } else {
+                let mut state = text_sync::retained(&store.connection, &id)
+                    .unwrap()
+                    .unwrap();
+                let version = state.version.clone();
+                match corruption {
+                    "entry" => state.identity.entry_id = EntryId::new("different_entry").unwrap(),
+                    "scope" => state.identity.realm_id = RealmId::new("different_realm").unwrap(),
+                    "bootstrap" => {
+                        state.identity.bootstrap_id = UpdateId::new("different_text").unwrap()
+                    }
+                    "actors" => {
+                        assert!(!state.actors.is_empty());
+                        state.actors.clear();
+                    }
+                    "snapshot" => state.snapshot = b"invalid snapshot".to_vec(),
+                    _ => unreachable!(),
+                }
+                store
+                    .connection
+                    .execute(
+                        "UPDATE text_revisions SET record=?1 WHERE entry_id=?2 AND revision=?3",
+                        params![
+                            serde_json::to_string(&state).unwrap(),
+                            id.as_str(),
+                            version.as_str()
+                        ],
+                    )
+                    .unwrap();
+            }
+            let corrupted = database(&store.connection);
+            let tx = store.connection.unchecked_transaction().unwrap();
+            assert!(
+                prepare_command(&tx, &request, Some(FamilyCreateMode::Text)).is_err(),
+                "{corruption}"
+            );
+            tx.rollback().unwrap();
+            let tx = store
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            assert!(commit_prepared(&tx, &prepared).is_err(), "{corruption}");
+            tx.rollback().unwrap();
+            assert_eq!(database(&store.connection), corrupted, "{corruption}");
+        }
+    }
+    #[test]
+    fn text_head_only_change_after_preparation_keeps_fresh_writer_cas() {
+        let (dir, mut store) = snapshot_fixture();
+        let request = text("new_entry", "new.md");
+        let tx = store.connection.unchecked_transaction().unwrap();
+        let prepared = prepare_command(&tx, &request, Some(FamilyCreateMode::Text)).unwrap();
+        tx.commit().unwrap();
+        let before_entries = entries(&store.connection).unwrap();
+        let mut peer = Store::open(dir.path().join("store")).unwrap();
+        let tx = peer
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        let old = text_sync::retained(&tx, &EntryId::new("c_entry").unwrap())
+            .unwrap()
+            .unwrap();
+        let revision = Revision::new("peer_head_only_revision").unwrap();
+        let next = old.rebind_revision(&old.version, &revision).unwrap();
+        text_sync::reserve_revision(&tx, &revision).unwrap();
+        text_sync::put_current(&tx, &next).unwrap();
+        tx.commit().unwrap();
+        let advanced = database(&store.connection);
+        let tx = store
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        let actual_graph = graph(&tx, &scope(&tx).unwrap()).unwrap();
+        prepared
+            .graph
+            .check_preconditions(&actual_graph, None)
+            .unwrap();
+        assert_eq!(entries(&tx).unwrap(), before_entries);
+        assert_ne!(
+            family_ingress::retained_texts(&tx, actual_graph.scope()).unwrap(),
+            prepared.expected_texts
+        );
+        assert!(matches!(
+            commit_prepared(&tx, &prepared),
+            Err(StoreError::Sync(
+                zorid_client_sync::SyncError::VersionConflict
+            ))
+        ));
+        tx.rollback().unwrap();
+        assert_eq!(database(&store.connection), advanced);
+    }
+
     #[test]
     fn prepared_command_rejects_a_new_graph_without_persisting_any_effects() {
         let dir = tempfile::tempdir().unwrap();
