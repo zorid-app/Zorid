@@ -93,12 +93,32 @@ the frozen verified binary,18 commands exit0, exact expected text hits/ranges an
 five authority samples, all103 physical files unchanged. Evidence:
 `/private/tmp/zorid-s1-cli-smoke-c91106b2/report.json`. Existing inline imported PNG
 is classified Unreadable, so coverageComplete=false is retained despite full text
-scan completion. New local-family and browser runtime passes are still required.
-This is not the10k representative benchmark or a performance gain.
+scan completion.
+
+Actual browser100-note smoke passes all five phases at frozen `5aa0f9da`:
+`/private/tmp/zorid-s1-web-100-5aa0f9da-evidence/report.json`. Chrome155.0.8059.80,
+real product Worker/Rust/WASM/IndexedDB; all103 files imported/read back exactly,
+eight full paginated literal oracles with revision/range checks pass cold/warm,
+and the independent-edit marker passes on catch-up. Warm process reopen retained
+the exact current snapshot with zero pumps; catch-up advanced source107→108 and
+reused102/103 records across four pumps. Five client/pin/stage releases acknowledged;
+all owned Chrome children exited0 and the server port is closed. Exact source/
+artifact proof remained unchanged. No Runtime.exceptionThrown; only favicon404
+and Vite connection logs. This is a source-driven fixture, not normal editor UI,
+Safari/other-engine, eviction, peak-memory or browser-multicore acceptance.
+
+Native local-family100 setup initially exposed a tool guard that watched only
+finished inventory counters while content imports continued. That run is retained
+as incomplete setup, not a product/index performance failure. Reviewed fixes are
+integrated through `f3867a92`: public live-file tuple growth, final-map continuity
+and count/hash summaries bound evidence memory; main tooling9 checks pass. A fresh
+normal desktop local-family profile rerun is required. This is not the10k
+representative benchmark or a performance gain.
 
 Owners: `s1_execution_audit` owns workload/native CLI baseline tooling;
 `s1_query_audit` owns the integrated language fixtures;
-`architecture_platform_audit` owns actual browser measurement harness;
+`architecture_platform_audit` owns actual browser/normal Electron measurement
+harnesses (browser100 passed; Electron source preparation underway);
 `storage_recovery_impl` independently reviews workload/oracle/resource handling.
 Root retains sole main integration. Heavy work stays serialized; no push. Open
 sync-group policies await the user; no new design discussion is started.
