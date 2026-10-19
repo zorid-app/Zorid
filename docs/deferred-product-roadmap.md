@@ -18,26 +18,32 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 - **Current limitation:** legacy10k still stops at import,6,167 entries/240.656s
   versus3,383/240.256s and initially2,378/240.316s. No native10k index/search result or completion gain
   is established. Pure-core10k and actual-browser100 passed within their stated
-  scopes. Generated Base10k graph-budget rejection is source-predicted, not yet
-  executed.
-- **Active owner/slot:** `s1_query_audit` now release-builds/runs generated Base100
-  then the bounded10k outcome. Normal-family10k is terminal incomplete at32 passes:
-  224 live files admitted, inventory3030/unfinished, no index/query stage, all
-  sources/hashes exact and all owned PIDs gone. Its one authorized sample points
-  to repeated metadata graph-view validation, unlike the legacy SQL bottleneck.
-  `architecture_core_audit` owns that read-only family-path investigation.
-  Store bulk-loader source through `7858cb20` is reviewed but untested; no planner,
-  mutation-cache or schema change is approved. Root is sole main integrator; no push.
+  scopes. Generated Base100 passed all eight semantic oracles;10k generation completed,
+  but all eight queries rejected the existing preparation budget (limited/incomplete).
+- **Active owner/slot:** `storage_sqlite_impl` owns serialized focused Rust
+  validation of reviewed bulk-loader `7858cb20`; no release build/runtime yet.
+  Normal-family10k is terminal incomplete at32 passes:224 live files admitted,
+  inventory3030/unfinished, no index/query stage, all sources/hashes exact and
+  owned PIDs gone. Its sample points to repeated metadata graph-view validation.
+  `storage_recovery_impl` implements invocation-local lazy immutable view reuse
+  (`3b416f3b`); exact source review passed, compiled tests/runtime pending.
+  This is not a persistent mutation cache or schema/planner contract change.
+  Root is sole main integrator; no push.
 - **Desktop verification:** corrected normal100 passes exact save/file/native/
   checkpoint, fresh search and retained warm index/revision gates. Three apps quit
   normally; source/build hashes unchanged, no survivors. Evidence:
   `/private/tmp/zorid-s1-desktop-100-071b8500-evidence/report.json`. Harness integrated
   through `8a03b0d5`; earlier CDP multiline-loss diagnosis is retained separately.
   This is hidden macOS correctness scope, not10k or foreground performance parity.
-- **Other isolated work:** generated-Base baseline `ffaee3ad` is source reviewed,
-  Node10 checks pass; real Rust100/10k slot is active. Opt-in process resource
-  tooling through `c2f2b75a` is source reviewed; child/time tests and real smokes
-  pending. Source-only approval is not runtime acceptance.
+- **Baseline tooling:** generated-Base tool `ffaee3ad` is integrated `9235ab46`;
+  Node10 checks, real release100 semantic gates and honest10k budget outcome are
+  recorded. Opt-in Darwin process CPU/RSS tooling is integrated `66cd9728` from
+  reviewed `8741c686`:15 resource/lifecycle tests, existing default checks and
+  real core100/Base17/CLI1 legacy+family smokes pass.36 selected measured
+  invocations retain exact raw sidecars/source/binary proofs; owned groups and
+  PIDs absent. Small instrumentation smokes are not representative speedup or
+  memory-distribution acceptance. Evidence:
+  `/private/tmp/zorid-s1-process-resources-c2f2b75a-syq_b62c/validation-summary.json`.
 - **Boundaries:** serialize heavy builds/timing on the8GB Mac. Current runtime
   targets are macOS Electron, web and standalone macOS CLI. Native mobile and
   other OS checks stay deferred. Sync remains E2EE; new group-lifecycle policy

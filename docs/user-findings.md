@@ -1,19 +1,21 @@
 # User findings queue
 
-## S1 generated Base queries eagerly prepare the full graph — source-audited limitation
+## S1 generated Base queries eagerly prepare the full graph — confirmed baseline limitation
 
-Read-only S1.0 audit: `query_generation` prepares relationships even for a
-property-only query. Current resolution charges/scans the namespace for each
-link. The frozen10k workload's5,000 links and10,003 entries imply at least
-50,015,000 resolver work against the normal2,000,000 query ceiling. This is a
-source-derived prediction, not an observed10k execution or performance result.
+`query_generation` prepares relationships even for a property-only query. Current
+resolution charges/scans the namespace for each link. The frozen10k workload's
+5,000 links and10,003 entries imply at least50,015,000 resolver work against the
+normal2,000,000 query ceiling. Actual release execution now confirms all eight
+queries reject preparation, after successful generation of10,003 records; timings
+are rejection latency only, and the run is limited/incomplete. Evidence:
+`/private/tmp/zorid-s1-generated-bases-release10000-ffaee3ad/generated-bases-report.json`.
+The same generated tool passes all eight semantic oracles at100 notes; source and
+binary hashes remain exact. Tool integrated `9235ab46`, not an engine optimization.
 
-Keep the full linked fixture and existing limits in the generated Base baseline;
-an actual budget rejection must remain limited/incomplete. Owner `s1_query_audit`
-is preparing isolated tooling with independent arithmetic expectations. Later
-accepted S1.2 work can address conservative dependency-aware graph preparation,
-indexed resolution and bounded generation-keyed reuse, preserving tie/normalization
-semantics. No engine optimization or budget change has been implemented here.
+Keep the full linked fixture and existing limits. Later accepted S1.2 work can
+address conservative dependency-aware graph preparation, indexed resolution and
+bounded generation-keyed reuse, preserving tie/normalization semantics. No engine
+optimization or budget change has been implemented here.
 
 ## S1 normal storage repeatedly validates metadata graph views — measured setup bottleneck
 
@@ -28,9 +30,12 @@ One authorized1s setup sample attributes repeated work to
 `MetadataState::metadata_view` during command preparation and commit. This is one
 sample window, not a whole-run fraction. It differs from legacy import's full
 SQL snapshot loading, so legacy partial-throughput gains are not desktop startup
-speedup evidence. Owner `architecture_core_audit` is investigating safe reuse of
-validated immutable views within the existing proof/head/CAS boundaries. No
-family-path optimization or cache authority change is implemented yet.
+speedup evidence. Owner `storage_recovery_impl` has isolated invocation-local
+lazy immutable view reuse through `3b416f3b`; exact source review passes, including
+valid-but-mismatched history and allocation rollback fixtures. Compiled tests and
+runtime validation remain pending. Each validate/apply invocation
+retains fresh graph/proof/head/CAS boundaries; no persistent authority cache. No
+family-path optimization is integrated yet; no cache authority change is proposed.
 
 ## S1 native setup scales with repeated full-store work — two fixes integrated
 
