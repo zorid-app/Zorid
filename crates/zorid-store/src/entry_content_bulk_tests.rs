@@ -416,10 +416,38 @@ fn graph_references_keep_owner_digest_and_immutable_source_checks() {
                     .unwrap();
             }
             "backing" => {
+                // Simulate backing corruption without deleting retained rows or
+                // disabling foreign keys. Reinstate the exact registered guard
+                // before exercising either reader.
+                let registered = immutable_payloads::SCHEMA
+                    .iter()
+                    .find(|(name, _)| *name == "immutable_payloads_no_update")
+                    .unwrap()
+                    .1;
+                let trigger_sql = || {
+                    store.connection.query_row(
+                    "SELECT sql FROM sqlite_schema WHERE name='immutable_payloads_no_update'",
+                    [], |row| row.get::<_, String>(0),
+                ).unwrap()
+                };
+                assert_eq!(trigger_sql(), registered);
                 store
                     .connection
-                    .execute("DELETE FROM immutable_payloads", [])
+                    .execute_batch("DROP TRIGGER immutable_payloads_no_update")
                     .unwrap();
+                let changed = store
+                    .connection
+                    .execute(
+                        "UPDATE immutable_payloads SET descriptor='{}' WHERE family='files'",
+                        [],
+                    )
+                    .unwrap();
+                assert!(
+                    changed > 0,
+                    "fixture must damage an existing backing descriptor"
+                );
+                store.connection.execute_batch(registered).unwrap();
+                assert_eq!(trigger_sql(), registered);
             }
             _ => unreachable!(),
         }
