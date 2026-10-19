@@ -370,6 +370,19 @@ pub(super) fn read_legacy_entry(tx: &Connection, id: &EntryId) -> Result<Option<
         content: bytes,
     }))
 }
+pub(super) fn read_path_metadata_row(
+    tx: &Connection,
+    path: &VaultPath,
+) -> Result<Option<StoredEntryMetadata>> {
+    let id: Option<String> = tx.query_row(
+        "SELECT id FROM entries WHERE path=?1 AND deleted=0 AND visible=1",
+        [path.as_str()],
+        |row| row.get(0),
+    ).optional()?;
+    id.map(|id| read_metadata_row(tx, &EntryId::new(id)?))
+        .transpose().map(Option::flatten)
+}
+
 impl Store {
     pub fn read_metadata(&self, id: &EntryId) -> Result<Option<StoredEntryMetadata>> {
         let tx = self.connection.unchecked_transaction()?;
@@ -383,17 +396,7 @@ impl Store {
     }
     pub fn read_path_metadata(&self, path: &VaultPath) -> Result<Option<StoredEntryMetadata>> {
         let tx = self.connection.unchecked_transaction()?;
-        let id: Option<String> = tx
-            .query_row(
-                "SELECT id FROM entries WHERE path=?1 AND deleted=0 AND visible=1",
-                [path.as_str()],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let result = id
-            .map(|id| read_metadata_row(&tx, &EntryId::new(id)?))
-            .transpose()?
-            .flatten();
+        let result = read_path_metadata_row(&tx, path)?;
         tx.commit()?;
         Ok(result)
     }
@@ -429,6 +432,94 @@ mod tests {
         let store = Store::open(dir.path().join("store.sqlite")).unwrap();
         (dir, store)
     }
+    #[test]
+    fn stat_path_is_targeted_fresh_and_filters_missing_hidden_deleted_entries() {
+        let (dir, mut store) = store();
+        store.apply(&create(vec![])).unwrap();
+        let empty = store.stat_path(&path()).unwrap().unwrap();
+        assert_eq!(empty.state.kind, EntryKind::File);
+        assert_eq!(empty.presentation.size_bytes, 0);
+        let mut folder = create(vec![]);
+        folder.operation_id = OperationId::new("folder-create").unwrap();
+        if let Mutation::Create {
+            id,
+            path,
+            kind,
+            content,
+        } = &mut folder.mutation
+        {
+            *id = EntryId::new("folder").unwrap();
+            *path = VaultPath::new("folder").unwrap();
+            *kind = EntryKind::Folder;
+            *content = None;
+        }
+        store.apply(&folder).unwrap();
+        let folder_path = VaultPath::new("folder").unwrap();
+        assert_eq!(
+            store.stat_path(&folder_path).unwrap().unwrap().state.kind,
+            EntryKind::Folder
+        );
+        assert!(store
+            .stat_path(&VaultPath::new("missing").unwrap())
+            .unwrap()
+            .is_none());
+        let mut peer = Store::open(dir.path().join("store.sqlite")).unwrap();
+        peer.apply(&MutationRequest {
+            operation_id: OperationId::new("peer-write").unwrap(),
+            mutation: Mutation::Write {
+                id: id(),
+                expected: empty.state.revision,
+                content: b"peer".to_vec(),
+            },
+        })
+        .unwrap();
+        let fresh = store.stat_path(&path()).unwrap().unwrap();
+        assert_eq!(fresh.presentation.size_bytes, 4);
+        assert_eq!(
+            fresh.state,
+            peer.read_metadata(&id()).unwrap().unwrap().state
+        );
+        // Invalid unrelated display/state data cannot turn an exact path stat
+        // into a full-vault decode; the selected target remains fully checked.
+        store
+            .connection
+            .execute("DELETE FROM entry_presentation WHERE entry_id='folder'", [])
+            .unwrap();
+        store
+            .connection
+            .execute("UPDATE entries SET state='bad' WHERE id='folder'", [])
+            .unwrap();
+        assert_eq!(store.stat_path(&path()).unwrap(), Some(fresh));
+        assert!(store.stat_path(&folder_path).is_err());
+        store
+            .connection
+            .execute("UPDATE entries SET visible=0 WHERE id='folder'", [])
+            .unwrap();
+        assert!(store.stat_path(&folder_path).unwrap().is_none());
+        store
+            .connection
+            .execute("UPDATE entries SET deleted=1 WHERE id='file'", [])
+            .unwrap();
+        assert!(store.stat_path(&path()).unwrap().is_none());
+    }
+    #[test]
+    fn stat_path_rejects_selected_metadata_and_presentation_corruption() {
+        for sql in [
+            "UPDATE entries SET content_digest=NULL WHERE id='file'",
+            "UPDATE entries SET state=json_set(state,'$.path','other') WHERE id='file'",
+            "UPDATE entry_presentation SET size_bytes=1 WHERE entry_id='file'",
+            "DELETE FROM entry_presentation WHERE entry_id='file'",
+        ] {
+            let (_dir, mut store) = store();
+            store.apply(&create(vec![])).unwrap();
+            store.connection.execute(sql, []).unwrap();
+            assert!(
+                matches!(store.stat_path(&path()), Err(StoreError::Corrupt(_))),
+                "{sql}"
+            );
+        }
+    }
+
     #[test]
     fn inline_body_digest_and_double_authority_are_rejected() {
         let (_dir, mut store) = store();
@@ -483,6 +574,8 @@ mod tests {
                 .len(),
             length
         );
+        store.connection.execute("UPDATE entry_presentation SET size_bytes=?1 WHERE entry_id='file'", [length as i64]).unwrap();
+        assert_eq!(store.stat_path(&path()).unwrap().unwrap().presentation.size_bytes, length);
         for result in [
             store.read(&id()).map(|_| ()),
             store.read_path(&path()).map(|_| ()),
@@ -527,7 +620,7 @@ mod tests {
     }
     /// Stores each exact chunk independently. The only input byte buffer is one
     /// 128KiB reusable chunk, even for the explicit 64MiB regression.
-    fn graph_backed_reader_fixture(chunk_count: u32) {
+    fn graph_backed_reader_fixture(chunk_count: u32, stat_only: bool) {
         let (dir, mut store) = store();
         store
             .family_enroll(&blob_index::test_support::scope())
@@ -588,6 +681,13 @@ mod tests {
             Some(metadata.clone())
         );
         let listing = store.list_snapshot().unwrap();
+        let stat = store.stat_path(&path()).unwrap().unwrap();
+        assert_eq!(stat, listing.entries[0]);
+        if stat_only {
+            assert!(length > FAMILY_MAX_INLINE_BYTES);
+            assert!(matches!(store.read_path(&path()), Err(StoreError::StreamRequired { .. })));
+            return;
+        }
         assert_eq!(listing.entries[0].state, metadata.state);
         assert_eq!(listing.entries[0].presentation.size_bytes, length);
         let Some(ContentMetadata::BinaryRef {
@@ -633,13 +733,17 @@ mod tests {
     }
     #[test]
     fn graph_metadata_and_bounded_cross_chunk_reads_survive_restart() {
-        graph_backed_reader_fixture(2);
+        graph_backed_reader_fixture(2, false);
+    }
+    #[test]
+    fn stat_path_large_graph_metadata_does_not_require_whole_file_read() {
+        graph_backed_reader_fixture(129, true);
     }
     /// Explicit large gate:
     /// cargo test -p zorid-store --lib entry_content::tests::graph_metadata_64_mib -- --ignored --exact --test-threads=1
     #[test]
     #[ignore = "64MiB durable fixture; run explicitly with the serialized resource slot"]
     fn graph_metadata_64_mib() {
-        graph_backed_reader_fixture(512);
+        graph_backed_reader_fixture(512, false);
     }
 }

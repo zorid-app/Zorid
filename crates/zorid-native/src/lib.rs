@@ -397,6 +397,9 @@ impl NativeVault {
     pub fn read(&self, _: &EntryId) -> Result<Option<StoredEntry>> {
         unsupported()
     }
+    pub fn stat_path(&self, _: &VaultPath) -> Result<Option<PresentedState>> {
+        unsupported()
+    }
     pub fn read_path(&self, _: &VaultPath) -> Result<Option<PresentedEntry>> {
         unsupported()
     }

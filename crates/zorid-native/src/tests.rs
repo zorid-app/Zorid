@@ -1324,7 +1324,10 @@ fn coherent_path_reads_use_committed_bytes_while_projection_is_pending() {
         b"unprojected binary\0\xff",
     );
     let receipt = store.apply_at(&req, 1).unwrap();
+    let stat = vault.stat_path(&path()).unwrap().unwrap();
     let entry = vault.read_path(&path()).unwrap().unwrap();
+    assert_eq!(stat.state, entry.state);
+    assert_eq!(stat.presentation, entry.presentation);
     assert_eq!(entry.state.id, id());
     assert_eq!(
         entry.state.revision,

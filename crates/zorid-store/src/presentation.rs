@@ -326,6 +326,17 @@ impl Store {
         tx.commit()?;
         Ok(result)
     }
+    /// Current live path metadata and display facts in one snapshot; no body read.
+    pub fn stat_path(&self, path: &VaultPath) -> Result<Option<PresentedState>> {
+        let tx = self.connection.unchecked_transaction()?;
+        let result = entry_content::read_path_metadata_row(&tx, path)?
+            .map(|entry| -> Result<PresentedState> {
+                let presentation = presentation(&tx, &entry.state)?;
+                Ok(PresentedState { state: entry.state, presentation })
+            }).transpose()?;
+        tx.commit()?;
+        Ok(result)
+    }
     /// Entry identity is the recovery key; renamed paths remain display locators.
     pub fn read_presented(&self, id: &EntryId) -> Result<Option<PresentedEntry>> {
         let tx = self.connection.unchecked_transaction()?;

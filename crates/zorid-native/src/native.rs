@@ -161,6 +161,10 @@ impl NativeVault {
         self.paths.verify()?;
         Ok(self.store.read(id)?)
     }
+    pub fn stat_path(&self, path: &VaultPath) -> Result<Option<PresentedState>> {
+        self.paths.verify()?;
+        Ok(self.store.stat_path(path)?)
+    }
     pub fn read_path(&self, path: &VaultPath) -> Result<Option<PresentedEntry>> {
         self.paths.verify()?;
         Ok(self.store.read_path(path)?)
