@@ -1,5 +1,14 @@
 # User findings queue
 
+## Ordinary local saves should be below100ms — open performance target
+
+User expects a small local note save below100ms. Track edit-to-verified-durable
+save separately from intentional autosave delay and native commit round trip;
+710ms native commit and multi-second end-to-end observations are not acceptance.
+First remove the measured repeated full-catalogue reads, then measure remaining
+commit cost without weakening durability, recovery or concurrent-write checks.
+This is a target to verify, not a measured guarantee across devices or files.
+
 ## S1 save latency during background work — open comparison finding
 
 Normal Electron100 single observations `255caa28`→`fa76b894`: cold search5.706→
