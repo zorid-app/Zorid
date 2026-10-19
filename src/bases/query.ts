@@ -23,6 +23,8 @@ export interface BaseQueryOptions {
   readonly currentFilePath?: string;
   readonly functions?: BaseFunctionRegistry;
   readonly now?: () => Date;
+  /** Selected IANA/fixed timezone; omitted uses the host device timezone. */
+  readonly timezone?: string;
   readonly maxSteps?: number;
   readonly ignore?: (path: string) => boolean;
   /** Pre-tokenized terms; matching spans visible properties, never file contents. */

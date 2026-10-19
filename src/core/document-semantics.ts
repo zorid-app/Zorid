@@ -50,6 +50,9 @@ export type DocumentBaseValue=
   |{readonly type:'duration';readonly years:number;readonly months:number;readonly weeks:number;readonly days:number;readonly hours:number;readonly minutes:number;readonly seconds:number;readonly milliseconds:number}
   |{readonly type:'file';readonly path:string}|{readonly type:'link';readonly path:string;readonly target:{readonly entryId:string;readonly revision:string}|null;readonly display:string|null;readonly external:boolean}
   |{readonly type:'error';readonly code:string;readonly message:string};
+export interface DocumentBaseRefreshHint {
+  readonly dependency:'none'|'day'|'instant';readonly timezone:string;readonly nextWakeMs:number|null;
+}
 export interface DocumentBaseResult {
   readonly snapshotId:DocumentSnapshotId;readonly view:DocumentValue;
   readonly rows:readonly{readonly entryId:string;readonly revision:string;readonly path:string;readonly values:Readonly<Record<string,DocumentBaseValue>>}[];
@@ -61,6 +64,8 @@ export interface DocumentBaseResult {
   readonly relationshipsAvailable:boolean;readonly metadataComplete:boolean;
   readonly metadataIssues:readonly{readonly witness:{readonly entryId:string;readonly revision:string};readonly exclusion:DocumentExclusion|null;readonly diagnostics:readonly DocumentDiagnostic[];readonly propertiesUnavailable:boolean}[];
   readonly stepsUsed:number;
+  /** Optional while older hosts are supported; null is unavailable lazy advice. */
+  readonly refreshHint?:DocumentBaseRefreshHint|null;
 }
 /** Shared normal-vault calls capture clockMs once per invocation and default maxRows to 1000. */
 export interface DocumentBaseOptions {readonly viewIndex?:number;readonly searchTerms?:readonly string[];readonly ignorePaths?:readonly string[];readonly clockMs?:number;readonly timezone?:string;readonly maxRows?:number;readonly currentEntryId?:string;readonly maxSteps?:number}
@@ -157,6 +162,15 @@ function bounded(value:unknown,maximum:number,request=false):void{
   }
   const encoded=JSON.stringify(value);if(typeof encoded!=='string'||encoded.length>maximum||new TextEncoder().encode(encoded).byteLength>maximum)throw new DocumentSemanticsError(request?'request_too_large':'response_too_large');
 }
+function baseRefreshHint(value:unknown,clockMs:number):DocumentBaseRefreshHint|null {
+  if(value===null)return null;
+  const hint=object(value);
+  if(Object.keys(hint).length!==3||!Object.hasOwn(hint,'dependency')||!Object.hasOwn(hint,'timezone')||!Object.hasOwn(hint,'nextWakeMs'))return invalid();
+  if(hint.dependency!=='none'&&hint.dependency!=='day'&&hint.dependency!=='instant')return invalid();
+  if(typeof hint.timezone!=='string'||!hint.timezone.length||new TextEncoder().encode(hint.timezone).length>128)return invalid();
+  if(hint.nextWakeMs!==null&&(typeof hint.nextWakeMs!=='number'||!Number.isSafeInteger(hint.nextWakeMs)||hint.nextWakeMs< -62167219200000||hint.nextWakeMs>253402300799999||hint.nextWakeMs<=clockMs||hint.dependency==='none'))return invalid();
+  return hint as unknown as DocumentBaseRefreshHint;
+}
 export function documentErrorCode(error:unknown):string|undefined{return error&&typeof error==='object'&&'code'in error&&typeof error.code==='string'?error.code:undefined;}
 export function createDocumentService(transport:DocumentTransport):DocumentService{
   const maintenance=transport.maintenance===undefined?undefined:createDocumentMaintenance(transport.maintenance);
@@ -215,7 +229,7 @@ export function createDocumentService(transport:DocumentTransport):DocumentServi
           if(!sameSnapshot(documentSnapshot(value.value.result.snapshotId),snapshot)||value.value.definitions.length!==request.typeIds.length||value.value.definitions.some((entry,index)=>entry.id!==request.typeIds[index])||typeof value.value.result.coverageComplete!=='boolean'||value.value.result.coverageComplete&&!coverageComplete)return invalid();
           return value;
         }}:{}),
-        async base(input:{id:string;viewName?:string|null;options?:DocumentBaseOptions}){live();if(input.options?.currentEntryId!==undefined&&(typeof input.options.currentEntryId!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(input.options.currentEntryId)))throw new DocumentSemanticsError('invalid_request');if(input.options?.maxSteps!==undefined&&(!Number.isInteger(input.options.maxSteps)||input.options.maxSteps<1||input.options.maxSteps>2000000))throw new DocumentSemanticsError('invalid_request');const {searchTerms,ignorePaths,...scalars}=input.options??{};const definedScalars=Object.fromEntries(Object.entries(scalars).filter(([,value])=>value!==undefined));const options:NonNullable<Parameters<DocumentTransport['base']>[0]['options']>={...definedScalars,clockMs:scalars.clockMs===undefined?Date.now():scalars.clockMs,maxRows:scalars.maxRows===undefined?1000:scalars.maxRows};if(searchTerms)options.searchTerms=[...searchTerms];if(ignorePaths)options.ignorePaths=[...ignorePaths];const request={pinId,id:input.id,viewName:input.viewName,options};return report<DocumentBaseRead>(await call(request,()=>transport.base(request)));},
+        async base(input:{id:string;viewName?:string|null;options?:DocumentBaseOptions}){live();if(input.options?.currentEntryId!==undefined&&(typeof input.options.currentEntryId!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(input.options.currentEntryId)))throw new DocumentSemanticsError('invalid_request');if(input.options?.maxSteps!==undefined&&(!Number.isInteger(input.options.maxSteps)||input.options.maxSteps<1||input.options.maxSteps>2000000))throw new DocumentSemanticsError('invalid_request');const {searchTerms,ignorePaths,...scalars}=input.options??{};const definedScalars=Object.fromEntries(Object.entries(scalars).filter(([,value])=>value!==undefined));const options:NonNullable<Parameters<DocumentTransport['base']>[0]['options']>={...definedScalars,clockMs:scalars.clockMs===undefined?Date.now():scalars.clockMs,maxRows:scalars.maxRows===undefined?1000:scalars.maxRows};if(searchTerms)options.searchTerms=[...searchTerms];if(ignorePaths)options.ignorePaths=[...ignorePaths];const request={pinId,id:input.id,viewName:input.viewName,options};const result=report<DocumentBaseRead>(await call(request,()=>transport.base(request)));const value=object(result.value),body=object(value.result);if(Object.hasOwn(body,'refreshHint'))baseRefreshHint(body.refreshHint,options.clockMs!);return result;},
       });
     },
   };

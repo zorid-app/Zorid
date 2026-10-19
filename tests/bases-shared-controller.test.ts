@@ -45,7 +45,7 @@ async function fixture() {
   };
   const vault = new Vault(adapter); await vault.initialize();
   const published: string[][] = [];
-  const controller = new BaseController({ vault, basePath: 'Work.base', query: { maxSteps: 123, now: () => new Date(42) }, delayMs: 1000,
+  const controller = new BaseController({ vault, basePath: 'Work.base', query: { maxSteps: 123, now: () => new Date(42), timezone: 'UTC' }, delayMs: 1000,
     mutations: { async transform(path, transform, validate, _validateWrite, witness) { edits.push({ path, witness }); validate(); await vault.modify(path, transform(await vault.read(path))); } },
     onChange: state => { if (state.result) published.push(state.result.rows.map(row => row.path)); } });
   await controller.refresh(); assert.equal(controller.state.error, null);

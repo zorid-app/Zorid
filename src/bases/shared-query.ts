@@ -7,10 +7,15 @@ import { BASE_NULL, BaseExpressionError } from './expression.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import type { BaseQueryOptions, BaseQueryResult, BaseQueryDiagnostic } from './query.ts';
 import type { BaseViewConfig } from './document.ts';
+import { createBaseClockHost } from './clock.ts';
+import type { BaseClockCapture, BaseClockHost } from './clock.ts';
 
 function invalid(message = 'The shared Base response does not match the saved snapshot.'): never { throw new Error(message); }
 export interface BaseSavedWitness { readonly entryId: string; readonly revision: string }
 const witnesses = new WeakMap<BaseQueryResult, ReadonlyMap<string, BaseSavedWitness>>();
+const captures = new WeakMap<BaseQueryResult, BaseClockCapture>();
+/** Exact host input retained only for wake comparisons, never row authority. */
+export function sharedBaseCapture(result: BaseQueryResult): BaseClockCapture | undefined { return captures.get(result); }
 /** Only Rust-produced results have witnesses; absence never creates a shared edit fallback. */
 export function sharedBaseWitness(result: BaseQueryResult, path: string): BaseSavedWitness | undefined {
   const saved = witnesses.get(result);
@@ -93,11 +98,12 @@ export function projectSharedBaseResult(raw: DocumentBaseResult, version: number
 interface Run { active: boolean; opening: boolean; reading: boolean; finalRetry?: boolean; pin?: DocumentPin; closing?: Promise<void> }
 export interface SharedBaseQueryInput {
   service: DocumentService; definition: VaultEntry; current: VaultEntry; entries: readonly VaultEntry[];
-  query: BaseQueryOptions; viewIndex: number; viewName?: string; version: number; isCurrent(): boolean;
+  query: BaseQueryOptions; viewIndex: number; viewName?: string; version: number; isCurrent(): boolean; clock?: BaseClockHost;
 }
 export class SharedBaseQueryRunner {
   private runs = new Set<Run>();
   private disposed = false;
+  private clock = createBaseClockHost();
   private close(run: Run): Promise<void> {
     if (run.closing) return run.closing;
     // DocumentPin does not promise that closing may overlap an in-flight read.
@@ -124,8 +130,6 @@ export class SharedBaseQueryRunner {
       await Promise.all([...this.runs].filter(other => other !== run && !other.active).map(other => this.close(other))); check();
       if (input.query.functions) return invalid('Custom Base functions are unavailable with shared document queries.');
       if (!input.definition.entryId || !input.definition.revision || !input.current.entryId || !input.current.revision) return invalid('Saved entry identity is unavailable for this Base.');
-      const clockMs = input.query.now?.().getTime() ?? Date.now();
-      if (!Number.isSafeInteger(clockMs)) return invalid('The Base query clock is invalid.');
       const ignorePaths = input.query.ignore ? input.entries.filter(entry => entry.type === 'file' && input.query.ignore!(entry.path)).map(entry => entry.path) : undefined;
       const maintained = await catchUpDocumentIndex(input.service, { isCurrent: live }); check();
       if (!maintained.current || !maintained.snapshot || maintained.rebuildRequired) return invalid('Saved notes are still being indexed. Refresh this Base to continue.');
@@ -137,13 +141,20 @@ export class SharedBaseQueryRunner {
       const metadata = await read(() => pin.metadata(input.definition.entryId!)); check();
       const definition = metadata.value.entry;
       if (definition.id !== input.definition.entryId || definition.revision !== input.definition.revision || definition.path !== input.definition.path) return invalid('The Base definition changed. Refresh before editing.');
-      const timezone = 'UTC';
+      // Capture after index catch-up and retained definition admission, so a
+      // long first build does not age the invocation before Rust evaluates it.
+      const captured = (input.clock ?? this.clock).capture(input.query.timezone);
+      const clockMs = input.query.now?.().getTime() ?? captured.clockMs;
+      if (!Number.isSafeInteger(clockMs)) return invalid('The Base query clock is invalid.');
+      const timezone = captured.timezone;
       const options = { viewIndex: input.viewIndex, searchTerms: input.query.searchTerms, ignorePaths, clockMs, timezone, maxRows: 1000,
         currentEntryId: input.current.entryId, maxSteps: input.query.maxSteps };
       const report = await read(() => pin.base({ id: definition.id, viewName: input.viewName, options })); check();
       if (report.value.definition.id !== definition.id || report.value.definition.revision !== definition.revision || report.value.definition.path !== definition.path
         || JSON.stringify(report.value.result.snapshotId) !== JSON.stringify(pin.snapshot)) return invalid();
-      return projectSharedBaseResult(report.value.result, input.version, input.entries, timezone, definition);
+      const result = projectSharedBaseResult(report.value.result, input.version, input.entries, timezone, definition);
+      captures.set(result, Object.freeze({ clockMs, timezone }));
+      return result;
     } finally { run.active = false; await this.retire(run); }
   }
 }

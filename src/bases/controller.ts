@@ -2,7 +2,9 @@ import { BaseDocument } from './document.ts';
 import type { BaseValue, BaseViewPatch } from './document.ts';
 import { executeBaseQuery, normalizeBaseProperty } from './query.ts';
 import type { BaseQueryOptions, BaseQueryResult } from './query.ts';
-import { SharedBaseQueryRunner, sharedBaseWitness } from './shared-query.ts';
+import { SharedBaseQueryRunner, sharedBaseWitness, sharedBaseCapture } from './shared-query.ts';
+import { createBaseClockHost } from './clock.ts';
+import type { BaseClockCapture, BaseClockHost } from './clock.ts';
 import type { BaseSavedWitness } from './shared-query.ts';
 import { readProperties, removeProperty, setProperty } from '../core/properties.ts';
 import { isMarkdown, normalizePath } from '../core/types.ts';
@@ -73,6 +75,8 @@ export interface BaseControllerOptions {
   basePath: string;
   mutations: BaseMutationHost;
   query?: BaseQueryOptions;
+  /** View/host visibility and clock effects; never query semantics. */
+  clock?: BaseClockHost;
   /** Internal embedded-view binding, resolved against each fresh configuration. */
   viewName?: string;
   /** A fixed coalescing window; sustained events cannot postpone refresh forever. */
@@ -103,10 +107,16 @@ export class BaseController {
   private refreshing = false;
   private requested = false;
   private sharedQueries = new SharedBaseQueryRunner();
+  private clock: BaseClockHost;
+  private lastCapture?: BaseClockCapture;
+  private cancelWake?: () => void;
+  private wakeSerial = 0;
+  private stale = true;
   private current: BaseControllerState = Object.freeze({ version: 0, source: '', result: null, error: null });
 
   constructor(options: BaseControllerOptions) {
     this.options = options; this.path = normalizePath(options.basePath);
+    this.clock = options.clock ?? createBaseClockHost();
     this.query = { ...options.query }; this.viewName = options.viewName;
     for (const path of options.vault.entries.keys()) this.identities.set(path, ++this.nextIdentity);
     this.subscriptions = (['create', 'modify', 'rename', 'delete', 'ready'] as const).map(event => options.vault.on(event, change => {
@@ -115,9 +125,11 @@ export class BaseController {
         for (const path of this.identities.keys()) if (path === previous || path.startsWith(previous + '/')) this.identities.delete(path);
       }
       for (const path of options.vault.entries.keys()) if (!this.identities.has(path)) this.identities.set(path, ++this.nextIdentity);
+      this.stale = true; this.clearWake();
       this.epoch++; this.sharedQueries.cancel();
       this.schedule();
     }));
+    this.subscriptions.push(this.clock.subscribeWake(() => this.onClockWake()));
     this.schedule();
   }
 
@@ -126,12 +138,45 @@ export class BaseController {
   get selectedViewIndex(): number { return this.query.viewIndex ?? 0; }
 
   private schedule(): void {
-    if (this.disposed || this.timer !== undefined) return;
+    if (this.disposed || !this.clock.isVisible() || this.timer !== undefined) return;
     this.timer = setTimeout(() => { this.timer = undefined; void this.refresh(); }, Math.max(0, Math.min(1000, this.options.delayMs ?? 30)));
+  }
+
+  private clearWake(): void { this.wakeSerial++; this.cancelWake?.(); this.cancelWake = undefined; }
+
+  private armWake(result = this.current.result): void {
+    this.clearWake();
+    // An explicit fixed query clock cannot advance when a host wall timer fires.
+    if (this.disposed || this.stale || !this.clock.isVisible() || this.query.now) return;
+    const hint = result?.shared?.refreshHint;
+    if (!hint || hint.dependency === 'none' || hint.nextWakeMs === null) return;
+    const serial = this.wakeSerial;
+    this.cancelWake = this.clock.scheduleAt(hint.nextWakeMs, () => {
+      if (this.disposed || serial !== this.wakeSerial) return;
+      this.cancelWake = undefined; this.onClockWake();
+    });
+  }
+
+  private onClockWake(): void {
+    if (this.disposed) return;
+    this.clearWake();
+    if (!this.clock.isVisible()) {
+      if (this.timer !== undefined) { clearTimeout(this.timer); this.timer = undefined; }
+      if (this.refreshing) { this.stale = true; this.epoch++; this.sharedQueries.cancel(); }
+      return;
+    }
+    const capture = this.clock.capture(this.query.timezone);
+    const zoneChanged = this.lastCapture !== undefined && capture.timezone !== this.lastCapture.timezone;
+    const hint = this.current.result?.shared?.refreshHint;
+    const missed = !this.query.now && hint && hint.dependency !== 'none' && hint.nextWakeMs !== null && hint.nextWakeMs <= capture.clockMs;
+    if (this.stale || zoneChanged || missed) {
+      this.stale = true; this.epoch++; this.sharedQueries.cancel(); void this.refresh();
+    } else this.armWake();
   }
 
   /** Refresh failures are represented in state; mutation failures reject to the caller. */
   refresh(): Promise<void> {
+    this.clearWake(); this.stale = true;
     if (this.timer !== undefined) { clearTimeout(this.timer); this.timer = undefined; }
     const refresh = async () => {
       if (this.disposed) return;
@@ -155,7 +200,7 @@ export class BaseController {
           const current = currentPath === this.path ? definition : await observe(currentPath);
           if (!definition || !current) throw new Error('The saved Base or current file is unavailable.');
           result = await this.sharedQueries.query({ service, definition, current, entries: [...this.options.vault.entries.values()], query: this.query,
-            viewIndex, viewName: this.viewName, version, isCurrent: () => !this.disposed && epoch === this.epoch });
+            viewIndex, viewName: this.viewName, version, clock: this.clock, isCurrent: () => !this.disposed && epoch === this.epoch });
           if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
           const latest = await observe(this.path);
           if (!latest || latest.entryId !== definition.entryId || latest.revision !== definition.revision) throw new Error('The Base definition changed. Refresh before editing.');
@@ -169,6 +214,8 @@ export class BaseController {
           result = executeBaseQuery(document, { version, files }, { currentFilePath: this.path, ...this.query, viewIndex });
         }
         this.query = { ...this.query, viewIndex };
+        this.lastCapture = sharedBaseCapture(result);
+        this.stale = false; this.armWake(result);
         const signature = JSON.stringify([source, this.identities.get(this.path), result.rows.map(row => this.identities.get(row.path)), { ...result, version: 0 }]);
         if (signature === this.signature && !this.current.error) return;
         this.version = version; this.signature = signature;
@@ -201,7 +248,7 @@ export class BaseController {
       // cannot retarget an embedded view to an unrelated configuration.
       this.viewName = view.name;
     }
-    this.query = { ...this.query, viewIndex }; this.epoch++; this.sharedQueries.cancel();
+    this.query = { ...this.query, viewIndex }; this.stale = true; this.clearWake(); this.epoch++; this.sharedQueries.cancel();
     return this.refresh();
   }
 
@@ -277,7 +324,7 @@ export class BaseController {
   }
 
   dispose(): void {
-    this.disposed = true; this.epoch++; this.sharedQueries.dispose();
+    this.disposed = true; this.clearWake(); this.epoch++; this.sharedQueries.dispose();
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.subscriptions.forEach(unsubscribe => unsubscribe()); this.subscriptions = [];
   }
