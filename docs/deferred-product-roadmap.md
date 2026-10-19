@@ -9,6 +9,47 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Current integration update after `a38416db`:
+
+- Actual matching release Electron `d38af6cf`: import34/34, grouped33/33
+  results/counts/continuation and case/group controls pass. Runs002/003 stop at
+  native HTML select input: trusted keys reach the focused select but no change
+  event/value change occurs. This is an inconclusive native automation gate,
+  not an established product sort defect. Dense navigation and Find remain
+  unexecuted in this pass. All owned processes are gone; normal final quit was
+  not attempted on these failure paths. Evidence
+  `/private/tmp/zorid-s1-rich-electron-d38af6cf-003/report.json`.
+- Actual screenshots exposed unrelated file toolbar, scrolling search controls
+  and low-contrast default marks. Source-reviewed two-file polish is integrated
+  `a38416db`; actual repaint/scroll acceptance still pending. Existing matching
+  native release artifact remains unchanged; frontend needs a new build.
+- S1.4D source approvals: native/host `c52c1521` (22 native+11 host authored,
+  unexecuted), desktop scheduler `3f763282` (35 authored; bounded Node validation
+  currently assigned to `storage_recovery_impl`), desktop delivery `70538446`
+  (final focused/TypeScript unexecuted), common `1ac083c5`/`8f8fa08b`/`dfd64181`/
+  `608840c9` (initial20 Node checks only). Common type-only `9d5a4367` awaits
+  review/execution after10 TypeScript narrowing errors were exposed. Browser
+  `e83cf312` passes110 Node checks; full TypeScript failed, owned nullability
+  fix `3a4c7766` is source-approved. All normal runtime activations remain OFF
+  until coherent adapters, capable catch-up/rebuild and caller cancellation pass.
+  Do not infer actual no-listener liveness or fairness from these source reviews.
+- CLI runtime migration `3f2d3f9d` awaits its narrow visibility correction and
+  execution. Inode owner lookup `864710be` is source-approved atop earlier
+  `a6d57cb9`, with combined native/Store checks and same-cap measurements pending.
+  Clock boundary fix/tests `0278d835` and core refresh hints `cbdd3139` are
+  source-approved but unexecuted. Frontend temporal refresh owner `s1_query_audit`
+  works in isolated `s1-base-refresh-view`; first-build preview remains missing.
+- Resource floor remains1GiB. Exact obsolete compiled caches (100 old library
+  files, old `stage4-wasm-verified`,10 rebuildable test executables) and three
+  closed agent Chrome profiles were evicted after ownership/handle/source proofs;
+  prior archives, source, current libraries, actual CLI/release artifacts and
+  evidence were preserved. Tests whose executable caches were evicted require
+  relinking. App runs use the latest explicit1.70GB start gate. OS swap was
+  observed at7.5GiB total; the earlier unexplained disk drop is not attributed
+  without a before sample. Never close manual/user apps to free resources.
+
+The older summary below remains historical where this update supersedes it.
+
 Main through `ee7821a6` integrates grouped search/controller, common transport,
 pure rich paging, native binding, real WASM/browser binding, standalone rich CLI,
 pure lifecycle reducer and the measured transient snippet projector. The older
