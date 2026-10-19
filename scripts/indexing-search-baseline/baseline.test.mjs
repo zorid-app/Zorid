@@ -4,7 +4,7 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {generate,noteSource,noteSize,notePath,noteId,queries,literalOracle,expectedCount,sha256,json} from './workload.mjs';
-import {validateSearch,invoke,buildSource,validateWarmStatus,decodeReadyFrame,liveImportCoverage,importProgress,finalImportCoverage} from './cli.mjs';
+import {validateSearch,invoke,buildSource,validateWarmStatus,decodeReadyFrame,liveImportCoverage,importProgress,finalImportCoverage,runBaseline} from './cli.mjs';
 
 test('v1 exact template, UTF8 byte budgets and fixed source digest remain reproducible',()=>{
   const expected='---\nproject: project-0\nstatus: todo\nrank: 0\n---\n# Note 000000\n\ncommon-marker café 😀\nunique-000000\nrare-marker\nprefixSUBSTRsuffix\n[[/Notes/G000/Note-000001]]\n- [ ] Task\n';
@@ -73,4 +73,8 @@ test('final completed import cannot adopt changed, missing or duplicate observed
  const before=liveImportCoverage({entries:[a]},allowed);
  assert.equal(finalImportCoverage({entries:[b,a]},allowed,before).length,2);
  for(const entries of [[{...a,id:'new'},b],[{...a,revision:'new'},b],[b],[a,a],[a,{...b,id:a.id}]])assert.throws(()=>finalImportCoverage({entries},allowed,before));
+});
+
+test('import work budget is explicit and cannot reach or exceed its process bound',async()=>{
+ for(const importBudgetMs of [0,-1,1.5,1000,1001])await assert.rejects(runBaseline({out:'/unused',binary:'/unused',timeoutMs:1000,importBudgetMs}),/import-budget-ms/);
 });

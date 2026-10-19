@@ -57,9 +57,14 @@ The runner creates a fresh fixture and app-local data directory. With explicit
 `--native-host`, it initializes local-family authority through the same native
 `--initialize-local` entry point used by desktop, validates the single bounded
 ready frame and observes normal host exit after stdin EOF. CLI `rescan` then
-continues durable family inventory in bounded passes (5-second soft work budget,
+continues durable family inventory in bounded passes (5-second soft work budget
+by default, explicit `--import-budget-ms`,
 32 passes by default, `--max-import-passes` 1..1000). Each CLI process still has
-the explicit process timeout. Raw scan progress is retained; three passes without
+the explicit `--timeout-ms` process timeout. `--import-budget-ms` must be a
+positive integer below that hard bound; both bounds are recorded in the report.
+Untimed setup budgets can be chosen explicitly for representative runs after
+small-profile evidence, separately from measured indexing/query work. A 5-second
+smoke budget is not a product SLA. Raw scan progress is retained; three passes without
 proven same-inventory observed/finished progress or growth of the exact live
 file identity set stop as incomplete. Content imports can advance after the
 inventory has finished; public CLI listings verify that durable growth. Repeated

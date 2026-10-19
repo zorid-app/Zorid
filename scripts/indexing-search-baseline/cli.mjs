@@ -76,9 +76,10 @@ export async function invoke(binary,args,{environment,timeoutMs,maxOutputBytes=6
     child.once('close',(exitCode,signal)=>{clearTimeout(timer);clearTimeout(killTimer);resolve({args,wallMs:performance.now()-started,exitCode,signal,timedOut,outputLimit:overflow,stdout:stdoutEncoding==='buffer'?Buffer.concat(stdout):Buffer.concat(stdout).toString('utf8'),stderr:Buffer.concat(stderr).toString('utf8')});});
   });
 }
-export async function runBaseline({out,binary,notes=100,timeoutMs=60000,buildSha='unknown',buildMode='unknown',samples=1,stress=false,nativeHost,maxImportPasses=32}){
+export async function runBaseline({out,binary,notes=100,timeoutMs=60000,buildSha='unknown',buildMode='unknown',samples=1,stress=false,nativeHost,maxImportPasses=32,importBudgetMs=5000}){
   checkCount(notes);if(notes===100000&&!stress)throw Error('100k requires explicit --stress; retain expected resource limits');
   if(!Number.isSafeInteger(timeoutMs)||timeoutMs<100||timeoutMs>300000)throw Error('timeout-ms must be in100..300000');
+  if(!Number.isSafeInteger(importBudgetMs)||importBudgetMs<1||importBudgetMs>=timeoutMs)throw Error('import-budget-ms must be a positive integer below timeout-ms');
   if(!Number.isSafeInteger(maxImportPasses)||maxImportPasses<1||maxImportPasses>1000)throw Error('max-import-passes must be in1..1000');
   if(!Number.isSafeInteger(samples)||samples<1||samples>20)throw Error('samples must be in1..20');
   if(process.platform!=='darwin')throw Error('This native runtime baseline currently targets macOS only');
@@ -89,7 +90,7 @@ export async function runBaseline({out,binary,notes=100,timeoutMs=60000,buildSha
   const report={schemaVersion:1,scope:'standalone CLI on macOS; real native SQLite/source/index commands, no renderer/web/mobile responsiveness claim',status:'running',fixtureHash:fixture.fixtureHash,noteCount:notes,noteBytes:fixture.manifest.noteBytes,
     binary:{path:binary,sha256:sha256(await readFile(binary)),buildSha,buildMode,provenance:'buildSha/mode supplied by caller; executable bytes hashed, not inferred source correspondence'},
     environment:{node:process.version,os:os.release(),platform:process.platform,arch:process.arch,cpus:os.cpus().length,totalMemory:os.totalmem(),executor:'existing CLI implementation; no configured worker pool'},
-    setup:{generationMs,sourceAdmission:nativeHost?'public desktop-host --initialize-local + CLI rescan, local-family native authority; no Electron renderer claim':'public init + rescan, legacy non-enrolled native authority; no enrolled-family or desktop path claim',presentation:'manifest timestamps are synthetic. Current native source admission supplies actual presentation; no fixed-ctime claim and no ctime-dependent query oracle.'},
+    bounds:{processTimeoutMs:timeoutMs,importBudgetMs,maxImportPasses,samples},setup:{generationMs,sourceAdmission:nativeHost?'public desktop-host --initialize-local + CLI rescan, local-family native authority; no Electron renderer claim':'public init + rescan, legacy non-enrolled native authority; no enrolled-family or desktop path claim',presentation:'manifest timestamps are synthetic. Current native source admission supplies actual presentation; no fixed-ctime claim and no ctime-dependent query oracle.'},
     limitations:['first bounded tool, not complete S1.0 or performance acceptance','each command restarts CLI; repeated queries do not reuse one process-local pin','OS page cache uncontrolled','internal phase/cancellation/peak RSS metrics unavailable in this runner; process wall time includes startup','only literal oracle exercised; no Base/operator/regex or editor foreground gate','no source-corruption/cache-deletion/interruption/incremental mutation scenarios executed'],commands:[],queries:[],filesystemSourcePreserved:false,authoritySamples:[]};
   if(nativeHost)report.nativeHost={path:nativeHost,sha256:sha256(await readFile(nativeHost))};
   const environment={...process.env,ZORID_LOCAL_DATA_DIR:localData};delete environment.ZORID_IPC_ENDPOINT;delete environment.DISPLAY;
@@ -115,7 +116,7 @@ export async function runBaseline({out,binary,notes=100,timeoutMs=60000,buildSha
     let lastScan,lastCoverage,stalls=0;report.setup.importPasses=[];report.setup.importCoverage=[];
     const expectedPaths=new Set(fixture.manifest.entries.map(e=>e.path));
     for(let pass=0;pass<maxImportPasses;pass++){
-      const scan=await command(`import-${pass}`,['rescan','--max-entries','100000','--max-total-bytes',String(fixture.manifest.noteBytes+1024*1024),'--max-duration-ms',String(Math.min(5000,Math.floor(timeoutMs/2)))]);
+      const scan=await command(`import-${pass}`,['rescan','--max-entries','100000','--max-total-bytes',String(fixture.manifest.noteBytes+1024*1024),'--max-duration-ms',String(importBudgetMs)]);
       report.setup.importPasses.push(scan);
       if(scan.complete){lastScan=scan;break;}
       // Local-family inventory has a durable continuation. Legacy rescan starts
@@ -160,9 +161,9 @@ export async function runBaseline({out,binary,notes=100,timeoutMs=60000,buildSha
   return report;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
-  const {values}=parseArgs({options:{out:{type:'string'},cli:{type:'string'},notes:{type:'string',default:'100'},'timeout-ms':{type:'string',default:'60000'},samples:{type:'string',default:'1'},'build-sha':{type:'string',default:'unknown'},'build-mode':{type:'string',default:'unknown'},stress:{type:'boolean',default:false},'native-host':{type:'string'},'max-import-passes':{type:'string',default:'32'}}});
+  const {values}=parseArgs({options:{out:{type:'string'},cli:{type:'string'},notes:{type:'string',default:'100'},'timeout-ms':{type:'string',default:'60000'},samples:{type:'string',default:'1'},'build-sha':{type:'string',default:'unknown'},'build-mode':{type:'string',default:'unknown'},stress:{type:'boolean',default:false},'native-host':{type:'string'},'max-import-passes':{type:'string',default:'32'},'import-budget-ms':{type:'string',default:'5000'}}});
   if(!values.out||!values.cli)throw Error('Usage: node cli.mjs --out NEW_DIRECTORY --cli BUILT_ZORID [--notes 10000 --samples 1]');
-  const report=await runBaseline({out:values.out,binary:values.cli,notes:Number(values.notes),timeoutMs:Number(values['timeout-ms']),samples:Number(values.samples),buildSha:values['build-sha'],buildMode:values['build-mode'],stress:values.stress,nativeHost:values['native-host'],maxImportPasses:Number(values['max-import-passes'])});
+  const report=await runBaseline({out:values.out,binary:values.cli,notes:Number(values.notes),timeoutMs:Number(values['timeout-ms']),samples:Number(values.samples),buildSha:values['build-sha'],buildMode:values['build-mode'],stress:values.stress,nativeHost:values['native-host'],maxImportPasses:Number(values['max-import-passes']),importBudgetMs:Number(values['import-budget-ms'])});
   console.log(JSON.stringify({status:report.status,filesystemSourcePreserved:report.filesystemSourcePreserved,noteCount:report.noteCount,report:path.join(path.resolve(values.out),'report.json'),failure:report.failure}));
   if(report.status==='failed')process.exitCode=1;else if(report.status!=='bounded-scenarios-verified')process.exitCode=2;
 }
