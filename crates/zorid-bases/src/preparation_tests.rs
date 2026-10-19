@@ -393,13 +393,21 @@ fn actual_structure_bytes_evict_before_count_and_supported_large_prep_is_uncache
         "filters: file.path == \"large-0.md\"\nviews:\n  - type: table\n    name: Table\n    order: [file.path]\n",
     )
     .unwrap();
+    let expected = crate::query_generation(&program, &generation, &[], &r.options).unwrap();
+    assert_eq!(expected.rows.len(), 1);
     assert_eq!(
-        query_prepared(&program, &large, &r.options)
-            .unwrap()
-            .rows
-            .len(),
-        1
+        semantics(query_prepared(&program, &large, &r.options).unwrap()),
+        semantics(expected.clone())
     );
+    let mut tight = r.options.clone();
+    tight.max_steps = expected.steps_used;
+    let uncached = BasePreparationCache::new()
+        .prepare_generation(&generation, &[], &tight, 0)
+        .unwrap();
+    assert_eq!(uncached.outcome(), PreparationCacheOutcome::Uncached);
+    let actual = query_prepared(&program, &uncached, &tight).unwrap();
+    assert_eq!(actual.steps_used, expected.steps_used);
+    assert_eq!(semantics(actual), semantics(expected));
 }
 
 #[test]
@@ -500,13 +508,21 @@ fn optional_allowance_overflow_and_incomplete_copy_decline_without_retaining() {
     let r = first();
     let generation = r.generation();
     let mut maintenance = Maintenance::new(Some(&r.options));
-    assert!(GenerationProof::new(&generation, &r.facts, &mut maintenance, 0).is_none());
+    assert!(GenerationProof::new(
+        &generation,
+        &r.facts,
+        generation.records().count(),
+        &mut maintenance,
+        0
+    )
+    .is_none());
     assert!(maintenance.used <= MAX_PREPARATION_CACHE_WORK);
     let mut exhausted = Maintenance::new(Some(&r.options));
     exhausted.used = MAX_PREPARATION_CACHE_WORK;
     assert!(GenerationProof::new(
         &generation,
         &r.facts,
+        generation.records().count(),
         &mut exhausted,
         MAX_PREPARED_GENERATION_BYTES
     )
@@ -1514,4 +1530,147 @@ fn invocation_clock_domain_is_structured_and_shared_by_all_base_paths() {
             value: "sample".into()
         }
     );
+}
+
+#[test]
+fn proof_fixed_slots_precede_walks_and_keep_exact_record_count_and_fit() {
+    let mut r = first();
+    r.entries.push(EntryState {
+        id: crate::EntryId::new("folder-without-record").unwrap(),
+        path: zorid_core::VaultPath::new("Folder").unwrap(),
+        kind: zorid_core::EntryKind::Folder,
+        revision: crate::Revision::new("folder-r1").unwrap(),
+        deleted: false,
+    });
+    let generation = r.generation();
+    let prepared = BasePreparationCache::new()
+        .prepare_generation(&generation, &r.facts, &r.options, 0)
+        .unwrap();
+    let count = prepared.value().snapshot.records.len();
+    assert_eq!(count, generation.records().count());
+    assert!(count < generation.manifest().entries().len());
+    let fixed = GenerationProof::fixed_bytes(&generation, &r.facts, count).unwrap();
+    assert_eq!(
+        GenerationProof::fixed_bytes(&generation, &r.facts, count + 1).unwrap() - fixed,
+        size_of::<IndexRecord>()
+    );
+    let mut rejected = Maintenance::new(Some(&r.options));
+    assert!(GenerationProof::new(&generation, &r.facts, count, &mut rejected, fixed - 1).is_none());
+    assert_eq!(rejected.used, 1, "only the fixed-slot preflight may run");
+    assert!(GenerationProof::fixed_bytes(&generation, &r.facts, usize::MAX).is_none());
+    let mut overflow = Maintenance::new(Some(&r.options));
+    assert!(GenerationProof::new(
+        &generation,
+        &r.facts,
+        usize::MAX,
+        &mut overflow,
+        MAX_PREPARED_GENERATION_BYTES
+    )
+    .is_none());
+    assert_eq!(overflow.used, 1);
+    for wrong in [count - 1, count + 1] {
+        assert!(GenerationProof::new(
+            &generation,
+            &r.facts,
+            wrong,
+            &mut Maintenance::new(Some(&r.options)),
+            MAX_PREPARED_GENERATION_BYTES
+        )
+        .is_none());
+    }
+    let proof = GenerationProof::new(
+        &generation,
+        &r.facts,
+        count,
+        &mut Maintenance::new(Some(&r.options)),
+        MAX_PREPARED_GENERATION_BYTES,
+    )
+    .unwrap();
+    assert_eq!(
+        proof.record_work.capacity(),
+        generation.manifest().entries().len()
+    );
+    let exact = proof.retained_bytes();
+    for allowance in [exact - 1, exact, exact + 1] {
+        let result = GenerationProof::new(
+            &generation,
+            &r.facts,
+            count,
+            &mut Maintenance::new(Some(&r.options)),
+            allowance,
+        );
+        assert_eq!(result.is_some(), allowance >= exact);
+        if let Some(proof) = result {
+            assert_eq!(proof.retained_bytes(), exact);
+        }
+    }
+    let mut options = r.options.clone();
+    let token = crate::OperationCancellation::default();
+    token.cancel();
+    options.evaluation.cancellation = Some(token);
+    let mut cancelled = Maintenance::new(Some(&options));
+    assert!(
+        GenerationProof::new(&generation, &r.facts, count, &mut cancelled, fixed - 1).is_none()
+    );
+    assert_eq!(cancelled.used, 0);
+    assert_eq!(
+        BasePreparationCache::new()
+            .prepare_generation(&generation, &r.facts, &options, 0)
+            .err()
+            .unwrap()
+            .code,
+        "cancelled"
+    );
+}
+
+#[test]
+fn proof_running_heap_stops_after_each_record_entry_and_fact() {
+    let mut r = first();
+    r.facts = r
+        .entries
+        .iter()
+        .map(|entry| FilePresentationFacts {
+            witness: crate::RecordWitness {
+                entry_id: entry.id.clone(),
+                revision: entry.revision.clone(),
+            },
+            size: Some(1),
+            ctime_ms: None,
+            mtime_ms: None,
+        })
+        .collect();
+    let generation = r.generation();
+    let count = generation.records().count();
+    let fixed = GenerationProof::fixed_bytes(&generation, &r.facts, count).unwrap();
+    let mut measured = Maintenance::new(Some(&r.options));
+    measured.take(1).unwrap();
+    slots::<usize>(generation.manifest().entries().len(), &mut measured).unwrap();
+    let mut heap = 0usize;
+    let mut boundaries = Vec::new();
+    for record in generation.records() {
+        heap += record_heap(record, &mut measured).unwrap();
+        boundaries.push((heap, measured.used));
+    }
+    for entry in generation.manifest().entries() {
+        measured.take(state_work(entry)).unwrap();
+        heap += state_heap(entry);
+        boundaries.push((heap, measured.used));
+    }
+    for fact in &r.facts {
+        measured.take(fact_work(fact)).unwrap();
+        heap += fact_heap(fact);
+        boundaries.push((heap, measured.used));
+    }
+    assert!(boundaries.windows(2).all(|pair| pair[0].0 < pair[1].0));
+    for (heap, work) in boundaries {
+        let mut stopped = Maintenance::new(Some(&r.options));
+        assert!(
+            GenerationProof::new(&generation, &r.facts, count, &mut stopped, fixed + heap - 1)
+                .is_none()
+        );
+        assert_eq!(
+            stopped.used, work,
+            "walk continued beyond the remaining heap allowance"
+        );
+    }
 }

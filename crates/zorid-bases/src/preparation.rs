@@ -709,7 +709,13 @@ impl BasePreparationCache {
             .and_then(|bytes| {
                 let allowance = MAX_PREPARED_GENERATION_BYTES
                     .checked_sub(bytes.checked_add(overhead)?.checked_add(TOKEN_BYTES)?)?;
-                let proof = GenerationProof::new(generation, facts, &mut maintenance, allowance)?;
+                let proof = GenerationProof::new(
+                    generation,
+                    facts,
+                    value.snapshot.records.len(),
+                    &mut maintenance,
+                    allowance,
+                )?;
                 Some((
                     bytes
                         .checked_add(proof.retained_bytes())?
@@ -782,58 +788,21 @@ pub fn query_prepared(
     Ok(result)
 }
 impl GenerationProof {
-    fn new(
+    fn fixed_bytes(
         generation: &Generation,
         facts: &[FilePresentationFacts],
-        maintenance: &mut Maintenance<'_>,
-        allowance: usize,
-    ) -> Option<Self> {
-        // Only a bounded bookkeeping vector is allocated during measurement.
-        // No authority-derived entries, facts or metadata are cloned until the
-        // complete structure/copy costs and all retained bytes are admitted.
+        record_count: usize,
+    ) -> Option<usize> {
         let count = generation.manifest().entries().len();
-        let work_slots = slots::<usize>(count, maintenance)?;
-        if work_slots > allowance {
-            return None;
-        }
-        let mut record_work = Vec::with_capacity(count);
-        let mut record_heap_bytes = 0usize;
-        for record in generation.records() {
-            let before = maintenance.used;
-            let heap = record_heap(record, maintenance)?;
-            record_work.push(maintenance.used - before);
-            record_heap_bytes = costs([record_heap_bytes, heap])?;
-            if record_heap_bytes > allowance {
-                return None;
-            }
-        }
-        let mut entry_heap = 0usize;
-        let mut compare_work = record_work
-            .iter()
-            .copied()
-            .fold(0usize, usize::saturating_add);
-        for entry in generation.manifest().entries() {
-            maintenance.take(state_work(entry))?;
-            entry_heap = costs([entry_heap, state_heap(entry)])?;
-            compare_work = compare_work.checked_add(state_work(entry))?;
-        }
-        let mut facts_heap = 0usize;
-        for fact in facts {
-            maintenance.take(fact_work(fact))?;
-            facts_heap = costs([facts_heap, fact_heap(fact)])?;
-            compare_work = compare_work.checked_add(fact_work(fact))?;
-        }
-        let fixed = costs([
+        costs([
             size_of::<Self>(),
             count.checked_mul(size_of::<EntryState>())?,
-            entry_heap,
-            record_work.len().checked_mul(size_of::<IndexRecord>())?,
-            record_heap_bytes,
+            record_count.checked_mul(size_of::<IndexRecord>())?,
             facts
                 .len()
                 .checked_mul(size_of::<FilePresentationFacts>())?,
-            facts_heap,
-            record_work.capacity().checked_mul(size_of::<usize>())?,
+            // Preserve the existing manifest-sized bookkeeping allocation.
+            count.checked_mul(size_of::<usize>())?,
             snapshot_id_heap(generation.id()),
             generation
                 .manifest()
@@ -842,6 +811,69 @@ impl GenerationProof {
                 .as_str()
                 .len(),
             generation.manifest().source().watermark().as_str().len(),
+        ])
+    }
+    fn new(
+        generation: &Generation,
+        facts: &[FilePresentationFacts],
+        record_count: usize,
+        maintenance: &mut Maintenance<'_>,
+        allowance: usize,
+    ) -> Option<Self> {
+        // Only a bounded bookkeeping vector is allocated during measurement.
+        // No authority-derived entries, facts or metadata are cloned until the
+        // complete structure/copy costs and all retained bytes are admitted.
+        let count = generation.manifest().entries().len();
+        maintenance.take(1)?;
+        // The sealed snapshot already knows its exact record count. Admit all
+        // fixed proof buffers before allocating bookkeeping or walking metadata;
+        // manifest entries may additionally contain folders without records.
+        let fixed_bytes = Self::fixed_bytes(generation, facts, record_count)?;
+        let heap_allowance = allowance.checked_sub(fixed_bytes)?;
+        slots::<usize>(count, maintenance)?;
+        let mut record_work = Vec::with_capacity(count);
+        let mut heap_bytes = 0usize;
+        for record in generation.records() {
+            if record_work.len() >= record_count {
+                return None;
+            }
+            let before = maintenance.used;
+            let heap = record_heap(record, maintenance)?;
+            heap_bytes = costs([heap_bytes, heap])?;
+            if heap_bytes > heap_allowance {
+                return None;
+            }
+            record_work.push(maintenance.used - before);
+        }
+        if record_work.len() != record_count {
+            return None;
+        }
+        let mut compare_work = record_work
+            .iter()
+            .copied()
+            .fold(0usize, usize::saturating_add);
+        for entry in generation.manifest().entries() {
+            maintenance.take(state_work(entry))?;
+            heap_bytes = costs([heap_bytes, state_heap(entry)])?;
+            if heap_bytes > heap_allowance {
+                return None;
+            }
+            compare_work = compare_work.checked_add(state_work(entry))?;
+        }
+        for fact in facts {
+            maintenance.take(fact_work(fact))?;
+            heap_bytes = costs([heap_bytes, fact_heap(fact)])?;
+            if heap_bytes > heap_allowance {
+                return None;
+            }
+            compare_work = compare_work.checked_add(fact_work(fact))?;
+        }
+        // Count each fixed allocation once, retaining the final actual-capacity
+        // check before any proof entries/records/facts are copied.
+        let fixed = costs([
+            fixed_bytes.checked_sub(count.checked_mul(size_of::<usize>())?)?,
+            record_work.capacity().checked_mul(size_of::<usize>())?,
+            heap_bytes,
         ])?;
         if fixed > allowance {
             return None;
