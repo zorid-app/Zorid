@@ -1652,18 +1652,19 @@ export class Workspace {
     await this.openNote(path,newTab,pane,true,'',activation,guarded,entry.id);
     const expectedNavigation=navigation+1;
     if(!guarded()||this.navigationIntent.get(pane)!==expectedNavigation||this.current(pane)?.path!==path)return;
-    if(location?.locator.origin!=='source'||!pane.editor||!isMarkdown(path))return;
+    const editor=pane.editor;
+    if(location?.locator.origin!=='source'||!editor||!isMarkdown(path))return;
     const source=await vault.readDurableTextById(entry.id);
     if(!guarded()||this.navigationIntent.get(pane)!==expectedNavigation||this.current(pane)?.path!==path)return;
-    if(!pane.editor)return;
+    if(pane.editor!==editor)return;
     const buffer=this.buffers.get(path),saved=buffer?.savedDurableWitness;
     const range=location.locator.range.utf16;
     if(!source||source.path!==path||source.entryId!==entry.id||source.revision!==entry.revision||!buffer||buffer.dirty||buffer.error||saved?.entryId!==entry.id||saved.revision!==entry.revision
-      ||saved.path!==path||buffer.savedText!==source.content||buffer.text!==source.content||pane.editor?.getValue()!==source.content||range[1]>source.content.length){
+      ||saved.path!==path||buffer.savedText!==source.content||buffer.text!==source.content||editor.getValue()!==source.content||range[1]>source.content.length){
       notice('The note changed since this result. Refresh search to select its current match.');return;
     }
-    const state=pane.editor.getViewState?.();
-    if(state)pane.editor.restoreViewState?.({...state,selection:{ranges:[{anchor:range[0],head:range[1]}],mainIndex:0}});
+    const state=editor.getViewState?.();
+    if(state)editor.restoreViewState?.({...state,selection:{ranges:[{anchor:range[0],head:range[1]}],mainIndex:0}});
   }
 
   private async search(rebuild=false):Promise<void>{

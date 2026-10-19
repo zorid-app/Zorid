@@ -132,6 +132,7 @@ export function mountDocumentSearch(parent:HTMLElement,options:DocumentSearchCon
         if(existing){if(locationPayload(existing)!==locationPayload(location))invalid();}
         else{known.set(location.index,location);added.push(location);}
       }
+      if([...known.values()].filter(location=>location.occurrences>0).length>chunk.occurrenceCount)invalid();
       const bytes=new TextEncoder().encode(JSON.stringify(chunk)).byteLength;
       if((!previous&&groups.length>=MAX_GROUPS)||snippetCount+chunk.snippets.length>MAX_SNIPPETS||retainedBytes+bytes>MAX_BYTES){truncated=true;break;}
       retainedBytes+=bytes;snippetCount+=chunk.snippets.length;nextChunk=chunk.chunk+1;
@@ -140,6 +141,8 @@ export function mountDocumentSearch(parent:HTMLElement,options:DocumentSearchCon
         snippets:previous?[...previous.snippets,...chunk.snippets]:chunk.snippets,outputComplete:chunk.lastChunk};
       if(previous)groups[groups.length-1]=combined;else groups.push(combined);
     }
+    if(page.totals.files.relation!=='unknown'&&groups.length>page.totals.files.value)invalid();
+    if(page.totals.occurrences.relation!=='unknown'&&groups.reduce((sum,group)=>sum+BigInt(group.occurrenceCount),0n)>BigInt(page.totals.occurrences.value))invalid();
     lastPage=page;
     result={snapshot:page.snapshot,source:pin!.source,totals:page.totals,coverage:page.coverage,coverageComplete:page.coverageComplete,
       outputComplete:page.outputComplete,complete:page.complete,explanation:page.explanation};

@@ -387,3 +387,12 @@ test('a later rich result click reserves navigation before an older stat lookup 
   const first=nav.invoke(undefined);await until(()=>calls===1,'first stat pending');await nav.invoke(undefined);assert.equal(nav.opens,1);
   pending.resolve(ui.workspace.vault.entries.get('Note.md'));await first;assert.equal(nav.opens,1);
 });
+
+test('post-open source proof cannot select into a same-path replacement editor',async t=>{
+  const ui=await setup(t),nav=prepareRichNavigation(ui),pending=deferred<any>();let reading=false;
+  ui.workspace.vault.readDurableTextById=()=>{reading=true;return pending.promise;};
+  const opening=nav.invoke({locator:{origin:'source',range:{bytes:[0,1],utf16:[0,1]}}});await until(()=>reading,'source proof pending');
+  const replacementSelections:any[]=[];ui.workspace.activePane.editor={...ui.workspace.activePane.editor!,restoreViewState:state=>replacementSelections.push(state)};
+  pending.resolve({entryId:'note',revision:'revision-note',path:'Note.md',content:'needle'});await opening;
+  assert.equal(nav.selections.length,0);assert.equal(replacementSelections.length,0);
+});

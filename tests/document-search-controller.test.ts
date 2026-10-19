@@ -156,3 +156,15 @@ test('newer admitted navigation retires older errors before they can repaint the
   activate();await until(()=>calls===1);const oldCurrent=ui.opened[0][3];activate();await until(()=>calls===2);assert.equal(oldCurrent(),false);
   pending.resolve();await new Promise(r=>setTimeout(r,5));assert.equal(ui.frame.message,undefined);await ui.controller.close();
 });
+
+test('cross-page unique file/count lower bounds validate authoritative totals without replacing displayed counts',async()=>{
+  for(const lowFiles of [true,false]){
+    let calls=0;const ui=fixture({query:async spec=>({queryId:'q',prepare:async()=>({state:'ready',cursor:'0' as DocumentCursor}),page:async()=>++calls===1?page(spec,[chunk()],'1'):page(spec,[{...chunk(),entry:{...entry,id:'other',path:'Other.md'}}],null,{totals:{files:{relation:'exact',value:lowFiles?1:2},occurrences:{relation:'exact',value:lowFiles?10:5}}}),close:async()=>{}})});
+    await ui.search('x');ui.callbacks.onAction(ui.frame,'loadMore');await ui.controller.ready;assert.equal(ui.frame.phase,'error');assert.equal(ui.frame.groups.length,1);assert.equal(ui.frame.result?.totals.occurrences.value,5);await ui.controller.close();
+  }
+});
+
+test('positive deduplicated location-index cardinality cannot exceed the authoritative per-file count',async()=>{
+  let calls=0;const ui=fixture({query:async spec=>({queryId:'q',prepare:async()=>({state:'ready',cursor:'0' as DocumentCursor}),page:async()=>++calls===1?page(spec,[chunk(0,false,1)],'1'):page(spec,[chunk(1,true,1)]),close:async()=>{}})});
+  await ui.search('x');ui.callbacks.onAction(ui.frame,'loadMore');await ui.controller.ready;assert.equal(ui.frame.phase,'error');assert.equal(ui.frame.groups[0].occurrenceCount,1);assert.equal(ui.frame.groups[0].locations.length,1);await ui.controller.close();
+});
