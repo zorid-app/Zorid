@@ -210,7 +210,7 @@ fn stage(vault: &mut NativeVault) -> Result<(DocumentIndexStage, bool)> {
     }
     Ok((vault.begin_document_index().map_err(failure)?, false))
 }
-fn open(vault: &NativeVault, expected: Option<&str>) -> Result<DocumentQueryPin> {
+pub(super) fn open(vault: &NativeVault, expected: Option<&str>) -> Result<DocumentQueryPin> {
     let expected = expected
         .map(|value| {
             if value.len() > MAX_SNAPSHOT_INPUT {
@@ -443,7 +443,7 @@ pub fn base(vault: &NativeVault, id: EntryId, options: BaseOptions) -> Result<Ve
         selected_view: options.view,
     })
 }
-fn failure(error: NativeDocumentError) -> Failure {
+pub(super) fn failure(error: NativeDocumentError) -> Failure {
     match error {
         NativeDocumentError::Native(error) => error.into(),
         NativeDocumentError::Index(DocumentIndexError::Authority(error)) => {

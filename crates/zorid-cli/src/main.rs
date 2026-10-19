@@ -3,6 +3,8 @@ mod binary;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod documents;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+mod documents_search;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod metadata;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod search;
@@ -160,13 +162,19 @@ enum Command {
         #[command(subcommand)]
         command: documents::IndexCommand,
     },
-    /// Search a published Rust index; never implicitly build or scan files.
+    /// Search a published Rust index literally; never implicitly build or scan files.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     IndexedSearch {
         #[arg(value_parser = search_query)]
         query: String,
         #[command(flatten)]
         options: documents::PageOptions,
+    },
+    /// Stream a rich Rust query over one published snapshot as bounded NDJSON.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    IndexedQuery {
+        #[command(flatten)]
+        options: documents_search::Options,
     },
     /// Query incoming resolved links in one published document snapshot.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -218,6 +226,7 @@ fn search_query(value: &str) -> std::result::Result<String, String> {
     Ok(value.to_owned())
 }
 
+#[derive(Debug)]
 struct Failure {
     code: &'static str,
     message: &'static str,
@@ -764,6 +773,10 @@ fn run(args: Args) -> Result<Output> {
         }
         Command::IndexedSearch { query, options } => {
             return Ok(Output::Raw(documents::search(&vault, query, options)?));
+        }
+        Command::IndexedQuery { options } => {
+            documents_search::run(&vault, options)?;
+            return Ok(Output::Streamed);
         }
         Command::Backlinks { id, options } => {
             return Ok(Output::Raw(documents::backlinks(
