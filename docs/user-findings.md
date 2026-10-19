@@ -15,7 +15,22 @@ accepted S1.2 work can address conservative dependency-aware graph preparation,
 indexed resolution and bounded generation-keyed reuse, preserving tie/normalization
 semantics. No engine optimization or budget change has been implemented here.
 
-## S1 native setup scales with unrelated retained observations — source fix isolated
+## S1 native setup scales with repeated full-store work — first fix integrated
+
+The indexed unresolved-observation lookup is integrated through `2c53a98d`
+(production `239e639e`, reviewed source `9d2d3704`). Scoped193 checks pass with one
+existing ignored fixture; release build and normal-family100 source/query checks
+pass. Same-cap legacy10k still stops during setup:3,383 entries in240.256s versus
+the earlier2,378 in240.316s. Neither run reached indexing; no full-vault latency
+or completion-speedup claim follows. All10,003 physical sources remain exact.
+Evidence `/private/tmp/zorid-s1-cli-legacy-release-51060b1d-10000/report.json`.
+
+One authorized1s setup sample now identifies repeated `Store::list` calls used to
+find individual directory/file paths. `storage_sqlite_impl` is preparing four
+native selector replacements using the existing indexed `read_path_metadata`
+API, preserving selected-row validation, physical proofs, full recovery scans
+and absence inventories. No new schema/cache/API is required. Implementation and
+runtime verification of that follow-up remain separate from the first fix.
 
 The release10k legacy CLI attempt reached only2,378 entries within its explicit
 240s setup budget; no index/query latency was measured. All10,003 physical sources

@@ -235,6 +235,29 @@ this is not yet a runtime observation. Keep links and budgets intact and report
 any actual rejection as limited/incomplete. Dependency-aware preparation, indexed
 resolution and bounded reuse belong to accepted S1.2, not this baseline tool.
 
+First measured setup fix is integrated through main `2c53a98d` (production
+`239e639e`, reviewed `9d2d3704` plus test-only successors). Exact frozen candidate
+`51060b1d` release build passed; CLI SHA
+`eaecfb89c69c2b24c22c998a67582564b9a402172a2eceb60b8c7d8e41238821`, host SHA
+`26bbd6bbd7ad8bad90a60c6abb8a1f70f4e203d02caf6d369213f32cbcf5a143`.
+Normal-family100 passes all eight full query/source oracles, complete coverage,
+all103 physical sources and five authority reads,23 normal exit0 commands:
+`/private/tmp/zorid-s1-cli-family-release-51060b1d-100/report.json`.
+Same-cap legacy10k is terminal incomplete, rescan240.256s/3,383 observed entries,
+normal command exits, no index/query phase; all10,003 physical sources and binary
+hashes exact. Evidence `/private/tmp/zorid-s1-cli-legacy-release-51060b1d-10000/report.json`.
+This is partial progress versus2,378/240.316s, not a completion-speedup or10k index
+result. All owned build/runtime PIDs are gone. Prior release binaries remain
+verified immutable copies under `/private/tmp/zorid-s1-baseline-native-release-a200ef44`.
+
+The single authorized setup sample at96s now points to repeated full-store
+list/find operations for individual paths. Follow-up owner `storage_sqlite_impl`
+has four native selector replacements in preparation, using existing
+`Store::read_path_metadata`, no schema/API/cache addition. Independent core review
+is assigned; old full recovery/absence inventories and typed/physical checks must
+remain intact. No follow-up build/runtime is credited yet. Corrected Electron100
+on matching integrated source/native is next in the serialized slot.
+
 Owners: `s1_execution_audit` owns workload/native CLI baseline tooling;
 `s1_query_audit` owns the integrated language fixtures;
 `architecture_platform_audit` owns actual browser/normal Electron measurement
