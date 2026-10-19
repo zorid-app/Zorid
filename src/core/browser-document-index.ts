@@ -371,7 +371,7 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
     async rebuild(){active();for(const stage of stages.values()){stage.builder?.free();stage.generation?.free();}stages.clear();for(const pin of pins.values())pin.value.free();pins.clear();
       // Explicit rebuild expires every old pin; fresh epochs prevent token ABA.
       recovery=undefined;const nonce=crypto.randomUUID();await run<void>('readwrite',['control'],(tx,done)=>{putCatalog(tx,{...empty(),rebuilding:nonce});done();});
-      await parseCache.clear();
+      // Generation rebuild preserves the separate validated content-facts family.
       await cleanupPrefix(PREFIX+'g/');
       await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{if(c.rebuilding===nonce)putCatalog(tx,empty());done();},abort));
     },
