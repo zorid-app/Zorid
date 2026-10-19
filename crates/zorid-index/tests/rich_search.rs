@@ -684,6 +684,7 @@ fn tag_property_provenance_names_actual_first_selected_case_variant() {
         found.properties,
         vec![SearchPropertyMatch {
             key: "Tags".into(),
+            key_match: Some(SearchKeyMatch::Exists),
             array_path: vec![],
             value: None
         }]

@@ -12,6 +12,7 @@ struct Raw {
     filepath: Vec<Span>,
     key: Vec<Span>,
     properties: Vec<SearchPropertyMatch>,
+    property_proofs: Vec<proof::PropertyProof>,
     tags: Vec<SearchTagMatch>,
 }
 impl Raw {
@@ -21,6 +22,11 @@ impl Raw {
         self.filename.append(&mut other.filename);
         self.filepath.append(&mut other.filepath);
         self.key.append(&mut other.key);
+        let offset = self.properties.len();
+        for item in &mut other.property_proofs {
+            item.property += offset;
+        }
+        self.property_proofs.append(&mut other.property_proofs);
         self.properties.append(&mut other.properties);
         self.tags.append(&mut other.tags);
     }
@@ -223,6 +229,7 @@ where
                             no = true;
                         }
                         Outcome::Yes(found) => {
+                            self.charge(found.property_proofs.len())?;
                             result.get_or_insert_with(Raw::default).merge(found);
                         }
                         Outcome::Inapplicable => {}
@@ -357,13 +364,29 @@ where
             let mut key_context = c.clone();
             key_context.active = vec![Field::Key];
             key_context.key = Some(&property.key);
-            if !matches!(self.eval(key, &key_context)?, Outcome::Yes(_)) {
+            let Outcome::Yes(key_found) = self.eval(key, &key_context)? else {
                 continue;
-            }
+            };
             let Some(value_node) = value else {
                 self.output(1, property.key.len() + 32)?;
+                self.charge(key_found.key.len())?;
+                let spans = key_found.key;
+                let key_ranges = self.normalize(spans.clone())?;
+                self.scan(property.key.len())?;
+                let key_match = if key_ranges.is_empty() {
+                    SearchKeyMatch::Exists
+                } else {
+                    SearchKeyMatch::Ranges {
+                        ranges: coordinates(&property.key, &key_ranges)?,
+                    }
+                };
+                out.property_proofs.push(proof::PropertyProof {
+                    property: out.properties.len(),
+                    spans,
+                });
                 out.properties.push(SearchPropertyMatch {
                     key: property.key.clone(),
+                    key_match: Some(key_match),
                     array_path: vec![],
                     value: None,
                 });
@@ -391,7 +414,9 @@ where
                     if found.content.is_empty() {
                         continue;
                     }
-                    let spans = self.normalize(found.content)?;
+                    self.charge(found.content.len())?;
+                    let proof_spans = found.content;
+                    let spans = self.normalize(proof_spans.clone())?;
                     self.scan(text.len())?;
                     if spans.iter().any(|s| s.1 > text.len()) {
                         return Err(SearchError::InvalidDocument(
@@ -400,8 +425,13 @@ where
                     }
                     let ranges = coordinates(&text, &spans)?;
                     self.output(1, property.key.len() + text.len() + 64)?;
+                    out.property_proofs.push(proof::PropertyProof {
+                        property: out.properties.len(),
+                        spans: proof_spans,
+                    });
                     out.properties.push(SearchPropertyMatch {
                         key: property.key.clone(),
+                        key_match: None,
                         array_path: if matches!(property.value, PropertyValue::Array(_)) {
                             vec![i as u32]
                         } else {
@@ -694,8 +724,13 @@ where
                     let s = s.trim_matches(js_whitespace);
                     if !s.is_empty() && !s.contains(' ') && accepts_tag(s, &target) {
                         self.output(1, property.key.len() + 32)?;
+                        out.property_proofs.push(proof::PropertyProof {
+                            property: out.properties.len(),
+                            spans: vec![],
+                        });
                         out.properties.push(SearchPropertyMatch {
                             key: property.key.clone(),
+                            key_match: Some(SearchKeyMatch::Exists),
                             array_path: vec![],
                             value: None,
                         });
@@ -891,7 +926,10 @@ fn normalize(mut spans: Vec<Span>) -> Vec<Span> {
     result
 }
 /// Sorted disjoint spans allow a single monotonic Unicode coordinate pass.
-fn coordinates<E>(text: &str, spans: &[Span]) -> Result<Vec<SourceRange>, SearchError<E>> {
+pub(super) fn coordinates<E>(
+    text: &str,
+    spans: &[Span],
+) -> Result<Vec<SourceRange>, SearchError<E>> {
     let mut out = Vec::new();
     let mut byte = 0;
     let mut utf16 = 0;
@@ -1006,6 +1044,15 @@ where
         Outcome::Yes(r) => r,
     };
     e.charge(0)?;
+    e.charge(
+        raw.content
+            .len()
+            .saturating_add(raw.filename.len())
+            .saturating_add(raw.filepath.len()),
+    )?;
+    let source_proof = raw.content.clone();
+    let filename_proof = raw.filename.clone();
+    let filepath_proof = raw.filepath.clone();
     let content = e.normalize(raw.content)?;
     let anchors = e.normalize(raw.anchors)?;
     if !content.is_empty() || !anchors.is_empty() {
@@ -1044,6 +1091,17 @@ where
     }
     result.properties = raw.properties;
     result.tags = raw.tags;
+    let (locations, count) = proof::build(
+        &result,
+        source,
+        source_proof,
+        filename_proof,
+        filepath_proof,
+        raw.property_proofs,
+        &mut |units| e.charge(units),
+    )?;
+    result.locations = locations;
+    result.occurrence_count = count;
     // Final bounded serialization accounts for key escaping/locator overhead,
     // separately from the conservative allocation counters above.
     let mut encoded = SizeWriter {

@@ -56,6 +56,28 @@ pub(super) enum Node {
     Scope(Scope, Box<Node>),
     Property(Box<Node>, Option<Box<Node>>),
 }
+// Constructed in the same parser pass as Node. This preserves the evaluator's
+// enum and records consumed syntax before grouping/delimiter tokens disappear.
+struct ParsedNode {
+    node: Node,
+    explanation: ExplanationNode,
+}
+impl ParsedNode {
+    fn in_property_key_context(&mut self) {
+        fn apply(node: &mut ExplanationNode) {
+            // Evaluator::pattern compares quoted Field::Key operands by
+            // lowercase equality, independent of the inherited case variant.
+            // Ordinary key patterns and property values keep their context.
+            if node.kind == SearchExplanationKind::Quoted {
+                node.case_sensitive = false;
+            }
+            for child in &mut node.children {
+                apply(child);
+            }
+        }
+        apply(&mut self.explanation);
+    }
+}
 #[derive(Clone, Copy)]
 pub(super) enum Constant {
     True,
@@ -96,14 +118,33 @@ fn diagnostic(
 ) -> SearchDiagnostic {
     SearchDiagnostic {
         code,
-        query_range: SourceRange {
-            bytes: [start as u32, end as u32],
-            utf16: [
-                q[..start].encode_utf16().count() as u32,
-                q[..end].encode_utf16().count() as u32,
-            ],
-        },
+        query_range: query_range(q, start, end),
         message: message.into(),
+    }
+}
+fn query_range(q: &str, start: usize, end: usize) -> SourceRange {
+    SourceRange {
+        bytes: [start as u32, end as u32],
+        utf16: [
+            q[..start].encode_utf16().count() as u32,
+            q[..end].encode_utf16().count() as u32,
+        ],
+    }
+}
+fn explanation_scope(scope: Scope) -> SearchScope {
+    match scope {
+        Scope::File => SearchScope::File,
+        Scope::Path => SearchScope::Path,
+        Scope::Content => SearchScope::Content,
+        Scope::Line => SearchScope::Line,
+        Scope::Block => SearchScope::Block,
+        Scope::Section => SearchScope::Section,
+        Scope::Task => SearchScope::Task,
+        Scope::Todo => SearchScope::TaskTodo,
+        Scope::Done => SearchScope::TaskDone,
+        Scope::Tag => SearchScope::Tag,
+        Scope::Sensitive => SearchScope::MatchCase,
+        Scope::Insensitive => SearchScope::IgnoreCase,
     }
 }
 fn tokenize(q: &str, limits: &SearchLimits) -> Result<Vec<Token>, SearchDiagnostic> {
@@ -200,8 +241,44 @@ struct Parser<'a> {
     nodes: usize,
     limits: &'a SearchLimits,
     regex_budget: usize,
+    case_sensitive: bool,
 }
 impl Parser<'_> {
+    fn explained(
+        &self,
+        node: Node,
+        kind: SearchExplanationKind,
+        range: [usize; 2],
+        stack: &[Scope],
+        operand: Option<String>,
+        children: Vec<ExplanationNode>,
+    ) -> ParsedNode {
+        let scope = stack.iter().rev().find(|s| s.exclusive()).copied();
+        let sensitive = if scope == Some(Scope::Tag) {
+            false // Tag matching deliberately lowercases independent of options.
+        } else {
+            stack
+                .iter()
+                .rev()
+                .find_map(|s| match s {
+                    Scope::Sensitive => Some(true),
+                    Scope::Insensitive => Some(false),
+                    _ => None,
+                })
+                .unwrap_or(self.case_sensitive)
+        };
+        ParsedNode {
+            node,
+            explanation: ExplanationNode {
+                kind,
+                query_range: query_range(self.q, range[0], range[1]),
+                case_sensitive: sensitive,
+                scope: scope.map(explanation_scope),
+                operand,
+                children,
+            },
+        }
+    }
     fn error(&self, c: SearchDiagnosticCode, t: &Token, m: &str) -> SearchDiagnostic {
         diagnostic(self.q, c, t.start, t.end, m)
     }
@@ -211,7 +288,7 @@ impl Parser<'_> {
         stack: &[Scope],
         property: bool,
         depth: usize,
-    ) -> Result<Option<Node>, SearchDiagnostic> {
+    ) -> Result<Option<ParsedNode>, SearchDiagnostic> {
         let mut children = Vec::new();
         loop {
             let child = if or {
@@ -242,11 +319,20 @@ impl Parser<'_> {
         Ok(match children.len() {
             0 => None,
             1 => children.pop(),
-            _ => Some(if or {
-                Node::Or(children)
-            } else {
-                Node::And(children)
-            }),
+            _ => {
+                let start = children.first().unwrap().explanation.query_range.bytes[0] as usize;
+                let end = children.last().unwrap().explanation.query_range.bytes[1] as usize;
+                let (nodes, explanations) = children
+                    .into_iter()
+                    .map(|c| (c.node, c.explanation))
+                    .unzip();
+                let (node, kind) = if or {
+                    (Node::Or(nodes), SearchExplanationKind::Or)
+                } else {
+                    (Node::And(nodes), SearchExplanationKind::And)
+                };
+                Some(self.explained(node, kind, [start, end], stack, None, explanations))
+            }
         })
     }
     fn unary(
@@ -254,7 +340,7 @@ impl Parser<'_> {
         stack: &[Scope],
         property: bool,
         depth: usize,
-    ) -> Result<Option<Node>, SearchDiagnostic> {
+    ) -> Result<Option<ParsedNode>, SearchDiagnostic> {
         let Some(t) = self.tokens.get(self.at).cloned() else {
             return Ok(None);
         };
@@ -297,18 +383,29 @@ impl Parser<'_> {
             next.push(scope);
             let child = match self.unary(&next, property, depth + 1)? {
                 Some(c) => c,
-                None => self.empty(&t)?,
+                None => self.empty(&t, &next)?,
             };
-            if scope == Scope::Tag && !matches!(&child,Node::Pattern(p) if !p.quoted&&!p.regex) {
+            if scope == Scope::Tag && !matches!(&child.node,Node::Pattern(p) if !p.quoted&&!p.regex)
+            {
                 return Err(self.error(
                     SearchDiagnosticCode::InvalidOperand,
                     &t,
                     "tag requires plain text",
                 ));
             }
-            return Ok(Some(Node::Scope(scope, Box::new(child))));
+            let end = self.tokens[self.at - 1].end;
+            let mut parsed = self.explained(
+                Node::Scope(scope, Box::new(child.node)),
+                SearchExplanationKind::Scope,
+                [t.start, end],
+                &next,
+                None,
+                vec![child.explanation],
+            );
+            parsed.explanation.scope = Some(explanation_scope(scope));
+            return Ok(Some(parsed));
         }
-        let node = match t.kind {
+        let (node, kind, operand, children) = match t.kind {
             Kind::Left => {
                 if property {
                     return Err(self.error(
@@ -317,10 +414,11 @@ impl Parser<'_> {
                         "Properties cannot be nested",
                     ));
                 }
-                let key = match self.group(true, stack, true, depth + 1)? {
+                let mut key = match self.group(true, stack, true, depth + 1)? {
                     Some(c) => c,
-                    None => self.empty(&t)?,
+                    None => self.empty(&t, stack)?,
                 };
+                key.in_property_key_context();
                 let value = if self.tokens.get(self.at).map(|t| t.kind) == Some(Kind::Colon) {
                     self.at += 1;
                     self.group(true, stack, true, depth + 1)?.map(Box::new)
@@ -330,29 +428,47 @@ impl Parser<'_> {
                 if self.tokens.get(self.at).map(|t| t.kind) == Some(Kind::Right) {
                     self.at += 1;
                 }
-                Node::Property(Box::new(key), value)
+                let mut children = vec![key.explanation];
+                let value = value.map(|v| {
+                    children.push(v.explanation);
+                    Box::new(v.node)
+                });
+                (
+                    Node::Property(Box::new(key.node), value),
+                    SearchExplanationKind::Property,
+                    None,
+                    children,
+                )
             }
             Kind::Open => {
                 let child = match self.group(true, stack, property, depth + 1)? {
                     Some(c) => c,
-                    None => self.empty(&t)?,
+                    None => self.empty(&t, stack)?,
                 };
                 if self.tokens.get(self.at).map(|t| t.kind) == Some(Kind::Close) {
                     self.at += 1;
                 }
-                child
+                let mut child = child;
+                child.explanation.query_range =
+                    query_range(self.q, t.start, self.tokens[self.at - 1].end);
+                return Ok(Some(child));
             }
             Kind::Minus => {
                 let Some(child) = self.unary(stack, property, depth + 1)? else {
                     return Ok(None);
                 };
-                Node::Not(Box::new(child))
+                (
+                    Node::Not(Box::new(child.node)),
+                    SearchExplanationKind::Not,
+                    None,
+                    vec![child.explanation],
+                )
             }
             Kind::Less | Kind::Greater => {
                 let Some(child) = self.unary(stack, property, depth + 1)? else {
                     return Ok(None);
                 };
-                let Node::Pattern(p) = child else {
+                let Node::Pattern(p) = child.node else {
                     return Err(self.error(
                         SearchDiagnosticCode::InvalidOperand,
                         &t,
@@ -366,16 +482,58 @@ impl Parser<'_> {
                         "Comparison requires text",
                     ));
                 }
-                Node::Compare(t.kind == Kind::Less, p.text)
+                // Keep the comparator in the operand: otherwise the explanation
+                // would erase the distinction between <text and >text.
+                let operand = format!("{}{}", t.value, p.text);
+                (
+                    Node::Compare(t.kind == Kind::Less, p.text),
+                    SearchExplanationKind::Compare,
+                    Some(operand),
+                    Vec::new(),
+                )
             }
-            Kind::True => Node::Constant(Constant::True),
-            Kind::False => Node::Constant(Constant::False),
-            Kind::Empty => Node::Constant(Constant::Empty),
-            _ => Node::Pattern(pattern(self.q, &t, self.regex_budget)?),
+            Kind::True => (
+                Node::Constant(Constant::True),
+                SearchExplanationKind::Constant,
+                Some(t.value.clone()),
+                Vec::new(),
+            ),
+            Kind::False => (
+                Node::Constant(Constant::False),
+                SearchExplanationKind::Constant,
+                Some(t.value.clone()),
+                Vec::new(),
+            ),
+            Kind::Empty => (
+                Node::Constant(Constant::Empty),
+                SearchExplanationKind::Constant,
+                Some(t.value.clone()),
+                Vec::new(),
+            ),
+            _ => {
+                let kind = match t.kind {
+                    Kind::Quote => SearchExplanationKind::Quoted,
+                    Kind::Regex => SearchExplanationKind::Regex,
+                    _ => SearchExplanationKind::Text,
+                };
+                (
+                    Node::Pattern(pattern(self.q, &t, self.regex_budget)?),
+                    kind,
+                    Some(t.value.clone()),
+                    Vec::new(),
+                )
+            }
         };
-        Ok(Some(node))
+        Ok(Some(self.explained(
+            node,
+            kind,
+            [t.start, self.tokens[self.at - 1].end],
+            stack,
+            operand,
+            children,
+        )))
     }
-    fn empty(&mut self, t: &Token) -> Result<Node, SearchDiagnostic> {
+    fn empty(&mut self, t: &Token, stack: &[Scope]) -> Result<ParsedNode, SearchDiagnostic> {
         if self.nodes >= self.limits.nodes {
             return Err(self.error(
                 SearchDiagnosticCode::Resource,
@@ -387,7 +545,17 @@ impl Parser<'_> {
         let mut t = t.clone();
         t.kind = Kind::Text;
         t.value.clear();
-        Ok(Node::Pattern(pattern(self.q, &t, self.regex_budget)?))
+        // An implicit operand has no source characters. Anchor it after the
+        // consumed opener/colon rather than attributing the operator's text.
+        let at = self.tokens[self.at.saturating_sub(1)].end;
+        Ok(self.explained(
+            Node::Pattern(pattern(self.q, &t, self.regex_budget)?),
+            SearchExplanationKind::Text,
+            [at, at],
+            stack,
+            Some(String::new()),
+            Vec::new(),
+        ))
     }
 }
 fn pattern(q: &str, t: &Token, budget: usize) -> Result<Pattern, SearchDiagnostic> {
@@ -509,7 +677,11 @@ fn unsupported(s: &str) -> bool {
     false
 }
 
-pub(super) fn compile(q: &str, l: &SearchLimits) -> Result<Option<Node>, SearchDiagnostic> {
+pub(super) fn compile(
+    q: &str,
+    l: &SearchLimits,
+    case_sensitive: bool,
+) -> Result<(Option<Node>, Option<ExplanationNode>, usize), SearchDiagnostic> {
     if !l.valid() || q.len() > l.query_bytes {
         return Err(diagnostic(
             q,
@@ -540,8 +712,63 @@ pub(super) fn compile(q: &str, l: &SearchLimits) -> Result<Option<Node>, SearchD
         nodes: 0,
         limits: l,
         regex_budget,
+        case_sensitive,
     };
-    parser.group(true, &[], false, 0)
+    Ok(match parser.group(true, &[], false, 0)? {
+        Some(parsed) => (Some(parsed.node), Some(parsed.explanation), regex_budget),
+        None => (None, None, regex_budget),
+    })
+}
+
+/// Dynamic allocations under Node; its inline size is counted by its owner.
+/// Regex internals do not expose allocator capacities: reserve the admitted
+/// compiled-program and lazy-DFA component limits for each retained variant.
+/// This is a component admission estimate, not a total regex/process heap bound.
+pub(super) fn retained_bytes(node: &Node, regex_budget: usize) -> usize {
+    use std::mem::size_of;
+    match node {
+        Node::Pattern(p) => p
+            .text
+            .capacity()
+            .saturating_add(regex_budget.saturating_mul(4))
+            // Regex stores its source separately from our decoded operand.
+            .saturating_add(p.sensitive.as_str().len().saturating_mul(2)),
+        Node::Compare(_, s) => s.capacity(),
+        Node::And(children) | Node::Or(children) => children
+            .capacity()
+            .saturating_mul(size_of::<Node>())
+            .saturating_add(
+                children
+                    .iter()
+                    .map(|c| retained_bytes(c, regex_budget))
+                    .fold(0usize, usize::saturating_add),
+            ),
+        Node::Not(c) | Node::Scope(_, c) => {
+            size_of::<Node>().saturating_add(retained_bytes(c, regex_budget))
+        }
+        Node::Property(key, value) => size_of::<Node>()
+            .saturating_add(retained_bytes(key, regex_budget))
+            .saturating_add(value.as_ref().map_or(0, |v| {
+                size_of::<Node>().saturating_add(retained_bytes(v, regex_budget))
+            })),
+        Node::Constant(_) => 0,
+    }
+}
+pub(super) fn explanation_retained_bytes(node: &ExplanationNode) -> usize {
+    node.operand
+        .as_ref()
+        .map_or(0, String::capacity)
+        .saturating_add(
+            node.children
+                .capacity()
+                .saturating_mul(std::mem::size_of::<ExplanationNode>()),
+        )
+        .saturating_add(
+            node.children
+                .iter()
+                .map(explanation_retained_bytes)
+                .fold(0usize, usize::saturating_add),
+        )
 }
 pub(super) fn requirements(node: &Node) -> SearchRequirements {
     match node {

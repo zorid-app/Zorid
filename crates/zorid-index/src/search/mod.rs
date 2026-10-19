@@ -29,9 +29,13 @@
 mod evaluate;
 mod order;
 pub use order::*;
-mod parser;
 mod page;
+mod parser;
+mod proof;
+mod snippet;
+mod runtime;
 pub use page::*;
+pub use runtime::*;
 
 use serde::{Deserialize, Serialize};
 use zorid_document::{DocumentMetadata, SourceRange};
@@ -172,10 +176,13 @@ pub struct SearchPropertyValueMatch {
     pub text: String,
     pub ranges: Vec<SourceRange>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SearchPropertyMatch {
     pub key: String,
+    /// Exact key-relative proof for key-only queries; value selectors are omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_match: Option<SearchKeyMatch>,
     /// Array element locator, never source offsets or recursive object traversal.
     pub array_path: Vec<u32>,
     pub value: Option<SearchPropertyValueMatch>,
@@ -187,14 +194,69 @@ pub struct SearchTagMatch {
     /// Present only for an actual parser-produced inline tag occurrence.
     pub source_range: Option<SourceRange>,
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SearchMatches {
+    /// Strict-overlap occurrence proof, independent of touch-merged highlights.
+    pub occurrence_count: u32,
+    #[serde(skip)]
+    locations: Vec<proof::LocationProof>,
     pub content: Vec<SearchContentMatch>,
     pub filename: Option<SearchFieldMatches>,
     pub filepath: Option<SearchFieldMatches>,
     pub properties: Vec<SearchPropertyMatch>,
     pub tags: Vec<SearchTagMatch>,
+}
+impl SearchMatches {
+    /// Number of sealed locations; strings are materialized only on request.
+    pub fn locations_len(&self) -> usize {
+        self.locations.len()
+    }
+    /// Stable per-file ordinal. A cloned wire locator conveys no source authority.
+    pub fn location(&self, index: usize) -> Option<SearchLocation> {
+        self.locations
+            .get(index)
+            .and_then(|p| p.location(index as u32, self))
+    }
+    /// Owned retained allocation, including spare capacities and private proofs.
+    pub fn retained_bytes(&self) -> usize {
+        use std::mem::size_of;
+        let field = |f: &Option<SearchFieldMatches>| {
+            f.as_ref().map_or(0, |f| {
+                f.value.capacity() + f.ranges.capacity() * size_of::<SourceRange>()
+            })
+        };
+        size_of::<Self>()
+            + self.content.capacity() * size_of::<SearchContentMatch>()
+            + field(&self.filename)
+            + field(&self.filepath)
+            + self.properties.capacity() * size_of::<SearchPropertyMatch>()
+            + self
+                .properties
+                .iter()
+                .map(|p| {
+                    p.key.capacity()
+                        + p.array_path.capacity() * size_of::<u32>()
+                        + match &p.key_match {
+                            Some(SearchKeyMatch::Ranges { ranges }) => {
+                                ranges.capacity() * size_of::<SourceRange>()
+                            }
+                            _ => 0,
+                        }
+                        + p.value.as_ref().map_or(0, |v| {
+                            v.text.capacity() + v.ranges.capacity() * size_of::<SourceRange>()
+                        })
+                })
+                .sum::<usize>()
+            + self.tags.capacity() * size_of::<SearchTagMatch>()
+            + self.tags.iter().map(|t| t.name.capacity()).sum::<usize>()
+            + self.locations.capacity() * size_of::<proof::LocationProof>()
+            + self
+                .locations
+                .iter()
+                .map(proof::LocationProof::heap_bytes)
+                .sum::<usize>()
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SearchEvaluation {
@@ -216,7 +278,9 @@ pub struct CompiledSearchQuery {
     limits: SearchLimits,
     ast: Option<parser::Node>,
     requirements: SearchRequirements,
-    word: regex::Regex,
+    explanation: Option<ExplanationNode>,
+    regex_component_bytes: usize,
+    word: &'static regex::Regex,
 }
 impl CompiledSearchQuery {
     pub fn compile(
@@ -224,17 +288,23 @@ impl CompiledSearchQuery {
         options: SearchOptions,
         limits: SearchLimits,
     ) -> Result<Self, SearchDiagnostic> {
-        let ast = parser::compile(query, &limits)?;
+        let (ast, explanation, regex_component_bytes) =
+            parser::compile(query, &limits, options.case_sensitive)?;
         let requirements = ast
             .as_ref()
             .map_or(SearchRequirements::default(), parser::requirements);
-        let word = regex::Regex::new(r"^[\p{L}\p{Nd}]$").expect("fixed bounded word pattern");
+        static WORD: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let word = WORD.get_or_init(|| {
+            regex::Regex::new(r"^[\p{L}\p{Nd}]$").expect("fixed bounded word pattern")
+        });
         Ok(Self {
             query: query.into(),
             options,
             limits,
             ast,
             requirements,
+            explanation,
+            regex_component_bytes,
             word,
         })
     }
@@ -246,6 +316,34 @@ impl CompiledSearchQuery {
     }
     pub fn requirements(&self) -> SearchRequirements {
         self.requirements
+    }
+    /// Explanation of the exact compiled AST. No query reparsing or regex
+    /// compilation occurs here; ranges refer to the original query spelling.
+    /// The returned clone is caller-owned, outside this query's retained bytes.
+    pub fn explanation(&self) -> CoreSearchExplanation {
+        CoreSearchExplanation {
+            dialect: SEARCH_DIALECT.into(),
+            root: self.explanation.clone(),
+        }
+    }
+    /// Owned struct/string/AST/explanation capacities plus conservative admitted
+    /// regex compiled-program and lazy-DFA reservations for both case variants.
+    /// Regex does not expose actual internal heap capacities; these component
+    /// reservations are not a process/allocator heap bound. The shared static
+    /// Unicode word classifier is process-owned and excluded from query state.
+    pub fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            .saturating_add(self.query.capacity())
+            .saturating_add(
+                self.ast
+                    .as_ref()
+                    .map_or(0, |n| parser::retained_bytes(n, self.regex_component_bytes)),
+            )
+            .saturating_add(
+                self.explanation
+                    .as_ref()
+                    .map_or(0, parser::explanation_retained_bytes),
+            )
     }
     pub fn evaluate_checked<E>(
         &self,

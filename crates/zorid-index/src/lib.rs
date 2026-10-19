@@ -72,3 +72,9 @@ pub use search::{
     SearchPresentationFacts, MAX_SEARCH_ORDER_ADMISSION_WORK, MAX_SEARCH_ORDER_PUMP_WORK,
     MAX_SEARCH_ORDER_WORK,
 };
+
+pub use search::{
+    CommittedRichSearchPage, PreparedRichSearchPage, RichPageProfile, RichPreparation, RichQueryId,
+    RichSearchAction, RichSearchCursor, RichSearchDrive, RichSearchError, RichSearchOwner,
+    RichSearchWorkBreakdown, RichTextReadRequest,
+};
