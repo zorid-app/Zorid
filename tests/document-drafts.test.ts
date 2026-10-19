@@ -101,7 +101,9 @@ test('upload seal accepts host-shaped normal and Ready replay reductions without
   const input:DocumentDraftRequest={op:'upload_seal',job};
   const first=reply(input);first.result.state.execution='dispatch';
   const ready={...reply(input),result:{...reply(input).result,state:{...reply(input).result.state,execution:'wait_for_acknowledgement',outcomes:[{job,kind:'ready',reason:null}]}}};
-  for(const frame of [first,ready])assert.deepEqual(documentDraftReply(input,frame),frame.result);
+  const activeReplay={...first,result:{...first.result,state:{...first.result.state,admitted:job,replay:true}}};
+  for(const frame of [first,activeReplay,ready])assert.deepEqual(documentDraftReply(input,frame),frame.result);
+  for(const state of [{...activeReplay.result.state,replay:false},{...activeReplay.result.state,admitted:{...job,id:'2'}}])assert.throws(()=>documentDraftReply(input,{...activeReplay,result:{...activeReplay.result,state}}),{code:'invalid_document_response'});
 });
 
 test('a throwing transport unsubscribe does not skip retirement observers',()=>{

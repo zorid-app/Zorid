@@ -109,7 +109,7 @@ function state(value:unknown,request:DocumentDraftRequest):DocumentDraftState|nu
   if(value===null){if(request.op==='request')return invalid();return null;}
   const row=fields(value,['admitted','replay','execution','outcomes','usage']),usage=fields(row.usage,['source_bytes','scratch_bytes','facts_bytes']);
   const admitted=row.admitted===null?null:documentDraftJob(row.admitted),replay=boolean(row.replay);
-  if(request.op==='request'?(admitted===null||admitted.buffer_lifetime!==request.buffer_lifetime||admitted.text_revision!==request.text_revision):admitted!==null)return invalid();
+  if(request.op==='request'?(admitted===null||admitted.buffer_lifetime!==request.buffer_lifetime||admitted.text_revision!==request.text_revision):admitted!==null&&(request.op!=='upload_seal'||!replay||!sameJob(admitted,request.job)))return invalid();
   if(typeof row.execution!=='string'||!['dispatch','wait_for_input','wait_for_acknowledgement','idle','quiesced'].includes(row.execution)||!Array.isArray(row.outcomes)||row.outcomes.length>32)return invalid();
   const seen=new Set<string>();let lifetime=admitted?.lifetime;
   const outcomes=row.outcomes.map(value=>{
