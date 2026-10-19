@@ -2,6 +2,7 @@
 //! Pure publication checks are not durable commits. Hosts must recheck heads and
 //! publish rows/head atomically in the same source/index storage transaction.
 pub mod document_runtime;
+pub mod document_work_runtime;
 pub mod draft_runtime;
 mod extraction;
 mod generation;
