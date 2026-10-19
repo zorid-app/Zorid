@@ -6,6 +6,9 @@ after [S0 and S0A acceptance](../roadmap.md). The deterministic workload and
 [native CLI tool](../../scripts/indexing-search-baseline/README.md),
 [actual browser harness](../../scripts/indexing-search-baseline/WEB.md), and
 [language matrix](../reference/query-language-support.md) are integrated.
+The [normal Electron tool](../../scripts/indexing-search-baseline/DESKTOP.md)
+has passed its100-note save/search/warm-restart scope with exact source and
+checkpoint checks; hidden CDP input is not foreground performance parity.
 The [pure-core tool](../../scripts/indexing-search-baseline/CORE.md) and
 [existing-corpus Base tool](../../scripts/indexing-search-baseline/BASES.md)
 separate engine work from client/storage setup. The Base tool checks only the

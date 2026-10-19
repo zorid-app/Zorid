@@ -20,15 +20,19 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   is established. Pure-core10k and actual-browser100 passed within their stated
   scopes. Generated Base10k graph-budget rejection is source-predicted, not yet
   executed.
-- **Active owner/slot:** matching `d0de1c83` release build, family100 and same-caps
-  legacy10k are terminal, all owned processes gone. Corrected Electron100 is next.
+- **Active owner/slot:** `s1_execution_audit` next runs the normal-family10k
+  admission baseline with existing d0 binaries (5s passes,32 passes,30s per command;
+  no profiling/retry/cap increases). Matching release build, family100, legacy10k
+  and corrected Electron100 are terminal with all owned processes gone.
   `storage_sqlite_impl` is auditing the remaining complete-snapshot metadata loader
   cost; no planner-invariant/cache/schema change is approved. Root is sole main
   integrator; no push.
-- **Desktop verification:** one-note ordinary typing preserves renderer/file/
-  native/checkpoint bytes. Multiline CDP insertion loses a newline before saving;
-  source-approved harness `c58c1383` uses ordinary Enter/typing with the original
-  byte oracle. Full100 save/index/warm restart remains queued.
+- **Desktop verification:** corrected normal100 passes exact save/file/native/
+  checkpoint, fresh search and retained warm index/revision gates. Three apps quit
+  normally; source/build hashes unchanged, no survivors. Evidence:
+  `/private/tmp/zorid-s1-desktop-100-071b8500-evidence/report.json`. Harness integrated
+  through `8a03b0d5`; earlier CDP multiline-loss diagnosis is retained separately.
+  This is hidden macOS correctness scope, not10k or foreground performance parity.
 - **Other isolated work:** generated-Base baseline `ffaee3ad` is source reviewed,
   Node10 checks pass; real Rust100/10k runs pending. Opt-in process resource
   tooling through `c2f2b75a` is source reviewed; child/time tests and real smokes
