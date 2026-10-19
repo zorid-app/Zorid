@@ -81,10 +81,19 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   retain every fresh stage/publication capture. No new authority cache/API.
   This small native indexing prerequisite precedes S1.2 Base preparation work
   because it targets the observed ordinary app flow. Owner `storage_sqlite_impl`,
-  independent reviewer `s1_execution_audit`; isolated branch/worktree assigned
-  next. Existing before binary and Electron100 harness provide comparison;
+  independent reviewer `s1_execution_audit`; isolated
+  `tingkai-c/s1-index-capture-cse` / `storage-parse-cache`. Source `578d4e31` plus
+  test-only correction `f17d3bae` is reviewed; focused checks are running.
+  Existing before binary and Electron100 harness provide comparison;
   no new benchmark framework. Audit:
   `/private/tmp/zorid-s1-native-index-source-audit-255caa28/audit.md`.
+  The independent next selector change replaces only enrolled-family
+  `observe_streamed_file`'s `list().find(path)` with the existing fresh targeted
+  metadata read. Integrated `56dd1de9` already establishes unrelated-row isolation
+  as intended; physical ownership/inode/parent/CAS guards remain unchanged.
+  Owner `baseline_resources_impl`, reviewer `architecture_core_audit`, isolated
+  `tingkai-c/s1-family-observe-lookup` / `s1-index-extraction`. These small disjoint
+  fixes may share one reviewed native build/app comparison; no new framework.
 - **Combined native result:** release `b3ed4400` passed build115.545s and family100
   correctness (all eight full literal oracles, complete coverage, exact physical/
   authority sources and watermark108). Rust inputs match integrated `2fb58f33`;
@@ -155,10 +164,10 @@ source approval is distinct from compilation and real-client acceptance):
 
 | Owner | Branch/worktree under `/Users/ctk/orca/workspaces/Zorid` | Verification |
 | --- | --- | --- |
-| `storage_sqlite_impl` | `tingkai-c/storage-parse-cache` / `storage-parse-cache` | Integrated `cbba5096`; reviewer `storage_recovery_impl`; composed34 checks pass, actual CLI/Electron pending |
+| `storage_sqlite_impl` | `tingkai-c/s1-index-capture-cse` / `storage-parse-cache` | Prior native cache `cbba5096` accepted bounded CLI/Electron; capture CSE source reviewed, focused checks running |
 | `architecture_platform_audit` | `tingkai-c/s1-browser-parse-cache` / `s1-browser-parse-cache` | Integrated `b4cf40f2`;42 Node +tsc +16 hosted Rust pass; actual matching WASM/Chrome100 +tiny9 pass on `6f2b177b`, slot released |
 | `s1_execution_audit` | `tingkai-c/storage-retained-text-cse` / `storage-retained-text-cse`, base `2f37f56c` | Integrated `5bb1d4f0`;24 focused checks +old-red/restore pass; no measured gain |
-| `baseline_resources_impl` | `tingkai-c/s1-index-extraction` / `s1-index-extraction` | Core integrated `ae227303`,37 tests pass; preparing tiny CLI cache acceptance using existing commands |
+| `baseline_resources_impl` | `tingkai-c/s1-family-observe-lookup` / `s1-index-extraction` | Prior core/cache accepted, CLI14-phase pass; owns next enrolled-family targeted lookup |
 
 Disk maintenance: three completed legacy10k fixture `vault`/`local-data` trees
 (`80dfce28`, `51060b1d`, `d0de1c83`) were archived after no-open-file checks to
