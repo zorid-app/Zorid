@@ -117,9 +117,11 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   Next scoped fix is payload-free indexed `stat_path` through Store/native/host
   and desktop client, preserving existence/size/revision guards. Rust owner
   `storage_sqlite_impl` in isolated `storage-parse-cache`; desktop bridge owner
-  `storage_recovery_ui_impl` in isolated `storage-recovery-ui`. Reviewers respectively
-  `architecture_core_audit` and `s1_execution_audit`. Branches will be recorded with
-  candidate commits. Root retains sole main integration; no scheduler redesign or
+  `storage_recovery_ui_impl` in isolated `storage-recovery-ui`. Branches respectively
+  `tingkai-c/s1-stat-path` and `tingkai-c/desktop-targeted-metadata`. Reviewers
+  `architecture_core_audit` and `s1_execution_audit`. Rust candidate `191ea1bc` is
+  source-approved, focused validation pending; no app speedup accepted yet.
+  Root retains sole main integration; no scheduler redesign or
   editor-internal changes. Reuse existing Electron100 trace for after comparison.
   Evidence `/private/tmp/zorid-s1-electron-fifo-diagnostic-7caf7cd4/summary.json`.
   The app/runtime slot is released. Frontend314 inputs/dist333 files are unchanged

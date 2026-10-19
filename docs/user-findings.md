@@ -5,6 +5,8 @@
 User expects a small local note save below100ms. Track edit-to-verified-durable
 save separately from intentional autosave delay and native commit round trip;
 710ms native commit and multi-second end-to-end observations are not acceptance.
+Current NoteBuffer default debounce is400ms; it alone prevents edit-to-save from
+reaching100ms. Keep that declared policy separate from observed timer/work delays.
 First remove the measured repeated full-catalogue reads, then measure remaining
 commit cost without weakening durability, recovery or concurrent-write checks.
 This is a target to verify, not a measured guarantee across devices or files.
