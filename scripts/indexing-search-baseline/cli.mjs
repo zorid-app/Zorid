@@ -120,7 +120,7 @@ export async function runBaseline({out,binary,notes=100,timeoutMs=60000,buildSha
     if(nativeHost){
       const result=await invoke(nativeHost,['--vault',fixture.vault,'--initialize-local'],{environment,timeoutMs,stdoutEncoding:'buffer',measureResources,sidecarDirectory:fixture.out});
       await writeFile(path.join(fixture.out,'native-host-ready.frame'),result.stdout);await writeFile(path.join(fixture.out,'native-host.stderr.txt'),result.stderr);
-      report.setup.nativeHost={wallMs:result.wallMs,exitCode:result.exitCode,signal:result.signal,timedOut:result.timedOut,outputLimit:result.outputLimit,...(measureResources?{observedProcessRole:result.observedProcessRole,exitObserved:result.exitObserved,stopReason:result.stopReason,pipesDrained:result.pipesDrained,cleanup:result.cleanup,signals:result.signals,measurement:result.measurement}:{} )};
+      report.setup.nativeHost={wallMs:result.wallMs,exitCode:result.exitCode,signal:result.signal,timedOut:result.timedOut,outputLimit:result.outputLimit,...(measureResources?{pid:result.pid,observedProcessRole:result.observedProcessRole,exitObserved:result.exitObserved,stopReason:result.stopReason,pipesDrained:result.pipesDrained,cleanup:result.cleanup,signals:result.signals,measurement:result.measurement}:{} )};
       if(result.exitCode!==0||result.signal||result.timedOut||result.outputLimit||result.processIncomplete)throw Object.assign(Error('native initialization did not exit normally'),{kind:'bounded-stop'});
       report.setup.ready=decodeReadyFrame(result.stdout);
     }else await command('init',['init']);
