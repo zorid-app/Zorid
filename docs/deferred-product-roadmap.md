@@ -110,8 +110,18 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   Do not claim an overall speedup or attribute all phase changes to these fixes.
   Evidence `/private/tmp/zorid-s1-release-fa76b894-cgo65brr/build.json` and
   `/private/tmp/zorid-s1-cache-desktop-fa76b894-evidence/comparison-summary.json`.
-  `s1_execution_audit` is tracing background rescan/RPC serialization against the
-  save delay; contention is a hypothesis, no scheduling implementation selected.
+  The subsequent complete metadata-only trace does not reproduce active rescan
+  contention: rescan finishes163ms before input. Save window12.155s includes200
+  full snapshots totaling11.208s; commit RTT710ms. Source-backed candidate is
+  per-note `readMetadata(path)` using `list_snapshot`; trace has no caller stacks.
+  Next scoped fix is payload-free indexed `stat_path` through Store/native/host
+  and desktop client, preserving existence/size/revision guards. Rust owner
+  `storage_sqlite_impl` in isolated `storage-parse-cache`; desktop bridge owner
+  `storage_recovery_ui_impl` in isolated `storage-recovery-ui`. Reviewers respectively
+  `architecture_core_audit` and `s1_execution_audit`. Branches will be recorded with
+  candidate commits. Root retains sole main integration; no scheduler redesign or
+  editor-internal changes. Reuse existing Electron100 trace for after comparison.
+  Evidence `/private/tmp/zorid-s1-electron-fifo-diagnostic-7caf7cd4/summary.json`.
   The app/runtime slot is released. Frontend314 inputs/dist333 files are unchanged
   from accepted `255caa28`; native Vite mode excludes WASM, so reuse that frontend.
   Build owner `storage_sqlite_impl`, app owner `architecture_platform_audit`;

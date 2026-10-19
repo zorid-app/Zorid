@@ -6,9 +6,16 @@ Normal Electron100 single observations `255caa28`→`fa76b894`: cold search5.706
 1.042s and post-save search1.838→1.018s, but input→verified durable save1.994→
 6.657s and input→updated visible result3.873→7.713s. Correctness passes; opening/
 import is roughly unchanged. This is not an overall speedup or proven causal
-regression. Source audit owner `s1_execution_audit` is checking whether long
-background reconciliation blocks the serial native host while saving. No new
-scheduling design or implementation is selected before diagnosis. Evidence:
+regression. A subsequent metadata-only Electron trace did not reproduce active
+rescan contention: rescan ended163ms before input. The12.155s save window contains
+200 `list_snapshot` round trips totaling11.208s; commit itself takes710ms.
+Source inspection finds `readMetadata(path)` scans the entire catalogue per note.
+Replace that placeholder with a payload-free indexed `stat_path`, retaining
+existence, size and revision guards. Rust owner `storage_sqlite_impl`; desktop
+owner `storage_recovery_ui_impl`; independent reviewers `architecture_core_audit`
+and `s1_execution_audit`. No scheduler change is selected. Trace evidence:
+`/private/tmp/zorid-s1-electron-fifo-diagnostic-7caf7cd4/summary.json`.
+Earlier comparison evidence:
 `/private/tmp/zorid-s1-cache-desktop-fa76b894-evidence/comparison-summary.json`.
 
 ## S1 normal reopen still reaches scan limits — open
