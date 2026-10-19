@@ -3,10 +3,14 @@
 [Roadmap](../roadmap.md#s1--rust-parsing-indexing-caching-and-search-performance) ·
 [Confirmed design](../architecture/indexing-search-design.md)
 
-Status: S1.0 implementing after bounded S0 delivery and S0A contract acceptance.
-The [language matrix](../reference/query-language-support.md) and frozen semantic
-fixtures are integrated; workload/native/browser measurements remain in progress.
-No optimization gain or complete language implementation is claimed. Deliver one
+Status: S1 in progress after bounded S0 delivery and S0A contract acceptance.
+S1.1 bounded client cache checks pass; S1.2 core and host answer reuse are
+integrated with focused checks, while full client acceptance remains pending.
+S1.3 pure rich search and in-note Find source are integrated; paging and the
+grouped view's app wiring/visual acceptance remain pending. S1.4–S1.6 are open.
+The [execution checkpoint](../deferred-product-roadmap.md) records exact evidence
+and remaining10k admission/cache limitations. No overall app speedup or complete
+language implementation is claimed. Deliver one
 coherent slice at a time, with independent owned subtasks/review where contracts
 permit them; later slice implementations wait for the measured baseline.
 

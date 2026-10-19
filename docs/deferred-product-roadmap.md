@@ -261,14 +261,26 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   Actual generated wasm32/browser acceptance remains pending. Measurement
   source `b6f1e69d` is independently approved,18 Node checks pass; composed
   source `b6b428a4` includes main `da9b31eb` with identical three-file patch.
-  It now owns the sole release build/100/10k measurement slot; no observed
-  outcome or speedup is assumed before its report.
+  Matching release example builds20.566s; both100/10k pass8 direct+16 prepared+
+  16 answer full-result comparisons and all8 unchanged semantic oracles. Source,
+  Cargo, fixtures, harness and immutable binary remain exact; owned processes
+  exited and slot released, minfree1.879GB. Measurement is integrated `c2341a8b`.
+  At100, preparation has15 hits/1 miss; answers4 hits/4 misses/8 uncached.
+  Hit calls observe0.009–0.029ms versus ordered seed misses0.404–0.845ms;
+  these are not controlled speedup or CPU measurements. At10k, both preparation
+  and answers remain uncached for all16 attempts; cold queries65.7–88.6ms,
+  preparation37.2–44.1ms and813,977 optional work units. No10k reuse gain is
+  established; keep this practical limitation in the S1 acceptance gate.
+  Evidence:
+  `/private/tmp/zorid-bases-answer-observation-b6b428a4-ubi2uu_w/acceptance-summary.json`.
   Separate measured10k admission prerequisite owner `storage_recovery_ui_impl`
   uses isolated `tingkai-c/s1-family-entry-cse` from `0d0bb27d`, solely
   `family_metadata_transactions.rs`: reuse checked entries through one immutable
   read transaction instead of loading them twice. Observations retain their fresh
   read and final writer/physical/authority/CAS checks remain unchanged. Reviewer
-  `storage_sqlite_impl`; no implementation acceptance or measured gain yet.
+  `storage_sqlite_impl` independently approves exact `4dd311a2`; it now owns the
+  serialized focused Store validation slot. No runtime acceptance or measured
+  gain yet; this removes one duplicate load, not cumulative whole-vault scans.
   S1.4 current core-lifecycle source handoff:
   `/private/tmp/zorid-s1-core-lifecycle-handoff.md` (no implementation yet).
   Concrete ownership and closed reducer-contract refinements:
