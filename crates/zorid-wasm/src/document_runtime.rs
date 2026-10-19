@@ -16,8 +16,8 @@ use zorid_index::{
 
 const CONTROL_BYTES: usize = 64 * 1024;
 const INTERNAL_BYTES: usize = CONTROL_BYTES;
-type Result<T> = std::result::Result<T, &'static str>;
-fn error(code: &str) -> JsValue {
+pub(crate) type Result<T> = std::result::Result<T, &'static str>;
+pub(crate) fn error(code: &str) -> JsValue {
     JsValue::from_str(&json!({"code":code}).to_string())
 }
 fn contract(error: core::RuntimeError) -> &'static str {
@@ -28,13 +28,13 @@ fn contract(error: core::RuntimeError) -> &'static str {
         core::RuntimeError::UnexpectedCompletion => "document_runtime_expired",
     }
 }
-fn decode<T: serde::de::DeserializeOwned>(raw: &str, limit: usize) -> Result<T> {
+pub(crate) fn decode<T: serde::de::DeserializeOwned>(raw: &str, limit: usize) -> Result<T> {
     if raw.len() > limit {
         return Err("document_runtime_capacity");
     }
     serde_json::from_str(raw).map_err(|_| "invalid_request")
 }
-fn decimal(raw: &str) -> Result<u64> {
+pub(crate) fn decimal(raw: &str) -> Result<u64> {
     if raw.is_empty()
         || raw.len() > 20
         || (raw.len() > 1 && raw.starts_with('0'))
@@ -187,6 +187,9 @@ impl From<Completion> for core::EffectResult {
         }
     }
 }
+pub(crate) fn decode_completion(raw: &str) -> Result<core::EffectResult> {
+    Ok(decode::<Completion>(raw, INTERNAL_BYTES)?.into())
+}
 fn failure(v: core::Failure) -> &'static str {
     match v {
         core::Failure::StaleSource => "staleSource",
@@ -211,11 +214,11 @@ fn update(v: &core::RuntimeUpdate) -> Value {
     "phase":match v.phase{core::Phase::Idle=>"idle",core::Phase::Observing=>"observing",core::Phase::Initializing=>"initializing",core::Phase::Recovering=>"recovering",core::Phase::Indexing=>"indexing",core::Phase::Publishing=>"publishing",core::Phase::Rebuilding=>"rebuilding",core::Phase::Releasing=>"releasing"},
     "progress":v.progress.as_ref().map(progress),"coverageComplete":v.coverage_complete,"hasForegroundDemand":v.has_foreground_demand,"error":v.error.map(failure)})
 }
-fn effect(v: &core::IssuedEffect) -> Value {
+pub(crate) fn effect(v: &core::IssuedEffect) -> Value {
     json!({"lifetime":v.lifetime,"effectId":v.id.to_string(),"priority":match v.priority{core::Priority::Foreground=>"foreground",core::Priority::Background=>"background"},"targetSource":v.target_source,
     "effect":match &v.kind{core::Effect::Observe=>json!({"kind":"observe"}),core::Effect::RecoverStage=>json!({"kind":"recoverStage"}),core::Effect::Initialize=>json!({"kind":"initialize"}),core::Effect::Begin=>json!({"kind":"begin"}),core::Effect::Pump{snapshot}=>json!({"kind":"pump","snapshot":snapshot}),core::Effect::Publish{snapshot}=>json!({"kind":"publish","snapshot":snapshot}),core::Effect::Discard{snapshot}=>json!({"kind":"discard","snapshot":snapshot}),core::Effect::Rebuild=>json!({"kind":"rebuild"})}})
 }
-fn encode(v: Value) -> Result<String> {
+pub(crate) fn encode(v: Value) -> Result<String> {
     let raw = v.to_string();
     if raw.len() > INTERNAL_BYTES {
         Err("document_runtime_capacity")
@@ -226,26 +229,28 @@ fn encode(v: Value) -> Result<String> {
 fn execution(value: core::Execution) -> &'static str {
     match value { core::Execution::Dispatch => "dispatch", core::Execution::Yield => "yield", core::Execution::WaitForWake => "waitForWake", core::Execution::Quiesced => "quiesced" }
 }
-fn reduction(v: &core::Reduction) -> Result<String> {
+pub(crate) fn reduction(v: &core::Reduction) -> Result<String> {
     encode(
         json!({"effect":v.effect.as_ref().map(effect),"update":update(&v.update),"execution":match v.execution{core::Execution::Dispatch=>"dispatch",core::Execution::Yield=>"yield",core::Execution::WaitForWake=>"waitForWake",core::Execution::Quiesced=>"quiesced"},
     "requestOutcomes":v.request_outcomes.iter().map(|o|match o{core::RequestOutcome::Finished{id,observation:v}=>json!({"kind":"finished","id":id.to_string(),"observation":observation(v)}),core::RequestOutcome::Failed{id,failure:v}=>json!({"kind":"failed","id":id.to_string(),"failure":failure(*v)}),core::RequestOutcome::Cancelled{id}=>json!({"kind":"cancelled","id":id.to_string()}),core::RequestOutcome::Retired{id}=>json!({"kind":"retired","id":id.to_string()})}).collect::<Vec<_>>()}),
     )
 }
-struct Replay {
-    lifetime: OperationId,
-    id: u64,
-    report: String,
+pub(crate) struct Replay {
+    pub(crate) lifetime: OperationId,
+    pub(crate) id: u64,
+    pub(crate) report: String,
 }
-struct State {
-    core: core::DocumentRuntime,
-    replay: Option<Replay>,
-    execution: core::Execution,
+pub(crate) struct State {
+    pub(crate) core: core::DocumentRuntime,
+    pub(crate) replay: Option<Replay>,
+    pub(crate) execution: core::Execution,
+    pub(crate) draft_scope: Option<crate::document_drafts::DraftScope>,
+    pub(crate) drafts: Option<zorid_index::document_draft_executor::DocumentDraftExecutor>,
 }
 #[wasm_bindgen]
 pub struct WasmDocumentRuntimeOwner {
-    state: Rc<RefCell<State>>,
-    live: Rc<Cell<bool>>,
+    pub(crate) state: Rc<RefCell<State>>,
+    pub(crate) live: Rc<Cell<bool>>,
 }
 impl WasmDocumentRuntimeOwner {
     fn command(&self, raw: &str) -> Result<String> {
@@ -258,8 +263,15 @@ impl WasmDocumentRuntimeOwner {
         if !self.live.get() {
             return Err("document_runtime_expired");
         }
-        let result = state.core.reduce(input).map_err(contract)?;
-        state.execution = result.execution;
+        let result = if retiring && state.drafts.is_some() {
+            let State { core, execution, drafts, .. } = &mut *state;
+            drafts.as_mut().unwrap().begin_close(core, execution)
+                .map_err(crate::document_drafts::draft_error)?.committed
+        } else {
+            let result = state.core.reduce(input).map_err(contract)?;
+            state.execution = result.execution;
+            result
+        };
         if retiring {
             state.replay = None;
         }
@@ -272,6 +284,9 @@ impl WasmDocumentRuntimeOwner {
             .try_borrow()
             .map_err(|_| "document_runtime_busy")?;
         if !self.live.get() {
+            return Err("document_runtime_expired");
+        }
+        if state.drafts.is_some() {
             return Err("document_runtime_expired");
         }
         let issued = state
@@ -314,6 +329,8 @@ impl WasmDocumentRuntimeOwner {
                     }),
                     replay: None,
                     execution: core::Execution::WaitForWake,
+                    draft_scope: None,
+                    drafts: None,
                 })),
                 live: Rc::new(Cell::new(true)),
             })
@@ -388,6 +405,11 @@ impl Drop for WasmDocumentRuntimeOwner {
         if let Ok(mut state) = self.state.try_borrow_mut() {
             state.replay = None;
             let _ = state.core.reduce(core::Input::Retire);
+            // Emergency free revokes retained handles and actually disposes all
+            // draft payloads. Normal callers prove the bounded future-turn drain
+            // before free; this fallback does not claim that lifecycle proof.
+            state.drafts = None;
+            state.draft_scope = None;
         }
     }
 }
@@ -408,7 +430,7 @@ impl WasmDocumentRuntimeIssued {
             .state
             .try_borrow_mut()
             .map_err(|_| "document_runtime_busy")?;
-        if !self.live.get() || state.core.in_flight() != Some(&self.issued) {
+        if !self.live.get() || state.drafts.is_some() || state.core.in_flight() != Some(&self.issued) {
             return Err("document_runtime_expired");
         }
         let reduced = state
@@ -443,7 +465,7 @@ impl WasmDocumentRuntimeIssued {
             .state
             .try_borrow()
             .map_err(|_| error("document_runtime_busy"))?;
-        if !self.live.get() || state.core.in_flight() != Some(&self.issued) {
+        if !self.live.get() || state.drafts.is_some() || state.core.in_flight() != Some(&self.issued) {
             return Err(error("document_runtime_expired"));
         }
         encode(effect(&self.issued)).map_err(error)
@@ -548,6 +570,18 @@ mod tests {
         let mut next = handle(&owner, &settled);
         next.complete(r#"{"kind":"done"}"#).unwrap();
         assert_eq!(owner.replay_json("runtime", "1").unwrap(), None);
+    }
+    #[test]
+    fn legacy_issued_handle_cannot_settle_after_the_composite_draft_owner_exists() {
+        let owner = new_owner("runtime");
+        let report = control(&owner, r#"{"kind":"wake","monotonicMs":"0"}"#);
+        let mut issued = handle(&owner, &report);
+        owner.configure_drafts("client", "draft", "work").unwrap();
+        owner.draft_command_json(r#"{"op":"request","buffer_lifetime":"buffer","text_revision":"1","source":{"bytes":1,"utf16":1,"sha256":"0000000000000000000000000000000000000000000000000000000000000000"}}"#).unwrap();
+        let before = owner.state.borrow().core.update();
+        assert_eq!(issued.complete(&observed(false)), Err("document_runtime_expired"));
+        assert_eq!(owner.state.borrow().core.update(), before);
+        assert!(owner.issue("runtime", "1").is_err());
     }
     #[test]
     fn runtime_retire_drains_only_issued_completion_and_drop_expires_old_handles() {
