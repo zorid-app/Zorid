@@ -23,9 +23,10 @@ async function setup(callback) {
     await callback({root,calls,run,directory:path.join(root,'target/browser-wasm/generated')});
   }finally{await fs.rm(root,{recursive:true,force:true});}
 }
-test('browser build pins bindgen, bounds Cargo jobs, caches intact outputs and rebuilds changed source/output',async()=>{
+test('browser build locks dependencies, pins bindgen, bounds Cargo jobs and rebuilds changed source/output',async()=>{
   await setup(async({root,calls,run,directory})=>{
     assert.equal(await buildCoreWasm({root,run}),directory);assert.equal(calls.length,3);
+    assert.ok(calls[1].args.includes('--locked'));
     assert.equal(calls[1].args.at(-1),'1');assert.equal(calls[1].args.at(-2),'-j');
     assert.equal(calls[2].args[1],'web');
     await buildCoreWasm({root,run});assert.equal(calls.length,3);

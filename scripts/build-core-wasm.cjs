@@ -52,7 +52,7 @@ async function buildCoreWasm(options = {}) {
   const version = await execute(bindgen,['--version'],{root,capture:true});
   if (version !== `wasm-bindgen ${bindgenVersion}`) throw new Error(`Browser core requires wasm-bindgen-cli ${bindgenVersion}; found ${version}`);
   const target = process.env.CARGO_TARGET_DIR ? path.resolve(root,process.env.CARGO_TARGET_DIR) : path.join(root,'target/browser-wasm/cargo');
-  await execute(cargo,['build','--manifest-path',path.join(root,'crates/zorid-wasm/Cargo.toml'),'--target','wasm32-unknown-unknown','--release','-j','1'],{root,env:{...process.env,CARGO_TARGET_DIR:target}});
+  await execute(cargo,['build','--locked','--manifest-path',path.join(root,'crates/zorid-wasm/Cargo.toml'),'--target','wasm32-unknown-unknown','--release','-j','1'],{root,env:{...process.env,CARGO_TARGET_DIR:target}});
   await fs.mkdir(directory,{recursive:true});
   // Publish cache metadata last, so interrupted generation never appears current.
   await fs.rm(metadataPath,{force:true});
