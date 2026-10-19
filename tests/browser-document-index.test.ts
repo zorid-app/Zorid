@@ -1,7 +1,8 @@
+import {BrowserVaultError} from '../src/core/browser-vault.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {browserDocumentIndex} from '../src/core/browser-document-index.ts';
+import {browserDocumentIndex,createBrowserDocumentIndexBackend} from '../src/core/browser-document-index.ts';
 import type {BrowserDocumentIndexWasm,BrowserIndexHeader} from '../src/core/browser-document-index.ts';
 import type {EntryState} from '../src/core/browser-vault.ts';
 
@@ -16,7 +17,7 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
   const records=new Map<string,Map<string,any>>(['control','metadata','presentation','content','sync_materialization_refs'].map(n=>[n,new Map()]));
   const seed=(store:string,key:string,value:any)=>records.get(store)!.set(key,clone(value));
   seed('control','local-store-id',{key:'local-store-id',value:authority});seed('control','sequence',{key:'sequence',value:'0'});
-  const calls:{store:string;op:string;key?:any}[]=[],transactions:string[][]=[];let failCommit=false,denied=false,cacheReadUnavailable=false;let afterRead:((store:string,key:any)=>void)|undefined;
+  const calls:{store:string;op:string;key?:any}[]=[],transactions:string[][]=[];let failCommit=false,denied=false,fatal=false,cacheReadUnavailable=false;let afterRead:((store:string,key:any)=>void)|undefined;
   const db:any={transaction(names:string[],mode:string,options:any){
     if(mode==='readwrite')assert.deepEqual(options,{durability:'strict'});transactions.push(names);
     const local=new Map(names.map(n=>[n,clone(records.get(n)!)])),writes=new Set<string>();let pending=0,aborted=false,completed=false,scheduled=false;
@@ -100,13 +101,14 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
   }
   const policy={formatVersion:1,maxRows:options.cacheRows??100000,maxBytes:options.cacheBytes??64*1024*1024,maxRowBytes:options.cacheRowBytes??1024*1024,maxEvictionsPerWrite:options.evictions??32};
   const wasm={documentParseCachePolicyJson:()=>JSON.stringify(policy),documentParseCacheAdmissionJson:(input:string)=>{const {usage,replacedPayloadBytes:replaced,incomingPayloadBytes:incoming,evictedRows:evicted}=JSON.parse(input),rows=usage.rows-(replaced===null?0:1)+1,bytes=usage.bytes-(replaced??0)+incoming;return JSON.stringify(incoming>policy.maxRowBytes?'skipOversized':rows<=policy.maxRows&&bytes<=policy.maxBytes?'write':evicted===policy.maxEvictionsPerWrite?'skipEvictionLimit':'evictOldest');},documentIndexVersionsJson:()=>'{"schema":1,"extraction":"fixture","resolver":"fixture","query":"fixture"}',WasmDocumentIndexBuilder:MockBuilder,WasmDocumentIndexPreparationCache:MockPreparationCache,WasmDocumentRichSearchOwner:MockRichOwner} as unknown as BrowserDocumentIndexWasm;
-  const open=(clientId='client-a')=>browserDocumentIndex({db,authorityId:authority,clientId,wasm,assertActive(){if(denied)throw Object.assign(new Error('retired'),{code:'owner_retired'});},
+  const backend=(clientId='client-a')=>createBrowserDocumentIndexBackend({db,authorityId:authority,clientId,wasm,assertActive(){if(fatal)throw new BrowserVaultError('storage_closed','fatal host close');if(denied)throw Object.assign(new Error('retired'),{code:'owner_retired'});},
     readPublication(tx,done,abort){let entries:any[]|undefined,presentation:any[]|undefined,sequence:string|undefined;
       const finish=()=>{if(entries&&presentation&&sequence!==undefined)done({entries,presentation,sequence});};
       for(const store of ['metadata','presentation']){const list:any[]=[];const request=tx.objectStore(store).openCursor();request.onsuccess=()=>{try{const cursor=request.result;if(cursor){list.push(cursor.value);cursor.continue();}else{if(store==='metadata')entries=list;else presentation=list;finish();}}catch(error){abort(error);}};}
       const request=tx.objectStore('control').get('sequence');request.onsuccess=()=>{sequence=request.result.value;finish();};
     },
   });
+  const open=(clientId='client-a')=>backend(clientId).index;
   function file(id:string,text:string,opts:{path?:string;revision?:string;binary?:boolean;mtime?:number}={}){
     const bytes=new TextEncoder().encode(text),entry:EntryState={id,path:opts.path??id+'.md',kind:'file',revision:opts.revision??'r1',deleted:false},presentation={id,ctime_ms:1,mtime_ms:opts.mtime??1,size_bytes:bytes.length};
     seed('metadata',id,entry);seed('presentation',id,presentation);
@@ -115,7 +117,7 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
   }
   const source=()=>clone(new Map([...records].filter(([n])=>n!=='control').map(([n,m])=>[n,m])));
   const build=async(index:ReturnType<typeof open>)=>{let stage=await index.begin();do{stage=await index.pump(stage.stageId);}while(!stage.ready);return index.publish(stage.stageId);};
-  return {records,calls,transactions,file,open,build,source,seed,richCalls,richStats,afterRichCommit(action:()=>void){afterRichCommit=action;},baseCalls,taskCalls,preparationCalls,preparationStats,afterBase(action:()=>void){afterBase=action;},stats:()=>({textExtractions,reuses,cacheBinds}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},cacheUnavailable(){cacheReadUnavailable=true;},deny(){denied=true;},afterRead(action:(store:string,key:any)=>void){afterRead=action;}};
+  return {records,calls,transactions,file,open,backend,wasm,build,source,seed,richCalls,richStats,afterRichCommit(action:()=>void){afterRichCommit=action;},baseCalls,taskCalls,preparationCalls,preparationStats,afterBase(action:()=>void){afterBase=action;},stats:()=>({textExtractions,reuses,cacheBinds}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},cacheUnavailable(){cacheReadUnavailable=true;},deny(){denied=true;},fatal(){fatal=true;},afterRead(action:(store:string,key:any)=>void){afterRead=action;}};
 }
 
 test('strict derived publication retains source bytes and uses no aggregate control scan',async()=>{
@@ -459,4 +461,53 @@ test('rich external catalog expiry after commit retires exact query and close re
   f.afterRichCommit(()=>{const row=f.records.get('control')!.get('document-index:v1/catalog');row.value.pins=[];});
   await assert.rejects(index.richPage({pinId:pin.pinId,...ready}),{code:'index_snapshot_expired'});assert.equal(f.richStats.closed,1);assert.equal(f.richStats.preparedFreed,1);assert.equal(f.richStats.drivesFreed,1);
   await index.richClose({pinId:pin.pinId,queryId:ready.queryId});assert.equal(f.richStats.closed,1);await index.closePin(pin.pinId);await index.close();
+});
+
+/** Selects a single effect for the real IDB backend adapter; it is deliberately
+ * not a JS copy of the Rust lifecycle transition policy. */
+function maintenanceScript(f:ReturnType<typeof fixture>){
+  let effect:any={kind:'observe'},id=0,replay:string|undefined;const completions:any[]=[];let freed=0,created=0;
+  const report=()=>JSON.stringify({effect:null,update:{lifetime:'runtime',revision:String(id)},requestOutcomes:[],execution:'waitForWake'});
+  f.wasm.WasmDocumentRuntimeOwner=class {
+    constructor(){created++;}commandJson(){return report();}updateJson(){return JSON.stringify({lifetime:'runtime',revision:String(id)});}
+    snapshotJson(){return JSON.stringify({update:{lifetime:'runtime',revision:String(id)},inFlight:null,lastStep:null});}
+    replayJson(){return replay;}issued(lifetime:string,selected:string){assert.equal(lifetime,'runtime');assert.equal(selected,String(id));return {descriptorJson:()=>JSON.stringify({lifetime,effectId:selected,effect,priority:'background',targetSource:null}),completeJson(raw:string){completions.push(JSON.parse(raw));return replay=report();},free(){}};}
+    free(){freed++;}
+  };
+  return {completions,freed:()=>freed,created:()=>created,select(next:any){effect=next;id++;replay=undefined;return {lifetime:'runtime',effectId:String(id)};}};
+}
+test('internal maintenance uses exact captured stage source/progress and retains facts/source bytes',async()=>{
+  const f=fixture();f.file('a','original');const script=maintenanceScript(f),{index,maintenance}=f.backend();const source=f.source();assert.equal(maintenance.update(),null);maintenance.command({kind:'continue'});
+  await maintenance.step(script.select({kind:'begin'}));const stage=script.completions.at(-1).stage;assert.deepEqual(stage.source,{localStoreId:authority,watermark:'0'});assert.equal(stage.progress.prepared,0);
+  await maintenance.step(script.select({kind:'pump',snapshot:stage.snapshot}));assert.deepEqual(script.completions.at(-1).stage.progress,{prepared:1,total:1,ready:true});
+  const catalog=f.records.get('control')!.get('document-index:v1/catalog');assert.equal(catalog.value.generations[0].rows,1);
+  await maintenance.step(script.select({kind:'recoverStage'}));assert.equal(script.completions.at(-1).stage.progress.ready,true);
+  await maintenance.step(script.select({kind:'publish',snapshot:stage.snapshot}));assert.deepEqual(script.completions.at(-1).snapshot,stage.snapshot);assert.equal((await index.status()).current,true);assert.deepEqual(f.source(),source);
+  await index.close();assert.equal(script.freed(),1);
+});
+test('failed live builder is unavailable recovery, never fabricated progress or source deletion',async()=>{
+  const f=fixture();f.file('a','original');const script=maintenanceScript(f),{index,maintenance}=f.backend(),source=f.source();maintenance.command({kind:'continue'});
+  await maintenance.step(script.select({kind:'begin'}));const stage=script.completions.at(-1).stage;f.fail();await assert.rejects(maintenance.step(script.select({kind:'pump',snapshot:stage.snapshot})));
+  await assert.rejects(maintenance.step(script.select({kind:'recoverStage'})),{code:'document_runtime_unavailable'});assert.equal(script.completions.at(-1).kind,'failed');assert.equal(script.completions.at(-1).failure,'unavailable');assert.deepEqual(f.source(),source);await index.close();
+});
+test('browser no-resume startup recovers None without deleting a foreign client stage',async()=>{
+  const f=fixture();f.file('a','original');const script=maintenanceScript(f),foreign=f.open('foreign'),stage=await foreign.begin();const {index,maintenance}=f.backend();maintenance.command({kind:'continue'});
+  await maintenance.step(script.select({kind:'initialize'}));await maintenance.step(script.select({kind:'recoverStage'}));assert.deepEqual(script.completions.at(-1),{kind:'recovered',stage:null});
+  const catalog=f.records.get('control')!.get('document-index:v1/catalog');assert.ok(catalog.value.generations.some((g:any)=>g.id===stage.stageId&&g.clientId==='foreign'&&g.state==='staging'));await index.close();await foreign.close();
+});
+
+test('public rebuild drains an accepted maintenance pump before builder release and creates a new lazy lifetime',async()=>{
+  const f=fixture();f.file('a','original');const script=maintenanceScript(f),{index,maintenance}=f.backend(),source=f.source();maintenance.command({kind:'continue'});await maintenance.step(script.select({kind:'begin'}));const stage=script.completions.at(-1).stage;
+  let rebuilt:Promise<void>|undefined;f.afterRead((store)=>{if(store==='content'&&!rebuilt){rebuilt=index.rebuild();assert.equal(script.freed(),0);assert.throws(()=>maintenance.command({kind:'continue'}),{code:'document_runtime_busy'});}});
+  await maintenance.step(script.select({kind:'pump',snapshot:stage.snapshot}));await rebuilt;assert.equal(script.freed(),1);assert.equal(script.created(),1);assert.deepEqual(f.source(),source);
+  maintenance.command({kind:'continue'});assert.equal(script.created(),2);await maintenance.step(script.select({kind:'observe'}));assert.equal(script.completions.at(-1).observation.published,null);await index.close();assert.equal(script.freed(),2);
+});
+test('public normal close acknowledges only after the accepted maintenance effect drains',async()=>{
+  const f=fixture();f.file('a','original');const script=maintenanceScript(f),{index,maintenance}=f.backend(),source=f.source();maintenance.command({kind:'continue'});await maintenance.step(script.select({kind:'begin'}));const stage=script.completions.at(-1).stage;
+  let closing:Promise<void>|undefined;const rejected:Promise<void>[]=[];f.afterRead((store)=>{if(store==='content'&&!closing){closing=index.close();assert.equal(script.freed(),0);assert.throws(()=>maintenance.command({kind:'continue'}),{code:'document_runtime_retired'});rejected.push(assert.rejects(index.open(),{code:'index_closed'}),assert.rejects(index.richStart({pinId:'unadmitted',spec:richSpec}),{code:'index_closed'}));}});
+  await maintenance.step(script.select({kind:'pump',snapshot:stage.snapshot}));await closing;await Promise.all(rejected);assert.equal(script.freed(),1);assert.equal(script.completions.at(-1).stage.progress.prepared,1);assert.deepEqual(f.source(),source);
+});
+test('fatal host revocation during an await cannot recreate maintenance or accept late progress',async()=>{
+  const f=fixture();f.file('a','original');const script=maintenanceScript(f),{index,maintenance}=f.backend(),source=f.source();maintenance.command({kind:'continue'});await maintenance.step(script.select({kind:'begin'}));const stage=script.completions.at(-1).stage;
+  f.afterRead(store=>{if(store==='content')f.fatal();});await assert.rejects(maintenance.step(script.select({kind:'pump',snapshot:stage.snapshot})),{code:'storage_closed'});await index.close();assert.equal(script.created(),1);assert.equal(script.freed(),1);assert.equal(script.completions.at(-1).failure,'fatal');assert.deepEqual(f.source(),source);assert.throws(()=>maintenance.command({kind:'continue'}),{code:'document_runtime_retired'});
 });

@@ -1,3 +1,5 @@
+import {browserDocumentRuntime} from './browser-document-runtime.ts';
+import type {BrowserDocumentIndexMaintenance,BrowserDocumentRuntimeWasm,DocumentRuntimeStage} from './browser-document-runtime.ts';
 import {searchSpec,richToken,richPreparation,richPage as decodeRichPage,searchCompileDiagnostic} from './document-search-validation.ts';
 import type {SearchSpec} from './document-search-types.ts';
 import type {DocumentTaskOptions,DocumentParseCacheCounters,DocumentSnapshotId} from './document-semantics.ts';
@@ -33,7 +35,7 @@ interface LiteralPage extends Free {nextReadJson():string;accept(bytes:Uint8Arra
 interface RichPrepared extends Free {}
 interface RichDrive extends Free {nextActionJson():string;accept(bytes:Uint8Array):void;finish():RichPrepared}
 interface RichOwner extends Free {clear():void;startQuery(generation:Generation,spec:string,facts:string):string;prepareJson(query:string):string;openDrive(query:string,cursor:string):RichDrive;commitJson(prepared:RichPrepared):string;closeQuery(query:string):void}
-export interface BrowserDocumentIndexWasm {documentIndexVersionsJson():string;documentParseCachePolicyJson():string;documentParseCacheAdmissionJson(input:string):string;WasmDocumentIndexBuilder:new(input:string)=>Builder;WasmDocumentIndexPreparationCache:new()=>PreparationCache;WasmDocumentRichSearchOwner:new(nonce:string)=>RichOwner}
+export interface BrowserDocumentIndexWasm extends BrowserDocumentRuntimeWasm {documentIndexVersionsJson():string;documentParseCachePolicyJson():string;documentParseCacheAdmissionJson(input:string):string;WasmDocumentIndexBuilder:new(input:string)=>Builder;WasmDocumentIndexPreparationCache:new()=>PreparationCache;WasmDocumentRichSearchOwner:new(nonce:string)=>RichOwner}
 export interface BrowserDocumentIndexHost {
   db:IDBDatabase;authorityId:string;clientId:string;wasm:BrowserDocumentIndexWasm;assertActive():void;
   readPublication(tx:IDBTransaction,done:(value:StreamingPublication)=>void,abort:(error:unknown)=>void):void;
@@ -128,16 +130,17 @@ function richAction(raw:string,snapshot:BrowserIndexSnapshot,entries:ReadonlyMap
   const entry=value.entry as EntryState;if(!entry||!equal(entries.get(entry.id),entry)||!Array.isArray(value.digest)||value.digest.length!==32||value.digest.some(n=>typeof n!=='number'||!Number.isInteger(n)||n<0||n>255)||!Number.isSafeInteger(value.bytes)||Number(value.bytes)<0||Number(value.bytes)>LIMITS.text)throw fail('index_rebuild_required');
   return {kind:'readText',entry,bytes:Number(value.bytes)};
 }
-export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocumentIndex {
+export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost):{index:BrowserDocumentIndex;maintenance:BrowserDocumentIndexMaintenance} {
   const stages=new Map<string,Stage>(),pins=new Map<string,{generation:string;value:Generation;header:BrowserIndexHeader;capture:SourceCapture}>();
   type Pin=ReturnType<typeof pins.get> & {};
   interface RichSession {value:RichOwner;alive:boolean}
   interface RichQueryBinding {pinId:string;pin:Pin;session:RichSession;core:string;spec:SearchSpec;entries:ReadonlyMap<string,EntryState>;retired:boolean;busy:boolean}
   const richQueries=new Map<string,RichQueryBinding>();let richOwner:RichSession|undefined;
   const releaseRich=()=>{const session=richOwner;richOwner=undefined;for(const query of richQueries.values())query.retired=true;richQueries.clear();if(session){session.alive=false;try{session.value.clear();}finally{session.value.free();}}};
-  let closed=false,preparation:PreparationCache|undefined;
+  let closed=false,preparation:PreparationCache|undefined;let maintenance:BrowserDocumentIndexMaintenance|undefined;
   const releasePreparation=()=>{const owned=preparation;preparation=undefined;owned?.free();};
-  const active=()=>{if(closed)throw fail('index_closed');try{host.assertActive();}catch(error){try{releasePreparation();}catch{/* Preserve the owner/lease error. */}try{releaseRich();}catch{/* Preserve the owner/lease error. */}throw error;}};
+  const releaseQueryOwners=()=>{releaseRich();releasePreparation();for(const pin of pins.values())pin.value.free();pins.clear();};
+  const active=()=>{if(closed)throw fail('index_closed');try{host.assertActive();}catch(error){void maintenance?.close().catch(()=>{});try{releasePreparation();}catch{/* Preserve the owner/lease error. */}try{releaseRich();}catch{/* Preserve the owner/lease error. */}throw error;}};
   const monotonicMs=()=>{const value=Math.floor(performance.now());if(!Number.isSafeInteger(value)||value<0)throw fail('index_invalid_budget');return value;};
   const richSession=()=>{active();if(!richOwner)richOwner={value:new host.wasm.WasmDocumentRichSearchOwner(crypto.randomUUID()),alive:true};return richOwner;};
   function admittedRichPin(pinId:string,pin:Pin,session:RichSession){active();if(pins.get(pinId)!==pin||richOwner!==session||!session.alive)throw richFail('search_expired');}
@@ -491,15 +494,85 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
       admitted();const result=json<unknown>(rust(()=>{preparation??=new host.wasm.WasmDocumentIndexPreparationCache();return preparation.baseJson(g,id,row.projection!,factsJson,options,monotonicMs(),viewName);}));
       await assertPin(pinId);admitted();return result;
     },
-    async rebuild(){active();releaseRich();releasePreparation();for(const stage of stages.values()){stage.builder?.free();stage.generation?.free();}stages.clear();for(const pin of pins.values())pin.value.free();pins.clear();
+    async rebuild(){active();releaseQueryOwners();for(const stage of stages.values()){stage.builder?.free();stage.generation?.free();}stages.clear();
       // Explicit rebuild expires every old pin; fresh epochs prevent token ABA.
       recovery=undefined;const nonce=crypto.randomUUID();await run<void>('readwrite',['control'],(tx,done)=>{putCatalog(tx,{...empty(),rebuilding:nonce});done();});
       // Generation rebuild preserves the separate validated content-facts family.
       await cleanupPrefix(PREFIX+'g/');
       await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{if(c.rebuilding===nonce)putCatalog(tx,empty());done();},abort));
     },
-    async close(){if(closed)return;releaseRich();releasePreparation();for(const stage of stages.values()){stage.builder?.free();stage.generation?.free();}stages.clear();for(const pin of pins.values())pin.value.free();pins.clear();
+    async close(){if(closed)return;releaseQueryOwners();for(const stage of stages.values()){stage.builder?.free();stage.generation?.free();}stages.clear();
       try{await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{c.pins=c.pins.filter(p=>p.clientId!==host.clientId);for(const g of c.generations)if(g.clientId===host.clientId&&g.state==='staging')g.state='deleting';putCatalog(tx,c);done();},abort));}catch{/* Cache cleanup never blocks source close. Explicit rebuild repairs derived state. */}finally{closed=true;}
     },
-  };return api;
+  };
+  // This executor uses raw low-level effects, not the public close wrapper.
+  // Stage source is the captured header source, never a later status value.
+  function ownedStage(snapshot:BrowserIndexSnapshot):Stage {
+    active();const stage=stages.get(snapshot.generationEpoch);
+    if(!stage||!equal(stage.header.nextIndex,snapshot))throw fail('index_stage_expired');
+    if(stage.failed)throw fail('document_runtime_unavailable');
+    return stage;
+  }
+  const observation=(stage:Stage):DocumentRuntimeStage=>({source:{...stage.header.source},snapshot:structuredClone(stage.header.nextIndex),progress:{prepared:stage.prepared,total:stage.total,ready:!!stage.generation}});
+  const fromResult=(result:BrowserIndexStage):DocumentRuntimeStage=>observation(ownedStage(result.snapshot));
+  const createMaintenance=()=>browserDocumentRuntime({authorityId:host.authorityId,wasm:host.wasm,backend:{assertActive:active,
+    async observe(){const result=await api.status();return {source:result.source,published:result.snapshot,current:result.current,rebuildRequired:result.rebuildRequired,coverageComplete:result.coverageComplete};},
+    initialize:()=>api.initialize(),
+    async recoverStage(){
+      active();if(stages.size===0)return null;if(stages.size!==1)throw fail('document_runtime_unavailable');
+      const stage=ownedStage(stages.values().next().value!.header.nextIndex);
+      // No persisted browser resume is available. Only an actual healthy live
+      // builder can be recovered; a failed partially advanced builder cannot.
+      const expected=JSON.stringify({rust:rust(()=>stage.builder?.headerJson()??stage.generation!.headerJson()),capture:stage.capture});
+      const checksum=await run<string>('readonly',['control','metadata','presentation','sync_materialization_refs'],(tx,done,abort)=>readCatalog(tx,c=>{
+        const descriptor=c.generations.find(g=>g.id===stage.id&&g.clientId===host.clientId&&g.state==='staging');
+        if(!descriptor||descriptor.rows!==stage.prepared||!equal(descriptor.snapshot,stage.header.nextIndex))throw fail('index_stage_expired');
+        sourceFence(tx,stage.header,c,stage.capture,()=>on(tx.objectStore('control').get(headerKey(stage.id)),row=>{
+          if(row?.value!==expected||typeof row.digest!=='string')throw fail('index_rebuild_required');done(row.digest);
+        },abort),abort);
+      },abort));
+      if(checksum!==await digest(expected))throw fail('index_rebuild_required');
+      return observation(ownedStage(stage.header.nextIndex));
+    },
+    async begin(){return fromResult(await api.begin());},
+    async pump(snapshot){const stage=ownedStage(snapshot);return fromResult(await api.pump(stage.id));},
+    async publish(snapshot){const stage=ownedStage(snapshot);return api.publish(stage.id);},
+    async discard(snapshot){const stage=stages.get(snapshot.generationEpoch);if(stage&&!equal(stage.header.nextIndex,snapshot))throw fail('index_stage_expired');return api.discard(snapshot.generationEpoch);},
+    rebuild:()=>api.rebuild(),
+  }});
+  let driver=createMaintenance(),maintenanceClosed=false,rebuilding:Promise<void>|undefined,maintenanceClosing:Promise<void>|undefined;
+  const gateMaintenance=()=>{if(maintenanceClosed)throw fail('document_runtime_retired');if(rebuilding)throw fail('document_runtime_busy');};
+  maintenance={
+    command(input){gateMaintenance();return driver.command(input);},
+    step(token){try{gateMaintenance();return driver.step(token);}catch(error){return Promise.reject(error);}},
+    update(){return rebuilding?null:driver.update();},
+    snapshot(){return rebuilding?null:driver.snapshot();},
+    close(){maintenanceClosed=true;return maintenanceClosing??=(async()=>{await driver.close();await rebuilding?.catch(()=>{});})();},
+  };
+  const ownedMaintenance=maintenance;let closing:Promise<void>|undefined;
+  // Public admission is revoked synchronously, while the internal executor can
+  // still finish its one accepted raw operation before builders are released.
+  const publicApi={...api};
+  for(const [name,operation]of Object.entries(api))Reflect.set(publicApi,name,(...args:unknown[])=>{
+    if(maintenanceClosed||closing)return Promise.reject(fail('index_closed'));
+    if(rebuilding)return Promise.reject(fail('document_runtime_busy'));
+    return Reflect.apply(operation,api,args);
+  });
+  const index:BrowserDocumentIndex={...publicApi,
+    rebuild(){
+      active();if(maintenanceClosed)throw fail('index_closed');if(rebuilding)return rebuilding;
+      releaseQueryOwners();const previous=driver;
+      const task=(async()=>{await previous.close();try{await api.rebuild();}finally{
+        // Only a fully drained previous owner can be replaced. A failed raw
+        // rebuild still requires the new lifetime to Observe durable storage.
+        if(!maintenanceClosed)driver=createMaintenance();
+      }})();
+      const tracked=task.finally(()=>{if(rebuilding===tracked)rebuilding=undefined;});rebuilding=tracked;return tracked;
+    },
+    close(){if(closing)return closing;releaseQueryOwners();return closing=(async()=>{await ownedMaintenance.close();await api.close();})();},
+  };
+  return {index,maintenance:ownedMaintenance};
 }
+/** Compatibility low-level index. Maintenance remains lazy until its internal
+ * owner is explicitly driven; no automatic frontend planner is installed. */
+export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocumentIndex{return createBrowserDocumentIndexBackend(host).index;}

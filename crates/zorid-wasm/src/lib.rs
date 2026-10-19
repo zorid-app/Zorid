@@ -5,6 +5,7 @@ mod bases;
 mod crypto;
 mod document;
 mod document_index;
+mod document_runtime;
 mod rpc;
 mod records;
 mod workblocks;
