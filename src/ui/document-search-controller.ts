@@ -10,8 +10,8 @@ export interface DocumentSearchControllerOptions {
   readonly scopeId:string;
   readonly spec?:SearchSpec;
   readonly isCurrent:()=>boolean;
-  /** Existing freshness acquisition policy, injected until core scheduling owns it. */
-  readonly acquireFresh:(isCurrent:()=>boolean,rebuild:boolean)=>Promise<boolean>;
+  /** The signal retires only this run's injected freshness demand. */
+  readonly acquireFresh:(isCurrent:()=>boolean,rebuild:boolean,signal:AbortSignal)=>Promise<boolean>;
   readonly beforeOpen?:()=>Promise<void>;
   readonly onSpec?:(spec:SearchSpec)=>void;
   readonly onOpen:(entry:DocumentEntry,location:SearchLocation|undefined,modifiers:{readonly primary:boolean;readonly shift:boolean;readonly alt:boolean},isCurrent:()=>boolean)=>void|Promise<void>;
@@ -54,6 +54,8 @@ export function mountDocumentSearch(parent:HTMLElement,options:DocumentSearchCon
   let phase:DocumentSearchFrame['phase']='idle',message:string|undefined,stale=false,rebuild=false,needsRefresh=false;
   let scheduled=false,serial:Promise<void>=Promise.resolve(),ready:Promise<void>=Promise.resolve();
   let closing:Promise<void>|undefined;
+  let freshness:AbortController|undefined;
+  const cancelFreshness=()=>{freshness?.abort();freshness=undefined;};
   const live=()=>!disposed&&!released&&options.isCurrent();
   const identity=():DocumentSearchIdentity=>({scopeId:options.scopeId,requestId:String(request)});
   const admit=(id:DocumentSearchIdentity)=>live()&&id.scopeId===options.scopeId&&id.requestId===String(request);
@@ -87,14 +89,14 @@ export function mountDocumentSearch(parent:HTMLElement,options:DocumentSearchCon
     paint();
   }
   function setSpec(next:SearchSpec):void {
-    if(!live()||sameSpec(spec,next))return;spec={...next};request++;navigationEpoch++;options.onSpec?.(spec);
+    if(!live()||sameSpec(spec,next))return;cancelFreshness();spec={...next};request++;navigationEpoch++;options.onSpec?.(spec);
     message=undefined;needsRefresh=false;phase=spec.query.length?'loading':'idle';stale=!!result;
     if(!spec.query.length){resetResults();stale=false;}
     paint();if(timer!==undefined)clearTimeout(timer);
     timer=setTimeout(()=>{timer=undefined;enqueue();},options.debounceMs??120);
   }
   function invalidate():void {
-    if(!live())return;sourceEpoch++;stale=!!result;message=undefined;needsRefresh=false;
+    if(!live())return;cancelFreshness();sourceEpoch++;stale=!!result;message=undefined;needsRefresh=false;
     phase=spec.query.length?'loading':'idle';paint();
     if(timer!==undefined)clearTimeout(timer);
     timer=setTimeout(()=>{timer=undefined;enqueue();},options.debounceMs??120);
@@ -159,7 +161,11 @@ export function mountDocumentSearch(parent:HTMLElement,options:DocumentSearchCon
     if(!pin){
       await options.beforeOpen?.();if(!current())return;
       const wantsRebuild=rebuild;rebuild=false;
-      const acquired=await options.acquireFresh(current,wantsRebuild);if(!current())return;
+      const acquisition=new AbortController();freshness=acquisition;
+      let acquired:boolean;
+      try{acquired=await options.acquireFresh(current,wantsRebuild,acquisition.signal);}
+      finally{if(freshness===acquisition)freshness=undefined;}
+      if(!current())return;
       if(!acquired){needsRefresh=true;phase='results';message='The saved search index is still updating. Refresh to continue.';stale=!!result;paint();return;}
       const opened=await options.service.open();if(!released){pin=opened;pinEpoch=epoch;}
       // Release is the final host acknowledgment, including unresolved opens.
@@ -204,10 +210,10 @@ export function mountDocumentSearch(parent:HTMLElement,options:DocumentSearchCon
   paint();if(spec.query.length)enqueue();
   return {service:options.service,get ready(){return ready;},setSpec,invalidateSource:invalidate,focusQuery:()=>view.focusQuery(),
     close(){
-      disposed=true;request++;if(timer!==undefined){clearTimeout(timer);timer=undefined;}view.destroy();
+      disposed=true;cancelFreshness();request++;if(timer!==undefined){clearTimeout(timer);timer=undefined;}view.destroy();
       if(released)return Promise.resolve();if(closing)return closing;
       closing=serial.catch(()=>{}).then(()=>released?undefined:closePin()).finally(()=>{closing=undefined;});return closing;
     },
-    release(){released=true;disposed=true;request++;if(timer!==undefined)clearTimeout(timer);pin=undefined;query=undefined;view.destroy();},
+    release(){released=true;disposed=true;cancelFreshness();request++;if(timer!==undefined)clearTimeout(timer);pin=undefined;query=undefined;view.destroy();},
   };
 }

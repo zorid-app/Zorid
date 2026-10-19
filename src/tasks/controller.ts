@@ -74,6 +74,7 @@ export class TasksController {
   private closeCancelled = false;
   get phase(): TasksPhase { return this.lifecycle; }
   private refreshRequested = false;
+  private refreshFreshness?: AbortController;
   private running: Promise<void> | undefined;
   private unsubscribe?: () => void;
   readonly host: TasksHost;
@@ -86,7 +87,7 @@ export class TasksController {
   prepareClose(): Promise<void> {
     if (this.phase === 'prepared' || this.phase === 'disposed') return Promise.resolve();
     if (this.closeRun) return this.closeRun;
-    this.lifecycle = 'preparing'; this.closeCancelled = false; this.refreshRequested = false;
+    this.lifecycle = 'preparing'; this.closeCancelled = false; this.refreshRequested = false; this.refreshFreshness?.abort();
     const run = Promise.resolve().then(async () => {
       try {
         await this.running;
@@ -124,20 +125,27 @@ export class TasksController {
   /** Coalesced and serialized: pin close never overlaps its read. No silent expiry retry. */
   refresh(): Promise<void> {
     if (this.phase !== 'active') return Promise.resolve();
-    if (this.state.busy) { this.refreshRequested = true; return this.running ?? Promise.resolve(); }
+    if (this.state.busy) { this.refreshRequested = true; this.refreshFreshness?.abort(); return this.running ?? Promise.resolve(); }
+    const freshness = new AbortController(); this.refreshFreshness = freshness;
+    const current = () => this.phase === 'active' && !freshness.signal.aborted;
     this.running = this.perform(async () => {
-      await this.closePins();
-      const status = await catchUpDocumentIndex(this.host.documents,{isCurrent:() => this.phase === 'active'});
-      if (this.phase !== 'active') return;
-      if (!status.current || status.rebuildRequired) throw Error('Saved notes are still being indexed. Refresh to reopen Tasks.');
-      const pin = await this.host.documents.open(); this.pins.add(pin);
       try {
-        if (!pin.tasks) throw Error('Tasks queries are unavailable in this vault.');
-        const reply = await pin.tasks({typeIds:[...this.host.typeDefinitionIds()],options:{filter:this.state.filter,showDone:this.state.showDone,clockMs:Date.now(),timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,maxRows:1000}});
-        if (this.phase !== 'active') return;
-        this.state.data = reply.value;
-        if (!this.state.capture.typeId) this.state.capture.typeId = reply.value.types[0]?.typeId ?? '';
-      } finally { await this.closePin(pin); }
+        await this.closePins();
+        if (!current()) return;
+        const status = await catchUpDocumentIndex(this.host.documents,{isCurrent:current,signal:freshness.signal});
+        if (!current()) return;
+        if (!status.current || status.rebuildRequired) throw Error('Saved notes are still being indexed. Refresh to reopen Tasks.');
+        const pin = await this.host.documents.open(); this.pins.add(pin);
+        try {
+          if (!current()) return;
+          if (!pin.tasks) throw Error('Tasks queries are unavailable in this vault.');
+          const reply = await pin.tasks({typeIds:[...this.host.typeDefinitionIds()],options:{filter:this.state.filter,showDone:this.state.showDone,clockMs:Date.now(),timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,maxRows:1000}});
+          if (!current()) return;
+          this.state.data = reply.value;
+          if (!this.state.capture.typeId) this.state.capture.typeId = reply.value.types[0]?.typeId ?? '';
+        } finally { await this.closePin(pin); }
+      } catch (error) { if (!freshness.signal.aborted) throw error; }
+      finally { if (this.refreshFreshness === freshness) this.refreshFreshness = undefined; }
     });
     return this.running;
   }

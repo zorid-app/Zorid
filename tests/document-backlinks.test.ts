@@ -9,6 +9,7 @@ import type {
 } from '../src/core/document-semantics.ts';
 import { mountDocumentBacklinks } from '../src/ui/document-backlinks.ts';
 import type { DocumentBacklinksTarget } from '../src/ui/document-backlinks.ts';
+import { freshnessUntil, heldDocumentFreshness } from './fixtures/held-document-freshness.ts';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -78,6 +79,22 @@ test('shared backlinks deduplicate source IDs and navigate by saved identity', a
   buttons[0].click(); assert.deepEqual(ui.opened, [{ id: 'a', path: 'Folder/Alpha.md' }]);
   ui.context.active = false; buttons[1].click(); assert.equal(ui.opened.length, 1);
   assert.equal(owned.closeCount, 1); assert.equal(foreign.closeCount, 0);
+});
+
+for(const reason of ['refresh','target','cancel','dispose'] as const)test(`backlinks ${reason} cancels its freshness demand after a held admission ACK`,async t=>{
+  const held=heldDocumentFreshness(),owned=makePin(),base=makeService(async()=>owned.pin);
+  const ui=setup(t,{...base.service,maintenance:held.maintenance});await freshnessUntil(()=>held.requests.length===1);
+  const first=held.requests[0];let next:Promise<void>|undefined;
+  if(reason==='refresh')next=ui.view.refresh();
+  else if(reason==='target'){ui.context.target={id:'other',path:'Other.md'};next=ui.view.refresh(ui.context.target);}
+  else if(reason==='cancel')ui.view.cancel();
+  else ui.view.dispose();
+  assert.equal(base.opens,0);held.release(first);
+  if(next){await freshnessUntil(()=>held.requests.length===2);ui.view.dispose();held.release(held.requests[1]);await next;}
+  else await ui.view.ready;
+  await freshnessUntil(()=>held.outcomeAcks.includes(first));
+  assert.equal(held.cancellations.includes(first),true);assert.equal(base.opens,0);
+  assert.equal(base.opens,0);assert.equal(held.subscriptions,0);
 });
 
 test('late pin open closes only the retired request and cannot replace a new target', async t => {

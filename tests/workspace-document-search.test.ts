@@ -7,6 +7,7 @@ import type { EditorHandle } from '../src/ui/editor.ts';
 import { MemoryAdapter } from '../src/core/memory-adapter.ts';
 import type { DurableWrites } from '../src/core/durable-writes.ts';
 import type { DocumentCursor, DocumentLiteralHit, DocumentLiteralPage, DocumentPage, DocumentPin, DocumentPinId, DocumentService, DocumentSnapshotId } from '../src/core/document-semantics.ts';
+import { freshnessUntil, heldDocumentFreshness } from './fixtures/held-document-freshness.ts';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -105,6 +106,25 @@ test('workspace shared search passes exact literals, pages one snapshot and grou
   assert.equal(ui.root.querySelector('.search-snippet')?.getAttribute('title'), 'Line 1');
   assert.equal(ui.root.querySelector('.search-results')?.getAttribute('data-state'), 'ready');
   assert.equal(f.pins.length, 1); assert.equal(f.pins[0].closed, 1);
+});
+
+for(const reason of ['query','source','sidebar','owner'] as const)test(`legacy Workspace search ${reason} cancels capable freshness before a late admission ACK`,async t=>{
+  const ui=await setup(t),held=heldDocumentFreshness(),f=fixture(async()=>page());
+  ui.setService({...f.service,maintenance:held.maintenance});
+  const old=ui.search('old');await freshnessUntil(()=>held.requests.length===1);const first=held.requests[0];
+  let latest:Promise<void>|undefined;
+  if(reason==='query')latest=ui.search('new');
+  else if(reason==='source')await ui.workspace.vault.modify('Note.md','new saved source');
+  else if(reason==='sidebar'){ui.internal.treeTab='files';ui.internal.renderSidebar();}
+  else {ui.internal.documentSearchSuspended=true;ui.internal.clearDocumentSearch();}
+  assert.equal(f.pins.length,0);held.release(first);
+  if(reason==='query'||reason==='source'){
+    await freshnessUntil(()=>held.requests.length===2);ui.internal.clearDocumentSearch();held.release(held.requests[1]);
+    await freshnessUntil(()=>held.outcomeAcks.includes(held.requests[1]));
+  }
+  await freshnessUntil(()=>held.outcomeAcks.includes(first));
+  assert.equal(held.cancellations.includes(first),true);assert.equal(f.pins.length,0);
+  await old;await latest;assert.equal(f.pins.length,0);assert.equal(held.subscriptions,0);
 });
 
 test('workspace shared search reserves the source budget before each page and labels bounded empty output incomplete', async t => {

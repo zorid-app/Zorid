@@ -142,6 +142,7 @@ export class Workspace {
   private folderCreationIntent = 0;
   private query = '';
   private searchGeneration = 0;
+  private documentSearchFreshness?: AbortController;
   private documentSearchSuspended = false;
   private documentSearchOwners = new Set<DocumentSearchOwner>();
   private richDocumentSearch?:{vault:Vault;service:DocumentService;controller?:DocumentSearchController};
@@ -768,7 +769,11 @@ export class Workspace {
         for (const pane of this.loadedViews()) if (pane.viewPath === change.path) { if (pane.viewMode === 'reading') pane.refreshPreview?.(); else pane.editor?.setValue(buffer.text); } this.renderRight();
       });
     }));
-    for(const event of ['create','delete','rename','modify'] as const)this.disposers.push(this.vault.on(event,()=>{this.richDocumentSearch?.controller?.invalidateSource();for(const pane of this.loadedViews())pane.editor?.refreshLinks?.();}));
+    for(const event of ['create','delete','rename','modify'] as const)this.disposers.push(this.vault.on(event,()=>{
+      if(this.richDocumentSearch)this.richDocumentSearch.controller?.invalidateSource();
+      else if(this.treeTab==='search'&&this.documentSearchFreshness){this.clearDocumentSearch();this.run(()=>this.search());}
+      for(const pane of this.loadedViews())pane.editor?.refreshLinks?.();
+    }));
     const generation = this.vaultGeneration;
     const changedPaths = new Set<string>();
     let needsFullReload = false;
@@ -1513,7 +1518,7 @@ export class Workspace {
         this.richDocumentSearch=mount;
         const current=()=>this.richDocumentSearch===mount&&this.vault===vault&&this.treeTab==='search'&&!this.documentSearchSuspended&&!this.platformReleased&&!this.closing;
         const controller=mountDocumentSearch(this.sidebarContent,{service,scopeId:scope,spec:{...this.richSearchSpec,query:this.query},isCurrent:current,
-          acquireFresh:async(isCurrent,rebuild)=>{const value=await catchUpDocumentIndex(service,{isCurrent,rebuild});if(value.rebuildRequired)throw new DocumentSemanticsError('rebuild_required');return !!value.snapshot;},
+          acquireFresh:async(isCurrent,rebuild,signal)=>{const value=await catchUpDocumentIndex(service,{isCurrent,rebuild,signal});if(value.rebuildRequired)throw new DocumentSemanticsError('rebuild_required');return !!value.snapshot;},
           beforeOpen:async()=>{for(const owner of this.richDocumentSearchOwners)if(owner.vault===vault&&owner.controller!==mount.controller&&owner.controller.service===service){await owner.controller.close();this.richDocumentSearchOwners.delete(owner);}},
           onSpec:spec=>{if(current()){this.richSearchSpec=spec;this.query=spec.query;}},
           onOpen:(entry,location,modifiers,isCurrent)=>this.openRichDocumentSearchEntry(entry,location,modifiers.primary,isCurrent),
@@ -1594,6 +1599,7 @@ export class Workspace {
   }
 
   private clearDocumentSearch(keepRich=false):void {
+    this.documentSearchFreshness?.abort();this.documentSearchFreshness=undefined;
     if(!keepRich&&this.richDocumentSearch){const retired=this.richDocumentSearch;this.richDocumentSearch=undefined;void retired.controller?.close().then(()=>{for(const owner of this.richDocumentSearchOwners)if(owner.controller===retired.controller)this.richDocumentSearchOwners.delete(owner);}).catch(()=>{});}
     this.searchGeneration++;
     void this.closeDocumentSearchPins().catch(()=>{});
@@ -1676,10 +1682,10 @@ export class Workspace {
       this.richDocumentSearch?.controller?.setSpec({...this.richSearchSpec,query:this.query});return;
     }
     this.clearDocumentSearch();
-    const generation=this.searchGeneration,vault=this.vault,query=this.query;
+    const generation=this.searchGeneration,vault=this.vault,query=this.query,freshness=new AbortController();
     const results=this.sidebarContent.querySelector<HTMLElement>('.search-results');if(!results)return;
     const current=()=>generation===this.searchGeneration&&this.vault===vault&&this.query===query&&this.treeTab==='search'
-      &&this.sidebarContent.contains(results)&&!this.documentSearchSuspended&&!this.platformReleased&&!this.closing;
+      &&this.sidebarContent.contains(results)&&!freshness.signal.aborted&&!this.documentSearchSuspended&&!this.platformReleased&&!this.closing;
     results.replaceChildren();
     const service=vault.adapter.documentSemantics;
     if(service?!query.length:!query.trim()){results.append(el('p','sidebar-empty','Type to search your vault.'));return;}
@@ -1696,6 +1702,7 @@ export class Workspace {
       }
       if(!count)results.append(el('p','sidebar-empty','No results found.'));return;
     }
+    this.documentSearchFreshness=freshness;
     const status=el('p','sidebar-empty','Updating the saved-text index…'),rows=el('div'),actions=el('div');
     status.setAttribute('role','status');status.setAttribute('aria-live','polite');results.append(status,rows,actions);
     const show=(state:string,message:string)=>{if(!current())return;results.dataset.state=state;status.textContent=message;actions.replaceChildren();};
@@ -1708,7 +1715,7 @@ export class Workspace {
     owner.runs++;
     let pin:DocumentPin|undefined;
     try{
-      const maintained=await catchUpDocumentIndex(service,{isCurrent:current,rebuild,onProgress:progress=>{
+      const maintained=await catchUpDocumentIndex(service,{isCurrent:current,rebuild,signal:freshness.signal,onProgress:progress=>{
         show('indexing',progress.phase==='indexing'&&progress.prepared!==undefined&&progress.total!==undefined
           ?`Indexing saved text… ${progress.prepared} of ${progress.total}`:'Updating the saved-text index…');
       }});
@@ -1778,6 +1785,7 @@ export class Workspace {
         ?'The saved snapshot expired. Refresh search to try again.':'Saved-text search is unavailable. Refresh to try again.');
       retry(needsRebuild?'Rebuild index':'Refresh search',needsRebuild);
     }finally{
+      if(this.documentSearchFreshness===freshness)this.documentSearchFreshness=undefined;
       if(pin){
         // Retire only this operation's pin; another search may already own one.
         try{await this.closeDocumentSearchPin(owner,pin);}catch{

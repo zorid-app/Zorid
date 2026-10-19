@@ -4,6 +4,8 @@ import { DocumentSemanticsError } from '../src/core/document-semantics.ts';
 import type { DocumentCursor, DocumentPage, DocumentPin, DocumentRichQuery, DocumentService, DocumentSnapshotId } from '../src/core/document-semantics.ts';
 import type { DocumentRichSearchPage, SearchFileChunk, SearchSpec } from '../src/core/document-search-types.ts';
 import { initialDocumentSearchSpec, mountDocumentSearch } from '../src/ui/document-search-controller.ts';
+import { catchUpDocumentIndex } from '../src/core/document-semantics.ts';
+import { freshnessUntil, heldDocumentFreshness } from './fixtures/held-document-freshness.ts';
 import type { DocumentSearchCallbacks, DocumentSearchFrame } from '../src/ui/document-search.ts';
 const source={localStoreId:'store',watermark:'1'};
 const snapshot:DocumentSnapshotId={localStoreId:'store',generationEpoch:'epoch',generation:'1',versions:{schema:2,extraction:'x',resolver:'r',query:'q'}};
@@ -14,7 +16,7 @@ function page(spec:SearchSpec,files:readonly SearchFileChunk[]=[chunk()],cursor:
 }
 function deferred<T>(){let resolve!:(v:T)=>void;const promise=new Promise<T>(r=>resolve=r);return {promise,resolve};}
 async function until(predicate:()=>boolean){const end=Date.now()+2000;while(!predicate()){if(Date.now()>end)assert.fail('Timed out');await new Promise(r=>setTimeout(r,2));}}
-function fixture(config:{query?:(spec:SearchSpec,index:number)=>Promise<DocumentRichQuery>;open?:()=>Promise<void>;closePin?:()=>Promise<void>;acquire?:()=>Promise<boolean>;onOpen?:()=>Promise<void>}={}){
+function fixture(config:{query?:(spec:SearchSpec,index:number)=>Promise<DocumentRichQuery>;open?:()=>Promise<void>;closePin?:()=>Promise<void>;acquire?:(isCurrent:()=>boolean,rebuild:boolean,signal:AbortSignal)=>Promise<boolean>;onOpen?:()=>Promise<void>}={}){
   const frames:DocumentSearchFrame[]=[],events:string[]=[],opened:any[]=[];let callbacks!:DocumentSearchCallbacks,opens=0,fresh=0,alive=true;
   const unused=async():Promise<never>=>{throw new Error('unexpected');};
   const query=(spec:SearchSpec):DocumentRichQuery=>({queryId:spec.query,prepare:async()=>({state:'ready',cursor:'start' as DocumentCursor}),page:async()=>page(spec),close:async()=>{events.push(`close:${spec.query}`);}});
@@ -24,7 +26,7 @@ function fixture(config:{query?:(spec:SearchSpec,index:number)=>Promise<Document
       close:async()=>{events.push('closePin');await config.closePin?.();},richSearch:async({spec})=>{events.push(`start:${spec.query}`);return config.query?config.query(spec,events.filter(e=>e.startsWith('start:')).length):query(spec);}};
   }};
   const controller=mountDocumentSearch({} as HTMLElement,{service,scopeId:'scope',isCurrent:()=>alive,debounceMs:0,
-    acquireFresh:async()=>{fresh++;return config.acquire?config.acquire():true;},
+    acquireFresh:async(isCurrent,rebuild,signal)=>{fresh++;return config.acquire?config.acquire(isCurrent,rebuild,signal):true;},
     onOpen:async(...args)=>{opened.push(args);await config.onOpen?.();},viewFactory:(_,next)=>{callbacks=next;return {render(frame){frames.push(structuredClone(frame));},focusQuery(){},destroy(){events.push('destroy');}};}});
   const spec=(query:string,extra:Partial<SearchSpec>={})=>({...initialDocumentSearchSpec,query,...extra});
   return {controller,frames,events,opened,spec,get callbacks(){return callbacks;},get frame(){return frames.at(-1)!;},get opens(){return opens;},get fresh(){return fresh;},set alive(value:boolean){alive=value;},async search(query:string,extra:Partial<SearchSpec>={}){controller.setSpec(spec(query,extra));await until(()=>frames.at(-1)?.phase!=='loading');await controller.ready;}};
@@ -36,6 +38,37 @@ test('query/options reuse one pin and freshness; core counts repeated in chunks 
   ui.callbacks.onAction(ui.frame,'loadMore');await ui.controller.ready;
   assert.equal(ui.frame.groups.length,1);assert.equal(ui.frame.groups[0].occurrenceCount,5);assert.equal(ui.frame.groups[0].snippets.length,2);assert.equal(ui.frame.result?.complete,true);
   await ui.search('x',{caseSensitive:true,sort:'createdAsc',context:'section',explain:true});assert.equal(ui.opens,1);assert.equal(ui.fresh,1);await ui.controller.close();
+});
+
+for(const reason of ['query','source','close','release'] as const)test(`rich search ${reason} aborts held freshness before admission ACK and drains only its demand`,async()=>{
+  const held=heldDocumentFreshness(),signals:AbortSignal[]=[];
+  const ui=fixture({acquire:async(isCurrent,rebuild,signal)=>{signals.push(signal);const status=await catchUpDocumentIndex(held.service,{isCurrent,rebuild,signal});return !!status.snapshot;}});
+  ui.controller.setSpec(ui.spec('old'));await freshnessUntil(()=>held.requests.length===1);
+  const first=held.requests[0];assert.equal(signals[0].aborted,false);
+  let closed:Promise<void>|undefined;
+  if(reason==='query')ui.controller.setSpec(ui.spec('new'));
+  else if(reason==='source')ui.controller.invalidateSource();
+  else if(reason==='close')closed=ui.controller.close();
+  else ui.controller.release();
+  assert.equal(signals[0].aborted,true);assert.equal(ui.opens,0);assert.deepEqual(held.cancellations,[]);
+  held.release(first);await freshnessUntil(()=>held.outcomeAcks.includes(first));
+  assert.deepEqual(held.cancellations,[first]);assert.equal(ui.opens,0);
+  if(reason==='query'||reason==='source'){
+    await freshnessUntil(()=>held.requests.length===2);closed=ui.controller.close();
+    assert.equal(signals[1].aborted,true);held.release(held.requests[1]);await freshnessUntil(()=>held.outcomeAcks.includes(held.requests[1]));
+  }
+  await (closed??ui.controller.ready);assert.equal(ui.opens,0);assert.equal(held.subscriptions,0);
+});
+
+test('closing rich search leaves another admitted freshness demand active',async()=>{
+  const held=heldDocumentFreshness();
+  const ui=fixture({acquire:async(isCurrent,rebuild,signal)=>!!(await catchUpDocumentIndex(held.service,{isCurrent,rebuild,signal})).snapshot});
+  ui.controller.setSpec(ui.spec('old'));await freshnessUntil(()=>held.requests.length===1);
+  const own=held.requests[0],other=held.maintenance.requestFreshness(),closed=ui.controller.close();
+  held.release(own);await freshnessUntil(()=>held.requests.length===2);const foreign=held.requests[1];held.release(foreign);
+  await freshnessUntil(()=>held.outcomeAcks.includes(own));await closed;
+  assert.deepEqual(held.cancellations,[own]);assert.equal(held.active.has(foreign),true);
+  held.finish(foreign);await other.result;await other.cancel();assert.equal(held.subscriptions,0);
 });
 
 test('rapid inputs coalesce; pending old page cannot repaint and old query closes before latest starts',async()=>{

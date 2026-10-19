@@ -31,6 +31,7 @@ export interface DocumentBacklinksView {
 }
 interface Run {
   readonly generation: number;
+  readonly freshness: AbortController;
   readonly target: DocumentBacklinksTarget | null;
   cancelled: boolean;
   finished: boolean;
@@ -98,6 +99,7 @@ export function mountDocumentBacklinks(container: HTMLElement, options: Document
   };
   const retire = (run: Run): void => {
     run.cancelled = true;
+    run.freshness.abort();
     // The run's finally also awaits this same promise; cancellation is nonblocking.
     void closeOwned(run).catch(() => {});
   };
@@ -153,7 +155,7 @@ export function mountDocumentBacklinks(container: HTMLElement, options: Document
       await Promise.all([...runs].filter(previous => previous !== run).map(closeOwned));
       if (!live(run)) return;
       const maintained = await catchUpDocumentIndex(service, {
-        isCurrent: () => live(run), rebuild, maxPumps: options.maxPumps, maxRestarts: options.maxRestarts,
+        isCurrent: () => live(run), signal: run.freshness.signal, rebuild, maxPumps: options.maxPumps, maxRestarts: options.maxRestarts,
         onProgress(progress) {
           const message = progress.phase === 'rebuild' ? 'Rebuilding the note index…'
             : progress.phase === 'indexing' && progress.prepared !== undefined && progress.total !== undefined
@@ -221,7 +223,7 @@ export function mountDocumentBacklinks(container: HTMLElement, options: Document
   function start(next: DocumentBacklinksTarget | null, rebuild = false): Promise<void> {
     for (const run of runs) retire(run);
     target = copyTarget(next);
-    const run: Run = { generation: ++generation, target: copyTarget(target), cancelled: false, finished: false, pin: null, closing: null };
+    const run: Run = { generation: ++generation, freshness: new AbortController(), target: copyTarget(target), cancelled: false, finished: false, pin: null, closing: null };
     current = run; runs.add(run);
     if (live(run)) { rows.replaceChildren(); show(run, 'indexing', 'Updating linked mentions…', true); }
     const work = perform(run, rebuild).finally(() => { run.finished = true; if (!run.pin) runs.delete(run); });

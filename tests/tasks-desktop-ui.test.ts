@@ -7,6 +7,7 @@ import { TasksController, taskReadDiagnostics } from '../src/tasks/controller.ts
 import type { TasksHost } from '../src/tasks/controller.ts';
 import { createTasksView } from '../src/tasks/view.ts';
 import { createTabViewRuntime } from '../src/ui/tab-view-runtime.ts';
+import { freshnessUntil, heldDocumentFreshness } from './fixtures/held-document-freshness.ts';
 
 const snapshot = {localStoreId:'store',generationEpoch:'epoch',generation:'9007199254740993',versions:{schema:1,extraction:'v1',resolver:'v1',query:'v1'}};
 const source = {localStoreId:'store',watermark:'9007199254740993'};
@@ -46,6 +47,24 @@ test('normal document wrapper receives definition EntryIds/options and closes it
   assert.deepEqual(h.calls[1].input.typeIds,['type-file']); assert.equal(h.calls[1].input.options.filter,'all');
   assert.equal(h.calls[1].input.options.maxRows,1000); assert.ok(Number.isSafeInteger(h.calls[1].input.options.clockMs));
   assert.equal(c.state.data?.result.rows[0].witness.revision,'r1'); await cleanup(c);
+});
+
+for(const reason of ['refresh','filter','source','close'] as const)test(`Tasks ${reason} aborts its own held freshness and cannot admit a stale pin`,async()=>{
+  const held=heldDocumentFreshness(),h=harness(),c=new TasksController({...h.host,documents:{...h.host.documents,maintenance:held.maintenance}});
+  const firstRun=c.refresh();await freshnessUntil(()=>held.requests.length===1);const first=held.requests[0];
+  let closed:Promise<void>|undefined;
+  if(reason==='refresh')void c.refresh();
+  else if(reason==='filter')c.setFilter('today');
+  else if(reason==='source')h.notify();
+  else closed=c.prepareClose();
+  assert.equal(h.calls.length,0);held.release(first);await freshnessUntil(()=>held.outcomeAcks.includes(first));
+  assert.deepEqual(held.cancellations,[first]);assert.equal(h.calls.length,0);
+  if(reason!=='close'){
+    await freshnessUntil(()=>held.requests.length===2);closed=c.prepareClose();held.release(held.requests[1]);
+  }
+  await firstRun;await closed;c.destroy();
+  assert.equal(h.calls.length,0);assert.equal(c.state.data,null);assert.equal(c.state.error,null);
+  assert.equal(held.subscriptions,0);assert.equal(h.subscriptionCount(),0);
 });
 test('capture persists type defaults through ordinary host, retains failed draft, refreshes only after durable success',async () => {
   const h = harness(), c = new TasksController(h.host); await c.refresh(); c.state.capture.title = ' New task ';
