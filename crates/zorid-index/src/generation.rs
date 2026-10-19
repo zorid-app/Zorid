@@ -1,5 +1,5 @@
 use crate::{
-    ContentExtractionKey, ContentExtractionResult, EntryWitness, ExtractionDomain, ExtractionMode,
+    extract_content, ContentExtractionOutcome, EntryWitness, ExtractionDomain, ExtractionMode,
     ExtractionScope, IndexError, IndexSnapshotId, Manifest, PublicationFence, MAX_PUMP_BYTES,
     MAX_PUMP_DOCUMENTS, RESOLVER_VERSION,
 };
@@ -54,12 +54,6 @@ impl IndexRecord {
         {
             return Err(IndexError::StaleSource);
         }
-        if request.source.len() > MAX_SOURCE_BYTES {
-            return Ok(Self::excluded(witness, Exclusion::SourceLimit));
-        }
-        if request.source.contains('\0') {
-            return Ok(Self::excluded(witness, Exclusion::Binary));
-        }
         let mode = if markdown {
             ExtractionMode::Markdown
         } else {
@@ -69,8 +63,13 @@ impl IndexRecord {
             ExtractionDomain::DocumentIndex,
             witness.source().local_store_id().clone(),
         );
-        let key = ContentExtractionKey::for_source(scope, mode, &request.source)?;
-        ContentExtractionResult::extract(key.clone(), &request.source)?.bind(&key, witness, mode)
+        match extract_content(scope, mode, &request.source)? {
+            ContentExtractionOutcome::Extracted(result) => {
+                let key = result.key().clone();
+                result.bind(&key, witness, mode)
+            }
+            ContentExtractionOutcome::Excluded(reason) => Ok(Self::excluded(witness, reason)),
+        }
     }
     /// Restore a disposable cached row without parsing source or doing IO.
     /// The caller bounds encoded input before decoding, obtains witness from

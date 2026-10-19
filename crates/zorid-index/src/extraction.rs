@@ -1,6 +1,6 @@
 //! Content-derived extraction only: no path, entry, revision, publication or IO.
 use crate::{
-    document_extraction_version, EntryWitness, IndexError, IndexRecord,
+    document_extraction_version, EntryWitness, Exclusion, IndexError, IndexRecord,
     MAX_GENERATION_METADATA_BYTES, MAX_PUMP_DOCUMENTS,
 };
 use serde::{Deserialize, Serialize};
@@ -149,27 +149,66 @@ pub struct ContentExtractionResult {
     facts: ExtractionFacts,
     facts_digest: [u8; 32],
 }
+/// Only successful content facts are cacheable. Terminal source/parser exclusions
+/// stay explicit and never become an empty successful cached projection.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ContentExtractionOutcome {
+    Extracted(ContentExtractionResult),
+    Excluded(Exclusion),
+}
+/// Normal source admission: preserve the existing size -> NUL -> parser-exclusion
+/// precedence. Hosts preflight pump budgets before calling this pure function.
+pub fn extract_content(
+    scope: ExtractionScope,
+    mode: ExtractionMode,
+    source: &str,
+) -> Result<ContentExtractionOutcome, IndexError> {
+    if source.len() > MAX_SOURCE_BYTES {
+        return Ok(ContentExtractionOutcome::Excluded(Exclusion::SourceLimit));
+    }
+    if source.contains('\0') {
+        return Ok(ContentExtractionOutcome::Excluded(Exclusion::Binary));
+    }
+    let key = ContentExtractionKey::for_source(scope, mode, source)?;
+    extract_supported(key, source)
+}
+fn extract_supported(
+    key: ContentExtractionKey,
+    source: &str,
+) -> Result<ContentExtractionOutcome, IndexError> {
+    let facts = match key.mode {
+        ExtractionMode::Markdown => match parse_markdown_facts(source) {
+            Ok(facts) => ExtractionFacts::Markdown(facts),
+            Err(_) => {
+                return Ok(ContentExtractionOutcome::Excluded(
+                    Exclusion::ExtractionLimit,
+                ))
+            }
+        },
+        ExtractionMode::PlainText => ExtractionFacts::PlainText(key.source_length.clone()),
+    };
+    let facts_digest = bounded_encoding(&(&key, &facts), MAX_GENERATION_METADATA_BYTES)?.1;
+    let result = ContentExtractionResult {
+        key,
+        facts,
+        facts_digest,
+    };
+    result.check_envelope()?;
+    Ok(ContentExtractionOutcome::Extracted(result))
+}
 impl ContentExtractionResult {
+    /// Strict keyed work for already eligible text. Ordinary source admission
+    /// uses extract_content so exclusions retain their existing classification.
     pub fn extract(key: ContentExtractionKey, source: &str) -> Result<Self, IndexError> {
         key.validate()?;
         let actual = ContentExtractionKey::for_source(key.scope.clone(), key.mode, source)?;
         if key != actual {
             return Err(IndexError::ContentMismatch);
         }
-        let facts = match key.mode {
-            ExtractionMode::Markdown => ExtractionFacts::Markdown(
-                parse_markdown_facts(source).map_err(|_| IndexError::InvalidRecord)?,
-            ),
-            ExtractionMode::PlainText => ExtractionFacts::PlainText(key.source_length.clone()),
-        };
-        let facts_digest = bounded_encoding(&(&key, &facts), MAX_GENERATION_METADATA_BYTES)?.1;
-        let result = Self {
-            key,
-            facts,
-            facts_digest,
-        };
-        result.check_envelope()?;
-        Ok(result)
+        match extract_supported(key, source)? {
+            ContentExtractionOutcome::Extracted(result) => Ok(result),
+            ContentExtractionOutcome::Excluded(_) => Err(IndexError::InvalidRecord),
+        }
     }
     pub fn key(&self) -> &ContentExtractionKey {
         &self.key

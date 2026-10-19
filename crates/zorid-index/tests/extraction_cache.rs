@@ -364,3 +364,24 @@ fn cached_binding_still_requires_current_manifest_and_pump_preflight() {
         Err(IndexError::PumpLimit)
     );
 }
+
+#[test]
+fn ordinary_extraction_returns_exclusions_without_successful_cache_envelopes() {
+    let scope = ExtractionScope::new(
+        ExtractionDomain::DocumentIndex,
+        OperationId::new("store").unwrap(),
+    );
+    assert_eq!(
+        extract_content(scope.clone(), ExtractionMode::Markdown, "\0").unwrap(),
+        ContentExtractionOutcome::Excluded(Exclusion::Binary)
+    );
+    assert_eq!(
+        extract_content(
+            scope,
+            ExtractionMode::Markdown,
+            &"\0".repeat(MAX_SOURCE_BYTES + 1)
+        )
+        .unwrap(),
+        ContentExtractionOutcome::Excluded(Exclusion::SourceLimit)
+    );
+}
