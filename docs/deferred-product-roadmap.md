@@ -7,6 +7,11 @@ is historical where it conflicts with this checkpoint. The maintained stage
 sequence is in [roadmap.md](roadmap.md); S1 scope is in
 [plans/indexing-search.md](plans/indexing-search.md).
 
+- **Active goal boundary:** latest explicit user objective is "Complete the full
+  roadmap S1. Stop after that." Complete every applicable S1 slice and its actual
+  platform/performance gates, with multicore excluded by latest steering. Stop
+  at S1 acceptance; later feature/sync/mobile stages remain planned. Preserve the
+  full scope rather than treating parse caching or a resolver fix as completion.
 - **Latest steering:** user accepts saving latency after trying the visible app;
   avoid further save-performance detours and continue the maintained roadmap.
   Skip multicore implementation; reduce unnecessary computations. This supersedes
