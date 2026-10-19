@@ -56,6 +56,10 @@ unmounted; native sort keyboard input is inconclusive. Controller source through
 repeated location indices across chunks, save-triggered navigation, source-refresh
 IME preservation and later-click admission. Full common/browser composition and
 actual app acceptance remain pending; no general UX/performance completion claim.
+Presentation, common transport and controller are now integrated through main
+`8968632f`; all76 composed focused checks pass on main. The real platform binding
+capability still gates the mounted rich path. Actual Electron/web behavior and
+Find painting/input remain open, rather than inferred from these scripted checks.
 
 ## Latest execution steering — follow roadmap, skip multicore
 

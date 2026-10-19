@@ -327,6 +327,21 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   Grouped-view painted wide/narrow fixtures show the requested pill/Aa/sliders
   layout; actual native sort input is unverified. Component paint does not
   establish mounted normal-app search/Find or platform/performance acceptance.
+  Follow-on integration: grouped presentation `b039d6e4`/`38858887`/`7d922a1c`,
+  approved common facade/decoder through `15a66cd4`, and approved controller/
+  Workspace through `8968632f` are now main. All76 composed focused checks pass
+  again on main; owned source files match their approved feature candidates.
+  Real browser methods, native/desktop/CLI composition, full TypeScript and
+  actual client acceptance remain pending. Pure/native scoped composition
+  `501c34b1` passes the bounded index-library check (7.13s), with366 source and
+  49 frozen JSON/Cargo fences exact; minimum disk1.290GB and owned group gone.
+  This is compilation, not native runtime proof. The reviewed successor adds
+  explicit evaluation-versus-output coverage and a4MiB/8192-match dense paging
+  oracle before broader validation. S1.4A pure lifecycle owner `s1_lifecycle_core`
+  works isolated at `/private/tmp/zorid-s1-lifecycle-core` on
+  `tingkai-c/s1-lifecycle-core`, new runtime module/tests only; shared exports and
+  platform migrations await named coordination. No lifecycle implementation
+  acceptance yet; heavy validation remains serialized.
 - **Integrated:** scoped observation-lookup fix through `2c53a98d`,193
   focused checks/1 existing ignored fixture, release build and normal-family100
   source/search checks pass. Small Base17 semantic-baseline tool is integrated
