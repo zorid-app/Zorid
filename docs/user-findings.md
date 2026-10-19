@@ -9,8 +9,11 @@ Eight guarded read-handler errors (`vault_closed` / `Untrusted sender`) also occ
 without timestamps establishing their exact phase. Retain the admission/lifecycle
 gap; do not describe this run as error-free. Evidence:
 `/private/tmp/zorid-s1-cache-desktop-255caa28-evidence/report.json`.
-Source audit is checking repeated index/source reads within existing transactions;
-separate-transaction observations must still capture fresh authority.
+Capture CSE is integrated `89fb84c5` with31 focused checks; enrolled-family targeted
+lookup is integrated `b57e6f5a` with48 composed checks. The latter uses the existing
+fresh path reader; ownership/proof/CAS checks remain intact. Actual app comparison
+is next. Separate-transaction observations still capture fresh authority; full
+inode-ownership inventory remains unchanged and the reconciliation gap stays open.
 
 ## S1 desktop pump rejects new cache counters — focused fix integrated
 

@@ -72,7 +72,7 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   validated source; Rust/browser inputs are unchanged from the tested freeze.
   Evidence `/private/tmp/zorid-desktop-parse-cache-validation.json`. Actual
   matching CLI cache acceptance and Electron compatibility now pass.
-- **Next practical increment:** remove capture's duplicate metadata validation
+- **Native read fixes — integrated, app comparison next:** remove capture's duplicate metadata validation
   within the same transaction (`entry_content.rs` / `document_index.rs`). The
   current Electron100 observation is5.7s cold search and1.8s post-save index
   refresh; these are single observations, not a performance comparison.
@@ -83,7 +83,11 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   because it targets the observed ordinary app flow. Owner `storage_sqlite_impl`,
   independent reviewer `s1_execution_audit`; isolated
   `tingkai-c/s1-index-capture-cse` / `storage-parse-cache`. Source `578d4e31` plus
-  test-only correction `f17d3bae` is reviewed; focused checks are running.
+  test-only correction `f17d3bae` is integrated `89fb84c5`;31 focused checks pass.
+  Four-entry regression records16 point metadata reads before versus8 after,
+  retaining presentation validation. The interrupted1GiB-floor run is not credited;
+  final22 pass with source-bounded512MiB floor, minfree740MB, no survivors. Evidence:
+  `/private/tmp/zorid-capture-cse-f17-index22-uni_o3qm/validation-summary.json`.
   Existing before binary and Electron100 harness provide comparison;
   no new benchmark framework. Audit:
   `/private/tmp/zorid-s1-native-index-source-audit-255caa28/audit.md`.
@@ -92,8 +96,16 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   metadata read. Integrated `56dd1de9` already establishes unrelated-row isolation
   as intended; physical ownership/inode/parent/CAS guards remain unchanged.
   Owner `baseline_resources_impl`, reviewer `architecture_core_audit`, isolated
-  `tingkai-c/s1-family-observe-lookup` / `s1-index-extraction`. These small disjoint
-  fixes may share one reviewed native build/app comparison; no new framework.
+  `tingkai-c/s1-family-observe-lookup` / `s1-index-extraction`. Source `9930d3d8`
+  is integrated `b57e6f5a` after composed `7f30b2d5` passes48 focused checks and
+  old-selector regression fails as intended. All five integrated Rust files match
+  the tested composition. Evidence:
+  `/private/tmp/zorid-family-lookup-7f30b2d5-v79uygow/validation-summary.json`.
+  These small disjoint fixes share one matching native build/app comparison;
+  no measured gain yet. Frontend314 component inputs/dist333 files are unchanged
+  from accepted `255caa28`; native Vite mode excludes WASM, so reuse that frontend.
+  Native build owner `storage_sqlite_impl`, subsequent app owner
+  `architecture_platform_audit`; no new framework or unrelated rebuild.
 - **Combined native result:** release `b3ed4400` passed build115.545s and family100
   correctness (all eight full literal oracles, complete coverage, exact physical/
   authority sources and watermark108). Rust inputs match integrated `2fb58f33`;
@@ -164,10 +176,10 @@ source approval is distinct from compilation and real-client acceptance):
 
 | Owner | Branch/worktree under `/Users/ctk/orca/workspaces/Zorid` | Verification |
 | --- | --- | --- |
-| `storage_sqlite_impl` | `tingkai-c/s1-index-capture-cse` / `storage-parse-cache` | Prior native cache `cbba5096` accepted bounded CLI/Electron; capture CSE source reviewed, focused checks running |
+| `storage_sqlite_impl` | `tingkai-c/s1-index-capture-cse` / `storage-parse-cache` | Capture CSE integrated `89fb84c5`,31 pass; next matching combined native build |
 | `architecture_platform_audit` | `tingkai-c/s1-browser-parse-cache` / `s1-browser-parse-cache` | Integrated `b4cf40f2`;42 Node +tsc +16 hosted Rust pass; actual matching WASM/Chrome100 +tiny9 pass on `6f2b177b`, slot released |
 | `s1_execution_audit` | `tingkai-c/storage-retained-text-cse` / `storage-retained-text-cse`, base `2f37f56c` | Integrated `5bb1d4f0`;24 focused checks +old-red/restore pass; no measured gain |
-| `baseline_resources_impl` | `tingkai-c/s1-family-observe-lookup` / `s1-index-extraction` | Prior core/cache accepted, CLI14-phase pass; owns next enrolled-family targeted lookup |
+| `baseline_resources_impl` | `tingkai-c/s1-family-observe-lookup` / `s1-index-extraction` | Selector integrated `b57e6f5a`,48 composed checks pass; actual app comparison next |
 
 Disk maintenance: three completed legacy10k fixture `vault`/`local-data` trees
 (`80dfce28`, `51060b1d`, `d0de1c83`) were archived after no-open-file checks to
