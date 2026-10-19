@@ -71,6 +71,8 @@ mod text_sync;
 mod document_index;
 #[path = "document_search.rs"]
 mod document_search;
+#[path = "document_runtime.rs"]
+mod document_runtime;
 
 #[path = "workblocks.rs"]
 mod workblocks;
@@ -91,6 +93,9 @@ pub struct NativeVault {
     base_preparation_clock: std::time::Instant,
     // Pure search state is bounded separately from host query guards/pins.
     rich_search_owner: std::sync::Arc<std::sync::Mutex<zorid_index::RichSearchOwner>>,
+    // One committed-maintenance owner per native/cache lifetime, independent
+    // of feature subscriptions. IO executes only through explicit bounded steps.
+    document_runtime: Option<document_runtime::NativeDocumentRuntime>,
     #[cfg(test)]
     pub(crate) fault: Option<fn(&str)>,
 }
@@ -138,6 +143,7 @@ impl NativeVault {
             rich_search_owner: std::sync::Arc::new(std::sync::Mutex::new(
                 zorid_index::RichSearchOwner::new(new_op()),
             )),
+            document_runtime: None,
             #[cfg(test)]
             fault: None,
         })

@@ -31,6 +31,7 @@ impl NativeVault {
         self.store.enable_document_cache(parent.join(name))?;
         self.base_preparation_cache.borrow_mut().clear();
         self.clear_rich_document_queries();
+        self.retire_document_runtime_for_cache_change();
         Ok(())
     }
     pub fn document_index_status(&self) -> NativeDocumentResult<DocumentIndexStatus> {
@@ -80,6 +81,16 @@ impl NativeVault {
     ) -> NativeDocumentResult<DocumentIndexStage> {
         self.paths.verify()?;
         Ok(self.store.resume_document_index(snapshot)?)
+    }
+    /// Bounded newest-first durable recovery; the Store retains all source/head/
+    /// epoch fences and propagates corruption instead of treating it as a miss.
+    pub fn recover_document_index_stage(
+        &self,
+    ) -> NativeDocumentResult<Option<(DocumentIndexStage, zorid_store::DocumentStageProgress)>> {
+        self.paths.verify()?;
+        let recovered = self.store.recover_document_index_stage()?;
+        self.paths.verify()?;
+        Ok(recovered)
     }
     /// One bounded Store pump; parsing happens outside the Store write transaction.
     pub fn pump_document_index(

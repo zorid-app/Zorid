@@ -188,3 +188,60 @@ pub struct NativeRichPage {
     pub result: DocumentQueryResult<DocumentRichSearchPage>,
     pub next: Option<NativeRichCursor>,
 }
+
+
+// Lifecycle controls never accept adapter completions or caller-authored
+// observations. Effects and immutable updates are reports, not capabilities.
+pub use zorid_index::document_runtime::{
+    Execution as DocumentRuntimeExecution, Failure as DocumentRuntimeFailure,
+    Freshness as DocumentRuntimeFreshness, FreshnessRequest as DocumentFreshnessRequest,
+    Phase as DocumentRuntimePhase, Reduction as DocumentRuntimeReduction,
+    RequestOutcome as DocumentRuntimeRequestOutcome, RuntimeError as DocumentRuntimeContractError,
+    RuntimeUpdate as DocumentRuntimeUpdate,
+};
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DocumentRuntimeCommand {
+    Wake { monotonic_ms: u64 },
+    Continue,
+    SourceHint,
+    Request(DocumentFreshnessRequest),
+    CancelRequest { id: u64 },
+    Retire,
+}
+#[derive(Debug)]
+pub enum NativeDocumentRuntimeError {
+    Document(NativeDocumentError),
+    Contract(DocumentRuntimeContractError),
+    NotStarted,
+    NoEffect,
+}
+impl fmt::Display for NativeDocumentRuntimeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Document(error) => error.fmt(f),
+            Self::Contract(error) => error.fmt(f),
+            Self::NotStarted => f.write_str("Document runtime has not started"),
+            Self::NoEffect => f.write_str("Document runtime has no issued effect"),
+        }
+    }
+}
+impl std::error::Error for NativeDocumentRuntimeError {}
+impl From<NativeDocumentError> for NativeDocumentRuntimeError {
+    fn from(error: NativeDocumentError) -> Self { Self::Document(error) }
+}
+impl From<DocumentRuntimeContractError> for NativeDocumentRuntimeError {
+    fn from(error: DocumentRuntimeContractError) -> Self { Self::Contract(error) }
+}
+impl NativeDocumentRuntimeError {
+    pub fn code(&self) -> &str {
+        match self {
+            Self::Document(error) => error.code(),
+            Self::Contract(DocumentRuntimeContractError::Capacity) => "document_runtime_capacity",
+            Self::Contract(DocumentRuntimeContractError::Retired) => "document_runtime_retired",
+            Self::Contract(_) => "document_runtime_contract",
+            Self::NotStarted => "document_runtime_not_started",
+            Self::NoEffect => "document_runtime_idle",
+        }
+    }
+}
+pub type NativeDocumentRuntimeResult<T> = Result<T, NativeDocumentRuntimeError>;
