@@ -142,7 +142,7 @@ function richFixture(wait?:Promise<void>){
   Object.assign(f.backend,{installAdmissionGuard(next:()=>void){guard=next;},documentIndex:{
     richStart:(input:unknown)=>invoke('start',input),richPrepare:(input:unknown)=>invoke('prepare',input),richPage:(input:unknown)=>invoke('page',input),richClose:async(input:unknown)=>{await invoke('close',input);},
   }});
-  return {...f,requests};
+  return Object.assign(f,{requests});
 }
 test('admitted rich methods forward through runtime ownership checks and capture before provider awaits',async()=>{
   const f=richFixture(),context=f.admit(),index=context.documentIndex!;
