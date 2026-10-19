@@ -143,7 +143,7 @@ function checkpointResult({ result, bytes }) {
 function successful(command, result, bytes, expectedBytes) {
   if (!object(result)) return false;
   if (!command) return bytes.length === 0; // Full startup validation follows.
-  if (!['read', 'read_path', 'read_presented', 'checkpoint_load', 'checkpoint_cas', 'binary', 'documents', 'workblocks', 'recovery_read'].includes(command.method) && bytes.length) return false;
+  if (!['read', 'read_path', 'read_presented', 'checkpoint_load', 'checkpoint_cas', 'binary', 'documents', 'workblocks', 'recovery_read'].includes(command.method) && !(command.method==='document_drafts'&&command.request?.op==='facts_read') && bytes.length) return false;
   switch (command.method) {
     case 'recovery_list': case 'recovery_read': return validRecoveryReply(command,result,bytes);
     case 'documents': return isRuntimeOp(command.request?.command?.op)?validRuntimeReply(command,result,bytes):validDocumentReply(command,result,bytes);
