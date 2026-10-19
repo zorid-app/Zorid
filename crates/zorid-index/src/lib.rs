@@ -40,8 +40,9 @@ pub use import::{GenerationSource, MAX_IMPORT_ENTRIES, MAX_IMPORT_SOURCE_BYTES};
 pub use persisted::PersistedIndexRecord;
 
 pub use extraction::{
-    parse_cache_admission, ContentExtractionKey, ContentExtractionResult, ExtractionDomain,
-    ExtractionMode, ExtractionScope, ParseCacheAdmission, ParseCacheOutcome, ParseCacheUsage,
-    FACTS_ENCODING_VERSION, MAX_PARSE_CACHE_BYTES, MAX_PARSE_CACHE_EVICTIONS_PER_WRITE,
-    MAX_PARSE_CACHE_ROWS, MAX_PARSE_CACHE_ROW_BYTES,
+    extract_content, parse_cache_admission, ContentExtractionKey, ContentExtractionOutcome,
+    ContentExtractionResult, ExtractionDomain, ExtractionMode, ExtractionScope,
+    ParseCacheAdmission, ParseCacheOutcome, ParseCacheUsage, FACTS_ENCODING_VERSION,
+    MAX_PARSE_CACHE_BYTES, MAX_PARSE_CACHE_EVICTIONS_PER_WRITE, MAX_PARSE_CACHE_ROWS,
+    MAX_PARSE_CACHE_ROW_BYTES,
 };

@@ -187,13 +187,15 @@ fn extract_supported(
         },
         ExtractionMode::PlainText => ExtractionFacts::PlainText(key.source_length.clone()),
     };
-    let facts_digest = bounded_encoding(&(&key, &facts), MAX_GENERATION_METADATA_BYTES)?.1;
+    let facts_digest = bounded_checksum(&(&key, &facts), MAX_GENERATION_METADATA_BYTES)?;
     let result = ContentExtractionResult {
         key,
         facts,
         facts_digest,
     };
-    result.check_envelope()?;
+    // Constructor just computed the checksum from trusted parser facts. Bound
+    // the envelope once; public bind still rechecks all untrusted inputs.
+    result.encoded_size()?;
     Ok(ContentExtractionOutcome::Extracted(result))
 }
 impl ContentExtractionResult {
@@ -262,11 +264,11 @@ impl ContentExtractionResult {
         )
     }
     pub fn encoded_size(&self) -> Result<usize, IndexError> {
-        bounded_encoding(self, MAX_GENERATION_METADATA_BYTES).map(|(bytes, _)| bytes)
+        bounded_encoding(self, MAX_GENERATION_METADATA_BYTES, false).map(|(bytes, _)| bytes)
     }
     fn check_envelope(&self) -> Result<(), IndexError> {
         self.encoded_size()?;
-        let actual = bounded_encoding(&(&self.key, &self.facts), MAX_GENERATION_METADATA_BYTES)?.1;
+        let actual = bounded_checksum(&(&self.key, &self.facts), MAX_GENERATION_METADATA_BYTES)?;
         if actual != self.facts_digest {
             return Err(IndexError::ContentMismatch);
         }
@@ -274,15 +276,22 @@ impl ContentExtractionResult {
     }
 }
 
+fn bounded_checksum(value: &impl Serialize, maximum: usize) -> Result<[u8; 32], IndexError> {
+    bounded_encoding(value, maximum, true)?
+        .1
+        .ok_or(IndexError::InvalidRecord)
+}
+
 fn bounded_encoding(
     value: &impl Serialize,
     maximum: usize,
-) -> Result<(usize, [u8; 32]), IndexError> {
+    checksum: bool,
+) -> Result<(usize, Option<[u8; 32]>), IndexError> {
     struct Counter {
         bytes: usize,
         maximum: usize,
         exceeded: bool,
-        digest: Sha256,
+        digest: Option<Sha256>,
     }
     impl Write for Counter {
         fn write(&mut self, data: &[u8]) -> io::Result<usize> {
@@ -291,7 +300,9 @@ fn bounded_encoding(
                 return Err(io::Error::other("extraction envelope limit"));
             }
             self.bytes += data.len();
-            self.digest.update(data);
+            if let Some(digest) = &mut self.digest {
+                digest.update(data);
+            }
             Ok(data.len())
         }
         fn flush(&mut self) -> io::Result<()> {
@@ -302,7 +313,7 @@ fn bounded_encoding(
         bytes: 0,
         maximum,
         exceeded: false,
-        digest: Sha256::new(),
+        digest: checksum.then(Sha256::new),
     };
     if serde_json::to_writer(&mut counter, value).is_err() {
         return Err(if counter.exceeded {
@@ -311,7 +322,10 @@ fn bounded_encoding(
             IndexError::InvalidRecord
         });
     }
-    Ok((counter.bytes, counter.digest.finalize().into()))
+    Ok((
+        counter.bytes,
+        counter.digest.map(|digest| digest.finalize().into()),
+    ))
 }
 
 /// Usage covers only this scoped disposable family's full encoded payloads.
@@ -432,9 +446,7 @@ mod tests {
         };
         facts.headings[0].range.bytes[1] = 99;
         result.facts_digest =
-            bounded_encoding(&(&result.key, &result.facts), MAX_GENERATION_METADATA_BYTES)
-                .unwrap()
-                .1;
+            bounded_checksum(&(&result.key, &result.facts), MAX_GENERATION_METADATA_BYTES).unwrap();
         assert_eq!(
             result.bind(&key, witness, ExtractionMode::Markdown),
             Err(IndexError::InvalidRecord)
@@ -443,7 +455,7 @@ mod tests {
     #[test]
     fn encoding_budget_stops_output_without_allocating_an_unbounded_buffer() {
         assert_eq!(
-            bounded_encoding(&"large", 2),
+            bounded_encoding(&"large", 2, false),
             Err(IndexError::GenerationLimit)
         );
     }

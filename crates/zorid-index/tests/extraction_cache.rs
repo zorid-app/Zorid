@@ -385,3 +385,31 @@ fn ordinary_extraction_returns_exclusions_without_successful_cache_envelopes() {
         ContentExtractionOutcome::Excluded(Exclusion::SourceLimit)
     );
 }
+
+#[test]
+fn supported_large_facts_skip_optional_cache_without_limiting_extraction() {
+    let w = witness("store", "1", "large", "r", "Large.md");
+    let text = format!("# {}", "x".repeat(MAX_PARSE_CACHE_ROW_BYTES));
+    let k = key(&w, ExtractionMode::Markdown, &text);
+    let extracted = result(&k, &text);
+    let encoded = extracted.encoded_size().unwrap();
+    assert!(encoded > MAX_PARSE_CACHE_ROW_BYTES);
+    assert_eq!(
+        parse_cache_admission(ParseCacheUsage { rows: 0, bytes: 0 }, None, encoded, 0).unwrap(),
+        ParseCacheAdmission::SkipOversized
+    );
+    let record = extracted
+        .bind(&k, w.clone(), ExtractionMode::Markdown)
+        .unwrap();
+    assert!(record.exclusion().is_none());
+    assert_eq!(
+        record.metadata().unwrap().headings[0].text.len(),
+        MAX_PARSE_CACHE_ROW_BYTES
+    );
+    let request = MetadataRequest {
+        entry_id: w.entry().id.clone(),
+        content_revision: w.entry().revision.clone(),
+        source: text,
+    };
+    assert_eq!(IndexRecord::text(w, &request, true).unwrap(), record);
+}
