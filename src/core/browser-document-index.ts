@@ -18,6 +18,16 @@ const LIMITS=Object.freeze({header:16*1024*1024,row:16*1024*1024,text:16*1024*10
   metadata:64*1024*1024,baseRecords:50000,baseFacts:8*1024*1024,projection:256*1024*1024,cache:512*1024*1024,pins:4,stages:4,generations:3});
 const fail=(code:string,details?:unknown)=>new BrowserVaultError(code,'Disposable document index is unavailable; source files remain authoritative',details);
 const size=(text:string)=>new TextEncoder().encode(text).byteLength;
+// Rust Manifest orders valid UTF8 strings by Unicode scalar value. JavaScript's
+// default UTF16 ordering differs for BMP/astral paths; locale ordering also differs.
+function manifestStringOrder(a:string,b:string):number {
+  for(let at=0;at<Math.min(a.length,b.length);){
+    const left=a.codePointAt(at)!,right=b.codePointAt(at)!;
+    if(left!==right)return left-right;
+    at+=left>0xffff?2:1;
+  }
+  return a.length-b.length;
+}
 function equal(a:unknown,b:unknown):boolean {
   if(a===b)return true;
   if(!a||!b||typeof a!=='object'||typeof b!=='object'||Array.isArray(a)!==Array.isArray(b))return false;
@@ -386,7 +396,11 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
       if(captured.digest!==await digest(captured.header)){await api.closePin(pinId);throw fail('index_rebuild_required');}
       let builder:Builder|undefined;
       try{const stored=json<StoredHeader>(captured.header,3*LIMITS.header),h=checkedHeader(stored.rust);if(!equal(h.nextIndex,captured.snapshot)||!equal(h.entries,stored.capture?.publication?.entries)||h.source.watermark!==stored.capture?.publication?.sequence)throw fail('index_rebuild_required');builder=rust(()=>new host.wasm.WasmDocumentIndexBuilder(stored.rust));let count=0;for(const entry of h.entries){if(entry.kind!=='file')continue;if(count++%32===0)rust(()=>builder!.beginPump());const row=await readRow(captured.id,entry);try{rust(()=>builder!.addPersisted(entry.id,row.record));}catch(error){if(!(error instanceof BrowserVaultError)||error.code!=='index_pump_limit')throw error;rust(()=>builder!.beginPump());rust(()=>builder!.addPersisted(entry.id,row.record));}}
-        const generation=rust(()=>builder!.finish());pins.set(pinId,{generation:captured.id,value:generation,header:h,capture:stored.capture});return {pinId,snapshot:captured.snapshot,source:h.source,coverageComplete:rust(()=>generation.coverageComplete())};
+        const generation=rust(()=>builder!.finish());
+        // Canonicalize this already-owned immutable pin header once. Keep the
+        // captured authority inventory and persisted header in their original order.
+        h.entries.sort((a,b)=>manifestStringOrder(a.path,b.path)||manifestStringOrder(a.id,b.id));
+        pins.set(pinId,{generation:captured.id,value:generation,header:h,capture:stored.capture});return {pinId,snapshot:captured.snapshot,source:h.source,coverageComplete:rust(()=>generation.coverageComplete())};
       }catch(error){await api.closePin(pinId);throw error;}finally{builder?.free();}
     },
     async closePin(pinId){active();retireRichPin(pinId);pins.get(pinId)?.value.free();pins.delete(pinId);await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{c.pins=c.pins.filter(p=>p.id!==pinId||p.clientId!==host.clientId);putCatalog(tx,c);done();},abort));},

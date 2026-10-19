@@ -86,6 +86,9 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
     clear(){richStats.cleared++;this.queries.clear();}
     free(){richStats.freed++;}
     startQuery(generation:any,specJson:string,factsJson:string){const spec=JSON.parse(specJson),facts=JSON.parse(factsJson),header=JSON.parse(generation.headerJson());richCalls.push({spec,facts,header});
+      // Mirror the real binding's identity/order guard with an independent UTF8 oracle.
+      const canonical=header.entries.filter((entry:any)=>entry.kind==='file').sort((a:any,b:any)=>Buffer.compare(Buffer.from(a.path),Buffer.from(b.path))||Buffer.compare(Buffer.from(a.id),Buffer.from(b.id)));
+      assert.deepEqual(facts.map((fact:any)=>[fact.entryId,fact.revision]),canonical.map((entry:any)=>[entry.id,entry.revision]));
       if(options.richCompile)throw JSON.stringify({code:'search_compile',diagnostic:{code:'invalid-operand',queryRange:{bytes:[0,1],utf16:[0,1]},message:'Expected operand'}});
       const id='q'+(++this.serial);this.queries.set(id,{generation,header,spec});return id;}
     prepareJson(query:string){if(!this.queries.has(query))throw JSON.stringify({code:'search_expired'});return JSON.stringify({state:'ready',cursor:'c'+query});}
@@ -405,6 +408,26 @@ test('unsupported optional catalog and exhausted FIFO ordinal never fail support
 
 const richSpec={query:'needle',caseSensitive:false,sort:'nameAsc' as const,context:'line' as const,explain:false};
 async function richReady(index:ReturnType<ReturnType<typeof fixture>['open']>,pinId:string){const {queryId}=await index.richStart({pinId,spec:richSpec}) as {queryId:string};const ready=await index.richPrepare({pinId,queryId}) as {state:'ready';cursor:string};assert.equal(ready.state,'ready');return {queryId,cursor:ready.cursor};}
+test('rich facts follow Rust path order across inventory, BMP and astral paths on an immutable pin',async()=>{
+  const f=fixture();
+  f.file('a','needle',{path:'Z.md',revision:'za',mtime:91});
+  f.file('b','needle',{path:'\u{10000}.md',revision:'astral',mtime:22});
+  f.file('c','needle',{path:'\uE000.md',revision:'bmp',mtime:33});
+  f.file('d','needle',{path:'A.md',revision:'ascii',mtime:44});
+  f.file('e','binary',{path:'image.png',revision:'binary',mtime:55,binary:true});
+  const source=f.source(),index=f.open();await f.build(index);const pin=await index.open();
+  const expected=[['d','ascii',44],['a','za',91],['e','binary',55],['c','bmp',33],['b','astral',22]];
+  for(let attempt=0;attempt<2;attempt++){
+    const ready=await richReady(index,pin.pinId);
+    assert.deepEqual(f.richCalls[attempt].facts.map(row=>[row.entryId,row.revision,row.mtimeMs]),expected);
+    await index.richClose({pinId:pin.pinId,queryId:ready.queryId});
+  }
+  assert.deepEqual(f.source(),source);
+  f.file('a','new needle',{path:'0.md',revision:'new',mtime:999});f.sequence('1');await f.build(index);
+  const retained=await richReady(index,pin.pinId);
+  assert.deepEqual(f.richCalls[2].facts.map(row=>[row.entryId,row.revision,row.mtimeMs]),expected);
+  await index.richClose({pinId:pin.pinId,queryId:retained.queryId});await index.close();
+});
 test('rich metadata-only pages use retained facts, strict shared envelope and zero projection reads',async()=>{
   const f=fixture();f.file('a','old',{mtime:7});f.file('image','binary',{path:'image.png',binary:true});const index=f.open();await f.build(index);const pin=await index.open(),source=f.source();
   f.file('a','new',{revision:'r2',mtime:99});const before=f.calls.length;const ready=await richReady(index,pin.pinId);const page=await index.richPage({pinId:pin.pinId,...ready}) as any;
