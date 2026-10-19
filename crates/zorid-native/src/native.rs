@@ -69,6 +69,8 @@ mod text_sync;
 
 #[path = "document_index.rs"]
 mod document_index;
+#[path = "document_search.rs"]
+mod document_search;
 
 #[path = "workblocks.rs"]
 mod workblocks;
@@ -87,6 +89,8 @@ pub struct NativeVault {
     // query pin, lease, transaction or source-write capability. Drop releases it.
     base_preparation_cache: std::cell::RefCell<zorid_bases::BasePreparationCache>,
     base_preparation_clock: std::time::Instant,
+    // Pure search state is bounded separately from host query guards/pins.
+    rich_search_owner: std::sync::Arc<std::sync::Mutex<zorid_index::RichSearchOwner>>,
     #[cfg(test)]
     pub(crate) fault: Option<fn(&str)>,
 }
@@ -131,6 +135,9 @@ impl NativeVault {
                 zorid_bases::BasePreparationCache::new(),
             ),
             base_preparation_clock: std::time::Instant::now(),
+            rich_search_owner: std::sync::Arc::new(std::sync::Mutex::new(
+                zorid_index::RichSearchOwner::new(new_op()),
+            )),
             #[cfg(test)]
             fault: None,
         })

@@ -11,6 +11,8 @@ pub use zorid_bases::{BaseQueryResult, EvaluationOptions, OperationCancellation,
 pub use zorid_index::{
     IndexSnapshotId, LiteralPage, LiteralQuery, LiteralToken, RelationshipDirection,
     RelationshipPage, RelationshipToken, ResolutionSnapshot, SourceSnapshotId,
+    DocumentRichSearchPage, RichPageProfile, SearchContext, SearchCount, SearchDiagnostic,
+    SearchDiagnosticCode, SearchQueryCoverage, SearchSort, SearchSpec, SearchTotals,
 };
 pub use zorid_store::{
     DocumentIndexError, DocumentIndexProgress, DocumentIndexStage, DocumentIndexStatus,
@@ -26,6 +28,12 @@ pub enum NativeDocumentError {
     BaseCompile(zorid_bases::BaseCompileError),
     BaseEvaluation(zorid_bases::ExpressionDiagnostic),
     SourceUnavailable(EntryId),
+    SearchCompile(SearchDiagnostic),
+    SearchResource(&'static str),
+    SearchInvalid(&'static str),
+    SearchExpired,
+    SearchBusy,
+    QueryCancelled,
     Calendar(crate::WorkBlockError),
 }
 impl fmt::Display for NativeDocumentError {
@@ -36,6 +44,12 @@ impl fmt::Display for NativeDocumentError {
             Self::Index(error) => error.fmt(f),
             Self::BaseCompile(error) => write!(f, "Invalid Base definition: {error:?}"),
             Self::BaseEvaluation(error) => error.fmt(f),
+            Self::SearchCompile(error) => error.fmt(f),
+            Self::SearchResource(detail) => write!(f, "Search resource limit: {detail}"),
+            Self::SearchInvalid(detail) => write!(f, "Invalid search request: {detail}"),
+            Self::SearchExpired => f.write_str("Search query or cursor expired"),
+            Self::SearchBusy => f.write_str("Search query is already being driven"),
+            Self::QueryCancelled => f.write_str("Query cancelled"),
             Self::SourceUnavailable(id) => {
                 write!(f, "No eligible text projection for entry {}", id.as_str())
             }
@@ -111,6 +125,12 @@ impl NativeDocumentError {
         use zorid_store::DocumentIndexError as D;
         match self {
             Self::Calendar(error) => error.code(),
+            Self::SearchCompile(_) => "search_compile",
+            Self::SearchResource(_) => "search_resource",
+            Self::SearchInvalid(_) => "invalid_request",
+            Self::SearchExpired => "search_expired",
+            Self::SearchBusy => "search_busy",
+            Self::QueryCancelled => "cancelled",
             Self::Native(crate::Error::UnsafePath(_)) => "unsafe_path",
             Self::Native(_) => "native_error",
             Self::Index(D::RebuildRequired) => "rebuild_required",
@@ -138,4 +158,33 @@ impl NativeDocumentError {
 
 impl From<crate::WorkBlockError> for NativeDocumentError {
     fn from(error: crate::WorkBlockError) -> Self { Self::Calendar(error) }
+}
+
+/// Host-owned query lifetime. The exact admitted pin never enters the pure
+/// search owner. This guard is deliberately non-Clone and non-serializable.
+pub struct NativeRichQuery {
+    pub(crate) pin: std::sync::Arc<DocumentQueryPin>,
+    pub(crate) owner: std::sync::Weak<std::sync::Mutex<zorid_index::RichSearchOwner>>,
+    pub(crate) id: zorid_index::RichQueryId,
+}
+/// An actual core checkpoint, not a caller-authored JSON offset or source proof.
+#[derive(Clone)]
+pub struct NativeRichCursor {
+    pub(crate) owner: std::sync::Weak<std::sync::Mutex<zorid_index::RichSearchOwner>>,
+    pub(crate) value: zorid_index::RichSearchCursor,
+}
+impl PartialEq for NativeRichCursor {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Weak::ptr_eq(&self.owner, &other.owner) && self.value == other.value
+    }
+}
+impl Eq for NativeRichCursor {}
+pub enum NativeRichPreparation {
+    Preparing,
+    Ready(NativeRichCursor),
+}
+/// Adapters serialize only result and map next to a scoped opaque handle.
+pub struct NativeRichPage {
+    pub result: DocumentQueryResult<DocumentRichSearchPage>,
+    pub next: Option<NativeRichCursor>,
 }

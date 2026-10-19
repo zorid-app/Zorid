@@ -30,6 +30,7 @@ impl NativeVault {
             .ok_or_else(|| crate::Error::UnsafePath("cache filename missing".into()))?;
         self.store.enable_document_cache(parent.join(name))?;
         self.base_preparation_cache.borrow_mut().clear();
+        self.clear_rich_document_queries();
         Ok(())
     }
     pub fn document_index_status(&self) -> NativeDocumentResult<DocumentIndexStatus> {
@@ -53,6 +54,7 @@ impl NativeVault {
         self.paths.verify()?;
         self.store.rebuild_document_index()?;
         self.base_preparation_cache.borrow_mut().clear();
+        self.clear_rich_document_queries();
         Ok(())
     }
     pub fn begin_document_index(&mut self) -> NativeDocumentResult<DocumentIndexStage> {
