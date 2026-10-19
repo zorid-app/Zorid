@@ -135,9 +135,16 @@ and passed actual100-note full external oracles before integration `066c67e7` /
 `6b7c1c4c`. Evidence `/private/tmp/zorid-s1-core-release100-3f41fe08/core-report.json`.
 Main tool checks: native10, core protocol12 plus three synthetic process/report
 lifecycle cases (the latter are explicitly not Rust execution). The first10k
-pure-core observation is underway; normal Electron harness `3d528d03` is source
-reviewed but still isolated pending actual runtime. No S1.0 acceptance or engine
-optimization gain is claimed by these preparatory tools/smokes.
+pure-core observation passed all eight complete external oracles (20,554 hits,
+2,504 pages,10,003 records), exact source preservation and complete declared
+coverage: `/private/tmp/zorid-s1-core-release10000-3f41fe08/core-report.json`.
+One sequential release sample observed setup1.649s (source reads1.528s), composite
+extraction445ms, binding100ms, insertion123ms, literals78–225ms. Each literal still
+scanned the full corpus; this isolates engine work and excludes client/SQLite/
+source-admission costs. It is not a repeated distribution, speedup, Base-query or
+normal-client10k pass. Normal Electron harness `3d528d03` is source reviewed but
+still isolated pending actual runtime. No complete S1.0 acceptance or engine
+optimization gain is claimed by these tools/smokes.
 
 Owners: `s1_execution_audit` owns workload/native CLI baseline tooling;
 `s1_query_audit` owns the integrated language fixtures;
