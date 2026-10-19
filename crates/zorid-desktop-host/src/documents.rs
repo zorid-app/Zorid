@@ -38,6 +38,14 @@ pub(crate) struct Request {
     deny_unknown_fields
 )]
 enum DocumentCommand {
+    RuntimeObserve,
+    RuntimeSnapshot,
+    RuntimeControl { sequence: crate::document_runtime::Counter, command: crate::document_runtime::Feature },
+    RuntimeAck { sequence: crate::document_runtime::Counter },
+    RuntimeOutcomeAck { lifetime: OperationId, id: crate::document_runtime::Counter },
+    RuntimeOwner { sequence: crate::document_runtime::Counter, command: crate::document_runtime::Owner },
+    RuntimeOwnerAck { sequence: crate::document_runtime::Counter },
+    RuntimeStep { lifetime: OperationId, effect_id: crate::document_runtime::Counter },
     Status,
     Initialize,
     Rebuild,
@@ -339,8 +347,19 @@ struct Client {
 #[derive(Default)]
 pub(crate) struct Sessions {
     clients: BTreeMap<OperationId, Client>,
+    runtime: crate::document_runtime::Sessions,
 }
 impl Sessions {
+    #[cfg(test)]
+    pub(crate) fn retained_pin_count(&self) -> usize {
+        self.clients.values().map(|client| client.pins.len()).sum()
+    }
+    pub(crate) fn release_runtime(&mut self, vault: &mut NativeVault, client: &OperationId, last: bool) -> Result<(),Value> {
+        if self.runtime.release(vault,client,last)? {
+            for client in self.clients.values_mut() { client.pins.clear(); }
+        }
+        Ok(())
+    }
     pub(crate) fn release(&mut self, client: &OperationId) {
         self.clients.remove(client); // Drop releases even already-expired pins.
     }
@@ -434,6 +453,13 @@ struct Paged<T> {
     cursor: Option<OperationId>,
 }
 
+fn runtime_answer(vault:&mut NativeVault,sessions:&mut Sessions,client:&OperationId,op:&str,command:crate::document_runtime::Command)->Result<(Value,Vec<u8>),Value> {
+    let reply=sessions.runtime.execute(vault,client,command)?;
+    if reply.rebuilt {for client in sessions.clients.values_mut(){client.pins.clear();}}
+    let encoded=answer(op,reply.value)?;
+    if encoded.1.len()>crate::document_runtime::MAX_BYTES {return Err(failure("document_runtime_capacity"));}
+    Ok(encoded)
+}
 pub(crate) fn execute(
     vault: &mut NativeVault,
     sessions: &mut Sessions,
@@ -468,6 +494,14 @@ pub(crate) fn execute(
     };
     let result = (|| {
         match request.command {
+            RuntimeObserve => runtime_answer(vault,sessions,client,"runtime_observe",crate::document_runtime::Command::Observe),
+            RuntimeSnapshot => runtime_answer(vault,sessions,client,"runtime_snapshot",crate::document_runtime::Command::Snapshot),
+            RuntimeControl {sequence,command} => runtime_answer(vault,sessions,client,"runtime_control",crate::document_runtime::Command::Control{sequence,command}),
+            RuntimeAck {sequence} => runtime_answer(vault,sessions,client,"runtime_ack",crate::document_runtime::Command::Ack{sequence}),
+            RuntimeOutcomeAck {lifetime,id} => runtime_answer(vault,sessions,client,"runtime_outcome_ack",crate::document_runtime::Command::OutcomeAck{lifetime,id}),
+            RuntimeOwner {sequence,command} => runtime_answer(vault,sessions,client,"runtime_owner",crate::document_runtime::Command::Owner{sequence,command}),
+            RuntimeOwnerAck {sequence} => runtime_answer(vault,sessions,client,"runtime_owner_ack",crate::document_runtime::Command::OwnerAck{sequence}),
+            RuntimeStep {lifetime,effect_id} => runtime_answer(vault,sessions,client,"runtime_step",crate::document_runtime::Command::Step{lifetime,effect_id}),
             Status => {
                 let (source, status) = vault.document_index_status_with_source().map_err(native)?;
                 answer("status", StatusReport { source, status })

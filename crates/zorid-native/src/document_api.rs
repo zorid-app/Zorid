@@ -245,3 +245,33 @@ impl NativeDocumentRuntimeError {
     }
 }
 pub type NativeDocumentRuntimeResult<T> = Result<T, NativeDocumentRuntimeError>;
+
+
+pub use zorid_index::document_runtime::{
+    Effect as DocumentRuntimeEffect, EffectResult as DocumentRuntimeEffectResult,
+    IssuedEffect as DocumentRuntimeIssuedEffect, Observation as DocumentRuntimeObservation,
+    StageObservation as DocumentRuntimeStageObservation, StageProgress as DocumentRuntimeStageProgress,
+    Priority as DocumentRuntimePriority,
+};
+/// Read-only actual execution data in the existing single step ACK slot.
+/// It owns no body, pin, stage capability, transaction or write authority.
+#[derive(Clone, Debug)]
+pub struct NativeDocumentRuntimeReceipt {
+    pub issued: DocumentRuntimeIssuedEffect,
+    pub completion: DocumentRuntimeEffectResult,
+    pub pump: Option<std::sync::Arc<DocumentIndexProgress>>,
+}
+#[derive(Clone, Debug)]
+pub struct NativeDocumentRuntimeStepRecord {
+    pub lifetime: zorid_core::OperationId,
+    pub effect_id: u64,
+    pub reduction: DocumentRuntimeReduction,
+    pub receipt: NativeDocumentRuntimeReceipt,
+}
+#[derive(Clone, Debug)]
+pub struct NativeDocumentRuntimeSnapshot {
+    pub execution: DocumentRuntimeExecution,
+    pub update: DocumentRuntimeUpdate,
+    pub in_flight: Option<DocumentRuntimeIssuedEffect>,
+    pub last_step: Option<NativeDocumentRuntimeStepRecord>,
+}

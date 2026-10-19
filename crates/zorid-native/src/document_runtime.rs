@@ -17,16 +17,14 @@ pub(super) struct NativeDocumentRuntime {
     core: DocumentRuntime,
     stage: Option<DocumentIndexStage>,
     // One bounded acknowledgment report, never a body, pin or authority proof.
-    last_step: Option<StepReplay>,
-}
-struct StepReplay {
-    lifetime: OperationId,
-    effect_id: u64,
-    reduction: DocumentRuntimeReduction,
+    last_step: Option<NativeDocumentRuntimeStepRecord>,
+    pump_receipt: Option<std::sync::Arc<DocumentIndexProgress>>,
+    execution: DocumentRuntimeExecution,
 }
 impl NativeDocumentRuntime {
     fn reduce(&mut self, input: Input) -> NativeDocumentRuntimeResult<DocumentRuntimeReduction> {
         let result = self.core.reduce(input)?;
+        self.execution = result.execution;
         if self.core.stage().is_none() {
             self.stage = None;
         }
@@ -58,6 +56,8 @@ impl NativeVault {
                 }),
                 stage: None,
                 last_step: None,
+                pump_receipt: None,
+                execution: DocumentRuntimeExecution::WaitForWake,
             });
         }
         let retiring = matches!(&command, DocumentRuntimeCommand::Retire);
@@ -83,6 +83,31 @@ impl NativeVault {
             .as_ref()
             .map(|owner| owner.core.update())
     }
+    /// Actual core and existing ACK state; this does not drive, reconstruct or
+    /// recapture authority. Native receipts are omitted by shared host wire.
+    pub fn document_runtime_snapshot(&self) -> Option<NativeDocumentRuntimeSnapshot> {
+        self.document_runtime
+            .as_ref()
+            .map(|owner| NativeDocumentRuntimeSnapshot {
+                execution: owner.execution,
+                update: owner.core.update(),
+                in_flight: owner.core.in_flight().cloned(),
+                last_step: owner.last_step.clone(),
+            })
+    }
+    /// A trusted host may start a new owner lifetime after the previous owner
+    /// fully retired. No active demand/effect/ACK can be reset by this method.
+    pub fn restart_document_runtime(&mut self) -> NativeDocumentRuntimeResult<()> {
+        let snapshot = self
+            .document_runtime_snapshot()
+            .ok_or(NativeDocumentRuntimeError::NotStarted)?;
+        if snapshot.update.phase != DocumentRuntimePhase::Releasing || snapshot.in_flight.is_some()
+        {
+            return Err(DocumentRuntimeContractError::InvalidRequest.into());
+        }
+        self.document_runtime = None;
+        Ok(())
+    }
     /// Execute exactly one issued effect. A next Dispatch is returned to the
     /// host queue; a Yield schedules Continue on a later admitted host turn.
     pub fn document_runtime_step(
@@ -90,13 +115,24 @@ impl NativeVault {
         lifetime: &OperationId,
         effect_id: u64,
     ) -> NativeDocumentRuntimeResult<DocumentRuntimeReduction> {
+        self.document_runtime_step_record(lifetime, effect_id)
+            .map(|record| record.reduction)
+    }
+    /// Return the same actual execution receipt directly, including the final
+    /// retired drain which is deliberately not retained as an ACK afterward.
+    /// The convenience step method and this method share one executor/slot.
+    pub fn document_runtime_step_record(
+        &mut self,
+        lifetime: &OperationId,
+        effect_id: u64,
+    ) -> NativeDocumentRuntimeResult<NativeDocumentRuntimeStepRecord> {
         let owner = self
             .document_runtime
             .as_ref()
             .ok_or(NativeDocumentRuntimeError::NotStarted)?;
         if let Some(replay) = &owner.last_step {
             if &replay.lifetime == lifetime && replay.effect_id == effect_id {
-                return Ok(replay.reduction.clone());
+                return Ok(replay.clone());
             }
         }
         let issued = owner
@@ -109,6 +145,7 @@ impl NativeVault {
         }
         // No runtime borrow survives IO. Existing NativeVault methods retain
         // root verification and Store source/head/epoch/publication fencing.
+        self.document_runtime.as_mut().expect("owner").pump_receipt = None;
         let result = self
             .execute_document_runtime_effect(&issued)
             .unwrap_or_else(|error| EffectResult::Failed(effect_failure(&error)));
@@ -116,21 +153,28 @@ impl NativeVault {
             .document_runtime
             .as_mut()
             .expect("effect cannot remove owner");
+        let receipt = NativeDocumentRuntimeReceipt {
+            issued: issued.clone(),
+            completion: result.clone(),
+            pump: owner.pump_receipt.take(),
+        };
         let reduction = owner.reduce(Input::Complete {
             lifetime: issued.lifetime.clone(),
             effect_id: issued.id,
             result,
         })?;
-        // Retirement expires earlier ACK ownership. The one already-issued
-        // effect may drain, but a retired lifetime does not retain new reports.
-        if reduction.execution != DocumentRuntimeExecution::Quiesced {
-            owner.last_step = Some(StepReplay {
-                lifetime: issued.lifetime,
-                effect_id: issued.id,
-                reduction: reduction.clone(),
-            });
+        let record = NativeDocumentRuntimeStepRecord {
+            lifetime: issued.lifetime,
+            effect_id: issued.id,
+            reduction,
+            receipt,
+        };
+        // Retirement expires earlier ACK ownership. The caller may inspect its
+        // actual final receipt, but this owner retains no quiesced report.
+        if record.reduction.execution != DocumentRuntimeExecution::Quiesced {
+            owner.last_step = Some(record.clone());
         }
-        Ok(reduction)
+        Ok(record)
     }
     fn execute_document_runtime_effect(
         &mut self,
@@ -210,6 +254,8 @@ impl NativeVault {
                     Ok(progress) => progress,
                     Err(error) => return Ok(EffectResult::Failed(error)),
                 };
+                self.document_runtime.as_mut().expect("owner").pump_receipt =
+                    Some(std::sync::Arc::new(progress));
                 Ok(EffectResult::Stage(stage_observation(
                     &stage,
                     Some(projected),

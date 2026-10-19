@@ -674,3 +674,188 @@ fn provider_replacement_and_retirement_expire_earlier_step_ack_scope() {
         .document_runtime_step(&draining.lifetime, draining.id)
         .is_err());
 }
+
+#[test]
+fn snapshot_exposes_actual_pending_effect_and_actual_pump_metrics_in_one_ack() {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(root.path()).unwrap();
+    for n in 0..35 {
+        create(&mut vault, n);
+    }
+    request(&mut vault, 1, 8);
+    until(&mut vault, |e| matches!(e, Effect::Pump { .. }));
+    let issued = vault
+        .document_runtime_snapshot()
+        .unwrap()
+        .in_flight
+        .unwrap();
+    let report = vault
+        .document_runtime_step(&issued.lifetime, issued.id)
+        .unwrap();
+    let actual = vault.document_runtime_snapshot().unwrap();
+    assert_eq!(actual.execution, DocumentRuntimeExecution::Yield);
+    assert!(actual.in_flight.is_none());
+    let record = actual.last_step.unwrap();
+    assert_eq!(record.lifetime, issued.lifetime);
+    assert_eq!(record.effect_id, issued.id);
+    assert_eq!(record.receipt.issued, issued);
+    assert_eq!(record.reduction, report);
+    let progress = record.receipt.pump.as_ref().unwrap();
+    assert_eq!(progress.prepared_documents, 32);
+    assert_eq!(progress.total_documents, 35);
+    assert!(matches!(record.receipt.completion, EffectResult::Stage(_)));
+    let replay = vault
+        .document_runtime_step(&issued.lifetime, issued.id)
+        .unwrap();
+    assert_eq!(replay, report);
+    let retained = vault
+        .document_runtime_snapshot()
+        .unwrap()
+        .last_step
+        .unwrap()
+        .receipt
+        .pump
+        .unwrap();
+    assert!(std::sync::Arc::ptr_eq(progress, &retained));
+    vault
+        .document_runtime_command(DocumentRuntimeCommand::Continue)
+        .unwrap();
+    let actual = vault.document_runtime_snapshot().unwrap();
+    assert_eq!(actual.execution, DocumentRuntimeExecution::Dispatch);
+    assert_eq!(
+        actual.last_step.unwrap().reduction.execution,
+        DocumentRuntimeExecution::Yield
+    );
+}
+
+#[test]
+fn current_fastpath_continuation_snapshot_does_not_repeat_old_yield_ack() {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(root.path()).unwrap();
+    create(&mut vault, 0);
+    ready(&mut vault);
+    vault
+        .document_runtime_command(DocumentRuntimeCommand::Wake { monotonic_ms: 10 })
+        .unwrap();
+    request(&mut vault, 2, 8);
+    step(&mut vault).unwrap();
+    let yielded = step(&mut vault).unwrap();
+    assert_eq!(yielded.execution, DocumentRuntimeExecution::Yield);
+    let finished = vault
+        .document_runtime_command(DocumentRuntimeCommand::Continue)
+        .unwrap();
+    assert_eq!(finished.execution, DocumentRuntimeExecution::WaitForWake);
+    let actual = vault.document_runtime_snapshot().unwrap();
+    assert_eq!(actual.execution, DocumentRuntimeExecution::WaitForWake);
+    assert!(actual.in_flight.is_none());
+    assert_eq!(
+        actual.last_step.unwrap().reduction.execution,
+        DocumentRuntimeExecution::Yield
+    );
+    assert_eq!(finished.request_outcomes.len(), 1);
+}
+
+#[test]
+fn recovery_receipt_preserves_actual_resumed_source_and_progress_without_a_pump() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let path = cache.path().join("cache.sqlite");
+    let mut vault = open(root.path(), &path);
+    create(&mut vault, 0);
+    vault.initialize_document_index().unwrap();
+    let stage = vault.begin_document_index().unwrap();
+    vault.pump_document_index(&stage).unwrap();
+    drop(vault);
+    let mut vault = open(root.path(), &path);
+    request(&mut vault, 1, 8);
+    until(&mut vault, |e| matches!(e, Effect::RecoverStage));
+    step(&mut vault).unwrap();
+    let receipt = vault
+        .document_runtime_snapshot()
+        .unwrap()
+        .last_step
+        .unwrap()
+        .receipt;
+    assert!(receipt.pump.is_none());
+    match receipt.completion {
+        EffectResult::Recovered(Some(observed)) => {
+            assert_eq!(observed.snapshot, *stage.snapshot());
+            assert_eq!(observed.source, *stage.source());
+            assert_eq!(observed.progress.unwrap().prepared, 1);
+        }
+        _ => panic!("actual recovered stage required"),
+    }
+}
+
+#[test]
+fn new_owner_can_restart_only_after_retirement_has_fully_drained() {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(root.path()).unwrap();
+    create(&mut vault, 0);
+    let started = request(&mut vault, 1, 8);
+    let lifetime = started.update.lifetime;
+    assert!(vault.restart_document_runtime().is_err());
+    vault
+        .document_runtime_command(DocumentRuntimeCommand::Retire)
+        .unwrap();
+    assert!(vault.restart_document_runtime().is_err());
+    step(&mut vault).unwrap();
+    vault.restart_document_runtime().unwrap();
+    assert!(vault.document_runtime_snapshot().is_none());
+    let fresh = vault
+        .document_runtime_command(DocumentRuntimeCommand::Wake { monotonic_ms: 1 })
+        .unwrap();
+    assert_ne!(fresh.update.lifetime, lifetime);
+    assert_eq!(vault.list().unwrap().len(), 1);
+}
+
+#[test]
+fn retired_rebuild_returns_actual_call_owned_receipt_despite_prior_visible_error() {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(root.path()).unwrap();
+    create(&mut vault, 0);
+    request(&mut vault, 1, 8);
+    let issued = vault
+        .document_runtime_snapshot()
+        .unwrap()
+        .in_flight
+        .unwrap();
+    vault
+        .document_runtime
+        .as_mut()
+        .unwrap()
+        .reduce(Input::Complete {
+            lifetime: issued.lifetime,
+            effect_id: issued.id,
+            result: EffectResult::Failed(Failure::Unavailable),
+        })
+        .unwrap();
+    let mut q = DocumentFreshnessRequest::new(2);
+    q.force_rebuild = true;
+    vault
+        .document_runtime_command(DocumentRuntimeCommand::Request(q))
+        .unwrap();
+    let issued = vault
+        .document_runtime_snapshot()
+        .unwrap()
+        .in_flight
+        .unwrap();
+    assert!(matches!(issued.kind, Effect::Rebuild));
+    vault
+        .document_runtime_command(DocumentRuntimeCommand::Retire)
+        .unwrap();
+    let record = vault
+        .document_runtime_step_record(&issued.lifetime, issued.id)
+        .unwrap();
+    assert!(matches!(record.receipt.completion, EffectResult::Done));
+    assert_eq!(record.reduction.update.error, Some(Failure::Unavailable));
+    assert_eq!(
+        record.reduction.execution,
+        DocumentRuntimeExecution::Quiesced
+    );
+    assert!(vault
+        .document_runtime_snapshot()
+        .unwrap()
+        .last_step
+        .is_none());
+}
