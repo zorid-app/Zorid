@@ -8,8 +8,9 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 [plans/indexing-search.md](plans/indexing-search.md).
 
 - **Stage:** S0 bounded native delivery and S0A contracts accepted; S1.0 baseline
-  and measured setup prerequisites implementing. Cached parse facts, multicore
-  execution and core-owned scheduling are not implemented yet.
+  and measured setup prerequisites implementing. S1.1 identity-free parser facts
+  source foundation starts from the retained baseline/known limits; reusable
+  parse-cache persistence, multicore and core scheduling are not implemented yet.
 - **Integrated:** scoped observation-lookup fix through `2c53a98d`,193
   focused checks/1 existing ignored fixture, release build and normal-family100
   source/search checks pass. Small Base17 semantic-baseline tool is integrated
@@ -26,8 +27,14 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   inventory3030/unfinished, no index/query stage, all sources/hashes exact and
   owned PIDs gone. Its sample points to repeated metadata graph-view validation.
   `storage_recovery_impl` implements invocation-local lazy immutable view reuse
-  (`3b416f3b`); exact source review passed, compiled tests/runtime pending.
+  (`61fa42af`); exact source review passed, compiled tests/runtime pending.
+  Loader test-only correction `028bc96d` is under review after a new corruption
+  fixture hit the existing immutable-delete guard before its reader assertion;
+  initial Store library116 passed/1 failed/1 existing ignored, not acceptance.
   This is not a persistent mutation cache or schema/planner contract change.
+  Combined source-only candidate `b069d553` is frozen pending updated validation.
+  `s1_query_audit` owns isolated S1.1 parser facts and contextual binding, preserving
+  existing output/corpus/limits; no cache/platform wiring in that first commit.
   Root is sole main integrator; no push.
 - **Desktop verification:** corrected normal100 passes exact save/file/native/
   checkpoint, fresh search and retained warm index/revision gates. Three apps quit

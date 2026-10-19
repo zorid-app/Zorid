@@ -61,6 +61,15 @@ replay and existing admission; this is not a new retention policy or evidence th
 the Rust index cannot handle10k (the pure-core10k oracle run passed). Parse-cache,
 query-cache and executor implementations have not been launched in parallel.
 
+S1.1 source foundation starts after the retained S1.0 observations: pure-core10k
+full literal oracles passed, generated Base10k truthfully rejects its preparation
+budget, and native normal-family10k remains incomplete during admission. These
+known limits do not require the existing engine to pass later performance gates
+before optimization starts. Native setup fixes continue scoped validation; this
+is not full S1.0 protocol acceptance. First isolate identity-free document facts
+and explicit contextual binding without changing extraction semantics; persistence,
+platform wiring and runtime acceptance follow independently reviewed commits.
+
 S1.1 separates reusable extraction from entry/path/revision witnesses. Hash equality
 alone does not authorize mutation or cross-vault reuse. S1.2 cache reuse includes
 all relevant source/configuration/view/context/graph/presentation/time inputs;
