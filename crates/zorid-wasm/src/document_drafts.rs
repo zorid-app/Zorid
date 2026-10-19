@@ -146,7 +146,7 @@ enum Request {
     ReleaseBuffer {
         buffer_lifetime: OperationId,
     },
-    Snapshot,
+    Snapshot {},
 }
 fn request(raw: &str) -> Result<Request> {
     if raw.len() > CONTROL_BYTES {
@@ -361,7 +361,7 @@ fn command(state: &mut State, request: Request) -> Result<String> {
                 buffer_lifetime,
             }))
         }
-        Request::Snapshot => return reply(state, None, None),
+        Request::Snapshot {} => return reply(state, None, None),
         Request::UploadChunk { .. } | Request::FactsRead { .. } => {
             return Err("draft_invalid_request")
         }

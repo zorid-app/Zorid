@@ -115,6 +115,11 @@ fn controls_reject_payload_phase_completion_unknown_duplicate_and_noncanonical_f
         Err("draft_invalid_source")
     );
     assert!(owner.state.borrow().drafts.is_none());
+    let before = control(&owner, json!({"op":"snapshot"}));
+    assert!(request(r#"{"op":"snapshot","proof":true}"#).is_err());
+    let after = control(&owner, json!({"op":"snapshot"}));
+    assert_eq!(after, before);
+    assert!(owner.state.borrow().drafts.is_none());
 }
 #[test]
 fn request_reply_is_scoped_decimal_exact_and_replay_keeps_one_actual_executor_job() {
