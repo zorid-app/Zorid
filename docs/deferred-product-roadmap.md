@@ -294,6 +294,39 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   `/private/tmp/zorid-s1-lifecycle-reducer-contract.md`. These are preparatory;
   native captured-stage-source/bounded discovery and legacy TS metadata/draft
   parsing remain real migration gaps, not accepted runtime behavior.
+- **Latest S1 integration/ownership update (2026-10-19):** main through
+  `3dd5f7b7` additionally includes rich DTO/order `ca7be8bd`, Manifest ordinal
+  lookup `91db7aa8`, early optional proof admission `afe0469c`, and Store's
+  shared immutable pin-generation bridge `3dd5f7b7`. Combined Manifest/proof
+  candidate `48e92919` passes74 focused checks; the Store bridge passes5.
+  Existing pin/source/owner fences remain mandatory; retaining the generation
+  Arc does not retain a query pin or source capability.
+  Matching post-admission observation at `afe0469c` passes the same40 full-result
+  comparisons and8 unchanged oracles for both100 and10k. At10k optional work
+  falls813,977→588,280 units (27.7%); mandatory work remains1,320,196 and all16
+  preparation/answer attempts remain uncached. Preparation median37.72→37.39ms
+  does not establish meaningful timing/CPU improvement or attribution to either
+  individual change. Evidence:
+  `/private/tmp/zorid-bases-post-admission-afe0469c-hkak32xx/acceptance-summary.json`.
+  Pure rich paging owner `s1_query_audit` has source `38224a00` under review;
+  native owner `architecture_core_audit` has `80c155ce` including callback-safe
+  retirement. Compose scoped rich-search files rather than merging divergent
+  branch ancestry, preserving integrated Manifest/resolver and Store fixes.
+  Pure compilation, dense4MiB/8192-match paging and native tests remain pending.
+  Browser binding owner `architecture_platform_audit`; common facade/decoder and
+  Worker forwarding owner `baseline_resources_impl`; desktop transport owner
+  `s1_rich_desktop_transport`; CLI owner `storage_recovery_ui_impl`; frontend
+  controller owner `s1_rich_search_controller`. Each works isolated; root remains
+  sole main integrator and grants serialized heavy validation. Common decoder
+  successor review and browser implementation are not yet accepted. Desktop
+  `58cdb305`/`c198d5fa` is source-approved with focused JS/TS checks, but Rust
+  host and actual Electron acceptance remain pending. CLI `76a8431e`/`fdee79c8`
+  is source-approved and uncompiled. Frontend through `c84bd79f` is independently
+  source-approved with69 focused checks; final cross-page validation and common
+  dependency composition remain pending. None of these pending batches is main.
+  Grouped-view painted wide/narrow fixtures show the requested pill/Aa/sliders
+  layout; actual native sort input is unverified. Component paint does not
+  establish mounted normal-app search/Find or platform/performance acceptance.
 - **Integrated:** scoped observation-lookup fix through `2c53a98d`,193
   focused checks/1 existing ignored fixture, release build and normal-family100
   source/search checks pass. Small Base17 semantic-baseline tool is integrated

@@ -48,6 +48,15 @@ query and output coverage, supplied snippet ranges, authoritative counts and the
 case toggle. Static REA evidence is complete. Implementation is not visual/runtime acceptance.
 This addition does not reopen saving or resume later product stages.
 
+Grouped presentation successor `272b357b` has painted wide/narrow fixture
+evidence: pill field, Aa inside before clear, sliders outside, full-width snippet
+boxes and readable options at320px without overflow. It remains isolated and
+unmounted; native sort keyboard input is inconclusive. Controller source through
+`c84bd79f` is independently approved and passes69 focused checks, including
+repeated location indices across chunks, save-triggered navigation, source-refresh
+IME preservation and later-click admission. Full common/browser composition and
+actual app acceptance remain pending; no general UX/performance completion claim.
+
 ## Latest execution steering — follow roadmap, skip multicore
 
 User tried the visible current app and reports no problem with latency; current
