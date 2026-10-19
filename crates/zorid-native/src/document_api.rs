@@ -311,3 +311,19 @@ pub use crate::native::document_drafts::{
     NativeDocumentWorkError, NativeDraftCommand, NativeDraftSnapshot,
     NativeDraftStepRecord, NativeWorkReceipt, NativeWorkStepRecord,
 };
+
+/// Metadata-only transient transfer progress and typed failures; payload stays core-owned.
+pub use crate::native::document_drafts::{NativeDraftTransferError, NativeDraftTransferProgress};
+
+/// Existing draft/work values for trusted platform adapters. Constructed values
+/// are never completion proofs; execution resolves the actual selected ticket.
+pub use zorid_index::draft_runtime::{
+    BufferKey as DraftBufferKey, DraftTag, DraftRequest,
+    SourceDescriptor as DraftSourceDescriptor, JobToken as DraftJobToken,
+    Reduction as DraftReduction, Execution as DraftExecution,
+    OutcomeKind as DraftOutcomeKind, RuntimeError as DraftRuntimeError,
+};
+pub use zorid_index::document_work_runtime::{
+    Ticket as DocumentWorkTicket, ChildEffect as DocumentWorkChildEffect,
+    Lane as DocumentWorkLane, WorkState as DocumentWorkState,
+};

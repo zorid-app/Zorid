@@ -668,6 +668,10 @@ fn portable_executor_errors_preserve_native_and_legacy_classification() {
         (E::Expired, "Expired"),
         (E::NotReady, "NotReady"),
         (E::Closed, "Closed"),
+        (
+            E::Transfer(NativeDraftTransferError::Resource),
+            "Transfer(Resource)",
+        ),
         (E::UnexpectedParserState, "UnexpectedParserState"),
         (E::Work(w::WorkError::WrongTicket), "Work(WrongTicket)"),
         (

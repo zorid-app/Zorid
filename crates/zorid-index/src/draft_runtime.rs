@@ -244,6 +244,18 @@ impl DraftRuntime {
         let job = self.jobs.get(&effect.job.id).ok_or(RuntimeError::Expired)?;
         Ok(job.outcome.is_none() && !self.retired)
     }
+    /// Exact retained input liveness, including terminal outcomes hidden by ACK.
+    /// A transport must use this before retaining or scanning another upload.
+    pub fn job_is_current(&self, token: &JobToken) -> Result<bool, RuntimeError> {
+        let job = self.selected(token)?;
+        Ok(!self.retired
+            && job.outcome.is_none()
+            && self.buffers.get(&token.tag.buffer).is_some_and(|buffer| {
+                !buffer.releasing
+                    && buffer.current == Some(token.id)
+                    && buffer.revision == token.tag.text_revision
+            }))
+    }
     pub fn usage(&self) -> ParseFactsUsage {
         let mut total = zero();
         for job in self.jobs.values() {

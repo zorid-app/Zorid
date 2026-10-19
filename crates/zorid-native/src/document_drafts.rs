@@ -13,7 +13,8 @@ use zorid_index::{document_work_runtime as w, draft_runtime as d};
 use zorid_index::document_draft_executor::{DocumentDraftExecutor, DraftExecutorError};
 pub use zorid_index::document_draft_executor::{
     DraftCommand as NativeDraftCommand, DraftSnapshot as NativeDraftSnapshot,
-    DraftStepRecord as NativeDraftStepRecord,
+    DraftStepRecord as NativeDraftStepRecord, DraftTransferError as NativeDraftTransferError,
+    DraftTransferProgress as NativeDraftTransferProgress,
 };
 
 #[derive(Clone, Debug)]
@@ -31,6 +32,7 @@ pub enum NativeDocumentWorkError {
     Runtime(NativeDocumentRuntimeError),
     Draft(d::RuntimeError),
     Work(w::WorkError),
+    Transfer(NativeDraftTransferError),
     NotStarted,
     SourceMismatch,
     Expired,
@@ -72,6 +74,7 @@ impl From<DraftExecutorError> for NativeDocumentWorkError {
         match error {
             DraftExecutorError::Draft(error) => Self::Draft(error),
             DraftExecutorError::Work(error) => Self::Work(error),
+            DraftExecutorError::Transfer(error) => Self::Transfer(error),
             DraftExecutorError::SourceMismatch => Self::SourceMismatch,
             DraftExecutorError::Expired => Self::Expired,
             DraftExecutorError::NotReady => Self::NotReady,
@@ -133,6 +136,84 @@ impl NativeVault {
             .as_ref()
             .ok_or(NativeDocumentWorkError::NotStarted)?
             .facts(token)?)
+    }
+    pub fn document_draft_begin_source_upload(
+        &mut self,
+        token: &d::JobToken,
+    ) -> Result<NativeDraftTransferProgress, NativeDocumentWorkError> {
+        Ok(self
+            .document_drafts
+            .as_mut()
+            .ok_or(NativeDocumentWorkError::NotStarted)?
+            .begin_source_upload(token)?)
+    }
+    pub fn document_draft_append_source_upload(
+        &mut self,
+        token: &d::JobToken,
+        offset: usize,
+        bytes: &[u8],
+    ) -> Result<NativeDraftTransferProgress, NativeDocumentWorkError> {
+        Ok(self
+            .document_drafts
+            .as_mut()
+            .ok_or(NativeDocumentWorkError::NotStarted)?
+            .append_source_upload(token, offset, bytes)?)
+    }
+    pub fn document_draft_read_source_upload_chunk(
+        &mut self,
+        token: &d::JobToken,
+        offset: usize,
+        length: usize,
+        reader: &mut impl std::io::Read,
+    ) -> Result<NativeDraftTransferProgress, NativeDocumentWorkError> {
+        Ok(self
+            .document_drafts
+            .as_mut()
+            .ok_or(NativeDocumentWorkError::NotStarted)?
+            .read_source_upload_chunk(token, offset, length, reader)?)
+    }
+    pub fn document_draft_seal_source_upload(
+        &mut self,
+        token: &d::JobToken,
+    ) -> Result<d::Reduction, NativeDocumentWorkError> {
+        Ok(self
+            .document_drafts
+            .as_mut()
+            .ok_or(NativeDocumentWorkError::NotStarted)?
+            .seal_source_upload(token)?)
+    }
+    pub fn document_draft_prepare_facts_bytes(
+        &mut self,
+        token: &d::JobToken,
+    ) -> Result<NativeDraftTransferProgress, NativeDocumentWorkError> {
+        Ok(self
+            .document_drafts
+            .as_mut()
+            .ok_or(NativeDocumentWorkError::NotStarted)?
+            .prepare_facts_bytes(token)?)
+    }
+    pub fn document_draft_write_facts_bytes(
+        &self,
+        token: &d::JobToken,
+        offset: usize,
+        maximum: usize,
+        writer: &mut impl std::io::Write,
+    ) -> Result<usize, NativeDocumentWorkError> {
+        Ok(self
+            .document_drafts
+            .as_ref()
+            .ok_or(NativeDocumentWorkError::NotStarted)?
+            .write_facts_bytes(token, offset, maximum, writer)?)
+    }
+    pub fn document_draft_transfer_progress(
+        &self,
+        token: &d::JobToken,
+    ) -> Result<NativeDraftTransferProgress, NativeDocumentWorkError> {
+        Ok(self
+            .document_drafts
+            .as_ref()
+            .ok_or(NativeDocumentWorkError::NotStarted)?
+            .transfer_progress(token)?)
     }
     pub fn document_draft_snapshot(&self) -> Option<NativeDraftSnapshot> {
         self.document_drafts
