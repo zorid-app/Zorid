@@ -1,5 +1,15 @@
 # User findings queue
 
+## S1 clock boundary validation — open internal correctness finding
+
+Answer-cache testing exposed a pre-existing cold evaluator panic: chrono accepts
+expanded-year epoch clocks, but the evaluator formats then reparses a four-digit
+RFC3339 clock and reaches an `expect` failure. Normal app clocks are unaffected;
+accepted API inputs must still produce structured outcomes. Track the underlying
+validation/domain consistency fix in S1.5, with raw cold/native/WASM boundary
+checks. The answer-cache successor conservatively declines reuse outside the
+actual parser clock domain; that guard does not fix the cold evaluator panic.
+
 ## S1 search UI reference — editor find integrated, broader verification pending
 
 User supplied Obsidian screenshots for vault search and in-file find. Vault search

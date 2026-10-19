@@ -196,6 +196,26 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   Free space recovered to1.44GiB. Keep heavy checks serialized with1GiB floor;
   no active slot after the first rich-search test failure. Don't remove archives
   or assume their old test executable paths still exist without restoring them.
+  Subsequent exact rich candidate `76d8e9d9` passes14 rich tests plus unchanged
+  literal baseline (19 target/36 Unicode cases; literal19 cases at page1/100).
+  All8192 exact occurrences in a4MiB control pass ordinary/quoted/plain-slash
+  forms at387,455 work units under unchanged2M/10k/1MiB limits. This fixes false
+  quadratic literal accounting, not a measured CPU-speedup claim. Evidence:
+  `/private/tmp/zorid-rich-search-76d8e9d9-focused-x8ge2hpk/verification.json`.
+  Coordinated DTO freeze: `/private/tmp/zorid-s1-rich-search-dto-freeze.md`.
+  Follow-on page owner remains `s1_query_audit`; presentation owner
+  `architecture_platform_audit` delivers isolated unmounted `1dfe2430`,9 checks
+  plus TypeScript, under independent `storage_recovery_ui_impl` review. No
+  Workspace/transport migration is accepted yet. Root approves initial separate
+  64M order-preparation work ceiling from a deterministic100k comparison model
+  (duplicate-name control59.84M); actual Rust bounds/order tests remain required.
+  It does not raise the2M per-document evaluator ceiling; sorting must yield.
+  Answer candidate `597cbdb7` is independently source-approved; affected tests
+  then24 units plus3 corpora are running in the sole heavy slot. Earlier failures
+  exposed oversized test String capacity and an expanded-year cold-clock panic.
+  Test fixtures are corrected without weakening caps; optional cache declines
+  unsupported clocks. Underlying panic remains an OPEN S1.5 correctness finding,
+  tracked in user-findings; it is not fixed by cache eligibility or ignored as old.
   S1.4 current core-lifecycle source handoff:
   `/private/tmp/zorid-s1-core-lifecycle-handoff.md` (no implementation yet).
 - **Integrated:** scoped observation-lookup fix through `2c53a98d`,193
