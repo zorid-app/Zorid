@@ -87,10 +87,15 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   sealed cold-preparation cost. This preserves tight-valid cold behavior without
   retrying evaluation or raising the query ceiling.
   Native consumer `a0300474` on `tingkai-c/s1-native-preparation-cache` is source
-  approved, including exact shared composition `4bc57d48`;12 focused native tests
-  are running in the sole heavy slot. WASM/browser `2b73fb3f` plus awaited-pin
+  approved, including exact shared composition `4bc57d48`; all12 focused native
+  tests pass and wiring is integrated as `db7b3229`. Evidence:
+  `/private/tmp/zorid-s1-native-preparation-4bc57d48-focused/verification.json`.
+  WASM/browser `2b73fb3f` plus awaited-pin
   hardening `15c24a13` is source approved, composed with the corrected shared
-  dependency as `b0109a1a`; focused validation remains pending. Neither binding
+  dependency as `b0109a1a`;46 Node checks, TypeScript and20 hosted Rust checks
+  pass, integrated `03097217`/`ec554b04`. Evidence:
+  `/private/tmp/zorid-s1-wasm-preparation-b0109a1a-dtc28hrx/summary.json`.
+  Owned test processes exited and the heavy slot is released. Neither binding
   has actual client runtime acceptance yet. One client lease release retires its pins,
   while bounded capability-free data may survive in a still-live shared native
   vault owner; actual owner retirement clears it. Browser owner retirement frees
@@ -128,6 +133,19 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   statically. In-file standard reference has no options; requested options remain
   a deliberate Zorid requirement. S1.3 DTO/UI addendum:
   `/private/tmp/zorid-s1-search-handoff-5ed9b53c/ui-addendum.md`.
+  After shared/native/browser preparation source and focused correctness passed,
+  independent S1.3 pure search and parser-facts work starts while remaining S1.2
+  answer reuse and measured/client gates continue. This overlap avoids idle source
+  work without accepting either slice or changing active storage/client paths.
+  `s1_query_audit` owns new index search modules, narrow index exports and the
+  pinned existing regex dependency; `architecture_core_audit` owns document parser
+  facts and proposes explicit metadata-version/validator changes first. Their
+  schema/API agreement precedes edits; `storage_recovery_impl` reviews search.
+  No new shared-search platform migration starts before the pure contract passes.
+  `storage_sqlite_impl` separately owns conservative answer reuse in Bases only;
+  `baseline_resources_impl` owns the opt-in existing generated-Base preparation
+  measurement path and reviews the answer cache. Neither changes existing frozen
+  defaults/oracles/caps or claims that a cache unit test establishes UX improvement.
   S1.4 current core-lifecycle source handoff:
   `/private/tmp/zorid-s1-core-lifecycle-handoff.md` (no implementation yet).
 - **Integrated:** scoped observation-lookup fix through `2c53a98d`,193
