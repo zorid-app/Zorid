@@ -16,7 +16,7 @@ const PREFIX='document-parse-cache:v1/',CATALOG=PREFIX+'catalog',ROWS=PREFIX+'ro
 const size=(value:string)=>new TextEncoder().encode(value).byteLength;
 class Corrupt extends Error {}
 class Unsupported extends Error {}
-const corrupt=():never=>{throw new Corrupt('Optional parse cache is inconsistent');};
+function corrupt():never {throw new Corrupt('Optional parse cache is inconsistent');}
 const integer=(value:unknown):value is number=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0;
 const locator=(value:string):void=>{if(!/^[0-9a-f]{64}$/.test(value))corrupt();};
 /** Authority/admission/source errors are never converted into cache misses. */

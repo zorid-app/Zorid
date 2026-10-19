@@ -30,8 +30,10 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
           delete:(key:string)=>request('delete',key,()=>{local.get(name)!.delete(key);writes.add(name);}),
           openKeyCursor(bounds?:any){return this.openCursor(bounds);},
           openCursor(bounds?:any){if(name==='control')assert.ok(['document-index:v1/g/','document-parse-cache:v1/row/','document-parse-cache:v1/oldest/'].some(prefix=>bounds?.lower?.startsWith(prefix)),'control cursor must have an exact derived prefix');
-            calls.push({store:name,op:'cursor',key:bounds});const result:any={};pending++;const rows=[...local.get(name)!].filter(([key])=>!bounds||key>=bounds.lower&&key<=bounds.upper).sort(([a],[b])=>a<b?-1:1);let pos=0;
-            const step=()=>{if(aborted)return;let continued=false;const row=rows[pos];result.result=row?{primaryKey:row[0],value:clone(row[1]),continue(){continued=true;pos++;queueMicrotask(step);},delete(){return request('delete',row[0],()=>{local.get(name)!.delete(row[0]);writes.add(name);});}}:null;
+            calls.push({store:name,op:'cursor',key:bounds});const result:any={};pending++;let rows:[string,any][]|undefined,pos=0;
+            // A cursor request executes after prior queued delete/put requests.
+            // Taking its rows at request creation observes pre-delete FIFO state.
+            const step=()=>{if(aborted)return;rows??=[...local.get(name)!].filter(([key])=>!bounds||key>=bounds.lower&&key<=bounds.upper).sort(([a],[b])=>a<b?-1:1);let continued=false;const row=rows[pos];result.result=row?{primaryKey:row[0],value:clone(row[1]),continue(){continued=true;pos++;queueMicrotask(step);},delete(){return request('delete',row[0],()=>{local.get(name)!.delete(row[0]);writes.add(name);});}}:null;
               try{result.onsuccess?.();}catch{tx.abort();}finally{if(!continued){pending--;schedule();}}};queueMicrotask(step);return result;
           },
         };
