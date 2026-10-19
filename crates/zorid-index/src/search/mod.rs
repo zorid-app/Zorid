@@ -27,7 +27,11 @@
 //! pattern work per call; arbitrary regex prepays each remaining haystack. It is
 //! not a CPU-instruction counter. A resource failure never returns partial hits.
 mod evaluate;
+mod order;
+pub use order::*;
 mod parser;
+mod page;
+pub use page::*;
 
 use serde::{Deserialize, Serialize};
 use zorid_document::{DocumentMetadata, SourceRange};

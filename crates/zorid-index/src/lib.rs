@@ -56,3 +56,19 @@ pub use search::{
     SearchLimits, SearchMatches, SearchMetadataInput, SearchOptions, SearchPropertyMatch,
     SearchPropertyValueMatch, SearchRequirements, SearchSource, SearchTagMatch, SEARCH_DIALECT,
 };
+
+pub use search::{
+    CoreSearchExplanation, DocumentRichSearchPage, ExplanationNode, SearchContext,
+    SearchCount, SearchExplanationKind, SearchFileChunk, SearchKeyMatch, SearchLocation,
+    SearchLocationRole, SearchLocator, SearchPageWork, SearchQueryCoverage, SearchScope,
+    SearchSnippet, SearchSnippetHighlight, SearchSnippetOrigin, SearchSort, SearchSpec,
+    SearchTotals, MAX_SEARCH_CANDIDATES, MAX_SEARCH_CHECKPOINTS, MAX_SEARCH_ORDER_BYTES,
+    MAX_SEARCH_OWNED_BYTES, MAX_SEARCH_PAGE_BYTES, MAX_SEARCH_PAGE_CHUNKS, MAX_SEARCH_QUERIES,
+};
+
+/// Capability-free retained rich-search ordering and its preparation bounds.
+pub use search::{
+    SearchOrderError, SearchOrderPlan, SearchOrderPreparation, SearchOrderProgress,
+    SearchPresentationFacts, MAX_SEARCH_ORDER_ADMISSION_WORK, MAX_SEARCH_ORDER_PUMP_WORK,
+    MAX_SEARCH_ORDER_WORK,
+};
