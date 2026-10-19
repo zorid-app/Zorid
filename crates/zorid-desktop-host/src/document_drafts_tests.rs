@@ -105,7 +105,10 @@ fn reserve(
     revision: u64,
     source: &str,
 ) -> Value {
-    let source_hash = format!("{:x}", Sha256::digest(source.as_bytes()));
+    let source_hash = Sha256::digest(source.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     let (r, b) = public(
         v,
         l,
