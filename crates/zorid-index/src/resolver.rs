@@ -2,6 +2,8 @@ use crate::{IndexError, Manifest};
 use percent_encoding::percent_decode_str;
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::mem::size_of;
+use std::sync::Arc;
 use unicode_normalization::UnicodeNormalization;
 use zorid_core::{EntryId, EntryKind, EntryState};
 
@@ -69,17 +71,85 @@ fn destination_path(destination: &str) -> Result<String, IndexError> {
 pub fn is_external_destination(destination: &str) -> Result<bool, IndexError> {
     Ok(external(&destination_path(destination)?))
 }
-struct PreparedFile<'a> {
-    entry: &'a EntryState,
+#[derive(Debug)]
+struct PreparedFile {
+    entry_index: usize,
     path: String,
     directory: String,
     utf16_path_length: usize,
 }
-fn order(a: &PreparedFile<'_>, b: &PreparedFile<'_>) -> Ordering {
+fn order(a: &PreparedFile, b: &PreparedFile, manifest: &Manifest) -> Ordering {
+    let a_entry = &manifest.entries()[a.entry_index];
+    let b_entry = &manifest.entries()[b.entry_index];
     a.utf16_path_length
         .cmp(&b.utf16_path_length)
-        .then(a.entry.path.cmp(&b.entry.path))
-        .then(a.entry.id.cmp(&b.entry.id))
+        .then(a_entry.path.cmp(&b_entry.path))
+        .then(a_entry.id.cmp(&b_entry.id))
+}
+#[derive(Debug)]
+struct LookupData {
+    files: Vec<PreparedFile>,
+    sources: HashMap<EntryId, usize>,
+    basenames: HashMap<String, Vec<usize>>,
+    retained_bytes: usize,
+}
+/// Sealed, owned namespace data for reuse without a pin, source capability or
+/// self-reference. Only an actual graph can supply this public shared handle.
+/// The private tables are bound to this exact retained manifest and row order.
+#[derive(Clone, Debug)]
+pub struct PreparedNamespace {
+    manifest: Arc<Manifest>,
+    lookup: Arc<LookupData>,
+    retained_bytes: usize,
+}
+impl PreparedNamespace {
+    /// Conservative full retained allocation charge, even when another handle
+    /// shares the same Arcs. Releasing one handle need not free shared storage.
+    pub fn retained_bytes(&self) -> usize {
+        self.retained_bytes
+    }
+    pub fn candidates_checked<E: From<IndexError>>(
+        &self,
+        source_id: &EntryId,
+        destination: &str,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Vec<&EntryState>, E> {
+        self.resolver_checked(check)?
+            .candidates_checked(source_id, destination, check)
+    }
+    pub(crate) fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+    pub(crate) fn resolver_checked<E>(
+        &self,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Resolver<'_>, E> {
+        check(0)?;
+        check(1)?;
+        Ok(Resolver {
+            manifest: &self.manifest,
+            lookup: Arc::clone(&self.lookup),
+        })
+    }
+}
+// HashMap::capacity is usable elements, not physical buckets. Twice that many
+// element/control slots plus a fixed table header deliberately overcharges the
+// load-factor/allocator overhead. Strings/vectors are counted separately below.
+fn table_bytes<K, V>(capacity: usize) -> usize {
+    capacity
+        .saturating_mul(2)
+        .saturating_mul(size_of::<(K, V)>().saturating_add(size_of::<usize>()))
+        .saturating_add(64)
+}
+pub(crate) fn entry_heap_bytes(entry: &EntryState) -> usize {
+    // These identity/path values are exact String clones, not spare-capacity
+    // source buffers. Their backing strings are private to zorid-core.
+    entry
+        .id
+        .as_str()
+        .len()
+        .saturating_add(entry.revision.as_str().len())
+        .saturating_add(entry.path.as_str().len())
 }
 fn suffix_segment(path: &str, target: &str) -> bool {
     path == target
@@ -95,9 +165,8 @@ fn in_directory(path: &str, directory: &str) -> bool {
 }
 /// Borrowed namespace-only view: no body reads or second authority snapshot.
 pub struct Resolver<'a> {
-    files: Vec<PreparedFile<'a>>,
-    sources: HashMap<&'a EntryId, usize>,
-    basenames: HashMap<String, Vec<usize>>,
+    manifest: &'a Manifest,
+    lookup: Arc<LookupData>,
 }
 impl<'a> Resolver<'a> {
     pub fn new(manifest: &'a Manifest) -> Self {
@@ -114,7 +183,7 @@ impl<'a> Resolver<'a> {
     ) -> Result<Self, E> {
         check(0)?;
         let mut files = Vec::new();
-        for entry in manifest.entries() {
+        for (entry_index, entry) in manifest.entries().iter().enumerate() {
             check(1)?;
             if entry.kind == EntryKind::File {
                 let raw = entry.path.as_str();
@@ -122,7 +191,7 @@ impl<'a> Resolver<'a> {
                 // length) plus the separate, exact source-parent projection.
                 check(raw.len().saturating_add(parent(raw).len()))?;
                 files.push(PreparedFile {
-                    entry,
+                    entry_index,
                     path: normalize_link_key(raw),
                     directory: normalize_link_key(parent(raw)),
                     utf16_path_length: raw.encode_utf16().count(),
@@ -136,12 +205,13 @@ impl<'a> Resolver<'a> {
         let mut basenames: HashMap<String, Vec<usize>> = HashMap::with_capacity(files.len());
         for (index, file) in files.iter().enumerate() {
             let basename = name(&file.path);
+            let entry = &manifest.entries()[file.entry_index];
             check(
                 1usize
-                    .saturating_add(file.entry.id.as_str().len())
+                    .saturating_add(entry.id.as_str().len())
                     .saturating_add(basename.len()),
             )?;
-            sources.insert(&file.entry.id, index);
+            sources.insert(entry.id.clone(), index);
             basenames
                 .entry(basename.to_owned())
                 .or_default()
@@ -155,7 +225,7 @@ impl<'a> Resolver<'a> {
             let mut comparison_bytes = 1usize;
             for &index in bucket.iter() {
                 check(1)?;
-                let entry = files[index].entry;
+                let entry = &manifest.entries()[files[index].entry_index];
                 comparison_bytes = comparison_bytes.max(
                     entry
                         .path
@@ -167,13 +237,70 @@ impl<'a> Resolver<'a> {
             // Length is precomputed; raw paths and IDs still need a bounded
             // string comparison on ties. Large collision buckets pay for it.
             check(sort_work(bucket.len()).saturating_mul(comparison_bytes))?;
-            bucket.sort_by(|&a, &b| order(&files[a], &files[b]));
+            bucket.sort_by(|&a, &b| order(&files[a], &files[b], manifest));
+        }
+        let mut retained_bytes = size_of::<LookupData>()
+            .saturating_add(2 * size_of::<usize>())
+            .saturating_add(files.capacity().saturating_mul(size_of::<PreparedFile>()))
+            .saturating_add(table_bytes::<EntryId, usize>(sources.capacity()))
+            .saturating_add(table_bytes::<String, Vec<usize>>(basenames.capacity()));
+        for file in &files {
+            check(1)?;
+            retained_bytes = retained_bytes
+                .saturating_add(file.path.capacity())
+                .saturating_add(file.directory.capacity());
+        }
+        for id in sources.keys() {
+            check(1)?;
+            retained_bytes = retained_bytes.saturating_add(id.as_str().len());
+        }
+        for (key, bucket) in &basenames {
+            check(1)?;
+            retained_bytes = retained_bytes
+                .saturating_add(key.capacity())
+                .saturating_add(bucket.capacity().saturating_mul(size_of::<usize>()));
+        }
+        check(1)?;
+        Ok(Self {
+            manifest,
+            lookup: Arc::new(LookupData {
+                files,
+                sources,
+                basenames,
+                retained_bytes,
+            }),
+        })
+    }
+    /// Keep the exact manifest once and share the tables already prepared by
+    /// this resolver. No arbitrary manifest/table binding is publicly accepted.
+    pub(crate) fn owned_namespace_checked<E>(
+        &self,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<PreparedNamespace, E> {
+        check(0)?;
+        check(self.manifest.entries().len().saturating_add(1))?;
+        let manifest = Arc::new(self.manifest.clone());
+        let mut retained_bytes = size_of::<PreparedNamespace>()
+            .saturating_add(size_of::<Manifest>())
+            .saturating_add(2 * size_of::<usize>())
+            .saturating_add(
+                manifest
+                    .entries()
+                    .len()
+                    .saturating_mul(size_of::<EntryState>()),
+            )
+            .saturating_add(manifest.source().local_store_id().as_str().len())
+            .saturating_add(manifest.source().watermark().as_str().len())
+            .saturating_add(self.lookup.retained_bytes);
+        for entry in manifest.entries() {
+            check(1)?;
+            retained_bytes = retained_bytes.saturating_add(entry_heap_bytes(entry));
         }
         check(0)?;
-        Ok(Self {
-            files,
-            sources,
-            basenames,
+        Ok(PreparedNamespace {
+            manifest,
+            lookup: Arc::clone(&self.lookup),
+            retained_bytes,
         })
     }
     /// Semantic destination from the document parser: Markdown escapes/entities
@@ -209,12 +336,13 @@ impl<'a> Resolver<'a> {
         let decoded = destination_path(destination).map_err(E::from)?;
         check(1usize.saturating_add(source_id.as_str().len()))?;
         let source = self
+            .lookup
             .sources
             .get(source_id)
-            .map(|&index| &self.files[index])
+            .map(|&index| &self.lookup.files[index])
             .ok_or_else(|| E::from(IndexError::MissingSource))?;
         if decoded.is_empty() {
-            return Ok(vec![source.entry]);
+            return Ok(vec![&self.manifest.entries()[source.entry_index]]);
         }
         if external(&decoded) {
             return Ok(Vec::new());
@@ -225,13 +353,13 @@ impl<'a> Resolver<'a> {
         let mut candidates = None;
         if name(&target).contains('.') {
             check(1usize.saturating_add(name(&target).len()))?;
-            candidates = self.basenames.get(name(&target));
+            candidates = self.lookup.basenames.get(name(&target));
         }
         if candidates.is_none() {
             check(3)?;
             target.push_str(".md");
             check(1usize.saturating_add(name(&target).len()))?;
-            candidates = self.basenames.get(name(&target));
+            candidates = self.lookup.basenames.get(name(&target));
         }
         let Some(candidates) = candidates else {
             return Ok(Vec::new());
@@ -258,9 +386,9 @@ impl<'a> Resolver<'a> {
             let mut exact = Vec::new();
             for &index in candidates {
                 check(1)?;
-                let file = &self.files[index];
+                let file = &self.lookup.files[index];
                 if file.path == target {
-                    exact.push(file.entry);
+                    exact.push(&self.manifest.entries()[file.entry_index]);
                 }
             }
             if !exact.is_empty() {
@@ -274,9 +402,9 @@ impl<'a> Resolver<'a> {
         let mut exact = Vec::new();
         for &index in candidates {
             check(1)?;
-            let file = &self.files[index];
+            let file = &self.lookup.files[index];
             if file.path == target {
-                exact.push(file.entry);
+                exact.push(&self.manifest.entries()[file.entry_index]);
             }
         }
         if !exact.is_empty() {
@@ -290,12 +418,12 @@ impl<'a> Resolver<'a> {
         let mut other = Vec::new();
         for &index in candidates {
             check(1)?;
-            let file = &self.files[index];
+            let file = &self.lookup.files[index];
             if suffix_segment(&file.path, &target) {
                 if in_directory(&file.path, &directory) {
-                    preferred.push(file.entry);
+                    preferred.push(&self.manifest.entries()[file.entry_index]);
                 } else {
-                    other.push(file.entry);
+                    other.push(&self.manifest.entries()[file.entry_index]);
                 }
             }
         }

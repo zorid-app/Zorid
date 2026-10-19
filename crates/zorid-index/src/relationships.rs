@@ -1,7 +1,7 @@
 //! Snapshot-bound links derived from the same immutable metadata and namespace.
 //! No graph deserialization, source IO or second resolver authority.
 use crate::{
-    Generation, IndexError, IndexSnapshotId, Manifest, Resolver, SourceSnapshotId,
+    Generation, IndexError, IndexSnapshotId, PreparedNamespace, Resolver, SourceSnapshotId,
     MAX_GENERATION_METADATA_BYTES,
 };
 use serde::Serialize;
@@ -45,7 +45,9 @@ pub struct ResolutionSnapshot {
     complete: bool,
     edges: Vec<ResolvedEdge>,
     #[serde(skip)]
-    manifest: Manifest,
+    namespace: PreparedNamespace,
+    #[serde(skip)]
+    retained_bytes: usize,
 }
 impl ResolutionSnapshot {
     pub fn snapshot_id(&self) -> &IndexSnapshotId {
@@ -63,7 +65,9 @@ impl ResolutionSnapshot {
     /// Construct once per consumer query and reuse for arbitrary destinations.
     /// This borrows this graph's namespace, never today's source inventory.
     pub fn resolver(&self) -> Resolver<'_> {
-        Resolver::new(&self.manifest)
+        self.namespace
+            .resolver_checked(&mut |_| Ok::<(), IndexError>(()))
+            .expect("infallible checkpoint")
     }
     /// Preserve consumer work/cancellation accounting while preparing the same
     /// private immutable namespace for arbitrary hasLink/asFile destinations.
@@ -71,7 +75,23 @@ impl ResolutionSnapshot {
         &self,
         check: &mut impl FnMut(usize) -> Result<(), E>,
     ) -> Result<Resolver<'_>, E> {
-        Resolver::new_checked(&self.manifest, check)
+        self.namespace.resolver_checked(check)
+    }
+    /// Share the exact namespace already prepared during graph construction.
+    /// This checks cancellation and charges only handle acquisition, not a
+    /// fictitious second namespace rebuild.
+    pub fn prepare_namespace_checked<E>(
+        &self,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<PreparedNamespace, E> {
+        check(0)?;
+        check(1)?;
+        Ok(self.namespace.clone())
+    }
+    /// Conservative graph allocation charge, including its full shared namespace
+    /// charge. Shared handles can outlive any one graph/cache owner.
+    pub fn retained_bytes(&self) -> usize {
+        self.retained_bytes
     }
     pub fn resolve(
         &self,
@@ -149,14 +169,17 @@ impl<'a> ResolutionView<'a> {
         if max_bytes == 0 || max_bytes > MAX_GENERATION_METADATA_BYTES {
             return Err(E::from(IndexError::InvalidBudget));
         }
-        // Charge namespace cloning and the coverage scan before either runs.
-        check(self.generation.manifest().entries().len().saturating_mul(2))?;
+        // Charge coverage before scanning it; the owned namespace factory
+        // separately charges the one exact manifest clone and reuses tables.
+        check(self.generation.manifest().entries().len())?;
+        let namespace = self.resolver.owned_namespace_checked(check)?;
         let mut result = ResolutionSnapshot {
             snapshot_id: self.snapshot_id().clone(),
             source: self.source().clone(),
             complete: self.generation.coverage_complete(),
             edges: Vec::new(),
-            manifest: self.generation.manifest().clone(),
+            namespace,
+            retained_bytes: 0,
         };
         let mut bytes = serde_json::to_vec(&result)
             .map_err(|_| E::from(IndexError::InvalidRecord))?
@@ -200,6 +223,36 @@ impl<'a> ResolutionView<'a> {
                 result.edges.push(edge);
             }
         }
+        let versions = result.snapshot_id.versions();
+        let mut retained_bytes = std::mem::size_of::<ResolutionSnapshot>()
+            .saturating_add(result.namespace.retained_bytes())
+            .saturating_add(
+                result
+                    .edges
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<ResolvedEdge>()),
+            )
+            .saturating_add(result.snapshot_id.local_store_id().as_str().len())
+            .saturating_add(result.snapshot_id.generation_epoch().as_str().len())
+            .saturating_add(versions.extraction().len())
+            .saturating_add(versions.resolver().len())
+            .saturating_add(versions.query().len())
+            .saturating_add(result.source.local_store_id().as_str().len())
+            .saturating_add(result.source.watermark().as_str().len());
+        for edge in &result.edges {
+            check(1)?;
+            retained_bytes = retained_bytes
+                .saturating_add(crate::resolver::entry_heap_bytes(&edge.source))
+                .saturating_add(
+                    edge.target
+                        .as_ref()
+                        .map_or(0, crate::resolver::entry_heap_bytes),
+                )
+                .saturating_add(edge.link.target.capacity())
+                .saturating_add(edge.link.fragment.capacity())
+                .saturating_add(edge.link.destination.capacity());
+        }
+        result.retained_bytes = retained_bytes;
         check(0)?;
         Ok(result)
     }
@@ -246,7 +299,7 @@ impl ResolutionSnapshot {
         if !(1..=1000).contains(&limit) {
             return Err(IndexError::InvalidBudget);
         }
-        self.manifest.witness(entry)?;
+        self.namespace.manifest().witness(entry)?;
         let mut offset = 0;
         if let Some(token) = token {
             if token.snapshot != self.snapshot_id {

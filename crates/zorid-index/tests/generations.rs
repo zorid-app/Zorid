@@ -613,3 +613,114 @@ fn prepared_namespace_keeps_every_link_occurrence_with_a_bounded_cold_graph() {
         "the original per-link namespace scan exceeds this unchanged graph budget"
     );
 }
+
+#[test]
+fn owned_namespace_shares_cold_preparation_and_retains_exact_manifest_after_release() {
+    let (graph, namespace) = {
+        let generation = build(
+            "shared-owned-namespace",
+            &[("A.md", "[[B]]", true), ("B.md", "target", true)],
+        );
+        let graph = ResolutionView::snapshot_checked(&generation, 10, MAX_PUMP_BYTES, |_| {
+            Ok::<(), IndexError>(())
+        })
+        .unwrap();
+        let mut acquisition = 0usize;
+        let namespace = graph
+            .prepare_namespace_checked(&mut |units| {
+                acquisition += units;
+                Ok::<(), IndexError>(())
+            })
+            .unwrap();
+        assert_eq!(
+            acquisition, 1,
+            "sharing the already prepared namespace must not rebuild it"
+        );
+        assert!(matches!(
+            graph.prepare_namespace_checked(&mut |_| Err(IndexError::SnapshotExpired)),
+            Err(IndexError::SnapshotExpired)
+        ));
+        let id = EntryId::new("entry-0").unwrap();
+        let resolver = graph.resolver();
+        let via_graph = resolver.candidates(&id, "B").unwrap();
+        let via_handle = namespace
+            .candidates_checked(&id, "B", &mut |_| Ok::<(), IndexError>(()))
+            .unwrap();
+        assert!(
+            std::ptr::eq(via_graph[0], via_handle[0]),
+            "shared handles must retain the same exact owned manifest"
+        );
+        let minimum_namespace = generation
+            .manifest()
+            .entries()
+            .iter()
+            .map(|entry| {
+                std::mem::size_of::<EntryState>()
+                    + entry.id.as_str().len()
+                    + entry.revision.as_str().len()
+                    + entry.path.as_str().len()
+            })
+            .sum::<usize>();
+        assert!(namespace.retained_bytes() > minimum_namespace);
+        assert!(
+            graph.retained_bytes()
+                >= namespace.retained_bytes()
+                    + graph.edges().len() * std::mem::size_of::<ResolvedEdge>()
+        );
+        let json = serde_json::to_value(&graph).unwrap();
+        assert_eq!(
+            json.as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["complete", "edges", "snapshotId", "source"]
+        );
+        (graph, namespace)
+    };
+    // Same claimed snapshot/source IDs with different actual namespace data must
+    // not redirect a previously prepared handle. There is no public ID binder.
+    let different = build(
+        "shared-owned-namespace",
+        &[("A.md", "[[Moved]]", true), ("Moved.md", "target", true)],
+    );
+    assert_eq!(graph.snapshot_id(), different.id());
+    let different_graph = ResolutionView::new(&different)
+        .snapshot(10, MAX_PUMP_BYTES)
+        .unwrap();
+    let different_namespace = different_graph
+        .prepare_namespace_checked(&mut |_| Ok::<(), IndexError>(()))
+        .unwrap();
+    let id = EntryId::new("entry-0").unwrap();
+    let clone = namespace.clone();
+    drop(graph);
+    drop(namespace);
+    assert_eq!(
+        clone
+            .candidates_checked(&id, "B", &mut |_| Ok::<(), IndexError>(()))
+            .unwrap()[0]
+            .path
+            .as_str(),
+        "B.md"
+    );
+    assert!(clone
+        .candidates_checked(&id, "Moved", &mut |_| Ok::<(), IndexError>(()))
+        .unwrap()
+        .is_empty());
+    assert!(different_namespace
+        .candidates_checked(&id, "B", &mut |_| Ok::<(), IndexError>(()))
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        different_namespace
+            .candidates_checked(&id, "Moved", &mut |_| Ok::<(), IndexError>(()))
+            .unwrap()[0]
+            .path
+            .as_str(),
+        "Moved.md"
+    );
+    assert_eq!(
+        clone.candidates_checked(&id, "B", &mut |_| Err(IndexError::SnapshotExpired)),
+        Err(IndexError::SnapshotExpired)
+    );
+}
