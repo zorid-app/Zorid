@@ -623,10 +623,13 @@ impl BaseReadError {
         }
     }
 }
-type BaseOutcomes = (
-    zorid_bases::PreparationCacheOutcome,
-    zorid_bases::PreparationCacheOutcome,
-);
+#[derive(Debug)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct BaseOutcomes {
+    program: zorid_bases::PreparationCacheOutcome,
+    preparation: zorid_bases::PreparationCacheOutcome,
+    answer: zorid_bases::PreparationCacheOutcome,
+}
 fn base_query_options(
     input: BaseReadOptions,
     view_name: Option<&str>,
@@ -675,29 +678,38 @@ fn evaluate_base<'a>(
     record.check_text(bytes).map_err(BaseReadError::Index)?;
     let source =
         std::str::from_utf8(bytes).map_err(|_| BaseReadError::Code("index_source_unavailable"))?;
-    let (program, program_outcome) = if let Some((cache, clock)) = cache.as_mut() {
-        let lookup = cache
-            .compile_source(source, *clock)
-            .map_err(BaseReadError::Compile)?;
-        (Arc::clone(lookup.value()), Some(lookup.outcome()))
-    } else {
-        (
-            Arc::new(zorid_bases::compile_base_source(source).map_err(BaseReadError::Compile)?),
-            None,
+    // Keep the sealed lookup until answer evaluation: an Arc alone does not
+    // carry the current cache owner's dependency provenance.
+    let compiled = if let Some((cache, clock)) = cache.as_mut() {
+        Some(
+            cache
+                .compile_source(source, *clock)
+                .map_err(BaseReadError::Compile)?,
         )
+    } else {
+        None
     };
-    // View/current row/clock/timezone/search and every evaluation run anew.
+    let program = match &compiled {
+        Some(lookup) => Arc::clone(lookup.value()),
+        None => Arc::new(zorid_bases::compile_base_source(source).map_err(BaseReadError::Compile)?),
+    };
+    // Current invocation options are always admitted. The shared cache decides
+    // whether an exact answer can be reused, including clock dependencies.
     let options = base_query_options(input, view_name, &program)?;
     let (result, outcomes) = if let Some((cache, clock)) = cache {
         let prepared = cache
             .prepare_generation(generation, facts, &options, clock)
             .map_err(BaseReadError::Evaluation)?;
-        let result = zorid_bases::query_prepared(&program, &prepared, &options)
+        let compiled = compiled.as_ref().expect("cached program");
+        let answer = cache
+            .query_prepared_cached(compiled, &prepared, &options, clock)
             .map_err(BaseReadError::Evaluation)?;
-        (
-            result,
-            Some((program_outcome.expect("cached program"), prepared.outcome())),
-        )
+        let outcomes = BaseOutcomes {
+            program: compiled.outcome(),
+            preparation: prepared.outcome(),
+            answer: answer.outcome(),
+        };
+        (answer.into_value(), Some(outcomes))
     } else {
         (
             zorid_bases::query_generation(&program, generation, facts, &options)
@@ -1245,7 +1257,10 @@ mod tests {
             Some((&mut owner.inner, 100)),
         )
         .unwrap();
-        assert_eq!(outcomes, Some((Miss, Miss)));
+        assert_eq!(
+            outcomes.map(|o| (o.program, o.preparation)),
+            Some((Miss, Miss))
+        );
         drop(first); // Closing a pin does not close the session-owned pure cache.
         let fresh = base_generation(BASE_DEFINITION);
         let (warm, outcomes) = evaluate_base(
@@ -1258,7 +1273,10 @@ mod tests {
             Some((&mut owner.inner, 101)),
         )
         .unwrap();
-        assert_eq!(outcomes, Some((Hit, Hit)));
+        assert_eq!(
+            outcomes.map(|o| (o.program, o.preparation)),
+            Some((Hit, Hit))
+        );
         let (cold, _) = evaluate_base(
             &fresh.generation,
             &id,
@@ -1284,7 +1302,10 @@ mod tests {
             Some((&mut owner.inner, 102)),
         )
         .unwrap();
-        assert_eq!(outcomes, Some((Hit, Hit)));
+        assert_eq!(
+            outcomes.map(|o| (o.program, o.preparation)),
+            Some((Hit, Hit))
+        );
         let (cold, _) = evaluate_base(
             &fresh.generation,
             &id,
@@ -1395,7 +1416,10 @@ mod tests {
             Some((&mut owner.inner, 3)),
         )
         .unwrap();
-        assert_eq!(outcomes, Some((Hit, Hit)));
+        assert_eq!(
+            outcomes.map(|o| (o.program, o.preparation)),
+            Some((Hit, Hit))
+        );
         // TTL is explicit monotonic host time; unchanged evaluation time cannot
         // keep an idle entry alive. Backwards host time expires optional data.
         let (_, outcomes) = evaluate_base(
@@ -1408,7 +1432,10 @@ mod tests {
             Some((&mut owner.inner, 300003)),
         )
         .unwrap();
-        assert_eq!(outcomes, Some((Miss, Miss)));
+        assert_eq!(
+            outcomes.map(|o| (o.program, o.preparation)),
+            Some((Miss, Miss))
+        );
         let (_, outcomes) = evaluate_base(
             &generation.generation,
             &id,
@@ -1419,7 +1446,10 @@ mod tests {
             Some((&mut owner.inner, 1)),
         )
         .unwrap();
-        assert_eq!(outcomes, Some((Miss, Miss)));
+        assert_eq!(
+            outcomes.map(|o| (o.program, o.preparation)),
+            Some((Miss, Miss))
+        );
         owner.clear();
         let (_, outcomes) = evaluate_base(
             &generation.generation,
@@ -1431,7 +1461,314 @@ mod tests {
             Some((&mut owner.inner, 2)),
         )
         .unwrap();
-        assert_eq!(outcomes, Some((Miss, Miss)));
+        assert_eq!(
+            outcomes.map(|o| (o.program, o.preparation)),
+            Some((Miss, Miss))
+        );
+    }
+    const ANSWER_DEFINITION: &[u8] = b"filters: file.hasLink(\"b\")\nformulas:\n  selected: this.file.path\nviews:\n  - type: table\n    name: Links\n    order: [file.path, formula.selected]\n  - type: table\n    name: Paths\n    order: [file.path]\n";
+    fn same_base_semantics(
+        mut actual: zorid_bases::BaseQueryResult,
+        mut expected: zorid_bases::BaseQueryResult,
+    ) {
+        // Work is a modeled semantic charge; all result data remain identical.
+        actual.steps_used = 0;
+        expected.steps_used = 0;
+        assert_eq!(actual, expected);
+    }
+    #[test]
+    fn answer_cache_crosses_fresh_generation_wrappers_with_unchanged_report() {
+        use zorid_bases::PreparationCacheOutcome::{Hit, Miss};
+        let id = EntryId::new("base").unwrap();
+        let mut owner = WasmDocumentIndexPreparationCache::new();
+        let first = base_generation(ANSWER_DEFINITION);
+        let (seed, outcome) = evaluate_base(
+            &first.generation,
+            &id,
+            ANSWER_DEFINITION,
+            &[],
+            base_input(0, "a"),
+            Some("Links"),
+            Some((&mut owner.inner, 10)),
+        )
+        .unwrap();
+        assert_eq!(outcome.unwrap().answer, Miss);
+        let tight_ceiling = seed.result.steps_used;
+        drop(first);
+        let fresh = base_generation(ANSWER_DEFINITION);
+        let (warm, outcome) = evaluate_base(
+            &fresh.generation,
+            &id,
+            ANSWER_DEFINITION,
+            &[],
+            base_input(86400000, "a"),
+            Some("Links"),
+            Some((&mut owner.inner, 11)),
+        )
+        .unwrap();
+        let outcome = outcome.unwrap();
+        assert_eq!(
+            (outcome.program, outcome.preparation, outcome.answer),
+            (Hit, Hit, Hit)
+        );
+        let (cold, _) = evaluate_base(
+            &fresh.generation,
+            &id,
+            ANSWER_DEFINITION,
+            &[],
+            base_input(86400000, "a"),
+            Some("Links"),
+            None,
+        )
+        .unwrap();
+        same_base_semantics(warm.result, cold.result);
+        // The current ceiling is itself part of the exact answer key. Seed
+        // that tight-valid invocation, then prove its second call can hit.
+        let mut tight = base_input(86400000, "a");
+        tight.max_steps = Some(tight_ceiling);
+        evaluate_base(
+            &fresh.generation,
+            &id,
+            ANSWER_DEFINITION,
+            &[],
+            tight,
+            Some("Links"),
+            Some((&mut owner.inner, 12)),
+        )
+        .unwrap();
+        let mut tight = base_input(86400000, "a");
+        tight.max_steps = Some(tight_ceiling);
+        let (warm, outcome) = evaluate_base(
+            &fresh.generation,
+            &id,
+            ANSWER_DEFINITION,
+            &[],
+            tight,
+            Some("Links"),
+            Some((&mut owner.inner, 12)),
+        )
+        .unwrap();
+        assert_eq!(outcome.unwrap().answer, Hit);
+        let mut tight = base_input(86400000, "a");
+        tight.max_steps = Some(tight_ceiling);
+        let (cold, _) = evaluate_base(
+            &fresh.generation,
+            &id,
+            ANSWER_DEFINITION,
+            &[],
+            tight,
+            Some("Links"),
+            None,
+        )
+        .unwrap();
+        same_base_semantics(warm.result, cold.result);
+        let mut cached: serde_json::Value = serde_json::from_str(
+            &owner
+                .base_json(
+                    &fresh,
+                    "base",
+                    ANSWER_DEFINITION,
+                    "[]",
+                    r#"{"clockMs":86400000,"currentEntryId":"a"}"#,
+                    13.0,
+                    Some("Links".into()),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        let mut cold: serde_json::Value = serde_json::from_str(
+            &fresh
+                .base_json(
+                    "base",
+                    ANSWER_DEFINITION,
+                    "[]",
+                    r#"{"clockMs":86400000,"currentEntryId":"a"}"#,
+                    Some("Links".into()),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        cached["value"]["result"]["stepsUsed"] = serde_json::json!(0);
+        cold["value"]["result"]["stepsUsed"] = serde_json::json!(0);
+        assert_eq!(cached, cold);
+    }
+    #[test]
+    fn answer_cache_preserves_current_view_clock_source_and_budget_admission() {
+        use zorid_bases::PreparationCacheOutcome::Hit;
+        let id = EntryId::new("base").unwrap();
+        let generation = base_generation(BASE_DEFINITION);
+        let mut owner = WasmDocumentIndexPreparationCache::new();
+        for clock in 0..2 {
+            let (_, outcome) = evaluate_base(
+                &generation.generation,
+                &id,
+                BASE_DEFINITION,
+                &[],
+                base_input(0, "a"),
+                Some("Links"),
+                Some((&mut owner.inner, clock)),
+            )
+            .unwrap();
+            if clock == 1 {
+                assert_eq!(outcome.unwrap().answer, Hit);
+            }
+        }
+        for (clock, current, view) in [
+            (86400000, "a", "Links"),
+            (0, "b", "Links"),
+            (0, "a", "Paths"),
+        ] {
+            let (actual, outcome) = evaluate_base(
+                &generation.generation,
+                &id,
+                BASE_DEFINITION,
+                &[],
+                base_input(clock, current),
+                Some(view),
+                Some((&mut owner.inner, 3)),
+            )
+            .unwrap();
+            assert_ne!(outcome.unwrap().answer, Hit);
+            let (expected, _) = evaluate_base(
+                &generation.generation,
+                &id,
+                BASE_DEFINITION,
+                &[],
+                base_input(clock, current),
+                Some(view),
+                None,
+            )
+            .unwrap();
+            same_base_semantics(actual.result, expected.result);
+        }
+        let mut changed = BASE_DEFINITION.to_vec();
+        changed[0] = b'F';
+        assert!(matches!(
+            evaluate_base(
+                &generation.generation,
+                &id,
+                &changed,
+                &[],
+                base_input(0, "a"),
+                Some("Links"),
+                Some((&mut owner.inner, 4))
+            ),
+            Err(BaseReadError::Index(_))
+        ));
+        for cached in [false, true] {
+            let mut tiny = base_input(0, "a");
+            tiny.max_steps = Some(1);
+            let cache = if cached {
+                Some((&mut owner.inner, 5))
+            } else {
+                None
+            };
+            assert!(matches!(
+                evaluate_base(
+                    &generation.generation,
+                    &id,
+                    BASE_DEFINITION,
+                    &[],
+                    tiny,
+                    Some("Links"),
+                    cache
+                ),
+                Err(BaseReadError::Evaluation(_))
+            ));
+        }
+    }
+    #[test]
+    fn answer_cache_expiry_clear_and_changed_definition_never_reuse_old_answer() {
+        use zorid_bases::PreparationCacheOutcome::{Hit, Miss};
+        let id = EntryId::new("base").unwrap();
+        let generation = base_generation(ANSWER_DEFINITION);
+        let mut owner = WasmDocumentIndexPreparationCache::new();
+        for (clock, expected) in [(0, Miss), (1, Hit), (300001, Miss), (0, Miss)] {
+            let (_, outcome) = evaluate_base(
+                &generation.generation,
+                &id,
+                ANSWER_DEFINITION,
+                &[],
+                base_input(0, "a"),
+                Some("Links"),
+                Some((&mut owner.inner, clock)),
+            )
+            .unwrap();
+            assert_eq!(outcome.unwrap().answer, expected);
+        }
+        owner.clear();
+        let (_, outcome) = evaluate_base(
+            &generation.generation,
+            &id,
+            ANSWER_DEFINITION,
+            &[],
+            base_input(0, "a"),
+            Some("Links"),
+            Some((&mut owner.inner, 1)),
+        )
+        .unwrap();
+        assert_eq!(outcome.unwrap().answer, Miss);
+        let changed = String::from_utf8(ANSWER_DEFINITION.to_vec())
+            .unwrap()
+            .replace("file.hasLink(\"b\")", "true");
+        let fresh = base_generation(changed.as_bytes());
+        let (actual, outcome) = evaluate_base(
+            &fresh.generation,
+            &id,
+            changed.as_bytes(),
+            &[],
+            base_input(0, "a"),
+            Some("Links"),
+            Some((&mut owner.inner, 2)),
+        )
+        .unwrap();
+        let outcome = outcome.unwrap();
+        assert_eq!(
+            (outcome.program, outcome.preparation, outcome.answer),
+            (Miss, Miss, Miss)
+        );
+        let (expected, _) = evaluate_base(
+            &fresh.generation,
+            &id,
+            changed.as_bytes(),
+            &[],
+            base_input(0, "a"),
+            Some("Links"),
+            None,
+        )
+        .unwrap();
+        same_base_semantics(actual.result, expected.result);
+        let facts: Vec<zorid_bases::FilePresentationFacts> =
+            serde_json::from_value(serde_json::json!([{
+                "witness":{"entryId":"a","revision":"r1"},"size":42,"ctimeMs":0,"mtimeMs":1
+            }]))
+            .unwrap();
+        let (actual, outcome) = evaluate_base(
+            &fresh.generation,
+            &id,
+            changed.as_bytes(),
+            &facts,
+            base_input(0, "a"),
+            Some("Links"),
+            Some((&mut owner.inner, 3)),
+        )
+        .unwrap();
+        let outcome = outcome.unwrap();
+        assert_eq!(
+            (outcome.program, outcome.preparation, outcome.answer),
+            (Hit, Miss, Miss)
+        );
+        let (expected, _) = evaluate_base(
+            &fresh.generation,
+            &id,
+            changed.as_bytes(),
+            &facts,
+            base_input(0, "a"),
+            Some("Links"),
+            None,
+        )
+        .unwrap();
+        same_base_semantics(actual.result, expected.result);
     }
     #[test]
     fn preparation_cache_portable_clock_rejects_lossy_js_numbers() {
