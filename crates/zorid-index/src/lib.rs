@@ -43,6 +43,6 @@ pub use extraction::{
     extract_content, parse_cache_admission, ContentExtractionKey, ContentExtractionOutcome,
     ContentExtractionResult, ExtractionDomain, ExtractionMode, ExtractionScope,
     ParseCacheAdmission, ParseCacheOutcome, ParseCacheUsage, FACTS_ENCODING_VERSION,
-    MAX_PARSE_CACHE_BYTES, MAX_PARSE_CACHE_EVICTIONS_PER_WRITE, MAX_PARSE_CACHE_ROWS,
-    MAX_PARSE_CACHE_ROW_BYTES,
+    MAX_EXTRACTION_ENVELOPE_OVERHEAD_BYTES, MAX_EXTRACTION_RESULT_BYTES, MAX_PARSE_CACHE_BYTES,
+    MAX_PARSE_CACHE_EVICTIONS_PER_WRITE, MAX_PARSE_CACHE_ROWS, MAX_PARSE_CACHE_ROW_BYTES,
 };
