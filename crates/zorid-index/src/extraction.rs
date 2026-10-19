@@ -14,6 +14,12 @@ use zorid_document::{
 
 /// Encoding of the identity-free cache envelope, not a semantic/output version.
 pub const FACTS_ENCODING_VERSION: u32 = 1;
+/// The bounded key (128-byte typed scope ID, fixed current versions, SHA and
+/// lengths), mode wrapper and checksum add transport overhead to existing facts.
+/// This allowance must not make the established generation row cap stricter.
+pub const MAX_EXTRACTION_ENVELOPE_OVERHEAD_BYTES: usize = 1024;
+pub const MAX_EXTRACTION_RESULT_BYTES: usize =
+    MAX_GENERATION_METADATA_BYTES + MAX_EXTRACTION_ENVELOPE_OVERHEAD_BYTES;
 pub const MAX_PARSE_CACHE_ROW_BYTES: usize = 1024 * 1024;
 pub const MAX_PARSE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_PARSE_CACHE_ROWS: usize = 100_000;
@@ -187,7 +193,7 @@ fn extract_supported(
         },
         ExtractionMode::PlainText => ExtractionFacts::PlainText(key.source_length.clone()),
     };
-    let facts_digest = bounded_checksum(&(&key, &facts), MAX_GENERATION_METADATA_BYTES)?;
+    let facts_digest = bounded_checksum(&(&key, &facts), MAX_EXTRACTION_RESULT_BYTES)?;
     let result = ContentExtractionResult {
         key,
         facts,
@@ -264,11 +270,11 @@ impl ContentExtractionResult {
         )
     }
     pub fn encoded_size(&self) -> Result<usize, IndexError> {
-        bounded_encoding(self, MAX_GENERATION_METADATA_BYTES, false).map(|(bytes, _)| bytes)
+        bounded_encoding(self, MAX_EXTRACTION_RESULT_BYTES, false).map(|(bytes, _)| bytes)
     }
     fn check_envelope(&self) -> Result<(), IndexError> {
         self.encoded_size()?;
-        let actual = bounded_checksum(&(&self.key, &self.facts), MAX_GENERATION_METADATA_BYTES)?;
+        let actual = bounded_checksum(&(&self.key, &self.facts), MAX_EXTRACTION_RESULT_BYTES)?;
         if actual != self.facts_digest {
             return Err(IndexError::ContentMismatch);
         }
@@ -450,6 +456,61 @@ mod tests {
         assert_eq!(
             result.bind(&key, witness, ExtractionMode::Markdown),
             Err(IndexError::InvalidRecord)
+        );
+    }
+    #[test]
+    fn envelope_overhead_does_not_shrink_the_existing_row_budget() {
+        let entry = EntryState {
+            id: EntryId::new("a").unwrap(),
+            revision: Revision::new("r").unwrap(),
+            path: VaultPath::new("A.md").unwrap(),
+            kind: EntryKind::File,
+            deleted: false,
+        };
+        let scope = ExtractionScope::new(
+            ExtractionDomain::DocumentIndex,
+            OperationId::new("s".repeat(128)).unwrap(),
+        );
+        let source = SourceSnapshotId::new(
+            scope.local_store_id().clone(),
+            SourceWatermark::new("1").unwrap(),
+        );
+        let witness = Manifest::new(source, vec![entry.clone()])
+            .unwrap()
+            .witness(&entry.id)
+            .unwrap();
+        let key =
+            ContentExtractionKey::for_source(scope, ExtractionMode::Markdown, "# heading").unwrap();
+        let result = ContentExtractionResult::extract(key.clone(), "# heading").unwrap();
+        let record = result
+            .clone()
+            .bind(&key, witness, ExtractionMode::Markdown)
+            .unwrap();
+        let old_budget = serde_json::to_vec(record.metadata().unwrap())
+            .unwrap()
+            .len()
+            + entry.path.as_str().len()
+            + entry.id.as_str().len()
+            + 256;
+        let envelope = result.encoded_size().unwrap();
+        assert!(
+            envelope > old_budget,
+            "fixture must cross the old hypothetical small row budget"
+        );
+        assert!(bounded_encoding(&result, old_budget, false).is_err());
+        assert!(bounded_encoding(
+            &result,
+            old_budget + MAX_EXTRACTION_ENVELOPE_OVERHEAD_BYTES,
+            false
+        )
+        .is_ok());
+        let ExtractionFacts::Markdown(facts) = &result.facts else {
+            panic!()
+        };
+        let facts_bytes = serde_json::to_vec(facts).unwrap().len();
+        assert!(
+            envelope - facts_bytes <= MAX_EXTRACTION_ENVELOPE_OVERHEAD_BYTES,
+            "review fixed-version envelope allowance when its shape changes"
         );
     }
     #[test]
