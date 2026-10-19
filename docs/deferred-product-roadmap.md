@@ -9,46 +9,49 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
-Current integration `4da43cf7` (2026-10-19):
+Current integration `40a71dce` (2026-10-19):
 
-- The reviewed pure foundation is on main: phased document extraction, draft
-  reducer, metadata pager, bodyless Store registration fence, rich first-build
-  preview query and borrowed preview facts. All 216 scoped checks pass: 50 and
-  145 carried through unchanged dependency closures, plus 21 final Store checks.
-  All 395 source/Cargo/test/fixture inputs match tested candidate `402bbfa8`
-  and integrated main. Evidence:
-  `/private/tmp/zorid-s1-store21-402bbfa8-retry-wpiqthu3/aggregate216.json` and
-  adjacent `source395-closure.json`. Earlier fixture failures and resource hold
-  remain preserved. These pure checks do not establish platform activation.
-- Actual desktop's 32 functional phases passed on `bc013e3b` as recorded below.
-  Browser attempt 003 passes exact production Worker/lifecycle identification,
-  then fails its first Search with “Saved search is unavailable.” Later browser
-  checks were not reached. Source/artifacts stayed exact and owned processes
-  are gone. Evidence:
-  `/private/tmp/zorid-s1-rich-web-watch-8vdiwjdp/acceptance-terminal-summary.json`.
-  Owner `s1_browser_runtime_review` diagnoses in isolated
-  `/private/tmp/zorid-s1-browser-search-diagnosis`, based on `87befd89`.
-  Held browser/native builds remain labeled by their original source; they do
-  not establish parity with the newly integrated core.
-- Active isolated source work: `s1_lifecycle_core` owns the minimal core arbiter
-  (`aa1f4f10`, 15 authored checks unrun); `s1_query_audit` owns the shared Base
-  partial-preview body, with `s1_execution_audit` reviewing. The independently
-  passed parser/index dependencies permitted these tasks before the unrelated
-  Store fixture correction; all pure dependencies now pass.
-- E2 adapters: `baseline_resources_impl` owns common contract/strict projection,
-  `storage_sqlite_impl` owns native/host metadata batching, and
-  `s1_desktop_scheduler_review` owns WASM. Independent reviewers are named.
-  Browser routing/index leaves remain held by the actual Search diagnosis;
-  E2 must reconcile that fix before editing them. Vault/Workspace migration and
-  F native/transient transport have not started. No adapter is activated.
-- Normal core runtime flags remain OFF. Base first-build platform/UI mounting,
-  per-pane visibility/configured clocks, actual scheduling fairness/liveness,
+- Main includes the pure foundation (`4da43cf7`, 216 checks), work arbiter
+  (`24eca3a2`, 15 new +27 reducer checks), browser Search ordering correction
+  (`48d81168`, 63 focused Node checks, full TypeScript and three real-WASM
+  controls), and Rust E2/Bases preview batch (`40a71dce`, 114 checks). The
+  arbiter runner's expected-40/actual-42 mismatch is preserved separately;
+  the two extra embedded reducer tests are identified, with both commands
+  naturally exiting 0 and all tests passing. No rerun normalized that report.
+- The 114-check batch covers Bases preview/library/corpus/query/generation/
+  refresh (75), native metadata (15), host metadata (14), and hosted WASM (10).
+  Exact 11 owner files compose canonical `40a71dce`; source stayed stable,
+  all owned groups exited, minimum free disk was about 1.25 GB. Evidence:
+  `/private/tmp/zorid-s1-e2-preview-validation/verification.json`.
+  These are focused source/binding checks, not actual app activation or speed.
+- Actual desktop's 32 functional phases passed on `bc013e3b`. Browser 003
+  reached Search but failed its first rich request. A bounded diagnostic proved
+  indexing/publication/open succeeded, then Rust rejected mismatched file-fact
+  order. The real-WASM two-file reproduction and Unicode controls support the
+  once-per-pin canonical ordering fix now on main. Full matching browser rebuild
+  and functional rerun remain pending; held old artifacts keep their old source
+  labels. Diagnosis evidence and source handoff:
+  `/private/tmp/zorid-s1-browser-search-order-handoff.md`.
+- E2 client source remains isolated and unvalidated: common successor `63df6201`
+  under exact review, desktop `71983437` source-approved, browser `ea6fe538`
+  under review. Native/host/WASM backends are integrated, but Vault/Workspace
+  metadata migration has not started. Common strict decoding must avoid full
+  page serialization before enforcing its byte bound. Browser's fresh epoch per
+  publication currently forces resets; `docs/user-findings.md` records its
+  required S1 incremental-computation audit.
+- F native executor `637c8a74` is under source review, 18 authored checks unrun;
+  document API exports remain deferred until its gate. Host transient data plane,
+  WASM/browser draft execution and buffer projection have not started. Durable
+  saving/NoteBuffer state is outside this transient semantics change.
+- Normal runtime activation flags remain OFF. Base preview platform/UI mounting,
+  per-pane visibility/configured clocks, actual liveness/fairness, independent
   CLI concurrency and S1.6 retained workloads remain open. Overall S1 is not
-  accepted. Stop after S1; later desktop features and E2EE sync remain deferred.
-- Store's final run was serialized, jobs 1, minimum free disk about 2.15 GB;
-  owned processes are gone. The resource audit deleted nothing: disk headroom
-  recovered during read-only inspection, with no causal attribution. Preserve
-  actual artifacts/source/evidence and all manual/user apps; hard floor is 1 GiB.
+  accepted. Stop after S1; later desktop features and sync remain deferred.
+- Builds/apps and heavy checks stay serialized. Exactly 15 verified disposable
+  test executables were evicted before the 114 batch, recovering about 136 MB;
+  libraries, actual artifacts, source and evidence remained intact. The current
+  debug cache is needed for the next native gate. Before a cold matching WASM
+  build, reassess headroom; never close user/manual apps. Hard floor is 1 GiB.
 
 The earlier update below records its own source and verification points.
 

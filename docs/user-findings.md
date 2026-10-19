@@ -53,6 +53,14 @@ checks remain pending; do not claim general platform acceptance from core tests.
 
 
 
+
+Browser Search correction `48d81168` is now integrated: pin presentation facts
+are canonicalized once to Rust's UTF-8 path order. The original real-WASM probe
+reproduced `invalid_request` for opposed ID/path order; the regression fails
+before the fix and passes after it. All 63 focused checks, full TypeScript and
+three real-WASM controls pass, including BMP/astral ordering. Actual matching
+browser build and full UI acceptance remain pending.
+
 Actual browser 003 reaches Search but fails its first `common-marker` query with
 “Saved search is unavailable.” The exact production Worker and current WASM are
 loaded, with no debugger pause or captured renderer error. Case/sorts/dense/
