@@ -70,7 +70,12 @@ export class CommittedMetadataProjection {
   private invalidationOwner:object={};
   private invalidatedObservation:{lifetime:string;revision:string}|null=null;
   private loadOwner:object|undefined;
-  constructor(private readonly service:DocumentService,private readonly active:()=>boolean,private readonly changed:(state:CommittedMetadataState)=>void) {}
+  private readonly service:DocumentService;
+  private readonly active:()=>boolean;
+  private readonly changed:(state:CommittedMetadataState)=>void;
+  constructor(service:DocumentService,active:()=>boolean,changed:(state:CommittedMetadataState)=>void) {
+    this.service=service;this.active=active;this.changed=changed;
+  }
   get state():CommittedMetadataState{return this.active()?this.stateValue:Object.freeze({status:'unavailable',frame:null});}
   private alive():boolean{return !this.closed&&this.active();}
   private publish(status:CommittedMetadataState['status']):void {

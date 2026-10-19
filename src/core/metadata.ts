@@ -75,7 +75,8 @@ function fileName(path: string): string { return path.slice(path.lastIndexOf('/'
 export class MetadataCache {
   private notes = new Map<string, NoteMetadata>();
 
-  constructor(private readonly accepts: (path: string) => boolean = () => true) {}
+  private readonly accepts: (path: string) => boolean;
+  constructor(accepts: (path: string) => boolean = () => true) { this.accepts = accepts; }
 
   /** Adopt already extracted facts. This path never reads or parses source text. */
   adopt(notes: Iterable<readonly [string, NoteMetadata]>, files: Iterable<string>): void {
