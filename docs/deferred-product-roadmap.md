@@ -226,6 +226,15 @@ performance or independent full-result oracles. The serialized slot now belongs
 to `s1_execution_audit` for frozen `51060b1d` native CLI/host release build, normal
 family100 and same-caps legacy10k; baseline binaries are preserved before rebuild.
 
+The representative generated-Base tool is separately assigned to `s1_query_audit`
+(new example/wrapper/oracle/docs only). It preserves workloadv1 and normal limits,
+with independent arithmetic expectations for sparse/filter/formula/group/link/
+current-entry/view/time cases. A read-only audit predicts the eager full-graph
+preparation will exceed normal query work at10k, even for property-only filters;
+this is not yet a runtime observation. Keep links and budgets intact and report
+any actual rejection as limited/incomplete. Dependency-aware preparation, indexed
+resolution and bounded reuse belong to accepted S1.2, not this baseline tool.
+
 Owners: `s1_execution_audit` owns workload/native CLI baseline tooling;
 `s1_query_audit` owns the integrated language fixtures;
 `architecture_platform_audit` owns actual browser/normal Electron measurement
