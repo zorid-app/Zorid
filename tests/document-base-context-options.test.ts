@@ -9,7 +9,7 @@ test('Base context transports only a stable entry selector and bounded query ste
   const unused=async():Promise<never>=>{throw Error('Unexpected operation');};
   const transport:DocumentTransport={status:unused,initialize:unused,rebuild:unused,begin:unused,pump:unused,publish:unused,discard:unused,closePin:unused,metadata:unused,search:unused,backlinks:unused,
     async open(){return {pinId:'pin',snapshot,source,coverageComplete:true};},
-    async base(input){inputs.push(input);return {snapshot,source,coverageComplete:true,value:{}};},
+    async base(input){inputs.push(input);return {snapshot,source,coverageComplete:true,value:{result:{}}};},
   };
   const pin=await createDocumentService(transport).open();
   await pin.base({id:'definition',options:{currentEntryId:'current-entry',maxSteps:17,clockMs:0,maxRows:9}});

@@ -9,7 +9,7 @@ test('Base invocation forwards canonical clock and row defaults without replacin
   const unused=async():Promise<never>=>{throw Error('Unexpected operation');};
   const transport:DocumentTransport={status:unused,initialize:unused,rebuild:unused,begin:unused,pump:unused,publish:unused,discard:unused,closePin:unused,metadata:unused,search:unused,backlinks:unused,
     async open(){return {pinId:'pin',snapshot,source,coverageComplete:true};},
-    async base(input){requests.push(input);return {snapshot,source,coverageComplete:true,value:{}};},
+    async base(input){requests.push(input);return {snapshot,source,coverageComplete:true,value:{result:{}}};},
   };
   const pin=await createDocumentService(transport).open(),original=Date.now;let clocks=0;
   try{
