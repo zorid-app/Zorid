@@ -23,20 +23,20 @@ Current integration `8a6d20d0` (2026-10-19):
   `/private/tmp/zorid-s1-f-canonical-node-93c0b133/aggregate374.json`.
   Existing activation stays OFF; missing native F support keeps the legacy path.
 - Buffer projection owner `s1_rich_search_controller` has a staged standalone
-  boundary at `ca40bd92` with frozen successor `f924d98e`, not integrated or
-  approved. Reviewer `baseline_resources_impl` is explicitly reactivated for
-  the successor. Initial review found same-text
-  demand reacquisition, observer reentry, decoder admission and lost-owner wake
-  gaps. The approved frontend-only successor keeps exact cached views and uses
-  renewable private core leases without inventing text revisions or changing
-  core replay policy. NoteBuffer/Workspace hooks wait for that boundary's review
-  and checks. Durable save ownership remains unchanged.
-  The source-bound next plan is62 focused Node checks plus TypeScript,29 newly
-  authored and33 affected existing checks, at
-  `/private/tmp/zorid-s1-f-buffer-boundary-plan-f924d98e/validation-plan.json`.
-  No execution is granted: observed free disk fell below1GiB again. Required
-  start headroom is1.3GB for this boundary; Rust166 and actual app builds also
-  remain held. Do not expand into dependent hooks/preview implementation or
+  boundary source-approved by `baseline_resources_impl` at `5f2ebcb3`. Canonical
+  `64032dc6` on `tingkai-c/s1-buffer-draft-canonical` in the existing
+  `/private/tmp/zorid-s1-buffer-draft-projection` contains its exact six files atop
+  main `6678eadd`; all other tracked inputs match that main freeze. Review fixes
+  cover exact-view reuse, renewable private core leases, observer/cleanup promise
+  reservation, bounded single-use facts decoding and same-service engine restart
+  recovery. Old replies cannot poison a renewed analysis interval. Text revisions
+  still change only with text; core anti-replay policy and durable saving are
+  unchanged. NoteBuffer/Workspace hooks remain untouched pending this gate.
+  The rebound plan is62 focused Node checks plus TypeScript,29 newly authored and
+  33 affected existing checks. Composition proof, source manifest, static counts,
+  review and plan: `/private/tmp/zorid-s1-f-buffer-canonical-64032dc6/`.
+  No execution is granted: latest free space is about1.12GB, below its1.3GB start
+  requirement. Do not expand into dependent hooks/preview implementation or
   repeat tiny cleanup attempts while those validation dependencies are held.
 - Preview platform plans are preserved, without implementation, at
   `/private/tmp/zorid-s1-native-base-preview-scope.md` and
@@ -71,6 +71,14 @@ Current integration `8a6d20d0` (2026-10-19):
   artifacts. It permitted the bounded Node checks above; Rust166 and matching
   app builds still need more disk headroom. Cleanup evidence:
   `/private/tmp/zorid-s1-changing-local-cargo-output-proposal/terminal.json`.
+  A later transient2.52GB reading permitted a conditional Rust grant, but fresh
+  preflight found only1.45GB then1.30GB, below the1.5GB package-start requirement.
+  No Cargo/test child launched; source410 and actual44 matched. The grant is
+  withdrawn pending fresh clearance; heavy slot is released. Evidence:
+  `/private/tmp/zorid-s1-canonical-f-preview-aea13f96/execution-preflight-resource-hold.json`.
+  All workers are terminal after source preparation/review. The resource blocker
+  audit is `/private/tmp/zorid-s1-resource-blocked-audit-20261019.json`; no S1
+  completion is claimed.
 - Repeated Search/Find screenshots reaffirm the existing UI contract. The retained
   REA report and desktop32 evidence were reused; six view/style files matched the
   accepted desktop source before the small follow-up. Reviewed `57baa7f1` fixes
