@@ -1,13 +1,13 @@
 use crate::{
-    EntryWitness, IndexError, IndexSnapshotId, Manifest, PublicationFence, MAX_PUMP_BYTES,
+    ContentExtractionKey, ContentExtractionResult, EntryWitness, ExtractionDomain, ExtractionMode,
+    ExtractionScope, IndexError, IndexSnapshotId, Manifest, PublicationFence, MAX_PUMP_BYTES,
     MAX_PUMP_DOCUMENTS, RESOLVER_VERSION,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use zorid_core::{EntryId, EntryKind};
 use zorid_document::{
-    parse_markdown, DocumentMetadata, MetadataRequest, DIALECT_VERSION, MAX_SOURCE_BYTES,
-    SCHEMA_VERSION,
+    DocumentMetadata, MetadataRequest, DIALECT_VERSION, MAX_SOURCE_BYTES, SCHEMA_VERSION,
 };
 
 pub const INDEX_SCHEMA_VERSION: u32 = 1;
@@ -60,39 +60,17 @@ impl IndexRecord {
         if request.source.contains('\0') {
             return Ok(Self::excluded(witness, Exclusion::Binary));
         }
-        let metadata = if markdown {
-            match parse_markdown(request) {
-                Ok(value) => Some(value),
-                Err(_) => return Ok(Self::excluded(witness, Exclusion::ExtractionLimit)),
-            }
+        let mode = if markdown {
+            ExtractionMode::Markdown
         } else {
-            None
+            ExtractionMode::PlainText
         };
-        if let Some(metadata) = &metadata {
-            if metadata.schema_version != SCHEMA_VERSION
-                || metadata.dialect_version != DIALECT_VERSION
-                || metadata.entry_id != request.entry_id
-                || metadata.content_revision != request.content_revision
-                || metadata.source_length.bytes as usize != request.source.len()
-                || metadata.source_length.utf16 as usize != request.source.encode_utf16().count()
-            {
-                return Err(IndexError::InvalidRecord);
-            }
-            if serde_json::to_vec(metadata)
-                .map_err(|_| IndexError::InvalidRecord)?
-                .len()
-                > MAX_GENERATION_METADATA_BYTES
-            {
-                return Err(IndexError::GenerationLimit);
-            }
-        }
-        Ok(Self {
-            witness,
-            metadata,
-            text_digest: Some(Sha256::digest(request.source.as_bytes()).into()),
-            text_bytes: request.source.len(),
-            exclusion: None,
-        })
+        let scope = ExtractionScope::new(
+            ExtractionDomain::DocumentIndex,
+            witness.source().local_store_id().clone(),
+        );
+        let key = ContentExtractionKey::for_source(scope, mode, &request.source)?;
+        ContentExtractionResult::extract(key.clone(), &request.source)?.bind(&key, witness, mode)
     }
     /// Restore a disposable cached row without parsing source or doing IO.
     /// The caller bounds encoded input before decoding, obtains witness from
@@ -289,18 +267,28 @@ impl GenerationBuilder {
         request: &MetadataRequest,
         markdown: bool,
     ) -> Result<(), IndexError> {
-        self.manifest.check_witness(&witness)?;
-        let source_bytes = if request.source.len() > MAX_SOURCE_BYTES {
+        self.preflight_extraction(&witness, request.source.len())?;
+        self.add(IndexRecord::text(witness, request, markdown)?)
+    }
+    /// The same pre-parse source budget gate for cache-aware hosts. This is
+    /// validation, not a reservation; add() still checks complete row budgets.
+    pub fn preflight_extraction(
+        &self,
+        witness: &EntryWitness,
+        source_bytes: usize,
+    ) -> Result<(), IndexError> {
+        self.manifest.check_witness(witness)?;
+        let source_bytes = if source_bytes > MAX_SOURCE_BYTES {
             0
         } else {
-            request.source.len()
+            source_bytes
         };
         if self.pump_documents == MAX_PUMP_DOCUMENTS
             || (self.pump_documents > 0 && self.pump_source_bytes + source_bytes > MAX_PUMP_BYTES)
         {
             return Err(IndexError::PumpLimit);
         }
-        self.add(IndexRecord::text(witness, request, markdown)?)
+        Ok(())
     }
     /// Start another bounded pump after returning control to the caller.
     pub fn begin_pump(&mut self) {
