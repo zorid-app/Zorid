@@ -54,8 +54,16 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   prepares a minimal typed API first in isolated `storage-parse-cache`, new branch
   from current main; then owns Bases graph/query/program/cache internals and
   focused Bases tests. Resolver public matching contract stays unchanged. Host
-  wiring remains unassigned until the shared API is agreed; no native/WASM edits
-  by this owner yet. Root owns shared API decisions and main integration; reviewer
+  wiring now has separate owners after shared API agreement: `s1_query_audit`
+  owns native NativeVault init/cache lifecycle and document_index consumers;
+  `architecture_platform_audit` owns WASM document_index and required browser
+  document-index adapter wiring. Each uses an isolated new branch from current
+  main, composes the shared cache candidate before validation, and coordinates
+  exact APIs with the Bases owner. No Store schema/root build/frontend Workspace
+  changes; Cargo feature changes require root acknowledgment first. Reviewers
+  respectively `architecture_core_audit` and `s1_execution_audit`. This does not
+  authorize competing heavy checks or automated control of the user app.
+  Root owns shared API decisions and main integration; shared Bases reviewer
   `baseline_resources_impl`. Use session-owned bounded immutable data, full
   generation/facts/source/version keys, current invocation context and explicit
   expiry; never retain a query pin or source-write capability. Existing handoff
@@ -76,6 +84,20 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   find bar to S1.3. Reference owner `architecture_platform_audit` uses REA static
   Obsidian evidence; frontend source mapping owner `storage_recovery_ui_impl`.
   No proprietary recovered code enters source; user manual app remains untouched.
+  Completed static REA reference handoff:
+  `/private/tmp/zorid-obsidian-search-static-hznlv_yk/handoff.md`, hash477e08b5.
+  Actual cached Obsidian1.14.4 archive hash146ef847, focused REA Evidence
+  `ev_0ef7bc2c3b1071afa170b476125a7930b5c0f86d561d97b80e4fb55767df0ada`.
+  Full AST attempt exceeded512MiB; seven focused inert components parsed with
+  explicit partial/unbound limits. No app/vault access or runtime parity claim.
+  Preserve reference count nuance: overall includes filename matches, per-file
+  badge excludes filename; choose/document deliberate Zorid behavior instead of
+  guessing from snippets. Six sorts and default case toggle off are confirmed
+  statically. In-file standard reference has no options; requested options remain
+  a deliberate Zorid requirement. S1.3 DTO/UI addendum:
+  `/private/tmp/zorid-s1-search-handoff-5ed9b53c/ui-addendum.md`.
+  S1.4 current core-lifecycle source handoff:
+  `/private/tmp/zorid-s1-core-lifecycle-handoff.md` (no implementation yet).
 - **Integrated:** scoped observation-lookup fix through `2c53a98d`,193
   focused checks/1 existing ignored fixture, release build and normal-family100
   source/search checks pass. Small Base17 semantic-baseline tool is integrated
