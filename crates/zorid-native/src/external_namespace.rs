@@ -81,12 +81,7 @@ impl NativeVault {
                 break;
             }
             let snapshot = &scan.entries[&path];
-            if let Some(owner) = self
-                .store
-                .physical_bindings()?
-                .into_iter()
-                .find(|b| b.physical.inode == snapshot.identity)
-            {
+            if let Some(owner) = self.store.physical_owner_by_inode(&snapshot.identity)? {
                 if owner.state.path == path
                     && owner.state.kind == snapshot.kind
                     && owner.physical.parent_inode == snapshot.parent_identity
@@ -425,18 +420,15 @@ impl NativeVault {
                 if !scan.confirm_snapshot(self, &path)? {
                     return Err(Error::Busy("external capture changed before enrollment"));
                 }
-                let all = self.store.physical_bindings()?;
-                let owner = all.iter().find(|b| b.physical.inode == snapshot.identity);
-                if owner.is_some_and(|b| b.state.path != path) {
+                let owner = self.store.physical_owner_by_inode(&snapshot.identity)?;
+                if owner.as_ref().is_some_and(|b| b.state.path != path) {
                     return Err(Error::Busy("external inode retains another physical path"));
                 }
                 let (parent, _) = self.paths.parent(&path)?;
                 if let Some(owner) = owner {
-                    let visible = self
-                        .store
-                        .list()?
-                        .into_iter()
-                        .find(|e| e.id == owner.state.id && e.path == path);
+                    let visible = self.store.read_path_metadata(&path)?.filter(|entry| {
+                        entry.state.id == owner.state.id && entry.state.path == path
+                    });
                     if visible.is_none() {
                         return Err(Error::Busy(
                             "external physical branch retained for recovery",
@@ -456,9 +448,12 @@ impl NativeVault {
                         if let Some(binding) = self.store.physical_owner_at(&parent_path)? {
                             binding.state.kind == EntryKind::Folder
                                 && binding.physical.inode == snapshot.parent_identity
-                                && self.store.list()?.iter().any(|entry| {
-                                    entry.id == binding.state.id && entry.path == parent_path
-                                })
+                                && self.store.read_path_metadata(&parent_path)?.is_some_and(
+                                    |entry| {
+                                        entry.state.id == binding.state.id
+                                            && entry.state.path == parent_path
+                                    },
+                                )
                         } else {
                             false
                         };

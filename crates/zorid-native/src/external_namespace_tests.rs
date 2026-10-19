@@ -1715,3 +1715,110 @@ fn external_namespace_compound_rejects_replaced_missing_child_parent_inode() {
 fn external_namespace_compound_rejects_deleted_inode_observed_elsewhere() {
     assert_compound_ambiguous_member_rejected(2);
 }
+
+#[test]
+fn external_namespace_existing_file_noop_ignores_unrelated_unpublished_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = enrolled(root.path());
+    std::fs::write(root.path().join("selected.md"), b"selected bytes").unwrap();
+    complete(&mut vault);
+    let selected = state_at(&vault, "selected.md");
+    vault
+        .store
+        .family_apply(
+            &MutationRequest {
+                operation_id: OperationId::new("unpublished-create").unwrap(),
+                mutation: Mutation::Create {
+                    id: EntryId::new("unpublished").unwrap(),
+                    path: path("unpublished.md"),
+                    kind: EntryKind::File,
+                    content: Some(b"unpublished".to_vec()),
+                },
+            },
+            Some(zorid_store::FamilyCreateMode::Text),
+        )
+        .unwrap();
+    let sql = rusqlite::Connection::open(root.path().join(".zorid/vault.sqlite")).unwrap();
+    assert_eq!(
+        sql.execute(
+            "UPDATE entries SET state=json_set(state,'$.unexpected',1) WHERE id='unpublished'",
+            []
+        )
+        .unwrap(),
+        1
+    );
+    assert!(vault.store.list().is_err()); // Previous list()+find() fails before the no-op.
+    let before: String = sql.query_row("SELECT json_group_array(json_array(id,state,visible,deleted)) FROM entries ORDER BY id", [], |row| row.get(0)).unwrap();
+    let operations: i64 = sql
+        .query_row("SELECT count(*) FROM operations", [], |row| row.get(0))
+        .unwrap();
+    let report = complete(&mut vault);
+    assert!(
+        report.imported.is_empty() && report.namespace.is_empty(),
+        "{report:?}"
+    );
+    assert_eq!(
+        vault
+            .store
+            .read_path_metadata(&path("selected.md"))
+            .unwrap()
+            .unwrap()
+            .state,
+        selected
+    );
+    assert_eq!(sql.query_row("SELECT json_group_array(json_array(id,state,visible,deleted)) FROM entries ORDER BY id", [], |row| row.get::<_, String>(0)).unwrap(), before);
+    assert_eq!(
+        sql.query_row("SELECT count(*) FROM operations", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        operations
+    );
+    assert_eq!(
+        std::fs::read(root.path().join("selected.md")).unwrap(),
+        b"selected bytes"
+    );
+    assert!(!root.path().join("unpublished.md").exists());
+}
+
+#[test]
+fn external_namespace_existing_owner_stays_blocked_when_hidden_or_deleted() {
+    for change in [
+        "UPDATE entries SET visible=0 WHERE path='selected.md'",
+        "UPDATE entries SET deleted=1 WHERE path='selected.md'",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let mut vault = enrolled(root.path());
+        std::fs::write(root.path().join("selected.md"), b"retained bytes").unwrap();
+        complete(&mut vault);
+        let sql = rusqlite::Connection::open(root.path().join(".zorid/vault.sqlite")).unwrap();
+        assert_eq!(sql.execute(change, []).unwrap(), 1);
+        let before: String = sql
+            .query_row(
+                "SELECT state FROM entries WHERE path='selected.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let report = reconcile(&mut vault);
+        assert!(!report.complete && report.imported.is_empty(), "{report:?}");
+        assert!(
+            report.issues.iter().any(|issue| issue
+                .reason
+                .contains("external physical branch retained for recovery")),
+            "{report:?}"
+        );
+        assert_eq!(
+            sql.query_row(
+                "SELECT state FROM entries WHERE path='selected.md'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            before
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("selected.md")).unwrap(),
+            b"retained bytes"
+        );
+    }
+}

@@ -144,12 +144,11 @@ impl NativeVault {
         self.paths.verify_parent(path, parent)?;
         self.namespace_clear(path)?;
         if self.store.physical_owner_at(path)?.is_some()
-            || self.store.list()?.iter().any(|entry| entry.path == *path)
+            || self.store.read_path_metadata(path)?.is_some()
             || self
                 .store
-                .physical_bindings()?
-                .iter()
-                .any(|binding| binding.physical.inode == expected.identity)
+                .physical_owner_by_inode(&expected.identity)?
+                .is_some()
         {
             return Err(Error::Busy("new external file path already has an owner"));
         }
@@ -230,12 +229,11 @@ impl NativeVault {
         self.paths.verify_parent(path, parent)?;
         self.namespace_clear(path)?;
         if self.store.physical_owner_at(path)?.is_some()
-            || self.store.list()?.iter().any(|entry| entry.path == *path)
+            || self.store.read_path_metadata(path)?.is_some()
             || self
                 .store
-                .physical_bindings()?
-                .iter()
-                .any(|binding| binding.physical.inode == physical.inode)
+                .physical_owner_by_inode(&physical.inode)?
+                .is_some()
         {
             return Err(Error::Busy(
                 "new external directory path already has an owner",

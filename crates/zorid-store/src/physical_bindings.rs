@@ -385,6 +385,34 @@ impl Store {
         tx.commit()?;
         Ok(result)
     }
+    /// Select physical ownership independently of current logical visibility.
+    /// This is a fresh, targeted read, not a whole-catalogue integrity audit.
+    pub fn physical_owner_by_inode(&self, inode: &str) -> Result<Option<PhysicalBinding>> {
+        if !valid_string(inode) {
+            return Err(invalid("invalid physical inode identity"));
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        let ids = tx
+            .prepare("SELECT CASE WHEN length(CAST(entry_id AS BLOB)) BETWEEN 1 AND 128 THEN entry_id ELSE '' END FROM physical_bindings WHERE inode=?1 LIMIT 2")?
+            .query_map([inode], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if ids.len() > 1 {
+            return Err(invalid("multiple physical owners of one inode"));
+        }
+        let result = match ids.first() {
+            Some(id) => {
+                let value = binding(&tx, &EntryId::new(id.clone())?)?
+                    .ok_or_else(|| invalid("selected physical binding missing"))?;
+                if value.physical.inode != inode {
+                    return Err(invalid("selected physical inode mismatch"));
+                }
+                Some(value)
+            }
+            None => None,
+        };
+        tx.commit()?;
+        Ok(result)
+    }
     pub fn physical_binding(&self, id: &EntryId) -> Result<Option<PhysicalBinding>> {
         let tx = self.connection.unchecked_transaction()?;
         let result = binding(&tx, id)?;
@@ -760,6 +788,212 @@ mod tests {
         assert_eq!(
             check_observation(&store.connection, &id, &b.state.id).unwrap(),
             Some(proof)
+        );
+    }
+    fn add_bound_file(store: &mut Store, name: &str, inode: &str) -> PhysicalBinding {
+        let id = EntryId::new(name).unwrap();
+        store
+            .apply(&MutationRequest {
+                operation_id: op(&format!("create-{name}")),
+                mutation: Mutation::Create {
+                    id: id.clone(),
+                    path: VaultPath::new(name).unwrap(),
+                    kind: EntryKind::File,
+                    content: Some(b"other bytes".to_vec()),
+                },
+            })
+            .unwrap();
+        let state = store.read(&id).unwrap().unwrap().state;
+        projection::put_baseline(
+            &store.connection,
+            &ProjectionBaseline {
+                state: state.clone(),
+                content: StoredContent::InlineBytes(b"other bytes".to_vec()),
+            },
+        )
+        .unwrap();
+        let value = PhysicalBinding {
+            state,
+            physical: PhysicalIdentity {
+                inode: inode.into(),
+                parent_inode: "parent-inode".into(),
+            },
+        };
+        put_binding(&store.connection, &value).unwrap();
+        value
+    }
+
+    // Connection-local actual SQL reads, following the existing Store trace tests.
+    struct InodeReads<'a> {
+        connection: &'a Connection,
+        counts: Box<std::cell::Cell<[usize; 3]>>,
+    }
+    impl<'a> InodeReads<'a> {
+        fn new(connection: &'a Connection) -> Self {
+            unsafe extern "C" fn observe(
+                event: u32,
+                context: *mut std::ffi::c_void,
+                _: *mut std::ffi::c_void,
+                sql: *mut std::ffi::c_void,
+            ) -> i32 {
+                if event == rusqlite::ffi::SQLITE_TRACE_STMT && !context.is_null() && !sql.is_null()
+                {
+                    let bytes = unsafe { std::ffi::CStr::from_ptr(sql.cast()) }.to_bytes();
+                    let slot = if bytes
+                        .starts_with(b"SELECT record FROM projection_baselines WHERE")
+                    {
+                        Some(0)
+                    } else if bytes.starts_with(b"SELECT record FROM directory_baselines WHERE") {
+                        Some(1)
+                    } else if bytes.starts_with(b"SELECT entry_id FROM physical_bindings ORDER BY")
+                    {
+                        Some(2)
+                    } else {
+                        None
+                    };
+                    if let Some(slot) = slot {
+                        let counts = unsafe { &*context.cast::<std::cell::Cell<[usize; 3]>>() };
+                        let mut value = counts.get();
+                        value[slot] += 1;
+                        counts.set(value);
+                    }
+                }
+                0
+            }
+            let value = Self {
+                connection,
+                counts: Box::new(std::cell::Cell::new([0; 3])),
+            };
+            assert_eq!(
+                unsafe {
+                    rusqlite::ffi::sqlite3_trace_v2(
+                        connection.handle(),
+                        rusqlite::ffi::SQLITE_TRACE_STMT,
+                        Some(observe),
+                        (&*value.counts as *const std::cell::Cell<[usize; 3]>)
+                            .cast_mut()
+                            .cast(),
+                    )
+                },
+                rusqlite::ffi::SQLITE_OK
+            );
+            value
+        }
+    }
+    impl Drop for InodeReads<'_> {
+        fn drop(&mut self) {
+            assert_eq!(
+                unsafe {
+                    rusqlite::ffi::sqlite3_trace_v2(
+                        self.connection.handle(),
+                        0,
+                        None,
+                        std::ptr::null_mut(),
+                    )
+                },
+                rusqlite::ffi::SQLITE_OK
+            );
+        }
+    }
+
+    #[test]
+    fn inode_lookup_reads_only_selected_baseline_and_no_catalogue() {
+        for kind in [EntryKind::File, EntryKind::Folder] {
+            let (_dir, mut store, selected) = setup(kind);
+            put_binding(&store.connection, &selected).unwrap();
+            add_bound_file(&mut store, "unrelated", "different-inode");
+            store.connection.execute("UPDATE projection_baselines SET record='invalid-json' WHERE entry_id='unrelated'", []).unwrap();
+            assert!(store.physical_bindings().is_err()); // Previous native guard decodes this row.
+            let before = store.connection.total_changes();
+            let trace = InodeReads::new(&store.connection);
+            assert_eq!(store.physical_owner_by_inode("absent").unwrap(), None);
+            assert_eq!(trace.counts.get(), [0, 0, 0]);
+            assert_eq!(
+                store
+                    .physical_owner_by_inode(&selected.physical.inode)
+                    .unwrap(),
+                Some(selected)
+            );
+            assert_eq!(
+                trace.counts.get(),
+                if kind == EntryKind::File {
+                    [1, 0, 0]
+                } else {
+                    [0, 1, 0]
+                }
+            );
+            assert_eq!(store.connection.total_changes(), before);
+        }
+    }
+
+    #[test]
+    fn inode_lookup_selected_corruption_and_ambiguity_fail_closed() {
+        for sql in [
+            "UPDATE physical_bindings SET record='invalid-json'",
+            "UPDATE physical_bindings SET path='different'",
+            "UPDATE physical_bindings SET revision='different'",
+            "UPDATE physical_bindings SET kind='directory'",
+            "UPDATE physical_bindings SET parent_inode='different'",
+            "UPDATE physical_bindings SET record=json_set(record,'$.physical.inode','different')",
+            "UPDATE projection_baselines SET record='invalid-json'",
+        ] {
+            let (_dir, store, value) = setup(EntryKind::File);
+            put_binding(&store.connection, &value).unwrap();
+            store.connection.execute(sql, []).unwrap();
+            let before = store.connection.total_changes();
+            assert!(
+                store
+                    .physical_owner_by_inode(&value.physical.inode)
+                    .is_err(),
+                "{sql}"
+            );
+            assert_eq!(store.connection.total_changes(), before);
+        }
+        let (_dir, mut store, value) = setup(EntryKind::File);
+        put_binding(&store.connection, &value).unwrap();
+        add_bound_file(&mut store, "duplicate", &value.physical.inode);
+        assert!(
+            matches!(store.physical_owner_by_inode(&value.physical.inode),
+            Err(StoreError::Corrupt(message)) if message == "multiple physical owners of one inode")
+        );
+        for inode in ["", &"x".repeat(129)] {
+            assert!(store.physical_owner_by_inode(inode).is_err());
+        }
+    }
+
+    #[test]
+    fn inode_lookup_retains_hidden_deleted_and_stale_logical_owners() {
+        for change in [
+            "UPDATE entries SET visible=0 WHERE id='entry'",
+            "UPDATE entries SET deleted=1 WHERE id='entry'",
+        ] {
+            let (_dir, store, value) = setup(EntryKind::File);
+            put_binding(&store.connection, &value).unwrap();
+            store.connection.execute(change, []).unwrap();
+            assert_eq!(
+                store
+                    .physical_owner_by_inode(&value.physical.inode)
+                    .unwrap(),
+                Some(value)
+            );
+        }
+        let (_dir, mut store, value) = setup(EntryKind::File);
+        put_binding(&store.connection, &value).unwrap();
+        store
+            .apply(&MutationRequest {
+                operation_id: op("later-write"),
+                mutation: Mutation::Write {
+                    id: value.state.id.clone(),
+                    expected: value.state.revision.clone(),
+                    content: b"new logical bytes".to_vec(),
+                },
+            })
+            .unwrap();
+        assert_eq!(
+            store
+                .physical_owner_by_inode(&value.physical.inode)
+                .unwrap(),
+            Some(value)
         );
     }
 }
