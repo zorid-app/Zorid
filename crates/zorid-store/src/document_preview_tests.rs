@@ -44,7 +44,7 @@ fn persisted(store: &Store, stage: &DocumentIndexStage) -> Vec<String> {
         .unwrap()
         .query_map([Snapshot::of(stage.snapshot()).key()], |row| row.get(0))
         .unwrap()
-        .collect::<Result<_, _>>()
+        .collect::<std::result::Result<_, _>>()
         .unwrap()
 }
 fn captured(preview: &PreviewSnapshot) -> Vec<String> {
@@ -291,7 +291,7 @@ fn old_api_and_none_request_preserve_progress_and_skip_all_capture_callbacks() {
     let (_new_dir, mut optional, new_stage) = setup(35);
     let old_progress = old.pump_document_index(&old_stage).unwrap();
     let new_progress = optional
-        .pump_document_index_with_preview(&new_stage, None, |_| -> Result<(), ()> {
+        .pump_document_index_with_preview(&new_stage, None, |_| -> std::result::Result<(), ()> {
             panic!("None cannot invoke capture");
         })
         .unwrap();

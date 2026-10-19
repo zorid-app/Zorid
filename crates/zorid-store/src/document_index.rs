@@ -290,7 +290,7 @@ pub struct DocumentPreviewCaptureRequest {
 #[derive(Debug)]
 pub struct DocumentIndexPumpResult<E> {
     pub progress: DocumentIndexProgress,
-    pub preview: Option<Result<PreviewSnapshot, PreviewCaptureError<E>>>,
+    pub preview: Option<std::result::Result<PreviewSnapshot, PreviewCaptureError<E>>>,
 }
 #[derive(Debug, Serialize)]
 #[serde(
@@ -1153,7 +1153,7 @@ impl Store {
         &mut self,
         stage: &DocumentIndexStage,
         capture: Option<DocumentPreviewCaptureRequest>,
-        check: impl FnMut(usize) -> Result<(), E>,
+        check: impl FnMut(usize) -> std::result::Result<(), E>,
     ) -> IndexResult<DocumentIndexPumpResult<E>> {
         let (h, mut b, previous) = {
             let tx = self.document_transaction(TransactionBehavior::Deferred)?;
