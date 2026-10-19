@@ -562,3 +562,54 @@ fn controlled_graph_preparation_preserves_results_and_stops_with_host_errors() {
     ));
     assert_eq!(ordinary.snapshot_id(), generation.id());
 }
+
+#[test]
+fn prepared_namespace_keeps_every_link_occurrence_with_a_bounded_cold_graph() {
+    let body = (0..256)
+        .map(|n| {
+            format!(
+                "{}[[Note-{n:04}#Part]]\n",
+                if n % 2 == 0 { "!" } else { "" }
+            )
+        })
+        .collect::<String>();
+    let mut documents = vec![("Origin/Source.md".to_owned(), body, true)];
+    documents
+        .extend((0..512).map(|n| (format!("Targets/Note-{n:04}.md"), "target".to_owned(), true)));
+    let borrowed = documents
+        .iter()
+        .map(|(path, text, markdown)| (path.as_str(), text.as_str(), *markdown))
+        .collect::<Vec<_>>();
+    let generation = build("prepared-resolver", &borrowed);
+    let mut work = 0usize;
+    let graph = ResolutionView::snapshot_checked(&generation, 256, MAX_PUMP_BYTES, |units| {
+        work = work.saturating_add(units);
+        if work > 100_000 {
+            Err(IndexError::GenerationLimit)
+        } else {
+            Ok(())
+        }
+    })
+    .unwrap();
+    assert!(graph.complete());
+    assert_eq!(graph.edges().len(), 256);
+    let metadata = generation
+        .record(&EntryId::new("entry-0").unwrap())
+        .unwrap()
+        .metadata()
+        .unwrap();
+    for (n, edge) in graph.edges().iter().enumerate() {
+        assert_eq!(edge.source().id.as_str(), "entry-0");
+        assert_eq!(edge.link_index(), n as u32);
+        assert_eq!(edge.link(), &metadata.links[n]);
+        assert_eq!(edge.link().embed, n % 2 == 0);
+        assert_eq!(
+            edge.target().unwrap().id.as_str(),
+            format!("entry-{}", n + 1)
+        );
+    }
+    assert!(
+        work < 100_000,
+        "the original per-link namespace scan exceeds this unchanged graph budget"
+    );
+}

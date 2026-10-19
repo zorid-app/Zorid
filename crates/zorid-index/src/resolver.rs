@@ -1,6 +1,7 @@
 use crate::{IndexError, Manifest};
 use percent_encoding::percent_decode_str;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use unicode_normalization::UnicodeNormalization;
 use zorid_core::{EntryId, EntryKind, EntryState};
 
@@ -68,14 +69,17 @@ fn destination_path(destination: &str) -> Result<String, IndexError> {
 pub fn is_external_destination(destination: &str) -> Result<bool, IndexError> {
     Ok(external(&destination_path(destination)?))
 }
-fn order(a: &EntryState, b: &EntryState) -> Ordering {
-    a.path
-        .as_str()
-        .encode_utf16()
-        .count()
-        .cmp(&b.path.as_str().encode_utf16().count())
-        .then(a.path.cmp(&b.path))
-        .then(a.id.cmp(&b.id))
+struct PreparedFile<'a> {
+    entry: &'a EntryState,
+    path: String,
+    directory: String,
+    utf16_path_length: usize,
+}
+fn order(a: &PreparedFile<'_>, b: &PreparedFile<'_>) -> Ordering {
+    a.utf16_path_length
+        .cmp(&b.utf16_path_length)
+        .then(a.entry.path.cmp(&b.entry.path))
+        .then(a.entry.id.cmp(&b.entry.id))
 }
 fn suffix_segment(path: &str, target: &str) -> bool {
     path == target
@@ -91,16 +95,19 @@ fn in_directory(path: &str, directory: &str) -> bool {
 }
 /// Borrowed namespace-only view: no body reads or second authority snapshot.
 pub struct Resolver<'a> {
-    manifest: &'a Manifest,
-    files: Vec<(&'a EntryState, String)>,
+    files: Vec<PreparedFile<'a>>,
+    sources: HashMap<&'a EntryId, usize>,
+    basenames: HashMap<String, Vec<usize>>,
 }
 impl<'a> Resolver<'a> {
     pub fn new(manifest: &'a Manifest) -> Self {
         Self::new_checked(manifest, &mut |_| Ok::<(), IndexError>(()))
             .expect("infallible checkpoint")
     }
-    /// Charge/cancel before allocating each namespace projection. The callback
-    /// owns its error classification; this engine has no clock/cancellation IO.
+    /// Prepare namespace projections and lookup tables once. Work is charged
+    /// before projection, table allocation, hashing and bucket sorting. Hash maps
+    /// are never enumerated for candidate order; each bucket has the established
+    /// UTF16-length/raw-path/ID order, independent of hash seed or input order.
     pub fn new_checked<E>(
         manifest: &'a Manifest,
         check: &mut impl FnMut(usize) -> Result<(), E>,
@@ -110,10 +117,64 @@ impl<'a> Resolver<'a> {
         for entry in manifest.entries() {
             check(1)?;
             if entry.kind == EntryKind::File {
-                files.push((entry, normalize_link_key(entry.path.as_str())));
+                let raw = entry.path.as_str();
+                // One bounded full-path projection (normalization and UTF16
+                // length) plus the separate, exact source-parent projection.
+                check(raw.len().saturating_add(parent(raw).len()))?;
+                files.push(PreparedFile {
+                    entry,
+                    path: normalize_link_key(raw),
+                    directory: normalize_link_key(parent(raw)),
+                    utf16_path_length: raw.encode_utf16().count(),
+                });
             }
         }
-        Ok(Self { manifest, files })
+        // Reserve only after every projection has been admitted. Enough table
+        // capacity avoids hidden rehashing of all earlier keys on later inserts.
+        check(files.len().saturating_mul(2))?;
+        let mut sources = HashMap::with_capacity(files.len());
+        let mut basenames: HashMap<String, Vec<usize>> = HashMap::with_capacity(files.len());
+        for (index, file) in files.iter().enumerate() {
+            let basename = name(&file.path);
+            check(
+                1usize
+                    .saturating_add(file.entry.id.as_str().len())
+                    .saturating_add(basename.len()),
+            )?;
+            sources.insert(&file.entry.id, index);
+            basenames
+                .entry(basename.to_owned())
+                .or_default()
+                .push(index);
+        }
+        for bucket in basenames.values_mut() {
+            check(1)?;
+            if bucket.len() < 2 {
+                continue;
+            }
+            let mut comparison_bytes = 1usize;
+            for &index in bucket.iter() {
+                check(1)?;
+                let entry = files[index].entry;
+                comparison_bytes = comparison_bytes.max(
+                    entry
+                        .path
+                        .as_str()
+                        .len()
+                        .saturating_add(entry.id.as_str().len()),
+                );
+            }
+            // Length is precomputed; raw paths and IDs still need a bounded
+            // string comparison on ties. Large collision buckets pay for it.
+            check(sort_work(bucket.len()).saturating_mul(comparison_bytes))?;
+            bucket.sort_by(|&a, &b| order(&files[a], &files[b]));
+        }
+        check(0)?;
+        Ok(Self {
+            files,
+            sources,
+            basenames,
+        })
     }
     /// Semantic destination from the document parser: Markdown escapes/entities
     /// have already been normalized by that established parser; percent encoding
@@ -127,9 +188,10 @@ impl<'a> Resolver<'a> {
     ) -> Result<Vec<&'a EntryState>, IndexError> {
         self.candidates_checked(source_id, destination, &mut |_| Ok::<(), IndexError>(()))
     }
-    /// Same resolver with explicit work/cancellation checkpoints. Namespace
-    /// lookup and sorting reserve conservative work before their bounded work;
-    /// filtering charges each candidate as visited. No alternative semantics.
+    /// Same resolver with explicit work/cancellation checkpoints. Only actual
+    /// source/key lookups and the selected basename bucket are visited. Filtering
+    /// retains prepared order; directory preference is a stable partition, so no
+    /// per-destination sort or namespace scan remains.
     pub fn candidates_checked<E: From<IndexError>>(
         &self,
         source_id: &EntryId,
@@ -137,43 +199,41 @@ impl<'a> Resolver<'a> {
         check: &mut impl FnMut(usize) -> Result<(), E>,
     ) -> Result<Vec<&'a EntryState>, E> {
         check(0)?;
+        // Preserve invalid-target precedence over missing source. The byte count
+        // reserves the bounded fragment/trim/strict-percent decoding work.
+        check(destination.len().min(MAX_TARGET_BYTES))?;
         let decoded = destination_path(destination).map_err(E::from)?;
-        check(self.manifest.entries().len())?;
+        check(1usize.saturating_add(source_id.as_str().len()))?;
         let source = self
-            .manifest
-            .entry(source_id)
-            .filter(|e| e.kind == EntryKind::File)
+            .sources
+            .get(source_id)
+            .map(|&index| &self.files[index])
             .ok_or_else(|| E::from(IndexError::MissingSource))?;
         if decoded.is_empty() {
-            return Ok(vec![source]);
+            return Ok(vec![source.entry]);
         }
         if external(&decoded) {
             return Ok(Vec::new());
         }
+        check(decoded.len())?;
         let mut target = normalize_link_key(&decoded);
         let rooted = target.starts_with('/');
-        let mut candidates = Vec::new();
+        let mut candidates = None;
         if name(&target).contains('.') {
-            for pair in &self.files {
-                check(1)?;
-                if name(&pair.1) == name(&target) {
-                    candidates.push(pair);
-                }
-            }
+            check(1usize.saturating_add(name(&target).len()))?;
+            candidates = self.basenames.get(name(&target));
         }
-        if candidates.is_empty() {
+        if candidates.is_none() {
+            check(3)?;
             target.push_str(".md");
-            for pair in &self.files {
-                check(1)?;
-                if name(&pair.1) == name(&target) {
-                    candidates.push(pair);
-                }
-            }
+            check(1usize.saturating_add(name(&target).len()))?;
+            candidates = self.basenames.get(name(&target));
         }
-        if candidates.is_empty() {
+        let Some(candidates) = candidates else {
             return Ok(Vec::new());
-        }
-        let mut directory = normalize_link_key(parent(source.path.as_str()));
+        };
+        check(source.directory.len())?;
+        let mut directory = source.directory.clone();
         if target.starts_with("./") || target.starts_with("../") {
             if target.starts_with("./../") {
                 target = target[2..].into();
@@ -192,15 +252,14 @@ impl<'a> Resolver<'a> {
                 format!("{directory}/{target}")
             };
             let mut exact = Vec::new();
-            for (entry, path) in &candidates {
+            for &index in candidates {
                 check(1)?;
-                if path.as_str() == target.as_str() {
-                    exact.push(*entry);
+                let file = &self.files[index];
+                if file.path == target {
+                    exact.push(file.entry);
                 }
             }
             if !exact.is_empty() {
-                check(sort_work(exact.len()))?;
-                exact.sort_by(|a, b| order(a, b));
                 check(0)?;
                 return Ok(exact);
             }
@@ -209,36 +268,37 @@ impl<'a> Resolver<'a> {
             target = target[1..].into();
         }
         let mut exact = Vec::new();
-        for (entry, path) in &candidates {
+        for &index in candidates {
             check(1)?;
-            if path.as_str() == target.as_str() {
-                exact.push(*entry);
+            let file = &self.files[index];
+            if file.path == target {
+                exact.push(file.entry);
             }
         }
         if !exact.is_empty() {
-            check(sort_work(exact.len()))?;
-            exact.sort_by(|a, b| order(a, b));
             check(0)?;
             return Ok(exact);
         }
         if rooted {
             return Ok(Vec::new());
         }
-        let mut selected = Vec::new();
-        for pair in candidates {
+        let mut preferred = Vec::new();
+        let mut other = Vec::new();
+        for &index in candidates {
             check(1)?;
-            if suffix_segment(&pair.1, &target) {
-                selected.push(pair);
+            let file = &self.files[index];
+            if suffix_segment(&file.path, &target) {
+                if in_directory(&file.path, &directory) {
+                    preferred.push(file.entry);
+                } else {
+                    other.push(file.entry);
+                }
             }
         }
-        check(sort_work(selected.len()))?;
-        selected.sort_by(|(a, ap), (b, bp)| {
-            in_directory(bp, &directory)
-                .cmp(&in_directory(ap, &directory))
-                .then(order(a, b))
-        });
+        check(other.len())?;
+        preferred.extend(other);
         check(0)?;
-        Ok(selected.into_iter().map(|(entry, _)| *entry).collect())
+        Ok(preferred)
     }
 }
 fn sort_work(n: usize) -> usize {
