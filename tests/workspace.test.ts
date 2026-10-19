@@ -883,13 +883,19 @@ test('browser command recovery runs after note recovery and installs its final n
   await (workspace as any).buffers.get('One.md').saveRecoveryCopy();
 });
 
-test('desktop reconciliation warning persists over usable notes and cleans its subscription',async t=>{
+test('desktop reconciliation stays quiet over usable notes and cleans its subscription',async t=>{
   const {workspace,root}=await setup(t);const adapter=new MemoryAdapter({'Visible.md':'usable'});
   let listener:(()=>void)|undefined,stops=0;
   const status={complete:false,scanComplete:false,observed:1,imported:1,namespaceApplied:0,issueCount:1,issues:[],issuesTruncated:false};
   await workspace.openVault({adapter,label:'Importing',id:'test:importing',reconciliation:{getStatus:()=>status,subscribe:fn=>{listener=()=>fn(status);return()=>{stops++;};},retry:async()=>{status.complete=true;status.scanComplete=true;listener?.();}}});
-  assert.equal(root.querySelector<HTMLElement>('.import-status')?.hidden,false);
-  assert.match(root.querySelector('.import-status-message')!.textContent!,/imported notes are available/);
+  const banner=root.querySelector<HTMLElement>('.import-status')!;
+  assert.ok(banner);assert.equal(workspace.vault.entries.has('Visible.md'),true);
+  assert.equal(banner.hidden,true);assert.equal(banner.dataset.state,'checking');assert.equal(banner.getAttribute('aria-busy'),'true');
+  assert.equal(banner.querySelector<HTMLButtonElement>('.import-status-retry')!.hidden,true);
+  assert.match(banner.querySelector('.import-status-message')!.textContent!,/notes will appear here/i);
+  listener?.();assert.equal(banner.hidden,true,'duplicate pending updates stay quiet while automatic recovery owns retry');
+  status.complete=true;status.scanComplete=true;listener?.();
+  assert.equal(banner.hidden,true);assert.equal(banner.getAttribute('aria-busy'),'false');assert.equal(banner.querySelector<HTMLButtonElement>('.import-status-retry')!.hidden,true);
   await workspace.openVault({adapter:new MemoryAdapter(),label:'Next',id:'test:no-status'});
   assert.equal(stops,1);assert.equal(root.querySelector('.import-status'),null);
 });
