@@ -2,89 +2,89 @@
 
 [Architecture](README.md) · [Search](search.md) · [SQLite](sqlite.md)
 
-## Current systems
+## Extraction and authority
 
-`zorid-document` extracts source-aware Markdown metadata: properties/frontmatter,
-aliases, tags, headings, links and task occurrences. Parsing is derived work;
-invalid YAML produces metadata diagnostics rather than a refusal to save the note.
-The parser exposes identity-free `ParseFacts` through `parse_markdown_facts`;
-explicit binding supplies the current entry ID and revision. The existing
-`parse_markdown` facade returns the same document metadata and diagnostics.
+`zorid-document` extracts frontmatter/properties, aliases, tags, headings, links,
+blocks, list items and tasks. `ParseFacts` contains source positions and semantics
+without a vault, path, entry ID or revision. Binding attaches an explicitly captured
+entry/revision witness. Invalid YAML produces metadata diagnostics; it does not
+prevent saving the original note. Immediate CodeMirror syntax and rendering remain
+local editor work.
 
-`zorid-index` defines source manifests, immutable generations, semantic versions,
-publication fences, retained snapshots and metadata projection. Pure generation
-validation is not storage publication. Hosts must recheck source identity/heads
-and atomically publish matching rows and generation metadata.
+`zorid-index` owns manifests, immutable generations, semantic versions, retained
+snapshots, publication fences and query projections. Pure validation is not a
+durable commit. Hosts admit retained source, recheck ownership around asynchronous
+work, and publish generation rows/head atomically. Cache contents and draft facts
+never authorize a source mutation.
 
-Native `Store::pump_document_index` performs bounded work, reuses compatible
-records from a prior generation before parsing, and keeps parsing outside storage
-write transactions. It already persists derived metadata; caching is not being
-introduced from nothing. Native cache tables now live on an independent app-local `cache.sqlite`
-connection (or an in-memory fallback for bare embedders). Source remains in
-`vault.sqlite`; old optional authority cache tables are recognized but inert.
+Native indexing reads authoritative data from `vault.sqlite` and persists derived
+generations and reusable facts in the separate app-local `cache.sqlite`; bare
+embedders can use an in-memory cache. Older optional authority-cache tables are
+inert. Browser indexing uses Rust/WASM with a Worker/IndexedDB transaction host.
+Its retained working data and derived indexes need not mirror native databases.
+Neither cache is sync authority. Eviction, corruption or rebuild must preserve
+source, receipts, pending writes, recovery and pinned generations.
 
-The browser host stores local-only persisted generation data in IndexedDB and
-uses the same Rust semantics through WASM. Neither cache is sync authority.
+## Reuse and lifecycle
 
-## Accepted optimization direction
+The extraction key includes local-store scope, source SHA-256 and byte/UTF-16
+lengths, Markdown/plain-text mode, parser/schema/dialect/extraction versions and
+facts encoding. Compatible content can reuse identity-free facts and bind them to
+the current witness. Same-entry generation reuse is a separate optimization.
+Generation-only rebuild preserves reusable facts; disposing that cache family
+clears them. Optional parse-cache admission is bounded at 1 MiB per encoded row,
+64 MiB total and 100,000 rows. Larger supported documents still extract normally
+and can skip caching.
 
-Measure cold/warm startup, incremental update cost, large-note parsing, large-vault
-queries, memory and UI responsiveness before claiming improvement. Add bounded
-parallel Rust extraction where independent documents permit it. Keep storage
-publication coordinated and reject results for stale revisions/generations.
+The committed document runtime is a pure Rust reducer for change coalescing,
+freshness demand, recovery and bounded maintenance effects. Native and browser
+hosts execute its effects and supply storage, wake and lifecycle events. The
+common TypeScript facade delivers revisioned observations and separately
+acknowledged request outcomes. Each consumer owns cancellation of its freshness
+demand; cancelling one demand does not undo a committed save or stop other clients.
+A capable service's catch-up/rebuild uses that facade, while capability-absent
+providers retain the legacy helper. These must never become two active planners.
 
-The shared [extraction boundary](../../crates/zorid-index/src/extraction.rs)
-now provides typed keys/results and validated binding. Keys include the local
-store scope, exact source SHA-256 and byte/UTF-16 lengths, Markdown/plain-text
-mode, parser schema/dialect/extraction versions and facts encoding version.
-Current parser options are compiled into those semantic versions. Facts retain
-raw links and source positions without entry identity, path, resolved targets or
-generation context. Binding checks integrity and structural ranges, then attaches
-the captured current witness; cache data never authorizes a source mutation.
+Runtime adapters and consumer cancellation are integrated, but normal activation
+flags remain **off**. Autonomous no-listener indexing, foreground fairness and
+platform lifecycle acceptance remain gates. Multicore execution is outside the
+current S1 scope. Reduce repeated scans, extraction and preparation first; bounded
+work and cancellation still require honest accounting of synchronous calls.
 
-Shared optional cache admission uses a1MiB encoded-row cap,64MiB total payload
-and100,000 rows, with FIFO admission order and at most32 victim removals per write.
-Oversized supported facts still extract/bind normally and skip caching. This cache
-budget is separate from existing generation/metadata and bounded transport limits.
-These are initial resource bounds, not measured memory or latency promises.
+## Integrated foundation awaiting consumer wiring
 
-The extraction/policy layer, native reusable-facts tables and browser derived
-prefix are integrated with focused tests. On frozen `6f2b177b`, the normal WASM
-build, TypeScript check, actual Chrome100-note smoke and nine-phase tiny cache
-cohort pass. Fresh-process generation rebuild reuses persisted facts; identity/
-rename binding, byte/mode/scope invalidation and checksum-corruption fallback
-preserve public results and source/checkpoint/receipt data. Matching native build,
-normal Electron100 flow and standalone CLI14-phase cache checks also pass through
-`44181d1c`; disposal, corrupt/unsupported fallback and replay preserve source,
-authority, receipts and recovery. These are bounded correctness checks, not
-measured performance or other-browser acceptance. Generation-only rebuild preserves valid reusable
-facts; full disposal of that cache family clears them. New cache-outcome counters
-are per pump, and callers sum separate pump reports explicitly. Existing
-same-entry generation reuse remains distinct. Browser retains joined-group working
-data and persisted derived indexes between visits; its storage engine need not
-mirror native databases. Cache failures and eviction must preserve source,
-receipts, pending writes, recovery and pinned generations.
+| Foundation | Boundary and remaining work |
+| --- | --- |
+| Phased extraction | `ParseFactsJob` advances one whole phase per step, with source/scratch/facts limits and cancellation between phases. Markdown/YAML calls inside a phase remain synchronous and non-preemptible; this is not a small-quantum latency guarantee. |
+| Draft analysis | The latest-only draft reducer tags work by client, buffer lifetime and text revision, reserves transient resources and retires obsolete jobs. The pure work arbiter selects one committed or draft effect per turn; native execution remains pending. Draft facts carry no durable witness or published generation. Native/browser transport and Workspace dirty-draft consumption remain pending. |
+| Committed metadata paging | Body-free reset/delta pages project admitted immutable generations, including files, folders, removals, diagnostics and coverage. The Store registration fence revalidates an already admitted metadata pin without rereading bodies; it does not replace source/text/publication checks. Platform adapters and the Vault metadata migration remain pending. |
+| First-build preview | Sealed captures expose only the subset admitted after successful persisted pump work. Borrowed preview facts avoid copying metadata. Preview identity cannot become an ordinary query pin, publication proof or mutation witness; platform/UI mounting remains pending. |
 
-The [confirmed performance design](indexing-search-design.md) includes Bases query
-execution and search/backlinks. Persist parse/search-index reuse; keep compiled
-Bases and final answers initially in bounded memory. Index successful saves,
-prioritize interactive work, retain coherent previous results during updates and
-mark first-build partial coverage explicitly. Time-dependent answers refresh in
-configured/device-local timezone. See the [S1 slices](../plans/indexing-search.md)
-for implementation and measurement gates.
+The current Vault metadata cache and Workspace dirty metadata callbacks still use
+TypeScript parsing. Their migration must preserve outline, aliases/tags, links,
+graph and mutation-range correctness. The foundation above does not establish
+that migration or change NoteBuffer's durable-save protocol.
 
-## Interface review gate
-
-[S0A module interface review](interfaces.md) checks supported consumer operations,
-identity/transaction boundaries, errors, lifecycle and platform capabilities before
-S1 optimization/downstream feature work. Storage contracts are reviewed during S0
-design as well; the gate must not wait until an incompatible layer is built.
+S1 also includes bounded Bases preparation and eligible answer reuse. Coherent
+previous results, explicit first-build coverage and configured-timezone freshness
+are shared consumer requirements. Follow the [S1 slices](../plans/indexing-search.md)
+and [execution checkpoint](../deferred-product-roadmap.md) for remaining wiring
+and measured acceptance. Pure checks do not establish app speed or platform parity.
 
 ## Source map
 
-[Parser](../../crates/zorid-document/src/lib.rs),
-[index contracts](../../crates/zorid-index/src/lib.rs),
-[typed extraction/cache policy](../../crates/zorid-index/src/extraction.rs),
-[native persistence/pump](../../crates/zorid-store/src/document_index.rs),
-[native query facade](../../crates/zorid-native/src/document_index.rs),
-[browser cache host](../../src/core/browser-document-index.ts).
+- [Parser and phased facts](../../crates/zorid-document/src/lib.rs),
+  [phase execution](../../crates/zorid-document/src/phases.rs) and
+  [extraction/cache policy](../../crates/zorid-index/src/extraction.rs).
+- [Index contracts](../../crates/zorid-index/src/lib.rs),
+  [committed runtime](../../crates/zorid-index/src/document_runtime.rs),
+  [draft reducer](../../crates/zorid-index/src/draft_runtime.rs),
+  [work arbiter](../../crates/zorid-index/src/document_work_runtime.rs),
+  [metadata pager](../../crates/zorid-index/src/metadata_rows.rs) and
+  [preview capture/facts](../../crates/zorid-index/src/preview.rs).
+- [Native persistence and registration](../../crates/zorid-store/src/document_index.rs),
+  [native runtime driver](../../crates/zorid-native/src/document_runtime.rs),
+  [browser index host](../../src/core/browser-document-index.ts) and
+  [browser runtime host](../../src/platform/browser-document-runtime-host.ts).
+- [Common runtime delivery](../../src/core/document-runtime.ts) and
+  [document service/catch-up](../../src/core/document-semantics.ts).

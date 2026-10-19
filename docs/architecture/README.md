@@ -9,9 +9,13 @@ incremental catch-up. It has no user-managed native vault directory. Its current
 IndexedDB/Rust-WASM path is implemented; connected service onboarding is not yet
 complete.
 
-This manual describes canonical source at `824ddd2c` plus the explicitly marked
-architecture decisions accepted on 2026-10-18. Isolated feature work and historical
-runtime results do not establish current feature completion.
+This manual's source baseline is canonical main `48d81168` (2026-10-19).
+S1 parsing, indexing, caching and search is in progress: rich Rust search and its
+desktop presentation are integrated, as are phased draft/metadata/preview core
+foundations. Their remaining platform/consumer wiring and normal runtime
+activation are separate gates. The [execution checkpoint](../deferred-product-roadmap.md)
+records current verification; isolated work and pure checks do not establish
+platform completion or workload performance.
 
 ## Start at the platform
 
@@ -44,8 +48,10 @@ selects a service; it must not quietly fall back to another storage authority af
 an error. Rust plans are not commits. Storage transactions establish durability;
 filesystem publication and network delivery are separate outcomes.
 
-Follow the [product roadmap](../roadmap.md) for delivery order: storage is the
-immediate milestone. This manual describes architecture rather than scheduling.
+Follow the [product roadmap](../roadmap.md) for delivery order and the
+[S1 slices](../plans/indexing-search.md) for current acceptance gates. Normal core
+runtime activation remains off; multicore execution is outside the current scope.
+This manual describes system boundaries rather than an execution log.
 
 ## Then follow the systems
 
@@ -58,9 +64,9 @@ immediate milestone. This manual describes architecture rather than scheduling.
 | [Browser storage contract](browser-storage-contract.md) | Current IndexedDB commit, acknowledgment, scope, recovery and cache boundaries |
 | [SQLite infrastructure](sqlite.md) | Current Store implementation and planned unified access layer |
 | [Saving and recovery](saving-recovery.md) | Editor drafts, durable saves, physical files and planned snapshot history |
-| [Documents and indexing](indexing.md) | Shared parsing, cached metadata, generation publication and optimization |
+| [Documents and indexing](indexing.md) | Identity-free parsing/cache reuse, generation publication, lifecycle and pending draft/metadata/preview wiring |
 | [Query performance design](indexing-search-design.md) | Confirmed indexing/search/Bases behavior, compatibility and cache policy |
-| [Search and relationships](search.md) | Literal search, link resolution and presentation queries |
+| [Search and relationships](search.md) | Rust rich syntax, retained paging/counts/snippets, grouped presentation and relationship queries |
 | [Managed data and features](managed-data.md) | Bases, Types, Tasks, Calendar and provider boundaries |
 | [Sync and security](sync.md) | Convergence, encrypted transport, relay and local-only data |
 | [Bindings and CLI](bindings.md) | Desktop process, mobile C ABI, WASM and independent CLI |

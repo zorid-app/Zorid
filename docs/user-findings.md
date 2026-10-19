@@ -1,5 +1,16 @@
 # User findings queue
 
+## S1 browser metadata projection — epoch allocation audit
+
+Source inspection during E2 binding work found that browser `begin()` allocates a
+fresh generation epoch for every publication. The shared metadata pager correctly
+resets across epochs, so ordinary browser edits currently require a body-free full
+metadata frame rather than a delta. This is a remaining S1 computation/performance
+audit item, not native/browser delta parity. Preserve current authority and lease
+behavior while validating the adapters; then measure and assess a narrow shared
+epoch/generation allocation correction before S1 acceptance. Do not introduce a
+new host planner or claim incremental projection savings from reset-only runs.
+
 ## S1 dense search — correct output, repeated projection work remains
 
 Frozen pure/native source composition `06d0de82` passes all50 integration cases,
