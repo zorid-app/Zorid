@@ -342,6 +342,31 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   `tingkai-c/s1-lifecycle-core`, new runtime module/tests only; shared exports and
   platform migrations await named coordination. No lifecycle implementation
   acceptance yet; heavy validation remains serialized.
+  Rich core `a161b921` is now integrated `d51f64dd`:49 focused integration
+  checks,25 embedded search units and the dense three-form full-range oracle
+  pass on frozen composition `06d0de82`. No source/fixture/Cargo drift or owned
+  process remains. Dense correctness exposes128 body reads per query (512MiB),
+  tracked in user-findings; parent `s1_query_audit` owns the transient projector
+  follow-on, with snippet implementation isolated from the frozen reference.
+  Native testing caught initializer typo `fresh()`→existing `new_op()` (source
+  `2b70cd57`) and missing fixture folders (`4043c899`). Six of8 native checks
+  pass; remaining test assumptions about optional query capacity and binary
+  metadata coverage are being corrected, preserving production limits/fences.
+  Native batch is not yet main or accepted. Browser/WASM `ab62e058` is under
+  independent review, including post-await owner and failed-admission cleanup.
+  Browser admission four-method forwarding `984b23c1`/`98f654cd` is independently
+  source-approved; composed real adapter passes full TypeScript and64 focused
+  Node checks, not yet integrated or actual-engine acceptance. Source lifecycle
+  `6b1bd605` is independently approved (27 authored unexecuted tests), no shared
+  export/consumer changes; `Continue` avoids redundant status reads while real
+  wakes remain dirty and uncertainty retries are bounded. Native reconciliation
+  source audit owner `storage_sqlite_impl` implements only four remaining targeted
+  path reads in isolated `s1-family-live-lookup`; no claimed10k timing gain.
+  Baseline276files/32passes predates Store CSE and is not a post-CSE measurement.
+  Disk headroom recovered only by verified lossless archives of12 old Store
+  libraries and8 disposable completed test executables; source/build metadata,
+  previous archives and unrelated/user data remain intact. All future heavy
+  checks retain the1GiB floor and exclusive slot.
 - **Integrated:** scoped observation-lookup fix through `2c53a98d`,193
   focused checks/1 existing ignored fixture, release build and normal-family100
   source/search checks pass. Small Base17 semantic-baseline tool is integrated
