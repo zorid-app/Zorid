@@ -250,7 +250,10 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
       const stage:Stage={id,capture:capture.source,header:h,builder,prepared:0,total:h.entries.filter(e=>e.kind==='file').length,reused:0,parseCache:{hits:0,misses:0,unavailable:0,corrupt:0,unsupported:0}};if(rust(()=>builder.ready())){stage.generation=rust(()=>builder.finish());builder.free();stage.builder=undefined;}stages.set(id,stage);return stageInfo(stage);
     },
     async pump(stageId){
-      const stage=liveStage(stageId);if(stage.generation)return stageInfo(stage);const builder=stage.builder!;try{rust(()=>builder.beginPump());
+      const stage=liveStage(stageId);
+      // Cache outcomes describe this pump only; legacy reused remains unchanged.
+      stage.parseCache={hits:0,misses:0,unavailable:0,corrupt:0,unsupported:0};
+      if(stage.generation)return stageInfo(stage);const builder=stage.builder!;try{rust(()=>builder.beginPump());
       const pending=json<EntryState[]>(rust(()=>builder.pendingJson()));let sourceBytes=0;
       for(const entry of pending){
         const source=await run<{entry:EntryState;presentation:BrowserVaultPresentation;bytes?:Uint8Array}>('readonly',['control','metadata','presentation','content','sync_materialization_refs'],(tx,done,abort)=>{

@@ -74,8 +74,10 @@ export interface DocumentStatus {
   /** Exact host capture comparison, not sequence equality alone. */
   readonly current:boolean;readonly rebuildRequired:boolean;readonly coverageComplete:boolean|null;
 }
-/** Disjoint eligible lookup outcomes; fallback after a corrupt/unsupported/unavailable
- * lookup does not also count as a miss. Same-entry reuse is counted separately. */
+/** Disjoint eligible lookup outcomes for the latest pump only (begin and ready
+ * no-op pumps report zeros). Sum successive pumps explicitly for a stage total.
+ * Fallback after a corrupt/unsupported/unavailable lookup does not also count as
+ * a miss. Same-entry reuse retains its separate existing semantics. */
 export interface DocumentParseCacheCounters {readonly hits:number;readonly misses:number;readonly unavailable:number;readonly corrupt:number;readonly unsupported:number}
 export interface DocumentStage {readonly stageId:DocumentStageId;readonly snapshot:DocumentSnapshotId;readonly progress:null|{readonly prepared:number;readonly total:number;readonly reused:number|null;readonly ready:boolean;readonly parseCache?:DocumentParseCacheCounters}}
 export interface DocumentPin {

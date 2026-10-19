@@ -285,6 +285,7 @@ test('cache lookup cannot swallow retired admission or replace the final source 
 test('generation rebuild expires pins and reuses preserved facts without touching source or pending data',async()=>{
   const f=fixture();f.file('a','text');const index=f.open();const first=await prepared(index),old=await index.open(),source=f.source();
   const family=()=>clone(new Map([...f.records.get('control')!].filter(([key])=>key.startsWith('document-parse-cache:v1/'))));
+  // Opening the old pin hydrates persisted rows and already increments mock reuses.
   const facts=family(),before=f.stats();assert.equal(parseRows(f).length,1);
   f.seed('control','pending-checkpoint',{key:'pending-checkpoint',value:'unsent'});f.seed('control','receipt',{key:'receipt',value:'keep'});
   await index.rebuild();assert.deepEqual(family(),facts,'generation rebuild must not clear or rewrite facts');
@@ -309,8 +310,23 @@ test('impossible FIFO usage is corrupt optional state, never reset to an invente
   const f=fixture({cacheRows:1});f.file('a','text');f.seed('control','document-parse-cache:v1/catalog',{key:'document-parse-cache:v1/catalog',value:{formatVersion:1,authorityId:authority,rows:1,bytes:1,nextOrdinal:'1'}});const index=f.open();await prepared(index);assert.equal(parseRows(f).length,0);assert.equal(f.records.get('control')!.get('document-parse-cache:v1/catalog').value.rows,1);assert.equal((await index.status()).current,true);await index.close();
 });
 
-test('completed cache hits remain observable when row-output budget defers insertion to another pump',async()=>{
-  const f=fixture({pauseCacheBindOnce:true});f.file('a','same');const index=f.open();await prepared(index);f.file('b','same');f.sequence('1');let stage=await index.begin();stage=await index.pump(stage.stageId);assert.equal(stage.prepared,1);assert.equal(stage.ready,false);assert.equal(stage.progress.reused,1);assert.equal(stage.progress.parseCache.hits,1);stage=await index.pump(stage.stageId);assert.equal(stage.ready,true);assert.equal(stage.progress.parseCache.hits,2);assert.equal(stage.progress.parseCache.misses,0);await index.publish(stage.stageId);await index.close();
+test('completed cache hits count per pump when row-output budget defers insertion',async()=>{
+  const f=fixture({pauseCacheBindOnce:true});f.file('a','same');const index=f.open();await prepared(index);f.file('b','same');f.sequence('1');let stage=await index.begin();
+  const zero={hits:0,misses:0,unavailable:0,corrupt:0,unsupported:0},one={...zero,hits:1},observations=[];
+  assert.deepEqual(stage.progress.parseCache,zero);
+  stage=await index.pump(stage.stageId);observations.push(stage.progress.parseCache);assert.equal(stage.prepared,1);assert.equal(stage.ready,false);assert.equal(stage.progress.reused,1);assert.deepEqual(stage.progress.parseCache,one);
+  stage=await index.pump(stage.stageId);observations.push(stage.progress.parseCache);assert.equal(stage.ready,true);assert.equal(stage.progress.reused,1);assert.deepEqual(stage.progress.parseCache,one);
+  stage=await index.pump(stage.stageId);observations.push(stage.progress.parseCache);assert.equal(stage.ready,true);assert.equal(stage.progress.reused,1);assert.deepEqual(stage.progress.parseCache,zero);
+  assert.deepEqual(observations,[one,one,zero],'later pumps must not mutate earlier progress snapshots');assert.equal(observations.reduce((sum,row)=>sum+row.hits,0),2,'both completed lookup attempts count, including the deferred insertion');
+  await index.publish(stage.stageId);await index.close();
+});
+test('multi-pump cache outcomes sum explicitly without accumulating in stage progress',async()=>{
+  const f=fixture();for(let i=0;i<33;i++)f.file('note-'+i,'same');const source=f.source(),index=f.open();let stage=await index.begin();
+  const zero={hits:0,misses:0,unavailable:0,corrupt:0,unsupported:0};assert.deepEqual(stage.progress.parseCache,zero);
+  stage=await index.pump(stage.stageId);const first=stage.progress.parseCache;assert.equal(stage.ready,false);assert.equal(stage.prepared,32);assert.equal(stage.progress.reused,0);assert.deepEqual(first,{...zero,hits:31,misses:1});
+  stage=await index.pump(stage.stageId);const second=stage.progress.parseCache;assert.equal(stage.ready,true);assert.equal(stage.prepared,33);assert.equal(stage.progress.reused,0);assert.deepEqual(second,{...zero,hits:1});
+  stage=await index.pump(stage.stageId);assert.deepEqual(stage.progress.parseCache,zero);assert.deepEqual(first,{...zero,hits:31,misses:1});assert.equal(first.hits+second.hits,32);assert.equal(first.misses+second.misses,1);
+  assert.deepEqual(f.stats(),{textExtractions:1,reuses:0,cacheBinds:32});await index.publish(stage.stageId);assert.deepEqual(f.source(),source);await index.close();
 });
 test('unsupported optional catalog and exhausted FIFO ordinal never fail supported indexing',async()=>{
   for(const value of [{formatVersion:999,authorityId:authority,rows:0,bytes:0,nextOrdinal:'0'},{formatVersion:1,authorityId:authority,rows:0,bytes:0,nextOrdinal:'18446744073709551615'}]){const f=fixture();f.file('a','text');f.seed('control','document-parse-cache:v1/catalog',{key:'document-parse-cache:v1/catalog',value});const source=f.source(),index=f.open();const stage=await prepared(index);assert.equal(stage.progress.parseCache[value.formatVersion===999?'unsupported':'misses'],1);assert.equal((await index.status()).current,true);assert.equal(parseRows(f).length,0);assert.deepEqual(f.source(),source);await index.close();}
