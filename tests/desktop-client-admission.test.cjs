@@ -223,6 +223,10 @@ test('draft capability is positive before open and incomplete trusted scheduling
   const legacy=fixture();legacy.host.capabilities=['documents','document_drafts'];const context=await admitDesktopFixtureClient(legacy.service,legacy.options);assert.equal(context.draftsAvailable,undefined);assert.equal(context.documentDrafts,undefined);await context.release(async()=>{});
   const broken=fixture();enableDrafts(broken);broken.service.registerDocumentDraftOwner=undefined;
   await assert.rejects(admitDesktopFixtureClient(broken.service,broken.options),{code:'unsupported_host_capability'});assert.equal(broken.active,null);
+  const partial=fixture();enableDrafts(partial);partial.service.registerDocumentDraftOwner=()=>({notify(){},subscribe(){return()=>{};},revoke(){},release(){}});
+  partial.service.registerDocumentRuntimeOwner=()=>({observe(){}});partial.service.releaseDocumentDraftClient=reference=>partial.host.releaseClient(reference);
+  await assert.rejects(admitDesktopFixtureClient(partial.service,partial.options),{code:'unsupported_host_capability'});assert.equal(partial.active,null);assert.equal(partial.calls.filter(op=>op==='release_client').length,1);
+
 });
 test('draft retire drains late requests and retains exact native lease until trusted release resolves',async()=>{
   const f=fixture(),events=[],releaseGate=deferred();let onRetire=()=>{};

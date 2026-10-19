@@ -114,8 +114,9 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     },null);
     const documentCommand=input=>invoke(async()=>{const value=await documents.invoke(input);live();return value;},null);
     if(service.documentRuntimeEnabled){
-      runtime=service.registerDocumentRuntimeOwner({host:guarded,clientId,localStoreId:reference.local_store_id,assertActive:live});
-      if(draftsAvailable&&(!runtime||!['observe','control','ackControl','ackOutcome','subscribe','pause','resume','prepareRelease','release','revoke'].every(name=>typeof runtime[name]==='function')))throw fail('unsupported_host_capability');
+      const owner=service.registerDocumentRuntimeOwner({host:guarded,clientId,localStoreId:reference.local_store_id,assertActive:live});
+      if(draftsAvailable&&(!owner||!['observe','control','ackControl','ackOutcome','subscribe','pause','resume','prepareRelease','release','revoke'].every(name=>typeof owner[name]==='function')))throw fail('unsupported_host_capability');
+      runtime=owner;
     }
     const documentRuntime=runtime?Object.freeze({
       observe:()=>invoke(()=>runtime.observe(),null),
