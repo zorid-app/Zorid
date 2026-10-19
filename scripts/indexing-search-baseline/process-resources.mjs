@@ -147,7 +147,7 @@ export async function startOwnedMeasuredProcess({binary,args=[],cwd,env=process.
   };
   const stop=reason=>{
     if(finalized||stopReason)return completed;
-    stopReason=String(reason??'caller-stop').slice(0,256);timedOut=stopReason==='timeout';
+    stopReason=String(reason??'caller-stop').slice(0,256)||'caller-stop';timedOut=stopReason==='timeout';
     cancel(drainTimer);send('SIGTERM');child.stdin?.destroy();child.stdout.resume();child.stderr.resume();
     schedule(()=>{
       if(finalized)return;send('SIGKILL');maybeFinish();

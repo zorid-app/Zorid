@@ -57,7 +57,7 @@ test('timeout escalates only the owned group and repeated stop is idempotent',ru
 }));
 test('caller protocol failure stops owned execution without rewriting observed signal',runtime,()=>fixture(async directory=>{
   const handle=await start(directory,"process.on('SIGTERM',()=>{});process.stdout.write('ready');setInterval(()=>{},1000)");const stderr=collect(handle.stderr);await new Promise(resolve=>handle.stdout.once('data',resolve));
-  const first=handle.stop('invalid-protocol');assert.equal(first,handle.stop('second-reason'));const result=await first;await stderr;assert.equal(result.stopReason,'invalid-protocol');assert.equal(result.measurement.metrics.availability,'unavailable');assert.equal(result.observedProcessRole,'darwin-time-wrapper');assert.ok(result.signals.length<=2);
+  const first=handle.stop('');assert.equal(first,handle.stop('second-reason'));const result=await first;await stderr;assert.equal(result.stopReason,'caller-stop');assert.equal(result.measurement.metrics.availability,'unavailable');assert.equal(result.observedProcessRole,'darwin-time-wrapper');assert.ok(result.signals.length<=2);
 }));
 test('wrapper killed by utility preserves wrapper signal and cleans inherited utility pipes',runtime,()=>fixture(async directory=>{
   const handle=await start(directory,"process.on('SIGTERM',()=>{});process.kill(process.ppid,'SIGKILL');setInterval(()=>{},1000)");const {result}=await outcome(handle);
