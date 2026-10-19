@@ -157,6 +157,20 @@ impl IndexSnapshotId {
         &self.versions
     }
 }
+/// Reserve the next identity from a host's durable allocation watermark.
+/// The host persists the returned generation; published head state is unrelated.
+pub fn allocate_index_snapshot(
+    local_store_id: OperationId,
+    generation_epoch: OperationId,
+    allocated: u64,
+    versions: SemanticVersions,
+) -> Result<IndexSnapshotId, IndexError> {
+    let generation = allocated
+        .checked_add(1)
+        .ok_or(IndexError::InvalidGeneration)?;
+    IndexSnapshotId::new(local_store_id, generation_epoch, generation, versions)
+}
+
 /// Complete committed namespace, without document bodies. Construction validates
 /// shape, not that the host actually captured its inventory/head transactionally.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -550,5 +564,56 @@ mod manifest_lookup_tests {
         assert!(empty.entries().is_empty());
         assert_eq!(empty.derived_index_heap_bytes(), 0);
         assert_eq!(empty.entry(&EntryId::new("missing").unwrap()), None);
+    }
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+
+    fn allocate(allocated: u64) -> Result<IndexSnapshotId, IndexError> {
+        allocate_index_snapshot(
+            OperationId::new("local-store").unwrap(),
+            OperationId::new("generation-epoch").unwrap(),
+            allocated,
+            SemanticVersions::new(2, "extraction:v2", "resolver:v3", "query:v4").unwrap(),
+        )
+    }
+
+    #[test]
+    fn first_allocation_retains_the_exact_scope_epoch_and_semantic_versions() {
+        let snapshot = allocate(0).unwrap();
+        assert_eq!(snapshot.generation(), 1);
+        assert_eq!(snapshot.local_store_id().as_str(), "local-store");
+        assert_eq!(snapshot.generation_epoch().as_str(), "generation-epoch");
+        assert_eq!(
+            snapshot.versions(),
+            &SemanticVersions::new(2, "extraction:v2", "resolver:v3", "query:v4").unwrap()
+        );
+    }
+
+    #[test]
+    fn allocation_above_javascript_integer_precision_is_exact_and_serializes_as_decimal() {
+        let snapshot = allocate(9_007_199_254_740_992).unwrap();
+        assert_eq!(snapshot.generation(), 9_007_199_254_740_993);
+        let wire = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(wire["generation"], "9007199254740993");
+        assert_eq!(
+            serde_json::from_value::<IndexSnapshotId>(wire).unwrap(),
+            snapshot
+        );
+    }
+
+    #[test]
+    fn last_u64_generation_is_valid_without_wrapping() {
+        let snapshot = allocate(u64::MAX - 1).unwrap();
+        assert_eq!(snapshot.generation(), u64::MAX);
+        let wire = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(wire["generation"], u64::MAX.to_string());
+    }
+
+    #[test]
+    fn exhausted_allocation_rejects_instead_of_reusing_zero_or_head() {
+        assert_eq!(allocate(u64::MAX), Err(IndexError::InvalidGeneration));
     }
 }

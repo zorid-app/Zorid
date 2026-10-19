@@ -10,7 +10,8 @@ use std::{
 use wasm_bindgen::prelude::*;
 use zorid_core::{EntryId, EntryState};
 use zorid_index::{
-    document_extraction_version, extract_content, parse_cache_admission, ContentExtractionKey,
+    allocate_index_snapshot, document_extraction_version, extract_content, parse_cache_admission,
+    ContentExtractionKey,
     ContentExtractionOutcome, ContentExtractionResult, EntryWitness, Exclusion, ExtractionDomain,
     ExtractionMode, ExtractionScope, Generation, GenerationBuilder, IndexError, IndexRecord,
     IndexSnapshotId, LiteralPageBuilder, LiteralQuery, LiteralToken, Manifest, MetadataRequest,
@@ -95,6 +96,44 @@ pub fn document_index_versions_json() -> Result<String, JsValue> {
         )
         .map_err(contract)?,
     )
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GenerationAllocationRequest {
+    local_store_id: zorid_core::OperationId,
+    generation_epoch: zorid_core::OperationId,
+    allocated: String,
+}
+fn allocate_generation(request: GenerationAllocationRequest) -> Result<IndexSnapshotId, IndexError> {
+    let allocated: u64 = request
+        .allocated
+        .parse()
+        .map_err(|_| IndexError::InvalidGeneration)?;
+    if allocated.to_string() != request.allocated {
+        return Err(IndexError::InvalidGeneration);
+    }
+    allocate_index_snapshot(
+        request.local_store_id,
+        request.generation_epoch,
+        allocated,
+        SemanticVersions::new(
+            INDEX_SCHEMA_VERSION,
+            document_extraction_version(),
+            RESOLVER_VERSION,
+            LITERAL_QUERY_VERSION,
+        )?,
+    )
+}
+/// Pure reservation proposal only. The browser must compare the prior durable
+/// clock/source/head and persist this identity with its stage/header atomically.
+/// Owner replacement reloads that clock; publication/discard never roll it back.
+#[wasm_bindgen(js_name = documentIndexAllocateJson)]
+pub fn document_index_allocate_json(input: &str) -> Result<String, JsValue> {
+    if input.len() > 64 * 1024 {
+        return Err(error("index_input_limit"));
+    }
+    let request = serde_json::from_str(input).map_err(|_| error("index_invalid_record"))?;
+    encode(&allocate_generation(request).map_err(contract)?)
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1843,6 +1882,9 @@ mod document_clock_tests;
 #[cfg(test)]
 #[path = "document_metadata_rows_tests.rs"]
 mod document_metadata_rows_tests;
+#[cfg(test)]
+#[path = "document_allocation_tests.rs"]
+mod document_allocation_tests;
 
 #[cfg(test)]
 mod tests {

@@ -893,16 +893,13 @@ impl Store {
         let tx = self.document_transaction(TransactionBehavior::Immediate)?;
         let mut c = control(&tx)?;
         let manifest = capture(&tx)?;
-        c.allocated = c
-            .allocated
-            .checked_add(1)
-            .ok_or(IndexError::InvalidGeneration)?;
-        let snapshot = IndexSnapshotId::new(
+        let snapshot = zorid_index::allocate_index_snapshot(
             manifest.local_store_id.clone(),
             c.epoch.clone(),
             c.allocated,
             versions(),
         )?;
+        c.allocated = snapshot.generation();
         let h = Header {
             snapshot: Snapshot::of(&snapshot),
             expected: c.head.clone(),
@@ -1492,6 +1489,95 @@ mod cache_snapshot_tests {
         let stage = store.begin_document_index().unwrap();
         while !store.pump_document_index(&stage).unwrap().ready {}
         store.publish_document_index(&stage).unwrap();
+    }
+
+    #[test]
+    fn allocated_generations_survive_discard_failed_work_and_cache_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().canonicalize().unwrap();
+        let path = parent.join("store.sqlite");
+        let cache_path = parent.join("cache.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        store.enable_document_cache(&cache_path).unwrap();
+        store.apply(&create("original-note")).unwrap();
+        store.initialize_document_index().unwrap();
+        build(&mut store);
+        let published = store.open_document_snapshot().unwrap();
+        let head = published.generation().id().clone();
+        assert_eq!(head.generation(), 1);
+        store.close_document_snapshot(published);
+
+        let discarded = store.begin_document_index().unwrap();
+        assert_eq!(discarded.snapshot().generation(), 2);
+        store
+            .discard_document_index_stage(discarded.snapshot())
+            .unwrap();
+        let failed = store.begin_document_index().unwrap();
+        assert_eq!(failed.snapshot().generation(), 3);
+        store.apply(&create("later-note")).unwrap();
+        assert!(matches!(
+            store.pump_document_index(&failed),
+            Err(DocumentIndexError::Contract(IndexError::StaleSource))
+        ));
+        drop(store);
+
+        let mut reopened = Store::open(&path).unwrap();
+        reopened.enable_document_cache(&cache_path).unwrap();
+        // Allocation follows durable reservations even when the published head
+        // remains at one and earlier attempts were discarded or never completed.
+        let next = reopened.begin_document_index().unwrap();
+        assert_eq!(next.snapshot().generation(), 4);
+        assert_eq!(next.snapshot().local_store_id(), head.local_store_id());
+        assert_eq!(next.snapshot().generation_epoch(), head.generation_epoch());
+        assert_eq!(next.snapshot().versions(), head.versions());
+        let tx = reopened
+            .document_transaction(TransactionBehavior::Deferred)
+            .unwrap();
+        let current = control(&tx).unwrap();
+        assert_eq!(current.allocated, 4);
+        assert_eq!(current.head.as_ref(), Some(&Snapshot::of(&head)));
+        tx.commit().unwrap();
+    }
+
+    #[test]
+    fn exhausted_generation_allocation_leaves_durable_control_and_headers_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().canonicalize().unwrap();
+        let mut store = Store::open(parent.join("store.sqlite")).unwrap();
+        store.initialize_document_index().unwrap();
+        let tx = store
+            .document_transaction(TransactionBehavior::Immediate)
+            .unwrap();
+        let mut current = control(&tx).unwrap();
+        current.allocated = u64::MAX;
+        let before = encode(&current).unwrap();
+        tx.execute(
+            "UPDATE document_index_control SET record=?1 WHERE singleton=1",
+            [&before],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        assert!(matches!(
+            store.begin_document_index(),
+            Err(DocumentIndexError::Contract(IndexError::InvalidGeneration))
+        ));
+        let tx = store
+            .document_transaction(TransactionBehavior::Deferred)
+            .unwrap();
+        let after: String = tx
+            .query_row(
+                "SELECT record FROM document_index_control WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let headers: u64 = tx
+            .query_row("SELECT count(*) FROM document_index_generations", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(after, before);
+        assert_eq!(headers, 0);
+        tx.commit().unwrap();
     }
 
     #[test]

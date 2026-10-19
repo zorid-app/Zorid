@@ -21,6 +21,7 @@ pub use resolver::{
     is_external_destination, normalize_link_key, PreparedNamespace, Resolver, RESOLVER_VERSION,
 };
 pub use snapshot::{
+    allocate_index_snapshot,
     EntryWitness, IndexError, IndexSnapshotId, Manifest, PublicationFence, SemanticVersions,
     SourceSnapshotId, SourceWatermark, MAX_PUMP_BYTES, MAX_PUMP_DOCUMENTS,
 };
