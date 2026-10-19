@@ -532,6 +532,7 @@ mod tests {
                     mutation: Mutation::Delete {
                         id: last.state.id,
                         expected: last.state.revision,
+                        recursive: false,
                     },
                 },
                 None,
