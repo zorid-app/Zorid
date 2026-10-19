@@ -10,6 +10,10 @@ reaching100ms. Keep that declared policy separate from observed timer/work delay
 First remove the measured repeated full-catalogue reads, then measure remaining
 commit cost without weakening durability, recovery or concurrent-write checks.
 This is a target to verify, not a measured guarantee across devices or files.
+After targeted lookup integration `03642609`, Electron100 measures1.917s
+edit-to-verified-save: commit enqueued at+973ms, native round trip824ms, remaining
+confirmation~120ms. Target remains unmet; profile the remaining native work and
+inspect the pre-submit timer/checkpoint chain before further implementation.
 
 ## S1 save latency during background work — open comparison finding
 
@@ -21,11 +25,21 @@ regression. A subsequent metadata-only Electron trace did not reproduce active
 rescan contention: rescan ended163ms before input. The12.155s save window contains
 200 `list_snapshot` round trips totaling11.208s; commit itself takes710ms.
 Source inspection finds `readMetadata(path)` scans the entire catalogue per note.
-Replace that placeholder with a payload-free indexed `stat_path`, retaining
+Replaced that placeholder with a payload-free indexed `stat_path`, retaining
 existence, size and revision guards. Rust owner `storage_sqlite_impl`; desktop
 owner `storage_recovery_ui_impl`; independent reviewers `architecture_core_audit`
 and `s1_execution_audit`. No scheduler change is selected. Trace evidence:
 `/private/tmp/zorid-s1-electron-fifo-diagnostic-7caf7cd4/summary.json`.
+Integrated Rust `33b84512` and desktop `03642609` after17 Rust checks pass
+(one existing64MiB stress test ignored),82 desktop checks pass and independent
+reviews. Matching release build and unchanged Electron100 five-phase correctness
+pass. One traced before/after observation: save12.155→1.917s, edit→visible
+13.726→3.110s, save-window full snapshots200→1. No `stat_path` calls occur in
+that save window; background reconciliation differs, so don't attribute the
+entire timing change solely to lookup cost. Import worsens37.941→65.630s;
+overall app performance is not accepted. All three normal quits drain hosts;
+owned processes gone. Scan limits and guarded shutdown read errors remain.
+Evidence `/private/tmp/zorid-s1-electron-stat-path-after-diagnostic/summary.json`.
 Earlier comparison evidence:
 `/private/tmp/zorid-s1-cache-desktop-fa76b894-evidence/comparison-summary.json`.
 

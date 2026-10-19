@@ -114,18 +114,36 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   contention: rescan finishes163ms before input. Save window12.155s includes200
   full snapshots totaling11.208s; commit RTT710ms. Source-backed candidate is
   per-note `readMetadata(path)` using `list_snapshot`; trace has no caller stacks.
-  Next scoped fix is payload-free indexed `stat_path` through Store/native/host
+  Integrated fix is payload-free indexed `stat_path` through Store/native/host
   and desktop client, preserving existence/size/revision guards. Rust owner
   `storage_sqlite_impl` in isolated `storage-parse-cache`; desktop bridge owner
   `storage_recovery_ui_impl` in isolated `storage-recovery-ui`. Branches respectively
   `tingkai-c/s1-stat-path` and `tingkai-c/desktop-targeted-metadata`. Reviewers
-  `architecture_core_audit` and `s1_execution_audit`. Rust candidate `191ea1bc` is
-  source-approved, focused validation pending; no app speedup accepted yet.
-  Root retains sole main integration; no scheduler redesign or
-  editor-internal changes. Reuse existing Electron100 trace for after comparison.
+  `architecture_core_audit` and `s1_execution_audit`. Rust source `191ea1bc` is
+  integrated `33b84512`,17 focused checks pass/one existing64MiB test ignored;
+  CJS `bcad864b` is integrated `03642609`,82 checks pass. All integrated files
+  match validated candidates. Matching release build passes74.735s, followed by
+  unchanged Electron100 five-phase correctness and three normal quits/host drains;
+  no owned processes remain. Evidence:
+  `/private/tmp/zorid-stat-path-191ea1bc-lnbgn8fq/validation-summary.json`,
+  `/private/tmp/zorid-desktop-stat-path-validation.json`,
+  `/private/tmp/zorid-s1-release-03642609-rgolk1bk/build.json` and
+  `/private/tmp/zorid-s1-electron-stat-path-after-diagnostic/summary.json`.
+  One traced comparison: edit→durable12.155→1.917s, edit→visible13.726→3.110s,
+  full snapshots during save200→1; no stat calls inside that window. Background
+  reconciliation differs; initial import worsens37.941→65.630s, cold search
+  1.044→1.587s, warm121→145ms. Do not claim a universal/overall speedup. Native
+  commit RTT824ms and pre-submit973ms remain; small-save<100ms target unmet.
+  Root retains sole main integration; no scheduler redesign or editor-internal
+  change. Next diagnosis: bounded native commit profiling (platform owner,
+  independent `storage_recovery_impl` review) and read-only pre-submit timer audit
+  (`storage_recovery_ui_impl`). No new runtime granted until profiling plan review.
+  Native source handoff for remaining global recovery/planning candidates:
+  `/private/tmp/zorid-commit-intent-source-handoff-917f62fa.md` (not timed attribution).
   Evidence `/private/tmp/zorid-s1-electron-fifo-diagnostic-7caf7cd4/summary.json`.
-  The app/runtime slot is released. Frontend314 inputs/dist333 files are unchanged
-  from accepted `255caa28`; native Vite mode excludes WASM, so reuse that frontend.
+  The app/runtime slot is released. Frontend313 required inputs/dist333 files are
+  unchanged from accepted `255caa28`; raw main CJS changed deliberately and is
+  separately hashed; native Vite mode excludes WASM, so reuse that frontend.
   Build owner `storage_sqlite_impl`, app owner `architecture_platform_audit`;
   no new framework or unrelated rebuild.
 - **Combined native result:** release `b3ed4400` passed build115.545s and family100
