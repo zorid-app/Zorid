@@ -3,7 +3,7 @@ import {
   ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleHelp,
   CodeXml, Columns2, Columns3, Copy, Ellipsis, Eye, EyeOff, File, FileSearch, Filter, FolderClosed, FolderPlus, GalleryVertical,
   GitFork, Group, GripHorizontal, GripVertical, House, LayoutDashboard, Link, List, Maximize, Minus, PanelLeft, PanelRight, PanelTop, StretchHorizontal,
-  Plus, Redo2, RotateCw, Search, Settings, SquarePen, StickyNote, Tag, Terminal, Trash2, Undo2, X, ZoomIn,
+  Plus, Redo2, RotateCw, Search, Settings, SlidersHorizontal, SquarePen, StickyNote, Tag, Terminal, Trash2, Undo2, X, ZoomIn,
 } from 'lucide';
 import type { IconNode } from 'lucide';
 
@@ -11,6 +11,7 @@ import type { IconNode } from 'lucide';
 // for existing buttons; canonical aliases let chrome use the intended glyph.
 const glyphs: Record<string, IconNode> = {
   file: File, folder: FolderClosed, search: Search, plus: Plus, close: X,
+  'sliders-horizontal': SlidersHorizontal,
   left: ChevronLeft, right: ChevronRight, down: ChevronDown,
   sidebar: PanelLeft, rightbar: PanelRight, book: BookOpen, edit: SquarePen,
   code: CodeXml, copy: Copy, settings: Settings, graph: GitFork, calendar: Calendar,

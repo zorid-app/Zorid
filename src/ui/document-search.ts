@@ -44,8 +44,8 @@ export function createDocumentSearchView(parent:HTMLElement, callbacks:DocumentS
   const field=make('input');field.type='search';field.placeholder='Search vault…';field.setAttribute('aria-label','Search vault');field.autocomplete='off';field.spellcheck=false;
   const button=(label:string,glyph:string)=>{const node=make('button','document-search-button');node.type='button';node.title=label;node.setAttribute('aria-label',label);node.append(icon(glyph,16,doc));return node;};
   const clear=button('Clear search','close'), caseButton=make('button','document-search-button document-search-case','Aa');caseButton.type='button';caseButton.title='Match case';caseButton.setAttribute('aria-label','Match case');caseButton.setAttribute('aria-pressed','false');
-  const settings=button('Search options','settings'), options=make('div','document-search-options');options.id=`document-search-options-${id}`;options.hidden=true;settings.setAttribute('aria-controls',options.id);settings.setAttribute('aria-expanded','false');
-  fieldWrap.append(icon('search',16,doc),field,clear);bar.append(fieldWrap,caseButton,settings);
+  const settings=button('Search options','sliders-horizontal'), options=make('div','document-search-options');options.id=`document-search-options-${id}`;options.hidden=true;settings.setAttribute('aria-controls',options.id);settings.setAttribute('aria-expanded','false');
+  fieldWrap.append(icon('search',16,doc),field,caseButton,clear);bar.append(fieldWrap,settings);
   const check=(label:string)=>{const wrap=make('label'),input=make('input');input.type='checkbox';wrap.append(input,doc.createTextNode(label));options.append(wrap);return input;};
   const collapse=check('Collapse all results'), context=check('Show more context'), explain=check('Explain search');
   const info=make('div','document-search-info'), totals=make('span','document-search-total'), sort=make('select','document-search-sort');sort.setAttribute('aria-label','Sort search results');
@@ -81,7 +81,7 @@ export function createDocumentSearchView(parent:HTMLElement, callbacks:DocumentS
       const header=make('div','document-search-file-header'), disclosure=button(closed?'Expand file results':'Collapse file results','right'), title=make('button','document-search-title');title.type='button';
       const body=make('div','document-search-contexts');body.id=`document-search-file-${id}-${fragment.childNodes.length}`;body.hidden=closed;disclosure.setAttribute('aria-controls',body.id);disclosure.setAttribute('aria-expanded',String(!closed));
       disclosure.dataset.focusKey=`disclosure:${key}`;title.dataset.focusKey=`title:${key}`;
-      const path=group.entry.path, slash=path.lastIndexOf('/');title.append(make('span','document-search-name',path.slice(slash+1)||path));
+      const path=group.entry.path, slash=path.lastIndexOf('/');title.append(make('span','document-search-name',(path.slice(slash+1)||path).replace(/\.md$/i,'')));
       if(slash>=0)title.append(make('span','document-search-path',path.slice(0,slash)));
       title.title=path;title.addEventListener('click',event=>open(group,undefined,event,stamp,groupStamp));
       const badge=make('span','document-search-badge',group.occurrenceCount.toLocaleString('en-US'));badge.setAttribute('aria-label',`${group.occurrenceCount.toLocaleString('en-US')} matches in this file`);

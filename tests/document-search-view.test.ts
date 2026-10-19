@@ -36,7 +36,7 @@ function setup(t:TestContext){
 
 test('renders exact core spans/counts/order and immutable plain text without querying or DOM recount',t=>{
   const f=setup(t),value=deepFreeze(frame()),before=JSON.stringify(value);f.view.render(value);
-  assert.deepEqual([...f.doc.querySelectorAll('.document-search-name')].map(n=>n.textContent),['z.md','a.md']);
+  assert.deepEqual([...f.doc.querySelectorAll('.document-search-name')].map(n=>n.textContent),['z','a']);
   assert.equal(f.doc.querySelector('.document-search-total')!.textContent,'24 matches in 4 files');
   assert.deepEqual([...f.doc.querySelectorAll('.document-search-badge')].map(n=>n.textContent),['7','7']);
   assert.deepEqual([...f.doc.querySelectorAll('mark')].map(n=>n.textContent),['cat','cat','cat','cat']);
@@ -126,4 +126,13 @@ test('explanation uses literal core tree and unavailable capability is truly dis
   const f=setup(t),base=frame();f.view.render(frame({spec:{...spec,explain:true},result:{...base.result!,explanation:{dialect:'zorid-search-rust-unicode-1',root:{kind:'text',queryRange:range(),caseSensitive:false,scope:'content',operand:'<img src=x>',children:[]}}}}));
   assert.match(f.doc.querySelector('.document-search-explanation')!.textContent!,/<img src=x>/);assert.equal(f.doc.querySelector('img'),null);
   f.view.render(frame({canExplain:false}));assert.equal(f.check('Explain search').disabled,true);f.toggle('Explain search',true);assert.equal(f.searches.length,0);
+});
+
+test('compact note titles preserve canonical navigation paths and Aa shares the search field',t=>{
+  const f=setup(t);f.view.render(frame({groups:[group('note','Notes/Named.MD'),group('binary','Assets/image.svg')]}));
+  assert.deepEqual([...f.doc.querySelectorAll('.document-search-name')].map(node=>node.textContent),['Named','image.svg']);
+  assert.ok(f.doc.querySelector('.document-search-field')!.contains(f.button('Match case')));
+  assert.equal(f.doc.querySelector<HTMLButtonElement>('.document-search-title')!.title,'Notes/Named.MD');
+  f.doc.querySelector<HTMLButtonElement>('.document-search-title')!.click();assert.equal(f.opens[0].entry.path,'Notes/Named.MD');
+  assert.equal(f.button('Search options').querySelector('svg')!.getAttribute('aria-hidden'),'true');
 });

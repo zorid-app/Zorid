@@ -1,7 +1,7 @@
 .document-search { display:flex; flex-direction:column; min-height:0; color:var(--text-normal); font:13px var(--font-interface); }
 .document-search [hidden] { display:none !important; }
 .document-search-bar { display:flex; gap:4px; align-items:center; padding:10px; }
-.document-search-field { display:flex; align-items:center; flex:1; min-width:0; gap:6px; padding:2px 7px; border:1px solid var(--background-modifier-border); border-radius:7px; background:var(--background-input); }
+.document-search-field { display:flex; align-items:center; flex:1; min-width:0; gap:6px; padding:2px 7px; border:1px solid var(--background-modifier-border); border-radius:20px; background:var(--background-input); }
 .document-search-field:focus-within { border-color:var(--interactive-accent); }
 .document-search-field > input { flex:1; min-width:0; width:100%; padding:5px 0; border:0; background:transparent; color:inherit; font:inherit; outline:none; box-shadow:none; }
 .document-search-field > input::-webkit-search-cancel-button { display:none; }
@@ -14,7 +14,7 @@
 .document-search-options label { display:inline-flex; align-items:center; gap:4px; }
 .document-search-info { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px; padding:0 10px 6px; }
 .document-search-total { color:var(--text-muted); font-size:12px; }
-.document-search-sort { max-width:100%; min-width:0; font:inherit; }
+.document-search-sort { max-width:100%; min-width:0; padding:3px 1px; border:0; border-radius:0; box-shadow:none; background:transparent; color:var(--text-muted); font:inherit; }
 .document-search-status { margin:0; padding:0 10px 8px; color:var(--text-muted); font-size:12px; }
 .document-search-status:empty { display:none; }
 .document-search-results { overflow:auto; min-height:0; }
@@ -25,7 +25,7 @@
 .document-search-name { font-weight:600; overflow-wrap:anywhere; }
 .document-search-path { color:var(--text-muted); font-size:11px; overflow-wrap:anywhere; }
 .document-search-badge { flex:none; color:var(--text-muted); background:var(--background-secondary); border-radius:5px; padding:1px 5px; font-size:11px; font-variant-numeric:tabular-nums; }
-.document-search-contexts { margin:0 0 0 28px; border:1px solid var(--background-modifier-border); border-radius:6px; overflow:hidden; }
+.document-search-contexts { margin:0; border:1px solid var(--background-modifier-border); border-radius:6px; overflow:hidden; }
 .document-search-contexts:empty { display:none; }
 .document-search-snippet { display:block; width:100%; border:0; border-bottom:1px solid var(--background-modifier-border); padding:8px; background:var(--background-primary); color:inherit; text-align:left; font:inherit; cursor:pointer; }
 .document-search-snippet:last-child { border-bottom:0; }
