@@ -12,7 +12,7 @@ const range=(globalThis as any).IDBKeyRange;
 (globalThis as any).IDBKeyRange={bound:(lower:string,upper:string)=>({lower,upper})};
 /** Transaction/opaque-WASM doubles test host storage and transport only. No JS
  * parser, resolver or query evaluator stands in for Rust corpus parity. */
-function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:number;evictions?:number;pauseCacheBindOnce?:boolean}={}){
+function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:number;evictions?:number;pauseCacheBindOnce?:boolean;richRead?:boolean;richCompile?:boolean;richInvalidPage?:boolean}={}){
   const records=new Map<string,Map<string,any>>(['control','metadata','presentation','content','sync_materialization_refs'].map(n=>[n,new Map()]));
   const seed=(store:string,key:string,value:any)=>records.get(store)!.set(key,clone(value));
   seed('control','local-store-id',{key:'local-store-id',value:authority});seed('control','sequence',{key:'sequence',value:'0'});
@@ -76,8 +76,30 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
       const result=generation.baseJson(id,bytes,facts,options,viewName);afterBase?.();return result;
     }
   }
+  // This double chooses read/output shapes, never evaluates a query. Real
+  // matching/count/sort/snippet semantics remain in the Rust hosted/client gates.
+  const richCalls:{spec:any;facts:any[];header:any}[]=[],richStats={created:0,cleared:0,freed:0,closed:0,drivesFreed:0,preparedFreed:0,accepted:0};let afterRichCommit:(()=>void)|undefined;
+  class MockRichOwner {
+    queries=new Map<string,any>();serial=0;
+    constructor(nonce:string){assert.ok(nonce);richStats.created++;}
+    clear(){richStats.cleared++;this.queries.clear();}
+    free(){richStats.freed++;}
+    startQuery(generation:any,specJson:string,factsJson:string){const spec=JSON.parse(specJson),facts=JSON.parse(factsJson),header=JSON.parse(generation.headerJson());richCalls.push({spec,facts,header});
+      if(options.richCompile)throw JSON.stringify({code:'search_compile',diagnostic:{code:'invalid-operand',queryRange:{bytes:[0,1],utf16:[0,1]},message:'Expected operand'}});
+      const id='q'+(++this.serial);this.queries.set(id,{generation,header,spec});return id;}
+    prepareJson(query:string){if(!this.queries.has(query))throw JSON.stringify({code:'search_expired'});return JSON.stringify({state:'ready',cursor:'c'+query});}
+    closeQuery(query:string){richStats.closed++;this.queries.delete(query);}
+    openDrive(query:string,cursor:string){const q=this.queries.get(query);if(!q||cursor!=='c'+query)throw JSON.stringify({code:'search_expired'});let position=0;const reads=options.richRead?q.header.entries.filter((e:any)=>e.kind==='file'&&JSON.parse(q.generation.rowJson(e.id)).digest):[];
+      return {free(){richStats.drivesFreed++;},nextActionJson:()=>{const entry=reads[position];return JSON.stringify(entry?{kind:'readText',snapshot:q.header.nextIndex,entry,digest:JSON.parse(q.generation.rowJson(entry.id)).digest,bytes:JSON.parse(q.generation.rowJson(entry.id)).textBytes}:{kind:'done'});},
+        accept(bytes:Uint8Array){if(JSON.stringify(sha(bytes))!==JSON.stringify(JSON.parse(q.generation.rowJson(reads[position].id)).digest))throw JSON.stringify({code:'index_source_changed'});richStats.accepted++;position++;},
+        finish(){return {query,q,free(){richStats.preparedFreed++;}};},
+      };}
+    commitJson(prepared:any){const q=prepared.q,header=q.header,count=header.entries.filter((e:any)=>e.kind==='file').length;
+      const page={result:{snapshot:header.nextIndex,source:header.source,coverageComplete:true,value:{snapshot:header.nextIndex,next:null,scanComplete:true,coverageComplete:true,complete:true,dialect:'zorid-search-rust-unicode-1',spec:q.spec,explanation:null,files:[],totals:{files:{relation:'exact',value:0},occurrences:{relation:'exact',value:0}},coverage:{candidateFiles:count,evaluatedFiles:count,unavailableFiles:0,scanComplete:true,queryCoverageComplete:true},outputComplete:true,work:{documents:count,sourceBytes:0,units:1}}},cursor:null};
+      if(options.richInvalidPage)(page.result.value as any).unknown=true;afterRichCommit?.();return JSON.stringify(page);}
+  }
   const policy={formatVersion:1,maxRows:options.cacheRows??100000,maxBytes:options.cacheBytes??64*1024*1024,maxRowBytes:options.cacheRowBytes??1024*1024,maxEvictionsPerWrite:options.evictions??32};
-  const wasm={documentParseCachePolicyJson:()=>JSON.stringify(policy),documentParseCacheAdmissionJson:(input:string)=>{const {usage,replacedPayloadBytes:replaced,incomingPayloadBytes:incoming,evictedRows:evicted}=JSON.parse(input),rows=usage.rows-(replaced===null?0:1)+1,bytes=usage.bytes-(replaced??0)+incoming;return JSON.stringify(incoming>policy.maxRowBytes?'skipOversized':rows<=policy.maxRows&&bytes<=policy.maxBytes?'write':evicted===policy.maxEvictionsPerWrite?'skipEvictionLimit':'evictOldest');},documentIndexVersionsJson:()=>'{"schema":1,"extraction":"fixture","resolver":"fixture","query":"fixture"}',WasmDocumentIndexBuilder:MockBuilder,WasmDocumentIndexPreparationCache:MockPreparationCache} as unknown as BrowserDocumentIndexWasm;
+  const wasm={documentParseCachePolicyJson:()=>JSON.stringify(policy),documentParseCacheAdmissionJson:(input:string)=>{const {usage,replacedPayloadBytes:replaced,incomingPayloadBytes:incoming,evictedRows:evicted}=JSON.parse(input),rows=usage.rows-(replaced===null?0:1)+1,bytes=usage.bytes-(replaced??0)+incoming;return JSON.stringify(incoming>policy.maxRowBytes?'skipOversized':rows<=policy.maxRows&&bytes<=policy.maxBytes?'write':evicted===policy.maxEvictionsPerWrite?'skipEvictionLimit':'evictOldest');},documentIndexVersionsJson:()=>'{"schema":1,"extraction":"fixture","resolver":"fixture","query":"fixture"}',WasmDocumentIndexBuilder:MockBuilder,WasmDocumentIndexPreparationCache:MockPreparationCache,WasmDocumentRichSearchOwner:MockRichOwner} as unknown as BrowserDocumentIndexWasm;
   const open=(clientId='client-a')=>browserDocumentIndex({db,authorityId:authority,clientId,wasm,assertActive(){if(denied)throw Object.assign(new Error('retired'),{code:'owner_retired'});},
     readPublication(tx,done,abort){let entries:any[]|undefined,presentation:any[]|undefined,sequence:string|undefined;
       const finish=()=>{if(entries&&presentation&&sequence!==undefined)done({entries,presentation,sequence});};
@@ -93,7 +115,7 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
   }
   const source=()=>clone(new Map([...records].filter(([n])=>n!=='control').map(([n,m])=>[n,m])));
   const build=async(index:ReturnType<typeof open>)=>{let stage=await index.begin();do{stage=await index.pump(stage.stageId);}while(!stage.ready);return index.publish(stage.stageId);};
-  return {records,calls,transactions,file,open,build,source,seed,baseCalls,taskCalls,preparationCalls,preparationStats,afterBase(action:()=>void){afterBase=action;},stats:()=>({textExtractions,reuses,cacheBinds}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},cacheUnavailable(){cacheReadUnavailable=true;},deny(){denied=true;},afterRead(action:(store:string,key:any)=>void){afterRead=action;}};
+  return {records,calls,transactions,file,open,build,source,seed,richCalls,richStats,afterRichCommit(action:()=>void){afterRichCommit=action;},baseCalls,taskCalls,preparationCalls,preparationStats,afterBase(action:()=>void){afterBase=action;},stats:()=>({textExtractions,reuses,cacheBinds}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},cacheUnavailable(){cacheReadUnavailable=true;},deny(){denied=true;},afterRead(action:(store:string,key:any)=>void){afterRead=action;}};
 }
 
 test('strict derived publication retains source bytes and uses no aggregate control scan',async()=>{
@@ -377,4 +399,51 @@ test('multi-pump cache outcomes sum explicitly without accumulating in stage pro
 });
 test('unsupported optional catalog and exhausted FIFO ordinal never fail supported indexing',async()=>{
   for(const value of [{formatVersion:999,authorityId:authority,rows:0,bytes:0,nextOrdinal:'0'},{formatVersion:1,authorityId:authority,rows:0,bytes:0,nextOrdinal:'18446744073709551615'}]){const f=fixture();f.file('a','text');f.seed('control','document-parse-cache:v1/catalog',{key:'document-parse-cache:v1/catalog',value});const source=f.source(),index=f.open();const stage=await prepared(index);assert.equal(stage.progress.parseCache[value.formatVersion===999?'unsupported':'misses'],1);assert.equal((await index.status()).current,true);assert.equal(parseRows(f).length,0);assert.deepEqual(f.source(),source);await index.close();}
+});
+
+const richSpec={query:'needle',caseSensitive:false,sort:'nameAsc' as const,context:'line' as const,explain:false};
+async function richReady(index:ReturnType<ReturnType<typeof fixture>['open']>,pinId:string){const {queryId}=await index.richStart({pinId,spec:richSpec}) as {queryId:string};const ready=await index.richPrepare({pinId,queryId}) as {state:'ready';cursor:string};assert.equal(ready.state,'ready');return {queryId,cursor:ready.cursor};}
+test('rich metadata-only pages use retained facts, strict shared envelope and zero projection reads',async()=>{
+  const f=fixture();f.file('a','old',{mtime:7});f.file('image','binary',{path:'image.png',binary:true});const index=f.open();await f.build(index);const pin=await index.open(),source=f.source();
+  f.file('a','new',{revision:'r2',mtime:99});const before=f.calls.length;const ready=await richReady(index,pin.pinId);const page=await index.richPage({pinId:pin.pinId,...ready}) as any;
+  assert.equal(page.result.value.complete,true);assert.equal(page.cursor,null);assert.equal(f.richStats.accepted,0);assert.equal(f.calls.slice(before).some(call=>call.op==='get'&&String(call.key).includes('/row/')),false);
+  assert.deepEqual(f.richCalls[0].facts.map(row=>[row.entryId,row.revision,row.mtimeMs]),[['a','r1',7],['image','r1',1]]);assert.equal(f.richCalls[0].facts.some(row=>'path'in row),false);
+  assert.equal(f.richStats.drivesFreed,1);assert.equal(f.richStats.preparedFreed,1);await index.richClose({pinId:pin.pinId,queryId:ready.queryId});await index.richClose({pinId:pin.pinId,queryId:ready.queryId});assert.equal(f.richStats.closed,1);await index.close();
+});
+test('rich retained reads accept exact old projection and free drive/prepared handles',async()=>{
+  const f=fixture({richRead:true});f.file('a','old needle');const index=f.open();await f.build(index);const pin=await index.open(),ready=await richReady(index,pin.pinId);f.file('a','new needle',{revision:'r2'});f.sequence('1');await f.build(index);
+  const page=await index.richPage({pinId:pin.pinId,...ready}) as any;assert.deepEqual(page.result.snapshot,pin.snapshot);assert.equal(f.richStats.accepted,1);assert.equal(f.richStats.drivesFreed,1);assert.equal(f.richStats.preparedFreed,1);await index.close();
+});
+test('rich caller mutation, foreign query/cursor and retired pin cannot redirect an operation',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();await f.build(index);const pin=await index.open(),other=await index.open();
+  const input={pinId:pin.pinId,spec:{...richSpec}};const pending=index.richStart(input);input.spec.query='changed';const {queryId}=await pending as {queryId:string};assert.equal(f.richCalls[0].spec.query,'needle');
+  const ready=await index.richPrepare({pinId:pin.pinId,queryId}) as {cursor:string};await assert.rejects(index.richPrepare({pinId:other.pinId,queryId}),{code:'search_expired'});await assert.rejects(index.richPage({pinId:pin.pinId,queryId,cursor:other.pinId+'/not-this-query'}),{code:'search_expired'});
+  await index.closePin(pin.pinId);await assert.rejects(index.richPage({pinId:pin.pinId,queryId,cursor:ready.cursor}),{code:'index_snapshot_expired'});assert.equal(f.richStats.closed,1);await index.close();
+});
+test('rich read rejects lease retirement before accept, preserves error and frees pending drive',async()=>{
+  const f=fixture({richRead:true});f.file('a','text');const index=f.open();await f.build(index);const pin=await index.open(),ready=await richReady(index,pin.pinId);let fetched=false;
+  f.afterRead((store,key)=>{if(store==='control'&&String(key).endsWith('/row/a')){fetched=true;f.deny();}});
+  await assert.rejects(index.richPage({pinId:pin.pinId,...ready}),{code:'owner_retired'});assert.equal(fetched,true);assert.equal(f.richStats.accepted,0);assert.equal(f.richStats.drivesFreed,1);assert.equal(f.richStats.freed,1);assert.equal(f.richStats.cleared,1);
+});
+test('rich pin-close during retained fetch retires query without resurrecting owner or accepting source',async()=>{
+  const f=fixture({richRead:true});f.file('a','text');const index=f.open();await f.build(index);const pin=await index.open(),ready=await richReady(index,pin.pinId);let close:Promise<void>|undefined;
+  f.afterRead((store,key)=>{if(!close&&store==='control'&&String(key).endsWith('/row/a'))close=index.closePin(pin.pinId);});
+  await assert.rejects(index.richPage({pinId:pin.pinId,...ready}),error=>['index_snapshot_expired','search_expired'].includes((error as any).code));await close;assert.equal(f.richStats.accepted,0);assert.equal(f.richStats.drivesFreed,1);assert.equal(f.richStats.created,1);assert.equal(f.richStats.closed,1);await index.close();
+});
+test('rich final post-commit admission cannot expose a retired reply; resources still drain',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();await f.build(index);const pin=await index.open(),ready=await richReady(index,pin.pinId);f.afterRichCommit(()=>f.deny());
+  await assert.rejects(index.richPage({pinId:pin.pinId,...ready}),{code:'owner_retired'});assert.equal(f.richStats.preparedFreed,1);assert.equal(f.richStats.drivesFreed,1);assert.equal(f.richStats.freed,1);
+});
+test('rich strict decoder rejects invalid output and Rust source errors remain fatal',async()=>{
+  for(const corrupt of [false,true]){const f=fixture(corrupt?{richRead:true}:{richInvalidPage:true});f.file('a','text');const index=f.open();await f.build(index);const pin=await index.open(),ready=await richReady(index,pin.pinId);
+    if(corrupt){const row=[...f.records.get('control')!.values()].find(row=>typeof row.key==='string'&&row.key.endsWith('/row/a'));row.value.projection=new TextEncoder().encode('xxxx');}
+    await assert.rejects(index.richPage({pinId:pin.pinId,...ready}),{code:corrupt?'index_source_changed':'index_rebuild_required'});assert.equal(f.richStats.drivesFreed,1);await index.close();}
+});
+test('rich compile diagnostics preserve stable code and exact query range through BrowserVaultError',async()=>{
+  const f=fixture({richCompile:true});f.file('a','text');const index=f.open();await f.build(index);const pin=await index.open();
+  await assert.rejects(index.richStart({pinId:pin.pinId,spec:{...richSpec,query:'!'}}),error=>{assert.equal((error as any).code,'search_compile');assert.equal((error as any).source,'rust');assert.deepEqual((error as any).details,{diagnostic:{code:'invalid-operand',queryRange:{bytes:[0,1],utf16:[0,1]},message:'Expected operand'}});return true;});await index.close();
+});
+test('rich rebuild clears owner, expires old query and starts with a fresh session',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();await f.build(index);const pin=await index.open(),ready=await richReady(index,pin.pinId);await index.rebuild();assert.equal(f.richStats.cleared,1);assert.equal(f.richStats.freed,1);
+  await assert.rejects(index.richPrepare({pinId:pin.pinId,queryId:ready.queryId}),{code:'index_snapshot_expired'});await f.build(index);const next=await index.open();await richReady(index,next.pinId);assert.equal(f.richStats.created,2);await index.close();assert.equal(f.richStats.freed,2);
 });

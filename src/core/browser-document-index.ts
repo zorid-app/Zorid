@@ -1,4 +1,6 @@
-import type {DocumentTaskOptions,DocumentParseCacheCounters} from './document-semantics.ts';
+import {searchSpec,richToken,richPreparation,richPage as decodeRichPage,searchCompileDiagnostic} from './document-search-validation.ts';
+import type {SearchSpec} from './document-search-types.ts';
+import type {DocumentTaskOptions,DocumentParseCacheCounters,DocumentSnapshotId} from './document-semantics.ts';
 import {browserDocumentParseCache} from './browser-document-parse-cache.ts';
 import type {BrowserParseCachePolicy,BrowserParseCacheAdmission} from './browser-document-parse-cache.ts';
 import {BrowserVaultError} from './browser-vault.ts';
@@ -28,7 +30,10 @@ interface Builder extends Free {headerJson():string;pendingJson():string;beginPu
 interface Generation extends Free {headerJson():string;snapshotJson():string;rowJson(id:string):string;coverageComplete():boolean;metadataJson(id:string):string;tasksJson(sources:string,options:string):string;baseJson(id:string,bytes:Uint8Array,facts:string,options:string,viewName?:string|null):string;resolveJson(id:string,destination:string):string;backlinksJson(id:string,token:string,limit:number):string;openLiteral(query:string,token:string,limit:number):LiteralPage}
 interface PreparationCache extends Free {clear():void;baseJson(generation:Generation,id:string,bytes:Uint8Array,facts:string,options:string,monotonicMs:number,viewName?:string|null):string}
 interface LiteralPage extends Free {nextReadJson():string;accept(bytes:Uint8Array):void;finishJson():string}
-export interface BrowserDocumentIndexWasm {documentIndexVersionsJson():string;documentParseCachePolicyJson():string;documentParseCacheAdmissionJson(input:string):string;WasmDocumentIndexBuilder:new(input:string)=>Builder;WasmDocumentIndexPreparationCache:new()=>PreparationCache}
+interface RichPrepared extends Free {}
+interface RichDrive extends Free {nextActionJson():string;accept(bytes:Uint8Array):void;finish():RichPrepared}
+interface RichOwner extends Free {clear():void;startQuery(generation:Generation,spec:string,facts:string):string;prepareJson(query:string):string;openDrive(query:string,cursor:string):RichDrive;commitJson(prepared:RichPrepared):string;closeQuery(query:string):void}
+export interface BrowserDocumentIndexWasm {documentIndexVersionsJson():string;documentParseCachePolicyJson():string;documentParseCacheAdmissionJson(input:string):string;WasmDocumentIndexBuilder:new(input:string)=>Builder;WasmDocumentIndexPreparationCache:new()=>PreparationCache;WasmDocumentRichSearchOwner:new(nonce:string)=>RichOwner}
 export interface BrowserDocumentIndexHost {
   db:IDBDatabase;authorityId:string;clientId:string;wasm:BrowserDocumentIndexWasm;assertActive():void;
   readPublication(tx:IDBTransaction,done:(value:StreamingPublication)=>void,abort:(error:unknown)=>void):void;
@@ -46,6 +51,10 @@ export interface BrowserDocumentIndex {
   metadata(input:{pinId:string;id:string}):Promise<unknown>;
   tasks(input:{pinId:string;typeIds:string[];options?:DocumentTaskOptions}):Promise<unknown>;
   base(input:{pinId:string;id:string;viewName?:string|null;options?:{viewIndex?:number;searchTerms?:string[];ignorePaths?:string[];clockMs?:number;timezone?:string;maxRows?:number;currentEntryId?:string;maxSteps?:number}}):Promise<unknown>;
+  richStart(input:{pinId:string;spec:SearchSpec}):Promise<unknown>;
+  richPrepare(input:{pinId:string;queryId:string}):Promise<unknown>;
+  richPage(input:{pinId:string;queryId:string;cursor:string}):Promise<unknown>;
+  richClose(input:{pinId:string;queryId:string}):Promise<void>;
   rebuild():Promise<void>;close():Promise<void>;
 }
 interface Catalog {rebuilding?:string;version:1;localStoreId:string;head:string|null;generations:Descriptor[];pins:{id:string;clientId:string;generation:string}[]}
@@ -98,12 +107,44 @@ const validId=(id:unknown):id is string=>typeof id==='string'&&/^[A-Za-z0-9_-]{1
 function json<T>(raw:string,max=LIMITS.header):T {if(typeof raw!=='string'||size(raw)>max)throw fail('index_rebuild_required');try{return JSON.parse(raw) as T;}catch{throw fail('index_rebuild_required');}}
 function rust<T>(action:()=>T):T {try{return action();}catch(error){if(error instanceof BrowserVaultError)throw error;let code='index_rebuild_required',details:unknown;try{const parsed=JSON.parse(String(error));if(typeof parsed.code==='string'&&parsed.code.startsWith('index_'))code=parsed.code;details=parsed.diagnostic;}catch{}throw new BrowserVaultError(code,'Shared Rust document engine rejected the operation',details,'rust');}}
 
+const richFail=(code:string)=>new BrowserVaultError(code,'Rich document search is unavailable');
+function captureRichRequest(input:unknown,keys:readonly string[]):Record<string,unknown>&{pinId:string} {
+  if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!keys.includes(key))||keys.some(key=>!Object.hasOwn(input,key)))throw richFail('invalid_request');
+  const row=input as Record<string,unknown>;let encoded:string;try{encoded=JSON.stringify(row);}catch{throw richFail('invalid_request');}if(size(encoded)>65536)throw richFail('search_resource');
+  if(!validId(row.pinId))throw richFail('invalid_request');const result:Record<string,unknown>&{pinId:string}={pinId:row.pinId};
+  for(const key of keys){if(key==='pinId')continue;try{result[key]=key==='spec'?searchSpec(row[key]):richToken(row[key]);}catch{throw richFail('invalid_request');}}
+  return result;
+}
+function richRust<T>(action:()=>T,query:string):T {try{return action();}catch(error){if(error instanceof BrowserVaultError)throw error;
+  let parsed:{code?:unknown;diagnostic?:unknown};try{const raw=String(error);if(size(raw)>65536)throw error;parsed=JSON.parse(raw);}catch{throw fail('index_rebuild_required');}
+  if(parsed.code==='search_compile'){let diagnostic;try{diagnostic=searchCompileDiagnostic(parsed.diagnostic,query);}catch{throw fail('index_rebuild_required');}throw new BrowserVaultError('search_compile','The search query could not be compiled',{diagnostic},'rust');}
+  if(typeof parsed.code==='string'&&(['search_resource','search_busy','search_expired','cancelled','invalid_request'].includes(parsed.code)||parsed.code.startsWith('index_')))throw new BrowserVaultError(parsed.code,'Shared Rust document search rejected the operation',undefined,'rust');
+  throw fail('index_rebuild_required');
+}}
+function richAction(raw:string,snapshot:BrowserIndexSnapshot,entries:ReadonlyMap<string,EntryState>):{kind:'yield'|'done'}|{kind:'readText';entry:EntryState;bytes:number} {
+  const value=json<Record<string,unknown>>(raw);if(!value||typeof value!=='object'||Array.isArray(value))throw fail('index_rebuild_required');
+  if(value.kind==='yield'||value.kind==='done'){if(Object.keys(value).length!==1)throw fail('index_rebuild_required');return {kind:value.kind};}
+  if(value.kind!=='readText'||Object.keys(value).length!==5||!['kind','entry','snapshot','digest','bytes'].every(key=>Object.hasOwn(value,key))||!equal(value.snapshot,snapshot))throw fail('index_rebuild_required');
+  const entry=value.entry as EntryState;if(!entry||!equal(entries.get(entry.id),entry)||!Array.isArray(value.digest)||value.digest.length!==32||value.digest.some(n=>typeof n!=='number'||!Number.isInteger(n)||n<0||n>255)||!Number.isSafeInteger(value.bytes)||Number(value.bytes)<0||Number(value.bytes)>LIMITS.text)throw fail('index_rebuild_required');
+  return {kind:'readText',entry,bytes:Number(value.bytes)};
+}
 export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocumentIndex {
   const stages=new Map<string,Stage>(),pins=new Map<string,{generation:string;value:Generation;header:BrowserIndexHeader;capture:SourceCapture}>();
+  type Pin=ReturnType<typeof pins.get> & {};
+  interface RichSession {value:RichOwner;alive:boolean}
+  interface RichQueryBinding {pinId:string;pin:Pin;session:RichSession;core:string;spec:SearchSpec;entries:ReadonlyMap<string,EntryState>;retired:boolean;busy:boolean}
+  const richQueries=new Map<string,RichQueryBinding>();let richOwner:RichSession|undefined;
+  const releaseRich=()=>{const session=richOwner;richOwner=undefined;for(const query of richQueries.values())query.retired=true;richQueries.clear();if(session){session.alive=false;try{session.value.clear();}finally{session.value.free();}}};
   let closed=false,preparation:PreparationCache|undefined;
   const releasePreparation=()=>{const owned=preparation;preparation=undefined;owned?.free();};
-  const active=()=>{if(closed)throw fail('index_closed');try{host.assertActive();}catch(error){try{releasePreparation();}catch{/* Preserve the owner/lease error. */}throw error;}};
+  const active=()=>{if(closed)throw fail('index_closed');try{host.assertActive();}catch(error){try{releasePreparation();}catch{/* Preserve the owner/lease error. */}try{releaseRich();}catch{/* Preserve the owner/lease error. */}throw error;}};
   const monotonicMs=()=>{const value=Math.floor(performance.now());if(!Number.isSafeInteger(value)||value<0)throw fail('index_invalid_budget');return value;};
+  const richSession=()=>{active();if(!richOwner)richOwner={value:new host.wasm.WasmDocumentRichSearchOwner(crypto.randomUUID()),alive:true};return richOwner;};
+  function admittedRichPin(pinId:string,pin:Pin,session:RichSession){active();if(pins.get(pinId)!==pin||richOwner!==session||!session.alive)throw richFail('search_expired');}
+  function admittedRichQuery(id:string,query:RichQueryBinding){admittedRichPin(query.pinId,query.pin,query.session);if(query.retired||richQueries.get(id)!==query)throw richFail('search_expired');}
+  function getRichQuery(pinId:string,id:string){const query=richQueries.get(id);if(!query||query.pinId!==pinId)throw richFail('search_expired');admittedRichQuery(id,query);return query;}
+  function retireRichQuery(id:string,query:RichQueryBinding){if(query.retired)return;if(query.session.alive&&richOwner===query.session)richRust(()=>query.session.value.closeQuery(query.core),query.spec.query);query.retired=true;richQueries.delete(id);}
+  function retireRichPin(pinId:string){for(const [id,query]of richQueries)if(query.pinId===pinId)retireRichQuery(id,query);}
   const parseCache=browserDocumentParseCache({db:host.db,authorityId:host.authorityId,assertActive:active,
     policy:json<BrowserParseCachePolicy>(rust(()=>host.wasm.documentParseCachePolicyJson())),
     admit:(usage,replaced,incoming,evicted)=>json<BrowserParseCacheAdmission>(rust(()=>host.wasm.documentParseCacheAdmissionJson(JSON.stringify({usage,replacedPayloadBytes:replaced,incomingPayloadBytes:incoming,evictedRows:evicted}))))});
@@ -342,11 +383,75 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
         const generation=rust(()=>builder!.finish());pins.set(pinId,{generation:captured.id,value:generation,header:h,capture:stored.capture});return {pinId,snapshot:captured.snapshot,source:h.source,coverageComplete:rust(()=>generation.coverageComplete())};
       }catch(error){await api.closePin(pinId);throw error;}finally{builder?.free();}
     },
-    async closePin(pinId){active();pins.get(pinId)?.value.free();pins.delete(pinId);await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{c.pins=c.pins.filter(p=>p.id!==pinId||p.clientId!==host.clientId);putCatalog(tx,c);done();},abort));},
+    async closePin(pinId){active();retireRichPin(pinId);pins.get(pinId)?.value.free();pins.delete(pinId);await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{c.pins=c.pins.filter(p=>p.id!==pinId||p.clientId!==host.clientId);putCatalog(tx,c);done();},abort));},
     async search(input){const g=await assertPin(input.pinId),pin=pins.get(input.pinId)!;const page=rust(()=>g.openLiteral(inputText(input.query,4096),tokenForPin(input.pinId,input.cursor),pageLimit(input.limit)));try{
       for(;;){const entry=json<EntryState|null>(rust(()=>page.nextReadJson()));if(!entry)break;const row=await readRow(pin.generation,entry);if(!row.projection)throw fail('index_rebuild_required');rust(()=>page.accept(row.projection!));}
       const result=pinPage(input.pinId,rust(()=>page.finishJson()));await assertPin(input.pinId);return result;
     }finally{page.free();}},
+    async richStart(input){
+      const captured=captureRichRequest(input,['pinId','spec']),pinId=captured.pinId;
+      let spec:SearchSpec;try{spec=searchSpec(captured.spec);}catch{throw richFail('invalid_request');}
+      const g=await assertPin(pinId),pin=pins.get(pinId)!;const session=richSession();
+      const entries=new Map<string,EntryState>(),presentations=new Map<string,BrowserVaultPresentation>();
+      for(const fact of pin.capture.publication.presentation){if(presentations.has(fact.id))throw fail('index_rebuild_required');presentations.set(fact.id,fact);}
+      const facts:{entryId:string;revision:string;ctimeMs:number;mtimeMs:number}[]=[];let factsBytes=2;
+      for(const entry of pin.header.entries){if(entry.kind!=='file')continue;const fact=presentations.get(entry.id);if(!fact||!Number.isSafeInteger(fact.ctime_ms)||!Number.isSafeInteger(fact.mtime_ms))throw fail('index_rebuild_required');
+        const row={entryId:entry.id,revision:entry.revision,ctimeMs:fact.ctime_ms,mtimeMs:fact.mtime_ms};factsBytes+=size(JSON.stringify(row))+(facts.length?1:0);if(factsBytes>LIMITS.header||facts.length===LIMITS.records)throw richFail('search_resource');facts.push(row);entries.set(entry.id,entry);
+      }
+      admittedRichPin(pinId,pin,session);
+      const core=richRust(()=>session.value.startQuery(g,JSON.stringify(spec),JSON.stringify(facts)),spec.query);
+      let queryId:string;try{queryId=richToken(pinId+'/'+core);}catch{richRust(()=>session.value.closeQuery(core),spec.query);throw richFail('search_resource');}
+      const query:RichQueryBinding={pinId,pin,session,core,spec,entries,retired:false,busy:false};richQueries.set(queryId,query);
+      try{await assertPin(pinId);admittedRichQuery(queryId,query);return Object.freeze({queryId});}
+      catch(error){retireRichQuery(queryId,query);throw error;}
+    },
+    async richPrepare(input){
+      const captured=captureRichRequest(input,['pinId','queryId']),pinId=captured.pinId,queryId=captured.queryId as string;
+      await assertPin(pinId);const query=getRichQuery(pinId,queryId);if(query.busy)throw richFail('search_busy');
+      const raw=richRust(()=>query.session.value.prepareJson(query.core),query.spec.query);
+      let response:ReturnType<typeof richPreparation>;try{response=richPreparation(json<unknown>(raw,65536));}catch(error){if(error instanceof BrowserVaultError)throw error;throw fail('index_rebuild_required');}
+      const result=response.state==='ready'?Object.freeze({state:'ready' as const,cursor:richToken(queryId+'/'+response.cursor)}):response;
+      await assertPin(pinId);admittedRichQuery(queryId,query);return result;
+    },
+    async richPage(input){
+      const captured=captureRichRequest(input,['pinId','queryId','cursor']),pinId=captured.pinId,queryId=captured.queryId as string,cursor=captured.cursor as string;
+      await assertPin(pinId);const query=getRichQuery(pinId,queryId);if(query.busy)throw richFail('search_busy');
+      const prefix=queryId+'/';if(!cursor.startsWith(prefix)||cursor.length===prefix.length)throw richFail('search_expired');
+      query.busy=true;let drive:RichDrive|undefined,prepared:RichPrepared|undefined;
+      try{
+        admittedRichQuery(queryId,query);drive=richRust(()=>query.session.value.openDrive(query.core,cursor.slice(prefix.length)),query.spec.query);
+        for(;;){
+          admittedRichQuery(queryId,query);const action=richAction(richRust(()=>drive!.nextActionJson(),query.spec.query),query.pin.header.nextIndex,query.entries);
+          if(action.kind!=='readText')break;
+          await assertPin(pinId);admittedRichQuery(queryId,query);
+          const row=await readRow(query.pin.generation,action.entry);
+          await assertPin(pinId);admittedRichQuery(queryId,query);
+          if(!row.projection||row.projection.byteLength!==action.bytes)throw fail('index_source_unavailable');
+          // The outstanding Rust request owns the digest and UTF8/NUL checks;
+          // this descriptor is only an admitted host read, never an offset API.
+          richRust(()=>drive!.accept(row.projection!),query.spec.query);
+        }
+        await assertPin(pinId);admittedRichQuery(queryId,query);
+        prepared=richRust(()=>drive!.finish(),query.spec.query);
+        // No await or mutable WASM borrow between the final local admission and
+        // commit. A later failed admission never exposes this result/cursor.
+        admittedRichQuery(queryId,query);
+        const raw=richRust(()=>query.session.value.commitJson(prepared!),query.spec.query);
+        const page=json<{result:unknown;cursor:unknown}>(raw,2*1024*1024);
+        if(page.cursor!==null){let token:string;try{token=richToken(page.cursor);}catch{throw fail('index_rebuild_required');}page.cursor=richToken(queryId+'/'+token);}
+        let result;try{result=decodeRichPage(page,{snapshot:query.pin.header.nextIndex as DocumentSnapshotId,source:query.pin.header.source,coverageComplete:richRust(()=>query.pin.value.coverageComplete(),query.spec.query),spec:query.spec});}catch(error){if(error instanceof BrowserVaultError)throw error;throw fail('index_rebuild_required');}
+        await assertPin(pinId);admittedRichQuery(queryId,query);return result;
+      }finally{prepared?.free();drive?.free();query.busy=false;}
+    },
+    async richClose(input){
+      const captured=captureRichRequest(input,['pinId','queryId']),pinId=captured.pinId,queryId=captured.queryId as string;
+      await assertPin(pinId);if(!queryId.startsWith(pinId+'/'))throw richFail('search_expired');
+      const query=richQueries.get(queryId);
+      // Same-pin unknown close is an idempotent cleanup acknowledgement. It
+      // admits no query/cursor, and makes a lost close response safe to retry.
+      if(!query)return;admittedRichQuery(queryId,query);retireRichQuery(queryId,query);
+      await assertPin(pinId);
+    },
     async resolve(input){const g=await assertPin(input.pinId),result=json<unknown>(rust(()=>g.resolveJson(inputText(input.sourceId,128),inputText(input.destination,4096))));await assertPin(input.pinId);return result;},
     async backlinks(input){const g=await assertPin(input.pinId),result=pinPage(input.pinId,rust(()=>g.backlinksJson(inputText(input.targetId,128),tokenForPin(input.pinId,input.cursor),pageLimit(input.limit))));await assertPin(input.pinId);return result;},
     async metadata(input){const g=await assertPin(input.pinId),result=json<unknown>(rust(()=>g.metadataJson(inputText(input.id,128))));await assertPin(input.pinId);return result;},
@@ -384,14 +489,14 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
       admitted();const result=json<unknown>(rust(()=>{preparation??=new host.wasm.WasmDocumentIndexPreparationCache();return preparation.baseJson(g,id,row.projection!,factsJson,options,monotonicMs(),viewName);}));
       await assertPin(pinId);admitted();return result;
     },
-    async rebuild(){active();releasePreparation();for(const stage of stages.values()){stage.builder?.free();stage.generation?.free();}stages.clear();for(const pin of pins.values())pin.value.free();pins.clear();
+    async rebuild(){active();releaseRich();releasePreparation();for(const stage of stages.values()){stage.builder?.free();stage.generation?.free();}stages.clear();for(const pin of pins.values())pin.value.free();pins.clear();
       // Explicit rebuild expires every old pin; fresh epochs prevent token ABA.
       recovery=undefined;const nonce=crypto.randomUUID();await run<void>('readwrite',['control'],(tx,done)=>{putCatalog(tx,{...empty(),rebuilding:nonce});done();});
       // Generation rebuild preserves the separate validated content-facts family.
       await cleanupPrefix(PREFIX+'g/');
       await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{if(c.rebuilding===nonce)putCatalog(tx,empty());done();},abort));
     },
-    async close(){if(closed)return;releasePreparation();for(const stage of stages.values()){stage.builder?.free();stage.generation?.free();}stages.clear();for(const pin of pins.values())pin.value.free();pins.clear();
+    async close(){if(closed)return;releaseRich();releasePreparation();for(const stage of stages.values()){stage.builder?.free();stage.generation?.free();}stages.clear();for(const pin of pins.values())pin.value.free();pins.clear();
       try{await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{c.pins=c.pins.filter(p=>p.clientId!==host.clientId);for(const g of c.generations)if(g.clientId===host.clientId&&g.state==='staging')g.state='deleting';putCatalog(tx,c);done();},abort));}catch{/* Cache cleanup never blocks source close. Explicit rebuild repairs derived state. */}finally{closed=true;}
     },
   };return api;

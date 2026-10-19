@@ -554,6 +554,491 @@ fn base_error(code: &str, diagnostic: &impl Serialize) -> JsValue {
             .unwrap_or_else(|_| "{\"code\":\"index_invalid_record\"}".into()),
     )
 }
+// Rich search keeps capability-free core objects behind bounded opaque handles.
+// The browser adapter still admits its pin/source before and after every await.
+type RichFailure = zorid_index::RichSearchError<&'static str>;
+fn rich_failure(value: RichFailure) -> JsValue {
+    use zorid_index::RichSearchError as E;
+    match value {
+        E::Compile(diagnostic) => JsValue::from_str(
+            &serde_json::to_string(
+                &serde_json::json!({"code":"search_compile","diagnostic":diagnostic}),
+            )
+            .expect("diagnostic JSON"),
+        ),
+        E::Index(value) => contract(value),
+        E::Host(code) => error(code),
+        E::Resource(_) => error("search_resource"),
+        E::Invalid(_) => error("invalid_request"),
+        E::Expired => error("search_expired"),
+        E::Busy => error("search_busy"),
+    }
+}
+fn rich_decode<T: serde::de::DeserializeOwned>(raw: &str, cap: usize) -> Result<T, RichFailure> {
+    if raw.len() > cap {
+        return Err(zorid_index::RichSearchError::Resource("rich input bytes"));
+    }
+    serde_json::from_str(raw).map_err(|_| zorid_index::RichSearchError::Invalid("rich JSON"))
+}
+fn rich_encode(value: &impl Serialize, cap: usize) -> Result<String, RichFailure> {
+    struct Bounded {
+        bytes: Vec<u8>,
+        cap: usize,
+    }
+    impl std::io::Write for Bounded {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > self.cap.saturating_sub(self.bytes.len()) {
+                return Err(std::io::Error::other("rich output bound"));
+            }
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut out = Bounded {
+        bytes: Vec::new(),
+        cap,
+    };
+    serde_json::to_writer(&mut out, value)
+        .map_err(|_| zorid_index::RichSearchError::Resource("rich output bytes"))?;
+    String::from_utf8(out.bytes)
+        .map_err(|_| zorid_index::RichSearchError::Invalid("rich output UTF8"))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RichPresentationInput {
+    entry_id: EntryId,
+    revision: zorid_core::Revision,
+    ctime_ms: Option<i64>,
+    mtime_ms: Option<i64>,
+}
+struct RichBindingQuery {
+    id: zorid_index::RichQueryId,
+    generation: Arc<Generation>,
+}
+struct RichBindingCursor {
+    query: String,
+    cursor: zorid_index::RichSearchCursor,
+    serial: u64,
+}
+struct RichBindingState {
+    core: zorid_index::RichSearchOwner,
+    nonce: String,
+    serial: u64,
+    queries: BTreeMap<String, RichBindingQuery>,
+    cursors: BTreeMap<String, RichBindingCursor>,
+}
+impl RichBindingState {
+    fn token(&mut self, kind: &str) -> Result<(String, u64), RichFailure> {
+        self.serial = self
+            .serial
+            .checked_add(1)
+            .ok_or(zorid_index::RichSearchError::Resource(
+                "rich handle sequence",
+            ))?;
+        Ok((
+            format!("{}/{kind}/{}", self.nonce, self.serial),
+            self.serial,
+        ))
+    }
+    fn cursor(
+        &mut self,
+        query: &str,
+        cursor: zorid_index::RichSearchCursor,
+    ) -> Result<String, RichFailure> {
+        if let Some((key, _)) = self
+            .cursors
+            .iter()
+            .find(|(_, value)| value.query == query && value.cursor == cursor)
+        {
+            return Ok(key.clone());
+        }
+        let (key, serial) = self.token("c")?;
+        if self
+            .cursors
+            .values()
+            .filter(|value| value.query == query)
+            .count()
+            >= 8
+        {
+            let oldest = self
+                .cursors
+                .iter()
+                .filter(|(_, value)| value.query == query)
+                .min_by_key(|(_, value)| value.serial)
+                .map(|(key, _)| key.clone())
+                .expect("bounded cursor exists");
+            self.cursors.remove(&oldest);
+        }
+        self.cursors.insert(
+            key.clone(),
+            RichBindingCursor {
+                query: query.into(),
+                cursor,
+                serial,
+            },
+        );
+        Ok(key)
+    }
+    fn clear(&mut self) {
+        for query in self.queries.values() {
+            query.id.retire();
+        }
+        self.core.clear();
+        self.cursors.clear();
+        self.queries.clear();
+    }
+}
+#[wasm_bindgen]
+pub struct WasmDocumentRichSearchOwner {
+    state: Rc<RefCell<RichBindingState>>,
+    live: Rc<std::cell::Cell<bool>>,
+}
+impl WasmDocumentRichSearchOwner {
+    fn active(&self) -> Result<(), RichFailure> {
+        if self.live.get() {
+            Ok(())
+        } else {
+            Err(zorid_index::RichSearchError::Expired)
+        }
+    }
+    fn start(
+        &self,
+        generation: &WasmDocumentIndexGeneration,
+        spec_json: &str,
+        facts_json: &str,
+    ) -> Result<String, RichFailure> {
+        self.active()?;
+        let spec: zorid_index::SearchSpec = rich_decode(spec_json, 65536)?;
+        let facts: Vec<RichPresentationInput> = rich_decode(facts_json, MAX_JSON)?;
+        if facts.len() > 100000 {
+            return Err(zorid_index::RichSearchError::Resource(
+                "rich presentation rows",
+            ));
+        }
+        let mut at = 0;
+        let mut borrowed = Vec::with_capacity(facts.len());
+        for entry in generation.generation.manifest().entries() {
+            if entry.kind != zorid_core::EntryKind::File {
+                continue;
+            }
+            let input = facts.get(at).ok_or(zorid_index::RichSearchError::Invalid(
+                "missing presentation",
+            ))?;
+            if input.entry_id != entry.id || input.revision != entry.revision {
+                return Err(zorid_index::RichSearchError::Invalid(
+                    "presentation identity/order",
+                ));
+            }
+            borrowed.push(zorid_index::SearchPresentationFacts {
+                entry,
+                created_ms: input.ctime_ms,
+                modified_ms: input.mtime_ms,
+            });
+            at += 1;
+        }
+        if at != facts.len() {
+            return Err(zorid_index::RichSearchError::Invalid("extra presentation"));
+        }
+        let mut state = self
+            .state
+            .try_borrow_mut()
+            .map_err(|_| zorid_index::RichSearchError::Busy)?;
+        let (token, _) = state.token("q")?;
+        let id = state.core.start_query(
+            generation.generation.clone(),
+            spec,
+            &borrowed,
+            zorid_index::RichPageProfile::default(),
+            |_| Ok(()),
+        )?;
+        state.queries.insert(
+            token.clone(),
+            RichBindingQuery {
+                id,
+                generation: generation.generation.clone(),
+            },
+        );
+        Ok(token)
+    }
+}
+#[wasm_bindgen]
+impl WasmDocumentRichSearchOwner {
+    #[wasm_bindgen(constructor)]
+    pub fn new(nonce: &str) -> Result<WasmDocumentRichSearchOwner, JsValue> {
+        let id = zorid_core::OperationId::new(nonce).map_err(|_| error("invalid_request"))?;
+        Ok(Self {
+            state: Rc::new(RefCell::new(RichBindingState {
+                core: zorid_index::RichSearchOwner::new(id),
+                nonce: nonce.into(),
+                serial: 0,
+                queries: BTreeMap::new(),
+                cursors: BTreeMap::new(),
+            })),
+            live: Rc::new(std::cell::Cell::new(true)),
+        })
+    }
+    pub fn clear(&self) -> Result<(), JsValue> {
+        self.active().map_err(rich_failure)?;
+        self.state
+            .try_borrow_mut()
+            .map_err(|_| error("search_busy"))?
+            .clear();
+        Ok(())
+    }
+    #[wasm_bindgen(js_name=startQuery)]
+    pub fn start_query(
+        &self,
+        generation: &WasmDocumentIndexGeneration,
+        spec_json: &str,
+        facts_json: &str,
+    ) -> Result<String, JsValue> {
+        self.start(generation, spec_json, facts_json)
+            .map_err(rich_failure)
+    }
+    #[wasm_bindgen(js_name=prepareJson)]
+    pub fn prepare_json(&self, query: &str) -> Result<String, JsValue> {
+        let run = || -> Result<String, RichFailure> {
+            self.active()?;
+            let mut state = self
+                .state
+                .try_borrow_mut()
+                .map_err(|_| zorid_index::RichSearchError::Busy)?;
+            let id = state
+                .queries
+                .get(query)
+                .ok_or(zorid_index::RichSearchError::Expired)?
+                .id
+                .clone();
+            match state.core.prepare_query(&id, 2_000_000, |_| Ok(()))? {
+                zorid_index::RichPreparation::Preparing => {
+                    rich_encode(&serde_json::json!({"state":"preparing"}), 65536)
+                }
+                zorid_index::RichPreparation::Ready(cursor) => {
+                    let token = state.cursor(query, cursor)?;
+                    rich_encode(&serde_json::json!({"state":"ready","cursor":token}), 65536)
+                }
+            }
+        };
+        run().map_err(rich_failure)
+    }
+    #[wasm_bindgen(js_name=openDrive)]
+    pub fn open_drive(
+        &self,
+        query: &str,
+        cursor: &str,
+    ) -> Result<WasmDocumentRichSearchDrive, JsValue> {
+        let run = || -> Result<WasmDocumentRichSearchDrive, RichFailure> {
+            self.active()?;
+            let state = self
+                .state
+                .try_borrow()
+                .map_err(|_| zorid_index::RichSearchError::Busy)?;
+            let q = state
+                .queries
+                .get(query)
+                .ok_or(zorid_index::RichSearchError::Expired)?;
+            let c = state
+                .cursors
+                .get(cursor)
+                .filter(|c| c.query == query)
+                .ok_or(zorid_index::RichSearchError::Expired)?;
+            let drive = state.core.open_drive(&c.cursor)?;
+            Ok(WasmDocumentRichSearchDrive {
+                inner: Some(drive),
+                pending: None,
+                state: self.state.clone(),
+                live: self.live.clone(),
+                query: query.into(),
+                query_id: q.id.clone(),
+            })
+        };
+        run().map_err(rich_failure)
+    }
+    #[wasm_bindgen(js_name=commitJson)]
+    pub fn commit_json(
+        &self,
+        prepared: &mut WasmDocumentPreparedRichSearchPage,
+    ) -> Result<String, JsValue> {
+        let mut run = || -> Result<String, RichFailure> {
+            self.active()?;
+            if !Rc::ptr_eq(&self.state, &prepared.state) || !Rc::ptr_eq(&self.live, &prepared.live)
+            {
+                return Err(zorid_index::RichSearchError::Expired);
+            }
+            let mut state = self
+                .state
+                .try_borrow_mut()
+                .map_err(|_| zorid_index::RichSearchError::Busy)?;
+            let generation = state
+                .queries
+                .get(&prepared.query)
+                .filter(|q| q.id == prepared.query_id)
+                .ok_or(zorid_index::RichSearchError::Expired)?
+                .generation
+                .clone();
+            let page = state.core.commit(
+                prepared
+                    .inner
+                    .take()
+                    .ok_or(zorid_index::RichSearchError::Expired)?,
+            )?;
+            let cursor = page
+                .next
+                .map(|cursor| state.cursor(&prepared.query, cursor))
+                .transpose()?;
+            #[derive(Serialize)]
+            struct ResultPage<'a> {
+                result: QueryReport<'a, zorid_index::DocumentRichSearchPage>,
+                cursor: Option<String>,
+            }
+            rich_encode(
+                &ResultPage {
+                    result: QueryReport {
+                        snapshot: generation.id(),
+                        source: generation.manifest().source(),
+                        coverage_complete: generation.coverage_complete(),
+                        value: page.page,
+                    },
+                    cursor,
+                },
+                2 * 1024 * 1024,
+            )
+        };
+        run().map_err(rich_failure)
+    }
+    #[wasm_bindgen(js_name=closeQuery)]
+    pub fn close_query(&self, query: &str) -> Result<(), JsValue> {
+        self.active().map_err(rich_failure)?;
+        let mut state = self
+            .state
+            .try_borrow_mut()
+            .map_err(|_| error("search_busy"))?;
+        if let Some(q) = state.queries.remove(query) {
+            q.id.retire();
+            state.core.close_query(&q.id);
+        }
+        state.cursors.retain(|_, c| c.query != query);
+        Ok(())
+    }
+}
+impl Drop for WasmDocumentRichSearchOwner {
+    fn drop(&mut self) {
+        self.live.set(false);
+        if let Ok(mut state) = self.state.try_borrow_mut() {
+            state.clear();
+        }
+    }
+}
+#[wasm_bindgen]
+pub struct WasmDocumentRichSearchDrive {
+    inner: Option<zorid_index::RichSearchDrive>,
+    pending: Option<zorid_index::RichTextReadRequest>,
+    state: Rc<RefCell<RichBindingState>>,
+    live: Rc<std::cell::Cell<bool>>,
+    query: String,
+    query_id: zorid_index::RichQueryId,
+}
+impl WasmDocumentRichSearchDrive {
+    fn active(&self) -> Result<(), RichFailure> {
+        if self.live.get() {
+            Ok(())
+        } else {
+            Err(zorid_index::RichSearchError::Expired)
+        }
+    }
+}
+#[wasm_bindgen]
+impl WasmDocumentRichSearchDrive {
+    #[wasm_bindgen(js_name=nextActionJson)]
+    pub fn next_action_json(&mut self) -> Result<String, JsValue> {
+        let mut run = || -> Result<String, RichFailure> {
+            self.active()?;
+            match self
+                .inner
+                .as_mut()
+                .ok_or(zorid_index::RichSearchError::Expired)?
+                .next_action(|_| Ok(()))?
+            {
+                zorid_index::RichSearchAction::ReadText(request) => {
+                    #[derive(Serialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Read<'a> {
+                        kind: &'static str,
+                        snapshot: &'a IndexSnapshotId,
+                        entry: &'a EntryState,
+                        digest: &'a [u8; 32],
+                        bytes: usize,
+                    }
+                    let raw = rich_encode(
+                        &Read {
+                            kind: "readText",
+                            snapshot: request.snapshot(),
+                            entry: request.entry(),
+                            digest: request.digest(),
+                            bytes: request.bytes(),
+                        },
+                        MAX_JSON,
+                    )?;
+                    self.pending = Some(request);
+                    Ok(raw)
+                }
+                zorid_index::RichSearchAction::Yield => {
+                    rich_encode(&serde_json::json!({"kind":"yield"}), 65536)
+                }
+                zorid_index::RichSearchAction::Done => {
+                    rich_encode(&serde_json::json!({"kind":"done"}), 65536)
+                }
+            }
+        };
+        run().map_err(rich_failure)
+    }
+    pub fn accept(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
+        let mut run = || -> Result<(), RichFailure> {
+            self.active()?;
+            let request = self
+                .pending
+                .take()
+                .ok_or(zorid_index::RichSearchError::Invalid(
+                    "no pending rich read",
+                ))?;
+            self.inner
+                .as_mut()
+                .ok_or(zorid_index::RichSearchError::Expired)?
+                .accept_text(&request, bytes, |_| Ok(()))
+        };
+        run().map_err(rich_failure)
+    }
+    pub fn finish(&mut self) -> Result<WasmDocumentPreparedRichSearchPage, JsValue> {
+        let mut run = || -> Result<WasmDocumentPreparedRichSearchPage, RichFailure> {
+            self.active()?;
+            let page = self
+                .inner
+                .take()
+                .ok_or(zorid_index::RichSearchError::Expired)?
+                .finish()?;
+            Ok(WasmDocumentPreparedRichSearchPage {
+                inner: Some(page),
+                state: self.state.clone(),
+                live: self.live.clone(),
+                query: self.query.clone(),
+                query_id: self.query_id.clone(),
+            })
+        };
+        run().map_err(rich_failure)
+    }
+}
+#[wasm_bindgen]
+pub struct WasmDocumentPreparedRichSearchPage {
+    inner: Option<zorid_index::PreparedRichSearchPage>,
+    state: Rc<RefCell<RichBindingState>>,
+    live: Rc<std::cell::Cell<bool>>,
+    query: String,
+    query_id: zorid_index::RichQueryId,
+}
+
 // Session-owned pure data, deliberately separate from each admitted generation.
 // Its TTL clock comes from the browser host, never a query's evaluation clock.
 #[wasm_bindgen]
