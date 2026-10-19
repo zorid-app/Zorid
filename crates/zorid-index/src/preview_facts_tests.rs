@@ -291,6 +291,19 @@ fn facts_view_128_of_100k_has_constant_admission_and_visits_only_prepared_rows()
     let snapshot = PreviewCaptureOwner::new(op("large-incarnation"), op("large-stage"), &builder)
         .capture_checked(&builder, &selected, MAX_SEARCH_OWNED_BYTES, ok)
         .unwrap();
+    let total_checked = PreviewCaptureOwner::new(
+        op("large-retention-incarnation"),
+        op("large-stage"),
+        &builder,
+    )
+    .capture_prepared_checked(&builder, MAX_SEARCH_OWNED_BYTES, ok)
+    .unwrap();
+    assert!(total_checked.retention().total_bytes() <= MAX_SEARCH_OWNED_BYTES);
+    assert_eq!(
+        total_checked.retention().shared_backing_bytes(),
+        snapshot.retention().shared_backing_bytes()
+    );
+    assert_eq!(total_checked.progress(), snapshot.progress());
     let strong = Arc::strong_count(&snapshot.backing.rows[0]);
     let mut boundaries = Vec::new();
     let mut units = 0usize;
@@ -592,4 +605,289 @@ fn capture_prepared_rejects_other_builder_backing_without_changing_existing_capt
     assert_eq!(original.progress().prepared_files, 1);
     assert_eq!(original.progress().pending_files, 2);
     assert_eq!(original.check_text(&id("z"), b"first"), Ok(()));
+}
+
+#[test]
+fn preview_retention_charges_shared_facts_in_full_and_stays_cached_after_builder_drop() {
+    let mut builder = small();
+    let source = format!("---\nvalue: {}\n---\n", "x".repeat(128 * 1024));
+    text(&mut builder, "z", &source, true);
+    drop(source);
+    let mut owner =
+        PreviewCaptureOwner::new(op("retention-incarnation"), op("retention-stage"), &builder);
+    let legacy = owner
+        .capture_checked(&builder, &[id("z")], 1024, ok)
+        .unwrap();
+    let current = owner
+        .capture_prepared_checked(&builder, MAX_SEARCH_OWNED_BYTES, ok)
+        .unwrap();
+    let first = legacy.retention();
+    assert!(legacy.retained_bytes() < 1024);
+    assert!(first.capture_owned_bytes() > legacy.retained_bytes());
+    assert!(first.shared_backing_bytes() > 128 * 1024);
+    assert_eq!(
+        first.shared_backing_bytes(),
+        current.retention().shared_backing_bytes()
+    );
+    assert_eq!(
+        first.total_bytes(),
+        first.capture_owned_bytes() + first.shared_backing_bytes()
+    );
+    assert_eq!(legacy.clone().retention(), first);
+    text(&mut builder, "a", "# newly prepared", true);
+    let grown = owner
+        .capture_prepared_checked(&builder, MAX_SEARCH_OWNED_BYTES, ok)
+        .unwrap();
+    assert!(grown.retention().shared_backing_bytes() > first.shared_backing_bytes());
+    assert_eq!(legacy.retention(), first);
+    drop(builder);
+    drop(owner);
+    drop(current);
+    assert_eq!(legacy.retention(), first);
+    assert_eq!(legacy.progress().prepared_files, 1);
+    assert_eq!(grown.progress().prepared_files, 2);
+    let view = legacy.facts_view_checked(&mut ok).unwrap();
+    let row = view.rows().next().unwrap();
+    assert_eq!(
+        row.metadata().unwrap().properties[0]
+            .value
+            .as_str()
+            .unwrap()
+            .len(),
+        128 * 1024
+    );
+}
+
+#[test]
+fn preview_retention_counts_actual_nested_metadata_string_and_vector_spare_capacities() {
+    use zorid_document::{DocumentMetadata, PropertyValue};
+    fn string_extra(value: &mut String) -> usize {
+        let old = allocation_bytes(value.capacity()).unwrap();
+        value.reserve_exact(257);
+        allocation_bytes(value.capacity()).unwrap() - old
+    }
+    fn vector_extra<T>(value: &mut Vec<T>) -> usize {
+        let old = allocation_bytes(value.capacity() * size_of::<T>()).unwrap();
+        value.reserve_exact(7);
+        allocation_bytes(value.capacity() * size_of::<T>()).unwrap() - old
+    }
+    fn property_extra(value: &mut PropertyValue) -> usize {
+        match value {
+            PropertyValue::String(value) => string_extra(value),
+            PropertyValue::Array(values) => {
+                let mut n = vector_extra(values);
+                for value in values {
+                    n += property_extra(value);
+                }
+                n
+            }
+            PropertyValue::Object(values) => {
+                let mut n = vector_extra(values);
+                for (key, value) in values {
+                    n += string_extra(key) + property_extra(value);
+                }
+                n
+            }
+            _ => 0,
+        }
+    }
+    fn inflate(d: &mut DocumentMetadata) -> usize {
+        let mut n = string_extra(&mut d.dialect_version);
+        let mut entry_id = String::with_capacity(1024);
+        entry_id.push_str(d.entry_id.as_str());
+        let old = allocation_bytes(d.entry_id.heap_capacity_bytes()).unwrap();
+        d.entry_id = EntryId::new(entry_id).unwrap();
+        n += allocation_bytes(d.entry_id.heap_capacity_bytes()).unwrap() - old;
+        let mut revision = String::with_capacity(1024);
+        revision.push_str(d.content_revision.as_str());
+        let old = allocation_bytes(d.content_revision.heap_capacity_bytes()).unwrap();
+        d.content_revision = Revision::new(revision).unwrap();
+        n += allocation_bytes(d.content_revision.heap_capacity_bytes()).unwrap() - old;
+        n += vector_extra(&mut d.properties);
+        for property in &mut d.properties {
+            n += string_extra(&mut property.key) + property_extra(&mut property.value);
+        }
+        n += vector_extra(&mut d.aliases);
+        for value in &mut d.aliases {
+            n += string_extra(value);
+        }
+        n += vector_extra(&mut d.tags);
+        for value in &mut d.tags {
+            n += string_extra(value);
+        }
+        n += vector_extra(&mut d.tag_occurrences);
+        for value in &mut d.tag_occurrences {
+            n += string_extra(&mut value.name);
+        }
+        n += vector_extra(&mut d.headings);
+        for value in &mut d.headings {
+            n += string_extra(&mut value.text);
+        }
+        n += vector_extra(&mut d.links);
+        for value in &mut d.links {
+            n += string_extra(&mut value.target)
+                + string_extra(&mut value.fragment)
+                + string_extra(&mut value.destination);
+        }
+        n += vector_extra(&mut d.tasks);
+        for value in &mut d.tasks {
+            n += string_extra(&mut value.status) + string_extra(&mut value.text);
+        }
+        n += vector_extra(&mut d.blocks);
+        n += vector_extra(&mut d.list_items);
+        for value in &mut d.list_items {
+            if let Some(status) = &mut value.task_status {
+                n += string_extra(status);
+            }
+        }
+        n += vector_extra(&mut d.diagnostics);
+        n
+    }
+    fn prepared(spare: bool) -> (GenerationBuilder, usize) {
+        let mut builder = small();
+        let witness = builder.manifest().witness(&id("z")).unwrap();
+        let source = "---\nvalue: {inner: [one, two]}\naliases: [Alias]\ntags: [tag]\n---\n# Heading\n- [ ] task\n#tag [[Target]] [link](other.md)\n";
+        let seed = IndexRecord::text(
+            witness.clone(),
+            &MetadataRequest {
+                entry_id: id("z"),
+                content_revision: witness.entry().revision.clone(),
+                source: source.into(),
+            },
+            true,
+        )
+        .unwrap();
+        let mut metadata = seed.metadata().unwrap().clone();
+        let extra = if spare { inflate(&mut metadata) } else { 0 };
+        let record = IndexRecord::from_persisted(
+            witness,
+            Some(metadata),
+            seed.text_digest().copied(),
+            seed.text_bytes(),
+            None,
+        )
+        .unwrap();
+        builder.add(record).unwrap();
+        (builder, extra)
+    }
+    let (compact, _) = prepared(false);
+    let (spare, extra) = prepared(true);
+    assert!(extra > 4096);
+    let compact = capture(&compact, &["z"]);
+    let spare = capture(&spare, &["z"]);
+    assert_eq!(compact.retained_bytes(), spare.retained_bytes());
+    assert_eq!(
+        compact.retention().capture_owned_bytes(),
+        spare.retention().capture_owned_bytes()
+    );
+    assert_eq!(
+        spare.retention().shared_backing_bytes(),
+        compact.retention().shared_backing_bytes() + extra
+    );
+}
+
+#[test]
+fn preview_retention_new_total_limit_rejects_overbudget_manifest_and_preserves_legacy_payload_admission(
+) {
+    let mut spelling = String::with_capacity(MAX_SEARCH_OWNED_BYTES + 4096);
+    spelling.push_str("short.md");
+    let mut builder = builder(vec![EntryState {
+        id: id("only"),
+        path: VaultPath::new(spelling).unwrap(),
+        kind: EntryKind::File,
+        revision: Revision::new("r").unwrap(),
+        deleted: false,
+    }]);
+    let witness = builder.manifest().witness(&id("only")).unwrap();
+    builder
+        .add(IndexRecord::excluded(witness, Exclusion::Binary))
+        .unwrap();
+    let mut owner =
+        PreviewCaptureOwner::new(op("retention-incarnation"), op("retention-stage"), &builder);
+    let old = owner
+        .capture_checked(&builder, &[id("only")], 1024, ok)
+        .unwrap();
+    assert!(old.retained_bytes() < 1024);
+    assert!(old.retention().shared_backing_bytes() > MAX_SEARCH_OWNED_BYTES);
+    let serial = owner.next_serial;
+    assert!(matches!(
+        owner.capture_prepared_checked(&builder, usize::MAX, ok),
+        Err(PreviewCaptureError::Resource(
+            "preview capture retained byte limit"
+        ))
+    ));
+    assert_eq!(owner.next_serial, serial);
+    assert_eq!(old.progress().prepared_files, 1);
+    assert_eq!(old.progress().pending_files, 0);
+}
+
+#[test]
+fn preview_retention_property_capacity_and_depth_fences_precede_child_walks() {
+    use zorid_document::PropertyValue;
+    let mut children = Vec::with_capacity(8);
+    children.push(PropertyValue::String("child".into()));
+    let value = PropertyValue::Array(children);
+    let mut heap = RetentionHeap {
+        bytes: 0,
+        maximum: 1,
+    };
+    let mut work = Vec::new();
+    assert!(matches!(
+        heap.property(&value, 0, &mut |n| {
+            work.push(n);
+            Ok::<_, ()>(())
+        }),
+        Err(PreviewCaptureError::Resource(
+            "preview capture retained byte limit"
+        ))
+    ));
+    assert_eq!(work, [1]);
+    assert_eq!(heap.bytes, 0);
+    let mut nested_children = Vec::with_capacity(2);
+    nested_children.push(PropertyValue::String("first child".into()));
+    nested_children.push(PropertyValue::String("inner sibling".into()));
+    let child_slots =
+        allocation_bytes(nested_children.capacity() * size_of::<PropertyValue>()).unwrap();
+    let mut outer = Vec::with_capacity(2);
+    outer.push(PropertyValue::Array(nested_children));
+    outer.push(PropertyValue::String("outer sibling".into()));
+    let expected_slots =
+        child_slots + allocation_bytes(outer.capacity() * size_of::<PropertyValue>()).unwrap();
+    let nested = PropertyValue::Array(outer);
+    let mut heap = RetentionHeap {
+        bytes: 0,
+        maximum: usize::MAX,
+    };
+    let mut boundaries = 0usize;
+    let result = heap.property(&nested, 0, &mut |_| {
+        boundaries += 1;
+        // Outer visit/slots, nested-array visit/slots, then the first string
+        // visit: cancellation precedes its bytes and both sibling traversals.
+        if boundaries == 5 {
+            Err("nested child cancelled")
+        } else {
+            Ok(())
+        }
+    });
+    assert!(matches!(
+        result,
+        Err(PreviewCaptureError::Host("nested child cancelled"))
+    ));
+    assert_eq!(boundaries, 5);
+    assert_eq!(heap.bytes, expected_slots);
+
+    let mut deep = PropertyValue::Null;
+    for _ in 0..130 {
+        deep = PropertyValue::Array(vec![deep]);
+    }
+    let mut heap = RetentionHeap {
+        bytes: 0,
+        maximum: usize::MAX,
+    };
+    assert!(matches!(
+        heap.property(&deep, 0, &mut ok),
+        Err(PreviewCaptureError::Resource(
+            "preview property retained depth"
+        ))
+    ));
 }

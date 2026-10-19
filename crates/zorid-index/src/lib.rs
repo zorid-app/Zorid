@@ -35,8 +35,8 @@ pub use generation::{
 };
 /// Sealed first-build captures; these reports never certify publication.
 pub use preview::{
-    PreviewCaptureError, PreviewCaptureOwner, PreviewFactsView, PreviewProgress, PreviewRowFacts,
-    PreviewSnapshot, PreviewSnapshotId,
+    PreviewCaptureError, PreviewCaptureOwner, PreviewFactsView, PreviewProgress, PreviewRetention,
+    PreviewRowFacts, PreviewSnapshot, PreviewSnapshotId,
 };
 
 pub use literal::{

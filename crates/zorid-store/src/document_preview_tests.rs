@@ -33,7 +33,7 @@ fn request(bytes: usize) -> DocumentPreviewCaptureRequest {
     DocumentPreviewCaptureRequest {
         owner_nonce: op("capture-incarnation"),
         stage_id: op("capture-stage"),
-        owned_byte_limit: bytes,
+        retained_byte_limit: bytes,
     }
 }
 fn persisted(store: &Store, stage: &DocumentIndexStage) -> Vec<String> {
@@ -148,6 +148,42 @@ fn optional_capture_cancel_and_resource_failure_keep_successful_durable_progress
     let pin = store.open_document_snapshot().unwrap();
     assert_eq!(pin.generation().records().count(), 35);
     store.close_document_snapshot(pin);
+}
+#[test]
+fn producer_admits_full_retained_backing_and_keeps_charge_after_builder_and_store_drop() {
+    let (_dir, mut store, stage) = setup(1);
+    let completed = store
+        .pump_document_index_with_preview(
+            &stage,
+            Some(request(zorid_index::MAX_SEARCH_OWNED_BYTES)),
+            |_| Ok::<_, ()>(()),
+        )
+        .unwrap();
+    assert!(completed.progress.ready);
+    let retained = completed.preview.unwrap().unwrap();
+    let charge = retained.retention();
+    assert!(charge.shared_backing_bytes() > 0);
+    assert!(charge.total_bytes() > retained.retained_bytes());
+    assert!(charge.total_bytes() <= zorid_index::MAX_SEARCH_OWNED_BYTES);
+    // This is sufficient for the legacy explicit-capture payload, but cannot
+    // admit this producer's full namespace/facts backing. Durable work remains
+    // successful even though the post-commit optional capture is rejected.
+    let rejected = store
+        .pump_document_index_with_preview(&stage, Some(request(retained.retained_bytes())), |_| {
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    assert!(rejected.progress.ready);
+    assert_eq!(rejected.progress.prepared_documents, 1);
+    assert!(matches!(
+        rejected.preview,
+        Some(Err(PreviewCaptureError::Resource(_)))
+    ));
+    assert_eq!(persisted(&store, &stage), vec!["note-00"]);
+    drop(store);
+    assert_eq!(retained.retention(), charge);
+    retained.check_text(&id("note-00"), b"text-00").unwrap();
+    assert_eq!(captured(&retained), vec!["note-00"]);
 }
 // Test-only connection-local authorizer. It rejects the second stage INSERT,
 // after one row has been written inside the same transaction. The guard is

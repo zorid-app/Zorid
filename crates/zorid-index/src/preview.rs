@@ -31,11 +31,32 @@ struct CaptureIdentity {
     owner_nonce: OperationId,
     stage_id: OperationId,
 }
+/// Conservative full retained charge for one capture handle, including shared
+/// immutable stage facts that can outlive their builder. Shared allocations are
+/// charged in full for each handle; this is not a process allocator census.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreviewRetention {
+    capture_owned_bytes: usize,
+    shared_backing_bytes: usize,
+}
+impl PreviewRetention {
+    pub fn capture_owned_bytes(&self) -> usize {
+        self.capture_owned_bytes
+    }
+    pub fn shared_backing_bytes(&self) -> usize {
+        self.shared_backing_bytes
+    }
+    pub fn total_bytes(&self) -> usize {
+        self.capture_owned_bytes
+            .saturating_add(self.shared_backing_bytes)
+    }
+}
 struct PreviewBacking {
     manifest: Arc<Manifest>,
     // Exact ID order, without cloned IDs, metadata or source text.
     rows: Vec<Arc<IndexRecord>>,
     progress: PreviewProgress,
+    retention: PreviewRetention,
 }
 
 /// Not deserializable or caller-constructible. A weak identity retains only the
@@ -94,12 +115,10 @@ impl PreviewSnapshot {
     pub fn progress(&self) -> PreviewProgress {
         self.backing.progress
     }
-    /// New owned capture backing/row capacities, including conservative Arc
-    /// control/alignment overhead and inline handle fields. Shared stage facts,
-    /// manifest and capture-owner identity are already owned/accounted elsewhere;
-    /// they are not cloned or charged as new capture allocations. Hosts reserve
-    /// this allocation in the existing owner ledger, including retained old
-    /// captures and weak IDs; no second query pool is created here.
+    /// Legacy new-payload allocation charge: inline snapshot/backing/control and
+    /// actual row-vector capacity only. This excludes shared stage facts and the
+    /// identity/token allocations. Existing explicit-membership capture callers
+    /// keep this admission contract; use retention() for full retained memory.
     pub fn retained_bytes(&self) -> usize {
         size_of::<Self>()
             .saturating_add(arc_bytes::<PreviewBacking>())
@@ -109,6 +128,11 @@ impl PreviewSnapshot {
                     .capacity()
                     .saturating_mul(size_of::<Arc<IndexRecord>>()),
             )
+    }
+    /// Cached full retained charge measured during capture, never by a query or
+    /// serialization pass. No source bodies are included.
+    pub fn retention(&self) -> PreviewRetention {
+        self.backing.retention
     }
     /// Borrow prepared semantic facts without copying metadata, acquiring Arc
     /// handles or scanning the captured namespace. Only the callback can fail;
@@ -274,10 +298,13 @@ impl PreviewCaptureOwner {
     /// builder also contains rows awaiting commit, use capture_checked with the
     /// exact committed subset instead. This API does not certify durability.
     /// Stage facts remain shared; only the bounded row-handle vector is copied.
+    /// retained_byte_limit admits their FULL cached retained charge (including
+    /// the manifest, selected records and identity), clamped to32MiB. Failure
+    /// precedes final snapshot publication and never advances the serial.
     pub fn capture_prepared_checked<E>(
         &mut self,
         builder: &GenerationBuilder,
-        owned_byte_limit: usize,
+        retained_byte_limit: usize,
         mut check: impl FnMut(usize) -> Result<(), E>,
     ) -> Result<PreviewSnapshot, PreviewCaptureError<E>> {
         charge(&mut check, 1)?;
@@ -292,21 +319,25 @@ impl PreviewCaptureOwner {
             ))?;
         let mut budget = CaptureBudget {
             used: 0,
-            limit: owned_byte_limit.min(MAX_SEARCH_OWNED_BYTES),
+            limit: retained_byte_limit.min(MAX_SEARCH_OWNED_BYTES),
         };
         let base = size_of::<PreviewSnapshot>()
             .checked_add(arc_bytes::<PreviewBacking>())
             .ok_or(PreviewCaptureError::Resource("preview capture bytes"))?;
         budget.admit::<E>(base)?;
-        charge(&mut check, self.manifest.entries().len().saturating_add(1))?;
-        let total = self
-            .manifest
-            .entries()
-            .iter()
-            .filter(|entry| entry.kind == EntryKind::File)
-            .count();
         let records = builder.preview_records_by_id();
         let count = records.len();
+        let planned_owned = capture_owned_bytes(&self.identity, count).ok_or(
+            PreviewCaptureError::Resource("preview capture retained bytes"),
+        )?;
+        let maximum = retained_byte_limit
+            .min(MAX_SEARCH_OWNED_BYTES)
+            .checked_sub(planned_owned)
+            .ok_or(PreviewCaptureError::Resource(
+                "preview capture retained byte limit",
+            ))?;
+        let mut shared = RetentionHeap { bytes: 0, maximum };
+        let total = self.measure_manifest_checked(&mut shared, &mut check)?;
         if count > total {
             return Err(PreviewCaptureError::Index(IndexError::InvalidRecord));
         }
@@ -316,6 +347,10 @@ impl PreviewCaptureOwner {
         // actual Arc acquisition also has its own pre-copy cancellation check.
         charge(&mut check, count.saturating_add(1))?;
         let mut rows = budget.vector(count)?;
+        let owned = capture_owned_bytes(&self.identity, rows.capacity()).ok_or(
+            PreviewCaptureError::Resource("preview capture retained bytes"),
+        )?;
+        shared.tighten(retained_byte_limit.min(MAX_SEARCH_OWNED_BYTES), owned)?;
         let lookup_work = log_work(self.manifest.entries().len())
             .saturating_add(1)
             .saturating_mul(5);
@@ -339,6 +374,7 @@ impl PreviewCaptureOwner {
             if witness.source() != self.manifest.source() || witness.entry() != entry {
                 return Err(PreviewCaptureError::Index(IndexError::StaleSource));
             }
+            shared.record(record, &mut check)?;
             charge(&mut check, 1)?;
             rows.push(record.clone());
         }
@@ -348,6 +384,10 @@ impl PreviewCaptureOwner {
         let backing = Arc::new(PreviewBacking {
             manifest: self.manifest.clone(),
             rows,
+            retention: PreviewRetention {
+                capture_owned_bytes: owned,
+                shared_backing_bytes: shared.bytes,
+            },
             progress: PreviewProgress {
                 prepared_files: prepared,
                 total_files: total,
@@ -397,13 +437,14 @@ impl PreviewCaptureOwner {
             .checked_add(arc_bytes::<PreviewBacking>())
             .ok_or(PreviewCaptureError::Resource("preview capture bytes"))?;
         budget.admit::<E>(base)?;
-        charge(&mut check, self.manifest.entries().len().saturating_add(1))?;
-        let total = self
-            .manifest
-            .entries()
-            .iter()
-            .filter(|entry| entry.kind == EntryKind::File)
-            .count();
+        let planned_owned = capture_owned_bytes(&self.identity, committed_ids.len()).ok_or(
+            PreviewCaptureError::Resource("preview capture retained bytes"),
+        )?;
+        let mut shared = RetentionHeap {
+            bytes: 0,
+            maximum: usize::MAX - planned_owned,
+        };
+        let total = self.measure_manifest_checked(&mut shared, &mut check)?;
         if committed_ids.len() > total {
             return Err(PreviewCaptureError::Index(IndexError::InvalidRecord));
         }
@@ -421,6 +462,10 @@ impl PreviewCaptureOwner {
             return Err(PreviewCaptureError::Index(IndexError::InvalidRecord));
         }
         let mut rows = budget.vector(selected.len())?;
+        let owned = capture_owned_bytes(&self.identity, rows.capacity()).ok_or(
+            PreviewCaptureError::Resource("preview capture retained bytes"),
+        )?;
+        shared.tighten(usize::MAX, owned)?;
         let lookup_work = log_work(self.manifest.entries().len())
             .saturating_add(1)
             .saturating_mul(5);
@@ -451,6 +496,7 @@ impl PreviewCaptureOwner {
             if witness.source() != self.manifest.source() || witness.entry() != entry {
                 return Err(PreviewCaptureError::Index(IndexError::StaleSource));
             }
+            shared.record(record, &mut check)?;
             charge(&mut check, 1)?;
             rows.push(record.clone());
         }
@@ -460,6 +506,10 @@ impl PreviewCaptureOwner {
         let backing = Arc::new(PreviewBacking {
             manifest: self.manifest.clone(),
             rows,
+            retention: PreviewRetention {
+                capture_owned_bytes: owned,
+                shared_backing_bytes: shared.bytes,
+            },
             progress: PreviewProgress {
                 prepared_files: prepared,
                 total_files: total,
@@ -477,6 +527,232 @@ impl PreviewCaptureOwner {
         charge(&mut check, 0)?;
         self.next_serial = next_serial;
         Ok(snapshot)
+    }
+    fn measure_manifest_checked<E>(
+        &self,
+        shared: &mut RetentionHeap,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<usize, PreviewCaptureError<E>> {
+        charge(check, self.manifest.entries().len().saturating_add(1))?;
+        shared.add(self.manifest.preview_base_heap_bytes(), check)?;
+        let mut total = 0usize;
+        for entry in self.manifest.entries() {
+            shared.add(crate::snapshot::entry_heap_capacity_bytes(entry), check)?;
+            if entry.kind == EntryKind::File {
+                total = total
+                    .checked_add(1)
+                    .ok_or(PreviewCaptureError::Resource("preview file count"))?;
+            }
+        }
+        Ok(total)
+    }
+}
+// Conservative allocator bookkeeping in addition to actual payload capacities.
+// Arc control/alignment is included separately by arc_bytes().
+fn allocation_bytes(payload: usize) -> Option<usize> {
+    if payload == 0 {
+        Some(0)
+    } else {
+        payload.checked_add(2 * size_of::<usize>())
+    }
+}
+fn capture_owned_bytes(identity: &CaptureIdentity, row_capacity: usize) -> Option<usize> {
+    size_of::<PreviewSnapshot>()
+        .checked_add(arc_bytes::<PreviewBacking>())?
+        .checked_add(allocation_bytes(
+            row_capacity.checked_mul(size_of::<Arc<IndexRecord>>())?,
+        )?)?
+        .checked_add(arc_bytes::<CaptureIdentity>())?
+        .checked_add(allocation_bytes(
+            identity.owner_nonce.heap_capacity_bytes(),
+        )?)?
+        .checked_add(allocation_bytes(identity.stage_id.heap_capacity_bytes())?)
+}
+struct RetentionHeap {
+    bytes: usize,
+    maximum: usize,
+}
+impl RetentionHeap {
+    fn tighten<E>(&mut self, limit: usize, owned: usize) -> Result<(), PreviewCaptureError<E>> {
+        self.maximum = limit
+            .checked_sub(owned)
+            .ok_or(PreviewCaptureError::Resource(
+                "preview capture retained byte limit",
+            ))?;
+        if self.bytes > self.maximum {
+            return Err(PreviewCaptureError::Resource(
+                "preview capture retained byte limit",
+            ));
+        }
+        Ok(())
+    }
+    fn add<E>(
+        &mut self,
+        bytes: usize,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<(), PreviewCaptureError<E>> {
+        let total = self
+            .bytes
+            .checked_add(bytes)
+            .filter(|&n| n <= self.maximum)
+            .ok_or(PreviewCaptureError::Resource(
+                "preview capture retained byte limit",
+            ))?;
+        charge(check, bytes.div_ceil(64).saturating_add(1))?;
+        self.bytes = total;
+        Ok(())
+    }
+    fn string_capacity<E>(
+        &mut self,
+        capacity: usize,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<(), PreviewCaptureError<E>> {
+        let bytes = allocation_bytes(capacity).ok_or(PreviewCaptureError::Resource(
+            "preview capture retained bytes",
+        ))?;
+        self.add(bytes, check)
+    }
+    fn slots<T, E>(
+        &mut self,
+        values: &Vec<T>,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<(), PreviewCaptureError<E>> {
+        let bytes = values
+            .capacity()
+            .checked_mul(size_of::<T>())
+            .and_then(allocation_bytes)
+            .ok_or(PreviewCaptureError::Resource(
+                "preview capture retained bytes",
+            ))?;
+        // Admit every fixed element slot, including spare capacity, BEFORE
+        // following any child strings, object members or recursive values.
+        self.add(bytes, check)
+    }
+    fn strings<E>(
+        &mut self,
+        values: &Vec<String>,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<(), PreviewCaptureError<E>> {
+        self.slots(values, check)?;
+        for value in values {
+            charge(check, 1)?;
+            self.string_capacity(value.capacity(), check)?;
+        }
+        Ok(())
+    }
+    fn property<E>(
+        &mut self,
+        value: &zorid_document::PropertyValue,
+        depth: usize,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<(), PreviewCaptureError<E>> {
+        if depth > 128 {
+            return Err(PreviewCaptureError::Resource(
+                "preview property retained depth",
+            ));
+        }
+        charge(check, 1)?;
+        match value {
+            zorid_document::PropertyValue::String(text) => {
+                self.string_capacity(text.capacity(), check)?
+            }
+            zorid_document::PropertyValue::Array(values) => {
+                self.slots(values, check)?;
+                for value in values {
+                    self.property(value, depth + 1, check)?;
+                }
+            }
+            zorid_document::PropertyValue::Object(values) => {
+                self.slots(values, check)?;
+                for (key, value) in values {
+                    charge(check, 1)?;
+                    self.string_capacity(key.capacity(), check)?;
+                    self.property(value, depth + 1, check)?;
+                }
+            }
+            // The pinned workspace does not enable serde_json's arbitrary_precision
+            // feature: Number is an inline scalar, as are Null and Bool.
+            zorid_document::PropertyValue::Null
+            | zorid_document::PropertyValue::Bool(_)
+            | zorid_document::PropertyValue::Number(_) => {}
+        }
+        Ok(())
+    }
+    fn record<E>(
+        &mut self,
+        record: &IndexRecord,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<(), PreviewCaptureError<E>> {
+        charge(check, 1)?;
+        self.add(arc_bytes::<IndexRecord>(), check)?;
+        self.add(record.witness().preview_heap_bytes(), check)?;
+        let Some(metadata) = record.metadata() else {
+            return Ok(());
+        };
+        // Exhaustive schema2 decomposition makes new typed fields a compile-time
+        // accounting decision. Its inline struct lives inside IndexRecord.
+        let zorid_document::DocumentMetadata {
+            schema_version: _,
+            dialect_version,
+            entry_id,
+            content_revision,
+            source_length: _,
+            frontmatter: _,
+            properties,
+            aliases,
+            tags,
+            tag_occurrences,
+            headings,
+            links,
+            tasks,
+            blocks,
+            list_items,
+            diagnostics,
+        } = metadata;
+        self.string_capacity(dialect_version.capacity(), check)?;
+        self.string_capacity(entry_id.heap_capacity_bytes(), check)?;
+        self.string_capacity(content_revision.heap_capacity_bytes(), check)?;
+        self.slots(properties, check)?;
+        for property in properties {
+            charge(check, 1)?;
+            self.string_capacity(property.key.capacity(), check)?;
+            self.property(&property.value, 0, check)?;
+        }
+        self.strings(aliases, check)?;
+        self.strings(tags, check)?;
+        self.slots(tag_occurrences, check)?;
+        for tag in tag_occurrences {
+            charge(check, 1)?;
+            self.string_capacity(tag.name.capacity(), check)?;
+        }
+        self.slots(headings, check)?;
+        for heading in headings {
+            charge(check, 1)?;
+            self.string_capacity(heading.text.capacity(), check)?;
+        }
+        self.slots(links, check)?;
+        for link in links {
+            charge(check, 1)?;
+            self.string_capacity(link.target.capacity(), check)?;
+            self.string_capacity(link.fragment.capacity(), check)?;
+            self.string_capacity(link.destination.capacity(), check)?;
+        }
+        self.slots(tasks, check)?;
+        for task in tasks {
+            charge(check, 1)?;
+            self.string_capacity(task.status.capacity(), check)?;
+            self.string_capacity(task.text.capacity(), check)?;
+        }
+        self.slots(blocks, check)?;
+        self.slots(list_items, check)?;
+        for item in list_items {
+            charge(check, 1)?;
+            if let Some(status) = &item.task_status {
+                self.string_capacity(status.capacity(), check)?;
+            }
+        }
+        self.slots(diagnostics, check)?;
+        Ok(())
     }
 }
 fn charge<E>(

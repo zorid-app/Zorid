@@ -218,6 +218,20 @@ impl Manifest {
             .capacity()
             .saturating_mul(std::mem::size_of::<usize>())
     }
+    /// Fixed retained namespace allocations, excluding each entry's String
+    /// payload (measured during the existing capture inventory walk). This is a
+    /// conservative per-capture shared charge, not allocator or RSS telemetry.
+    pub(crate) fn preview_base_heap_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            .saturating_add(4 * std::mem::size_of::<usize>())
+            .saturating_add(preview_allocation_bytes(
+                self.entries
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<EntryState>()),
+            ))
+            .saturating_add(preview_allocation_bytes(self.derived_index_heap_bytes()))
+            .saturating_add(source_heap_capacity_bytes(&self.source))
+    }
     pub fn entry(&self, id: &EntryId) -> Option<&EntryState> {
         self.entries_by_id
             .binary_search_by(|&index| {
@@ -259,6 +273,32 @@ impl EntryWitness {
     pub fn entry(&self) -> &EntryState {
         &self.entry
     }
+    /// Dynamic payload only: the enclosing IndexRecord already includes the
+    /// inline witness. Shared capture accounting deliberately does not dedup.
+    pub(crate) fn preview_heap_bytes(&self) -> usize {
+        source_heap_capacity_bytes(&self.source)
+            .saturating_add(entry_heap_capacity_bytes(&self.entry))
+    }
+}
+fn preview_allocation_bytes(capacity: usize) -> usize {
+    if capacity == 0 {
+        0
+    } else {
+        capacity.saturating_add(2 * std::mem::size_of::<usize>())
+    }
+}
+fn source_heap_capacity_bytes(source: &SourceSnapshotId) -> usize {
+    preview_allocation_bytes(source.local_store_id.heap_capacity_bytes())
+        .saturating_add(preview_allocation_bytes(source.watermark.0.capacity()))
+}
+/// Owned backing capacities only; EntryState's inline slots are charged by the
+/// enclosing namespace vector or IndexRecord, with allocator allowance here.
+pub(crate) fn entry_heap_capacity_bytes(entry: &EntryState) -> usize {
+    preview_allocation_bytes(entry.id.heap_capacity_bytes())
+        .saturating_add(preview_allocation_bytes(
+            entry.revision.heap_capacity_bytes(),
+        ))
+        .saturating_add(preview_allocation_bytes(entry.path.heap_capacity_bytes()))
 }
 /// Host must recheck this fence inside its atomic source/index publish transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -615,5 +655,53 @@ mod allocation_tests {
     #[test]
     fn exhausted_allocation_rejects_instead_of_reusing_zero_or_head() {
         assert_eq!(allocate(u64::MAX), Err(IndexError::InvalidGeneration));
+    }
+}
+
+#[cfg(test)]
+mod preview_capacity_tests {
+    use super::*;
+    use zorid_core::{Revision, VaultPath};
+
+    fn spare(text: &str, capacity: usize) -> String {
+        let mut value = String::with_capacity(capacity);
+        value.push_str(text);
+        value
+    }
+
+    #[test]
+    fn preview_namespace_charge_includes_actual_spare_backings_and_vector_slots() {
+        let source = SourceSnapshotId::new(
+            OperationId::new(spare("store", 2048)).unwrap(),
+            SourceWatermark::new(spare("7", 1024)).unwrap(),
+        );
+        let entry = EntryState {
+            id: EntryId::new(spare("entry", 4096)).unwrap(),
+            revision: Revision::new(spare("revision", 8192)).unwrap(),
+            path: VaultPath::new(spare("Folder/Note.md", 16384)).unwrap(),
+            kind: EntryKind::File,
+            deleted: false,
+        };
+        let payload = entry.id.heap_capacity_bytes()
+            + entry.revision.heap_capacity_bytes()
+            + entry.path.heap_capacity_bytes();
+        assert!(entry_heap_capacity_bytes(&entry) >= payload);
+        let mut entries = Vec::with_capacity(128);
+        entries.push(entry);
+        let manifest = Manifest::new(source, entries).unwrap();
+        let slots = manifest.entries.capacity() * std::mem::size_of::<EntryState>();
+        let index = manifest.entries_by_id.capacity() * std::mem::size_of::<usize>();
+        let source_strings = manifest.source.local_store_id.heap_capacity_bytes()
+            + manifest.source.watermark.0.capacity();
+        assert!(manifest.preview_base_heap_bytes() >= slots + index + source_strings);
+        assert!(slots >= 128 * std::mem::size_of::<EntryState>());
+        let witness = manifest.witness(&manifest.entries()[0].id).unwrap();
+        let witness_strings = witness.source.local_store_id.heap_capacity_bytes()
+            + witness.source.watermark.0.capacity()
+            + witness.entry.id.heap_capacity_bytes()
+            + witness.entry.revision.heap_capacity_bytes()
+            + witness.entry.path.heap_capacity_bytes();
+        assert!(witness.preview_heap_bytes() >= witness_strings);
+        assert_eq!(manifest.check_witness(&witness), Ok(()));
     }
 }

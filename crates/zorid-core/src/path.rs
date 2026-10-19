@@ -49,6 +49,12 @@ impl VaultPath {
         &self.0
     }
 
+    /// Capacity of this owned String backing only. Object layout, allocator
+    /// overhead and process RSS are excluded; this confers no filesystem grant.
+    pub fn heap_capacity_bytes(&self) -> usize {
+        self.0.capacity()
+    }
+
     /// None denotes the implicit vault root. No synthetic root entry is stored.
     pub fn parent(&self) -> Option<Self> {
         self.0
@@ -97,5 +103,22 @@ impl From<VaultPath> for String {
 impl fmt::Display for VaultPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+#[cfg(test)]
+mod heap_capacity_tests {
+    use super::*;
+    #[test]
+    fn path_spare_capacity_is_measured_without_changing_logical_path_or_wire() {
+        let mut source = String::with_capacity(4096);
+        source.push_str("Folder/Note.md");
+        let expected = source.capacity();
+        let path = VaultPath::new(source).unwrap();
+        assert_eq!(path.heap_capacity_bytes(), expected);
+        assert!(path.heap_capacity_bytes() > path.as_str().len());
+        assert_eq!(path, VaultPath::new("Folder/Note.md").unwrap());
+        assert_eq!(path.as_str(), "Folder/Note.md");
+        assert_eq!(serde_json::to_string(&path).unwrap(), "\"Folder/Note.md\"");
     }
 }

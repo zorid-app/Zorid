@@ -31,6 +31,13 @@ macro_rules! identifier {
             pub fn as_str(&self) -> &str {
                 &self.0
             }
+
+            /// Capacity of this owned String backing only. Object layout,
+            /// allocator overhead and process RSS are not included. This is a
+            /// read-only accounting observation, never an authority witness.
+            pub fn heap_capacity_bytes(&self) -> usize {
+                self.0.capacity()
+            }
         }
 
         impl TryFrom<String> for $name {
@@ -57,3 +64,29 @@ macro_rules! identifier {
 identifier!(EntryId, "entry ID");
 identifier!(Revision, "revision token");
 identifier!(OperationId, "operation ID");
+
+#[cfg(test)]
+mod heap_capacity_tests {
+    use super::*;
+    #[test]
+    fn opaque_identifiers_measure_owned_spare_capacity_without_changing_wire_or_identity() {
+        let mut source = String::with_capacity(4096);
+        source.push_str("stable-token");
+        let expected = source.capacity();
+        let entry = EntryId::new(source).unwrap();
+        assert_eq!(entry.heap_capacity_bytes(), expected);
+        assert!(entry.heap_capacity_bytes() > entry.as_str().len());
+        assert_eq!(entry, EntryId::new("stable-token").unwrap());
+        assert_eq!(serde_json::to_string(&entry).unwrap(), "\"stable-token\"");
+        let mut source = String::with_capacity(2048);
+        source.push_str("revision");
+        let expected = source.capacity();
+        let revision = Revision::new(source).unwrap();
+        assert_eq!(revision.heap_capacity_bytes(), expected);
+        let mut source = String::with_capacity(1024);
+        source.push_str("operation");
+        let expected = source.capacity();
+        let operation = OperationId::new(source).unwrap();
+        assert_eq!(operation.heap_capacity_bytes(), expected);
+    }
+}

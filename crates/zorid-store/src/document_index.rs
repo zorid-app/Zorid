@@ -276,12 +276,12 @@ pub struct DocumentIndexProgress {
 /// Optional caller-owned capture request. These labels supply no authority;
 /// the capture binds the actual restored builder/manifest and private backing.
 /// The host supplies a fresh incarnation nonce and charges retained captures in
-/// its existing preview/query owner, tightening the shared capture byte cap.
+/// its existing preview/query owner, tightening the shared retained TOTAL cap.
 #[derive(Clone, Debug)]
 pub struct DocumentPreviewCaptureRequest {
     pub owner_nonce: OperationId,
     pub stage_id: OperationId,
-    pub owned_byte_limit: usize,
+    pub retained_byte_limit: usize,
 }
 /// Durable pump progress cannot become ambiguous merely because optional
 /// post-commit capture runs out of bytes/work or is cancelled. The outer error
@@ -1144,11 +1144,12 @@ impl Store {
     /// pump IO/commit semantics are unchanged. None performs no capture work.
     /// The returned capture is immutable data; native/browser admission must
     /// still verify its live stage/source/client before and after every query.
-    /// The byte request covers new capture/identity allocations, not the
-    /// already restored stage facts/manifest. Returning a capture retains that
-    /// shared stage backing after this builder drops; consumers must retain
-    /// its separate stage/generation component admission too. This is not a
-    /// global owner pool or a total retained-heap/RSS guarantee.
+    /// The retained-byte request covers this capture's declared TOTAL: capture
+    /// allocations plus its full shared manifest/facts backing. Returning a
+    /// capture retains that backing after this builder drops. The caller keeps
+    /// its cached retention charge across old handles and new candidates in the
+    /// same owner budget; there is no implicit sharing discount. This is not a
+    /// global owner pool or a process RSS guarantee.
     pub fn pump_document_index_with_preview<E>(
         &mut self,
         stage: &DocumentIndexStage,
@@ -1360,17 +1361,16 @@ impl Store {
             // its Arc/header and retained token payloads before allocation.
             let identity_bytes = std::mem::size_of::<DocumentPreviewCaptureRequest>()
                 .saturating_add(8 * std::mem::size_of::<usize>())
-                .saturating_add(request.owner_nonce.as_str().len())
-                .saturating_add(request.stage_id.as_str().len());
-            let capture_bytes = request
-                .owned_byte_limit
-                .checked_sub(identity_bytes)
-                .filter(|_| request.owned_byte_limit <= zorid_index::MAX_SEARCH_OWNED_BYTES)
-                .ok_or(PreviewCaptureError::Resource(
-                    "preview identity byte budget",
-                ))?;
+                .saturating_add(request.owner_nonce.heap_capacity_bytes())
+                .saturating_add(request.stage_id.heap_capacity_bytes());
+            let retained_limit = request.retained_byte_limit;
+            if retained_limit < identity_bytes || retained_limit > zorid_index::MAX_SEARCH_OWNED_BYTES {
+                return Err(PreviewCaptureError::Resource("preview identity byte budget"));
+            }
+            // The core's cached total includes this identity once; this early
+            // preflight is not a second deduction from the retained budget.
             PreviewCaptureOwner::new(request.owner_nonce, request.stage_id, &b)
-                .capture_prepared_checked(&b, capture_bytes, check)
+                .capture_prepared_checked(&b, retained_limit, check)
         });
         Ok(DocumentIndexPumpResult { progress, preview })
     }
