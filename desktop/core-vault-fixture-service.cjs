@@ -170,9 +170,7 @@ class CoreVaultFixtureService {
   registerDocumentRuntimeOwner(options) {
     this.live();
     if(!this.documentRuntimeEnabled||this.runtimeFailed)throw error('unsupported_host_capability');
-    if(!this.documentScheduler)this.documentScheduler=new DocumentRuntimeScheduler({onError:()=>{
-      if(this.host.fatal||this.host.exited){this.runtimeFailed=true;this.stopPolling();void this.documentScheduler.close();}
-    }});
+    this.ensureDocumentScheduler();
     const handle=this.documentScheduler.addOwner(options),owner={host:options.host,assertActive:options.assertActive,handle,paused:false};
     const remove=()=>{owner.paused=true;this.documentRuntimeOwners.delete(owner);this.syncPolling();};
     handle.subscribe(()=>{},remove);
@@ -186,6 +184,21 @@ class CoreVaultFixtureService {
       release:()=>{handle.release();remove();},
       revoke:async()=>{remove();await handle.revoke();},
     });
+  }
+  ensureDocumentScheduler(){
+    if(!this.documentScheduler)this.documentScheduler=new DocumentRuntimeScheduler({
+      ...(this.host.capabilities?.includes('document_drafts')?{workHost:this.host}:{}),
+      onError:()=>{if(this.host.fatal||this.host.exited){this.runtimeFailed=true;this.stopPolling();void this.documentScheduler.close().catch(()=>{});}},
+    });
+    return this.documentScheduler;
+  }
+  registerDocumentDraftOwner(options){
+    this.live();if(this.runtimeFailed||!this.host.capabilities?.includes('document_drafts')||typeof this.host.documentWork!=='function'||typeof options.host?.documentDrafts!=='function')throw error('unsupported_host_capability');
+    return this.ensureDocumentScheduler().addDraftOwner(options);
+  }
+  releaseDocumentDraftClient(reference){
+    this.live();if(!this.host.capabilities?.includes('document_drafts'))throw error('unsupported_host_capability');
+    return this.ensureDocumentScheduler().releaseDraftClient(reference);
   }
   documentRuntimeSourceHint() { this.documentScheduler?.sourceHint(); }
   async poll() {

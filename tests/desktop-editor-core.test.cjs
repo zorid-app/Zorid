@@ -163,3 +163,23 @@ test('editor admission carries positive metadata capability before open and reje
   let retired=0;const f=fixture({admission:{scope:{vaultId:'store',clientId:'client'},metadataRowsAvailable:true,async retire(){retired++;}}}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
   await assert.rejects(f.manager.context(f.broker,a,'/vault'),{code:'unsupported_host_capability'});assert.equal(retired,1);f.closed.resolve();await f.manager.close();
 });
+
+test('draft admission uses scoped existing nudge channel and never exposes trusted work',async()=>{
+  let changed,retired,stops=0;const calls=[],messages=[];
+  const admission={scope:{vaultId:'store',clientId:'client'},draftsAvailable:true,documentCommand(){},documentDrafts:{async invoke(request,bytes){calls.push({request,bytes});return {result:{state:null,transfer:null,transfer_scratch_bytes:0},bytes:new Uint8Array()};},subscribe(listener,onRetire){changed=listener;retired=onRetire;return()=>stops++;}},async retire(){retired();}};
+  const f=fixture({admission,options:{onDocumentRuntimeNudge:(_record,message)=>messages.push(structuredClone(message))}}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  const context=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame};assert.equal(context.draftsAvailable,true);
+  changed();assert.deepEqual(messages,[{vault:'/vault',admissionId:context.admissionId}]);
+  await f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'documentDrafts',[{op:'snapshot'},new Uint8Array()]);assert.equal(calls.length,1);
+  await assert.rejects(f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'documentWork',[{op:'next_turn'}]),{code:'invalid_durable_request'});
+  await assert.rejects(f.manager.invoke(f.broker,a,event,'/vault','foreign','documentDrafts',[{op:'snapshot'},new Uint8Array()]),{code:'durable_scope_changed'});
+  retired();await assert.rejects(f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'documentDrafts',[{op:'snapshot'},new Uint8Array()]),{code:'client_not_admitted'});assert.equal(messages.at(-1).retired,true);
+  f.closed.resolve();await f.manager.close();assert.equal(stops,1);
+});
+test('positive draft admission fails closed without complete methods or scoped notifications',async()=>{
+  for(const broken of [{documentDrafts:undefined},{documentCommand:undefined},{noChannel:true}]){
+    let retired=0;const admission={scope:{vaultId:'store',clientId:'client'},draftsAvailable:true,documentCommand(){},documentDrafts:{invoke(){},subscribe(){return()=>{};}},async retire(){retired++;},...broken};
+    const f=fixture({admission,options:broken.noChannel?{}:{onDocumentRuntimeNudge(){}}}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+    await assert.rejects(f.manager.context(f.broker,a,'/vault'),{code:'unsupported_host_capability'});assert.equal(retired,1);f.closed.resolve();await f.manager.close();
+  }
+});

@@ -2,6 +2,7 @@ import {createDocumentService,documentSnapshot,documentSource,DocumentSemanticsE
 import type {DocumentService,DocumentSnapshotId,DocumentTransport} from '../core/document-semantics.ts';
 import {DocumentRuntimeError} from '../core/document-runtime.ts';
 import type {DocumentRuntimeScope,DocumentRuntimeTransport} from '../core/document-runtime.ts';
+import type {DocumentDraftTransport} from '../core/document-drafts.ts';
 
 export interface DesktopDocumentRequest {schemaVersion:1;command:Readonly<Record<string,unknown>>&{op:string}}
 type RuntimeMethod='documentRuntimeObserve'|'documentRuntimeControl'|'documentRuntimeAckControl'|'documentRuntimeAckOutcome';
@@ -47,7 +48,7 @@ export function createDesktopDocumentRuntime(options:{
 /** One instance per admitted desktop context. The invocation closure must retain
  * that admission and its normal release guard; it is not an unrestricted IPC. */
 export interface DesktopDocumentBinding {readonly service:DocumentService;release():Promise<void>}
-export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequest)=>Promise<unknown>,maintenance?:DocumentRuntimeTransport,capabilities:{readonly metadataRowsAvailable?:boolean}={}):DesktopDocumentBinding{
+export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequest)=>Promise<unknown>,maintenance?:DocumentRuntimeTransport,capabilities:{readonly metadataRowsAvailable?:boolean;readonly draftsAvailable?:boolean;readonly drafts?:DocumentDraftTransport}={}):DesktopDocumentBinding{
   const metadataRowsAvailable=capabilities.metadataRowsAvailable===true;
   if(metadataRowsAvailable&&typeof invoke!=='function')throw new DocumentSemanticsError('invalid_document_response');
   const stages=new Map<string,DocumentSnapshotId>();let stageSequence=0n,pinSequence=0n;
@@ -85,6 +86,7 @@ export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequ
   }:undefined;
   const snapshotFor=(id:string)=>{const snapshot=stages.get(id);if(!snapshot)throw new DocumentSemanticsError('stage_expired');return snapshot;};
   const transport:DocumentTransport={
+    ...(capabilities.draftsAvailable===true?{draftsAvailable:true,drafts:capabilities.drafts}:{}),
     ...(runtimeTransport?{maintenance:runtimeTransport}:{}),
     ...(metadataRowsAvailable?{metadataRowsAvailable:true,metadataRows:(input:Parameters<NonNullable<DocumentTransport['metadataRows']>>[0])=>command('metadata_rows',input)}:{}),
     async status(){

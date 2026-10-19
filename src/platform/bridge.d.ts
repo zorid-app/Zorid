@@ -2,7 +2,7 @@ import type { CheckpointScope } from '../core/durable-checkpoints.ts';
 import type { VaultEntry } from '../core/types';
 import type { ContextMenuRequest } from './context-menu';
 
-export interface DesktopDurableContext { workBlocks?:true; documentSemantics?:true; documentMaintenance?:true; metadataRowsAvailable?:boolean; admissionId: string; scope: CheckpointScope; binaryLimits?:import('../core/binary-streams.ts').BinaryStreamLimits }
+export interface DesktopDurableContext { workBlocks?:true; documentSemantics?:true; documentMaintenance?:true; metadataRowsAvailable?:boolean; draftsAvailable?:boolean; admissionId: string; scope: CheckpointScope; binaryLimits?:import('../core/binary-streams.ts').BinaryStreamLimits }
 export interface DesktopReconciliation {
   scanId: string; complete: boolean; scanComplete: boolean; finished: boolean;
   observed: number; imported: number; namespaceApplied: number; issueCount: number; issuesTruncated: boolean;

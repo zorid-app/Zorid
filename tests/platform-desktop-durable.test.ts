@@ -134,3 +134,27 @@ test('desktop bridge preserves pre-open metadata capability without granting it 
     await assert.rejects(createPlatformAdapter(),/Incomplete document metadata capability/);
   }finally{if(previous)Object.defineProperty(globalThis,'window',previous);else Reflect.deleteProperty(globalThis,'window');}
 });
+
+test('desktop pre-open draft capability composes the same common service and retires before native release',async()=>{
+  const previous=Object.getOwnPropertyDescriptor(globalThis,'window');let observer=()=>{},retireObserver=()=>{},stops=0,releases=0,invocations=0,resolve!:(value:unknown)=>void;
+  Object.defineProperty(globalThis,'window',{configurable:true,value:{zorid:{
+    getVault:async()=>({path:'/fixture',name:'Fixture'}),
+    getDurableContext:async()=>({admissionId:'admitted',scope:{vaultId:'authority',clientId:'client'},documentSemantics:true,draftsAvailable:true}),
+    onDocumentRuntimeNudge:(path:string,admission:string,listener:()=>void,onRetire:()=>void)=>{assert.equal(path,'/fixture');assert.equal(admission,'admitted');observer=listener;retireObserver=onRetire;return()=>{stops++;};},
+    durableInvoke:(_path:string,_admission:string,method:string,args:unknown[])=>{assert.equal(method,'documentDrafts');assert.deepEqual(args[0],{op:'snapshot'});invocations++;return new Promise<unknown>(yes=>{resolve=yes;});},
+    releaseDurableContext:async()=>{releases++;},
+  }}});
+  try{
+    const platform=(await createPlatformAdapter())!,drafts=platform.documentSemantics!.drafts!;assert.equal(platform.documentSemantics!.draftsAvailable,true);assert.equal(invocations,0);assert.equal(drafts,platform.adapter.documentSemantics!.drafts);
+    let hints=0,retired=0;drafts.subscribe(()=>{hints++;},()=>{retired++;});observer();assert.equal(hints,1);
+    const pending=drafts.snapshot(),rejected=assert.rejects(pending,{code:'client_not_admitted'}),release=platform.release!();await Promise.resolve();assert.equal(releases,0);assert.equal(retired,1);
+    resolve({documentDrafts:true,schemaVersion:1,ok:true,value:{result:{state:null,transfer:null,transfer_scratch_bytes:0},bytes:new Uint8Array()}});await rejected;await release;assert.equal(releases,1);assert.equal(stops,1);retireObserver();assert.equal(retired,1);
+  }finally{if(previous)Object.defineProperty(globalThis,'window',previous);else Reflect.deleteProperty(globalThis,'window');}
+});
+test('positive desktop draft advertisement requires document semantics and scoped nudge channel before use',async()=>{
+  const previous=Object.getOwnPropertyDescriptor(globalThis,'window');
+  try{for(const extra of [{documentSemantics:false},{documentSemantics:true}]){
+    Object.defineProperty(globalThis,'window',{configurable:true,value:{zorid:{getVault:async()=>({path:'/fixture',name:'Fixture'}),getDurableContext:async()=>({admissionId:'admitted',scope:{vaultId:'authority',clientId:'client'},draftsAvailable:true,...extra}),durableInvoke:assert.fail,releaseDurableContext:async()=>{}}}});
+    await assert.rejects(createPlatformAdapter(),/Incomplete document draft capability/);
+  }}finally{if(previous)Object.defineProperty(globalThis,'window',previous);else Reflect.deleteProperty(globalThis,'window');}
+});

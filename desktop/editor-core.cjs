@@ -25,7 +25,7 @@ function createEditorCoreManager(environment=process.env, options={}){
   // capability remains absent while the legacy frontend planner is active.
   const documentRuntime=options.documentRuntime===true&&typeof options.onDocumentRuntimeNudge==='function';
   const contexts=new Map(), admissions=new Map(), released=new WeakMap(), services=new Set(), openings=new Map(), retirements=new Map();
-  const describe=saved=>({admissionId:saved.id,scope:saved.admission.scope,...(saved.admission.documentCommand?{documentSemantics:true}:{}),...(saved.admission.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(documentRuntime&&runtimeAvailable(saved.admission)?{documentMaintenance:true}:{}),...(saved.admission.workblockCommand?{workBlocks:true}:{}),...(saved.admission.binaryLimits?{binaryLimits:saved.admission.binaryLimits}:{})});
+  const describe=saved=>({admissionId:saved.id,scope:saved.admission.scope,...(saved.admission.documentCommand?{documentSemantics:true}:{}),...(saved.admission.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(saved.admission.draftsAvailable===true?{draftsAvailable:true}:{}),...(documentRuntime&&runtimeAvailable(saved.admission)?{documentMaintenance:true}:{}),...(saved.admission.workblockCommand?{workBlocks:true}:{}),...(saved.admission.binaryLimits?{binaryLimits:saved.admission.binaryLimits}:{})});
   const executable=()=>require('./host-location.cjs').resolveDesktopHost({...options,override:config.executable});
   function checked(broker,record,expectedRoot,admissionId,allowRetired=false){
     broker.assertLive(record);
@@ -47,7 +47,7 @@ function createEditorCoreManager(environment=process.env, options={}){
       if(admission)await admission.catch(()=>{});
       const saved=contexts.get(record)??released.get(record)??initial;
       released.delete(record);contexts.delete(record);
-      saved.stopRuntime?.();
+      saved.stopRuntime?.();saved.stopDrafts?.();
       if(saved.admission)await saved.admission.retire();
       const current=broker.vaults.get(root);
       if(current?.service===service&&current.members.size||[...contexts.values()].some(value=>value.service===service))return;
@@ -106,9 +106,22 @@ function createEditorCoreManager(environment=process.env, options={}){
         const admission=await admitDesktopFixtureClient(service,{fixture:true,clientId:fixture&&record.id==='main'?config.clientId:record.clientSlot?.clientId,assertOwner:check});
         try {check();}
         catch(error){await admission.retire();throw error;}
-        const saved={id:randomUUID(),admission,service,check:(allowRetired=false)=>{check();if(saved.runtimeRetired&&!allowRetired)throw fail('client_not_admitted');}};contexts.set(record,saved);
+        const saved={id:randomUUID(),admission,service,check:(allowRetired=false)=>{check();if((saved.runtimeRetired||saved.draftsRetired)&&!allowRetired)throw fail('client_not_admitted');}};contexts.set(record,saved);
         try{
           if(admission.metadataRowsAvailable===true&&typeof admission.documentCommand!=='function')throw fail('unsupported_host_capability');
+          if(admission.draftsAvailable===true){
+            if(typeof options.onDocumentRuntimeNudge!=='function'||!admission.documentCommand||!admission.documentDrafts||!['invoke','subscribe'].every(name=>typeof admission.documentDrafts[name]==='function'))throw fail('unsupported_host_capability');
+            const publish=retired=>{
+              try{
+                if(contexts.get(record)!==saved||saved.draftsRetired)return;
+                if(retired){broker.assertLive(record);if(record.vaultSelectionPending||record.vault!==entry||record.generation!==generation||!broker.allowedURL(record.window.webContents.mainFrame.url))return;saved.draftsRetired=true;}
+                else check();
+                options.onDocumentRuntimeNudge(record,{vault:expectedRoot,admissionId:saved.id,...(retired?{retired:true}:{})});
+              }catch{/* Only this admitted receiver may observe hints. */}
+            };
+            const stopDrafts=admission.documentDrafts.subscribe(()=>publish(false),()=>publish(true));
+            if(typeof stopDrafts!=='function')throw fail('invalid_document_response');saved.stopDrafts=stopDrafts;saved.check();
+          }
           if(documentRuntime){
             if(!runtimeAvailable(admission))throw fail('unsupported_host_capability');
             const publish=retired=>{
@@ -127,7 +140,7 @@ function createEditorCoreManager(environment=process.env, options={}){
             saved.stopRuntime=stopRuntime;
             saved.check();
           }
-        }catch(error){if(contexts.get(record)===saved)contexts.delete(record);try{saved.stopRuntime?.();}finally{await admission.retire();}throw error;}
+        }catch(error){if(contexts.get(record)===saved)contexts.delete(record);try{saved.stopRuntime?.();saved.stopDrafts?.();}finally{await admission.retire();}throw error;}
         return describe(saved);
       })();
       admissions.set(record,pending);
@@ -152,6 +165,11 @@ function createEditorCoreManager(environment=process.env, options={}){
       if(method==='documentCommand'){
         if(args.length!==1||!saved.admission.documentCommand)throw fail('invalid_durable_request');
         return saved.admission.documentCommand(args[0]);
+      }
+      if(method==='documentDrafts'){
+        if(args.length!==2||saved.admission.draftsAvailable!==true||typeof saved.admission.documentDrafts?.invoke!=='function')throw fail('invalid_durable_request');
+        const value=await saved.admission.documentDrafts.invoke(args[0],args[1]);checked(broker,record,expectedRoot,admissionId);
+        if(contexts.get(record)!==saved)throw fail('durable_scope_changed');return value;
       }
       if(method==='binaryCommand'){
         if(args.length!==1||!(args[0] instanceof Uint8Array)||!args[0].length||args[0].byteLength>MAX_BINARY_FRAME||!saved.admission.binaryCommand)throw fail('invalid_durable_request');
@@ -181,7 +199,7 @@ function createEditorCoreManager(environment=process.env, options={}){
       // Renderer lifecycle owner has awaited its final checkpoint/flush before
       // requesting release. The admission layer drains already accepted RPCs.
       await saved.admission.release(()=>{});
-      saved.stopRuntime?.();
+      saved.stopRuntime?.();saved.stopDrafts?.();
       if(contexts.get(record)===saved)contexts.delete(record);
       released.set(record,{id:admissionId,root:expectedRoot,service:saved.service,admission:saved.admission});
     },
@@ -191,7 +209,7 @@ function createEditorCoreManager(environment=process.env, options={}){
       closed=true;
       closePromise=(async()=>{
         await Promise.allSettled([...openings.values(),...admissions.values(),...retirements.values()].filter(Boolean));
-        for(const saved of contexts.values())saved.stopRuntime?.();contexts.clear();await Promise.all([...services].map(service=>service.close()));services.clear();
+        for(const saved of contexts.values()){saved.stopRuntime?.();saved.stopDrafts?.();}contexts.clear();await Promise.all([...services].map(service=>service.close()));services.clear();
       })();return closePromise;
     },
   };

@@ -432,3 +432,69 @@ test('ownership lost while a feature control awaits the host rejects the late re
   await f.drain();assert.equal(steps(f).length,0);assert.equal(retireCount,1);
   await owner.revoke();assert.equal(retireCount,1);
 });
+
+// Fixed private native replies: this fixture never selects a lane/phase or
+// implements priorities. Each callback is one explicit main-owned turn.
+function compositeFixture(replies,{releaseReplies=[]}={}){
+  const queued=new Map(),calls=[],errors=[];let next=0;
+  const host={async documentWork(request){calls.push(clone(request));assert.ok(replies.length,'unexpected extra trusted turn');const row=replies.shift();assert.equal(request.op,row.op);if(row.ticket)assert.deepEqual(request.ticket,row.ticket);if(row.error)throw row.error;return clone(row.value);},async releaseClient(reference){calls.push({op:'release_client',reference});assert.ok(releaseReplies.length,'unexpected release retry');const row=releaseReplies.shift();if(row.error)throw row.error;return row.value;}};
+  const scheduler=new DocumentRuntimeScheduler({workHost:host,defer(callback){const id=++next;queued.set(id,callback);return id;},cancel(id){queued.delete(id);},onError:error=>errors.push(error)});
+  const owner=scheduler.addDraftOwner({clientId:'client-a',localStoreId:'store',assertActive(){}});
+  async function settled(){for(let i=0;i<60;i++)await Promise.resolve();}
+  async function turn(){assert.ok(queued.size,'expected deferred trusted work');const [id,callback]=queued.entries().next().value;queued.delete(id);callback();await settled();}
+  async function drain(){for(let i=0;queued.size&&i<24;i++)await turn();assert.equal(queued.size,0);}
+  return {scheduler,owner,calls,errors,turn,drain,settled,queued:()=>queued.size};
+}
+const draftTicket=id=>({incarnation:'incarnation',lane:'draft',lifetime:'draft-owner',id});
+const privateWork=(selected=null,last_settled=null,closing=false,close_ready=false)=>({selected,last_settled,closing,close_ready});
+const workReply=(work,turn=null)=>({work,turn:turn===null?null:{state:turn}});
+const draftMutationReply={result:{state:{},transfer:null,transfer_scratch_bytes:0},bytes:new Uint8Array()};
+test('draft work runs autonomously without listeners and yields between exact selected steps',async()=>{
+  const a=draftTicket('1'),b=draftTicket('2');
+  const f=compositeFixture([
+    {op:'next_turn',value:workReply(privateWork(a),'ready')},
+    {op:'step',ticket:a,value:workReply(privateWork(null,a))},
+    {op:'next_turn',value:workReply(privateWork(b,a),'ready')},
+    {op:'step',ticket:b,value:workReply(privateWork(null,b))},
+    {op:'next_turn',value:workReply(privateWork(null,b),'waiting')},
+  ]);
+  f.owner.notify({op:'request'},draftMutationReply);assert.equal(f.calls.length,0);await f.turn();assert.equal(f.calls.length,1);
+  await f.turn();assert.deepEqual(f.calls[1],{op:'step',ticket:a});assert.ok(f.queued());
+  f.calls.push({op:'foreground'});await f.drain();assert.deepEqual(f.calls.map(c=>c.op),['next_turn','step','foreground','next_turn','step','next_turn']);assert.deepEqual(f.errors,[]);
+});
+test('draft observational hints never make an idle owner poll or recursively wake',async()=>{
+  const f=compositeFixture([{op:'next_turn',value:workReply(privateWork(),'waiting')}]);let hints=0;
+  f.owner.subscribe(()=>{hints++;f.owner.notify({op:'snapshot'},draftMutationReply);f.owner.notify({op:'progress'},draftMutationReply);f.owner.notify({op:'facts_read'},{result:{job:draftTicket('1')}});});
+  f.owner.notify({op:'request'},draftMutationReply);await f.drain();assert.equal(f.calls.length,1);assert.ok(hints>=1);assert.equal(f.queued(),0);assert.deepEqual(f.errors,[]);
+});
+test('revoked listener-free release retries only after actual settled work and final close-ready',async()=>{
+  const a=draftTicket('1'),draining={code:'document_drafts_draining'},reference={client_id:'client-a',token:'lease'};
+  const f=compositeFixture([
+    {op:'next_turn',value:workReply(privateWork(a,null,true),'ready')},
+    {op:'step',ticket:a,value:workReply(privateWork(null,a,true,true))},
+  ],{releaseReplies:[{error:draining},{value:{released:true}}]});
+  f.owner.revoke();let done=false;const release=f.scheduler.releaseDraftClient(reference).then(()=>{done=true;});await f.settled();
+  assert.equal(done,false);assert.equal(f.calls.filter(c=>c.op==='release_client').length,1);await f.turn();assert.equal(f.calls.filter(c=>c.op==='release_client').length,1,'selection is not completed Drop');
+  await f.turn();await release;assert.equal(done,true);assert.equal(f.calls.filter(c=>c.op==='release_client').length,2);assert.deepEqual(f.calls.at(-1),{op:'release_client',reference});assert.deepEqual(f.errors,[]);
+});
+test('lost composite step acknowledgement recovers only the exact actual settled ticket',async()=>{
+  for(const exact of [true,false]){
+    const a=draftTicket('1'),f=compositeFixture([
+      {op:'next_turn',value:workReply(privateWork(a),'ready')},
+      {op:'step',ticket:a,error:{code:'timeout'}},
+      {op:'snapshot',value:workReply(privateWork(null,exact?a:draftTicket('2')))},
+      ...(exact?[{op:'next_turn',value:workReply(privateWork(null,a),'waiting')}]:[]),
+    ]);
+    f.owner.notify({op:'request'},draftMutationReply);await f.drain();assert.equal(f.errors.length,exact?0:1);if(!exact)assert.equal(f.errors[0].code,'timeout');
+  }
+});
+test('cold F-capable close observes no owner and never creates or pumps one',async()=>{
+  const f=compositeFixture([{op:'snapshot',value:workReply(null)}]);f.owner.revoke();await f.scheduler.close();assert.deepEqual(f.calls,[{op:'snapshot'}]);assert.equal(f.queued(),0);
+});
+test('composite close continues trusted turns after all draft observers are revoked',async()=>{
+  const a=draftTicket('1'),f=compositeFixture([
+    {op:'close',value:workReply(privateWork(a,null,true))},
+    {op:'step',ticket:a,value:workReply(privateWork(null,a,true,true))},
+  ]);
+  f.owner.notify({op:'request'},draftMutationReply);f.owner.revoke();let done=false;const closed=f.scheduler.close().then(()=>{done=true;});await f.settled();assert.equal(done,false);await f.drain();await closed;assert.equal(done,true);assert.deepEqual(f.calls.map(c=>c.op),['close','step']);assert.deepEqual(f.errors,[]);
+});

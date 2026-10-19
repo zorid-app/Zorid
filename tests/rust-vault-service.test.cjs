@@ -36,6 +36,20 @@ process.stdin.on('data', chunk => {buffer=Buffer.concat([buffer,chunk]); while(b
   if(mode==='rich_diagnostic_extra')diagnostic.internal='/private/secret';
   send({version:1,request_id:req.request_id,ok:false,error:{code:'search_compile',commit_uncertain:false,details:{diagnostic},message:'/private/raw recovery'}});continue;
  }
+ if(mode==='draft_oversized_header'||mode==='draft_oversized_body'){
+  const prefix=Buffer.alloc(8);prefix.writeUInt32BE(mode==='draft_oversized_header'?65537:2,0);prefix.writeUInt32BE(mode==='draft_oversized_body'?131073:0,4);process.stdout.write(prefix);continue;
+ }
+ if(mode==='draft_normal'){
+  let result={state:null,transfer:null,transfer_scratch_bytes:0},replyBody=Buffer.alloc(0);
+  if(req.command.method==='document_work')result={work:null,turn:null};
+  else if(req.command.request.op==='facts_read'){
+   replyBody=Buffer.alloc(req.command.request.maximum,0xa9);result={job:req.command.request.job,offset:req.command.request.offset,bytes:replyBody.length,total_bytes:replyBody.length,eof:true};
+  }else if(req.command.request.op==='upload_chunk'){
+   result={state:{admitted:null,replay:false,execution:'wait_for_input',outcomes:[],usage:{source_bytes:0,scratch_bytes:0,facts_bytes:0}},transfer:{source_bytes_received:131072,source_bytes_expected:131072,source_sealed:false,facts_bytes:null,scratch_bytes:131072},transfer_scratch_bytes:131072};
+   if(body.length!==131072||body[0]!==7){send({version:1,request_id:req.request_id,ok:false,error:{code:'draft_invalid_chunk',commit_uncertain:false}});continue;}
+  }
+  send({version:1,request_id:req.request_id,ok:true,result},replyBody);continue;
+ }
  if(mode==='rich_oversized'){const prefix=Buffer.alloc(8);prefix.writeUInt32BE(2,0);prefix.writeUInt32BE(2097153,4);process.stdout.write(prefix);continue;}
  if(mode==='reject'){send({version:1,request_id:req.request_id,ok:false,error:{code:'revision_conflict',commit_uncertain:false}});continue;}
  if((mode==='document_rejection'||mode==='document_bad_rejection')&&req.command.method==='documents'){send({version:1,request_id:req.request_id,ok:false,error:{code:mode==='document_rejection'?'stale_source':'stale-source',commit_uncertain:false}});continue;}
@@ -429,4 +443,20 @@ for(const mode of ['rich_diagnostic_bad','rich_diagnostic_extra'])test(`reject m
 test('rich page frame rejects oversized declared body before reading or allocating it',async t=>{
   const host=await fixture(t,'rich_oversized');
   await assert.rejects(host.request({method:'documents',request:{command:{op:'rich_page'}}}),{code:'invalid_response'});
+});
+
+const stdioDraftJob={lifetime:'owner',id:'1',buffer_lifetime:'buffer',text_revision:'1'};
+test('actual JS subprocess framing preserves draft raw chunks and keeps work out of leased transport',async t=>{
+  const host=await fixture(t,'draft_normal'),reference={local_store_id:'store',client_id:'client',token:'token'},scoped=host.withClientLease(reference);
+  assert.equal(scoped.documentWork,undefined);
+  const bytes=new Uint8Array(131072).fill(7),pending=scoped.documentDrafts('client',{op:'upload_chunk',job:stdioDraftJob,offset:'0'},bytes);bytes.fill(9);assert.equal((await pending).result.transfer.source_bytes_received,131072);
+  const read=await scoped.documentDrafts('client',{op:'facts_read',job:stdioDraftJob,offset:'0',maximum:131072});assert.equal(read.bytes.length,131072);assert.equal(read.bytes[0],0xa9);
+  assert.deepEqual(await host.documentWork({op:'snapshot'}),{work:null,turn:null});
+  await assert.rejects(host.request({method:'document_work',request:{op:'snapshot'}},new Uint8Array(),reference),{code:'draft_owner_mismatch'});
+  await assert.rejects(host.request({method:'document_drafts',client_id:'client',request:{op:'upload_chunk',job:stdioDraftJob,offset:'0'}},new Uint8Array(131073)),{code:'request_limit'});
+  await assert.rejects(host.request({method:'document_drafts',client_id:'client',request:{op:'snapshot',padding:'x'.repeat(65536)}}),{code:'request_limit'});
+  await host.close();assert.equal(host.exited,true);
+});
+for(const mode of ['draft_oversized_header','draft_oversized_body'])test(`draft frame preallocation rejects ${mode} from prefix alone`,async t=>{
+  const host=await fixture(t,mode);await assert.rejects(host.documentDrafts('client',{op:'facts_read',job:stdioDraftJob,offset:'0',maximum:131072}),{code:'response_limit',commitUncertain:true});assert.ok(host.fatal);
 });

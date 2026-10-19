@@ -3,6 +3,7 @@ import {decodeWorkBlockEnvelope} from '../../desktop/workblocks.cjs';
 import {createDesktopWorkBlocks,createDesktopBinaryStreams} from './desktop.ts';
 import {scheduleBinaryTransfer} from '../core/binary-transfer-queue.ts';
 import {createDesktopDocumentService,createDesktopDocumentRuntime} from './desktop-document-semantics.ts';
+import {createDesktopDocumentDraftTransport} from './desktop-document-drafts.ts';
 import type {DocumentService} from '../core/document-semantics.ts';
 import type { DurableWrites } from '../core/durable-writes.ts';
 import type { VaultAdapter } from '../core/types';
@@ -55,6 +56,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
   let workBlocks:ReturnType<typeof createDesktopWorkBlocks>|undefined;
   let documents:ReturnType<typeof createDesktopDocumentService>|undefined;
   let documentRuntime:ReturnType<typeof createDesktopDocumentRuntime>|undefined;
+  let drafts:ReturnType<typeof createDesktopDocumentDraftTransport>|undefined;
   if (binding) {
     if (!bridge.durableInvoke || !bridge.releaseDurableContext || !binding.admissionId || !binding.scope?.vaultId || !binding.scope.clientId) throw new Error('Incomplete durable desktop capability');
     const invoke = bridge.durableInvoke.bind(bridge), releaseContext = bridge.releaseDurableContext.bind(bridge);
@@ -94,7 +96,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
         compareAndSwap: change => call('checkpoints.compareAndSwap',change),
         list: options => call('checkpoints.list',options), changes: options => call('checkpoints.changes',options)}),
     });
-    let binaryDrained=false,documentsDrained=false;
+    let binaryDrained=false,documentsDrained=false,draftsDrained=false;
     if(binding.workBlocks===true)workBlocks=createDesktopWorkBlocks(request=>call('workblockCommand',request).then(reply=>decodeWorkBlockEnvelope(request,reply)));
     if(binding.documentMaintenance===true){
       if(binding.documentSemantics!==true||!bridge.onDocumentRuntimeNudge)throw new Error('Incomplete document runtime capability');
@@ -103,9 +105,14 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
         subscribe:(listener,onRetire)=>subscribe(info.path,admissionId,listener,onRetire)});
     }
     if(binding.metadataRowsAvailable===true&&binding.documentSemantics!==true)throw new Error('Incomplete document metadata capability');
-    if(binding.documentSemantics)documents=createDesktopDocumentService(request=>call('documentCommand',request),documentRuntime?.transport,{metadataRowsAvailable:binding.metadataRowsAvailable===true});
+    if(binding.draftsAvailable===true){
+      if(binding.documentSemantics!==true||!bridge.onDocumentRuntimeNudge)throw new Error('Incomplete document draft capability');
+      const subscribe=bridge.onDocumentRuntimeNudge.bind(bridge);
+      drafts=createDesktopDocumentDraftTransport({scope:{localStoreId:scope.vaultId,clientId:scope.clientId},invoke:(request,bytes)=>call('documentDrafts',request,bytes),subscribe:(listener,onRetire)=>subscribe(info.path,admissionId,listener,onRetire)});
+    }
+    if(binding.documentSemantics)documents=createDesktopDocumentService(request=>call('documentCommand',request),documentRuntime?.transport,{metadataRowsAvailable:binding.metadataRowsAvailable===true,draftsAvailable:binding.draftsAvailable===true,drafts:drafts?.transport});
     if(binding.binaryLimits)binary=createDesktopBinaryStreams({scope,checkpoints:durableWrites.checkpoints,limits:binding.binaryLimits,assertActive:()=>{if(released||binaryDrained)throw new Error('Desktop binary context released');},invoke:bytes=>call<Uint8Array>('binaryCommand',bytes)});
-    release = async () => { if (!released) { if(workBlocks)await workBlocks.release(); if(binary&&!binaryDrained){await scheduleBinaryTransfer(binary.streams,()=>binary!.release());binaryDrained=true;} if(documents&&!documentsDrained){await documents.release();documentsDrained=true;} await releaseContext(info.path, admissionId); documentRuntime?.retire();released = true; } };
+    release = async () => { if (!released) { if(drafts&&!draftsDrained){await drafts.release();draftsDrained=true;} if(workBlocks)await workBlocks.release(); if(binary&&!binaryDrained){await scheduleBinaryTransfer(binary.streams,()=>binary!.release());binaryDrained=true;} if(documents&&!documentsDrained){await documents.release();documentsDrained=true;} await releaseContext(info.path, admissionId); documentRuntime?.retire();released = true; } };
   }
   return {
     ...(release ? {release} : {}),

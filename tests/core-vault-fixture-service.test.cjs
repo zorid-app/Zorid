@@ -111,3 +111,16 @@ test('metadata stat preserves identity and rejects large convenience reads befor
   assert.deepEqual(await core.stat('large.bin'),{path:'large.bin',entryId:'file',revision:'revision',type:'file',mtime:2,size:20*1024*1024,ctime:1});
   await assert.rejects(core.readBinary('large.bin'),{code:'stream_required'});assert.equal(payloadReads,0);
 });
+
+test('draft owner registration shares one main scheduler and cold close never creates an F owner',async()=>{
+  const calls=[],core=service({capabilities:['document_drafts'],async documentWork(request){calls.push(request);assert.equal(request.op,'snapshot');return {work:null,turn:null};},async close(){calls.push({op:'host-close'});}});
+  const guarded={async documentDrafts(){throw Error('No public request at registration');}};
+  const first=core.registerDocumentDraftOwner({host:guarded,clientId:'client-a',localStoreId:'store',assertActive(){}}),scheduler=core.documentScheduler;
+  const second=core.registerDocumentDraftOwner({host:guarded,clientId:'client-b',localStoreId:'store',assertActive(){}});assert.equal(core.documentScheduler,scheduler);assert.deepEqual(calls,[]);
+  first.revoke();second.revoke();await core.close();assert.deepEqual(calls,[{op:'snapshot'},{op:'host-close'}]);
+});
+test('draft support fails closed without the stdio capability and complete trusted route',async()=>{
+  for(const host of [{capabilities:[]},{capabilities:['document_drafts']}]){
+    const core=service(host);assert.throws(()=>core.registerDocumentDraftOwner({host:{documentDrafts(){}},clientId:'client',localStoreId:'store',assertActive(){}}),{code:'unsupported_host_capability'});assert.equal(core.documentScheduler,null);
+  }
+});

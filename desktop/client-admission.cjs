@@ -4,6 +4,7 @@ const { desktopTextCreates } = require('./text-create.cjs');
 const { createDesktopDocumentSemantics } = require('./document-semantics.cjs');
 const {captureWorkBlockRequest}=require('./workblocks.cjs');
 const { MAX_BINARY_FRAME } = require('./rust-vault-service.cjs');
+const {captureDraftRequest,captureDraftBody,MAX_DRAFT_CHUNK}=require('./document-drafts.cjs');
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 function fail(code, uncertain = false) { return Object.assign(new Error('Desktop fixture consumer is not admitted.'), { code, commitUncertain: uncertain }); }
 
@@ -15,7 +16,7 @@ function fail(code, uncertain = false) { return Object.assign(new Error('Desktop
 async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwner } = {}) {
   if (fixture !== true || !uuid(clientId) || typeof assertOwner !== 'function') throw fail('invalid_admission');
   const host = service.host;
-  let phase = 'admitting', closing = null, flushed = false, releasePrepared = false, activeFlush = null, runtime = null;
+  let phase = 'admitting', closing = null, flushed = false, releasePrepared = false, activeFlush = null, runtime = null, drafts = null,draftRetired=false;
   const pending = new Set();
   function live() {
     if (service.closed || host.fatal || host.exited) throw fail('client_ownership_lost', true);
@@ -23,6 +24,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
   }
   live();
   const reference = await host.claimClient(clientId);
+  const releaseLease=()=>drafts?service.releaseDocumentDraftClient(reference):host.releaseClient(reference);
   try {
     live();
     const shadow = Object.create(service);
@@ -74,6 +76,30 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     const metadataRowsAvailable=host.capabilities?.includes('document_metadata_rows')===true;
     if(metadataRowsAvailable&&(!host.capabilities?.includes('documents')||typeof guarded.documentCommand!=='function'))throw fail('unsupported_host_capability');
     const documents=host.capabilities?.includes('documents')?createDesktopDocumentSemantics(guarded,clientId,reference.local_store_id,{metadataRowsAvailable}):null;
+    const draftsAvailable=host.capabilities?.includes('document_drafts')===true;
+    if(draftsAvailable){
+      if(!documents||typeof guarded.documentDrafts!=='function'||typeof service.registerDocumentDraftOwner!=='function'||typeof service.releaseDocumentDraftClient!=='function')throw fail('unsupported_host_capability');
+      const owner=service.registerDocumentDraftOwner({host:guarded,clientId,localStoreId:reference.local_store_id,assertActive:live});
+      if(!owner||!['notify','subscribe','revoke','release'].every(name=>typeof owner[name]==='function'))throw fail('unsupported_host_capability');
+      drafts=owner;
+    }
+    let draftPending=0,draftBytes=0;
+    const documentDrafts=drafts?Object.freeze({
+      invoke:(input,bytes=new Uint8Array())=>invoke(()=>{
+        if(draftRetired)throw fail('client_not_admitted');const request=captureDraftRequest(input);
+        if(!(bytes instanceof Uint8Array)||bytes.byteLength>MAX_DRAFT_CHUNK||request.op!=='upload_chunk'&&bytes.byteLength!==0)throw fail('draft_invalid_chunk');
+        if(draftPending>=32||draftBytes+bytes.byteLength>32*MAX_DRAFT_CHUNK)throw fail('draft_capacity');
+        const size=bytes.byteLength;draftPending++;draftBytes+=size;let body;
+        try{body=captureDraftBody(request,bytes);}catch(error){draftPending--;draftBytes-=size;throw error;}
+        return (async()=>{
+          try{
+            let result;try{result=await guarded.documentDrafts(clientId,request,body);}catch(error){if(draftRetired)throw fail('client_not_admitted');live();throw error;}
+            if(draftRetired)throw fail('client_not_admitted');live();drafts.notify(request,result);return result;
+          }finally{draftPending--;draftBytes-=size;}
+        })();
+      },null),
+      subscribe:(listener,onRetire)=>{allowed();if(draftRetired)throw fail('client_not_admitted');return drafts.subscribe(listener,onRetire);},
+    }):null;
     const workblockCommand=input=>invoke(async()=>{
       const request=captureWorkBlockRequest(input);
       const value=await guarded.workblockCommand(clientId,request);
@@ -103,6 +129,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
       scope, durableWrites: writes, assertActive: () => allowed(),
       ...(documents?{documentCommand}:{}),
       ...(metadataRowsAvailable?{metadataRowsAvailable:true}:{}),
+      ...(documentDrafts?{draftsAvailable:true,documentDrafts}:{}),
       ...(documentRuntime?{documentRuntime}:{}),
       ...(host.capabilities?.includes('workblocks')?{workblockCommand}:{}),
       ...(host.capabilities?.includes('binary_streams')?{binaryCommand,binaryLimits:host.binaryLimits}:{}),
@@ -113,8 +140,9 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
         if(phase==='released')return;
         if(closing)await closing.catch(()=>{});
         phase='retiring';activeFlush=null;
+        draftRetired=true;drafts?.revoke();
         await runtime?.revoke();
-        await drain();await host.releaseClient(reference);documents?.forget();phase='released';
+        await drain();await releaseLease();drafts?.release();documents?.forget();phase='released';
       },
       release(flushGate) {
         if (phase === 'released') return Promise.resolve();
@@ -157,7 +185,8 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
             catch(reason){phase='release_unknown';throw reason;}
           }
           phase = 'releasing';
-          try { await host.releaseClient(reference);runtime?.release();documents?.forget();phase='released'; }
+          draftRetired=true;drafts?.revoke();
+          try { await releaseLease();drafts?.release();runtime?.release();documents?.forget();phase='released'; }
           catch (reason) { phase = 'release_unknown'; throw reason; }
         })().finally(() => { closing = null; });
         return closing;
@@ -165,9 +194,10 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     });
     return context;
   } catch (reason) {
+    draftRetired=true;drafts?.revoke();
     await runtime?.revoke();
     phase = 'releasing';
-    try { await host.releaseClient(reference); } catch { throw fail('admission_cleanup_unknown', true); }
+    try { await releaseLease(); } catch { throw fail('admission_cleanup_unknown', true); }
     throw reason;
   }
 }

@@ -113,6 +113,10 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   assert.deepEqual(structuredClone(await exposed.durableInvoke('/first','admitted','documentCommand',[metadataRequest])),{documents:true,schemaVersion:1,ok:false,error:{code:'search_compile',commitUncertain:true}},'metadata never acquires compile diagnostics');
   coreFailure=undefined;
   assert.deepEqual(structuredClone(await exposed.durableInvoke('/first','admitted','documentCommand',[metadataRequest])),{documents:true,schemaVersion:1,ok:true,value:{queryId:'query'}});
+  coreFailure=Object.assign(new Error('/private/draft recovery'),{code:'draft_expired',commitUncertain:false,details:{diagnostic}});
+  assert.deepEqual(structuredClone(await exposed.durableInvoke('/first','admitted','documentDrafts',[{op:'snapshot'},new Uint8Array()])),{documentDrafts:true,schemaVersion:1,ok:false,error:{code:'draft_expired',commitUncertain:false}},'transient draft errors remain plain bounded data without diagnostics');
+  coreFailure=undefined;
+  assert.deepEqual(structuredClone(await exposed.durableInvoke('/first','admitted','documentDrafts',[{op:'snapshot'},new Uint8Array()])),{documentDrafts:true,schemaVersion:1,ok:true,value:{queryId:'query'}});
   const savedURL = windows[0].webContents.mainFrame.url;
   windows[0].webContents.mainFrame.url = savedURL.replace('index.html', 'other.html');
   assert.throws(() => invoke(windows[0], 'getVault'), /Untrusted page/);

@@ -21,6 +21,7 @@ function fixture() {
     assert.deepEqual(reference, active, 'each admitted RPC carries the owned native lease');
     let result;
     switch (command.method) {
+      case 'document_drafts':if(readGate)await readGate.promise;return {result:{state:null,transfer:null,transfer_scratch_bytes:0},bytes:new Uint8Array()};
       case 'binary':if(readGate)await readGate.promise;return {result:{binary:true},bytes:new Uint8Array(bytes)};
       case 'identity': result = { identity: { local_store_id: 'authority', realm_id: null, vault_id: null } }; break;
       case 'read_path':
@@ -210,4 +211,28 @@ test('metadata advertisement comes only from frozen positive host capability bef
   }
   const broken=fixture();broken.host.capabilities=['document_metadata_rows'];
   await assert.rejects(admitDesktopFixtureClient(broken.service,broken.options),{code:'unsupported_host_capability'});assert.equal(broken.active,null);
+});
+
+test('draft capability is positive before open and incomplete trusted scheduling fails closed',async()=>{
+  const legacy=fixture(),context=await admitDesktopFixtureClient(legacy.service,legacy.options);assert.equal(context.draftsAvailable,undefined);assert.equal(context.documentDrafts,undefined);await context.release(async()=>{});
+  const broken=fixture();broken.host.capabilities=['documents','document_drafts'];broken.service.registerDocumentDraftOwner=undefined;
+  await assert.rejects(admitDesktopFixtureClient(broken.service,broken.options),{code:'unsupported_host_capability'});assert.equal(broken.active,null);
+});
+test('draft retire drains late requests and retains exact native lease until trusted release resolves',async()=>{
+  const f=fixture(),events=[],releaseGate=deferred();let onRetire=()=>{};
+  f.host.capabilities=['documents','document_drafts'];
+  f.service.registerDocumentDraftOwner=()=>({notify(){events.push('notify');},subscribe(_listener,retired){onRetire=retired;return()=>{};},revoke(){events.push('revoke');onRetire();},release(){events.push('drop-handle');}});
+  f.service.releaseDocumentDraftClient=async reference=>{events.push('trusted-release');assert.equal(reference.client_id,clientId);assert.ok(f.active);await releaseGate.promise;return f.host.releaseClient(reference);};
+  const context=await admitDesktopFixtureClient(f.service,f.options);assert.equal(context.draftsAvailable,true);context.documentDrafts.subscribe(()=>{},()=>events.push('retired'));
+  const readGate=deferred();f.readGate=readGate;const request=context.documentDrafts.invoke({op:'snapshot'}),late=assert.rejects(request,{code:'client_not_admitted'});
+  const closing=context.retire();readGate.resolve();await late;await new Promise(resolve=>setImmediate(resolve));assert.ok(f.active);assert.equal(events.includes('drop-handle'),false);assert.equal(events.includes('notify'),false);
+  await assert.rejects(context.documentDrafts.invoke({op:'snapshot'}),{code:'client_not_admitted'});
+  releaseGate.resolve();await closing;assert.equal(f.active,null);assert.ok(events.indexOf('revoke')<events.indexOf('trusted-release'));assert.equal(events.at(-1),'drop-handle');
+});
+test('draft successful flush retires readers before the internal release drain without repeating flush',async()=>{
+  const f=fixture(),events=[],releaseGate=deferred();f.host.capabilities=['documents','document_drafts'];
+  f.service.registerDocumentDraftOwner=()=>({notify(){},subscribe(){return()=>{};},revoke(){events.push('revoke');},release(){events.push('drop-handle');}});
+  f.service.releaseDocumentDraftClient=async reference=>{events.push('trusted-release');await releaseGate.promise;return f.host.releaseClient(reference);};
+  const context=await admitDesktopFixtureClient(f.service,f.options),closing=context.release(async()=>{events.push('flush');});await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(events,['flush','revoke','trusted-release']);assert.ok(f.active);await assert.rejects(context.documentDrafts.invoke({op:'snapshot'}),{code:'client_not_admitted'});releaseGate.resolve();await closing;assert.equal(f.active,null);assert.equal(events.at(-1),'drop-handle');
 });

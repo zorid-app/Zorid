@@ -124,6 +124,10 @@ function registerIPC() {
   handle('getDurableContext', (record, _event, expectedRoot) => durableReply(() => editorCore ? editorCore.context(broker, record, expectedRoot) : null));
   handle('durableInvoke', (record, event, expectedRoot, admissionId, method, args) => durableReply(async () => {
     if (!editorCore) throw new Error('No Rust editor context');
+    if(method==='documentDrafts'){
+      try{return {documentDrafts:true,schemaVersion:1,ok:true,value:await editorCore.invoke(broker,record,event,expectedRoot,admissionId,method,args)};}
+      catch(error){return {documentDrafts:true,schemaVersion:1,ok:false,error:{code:typeof error?.code==='string'&&/^[a-z_]{1,64}$/.test(error.code)?error.code:'invalid_document_response',commitUncertain:error?.commitUncertain===true}};}
+    }
     if(method==='documentCommand'&&['rich_start','rich_prepare','rich_page','rich_close','metadata_rows'].includes(args?.[0]?.command?.op)){
       // Return plain data through the existing preload pass-through: Electron's
       // contextBridge does not preserve custom properties on thrown Errors.
