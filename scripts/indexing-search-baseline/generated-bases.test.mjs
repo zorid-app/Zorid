@@ -36,7 +36,7 @@ test('future10k success oracle keeps all input rows and linked witnesses',()=>{
 // These synthetic protocol objects exercise validators, not the Rust engine.
 import {GeneratedBasesValidator,validateGeneratedResult} from './generated-bases.mjs';
 function syntheticResult(id,m){const e=expectedGenerated(id,m);return {snapshotId:structuredClone(SNAPSHOT),view:{name:e.viewName},rows:structuredClone(e.rows),properties:e.properties,counts:e.counts,groups:e.groups,groupOptions:e.groupOptions,diagnostics:[],relationshipsAvailable:true,metadataComplete:true,metadataIssues:e.metadataIssues,stepsUsed:1};}
-function prepared(count){const m=manifest(count),plan=generatedPlan(),v=new GeneratedBasesValidator({manifest:m},plan);
+function prepared(count,preparationCache=false){const m=manifest(count),plan=generatedPlan(),v=new GeneratedBasesValidator({manifest:m},plan,{preparationCache});
   v.accept({type:'setup',noteCount:count,entries:m.entries.length,sourceBytes:m.entries.reduce((n,e)=>n+e.bytes,0),manifestBytes:Buffer.byteLength(json(m)),planBytes:Buffer.byteLength(json(plan)),debugAssertions:false,setupMs:0,sourceReadMs:0,sourceDecodeMs:0});
   v.accept({type:'generation',source:SOURCE,snapshot:SNAPSHOT,records:count+3,fileFacts:count+3,parseInvocations:count,coverageComplete:true,metadataBytes:1,pumpResets:0,generationBuildMs:0});
   for(const p of plan.programs)v.accept({type:'program',programId:p.id,sourceBytes:Buffer.byteLength(p.source),yamlAndConfigurationMs:0});return {m,plan,v};}
@@ -52,4 +52,32 @@ test('source, request capture and final ordering must remain exact',()=>{
   const {plan,v}=prepared(100),i=plan.invocations[0];assert.throws(()=>v.accept({type:'done',source:SOURCE,snapshot:SNAPSHOT,invocations:8,successes:0,rejections:8}));
   const event={type:'result',caseId:i.id,programId:i.programId,options:i.options,source:SOURCE,snapshot:SNAPSHOT,queryMs:0,outcome:'rejected',error:{code:'budget',message:'synthetic'}};
   assert.throws(()=>v.accept({...event,source:{...SOURCE,watermark:'2'}}));assert.throws(()=>v.accept({...event,options:{...i.options,viewIndex:1}}));assert.throws(()=>v.accept({...event,result:{}}));v.accept(event);assert.throws(()=>v.accept(event));v.accept({type:'measurement',caseId:i.id,resultOutputMs:0});assert.equal(v.results[0].correctness,'semantic oracle unestablished; no result returned');
+});
+
+function cachePrepared(count=100){
+  const state=prepared(count,true),{m,plan,v}=state;
+  for(const i of plan.invocations){const result=syntheticResult(i.id,m);result.stepsUsed=20;v.accept({type:'result',caseId:i.id,programId:i.programId,options:i.options,source:SOURCE,snapshot:SNAPSHOT,queryMs:1,outcome:'ok',result});v.accept({type:'measurement',caseId:i.id,resultOutputMs:0});}
+  for(const p of plan.programs)for(const lookup of ['first','repeat'])v.accept({type:'cache-program',programId:p.id,lookup,sourceBytes:Buffer.byteLength(p.source),compileMs:1,outcome:lookup==='first'?'miss':'hit',workUsed:0,cacheWorkUsed:1,...(lookup==='repeat'?{sameProgram:true}:{})});
+  return state;
+}
+function cachedEvent(state,index,{outcome='hit'}={}){
+  const i=state.plan.invocations[index%8],result=syntheticResult(i.id,state.m);result.stepsUsed=10;
+  return {type:'cache-result',pass:Math.floor(index/8)+1,caseId:i.id,programId:i.programId,options:i.options,source:SOURCE,snapshot:SNAPSHOT,preparationMs:1,evaluationMs:1,preparationOutcome:outcome,preparationWorkUsed:2,cacheWorkUsed:3,result};
+}
+function finishCache(state,outcome='hit'){
+  for(let index=0;index<16;index++){const e=cachedEvent(state,index,{outcome});state.v.accept(e);state.v.accept({type:'cache-measurement',pass:e.pass,caseId:e.caseId,resultOutputMs:0});}
+  state.v.accept({type:'cache-done',programLookups:10,invocations:16,source:SOURCE,snapshot:SNAPSHOT});state.v.accept({type:'done',invocations:8,successes:8,rejections:0,source:SOURCE,snapshot:SNAPSHOT});return state.v;
+}
+test('opt-in cache observation preserves all eight full results across two passes with separate work',()=>{
+  const v=finishCache(cachePrepared());assert.equal(v.status(),'passed');assert.equal(v.cacheDone,true);assert.equal(v.cachePrograms.length,10);assert.equal(v.cacheResults.length,16);assert.ok(v.cacheResults.every(r=>r.fullTypedEquivalentExceptSteps&&r.semanticWorkReduced&&r.evaluationWorkUsed===8&&r.cacheWorkUsed===3));
+});
+test('cache output is rejected by default and opt-in requires complete ordered acknowledgments',()=>{
+  const ordinary=prepared(100);assert.throws(()=>ordinary.v.accept({type:'cache-done'}));
+  const state=cachePrepared();assert.throws(()=>state.v.accept({type:'done',invocations:8,successes:8,rejections:0,source:SOURCE,snapshot:SNAPSHOT}));assert.throws(()=>state.v.accept({...cachedEvent(state,0),pass:2}));assert.throws(()=>state.v.accept({type:'cache-done',programLookups:10,invocations:16,source:SOURCE,snapshot:SNAPSHOT}));
+});
+test('cached validation rejects undeclared full-result changes, request drift and fake work savings',()=>{
+  for(const change of [e=>{e.result.rows[0].values.extra={type:'number',value:1};},e=>{e.options={...e.options,viewIndex:1};},e=>{e.result.stepsUsed=21;},e=>{e.preparationWorkUsed=11;},e=>{e.cacheWorkUsed=2000001;},e=>{e.preparationOutcome='forced-hit';}]){const state=cachePrepared(),event=cachedEvent(state,0);change(event);assert.throws(()=>state.v.accept(event));}
+});
+test('actual noncacheable preparations remain explicit with unchanged 10k semantic oracles',()=>{
+  const v=finishCache(cachePrepared(10000),'uncached');assert.equal(v.status(),'passed');assert.ok(v.cacheResults.every(r=>r.preparationOutcome==='uncached'));assert.equal(v.cacheResults[0].counts.scanned,10003);
 });

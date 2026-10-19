@@ -9,7 +9,8 @@ use std::{
     time::Instant,
 };
 use zorid_bases::{
-    compile_base_source, query_generation, FilePresentationFacts, QueryOptions, RecordWitness,
+    compile_base_source, query_generation, query_prepared, BasePreparationCache,
+    FilePresentationFacts, PreparationCacheOutcome, QueryOptions, RecordWitness,
 };
 use zorid_core::{EntryId, EntryKind, EntryState, OperationId, Revision, VaultPath};
 use zorid_document::MetadataRequest;
@@ -39,7 +40,7 @@ struct Presentation {
     ctime_ms: i64,
     mtime_ms: i64,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Plan {
     schema_version: u32,
@@ -47,13 +48,13 @@ struct Plan {
     programs: Vec<ProgramInput>,
     invocations: Vec<Invocation>,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProgramInput {
     id: String,
     source: String,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Invocation {
     id: String,
@@ -106,7 +107,7 @@ fn read(path: &Path, limit: u64) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-fn run(fixture: PathBuf) -> Result<()> {
+fn run(fixture: PathBuf, preparation_cache: bool) -> Result<()> {
     let start = Instant::now();
     let manifest_bytes = read(&fixture.join("manifest.json"), 64 * 1024 * 1024)?;
     let plan_bytes = read(&fixture.join("generated-bases-plan.json"), 1024 * 1024)?;
@@ -124,6 +125,7 @@ fn run(fixture: PathBuf) -> Result<()> {
     {
         return Err(fail("setup", "unsupported frozen profile/plan"));
     }
+    let cache_plan = preparation_cache.then(|| plan.clone());
     let vault = fs::canonicalize(fixture.join("vault")).map_err(|e| fail("setup", e))?;
     let mut loaded = Vec::new();
     let mut bytes_read = 0u64;
@@ -303,8 +305,77 @@ fn run(fixture: PathBuf) -> Result<()> {
         }
         emit(json!({"type":"measurement","caseId":invocation.id,"resultOutputMs":ms(started)}))?;
     }
+    if let Some(plan) = cache_plan {
+        observe_preparation_cache(&plan, &generation, &facts, &source, &snapshot)?;
+    }
     emit(
         json!({"type":"done","invocations":8,"successes":successes,"rejections":rejections,"source":source,"snapshot":snapshot}),
+    )
+}
+fn cache_outcome(outcome: PreparationCacheOutcome) -> &'static str {
+    match outcome {
+        PreparationCacheOutcome::Hit => "hit",
+        PreparationCacheOutcome::Miss => "miss",
+        PreparationCacheOutcome::Uncached => "uncached",
+    }
+}
+// This ordered observation is opt-in. It reuses the exact frozen generation,
+// sources, options and semantic oracles; no host pin or answer cache is involved.
+fn observe_preparation_cache(
+    plan: &Plan,
+    generation: &Generation,
+    facts: &[FilePresentationFacts],
+    source: &SourceSnapshotId,
+    snapshot: &IndexSnapshotId,
+) -> Result<()> {
+    let clock = Instant::now();
+    let now = || u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let mut cache = BasePreparationCache::new();
+    let mut programs = BTreeMap::new();
+    for input in &plan.programs {
+        let started = Instant::now();
+        let first = cache
+            .compile_source(&input.source, now())
+            .map_err(|e| fail("cache-program", format!("{}: {e:?}", input.id)))?;
+        let compile_ms = ms(started);
+        emit(
+            json!({"type":"cache-program","programId":input.id,"lookup":"first","sourceBytes":input.source.len(),"compileMs":compile_ms,"outcome":cache_outcome(first.outcome()),"workUsed":first.work_used(),"cacheWorkUsed":first.cache_work_used()}),
+        )?;
+        let started = Instant::now();
+        let repeat = cache
+            .compile_source(&input.source, now())
+            .map_err(|e| fail("cache-program", format!("{}: {e:?}", input.id)))?;
+        let compile_ms = ms(started);
+        emit(
+            json!({"type":"cache-program","programId":input.id,"lookup":"repeat","sourceBytes":input.source.len(),"compileMs":compile_ms,"outcome":cache_outcome(repeat.outcome()),"workUsed":repeat.work_used(),"cacheWorkUsed":repeat.cache_work_used(),"sameProgram":std::sync::Arc::ptr_eq(first.value(), repeat.value())}),
+        )?;
+        programs.insert(input.id.clone(), std::sync::Arc::clone(repeat.value()));
+    }
+    for pass in 1..=2 {
+        for invocation in &plan.invocations {
+            let program = programs
+                .get(&invocation.program_id)
+                .ok_or_else(|| fail("cache-query", "unknown program"))?;
+            let started = Instant::now();
+            let preparation = cache
+                .prepare_generation(generation, facts, &invocation.options, now())
+                .map_err(|e| fail("cache-preparation", format!("{}: {e:?}", invocation.id)))?;
+            let preparation_ms = ms(started);
+            let started = Instant::now();
+            let result = query_prepared(program, &preparation, &invocation.options)
+                .map_err(|e| fail("cache-query", format!("{}: {e:?}", invocation.id)))?;
+            let evaluation_ms = ms(started);
+            let started = Instant::now();
+            emit(
+                json!({"type":"cache-result","pass":pass,"caseId":invocation.id,"programId":invocation.program_id,"options":invocation.options,"source":source,"snapshot":snapshot,"preparationMs":preparation_ms,"evaluationMs":evaluation_ms,"preparationOutcome":cache_outcome(preparation.outcome()),"preparationWorkUsed":preparation.work_used(),"cacheWorkUsed":preparation.cache_work_used(),"result":result}),
+            )?;
+            emit(
+                json!({"type":"cache-measurement","pass":pass,"caseId":invocation.id,"resultOutputMs":ms(started)}),
+            )?;
+        }
+    }
+    emit(
+        json!({"type":"cache-done","programLookups":10,"invocations":16,"source":source,"snapshot":snapshot}),
     )
 }
 fn main() {
@@ -317,10 +388,15 @@ fn main() {
             args.next()
                 .ok_or_else(|| fail("arguments", "missing fixture"))?,
         );
+        let preparation_cache = match args.next().as_deref() {
+            None => false,
+            Some("--preparation-cache") => true,
+            _ => return Err(fail("arguments", "unexpected argument")),
+        };
         if args.next().is_some() {
             return Err(fail("arguments", "unexpected argument"));
         }
-        run(fixture)
+        run(fixture, preparation_cache)
     })();
     if let Err(e) = result {
         let _ = emit(json!({"type":"error","phase":e.phase,"detail":e.detail}));
