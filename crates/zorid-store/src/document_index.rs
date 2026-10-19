@@ -161,11 +161,14 @@ pub struct DocumentManifest {
     presentations: Vec<EntryPresentation>,
 }
 impl DocumentManifest {
-    pub fn manifest(&self) -> IndexResult<Manifest> {
-        let source = SourceSnapshotId::new(
+    fn source(&self) -> IndexResult<SourceSnapshotId> {
+        Ok(SourceSnapshotId::new(
             self.local_store_id.clone(),
             SourceWatermark::new(self.watermark.clone())?,
-        );
+        ))
+    }
+    pub fn manifest(&self) -> IndexResult<Manifest> {
+        let source = self.source()?;
         let manifest = Manifest::new(
             source,
             self.entries.iter().map(|e| e.state.clone()).collect(),
@@ -216,11 +219,25 @@ impl Header {
 #[serde(rename_all = "camelCase")]
 pub struct DocumentIndexStage {
     snapshot: IndexSnapshotId,
+    #[serde(skip)]
+    source: SourceSnapshotId,
 }
 impl DocumentIndexStage {
     pub fn snapshot(&self) -> &IndexSnapshotId {
         &self.snapshot
     }
+    /// Actual captured source, not the latest source observed after staging.
+    pub fn source(&self) -> &SourceSnapshotId {
+        &self.source
+    }
+}
+/// Actual restored work counters; this carries no staging/write authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentStageProgress {
+    pub prepared_documents: usize,
+    pub total_documents: usize,
+    pub ready: bool,
 }
 /// Disjoint outcomes for eligible content-facts lookups in this pump only.
 /// Same-entry generation reuse and skipped optional writes are independent.
@@ -460,15 +477,24 @@ fn header(tx: &DocumentTransaction<'_>, snapshot: &IndexSnapshotId) -> IndexResu
         )
         .optional()?;
     let h: Header = decode(&raw.ok_or(DocumentIndexError::RebuildRequired)?)?;
+    validate_header(tx, &c, snapshot, &h)?;
+    Ok(h)
+}
+fn validate_header(
+    tx: &DocumentTransaction<'_>,
+    control: &Control,
+    snapshot: &IndexSnapshotId,
+    h: &Header,
+) -> IndexResult<()> {
     if h.snapshot.id()? != *snapshot
         || h.manifest.local_store_id != *snapshot.local_store_id()
         || h.manifest.local_store_id != text_sync::identity(&tx.authority)?.local_store_id
-        || snapshot.generation() > c.allocated
+        || snapshot.generation() > control.allocated
     {
         return Err(DocumentIndexError::RebuildRequired);
     }
     h.fence()?;
-    Ok(h)
+    Ok(())
 }
 fn builder(tx: &DocumentTransaction<'_>, h: &Header) -> IndexResult<GenerationBuilder> {
     let manifest = h.manifest.manifest()?;
@@ -549,12 +575,25 @@ fn check_stage(tx: &DocumentTransaction<'_>, h: &Header) -> IndexResult<()> {
     if active != *h || active.published {
         return Err(IndexError::StaleIndex.into());
     }
-    if c.epoch != h.snapshot.epoch {
+    check_current_stage(tx, &c, h)
+}
+/// The caller holds this transaction's validated control and actual unpublished
+/// header: either freshly selected here, or reloaded and compared by check_stage.
+/// External/stale header callers must retain check_stage's full reload/equality.
+fn check_current_stage(
+    tx: &DocumentTransaction<'_>,
+    control: &Control,
+    h: &Header,
+) -> IndexResult<()> {
+    if h.published {
+        return Err(IndexError::StaleIndex.into());
+    }
+    if control.epoch != h.snapshot.epoch {
         return Err(IndexError::SnapshotExpired.into());
     }
     h.fence()?.check(
         &source(tx)?,
-        c.head.as_ref().map(Snapshot::id).transpose()?.as_ref(),
+        control.head.as_ref().map(Snapshot::id).transpose()?.as_ref(),
     )?;
     if capture(tx)? != h.manifest {
         return Err(DocumentIndexError::RebuildRequired);
@@ -857,8 +896,9 @@ impl Store {
             [encode(&c)?],
         )?;
         prune(&tx, false, DOCUMENT_INDEX_RETAINED_STAGES)?;
+        let source = h.manifest.source()?;
         tx.commit()?;
-        Ok(DocumentIndexStage { snapshot })
+        Ok(DocumentIndexStage { snapshot, source })
     }
     /// Discard only this unpublished staging attempt, even after source/index
     /// heads advance. The locator's actual store identity must match. Exact
@@ -944,6 +984,7 @@ impl Store {
                 if !h.published {
                     out.push(DocumentIndexStage {
                         snapshot: h.snapshot.id()?,
+                        source: h.manifest.source()?,
                     });
                 }
             }
@@ -963,10 +1004,87 @@ impl Store {
         }
         check_stage(&tx, &h)?;
         builder(&tx, &h)?;
+        let source = h.manifest.source()?;
         tx.commit()?;
         Ok(DocumentIndexStage {
             snapshot: snapshot.clone(),
+            source,
         })
+    }
+    /// Recover the newest usable unpublished attempt in one pinned read.
+    /// Inspect one bounded header/builder at a time; corrupt cache or authority
+    /// is never treated as a stale attempt and never silently cleared.
+    pub fn recover_document_index_stage(
+        &self,
+    ) -> IndexResult<Option<(DocumentIndexStage, DocumentStageProgress)>> {
+        let tx = self.document_transaction(TransactionBehavior::Deferred)?;
+        // Includes the existing aggregate count and per-header length bounds,
+        // before any untrusted header/key is loaded into Rust.
+        let c = control(&tx)?;
+        let retained = DOCUMENT_INDEX_RETAINED_GENERATIONS + DOCUMENT_INDEX_RETAINED_STAGES;
+        let recovered = {
+            let mut statement = tx.prepare(
+                "SELECT snapshot_key,record FROM document_index_generations NOT INDEXED ORDER BY rowid DESC LIMIT ?1",
+            )?;
+            let mut rows = statement.query([i64::try_from(retained + 1)
+                .map_err(|_| DocumentIndexError::RebuildRequired)?])?;
+            let mut inspected = 0;
+            let mut recovered = None;
+            while let Some(row) = rows.next()? {
+                inspected += 1;
+                if inspected > retained {
+                    return Err(DocumentIndexError::RebuildRequired);
+                }
+                let key: String = row.get(0)?;
+                let h: Header = decode(&row.get::<_, String>(1)?)?;
+                if h.snapshot.key() != key || h.snapshot.epoch != c.epoch {
+                    return Err(DocumentIndexError::RebuildRequired);
+                }
+                let snapshot = h.snapshot.id()?;
+                validate_header(&tx, &c, &snapshot, &h)?;
+                if h.published {
+                    continue;
+                }
+                let candidate = (|| {
+                    // This exact header and control came from the same pinned
+                    // read above; no second header decode/resume is necessary.
+                    check_current_stage(&tx, &c, &h)?;
+                    let b = builder(&tx, &h)?;
+                    let progress = DocumentStageProgress {
+                        prepared_documents: b.prepared_records(),
+                        total_documents: b
+                            .manifest()
+                            .entries()
+                            .iter()
+                            .filter(|entry| entry.kind == EntryKind::File)
+                            .count(),
+                        ready: b.ready(),
+                    };
+                    Ok((
+                        DocumentIndexStage {
+                            snapshot,
+                            source: h.manifest.source()?,
+                        },
+                        progress,
+                    ))
+                })();
+                match candidate {
+                    Ok(value) => {
+                        recovered = Some(value);
+                        break;
+                    }
+                    Err(DocumentIndexError::Contract(
+                        IndexError::StaleSource
+                        | IndexError::StaleIndex
+                        | IndexError::SnapshotExpired,
+                    )) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            recovered
+        };
+        tx.commit()?;
+        Ok(recovered)
     }
     pub fn pump_document_index(
         &mut self,
@@ -1648,3 +1766,7 @@ mod cache_snapshot_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "document_stage_recovery_tests.rs"]
+mod stage_recovery_tests;
