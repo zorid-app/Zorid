@@ -194,7 +194,7 @@ impl Sessions {
             self.lifetime = observed;
         }
     }
-    fn adopt(&mut self, reduction: &Reduction) {
+    pub(crate) fn adopt(&mut self, reduction: &Reduction) {
         for outcome in &reduction.request_outcomes {
             let id = outcome_id(outcome);
             for client in self.clients.values_mut() {
@@ -426,6 +426,20 @@ impl Sessions {
         };
         bounded(&value)?;
         Ok(Reply { value, rebuilt })
+    }
+    pub(crate) fn release_after_work(
+        &mut self,
+        vault: &mut NativeVault,
+        client: &OperationId,
+        last: bool,
+    ) -> Result<bool> {
+        // The actual composite close (when last) already drained. Never route an
+        // independent legacy step around the selected draft/committed ticket.
+        let rebuilt = self.release(vault, client, false)?;
+        if last {
+            self.owner.expire();
+        }
+        Ok(rebuilt)
     }
     /// Called by trusted release after existing flush/admission handling. It
     /// cancels only this client's demand; last-owner retirement drains at most

@@ -392,9 +392,36 @@ pub(crate) struct Sessions {
     runtime: crate::document_runtime::Sessions,
 }
 impl Sessions {
+    // Only actual core Continue/step receipts supply this reduction. Keep the
+    // existing request mapping and successful rebuild pin-disposal behavior.
+    pub(crate) fn adopt_runtime(
+        &mut self,
+        reduction: &zorid_native::DocumentRuntimeReduction,
+        rebuilt: bool,
+    ) {
+        self.runtime.adopt(reduction);
+        if rebuilt {
+            for client in self.clients.values_mut() {
+                client.pins.clear();
+            }
+        }
+    }
     #[cfg(test)]
     pub(crate) fn retained_pin_count(&self) -> usize {
         self.clients.values().map(|client| client.pins.len()).sum()
+    }
+    pub(crate) fn release_runtime_after_work(
+        &mut self,
+        vault: &mut NativeVault,
+        client: &OperationId,
+        last: bool,
+    ) -> Result<(), Value> {
+        if self.runtime.release_after_work(vault, client, last)? {
+            for client in self.clients.values_mut() {
+                client.pins.clear();
+            }
+        }
+        Ok(())
     }
     pub(crate) fn release_runtime(&mut self, vault: &mut NativeVault, client: &OperationId, last: bool) -> Result<(),Value> {
         if self.runtime.release(vault,client,last)? {

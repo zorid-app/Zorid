@@ -3,6 +3,7 @@
 mod binary;
 mod documents;
 mod document_runtime;
+mod document_drafts;
 mod recovery;
 mod workblocks;
 mod embedded_fixture_sync;
@@ -60,6 +61,13 @@ enum Command {
     },
     Binary {
         client_id: OperationId,
+    },
+    DocumentDrafts {
+        client_id: OperationId,
+        request: document_drafts::Request,
+    },
+    DocumentWork {
+        request: document_drafts::WorkRequest,
     },
     FixtureFamilyEnroll,
     FixtureFamilyStatus,
@@ -229,7 +237,12 @@ fn native_fault(error: zorid_native::Error) -> Value {
 
 // Two big-endian u32 lengths, then UTF-8 JSON header and exact binary bytes.
 // Check both lengths before allocation. Partial frames are terminal; never resync.
-fn read_frame(input: &mut impl Read) -> io::Result<Option<(Vec<u8>, Vec<u8>)>> {
+struct FrameHead {
+    header: Vec<u8>,
+    request: Request,
+    body_len: usize,
+}
+fn read_frame_head(input: &mut impl Read) -> io::Result<Option<FrameHead>> {
     let mut prefix = [0; 8];
     loop {
         match input.read(&mut prefix[..1]) {
@@ -249,19 +262,53 @@ fn read_frame(input: &mut impl Read) -> io::Result<Option<(Vec<u8>, Vec<u8>)>> {
     input.read_exact(&mut header)?;
     let request: Request = serde_json::from_slice(&header)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "request"))?;
-    if body_len
-        > (if matches!(request.command, Command::Binary { .. }) {
-            binary::MAX_FRAME
-        } else {
-            MAX_BODY
-        })
-        && !matches!(request.command, Command::CheckpointCas { .. })
-    {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "body limit"));
+    let transient = matches!(
+        &request.command,
+        Command::DocumentDrafts { .. } | Command::DocumentWork { .. }
+    );
+    let maximum = match &request.command {
+        Command::DocumentDrafts { request, .. } if request.accepts_body() => {
+            document_drafts::MAX_CHUNK
+        }
+        Command::DocumentDrafts { .. } | Command::DocumentWork { .. } => 0,
+        Command::Binary { .. } => binary::MAX_FRAME,
+        Command::CheckpointCas { .. } => MAX_CHECKPOINT_BODY,
+        _ => MAX_BODY,
+    };
+    if body_len > maximum || (transient && header_len > document_drafts::MAX_CONTROL) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "body/control limit",
+        ));
     }
-    let mut body = vec![0; body_len];
+    Ok(Some(FrameHead {
+        header,
+        request,
+        body_len,
+    }))
+}
+fn read_frame_body(input: &mut impl Read, length: usize) -> io::Result<Vec<u8>> {
+    let mut body = vec![0; length];
     input.read_exact(&mut body)?;
-    Ok(Some((header, body)))
+    Ok(body)
+}
+// Compatibility helper for existing framed tests/embedded commands. The stdio
+// draft lane never calls this allocating body helper.
+fn read_frame(input: &mut impl Read) -> io::Result<Option<(Vec<u8>, Vec<u8>)>> {
+    let Some(head) = read_frame_head(input)? else {
+        return Ok(None);
+    };
+    if matches!(
+        &head.request.command,
+        Command::DocumentDrafts { .. } | Command::DocumentWork { .. }
+    ) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "stdio-only draft frame",
+        ));
+    }
+    let body = read_frame_body(input, head.body_len)?;
+    Ok(Some((head.header, body)))
 }
 struct HeaderBuffer(Vec<u8>);
 impl Write for HeaderBuffer {
@@ -373,6 +420,8 @@ struct ClientLeases {
     active: BTreeMap<String, ClientLease>,
     binary_reads: BTreeMap<(OperationId, OperationId), zorid_store::BinaryReadSession>,
     released: BTreeMap<String, ClientLeaseRef>,
+    // Retain kernel ownership while trusted turns dispose actual F payloads.
+    revoking: BTreeMap<String, ()>,
 }
 fn admission_fault(error: ClientAdmissionError) -> Value {
     match error {
@@ -392,6 +441,7 @@ impl ClientLeases {
             Command::Binary { client_id }
             | Command::Documents { client_id, .. }
             | Command::Workblocks { client_id, .. }
+            | Command::DocumentDrafts { client_id, .. }
             | Command::PrepareIntent { client_id, .. }
             | Command::ListIntents { client_id, .. }
             | Command::CreateText { client_id, .. }
@@ -420,6 +470,9 @@ impl ClientLeases {
             .filter(|lease| lease.reference() == reference)
             .ok_or_else(|| fault("client_not_admitted"))?;
         vault.verify_client_lease(lease).map_err(admission_fault)?;
+        if self.revoking.contains_key(reference.token.as_str()) {
+            return Err(fault("client_not_admitted"));
+        }
         if client.is_some_and(|client| client != &reference.client_id) {
             return Err(fault("client_scope_mismatch"));
         }
@@ -432,7 +485,8 @@ impl ClientLeases {
             {
                 Err(fault("client_scope_mismatch"))
             }
-            Command::ClaimClient { .. }
+            Command::DocumentWork { .. }
+            | Command::ClaimClient { .. }
             | Command::ReleaseClient { .. }
             | Command::Apply { .. }
             | Command::FixtureFamilyEnroll
@@ -522,6 +576,9 @@ fn execute(
     body: Vec<u8>,
 ) -> Result<(Value, Vec<u8>), Value> {
     let result = match command {
+        Command::DocumentDrafts { .. } | Command::DocumentWork { .. } => {
+            return Err(fault("client_operation_unsupported"));
+        }
         Command::RecoveryList { entry_id, limit, before } => {
             empty(&body)?;
             return recovery::list(vault, &entry_id, limit, before);
@@ -577,13 +634,35 @@ fn execute(
                 .is_some_and(|lease| lease.reference() == &reference)
             {
                 let last_runtime_owner = leases.active.values().all(|lease| lease.reference().client_id == reference.client_id);
-                leases.documents.release_runtime(vault,&reference.client_id,last_runtime_owner)?;
+                let composite = vault.document_draft_snapshot().is_some();
+                if composite {
+                    leases
+                        .revoking
+                        .insert(reference.token.as_str().to_owned(), ());
+                }
+                if document_drafts::release_client(
+                    vault,
+                    &mut leases.documents,
+                    &reference.client_id,
+                    last_runtime_owner,
+                )? {
+                    leases.documents.release_runtime_after_work(
+                        vault,
+                        &reference.client_id,
+                        last_runtime_owner,
+                    )?;
+                } else {
+                    leases
+                        .documents
+                        .release_runtime(vault, &reference.client_id, last_runtime_owner)?;
+                }
                 leases
                     .binary_reads
                     .retain(|(client, _), _| client != &reference.client_id);
                 leases.documents.release(&reference.client_id);
                 leases.workblocks.release(&reference.client_id);
                 leases.active.remove(reference.token.as_str()); // Drop releases kernel ownership; NEVER unlink.
+                leases.revoking.remove(reference.token.as_str());
                 leases
                     .released
                     .insert(reference.token.as_str().to_owned(), reference.clone());
@@ -1026,12 +1105,25 @@ impl EmbeddedHost {
     /// Caller serializes access and retains this host until all accepted calls drain.
     pub fn dispatch(&mut self, frame: &[u8]) -> io::Result<Vec<u8>> {
         let mut input = frame;
-        let (header, body) = read_frame(&mut input)?.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "empty frame"))?;
-        if !input.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "trailing frame"));
+        let head = read_frame_head(&mut input)?
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "empty frame"))?;
+        if input.len() != head.body_len {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "trailing/truncated frame",
+            ));
         }
-        let request: Request = serde_json::from_slice(&header)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "request"))?;
+        let request = head.request;
+        let transient = matches!(
+            &request.command,
+            Command::DocumentDrafts { .. } | Command::DocumentWork { .. }
+        );
+        // Reject before making an embedded payload or response-body copy.
+        let body = if transient {
+            vec![]
+        } else {
+            read_frame_body(&mut input, head.body_len)?
+        };
         if request.request_id.is_empty() || request.request_id.len() > 64
             || !request.request_id.bytes().all(|b| b.is_ascii_digit()) || request.request_id == "0" {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "request identity"));
@@ -1045,7 +1137,7 @@ impl EmbeddedHost {
             Command::FixtureFamilyStatus | Command::Reconcile { .. } |
             Command::Recover | Command::Rescan);
         let may_commit = command_may_commit(&request.command);
-        let answer = if trusted_only { Err(fault("client_operation_unsupported")) }
+        let answer = if trusted_only || transient { Err(fault("client_operation_unsupported")) }
         else if request.version == 1 {
             self.leases.authorize(&self.vault, &request.command, request.lease.as_ref())
                 .and_then(|()| execute(&mut self.vault, &mut self.leases, None, request.command, body))
@@ -1156,16 +1248,12 @@ pub fn run_stdio() -> io::Result<()> {
     if initialize_local { snapshot_local_recovery_if_due(&mut vault, &mut leases, now_ms()); }
     write_frame(
         &mut output,
-        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"max_binary_frame":binary::MAX_FRAME,"binary_limits":{"maxFileBytes":"67108864","maxChunkBytes":binary::MAX_CHUNK,"smallReadBytes":binary::SMALL_READ.to_string()},"reconciliation":reconciliation,"capabilities":["workblocks","documents","document_metadata_rows","document_runtime","binary_streams","reconciliation_status","local_family_status","file_command","file_command_compact","file_command_status","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","stat_path","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
+        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"max_binary_frame":binary::MAX_FRAME,"binary_limits":{"maxFileBytes":"67108864","maxChunkBytes":binary::MAX_CHUNK,"smallReadBytes":binary::SMALL_READ.to_string()},"reconciliation":reconciliation,"capabilities":["workblocks","documents","document_metadata_rows","document_runtime","document_drafts","binary_streams","reconciliation_status","local_family_status","file_command","file_command_compact","file_command_status","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","stat_path","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
         &[],
     )?;
     let mut input = io::stdin().lock();
-    while let Some((header, body)) = read_frame(&mut input)? {
-        // Parse directly into typed input: reject duplicate/unknown fields.
-        let request: Request = match serde_json::from_slice(&header) {
-            Ok(request) => request,
-            Err(_) => return Err(io::Error::new(io::ErrorKind::InvalidData, "request")),
-        };
+    while let Some(head) = read_frame_head(&mut input)? {
+        let request = head.request;
         if request.request_id.is_empty()
             || request.request_id.len() > 64
             || !request.request_id.bytes().all(|b| b.is_ascii_digit())
@@ -1176,6 +1264,21 @@ pub fn run_stdio() -> io::Result<()> {
                 "request identity",
             ));
         }
+        if matches!(
+            &request.command,
+            Command::DocumentDrafts { .. } | Command::DocumentWork { .. }
+        ) {
+            document_drafts::execute_frame(
+                &mut vault,
+                &mut leases,
+                request,
+                head.body_len,
+                &mut input,
+                &mut output,
+            )?;
+            continue;
+        }
+        let body = read_frame_body(&mut input, head.body_len)?;
         let may_commit = command_may_commit(&request.command);
         let answer = if request.version == 1 {
             leases
