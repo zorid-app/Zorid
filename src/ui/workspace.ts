@@ -9,6 +9,8 @@ import { catchUpDocumentIndex, documentErrorCode, DocumentSemanticsError } from 
 import type { DocumentCursor, DocumentPin, DocumentService, DocumentSnapshotId, DocumentSourceId, DocumentTaskWitness } from '../core/document-semantics.ts';
 import { openVersionHistory } from './version-history.ts';
 import { mountImportStatus } from './import-status.ts';
+import { createReadingFind } from './reading-find.ts';
+import type { ReadingFind } from './reading-find.ts';
 import { HotkeyPreferences, HOTKEY_STORAGE_KEY, WORKSPACE_HOTKEY_COMMANDS, EDITOR_HOTKEY_COMMANDS } from './hotkeys.ts';
 import { mountHotkeySettings } from './hotkey-settings.ts';
 import {pdfMarkdownLink} from './pdf-link.ts';
@@ -84,7 +86,7 @@ interface Pane {
   editor?:EditorHandle; imageView?:ImageView; pdfView?:PdfView; mediaView?:MediaView; canvasView?:CanvasView; baseView?:BaseSession;
   calendarView?:CalendarView; tasksView?:TasksView;
   canvasSource?:string; baseEmbeds?:BaseEmbedSessions; embeds?:MarkdownEmbeds; properties?:PropertiesView;
-  propertyTimer?:ReturnType<typeof setTimeout>; refreshPreview?:()=>void;
+  propertyTimer?:ReturnType<typeof setTimeout>; refreshPreview?:()=>void; readingFind?:ReadingFind;
   history:string[]; historyIndex:number; persisted?:Record<string,unknown>;
 }
 interface Settings extends AttachmentImportSettings { theme: 'system' | 'dark' | 'light'; fontSize: number; readableWidth: boolean; showInlineTitle: boolean; defaultMode: 'live'; useTab: boolean; tabSize: number; smartIndentList: boolean; autoConvertHtml: boolean; }
@@ -1117,7 +1119,9 @@ export class Workspace {
       const baseSessions=this.embeddedBases(()=>pane,()=>{if(generation!==this.vaultGeneration||pane.runtime!==runtime||runtime.phase==='disposed')throw new Error('The source note is closed.');});
       const createEmbeds=()=>new MarkdownEmbeds({bases:{sessions:baseSessions,identity:target=>this.treeEntryToken(target)},vault:this.vault,resources:this.attachments,pdfFactory:this.viewFactories.pdf,generatePdfLink:(target,fragment,alias)=>generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase!=='disposed'?pdfMarkdownLink(this.vault,target,fragment,alias,this.settings):null,contextMenu:(event,request,source)=>{const target=this.vault.metadata.resolveLink(source,request.target,request.kind);const entry=target?this.vault.entries.get(target):undefined;if(entry){const point=this.menuPoint(event);event.preventDefault();event.stopPropagation();this.fileMenu(entry,point.x,point.y);}},open:(source,target,kind)=>this.run(()=>this.followLink(source,target,pane,kind)),read:async target=>{const loaded=this.buffers.get(target);if(loaded){await loaded.load();if(loaded.dirty)return loaded.text;}return this.vault.cachedRead(target);},taskChange:(target,line,checked)=>this.changeTask(target,line,checked)});
       if(tab.mode==='reading'){
-        const preview=el('div','markdown-preview');scroll.append(preview);
+        const preview=el('div','markdown-preview');preview.tabIndex=-1;scroll.append(preview);
+        const findHost=el('div','zorid-reading-find-host');content.insertBefore(findHost,scroll);
+        pane.readingFind=createReadingFind(findHost,preview,{isCurrent:()=>generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path&&pane.runtime===runtime&&runtime.phase!=='disposed'&&this.panes.includes(pane)&&this.current(pane)?.id===tab.id&&!this.closing&&!this.root.inert&&!this.platformReleased,returnFocus:()=>{if(this.activePane===pane)preview.focus({preventScroll:true});}});
         pane.refreshPreview=()=>{
           if(version!==pane.renderVersion||pane.viewPath!==path||!pane.runtime||pane.runtime.phase==='disposed')return;
           destroyMarkdown(preview);
@@ -1126,7 +1130,8 @@ export class Workspace {
           pane.embeds=embeds;
           try{
             renderMarkdown(preview,buffer.text,(target,kind)=>this.run(()=>this.followLink(path,target,pane,kind)),(line,checked)=>this.run(()=>this.changeTask(path,line,checked)),{embed:request=>embeds.render(request,path),properties:false});
-          }catch(error){destroyMarkdown(preview);embeds.destroy();if(pane.embeds===embeds)pane.embeds=undefined;throw error;}
+          }catch(error){pane.readingFind?.close();destroyMarkdown(preview);embeds.destroy();if(pane.embeds===embeds)pane.embeds=undefined;throw error;}
+          pane.readingFind?.refresh();
         };
         pane.refreshPreview();
       }else{
@@ -1156,7 +1161,7 @@ export class Workspace {
       if(buffer.error)this.noteStorageFailure(buffer.error);
     }catch(error){
       if(version!==pane.renderVersion)return;
-      destroyMarkdown(scroll);pane.embeds?.destroy();pane.embeds=undefined;pane.refreshPreview=undefined;
+      pane.readingFind?.destroy();pane.readingFind=undefined;destroyMarkdown(scroll);pane.embeds?.destroy();pane.embeds=undefined;pane.refreshPreview=undefined;
       console.error('Note could not be opened',error);
       scroll.append(el('p','error-message','This note couldn’t be opened. Please try opening it again.'));
     }
@@ -1391,7 +1396,7 @@ export class Workspace {
   private viewSettings():string{return JSON.stringify([this.settings.readableWidth,this.settings.showInlineTitle,this.settings.useTab,this.settings.tabSize,this.settings.smartIndentList]);}
   private clearPaneViewFields(pane:Pane):void{
     pane.viewTabId=undefined;pane.viewPath=undefined;pane.viewMode=undefined;pane.viewKind=undefined;pane.viewReady=false;pane.rebindView=undefined;pane.content=undefined;pane.runtime=undefined;
-    pane.editor=undefined;pane.imageView=undefined;pane.pdfView=undefined;pane.mediaView=undefined;pane.canvasView=undefined;pane.baseView=undefined;pane.calendarView=undefined;pane.tasksView=undefined;pane.canvasSource=undefined;pane.baseEmbeds=undefined;pane.embeds=undefined;pane.properties=undefined;pane.refreshPreview=undefined;pane.propertyTimer=undefined;
+    pane.editor=undefined;pane.imageView=undefined;pane.pdfView=undefined;pane.mediaView=undefined;pane.canvasView=undefined;pane.baseView=undefined;pane.calendarView=undefined;pane.tasksView=undefined;pane.canvasSource=undefined;pane.baseEmbeds=undefined;pane.embeds=undefined;pane.properties=undefined;pane.refreshPreview=undefined;pane.readingFind=undefined;pane.propertyTimer=undefined;
     pane.renderVersion=++this.viewSequence;
   }
   private parkPaneView(pane:Pane,keepConnected=false):void{
@@ -1399,7 +1404,7 @@ export class Workspace {
     if(!tab||!pane.content||!pane.runtime)return;
     this.capturePaneState(pane);
     const parked:Pane={...pane,tabs:[tab],active:tab.id,history:[...pane.history],element:pane.content};
-    pane.rebindView?.(parked);this.cachedViews.set(tab,parked);
+    pane.rebindView?.(parked);parked.readingFind?.refresh();this.cachedViews.set(tab,parked);
     if(!keepConnected)pane.runtime.detach();
     this.clearPaneViewFields(pane);
   }
@@ -1409,10 +1414,10 @@ export class Workspace {
     const cached=this.cachedViews.get(tab);if(!cached?.runtime||!cached.content)return false;
     const connected=cached.content.isConnected;
     cached.runtime.attach(pane.element,this.viewOwner(pane));
-    const fields=['viewTabId','viewPath','viewMode','viewKind','viewReady','viewSettings','rebindView','editor','imageView','pdfView','mediaView','canvasView','baseView','calendarView','tasksView','canvasSource','baseEmbeds','embeds','properties','refreshPreview','propertyTimer','renderVersion','runtime','content'] as const;
+    const fields=['viewTabId','viewPath','viewMode','viewKind','viewReady','viewSettings','rebindView','editor','imageView','pdfView','mediaView','canvasView','baseView','calendarView','tasksView','canvasSource','baseEmbeds','embeds','properties','refreshPreview','readingFind','propertyTimer','renderVersion','runtime','content'] as const;
     for(const key of fields)(pane as unknown as Record<string,unknown>)[key]=cached[key];
     pane.history=tab.history??cached.history;pane.historyIndex=tab.historyIndex??cached.historyIndex;
-    pane.rebindView?.(pane);this.cachedViews.delete(tab);this.applyViewSettings(pane);
+    pane.rebindView?.(pane);this.cachedViews.delete(tab);this.applyViewSettings(pane);pane.readingFind?.refresh();
     const saved=tab.viewState?.editor,current=pane.editor?.getViewState?.();
     if(!connected&&saved&&current&&JSON.stringify(saved.selection)!==JSON.stringify(current.selection))pane.editor?.restoreViewState?.({...current,selection:saved.selection});
     return true;
@@ -1439,7 +1444,7 @@ export class Workspace {
   private async clearCachedViews():Promise<void>{for(const [tab,pane] of this.cachedViews){await this.disposePaneViews(pane);this.cachedViews.delete(tab);}}
   private releasePaneView(pane:Pane,content:HTMLElement):void{
     if(pane.runtime){this.nativePresentations.get(pane.runtime)?.dispose();this.nativePresentations.delete(pane.runtime);}
-    this.capturePaneState(pane);destroyMarkdown(content);
+    this.capturePaneState(pane);pane.readingFind?.destroy();destroyMarkdown(content);
     clearTimeout(pane.propertyTimer);pane.editor?.destroy();pane.imageView?.destroy();pane.pdfView?.destroy();pane.mediaView?.destroy();pane.canvasView?.destroy();pane.calendarView?.destroy();pane.embeds?.destroy();pane.properties?.destroy();this.clearPaneViewFields(pane);
   }
   private async disposePaneViews(pane:Pane):Promise<void>{
@@ -2357,10 +2362,13 @@ export class Workspace {
       }
     }
     if(id){event.preventDefault();event.stopPropagation();this.executeHotkey(id);return;}
-    // PDF search remains a focused-view command, sharing the editor's reserved
+    // Reading and PDF search remain focused-view commands, sharing the editor's reserved
     // primary-F chord rather than becoming a global configurable command.
     const primary=this.hotkeys.platform==='mac'?event.metaKey&&!event.ctrlKey:event.ctrlKey&&!event.metaKey;
-    if(primary&&!event.shiftKey&&!event.altKey&&!event.repeat&&event.key.toLowerCase()==='f'&&this.activePane?.pdfView){event.preventDefault();this.activePane.pdfView.showSearch();}
+    if(primary&&!event.shiftKey&&!event.altKey&&!event.repeat&&event.key.toLowerCase()==='f'){
+      if(this.activePane?.readingFind){event.preventDefault();this.activePane.readingFind.open();}
+      else if(this.activePane?.pdfView){event.preventDefault();this.activePane.pdfView.showSearch();}
+    }
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.tasksView?.flush();await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
   async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.tasksView?.flush();if(pane.tasksView?.hasPendingChanges())throw new Error('Tasks has unsaved or unconfirmed changes. Save, discard, or resolve them before closing.');await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
