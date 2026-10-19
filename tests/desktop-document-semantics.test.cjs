@@ -337,6 +337,7 @@ test('unknown baseline selects only host reset; reset continuation drops the unu
   const f=metadataRowsController();await f.open();f.respond=()=>metadataRowsReply({cursor:'reset:next'});
   await f.controller.invoke(request('metadata_rows',{pinId:'2',baseline:{pinId:'1',snapshot},limit:1}));
   await f.controller.invoke(request('close',{pinId:'1'}));await f.controller.invoke(request('metadata_rows',{pinId:'2',cursor:'reset:next'}));
+  f.respond=()=>metadataRowsReply({cursor:'unknown:next'});
   await f.controller.invoke(request('metadata_rows',{pinId:'2',baseline:{pinId:'99',snapshot}}));
   f.respond=()=>metadataRowsReply({mode:'delta',from:snapshot,cursor:'foreign'});
   await assert.rejects(f.controller.invoke(request('metadata_rows',{pinId:'2',baseline:{pinId:'99',snapshot}})),{code:'invalid_document_response'});

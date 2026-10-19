@@ -58,7 +58,7 @@ test('normal Base adapter omits unset scalar options before strict IPC capture',
     const c=request.command;
     if(c.op==='open')return opened(c.pinId);
     if(c.op==='close')return true;
-    if(c.op==='base'){optionsSeen.push(c.options);return {snapshot,source,coverageComplete:true,value:{}};}
+    if(c.op==='base'){optionsSeen.push(c.options);return {snapshot,source,coverageComplete:true,value:{result:{}}};}
     throw Error('Unexpected operation');
   });
   const pin=await binding.service.open();
