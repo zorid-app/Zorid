@@ -1,5 +1,5 @@
 use zorid_core::{EntryId, EntryKind, Mutation, MutationRequest, OperationId, VaultPath};
-use zorid_store::{PhysicalBinding, PhysicalIdentity, ProjectionBaseline, Store};
+use zorid_store::{PhysicalBinding, PhysicalIdentity, ProjectionBaseline, Store, StoredContent};
 
 fn fixture() -> (tempfile::TempDir, Store, PhysicalBinding) {
     let dir = tempfile::tempdir().unwrap();
@@ -31,7 +31,7 @@ fn fixture() -> (tempfile::TempDir, Store, PhysicalBinding) {
             id.as_str(),
             serde_json::to_string(&ProjectionBaseline {
                 state,
-                content: b"saved".to_vec()
+                content: StoredContent::InlineBytes(b"saved".to_vec())
             })
             .unwrap()
         ],
@@ -113,7 +113,7 @@ fn prior_schema_is_rejected_without_mutation_or_invented_binding() {
         serde_json::from_str::<ProjectionBaseline>(&retained)
             .unwrap()
             .content,
-        b"saved"
+        StoredContent::InlineBytes(b"saved".to_vec())
     );
 }
 
@@ -161,7 +161,7 @@ fn physical_path_owner_survives_hidden_logical_path_and_rejects_ambiguity() {
             other_id.as_str(),
             serde_json::to_string(&ProjectionBaseline {
                 state: other.state.clone(),
-                content: b"other".to_vec()
+                content: StoredContent::InlineBytes(b"other".to_vec())
             })
             .unwrap()
         ],

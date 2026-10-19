@@ -1,6 +1,7 @@
 use zorid_core::{EntryId, EntryKind, Mutation, MutationRequest, OperationId, VaultPath};
 use zorid_store::{
     DirectoryPhase, NamespaceAttempt, NamespaceEvidence, ProjectionPhase, ProjectionWork, Store,
+    StoredContent,
 };
 
 fn id(s: &str) -> EntryId {
@@ -53,7 +54,7 @@ fn evidence(store: &Store, name: &str, moving: bool) -> NamespaceEvidence {
         source_identity: format!("inode-{name}"),
         source_parent_identity: "root-inode".into(),
         destination_parent_identity: moving.then(|| "root-inode".into()),
-        content: value.content,
+        content: value.content.map(StoredContent::InlineBytes),
         file_baseline: store.projection_baseline(&id(name)).unwrap(),
         directory_baseline: store.directory_baseline(&id(name)).unwrap(),
         physical_binding: store.physical_binding(&id(name)).unwrap(),
@@ -130,7 +131,10 @@ fn move_restart_exact_retirement_keeps_later_write_pending() {
     assert_eq!(s.finish_namespace(&a.job.job_id).unwrap(), finished);
     let baseline = s.projection_baseline(&id("file")).unwrap().unwrap();
     assert_eq!(baseline.state.path, path("new"));
-    assert_eq!(baseline.content, b"original");
+    assert_eq!(
+        baseline.content,
+        StoredContent::InlineBytes(b"original".to_vec())
+    );
     let binding = s.physical_binding(&id("file")).unwrap().unwrap();
     assert_eq!(binding.state, baseline.state);
     assert_eq!(binding.physical.inode, "inode-file");
@@ -364,7 +368,7 @@ fn stale_content_or_directory_identity_cannot_commit_namespace_mutation() {
     seed(&mut s, "file", "file", EntryKind::File);
     let req = deleting(&s, "file", "delete-file");
     let mut proof = evidence(&s, "file", false);
-    proof.content = Some(b"different".to_vec());
+    proof.content = Some(StoredContent::InlineBytes(b"different".to_vec()));
     assert!(s.apply_namespace(&req, &[proof]).is_err());
     assert!(s.replay(&req).unwrap().is_none());
     seed(&mut s, "folder", "folder", EntryKind::Folder);
