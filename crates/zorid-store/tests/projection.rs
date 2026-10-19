@@ -1,6 +1,6 @@
 mod common;
 use zorid_core::{EntryId, EntryKind, Mutation, MutationRequest, OperationId, VaultPath};
-use zorid_store::{ProjectionPhase, Store};
+use zorid_store::{ProjectionPhase, Store, StoredContent};
 fn create(id: &str, path: &str, kind: EntryKind) -> MutationRequest {
     MutationRequest {
         operation_id: OperationId::new(format!("create-{id}")).unwrap(),
@@ -102,11 +102,14 @@ fn older_publication_keeps_later_file_and_folder_intents() {
     assert_eq!(store.pending_counts().unwrap(), (3, 2));
     assert_eq!(
         store.projection_baseline(&id).unwrap().unwrap().content,
-        b"original"
+        StoredContent::InlineBytes(b"original".to_vec())
     );
     assert_eq!(store.read(&id).unwrap().unwrap().content.unwrap(), b"newer");
     let next = store.begin_projection(&id).unwrap();
-    assert_eq!(next.baseline.unwrap().content, b"original");
+    assert_eq!(
+        next.baseline.unwrap().content,
+        StoredContent::InlineBytes(b"original".to_vec())
+    );
     assert_eq!(serde_json::to_value(&next.through_sequence).unwrap(), "3");
 }
 #[test]
