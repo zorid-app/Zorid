@@ -106,8 +106,14 @@ test('unfinished first index exposes refresh and never fabricates an empty compl
 });
 
 test('display storage stays bounded and a new query can replace capped output',async()=>{
-  const ui=fixture({query:async spec=>({queryId:spec.query,prepare:async()=>({state:'ready',cursor:'0' as DocumentCursor}),page:async()=>page(spec,spec.query==='many'?Array.from({length:201},(_,index)=>({...chunk(),entry:{...entry,id:String(index),path:`${index}.md`}})):[chunk()]),close:async()=>{}})});
-  await ui.search('many');assert.equal(ui.frame.groups.length,200);assert.equal(ui.frame.displayTruncated,true);assert.deepEqual(ui.frame.actions,[]);assert.match(ui.frame.message!,/Display limit/);
+  let offset=0;
+  const ui=fixture({query:async spec=>({queryId:spec.query,prepare:async()=>({state:'ready',cursor:'0' as DocumentCursor}),page:async()=>{
+    if(spec.query!=='many')return page(spec);
+    const length=Math.min(100,201-offset),files=Array.from({length},(_,index)=>({...chunk(),entry:{...entry,id:String(offset+index),path:`${offset+index}.md`}}));offset+=length;
+    const relation=offset===201?'exact':'atLeast';
+    return page(spec,files,offset===201?null:String(offset),{totals:{files:{relation,value:offset},occurrences:{relation,value:offset*5}}});
+  },close:async()=>{}})});
+  await ui.search('many');ui.callbacks.onAction(ui.frame,'loadMore');await ui.controller.ready;ui.callbacks.onAction(ui.frame,'loadMore');await ui.controller.ready;assert.equal(ui.frame.groups.length,200);assert.equal(ui.frame.displayTruncated,true);assert.deepEqual(ui.frame.actions,[]);assert.match(ui.frame.message!,/Display limit/);
   await ui.search('one');assert.equal(ui.frame.groups.length,1);assert.equal(ui.frame.displayTruncated,false);await ui.controller.close();
 });
 
