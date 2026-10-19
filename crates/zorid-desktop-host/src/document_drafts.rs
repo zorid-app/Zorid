@@ -134,7 +134,7 @@ pub(crate) enum Request {
     ReleaseBuffer {
         buffer_lifetime: OperationId,
     },
-    Snapshot,
+    Snapshot {},
 }
 impl Request {
     pub(crate) fn accepts_body(&self) -> bool {
@@ -170,10 +170,10 @@ fn ticket(value: &DocumentWorkTicket) -> Ticket {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum WorkRequest {
-    NextTurn,
-    Snapshot,
+    NextTurn {},
+    Snapshot {},
     Step { ticket: Ticket },
-    Close,
+    Close {},
 }
 
 fn native(error: NativeDocumentWorkError) -> Value {
@@ -275,8 +275,8 @@ fn work(
 ) -> Result<Value, Value> {
     let mut observed_turn = None;
     match request {
-        WorkRequest::Snapshot => {}
-        WorkRequest::NextTurn => {
+        WorkRequest::Snapshot {} => {}
+        WorkRequest::NextTurn {} => {
             let turn = vault.document_work_next_turn().map_err(native)?;
             if let Some(r) = &turn.continued {
                 sessions.adopt_runtime(r, false);
@@ -285,7 +285,7 @@ fn work(
                 json!({"state":match turn.state {zorid_native::DocumentWorkState::Ready=>"ready",zorid_native::DocumentWorkState::Waiting=>"waiting",zorid_native::DocumentWorkState::Quiesced=>"quiesced"}}),
             );
         }
-        WorkRequest::Close => {
+        WorkRequest::Close {} => {
             let close = vault.document_work_begin_close().map_err(native)?;
             sessions.adopt_runtime(&close.committed, false);
         }
@@ -403,7 +403,7 @@ fn ordinary(
                     .map_err(native)?,
             );
         }
-        Request::Snapshot => {}
+        Request::Snapshot {} => {}
         Request::UploadChunk { .. } | Request::FactsRead { .. } => {
             return Err(fault("draft_invalid_request"))
         }

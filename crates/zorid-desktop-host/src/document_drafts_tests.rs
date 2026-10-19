@@ -161,9 +161,22 @@ fn strict_controls_reject_complete_descriptors_unknown_fields_and_lossy_counters
         json!({"op":"upload_chunk","job":{"lifetime":"life","id":1,"buffer_lifetime":"b","text_revision":"0"},"offset":"0"}),
         json!({"op":"upload_chunk","job":{"lifetime":"life","id":"18446744073709551616","buffer_lifetime":"b","text_revision":"0"},"offset":"0"}),
     ] {
-        assert!(serde_json::from_value::<Request>(request).is_err());
+        assert!(
+            serde_json::from_value::<Request>(request.clone()).is_err(),
+            "unexpectedly accepted {request}"
+        );
     }
     assert!(serde_json::from_str::<Request>(r#"{"op":"snapshot","op":"snapshot"}"#).is_err());
+    for op in ["next_turn", "snapshot", "close"] {
+        assert!(serde_json::from_value::<WorkRequest>(json!({"op":op})).is_ok());
+        let invalid = json!({"op":op,"completion":{}});
+        assert!(
+            serde_json::from_value::<WorkRequest>(invalid.clone()).is_err(),
+            "unexpectedly accepted {invalid}"
+        );
+    }
+    assert!(serde_json::from_value::<Request>(json!({"op":"snapshot"})).is_ok());
+
     let large=serde_json::from_value::<Job>(json!({"lifetime":"life","id":"18446744073709551615","buffer_lifetime":"b","text_revision":"9007199254740993"})).unwrap();
     assert_eq!(large.id.0, u64::MAX);
     assert_eq!(large.text_revision.0, 9_007_199_254_740_993);
