@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
+import {startOwnedMeasuredProcess} from './process-resources.mjs';
 import {open,readFile,writeFile,stat,realpath,mkdtemp,chmod,rm} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -53,7 +54,22 @@ export class CoreValidator {
   }
 }
 async function verifyFiles(fixture){for(const e of fixture.manifest.entries){const bytes=await readFile(path.join(fixture.vault,e.path));assert.equal(bytes.length,e.bytes);assert.equal(sha256(bytes),e.sha256,'fixture changed during core pass');}}
-async function execute(binary,args,validator,log,timeoutMs){
+async function executeMeasured(binary,args,validator,log,timeoutMs,sidecarDirectory){
+  const owned=await startOwnedMeasuredProcess({binary,args,timeoutMs,sidecarDirectory,measureResources:true});let total=0,line='',stderr='',validationError;
+  owned.stderr.on('data',chunk=>{if(Buffer.byteLength(stderr)+chunk.length>1024*1024){validationError??=Error('stderr bound');owned.stop('stderr-output-limit');}else stderr+=chunk.toString('utf8');});
+  const decoder=new TextDecoder('utf-8',{fatal:true});
+  try{
+    for await(const chunk of owned.stdout){total+=chunk.length;if(total>512*1024*1024)throw Error('stdout bound');await log.write(chunk);line+=decoder.decode(chunk,{stream:true});let split;
+      while((split=line.indexOf('\n'))>=0){const raw=line.slice(0,split);line=line.slice(split+1);if(Buffer.byteLength(raw)>2*1024*1024)throw Error('NDJSON event bound');validator.accept(JSON.parse(raw));}
+      if(Buffer.byteLength(line)>2*1024*1024)throw Error('NDJSON event bound');
+    }
+    line+=decoder.decode();assert.equal(line,'','truncated final NDJSON record');
+  }catch(error){validationError??=error;owned.stop('protocol-or-output-failure');owned.stdout.resume();}
+  const result=await owned.completed;
+  return {...result,stdoutBytes:total,stderr,...(validationError?{validationError:{message:String(validationError.message),kind:validationError.kind,phase:validationError.phase,detail:validationError.detail}}:{})};
+}
+async function execute(binary,args,validator,log,timeoutMs,resourceDirectory){
+  if(resourceDirectory)return executeMeasured(binary,args,validator,log,timeoutMs,resourceDirectory);
   const started=performance.now(),child=spawn(binary,args,{stdio:['ignore','pipe','pipe'],env:{...process.env}});let timedOut=false,killTimer,total=0,line='',stderr='',streamError;
   const stop=()=>{child.kill('SIGTERM');killTimer??=setTimeout(()=>child.kill('SIGKILL'),1000);};
   const timer=setTimeout(()=>{timedOut=true;stop();},timeoutMs);
@@ -70,7 +86,8 @@ async function execute(binary,args,validator,log,timeoutMs){
   const result=await closed;clearTimeout(timer);clearTimeout(killTimer);
   return {...result,wallMs:performance.now()-started,timedOut,stdoutBytes:total,stderr,...(streamError?{validationError:{message:String(streamError.message),kind:streamError.kind,phase:streamError.phase,detail:streamError.detail}}:{})};
 }
-export async function runCore({out,binary,notes=100,samples=1,timeoutMs=60000,buildSha='unknown',buildMode='unknown',stress=false}){
+export async function runCore({out,binary,notes=100,samples=1,timeoutMs=60000,buildSha='unknown',buildMode='unknown',stress=false,measureResources=false}){
+  assert.equal(typeof measureResources,'boolean');if(measureResources)assert.equal(process.platform,'darwin','--process-resources currently supports Darwin only');
   checkCount(notes);if(notes===100000&&!stress)throw Error('100k requires --stress');
   assert.ok(Number.isSafeInteger(samples)&&samples>=1&&samples<=20);assert.ok(Number.isSafeInteger(timeoutMs)&&timeoutMs>=100&&timeoutMs<=300000);
   assert.ok(['debug','release','unknown'].includes(buildMode));assert.match(buildSha,/^(unknown|[a-f0-9]{40})$/);
@@ -83,11 +100,14 @@ export async function runCore({out,binary,notes=100,samples=1,timeoutMs=60000,bu
     wrapperSha256:sha256(await readFile(new URL(import.meta.url))),workloadSha256:sha256(await readFile(new URL('./workload.mjs',import.meta.url))),
     environment:{node:process.version,os:os.release(),platform:process.platform,arch:process.arch,cpus:os.cpus().length,totalMemory:os.totalmem(),executor:'existing sequential pure engine; no worker pool'},setup:{fixtureGenerationMs:generationMs},queries:[],filesystemSourcePreserved:false,
     limitations:['initial literal/parsing baseline only, not S1.0 acceptance','source IO/hash/decode setup excluded from extraction/query timers','IndexRecord extraction includes source hash/projection/validation, not parser-only CPU','page encoding/output excluded from queryMs and reported separately; wrapper validation/backpressure may affect scheduling','no restart cache, incremental edits, graph/Base queries, foreground responsiveness or cancellation scenarios','OS page cache/load uncontrolled; peak RSS/CPU/internal cache counters unavailable','pure fixture witnesses never authorize source mutations; complete coverage excludes known binary body extraction']};
+  if(measureResources)report.limitations[5]='OS page cache/load uncontrolled; internal cache counters unavailable; peak RSS/CPU unavailable unless optional per-utility process resources are requested';
   const validator=new CoreValidator(fixture,samples),log=await open(path.join(fixture.out,'core.stdout.ndjson'),'wx');
   try{
-    report.process=await execute(binary,['--fixture',fixture.out,'--samples',String(samples)],validator,log,timeoutMs);
+    report.process=await execute(binary,['--fixture',fixture.out,'--samples',String(samples)],validator,log,timeoutMs,measureResources?fixture.out:undefined);
     report.setup.core=validator.setup;report.generation=validator.generation;report.queries=validator.reports;
+    if(measureResources){report.processResources={requested:true,helperSha256:sha256(await readFile(new URL('./process-resources.mjs',import.meta.url))),scope:'one instrumented utility lifetime, not engine phases or aggregate process tree'};}
     await verifyFiles(fixture);report.filesystemSourcePreserved=true;assert.equal(sha256(await readFile(binary)),beforeHash,'executable changed during pass');
+    if(measureResources){assert.equal(report.process.stopReason,null);assert.equal(report.process.exitObserved,true);assert.equal(report.process.pipesDrained,true);assert.equal(report.process.cleanup.ownedGroupRemaining,false);}
     assert.equal(report.process.spawnError,undefined);assert.equal(report.process.validationError,undefined,report.process.validationError?.message);assert.equal(report.process.timedOut,false);assert.equal(report.process.signal,null);assert.equal(report.process.exitCode,0);assert.equal(validator.done,true,'missing complete final acknowledgment');
     report.status='passed';
   }catch(error){report.status='failed-or-incomplete';report.error={message:String(error.message),kind:error.kind,phase:error.phase};}
@@ -149,7 +169,7 @@ else{
   return {scope:'Node validator plus synthetic executable/report lifecycle only; no Rust or performance acceptance',protocolChecks:12,syntheticProcessCases:3};
 }
 if(process.argv[1]&&pathToFileURL(path.resolve(process.argv[1])).href===import.meta.url){
-  const {values}=parseArgs({options:{out:{type:'string'},core:{type:'string'},notes:{type:'string',default:'100'},samples:{type:'string',default:'1'},'timeout-ms':{type:'string',default:'60000'},'build-sha':{type:'string',default:'unknown'},'build-mode':{type:'string',default:'unknown'},stress:{type:'boolean'},'self-test':{type:'boolean'}}});
+  const {values}=parseArgs({options:{out:{type:'string'},core:{type:'string'},notes:{type:'string',default:'100'},samples:{type:'string',default:'1'},'timeout-ms':{type:'string',default:'60000'},'build-sha':{type:'string',default:'unknown'},'build-mode':{type:'string',default:'unknown'},stress:{type:'boolean'},'self-test':{type:'boolean'},'process-resources':{type:'boolean'}}});
   if(values['self-test'])console.log(json(await selfTest()));
-  else{if(!values.out||!values.core)throw Error('Use --out NEW_DIRECTORY --core ALREADY_BUILT_EXAMPLE');const result=await runCore({out:values.out,binary:values.core,notes:Number(values.notes),samples:Number(values.samples),timeoutMs:Number(values['timeout-ms']),buildSha:values['build-sha'],buildMode:values['build-mode'],stress:values.stress});console.log(json({out:result.out,status:result.report.status,report:path.join(result.out,'core-report.json')}));if(result.report.status!=='passed')process.exitCode=1;}
+  else{if(!values.out||!values.core)throw Error('Use --out NEW_DIRECTORY --core ALREADY_BUILT_EXAMPLE');const result=await runCore({out:values.out,binary:values.core,notes:Number(values.notes),samples:Number(values.samples),timeoutMs:Number(values['timeout-ms']),buildSha:values['build-sha'],buildMode:values['build-mode'],measureResources:values['process-resources']??false,stress:values.stress});console.log(json({out:result.out,status:result.report.status,report:path.join(result.out,'core-report.json')}));if(result.report.status!=='passed')process.exitCode=1;}
 }

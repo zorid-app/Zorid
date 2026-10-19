@@ -109,3 +109,37 @@ It is not Rust execution evidence. The initial tool does
 not execute Bases/graph, incremental mutation, cache reuse, cancellation, foreground
 contention or the separate large-note profiles. Those remain baseline work under
 the [measurement specification](../../docs/plans/indexing-search-baseline.md).
+
+
+## Optional macOS process resources
+
+Add `--process-resources` to this runner to collect CPU and maximum resident set
+size for each utility invocation. The default execution path and its timing
+labels stay unchanged. Opt-in runs use the absolute `/usr/bin/time` executable
+with `-l -p -o`, an argv array and a unique private sidecar; reports identify the
+instrumented mode, helper/provider hashes, OS and raw evidence hash/path.
+
+`real`, `user` and `sys` are seconds; CPU values have centisecond display
+resolution. Darwin's `maximum resident set size` is **bytes**, as documented by
+the local `getrusage(2)` manual. It differs from `peak memory footprint`, which
+remains raw evidence only. These values cover the utility lifetime, including
+startup, loading, setup and output; CPU may include waited descendants. They do
+not describe individual engine phases, an aggregate process-tree peak, browser,
+Electron renderer or mobile memory. Do not add peaks from separate processes.
+Existing inner engine timers retain their scopes. Node-observed instrumented
+wall time includes the time-wrapper overhead, so compare like modes.
+
+The observed PID, exit code and signal belong to the time wrapper; reports do
+not relabel them as a Rust utility signal. Existing source/protocol correctness
+and normal-exit gates still apply. Missing, truncated, oversized, duplicate or
+invalid stats and interrupted/incomplete runs report metrics as unavailable,
+never fabricated zero. Raw sidecars are retained with a 64KiB cap and private
+permissions. Timeout/protocol/output failure stops only the exact owned detached
+process group, with bounded TERM/KILL and pipe drainage; descendants that escape
+that group are outside the containment claim. Cleanup uncertainty stays explicit.
+
+Local sources: `time(1)` and the macOS SDK's `getrusage(2)` manual. Focused parser
+checks run with `node --test scripts/indexing-search-baseline/process-resources.test.mjs`.
+Actual child/time lifecycle checks additionally require
+`ZORID_PROCESS_RESOURCES_RUNTIME_TESTS=1` and the coordinator's serialized resource
+slot; these synthetic checks establish no Rust performance result.

@@ -1,4 +1,5 @@
 import {spawn} from 'node:child_process';
+import {startOwnedMeasuredProcess} from './process-resources.mjs';
 import {readFile,writeFile,mkdir,stat,realpath} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -65,7 +66,15 @@ export function decodeReadyFrame(bytes){
 async function verifyFiles(fixture){
   for(const entry of fixture.manifest.entries){const bytes=await readFile(path.join(fixture.vault,entry.path));assert.equal(bytes.length,entry.bytes);assert.equal(sha256(bytes),entry.sha256,`fixture source changed: ${entry.path}`);}
 }
-export async function invoke(binary,args,{environment,timeoutMs,maxOutputBytes=64*1024*1024,stdoutEncoding='utf8'}){
+async function invokeMeasured(binary,args,{environment,timeoutMs,maxOutputBytes,stdoutEncoding,sidecarDirectory}){
+  const owned=await startOwnedMeasuredProcess({binary,args,env:environment,timeoutMs,sidecarDirectory,measureResources:true});let bytes=0,overflow=false;const stdout=[],stderr=[];
+  const collect=target=>chunk=>{bytes+=chunk.length;if(bytes>maxOutputBytes){overflow=true;owned.stop('output-limit');}else target.push(chunk);};
+  owned.stdout.on('data',collect(stdout));owned.stderr.on('data',collect(stderr));
+  const result=await owned.completed;
+  return {...result,args,outputLimit:overflow,processIncomplete:result.stopReason!==null||!result.exitObserved||!result.pipesDrained||result.cleanup.ownedGroupRemaining!==false,stdout:stdoutEncoding==='buffer'?Buffer.concat(stdout):Buffer.concat(stdout).toString('utf8'),stderr:Buffer.concat(stderr).toString('utf8')};
+}
+export async function invoke(binary,args,{environment,timeoutMs,maxOutputBytes=64*1024*1024,stdoutEncoding='utf8',measureResources=false,sidecarDirectory}){
+  if(measureResources)return invokeMeasured(binary,args,{environment,timeoutMs,maxOutputBytes,stdoutEncoding,sidecarDirectory});
   const started=performance.now();return await new Promise((resolve,reject)=>{
     const child=spawn(binary,args,{env:environment,stdio:['ignore','pipe','pipe']});let bytes=0,overflow=false,timedOut=false,killTimer;
     const stdout=[],stderr=[];const stop=()=>{child.kill('SIGTERM');killTimer??=setTimeout(()=>child.kill('SIGKILL'),1000);};
@@ -76,7 +85,8 @@ export async function invoke(binary,args,{environment,timeoutMs,maxOutputBytes=6
     child.once('close',(exitCode,signal)=>{clearTimeout(timer);clearTimeout(killTimer);resolve({args,wallMs:performance.now()-started,exitCode,signal,timedOut,outputLimit:overflow,stdout:stdoutEncoding==='buffer'?Buffer.concat(stdout):Buffer.concat(stdout).toString('utf8'),stderr:Buffer.concat(stderr).toString('utf8')});});
   });
 }
-export async function runBaseline({out,binary,notes=100,timeoutMs=60000,buildSha='unknown',buildMode='unknown',samples=1,stress=false,nativeHost,maxImportPasses=32,importBudgetMs=5000}){
+export async function runBaseline({out,binary,notes=100,timeoutMs=60000,buildSha='unknown',buildMode='unknown',samples=1,stress=false,nativeHost,maxImportPasses=32,importBudgetMs=5000,measureResources=false}){
+  assert.equal(typeof measureResources,'boolean');
   checkCount(notes);if(notes===100000&&!stress)throw Error('100k requires explicit --stress; retain expected resource limits');
   if(!Number.isSafeInteger(timeoutMs)||timeoutMs<100||timeoutMs>300000)throw Error('timeout-ms must be in100..300000');
   if(!Number.isSafeInteger(importBudgetMs)||importBudgetMs<1||importBudgetMs>=timeoutMs)throw Error('import-budget-ms must be a positive integer below timeout-ms');
@@ -92,25 +102,26 @@ export async function runBaseline({out,binary,notes=100,timeoutMs=60000,buildSha
     environment:{node:process.version,os:os.release(),platform:process.platform,arch:process.arch,cpus:os.cpus().length,totalMemory:os.totalmem(),executor:'existing CLI implementation; no configured worker pool'},
     bounds:{processTimeoutMs:timeoutMs,importBudgetMs,maxImportPasses,samples},setup:{generationMs,sourceAdmission:nativeHost?'public desktop-host --initialize-local + CLI rescan, local-family native authority; no Electron renderer claim':'public init + rescan, legacy non-enrolled native authority; no enrolled-family or desktop path claim',presentation:'manifest timestamps are synthetic. Current native source admission supplies actual presentation; no fixed-ctime claim and no ctime-dependent query oracle.'},
     limitations:['first bounded tool, not complete S1.0 or performance acceptance','each command restarts CLI; repeated queries do not reuse one process-local pin','OS page cache uncontrolled','internal phase/cancellation/peak RSS metrics unavailable in this runner; process wall time includes startup','only literal oracle exercised; no Base/operator/regex or editor foreground gate','no source-corruption/cache-deletion/interruption/incremental mutation scenarios executed'],commands:[],queries:[],filesystemSourcePreserved:false,authoritySamples:[]};
+  if(measureResources){report.processResources={requested:true,helperSha256:sha256(await readFile(new URL('./process-resources.mjs',import.meta.url))),scope:'separate instrumented utility lifetime per command/initialization host; no aggregate peak or engine-phase attribution'};report.limitations[3]='internal phase/cancellation counters unavailable; optional process CPU/RSS per utility lifetime only; wall time includes startup and time wrapper overhead';}
   if(nativeHost)report.nativeHost={path:nativeHost,sha256:sha256(await readFile(nativeHost))};
   const environment={...process.env,ZORID_LOCAL_DATA_DIR:localData};delete environment.ZORID_IPC_ENDPOINT;delete environment.DISPLAY;
   async function command(label,args){
-    const result=await invoke(binary,['--vault',fixture.vault,...args],{environment,timeoutMs});
+    const result=await invoke(binary,['--vault',fixture.vault,...args],{environment,timeoutMs,measureResources,sidecarDirectory:fixture.out});
     await writeFile(path.join(fixture.out,`${String(report.commands.length).padStart(2,'0')}-${label}.stdout.json`),result.stdout);
     await writeFile(path.join(fixture.out,`${String(report.commands.length).padStart(2,'0')}-${label}.stderr.txt`),result.stderr);
     const entry={label,args,result:{...result,stdoutBytes:Buffer.byteLength(result.stdout),stderrBytes:Buffer.byteLength(result.stderr)}};delete entry.result.stdout;delete entry.result.stderr;
     report.commands.push(entry);
-    if(result.timedOut||result.outputLimit||result.signal)throw Object.assign(Error(`bounded command stopped: ${label}`),{kind:'bounded-stop',label});
+    if(result.timedOut||result.outputLimit||result.signal||result.processIncomplete)throw Object.assign(Error(`bounded command stopped: ${label}`),{kind:'bounded-stop',label});
     let envelope;try{envelope=JSON.parse(result.exitCode===0?result.stdout:result.stderr);}catch{throw Error(`invalid CLI JSON for ${label}`);}
     if(result.exitCode!==0||envelope.ok!==true){entry.error=envelope.error;throw Object.assign(Error(`CLI rejected ${label}: ${envelope.error?.code??'unknown'}`),{kind:'cli-rejection',code:envelope.error?.code,label});}
     assert.equal(envelope.version,1);return envelope.result;
   }
   try{
     if(nativeHost){
-      const result=await invoke(nativeHost,['--vault',fixture.vault,'--initialize-local'],{environment,timeoutMs,stdoutEncoding:'buffer'});
+      const result=await invoke(nativeHost,['--vault',fixture.vault,'--initialize-local'],{environment,timeoutMs,stdoutEncoding:'buffer',measureResources,sidecarDirectory:fixture.out});
       await writeFile(path.join(fixture.out,'native-host-ready.frame'),result.stdout);await writeFile(path.join(fixture.out,'native-host.stderr.txt'),result.stderr);
-      report.setup.nativeHost={wallMs:result.wallMs,exitCode:result.exitCode,signal:result.signal,timedOut:result.timedOut,outputLimit:result.outputLimit};
-      if(result.exitCode!==0||result.signal||result.timedOut||result.outputLimit)throw Object.assign(Error('native initialization did not exit normally'),{kind:'bounded-stop'});
+      report.setup.nativeHost={wallMs:result.wallMs,exitCode:result.exitCode,signal:result.signal,timedOut:result.timedOut,outputLimit:result.outputLimit,...(measureResources?{observedProcessRole:result.observedProcessRole,exitObserved:result.exitObserved,stopReason:result.stopReason,pipesDrained:result.pipesDrained,cleanup:result.cleanup,signals:result.signals,measurement:result.measurement}:{} )};
+      if(result.exitCode!==0||result.signal||result.timedOut||result.outputLimit||result.processIncomplete)throw Object.assign(Error('native initialization did not exit normally'),{kind:'bounded-stop'});
       report.setup.ready=decodeReadyFrame(result.stdout);
     }else await command('init',['init']);
     let lastScan,lastCoverage,stalls=0;report.setup.importPasses=[];report.setup.importCoverage=[];
@@ -161,9 +172,9 @@ export async function runBaseline({out,binary,notes=100,timeoutMs=60000,buildSha
   return report;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
-  const {values}=parseArgs({options:{out:{type:'string'},cli:{type:'string'},notes:{type:'string',default:'100'},'timeout-ms':{type:'string',default:'60000'},samples:{type:'string',default:'1'},'build-sha':{type:'string',default:'unknown'},'build-mode':{type:'string',default:'unknown'},stress:{type:'boolean',default:false},'native-host':{type:'string'},'max-import-passes':{type:'string',default:'32'},'import-budget-ms':{type:'string',default:'5000'}}});
+  const {values}=parseArgs({options:{out:{type:'string'},cli:{type:'string'},notes:{type:'string',default:'100'},'timeout-ms':{type:'string',default:'60000'},samples:{type:'string',default:'1'},'build-sha':{type:'string',default:'unknown'},'build-mode':{type:'string',default:'unknown'},stress:{type:'boolean',default:false},'process-resources':{type:'boolean'},'native-host':{type:'string'},'max-import-passes':{type:'string',default:'32'},'import-budget-ms':{type:'string',default:'5000'}}});
   if(!values.out||!values.cli)throw Error('Usage: node cli.mjs --out NEW_DIRECTORY --cli BUILT_ZORID [--notes 10000 --samples 1]');
-  const report=await runBaseline({out:values.out,binary:values.cli,notes:Number(values.notes),timeoutMs:Number(values['timeout-ms']),samples:Number(values.samples),buildSha:values['build-sha'],buildMode:values['build-mode'],stress:values.stress,nativeHost:values['native-host'],maxImportPasses:Number(values['max-import-passes']),importBudgetMs:Number(values['import-budget-ms'])});
+  const report=await runBaseline({out:values.out,binary:values.cli,notes:Number(values.notes),timeoutMs:Number(values['timeout-ms']),samples:Number(values.samples),buildSha:values['build-sha'],buildMode:values['build-mode'],measureResources:values['process-resources']??false,stress:values.stress,nativeHost:values['native-host'],maxImportPasses:Number(values['max-import-passes']),importBudgetMs:Number(values['import-budget-ms'])});
   console.log(JSON.stringify({status:report.status,filesystemSourcePreserved:report.filesystemSourcePreserved,noteCount:report.noteCount,report:path.join(path.resolve(values.out),'report.json'),failure:report.failure}));
   if(report.status==='failed')process.exitCode=1;else if(report.status!=='bounded-scenarios-verified')process.exitCode=2;
 }
