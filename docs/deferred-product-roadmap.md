@@ -175,6 +175,29 @@ focused body and use passive DOM search observations with one post-visible statu
 probe (exact publication time remains unavailable). Original save/source assertions
 stay intact; the corrected normal-app pass is still required.
 
+Corrected Electron retry at frozen `ca84ca45` passed automatic import/all-source
+readback and cold unique search (one observed1.360s visible result; post-visible
+status probe3.24ms), then failed the harness's exact-save assertion. Live Edit's
+properties filter protects YAML from body selection: selecting all and inserting
+the entire original file duplicated YAML inside the body. This is a demonstrated
+harness replacement-scope error, not an established product save regression.
+Evidence `/private/tmp/zorid-s1-desktop-100-ca84ca45-evidence/report.json` and
+`post-run-provenance.json`; source/dist/native hashes remained exact, no renderer
+exceptions, and all exact owned app/host PIDs are gone. Platform owner is preparing
+ordinary end-of-document navigation plus suffix-only insertion; exact source,
+checkpoint, index and warm-restart assertions remain required. No save/warm pass
+is claimed. Root released the frozen-main hold after terminal cleanup.
+
+The serialized resource slot now belongs to `storage_sqlite_impl` for the scoped
+old-function red / exact-approved-source green checks of `9d2d3704`, using the
+existing1.99 `target/stage4-verified` cache, jobs1/test-threads1 and1GiB disk floor.
+Release candidate build and comparable10k runtime have not started. Independently
+source-approved Base semantic-baseline tooling `18722402` remains isolated in
+`s1-bases-baseline` / `tingkai-c/s1-bases-baseline`: seventeen pinned existing
+corpus cases, explicitly partial declared-field oracles; Node validation/lifecycle
+checks pass, actual Rust compile/execution is queued after Store checks. It adds
+no language/cache behavior or representative Base-performance acceptance.
+
 Owners: `s1_execution_audit` owns workload/native CLI baseline tooling;
 `s1_query_audit` owns the integrated language fixtures;
 `architecture_platform_audit` owns actual browser/normal Electron measurement
