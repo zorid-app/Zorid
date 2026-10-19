@@ -66,10 +66,20 @@ function cachedEvent(state,index,{outcome='hit'}={}){
 }
 function finishCache(state,outcome='hit'){
   for(let index=0;index<16;index++){const e=cachedEvent(state,index,{outcome});state.v.accept(e);state.v.accept({type:'cache-measurement',pass:e.pass,caseId:e.caseId,resultOutputMs:0});}
-  state.v.accept({type:'cache-done',programLookups:10,invocations:16,source:SOURCE,snapshot:SNAPSHOT});state.v.accept({type:'done',invocations:8,successes:8,rejections:0,source:SOURCE,snapshot:SNAPSHOT});return state.v;
+  state.v.accept({type:'cache-done',programLookups:10,invocations:16,source:SOURCE,snapshot:SNAPSHOT});return state;
 }
+function answerEvent(state,index,{outcome='hit'}={}){
+  const i=state.plan.invocations[index%8],result=syntheticResult(i.id,state.m);result.stepsUsed=10;
+  return {type:'answer-result',pass:Math.floor(index/8)+1,caseId:i.id,programId:i.programId,options:i.options,source:SOURCE,snapshot:SNAPSHOT,programLookupMs:1,programOutcome:'hit',programCacheWorkUsed:1,preparationMs:1,preparationOutcome:outcome,preparationSemanticWorkUsed:2,preparationCacheWorkUsed:3,answerCallMs:1,answerOutcome:outcome,answerSemanticWorkUsed:10,answerCacheWorkUsed:7,result};
+}
+function finishAnswers(state,outcome='hit'){
+  for(let index=0;index<16;index++){const e=answerEvent(state,index,{outcome});state.v.accept(e);state.v.accept({type:'answer-measurement',pass:e.pass,caseId:e.caseId,resultOutputMs:0});}
+  state.v.accept({type:'answer-done',invocations:16,source:SOURCE,snapshot:SNAPSHOT});state.v.accept({type:'done',invocations:8,successes:8,rejections:0,source:SOURCE,snapshot:SNAPSHOT});return state.v;
+}
+function finishObservation(state,outcome='hit'){return finishAnswers(finishCache(state,outcome),outcome);}
+
 test('opt-in cache observation preserves all eight full results across two passes with separate work',()=>{
-  const v=finishCache(cachePrepared());assert.equal(v.status(),'passed');assert.equal(v.cacheDone,true);assert.equal(v.cachePrograms.length,10);assert.equal(v.cacheResults.length,16);assert.ok(v.cacheResults.every(r=>r.fullTypedEquivalentExceptSteps&&r.semanticWorkReduced&&r.evaluationWorkUsed===8&&r.cacheWorkUsed===3));
+  const v=finishObservation(cachePrepared());assert.equal(v.status(),'passed');assert.equal(v.cacheDone,true);assert.equal(v.cachePrograms.length,10);assert.equal(v.cacheResults.length,16);assert.ok(v.cacheResults.every(r=>r.fullTypedEquivalentExceptSteps&&r.semanticWorkReduced&&r.evaluationWorkUsed===8&&r.cacheWorkUsed===3));
 });
 test('cache output is rejected by default and opt-in requires complete ordered acknowledgments',()=>{
   const ordinary=prepared(100);assert.throws(()=>ordinary.v.accept({type:'cache-done'}));
@@ -79,5 +89,19 @@ test('cached validation rejects undeclared full-result changes, request drift an
   for(const change of [e=>{e.result.rows[0].values.extra={type:'number',value:1};},e=>{e.options={...e.options,viewIndex:1};},e=>{e.result.stepsUsed=21;},e=>{e.preparationWorkUsed=11;},e=>{e.cacheWorkUsed=2000001;},e=>{e.preparationOutcome='forced-hit';}]){const state=cachePrepared(),event=cachedEvent(state,0);change(event);assert.throws(()=>state.v.accept(event));}
 });
 test('actual noncacheable preparations remain explicit with unchanged 10k semantic oracles',()=>{
-  const v=finishCache(cachePrepared(10000),'uncached');assert.equal(v.status(),'passed');assert.ok(v.cacheResults.every(r=>r.preparationOutcome==='uncached'));assert.equal(v.cacheResults[0].counts.scanned,10003);
+  const v=finishObservation(cachePrepared(10000),'uncached');assert.equal(v.status(),'passed');assert.ok(v.cacheResults.every(r=>r.preparationOutcome==='uncached'));assert.equal(v.cacheResults[0].counts.scanned,10003);
+});
+
+test('answer observations retain full typed mixed-file results and separate modeled work from actual optional units',()=>{
+  const v=finishObservation(cachePrepared());assert.equal(v.answerDone,true);assert.equal(v.answerResults.length,16);assert.ok(v.answerResults.every(r=>r.fullTypedEquivalentExceptSteps&&r.answerOutcome==='hit'&&r.modeledEvaluationWorkUsed===8&&r.answerSemanticWorkUsed===10&&r.preparationSemanticWorkUsed===2&&r.answerCacheWorkUsed===7&&r.answerOptionalWorkDelta===4));assert.ok(v.baselineResults.get('sparse-first').metadataIssues.some(i=>i.exclusion==='binary'));
+});
+test('answer output requires opt-in and both complete ordered acknowledgments',()=>{
+  assert.throws(()=>prepared(100).v.accept({type:'answer-done'}));const early=cachePrepared();assert.throws(()=>early.v.accept(answerEvent(early,0)));
+  const state=finishCache(cachePrepared());assert.throws(()=>state.v.accept({type:'done',invocations:8,successes:8,rejections:0,source:SOURCE,snapshot:SNAPSHOT}));assert.throws(()=>state.v.accept({...answerEvent(state,0),pass:2}));assert.throws(()=>state.v.accept({type:'answer-done',invocations:16,source:SOURCE,snapshot:SNAPSHOT}));state.v.accept(answerEvent(state,0));assert.throws(()=>state.v.accept(answerEvent(state,0)));assert.throws(()=>state.v.accept({type:'answer-measurement',pass:1,caseId:'sparse-repeat',resultOutputMs:0}));
+});
+test('answer validation rejects typed-field drift, mixed-file issue corruption and invented work reductions',()=>{
+  for(const change of [e=>{e.result.rows[0].values.extra={type:'number',value:1};},e=>{e.result.metadataIssues[0].witness.revision='foreign';},e=>{e.options={...e.options,viewIndex:1};},e=>{e.source={...SOURCE,watermark:'2'};},e=>{e.result.stepsUsed=9;e.answerSemanticWorkUsed=9;},e=>{e.answerSemanticWorkUsed=9;},e=>{e.answerCacheWorkUsed=2;},e=>{e.programCacheWorkUsed=2000001;},e=>{e.answerOutcome='forced-hit';},e=>{e.answerCallMs=-1;}]){const state=finishCache(cachePrepared()),event=answerEvent(state,0);change(event);assert.throws(()=>state.v.accept(event));}
+});
+test('noncacheable answers and preparation outcomes remain observations without forced hits',()=>{
+  const v=finishObservation(cachePrepared(10000),'uncached');assert.equal(v.status(),'passed');assert.ok(v.answerResults.every(r=>r.answerOutcome==='uncached'&&r.preparationOutcome==='uncached'&&r.counts.scanned===10003));
 });

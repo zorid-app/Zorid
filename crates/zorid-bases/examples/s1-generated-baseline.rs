@@ -320,7 +320,7 @@ fn cache_outcome(outcome: PreparationCacheOutcome) -> &'static str {
     }
 }
 // This ordered observation is opt-in. It reuses the exact frozen generation,
-// sources, options and semantic oracles; no host pin or answer cache is involved.
+// sources, options and semantic oracles; host pin admission is outside this utility.
 fn observe_preparation_cache(
     plan: &Plan,
     generation: &Generation,
@@ -376,7 +376,42 @@ fn observe_preparation_cache(
     }
     emit(
         json!({"type":"cache-done","programLookups":10,"invocations":16,"source":source,"snapshot":snapshot}),
-    )
+    )?;
+    // Fresh sealed lookups model independently admitted repeated invocations.
+    // Answer steps retain a semantic ceiling charge; optional units and wall
+    // times are reported separately and are never labeled as CPU time.
+    for pass in 1..=2 {
+        for invocation in &plan.invocations {
+            let input = plan
+                .programs
+                .iter()
+                .find(|p| p.id == invocation.program_id)
+                .ok_or_else(|| fail("answer-program", "unknown program"))?;
+            let started = Instant::now();
+            let program = cache
+                .compile_source(&input.source, now())
+                .map_err(|e| fail("answer-program", format!("{}: {e:?}", invocation.id)))?;
+            let program_ms = ms(started);
+            let started = Instant::now();
+            let preparation = cache
+                .prepare_generation(generation, facts, &invocation.options, now())
+                .map_err(|e| fail("answer-preparation", format!("{}: {e:?}", invocation.id)))?;
+            let preparation_ms = ms(started);
+            let started = Instant::now();
+            let answer = cache
+                .query_prepared_cached(&program, &preparation, &invocation.options, now())
+                .map_err(|e| fail("answer-query", format!("{}: {e:?}", invocation.id)))?;
+            let answer_ms = ms(started);
+            let started = Instant::now();
+            emit(
+                json!({"type":"answer-result","pass":pass,"caseId":invocation.id,"programId":invocation.program_id,"options":invocation.options,"source":source,"snapshot":snapshot,"programLookupMs":program_ms,"programOutcome":cache_outcome(program.outcome()),"programCacheWorkUsed":program.cache_work_used(),"preparationMs":preparation_ms,"preparationOutcome":cache_outcome(preparation.outcome()),"preparationSemanticWorkUsed":preparation.work_used(),"preparationCacheWorkUsed":preparation.cache_work_used(),"answerCallMs":answer_ms,"answerOutcome":cache_outcome(answer.outcome()),"answerSemanticWorkUsed":answer.work_used(),"answerCacheWorkUsed":answer.cache_work_used(),"result":answer.value()}),
+            )?;
+            emit(
+                json!({"type":"answer-measurement","pass":pass,"caseId":invocation.id,"resultOutputMs":ms(started)}),
+            )?;
+        }
+    }
+    emit(json!({"type":"answer-done","invocations":16,"source":source,"snapshot":snapshot}))
 }
 fn main() {
     let mut args = std::env::args().skip(1);
