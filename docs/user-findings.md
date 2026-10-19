@@ -13,7 +13,11 @@ that workload under the existing model. Owner `s1_desktop_runtime_review` record
 the exact code/evidence and assesses a scalable correction; no limit increase,
 new trusted mutation cache or full-workload acceptance is authorized by this note.
 Its separately scoped removal of duplicate graph derivation preserves current
-validation and limits. Both implementation and measured acceptance remain open.
+validation and limits. That correction is integrated through `2bf929f9` after
+the67-check shared/native/Store gate; it does not remove the capacity boundary or
+establish a timing gain. Source-backed scaling feasibility is recorded in
+`/private/tmp/zorid-s1-source-backed-graph-feasibility-34ae20c7.md`; the durable
+index/writer contract and full-workload acceptance remain open.
 
 ## S1 browser metadata projection — epoch allocation audit
 

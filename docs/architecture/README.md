@@ -9,7 +9,7 @@ incremental catch-up. It has no user-managed native vault directory. Its current
 IndexedDB/Rust-WASM path is implemented; connected service onboarding is not yet
 complete.
 
-This manual's source baseline is canonical main `8917d66c` (2026-10-19).
+This manual's source baseline is canonical main `2bf929f9` (2026-10-19).
 S1 parsing, indexing, caching and search is in progress: rich Rust search and its
 desktop presentation are integrated, as are phased draft/metadata/preview core
 foundations. Their remaining platform/consumer wiring and normal runtime

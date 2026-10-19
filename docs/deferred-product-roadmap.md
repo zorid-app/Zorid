@@ -9,7 +9,7 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
-Current integration `8917d66c` (2026-10-19):
+Current integration `2bf929f9` (2026-10-19):
 
 - Main includes the pure foundation (`4da43cf7`, 216 checks), work arbiter
   (`24eca3a2`, 15 new +27 reducer checks), browser Search ordering correction
@@ -47,11 +47,19 @@ Current integration `8917d66c` (2026-10-19):
   from reviewed `89e1b58a`. All18 draft executor and22 runtime checks pass,
   source unchanged and owned groups gone. Evidence:
   `/private/tmp/zorid-s1-native-f40-89e1b58a/verification.json`.
-  Owner `s1_lifecycle_core` next extracts its portable executor into `zorid-index`
-  before WASM implementation; `s1_native_runtime_host_review` owns independent
-  review. Host transient framing owner `storage_sqlite_impl` coordinates shared
-  scratch accounting rather than a second host policy. Actual host transport,
-  WASM/browser draft execution and buffer projection remain unverified/pending.
+  The reviewed portable executor extraction `5035e456` and Store duplicate graph
+  validation removal `9ea3cb5d` are now integrated through `2bf929f9`. All67
+  focused checks pass: native18+22, portable10, Store6+11. One portable case is
+  relocated coverage. A resource preflight paused after56; only the remaining11
+  ran later against the same built Store binary. No passed cases were rerun.
+  Evidence: `/private/tmp/zorid-s1-canonical-draft-store-2bf929f9/aggregate67.json`.
+  The subsequent transfer owner `s1_lifecycle_core` has source-approved
+  `89e88d73`: actual uploads/encoding remain in the shared owner, charged through
+  conversion and growth overlaps until actual disposal. Its26 shared and40
+  native checks are not yet run. Host framing owner `storage_sqlite_impl` and
+  desktop facade/scheduler owner `s1_rich_desktop_transport` implement its frozen
+  reader/writer contract in isolation. Embedded/mobile F remains unsupported.
+  Actual host transport, WASM/browser drafts and buffer projection remain open.
   Durable saving/NoteBuffer state is outside this transient semantics change.
   Main integration proof binds the25 client and seven native owner files to
   their separately validated sources:
@@ -60,13 +68,32 @@ Current integration `8917d66c` (2026-10-19):
   per-pane visibility/configured clocks, actual liveness/fairness, independent
   CLI concurrency and S1.6 retained workloads remain open. Overall S1 is not
   accepted. Stop after S1; later desktop features and sync remain deferred.
+- Next frozen source batches: Vault `3440e40d` and Workspace ordered `a9519456`
+  then `5a2d1210` are independently reviewed; canonical `ad7e932e` prepares132
+  focused Node checks plus TypeScript. Vault's new path requires both metadata
+  paging and a maintenance subscription, preserving normal legacy behavior while
+  runtime activation is off. Stable browser allocation `5190017e` is reviewed
+  but its23 new checks/real WASM-IDB acceptance are pending. Preview producer
+  ordered `d1569800`/`055cab31` is reviewed with11 new checks unrun; backing
+  capacity admission is the next prerequisite before native preview retention.
+- The normal10k admission limitation is a confirmed whole-graph capacity gate,
+  separate from historical throughput:4096 combined records/activities cannot
+  hold at least20,000 members needed for10k Markdown notes. A thin paged reader
+  cannot preserve the existing global identity/conflict/causal validation.
+  Feasibility is recorded in
+  `/private/tmp/zorid-s1-source-backed-graph-feasibility-34ae20c7.md`; a durable
+  graph-index/writer contract remains unresolved, not silently replaced by a cap
+  increase or disposable authority cache. S1.6 is not accepted.
 - Builds/apps and heavy checks stay serialized. After the earlier15 executable
   cleanup, nine passed Rust E2 test binaries were reclaimed with ownership/hash
   proofs (about265 MB); libraries, actual artifacts, source and evidence remain
-  intact. Native F40 used the warm debug cache and reached about1.29 GB minimum
-  free disk. Retain that cache for the executor extraction gate. Before a cold
-  matching WASM build, reassess headroom; never close user/manual apps. Hard
-  floor is1 GiB.
+  intact. Subsequent verified cleanup removed22 MB of closed owned browser
+  caches (not IndexedDB),536 MB of unreachable Cargo library variants and passed
+  test executables, while preserving the155-node reachable warm graph and44 held
+  actual runtime artifacts. The67 batch reached about1.106 GB minimum free disk;
+  no hard-floor breach or forced termination occurred. Test cache cleanup after
+  acceptance leaves about1.19 GB free. Before a cold matching WASM/native build,
+  reassess headroom; never close user/manual apps. Hard floor is1 GiB.
 
 The earlier update below records its own source and verification points.
 
