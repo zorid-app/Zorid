@@ -2,7 +2,7 @@
  * this owner only prepares bounded input, transfers facts, and retires its lease. */
 import type {DocumentDraftJob,DocumentDraftOutcome,DocumentDraftReply,DocumentDraftService} from '../core/document-drafts.ts';
 import {DOCUMENT_DRAFT_CHUNK_BYTES,DOCUMENT_DRAFT_SOURCE_BYTES} from '../core/document-drafts.ts';
-import {decodeDocumentDraftFacts,documentDraftFactsAllocation,DocumentDraftFactsError,DOCUMENT_DRAFT_FACTS_WIRE_BYTES} from '../core/document-draft-facts.ts';
+import {prepareDocumentDraftFacts,DocumentDraftFactsError,DOCUMENT_DRAFT_FACTS_WIRE_BYTES} from '../core/document-draft-facts.ts';
 import {noteFromFacts,parseMetadata} from '../core/metadata.ts';
 import type {NoteMetadata} from '../core/types.ts';
 
@@ -20,6 +20,8 @@ interface Budget {used:number;components:Map<string,number>}
 const budgets=new WeakMap<object,Budget>();
 class Resource extends Error {}
 class Obsolete extends Error {}
+class Unavailable extends Error {}
+class InvalidText extends Error {}
 function budgetFor(owner:object):Budget {let value=budgets.get(owner);if(!value){value={used:0,components:new Map()};budgets.set(owner,value);}return value;}
 function reserve(budget:Budget,component:string,bytes:number):()=>void {
   if(!Number.isSafeInteger(bytes)||bytes<0||bytes>DOCUMENT_DRAFT_FRONTEND_BYTES-budget.used)throw new Resource();
@@ -36,6 +38,7 @@ const turn=()=>new Promise<void>(resolve=>setTimeout(resolve,0));
 
 interface Run {epoch:number;revision:string;text:string;path:string;releaseText:()=>void;slot?:Slot}
 interface Slot {job:DocumentDraftJob;retired:boolean;outcome?:DocumentDraftOutcome;acking?:Promise<void>;ackFailed?:boolean;cancelling?:Promise<void>}
+interface WireLease {id:string;lastRevision?:string;needsRenewal:boolean;retired:boolean;start?:Promise<void>;releasing?:Promise<void>;releaseAllocation:()=>void}
 export interface DocumentDraftProjectionOptions {
   /** The admitted service itself is the shared allocation owner. Legacy uses Vault. */
   readonly owner:object;
@@ -64,11 +67,16 @@ export class DocumentDraftProjection {
   private hint=0;
   private observing?:Promise<void>;
   private observationFailed=false;
+  private ownerLost=false;
   private slots=new Map<string,Slot>();
+  private wireLeases=new Map<string,WireLease>();
+  private wireLeaseId=this.bufferLifetime;
+  private wireLeaseRetired=false;
   private calls=new Set<Promise<unknown>>();
   private waiters=new Set<()=>void>();
   private viewRelease?:()=>void;
   private installed?:NoteMetadata;
+  private installedRevision?:string;
   private stateValue:DraftMetadataState;
 
   constructor(options:DocumentDraftProjectionOptions){
@@ -92,7 +100,13 @@ export class DocumentDraftProjection {
     if(changed){if(this.revision===18446744073709551615n){this.publish('unavailable','resource');return;}this.revision++;}
     this.text=text;this.path=path;this.demanded=options.demand;this.epoch++;this.wake();this.next?.releaseText();this.next=undefined;
     for(const slot of this.slots.values())this.retireSlot(slot);
-    if(!options.demand){this.installed=undefined;this.viewRelease?.();this.viewRelease=undefined;this.publish('unsupported');return;}
+    if(!options.demand){const lease=this.wireLeases.get(this.wireLeaseId);if(lease)void this.releaseLease(lease).catch(()=>{});this.publish('unsupported');return;}
+    if(this.ownerLost){this.publish('unavailable','unavailable');return;}
+    // Demand is not a text revision. Reuse the exact already-owned view even
+    // after its core terminal ACK, in both the core and legacy paths.
+    if(this.installed&&this.installedRevision===String(this.revision)){if(this.installed.path!==path)this.installPath(path);this.publish('current');return;}
+    const previousLease=this.wireLeases.get(this.wireLeaseId);
+    if(this.options.capable&&this.wireLeases.size>=32&&(!previousLease||previousLease.retired||previousLease.needsRenewal||previousLease.lastRevision===String(this.revision))){this.publish('unavailable','resource');return;}
     let releaseText:()=>void;
     try{if(text.length>DOCUMENT_DRAFT_SOURCE_BYTES)throw new Resource();releaseText=reserve(this.budget,'captured-text',text.length*2);}catch{this.publish('unavailable','resource');return;}
     const run:Run={epoch:this.epoch,revision:String(this.revision),text,path,releaseText};this.next=run;this.publish('pending');
@@ -104,11 +118,17 @@ export class DocumentDraftProjection {
     this.stateValue=Object.freeze({status,origin:this.options.capable?'core':'legacy',bufferLifetime:this.bufferLifetime,textRevision:String(this.revision),...(this.installed?{view:this.installed}:{}),...(code?{code}:{})});
     if(!this.closed)try{this.options.onChange?.(this.stateValue);}catch{/* Display listeners cannot own transport cleanup. */}
   }
-  private check(run:Run):void {if(this.closed||run.epoch!==this.epoch)throw new Obsolete();}
+  private check(run:Run):void {if(this.closed||run.epoch!==this.epoch)throw new Obsolete();if(this.ownerLost)throw new Unavailable();}
   private wake():void {for(const resolve of [...this.waiters]){this.waiters.delete(resolve);resolve();}}
   private track<T>(promise:Promise<T>):Promise<T>{this.calls.add(promise);void promise.then(()=>this.calls.delete(promise),()=>this.calls.delete(promise));return promise;}
   private invoke<T>(operation:()=>Promise<T>):Promise<T>{try{return this.track(operation());}catch(error){return this.track(Promise.reject(error));}}
   private accept(reply:DocumentDraftReply):void {
+    const lifetime=reply.state?.admitted?.lifetime??reply.state?.outcomes[0]?.job.lifetime;
+    if((reply.state===null&&this.slots.size)||lifetime!==undefined&&[...this.slots.values()].some(slot=>slot.job.lifetime!==lifetime)){
+      // A null owner after admission, or an actual different-lifetime outcome,
+      // expires old jobs. An empty non-null frame alone proves no lifetime.
+      this.slots.clear();this.ownerLost=true;this.observationFailed=true;this.wake();return;
+    }
     for(const outcome of reply.state?.outcomes??[]){
       const slot=this.slots.get(jobKey(outcome.job));if(!slot||!sameJob(slot.job,outcome.job))continue;
       slot.outcome=outcome;if(slot.retired&&!slot.ackFailed&&!this.closed)void this.ackSlot(slot).catch(()=>{});
@@ -118,12 +138,12 @@ export class DocumentDraftProjection {
   private observeHint():void {
     if(this.closed||!this.service)return;this.hint++;
     if(this.observing)return;
-    this.observationFailed=false;
-    this.observing=(async()=>{
-      let seen:number;
-      do{seen=this.hint;try{this.accept(await this.track(this.service!.snapshot()));this.observationFailed=false;}
+    if(!this.ownerLost)this.observationFailed=false;
+    let seen=-1;
+    this.observing=Promise.resolve().then(async()=>{
+      do{seen=this.hint;try{this.accept(await this.track(this.service!.snapshot()));}
       catch{this.observationFailed=true;this.wake();}}while(!this.closed&&seen!==this.hint);
-    })().finally(()=>{this.observing=undefined;});
+    }).finally(()=>{this.observing=undefined;if(!this.closed&&seen!==this.hint)this.observeHint();});
   }
   private retireProvider():void {
     if(this.providerRetired)return;this.providerRetired=true;this.closed=true;this.epoch++;this.next?.releaseText();this.next=undefined;this.text=undefined;this.wake();
@@ -140,6 +160,7 @@ export class DocumentDraftProjection {
   private ackSlot(slot:Slot):Promise<void>{
     if(slot.acking)return slot.acking;
     if(!this.service||this.closed)return Promise.resolve();
+    const lease=this.wireLeases.get(slot.job.buffer_lifetime);if(lease)lease.needsRenewal=true;
     const operation=this.invoke(()=>this.service!.acknowledge(slot.job)).then(reply=>{this.slots.delete(jobKey(slot.job));this.accept(reply);},error=>{slot.ackFailed=true;throw error;});
     slot.acking=operation.finally(()=>{slot.acking=undefined;});return slot.acking;
   }
@@ -170,7 +191,34 @@ export class DocumentDraftProjection {
     walk(view,0);return bytes;
   }
   private replaceView(view:NoteMetadata,release:()=>void):void {
-    const previous=this.viewRelease;this.installed=view;this.viewRelease=release;previous?.();
+    const previous=this.viewRelease;this.installed=view;this.installedRevision=String(this.revision);this.viewRelease=release;previous?.();
+  }
+  private leaseFor(run:Run):WireLease {
+    let lease=this.wireLeases.get(this.wireLeaseId);
+    if(!lease&&this.wireLeaseRetired){if(this.wireLeases.size>=32)throw new Resource();this.wireLeaseId=crypto.randomUUID();this.wireLeaseRetired=false;}
+    if(lease&&(lease.retired||lease.needsRenewal||lease.lastRevision===run.revision)){
+      void this.releaseLease(lease).catch(()=>{});
+      // Failed old releases remain charged and bounded. Rapid demand toggles
+      // cannot grow an unbounded collection of renewable nonces.
+      if(this.wireLeases.size>=32)throw new Resource();
+      this.wireLeaseId=crypto.randomUUID();this.wireLeaseRetired=false;lease=undefined;
+    }
+    if(!lease){if(this.wireLeases.size>=32)throw new Resource();const releaseAllocation=reserve(this.budget,'wire-lease',1024);lease={id:this.wireLeaseId,needsRenewal:false,retired:false,releaseAllocation};this.wireLeases.set(lease.id,lease);}
+    lease.lastRevision=run.revision;return lease;
+  }
+  private releaseLease(lease:WireLease):Promise<void>{
+    lease.retired=true;if(lease.id===this.wireLeaseId)this.wireLeaseRetired=true;if(lease.releasing)return lease.releasing;
+    if(this.providerRetired)return Promise.resolve();
+    // Capture a pending admission before the early buffer-scoped release. Its
+    // delayed ACK may expose a job only after the first release settled.
+    const start=lease.start;
+    const releasing=(async()=>{
+      await this.invoke(()=>this.service!.releaseBuffer(lease.id));
+      if(start){await start;if(!this.providerRetired)await this.invoke(()=>this.service!.releaseBuffer(lease.id));}
+      if(this.wireLeases.get(lease.id)===lease){this.wireLeases.delete(lease.id);lease.releaseAllocation();}
+      for(const [key,slot]of this.slots)if(slot.job.buffer_lifetime===lease.id)this.slots.delete(key);
+      this.wake();
+    })().finally(()=>{if(lease.releasing===releasing)lease.releasing=undefined;});lease.releasing=releasing;return releasing;
   }
   private installPath(path:string):void {
     if(!this.installed)return;
@@ -182,7 +230,7 @@ export class DocumentDraftProjection {
     let length=0;
     for(let start=0;start<run.text.length;){
       const end=Math.min(run.text.length,start+32768);
-      while(start<end){const c=run.text.charCodeAt(start++);if(c>=0xd800&&c<=0xdbff){const low=run.text.charCodeAt(start++);if(!(low>=0xdc00&&low<=0xdfff))throw new TypeError();length+=4;}else if(c>=0xdc00&&c<=0xdfff)throw new TypeError();else length+=c<128?1:c<2048?2:3;if(length>DOCUMENT_DRAFT_SOURCE_BYTES)throw new Resource();}
+      while(start<end){const c=run.text.charCodeAt(start++);if(c>=0xd800&&c<=0xdbff){const low=run.text.charCodeAt(start++);if(!(low>=0xdc00&&low<=0xdfff))throw new InvalidText();length+=4;}else if(c>=0xdc00&&c<=0xdfff)throw new InvalidText();else length+=c<128?1:c<2048?2:3;if(length>DOCUMENT_DRAFT_SOURCE_BYTES)throw new Resource();}
       await turn();this.check(run);
     }
     const releases:(()=>void)[]=[];
@@ -204,9 +252,13 @@ export class DocumentDraftProjection {
     let source:Awaited<ReturnType<DocumentDraftProjection['source']>>|undefined;
     try{
       source=await this.source(run);this.check(run);
-      const reply=await this.track(this.service!.request({buffer_lifetime:this.bufferLifetime,text_revision:run.revision,source:source.descriptor}));
-      const job=reply.state?.admitted;if(!job)throw new Error();
-      const slot:Slot={job,retired:false};run.slot=slot;this.slots.set(jobKey(job),slot);this.accept(reply);this.check(run);
+      const lease=this.leaseFor(run);let settled!:()=>void;lease.start=new Promise<void>(resolve=>{settled=resolve;});
+      let job:DocumentDraftJob,slot:Slot;
+      try{const reply=await this.track(this.service!.request({buffer_lifetime:lease.id,text_revision:run.revision,source:source.descriptor}));
+      if(!reply.state?.admitted)throw new Error();job=reply.state.admitted;
+      slot={job,retired:false};run.slot=slot;this.slots.set(jobKey(job),slot);this.accept(reply);
+      }finally{lease.start=undefined;settled();}
+      this.check(run);
       this.accept(await this.track(this.service!.uploadBegin(job)));this.check(run);
       for(let offset=0;offset<source.bytes.length;offset+=DOCUMENT_DRAFT_CHUNK_BYTES){
         const chunk=source.bytes.subarray(offset,Math.min(source.bytes.length,offset+DOCUMENT_DRAFT_CHUNK_BYTES));
@@ -216,10 +268,10 @@ export class DocumentDraftProjection {
       }
       this.accept(await this.track(this.service!.uploadSeal(job)));this.check(run);source.release();run.text='';run.releaseText();
       this.observeHint();
-      while(!slot.outcome){this.check(run);if(this.observationFailed)throw new Error();await new Promise<void>(resolve=>this.waiters.add(resolve));}
+      while(!slot.outcome){this.check(run);if(this.observationFailed)throw new Unavailable();await new Promise<void>(resolve=>this.waiters.add(resolve));}
       this.check(run);if(slot.outcome.kind!=='ready'){this.publish('unavailable',slot.outcome.reason==='resource'?'resource':'unavailable');return;}
       await this.facts(run,slot,source.descriptor);this.check(run);await this.ackSlot(slot);
-    }catch(error){if(!(error instanceof Obsolete)&&!this.closed&&run.epoch===this.epoch)this.publish('unavailable',error instanceof Resource||error instanceof DocumentDraftFactsError&&error.code==='resource'?'resource':error instanceof TypeError?'invalid_text':'invalid_facts');}
+    }catch(error){if(!(error instanceof Obsolete)&&!this.closed&&run.epoch===this.epoch)this.publish('unavailable',error instanceof Resource||error instanceof DocumentDraftFactsError&&error.code==='resource'?'resource':error instanceof InvalidText?'invalid_text':error instanceof Unavailable?'unavailable':'invalid_facts');}
     finally{source?.release();run.text='';run.releaseText();if(run.slot&&this.slots.has(jobKey(run.slot.job)))this.retireSlot(run.slot);}
   }
   private async facts(run:Run,slot:Slot,descriptor:{bytes:number;utf16:number}):Promise<void>{
@@ -233,8 +285,8 @@ export class DocumentDraftProjection {
         try{const chunk=await this.track(this.service!.readFacts({job:slot.job,offset:String(offset),maximum:DOCUMENT_DRAFT_CHUNK_BYTES}));this.check(run);if(chunk.result.total_bytes!==total||chunk.result.offset!==String(offset)||offset+chunk.bytes.length>total)throw new Error();wire.set(chunk.bytes,offset);offset+=chunk.bytes.length;if(chunk.result.eof!==(offset===total)||!chunk.result.eof&&chunk.bytes.length===0)throw new Error();}finally{release();}
       }while(offset<total);
       textRelease=reserve(this.budget,'facts-text',total*2);let text=new TextDecoder('utf-8',{fatal:true}).decode(wire);wire=new Uint8Array();wireRelease();
-      const allocation=documentDraftFactsAllocation(text);parsedRelease=reserve(this.budget,'facts-decoded-and-indices',allocation);
-      const facts=decodeDocumentDraftFacts(text,descriptor);text='';textRelease();this.check(run);
+      const preparedFacts=prepareDocumentDraftFacts(text),allocation=preparedFacts.allocation;parsedRelease=reserve(this.budget,'facts-decoded-and-indices',allocation);
+      const facts=preparedFacts.decode(descriptor);text='';textRelease();this.check(run);
       // Mapping only projects supplied fields; retained full facts and its view
       // overlap stay charged until the old installed view is disposed.
       const mappingRelease=reserve(this.budget,'view-mapping',allocation+this.path.length*2+1024);
@@ -252,11 +304,12 @@ export class DocumentDraftProjection {
     if(this.closing)return this.closing;
     // Buffer-scoped release is available before a delayed request ACK exposes
     // its job token. The final release below also catches a late admission.
-    let early:Promise<unknown>|undefined;
-    if(this.service&&!this.providerRetired){try{early=this.track(this.service.releaseBuffer(this.bufferLifetime));}catch(error){early=Promise.reject(error);}void early.catch(()=>{});}
+    const early=this.service&&!this.providerRetired?[...this.wireLeases.values()].map(lease=>this.releaseLease(lease)):[];
+    for(const promise of early)void promise.catch(()=>{});
     const closing=(async()=>{
-      await this.running;await this.observing;if(early)await Promise.allSettled([early]);while(this.calls.size)await Promise.allSettled([...this.calls]);
-      if(this.service&&!this.providerRetired)await this.service.releaseBuffer(this.bufferLifetime);
+      await this.running;await this.observing;await Promise.allSettled(early);while(this.calls.size)await Promise.allSettled([...this.calls]);
+      if(this.service&&!this.providerRetired)for(const lease of [...this.wireLeases.values()])await this.releaseLease(lease);
+      for(const lease of this.wireLeases.values())lease.releaseAllocation();this.wireLeases.clear();
       const stop=this.unsubscribe;this.unsubscribe=undefined;try{stop?.();}catch{/* The core release ACK already transferred ownership. */}this.slots.clear();this.installed=undefined;this.viewRelease?.();this.viewRelease=undefined;this.publish('unsupported');
     })().finally(()=>{if(this.closing===closing)this.closing=undefined;});this.closing=closing;return closing;
   }

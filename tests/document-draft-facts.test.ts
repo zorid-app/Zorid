@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {decodeDocumentDraftFacts,validateDocumentParseFacts,documentDraftFactsAllocation} from '../src/core/document-draft-facts.ts';
+import {decodeDocumentDraftFacts,validateDocumentParseFacts,documentDraftFactsAllocation,prepareDocumentDraftFacts} from '../src/core/document-draft-facts.ts';
 import {noteFromFacts} from '../src/core/metadata.ts';
 
 const text='---\r\nvalue: [true, 1, null]\r\n---\r\n# Hé😀\r\n[[dest]]\r\n';
@@ -42,7 +42,7 @@ test('allocation preflight accounts quoted spellings nodes and depth before JSON
   assert.throws(()=>documentDraftFactsAllocation('{"unterminated'));
 });
 
-test('facts validation never executes property accessors',()=>{
+test('top-level fact fields reject accessors without executing them',()=>{
   const value=facts();let called=0;Object.defineProperty(value,'headings',{enumerable:true,get(){called++;return [];}});
   assert.throws(()=>validateDocumentParseFacts(value,source));assert.equal(called,0);
 });
@@ -50,4 +50,12 @@ test('facts validation never executes property accessors',()=>{
 test('view mapping preserves repeated reference destinations without invented entry witnesses',()=>{
   const value=facts();value.links.push({...value.links[0]});const view=noteFromFacts('Renamed.md',decodeDocumentDraftFacts(JSON.stringify(value),source));
   assert.equal(view.path,'Renamed.md');assert.equal(view.links.length,2);assert.deepEqual(view.links[0],view.links[1]);assert.equal('entryId'in view,false);
+});
+
+test('sealed preflight enforces wire bytes before JSON.parse and decodes only once',()=>{
+  const original=JSON.parse;let parsed=0;JSON.parse=(...args:Parameters<typeof JSON.parse>)=>{parsed++;return original(...args);};
+  try{
+    assert.throws(()=>decodeDocumentDraftFacts('"'+'é'.repeat(8*1024*1024)+'"',source),e=>(e as any).code==='resource');assert.equal(parsed,0);
+    const sealed=prepareDocumentDraftFacts(JSON.stringify(facts()));assert.equal(parsed,0);assert.ok(sealed.allocation>0);sealed.decode(source);assert.equal(parsed,1);assert.throws(()=>sealed.decode(source));assert.equal(parsed,1);
+  }finally{JSON.parse=original;}
 });

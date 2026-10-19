@@ -8,21 +8,32 @@ import {DocumentDraftProjection,documentDraftProjectionUsage,DOCUMENT_DRAFT_FRON
 function deferred<T>(){let resolve!:(value:T)=>void,reject!:(error:unknown)=>void;const promise=new Promise<T>((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};}
 async function until(predicate:()=>boolean,label='draft state'){const deadline=Date.now()+5000;while(!predicate()){if(Date.now()>deadline)assert.fail(`Timed out: ${label}`);await new Promise(resolve=>setTimeout(resolve,2));}}
 function facts(text:string):any{return {schemaVersion:2,dialectVersion:'zorid-markdown-1',sourceLength:{bytes:Buffer.byteLength(text),utf16:text.length},frontmatter:{state:'absent',range:null,bodyStart:{byte:0,utf16:0}},properties:[],aliases:[`core:${text}`],tags:['from-core'],tagOccurrences:[],headings:text?[{text:'Supplied core heading',level:1,line:0,range:{bytes:[0,Buffer.byteLength(text)],utf16:[0,text.length]}}]:[],links:[],tasks:[],blocks:[],listItems:[],diagnostics:[]};}
-interface Owned {job:DocumentDraftJob;source:{bytes:number;utf16:number;sha256:string};bytes:Uint8Array;received:number;sealed:boolean;wire?:Uint8Array;kind?:'ready'|'cancelled';}
+interface Owned {job:DocumentDraftJob;source:{bytes:number;utf16:number;sha256:string};bytes:Uint8Array;received:number;sealed:boolean;wire?:Uint8Array;kind?:'ready'|'cancelled'|'superseded';}
 function fixture(){
   const events:DocumentDraftRequest[]=[],jobs=new Map<string,Owned>(),receivers=new Set<{hint:()=>void;retire:()=>void}>();let sequence=0;
-  const controls={requestGate:undefined as ReturnType<typeof deferred<void>>|undefined,readGate:undefined as ReturnType<typeof deferred<void>>|undefined,releaseFailures:0,facts:((text:string)=>facts(text)),wireLength:undefined as number|undefined};
+  const buffers=new Map<string,{revision:string;id:string;released:boolean}>();
+  const controls={requestGate:undefined as ReturnType<typeof deferred<void>>|undefined,readGate:undefined as ReturnType<typeof deferred<void>>|undefined,releaseFailures:0,facts:((text:string)=>facts(text)),wireLength:undefined as number|undefined,autoReady:true,syncSnapshotHints:0,snapshotMode:'normal' as 'normal'|'null'|'other-life',snapshotActive:0,snapshotMaximum:0};
   const hint=()=>{for(const slot of [...receivers])slot.hint();};
   const transport:DocumentDraftTransport={scope:{localStoreId:'store',clientId:'client'},subscribe(hint,retire){const slot={hint,retire};receivers.add(slot);return()=>receivers.delete(slot);},invoke:async(input,bytes)=>{
     events.push(input);
     const outcome=()=>[...jobs.values()].filter(row=>row.kind).map(row=>({job:row.job,kind:row.kind,reason:null}));
     const reply=(admitted:DocumentDraftJob|null=null,transfer:unknown=null)=>({result:{state:{admitted,replay:false,execution:'wait_for_acknowledgement',outcomes:outcome(),usage:{source_bytes:0,scratch_bytes:0,facts_bytes:0}},transfer,transfer_scratch_bytes:0},bytes:new Uint8Array()});
     if(input.op==='request'){
+      const prior=buffers.get(input.buffer_lifetime);
+      if(prior&&(prior.released||BigInt(input.text_revision)<BigInt(prior.revision)||input.text_revision===prior.revision&&!jobs.has(prior.id)))throw {code:'draft_expired'};
+      if(prior&&input.text_revision===prior.revision){const captured=reply(jobs.get(prior.id)!.job);captured.result.state.replay=true;return captured;}
+      if(prior){const old=jobs.get(prior.id);if(old)old.kind='superseded';}
       const job={lifetime:'owner',id:String(++sequence),buffer_lifetime:input.buffer_lifetime,text_revision:input.text_revision};
+      buffers.set(input.buffer_lifetime,{revision:input.text_revision,id:job.id,released:false});
       jobs.set(job.id,{job,source:input.source,bytes:new Uint8Array(input.source.bytes),received:0,sealed:false});const captured=reply(job);await controls.requestGate?.promise;return captured;
     }
-    if(input.op==='snapshot')return reply();
-    if(input.op==='release_buffer'){for(const [id,row]of jobs)if(row.job.buffer_lifetime===input.buffer_lifetime)jobs.delete(id);if(controls.releaseFailures-->0)throw {code:'release_failed'};return reply();}
+    if(input.op==='snapshot'){
+      controls.snapshotActive++;controls.snapshotMaximum=Math.max(controls.snapshotMaximum,controls.snapshotActive);
+      try{if(controls.syncSnapshotHints-->0)hint();await Promise.resolve();if(controls.snapshotMode==='null')return {result:{state:null,transfer:null,transfer_scratch_bytes:0},bytes:new Uint8Array()};
+      const value=reply();if(controls.snapshotMode==='other-life')value.result.state.outcomes=[{job:{lifetime:'replacement',id:'1',buffer_lifetime:'other',text_revision:'1'},kind:'ready',reason:null}];return value;
+      }finally{controls.snapshotActive--;}
+    }
+    if(input.op==='release_buffer'){const prior=buffers.get(input.buffer_lifetime);if(prior)prior.released=true;for(const [id,row]of jobs)if(row.job.buffer_lifetime===input.buffer_lifetime)jobs.delete(id);if(controls.releaseFailures-->0)throw {code:'release_failed'};return reply();}
     const row=jobs.get(input.job.id);if(!row)throw {code:'draft_expired'};
     const transfer=()=>({source_bytes_received:row.received,source_bytes_expected:row.source.bytes,source_sealed:row.sealed,facts_bytes:row.wire?controls.wireLength??row.wire.length:null,scratch_bytes:0});
     if(input.op==='upload_begin'||input.op==='progress')return reply(null,transfer());
@@ -30,7 +41,7 @@ function fixture(){
     if(input.op==='upload_seal'){
       assert.equal(row.received,row.source.bytes);assert.equal(createHash('sha256').update(row.bytes).digest('hex'),row.source.sha256);
       const text=new TextDecoder('utf-8',{fatal:true}).decode(row.bytes);assert.equal(text.length,row.source.utf16);
-      row.sealed=true;row.wire=new TextEncoder().encode(JSON.stringify(controls.facts(text)));row.kind='ready';queueMicrotask(hint);return reply();
+      row.sealed=true;row.wire=new TextEncoder().encode(JSON.stringify(controls.facts(text)));if(controls.autoReady)row.kind='ready';queueMicrotask(hint);return reply();
     }
     if(input.op==='facts_prepare')return reply(null,transfer());
     if(input.op==='facts_read'){const offset=Number(input.offset),wire=row.wire!,part=wire.slice(offset,offset+input.maximum),captured={result:{job:row.job,offset:input.offset,bytes:part.length,total_bytes:wire.length,eof:offset+part.length===wire.length},bytes:part};await controls.readGate?.promise;return captured;}
@@ -48,11 +59,13 @@ test('clean observation is lazy and save-only notifications never request analys
   assert.equal(projection.state.textRevision,'1');assert.equal(projection.state.status,'unsupported');assert.equal(f.events.length,0);
   projection.update('One.md','saved',demand);await until(()=>!!projection.current);const count=f.events.filter(e=>e.op==='request').length;
   projection.update('One.md','saved',demand);assert.equal(f.events.filter(e=>e.op==='request').length,count);assert.equal(projection.state.textRevision,'1');
-  projection.update('One.md','saved',idle);assert.equal(projection.current,undefined);assert.equal(projection.state.status,'unsupported');
+  const cached=projection.current;projection.update('One.md','saved',idle);assert.equal(projection.current,undefined);assert.equal(projection.state.status,'unsupported');
+  projection.update('One.md','saved',demand);assert.equal(projection.current,cached);assert.equal(f.events.filter(e=>e.op==='request').length,count);assert.equal(projection.state.textRevision,'1');
 });
 
 test('legacy metadata is cached per actual text revision and shared through path changes',async()=>{
   const projection=new DocumentDraftProjection({owner:{},capable:false});projection.update('One.md','# First',demand);const first=projection.current;
+  projection.update('One.md','# First',idle);projection.update('One.md','# First',demand);assert.equal(projection.current,first,'demand toggles never reparse the same legacy revision');
   projection.update('One.md','# First',demand);assert.equal(projection.current,first);projection.update('Renamed.md','# First',demand);assert.equal(projection.current?.path,'Renamed.md');assert.equal(projection.state.textRevision,'1');
   projection.update('Renamed.md','# Other',idle);projection.update('Renamed.md','# First',demand);assert.equal(projection.state.textRevision,'3');assert.notEqual(projection.current,first);await projection.close();
 });
@@ -75,6 +88,44 @@ test('rapid ABA input coalesces source preparation and retires a late admission 
   projection.update('One.md','B',demand);projection.update('One.md','A',demand);assert.equal(projection.current,undefined);gate.resolve();f.controls.requestGate=undefined;
   await until(()=>projection.state.status==='current');assert.equal(projection.state.textRevision,'3');assert.deepEqual(projection.current!.aliases,['core:A']);
   assert.deepEqual(f.events.filter(e=>e.op==='request').map(e=>(e as any).text_revision),['1','3']);assert.ok(f.events.some(e=>e.op==='cancel'&&e.job.text_revision==='1'));
+});
+
+test('pending off/on reacquires the same text revision with a distinct lease while old admission is held',async t=>{
+  const f=fixture();t.after(()=>f.close());const projection=f.project(),gate=deferred<void>();f.controls.requestGate=gate;
+  projection.update('One.md','same',demand);await until(()=>f.events.some(e=>e.op==='request'));const first=f.events.find(e=>e.op==='request') as Extract<DocumentDraftRequest,{op:'request'}>,identity=projection.state.bufferLifetime;
+  projection.update('One.md','same',idle);assert.ok(f.events.some(e=>e.op==='release_buffer'&&e.buffer_lifetime===first.buffer_lifetime));projection.update('One.md','same',demand);
+  gate.resolve();f.controls.requestGate=undefined;await until(()=>!!projection.current);
+  const requests=f.events.filter(e=>e.op==='request');assert.equal(requests.length,2);assert.notEqual(requests[1]!.buffer_lifetime,first.buffer_lifetime);assert.equal(requests[1]!.text_revision,first.text_revision);assert.equal(projection.state.bufferLifetime,identity);
+  assert.ok(f.events.filter(e=>e.op==='release_buffer').every(e=>e.buffer_lifetime===first.buffer_lifetime),'late old release never targets the renewed lease');
+});
+
+test('Ready facts rejected locally can reacquire only through a fresh lease after terminal ACK',async t=>{
+  const f=fixture();t.after(()=>f.close());const projection=f.project();f.controls.facts=text=>({...facts(text),entryId:'forged'});
+  projection.update('One.md','same',demand);await until(()=>projection.state.status==='unavailable');await until(()=>f.events.some(e=>e.op==='acknowledge'));
+  const first=f.events.find(e=>e.op==='request') as Extract<DocumentDraftRequest,{op:'request'}>;
+  await assert.rejects(f.service.request({buffer_lifetime:first.buffer_lifetime,text_revision:first.text_revision,source:first.source}),e=>(e as any).code==='draft_expired','the strict fake core preserves equal-revision anti-resurrection');
+  f.controls.facts=facts;projection.update('One.md','same',idle);projection.update('One.md','same',demand);await until(()=>!!projection.current);
+  const last=f.events.filter(e=>e.op==='request').at(-1)!;assert.notEqual(last.buffer_lifetime,first.buffer_lifetime);assert.equal(last.text_revision,first.text_revision);
+});
+
+test('failed old releases bound renewable lease ownership instead of accumulating nonces forever',async t=>{
+  const f=fixture();t.after(()=>f.close());const projection=f.project();f.controls.facts=text=>({...facts(text),entryId:'forged'});f.controls.releaseFailures=10000;
+  try{
+    for(let i=0;i<33;i++){projection.update('One.md','same',idle);projection.update('One.md','same',demand);await until(()=>projection.state.status==='unavailable');}
+    const requests=f.events.filter(e=>e.op==='request');assert.equal(requests.length,32);assert.equal(new Set(requests.map(e=>e.buffer_lifetime)).size,32);assert.ok(requests.every(e=>e.text_revision==='1'));assert.equal(projection.state.code,'resource');
+  }finally{f.controls.releaseFailures=0;}
+});
+
+test('synchronous snapshot hints reserve one observer before invoking transport',async t=>{
+  const f=fixture();t.after(()=>f.close());f.controls.autoReady=false;f.controls.syncSnapshotHints=1;const projection=f.project();projection.update('One.md','waiting',demand);
+  await until(()=>f.events.filter(e=>e.op==='snapshot').length>=2);assert.equal(f.controls.snapshotMaximum,1);assert.equal(projection.state.status,'pending');
+});
+
+for(const mode of ['null','other-life'] as const)test(`authoritative ${mode} observation expires an admitted wait without cross-lifetime ACK`,async t=>{
+  const f=fixture();t.after(()=>f.close());f.controls.autoReady=false;const projection=f.project();projection.update('One.md','waiting',demand);
+  await until(()=>f.events.some(e=>e.op==='snapshot'));f.controls.snapshotMode=mode;f.hint();await until(()=>projection.state.status==='unavailable');
+  assert.equal(projection.state.code,'unavailable');assert.equal(projection.current,undefined);assert.equal(f.events.some(e=>e.op==='acknowledge'),false);
+  const before=f.events.filter(e=>e.op==='request').length;projection.update('One.md','next',demand);assert.equal(f.events.filter(e=>e.op==='request').length,before,'lost owner is not silently retargeted');
 });
 
 test('a delayed old facts read cannot replace newer text and its bytes stay charged until settled',async t=>{
@@ -113,7 +164,7 @@ test('close sends buffer release before admission ACK and joins the late owned j
 test('failed buffer release retains the same retired owner and view reservation for explicit retry',async()=>{
   const f=fixture(),projection=f.project();projection.update('One.md','retained',demand);await until(()=>!!projection.current);f.controls.releaseFailures=2;
   await assert.rejects(projection.close(),e=>(e as any).code==='release_failed');assert.equal(projection.current,undefined);assert.ok(documentDraftProjectionUsage(f.service).bytes>0);
-  const before=f.events.filter(e=>e.op==='release_buffer').length;await projection.close();assert.equal(f.events.filter(e=>e.op==='release_buffer').length,before+2);assert.equal(documentDraftProjectionUsage(f.service).bytes,0);
+  const before=f.events.filter(e=>e.op==='release_buffer').length;await projection.close();assert.ok(f.events.filter(e=>e.op==='release_buffer').length>before);assert.equal(documentDraftProjectionUsage(f.service).bytes,0);
 });
 
 for(const phase of ['admission','hash','read'] as const)test(`authoritative service retirement hands off core disposal during held ${phase}`,async t=>{

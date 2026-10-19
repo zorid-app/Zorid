@@ -27,6 +27,8 @@ function key(v:unknown):string{const s=str(v);if(!s.trim()||/[\u0000-\u001f\u007
 const diagnosticCodes=['frontmatter_unclosed','frontmatter_syntax','frontmatter_duplicate_key','frontmatter_mapping','frontmatter_tag','frontmatter_alias','frontmatter_value','frontmatter_resource','projection_non_string'] as const;
 export const DOCUMENT_PARSE_FACTS_FIELDS=['schemaVersion','dialectVersion','sourceLength','frontmatter','properties','aliases','tags','tagOccurrences','headings','links','tasks','blocks','listItems','diagnostics'] as const;
 
+/** Shape validator for already bounded plain JSON data. Committed callers first
+ * run their descriptor-safe envelope walk; draft callers use prepare/decode. */
 export function validateDocumentParseFacts(v:unknown,expected?:{readonly bytes:number;readonly utf16:number},committed=false):DocumentParseFacts{
   const m=row(v,[...DOCUMENT_PARSE_FACTS_FIELDS,...(committed?['entryId','contentRevision']:[])]);
   if(m.schemaVersion!==2||m.dialectVersion!=='zorid-markdown-1')bad();
@@ -60,21 +62,36 @@ export function validateDocumentParseFacts(v:unknown,expected?:{readonly bytes:n
  * conservative component reservations, never a JS heap/RSS bound.
  * Scan before JSON.parse; raw quoted spelling overcharges escapes deliberately. */
 export function documentDraftFactsAllocation(text:string):number{
-  let charge=0,depth=0,quoted=false,escaped=false;
+  let charge=0,wire=0,depth=0,quoted=false,escaped=false,primitive=false;
   for(let i=0;i<text.length;i++){
-    const c=text[i]!;
+    const c=text[i]!,unit=text.charCodeAt(i);
+    if(unit>=0xd800&&unit<=0xdbff){const low=text.charCodeAt(i+1);if(!(low>=0xdc00&&low<=0xdfff))bad();wire+=4;}
+    else if(unit>=0xdc00&&unit<=0xdfff){const high=text.charCodeAt(i-1);if(!(high>=0xd800&&high<=0xdbff))bad();}
+    else wire+=unit<128?1:unit<2048?2:3;
+    if(wire>DOCUMENT_DRAFT_FACTS_WIRE_BYTES)throw new DocumentDraftFactsError('resource');
     if(quoted){charge+=2;if(escaped)escaped=false;else if(c==='\\')escaped=true;else if(c==='"')quoted=false;}
-    else if(c==='"'){quoted=true;charge+=64;}
-    else if(c==='{'||c==='['){if(++depth>73)bad();charge+=256;}
-    else if(c==='}'||c===']'){if(--depth<0)bad();}
-    else if(c===':'||c===',')charge+=64;
-    else if(!/\s/.test(c)){charge+=32;while(i+1<text.length&&!/[\s,\]\}]/.test(text[i+1]!))i++;}
+    else if(c==='"'){primitive=false;quoted=true;charge+=64;}
+    else if(c==='{'||c==='['){primitive=false;if(++depth>73)bad();charge+=256;}
+    else if(c==='}'||c===']'){primitive=false;if(--depth<0)bad();}
+    else if(c===':'||c===','){primitive=false;charge+=64;}
+    else if(/\s/.test(c))primitive=false;
+    else if(!primitive){primitive=true;charge+=32;}
     if(charge>96*1024*1024)throw new DocumentDraftFactsError('resource');
   }
   if(quoted||depth!==0)bad();return charge;
 }
-export function decodeDocumentDraftFacts(text:string,expected:{readonly bytes:number;readonly utf16:number}):DocumentParseFacts{
+function decode(text:string,expected:{readonly bytes:number;readonly utf16:number}):DocumentParseFacts{
   const facts=validateDocumentParseFacts(JSON.parse(text),expected);
   function freeze(value:unknown):void{if(value&&typeof value==='object'){for(const child of Object.values(value))freeze(child);Object.freeze(value);}}
   freeze(facts);return facts;
+}
+/** One scan gates wire/depth/logical allocation before JSON.parse. The immutable
+ * string is sealed into a single-use decoder, so callers reserve once and do not
+ * duplicate the full preflight scan. Discarding the seal drops its borrowed text. */
+export function prepareDocumentDraftFacts(text:string):Readonly<{allocation:number;decode(expected:{readonly bytes:number;readonly utf16:number}):DocumentParseFacts}>{
+  const allocation=documentDraftFactsAllocation(text);let input:string|undefined=text;
+  return Object.freeze({allocation,decode(expected){if(input===undefined)bad();const current=input;input=undefined;return decode(current,expected);}});
+}
+export function decodeDocumentDraftFacts(text:string,expected:{readonly bytes:number;readonly utf16:number}):DocumentParseFacts{
+  return prepareDocumentDraftFacts(text).decode(expected);
 }
