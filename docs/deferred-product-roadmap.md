@@ -24,14 +24,26 @@ isolated with owner `s1_rich_search_controller`: NoteBuffer/Workspace and a narr
 EditorHandle metadata refresh seam; independent review `baseline_resources_impl`.
 No normal runtime activation or app verification is implied.
 
-Rust166 has58 planned checks passed, plus12 incidental search-preview passes
-reported separately. The first run stopped on a filter-count mismatch (37 actual,
-25 intended); independent source/name reconciliation accepted the exact intended25
-without rerunning. Continuation then stopped at a test-only Store allocator compile
-error: SQL count inferred unsupported u64 instead of i64. Owner
-`storage_recovery_impl` prepares the narrow fixture correction and remaining108
-continuation; reviewer `s1_execution_audit`. Original failures remain recorded.
-No failed runtime assertion or full Rust acceptance is claimed.
+Rust166 now has145 planned checks passed, plus12 incidental search-preview
+passes kept separate. The canonical successor is60e868ac: test-only SQL count
+type correction7808beb3 and independently reviewed strict empty-command decoder
+fix36a01be3 (integrated as60e868ac) preserve original failure evidence. All31 host
+checks pass after the decoder correction. Remaining21 hosted-WASM checks are
+source-reviewed and ready, but fresh disk is below the1.5GB package-start floor.
+Evidence: `/private/tmp/zorid-s1-canonical-f-preview-aea13f96/continuation52-run/summary.json`.
+Six completed test executables were retired after exact identity/handle checks;
+source, warm dependencies and evidence remain. Optional installed Rust HTML docs
+were also retired, preserving compiler/WASM tools/licenses; observed reclaim was
+only15.3MB, not their812.5MB summed allocation. Do not assume summed file blocks
+are net free space. A pending-WASM-only graph inventory and unused Electron-copy
+inventory are underway; do not delete current dependencies or manual apps.
+
+Hook candidateb5dd53de is independently source-approved after fixing single- and
+multi-buffer teardown retry. Its113 focused Node/full-TypeScript plan is unrun,
+waiting for the serialized slot and disk. Prior62 boundary checks carry only
+through their unchanged relevant closure. Store sealed preview prerequisite
+01bd11d0 is also source-approved, with7 new checks and6 affected producer checks
+pending. Both actual generated-WASM and app verification remain open.
 
 Remaining implementation ownership is isolated from the frozen validation tree:
 `s1_query_audit` owns the sealed Store preview prerequisite; `storage_sqlite_impl`
