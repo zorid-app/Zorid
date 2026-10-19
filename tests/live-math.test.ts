@@ -7,12 +7,16 @@ import type { Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { history, undo } from '@codemirror/commands';
+import { openSearchPanel, searchPanelOpen } from '@codemirror/search';
 import type { LiveMathOptions } from '../src/editor/live-math.ts';
 import { liveMath, liveMathMarkdown } from '../src/editor/live-math.ts';
 import { liveInlineMarkdown } from '../src/editor/live-inline.ts';
+import { noteFindPanel } from '../src/editor/find-panel.ts';
 
 function setup(t: TestContext, source: string, options: LiveMathOptions = {}, before: Extension = []) {
   const dom = new JSDOM('<!doctype html><body><main></main>', { pretendToBeVisual: true });
+  const errors: unknown[] = [];
+  dom.window.addEventListener('error', event => { errors.push(event.error ?? event.message); event.preventDefault(); });
   const observers: { callback: () => void; disconnected: boolean }[] = [];
   class TestResizeObserver {
     record: typeof observers[number];
@@ -40,14 +44,14 @@ function setup(t: TestContext, source: string, options: LiveMathOptions = {}, be
   } });
   const view = new EditorView({ parent: document.querySelector('main')!, state: EditorState.create({ doc: source,
     extensions: [markdown({ base: markdownLanguage, extensions: [liveInlineMarkdown, liveMathMarkdown] }),
-      history(), EditorState.allowMultipleSelections.of(true), before, compartment.of(extension)] }) });
+      history(), EditorState.allowMultipleSelections.of(true), EditorView.exceptionSink.of(error => errors.push(error)), before, compartment.of(extension)] }) });
   let destroyed = false;
   const destroy = () => { if (!destroyed) { destroyed = true; view.destroy(); } };
   t.after(() => { destroy(); dom.window.close(); for (const [key, descriptor] of saved) {
     if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key);
   } });
   const click = (target: Element) => target.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
-  return { dom, view, records, destroy, compartment, click, observers, widgets: () => [...view.dom.querySelectorAll('.cm-live-math')] };
+  return { dom, view, records, destroy, compartment, click, observers, errors, widgets: () => [...view.dom.querySelectorAll('.cm-live-math')] };
 }
 
 test('inline and display rendering preserves source and distinguishes layout from TeX display mode', t => {
@@ -58,23 +62,72 @@ test('inline and display rendering preserves source and distinguishes layout fro
   assert.equal(view.state.doc.toString(), source);
 });
 
-test('focused selections expose inline source while display preview stays mounted after its source', t => {
+test('focused selections expose inline source while display preview stays mounted after its source', async t => {
   const source = '$x$\n\n$$\ny\n$$\nend', { view, records, widgets } = setup(t, source);
   const block = view.dom.querySelector('.cm-live-math-block');
   view.focus(); view.dispatch({ selection: { anchor: source.indexOf('y') } });
+  await Promise.resolve();
   assert.equal(view.dom.querySelector('.cm-live-math-block'), block);
-  assert.ok(view.dom.textContent?.includes('$$')); assert.equal(records.length, 3); // inline focus reveal/remount
+  assert.ok(view.dom.textContent?.includes('$$')); assert.equal(records.filter(record => record.source === 'x').length, 1);
   view.dispatch({ selection: { anchor: 1 } });
   assert.equal(widgets().length, 1); assert.ok(view.dom.textContent?.includes('$x$'));
   view.contentDOM.blur();
+  await Promise.resolve();
   assert.equal(widgets().length, 2); assert.equal(view.state.doc.toString(), source);
+  view.focus(); await Promise.resolve(); assert.equal(widgets().length, 1); assert.ok(view.dom.textContent?.includes('$x$'));
 });
 
-test('multiple and reversed selections expose every intersecting formula', t => {
+test('multiple and reversed selections expose every intersecting formula', async t => {
   const source = '$one$ $two$ $$three$$\nend', { view, widgets } = setup(t, source);
   view.focus(); view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(1), EditorSelection.range(19, 14)]) });
+  await Promise.resolve();
   assert.equal(widgets().length, 2);
   assert.ok(view.dom.textContent?.includes('$one$')); assert.ok(view.dom.textContent?.includes('$$three$$'));
+});
+
+test('Find can mount and focus its field from a focused live-math editor without nested updates', async t => {
+  const source = '$x$ x\nend', { view, widgets, errors } = setup(t, source, {}, noteFindPanel());
+  view.dispatch({ selection: { anchor: 1 } }); view.focus(); await Promise.resolve();
+  assert.equal(widgets().length, 0); assert.ok(view.dom.textContent?.includes('$x$'));
+  const selection = view.state.selection;
+  assert.doesNotThrow(() => openSearchPanel(view));
+  assert.equal(searchPanelOpen(view.state), true);
+  assert.equal(view.dom.ownerDocument.activeElement, view.dom.querySelector('input[name="search"]'));
+  await Promise.resolve();
+  assert.deepEqual(errors, []); assert.equal(widgets().length, 1); assert.equal(view.state.doc.toString(), source);
+  view.dom.querySelector<HTMLButtonElement>('button[aria-label="Close find"]')!.click();
+  await Promise.resolve();
+  assert.equal(view.hasFocus, true); assert.equal(searchPanelOpen(view.state), false); assert.equal(widgets().length, 0);
+  assert.ok(view.state.selection.eq(selection)); assert.deepEqual(errors, []);
+});
+
+test('focus changes coalesce to current focus and skip already-current interaction state', async t => {
+  let updates = 0;
+  const { view, widgets, errors } = setup(t, '$x$\nend', {}, EditorView.updateListener.of(() => { updates++; }));
+  view.dispatch({ selection: { anchor: 1 } });
+  view.focus(); view.contentDOM.blur(); view.focus();
+  const before = updates; await Promise.resolve();
+  assert.equal(view.hasFocus, true); assert.equal(widgets().length, 0); assert.equal(updates, before + 1);
+  view.contentDOM.blur(); view.focus();
+  const unchanged = updates; await Promise.resolve();
+  assert.equal(widgets().length, 0); assert.equal(updates, unchanged); assert.deepEqual(errors, []);
+});
+
+test('a queued focus update is inert after view destruction', async t => {
+  const { view, destroy, records, errors } = setup(t, '$x$\nend');
+  view.focus(); destroy();
+  view.dispatch = () => { assert.fail('Destroyed math plugin must not dispatch queued focus'); };
+  await Promise.resolve();
+  assert.ok(records.every(record => record.disposed === 1)); assert.deepEqual(errors, []);
+});
+
+test('removing live math before its queued blur prevents a later dispatch', async t => {
+  const { view, compartment, errors } = setup(t, '$x$\nend');
+  view.focus(); await Promise.resolve();
+  view.contentDOM.blur(); view.dispatch({ effects: compartment.reconfigure([]) });
+  let updates = 0; const original = view.dispatch.bind(view);
+  view.dispatch = (...input: Parameters<EditorView['dispatch']>) => { updates++; original(...input); };
+  await Promise.resolve(); assert.equal(updates, 0); assert.deepEqual(errors, []);
 });
 
 test('math edit controls resolve current positions after edits and preserve renderer links', t => {
@@ -125,7 +178,7 @@ test('composition freezes source reveal and late resize callbacks are inert afte
 });
 
 
-test('whole-container ownership suppresses math until source reveal, including state-only changes', t => {
+test('whole-container ownership suppresses math until source reveal, including state-only changes', async t => {
   const source = '> [!note] Math\n> $inside$\n\n$outside$\nend';
   const boundary = source.indexOf('\n\n'), inside = source.indexOf('inside');
   const forceClosed = StateEffect.define<boolean>();
@@ -141,6 +194,7 @@ test('whole-container ownership suppresses math until source reveal, including s
     { excludes: state => state.field(owner) ? [{ from: 0, to: boundary }] : [] }, owner);
   assert.deepEqual(records.map(record => record.source), ['outside']);
   view.focus(); view.dispatch({ selection: { anchor: inside } });
+  await Promise.resolve();
   // Revealed inline math keeps source while the containing block is editable.
   assert.equal(widgets().length, 1); assert.ok(view.dom.textContent?.includes('$inside$'));
   view.dispatch({ selection: { anchor: source.indexOf('Math') } });

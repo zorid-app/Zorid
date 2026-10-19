@@ -169,7 +169,7 @@ export function liveMath(options: LiveMathOptions = {}): Extension {
   });
   const events = ViewPlugin.fromClass(class {
     timer: ReturnType<typeof setTimeout> | undefined;
-    pointer = false; composing = false; destroyed = false;
+    pointer = false; composing = false; destroyed = false; focusPending = false;
     readonly view: EditorView;
     constructor(view: EditorView) {
       this.view = view;
@@ -185,14 +185,28 @@ export function liveMath(options: LiveMathOptions = {}): Extension {
     owns = (target: EventTarget | null) => !!target && (target as Element).nodeType === 1
       && (target as Element).closest('.cm-editor') === this.view.dom;
     change = (value: Partial<Pick<MathState, 'focused' | 'frozen'>>) => {
-      if (!this.destroyed) this.view.dispatch({ effects: interaction.of(value) });
+      if (this.destroyed) return;
+      const current = this.view.state.field(field, false);
+      if (!current || (value.focused === undefined || value.focused === current.focused)
+        && (value.frozen === undefined || value.frozen === current.frozen)) return;
+      this.view.dispatch({ effects: interaction.of(value) });
     };
     down = (event: MouseEvent) => { if (event.button === 0 && this.owns(event.target)) { this.pointer = true; clearTimeout(this.timer); this.change({ frozen: true }); } };
     up = () => { if (this.pointer) { this.pointer = false; this.schedule(50); } };
     start = (event: Event) => { if (this.owns(event.target)) { this.composing = true; clearTimeout(this.timer); this.change({ frozen: true }); } };
     end = (event: Event) => { if (this.owns(event.target)) { this.composing = false; this.schedule(20); } };
-    focus = (event: Event) => { if (event.target === this.view.contentDOM) this.change({ focused: true }); };
-    blur = (event: Event) => { if (event.target === this.view.contentDOM) this.change({ focused: false }); };
+    // A panel can move focus while CodeMirror is mounting it during an update.
+    // Dispatch after that stack, sampling the latest focus rather than replaying
+    // an obsolete blur when another control has already returned focus.
+    focus = (event: Event) => {
+      if (event.target !== this.view.contentDOM || this.destroyed || this.focusPending) return;
+      this.focusPending = true;
+      queueMicrotask(() => {
+        this.focusPending = false;
+        if (!this.destroyed) this.change({ focused: this.view.hasFocus });
+      });
+    };
+    blur = this.focus;
     schedule(delay: number): void {
       clearTimeout(this.timer);
       this.timer = setTimeout(() => {
