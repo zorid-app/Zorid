@@ -49,9 +49,13 @@ budget is separate from existing generation/metadata and bounded transport limit
 These are initial resource bounds, not measured memory or latency promises.
 
 The extraction/policy layer, native reusable-facts tables and browser derived
-prefix are integrated with focused tests. Actual matching WASM/browser and native
-client checks remain pending; persistent content-derived reuse is not yet an
-accepted real-client capability. Generation-only rebuild preserves valid reusable
+prefix are integrated with focused tests. On frozen `6f2b177b`, the normal WASM
+build, TypeScript check, actual Chrome100-note smoke and nine-phase tiny cache
+cohort pass. Fresh-process generation rebuild reuses persisted facts; identity/
+rename binding, byte/mode/scope invalidation and checksum-corruption fallback
+preserve public results and source/checkpoint/receipt data. Native CLI/Electron
+cache acceptance remains pending. These are Chrome correctness checks, not
+measured performance or other-browser acceptance. Generation-only rebuild preserves valid reusable
 facts; full disposal of that cache family clears them. New cache-outcome counters
 are per pump, and callers sum separate pump reports explicitly. Existing
 same-entry generation reuse remains distinct. Browser retains joined-group working

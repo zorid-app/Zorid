@@ -15,7 +15,8 @@ actual macOS save/close/quit/history/concurrent-CLI/interruption evidence are in
 S0A's reviewed consumer matrix and contracts include the integrated browser
 binary-helper admission correction. **S1.0 has retained baseline observations and known limits; S1.1 reusable
 parsing/cache implementation is underway.** The typed extraction foundation is
-integrated; native and browser persistence still need their runtime gates.
+integrated; actual Chrome cache checks pass, while native CLI/Electron cache
+acceptance remains pending.
 Existing feature/iOS work is preserved.
 
 Design for desktop, browser and mobile now; finish the usable desktop feature set
@@ -204,8 +205,9 @@ representative/stress acceptance gate. [Design](architecture/indexing-search-des
 exist; pumps are sequential, Rust literal search scans text and Bases rebuilds
 substantial state per call. Identity-free parser facts and scoped extraction/
 binding/cache-admission contracts are integrated and focused tests pass. Native
-and browser reusable-facts storage is integrated with focused checks; actual
-client acceptance remains pending. Normal10k admission
+and browser reusable-facts storage is integrated with focused checks. The matching
+WASM build, actual Chrome100 smoke and tiny nine-phase persisted-cache cohort
+pass on `6f2b177b`; native CLI/Electron cache acceptance remains pending. Normal10k admission
 remains incomplete before indexing; full app speedup and complete Obsidian query
 compatibility are not established.
 

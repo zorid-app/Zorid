@@ -1,5 +1,18 @@
 # User findings queue
 
+## S1 desktop pump rejects new cache counters — focused fix integrated
+
+Source audit after native cache integration found that the Electron response
+allowlist rejects the new native `parseCache` field; its frontend pump mapper
+also drops those counters. Owner `storage_recovery_ui_impl`, isolated branch
+`tingkai-c/desktop-parse-cache-transport`; reviewer `storage_recovery_impl`.
+Integrated `a70c8202` accepts only the optional exact five nonnegative safe-integer
+counters, preserves legacy absence and returns immutable copied service metrics.
+Independent source review approves `f22d162f`; parent-source tests have two intended
+failures, candidate11/11 plus TypeScript pass, and integrated file hashes match.
+Evidence `/private/tmp/zorid-desktop-parse-cache-validation.json`. Actual Electron
+acceptance remains pending; Chrome checks do not establish desktop compatibility.
+
 ## S1 generated Base queries eagerly prepare the full graph — confirmed baseline limitation
 
 `query_generation` prepares relationships even for a property-only query. Current

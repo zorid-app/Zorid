@@ -10,7 +10,8 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 - **Stage:** S0 bounded native delivery and S0A contracts accepted; S1.0 baseline
   and measured setup prerequisites implementing. S1.1 parser/extraction contracts
   and native/browser facts-persistence code are integrated with focused checks.
-  Real-client persistence acceptance is pending; multicore and core-owned
+  Actual Chrome persistence checks pass; native-client persistence acceptance is
+  pending. Multicore and core-owned
   scheduling are not implemented yet.
 - **Integrated:** scoped observation-lookup fix through `2c53a98d`,193
   focused checks/1 existing ignored fixture, release build and normal-family100
@@ -33,7 +34,25 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   `/private/tmp/zorid-s1-browser-a29622a0-validation-p7usgo95/rebuild-per-pump-result.json`.
   Both use generation-only rebuild preserving facts and per-pump new counters;
   old reuse-counter semantics stay unchanged. Normal matching WASM build and
-  actual browser/native-client cache acceptance are NEXT, not already passed.
+  generated-binding TypeScript check pass on frozen `6f2b177b`. Actual Chrome100
+  passes all five phases; the tiny nine-phase cache cohort passes restart/rebuild
+  hits with same-entry reuse zero, new identity/rename binding, byte/mode/scope
+  misses and same-length valid-JSON checksum-corruption fallback. Public metadata,
+  ranges/search/backlinks and source/checkpoint/receipt fingerprints remain exact.
+  All owned Chrome processes/servers exited; source/artifact fences unchanged.
+  Evidence `/private/tmp/zorid-s1-browser-cache-6f2b177b-build/final-proof.json`,
+  `/private/tmp/zorid-s1-web-cache-100-6f2b177b-evidence/report.json` and
+  `/private/tmp/zorid-s1-browser-cache-tiny-6f2b177b-evidence/report.json`.
+  Runtime slot released. Native build/CLI/Electron cache acceptance is NEXT.
+  Desktop transport compatibility fix `f22d162f` is integrated `a70c8202`:
+  permit validated optional native `parseCache` counters and preserve them in
+  frontend progress. Owner `storage_recovery_ui_impl`, isolated
+  `tingkai-c/desktop-parse-cache-transport` / `storage-recovery-ui`; independent
+  reviewer `storage_recovery_impl`. Parent-source regression has two intended
+  failures; candidate11/11 and TypeScript pass. Four integrated file hashes match
+  validated source; Rust/browser inputs are unchanged from the tested freeze.
+  Evidence `/private/tmp/zorid-desktop-parse-cache-validation.json`. Actual
+  matching native build and CLI/Electron acceptance still pending.
 - **Combined native result:** release `b3ed4400` passed build115.545s and family100
   correctness (all eight full literal oracles, complete coverage, exact physical/
   authority sources and watermark108). Rust inputs match integrated `2fb58f33`;
@@ -67,7 +86,8 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   `storage_sqlite_impl` owns new
   native cache-only persistence, `architecture_platform_audit` browser/WASM
   adapter and optional validated cache counters. These are now integrated with
-  focused checks; no actual reusable-facts client/runtime or multicore acceptance yet. Preserve existing
+  focused checks and actual Chrome cache correctness; native-client and multicore
+  acceptance remain pending. Preserve existing
   parser output, source fences and separate authority/cache schemas. Root sole
   main integrator; no push.
 - **Residual admission CSE:** `397e011c` is integrated `5bb1d4f0` after24
@@ -104,7 +124,7 @@ source approval is distinct from compilation and real-client acceptance):
 | Owner | Branch/worktree under `/Users/ctk/orca/workspaces/Zorid` | Verification |
 | --- | --- | --- |
 | `storage_sqlite_impl` | `tingkai-c/storage-parse-cache` / `storage-parse-cache` | Integrated `cbba5096`; reviewer `storage_recovery_impl`; composed34 checks pass, actual CLI/Electron pending |
-| `architecture_platform_audit` | `tingkai-c/s1-browser-parse-cache` / `s1-browser-parse-cache` | Integrated `b4cf40f2`;42 Node +tsc +16 hosted Rust pass; actual WASM/browser pending |
+| `architecture_platform_audit` | `tingkai-c/s1-browser-parse-cache` / `s1-browser-parse-cache` | Integrated `b4cf40f2`;42 Node +tsc +16 hosted Rust pass; actual matching WASM/Chrome100 +tiny9 pass on `6f2b177b`, slot released |
 | `s1_execution_audit` | `tingkai-c/storage-retained-text-cse` / `storage-retained-text-cse`, base `2f37f56c` | Integrated `5bb1d4f0`;24 focused checks +old-red/restore pass; no measured gain |
 | `baseline_resources_impl` | `tingkai-c/s1-index-extraction` / `s1-index-extraction` | Core integrated `ae227303`,37 tests pass; preparing tiny CLI cache acceptance using existing commands |
 
