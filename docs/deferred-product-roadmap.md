@@ -68,11 +68,16 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   generation/facts/source/version keys, current invocation context and explicit
   expiry; never retain a query pin or source-write capability. Existing handoff
   defines accepted contracts; no new authority cache or query language framework.
-  Shared candidate `8317e4c5` is not accepted: initial focused cache tests6 pass/1
-  invalid test fixture fails; source review also requires removing repeated hot
-  snapshot/graph serialization and immutable ID/path validation, and correcting
-  optional probe/copy admission. Owner prepares one coherent successor before
-  composed validation. Static byte proof belongs to the sealed factory; detached
+  Shared source `8317e4c5` plus corrected successor `8a8dcc08` is independently
+  approved and integrated as `6037cc9a`/`e66ce9c7`. Initial candidate had6 pass/1
+  invalid fixture failure and review blockers; successor fixes the fixture, removes
+  repeated hot snapshot/graph serialization and immutable ID/path validation,
+  and corrects optional probe/copy admission. All26 focused tests pass (10 cache,
+  corpus7, query5, generation4), source hashes exact, no ignored tests or owned
+  processes remaining. Evidence:
+  `/private/tmp/zorid-bases-preparation-8a8dcc08-71zxmxlv/validation-summary.json`.
+  This establishes shared source/focused correctness, not client or performance
+  acceptance. Static byte proof belongs to the sealed factory; detached
   query validation and dynamic context/limits/cancellation remain mandatory.
   Optional maintenance gets a separate finite2M-unit allowance per prepare call
   (one typed visit plus each64-byte block), independent of unchanged semantic
@@ -82,10 +87,11 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   sealed cold-preparation cost. This preserves tight-valid cold behavior without
   retrying evaluation or raising the query ceiling.
   Native consumer `a0300474` on `tingkai-c/s1-native-preparation-cache` is source
-  approved; shared successor composition/tests pending. WASM/browser `2b73fb3f`
-  on `tingkai-c/s1-wasm-base-preparation` is under source review; owner-close/
-  awaited-pin races must be resolved before approval. Neither binding is accepted
-  from an uncompiled source patch. One client lease release retires its pins,
+  approved, including exact shared composition `4bc57d48`;12 focused native tests
+  are running in the sole heavy slot. WASM/browser `2b73fb3f` plus awaited-pin
+  hardening `15c24a13` is source approved, composed with the corrected shared
+  dependency as `b0109a1a`; focused validation remains pending. Neither binding
+  has actual client runtime acceptance yet. One client lease release retires its pins,
   while bounded capability-free data may survive in a still-live shared native
   vault owner; actual owner retirement clears it. Browser owner retirement frees
   its cache and pending calls must not recreate it after an await.
