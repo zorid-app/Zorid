@@ -1,6 +1,6 @@
 mod common;
 use zorid_core::{EntryId, EntryKind, Mutation, MutationRequest, OperationId, VaultPath};
-use zorid_store::{ProjectionPhase, Store, StoredContent};
+use zorid_store::{ProjectionPhase, Store, StoreError, StoredContent};
 fn create(id: &str, path: &str, kind: EntryKind) -> MutationRequest {
     MutationRequest {
         operation_id: OperationId::new(format!("create-{id}")).unwrap(),
@@ -18,21 +18,68 @@ fn downgrade(path: &std::path::Path) {
     c.execute_batch("DROP TABLE host_intents; DROP TABLE entry_presentation; DROP TABLE local_changes; DROP TABLE directory_baselines; DROP TABLE directory_attempts; DROP TABLE scan_observations; DROP TABLE scan_directories; DROP TABLE scan_runs; DROP TABLE projection_baselines; DROP TABLE projection_attempts; DROP TABLE external_observations; PRAGMA user_version=1; PRAGMA journal_mode=DELETE;").unwrap();
 }
 #[test]
-fn migrates_v1_preserving_receipts_and_intents() {
+fn unsupported_v1_preserves_raw_receipt_and_intents_without_migration() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db");
     let req = create("file", "note", EntryKind::File);
     let receipt = Store::open(&path).unwrap().apply(&req).unwrap();
     downgrade(&path);
-    let mut store = Store::open(&path).unwrap();
-    assert_eq!(store.apply(&req).unwrap(), receipt);
-    assert_eq!(store.pending_counts().unwrap(), (1, 1));
-    assert!(store.projection_attempts(false).unwrap().is_empty());
-    let c = rusqlite::Connection::open(&path).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let retained = |connection: &rusqlite::Connection| {
+        let operation: (String, String) = connection
+            .query_row(
+                "SELECT request,result FROM operations WHERE operation_id=?1",
+                [req.operation_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let outbox: Vec<i64> = connection
+            .prepare("SELECT sequence FROM outbox ORDER BY sequence")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        let projection: Vec<i64> = connection
+            .prepare("SELECT sequence FROM projection_queue ORDER BY sequence")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        (operation, outbox, projection)
+    };
+    let connection =
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    let expected = retained(&connection);
     assert_eq!(
-        c.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+        serde_json::from_str::<zorid_core::CommitResult>(&expected.0 .1).unwrap(),
+        receipt
+    );
+    assert_eq!(expected.1, vec![i64::try_from(receipt.sequence).unwrap()]);
+    assert_eq!(expected.2, expected.1);
+    drop(connection);
+    assert!(matches!(
+        Store::open(&path),
+        Err(StoreError::UnsupportedSchema(1))
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    let connection =
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    assert_eq!(retained(&connection), expected);
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        7
+        1
+    );
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+            .unwrap(),
+        "delete"
     );
 }
 #[test]

@@ -240,7 +240,26 @@ fn foreign_and_incomplete_schemas_are_rejected_without_repair() {
         let before: String = connection
             .pragma_query_value(None, "journal_mode", |r| r.get(0))
             .unwrap();
-        assert!(matches!(Store::open(&path), Err(StoreError::Corrupt(_))));
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        let database_bytes = std::fs::read(&path).unwrap();
+        if version == 1 {
+            assert!(matches!(
+                Store::open(&path),
+                Err(StoreError::UnsupportedSchema(1))
+            ));
+        } else {
+            assert_eq!(version, 0);
+            assert!(matches!(Store::open(&path), Err(StoreError::Corrupt(_))));
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), database_bytes);
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            version
+        );
         let after: String = connection
             .pragma_query_value(None, "journal_mode", |r| r.get(0))
             .unwrap();
