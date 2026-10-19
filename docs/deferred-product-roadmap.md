@@ -9,6 +9,41 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Current source checkpoint after the entries below (2026-10-19):
+
+- Main documentation is `87befd89`; application source remains `cce43207`.
+  Actual browser attempt 003 now passes exact production Worker identification
+  and lifecycle reporting, then fails its first Search with “Saved search is
+  unavailable.” Later browser functional checks were not reached. Source and
+  artifacts stayed exact; all owned browser/Node processes are gone. Evidence:
+  `/private/tmp/zorid-s1-rich-web-watch-8vdiwjdp/acceptance-terminal-summary.json`.
+  Owner `s1_browser_runtime_review` diagnoses in isolated
+  `/private/tmp/zorid-s1-browser-search-diagnosis`, based on `87befd89`; no fix yet.
+- Pure candidate `6371b6d8` has 195 verified checks: 50 carried with unchanged
+  dependency closure plus 145 matching checks. Four initial preview failures
+  were independently confirmed test assumptions; test-only `476ed7a6` preserves
+  existing empty-query and memory-admission semantics. Original failures remain.
+  Evidence `/private/tmp/zorid-s1-pure166-6371b6d8-m1op7j08/aggregate195.json`.
+- Eight Store registration tests stopped before assertions because the new
+  fixture used a symlinked macOS temporary path with SQLite no-follow enabled.
+  Test-only `d23345fd` canonicalizes fixture parents; production security and
+  assertions are unchanged. Isolated candidate `402bbfa8` incorporates it, with
+  the 195-check closure intact. Remaining 21 Store checks have not run: their
+  preflight held at about 1.29 GB free, below the 2 GB start requirement. Hard
+  floor stays 1 GiB. No compiler or app was launched by that held attempt.
+- Dependency-specific source work can proceed independently: F parser/reducer
+  and its independent document corpus passed all 50 relevant checks, and preview
+  facts/query/index checks passed. `s1_lifecycle_core` owns the isolated minimal
+  core arbiter; `s1_query_audit` owns the isolated Base partial-preview body with
+  `s1_execution_audit` reviewing. This supersedes the provisional blanket wait
+  for the entire 216-check batch for those source-only tasks. Neither task is
+  integrated or activated; Store/platform/runtime gates remain required.
+- Resource owner `architecture_core_audit` inventories disposable passed test
+  executables for safe reclamation. Preserve actual CLI/host/browser artifacts,
+  source, evidence and all user/manual apps. No heavy validation runs concurrently.
+
+The earlier update below records its own source and verification points.
+
 Current main `cce43207` (2026-10-19):
 
 - Actual release Electron acceptance on `bc013e3b` passes all 32 functional

@@ -41,6 +41,16 @@ checks remain pending; do not claim general platform acceptance from core tests.
 ## S1 search UI reference — editor find integrated, broader verification pending
 
 
+
+Actual browser 003 reaches Search but fails its first `common-marker` query with
+“Saved search is unavailable.” The exact production Worker and current WASM are
+loaded, with no debugger pause or captured renderer error. Case/sorts/dense/
+navigation/save/Find were not reached. Source/artifacts remain exact and the test
+app is closed. Diagnosis owner `s1_browser_runtime_review`, isolated
+`/private/tmp/zorid-s1-browser-search-diagnosis`; underlying error and fix remain
+open. Evidence:
+`/private/tmp/zorid-s1-rich-web-watch-8vdiwjdp/acceptance-terminal-summary.json`.
+
 Latest actual desktop result supersedes the older pending checks below:
 `bc013e3b` passes all 32 functional phases, with zero renderer exceptions and
 normal exit 0. Root visually confirms top-of-note Find in Live Edit and Reading.
