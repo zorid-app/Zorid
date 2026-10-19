@@ -1,6 +1,7 @@
 import { parentPath } from './types.ts';
 import { readProperties } from './properties.ts';
 import type { Backlink, NoteLink, NoteMetadata } from './types.ts';
+import type { DocumentParseFacts } from './document-draft-facts.ts';
 import type { DocumentMetadataRowsItem } from './document-semantics.ts';
 
 function asStrings(value: unknown): string[] {
@@ -187,9 +188,13 @@ export class MetadataCache {
  * rewriting does not use this projection; rename builds a fresh local context. */
 export function admittedNote(item: DocumentMetadataRowsItem): NoteMetadata | undefined {
   if (item.kind !== 'file' || !item.value.metadata) return undefined;
-  const {entry, metadata: facts} = item.value;
+  return noteFromFacts(item.value.entry.path,item.value.metadata);
+}
+
+/** Display-only view of exact-source facts; never a committed witness. */
+export function noteFromFacts(path:string,facts:DocumentParseFacts):NoteMetadata {
   const note: NoteMetadata = {
-    path: entry.path,
+    path,
     frontmatter: Object.fromEntries(facts.properties.map(property => [property.key, property.value])),
     tags: [...facts.tags], aliases: [...facts.aliases],
     headings: facts.headings.map(heading => Object.freeze({heading: heading.text, level: heading.level, line: heading.line})),
