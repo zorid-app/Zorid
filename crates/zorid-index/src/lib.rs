@@ -7,6 +7,7 @@ mod generation;
 mod import;
 mod literal;
 mod persisted;
+mod preview;
 mod relationships;
 mod resolver;
 mod restore;
@@ -27,6 +28,11 @@ pub use generation::{
     document_extraction_version, Exclusion, Generation, GenerationBuilder, IndexRecord,
     PreparedGeneration, INDEX_SCHEMA_VERSION, LITERAL_QUERY_VERSION, MAX_GENERATION_METADATA_BYTES,
 };
+/// Sealed first-build captures; these reports never certify publication.
+pub use preview::{
+    PreviewCaptureError, PreviewCaptureOwner, PreviewProgress, PreviewSnapshot, PreviewSnapshotId,
+};
+
 pub use literal::{
     LiteralPage, LiteralPageBuilder, LiteralQuery, LiteralToken, SearchHit, TextReadRequest,
 };

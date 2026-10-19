@@ -4,7 +4,7 @@ use crate::{
     MAX_PUMP_DOCUMENTS, RESOLVER_VERSION,
 };
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 use zorid_core::{EntryId, EntryKind};
 use zorid_document::{
     DocumentMetadata, MetadataRequest, DIALECT_VERSION, MAX_SOURCE_BYTES, SCHEMA_VERSION,
@@ -170,8 +170,8 @@ impl IndexRecord {
 #[derive(Clone, Debug)]
 pub struct Generation {
     id: IndexSnapshotId,
-    manifest: Manifest,
-    records: BTreeMap<EntryId, IndexRecord>,
+    manifest: Arc<Manifest>,
+    records: BTreeMap<EntryId, Arc<IndexRecord>>,
 }
 impl Generation {
     pub fn id(&self) -> &IndexSnapshotId {
@@ -181,13 +181,13 @@ impl Generation {
         &self.manifest
     }
     pub fn record(&self, id: &EntryId) -> Option<&IndexRecord> {
-        self.records.get(id)
+        self.records.get(id).map(Arc::as_ref)
     }
     pub fn records(&self) -> impl Iterator<Item = &IndexRecord> {
         self.manifest
             .entries()
             .iter()
-            .filter_map(|e| self.records.get(&e.id))
+            .filter_map(|e| self.records.get(&e.id).map(Arc::as_ref))
     }
     pub fn coverage_complete(&self) -> bool {
         !self
@@ -199,9 +199,9 @@ impl Generation {
 /// Pump batches are bounded independently of the immutable generation ceiling.
 /// Duplicate rows reject; source/index heads are not advanced by staging.
 pub struct GenerationBuilder {
-    manifest: Manifest,
+    manifest: Arc<Manifest>,
     fence: PublicationFence,
-    records: BTreeMap<EntryId, IndexRecord>,
+    records: BTreeMap<EntryId, Arc<IndexRecord>>,
     total_bytes: usize,
     pump_documents: usize,
     pump_source_bytes: usize,
@@ -220,7 +220,7 @@ impl GenerationBuilder {
             return Err(IndexError::InvalidVersion);
         }
         Ok(Self {
-            manifest,
+            manifest: Arc::new(manifest),
             fence,
             records: BTreeMap::new(),
             total_bytes: 0,
@@ -233,6 +233,14 @@ impl GenerationBuilder {
         &self.manifest
     }
     pub fn record(&self, id: &EntryId) -> Option<&IndexRecord> {
+        self.records.get(id).map(Arc::as_ref)
+    }
+    // Read-only structural sharing for sealed preview capture. No caller can
+    // mutate a record through these handles or obtain a publication fence.
+    pub(crate) fn preview_manifest(&self) -> &Arc<Manifest> {
+        &self.manifest
+    }
+    pub(crate) fn preview_record(&self, id: &EntryId) -> Option<&Arc<IndexRecord>> {
         self.records.get(id)
     }
     pub fn prepared_records(&self) -> usize {
@@ -321,7 +329,7 @@ impl GenerationBuilder {
         self.pump_source_bytes += record.text_bytes;
         self.pump_output_bytes += bytes;
         self.total_bytes += bytes;
-        self.records.insert(id, record);
+        self.records.insert(id, Arc::new(record));
         Ok(())
     }
     pub fn finish(self) -> Result<PreparedGeneration, IndexError> {
