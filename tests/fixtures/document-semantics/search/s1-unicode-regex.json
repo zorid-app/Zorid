@@ -1,0 +1,1123 @@
+{
+  "formatVersion": 1,
+  "dialect": "zorid-search-rust-unicode-1",
+  "engine": {
+    "regex": "1.13.1",
+    "regexSyntax": "0.8.11",
+    "unicodeData": "16.0.0"
+  },
+  "status": "proposed target-only vectors; direction approved, exact fixture independent review and Rust execution pending",
+  "provenance": "Expected UTF16 spans selected by source contract; UTF8 witnesses computed by coordinate arithmetic only; no matching engine executed. Original s1-language.json unchanged.",
+  "cases": [
+    {
+      "id": "ascii-default-fold",
+      "query": "content:cat",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "Cat cat CAT"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              3
+            ],
+            [
+              4,
+              7
+            ],
+            [
+              8,
+              11
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            0,
+            3
+          ],
+          "utf16": [
+            0,
+            3
+          ],
+          "text": "Cat"
+        },
+        {
+          "bytes": [
+            4,
+            7
+          ],
+          "utf16": [
+            4,
+            7
+          ],
+          "text": "cat"
+        },
+        {
+          "bytes": [
+            8,
+            11
+          ],
+          "utf16": [
+            8,
+            11
+          ],
+          "text": "CAT"
+        }
+      ]
+    },
+    {
+      "id": "ascii-aa-sensitive",
+      "query": "content:cat",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "Cat cat CAT"
+      },
+      "options": {
+        "caseSensitive": true
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              4,
+              7
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            4,
+            7
+          ],
+          "utf16": [
+            4,
+            7
+          ],
+          "text": "cat"
+        }
+      ]
+    },
+    {
+      "id": "scoped-case-overrides",
+      "query": "match-case:content:(cat OR ignore-case:DOG)",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "Cat cat dog DOG"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              4,
+              7
+            ],
+            [
+              8,
+              11
+            ],
+            [
+              12,
+              15
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            4,
+            7
+          ],
+          "utf16": [
+            4,
+            7
+          ],
+          "text": "cat"
+        },
+        {
+          "bytes": [
+            8,
+            11
+          ],
+          "utf16": [
+            8,
+            11
+          ],
+          "text": "dog"
+        },
+        {
+          "bytes": [
+            12,
+            15
+          ],
+          "utf16": [
+            12,
+            15
+          ],
+          "text": "DOG"
+        }
+      ]
+    },
+    {
+      "id": "unicode-latin-crlf-offsets",
+      "query": "content:café",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "😀 café\r\nCAFÉ\n"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              3,
+              7
+            ],
+            [
+              9,
+              13
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            5,
+            10
+          ],
+          "utf16": [
+            3,
+            7
+          ],
+          "text": "café"
+        },
+        {
+          "bytes": [
+            12,
+            17
+          ],
+          "utf16": [
+            9,
+            13
+          ],
+          "text": "CAFÉ"
+        }
+      ]
+    },
+    {
+      "id": "unicode-kelvin-simple-fold",
+      "query": "content:k",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "K k K"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              1
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              4,
+              5
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            0,
+            1
+          ],
+          "utf16": [
+            0,
+            1
+          ],
+          "text": "K"
+        },
+        {
+          "bytes": [
+            2,
+            3
+          ],
+          "utf16": [
+            2,
+            3
+          ],
+          "text": "k"
+        },
+        {
+          "bytes": [
+            4,
+            7
+          ],
+          "utf16": [
+            4,
+            5
+          ],
+          "text": "K"
+        }
+      ]
+    },
+    {
+      "id": "unicode-sigma-simple-fold",
+      "query": "content:/σ/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "Σ σ ς"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              1
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              4,
+              5
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            0,
+            2
+          ],
+          "utf16": [
+            0,
+            1
+          ],
+          "text": "Σ"
+        },
+        {
+          "bytes": [
+            3,
+            5
+          ],
+          "utf16": [
+            2,
+            3
+          ],
+          "text": "σ"
+        },
+        {
+          "bytes": [
+            6,
+            8
+          ],
+          "utf16": [
+            4,
+            5
+          ],
+          "text": "ς"
+        }
+      ]
+    },
+    {
+      "id": "unicode-sharp-s-no-expansion",
+      "query": "content:ss",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "ß SS ẞ"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              2,
+              4
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            3,
+            5
+          ],
+          "utf16": [
+            2,
+            4
+          ],
+          "text": "SS"
+        }
+      ]
+    },
+    {
+      "id": "unicode-turkish-no-locale",
+      "query": "content:i",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "I i İ ı"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              1
+            ],
+            [
+              2,
+              3
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            0,
+            1
+          ],
+          "utf16": [
+            0,
+            1
+          ],
+          "text": "I"
+        },
+        {
+          "bytes": [
+            2,
+            3
+          ],
+          "utf16": [
+            2,
+            3
+          ],
+          "text": "i"
+        }
+      ]
+    },
+    {
+      "id": "unicode-no-normalization",
+      "query": "content:é",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "é é"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            0,
+            2
+          ],
+          "utf16": [
+            0,
+            1
+          ],
+          "text": "é"
+        }
+      ]
+    },
+    {
+      "id": "astral-dot-is-one-scalar",
+      "query": "content:/^.$/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "😀"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              2
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            0,
+            4
+          ],
+          "utf16": [
+            0,
+            2
+          ],
+          "text": "😀"
+        }
+      ]
+    },
+    {
+      "id": "dot-matches-line-separator",
+      "query": "content:/^.$/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": " "
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            0,
+            3
+          ],
+          "utf16": [
+            0,
+            1
+          ],
+          "text": " "
+        }
+      ]
+    },
+    {
+      "id": "dot-does-not-cross-lf",
+      "query": "content:/a.b/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "a\nb"
+      },
+      "target": {
+        "kind": "match",
+        "value": null
+      }
+    },
+    {
+      "id": "unicode-word-class",
+      "query": "content:/\\w+/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "é_2 😀"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              3
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            0,
+            4
+          ],
+          "utf16": [
+            0,
+            3
+          ],
+          "text": "é_2"
+        }
+      ]
+    },
+    {
+      "id": "unicode-decimal-class",
+      "query": "content:/\\d+/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "2 ٢ Ⅳ"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              1
+            ],
+            [
+              2,
+              3
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            0,
+            1
+          ],
+          "utf16": [
+            0,
+            1
+          ],
+          "text": "2"
+        },
+        {
+          "bytes": [
+            2,
+            4
+          ],
+          "utf16": [
+            2,
+            3
+          ],
+          "text": "٢"
+        }
+      ]
+    },
+    {
+      "id": "explicit-ascii-decimal-class",
+      "query": "content:/[0-9]+/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "2 ٢ Ⅳ"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            0,
+            1
+          ],
+          "utf16": [
+            0,
+            1
+          ],
+          "text": "2"
+        }
+      ]
+    },
+    {
+      "id": "unicode-regex-word-boundary",
+      "query": "content:/\\bé\\b/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "é café é_"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            0,
+            2
+          ],
+          "utf16": [
+            0,
+            1
+          ],
+          "text": "é"
+        }
+      ]
+    },
+    {
+      "id": "quoted-custom-boundary-excludes-underscore",
+      "query": "content:\"é\"",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "é café é_"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              1
+            ],
+            [
+              7,
+              8
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            0,
+            2
+          ],
+          "utf16": [
+            0,
+            1
+          ],
+          "text": "é"
+        },
+        {
+          "bytes": [
+            9,
+            11
+          ],
+          "utf16": [
+            7,
+            8
+          ],
+          "text": "é"
+        }
+      ]
+    },
+    {
+      "id": "quoted-astral-letter-boundary",
+      "query": "content:\"𝒜\"",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "𝒜_ 𝒜2"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              2
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            0,
+            4
+          ],
+          "utf16": [
+            0,
+            2
+          ],
+          "text": "𝒜"
+        }
+      ]
+    },
+    {
+      "id": "multiline-anchors-lf-only",
+      "query": "content:/^b$/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "A\r\nb\nB\rC b"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              3,
+              4
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            3,
+            4
+          ],
+          "utf16": [
+            3,
+            4
+          ],
+          "text": "b"
+        }
+      ]
+    },
+    {
+      "id": "explicit-crlf-pattern-preserves-cr",
+      "query": "content:/^b\\r?$/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "A\r\nb\r\nB\n"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              3,
+              5
+            ],
+            [
+              6,
+              7
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            3,
+            5
+          ],
+          "utf16": [
+            3,
+            5
+          ],
+          "text": "b\r"
+        },
+        {
+          "bytes": [
+            6,
+            7
+          ],
+          "utf16": [
+            6,
+            7
+          ],
+          "text": "B"
+        }
+      ]
+    },
+    {
+      "id": "zero-width-omitted",
+      "query": "content:/^/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "😀\na"
+      },
+      "target": {
+        "kind": "match",
+        "value": null
+      }
+    },
+    {
+      "id": "zero-width-with-nonempty-match",
+      "query": "content:/a*/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "baac"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              1,
+              3
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            1,
+            3
+          ],
+          "utf16": [
+            1,
+            3
+          ],
+          "text": "aa"
+        }
+      ]
+    },
+    {
+      "id": "empty-regex-keeps-unavailable-success",
+      "query": "content://",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "anything"
+      },
+      "target": {
+        "kind": "match",
+        "value": {}
+      }
+    },
+    {
+      "id": "slash-suffix-is-adjacent-term",
+      "query": "content:/alpha/i",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "alpha"
+      },
+      "target": {
+        "kind": "match",
+        "value": null
+      }
+    },
+    {
+      "id": "escaped-slash-survives-tokenizer",
+      "query": "content:/a\\/b/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "a/b"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              3
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            0,
+            3
+          ],
+          "utf16": [
+            0,
+            3
+          ],
+          "text": "a/b"
+        }
+      ]
+    },
+    {
+      "id": "incomplete-slash-keeps-editor-grammar",
+      "query": "content:/ab",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "abc"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              2
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            0,
+            2
+          ],
+          "utf16": [
+            0,
+            2
+          ],
+          "text": "ab"
+        }
+      ]
+    },
+    {
+      "id": "rust-inline-dotall-is-explicit",
+      "query": "content:/(?s:a.b)/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "a\nb"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              3
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            0,
+            3
+          ],
+          "utf16": [
+            0,
+            3
+          ],
+          "text": "a\nb"
+        }
+      ]
+    },
+    {
+      "id": "rust-inline-case-overrides-context",
+      "query": "match-case:content:/(?i:a)/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "A"
+      },
+      "target": {
+        "kind": "match",
+        "value": {
+          "content": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      },
+      "rangeWitnesses": [
+        {
+          "bytes": [
+            0,
+            1
+          ],
+          "utf16": [
+            0,
+            1
+          ],
+          "text": "A"
+        }
+      ]
+    },
+    {
+      "id": "positive-lookahead",
+      "query": "content:/(?=a)a/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "abab"
+      },
+      "target": {
+        "kind": "unsupported",
+        "category": "unsupported-regex"
+      }
+    },
+    {
+      "id": "negative-lookahead",
+      "query": "content:/(?!b)a/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "abab"
+      },
+      "target": {
+        "kind": "unsupported",
+        "category": "unsupported-regex"
+      }
+    },
+    {
+      "id": "positive-lookbehind",
+      "query": "content:/(?<=a)b/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "abab"
+      },
+      "target": {
+        "kind": "unsupported",
+        "category": "unsupported-regex"
+      }
+    },
+    {
+      "id": "negative-lookbehind",
+      "query": "content:/(?<!a)b/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "abab"
+      },
+      "target": {
+        "kind": "unsupported",
+        "category": "unsupported-regex"
+      }
+    },
+    {
+      "id": "numeric-backreference",
+      "query": "content:/(ab)\\1/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "abab"
+      },
+      "target": {
+        "kind": "unsupported",
+        "category": "unsupported-regex"
+      }
+    },
+    {
+      "id": "named-backreference",
+      "query": "content:/(?<x>a)\\k<x>/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "abab"
+      },
+      "target": {
+        "kind": "unsupported",
+        "category": "unsupported-regex"
+      }
+    },
+    {
+      "id": "malformed-capture",
+      "query": "content:/(/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "abab"
+      },
+      "target": {
+        "kind": "error",
+        "category": "invalid-regex"
+      }
+    },
+    {
+      "id": "malformed-class",
+      "query": "content:/[a-/",
+      "document": {
+        "path": "notes/Note.md",
+        "text": "abab"
+      },
+      "target": {
+        "kind": "error",
+        "category": "invalid-regex"
+      }
+    }
+  ]
+}

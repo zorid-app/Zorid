@@ -6,6 +6,7 @@ license = "AGPL-3.0-only"
 description = "Portable derived index contracts and link resolution"
 
 [dependencies]
+regex = "=1.13.1"
 zorid-core = { path = "../zorid-core" }
 zorid-document = { path = "../zorid-document" }
 unicode-normalization = "=0.1.25"

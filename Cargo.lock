@@ -2075,6 +2075,7 @@ dependencies = [
 name = "zorid-index"
 version = "0.1.0"
 dependencies = [
+ "regex",
  "percent-encoding",
  "serde",
  "serde_json",
