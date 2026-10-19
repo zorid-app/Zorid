@@ -1,6 +1,6 @@
 # User findings queue
 
-## S1 search UI reference — requested, implementation pending
+## S1 search UI reference — in-file implementation started
 
 User supplied Obsidian screenshots for vault search and in-file find. Vault search
 should group collapsible results by file, show per-file match counts and bordered
@@ -11,9 +11,14 @@ preserving note interaction. Implement working behavior with shared search resul
 keyboard/focus/accessibility and correct counts/case semantics; no decorative fake
 controls or new full-index work for every view refresh. REA reference investigation
 owner `architecture_platform_audit`; source artifacts stay outside the repository.
-Zorid implementation/source mapping owner `storage_recovery_ui_impl`, read-only
-until scoped frontend ownership/engine contracts are agreed. Integrate in S1.3;
-this addition does not reopen saving or resume later product stages.
+In-file implementation owner `storage_recovery_ui_impl` has an isolated branch:
+new editor find-panel module/styles and focused tests, narrow editor integration
+and the single main stylesheet import. This independent CodeMirror presentation
+work can proceed while S1.2 cache validation runs; it changes neither shared query
+semantics nor indexing policy. Reading-mode integration remains a required follow-on.
+Vault-search implementation awaits the S1.3 shared result contract; the source map
+and static REA audit are complete. Implementation is not visual/runtime acceptance.
+This addition does not reopen saving or resume later product stages.
 
 ## Latest execution steering — follow roadmap, skip multicore
 

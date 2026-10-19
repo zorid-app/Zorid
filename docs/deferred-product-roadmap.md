@@ -102,8 +102,13 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   reuse preparation rather than rebuilding it. Cold/follow-on commits separate.
   S1.3 source handoff: `/private/tmp/zorid-s1-search-handoff-5ed9b53c/handoff.md`.
   Latest screenshot request adds grouped search UI/case toggle and top in-note
-  find bar to S1.3. Reference owner `architecture_platform_audit` uses REA static
-  Obsidian evidence; frontend source mapping owner `storage_recovery_ui_impl`.
+  find bar to S1.3. Reference owner `architecture_platform_audit` completed REA
+  static Obsidian evidence; frontend owner `storage_recovery_ui_impl` starts the
+  independent CodeMirror top find panel in an isolated branch, owning new find
+  module/styles/tests, narrow editor integration and one main stylesheet import.
+  This presentation work does not depend on the new shared search evaluator and
+  can overlap S1.2 validation without changing index policy. Reading-mode find
+  remains required; vault-search implementation waits for its shared result DTO.
   No proprietary recovered code enters source; user manual app remains untouched.
   Completed static REA reference handoff:
   `/private/tmp/zorid-obsidian-search-static-hznlv_yk/handoff.md`, hash477e08b5.

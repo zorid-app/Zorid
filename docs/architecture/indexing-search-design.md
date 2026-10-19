@@ -75,15 +75,16 @@ stage4 contract, approved corpus and primary docs. Identify the source revision
 when implementing compatibility cases; do not regenerate expected results merely
 to bless new evaluator behavior. Current complete compatibility is not established.
 
-## Caching and parallel work
+## Caching and bounded work
 
 - Persist reusable parsed metadata and search indexes across restart.
 - Initially keep compiled Base programs and final query answers in bounded memory
   caches. Reuse requires all semantic/version/dependency inputs, not Base revision
   alone. Contextual identity is separate from reusable content-derived parsing.
-- Use bounded adaptive parallel extraction and scheduling. Interactive editing,
-  saves and active queries take priority over background indexing; maximizing
-  occupied cores is not the objective. Derive worker/memory budgets by measurement.
+- Coalesce duplicate work and update only invalidated inputs. Core-owned scheduling
+  gives interactive editing, saves and active queries priority over background
+  indexing, with bounded work and cancellation. Multicore execution is deferred;
+  S1 does not require native worker pools or browser parallel extraction.
 - Cache corruption/eviction must not affect source, pending writes or recovery.
   Derived state can be regenerated. Preserve coherent revision-bound publication.
 
