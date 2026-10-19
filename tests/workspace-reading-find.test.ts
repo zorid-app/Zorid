@@ -80,7 +80,8 @@ test('Reading and Live Find use the workspace host directly below toolbar and ab
     const findHost = content.querySelector<HTMLElement>(':scope > .note-find-host')!;
     const scroll = content.querySelector(':scope > .note-scroll')!;
     assert.ok(findHost); assert.equal(toolbar.nextElementSibling, findHost);
-    assert.equal(findHost.nextElementSibling, scroll);
+    const recovery = content.querySelector(':scope > .note-recovery')!;
+    assert.equal(findHost.nextElementSibling, recovery); assert.equal(recovery.nextElementSibling, scroll);
     assert.ok(scroll.querySelector('.note-title')); assert.ok(scroll.querySelector('.properties-host'));
     return findHost;
   };
