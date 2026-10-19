@@ -74,7 +74,7 @@ mod document_search;
 #[path = "document_runtime.rs"]
 mod document_runtime;
 #[path = "document_drafts.rs"]
-mod document_drafts;
+pub(crate) mod document_drafts;
 
 #[path = "workblocks.rs"]
 mod workblocks;

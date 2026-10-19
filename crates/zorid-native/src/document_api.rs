@@ -304,3 +304,10 @@ impl NativeMetadataRows {
     }
 }
 pub use zorid_index::PreparedMetadataRowsPage;
+
+/// Transient draft analysis and the shared core-selected native executor.
+/// These types carry no committed entry witness or save authority.
+pub use crate::native::document_drafts::{
+    NativeDocumentWorkError, NativeDraftCommand, NativeDraftSnapshot,
+    NativeDraftStepRecord, NativeWorkReceipt, NativeWorkStepRecord,
+};
