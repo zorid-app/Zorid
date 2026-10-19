@@ -357,6 +357,25 @@ fn prepared_resolver_matches_frozen_scan_for_context_errors_and_fallback_edges()
                 );
             }
         }
+        for id in ["source", "folder", "missing"] {
+            let id = EntryId::new(id).unwrap();
+            let stop_on_work = |units| {
+                if units == 0 {
+                    Ok(())
+                } else {
+                    Err(ResolverStop::Budget)
+                }
+            };
+            assert_eq!(
+                prepared.candidates_checked(&id, &oversized, &mut { stop_on_work }),
+                original.candidates_checked(&id, &oversized, &mut { stop_on_work }),
+                "overlong input must reject before consuming host work"
+            );
+            assert_eq!(
+                prepared.candidates_checked(&id, &oversized, &mut { stop_on_work }),
+                Err(ResolverStop::Index(IndexError::InvalidTarget))
+            );
+        }
         for id in ["folder", "missing"] {
             for target in ["", "#part", "https://example.org"] {
                 assert_eq!(

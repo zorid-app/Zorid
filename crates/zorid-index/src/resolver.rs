@@ -199,9 +199,13 @@ impl<'a> Resolver<'a> {
         check: &mut impl FnMut(usize) -> Result<(), E>,
     ) -> Result<Vec<&'a EntryState>, E> {
         check(0)?;
-        // Preserve invalid-target precedence over missing source. The byte count
-        // reserves the bounded fragment/trim/strict-percent decoding work.
-        check(destination.len().min(MAX_TARGET_BYTES))?;
+        // Constant-time malformed-input rejection precedes any charged decoding
+        // or source lookup, preserving the existing InvalidTarget precedence.
+        if destination.len() > MAX_TARGET_BYTES {
+            return Err(E::from(IndexError::InvalidTarget));
+        }
+        // Reserve bounded fragment/trim/strict-percent decoding work.
+        check(destination.len())?;
         let decoded = destination_path(destination).map_err(E::from)?;
         check(1usize.saturating_add(source_id.as_str().len()))?;
         let source = self
