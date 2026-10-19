@@ -322,6 +322,7 @@ pub use zorid_index::draft_runtime::{
     SourceDescriptor as DraftSourceDescriptor, JobToken as DraftJobToken,
     Reduction as DraftReduction, Execution as DraftExecution,
     OutcomeKind as DraftOutcomeKind, RuntimeError as DraftRuntimeError,
+    UnavailableCode as DraftUnavailableCode,
 };
 pub use zorid_index::document_work_runtime::{
     Ticket as DocumentWorkTicket, ChildEffect as DocumentWorkChildEffect,
