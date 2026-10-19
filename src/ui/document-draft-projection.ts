@@ -38,7 +38,7 @@ const turn=()=>new Promise<void>(resolve=>setTimeout(resolve,0));
 
 interface Run {epoch:number;revision:string;text:string;path:string;releaseText:()=>void;slot?:Slot}
 interface Slot {job:DocumentDraftJob;retired:boolean;outcome?:DocumentDraftOutcome;acking?:Promise<void>;ackFailed?:boolean;cancelling?:Promise<void>}
-interface WireLease {id:string;lastRevision?:string;needsRenewal:boolean;retired:boolean;start?:Promise<void>;releasing?:Promise<void>;releaseAllocation:()=>void}
+interface WireLease {id:string;lastRevision?:string;retired:boolean;start?:Promise<void>;releasing?:Promise<void>;releaseAllocation:()=>void}
 export interface DocumentDraftProjectionOptions {
   /** The admitted service itself is the shared allocation owner. Legacy uses Vault. */
   readonly owner:object;
@@ -106,7 +106,7 @@ export class DocumentDraftProjection {
     // after its core terminal ACK, in both the core and legacy paths.
     if(this.installed&&this.installedRevision===String(this.revision)){if(this.installed.path!==path)this.installPath(path);this.publish('current');return;}
     const previousLease=this.wireLeases.get(this.wireLeaseId);
-    if(this.options.capable&&this.wireLeases.size>=32&&(!previousLease||previousLease.retired||previousLease.needsRenewal||previousLease.lastRevision===String(this.revision))){this.publish('unavailable','resource');return;}
+    if(this.options.capable&&this.wireLeases.size>=32&&(!previousLease||previousLease.retired||previousLease.lastRevision===String(this.revision))){this.publish('unavailable','resource');return;}
     let releaseText:()=>void;
     try{if(text.length>DOCUMENT_DRAFT_SOURCE_BYTES)throw new Resource();releaseText=reserve(this.budget,'captured-text',text.length*2);}catch{this.publish('unavailable','resource');return;}
     const run:Run={epoch:this.epoch,revision:String(this.revision),text,path,releaseText};this.next=run;this.publish('pending');
@@ -160,7 +160,6 @@ export class DocumentDraftProjection {
   private ackSlot(slot:Slot):Promise<void>{
     if(slot.acking)return slot.acking;
     if(!this.service||this.closed)return Promise.resolve();
-    const lease=this.wireLeases.get(slot.job.buffer_lifetime);if(lease)lease.needsRenewal=true;
     const operation=this.invoke(()=>this.service!.acknowledge(slot.job)).then(reply=>{this.slots.delete(jobKey(slot.job));this.accept(reply);},error=>{slot.ackFailed=true;throw error;});
     slot.acking=operation.finally(()=>{slot.acking=undefined;});return slot.acking;
   }
@@ -196,14 +195,14 @@ export class DocumentDraftProjection {
   private leaseFor(run:Run):WireLease {
     let lease=this.wireLeases.get(this.wireLeaseId);
     if(!lease&&this.wireLeaseRetired){if(this.wireLeases.size>=32)throw new Resource();this.wireLeaseId=crypto.randomUUID();this.wireLeaseRetired=false;}
-    if(lease&&(lease.retired||lease.needsRenewal||lease.lastRevision===run.revision)){
+    if(lease&&(lease.retired||lease.lastRevision===run.revision)){
       void this.releaseLease(lease).catch(()=>{});
       // Failed old releases remain charged and bounded. Rapid demand toggles
       // cannot grow an unbounded collection of renewable nonces.
       if(this.wireLeases.size>=32)throw new Resource();
       this.wireLeaseId=crypto.randomUUID();this.wireLeaseRetired=false;lease=undefined;
     }
-    if(!lease){if(this.wireLeases.size>=32)throw new Resource();const releaseAllocation=reserve(this.budget,'wire-lease',1024);lease={id:this.wireLeaseId,needsRenewal:false,retired:false,releaseAllocation};this.wireLeases.set(lease.id,lease);}
+    if(!lease){if(this.wireLeases.size>=32)throw new Resource();const releaseAllocation=reserve(this.budget,'wire-lease',1024);lease={id:this.wireLeaseId,retired:false,releaseAllocation};this.wireLeases.set(lease.id,lease);}
     lease.lastRevision=run.revision;return lease;
   }
   private releaseLease(lease:WireLease):Promise<void>{
@@ -212,13 +211,15 @@ export class DocumentDraftProjection {
     // Capture a pending admission before the early buffer-scoped release. Its
     // delayed ACK may expose a job only after the first release settled.
     const start=lease.start;
-    const releasing=(async()=>{
+    const releasing=Promise.resolve().then(async()=>{
+      if(this.providerRetired)return;
+      const pendingAtRelease=start!==undefined&&lease.start===start;
       await this.invoke(()=>this.service!.releaseBuffer(lease.id));
-      if(start){await start;if(!this.providerRetired)await this.invoke(()=>this.service!.releaseBuffer(lease.id));}
+      if(pendingAtRelease){await start;if(!this.providerRetired)await this.invoke(()=>this.service!.releaseBuffer(lease.id));}
       if(this.wireLeases.get(lease.id)===lease){this.wireLeases.delete(lease.id);lease.releaseAllocation();}
       for(const [key,slot]of this.slots)if(slot.job.buffer_lifetime===lease.id)this.slots.delete(key);
       this.wake();
-    })().finally(()=>{if(lease.releasing===releasing)lease.releasing=undefined;});lease.releasing=releasing;return releasing;
+    }).finally(()=>{if(lease.releasing===releasing)lease.releasing=undefined;});lease.releasing=releasing;return releasing;
   }
   private installPath(path:string):void {
     if(!this.installed)return;
@@ -304,13 +305,13 @@ export class DocumentDraftProjection {
     if(this.closing)return this.closing;
     // Buffer-scoped release is available before a delayed request ACK exposes
     // its job token. The final release below also catches a late admission.
-    const early=this.service&&!this.providerRetired?[...this.wireLeases.values()].map(lease=>this.releaseLease(lease)):[];
-    for(const promise of early)void promise.catch(()=>{});
-    const closing=(async()=>{
+    const closing=Promise.resolve().then(async()=>{
+      const early=this.service&&!this.providerRetired?[...this.wireLeases.values()].map(lease=>this.releaseLease(lease)):[];
+      for(const promise of early)void promise.catch(()=>{});
       await this.running;await this.observing;await Promise.allSettled(early);while(this.calls.size)await Promise.allSettled([...this.calls]);
       if(this.service&&!this.providerRetired)for(const lease of [...this.wireLeases.values()])await this.releaseLease(lease);
       for(const lease of this.wireLeases.values())lease.releaseAllocation();this.wireLeases.clear();
       const stop=this.unsubscribe;this.unsubscribe=undefined;try{stop?.();}catch{/* The core release ACK already transferred ownership. */}this.slots.clear();this.installed=undefined;this.viewRelease?.();this.viewRelease=undefined;this.publish('unsupported');
-    })().finally(()=>{if(this.closing===closing)this.closing=undefined;});this.closing=closing;return closing;
+    }).finally(()=>{if(this.closing===closing)this.closing=undefined;});this.closing=closing;return closing;
   }
 }

@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto';
 import {createDocumentDraftService} from '../src/core/document-drafts.ts';
 import type {DocumentDraftJob,DocumentDraftRequest,DocumentDraftTransport} from '../src/core/document-drafts.ts';
 import {DocumentDraftProjection,documentDraftProjectionUsage,DOCUMENT_DRAFT_FRONTEND_BYTES} from '../src/ui/document-draft-projection.ts';
+import type {DraftMetadataState} from '../src/ui/document-draft-projection.ts';
 
 function deferred<T>(){let resolve!:(value:T)=>void,reject!:(error:unknown)=>void;const promise=new Promise<T>((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};}
 async function until(predicate:()=>boolean,label='draft state'){const deadline=Date.now()+5000;while(!predicate()){if(Date.now()>deadline)assert.fail(`Timed out: ${label}`);await new Promise(resolve=>setTimeout(resolve,2));}}
@@ -12,7 +13,7 @@ interface Owned {job:DocumentDraftJob;source:{bytes:number;utf16:number;sha256:s
 function fixture(){
   const events:DocumentDraftRequest[]=[],jobs=new Map<string,Owned>(),receivers=new Set<{hint:()=>void;retire:()=>void}>();let sequence=0;
   const buffers=new Map<string,{revision:string;id:string;released:boolean}>();
-  const controls={requestGate:undefined as ReturnType<typeof deferred<void>>|undefined,readGate:undefined as ReturnType<typeof deferred<void>>|undefined,releaseFailures:0,facts:((text:string)=>facts(text)),wireLength:undefined as number|undefined,autoReady:true,syncSnapshotHints:0,snapshotMode:'normal' as 'normal'|'null'|'other-life',snapshotActive:0,snapshotMaximum:0};
+  const controls={requestGate:undefined as ReturnType<typeof deferred<void>>|undefined,readGate:undefined as ReturnType<typeof deferred<void>>|undefined,releaseFailures:0,retireOnRelease:false,facts:((text:string)=>facts(text)),wireLength:undefined as number|undefined,autoReady:true,syncSnapshotHints:0,snapshotMode:'normal' as 'normal'|'null'|'other-life',snapshotActive:0,snapshotMaximum:0};
   const hint=()=>{for(const slot of [...receivers])slot.hint();};
   const transport:DocumentDraftTransport={scope:{localStoreId:'store',clientId:'client'},subscribe(hint,retire){const slot={hint,retire};receivers.add(slot);return()=>receivers.delete(slot);},invoke:async(input,bytes)=>{
     events.push(input);
@@ -33,7 +34,7 @@ function fixture(){
       const value=reply();if(controls.snapshotMode==='other-life')value.result.state.outcomes=[{job:{lifetime:'replacement',id:'1',buffer_lifetime:'other',text_revision:'1'},kind:'ready',reason:null}];return value;
       }finally{controls.snapshotActive--;}
     }
-    if(input.op==='release_buffer'){const prior=buffers.get(input.buffer_lifetime);if(prior)prior.released=true;for(const [id,row]of jobs)if(row.job.buffer_lifetime===input.buffer_lifetime)jobs.delete(id);if(controls.releaseFailures-->0)throw {code:'release_failed'};return reply();}
+    if(input.op==='release_buffer'){if(controls.retireOnRelease){controls.retireOnRelease=false;for(const slot of [...receivers])slot.retire();}const prior=buffers.get(input.buffer_lifetime);if(prior)prior.released=true;for(const [id,row]of jobs)if(row.job.buffer_lifetime===input.buffer_lifetime)jobs.delete(id);if(controls.releaseFailures-->0)throw {code:'release_failed'};return reply();}
     const row=jobs.get(input.job.id);if(!row)throw {code:'draft_expired'};
     const transfer=()=>({source_bytes_received:row.received,source_bytes_expected:row.source.bytes,source_sealed:row.sealed,facts_bytes:row.wire?controls.wireLength??row.wire.length:null,scratch_bytes:0});
     if(input.op==='upload_begin'||input.op==='progress')return reply(null,transfer());
@@ -50,7 +51,7 @@ function fixture(){
     throw Error('No feature parser/work controls are allowed');
   }};
   const service=createDocumentDraftService(transport),projections:DocumentDraftProjection[]=[];
-  return {service,events,controls,jobs,hint,receivers,project(capable=true){const value=new DocumentDraftProjection({owner:service,service:capable?service:undefined,capable});projections.push(value);return value;},retire(){for(const slot of [...receivers])slot.retire();},async close(){for(const projection of projections)await projection.close();}};
+  return {service,events,controls,jobs,hint,receivers,project(capable=true,onChange?:(state:DraftMetadataState)=>void){const value=new DocumentDraftProjection({owner:service,service:capable?service:undefined,capable,onChange});projections.push(value);return value;},retire(){for(const slot of [...receivers])slot.retire();},async close(){for(const projection of projections)await projection.close();}};
 }
 const demand={demand:true},idle={demand:false};
 
@@ -79,6 +80,9 @@ test('core transfer preserves exact Unicode CRLF hash and supplied semantic fact
   const f=fixture();t.after(()=>f.close());const projection=f.project();projection.update('One.md','Hé😀\r\ncontent',demand);await until(()=>!!projection.current);
   assert.deepEqual(projection.current!.aliases,['core:Hé😀\r\ncontent']);assert.equal(projection.current!.headings[0]!.heading,'Supplied core heading');assert.deepEqual(projection.current!.tags,['from-core']);
   assert.equal(f.events.filter(e=>e.op==='request').length,1);assert.ok(f.events.some(e=>e.op==='acknowledge'));assert.ok(documentDraftProjectionUsage(f.service).bytes>0);
+  const first=f.events.find(e=>e.op==='request') as Extract<DocumentDraftRequest,{op:'request'}>;
+  projection.update('One.md','next actual revision',demand);await until(()=>projection.current?.aliases[0]==='core:next actual revision');
+  const next=f.events.filter(e=>e.op==='request').at(-1)!;assert.equal(next.buffer_lifetime,first.buffer_lifetime,'higher text revisions reuse the lease after terminal ACK');assert.equal(next.text_revision,'2');assert.equal(f.events.some(e=>e.op==='release_buffer'),false);
   await projection.close();assert.equal(documentDraftProjectionUsage(f.service).bytes,0);
 });
 
@@ -93,7 +97,7 @@ test('rapid ABA input coalesces source preparation and retires a late admission 
 test('pending off/on reacquires the same text revision with a distinct lease while old admission is held',async t=>{
   const f=fixture();t.after(()=>f.close());const projection=f.project(),gate=deferred<void>();f.controls.requestGate=gate;
   projection.update('One.md','same',demand);await until(()=>f.events.some(e=>e.op==='request'));const first=f.events.find(e=>e.op==='request') as Extract<DocumentDraftRequest,{op:'request'}>,identity=projection.state.bufferLifetime;
-  projection.update('One.md','same',idle);assert.ok(f.events.some(e=>e.op==='release_buffer'&&e.buffer_lifetime===first.buffer_lifetime));projection.update('One.md','same',demand);
+  projection.update('One.md','same',idle);await until(()=>f.events.some(e=>e.op==='release_buffer'&&e.buffer_lifetime===first.buffer_lifetime));projection.update('One.md','same',demand);
   gate.resolve();f.controls.requestGate=undefined;await until(()=>!!projection.current);
   const requests=f.events.filter(e=>e.op==='request');assert.equal(requests.length,2);assert.notEqual(requests[1]!.buffer_lifetime,first.buffer_lifetime);assert.equal(requests[1]!.text_revision,first.text_revision);assert.equal(projection.state.bufferLifetime,identity);
   assert.ok(f.events.filter(e=>e.op==='release_buffer').every(e=>e.buffer_lifetime===first.buffer_lifetime),'late old release never targets the renewed lease');
@@ -155,10 +159,13 @@ test('all buffers on the actual service share the logical view and staging ceili
   await f.close();assert.equal(documentDraftProjectionUsage(f.service).bytes,0);
 });
 
-test('close sends buffer release before admission ACK and joins the late owned job',async()=>{
+test('close reserves cleanup before delayed admission and synchronous service retirement',async()=>{
   const f=fixture(),projection=f.project(),gate=deferred<void>();f.controls.requestGate=gate;projection.update('One.md','held',demand);await until(()=>f.events.some(e=>e.op==='request'));
-  let done=false;const closing=projection.close().then(()=>{done=true;});assert.ok(f.events.some(e=>e.op==='release_buffer'));assert.equal(done,false);
+  let done=false;const closing=projection.close().then(()=>{done=true;});await until(()=>f.events.some(e=>e.op==='release_buffer'));assert.equal(done,false);
   gate.resolve();await closing;assert.equal(f.events.filter(e=>e.op==='release_buffer').length,2);assert.equal(documentDraftProjectionUsage(f.service).bytes,0);
+  f.controls.requestGate=undefined;let second!:DocumentDraftProjection,reentrant:Promise<void>|undefined;
+  second=f.project(true,state=>{if(state.status==='unavailable')reentrant=second.close();});second.update('Two.md','second',demand);await until(()=>!!second.current);
+  f.controls.retireOnRelease=true;const retired=second.close();await retired;assert.equal(reentrant,retired,'retirement rejoins the already reserved close promise');assert.equal(documentDraftProjectionUsage(f.service).bytes,0);assert.equal(f.receivers.size,0);
 });
 
 test('failed buffer release retains the same retired owner and view reservation for explicit retry',async()=>{
