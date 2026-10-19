@@ -447,3 +447,16 @@ test('rich rebuild clears owner, expires old query and starts with a fresh sessi
   const f=fixture();f.file('a','text');const index=f.open();await f.build(index);const pin=await index.open(),ready=await richReady(index,pin.pinId);await index.rebuild();assert.equal(f.richStats.cleared,1);assert.equal(f.richStats.freed,1);
   await assert.rejects(index.richPrepare({pinId:pin.pinId,queryId:ready.queryId}),{code:'index_snapshot_expired'});await f.build(index);const next=await index.open();await richReady(index,next.pinId);assert.equal(f.richStats.created,2);await index.close();assert.equal(f.richStats.freed,2);
 });
+
+test('rich pending admission teardown never recreates an owner after close/rebuild',async()=>{
+  for(const action of ['close','rebuild'] as const){const f=fixture();f.file('a','text');const index=f.open();await f.build(index);const pin=await index.open();await richReady(index,pin.pinId);let ending:Promise<void>|undefined;const source=f.source();
+    f.afterRead((store,key)=>{if(!ending&&store==='control'&&key==='document-index:v1/catalog')ending=index[action]();});
+    await assert.rejects(index.richStart({pinId:pin.pinId,spec:richSpec}),error=>['index_closed','index_snapshot_expired'].includes((error as any).code));await ending;
+    assert.equal(f.richStats.created,1);assert.equal(f.richStats.freed,1);assert.equal(f.richCalls.length,1);assert.deepEqual(f.source(),source);await index.close();}
+});
+test('rich external catalog expiry after commit retires exact query and close retry remains reachable',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();await f.build(index);const pin=await index.open(),ready=await richReady(index,pin.pinId);
+  f.afterRichCommit(()=>{const row=f.records.get('control')!.get('document-index:v1/catalog');row.value.pins=[];});
+  await assert.rejects(index.richPage({pinId:pin.pinId,...ready}),{code:'index_snapshot_expired'});assert.equal(f.richStats.closed,1);assert.equal(f.richStats.preparedFreed,1);assert.equal(f.richStats.drivesFreed,1);
+  await index.richClose({pinId:pin.pinId,queryId:ready.queryId});assert.equal(f.richStats.closed,1);await index.closePin(pin.pinId);await index.close();
+});

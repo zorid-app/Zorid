@@ -109,7 +109,7 @@ function rust<T>(action:()=>T):T {try{return action();}catch(error){if(error ins
 
 const richFail=(code:string)=>new BrowserVaultError(code,'Rich document search is unavailable');
 function captureRichRequest(input:unknown,keys:readonly string[]):Record<string,unknown>&{pinId:string} {
-  if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!keys.includes(key))||keys.some(key=>!Object.hasOwn(input,key)))throw richFail('invalid_request');
+  if(!input||typeof input!=='object'||Array.isArray(input)||(Object.getPrototypeOf(input)!==Object.prototype&&Object.getPrototypeOf(input)!==null)||Object.keys(input).some(key=>!keys.includes(key))||keys.some(key=>!Object.hasOwn(input,key)))throw richFail('invalid_request');
   const row=input as Record<string,unknown>;let encoded:string;try{encoded=JSON.stringify(row);}catch{throw richFail('invalid_request');}if(size(encoded)>65536)throw richFail('search_resource');
   if(!validId(row.pinId))throw richFail('invalid_request');const result:Record<string,unknown>&{pinId:string}={pinId:row.pinId};
   for(const key of keys){if(key==='pinId')continue;try{result[key]=key==='spec'?searchSpec(row[key]):richToken(row[key]);}catch{throw richFail('invalid_request');}}
@@ -144,6 +144,8 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
   function admittedRichQuery(id:string,query:RichQueryBinding){admittedRichPin(query.pinId,query.pin,query.session);if(query.retired||richQueries.get(id)!==query)throw richFail('search_expired');}
   function getRichQuery(pinId:string,id:string){const query=richQueries.get(id);if(!query||query.pinId!==pinId)throw richFail('search_expired');admittedRichQuery(id,query);return query;}
   function retireRichQuery(id:string,query:RichQueryBinding){if(query.retired)return;if(query.session.alive&&richOwner===query.session)richRust(()=>query.session.value.closeQuery(query.core),query.spec.query);query.retired=true;richQueries.delete(id);}
+  function quietRetireRich(id:string,query:RichQueryBinding){try{retireRichQuery(id,query);}catch{/* Preserve the failed operation's original admission/encoding error. */query.retired=true;richQueries.delete(id);}}
+  async function assertRichQuery(id:string,query:RichQueryBinding){try{await assertPin(query.pinId);admittedRichQuery(id,query);}catch(error){quietRetireRich(id,query);throw error;}}
   function retireRichPin(pinId:string){for(const [id,query]of richQueries)if(query.pinId===pinId)retireRichQuery(id,query);}
   const parseCache=browserDocumentParseCache({db:host.db,authorityId:host.authorityId,assertActive:active,
     policy:json<BrowserParseCachePolicy>(rust(()=>host.wasm.documentParseCachePolicyJson())),
@@ -391,7 +393,7 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
     async richStart(input){
       const captured=captureRichRequest(input,['pinId','spec']),pinId=captured.pinId;
       let spec:SearchSpec;try{spec=searchSpec(captured.spec);}catch{throw richFail('invalid_request');}
-      const g=await assertPin(pinId),pin=pins.get(pinId)!;const session=richSession();
+      const g=await assertPin(pinId);active();const pin=pins.get(pinId);if(!pin||pin.value!==g)throw fail('index_snapshot_expired');const session=richSession();
       const entries=new Map<string,EntryState>(),presentations=new Map<string,BrowserVaultPresentation>();
       for(const fact of pin.capture.publication.presentation){if(presentations.has(fact.id))throw fail('index_rebuild_required');presentations.set(fact.id,fact);}
       const facts:{entryId:string;revision:string;ctimeMs:number;mtimeMs:number}[]=[];let factsBytes=2;
@@ -402,55 +404,55 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
       const core=richRust(()=>session.value.startQuery(g,JSON.stringify(spec),JSON.stringify(facts)),spec.query);
       let queryId:string;try{queryId=richToken(pinId+'/'+core);}catch{richRust(()=>session.value.closeQuery(core),spec.query);throw richFail('search_resource');}
       const query:RichQueryBinding={pinId,pin,session,core,spec,entries,retired:false,busy:false};richQueries.set(queryId,query);
-      try{await assertPin(pinId);admittedRichQuery(queryId,query);return Object.freeze({queryId});}
-      catch(error){retireRichQuery(queryId,query);throw error;}
+      try{await assertRichQuery(queryId,query);admittedRichQuery(queryId,query);return Object.freeze({queryId});}
+      catch(error){quietRetireRich(queryId,query);throw error;}
     },
     async richPrepare(input){
       const captured=captureRichRequest(input,['pinId','queryId']),pinId=captured.pinId,queryId=captured.queryId as string;
-      await assertPin(pinId);const query=getRichQuery(pinId,queryId);if(query.busy)throw richFail('search_busy');
+      let query:RichQueryBinding;try{await assertPin(pinId);query=getRichQuery(pinId,queryId);}catch(error){const old=richQueries.get(queryId);if(old?.pinId===pinId)quietRetireRich(queryId,old);throw error;}if(query.busy)throw richFail('search_busy');
       const raw=richRust(()=>query.session.value.prepareJson(query.core),query.spec.query);
       let response:ReturnType<typeof richPreparation>;try{response=richPreparation(json<unknown>(raw,65536));}catch(error){if(error instanceof BrowserVaultError)throw error;throw fail('index_rebuild_required');}
       const result=response.state==='ready'?Object.freeze({state:'ready' as const,cursor:richToken(queryId+'/'+response.cursor)}):response;
-      await assertPin(pinId);admittedRichQuery(queryId,query);return result;
+      await assertRichQuery(queryId,query);admittedRichQuery(queryId,query);return result;
     },
     async richPage(input){
       const captured=captureRichRequest(input,['pinId','queryId','cursor']),pinId=captured.pinId,queryId=captured.queryId as string,cursor=captured.cursor as string;
-      await assertPin(pinId);const query=getRichQuery(pinId,queryId);if(query.busy)throw richFail('search_busy');
+      let query:RichQueryBinding;try{await assertPin(pinId);query=getRichQuery(pinId,queryId);}catch(error){const old=richQueries.get(queryId);if(old?.pinId===pinId)quietRetireRich(queryId,old);throw error;}if(query.busy)throw richFail('search_busy');
       const prefix=queryId+'/';if(!cursor.startsWith(prefix)||cursor.length===prefix.length)throw richFail('search_expired');
-      query.busy=true;let drive:RichDrive|undefined,prepared:RichPrepared|undefined;
+      query.busy=true;let drive:RichDrive|undefined,prepared:RichPrepared|undefined,commitStarted=false;
       try{
         admittedRichQuery(queryId,query);drive=richRust(()=>query.session.value.openDrive(query.core,cursor.slice(prefix.length)),query.spec.query);
         for(;;){
           admittedRichQuery(queryId,query);const action=richAction(richRust(()=>drive!.nextActionJson(),query.spec.query),query.pin.header.nextIndex,query.entries);
           if(action.kind!=='readText')break;
-          await assertPin(pinId);admittedRichQuery(queryId,query);
+          await assertRichQuery(queryId,query);admittedRichQuery(queryId,query);
           const row=await readRow(query.pin.generation,action.entry);
-          await assertPin(pinId);admittedRichQuery(queryId,query);
+          await assertRichQuery(queryId,query);admittedRichQuery(queryId,query);
           if(!row.projection||row.projection.byteLength!==action.bytes)throw fail('index_source_unavailable');
           // The outstanding Rust request owns the digest and UTF8/NUL checks;
           // this descriptor is only an admitted host read, never an offset API.
           richRust(()=>drive!.accept(row.projection!),query.spec.query);
         }
-        await assertPin(pinId);admittedRichQuery(queryId,query);
+        await assertRichQuery(queryId,query);admittedRichQuery(queryId,query);
         prepared=richRust(()=>drive!.finish(),query.spec.query);
         // No await or mutable WASM borrow between the final local admission and
         // commit. A later failed admission never exposes this result/cursor.
         admittedRichQuery(queryId,query);
-        const raw=richRust(()=>query.session.value.commitJson(prepared!),query.spec.query);
+        commitStarted=true;const raw=richRust(()=>query.session.value.commitJson(prepared!),query.spec.query);
         const page=json<{result:unknown;cursor:unknown}>(raw,2*1024*1024);
         if(page.cursor!==null){let token:string;try{token=richToken(page.cursor);}catch{throw fail('index_rebuild_required');}page.cursor=richToken(queryId+'/'+token);}
         let result;try{result=decodeRichPage(page,{snapshot:query.pin.header.nextIndex as DocumentSnapshotId,source:query.pin.header.source,coverageComplete:richRust(()=>query.pin.value.coverageComplete(),query.spec.query),spec:query.spec});}catch(error){if(error instanceof BrowserVaultError)throw error;throw fail('index_rebuild_required');}
-        await assertPin(pinId);admittedRichQuery(queryId,query);return result;
-      }finally{prepared?.free();drive?.free();query.busy=false;}
+        await assertRichQuery(queryId,query);admittedRichQuery(queryId,query);return result;
+      }catch(error){if(commitStarted)quietRetireRich(queryId,query);throw error;}finally{prepared?.free();drive?.free();query.busy=false;}
     },
     async richClose(input){
       const captured=captureRichRequest(input,['pinId','queryId']),pinId=captured.pinId,queryId=captured.queryId as string;
-      await assertPin(pinId);if(!queryId.startsWith(pinId+'/'))throw richFail('search_expired');
-      const query=richQueries.get(queryId);
-      // Same-pin unknown close is an idempotent cleanup acknowledgement. It
-      // admits no query/cursor, and makes a lost close response safe to retry.
-      if(!query)return;admittedRichQuery(queryId,query);retireRichQuery(queryId,query);
-      await assertPin(pinId);
+      active();if(!queryId.startsWith(pinId+'/'))throw richFail('search_expired');const query=richQueries.get(queryId);
+      // Same-pin unknown close is an idempotent cleanup acknowledgement, even
+      // after a failed final pin fence retired it. It admits no query or read.
+      if(!query)return;
+      await assertRichQuery(queryId,query);admittedRichQuery(queryId,query);retireRichQuery(queryId,query);
+      try{await assertPin(pinId);}catch(error){quietRetireRich(queryId,query);throw error;}
     },
     async resolve(input){const g=await assertPin(input.pinId),result=json<unknown>(rust(()=>g.resolveJson(inputText(input.sourceId,128),inputText(input.destination,4096))));await assertPin(input.pinId);return result;},
     async backlinks(input){const g=await assertPin(input.pinId),result=pinPage(input.pinId,rust(()=>g.backlinksJson(inputText(input.targetId,128),tokenForPin(input.pinId,input.cursor),pageLimit(input.limit))));await assertPin(input.pinId);return result;},
