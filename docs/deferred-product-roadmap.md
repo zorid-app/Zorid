@@ -11,12 +11,17 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 Current integration `8a6d20d0` (2026-10-19):
 
-Execution is resource-blocked after three consecutive goal turns with insufficient
-stable disk capacity. Fresh free space is about1.12GB; the next frontend62 gate
-requires1.3GB and the Rust166 package starts require1.5GB. All workers are terminal,
-both isolated candidates are clean/frozen, and no owned validation is running.
-S1 remains incomplete. Resume after capacity changes, revalidating the candidates
-and serialization before running the required gates; keep the full S1 scope.
+User authorized retiring obsolete build outputs and resuming builds on2026-10-19.
+The repo cleanup removed367 exact generated files (288,583,680 allocated bytes);
+current outputs, warm dependencies, source, vaults and evidence were preserved.
+Observed free space afterward was2.79GB; this is a point-in-time reading.
+Canonical buffer64032dc6 now passes all62 focused Node checks and full TypeScript:
+`/private/tmp/zorid-s1-f-buffer-canonical-64032dc6/run/summary.json`.
+The sole heavy slot is handed to the existing Rust166 owner for fresh preflight
+and serialized execution; no Rust result or S1 completion is claimed. The resource
+hold statements below describe the preceding attempts, superseded by this update.
+The user also raised excessive implementation size; a scoped source/test/module
+size audit is in progress before drawing conclusions or expanding abstractions.
 
 - Common/desktop F adapters are integrated as the23-file `8a6d20d0` subset.
   Full TypeScript passes on that exact subset;190 applicable common/desktop

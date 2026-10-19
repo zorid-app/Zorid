@@ -1,5 +1,18 @@
 # User findings queue
 
+## Storage complexity and obsolete build cleanup — 2026-10-19
+
+User questions whether roughly50,000 lines are justified for a Rust storage layer.
+Current `zorid-store` contains40,765 Rust lines, including10,144 in explicit
+separate test/example files and additional inline tests not yet separated. This
+is the entire existing crate, not a measured S1 addition count. Audit scope,
+production/test split and overlapping responsibilities before claiming the size
+is necessary; avoid expanding abstractions to answer a complexity concern.
+User authorized deleting older generated builds and resuming validation.
+Repo cleanup evidence: `/private/tmp/zorid-repo-older-builds-cleanup/terminal.json`.
+Current artifacts, warm dependencies, source, vaults and reports are retained.
+
+
 ## S1 normal-family workload — whole-graph capacity boundary
 
 The retained276/10k admission observation predates the integrated Text-vector,
