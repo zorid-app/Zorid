@@ -258,6 +258,29 @@ is assigned; old full recovery/absence inventories and typed/physical checks mus
 remain intact. No follow-up build/runtime is credited yet. Corrected Electron100
 on matching integrated source/native is next in the serialized slot.
 
+Electron100 at frozen `1d3add34` again passes automatic import/all-source readback
+and cold search, but exact save verification fails on one newline before the
+marker after multiline CDP input. YAML/body are otherwise preserved; source input
+mapping versus product behavior is still unclassified. Evidence
+`/private/tmp/zorid-s1-desktop-100-1d3add34-evidence/report.json` and post-run proof:
+all frozen hashes exact, no renderer exceptions, all owned PIDs gone. Failure
+cleanup required SIGKILL for the second app, so no graceful-save/restart claim.
+Do not adapt the expected bytes to the result. Platform owner is preparing a
+bounded one-note input diagnosis (events/caret/source before/after, multiline
+injection versus ordinary Enter/typing); no product edit is approved by this
+finding alone. Main/dist hold is released after terminal cleanup.
+
+The follow-up native four-selector candidate `d0de1c83` is independently source
+approved in `native-import-lookup` / `tingkai-c/native-import-lookup`, base
+`51060b1d`; no Store/API/schema/cache changes. Five scoped native regression
+groups are prepared. `storage_sqlite_impl` now owns the serialized old-red/green
+slot; builds and runtime remain separate gates. Generated-Base tooling `ffaee3ad`
+is independently source approved, Node10 checks pass, Rust100/10k not yet run.
+Optional native resource-helper tooling through `21b81827` is source approved in
+`s1-process-resources`; default process paths stay unchanged, actual child/time
+tests and measured smokes remain queued. These source-only tools establish no
+resource measurements or performance acceptance.
+
 Owners: `s1_execution_audit` owns workload/native CLI baseline tooling;
 `s1_query_audit` owns the integrated language fixtures;
 `architecture_platform_audit` owns actual browser/normal Electron measurement
