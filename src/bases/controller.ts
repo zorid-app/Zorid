@@ -235,8 +235,14 @@ export class BaseController {
     if (this.refreshing) return this.pending;
     this.refreshing = true;
     this.pending = (async () => {
-      do { this.requested = false; await refresh(); } while (this.requested && !this.disposed);
-    })().finally(() => { this.refreshing = false; });
+      try {
+        do { this.requested = false; await refresh(); } while (this.requested && !this.disposed);
+      } finally {
+        // Release in the same continuation as the final requested check. A
+        // later promise.finally leaves a gap that can lose a new refresh.
+        this.refreshing = false;
+      }
+    })();
     return this.pending;
   }
 
@@ -333,6 +339,8 @@ export class BaseController {
 
   dispose(): void {
     this.disposed = true; this.clearWake(); this.epoch++; this.sharedQueries.dispose();
+    // Disposal retires activity without publishing an observer after closure.
+    this.current = this.settled;
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.subscriptions.forEach(unsubscribe => unsubscribe()); this.subscriptions = [];
   }
