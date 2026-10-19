@@ -1675,7 +1675,7 @@ mod reference_tests {
 mod retained_view_tests {
     use super::*;
     use rusqlite::types::Value;
-    use zorid_core::VaultPath;
+    use zorid_core::{OperationId, VaultPath};
     use zorid_sync_protocol::{RealmId, VaultId};
 
     const TEXTS: usize = 8;
