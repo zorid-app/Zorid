@@ -9,7 +9,32 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
-Current integration `b3930388` (2026-10-19):
+Current integration `8a6d20d0` (2026-10-19):
+
+- Common/desktop F adapters are integrated as the23-file `8a6d20d0` subset.
+  Full TypeScript passes on that exact subset;190 applicable common/desktop
+  checks carry from validated `93c0b133` with exact selected dependency closures.
+  Evidence: `/private/tmp/zorid-s1-f-desktop-subset-8a6d20d0/terminal.json`.
+  The full36-file Node composition passes374 checks and TypeScript; its browser
+  portion remains isolated because it needs the held Rust/WASM exports. Original
+  framed failure is preserved: a real transport allowlist rejected valid raw
+  draft-facts replies. Reviewed one-condition fix admits only facts-read replies
+  to the existing strict decoder. No size/identity checks or fixtures were loosened.
+  `/private/tmp/zorid-s1-f-canonical-node-93c0b133/aggregate374.json`.
+  Existing activation stays OFF; missing native F support keeps the legacy path.
+- Buffer projection owner `s1_rich_search_controller` has a staged standalone
+  boundary at `ca40bd92`, not integrated or approved. Review found same-text
+  demand reacquisition, observer reentry, decoder admission and lost-owner wake
+  gaps. The approved frontend-only successor keeps exact cached views and uses
+  renewable private core leases without inventing text revisions or changing
+  core replay policy. NoteBuffer/Workspace hooks wait for that boundary's review
+  and checks. Durable save ownership remains unchanged.
+- Preview platform plans are preserved, without implementation, at
+  `/private/tmp/zorid-s1-native-base-preview-scope.md` and
+  `/private/tmp/zorid-s1-browser-base-preview-scope.md`. Browser's bounded current
+  writer-fence audit is `/private/tmp/zorid-s1-browser-preview-writer-fence-audit.md`.
+  A sealed postcommit Store registration/read bridge and actual platform/query
+  retention ledgers remain required. These plans do not establish acceptance.
 
 - Vault/Workspace metadata consumption is now integrated as `9988b0c1`,
   `cf97f170` and `b3930388`, matching canonical `28567494`. All132 focused
@@ -32,6 +57,11 @@ Current integration `b3930388` (2026-10-19):
   gate in the existing `s1-canonical-draft-store` worktree. Compilation is held:
   current disk headroom cannot cover observed link peaks above the1GiB floor.
   Sequential disposal of passed test executables alone does not prove safety.
+  Retiring20 proven must-rebuild first-party library payloads reclaimed110 MB,
+  preserving third-party dependencies, Cargo metadata, source and44 held actual
+  artifacts. It permitted the bounded Node checks above; Rust166 and matching
+  app builds still need more disk headroom. Cleanup evidence:
+  `/private/tmp/zorid-s1-changing-local-cargo-output-proposal/terminal.json`.
 - Common F facade `194c666d` and desktop adapter/scheduler `f3dd317f` have
   independent source approval; their41 new cases remain unrun. Browser F awaits
   its narrow work-turn reentry correction and final review. Owner

@@ -19,6 +19,10 @@ and duplicate Store graph-derivation removal pass67 checks through `2bf929f9`.
 Portable draft transfer/transport, buffer projection and preview platform/UI
 mounting are the current implementation work. Their next source-reviewed batches
 remain unrun; disk headroom currently holds the heavier validation gate.
+The common/desktop transport subset is additionally integrated through
+`8a6d20d0`, with190 applicable focused checks and exact-subset TypeScript. The full
+browser composition passes374 focused Node checks and TypeScript in isolation;
+Rust/WASM dependencies, actual bindings and normal activation remain pending.
 Platform wiring/activation and S1.4–S1.6 acceptance remain open.
 The [execution checkpoint](../deferred-product-roadmap.md) records exact evidence
 and remaining10k admission/cache limitations. No overall app speedup or complete
