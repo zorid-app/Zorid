@@ -94,7 +94,37 @@ pub(crate) fn extract(source: &str, positions: &Positions<'_>, result: &mut Pars
         blank(&mut visible, definition.span.clone());
     }
     let mut current_heading: Option<Heading> = None;
+    let mut block_depth = 0usize;
+    let mut list_depth = 0usize;
     while let Some((event, range)) = iterator.next() {
+        // Start offsets already cover the entire parser-owned block/item.
+        // All masks preserve byte positions; coordinates refer to original input.
+        if let Event::Start(tag) = &event {
+            if matches!(tag, Tag::List(_)) {
+                list_depth += 1;
+            }
+            if let Some(kind) = block_kind(tag) {
+                if block_depth == 0 && list_depth == 0 {
+                    result.blocks.push(MarkdownBlock {
+                        kind,
+                        range: positions.range(trim_final_newline(source, range.clone())),
+                    });
+                }
+                block_depth += 1;
+            }
+        } else if let Event::End(tag) = &event {
+            if matches!(tag, TagEnd::List(_)) {
+                list_depth -= 1;
+            }
+            if block_end(tag) {
+                block_depth -= 1;
+            }
+        } else if matches!(&event, Event::Rule) && block_depth == 0 && list_depth == 0 {
+            result.blocks.push(MarkdownBlock {
+                kind: BlockKind::ThematicBreak,
+                range: positions.range(trim_final_newline(source, range.clone())),
+            });
+        }
         match event {
             Event::Start(Tag::Heading { level, .. }) => {
                 let mut range = trim_final_newline(source, range);
@@ -126,12 +156,17 @@ pub(crate) fn extract(source: &str, positions: &Positions<'_>, result: &mut Pars
                 }
             }
             Event::Start(Tag::Item) => {
-                if let Some(task) = task(source, range.start, positions) {
+                let task = task(source, range.clone(), positions).filter(|task| {
                     let start = task.range.bytes[0] as usize;
                     let end = task.range.bytes[1] as usize;
-                    if visible[start..end] == source.as_bytes()[start..end] {
-                        result.tasks.push(task);
-                    }
+                    visible[start..end] == source.as_bytes()[start..end]
+                });
+                result.list_items.push(ListItem {
+                    range: positions.range(trim_final_newline(source, range)),
+                    task_status: task.as_ref().map(|task| task.status.clone()),
+                });
+                if let Some(task) = task {
+                    result.tasks.push(task);
                 }
             }
             Event::Start(Tag::Link {
@@ -457,7 +492,31 @@ fn destination_span(source: &str, mut start: usize, end: usize) -> Option<Range<
     }
     Some(start..cursor)
 }
-fn task(source: &str, mut cursor: usize, positions: &Positions<'_>) -> Option<Task> {
+fn block_kind(tag: &Tag<'_>) -> Option<BlockKind> {
+    Some(match tag {
+        Tag::Paragraph => BlockKind::Paragraph,
+        Tag::Heading { .. } => BlockKind::Heading,
+        Tag::BlockQuote(_) => BlockKind::Blockquote,
+        Tag::CodeBlock(_) => BlockKind::Code,
+        Tag::HtmlBlock => BlockKind::Html,
+        Tag::Table(_) => BlockKind::Table,
+        _ => return None,
+    })
+}
+fn block_end(tag: &TagEnd) -> bool {
+    matches!(
+        tag,
+        TagEnd::Paragraph
+            | TagEnd::Heading(_)
+            | TagEnd::BlockQuote(_)
+            | TagEnd::CodeBlock
+            | TagEnd::HtmlBlock
+            | TagEnd::Table
+    )
+}
+
+fn task(source: &str, item: Range<usize>, positions: &Positions<'_>) -> Option<Task> {
+    let mut cursor = item.start;
     let end = line_end(source, cursor);
     let bytes = source.as_bytes();
     while cursor < end && matches!(bytes[cursor], b' ' | b'\t') {
@@ -510,5 +569,6 @@ fn task(source: &str, mut cursor: usize, positions: &Positions<'_>) -> Option<Ta
         range: positions.range(start..marker_end),
         status_range: positions.range(start + 1..status_end),
         text_range: positions.range(cursor..end),
+        item_range: positions.range(trim_final_newline(source, item)),
     })
 }

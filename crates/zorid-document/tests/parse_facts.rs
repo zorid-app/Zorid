@@ -1,9 +1,12 @@
+#[path = "../../../tests/fixtures/document-semantics/markdown/legacy_projection.rs"]
+mod legacy_projection;
+use legacy_projection::{schema_one_projection, LegacyMetadata};
 use serde::Deserialize;
 use zorid_core::{EntryId, Revision};
 use zorid_document::{
-    parse_markdown, parse_markdown_facts, DiagnosticCode, DocumentMetadata, ExtractionError,
-    FrontmatterState, MetadataRequest, ParseFacts, DIALECT_VERSION, MAX_FRONTMATTER_BYTES,
-    MAX_SOURCE_BYTES, SCHEMA_VERSION,
+    parse_markdown, parse_markdown_facts, DiagnosticCode, ExtractionError, FrontmatterState,
+    MetadataRequest, ParseFacts, DIALECT_VERSION, MAX_FRONTMATTER_BYTES, MAX_SOURCE_BYTES,
+    SCHEMA_VERSION,
 };
 
 #[derive(Deserialize)]
@@ -14,7 +17,7 @@ struct Corpus {
 struct Case {
     id: String,
     request: MetadataRequest,
-    expected: DocumentMetadata,
+    expected: LegacyMetadata,
 }
 
 #[test]
@@ -33,14 +36,19 @@ fn facts_bind_to_each_identity_without_changing_the_accepted_corpus() {
             case.request.entry_id.clone(),
             case.request.content_revision.clone(),
         );
-        assert_eq!(bound, case.expected, "{} original identity", case.id);
+        assert_eq!(
+            schema_one_projection(&bound),
+            case.expected,
+            "{} original identity",
+            case.id
+        );
         assert_eq!(parse_markdown(&case.request).unwrap(), bound, "{}", case.id);
 
         let mut rebound_expected = case.expected;
         rebound_expected.entry_id = other_entry.clone();
         rebound_expected.content_revision = other_revision.clone();
         assert_eq!(
-            facts.bind(other_entry.clone(), other_revision.clone()),
+            schema_one_projection(&facts.bind(other_entry.clone(), other_revision.clone())),
             rebound_expected,
             "{} changed identity",
             case.id
@@ -57,7 +65,7 @@ fn serialized_facts_preserve_ordered_fields_and_reject_identity_fields() {
     assert_eq!(decoded, facts);
     let value = serde_json::to_value(&facts).unwrap();
     let fields = value.as_object().unwrap();
-    assert_eq!(fields.len(), 12);
+    assert_eq!(fields.len(), 14);
     for identity in ["entryId", "contentRevision", "path", "localStoreId"] {
         assert!(!fields.contains_key(identity));
         let mut invalid = value.clone();

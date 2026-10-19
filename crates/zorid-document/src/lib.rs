@@ -44,6 +44,8 @@ pub fn parse_markdown_facts(source: &str) -> Result<ParseFacts, ExtractionError>
         headings: Vec::new(),
         links: Vec::new(),
         tasks: Vec::new(),
+        blocks: Vec::new(),
+        list_items: Vec::new(),
         diagnostics: Vec::new(),
     };
     frontmatter::extract(source, &positions, &mut result);

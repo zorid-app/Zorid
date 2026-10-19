@@ -1,5 +1,8 @@
 //! Cross-engine regression: canonical parser facts survive the disposable index
 //! transport without a serde_json::Value detour that would reorder YAML maps.
+#[path = "../../../tests/fixtures/document-semantics/markdown/legacy_projection.rs"]
+mod legacy_projection;
+use legacy_projection::{schema_one_projection, LegacyMetadata};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use zorid_core::{EntryId, EntryKind, EntryState, OperationId, Revision, VaultPath};
@@ -14,7 +17,7 @@ struct Corpus {
 struct Case {
     id: String,
     request: MetadataRequest,
-    expected: DocumentMetadata,
+    expected: LegacyMetadata,
 }
 
 fn source() -> SourceSnapshotId {
@@ -35,7 +38,7 @@ fn entry(id: &EntryId, revision: &Revision, path: &str) -> EntryState {
 
 fn restore_case(case: &Case) -> Result<(), String> {
     let parsed = parse_markdown(&case.request).map_err(|e| format!("parse: {e:?}"))?;
-    if parsed != case.expected {
+    if schema_one_projection(&parsed) != case.expected {
         return Err("parser differs from canonical metadata, including ordered properties".into());
     }
     let manifest = Manifest::new(
@@ -51,7 +54,7 @@ fn restore_case(case: &Case) -> Result<(), String> {
         .witness(&case.request.entry_id)
         .map_err(|e| format!("witness: {e}"))?;
     let dto = PersistedIndexRecord {
-        metadata: Some(parsed),
+        metadata: Some(parsed.clone()),
         digest: Some(Sha256::digest(case.request.source.as_bytes()).into()),
         text_bytes: case.request.source.len(),
         exclusion: None,
@@ -63,7 +66,7 @@ fn restore_case(case: &Case) -> Result<(), String> {
     let restored = decoded
         .restore(witness.clone())
         .map_err(|e| format!("restore: {e}"))?;
-    if restored.metadata() != Some(&case.expected) || restored.witness() != &witness {
+    if restored.metadata() != Some(&parsed) || restored.witness() != &witness {
         return Err("metadata or committed source witness changed during restore".into());
     }
     if restored.metadata().unwrap().properties != case.expected.properties {
@@ -207,4 +210,72 @@ fn relationship_pages_distinguish_scan_completion_from_source_coverage() {
         }
         assert_eq!(occurrences, [(0, false), (1, true), (2, false)]);
     }
+}
+
+#[test]
+fn structural_intervals_are_required_versioned_and_strictly_validated() {
+    let request = MetadataRequest {
+        entry_id: EntryId::new("structural").unwrap(),
+        content_revision: Revision::new("revision").unwrap(),
+        source: "Paragraph\n\n- [ ] parent\n  - [x] child\n- sibling\n".into(),
+    };
+    let parsed = parse_markdown(&request).unwrap();
+    assert_eq!(parsed.schema_version, 2);
+    assert_eq!(parsed.blocks.len(), 1);
+    assert_eq!(parsed.list_items.len(), 3);
+    assert_eq!(parsed.tasks.len(), 2);
+    let manifest = Manifest::new(
+        source(),
+        vec![entry(
+            &request.entry_id,
+            &request.content_revision,
+            "Source.md",
+        )],
+    )
+    .unwrap();
+    let witness = manifest.witness(&request.entry_id).unwrap();
+    let digest: [u8; 32] = Sha256::digest(request.source.as_bytes()).into();
+    let restore = |metadata| {
+        IndexRecord::from_persisted(
+            witness.clone(),
+            Some(metadata),
+            Some(digest),
+            request.source.len(),
+            None,
+        )
+    };
+    assert!(restore(parsed.clone()).is_ok());
+    assert_eq!(document_extraction_version(), "zorid-markdown-1:metadata-2");
+    for change in 0..8 {
+        let mut bad = parsed.clone();
+        match change {
+            0 => bad.blocks[0].range.bytes[1] = bad.source_length.bytes + 1,
+            1 => bad.blocks.push(bad.blocks[0].clone()),
+            2 => bad.list_items[1].range = bad.list_items[2].range.clone(),
+            3 => bad.list_items[1].range.bytes[1] = bad.list_items[2].range.bytes[1],
+            4 => bad.list_items[0].task_status = Some("?".into()),
+            5 => bad.tasks[0].item_range = bad.tasks[0].range.clone(),
+            6 => bad.tasks.push(bad.tasks[0].clone()),
+            7 => {
+                bad.tasks.remove(0);
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            matches!(restore(bad), Err(IndexError::InvalidRecord)),
+            "case {change}"
+        );
+    }
+    let mut old = parsed.clone();
+    old.schema_version = 1;
+    assert!(matches!(restore(old), Err(IndexError::InvalidVersion)));
+    let value = serde_json::to_value(parsed).unwrap();
+    for field in ["blocks", "listItems"] {
+        let mut missing = value.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(serde_json::from_value::<DocumentMetadata>(missing).is_err());
+    }
+    let mut invalid_kind = value;
+    invalid_kind["blocks"][0]["kind"] = "list".into();
+    assert!(serde_json::from_value::<DocumentMetadata>(invalid_kind).is_err());
 }

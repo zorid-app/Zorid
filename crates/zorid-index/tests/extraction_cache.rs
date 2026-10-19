@@ -1,6 +1,9 @@
+#[path = "../../../tests/fixtures/document-semantics/markdown/legacy_projection.rs"]
+mod legacy_projection;
+use legacy_projection::{schema_one_projection, LegacyMetadata};
 use serde::Deserialize;
 use zorid_core::{EntryId, EntryKind, EntryState, OperationId, Revision, VaultPath};
-use zorid_document::{DocumentMetadata, MetadataRequest, MAX_SOURCE_BYTES};
+use zorid_document::{MetadataRequest, MAX_SOURCE_BYTES};
 use zorid_index::*;
 
 fn witness(store: &str, watermark: &str, id: &str, revision: &str, path: &str) -> EntryWitness {
@@ -222,7 +225,7 @@ struct Corpus {
 struct Case {
     id: String,
     request: MetadataRequest,
-    expected: DocumentMetadata,
+    expected: LegacyMetadata,
 }
 #[test]
 fn every_canonical_extraction_case_keeps_exact_typed_metadata() {
@@ -243,7 +246,12 @@ fn every_canonical_extraction_case_keeps_exact_typed_metadata() {
         let record = result(&k, &c.request.source)
             .bind(&k, w.clone(), ExtractionMode::Markdown)
             .unwrap();
-        assert_eq!(record.metadata(), Some(&c.expected), "{}", c.id);
+        assert_eq!(
+            record.metadata().map(schema_one_projection),
+            Some(c.expected),
+            "{}",
+            c.id
+        );
         assert_eq!(
             IndexRecord::text(w, &c.request, true).unwrap(),
             record,

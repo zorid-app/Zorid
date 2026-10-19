@@ -1,5 +1,5 @@
 use crate::{EntryWitness, IndexError};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use zorid_document::{
     DocumentMetadata, FrontmatterState, PropertyValue, SourceRange, DIALECT_VERSION,
     MAX_EXPANDED_YAML_BYTES, MAX_SOURCE_BYTES, MAX_VALUE_NODES, MAX_YAML_DEPTH, SCHEMA_VERSION,
@@ -168,6 +168,57 @@ pub(crate) fn validate_metadata(
             return Err(IndexError::InvalidRecord);
         }
     }
+    // New structural intervals are source ordered. Maximal blocks cannot
+    // overlap; list items may nest but cannot cross one another.
+    let key = |r: &SourceRange| (r.bytes[0], r.bytes[1], r.utf16[0], r.utf16[1]);
+    let nonempty = |r: &SourceRange| r.bytes[0] < r.bytes[1] && r.utf16[0] < r.utf16[1];
+    let after_body = |r: &SourceRange| r.bytes[0] >= point.byte && r.utf16[0] >= point.utf16;
+    let mut previous_block: Option<&SourceRange> = None;
+    for block in &metadata.blocks {
+        range(&block.range)?;
+        if !nonempty(&block.range)
+            || !after_body(&block.range)
+            || previous_block.is_some_and(|old| {
+                old.bytes[1] > block.range.bytes[0] || old.utf16[1] > block.range.utf16[0]
+            })
+        {
+            return Err(IndexError::InvalidRecord);
+        }
+        previous_block = Some(&block.range);
+    }
+    let mut items = BTreeMap::new();
+    let mut stack: Vec<&SourceRange> = Vec::new();
+    let mut previous_item: Option<&SourceRange> = None;
+    for item in &metadata.list_items {
+        range(&item.range)?;
+        if !nonempty(&item.range)
+            || !after_body(&item.range)
+            || previous_item.is_some_and(|old| {
+                old.bytes[0] >= item.range.bytes[0] || old.utf16[0] >= item.range.utf16[0]
+            })
+            || item.task_status.as_ref().is_some_and(|status| {
+                status.encode_utf16().count() != 1 || status.contains(['\r', '\n'])
+            })
+        {
+            return Err(IndexError::InvalidRecord);
+        }
+        while stack
+            .last()
+            .is_some_and(|old| old.bytes[1] <= item.range.bytes[0])
+        {
+            stack.pop();
+        }
+        if stack
+            .last()
+            .is_some_and(|outer| !contains(outer, &item.range))
+        {
+            return Err(IndexError::InvalidRecord);
+        }
+        stack.push(&item.range);
+        items.insert(key(&item.range), item.task_status.as_deref());
+        previous_item = Some(&item.range);
+    }
+    let mut task_items = BTreeSet::new();
     for task in &metadata.tasks {
         if task.line > length.bytes
             || task.status.encode_utf16().count() != 1
@@ -180,7 +231,12 @@ pub(crate) fn validate_metadata(
         range(&task.range)?;
         range(&task.status_range)?;
         range(&task.text_range)?;
-        if !width(&task.status_range, &task.status)
+        range(&task.item_range)?;
+        if !contains(&task.item_range, &task.range)
+            || !contains(&task.item_range, &task.text_range)
+            || items.get(&key(&task.item_range)) != Some(&Some(task.status.as_str()))
+            || !task_items.insert(key(&task.item_range))
+            || !width(&task.status_range, &task.status)
             || !width(&task.text_range, &task.text)
             || task.range.bytes[1] - task.range.bytes[0] != task.status.len() as u32 + 2
             || task.range.utf16[1] - task.range.utf16[0] != 3
@@ -192,6 +248,12 @@ pub(crate) fn validate_metadata(
         {
             return Err(IndexError::InvalidRecord);
         }
+    }
+    if items
+        .iter()
+        .any(|(range, status)| status.is_some() && !task_items.contains(range))
+    {
+        return Err(IndexError::InvalidRecord);
     }
     for diagnostic in &metadata.diagnostics {
         range(&diagnostic.range)?;

@@ -1,5 +1,8 @@
+#[path = "../../../tests/fixtures/document-semantics/markdown/legacy_projection.rs"]
+mod legacy_projection;
+use legacy_projection::{schema_one_projection, LegacyMetadata};
 use serde::Deserialize;
-use zorid_document::{parse_markdown, DocumentMetadata, MetadataRequest};
+use zorid_document::{parse_markdown, MetadataRequest};
 
 #[derive(Deserialize)]
 struct Corpus {
@@ -9,7 +12,7 @@ struct Corpus {
 struct Case {
     id: String,
     request: MetadataRequest,
-    expected: DocumentMetadata,
+    expected: LegacyMetadata,
 }
 
 fn differences(
@@ -55,12 +58,12 @@ fn shared_markdown_corpus() {
     let mut failures = Vec::new();
     for case in corpus.cases {
         match parse_markdown(&case.request) {
-            Ok(actual) if actual == case.expected => {}
+            Ok(actual) if schema_one_projection(&actual) == case.expected => {}
             Ok(actual) => {
                 let mut diff = Vec::new();
                 differences(
                     &serde_json::to_value(&case.expected).unwrap(),
-                    &serde_json::to_value(&actual).unwrap(),
+                    &serde_json::to_value(schema_one_projection(&actual)).unwrap(),
                     &case.id,
                     &mut diff,
                 );

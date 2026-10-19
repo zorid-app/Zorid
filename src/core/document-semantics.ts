@@ -17,14 +17,16 @@ export interface DocumentProperty {readonly key:string;readonly value:DocumentVa
 export interface DocumentDiagnostic {readonly code:string;readonly severity:'error'|'warning';readonly range:DocumentRange}
 export interface DocumentHeading {readonly text:string;readonly level:number;readonly line:number;readonly range:DocumentRange}
 export interface DocumentLink {readonly kind:'wiki'|'markdown';readonly embed:boolean;readonly target:string;readonly fragment:string;readonly destination:string;readonly range:DocumentRange;readonly targetRange:DocumentRange;readonly definitionRange:DocumentRange|null}
-export interface DocumentTask {readonly status:string;readonly checked:boolean;readonly completed:boolean;readonly text:string;readonly line:number;readonly range:DocumentRange;readonly statusRange:DocumentRange;readonly textRange:DocumentRange}
+export interface DocumentTask {readonly status:string;readonly checked:boolean;readonly completed:boolean;readonly text:string;readonly line:number;readonly range:DocumentRange;readonly statusRange:DocumentRange;readonly textRange:DocumentRange;readonly itemRange:DocumentRange}
+export interface DocumentBlock {readonly kind:'paragraph'|'heading'|'blockquote'|'code'|'html'|'table'|'thematicBreak';readonly range:DocumentRange}
+export interface DocumentListItem {readonly range:DocumentRange;readonly taskStatus:string|null}
 export interface DocumentMetadata {
   readonly schemaVersion:number;readonly dialectVersion:string;readonly entryId:string;readonly contentRevision:string;
   readonly sourceLength:{readonly bytes:number;readonly utf16:number};
   readonly frontmatter:{readonly state:'absent'|'valid'|'invalid'|'unclosed';readonly range:DocumentRange|null;readonly bodyStart:{readonly byte:number;readonly utf16:number}};
   readonly properties:readonly DocumentProperty[];readonly aliases:readonly string[];readonly tags:readonly string[];
   readonly tagOccurrences:readonly{readonly name:string;readonly range:DocumentRange}[];
-  readonly headings:readonly DocumentHeading[];readonly links:readonly DocumentLink[];readonly tasks:readonly DocumentTask[];readonly diagnostics:readonly DocumentDiagnostic[];
+  readonly headings:readonly DocumentHeading[];readonly links:readonly DocumentLink[];readonly tasks:readonly DocumentTask[];readonly blocks:readonly DocumentBlock[];readonly listItems:readonly DocumentListItem[];readonly diagnostics:readonly DocumentDiagnostic[];
 }
 export type DocumentExclusion='binary'|'unreadable'|'sourceLimit'|'extractionLimit';
 export interface DocumentMetadataRow {readonly entry:DocumentEntry;readonly metadata:DocumentMetadata|null;readonly exclusion:DocumentExclusion|null}

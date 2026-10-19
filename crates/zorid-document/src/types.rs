@@ -2,7 +2,7 @@ use crate::PropertyValue;
 use serde::{Deserialize, Serialize};
 use zorid_core::{EntryId, Revision};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 pub const DIALECT_VERSION: &str = "zorid-markdown-1";
 pub const MAX_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_FRONTMATTER_BYTES: usize = 1024 * 1024;
@@ -109,6 +109,33 @@ pub struct Link {
     pub target_range: SourceRange,
     pub definition_range: Option<SourceRange>,
 }
+/// Maximal parser-owned blocks outside lists. List containers are represented
+/// by individual items instead, so unrelated sibling items never form one block.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BlockKind {
+    Paragraph,
+    Heading,
+    Blockquote,
+    Code,
+    Html,
+    Table,
+    ThematicBreak,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MarkdownBlock {
+    pub kind: BlockKind,
+    pub range: SourceRange,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ListItem {
+    /// Complete original item, including continuation lines and descendants.
+    pub range: SourceRange,
+    /// None for ordinary items; every non-space marker is checked for search.
+    pub task_status: Option<String>,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Task {
@@ -120,6 +147,8 @@ pub struct Task {
     pub range: SourceRange,
     pub status_range: SourceRange,
     pub text_range: SourceRange,
+    /// Complete list item; the checkbox and first-line text ranges stay distinct.
+    pub item_range: SourceRange,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -166,6 +195,8 @@ pub struct ParseFacts {
     pub headings: Vec<Heading>,
     pub links: Vec<Link>,
     pub tasks: Vec<Task>,
+    pub blocks: Vec<MarkdownBlock>,
+    pub list_items: Vec<ListItem>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -187,6 +218,8 @@ impl ParseFacts {
             headings: self.headings,
             links: self.links,
             tasks: self.tasks,
+            blocks: self.blocks,
+            list_items: self.list_items,
             diagnostics: self.diagnostics,
         }
     }
@@ -208,6 +241,8 @@ pub struct DocumentMetadata {
     pub headings: Vec<Heading>,
     pub links: Vec<Link>,
     pub tasks: Vec<Task>,
+    pub blocks: Vec<MarkdownBlock>,
+    pub list_items: Vec<ListItem>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
