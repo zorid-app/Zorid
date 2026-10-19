@@ -2,6 +2,9 @@
 
 ## S1 browser metadata projection — epoch allocation audit
 
+Metadata adapters are integrated through `4887a970` after275 focused Node checks
+and TypeScript. Vault consumption and actual platform verification remain open.
+
 Source inspection during E2 binding work found that browser `begin()` allocates a
 fresh generation epoch for every publication. The shared metadata pager correctly
 resets across epochs, so ordinary browser edits currently require a body-free full
@@ -61,13 +64,12 @@ before the fix and passes after it. All 63 focused checks, full TypeScript and
 three real-WASM controls pass, including BMP/astral ordering. Actual matching
 browser build and full UI acceptance remain pending.
 
-Actual browser 003 reaches Search but fails its first `common-marker` query with
+Historical browser 003 reaches Search but fails its first `common-marker` query with
 “Saved search is unavailable.” The exact production Worker and current WASM are
 loaded, with no debugger pause or captured renderer error. Case/sorts/dense/
 navigation/save/Find were not reached. Source/artifacts remain exact and the test
-app is closed. Diagnosis owner `s1_browser_runtime_review`, isolated
-`/private/tmp/zorid-s1-browser-search-diagnosis`; underlying error and fix remain
-open. Evidence:
+app is closed. The ordering diagnosis and fix described above supersede this
+failure; it remains evidence of the original actual run. Evidence:
 `/private/tmp/zorid-s1-rich-web-watch-8vdiwjdp/acceptance-terminal-summary.json`.
 
 Latest actual desktop result supersedes the older pending checks below:

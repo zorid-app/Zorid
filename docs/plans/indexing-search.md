@@ -8,8 +8,13 @@ S1.1 bounded client cache checks pass; S1.2 core and host answer reuse are
 integrated with focused checks, while full client acceptance remains pending.
 S1.3 rich search and in-note Find are integrated; 32 actual desktop functional
 phases pass on their recorded freeze. Browser production execution reaches Search
-but its first query fails; diagnosis remains open. The pure phased-parser, draft,
-metadata and preview foundation passes 216 scoped checks on main `4da43cf7`.
+but its first query failed; the canonical pin-order correction is integrated,
+with a matching browser rebuild and full UI rerun pending. The pure phased-parser,
+draft, metadata and preview foundation passes216 scoped checks on `4da43cf7`.
+Rust metadata/preview bindings pass114 checks; metadata client adapters pass275
+focused Node checks and TypeScript; native draft execution passes40 checks.
+These batches are integrated through `8917d66c`. Vault metadata consumption and
+portable draft execution/transport are the current implementation work.
 Platform wiring/activation and S1.4–S1.6 acceptance remain open.
 The [execution checkpoint](../deferred-product-roadmap.md) records exact evidence
 and remaining10k admission/cache limitations. No overall app speedup or complete

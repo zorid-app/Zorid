@@ -9,7 +9,7 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
-Current integration `40a71dce` (2026-10-19):
+Current integration `8917d66c` (2026-10-19):
 
 - Main includes the pure foundation (`4da43cf7`, 216 checks), work arbiter
   (`24eca3a2`, 15 new +27 reducer checks), browser Search ordering correction
@@ -32,26 +32,41 @@ Current integration `40a71dce` (2026-10-19):
   and functional rerun remain pending; held old artifacts keep their old source
   labels. Diagnosis evidence and source handoff:
   `/private/tmp/zorid-s1-browser-search-order-handoff.md`.
-- E2 client source remains isolated and unvalidated: common successor `63df6201`
-  under exact review, desktop `71983437` source-approved, browser `ea6fe538`
-  under review. Native/host/WASM backends are integrated, but Vault/Workspace
-  metadata migration has not started. Common strict decoding must avoid full
-  page serialization before enforcing its byte bound. Browser's fresh epoch per
-  publication currently forces resets; `docs/user-findings.md` records its
-  required S1 incremental-computation audit.
-- F native executor `637c8a74` is under source review, 18 authored checks unrun;
-  document API exports remain deferred until its gate. Host transient data plane,
-  WASM/browser draft execution and buffer projection have not started. Durable
-  saving/NoteBuffer state is outside this transient semantics change.
+- E2 client adapters are integrated through `4887a970`: common strict metadata
+  decoding, desktop capability/transport and browser actual-pin/cursor fencing.
+  Canonical 275 focused Node checks and full TypeScript pass. Complete phases
+  carried forward only with unchanged dependency closures; four original failed
+  fixture attempts remain recorded. Evidence:
+  `/private/tmp/zorid-s1-e2-canonical-node-4887a970/aggregate275.json`.
+  No actual generated-WASM/browser activation is established by these checks.
+  Vault metadata migration owner `baseline_resources_impl` and display/lifecycle
+  owner `s1_rich_search_controller` work in isolated branches; their changes
+  are not yet integrated. Browser fresh epochs force resets; the required S1
+  incremental-computation audit is tracked in `docs/user-findings.md`.
+- F native executor and additive exports are integrated as `b270f26c`/`8917d66c`
+  from reviewed `89e1b58a`. All18 draft executor and22 runtime checks pass,
+  source unchanged and owned groups gone. Evidence:
+  `/private/tmp/zorid-s1-native-f40-89e1b58a/verification.json`.
+  Owner `s1_lifecycle_core` next extracts its portable executor into `zorid-index`
+  before WASM implementation; `s1_native_runtime_host_review` owns independent
+  review. Host transient framing owner `storage_sqlite_impl` coordinates shared
+  scratch accounting rather than a second host policy. Actual host transport,
+  WASM/browser draft execution and buffer projection remain unverified/pending.
+  Durable saving/NoteBuffer state is outside this transient semantics change.
+  Main integration proof binds the25 client and seven native owner files to
+  their separately validated sources:
+  `/private/tmp/zorid-s1-e2-native-main-integration-8917d66c.json`.
 - Normal runtime activation flags remain OFF. Base preview platform/UI mounting,
   per-pane visibility/configured clocks, actual liveness/fairness, independent
   CLI concurrency and S1.6 retained workloads remain open. Overall S1 is not
   accepted. Stop after S1; later desktop features and sync remain deferred.
-- Builds/apps and heavy checks stay serialized. Exactly 15 verified disposable
-  test executables were evicted before the 114 batch, recovering about 136 MB;
-  libraries, actual artifacts, source and evidence remained intact. The current
-  debug cache is needed for the next native gate. Before a cold matching WASM
-  build, reassess headroom; never close user/manual apps. Hard floor is 1 GiB.
+- Builds/apps and heavy checks stay serialized. After the earlier15 executable
+  cleanup, nine passed Rust E2 test binaries were reclaimed with ownership/hash
+  proofs (about265 MB); libraries, actual artifacts, source and evidence remain
+  intact. Native F40 used the warm debug cache and reached about1.29 GB minimum
+  free disk. Retain that cache for the executor extraction gate. Before a cold
+  matching WASM build, reassess headroom; never close user/manual apps. Hard
+  floor is1 GiB.
 
 The earlier update below records its own source and verification points.
 
