@@ -101,7 +101,11 @@ node scripts/indexing-search-baseline/core.mjs --self-test
 
 These reject false completion, missing/extra ordering, wrong revisions/ranges,
 source/snapshot substitution and malformed lifecycle sequencing. They do not
-substitute for the actual already-built Rust example run. The initial tool does
+substitute for the actual already-built Rust example run. The literal oracle does not independently validate extracted frontmatter/link/task
+metadata; accepted parser corpora remain the separate semantic gate. The Node
+self-test also uses three clearly synthetic owned executables to check successful,
+rejected and timed-out report persistence, then removes only that temporary root.
+It is not Rust execution evidence. The initial tool does
 not execute Bases/graph, incremental mutation, cache reuse, cancellation, foreground
 contention or the separate large-note profiles. Those remain baseline work under
 the [measurement specification](../../docs/plans/indexing-search-baseline.md).

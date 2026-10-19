@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {open,readFile,stat,realpath} from 'node:fs/promises';
+import {open,readFile,writeFile,stat,realpath,mkdtemp,chmod,rm} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {parseArgs} from 'node:util';
@@ -94,7 +94,7 @@ export async function runCore({out,binary,notes=100,samples=1,timeoutMs=60000,bu
   finally{await log.close();await writeFile(path.join(fixture.out,'core-report.json'),json(report),{flag:'wx'});}
   return {out:fixture.out,report};
 }
-export function selfTest(){
+export async function selfTest(){
   // Check rejection properties with fixture-independent protocol corruption.
   const entry={logicalId:'note-000000',path:'Notes/G000/Note-000000.md',sha256:'0'.repeat(64),bytes:1,kind:'text'},fixture={fixtureHash:'fixture',manifest:{noteCount:1,noteBytes:1,entries:[entry]}};
   const v=new CoreValidator(fixture,1);assert.throws(()=>v.accept({type:'done',source,snapshot}));
@@ -113,10 +113,43 @@ export function selfTest(){
   assert.throws(()=>fresh().accept({...page,hits:[{...hit,entry:{...hit.entry,revision:'other'}}]}));
   assert.throws(()=>fresh().accept({...page,hits:[{...hit,range:{...hit.range,bytes:[0,1]}}]}));
   const valid=fresh();valid.accept({...page,hits:[hit]});assert.throws(()=>valid.accept({...page,hits:[hit]}));
-  return {scope:'Node protocol validator only; no Rust process/performance acceptance',checks:12};
+  const temporary=await mkdtemp(path.join(os.tmpdir(),'zorid-s1-core-wrapper-'));
+  try{
+    const fake=`#!/usr/bin/env node
+import {readFile} from 'node:fs/promises';
+import path from 'node:path';
+import {queries,literalOracle,sha256} from ${JSON.stringify(new URL('./workload.mjs',import.meta.url).href)};
+const emit=value=>process.stdout.write(JSON.stringify(value)+'\\n');
+const mode=path.basename(process.argv[1]);
+if(mode==='timeout'){setInterval(()=>{},10000);}
+else if(mode==='error'){emit({type:'error',phase:'generation',detail:'synthetic retained resource rejection'});process.exitCode=1;}
+else{
+  const fixture=process.argv[process.argv.indexOf('--fixture')+1],raw=await readFile(path.join(fixture,'manifest.json')),m=JSON.parse(raw);
+  const source=${JSON.stringify(source)},snapshot=${JSON.stringify(snapshot)},mapped=e=>({id:e.logicalId,revision:'source-'+e.sha256,path:e.path,kind:'file',deleted:false});
+  const total=m.entries.reduce((n,e)=>n+e.bytes,0),text=m.entries.filter(e=>e.kind==='text').reduce((n,e)=>n+e.bytes,0);
+  emit({type:'setup',fixtureHash:sha256(raw),noteCount:m.noteCount,entries:m.entries.length,inputBytes:total,textBytes:text,setupMs:0,sourceReadMs:0,sourceHashMs:0,utf8DecodeMs:0,debugAssertions:false});
+  emit({type:'generation',source,snapshot,entries:m.entries.length,records:m.entries.length,coverageComplete:true,parseInvocations:m.noteCount,parseInputBytes:m.noteBytes,metadataBytes:1,pumpResets:0,manifestMs:0,bindingMs:0,extractionMs:0,insertionMs:0,finishMs:0,exclusions:m.entries.filter(e=>e.kind==='binary').map(e=>({entry:mapped(e),reason:'binary'}))});
+  for(const q of queries){const hits=[...literalOracle(q,m.noteCount)].map(e=>({entry:mapped(m.entries.find(row=>row.path===e.path)),line:e.line,range:e.range}));
+    emit({type:'page',source,snapshot,queryId:q.id,sample:0,page:1,coverageComplete:true,scanComplete:true,complete:true,hasNext:false,documents:m.entries.length,sourceBytes:text,hits});
+    emit({type:'query',source,snapshot,queryId:q.id,query:q.query,sample:0,pages:1,hits:hits.length,documents:m.entries.length,sourceBytes:text,queryMs:0,pageOutputMs:0,scanComplete:true,coverageComplete:true,complete:true});
+  }
+  emit({type:'done',source,snapshot,queries:queries.length,coverageComplete:true});
+}
+`;
+    for(const mode of ['success','error','timeout']){
+      const executable=path.join(temporary,mode);await writeFile(executable,fake,{flag:'wx'});await chmod(executable,0o700);
+      const result=await runCore({out:path.join(temporary,mode+'-out'),binary:executable,notes:1,timeoutMs:mode==='timeout'?100:10000});
+      const retained=JSON.parse(await readFile(path.join(result.out,'core-report.json'),'utf8'));
+      assert.equal(retained.status,mode==='success'?'passed':'failed-or-incomplete');assert.equal(retained.filesystemSourcePreserved,true);
+      if(mode==='success'){assert.equal(retained.queries.length,8);assert.equal(retained.process.exitCode,0);}
+      if(mode==='error')assert.equal(retained.process.validationError.phase,'generation');
+      if(mode==='timeout')assert.equal(retained.process.timedOut,true);
+    }
+  }finally{await rm(temporary,{recursive:true,force:true});}
+  return {scope:'Node validator plus synthetic executable/report lifecycle only; no Rust or performance acceptance',protocolChecks:12,syntheticProcessCases:3};
 }
 if(process.argv[1]&&pathToFileURL(path.resolve(process.argv[1])).href===import.meta.url){
   const {values}=parseArgs({options:{out:{type:'string'},core:{type:'string'},notes:{type:'string',default:'100'},samples:{type:'string',default:'1'},'timeout-ms':{type:'string',default:'60000'},'build-sha':{type:'string',default:'unknown'},'build-mode':{type:'string',default:'unknown'},stress:{type:'boolean'},'self-test':{type:'boolean'}}});
-  if(values['self-test'])console.log(json(selfTest()));
+  if(values['self-test'])console.log(json(await selfTest()));
   else{if(!values.out||!values.core)throw Error('Use --out NEW_DIRECTORY --core ALREADY_BUILT_EXAMPLE');const result=await runCore({out:values.out,binary:values.core,notes:Number(values.notes),samples:Number(values.samples),timeoutMs:Number(values['timeout-ms']),buildSha:values['build-sha'],buildMode:values['build-mode'],stress:values.stress});console.log(json({out:result.out,status:result.report.status,report:path.join(result.out,'core-report.json')}));if(result.report.status!=='passed')process.exitCode=1;}
 }
