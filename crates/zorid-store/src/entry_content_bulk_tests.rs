@@ -241,7 +241,7 @@ fn every_visible_row_keeps_canonical_and_content_checks_before_mutation() {
         "UPDATE entries SET state=json_set(state,'$.path','other.md') WHERE id='file'",
         "UPDATE entries SET state=json_set(state,'$.id','other') WHERE id='file'",
         "UPDATE entries SET state=json_set(state,'$.unexpected',true) WHERE id='file'",
-        "UPDATE entries SET state=json_set(state,'$.deleted',true) WHERE id='file'",
+        "UPDATE entries SET state=json_set(state,'$.deleted',json('true')) WHERE id='file'",
         "UPDATE entries SET content_digest=NULL WHERE id='file'",
         "UPDATE entries SET content_digest='not-json' WHERE id='file'",
         "UPDATE entries SET content_ref='{}' WHERE id='file'",
