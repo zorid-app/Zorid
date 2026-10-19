@@ -3,6 +3,8 @@ import {scheduleBinaryTransfer} from './binary-transfer-queue.ts';
 import type {BinarySource,BinarySink} from './binary-transfer.ts';
 import type {BinaryStreams,BinaryReadRef} from './binary-streams.ts';
 import { MetadataCache } from './metadata.ts';
+import {CommittedMetadataProjection} from './committed-metadata-frame.ts';
+import type {CommittedMetadataFrame, CommittedMetadataState} from './committed-metadata-frame.ts';
 import { isMarkdown, normalizePath, parentPath } from './types.ts';
 import type { VaultAdapter, VaultChange, VaultEntry, VaultEvent } from './types.ts';
 import type { DurableWrites, DurableWriteIntent, DurableWriteRead, DurableWriteRef } from './durable-writes.ts';
@@ -70,7 +72,60 @@ export class Vault {
   private pending: Promise<unknown> = Promise.resolve();
   private contents = new Map<string, string>();
 
-  constructor(adapter: VaultAdapter) { this.adapter = adapter; }
+  private readonly metadataProjection: CommittedMetadataProjection | undefined;
+  private readonly metadataListeners = new Set<(state: CommittedMetadataState) => void>();
+  private metadataRetired = false;
+  private projectedMetadataFrame: CommittedMetadataFrame | null | undefined;
+
+  constructor(adapter: VaultAdapter) {
+    this.adapter = adapter;
+    const service = adapter.documentSemantics;
+    // Paging alone is not normal consumer activation: D-off providers keep the
+    // legacy path until autonomous publication delivery is admitted too.
+    if (service?.metadataRowsAvailable === true && typeof service.maintenance?.observeAndSubscribe === 'function') {
+      this.metadataProjection = new CommittedMetadataProjection(service,
+        () => this.adapter === adapter && this.adapter.documentSemantics === service,
+        state => {
+          if (this.projectedMetadataFrame !== state.frame) {
+            this.projectedMetadataFrame = state.frame;
+            const cache = new MetadataCache(path => {
+              const live = this.entries.get(path), item = state.frame?.row(path);
+              const witnessed = item?.kind === 'file' ? item.value.entry : undefined;
+              return !this.metadataRetired && this.adapter === adapter && this.adapter.documentSemantics === service && !!live && live.type === 'file' && !!witnessed && live.entryId === witnessed.id && live.revision === witnessed.revision;
+            });
+            cache.adopt(state.frame?.metadata.entries() ?? [], this.filePaths());
+            this.metadata = cache;
+          }
+          for (const callback of this.metadataListeners) {
+            try { callback(state); } catch (error) { console.error('Vault metadata listener failed', error); }
+          }
+        });
+    }
+  }
+
+  /** Undefined is legacy; pending/null on a capable provider is not empty facts. */
+  get metadataFrame(): CommittedMetadataState | undefined { return this.metadataProjection?.state; }
+  onMetadata(callback: (state: CommittedMetadataState) => void): () => void {
+    if (this.metadataRetired) return () => {};
+    this.metadataListeners.add(callback);
+    return () => { this.metadataListeners.delete(callback); };
+  }
+  /** Permanent retirement; failed close acknowledgements remain retryable. */
+  closeMetadataProjection(): Promise<void> {
+    this.metadataRetired = true; this.metadataListeners.clear();
+    if (!this.metadataProjection) return Promise.resolve();
+    return this.metadataProjection.close().then(() => {
+      // Keep retry ownership until every close ACK succeeds. After success no
+      // Vault-owned cache/closure should keep a disposed frame's data alive.
+      this.projectedMetadataFrame = undefined;
+      this.metadata = new MetadataCache(() => false);
+    });
+  }
+  private filePaths(): string[] { return [...this.entries.values()].filter(entry => entry.type === 'file').map(entry => entry.path); }
+  private metadataChanged(): void {
+    this.metadata.setFiles(this.filePaths());
+    this.metadataProjection?.invalidate();
+  }
 
   on(event: VaultEvent, callback: (change: VaultChange) => void): () => void {
     let callbacks = this.listeners.get(event);
@@ -99,6 +154,16 @@ export class Vault {
       if (entries.has(path)) throw new Error(`Adapter returned a duplicate path: ${path}`);
       entries.set(path, { ...entry, path });
     }
+    if (this.metadataProjection) {
+      // Namespace inventory is metadata-only. Actual note/embed bodies stay lazy.
+      const contents = new Map<string, string>();
+      for (const [path, content] of this.contents) {
+        const old = this.entries.get(path), current = entries.get(path);
+        if (old?.entryId && old.revision && old.entryId === current?.entryId && old.revision === current.revision) contents.set(path, content);
+      }
+      this.entries = entries; this.contents = contents; this.metadataChanged();
+      return;
+    }
     const metadata = new MetadataCache(), contents = new Map<string, string>();
     metadata.setFiles([...entries.values()].filter(entry => entry.type === 'file').map(entry => entry.path));
     const notes = [...entries.values()].filter(entry => entry.type === 'file' && this.indexableMarkdown(this.adapter,entry));
@@ -112,7 +177,7 @@ export class Vault {
     this.contents = contents;
   }
 
-  initialize(): Promise<void> { return this.enqueue(async () => { await this.refresh(); this.emit('ready', { path: '' }); }); }
+  initialize(): Promise<void> { return this.enqueue(async () => { await this.refresh(); await this.metadataProjection?.start(); this.emit('ready', { path: '' }); }); }
   load(): Promise<void> { return this.initialize(); }
 
   private captureDurableBinding(): DurableBinding {
@@ -240,11 +305,12 @@ export class Vault {
       if (isMarkdown(path)) contents.set(path, current.content);
       // Parse before publishing maps or dispatching events. indexBatch itself
       // parses every item before touching the existing metadata cache.
-      if (isMarkdown(path)) this.metadata.indexBatch([[path, current.content]]);
-      this.metadata.setFiles([...entries.values()].filter(item => item.type === 'file').map(item => item.path));
+      if (!this.metadataProjection && isMarkdown(path)) this.metadata.indexBatch([[path, current.content]]);
+      if (!this.metadataProjection) this.metadata.setFiles([...entries.values()].filter(item => item.type === 'file').map(item => item.path));
       this.entries = entries; this.contents = contents;
+      if (this.metadataProjection) this.metadataChanged();
       if (!old) this.emit('create', { path, entry });
-      else if (old.revision !== entry.revision || old.mtime !== entry.mtime || old.size !== entry.size
+      else if (old.entryId !== entry.entryId || old.revision !== entry.revision || old.mtime !== entry.mtime || old.size !== entry.size
           || isMarkdown(path) && current.content !== oldContent) this.emit('modify', { path, entry });
       return { status: 'current', current };
     });
@@ -265,6 +331,14 @@ export class Vault {
     });
     if (snapshots.some(entry => !entry)) return false;
     const entries = new Map(snapshots.map(entry => [entry!.path, entry!]));
+    if (this.metadataProjection && [...entries.values()].every(entry => entry.entryId && entry.revision)) {
+      // Exact watcher notifications invalidate even unchanged stats. Active body
+      // consumers reload lazily; unopened notes never incur semantic-only reads.
+      for (const [path, entry] of entries) { this.contents.delete(path); this.entries.set(path, entry); }
+      this.metadataChanged();
+      for (const [path, entry] of entries) this.emit('modify', {path, entry});
+      return true;
+    }
     // Always read Markdown content: timestamps and byte lengths can remain unchanged.
     const contents = new Map(await mapConcurrent(paths.filter(path=>this.indexableMarkdown(this.adapter,entries.get(path)!)), async path =>
       [path, await this.adapter.read(path)] as const));
@@ -274,19 +348,20 @@ export class Vault {
       // Exact attachment notifications invalidate viewers even when a replacement
       // preserves its stats. Duplicate binary events are preferable to stale media;
       // no-argument full scans still compare metadata without loading binary files.
-      if (!isMarkdown(path) || old.revision !== entry.revision || old.mtime !== entry.mtime || old.size !== entry.size || this.contents.get(path) !== contents.get(path)) {
+      if (!isMarkdown(path) || old.entryId !== entry.entryId || old.revision !== entry.revision || old.mtime !== entry.mtime || old.size !== entry.size || this.contents.get(path) !== contents.get(path)) {
         changes.push({ path, entry });
       }
     }
     // No await or event dispatch may split publication of a batch. Parse first so a
     // failed read or parse leaves entries, contents and the metadata index unchanged.
-    this.metadata.indexBatch([...contents].filter(([path, content]) => this.contents.get(path) !== content));
+    if (!this.metadataProjection) this.metadata.indexBatch([...contents].filter(([path, content]) => this.contents.get(path) !== content));
     for (const [path, entry] of entries) {
       if(isMarkdown(path)&&!contents.has(path)){this.contents.delete(path);this.metadata.remove(path);}
       this.entries.set(path, entry);
     }
     this.metadata.setFiles([...this.entries.values()].filter(entry=>entry.type==='file').map(entry=>entry.path));
     for (const [path, content] of contents) this.contents.set(path, content);
+    if (this.metadataProjection) this.metadataChanged();
     for (const change of changes) this.emit('modify', change);
     return true;
   }
@@ -302,7 +377,7 @@ export class Vault {
       for (const [path, entry] of this.entries) {
         const old = previous.get(path);
         if (!old) this.emit('create', { path, entry });
-        else if (old.revision !== entry.revision || old.mtime !== entry.mtime || old.size !== entry.size || contents.get(path) !== this.contents.get(path)) this.emit('modify', { path, entry });
+        else if (old.entryId !== entry.entryId || old.revision !== entry.revision || old.mtime !== entry.mtime || old.size !== entry.size || contents.get(path) !== this.contents.get(path)) this.emit('modify', { path, entry });
       }
     });
   }
@@ -383,7 +458,7 @@ export class Vault {
       throw new Error(`Written file is no longer available: ${path}`);
     }
     if(expectedEntryId!==undefined&&entry.entryId!==expectedEntryId)throw durableFailure('revision_conflict','Committed binary moved or was replaced before publication');
-    validate();const content=this.indexableMarkdown(adapter,entry)?await adapter.read(path):undefined;
+    validate();const content=!this.metadataProjection&&this.indexableMarkdown(adapter,entry)?await adapter.read(path):undefined;
     validate();if(expectedEntryId!==undefined&&this.entries.get(path)?.type==='folder'){
       for(const name of this.entries.keys())if(name.startsWith(path+'/')){this.entries.delete(name);this.contents.delete(name);this.metadata.remove(name);}
     }
@@ -396,6 +471,7 @@ export class Vault {
     }
     const updated = { ...entry, path };
     this.entries.set(path, updated);
+    if (this.metadataProjection) this.metadataChanged();
     return updated;
   }
 
@@ -546,11 +622,12 @@ export class Vault {
       // Publish only after all I/O succeeds. Failed writes/reads retain the previous
       // snapshot and propagate the error so callers keep their recovery drafts.
       if (isMarkdown(path)) {
-        this.metadata.index(path, content);
+        if (!this.metadataProjection) this.metadata.index(path, content);
         this.contents.set(path, content);
       }
       const updated = { ...entry, path };
       this.entries.set(path, updated);
+      if (this.metadataProjection) this.metadataChanged();
       this.emit('modify', { path, entry: updated });
     });
   }
@@ -598,12 +675,24 @@ export class Vault {
       if (newPath.startsWith(`${oldPath}/`)) throw new Error('Cannot move a folder inside itself');
       const moved = (path: string): string => path === oldPath || path.startsWith(`${oldPath}/`) ? newPath + path.slice(oldPath.length) : path;
       const changes: { old: string; path: string; before: string; after: string }[] = [];
-      for (const [source, note] of updateLinks ? this.metadata.entries() : []) {
-        const before = this.contents.get(source)!;
+      // Link rewrites need fresh source spans, not historical frame facts. This
+      // temporary mutation-local parser is deliberately separate from metadata
+      // publication. All existing post-move identity/read/CAS fences remain.
+      let renameMetadata = this.metadata, renameContents = this.contents;
+      if (updateLinks && this.metadataProjection) {
+        renameMetadata = new MetadataCache(); renameContents = new Map();
+        renameMetadata.setFiles(this.filePaths());
+        const candidates = [...this.entries.values()].filter(entry => entry.type === 'file' && this.indexableMarkdown(this.adapter, entry));
+        for (const [path, content] of await mapConcurrent(candidates, async entry => [entry.path, await this.adapter.read(entry.path)] as const)) {
+          renameContents.set(path, content); renameMetadata.index(path, content);
+        }
+      }
+      for (const [source, note] of updateLinks ? renameMetadata.entries() : []) {
+        const before = renameContents.get(source)!;
         let after = before;
         const newSource = moved(source);
         for (const link of [...note.links].reverse()) {
-          const target = this.metadata.resolveLink(source, link.target, link.kind);
+          const target = renameMetadata.resolveLink(source, link.target, link.kind);
           if (!target) continue;
           const newTarget = moved(target);
           if (newTarget === target && newSource === source) continue;

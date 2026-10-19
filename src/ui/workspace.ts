@@ -8,6 +8,7 @@ import { mountDocumentSearch, initialDocumentSearchSpec } from './document-searc
 import type { DocumentSearchController } from './document-search-controller.ts';
 import type { SearchLocation, SearchSpec } from '../core/document-search-types.ts';
 import type { DocumentEntry } from '../core/document-semantics.ts';
+import type { CommittedMetadataFrame, CommittedMetadataState } from '../core/committed-metadata-frame.ts';
 import { mountDocumentBacklinks } from './document-backlinks.ts';
 import { catchUpDocumentIndex, documentErrorCode, DocumentSemanticsError } from '../core/document-semantics.ts';
 import type { DocumentCursor, DocumentPin, DocumentService, DocumentSnapshotId, DocumentSourceId, DocumentTaskWitness } from '../core/document-semantics.ts';
@@ -124,6 +125,10 @@ export class Workspace {
   private rightContent = el('div', 'right-content');
   private documentBacklinks?: ReturnType<typeof mountDocumentBacklinks>;
   private documentBacklinksGeneration = 0;
+  private metadataSubscription?: {vault:Vault;stop:()=>void};
+  private retiredMetadataVaults = new Set<Vault>();
+  private metadataOpenings = new Set<Promise<void>>();
+  private metadataGraphs = new WeakMap<HTMLElement,{vault:Vault;frame:CommittedMetadataFrame|null;container:HTMLElement;status:HTMLElement}>();
   private status = el('footer', 'status-bar');
   private nativeDocumentStatus?:HTMLElement;
   private nativeRecoveryBusy=new WeakSet<NoteBuffer>();
@@ -438,9 +443,13 @@ export class Workspace {
     this.documentSearchSuspended=true;this.clearDocumentSearch();
     let cancelTasksClose:(recover?:boolean)=>void=()=>{};
     try{
+    this.vaultRequest++;await this.vaultTransition;
     if(!this.platformDrained){await this.flush();cancelTasksClose=await this.prepareTasksViewsClose();await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.platformDrained=true;}
     this.clearDocumentBacklinks();
     await this.closeDocumentSearchPins().catch(()=>{});
+    await this.drainMetadataOpenings();
+    await this.closeVaultMetadata(this.vault);
+    await this.closeRetiredVaultMetadata();
     await this.platform.release();this.releaseDocumentSearchOwner(this.vault);this.platformReleased=true;cancelTasksClose(false);
     }catch(error){cancelTasksClose();this.documentSearchSuspended=searchWasSuspended;throw error;}
   }
@@ -622,9 +631,11 @@ export class Workspace {
 
   async openVault(platform: PlatformVault): Promise<void> {
     const request=++this.vaultRequest,next=new Vault(platform.adapter);
+    let settled!:()=>void;const opening=new Promise<void>(resolve=>{settled=resolve;});this.metadataOpenings.add(opening);
     // Initialization is read-only and can overlap; only the latest request may
     // enter the serialized teardown/install phase. Old views stay usable while
     // a new adapter initializes, and a late request cannot acquire a watcher.
+    try{
     await next.initialize();
     if(request!==this.vaultRequest)return;
     const transition=this.vaultTransition.then(async()=>{if(request===this.vaultRequest){
@@ -639,6 +650,51 @@ export class Workspace {
     }});
     this.vaultTransition=transition.catch(()=>{});
     await transition;
+    }finally{
+      try{if(this.vault!==next)await this.closeVaultMetadata(next);}
+      finally{this.metadataOpenings.delete(opening);settled();}
+    }
+  }
+
+  private async drainMetadataOpenings():Promise<void>{
+    // Teardown invalidates opening requests and joins the serialized install
+    // first. Its remaining openings can only retire their own projection.
+    while(this.metadataOpenings.size)await Promise.all([...this.metadataOpenings]);
+  }
+
+  private async closeRetiredVaultMetadata():Promise<void>{
+    for(const retired of [...this.retiredMetadataVaults])await this.closeVaultMetadata(retired);
+  }
+
+  private async closeVaultMetadata(vault:Vault|undefined):Promise<void>{
+    if(!vault)return;
+    if(this.metadataSubscription?.vault===vault){this.metadataSubscription.stop();this.metadataSubscription=undefined;}
+    this.retiredMetadataVaults.add(vault);
+    // A failed close retains this exact retired owner for a later retry.
+    await vault.closeMetadataProjection();this.retiredMetadataVaults.delete(vault);
+  }
+
+  private subscribeVaultMetadata(vault:Vault):void{
+    this.metadataSubscription?.stop();
+    const owner={vault,stop:()=>{}};this.metadataSubscription=owner;
+    const generation=this.vaultGeneration;let previous:CommittedMetadataFrame|null|undefined;
+    const receive=(state:CommittedMetadataState)=>{
+      if(this.metadataSubscription!==owner||this.vault!==vault||this.vaultGeneration!==generation||this.platformReleased||this.platformDrained)return;
+      const changed=state.frame!==previous;previous=state.frame;
+      if(this.rightTab==='tags'){
+        const status=this.rightContent.querySelector<HTMLElement>(':scope > .metadata-projection-status');
+        if(!changed&&status){this.rightContent.dataset.metadataStatus=state.status;status.textContent=this.metadataDisplayMessage(state)??'';status.hidden=!status.textContent;const empty=this.rightContent.querySelector('.metadata-projection-empty');if(empty)empty.textContent=state.status!=='current'||!state.frame?.coverageComplete?'No tags in this saved snapshot.':'No tags found.';}
+        else this.renderRight();
+      }else if(this.rightTab==='outline')this.renderRight();
+      for(const pane of this.loadedViews()){
+        if(pane.viewKind==='graph'&&pane.content)this.renderGraph(pane.content);
+        if(changed)pane.editor?.refreshLinks?.();
+      }
+    };
+    let unsubscribe:()=>void;
+    try{unsubscribe=vault.onMetadata(receive);}catch(error){if(this.metadataSubscription===owner)this.metadataSubscription=undefined;throw error;}
+    owner.stop=()=>{if(this.metadataSubscription===owner)this.metadataSubscription=undefined;unsubscribe();};this.disposers.push(owner.stop);
+    const state=vault.metadataFrame;if(state)receive(state);
   }
 
   private async replaceVault(platform:PlatformVault,next:Vault,recovered=new Map<string,NoteBuffer>()):Promise<void>{
@@ -656,6 +712,8 @@ export class Workspace {
     clearTimeout(this.reloadTimer);
     this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();
     for(const pane of this.panes)await this.disposePaneViews(pane);if(!this.platformReleased)for(const buffer of this.buffers.values())await buffer.dispose(); this.buffers.clear();
+    await this.closeVaultMetadata(searchVault);
+    await this.closeRetiredVaultMetadata();
     if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.releaseDocumentSearchOwner(this.vault);}
     this.attachments?.destroy();
     this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;
@@ -692,6 +750,7 @@ export class Workspace {
     this.activate(this.panes.find(pane=>pane.id===this.sessionState.activePaneId)??this.panes[0]);
     this.restoringLayout=false;
     for (const pane of this.panes) await this.renderPane(pane,{flush:false});
+    this.subscribeVaultMetadata(next);
     if(!platform.editorOnly)this.tabDocking=createTabDocking({root:this.root,getPanes:()=>this.dockPanes(),dock:intent=>this.dockTab(intent),enabled:()=>!matchMedia('(max-width: 700px)').matches,onError:error=>notice(error instanceof Error?error.message:String(error))});
     this.disposers.push(this.vault.on('create', change => { this.invalidateTreeTokens(change.path); this.renderSidebar(); }), this.vault.on('delete', change => {
       this.invalidateTreeTokens(change.path);
@@ -1847,7 +1906,7 @@ export class Workspace {
 
   private renderRight():void{
     this.clearDocumentBacklinks();
-    if(!this.vault||!this.activePane)return;this.rightContent.replaceChildren();const path=this.current()?.path;
+    if(!this.vault||!this.activePane)return;this.rightContent.replaceChildren();delete this.rightContent.dataset.metadataStatus;const path=this.current()?.path;
     if(this.rightTab==='backlinks'){
       if(this.vault.adapter.documentSemantics){
         if(!this.root.classList.contains('right-hidden'))void this.renderSharedBacklinks(path);
@@ -1859,9 +1918,21 @@ export class Workspace {
       const headings=path?this.vault.metadata.get(path)?.headings||[]:[];this.rightContent.append(el('h3','right-heading','Outline'));
       for(const heading of headings){const row=textButton(heading.heading,()=>{const target=this.activePane.element.querySelector(`#heading-${heading.line}`);target?.scrollIntoView({block:'start',behavior:'smooth'});},'outline-row');row.style.paddingLeft=`${12+(heading.level-1)*12}px`;this.rightContent.append(row);}if(!headings.length)this.rightContent.append(el('p','sidebar-empty','No headings found.'));
     }else{
-      this.rightContent.append(el('h3','right-heading','Tags'));const tags=new Map<string,number>();for(const entry of this.vault.entries.values())for(const tag of this.vault.metadata.get(entry.path)?.tags||[])tags.set(tag,(tags.get(tag)||0)+1);
-      for(const[tag,count]of[...tags].sort((a,b)=>a[0].localeCompare(b[0]))){const row=textButton(tag,()=>{this.treeTab='search';this.query=tag.startsWith('#')?tag:`#${tag}`;this.renderSidebar();},'tag-row');row.append(el('span','tag-count',String(count)));this.rightContent.append(row);}if(!tags.size)this.rightContent.append(el('p','sidebar-empty','No tags found.'));
+      this.rightContent.append(el('h3','right-heading','Tags'));
+      const state=this.vault.metadataFrame,frame=state?.frame,metadata=state?frame?.metadata:this.vault.metadata;
+      if(state){this.rightContent.dataset.metadataStatus=state.status;const message=this.metadataDisplayMessage(state),status=el('p','sidebar-empty metadata-projection-status',message??'');status.hidden=!message;status.setAttribute('role','status');this.rightContent.append(status);if(!frame)return;}
+      const namespace=state?frame!.entries():this.vault.entries.entries(),tags=new Map<string,number>();
+      for(const[path]of namespace)for(const tag of metadata?.get(path)?.tags||[])tags.set(tag,(tags.get(tag)||0)+1);
+      for(const[tag,count]of[...tags].sort((a,b)=>a[0].localeCompare(b[0]))){const row=textButton(tag,()=>{this.treeTab='search';this.query=tag.startsWith('#')?tag:`#${tag}`;this.renderSidebar();},'tag-row');row.append(el('span','tag-count',String(count)));this.rightContent.append(row);}
+      if(!tags.size)this.rightContent.append(el('p','sidebar-empty metadata-projection-empty',state&&(state.status!=='current'||!frame!.coverageComplete)?'No tags in this saved snapshot.':'No tags found.'));
     }
+  }
+
+  private metadataDisplayMessage(state:CommittedMetadataState):string|undefined{
+    if(!state.frame)return state.status==='unavailable'?'Saved note information is unavailable.':'Saved note information is updating.';
+    if(state.status==='unavailable')return 'Showing the last indexed notes. Saved note information is unavailable.';
+    if(state.status!=='current')return 'Showing the last indexed notes while updates finish.';
+    if(!state.frame.coverageComplete)return 'Some saved notes could not be indexed.';
   }
 
   private mountNoteRecovery(content:HTMLElement,buffer:NoteBuffer):()=>void{
@@ -2362,11 +2433,31 @@ export class Workspace {
   }
   private async openGraph():Promise<void>{await this.flushPane(this.activePane);const tab:Tab={id:makeId(),path:null,mode:'reading',kind:'graph'};this.activePane.tabs.push(tab);this.activePane.active=tab.id;this.run(()=>this.renderPane(this.activePane));this.saveSession();}
   private renderGraph(parent:HTMLElement):void{
+    const vault=this.vault,state=vault.metadataFrame,frame=state?.frame??null,previous=this.metadataGraphs.get(parent);
+    const updateStatus=(container:HTMLElement,status:HTMLElement)=>{
+      if(state)container.dataset.metadataStatus=state.status;else delete container.dataset.metadataStatus;
+      status.textContent=state?this.metadataDisplayMessage(state)??'':'';status.hidden=!status.textContent;
+      const empty=container.querySelector('.metadata-projection-empty');if(empty)empty.textContent=state&&(state.status!=='current'||!frame!.coverageComplete)?'No notes in this saved snapshot.':'Create notes and links to see them here.';
+    };
+    if(state&&previous?.vault===vault&&previous.frame===frame&&previous.container.parentNode===parent){updateStatus(previous.container,previous.status);return;}
+    parent.querySelector(':scope > .graph-view')?.remove();
     const container=el('div','graph-view');const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 800 600');svg.setAttribute('aria-label','Graph of linked notes');
-    const files=[...this.vault.entries.values()].filter(e=>e.type==='file'&&e.path.endsWith('.md'));
+    const metadata=state?frame?.metadata:vault.metadata;
+    const files=state?(frame?[...frame.entries()].flatMap(([,entry])=>entry.kind==='file'&&entry.path.endsWith('.md')?[entry]:[]):[]):[...vault.entries.values()].filter(entry=>entry.type==='file'&&entry.path.endsWith('.md'));
     const points=new Map(files.map((entry,index)=>[entry.path,{x:400+Math.cos(index/Math.max(1,files.length)*Math.PI*2)*Math.min(260,60+files.length*12),y:300+Math.sin(index/Math.max(1,files.length)*Math.PI*2)*Math.min(220,60+files.length*10)}]));
-    for(const entry of files){const from=points.get(entry.path)!;for(const link of this.vault.metadata.get(entry.path)?.links||[]){const resolved=this.vault.metadata.resolveLink(entry.path,link.target,link.kind);const to=resolved?points.get(resolved):null;if(!to)continue;const line=document.createElementNS(svg.namespaceURI,'line');for(const[k,v]of Object.entries({x1:from.x,y1:from.y,x2:to.x,y2:to.y}))line.setAttribute(k,String(v));svg.append(line);}}
-    for(const entry of files){const point=points.get(entry.path)!;const group=document.createElementNS(svg.namespaceURI,'g');group.setAttribute('tabindex','0');group.setAttribute('role','link');group.setAttribute('aria-label',nameOf(entry.path));const circle=document.createElementNS(svg.namespaceURI,'circle');circle.setAttribute('cx',String(point.x));circle.setAttribute('cy',String(point.y));circle.setAttribute('r','6');const label=document.createElementNS(svg.namespaceURI,'text');label.setAttribute('x',String(point.x));label.setAttribute('y',String(point.y+23));label.textContent=nameOf(entry.path);group.append(circle,label);group.addEventListener('click',()=>this.run(()=>this.openNote(entry.path)));group.addEventListener('keydown',event=>{if((event as KeyboardEvent).key==='Enter')this.run(()=>this.openNote(entry.path));});svg.append(group);}container.append(svg);if(!files.length)container.append(el('p','graph-empty','Create notes and links to see them here.'));parent.append(container);
+    for(const entry of files){const from=points.get(entry.path)!;for(const link of metadata?.get(entry.path)?.links||[]){const resolved=metadata?.resolveLink(entry.path,link.target,link.kind);const to=resolved?points.get(resolved):null;if(!to)continue;const line=document.createElementNS(svg.namespaceURI,'line');for(const[k,v]of Object.entries({x1:from.x,y1:from.y,x2:to.x,y2:to.y}))line.setAttribute(k,String(v));svg.append(line);}}
+    for(const entry of files){const point=points.get(entry.path)!;const group=document.createElementNS(svg.namespaceURI,'g');group.setAttribute('tabindex','0');group.setAttribute('role','link');group.setAttribute('aria-label',nameOf(entry.path));const circle=document.createElementNS(svg.namespaceURI,'circle');circle.setAttribute('cx',String(point.x));circle.setAttribute('cy',String(point.y));circle.setAttribute('r','6');const label=document.createElementNS(svg.namespaceURI,'text');label.setAttribute('x',String(point.x));label.setAttribute('y',String(point.y+23));label.textContent=nameOf(entry.path);group.append(circle,label);
+      const row=frame?.row(entry.path),saved=row?.kind==='file'?row.value.entry:undefined;
+      const open=()=>{
+        const pane=this.activePane,activation=this.paneActivationRevision;
+        const current=()=>this.vault===vault&&this.activePane===pane&&this.paneActivationRevision===activation&&!this.platformReleased&&!this.closing&&pane.content===parent&&container.isConnected;
+        if(current())this.run(()=>current()?this.openNote(entry.path,false,pane,true,'',activation,current,saved?.id):undefined);
+      };
+      group.addEventListener('click',open);group.addEventListener('keydown',event=>{if((event as KeyboardEvent).key==='Enter')open();});svg.append(group);
+    }
+    const status=el('p','graph-empty metadata-projection-status');status.setAttribute('role','status');updateStatus(container,status);container.append(status,svg);
+    if(!files.length&&(!state||frame))container.append(el('p','graph-empty metadata-projection-empty',state&&(state.status!=='current'||!frame!.coverageComplete)?'No notes in this saved snapshot.':'Create notes and links to see them here.'));
+    parent.append(container);this.metadataGraphs.set(parent,{vault,frame,container,status});
   }
 
   showSettings():void{
@@ -2444,5 +2535,5 @@ export class Workspace {
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.tasksView?.flush();await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
   async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.tasksView?.flush();if(pane.tasksView?.hasPendingChanges())throw new Error('Tasks has unsaved or unconfirmed changes. Save, discard, or resolve them before closing.');await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{let cancelTasksClose:(recover?:boolean)=>void=()=>{};const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();try{this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();cancelTasksClose=await this.prepareTasksViewsClose();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.releaseDocumentSearchOwner(this.vault);}this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();cancelTasksClose(false);}catch(error){cancelTasksClose();if(!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}}
+  async destroy():Promise<void>{let cancelTasksClose:(recover?:boolean)=>void=()=>{};const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();try{this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();cancelTasksClose=await this.prepareTasksViewsClose();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();await this.drainMetadataOpenings();await this.closeVaultMetadata(this.vault);await this.closeRetiredVaultMetadata();if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.releaseDocumentSearchOwner(this.vault);}this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();cancelTasksClose(false);}catch(error){cancelTasksClose();if(!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}}
 }

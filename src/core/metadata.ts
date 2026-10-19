@@ -1,6 +1,7 @@
 import { parentPath } from './types.ts';
 import { readProperties } from './properties.ts';
 import type { Backlink, NoteLink, NoteMetadata } from './types.ts';
+import type { DocumentMetadataRowsItem } from './document-semantics.ts';
 
 function asStrings(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String);
@@ -73,6 +74,14 @@ function fileName(path: string): string { return path.slice(path.lastIndexOf('/'
 
 export class MetadataCache {
   private notes = new Map<string, NoteMetadata>();
+
+  constructor(private readonly accepts: (path: string) => boolean = () => true) {}
+
+  /** Adopt already extracted facts. This path never reads or parses source text. */
+  adopt(notes: Iterable<readonly [string, NoteMetadata]>, files: Iterable<string>): void {
+    this.notes = new Map(notes);
+    this.setFiles(files);
+  }
   private files = new Set<string>();
   private names = new Map<string, Set<string>>();
 
@@ -102,8 +111,10 @@ export class MetadataCache {
       this.addFile(note.path);
     }
   }
-  get(path: string): NoteMetadata | undefined { return this.notes.get(path); }
-  entries(): IterableIterator<[string, NoteMetadata]> { return this.notes.entries(); }
+  get(path: string): NoteMetadata | undefined { return this.accepts(path) ? this.notes.get(path) : undefined; }
+  *entries(): IterableIterator<[string, NoteMetadata]> {
+    for (const item of this.notes) if (this.accepts(item[0])) yield item;
+  }
   remove(path: string): void {
     this.notes.delete(path); this.files.delete(path);
     const name = linkKey(fileName(path)), files = this.names.get(name);
@@ -164,9 +175,31 @@ export class MetadataCache {
 
   backlinks(target: string): Backlink[] {
     const result: Backlink[] = [];
-    for (const [source, note] of this.notes) for (const link of note.links) {
+    for (const [source, note] of this.entries()) for (const link of note.links) {
       if (this.resolveLink(source, link.target, link.kind) === target) result.push({ source, link });
     }
     return result;
   }
+}
+
+/** Compatibility display projection of the full admitted Rust DTO. Source-range
+ * rewriting does not use this projection; rename builds a fresh local context. */
+export function admittedNote(item: DocumentMetadataRowsItem): NoteMetadata | undefined {
+  if (item.kind !== 'file' || !item.value.metadata) return undefined;
+  const {entry, metadata: facts} = item.value;
+  const note: NoteMetadata = {
+    path: entry.path,
+    frontmatter: Object.fromEntries(facts.properties.map(property => [property.key, property.value])),
+    tags: [...facts.tags], aliases: [...facts.aliases],
+    headings: facts.headings.map(heading => Object.freeze({heading: heading.text, level: heading.level, line: heading.line})),
+    links: facts.links.map(link => Object.freeze({target: link.target, fragment: link.fragment, kind: link.kind, embed: link.embed, start: link.targetRange.utf16[0], end: link.targetRange.utf16[1]})),
+  };
+  Object.freeze(note.frontmatter);Object.freeze(note.tags);Object.freeze(note.aliases);Object.freeze(note.headings);Object.freeze(note.links);
+  return Object.freeze(note);
+}
+
+export type ReadonlyMetadataCache = Pick<MetadataCache, 'get' | 'entries' | 'resolveLink' | 'resolveLinkCandidates' | 'backlinks'>;
+/** Do not expose the mutable cache behind a committed frame. */
+export function readonlyMetadata(cache: MetadataCache): ReadonlyMetadataCache {
+  return Object.freeze({get: cache.get.bind(cache), entries: cache.entries.bind(cache), resolveLink: cache.resolveLink.bind(cache), resolveLinkCandidates: cache.resolveLinkCandidates.bind(cache), backlinks: cache.backlinks.bind(cache)});
 }
