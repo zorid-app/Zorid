@@ -20,6 +20,11 @@ test('draft controls preserve exact u64 tokens, capture identity and reject rend
   const input={...request,source:{...source}},captured=documentDraftRequest(input);input.source.bytes=4;assert.equal((captured as typeof request).source.bytes,3);assert.equal(Object.isFrozen(captured),true);
   for(const bad of [{op:'Complete',job},{op:'next_turn'},{op:'step',ticket:job},{...request,client_id:'other'}, {...request,text_revision:'01'},{...request,source:{...source,bytes:16777217}},{...request,source:{...source,utf16:4}},{...request,source:{...source,sha256:'A'.repeat(64)}},{op:'progress',job:{...job,id:'0'}},{op:'progress',job:{...job,id:'18446744073709551616'}},{op:'facts_read',job,offset:'0',maximum:131073}])assert.throws(()=>documentDraftRequest(bad),{code:'draft_invalid_request'});
   let ran=false;const accessor={get op(){ran=true;return 'snapshot';}};assert.throws(()=>documentDraftRequest(accessor),{code:'draft_invalid_request'});assert.equal(ran,false);
+  const hidden={op:'request',buffer_lifetime:job.buffer_lifetime,text_revision:job.text_revision,extra:source};
+  Object.defineProperty(hidden,'source',{get(){ran=true;return source;}});
+  assert.throws(()=>documentDraftRequest(hidden),{code:'draft_invalid_request'});assert.equal(ran,false);
+  const hiddenData={op:'request',buffer_lifetime:job.buffer_lifetime,text_revision:job.text_revision,extra:source};
+  Object.defineProperty(hiddenData,'source',{value:source});assert.throws(()=>documentDraftRequest(hiddenData),{code:'draft_invalid_request'});
   assert.equal(documentDraftRequest({op:'progress',job:{...job,text_revision:'0'}}).op,'progress');
 });
 
@@ -88,4 +93,20 @@ for(const outcome of ['success','rejection'])test(`transient owner retirement re
   const slot=f.slots[0];slot.listener();assert.equal(hints,1);slot.onRetire();assert.equal(retired,1);assert.equal(f.slots.length,0);
   if(outcome==='success')gate.resolve(reply({op:'snapshot'}));else gate.reject({code:'draft_not_ready'});await rejecting;
   assert.throws(()=>f.service.snapshot(),{code:'client_not_admitted'});
+});
+
+// The actual host's UploadSeal branch returns its reduction/outcomes with no
+// transfer progress, both on first seal and exact Ready-seal replay.
+test('upload seal accepts host-shaped normal and Ready replay reductions without synthesized transfer',()=>{
+  const input:DocumentDraftRequest={op:'upload_seal',job};
+  const first=reply(input);first.result.state.execution='dispatch';
+  const ready={...reply(input),result:{...reply(input).result,state:{...reply(input).result.state,execution:'wait_for_acknowledgement',outcomes:[{job,kind:'ready',reason:null}]}}};
+  for(const frame of [first,ready])assert.deepEqual(documentDraftReply(input,frame),frame.result);
+});
+
+test('a throwing transport unsubscribe does not skip retirement observers',()=>{
+  let retire!:()=>void,notified=0;
+  const service=createDocumentDraftService({scope:{localStoreId:'store',clientId:'client'},invoke:async()=>null,subscribe(_listener,onRetire){retire=onRetire;return()=>{throw Error('Receiver cleanup failed');};}});
+  service.subscribe(()=>{},()=>{notified++;});retire();assert.equal(notified,1);
+  assert.throws(()=>service.snapshot(),{code:'client_not_admitted'});
 });

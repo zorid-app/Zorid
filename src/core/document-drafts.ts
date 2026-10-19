@@ -68,7 +68,7 @@ const object=(value:unknown):Record<string,unknown>=>{
 };
 function fields(value:unknown,names:readonly string[]):Record<string,unknown>{
   const row=object(value),keys=Object.keys(row);
-  if(keys.length!==names.length||!names.every(name=>Object.hasOwn(row,name))||keys.some(name=>!Object.hasOwn(Object.getOwnPropertyDescriptor(row,name)!,'value')))return invalid();
+  if(keys.length!==names.length||keys.some(name=>!names.includes(name))||!names.every(name=>{const descriptor=Object.getOwnPropertyDescriptor(row,name);return descriptor?.enumerable===true&&Object.hasOwn(descriptor,'value');}))return invalid();
   return row;
 }
 const identity=(value:unknown):string=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(value)?value:invalid();
@@ -133,13 +133,13 @@ export function documentDraftReply(request:DocumentDraftRequest,value:unknown):D
   const row=fields(frame.result,['state','transfer','transfer_scratch_bytes']),current=state(row.state,request),transfer_scratch_bytes=count(row.transfer_scratch_bytes,DOCUMENT_DRAFT_SCRATCH_BYTES);
   if((current?.usage.scratch_bytes??0)+transfer_scratch_bytes>DOCUMENT_DRAFT_SCRATCH_BYTES||current===null&&transfer_scratch_bytes!==0)return invalid();
   let transfer:DocumentDraftTransfer|null=null;
-  const needsTransfer=['upload_begin','upload_chunk','upload_seal','progress','facts_prepare'].includes(request.op);
+  const needsTransfer=['upload_begin','upload_chunk','progress','facts_prepare'].includes(request.op);
   if(row.transfer===null){if(needsTransfer)return invalid();}
   else{
     if(!needsTransfer||current===null)return invalid();
     const data=fields(row.transfer,['source_bytes_received','source_bytes_expected','source_sealed','facts_bytes','scratch_bytes']);
     const source_bytes_expected=count(data.source_bytes_expected,DOCUMENT_DRAFT_SOURCE_BYTES),source_bytes_received=count(data.source_bytes_received,source_bytes_expected),source_sealed=boolean(data.source_sealed),facts_bytes=data.facts_bytes===null?null:count(data.facts_bytes,DOCUMENT_DRAFT_FACTS_BYTES),scratch_bytes=count(data.scratch_bytes,transfer_scratch_bytes);
-    if(source_sealed&&source_bytes_received!==source_bytes_expected||facts_bytes!==null&&!source_sealed||request.op==='upload_seal'&&!source_sealed||request.op==='facts_prepare'&&facts_bytes===null)return invalid();
+    if(source_sealed&&source_bytes_received!==source_bytes_expected||facts_bytes!==null&&!source_sealed||request.op==='facts_prepare'&&facts_bytes===null)return invalid();
     transfer={source_bytes_received,source_bytes_expected,source_sealed,facts_bytes,scratch_bytes};
   }
   const reply={state:current,transfer,transfer_scratch_bytes};bounded(reply);return freeze(reply);
@@ -152,7 +152,7 @@ export function createDocumentDraftService(transport:DocumentDraftTransport):Doc
   let owned=copies.get(transport);if(!owned){owned={calls:0,bytes:0};copies.set(transport,owned);}const admission=owned;
   let retired=false,stop=()=>{};const listeners=new Set<{listener:()=>void;onRetire:()=>void}>();
   const active=()=>{if(retired)throw new DocumentDraftError('client_not_admitted');};
-  const retire=()=>{if(retired)return;retired=true;stop();for(const slot of [...listeners]){listeners.delete(slot);try{slot.onRetire();}catch{/* Retire every observer. */}}};
+  const retire=()=>{if(retired)return;retired=true;try{stop();}catch{/* A receiver failure cannot retain observers. */}for(const slot of [...listeners]){listeners.delete(slot);try{slot.onRetire();}catch{/* Retire every observer. */}}};
   const cleanup=transport.subscribe(()=>{if(!retired)for(const slot of [...listeners])try{slot.listener();}catch{/* A hint is not authoritative completion. */}},retire);
   if(typeof cleanup!=='function')return invalid();stop=cleanup;if(retired){stop();active();}
   const call=(input:DocumentDraftRequest,bytes?:Uint8Array):Promise<DocumentDraftReply|DocumentDraftRead>=>{
