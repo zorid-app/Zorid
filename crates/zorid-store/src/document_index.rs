@@ -277,7 +277,7 @@ pub enum DocumentIndexStatus {
 /// rebuild can expire this pin; a query then returns SnapshotExpired.
 pub struct DocumentQueryPin {
     owner: OperationId,
-    generation: Generation,
+    generation: std::sync::Arc<Generation>,
     pins: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 impl Drop for DocumentQueryPin {
@@ -288,6 +288,11 @@ impl Drop for DocumentQueryPin {
 impl DocumentQueryPin {
     pub fn generation(&self) -> &Generation {
         &self.generation
+    }
+    /// Share only immutable derived data, without extending this pin's source
+    /// admission or global pin-count lifetime. Store reads still require the pin.
+    pub fn shared_generation(&self) -> std::sync::Arc<Generation> {
+        std::sync::Arc::clone(&self.generation)
     }
 }
 
@@ -1233,7 +1238,7 @@ impl Store {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(DocumentQueryPin {
             owner: self.document_query_owner.clone(),
-            generation,
+            generation: std::sync::Arc::new(generation),
             pins: self.document_query_pins.clone(),
         })
     }
@@ -1307,6 +1312,168 @@ mod cache_snapshot_tests {
         let stage = store.begin_document_index().unwrap();
         while !store.pump_document_index(&stage).unwrap().ready {}
         store.publish_document_index(&stage).unwrap();
+    }
+
+    #[test]
+    fn shared_generation_reuses_the_admitted_allocation_without_retaining_a_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("store.sqlite")).unwrap();
+        store.apply(&create("shared-note")).unwrap();
+        store.initialize_document_index().unwrap();
+        build(&mut store);
+        let pin = store.open_document_snapshot().unwrap();
+        let first = pin.shared_generation();
+        let second = pin.shared_generation();
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert!(std::ptr::eq(first.as_ref(), pin.generation()));
+        assert_eq!(
+            store
+                .document_query_pins
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        let source = first.manifest().source().clone();
+        let witness = first
+            .manifest()
+            .witness(&EntryId::new("shared-note").unwrap())
+            .unwrap();
+        store.close_document_snapshot(pin);
+        assert_eq!(
+            store
+                .document_query_pins
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        // Immutable data remain usable as data after admission has been dropped.
+        assert_eq!(first.manifest().source(), &source);
+        assert_eq!(second.manifest().check_witness(&witness), Ok(()));
+    }
+
+    #[test]
+    fn shared_data_do_not_extend_pin_limits_or_authorize_foreign_or_rebuilt_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        store.apply(&create("shared-note")).unwrap();
+        store.initialize_document_index().unwrap();
+        build(&mut store);
+        let mut pins: Vec<_> = (0..DOCUMENT_INDEX_MAX_QUERY_PINS)
+            .map(|_| store.open_document_snapshot().unwrap())
+            .collect();
+        let data: Vec<_> = (0..16).map(|_| pins[0].shared_generation()).collect();
+        assert!(data
+            .iter()
+            .all(|value| std::sync::Arc::ptr_eq(value, &data[0])));
+        assert_eq!(
+            store
+                .document_query_pins
+                .load(std::sync::atomic::Ordering::Relaxed),
+            DOCUMENT_INDEX_MAX_QUERY_PINS
+        );
+        assert!(matches!(
+            store.open_document_snapshot(),
+            Err(DocumentIndexError::Contract(IndexError::GenerationLimit))
+        ));
+        store.close_document_snapshot(pins.remove(0));
+        let replacement = store.open_document_snapshot().unwrap();
+        assert_eq!(
+            store
+                .document_query_pins
+                .load(std::sync::atomic::Ordering::Relaxed),
+            DOCUMENT_INDEX_MAX_QUERY_PINS
+        );
+        let foreign = Store::open(&path).unwrap();
+        assert!(matches!(
+            foreign.document_snapshot_manifest(&replacement),
+            Err(DocumentIndexError::Contract(IndexError::SnapshotExpired))
+        ));
+        assert!(matches!(
+            foreign.read_document_projection(&replacement, &EntryId::new("shared-note").unwrap()),
+            Err(DocumentIndexError::Contract(IndexError::SnapshotExpired))
+        ));
+        drop(foreign);
+        store.rebuild_document_index().unwrap();
+        for pin in pins.iter().chain(std::iter::once(&replacement)) {
+            assert!(matches!(
+                store.document_snapshot_manifest(pin),
+                Err(DocumentIndexError::Contract(IndexError::SnapshotExpired))
+            ));
+            assert!(matches!(
+                store.read_document_projection(pin, &EntryId::new("shared-note").unwrap()),
+                Err(DocumentIndexError::Contract(IndexError::SnapshotExpired))
+            ));
+        }
+        assert!(data[0]
+            .record(&EntryId::new("shared-note").unwrap())
+            .is_some());
+        drop(pins);
+        store.close_document_snapshot(replacement);
+        assert_eq!(
+            store
+                .document_query_pins
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            store
+                .read(&EntryId::new("shared-note").unwrap())
+                .unwrap()
+                .unwrap()
+                .content
+                .unwrap(),
+            b"needle"
+        );
+    }
+
+    #[test]
+    fn shared_generation_preserves_old_retained_projection_after_a_source_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("store.sqlite")).unwrap();
+        store.apply(&create("shared-note")).unwrap();
+        store.initialize_document_index().unwrap();
+        build(&mut store);
+        let old = store.open_document_snapshot().unwrap();
+        let shared = old.shared_generation();
+        let id = EntryId::new("shared-note").unwrap();
+        let previous = shared.manifest().entry(&id).unwrap().clone();
+        store
+            .apply(&MutationRequest {
+                operation_id: OperationId::new("write-shared-note").unwrap(),
+                mutation: Mutation::Write {
+                    id: id.clone(),
+                    expected: previous.revision.clone(),
+                    content: b"new source".to_vec(),
+                },
+            })
+            .unwrap();
+        build(&mut store);
+        let current = store.open_document_snapshot().unwrap();
+        assert_ne!(current.generation().id(), shared.id());
+        assert_ne!(
+            current.generation().manifest().entry(&id).unwrap().revision,
+            previous.revision
+        );
+        let retained = store.read_document_projection(&old, &id).unwrap();
+        assert_eq!(retained.witness.entry(), &previous);
+        assert_eq!(retained.content.unwrap(), b"needle");
+        assert_eq!(
+            store
+                .read_document_projection(&current, &id)
+                .unwrap()
+                .content
+                .unwrap(),
+            b"new source"
+        );
+        assert_eq!(
+            store
+                .document_snapshot_manifest(&old)
+                .unwrap()
+                .manifest()
+                .unwrap(),
+            *shared.manifest()
+        );
+        store.close_document_snapshot(current);
+        store.close_document_snapshot(old);
     }
 
     // Same connection-local trace pattern as the retained Text tests. The Box
