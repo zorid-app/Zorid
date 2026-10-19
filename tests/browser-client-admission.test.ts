@@ -135,3 +135,29 @@ test('accepted flush commit dispatches after gate revocation and before lease re
   assert.equal(f.events.includes('commit'),false);wait.resolve();await accepted;await closing;
   assert.ok(f.events.indexOf('commit')<f.events.indexOf('release'));
 });
+
+function richFixture(wait?:Promise<void>){
+  const f=fixture(),requests:{method:string;input:unknown}[]=[];let guard:()=>void=()=>{};
+  const invoke=async(method:string,input:unknown)=>{const captured=structuredClone(input);guard();requests.push({method,input:captured});if(wait)await wait;guard();return {method};};
+  Object.assign(f.backend,{installAdmissionGuard(next:()=>void){guard=next;},documentIndex:{
+    richStart:(input:unknown)=>invoke('start',input),richPrepare:(input:unknown)=>invoke('prepare',input),richPage:(input:unknown)=>invoke('page',input),richClose:async(input:unknown)=>{await invoke('close',input);},
+  }});
+  return {...f,requests};
+}
+test('admitted rich methods forward through runtime ownership checks and capture before provider awaits',async()=>{
+  const f=richFixture(),context=f.admit(),index=context.documentIndex!;
+  assert.deepEqual(f.requests,[]);
+  const start={pinId:'pin',spec:{query:'aa',caseSensitive:false,sort:'nameAsc' as const,context:'line' as const,explain:false}};
+  const request=index.richStart(start);start.spec.query='mutated';assert.deepEqual(await request,{method:'start'});
+  await index.richPrepare({pinId:'pin',queryId:'query'});await index.richPage({pinId:'pin',queryId:'query',cursor:'cursor'});await index.richClose({pinId:'pin',queryId:'query'});
+  assert.deepEqual(f.requests,[{method:'start',input:{pinId:'pin',spec:{...start.spec,query:'aa'}}},{method:'prepare',input:{pinId:'pin',queryId:'query'}},{method:'page',input:{pinId:'pin',queryId:'query',cursor:'cursor'}},{method:'close',input:{pinId:'pin',queryId:'query'}}]);
+  f.retire();await assert.rejects(index.richStart(start),{code:'owner_retired'});assert.equal(f.requests.length,4);
+});
+test('release drains accepted rich work and rejects newly admitted queries before runtime release',async()=>{
+  const wait=deferred(),f=richFixture(wait.promise),context=f.admit(),index=context.documentIndex!,pending=index.richPrepare({pinId:'pin',queryId:'query'});
+  const closing=context.release(async()=>{});await assert.rejects(index.richPage({pinId:'pin',queryId:'query',cursor:'cursor'}),{code:'client_not_admitted'});assert.equal(f.releaseCount,0);assert.equal(f.requests.length,1);
+  wait.resolve();await pending;await closing;assert.equal(f.releaseCount,1);await assert.rejects(index.richClose({pinId:'pin',queryId:'query'}),{code:'client_not_admitted'});
+});
+test('owner retirement during a rich RPC preserves the runtime post-await error and cannot dispatch new work',async()=>{
+  const wait=deferred(),f=richFixture(wait.promise),context=f.admit(),pending=context.documentIndex!.richPage({pinId:'pin',queryId:'query',cursor:'cursor'});f.retire();wait.resolve();await assert.rejects(pending,{code:'owner_retired'});await assert.rejects(context.documentIndex!.richClose({pinId:'pin',queryId:'query'}),{code:'owner_retired'});assert.equal(f.requests.length,1);
+});
