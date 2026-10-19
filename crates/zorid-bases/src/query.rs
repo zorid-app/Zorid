@@ -320,12 +320,109 @@ fn scalar_for_sort(
     }
 }
 
+/// Generation-only adjacency and property discovery; invocation formulas and
+/// selected view are added afresh by the evaluator.
+pub(crate) struct QueryPreparation {
+    pub(crate) relationships: Option<crate::graph::OwnedRelationships>,
+    pub(crate) available: Vec<String>,
+    pub(crate) work_used: usize,
+}
+pub(crate) fn prepare_snapshot(
+    snapshot: &BaseSnapshot,
+    options: &QueryOptions,
+) -> Result<QueryPreparation, ExpressionDiagnostic> {
+    let budget = |message: &str| ExpressionDiagnostic::new("budget", message);
+    let graph_work = snapshot
+        .relationships
+        .as_ref()
+        .map_or(0, |graph| graph.edges().len());
+    if graph_work > options.max_steps {
+        return Err(budget("Relationships exceed query work budget"));
+    }
+    let mut graph_preparation = 0usize;
+    let mut check = |work: usize| {
+        if options
+            .evaluation
+            .cancellation
+            .as_ref()
+            .is_some_and(|c| c.stop_reason().is_some())
+        {
+            return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+        }
+        graph_preparation = graph_preparation.saturating_add(work);
+        if graph_preparation > options.max_steps {
+            return Err(budget("Relationship preparation exceeds query work budget"));
+        }
+        Ok(())
+    };
+    let relationships = snapshot
+        .relationships
+        .as_ref()
+        .map(|graph| {
+            crate::graph::OwnedRelationships::new(graph, &snapshot.metadata_issues, &mut check)
+        })
+        .transpose()?;
+    let relationship_available = snapshot
+        .relationships
+        .as_ref()
+        .is_some_and(|graph| graph.complete());
+    let mut discovery = 0usize;
+    let mut preparation_work = graph_preparation;
+    let mut available = FILE_PROPERTIES
+        .iter()
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
+    if relationship_available {
+        available.extend(["file.links", "file.embeds", "file.backlinks"].map(String::from));
+    }
+    let mut available_set = available.iter().cloned().collect::<HashSet<_>>();
+    for record in &snapshot.records {
+        if options
+            .evaluation
+            .cancellation
+            .as_ref()
+            .is_some_and(|v| v.stop_reason().is_some())
+        {
+            return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+        }
+        preparation_work = preparation_work.saturating_add(
+            record.properties.len() + record.property_types.len() + record.tags.len() + 1,
+        );
+        if preparation_work > options.max_steps {
+            return Err(budget("Property discovery exceeds query work budget"));
+        }
+        for (key, _) in &record.properties {
+            discovery = discovery.saturating_add(key.len() + 16);
+            if discovery > crate::MAX_BASE_REQUEST_BYTES {
+                return Err(budget("Property discovery exceeds byte budget"));
+            }
+            let property = format!("note.{key}");
+            if available_set.insert(property.clone()) {
+                available.push(property);
+            }
+        }
+    }
+    Ok(QueryPreparation {
+        relationships,
+        available,
+        work_used: preparation_work,
+    })
+}
+
 /// Execute one bounded coherent snapshot. Any resource/cancellation failure is
 /// an explicit Err; no silently truncated prefix is returned as a full query.
 pub fn query_base(
     program: &BaseProgram,
     snapshot: &BaseSnapshot,
     options: &QueryOptions,
+) -> Result<BaseQueryResult, ExpressionDiagnostic> {
+    query_base_prepared(program, snapshot, options, None)
+}
+pub(crate) fn query_base_prepared(
+    program: &BaseProgram,
+    snapshot: &BaseSnapshot,
+    options: &QueryOptions,
+    prepared: Option<&QueryPreparation>,
 ) -> Result<BaseQueryResult, ExpressionDiagnostic> {
     let budget = |message: &str| ExpressionDiagnostic::new("budget", message);
     if options.max_steps == 0
@@ -405,77 +502,24 @@ pub fn query_base(
             ));
         }
     }
-    let graph_work = snapshot
-        .relationships
-        .as_ref()
-        .map_or(0, |graph| graph.edges().len());
-    if graph_work > options.max_steps {
-        return Err(budget("Relationships exceed query work budget"));
-    }
-    let mut graph_preparation = 0usize;
-    let mut check = |work: usize| {
-        if options
-            .evaluation
-            .cancellation
-            .as_ref()
-            .is_some_and(|c| c.stop_reason().is_some())
-        {
-            return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
-        }
-        graph_preparation = graph_preparation.saturating_add(work);
-        if graph_preparation > options.max_steps {
-            return Err(budget("Relationship preparation exceeds query work budget"));
-        }
-        Ok(())
+    let owned;
+    let (prepared, preparation_work) = if let Some(prepared) = prepared {
+        (prepared, 0)
+    } else {
+        owned = prepare_snapshot(snapshot, options)?;
+        let work = owned.work_used;
+        (&owned, work)
     };
-    let relationships = snapshot
+    let relationships = prepared
         .relationships
         .as_ref()
-        .map(|graph| {
-            crate::graph::PreparedRelationships::new(graph, &snapshot.metadata_issues, &mut check)
-        })
-        .transpose()?;
+        .map(crate::graph::PreparedRelationships::borrowed);
     let relationship_available = relationships.as_ref().is_some_and(|graph| graph.complete());
-    let mut discovery = 0usize;
-    let mut preparation_work = graph_preparation;
+    let mut available = prepared.available.clone();
     let mut counts = QueryCounts {
         scanned: snapshot.records.len(),
         ..Default::default()
     };
-    let mut available = FILE_PROPERTIES
-        .iter()
-        .map(|value| value.to_string())
-        .collect::<Vec<_>>();
-    if relationship_available {
-        available.extend(["file.links", "file.embeds", "file.backlinks"].map(String::from));
-    }
-    let mut available_set = available.iter().cloned().collect::<HashSet<_>>();
-    for record in &snapshot.records {
-        if options
-            .evaluation
-            .cancellation
-            .as_ref()
-            .is_some_and(|v| v.stop_reason().is_some())
-        {
-            return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
-        }
-        preparation_work = preparation_work.saturating_add(
-            record.properties.len() + record.property_types.len() + record.tags.len() + 1,
-        );
-        if preparation_work > options.max_steps {
-            return Err(budget("Property discovery exceeds query work budget"));
-        }
-        for (key, _) in &record.properties {
-            discovery = discovery.saturating_add(key.len() + 16);
-            if discovery > crate::MAX_BASE_REQUEST_BYTES {
-                return Err(budget("Property discovery exceeds byte budget"));
-            }
-            let property = format!("note.{key}");
-            if available_set.insert(property.clone()) {
-                available.push(property);
-            }
-        }
-    }
     for (name, _) in &program.formulas {
         available.push(format!("formula.{name}"));
     }

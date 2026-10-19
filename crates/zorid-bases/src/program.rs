@@ -1,6 +1,9 @@
 //! Base configuration validation over the shared ordered value. YAML decoding
 //! remains the document crate's responsibility; this module never writes source.
 use crate::{BaseValue, ExpressionDiagnostic, PropertyValue};
+/// Change whenever Base configuration compilation or language meaning changes.
+pub const BASE_COMPILER_VERSION: &str = "zorid-base-yaml-expression-v1";
+
 
 #[derive(Clone, Debug)]
 pub struct BaseProgram {

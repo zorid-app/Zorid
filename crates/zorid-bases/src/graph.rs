@@ -7,7 +7,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use zorid_core::EntryId;
-use zorid_index::{Generation, ResolutionSnapshot, ResolutionView, Resolver};
+use zorid_index::{Generation, PreparedNamespace, ResolutionSnapshot, ResolutionView};
 
 pub const MAX_RELATIONSHIP_EDGES: usize = 100_000;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -68,7 +68,7 @@ impl BaseSnapshot {
             charge(&mut remaining, None, work)
         })
     }
-    fn from_generation_checked(
+    pub(crate) fn from_generation_checked(
         generation: &Generation,
         facts: &[FilePresentationFacts],
         check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
@@ -202,6 +202,27 @@ pub fn query_generation(
     facts: &[FilePresentationFacts],
     options: &QueryOptions,
 ) -> Result<BaseQueryResult, ExpressionDiagnostic> {
+    preflight_generation(generation, options)?;
+    let mut remaining = options.max_steps;
+    let snapshot = BaseSnapshot::from_generation_checked(generation, facts, &mut |work| {
+        charge(
+            &mut remaining,
+            options.evaluation.cancellation.as_ref(),
+            work,
+        )
+    })?;
+    let used = options.max_steps - remaining;
+    let mut invocation = options.clone();
+    invocation.max_steps = remaining;
+    let mut result = crate::query_base(program, &snapshot, &invocation)?;
+    result.steps_used = result.steps_used.saturating_add(used);
+    crate::encoded_size(&result, options.max_output_bytes)?;
+    Ok(result)
+}
+pub(crate) fn preflight_generation(
+    generation: &Generation,
+    options: &QueryOptions,
+) -> Result<(), ExpressionDiagnostic> {
     let budget = |message: &str| ExpressionDiagnostic::new("budget", message);
     if options.max_steps == 0
         || options.max_steps > crate::MAX_QUERY_STEPS
@@ -243,21 +264,7 @@ pub fn query_generation(
             return Err(budget("Generation preparation exceeds query budget"));
         }
     }
-    let mut remaining = options.max_steps;
-    let snapshot = BaseSnapshot::from_generation_checked(generation, facts, &mut |work| {
-        charge(
-            &mut remaining,
-            options.evaluation.cancellation.as_ref(),
-            work,
-        )
-    })?;
-    let used = options.max_steps - remaining;
-    let mut invocation = options.clone();
-    invocation.max_steps = remaining;
-    let mut result = crate::query_base(program, &snapshot, &invocation)?;
-    result.steps_used = result.steps_used.saturating_add(used);
-    crate::encoded_size(&result, options.max_output_bytes)?;
-    Ok(result)
+    Ok(())
 }
 #[derive(Default)]
 struct FileRelations {
@@ -265,15 +272,63 @@ struct FileRelations {
     embeds: Vec<BasesLink>,
     backlinks: Vec<BasesLink>,
 }
-pub(crate) struct PreparedRelationships<'a> {
-    graph: &'a ResolutionSnapshot,
-    resolver: Resolver<'a>,
+pub(crate) struct OwnedRelationships {
+    complete: bool,
+    namespace: PreparedNamespace,
     files: HashMap<EntryId, FileRelations>,
     unavailable: HashSet<EntryId>,
 }
-impl<'a> PreparedRelationships<'a> {
+pub(crate) struct PreparedRelationships<'a> {
+    data: &'a OwnedRelationships,
+}
+impl OwnedRelationships {
+    pub(crate) fn retained_bytes(&self) -> usize {
+        use std::mem::size_of;
+        let link_heap = |link: &BasesLink| {
+            link.path.capacity()
+                + link.display.as_ref().map_or(0, String::capacity)
+                + link
+                    .resolved_path
+                    .as_ref()
+                    .and_then(Option::as_ref)
+                    .map_or(0, String::capacity)
+                + link
+                    .target
+                    .as_ref()
+                    .map_or(0, |w| w.entry_id.as_str().len() + w.revision.as_str().len())
+        };
+        // Hash capacity counts usable elements, not physical buckets. Double
+        // table slots/control bytes conservatively account its load factor.
+        size_of::<Self>()
+            + self.namespace.retained_bytes()
+            + self.files.capacity()
+                * 2
+                * (size_of::<(EntryId, FileRelations)>() + size_of::<usize>())
+            + 64
+            + self
+                .files
+                .iter()
+                .map(|(id, relations)| {
+                    id.as_str().len()
+                        + [&relations.links, &relations.embeds, &relations.backlinks]
+                            .into_iter()
+                            .map(|links| {
+                                links.capacity() * size_of::<BasesLink>()
+                                    + links.iter().map(link_heap).sum::<usize>()
+                            })
+                            .sum::<usize>()
+                })
+                .sum::<usize>()
+            + self.unavailable.capacity() * 2 * (size_of::<EntryId>() + size_of::<usize>())
+            + 64
+            + self
+                .unavailable
+                .iter()
+                .map(|id| id.as_str().len())
+                .sum::<usize>()
+    }
     pub(crate) fn new(
-        graph: &'a ResolutionSnapshot,
+        graph: &ResolutionSnapshot,
         issues: &[MetadataIssue],
         check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
     ) -> Result<Self, ExpressionDiagnostic> {
@@ -319,8 +374,8 @@ impl<'a> PreparedRelationships<'a> {
         }
         // Edge order is shared namespace path/ID order then parser occurrence.
         Ok(Self {
-            graph,
-            resolver: graph.resolver_checked(check)?,
+            complete: graph.complete(),
+            namespace: graph.prepare_namespace_checked(check)?,
             files,
             unavailable: issues
                 .iter()
@@ -329,18 +384,26 @@ impl<'a> PreparedRelationships<'a> {
                 .collect(),
         })
     }
+}
+impl<'a> PreparedRelationships<'a> {
+    pub(crate) fn borrowed(data: &'a OwnedRelationships) -> Self {
+        Self { data }
+    }
+    fn data(&self) -> &OwnedRelationships {
+        self.data
+    }
     pub(crate) fn complete(&self) -> bool {
-        self.graph.complete()
+        self.data().complete
     }
     pub(crate) fn attach(&self, file: &mut BasesFile) {
         file.metadata_unavailable = file
             .witness
             .as_ref()
-            .is_some_and(|w| self.unavailable.contains(&w.entry_id));
+            .is_some_and(|w| self.data().unavailable.contains(&w.entry_id));
         if let Some(edges) = file
             .witness
             .as_ref()
-            .and_then(|w| self.files.get(&w.entry_id))
+            .and_then(|w| self.data().files.get(&w.entry_id))
         {
             file.links = edges.links.clone();
             file.embeds = edges.embeds.clone();
@@ -365,9 +428,10 @@ impl<'a> PreparedRelationships<'a> {
         if file.links.iter().any(|link| link.path == target) {
             return Ok(true);
         }
-        let candidates = self
-            .resolver
-            .candidates_checked(&source.entry_id, target, check)?;
+        let candidates =
+            self.data()
+                .namespace
+                .candidates_checked(&source.entry_id, target, check)?;
         let selected = candidates.first().map(|entry| &entry.id);
         Ok(selected.is_some_and(|id| {
             file.links

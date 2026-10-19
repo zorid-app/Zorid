@@ -9,8 +9,16 @@ mod graph;
 pub use graph::{query_generation, FilePresentationFacts, MetadataIssue, MAX_RELATIONSHIP_EDGES};
 mod order;
 mod program;
+mod preparation;
+pub use preparation::{
+    query_prepared, BasePreparationCache, PreparationCacheOutcome, PreparationLookup,
+    PreparedBaseGeneration, MAX_COMPILED_PROGRAM_BYTES, MAX_COMPILED_PROGRAMS,
+    MAX_PREPARED_GENERATIONS, MAX_PREPARED_GENERATION_BYTES, PREPARATION_IDLE_MS,
+};
 mod query;
-pub use program::{compile_base, compile_base_source, BaseCompileError, BaseProgram};
+pub use program::{
+    compile_base, compile_base_source, BaseCompileError, BaseProgram, BASE_COMPILER_VERSION,
+};
 pub use query::{
     query_base, BaseGroup, BaseQueryResult, BaseRow, BaseSnapshot, GroupOption, QueryCounts,
     QueryDiagnostic, QueryOptions,
