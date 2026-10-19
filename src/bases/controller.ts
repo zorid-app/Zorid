@@ -2,7 +2,7 @@ import { BaseDocument } from './document.ts';
 import type { BaseValue, BaseViewPatch } from './document.ts';
 import { executeBaseQuery, normalizeBaseProperty } from './query.ts';
 import type { BaseQueryOptions, BaseQueryResult } from './query.ts';
-import { SharedBaseQueryRunner, sharedBaseWitness, sharedBaseCapture } from './shared-query.ts';
+import { SharedBaseQueryRunner, sharedBaseWitness, sharedBaseCapture, sharedBaseCoverage } from './shared-query.ts';
 import { createBaseClockHost } from './clock.ts';
 import type { BaseClockCapture, BaseClockHost } from './clock.ts';
 import type { BaseSavedWitness } from './shared-query.ts';
@@ -69,6 +69,8 @@ export interface BaseControllerState {
   readonly source: string;
   readonly result: BaseQueryResult | null;
   readonly error: Error | null;
+  /** Refresh activity is separate from the coherent retained result. */
+  readonly updating: boolean;
 }
 export interface BaseControllerOptions {
   vault: Vault;
@@ -112,7 +114,8 @@ export class BaseController {
   private cancelWake?: () => void;
   private wakeSerial = 0;
   private stale = true;
-  private current: BaseControllerState = Object.freeze({ version: 0, source: '', result: null, error: null });
+  private current: BaseControllerState = Object.freeze({ version: 0, source: '', result: null, error: null, updating: false });
+  private settled = this.current;
 
   constructor(options: BaseControllerOptions) {
     this.options = options; this.path = normalizePath(options.basePath);
@@ -163,6 +166,7 @@ export class BaseController {
     if (!this.clock.isVisible()) {
       if (this.timer !== undefined) { clearTimeout(this.timer); this.timer = undefined; }
       if (this.refreshing) { this.stale = true; this.epoch++; this.sharedQueries.cancel(); }
+      if (this.current.updating) this.publish(this.settled);
       return;
     }
     const capture = this.clock.capture(this.query.timezone);
@@ -183,6 +187,7 @@ export class BaseController {
     const refresh = async () => {
       if (this.disposed || !this.clock.isVisible()) return;
       const epoch = this.epoch;
+      if (!this.current.updating) this.publish({ ...this.current, updating: true, error: null });
       try {
         const service = this.options.vault.adapter.documentSemantics;
         const observe = async (path: string) => this.options.vault.adapter.stat ? await this.options.vault.adapter.stat(path) : this.options.vault.entries.get(path);
@@ -218,12 +223,12 @@ export class BaseController {
         this.query = { ...this.query, viewIndex };
         this.lastCapture = sharedBaseCapture(result);
         this.stale = false; this.armWake(result);
-        const signature = JSON.stringify([source, this.identities.get(this.path), result.rows.map(row => this.identities.get(row.path)), { ...result, version: 0 }]);
-        if (signature === this.signature && !this.current.error) return;
+        const signature = JSON.stringify([source, this.identities.get(this.path), result.rows.map(row => this.identities.get(row.path)), { ...result, version: 0 }, sharedBaseCoverage(result)]);
+        if (signature === this.signature && !this.settled.error) { this.publish(this.settled); return; }
         this.version = version; this.signature = signature;
-        this.publish({ version, source, result, error: null });
+        this.publish({ version, source, result, error: null, updating: false });
       } catch (error) {
-        if (!this.disposed && epoch === this.epoch) this.publish({ ...this.current, error: error instanceof Error ? error : new Error(String(error)) });
+        if (!this.disposed && epoch === this.epoch) this.publish({ ...this.current, updating: false, error: error instanceof Error ? error : new Error(String(error)) });
       }
     };
     this.requested = true;
@@ -237,6 +242,7 @@ export class BaseController {
 
   private publish(state: BaseControllerState): void {
     this.current = Object.freeze(state);
+    if (!state.updating) this.settled = this.current;
     try { this.options.onChange?.(this.current); } catch (error) { console.error('Bases observer failed', error); }
   }
 

@@ -14,6 +14,11 @@ function invalid(message = 'The shared Base response does not match the saved sn
 export interface BaseSavedWitness { readonly entryId: string; readonly revision: string }
 const witnesses = new WeakMap<BaseQueryResult, ReadonlyMap<string, BaseSavedWitness>>();
 const captures = new WeakMap<BaseQueryResult, BaseClockCapture>();
+export interface BaseSharedCoverage { readonly generationComplete: boolean; readonly metadataComplete: boolean }
+const coverage = new WeakMap<BaseQueryResult, BaseSharedCoverage>();
+/** Snapshot-bound coverage supplied by the admitted report, never inferred from rows. */
+export function sharedBaseCoverage(result: BaseQueryResult): BaseSharedCoverage | undefined { return coverage.get(result); }
+
 /** Exact host input retained only for wake comparisons, never row authority. */
 export function sharedBaseCapture(result: BaseQueryResult): BaseClockCapture | undefined { return captures.get(result); }
 /** Only Rust-produced results have witnesses; absence never creates a shared edit fallback. */
@@ -154,7 +159,9 @@ export class SharedBaseQueryRunner {
       const report = await read(() => pin.base({ id: definition.id, viewName: input.viewName, options })); check();
       if (report.value.definition.id !== definition.id || report.value.definition.revision !== definition.revision || report.value.definition.path !== definition.path
         || JSON.stringify(report.value.result.snapshotId) !== JSON.stringify(pin.snapshot)) return invalid();
+      if (typeof report.coverageComplete !== 'boolean' || typeof report.value.result.metadataComplete !== 'boolean') return invalid();
       const result = projectSharedBaseResult(report.value.result, input.version, input.entries, timezone, definition);
+      coverage.set(result, Object.freeze({ generationComplete: report.coverageComplete, metadataComplete: report.value.result.metadataComplete }));
       captures.set(result, Object.freeze({ clockMs, timezone }));
       return result;
     } finally { run.active = false; run.abort.abort(); await this.retire(run); }

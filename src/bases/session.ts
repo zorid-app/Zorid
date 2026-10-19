@@ -1,6 +1,9 @@
 import { BaseController, createBaseMutationHost } from './controller.ts';
 import type { BaseBufferHost, BaseControllerState } from './controller.ts';
 import { BaseDocument } from './document.ts';
+import { sharedBaseCoverage } from './shared-query.ts';
+import { createBaseClockHost } from './clock.ts';
+import type { BaseClockHost } from './clock.ts';
 import { BaseToolbarSaveError, createBaseToolbar } from './toolbar.ts';
 import { createBaseViewActions } from './view-actions.ts';
 import { createBaseTableView } from './table-view.ts';
@@ -12,6 +15,11 @@ import type { BaseQueryOptions, BaseQueryResult } from './query.ts';
 import type { Vault } from '../core/vault.ts';
 import type { NoteBuffer } from '../ui/note-buffer.ts';
 
+/** Pane hosts notify only when their explicit visibility state changes. */
+export interface BaseSessionVisibility {
+  isVisible(): boolean;
+  subscribe(listener: () => void): () => void;
+}
 export interface BaseSessionOptions {
   readonly vault: Vault;
   readonly basePath: string;
@@ -19,6 +27,8 @@ export interface BaseSessionOptions {
   readonly buffers?: BaseBufferHost;
   readonly readOnly?: boolean;
   readonly query?: BaseQueryOptions;
+  readonly clock?: BaseClockHost;
+  readonly visibility?: BaseSessionVisibility;
   readonly viewName?: string;
   readonly openFile: (path: string, event: MouseEvent | KeyboardEvent) => void;
   readonly validate: () => void;
@@ -93,7 +103,16 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       options.buffers!.onBufferChange?.(path, buffer, previousText);
     },
   }) : { async transform() { throw new Error('This base is read-only'); } };
-  const controller = new BaseController({ vault: options.vault, basePath: options.basePath, mutations, query: options.query, viewName: options.viewName,
+  const hostClock = options.clock ?? createBaseClockHost({ document: doc, window: win });
+  const clock: BaseClockHost = {
+    capture: zone => hostClock.capture(zone), scheduleAt: (deadline, callback) => hostClock.scheduleAt(deadline, callback),
+    isVisible: () => hostClock.isVisible() && (options.visibility?.isVisible() ?? true),
+    subscribeWake(callback) {
+      const stopClock = hostClock.subscribeWake(callback), stopPane = options.visibility?.subscribe(callback);
+      return () => { stopClock(); stopPane?.(); };
+    },
+  };
+  const controller = new BaseController({ vault: options.vault, basePath: options.basePath, mutations, query: options.query, clock, viewName: options.viewName,
     onChange(state) { render(state); options.onState?.(state); },
   });
   const actions = createBaseViewActions(controller, { validate: action, canRename: !!options.buffers?.rename,
@@ -121,9 +140,20 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     onDraftChange: schedule,
     onError: report,
   });
+  function renderStatus(state: BaseControllerState): void {
+    content.setAttribute('aria-busy', String(state.updating));
+    if (state.error) { status.textContent = state.error.message; return; }
+    if ([...changedBuffers].some(buffer => buffer.dirty || buffer.error)) return;
+    if (state.updating) { status.textContent = state.result ? 'Updating…' : 'Loading saved results…'; return; }
+    const coverage = state.result && sharedBaseCoverage(state.result);
+    status.textContent = coverage && !coverage.generationComplete ? 'Some saved files are unavailable in these results.'
+      : coverage && !coverage.metadataComplete ? 'Some saved properties are unavailable in these results.' : '';
+  }
   function render(state: BaseControllerState): void {
     if (disposed) return;
-    if (state.error) { deferred = undefined; status.textContent = state.error.message; return; }
+    // Status changes never replace rows or a focused local property/config draft.
+    renderStatus(state);
+    if (state.error) { deferred = undefined; return; }
     if (!state.result) return;
     if (pending.size || activeDraft()) { deferred = state; return; }
     deferred = undefined;
@@ -164,7 +194,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       }
       mountedType = result.view.type; mountedIndex = selectedIndex; mountedMove = moveEnabled;
     }
-    mountedResult = result; if (![...changedBuffers].some(buffer => buffer.dirty || buffer.error)) status.textContent = '';
+    mountedResult = result; renderStatus(state);
   }
   const observer = win?.MutationObserver ? new win.MutationObserver(schedule) : undefined;
   observer?.observe(content, { subtree: true, childList: true });
