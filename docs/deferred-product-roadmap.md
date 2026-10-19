@@ -68,6 +68,27 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   generation/facts/source/version keys, current invocation context and explicit
   expiry; never retain a query pin or source-write capability. Existing handoff
   defines accepted contracts; no new authority cache or query language framework.
+  Shared candidate `8317e4c5` is not accepted: initial focused cache tests6 pass/1
+  invalid test fixture fails; source review also requires removing repeated hot
+  snapshot/graph serialization and immutable ID/path validation, and correcting
+  optional probe/copy admission. Owner prepares one coherent successor before
+  composed validation. Static byte proof belongs to the sealed factory; detached
+  query validation and dynamic context/limits/cancellation remain mandatory.
+  Optional maintenance gets a separate finite2M-unit allowance per prepare call
+  (one typed visit plus each64-byte block), independent of unchanged semantic
+  max_steps and32MiB/count caps. Pre-admit complete copies and use checked/
+  saturating arithmetic, including wasm32. Actual optional work remains observable;
+  successful hit proof carries into evaluation only when no more costly than the
+  sealed cold-preparation cost. This preserves tight-valid cold behavior without
+  retrying evaluation or raising the query ceiling.
+  Native consumer `a0300474` on `tingkai-c/s1-native-preparation-cache` is source
+  approved; shared successor composition/tests pending. WASM/browser `2b73fb3f`
+  on `tingkai-c/s1-wasm-base-preparation` is under source review; owner-close/
+  awaited-pin races must be resolved before approval. Neither binding is accepted
+  from an uncompiled source patch. One client lease release retires its pins,
+  while bounded capability-free data may survive in a still-live shared native
+  vault owner; actual owner retirement clears it. Browser owner retirement frees
+  its cache and pending calls must not recreate it after an await.
   Root approved typed cache API/LRU policy:32MiB total cache-owned generation data,
   8MiB compiled programs,4/64 entries,5min idle expiry via explicit portable
   monotonic milliseconds; backwards time clears optional entries. Exact actual
