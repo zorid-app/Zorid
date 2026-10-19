@@ -31,6 +31,15 @@ export interface DocumentSearchController {
 }
 const sameSpec=(a:SearchSpec,b:SearchSpec)=>a.query===b.query&&a.caseSensitive===b.caseSensitive&&a.sort===b.sort&&a.context===b.context&&a.explain===b.explain;
 const invalid=():never=>{throw new DocumentSemanticsError('invalid_document_response');};
+const locationPayload=(location:SearchLocation):string=>{
+  const value=location.locator,base=[location.role,location.occurrences,value.origin];
+  switch(value.origin){
+    case 'source':return JSON.stringify([...base,value.kind,value.range.bytes,value.range.utf16]);
+    case 'filename':case 'path':return JSON.stringify([...base,value.range.bytes,value.range.utf16]);
+    case 'propertyKey':return JSON.stringify([...base,value.key,value.match.kind,value.match.kind==='ranges'?value.match.ranges.map(range=>[range.bytes,range.utf16]):null]);
+    case 'propertyValue':return JSON.stringify([...base,value.key,value.arrayPath,value.valueText,value.range.bytes,value.range.utf16]);
+  }
+};
 
 /** Serial retained-query consumer. Every result is supplied by Rust; this module
  * only admits ordered chunks and bounds the projection retained for display. */
@@ -117,13 +126,17 @@ export function mountDocumentSearch(parent:HTMLElement,options:DocumentSearchCon
       }else{
         if(chunk.chunk!==0||last&&!last.outputComplete||groups.some(group=>group.entry.id===chunk.entry.id))invalid();
       }
-      const previousIndex=previous?.locations.at(-1)?.index??-1;
-      if(chunk.locations.some((location,index)=>location.index<=(index?chunk.locations[index-1].index:previousIndex)))invalid();
+      const known=new Map(previous?.locations.map(location=>[location.index,location])),added:SearchLocation[]=[];
+      for(const location of chunk.locations){
+        const existing=known.get(location.index);
+        if(existing){if(locationPayload(existing)!==locationPayload(location))invalid();}
+        else{known.set(location.index,location);added.push(location);}
+      }
       const bytes=new TextEncoder().encode(JSON.stringify(chunk)).byteLength;
       if((!previous&&groups.length>=MAX_GROUPS)||snippetCount+chunk.snippets.length>MAX_SNIPPETS||retainedBytes+bytes>MAX_BYTES){truncated=true;break;}
       retainedBytes+=bytes;snippetCount+=chunk.snippets.length;nextChunk=chunk.chunk+1;
       const combined:DocumentSearchGroup={entry:chunk.entry,occurrenceCount:chunk.occurrenceCount,
-        locations:previous?[...previous.locations,...chunk.locations]:chunk.locations,
+        locations:previous?[...previous.locations,...added]:added,
         snippets:previous?[...previous.snippets,...chunk.snippets]:chunk.snippets,outputComplete:chunk.lastChunk};
       if(previous)groups[groups.length-1]=combined;else groups.push(combined);
     }

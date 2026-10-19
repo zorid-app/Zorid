@@ -122,3 +122,17 @@ test('late pin acquisition survives input-only replacement without reacquiring f
   ui.controller.setSpec(ui.spec('latest'));await new Promise(r=>setTimeout(r,5));opening.resolve();await until(()=>ui.frame.phase==='results');
   assert.equal(ui.opens,1);assert.equal(ui.fresh,1);assert.equal(ui.events.includes('start:old'),false);assert.equal(ui.events.includes('start:latest'),true);await ui.controller.close();
 });
+
+test('continuation snippets may repeat identical stable location indices, deduplicated without adding counts',async()=>{
+  let calls=0;const first=chunk(0,false),second={...chunk(1),locations:first.locations,snippets:first.snippets};
+  const ui=fixture({query:async spec=>({queryId:'q',prepare:async()=>({state:'ready',cursor:'0' as DocumentCursor}),page:async()=>++calls===1?page(spec,[first],'1'):page(spec,[second]),close:async()=>{}})});
+  await ui.search('x');ui.callbacks.onAction(ui.frame,'loadMore');await ui.controller.ready;
+  assert.equal(ui.frame.phase,'results');assert.equal(ui.frame.groups[0].locations.length,1);assert.equal(ui.frame.groups[0].snippets.length,2);assert.equal(ui.frame.groups[0].occurrenceCount,5);await ui.controller.close();
+});
+
+test('conflicting payload for a repeated per-file location rejects without corrupting prior group',async()=>{
+  let calls=0;const first=chunk(0,false),second={...chunk(1),locations:[{...first.locations[0],occurrences:2}],snippets:first.snippets};
+  const ui=fixture({query:async spec=>({queryId:'q',prepare:async()=>({state:'ready',cursor:'0' as DocumentCursor}),page:async()=>++calls===1?page(spec,[first],'1'):page(spec,[second]),close:async()=>{}})});
+  await ui.search('x');ui.callbacks.onAction(ui.frame,'loadMore');await ui.controller.ready;
+  assert.equal(ui.frame.phase,'error');assert.equal(ui.frame.groups[0].locations.length,1);assert.equal(ui.frame.groups[0].locations[0].occurrences,1);assert.equal(ui.frame.groups[0].snippets.length,1);await ui.controller.close();
+});
