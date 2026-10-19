@@ -45,3 +45,11 @@ test('vault replacement waits draft owner acknowledgement before platform releas
   const ui=await setup(t),outline=ui.outline(),gate=ui.core.holdRequest();ui.editors.at(-1)!.options.onChange('draft');await until(()=>ui.core.events.some(e=>e.op==='request'));
   let done=false;const opening=ui.workspace.openVault({adapter:new MemoryAdapter({'New.md':'# New'}),id:'test:new-draft-owner',label:'New'}).then(()=>{done=true;});await until(()=>ui.core.events.some(e=>e.op==='release_buffer'));assert.equal(done,false);assert.equal(ui.releases,0);gate.resolve();await opening;assert.equal(ui.core.subscriptions,0);assert.equal(ui.core.jobs.size,0);assert.equal(ui.releases,1);assert.doesNotMatch(outline.textContent??'',/Rust supplied heading/);
 });
+
+test('later buffer close failure preserves earlier completed retirement and Workspace teardown retry',async t=>{
+  const ui=await setup(t);ui.outline();ui.editors.at(-1)!.options.onChange('first draft');const first=ui.workspace.buffers.get('One.md')!;await until(()=>first.metadataState?.status==='current');
+  const second=await ui.internal.bufferFor('Two.md');second.update('second draft');second.getMetadata();await until(()=>second.metadataState?.status==='current');
+  const request=ui.core.events.filter(e=>e.op==='request').at(-1)!;assert.equal(request.op,'request');const lease=request.buffer_lifetime;ui.core.failRelease(lease);
+  await assert.rejects(ui.workspace.destroy());assert.equal(ui.releases,0);assert.equal(first.error,null);assert.equal(second.error,null);assert.equal(second.dirty,false);assert.throws(()=>first.update('too late'),/disposed/);
+  ui.core.allowRelease(lease);await ui.workspace.flush();await ui.workspace.destroy();assert.equal(ui.releases,1);assert.equal(ui.core.subscriptions,0);assert.equal(ui.core.jobs.size,0);assert.equal(await ui.adapter.read('One.md'),'first draft');assert.equal(await ui.adapter.read('Two.md'),'second draft');
+});

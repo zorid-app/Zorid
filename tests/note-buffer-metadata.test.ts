@@ -39,7 +39,7 @@ test('failed facts close stays retry-owned without becoming a durable save error
   const {note,core}=await setup(t);note.update('draft');note.getMetadata();await until(()=>note.metadataState?.status==='current');core.failRelease();core.failRelease();
   // Withdrawal can issue the first release during save; hold it until dispose
   // owns the same still-pending acknowledgement.
-  const gate=core.holdRelease(),closing=note.dispose();await until(()=>core.events.some(e=>e.op==='release_buffer'));gate.resolve();await assert.rejects(closing);assert.equal(note.error,null);assert.equal(note.dirty,false);await note.dispose();assert.equal(documentDraftProjectionUsage(core.service).bytes,0);
+  const gate=core.holdRelease(),closing=note.dispose();await until(()=>core.events.some(e=>e.op==='release_buffer'));gate.resolve();assert.equal(note.dispose(),closing);assert.throws(()=>note.update('late edit'),/closing/);await assert.rejects(closing);assert.equal(note.error,null);assert.equal(note.dirty,false);await note.flush();await note.dispose();assert.equal(documentDraftProjectionUsage(core.service).bytes,0);
 });
 test('save status listeners never receive metadata errors and actual provider retirement does not block disposal',async t=>{
   let updates=0;const {note,core}=await setup(t,{onMetadata:()=>{updates++;}}),gate=core.holdRequest();note.update('draft');note.getMetadata();await until(()=>core.events.some(e=>e.op==='request'));core.retire();gate.resolve();await note.dispose();assert.equal(note.error,null);assert.equal(core.subscriptions,0);const before=updates;await new Promise(resolve=>setTimeout(resolve,5));assert.equal(updates,before);

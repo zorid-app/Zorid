@@ -48,11 +48,12 @@ export class NoteBuffer {
   private metadataDemand=false;
   private metadataRetired=false;
   private metadataNotificationPending=false;
+  private disposing?:Promise<void>;
 
   /** Clean buffers use committed facts. Only an actual unsaved Markdown read
    * starts transient analysis; subsequent revisions share this buffer owner. */
   getMetadata():NoteMetadata|undefined {
-    if(this.disposed||this.metadataRetired||!this.loaded||!isMarkdown(this.path))return undefined;
+    if(this.disposed||this.disposing||this.metadataRetired||!this.loaded||!isMarkdown(this.path))return undefined;
     if(this.text===this.savedText)return this.vault.metadata.get(this.path);
     this.metadataDemand=true;
     if(!this.metadataProjection){
@@ -232,6 +233,7 @@ export class NoteBuffer {
 
   update(text: string, options: { validateWrite?: () => void } = {}): void {
     this.requireLoaded();
+    if(this.disposing)throw new Error('This note buffer is closing');
     // Guards belong to the accepted draft, including failed writes and later retries.
     // Ordinary typing cannot discard the lifetime protection of an earlier edit.
     if (options.validateWrite) { options.validateWrite(); this.writeValidators.add(options.validateWrite); }
@@ -286,6 +288,9 @@ export class NoteBuffer {
 
   flush(): Promise<void> {
     this.cancelTimer();
+    // A completed retirement already saved this immutable buffer. Workspace
+    // teardown may retry after a later buffer's independent close failed.
+    if(this.disposed)return Promise.resolve();
     return this.enqueue(() => this.save());
   }
 
@@ -374,14 +379,19 @@ export class NoteBuffer {
     });
   }
 
-  async dispose(): Promise<void> {
-    await this.enqueue(async () => {
-      if (this.disposed) return;
-      try { await this.save(); this.disposed = true; }
-      finally { this.cancelTimer(); }
-    });
-    // Facts cleanup must never become a durable save failure. The disposed
-    // buffer still owns failed cleanup and later dispose calls retry it.
-    await this.closeMetadataProjection();
+  dispose(): Promise<void> {
+    if(this.disposing)return this.disposing;
+    // Reserve retirement before calling any save/provider code. Save remains
+    // usable after a failed facts ACK, while editing cannot race the barrier.
+    const closing=Promise.resolve().then(async()=>{
+      await this.enqueue(async () => {
+        if (this.disposed) return;
+        try { await this.save(); }
+        finally { this.cancelTimer(); }
+      });
+      // Facts cleanup must never become a durable save failure.
+      await this.closeMetadataProjection();this.disposed=true;
+    }).finally(()=>{if(this.disposing===closing)this.disposing=undefined;});
+    this.disposing=closing;return closing;
   }
 }
