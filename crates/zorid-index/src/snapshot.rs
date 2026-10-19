@@ -194,6 +194,11 @@ impl Manifest {
     pub fn entries(&self) -> &[EntryState] {
         &self.entries
     }
+    /// Borrow the existing exact-ID ordering; entries themselves remain in
+    /// presentation/path order. No index or authority is constructed here.
+    pub(crate) fn entry_ordinals_by_id(&self) -> &[usize] {
+        &self.entries_by_id
+    }
     pub(crate) fn derived_index_heap_bytes(&self) -> usize {
         self.entries_by_id
             .capacity()

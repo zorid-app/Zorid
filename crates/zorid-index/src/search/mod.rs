@@ -33,6 +33,12 @@ mod page;
 mod parser;
 mod proof;
 mod snippet;
+mod preview;
+pub use preview::{
+    CommittedPreviewSearchPage, PreparedPreviewSearchPage, PreviewPreparation, PreviewQueryId,
+    PreviewRichSearchPage, PreviewSearchAction, PreviewSearchCursor, PreviewSearchDrive,
+    PreviewSearchStatus, PreviewTextReadRequest,
+};
 mod runtime;
 pub use page::*;
 pub use runtime::*;

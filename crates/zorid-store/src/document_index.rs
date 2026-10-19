@@ -636,6 +636,32 @@ fn index_status(
     }
 }
 
+// Registration only for immutable metadata already admitted by open_document_snapshot.
+// In particular, control() must not be used here: generation_bounds() examines
+// all retained header payload lengths even though this route consumes no header.
+fn metadata_registration_control(tx: &DocumentTransaction<'_>) -> IndexResult<Control> {
+    if cache_tables(tx)? != SCHEMA.len() {
+        return Err(DocumentIndexError::RebuildRequired);
+    }
+    let raw: Option<String> = tx.query_row(
+        "SELECT record FROM document_index_control WHERE singleton=1 AND length(CAST(record AS BLOB)) BETWEEN 1 AND ?1",
+        [DOCUMENT_INDEX_MAX_CONTROL_BYTES as i64], |r| r.get(0),
+    ).optional()?;
+    let c: Control = decode(&raw.ok_or(DocumentIndexError::RebuildRequired)?)?;
+    if c.format != 1
+        || c.head.as_ref().is_some_and(|head| {
+            head.epoch != c.epoch || head.generation > c.allocated || head.id().is_err()
+        })
+    {
+        return Err(DocumentIndexError::RebuildRequired);
+    }
+    let actual = text_sync::identity(&tx.authority)?.local_store_id;
+    if c.head.as_ref().is_some_and(|head| head.local != actual) {
+        return Err(DocumentIndexError::RebuildRequired);
+    }
+    Ok(c)
+}
+
 fn pinned_header(
     tx: &DocumentTransaction<'_>,
     pin: &DocumentQueryPin,
@@ -1360,6 +1386,42 @@ impl Store {
             pins: self.document_query_pins.clone(),
         })
     }
+    /// Revalidate only the registration of already-admitted immutable metadata.
+    /// This does not read persisted generation headers, rows, source bodies or
+    /// current source heads, and must not replace text/source/publication checks.
+    /// Native hosts must also check their live root and client pin registrations
+    /// before and after projecting a page from the pin's immutable generation.
+    pub fn check_document_metadata_pin_registration(
+        &self,
+        pin: &DocumentQueryPin,
+    ) -> IndexResult<()> {
+        if pin.owner != self.document_query_owner
+            || !std::sync::Arc::ptr_eq(&pin.pins, &self.document_query_pins)
+        {
+            return Err(IndexError::SnapshotExpired.into());
+        }
+        let tx = self.document_transaction(TransactionBehavior::Deferred)?;
+        let c = metadata_registration_control(&tx)?;
+        let snapshot = pin.generation.id();
+        if c.epoch != *snapshot.generation_epoch() {
+            return Err(IndexError::SnapshotExpired.into());
+        }
+        if snapshot.local_store_id() != &text_sync::identity(&tx.authority)?.local_store_id
+            || snapshot.generation() > c.allocated
+        {
+            return Err(DocumentIndexError::RebuildRequired);
+        }
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM document_index_generations WHERE snapshot_key=?1)",
+            [Snapshot::of(snapshot).key()],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            return Err(IndexError::SnapshotExpired.into());
+        }
+        tx.commit()?;
+        Ok(())
+    }
     /// Frozen source-mode and presentation facts from this exact generation.
     /// Advancing source heads do not invalidate retained immutable snapshots.
     pub fn document_snapshot_manifest(
@@ -1770,3 +1832,7 @@ mod cache_snapshot_tests {
 #[cfg(test)]
 #[path = "document_stage_recovery_tests.rs"]
 mod stage_recovery_tests;
+
+#[cfg(test)]
+#[path = "document_metadata_registration_tests.rs"]
+mod metadata_registration_tests;

@@ -5,7 +5,9 @@ use super::order::{
     SearchOrderError, SearchOrderPlan, SearchOrderPreparation, SearchOrderProgress,
     SearchPresentationFacts,
 };
+use super::preview::{SearchBacking, SearchPage};
 use super::*;
+use crate::PreviewSnapshot;
 use crate::{
     Exclusion, Generation, IndexError, IndexSnapshotId, MAX_PUMP_BYTES, MAX_PUMP_DOCUMENTS,
 };
@@ -57,7 +59,10 @@ impl RichSearchCursor {
 #[derive(Clone, Debug)]
 pub struct RichTextReadRequest {
     query: RichQueryId,
-    generation: Arc<Generation>,
+    generation: SearchBacking,
+    // A retained preview request keeps its captured rows charged after owner
+    // retirement/drive drop. This shares the existing reservation, not a pool.
+    _reservation: Option<Arc<Reservation>>,
     row: u32,
     digest: [u8; 32],
     bytes: usize,
@@ -65,7 +70,7 @@ pub struct RichTextReadRequest {
 impl PartialEq for RichTextReadRequest {
     fn eq(&self, other: &Self) -> bool {
         self.query == other.query
-            && Arc::ptr_eq(&self.generation, &other.generation)
+            && self.generation.same(&other.generation)
             && self.row == other.row
             && self.digest == other.digest
             && self.bytes == other.bytes
@@ -74,7 +79,19 @@ impl PartialEq for RichTextReadRequest {
 impl Eq for RichTextReadRequest {}
 impl RichTextReadRequest {
     pub fn snapshot(&self) -> &IndexSnapshotId {
-        self.generation.id()
+        self.generation
+            .published()
+            .expect("published read wrapper")
+            .id()
+    }
+    pub(super) fn preview_capture(&self) -> &crate::PreviewSnapshotId {
+        match &self.generation {
+            SearchBacking::Preview(p) => p.id(),
+            SearchBacking::Published(_) => unreachable!("preview read wrapper"),
+        }
+    }
+    pub(super) fn source(&self) -> &crate::SourceSnapshotId {
+        self.generation.manifest().source()
     }
     pub fn entry(&self) -> &EntryState {
         &self.generation.manifest().entries()[self.row as usize]
@@ -144,6 +161,7 @@ fn search_error<E>(e: SearchError<E>) -> RichSearchError<E> {
 
 // Reservations outlive owner removal while a drive retains the pure data. Arc
 // sharing does not pretend an eviction immediately frees physical allocation.
+#[derive(Debug)]
 struct Reservation {
     total: Arc<AtomicUsize>,
     bytes: AtomicUsize,
@@ -178,14 +196,14 @@ impl Drop for Reservation {
 }
 struct QueryData {
     id: RichQueryId,
-    generation: Arc<Generation>,
+    generation: SearchBacking,
     compiled: CompiledSearchQuery,
     generation_coverage: bool,
     spec: SearchSpec,
     profile: RichPageProfile,
     live: Arc<AtomicBool>,
     busy: AtomicBool,
-    reservation: Reservation,
+    reservation: Arc<Reservation>,
 }
 struct DriveLease(Arc<QueryData>);
 impl Drop for DriveLease {
@@ -266,6 +284,102 @@ impl RichSearchOwner {
             false
         }
     }
+    /// Facts are in captured manifest file order after filtering to committed
+    /// membership. They must be admitted against this exact immutable capture;
+    /// pending rows are never ordered or evaluated. No source bodies are kept.
+    pub fn start_preview_query<E>(
+        &mut self,
+        preview: PreviewSnapshot,
+        spec: SearchSpec,
+        facts: &[SearchPresentationFacts<'_>],
+        profile: RichPageProfile,
+        mut check: impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<PreviewQueryId, RichSearchError<E>> {
+        self.prune_retired();
+        let capture = preview.id().clone();
+        let result = self
+            .start_query_inner(
+                SearchBacking::Preview(preview),
+                spec,
+                facts,
+                profile,
+                &mut check,
+            )
+            .map(|inner| PreviewQueryId { inner, capture });
+        self.prune_retired();
+        result
+    }
+    fn preview_matches(&self, id: &PreviewQueryId) -> bool {
+        self.states.iter().any(|s| {
+            s.data.id == id.inner
+                && matches!(&s.data.generation, SearchBacking::Preview(p) if p.id() == &id.capture)
+        })
+    }
+    pub fn close_preview_query(&mut self, id: &PreviewQueryId) -> bool {
+        if !self.preview_matches(id) {
+            self.prune_retired();
+            return false;
+        }
+        self.close_query(&id.inner)
+    }
+    pub fn prepare_preview_query<E>(
+        &mut self,
+        id: &PreviewQueryId,
+        soft_work: usize,
+        check: impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<PreviewPreparation, RichSearchError<E>> {
+        if !self.preview_matches(id) {
+            return Err(RichSearchError::Expired);
+        }
+        self.prepare_query(&id.inner, soft_work, check)
+            .map(|p| match p {
+                RichPreparation::Preparing => PreviewPreparation::Preparing,
+                RichPreparation::Ready(inner) => PreviewPreparation::Ready(PreviewSearchCursor {
+                    inner,
+                    query: id.clone(),
+                }),
+            })
+    }
+    pub fn open_preview_drive<E>(
+        &self,
+        cursor: &PreviewSearchCursor,
+    ) -> Result<PreviewSearchDrive, RichSearchError<E>> {
+        if cursor.inner.query != cursor.query.inner || !self.preview_matches(&cursor.query) {
+            return Err(RichSearchError::Expired);
+        }
+        Ok(PreviewSearchDrive(
+            self.open_drive(&cursor.inner)?,
+            cursor.query.clone(),
+        ))
+    }
+    pub fn commit_preview<E>(
+        &mut self,
+        prepared: PreparedPreviewSearchPage,
+    ) -> Result<CommittedPreviewSearchPage, RichSearchError<E>> {
+        if prepared.inner.input.query != prepared.query.inner
+            || !self.preview_matches(&prepared.query)
+            || !matches!(&prepared.inner.page, SearchPage::Preview(_))
+        {
+            return Err(RichSearchError::Expired);
+        }
+        let source = match &prepared.inner._lease.0.generation {
+            SearchBacking::Preview(p) => p.source().clone(),
+            _ => return Err(RichSearchError::Expired),
+        };
+        let (page, next) = self.commit_shared(prepared.inner)?;
+        let SearchPage::Preview(page) = page else {
+            unreachable!()
+        };
+        Ok(CommittedPreviewSearchPage {
+            capture: prepared.query.capture.clone(),
+            source,
+            page,
+            next: next.map(|inner| PreviewSearchCursor {
+                inner,
+                query: prepared.query.clone(),
+            }),
+        })
+    }
     pub fn start_query<E>(
         &mut self,
         generation: Arc<Generation>,
@@ -275,13 +389,19 @@ impl RichSearchOwner {
         mut check: impl FnMut(usize) -> Result<(), E>,
     ) -> Result<RichQueryId, RichSearchError<E>> {
         self.prune_retired();
-        let result = self.start_query_inner(generation, spec, facts, profile, &mut check);
+        let result = self.start_query_inner(
+            SearchBacking::Published(generation),
+            spec,
+            facts,
+            profile,
+            &mut check,
+        );
         self.prune_retired();
         result
     }
     fn start_query_inner<E>(
         &mut self,
-        generation: Arc<Generation>,
+        generation: SearchBacking,
         spec: SearchSpec,
         facts: &[SearchPresentationFacts<'_>],
         profile: RichPageProfile,
@@ -297,7 +417,9 @@ impl RichSearchOwner {
         }
         // Pre-admit the documented maximum regex components and order storage
         // before compilation/copy; expensive queries may reduce the count below4.
-        let provisional = 16 * 1024 * 1024 + MAX_SEARCH_ORDER_BYTES + 512 * 1024;
+        let provisional = (16 * 1024 * 1024 + MAX_SEARCH_ORDER_BYTES + 512 * 1024usize)
+            .checked_add(generation.retained_bytes())
+            .ok_or(RichSearchError::Resource("search owner bytes"))?;
         let reservation = Reservation::new(self.total.clone(), provisional)
             .ok_or(RichSearchError::Resource("search owner bytes"))?;
         let compiled = CompiledSearchQuery::compile(
@@ -308,12 +430,15 @@ impl RichSearchOwner {
             SearchLimits::default(),
         )
         .map_err(RichSearchError::Compile)?;
-        let order = SearchOrderPreparation::new(generation.clone(), facts, spec.sort, &mut check)
-            .map_err(order_error)?;
+        let order =
+            SearchOrderPreparation::new_backing(generation.clone(), facts, spec.sort, &mut check)
+                .map_err(order_error)?;
         check(facts.len().saturating_add(1)).map_err(RichSearchError::Host)?;
-        let generation_coverage = generation.coverage_complete();
+        let generation_coverage = generation
+            .published()
+            .is_some_and(|g| g.coverage_complete());
         check(0).map_err(RichSearchError::Host)?;
-        let fixed = size_of::<QueryData>()
+        let fixed = generation.retained_bytes() + size_of::<QueryData>()
             + size_of::<QueryState>()
             + size_of::<Checkpoint>() * MAX_SEARCH_CHECKPOINTS
             + spec.query.capacity()
@@ -349,7 +474,7 @@ impl RichSearchOwner {
                 profile,
                 live: id.active.clone(),
                 busy: AtomicBool::new(false),
-                reservation,
+                reservation: Arc::new(reservation),
             }),
             order: Some(OrderState::Preparing(order)),
             checkpoints: VecDeque::with_capacity(MAX_SEARCH_CHECKPOINTS),
@@ -477,6 +602,19 @@ impl RichSearchOwner {
         &mut self,
         prepared: PreparedRichSearchPage,
     ) -> Result<CommittedRichSearchPage, RichSearchError<E>> {
+        if !matches!(&prepared.page, SearchPage::Published(_)) {
+            return Err(RichSearchError::Invalid("published search page"));
+        }
+        let (page, next) = self.commit_shared(prepared)?;
+        let SearchPage::Published(page) = page else {
+            unreachable!()
+        };
+        Ok(CommittedRichSearchPage { page, next })
+    }
+    fn commit_shared<E>(
+        &mut self,
+        prepared: PreparedRichSearchPage,
+    ) -> Result<(SearchPage, Option<RichSearchCursor>), RichSearchError<E>> {
         self.prune_retired();
         let state = self
             .states
@@ -491,7 +629,7 @@ impl RichSearchOwner {
         {
             return Err(RichSearchError::Expired);
         }
-        let next = if prepared.page.complete
+        let next = if prepared.page.complete()
             || prepared.position.row == prepared.candidates && !prepared.position.counted
         {
             None
@@ -526,10 +664,7 @@ impl RichSearchOwner {
                 checkpoint: id,
             })
         };
-        Ok(CommittedRichSearchPage {
-            page: prepared.page,
-            next,
-        })
+        Ok((prepared.page, next))
     }
 }
 impl Drop for RichSearchOwner {
@@ -548,7 +683,7 @@ pub struct PreparedRichSearchPage {
     input: RichSearchCursor,
     position: Position,
     candidates: usize,
-    page: DocumentRichSearchPage,
+    page: SearchPage,
     _lease: DriveLease,
     _reservation: Reservation,
 }
@@ -578,7 +713,7 @@ pub struct RichSearchDrive {
     blocked: bool,
     failed: bool,
     terminal: Option<bool>,
-    sealed_page: Option<DocumentRichSearchPage>,
+    sealed_page: Option<SearchPage>,
     envelope_ready: bool,
     bytes: usize,
     reservation: Reservation,
@@ -600,6 +735,21 @@ impl RichSearchDrive {
         } else {
             Ok(())
         }
+    }
+    fn record_charge<E>(
+        &mut self,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<(), RichSearchError<E>> {
+        let units = self.data().generation.lookup_work();
+        if units != 0 {
+            check(units).map_err(RichSearchError::Host)?;
+            self.work.units = self.work.units.saturating_add(units as u64);
+            self.breakdown.presentation_units = self
+                .breakdown
+                .presentation_units
+                .saturating_add(units as u64);
+        }
+        Ok(())
     }
     pub fn next_action<E>(
         &mut self,
@@ -648,7 +798,7 @@ impl RichSearchDrive {
             if self.position.row == self.order.rows().len() {
                 return Ok(RichSearchAction::Done);
             }
-            let profile = &self.data().profile;
+            let profile = self.data().profile.clone();
             if self.blocked
                 || self.files.len() >= profile.chunks
                 || self.work.documents as usize >= profile.documents
@@ -657,6 +807,7 @@ impl RichSearchDrive {
                 return Ok(RichSearchAction::Yield);
             }
             let row = self.order.rows()[self.position.row];
+            self.record_charge(&mut check)?;
             let entry = &self.data().generation.manifest().entries()[row as usize];
             let record = self.data().generation.record(&entry.id);
             if self.data().compiled.requirements().content {
@@ -670,6 +821,8 @@ impl RichSearchDrive {
                     let request = RichTextReadRequest {
                         query: self.data().id.clone(),
                         generation: self.data().generation.clone(),
+                        _reservation: matches!(&self.data().generation, SearchBacking::Preview(_))
+                            .then(|| self.data().reservation.clone()),
                         row,
                         digest: *record.text_digest().unwrap(),
                         bytes: record.text_bytes(),
@@ -715,6 +868,7 @@ impl RichSearchDrive {
         }
         let units = 3usize.saturating_mul(1 + bytes.len() / 64);
         check(units).map_err(RichSearchError::Host)?;
+        self.record_charge(&mut check)?;
         let record = self
             .data()
             .generation
@@ -744,6 +898,7 @@ impl RichSearchDrive {
         // across pure evaluation. It contains no capability or text body.
         let data = self.lease.0.clone();
         let entry = &data.generation.manifest().entries()[row as usize];
+        self.record_charge(check)?;
         let record = data.generation.record(&entry.id);
         let source = if let Some(text) = text {
             SearchSource::Text(text)
@@ -1038,12 +1193,11 @@ impl RichSearchDrive {
             }
         }
     }
-    fn page_with(&self, files: Vec<SearchFileChunk>) -> DocumentRichSearchPage {
-        // Whole-file evaluation/count coverage is independent of pending output.
+    fn page_with(&self, files: Vec<SearchFileChunk>) -> SearchPage {
         let scan_complete = self.position.evaluated as usize == self.order.rows().len();
         let query_complete = self.position.unavailable == 0;
         let output_complete = !self.position.counted;
-        let exact = scan_complete && query_complete;
+        let exact = scan_complete && query_complete && self.data().generation.published().is_some();
         let count = |value| {
             if exact {
                 SearchCount::Exact { value }
@@ -1051,33 +1205,49 @@ impl RichSearchDrive {
                 SearchCount::AtLeast { value }
             }
         };
-        DocumentRichSearchPage {
-            snapshot: self.data().generation.id().clone(),
-            next: (),
+        let totals = SearchTotals {
+            files: count(self.position.files),
+            occurrences: count(self.position.occurrences),
+        };
+        let coverage = SearchQueryCoverage {
+            candidate_files: self.order.rows().len() as u32,
+            evaluated_files: self.position.evaluated,
+            unavailable_files: self.position.unavailable,
             scan_complete,
-            coverage_complete: self.data().generation_coverage,
-            complete: scan_complete && query_complete && output_complete,
-            dialect: SEARCH_DIALECT.into(),
-            spec: self.data().spec.clone(),
-            explanation: self
-                .data()
-                .spec
-                .explain
-                .then(|| self.data().compiled.explanation()),
-            files,
-            totals: SearchTotals {
-                files: count(self.position.files),
-                occurrences: count(self.position.occurrences),
-            },
-            coverage: SearchQueryCoverage {
-                candidate_files: self.order.rows().len() as u32,
-                evaluated_files: self.position.evaluated,
-                unavailable_files: self.position.unavailable,
+            query_coverage_complete: query_complete,
+        };
+        let spec = self.data().spec.clone();
+        let explanation = spec.explain.then(|| self.data().compiled.explanation());
+        match &self.data().generation {
+            SearchBacking::Published(generation) => SearchPage::Published(DocumentRichSearchPage {
+                snapshot: generation.id().clone(),
+                next: (),
                 scan_complete,
-                query_coverage_complete: query_complete,
-            },
-            output_complete,
-            work: self.work.clone(),
+                coverage_complete: self.data().generation_coverage,
+                complete: scan_complete && query_complete && output_complete,
+                dialect: SEARCH_DIALECT.into(),
+                spec,
+                explanation,
+                files,
+                totals,
+                coverage,
+                output_complete,
+                work: self.work.clone(),
+            }),
+            SearchBacking::Preview(preview) => SearchPage::Preview(PreviewRichSearchPage {
+                status: PreviewSearchStatus::Indexing,
+                progress: preview.progress(),
+                prepared_scan_complete: scan_complete,
+                complete: false,
+                dialect: SEARCH_DIALECT.into(),
+                spec,
+                explanation,
+                files,
+                totals,
+                coverage,
+                output_complete,
+                work: self.work.clone(),
+            }),
         }
     }
     fn envelope_charge<E>(

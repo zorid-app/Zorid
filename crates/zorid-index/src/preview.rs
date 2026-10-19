@@ -12,7 +12,7 @@ use std::{
     mem::size_of,
     sync::{Arc, Weak},
 };
-use zorid_core::{EntryId, EntryKind, OperationId};
+use zorid_core::{EntryId, EntryKind, OperationId, Revision, VaultPath};
 
 #[derive(Debug)]
 pub enum PreviewCaptureError<E> {
@@ -20,7 +20,8 @@ pub enum PreviewCaptureError<E> {
     Index(IndexError),
     Resource(&'static str),
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PreviewProgress {
     pub prepared_files: u32,
     pub total_files: u32,
@@ -109,6 +110,36 @@ impl PreviewSnapshot {
                     .saturating_mul(size_of::<Arc<IndexRecord>>()),
             )
     }
+    /// Borrow prepared semantic facts without copying metadata, acquiring Arc
+    /// handles or scanning the captured namespace. Only the callback can fail;
+    /// its cancellation/error value is preserved unchanged. Logical row facts
+    /// carry no pin, publication or mutation authority.
+    pub fn facts_view_checked<E>(
+        &self,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<PreviewFactsView<'_>, E> {
+        check(0)?;
+        check(1)?;
+        Ok(PreviewFactsView { snapshot: self })
+    }
+    pub(crate) fn manifest(&self) -> &Manifest {
+        &self.backing.manifest
+    }
+    pub(crate) fn record(&self, id: &EntryId) -> Option<&IndexRecord> {
+        self.backing
+            .rows
+            .binary_search_by(|row| row.witness().entry().id.cmp(id))
+            .ok()
+            .map(|at| self.backing.rows[at].as_ref())
+    }
+    pub(crate) fn records_by_id(&self) -> &[Arc<IndexRecord>] {
+        &self.backing.rows
+    }
+    pub(crate) fn lookup_work(&self) -> usize {
+        log_work(self.backing.rows.len())
+            .saturating_add(1)
+            .saturating_mul(5)
+    }
     pub fn same_capture(&self, other: &Self) -> bool {
         self.id == other.id && Arc::ptr_eq(&self.backing, &other.backing)
     }
@@ -120,6 +151,72 @@ impl fmt::Debug for PreviewSnapshot {
             .field("progress", &self.progress())
             .field("retained_bytes", &self.retained_bytes())
             .finish()
+    }
+}
+
+/// Allocation-free semantic read view over this exact immutable capture.
+/// Rows are only its committed file membership, in exact EntryId order; pending
+/// files never appear as empty/unavailable records. The caller charges row
+/// visits and any property/tag/value copies before work, checks its own existing
+/// query limits, and keeps derived buffers in that same query's byte ledger.
+/// No namespace, resolver, source body or owned record handle escapes this view.
+pub struct PreviewFactsView<'capture> {
+    snapshot: &'capture PreviewSnapshot,
+}
+impl PreviewFactsView<'_> {
+    pub fn id(&self) -> &PreviewSnapshotId {
+        self.snapshot.id()
+    }
+    pub fn source(&self) -> &SourceSnapshotId {
+        self.snapshot.source()
+    }
+    pub fn progress(&self) -> PreviewProgress {
+        self.snapshot.progress()
+    }
+    /// Iteration borrows existing sealed rows. Callers charge each typed visit
+    /// before advancing, and pre-admit any derived copies separately. Creating
+    /// the iterator and reading its exact length perform no namespace scan.
+    pub fn rows(&self) -> impl ExactSizeIterator<Item = PreviewRowFacts<'_>> + '_ {
+        self.snapshot
+            .backing
+            .rows
+            .iter()
+            .map(|record| PreviewRowFacts {
+                record: record.as_ref(),
+            })
+    }
+}
+
+/// Borrowed logical read facts, never an admitted write witness or source-read
+/// request. This wrapper exposes neither IndexRecord nor its underlying Arcs.
+pub struct PreviewRowFacts<'view> {
+    record: &'view IndexRecord,
+}
+impl PreviewRowFacts<'_> {
+    pub fn entry_id(&self) -> &EntryId {
+        &self.record.witness().entry().id
+    }
+    pub fn revision(&self) -> &Revision {
+        &self.record.witness().entry().revision
+    }
+    pub fn path(&self) -> &VaultPath {
+        &self.record.witness().entry().path
+    }
+    /// Missing metadata is not automatically an absent property. Known binary
+    /// and successfully extracted plain text are not metadata-bearing;
+    /// SourceLimit, ExtractionLimit and Unreadable exclusions make properties
+    /// unavailable. Consumers retain this distinction using exclusion().
+    pub fn metadata(&self) -> Option<&zorid_document::DocumentMetadata> {
+        self.record.metadata()
+    }
+    pub fn exclusion(&self) -> Option<&crate::Exclusion> {
+        self.record.exclusion()
+    }
+    /// Present exactly when this row has a retained text digest, including
+    /// Some(0) for an extracted empty text. Excluded rows return None; a zero
+    /// byte count alone never proves readable text. No body is retained here.
+    pub fn source_text_bytes(&self) -> Option<usize> {
+        self.record.text_digest().map(|_| self.record.text_bytes())
     }
 }
 
@@ -331,3 +428,7 @@ impl CaptureBudget {
 #[cfg(test)]
 #[path = "preview_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "preview_facts_tests.rs"]
+mod facts_tests;

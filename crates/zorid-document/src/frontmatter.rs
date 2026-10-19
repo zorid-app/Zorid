@@ -1,3 +1,4 @@
+use crate::phases::{AllocationBudget, AllocationKind, ParseFactsJobError};
 use crate::positions::{after_line, line_end, Positions};
 use crate::*;
 use regex::Regex;
@@ -13,11 +14,11 @@ fn delimiter(line: &str, marker: &str) -> bool {
     })
 }
 
-pub(crate) fn extract(source: &str, positions: &Positions<'_>, result: &mut ParseFacts) {
+pub(crate) fn extract(source: &str, positions: &Positions<'_>, result: &mut ParseFacts, budget: &mut AllocationBudget) -> Result<(), ParseFactsJobError> {
     let start = if source.starts_with('\u{feff}') { 3 } else { 0 };
     let opening_end = line_end(source, start);
     if !delimiter(&source[start..opening_end], "---") {
-        return;
+        return Ok(());
     }
     let yaml_start = after_line(source, opening_end);
     let mut cursor = yaml_start;
@@ -34,12 +35,13 @@ pub(crate) fn extract(source: &str, positions: &Positions<'_>, result: &mut Pars
         let range = positions.range(0..yaml_start);
         result.frontmatter.state = FrontmatterState::Unclosed;
         result.frontmatter.range = Some(range.clone());
+        budget.reserve_vec(&mut result.diagnostics, 1, AllocationKind::Facts)?;
         result.diagnostics.push(Diagnostic {
             code: DiagnosticCode::FrontmatterUnclosed,
             severity: Severity::Error,
             range,
         });
-        return;
+        return Ok(());
     };
     let range = positions.range(0..body_start);
     result.frontmatter = Frontmatter {
@@ -50,22 +52,25 @@ pub(crate) fn extract(source: &str, positions: &Positions<'_>, result: &mut Pars
     let values = if body_start > MAX_FRONTMATTER_BYTES {
         Err(DiagnosticCode::FrontmatterResource)
     } else {
-        decode(&source[yaml_start..yaml_end], yaml_start, positions)
+        decode(&source[yaml_start..yaml_end], yaml_start, positions, budget)
     };
+    if let Some(error) = budget.failure() { return Err(error); }
     match values {
         Ok(properties) => {
             result.properties = properties;
-            projections(result);
+            projections(result, budget)?;
         }
         Err(code) => {
             result.frontmatter.state = FrontmatterState::Invalid;
-            result.diagnostics.push(Diagnostic {
+            budget.reserve_vec(&mut result.diagnostics, 1, AllocationKind::Facts)?;
+        result.diagnostics.push(Diagnostic {
                 code,
                 severity: Severity::Error,
                 range,
             });
         }
     }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -99,7 +104,7 @@ fn syntax(error: &saphyr_parser::ScanError) -> DiagnosticCode {
         DiagnosticCode::FrontmatterSyntax
     }
 }
-fn event_tree(source: &str) -> Result<Tree, DiagnosticCode> {
+fn event_tree(source: &str, budget: &mut AllocationBudget) -> Result<Tree, DiagnosticCode> {
     let mut tree = Tree {
         nodes: Vec::new(),
         root: None,
@@ -115,17 +120,17 @@ fn event_tree(source: &str) -> Result<Tree, DiagnosticCode> {
         let (event, span) = event.map_err(|error| syntax(&error))?;
         let (kind, anchor, opens) = match event {
             Event::Scalar(text, style, anchor, tag) => (
-                Kind::Scalar(text.into_owned(), style, tag.map(|tag| tag.into_owned())),
+                Kind::Scalar(budget.string(&text, AllocationKind::Scratch).map_err(|_| DiagnosticCode::FrontmatterResource)?, style, owned_tag(tag, budget)?),
                 anchor,
                 false,
             ),
             Event::SequenceStart(anchor, tag) => (
-                Kind::Sequence(Vec::new(), tag.map(|tag| tag.into_owned())),
+                Kind::Sequence(Vec::new(), owned_tag(tag, budget)?),
                 anchor,
                 true,
             ),
             Event::MappingStart(anchor, tag) => (
-                Kind::Mapping(Vec::new(), tag.map(|tag| tag.into_owned())),
+                Kind::Mapping(Vec::new(), owned_tag(tag, budget)?),
                 anchor,
                 true,
             ),
@@ -160,18 +165,21 @@ fn event_tree(source: &str) -> Result<Tree, DiagnosticCode> {
             return Err(DiagnosticCode::FrontmatterResource);
         }
         let node = tree.nodes.len();
+        budget.reserve_vec(&mut tree.nodes, 1, AllocationKind::Scratch).map_err(|_| DiagnosticCode::FrontmatterResource)?;
         tree.nodes.push(Node {
             kind,
             span: bom_bytes + span.start.index()..bom_bytes + span.end.index(),
         });
         if anchor != 0 {
+            budget.reserve_map(&mut anchors, 1, AllocationKind::Scratch).map_err(|_| DiagnosticCode::FrontmatterResource)?;
             anchors.insert(anchor, node);
         }
         if let Some(frame) = stack.last_mut() {
             match &mut tree.nodes[frame.node].kind {
-                Kind::Sequence(items, _) => items.push(node),
+                Kind::Sequence(items, _) => { budget.reserve_vec(items, 1, AllocationKind::Scratch).map_err(|_| DiagnosticCode::FrontmatterResource)?; items.push(node); },
                 Kind::Mapping(items, _) => {
                     if let Some(key) = frame.pending_key.take() {
+                        budget.reserve_vec(items, 1, AllocationKind::Scratch).map_err(|_| DiagnosticCode::FrontmatterResource)?;
                         items.push((key, node));
                     } else {
                         frame.pending_key = Some(node);
@@ -183,6 +191,7 @@ fn event_tree(source: &str) -> Result<Tree, DiagnosticCode> {
             return Err(DiagnosticCode::FrontmatterSyntax);
         }
         if opens {
+            budget.reserve_vec(&mut stack, 1, AllocationKind::Scratch).map_err(|_| DiagnosticCode::FrontmatterResource)?;
             stack.push(Frame {
                 node,
                 pending_key: None,
@@ -195,7 +204,8 @@ fn event_tree(source: &str) -> Result<Tree, DiagnosticCode> {
     Ok(tree)
 }
 
-struct Decoder<'a> {
+struct Decoder<'a, 'b> {
+    budget: &'b mut AllocationBudget,
     tree: &'a Tree,
     active: HashSet<usize>,
     nodes: usize,
@@ -203,10 +213,10 @@ struct Decoder<'a> {
     decoded_bytes: usize,
     issues: Vec<DiagnosticCode>,
 }
-impl Decoder<'_> {
+impl Decoder<'_, '_> {
     fn issue(&mut self, issue: DiagnosticCode) {
         if !self.issues.contains(&issue) {
-            self.issues.push(issue);
+            if self.budget.reserve_vec(&mut self.issues, 1, AllocationKind::Scratch).is_ok() { self.issues.push(issue); }
         }
     }
     fn reserve_decoded_bytes(&mut self, bytes: usize) -> Result<(), DiagnosticCode> {
@@ -229,7 +239,7 @@ impl Decoder<'_> {
                     self.issue(DiagnosticCode::FrontmatterValue);
                 }
                 self.reserve_decoded_bytes(text.len())?;
-                Ok(text.clone())
+                self.budget.string(text, AllocationKind::Facts).map_err(|_| DiagnosticCode::FrontmatterResource)
             }
             _ => {
                 self.issue(DiagnosticCode::FrontmatterValue);
@@ -249,6 +259,7 @@ impl Decoder<'_> {
         {
             return Err(DiagnosticCode::FrontmatterResource);
         }
+        self.budget.reserve_set(&mut self.active, 1, AllocationKind::Scratch).map_err(|_| DiagnosticCode::FrontmatterResource)?;
         if !self.active.insert(index) {
             self.issue(DiagnosticCode::FrontmatterAlias);
             return Ok(PropertyValue::Null);
@@ -266,9 +277,10 @@ impl Decoder<'_> {
         let result = match &tree.nodes[index].kind {
             Kind::Scalar(text, style, tag) => {
                 self.reserve_decoded_bytes(text.len())?;
-                match scalar(text, *style, tag.as_ref()) {
+                match scalar(text, *style, tag.as_ref(), self.budget) {
                     Ok(value) => value,
                     Err(code) => {
+                        if self.budget.failure().is_some() { return Err(code); }
                         self.issue(code);
                         PropertyValue::Null
                     }
@@ -280,6 +292,7 @@ impl Decoder<'_> {
                 }
                 let mut values = Vec::new();
                 for item in items {
+                    self.budget.reserve_vec(&mut values, 1, AllocationKind::Facts).map_err(|_| DiagnosticCode::FrontmatterResource)?;
                     values.push(self.value(*item, depth + 1, alias)?);
                 }
                 PropertyValue::Array(values)
@@ -292,9 +305,12 @@ impl Decoder<'_> {
                 let mut keys = HashSet::new();
                 for (key, value) in items {
                     let key = self.key(*key)?;
-                    if !keys.insert(key.clone()) {
+                    self.budget.reserve_set(&mut keys, 1, AllocationKind::Scratch).map_err(|_| DiagnosticCode::FrontmatterResource)?;
+                    let scratch_key = self.budget.string(&key, AllocationKind::Scratch).map_err(|_| DiagnosticCode::FrontmatterResource)?;
+                    if !keys.insert(scratch_key) {
                         self.issue(DiagnosticCode::FrontmatterDuplicateKey);
                     }
+                    self.budget.reserve_vec(&mut values, 1, AllocationKind::Facts).map_err(|_| DiagnosticCode::FrontmatterResource)?;
                     values.push((key, self.value(*value, depth + 1, alias)?));
                 }
                 PropertyValue::Object(values)
@@ -316,12 +332,13 @@ fn priority(code: &DiagnosticCode) -> u8 {
         _ => 6,
     }
 }
-fn decode_mapping(source: &str) -> Result<(Tree, Vec<(String, PropertyValue)>), DiagnosticCode> {
-    let tree = event_tree(source)?;
+fn decode_mapping(source: &str, budget: &mut AllocationBudget) -> Result<(Tree, Vec<(String, PropertyValue)>), DiagnosticCode> {
+    let tree = event_tree(source, budget)?;
     let Some(root) = tree.root else {
         return Ok((tree, Vec::new()));
     };
     let mut decoder = Decoder {
+        budget,
         tree: &tree,
         active: HashSet::new(),
         nodes: 0,
@@ -355,29 +372,24 @@ fn decode(
     source: &str,
     offset: usize,
     positions: &Positions<'_>,
+    budget: &mut AllocationBudget,
 ) -> Result<Vec<Property>, DiagnosticCode> {
-    let (tree, entries) = decode_mapping(source)?;
+    let (tree, entries) = decode_mapping(source, budget)?;
     let Some(root) = tree.root else {
         return Ok(Vec::new());
     };
     let keys = match &tree.nodes[root].kind {
-        Kind::Mapping(entries, _) => entries.iter().map(|entry| entry.0).collect::<Vec<_>>(),
-        _ => Vec::new(),
+        Kind::Mapping(entries, _) => entries.as_slice(),
+        _ => &[],
     };
-    Ok(entries
-        .into_iter()
-        .zip(keys)
-        .map(|((key, value), index)| {
-            let span = &tree.nodes[index].span;
-            let property_type = infer(&key, &value);
-            Property {
-                key,
-                value,
-                property_type,
-                key_range: positions.range(offset + span.start..offset + span.end),
-            }
-        })
-        .collect())
+    let mut properties = Vec::new();
+    for ((key, value), (index, _)) in entries.into_iter().zip(keys) {
+        budget.reserve_vec(&mut properties, 1, AllocationKind::Facts).map_err(|_| DiagnosticCode::FrontmatterResource)?;
+        let span = &tree.nodes[*index].span;
+        let property_type = infer(&key, &value);
+        properties.push(Property { key, value, property_type, key_range: positions.range(offset + span.start..offset + span.end) });
+    }
+    Ok(properties)
 }
 /// Decode exactly one YAML property mapping using the same bounded parser as
 /// Markdown frontmatter. This API performs no framing, inference or projection.
@@ -391,7 +403,7 @@ pub fn parse_yaml_mapping(source: &str) -> Result<PropertyValue, YamlDiagnostic>
             },
         });
     }
-    decode_mapping(source)
+    decode_mapping(source, &mut AllocationBudget::unbounded())
         .map(|(_, entries)| PropertyValue::Object(entries))
         .map_err(|code| {
             let code = match code {
@@ -443,12 +455,13 @@ fn scalar(
     text: &str,
     style: ScalarStyle,
     tag: Option<&Tag>,
+    budget: &mut AllocationBudget,
 ) -> Result<PropertyValue, DiagnosticCode> {
     if tag.is_some_and(|tag| !supported_tag(tag)) {
         return Err(DiagnosticCode::FrontmatterTag);
     }
     if tag.is_some_and(|tag| core_tag(tag, "str")) || tag.is_none() && style != ScalarStyle::Plain {
-        return Ok(PropertyValue::String(text.into()));
+        return Ok(PropertyValue::String(budget.string(text, AllocationKind::Facts).map_err(|_| DiagnosticCode::FrontmatterResource)?));
     }
     let requested = tag.map(|tag| tag.suffix.as_str());
     if matches!(text, "" | "~" | "null" | "Null" | "NULL")
@@ -494,7 +507,7 @@ fn scalar(
     if requested.is_some() {
         return Err(DiagnosticCode::FrontmatterValue);
     }
-    Ok(PropertyValue::String(text.into()))
+    Ok(PropertyValue::String(budget.string(text, AllocationKind::Facts).map_err(|_| DiagnosticCode::FrontmatterResource)?))
 }
 fn valid_date(value: &str) -> bool {
     if !patterns().date.is_match(value) {
@@ -561,62 +574,61 @@ fn infer(key: &str, value: &PropertyValue) -> PropertyType {
         _ => PropertyType::Unknown,
     }
 }
-fn projections(result: &mut ParseFacts) {
+fn projections(result: &mut ParseFacts, budget: &mut AllocationBudget) -> Result<(), ParseFactsJobError> {
     let selected = |plural: &str, singular: &str| {
-        result
-            .properties
-            .iter()
-            .position(|property| {
-                property.key == plural && !matches!(property.value, PropertyValue::Null)
-            })
-            .or_else(|| {
-                result
-                    .properties
-                    .iter()
-                    .position(|property| property.key == singular)
-            })
+        result.properties.iter().position(|property| property.key == plural && !matches!(property.value, PropertyValue::Null))
+            .or_else(|| result.properties.iter().position(|property| property.key == singular))
     };
     let aliases = selected("aliases", "alias");
     let tags = selected("tags", "tag");
     for (index, property) in result.properties.iter().enumerate() {
-        if Some(index) != aliases && Some(index) != tags {
-            continue;
-        }
-        let (values, warning) = match &property.value {
-            PropertyValue::String(text) => (
-                text.split(',')
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>(),
-                false,
-            ),
-            PropertyValue::Array(values) => (
-                values
-                    .iter()
-                    .filter_map(|value| value.as_str().map(str::to_owned))
-                    .collect(),
-                values.iter().any(|value| value.as_str().is_none()),
-            ),
-            _ => (Vec::new(), true),
+        if Some(index) != aliases && Some(index) != tags { continue; }
+        let mut values = Vec::new();
+        let warning = match &property.value {
+            PropertyValue::String(text) => {
+                for value in text.split(',').map(str::trim).filter(|value| !value.is_empty()) {
+                    budget.reserve_vec(&mut values, 1, AllocationKind::Scratch)?;
+                    values.push(budget.string(value, AllocationKind::Scratch)?);
+                }
+                false
+            }
+            PropertyValue::Array(items) => {
+                for value in items.iter().filter_map(PropertyValue::as_str) {
+                    budget.reserve_vec(&mut values, 1, AllocationKind::Scratch)?;
+                    values.push(budget.string(value, AllocationKind::Scratch)?);
+                }
+                items.iter().any(|value| value.as_str().is_none())
+            }
+            _ => true,
         };
         if warning {
-            result.diagnostics.push(Diagnostic {
-                code: DiagnosticCode::ProjectionNonString,
-                severity: Severity::Warning,
-                range: property.key_range.clone(),
-            });
+            budget.reserve_vec(&mut result.diagnostics, 1, AllocationKind::Facts)?;
+            result.diagnostics.push(Diagnostic { code: DiagnosticCode::ProjectionNonString, severity: Severity::Warning, range: property.key_range.clone() });
         }
         if Some(index) == aliases {
-            result.aliases = values.clone();
+            for value in &values {
+                budget.reserve_vec(&mut result.aliases, 1, AllocationKind::Facts)?;
+                result.aliases.push(budget.string(value, AllocationKind::Facts)?);
+            }
         }
         if Some(index) == tags {
             for value in values {
-                let value = value.strip_prefix('#').unwrap_or(&value).to_string();
-                if !result.tags.contains(&value) {
-                    result.tags.push(value);
+                let value = value.strip_prefix('#').unwrap_or(&value);
+                if !result.tags.iter().any(|tag| tag == value) {
+                    budget.reserve_vec(&mut result.tags, 1, AllocationKind::Facts)?;
+                    result.tags.push(budget.string(value, AllocationKind::Facts)?);
                 }
             }
         }
     }
+    Ok(())
+}
+
+fn owned_tag(tag: Option<std::borrow::Cow<'_, Tag>>, budget: &mut AllocationBudget) -> Result<Option<Tag>, DiagnosticCode> {
+    tag.map(|tag| {
+        Ok(Tag {
+            handle: budget.string(&tag.handle, AllocationKind::Scratch).map_err(|_| DiagnosticCode::FrontmatterResource)?,
+            suffix: budget.string(&tag.suffix, AllocationKind::Scratch).map_err(|_| DiagnosticCode::FrontmatterResource)?,
+        })
+    }).transpose()
 }

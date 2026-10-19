@@ -1,6 +1,7 @@
 //! Bounded ordering of an exact retained namespace, before any file evaluation.
 //! Unicode lowercase/UTF16 ordering is deliberate Zorid behavior, independent of
 //! locale and live stats. The 64M allowance is separate from evaluator work.
+use super::preview::SearchBacking;
 use super::{SearchSort, MAX_SEARCH_CANDIDATES, MAX_SEARCH_ORDER_BYTES};
 use crate::Generation;
 use std::{cmp::Ordering, mem::size_of, sync::Arc};
@@ -124,7 +125,7 @@ enum Phase {
 }
 
 pub struct SearchOrderPreparation {
-    generation: Arc<Generation>,
+    generation: SearchBacking,
     sort: SearchSort,
     count: usize,
     rows: Vec<Row>,
@@ -138,13 +139,15 @@ pub struct SearchOrderPreparation {
     work: usize,
 }
 pub struct SearchOrderPlan {
-    generation: Arc<Generation>,
+    generation: SearchBacking,
     rows: Vec<u32>,
     work: usize,
 }
 impl SearchOrderPlan {
     pub fn generation(&self) -> &Arc<Generation> {
-        &self.generation
+        self.generation
+            .published()
+            .expect("published order wrapper")
     }
     /// Ordinals into generation.manifest().entries(), including folder gaps.
     pub fn rows(&self) -> &[u32] {
@@ -185,6 +188,19 @@ fn charge_admission<E>(
     }
     charge(work, check)
 }
+fn charge_admission_units<E>(
+    work: &mut usize,
+    units: usize,
+    check: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<(), SearchOrderError<E>> {
+    if work
+        .checked_add(units)
+        .map_or(true, |n| n > MAX_SEARCH_ORDER_ADMISSION_WORK)
+    {
+        return Err(SearchOrderError::Resource("search order admission work"));
+    }
+    charge_units(work, units, check)
+}
 fn same_bytes<E>(
     a: &str,
     b: &str,
@@ -214,6 +230,14 @@ impl SearchOrderPreparation {
     /// are pumped; admission itself does not claim resumability.
     pub fn new<E>(
         generation: Arc<Generation>,
+        facts: &[SearchPresentationFacts<'_>],
+        sort: SearchSort,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Self, SearchOrderError<E>> {
+        Self::new_backing(SearchBacking::Published(generation), facts, sort, check)
+    }
+    pub(super) fn new_backing<E>(
+        generation: SearchBacking,
         facts: &[SearchPresentationFacts<'_>],
         sort: SearchSort,
         check: &mut impl FnMut(usize) -> Result<(), E>,
@@ -249,9 +273,69 @@ impl SearchOrderPreparation {
             ));
         }
         let mut work = 0;
+        // Namespace rows are path ordered, while captured membership is exact-ID
+        // ordered. Merge both existing ID orders once into a transient bitmap;
+        // admission then keeps its original path/facts order. No strings or
+        // parser facts are copied, and sparse previews never pay N*log(P).
+        let membership = if let SearchBacking::Preview(preview) = &generation {
+            let entries = generation.manifest().entries();
+            let scratch_limit = size_of::<Self>()
+                + rows.capacity() * size_of::<Row>()
+                + (order.capacity() + scratch.capacity()) * 4;
+            if scratch_limit
+                .checked_add(entries.len())
+                .map_or(true, |n| n > MAX_SEARCH_ORDER_BYTES)
+            {
+                return Err(SearchOrderError::Resource("search order membership bytes"));
+            }
+            charge_admission_units(
+                &mut work,
+                entries.len().div_ceil(64).saturating_add(1),
+                check,
+            )?;
+            let mut membership: Vec<u8> = Vec::new();
+            reserve(&mut membership, entries.len())?;
+            if scratch_limit
+                .checked_add(membership.capacity())
+                .map_or(true, |n| n > MAX_SEARCH_ORDER_BYTES)
+            {
+                return Err(SearchOrderError::Resource(
+                    "search order membership capacity",
+                ));
+            }
+            membership.resize(entries.len(), 0);
+            let prepared = preview.records_by_id();
+            let mut at = 0;
+            for &ordinal in generation.manifest().entry_ordinals_by_id() {
+                charge_admission(&mut work, check)?;
+                if at == prepared.len() {
+                    break;
+                }
+                // Typed visit plus both ID operands' <=128-byte comparisons.
+                charge_admission_units(&mut work, 5, check)?;
+                match entries[ordinal].id.cmp(&prepared[at].witness().entry().id) {
+                    Ordering::Less => {}
+                    Ordering::Equal => {
+                        charge_admission(&mut work, check)?;
+                        membership[ordinal] = 1;
+                        at += 1;
+                    }
+                    Ordering::Greater => {
+                        return Err(SearchOrderError::InvalidFacts("preview membership"))
+                    }
+                }
+            }
+            if at != prepared.len() {
+                return Err(SearchOrderError::InvalidFacts("preview membership"));
+            }
+            Some(membership)
+        } else {
+            None
+        };
         for (ordinal, entry) in generation.manifest().entries().iter().enumerate() {
             charge_admission(&mut work, check)?;
-            if entry.kind != EntryKind::File {
+            if entry.kind != EntryKind::File || membership.as_ref().is_some_and(|m| m[ordinal] == 0)
+            {
                 continue;
             }
             let fact = facts

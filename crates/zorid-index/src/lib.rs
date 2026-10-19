@@ -2,10 +2,12 @@
 //! Pure publication checks are not durable commits. Hosts must recheck heads and
 //! publish rows/head atomically in the same source/index storage transaction.
 pub mod document_runtime;
+pub mod draft_runtime;
 mod extraction;
 mod generation;
 mod import;
 mod literal;
+mod metadata_rows;
 mod persisted;
 mod preview;
 mod relationships;
@@ -30,7 +32,8 @@ pub use generation::{
 };
 /// Sealed first-build captures; these reports never certify publication.
 pub use preview::{
-    PreviewCaptureError, PreviewCaptureOwner, PreviewProgress, PreviewSnapshot, PreviewSnapshotId,
+    PreviewCaptureError, PreviewCaptureOwner, PreviewFactsView, PreviewProgress, PreviewRowFacts,
+    PreviewSnapshot, PreviewSnapshotId,
 };
 
 pub use literal::{
@@ -84,4 +87,17 @@ pub use search::{
     CommittedRichSearchPage, PreparedRichSearchPage, RichPageProfile, RichPreparation, RichQueryId,
     RichSearchAction, RichSearchCursor, RichSearchDrive, RichSearchError, RichSearchOwner,
     RichSearchWorkBreakdown, RichTextReadRequest,
+};
+
+/// First-build queries remain distinct from published search authority.
+pub use search::{
+    CommittedPreviewSearchPage, PreparedPreviewSearchPage, PreviewPreparation, PreviewQueryId,
+    PreviewRichSearchPage, PreviewSearchAction, PreviewSearchCursor, PreviewSearchDrive,
+    PreviewSearchStatus, PreviewTextReadRequest,
+};
+
+/// Body-free committed metadata reset/delta paging; host pin admission remains external.
+pub use metadata_rows::{
+    MetadataRowsError, MetadataRowsFile, MetadataRowsItem, MetadataRowsMode, MetadataRowsScan,
+    PreparedMetadataRowsPage, MAX_METADATA_ROWS, MAX_METADATA_ROWS_BYTES, MAX_METADATA_ROWS_WORK,
 };

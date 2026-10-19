@@ -3,6 +3,8 @@
 mod frontmatter;
 mod markdown;
 mod positions;
+mod phases;
+pub use phases::{ParseFactsJob, ParseFactsJobError, ParseFactsPhase, ParseFactsResourceKind, ParseFactsStep, ParseFactsStepBudget, ParseFactsUsage};
 mod types;
 mod value;
 
@@ -22,33 +24,5 @@ pub fn parse_markdown(request: &MetadataRequest) -> Result<DocumentMetadata, Ext
 /// remains successful extraction with diagnostics. No path, store or publication
 /// witness is inferred; callers correlate facts with their source before binding.
 pub fn parse_markdown_facts(source: &str) -> Result<ParseFacts, ExtractionError> {
-    if source.len() > MAX_SOURCE_BYTES {
-        return Err(ExtractionError::SourceTooLarge {
-            maximum_bytes: MAX_SOURCE_BYTES,
-        });
-    }
-    let positions = positions::Positions::new(source);
-    let mut result = ParseFacts {
-        schema_version: SCHEMA_VERSION,
-        dialect_version: DIALECT_VERSION.into(),
-        source_length: positions.length(),
-        frontmatter: Frontmatter {
-            state: FrontmatterState::Absent,
-            range: None,
-            body_start: positions.point(0),
-        },
-        properties: Vec::new(),
-        aliases: Vec::new(),
-        tags: Vec::new(),
-        tag_occurrences: Vec::new(),
-        headings: Vec::new(),
-        links: Vec::new(),
-        tasks: Vec::new(),
-        blocks: Vec::new(),
-        list_items: Vec::new(),
-        diagnostics: Vec::new(),
-    };
-    frontmatter::extract(source, &positions, &mut result);
-    markdown::extract(source, &positions, &mut result);
-    Ok(result)
+    phases::parse_borrowed(source)
 }

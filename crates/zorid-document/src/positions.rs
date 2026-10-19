@@ -1,8 +1,10 @@
 use crate::{SourceLength, SourcePoint, SourceRange};
 use std::ops::Range;
+use std::borrow::Cow;
+use crate::phases::{AllocationBudget, AllocationKind, ParseFactsJobError};
 
 #[derive(Clone, Copy)]
-struct Checkpoint {
+pub(crate) struct Checkpoint {
     byte: usize,
     utf16: u32,
     line: u32,
@@ -13,20 +15,27 @@ struct Checkpoint {
 /// per-byte Unicode table, including a large one-line note full of occurrences.
 pub(crate) struct Positions<'a> {
     source: &'a str,
-    checkpoints: Vec<Checkpoint>,
+    checkpoints: Cow<'a, [Checkpoint]>,
 }
 impl<'a> Positions<'a> {
     pub fn new(source: &'a str) -> Self {
+        let mut budget = AllocationBudget::unbounded();
+        Self::build(source, &mut budget).expect("unbounded position allocation")
+    }
+    pub(crate) fn build(source: &'a str, budget: &mut AllocationBudget) -> Result<Self, ParseFactsJobError> {
         let mut state = Checkpoint {
             byte: 0,
             utf16: 0,
             line: 0,
             previous_cr: false,
         };
-        let mut checkpoints = vec![state];
+        let mut checkpoints = Vec::new();
+        budget.reserve_vec(&mut checkpoints, 1, AllocationKind::Scratch)?;
+        checkpoints.push(state);
         for (byte, character) in source.char_indices() {
             if byte - checkpoints.last().unwrap().byte >= 256 {
                 state.byte = byte;
+                budget.reserve_vec(&mut checkpoints, 1, AllocationKind::Scratch)?;
                 checkpoints.push(state);
             }
             state.utf16 += character.len_utf16() as u32;
@@ -37,13 +46,16 @@ impl<'a> Positions<'a> {
         }
         state.byte = source.len();
         if checkpoints.last().unwrap().byte != source.len() {
+            budget.reserve_vec(&mut checkpoints, 1, AllocationKind::Scratch)?;
             checkpoints.push(state);
         }
-        Self {
+        Ok(Self {
             source,
-            checkpoints,
-        }
+            checkpoints: Cow::Owned(checkpoints),
+        })
     }
+    pub(crate) fn into_checkpoints(self) -> Vec<Checkpoint> { self.checkpoints.into_owned() }
+    pub(crate) fn from_index(source: &'a str, checkpoints: &'a [Checkpoint]) -> Self { Self { source, checkpoints: Cow::Borrowed(checkpoints) } }
     fn at(&self, byte: usize) -> Checkpoint {
         assert!(byte <= self.source.len() && self.source.is_char_boundary(byte));
         let index = self.checkpoints.partition_point(|point| point.byte <= byte) - 1;
