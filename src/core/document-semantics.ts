@@ -74,7 +74,10 @@ export interface DocumentStatus {
   /** Exact host capture comparison, not sequence equality alone. */
   readonly current:boolean;readonly rebuildRequired:boolean;readonly coverageComplete:boolean|null;
 }
-export interface DocumentStage {readonly stageId:DocumentStageId;readonly snapshot:DocumentSnapshotId;readonly progress:null|{readonly prepared:number;readonly total:number;readonly reused:number|null;readonly ready:boolean}}
+/** Disjoint eligible lookup outcomes; fallback after a corrupt/unsupported/unavailable
+ * lookup does not also count as a miss. Same-entry reuse is counted separately. */
+export interface DocumentParseCacheCounters {readonly hits:number;readonly misses:number;readonly unavailable:number;readonly corrupt:number;readonly unsupported:number}
+export interface DocumentStage {readonly stageId:DocumentStageId;readonly snapshot:DocumentSnapshotId;readonly progress:null|{readonly prepared:number;readonly total:number;readonly reused:number|null;readonly ready:boolean;readonly parseCache?:DocumentParseCacheCounters}}
 export interface DocumentPin {
   readonly pinId:DocumentPinId;readonly snapshot:DocumentSnapshotId;readonly source:DocumentSourceId;readonly coverageComplete:boolean;
   close():Promise<void>;
@@ -133,7 +136,7 @@ function bounded(value:unknown,maximum:number,request=false):void{
 export function documentErrorCode(error:unknown):string|undefined{return error&&typeof error==='object'&&'code'in error&&typeof error.code==='string'?error.code:undefined;}
 export function createDocumentService(transport:DocumentTransport):DocumentService{
   const call=async<T>(input:unknown,action:()=>Promise<T>):Promise<T>=>{bounded(input,DOCUMENT_REQUEST_BYTES,true);const value=await action();if(value!==undefined)bounded(value,DOCUMENT_RESPONSE_BYTES);return value;};
-  const stage=(value:unknown):DocumentStage=>{const row=object(value),p=row.progress===null?null:object(row.progress);return Object.freeze({stageId:text(row.stageId) as DocumentStageId,snapshot:documentSnapshot(row.snapshot),progress:p===null?null:Object.freeze({prepared:integer(p.prepared),total:integer(p.total),reused:p.reused===null?null:integer(p.reused),ready:bool(p.ready)})});};
+  const stage=(value:unknown):DocumentStage=>{const row=object(value),p=row.progress===null?null:object(row.progress);return Object.freeze({stageId:text(row.stageId) as DocumentStageId,snapshot:documentSnapshot(row.snapshot),progress:p===null?null:Object.freeze({prepared:integer(p.prepared),total:integer(p.total),reused:p.reused===null?null:integer(p.reused),ready:bool(p.ready),...(p.parseCache===undefined?{}:{parseCache:(()=>{const c=object(p.parseCache);return Object.freeze({hits:integer(c.hits),misses:integer(c.misses),unavailable:integer(c.unavailable),corrupt:integer(c.corrupt),unsupported:integer(c.unsupported)});})()})})});};
   return {
     async status(){const row=object(await call({},()=>transport.status()));const source=documentSource(row.source),snapshot=row.snapshot===null?null:documentSnapshot(row.snapshot),coveredSource=row.coveredSource===null?null:documentSource(row.coveredSource);if(snapshot&&snapshot.localStoreId!==source.localStoreId||coveredSource&&coveredSource.localStoreId!==source.localStoreId)return invalid();return {source,snapshot,coveredSource,current:bool(row.current),rebuildRequired:bool(row.rebuildRequired),coverageComplete:row.coverageComplete===null?null:bool(row.coverageComplete)};},
     initialize:()=>call({},()=>transport.initialize()),rebuild:()=>call({},()=>transport.rebuild()),

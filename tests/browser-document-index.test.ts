@@ -12,24 +12,24 @@ const range=(globalThis as any).IDBKeyRange;
 (globalThis as any).IDBKeyRange={bound:(lower:string,upper:string)=>({lower,upper})};
 /** Transaction/opaque-WASM doubles test host storage and transport only. No JS
  * parser, resolver or query evaluator stands in for Rust corpus parity. */
-function fixture(){
+function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:number;evictions?:number;pauseCacheBindOnce?:boolean}={}){
   const records=new Map<string,Map<string,any>>(['control','metadata','presentation','content','sync_materialization_refs'].map(n=>[n,new Map()]));
   const seed=(store:string,key:string,value:any)=>records.get(store)!.set(key,clone(value));
   seed('control','local-store-id',{key:'local-store-id',value:authority});seed('control','sequence',{key:'sequence',value:'0'});
-  const calls:{store:string;op:string;key?:any}[]=[],transactions:string[][]=[];let failCommit=false,denied=false;let afterRead:((store:string,key:any)=>void)|undefined;
+  const calls:{store:string;op:string;key?:any}[]=[],transactions:string[][]=[];let failCommit=false,denied=false,cacheReadUnavailable=false;let afterRead:((store:string,key:any)=>void)|undefined;
   const db:any={transaction(names:string[],mode:string,options:any){
     if(mode==='readwrite')assert.deepEqual(options,{durability:'strict'});transactions.push(names);
     const local=new Map(names.map(n=>[n,clone(records.get(n)!)])),writes=new Set<string>();let pending=0,aborted=false,completed=false,scheduled=false;
     const tx:any={durability:'strict',abort(){if(aborted||completed)return;aborted=true;queueMicrotask(()=>tx.onabort?.());},
       objectStore(name:string){assert.ok(local.has(name));
         const request=(op:string,key:any,action:()=>any)=>{const result:any={};calls.push({store:name,op,key});pending++;
-          queueMicrotask(()=>{if(aborted)return;try{result.result=clone(action());if(op==='get')afterRead?.(name,key);result.onsuccess?.();}catch{tx.abort();}finally{pending--;schedule();}});return result;};
+          queueMicrotask(()=>{if(aborted)return;try{if(cacheReadUnavailable&&name==='control'&&op==='get'&&String(key).startsWith('document-parse-cache:v1/row/')){cacheReadUnavailable=false;throw new DOMException('fixture optional cache unavailable','UnknownError');}result.result=clone(action());if(op==='get')afterRead?.(name,key);result.onsuccess?.();}catch{tx.abort();}finally{pending--;schedule();}});return result;};
         const put=(row:any,add:boolean)=>request(add?'add':'put',row.key??row.id,()=>{assert.equal(mode,'readwrite');const key=row.key??row.id;if(add&&local.get(name)!.has(key))throw new Error('duplicate');local.get(name)!.set(key,clone(row));writes.add(name);return key;});
         return {get:(key:string)=>request('get',key,()=>local.get(name)!.get(key)),put:(row:any)=>put(row,false),add:(row:any)=>put(row,true),
           getAll(){assert.fail('aggregate source/control scan is forbidden');},
           delete:(key:string)=>request('delete',key,()=>{local.get(name)!.delete(key);writes.add(name);}),
           openKeyCursor(bounds?:any){return this.openCursor(bounds);},
-          openCursor(bounds?:any){if(name==='control')assert.ok(bounds?.lower?.startsWith('document-index:v1/g/'),'control cursor must have an exact derived prefix');
+          openCursor(bounds?:any){if(name==='control')assert.ok(['document-index:v1/g/','document-parse-cache:v1/row/','document-parse-cache:v1/oldest/'].some(prefix=>bounds?.lower?.startsWith(prefix)),'control cursor must have an exact derived prefix');
             calls.push({store:name,op:'cursor',key:bounds});const result:any={};pending++;const rows=[...local.get(name)!].filter(([key])=>!bounds||key>=bounds.lower&&key<=bounds.upper).sort(([a],[b])=>a<b?-1:1);let pos=0;
             const step=()=>{if(aborted)return;let continued=false;const row=rows[pos];result.result=row?{primaryKey:row[0],value:clone(row[1]),continue(){continued=true;pos++;queueMicrotask(step);},delete(){return request('delete',row[0],()=>{local.get(name)!.delete(row[0]);writes.add(name);});}}:null;
               try{result.onsuccess?.();}catch{tx.abort();}finally{if(!continued){pending--;schedule();}}};queueMicrotask(step);return result;
@@ -39,13 +39,16 @@ function fixture(){
     };
     function schedule(){if(scheduled)return;scheduled=true;queueMicrotask(()=>{scheduled=false;if(aborted||completed||pending)return;if(failCommit&&mode==='readwrite'){failCommit=false;tx.abort();return;}completed=true;for(const n of writes)records.set(n,local.get(n)!);tx.oncomplete?.();});}schedule();return tx;
   }};
-  let textExtractions=0,reuses=0;const taskCalls:{sources:{id:string;source:string}[];options:any;snapshot:unknown}[]= [];
+  let textExtractions=0,reuses=0,cacheBinds=0,pauseCacheBindOnce=!!options.pauseCacheBindOnce;const taskCalls:{sources:{id:string;source:string}[];options:any;snapshot:unknown}[]= [];
   const baseCalls:{id:string;text:string;facts:any[];options:any;viewName?:string|null}[]=[];
   class MockBuilder {
     header:BrowserIndexHeader;rows=new Map<string,any>();constructor(input:string){this.header=JSON.parse(input);this.header.entries=this.header.entries.map(({id,path,kind,revision,deleted})=>({id,path,kind,revision,deleted}));}
     free(){}headerJson(){return JSON.stringify(this.header);}beginPump(){}
     pendingJson(){return JSON.stringify(this.header.entries.filter(e=>e.kind==='file'&&!this.rows.has(e.id)).slice(0,32));}
     addText(id:string,bytes:Uint8Array){textExtractions++;this.rows.set(id,{metadata:null,digest:sha(bytes),textBytes:bytes.length,exclusion:null});}
+    cacheKeyJson(id:string,bytes:Uint8Array){if(bytes.includes(0))return 'null';const entry=this.header.entries.find(e=>e.id===id)!,key={scope:this.header.source.localStoreId,mode:entry.path.toLowerCase().endsWith('.md')?'markdown':'plainText',digest:sha(bytes),bytes:bytes.length};return JSON.stringify({key,storageKey:createHash('sha256').update(JSON.stringify(key)).digest('hex')});}
+    extractText(id:string,bytes:Uint8Array){this.addText(id,bytes);const {key}=JSON.parse(this.cacheKeyJson(id,bytes));const record=this.rows.get(id),factsChecksum=createHash('sha256').update(JSON.stringify({key,record})).digest('hex');return JSON.stringify({added:true,payload:JSON.stringify({fixtureVersion:1,key,record,factsChecksum})});}
+    addCachedText(id:string,expected:string,payload:string){let value;try{value=JSON.parse(payload);}catch{return JSON.stringify({outcome:'corrupt',added:false});}if(value.fixtureVersion!==1)return JSON.stringify({outcome:'unsupported',added:false});const {key}=JSON.parse(expected);if(JSON.stringify(value.key)!==JSON.stringify(key)||value.factsChecksum!==createHash('sha256').update(JSON.stringify({key:value.key,record:value.record})).digest('hex'))return JSON.stringify({outcome:'corrupt',added:false});if(pauseCacheBindOnce){pauseCacheBindOnce=false;return JSON.stringify({outcome:'hit',added:false});}cacheBinds++;this.rows.set(id,clone(value.record));return JSON.stringify({outcome:'hit',added:true});}
     addBinary(id:string){this.rows.set(id,{metadata:null,digest:null,textBytes:0,exclusion:'binary'});}
     addUnreadable(id:string){this.rows.set(id,{metadata:null,digest:null,textBytes:0,exclusion:'unreadable'});}
     addPersisted(id:string,row:string){reuses++;this.rows.set(id,JSON.parse(row));}
@@ -61,7 +64,8 @@ function fixture(){
       };},
     };}
   }
-  const wasm={documentIndexVersionsJson:()=>'{"schema":1,"extraction":"fixture","resolver":"fixture","query":"fixture"}',WasmDocumentIndexBuilder:MockBuilder} as unknown as BrowserDocumentIndexWasm;
+  const policy={formatVersion:1,maxRows:options.cacheRows??100000,maxBytes:options.cacheBytes??64*1024*1024,maxRowBytes:options.cacheRowBytes??1024*1024,maxEvictionsPerWrite:options.evictions??32};
+  const wasm={documentParseCachePolicyJson:()=>JSON.stringify(policy),documentParseCacheAdmissionJson:(input:string)=>{const {usage,replacedPayloadBytes:replaced,incomingPayloadBytes:incoming,evictedRows:evicted}=JSON.parse(input),rows=usage.rows-(replaced===null?0:1)+1,bytes=usage.bytes-(replaced??0)+incoming;return JSON.stringify(incoming>policy.maxRowBytes?'skipOversized':rows<=policy.maxRows&&bytes<=policy.maxBytes?'write':evicted===policy.maxEvictionsPerWrite?'skipEvictionLimit':'evictOldest');},documentIndexVersionsJson:()=>'{"schema":1,"extraction":"fixture","resolver":"fixture","query":"fixture"}',WasmDocumentIndexBuilder:MockBuilder} as unknown as BrowserDocumentIndexWasm;
   const open=(clientId='client-a')=>browserDocumentIndex({db,authorityId:authority,clientId,wasm,assertActive(){if(denied)throw Object.assign(new Error('retired'),{code:'owner_retired'});},
     readPublication(tx,done,abort){let entries:any[]|undefined,presentation:any[]|undefined,sequence:string|undefined;
       const finish=()=>{if(entries&&presentation&&sequence!==undefined)done({entries,presentation,sequence});};
@@ -77,7 +81,7 @@ function fixture(){
   }
   const source=()=>clone(new Map([...records].filter(([n])=>n!=='control').map(([n,m])=>[n,m])));
   const build=async(index:ReturnType<typeof open>)=>{let stage=await index.begin();do{stage=await index.pump(stage.stageId);}while(!stage.ready);return index.publish(stage.stageId);};
-  return {records,calls,transactions,file,open,build,source,seed,baseCalls,taskCalls,stats:()=>({textExtractions,reuses}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},deny(){denied=true;},afterRead(action:(store:string,key:any)=>void){afterRead=action;}};
+  return {records,calls,transactions,file,open,build,source,seed,baseCalls,taskCalls,stats:()=>({textExtractions,reuses,cacheBinds}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},cacheUnavailable(){cacheReadUnavailable=true;},deny(){denied=true;},afterRead(action:(store:string,key:any)=>void){afterRead=action;}};
 }
 
 test('strict derived publication retains source bytes and uses no aggregate control scan',async()=>{
@@ -112,13 +116,13 @@ test('authored binary mode stays excluded even for valid UTF8 bytes',async()=>{
   const f=fixture();f.file('a','ordinary UTF8',{binary:true});const index=f.open();await f.build(index);const pin=await index.open();
   assert.equal(f.stats().textExtractions,0);assert.deepEqual((await index.search({pinId:pin.pinId,query:'opaque'}) as any).result.value.observed,[]);await index.close();
 });
-test('unchanged exact source witnesses reuse Rust records while moves re-extract',async()=>{
+test('same-entry priority stays distinct from content facts reuse after a move',async()=>{
   const f=fixture();f.file('a','text');const index=f.open();await f.build(index);await f.build(index);assert.equal(f.stats().textExtractions,1);assert.equal(f.stats().reuses,1);
-  f.file('a','text',{path:'move.md'});await f.build(index);assert.equal(f.stats().textExtractions,2);await index.close();
+  f.file('a','text',{path:'move.md'});await f.build(index);assert.equal(f.stats().textExtractions,1);assert.equal(f.stats().cacheBinds,1);await index.close();
 });
 test('cache corruption requires explicit rebuild and rebuild expires pins without changing source',async()=>{
   const f=fixture();f.file('a','text');const index=f.open();await f.build(index);const pin=await index.open(),source=f.source();
-  const cache=[...f.records.get('control')!].find(([key])=>key.includes('/row/'))!;cache[1].value.record='{"metadata":null}';
+  const cache=[...f.records.get('control')!].find(([key])=>key.startsWith('document-index:v1/g/')&&key.includes('/row/'))!;cache[1].value.record='{"metadata":null}';
   await assert.rejects(index.open(),{code:'index_rebuild_required'});await index.rebuild();await assert.rejects(index.search({pinId:pin.pinId,query:'opaque'}),{code:'index_snapshot_expired'});
   assert.deepEqual(f.source(),source);await f.build(index);assert.equal((await index.status()).current,true);await index.close();
 });
@@ -238,4 +242,63 @@ test('Tasks rechecks pin/session after asynchronous retained projection fetch',a
   const f=fixture();f.file('type','original');const index=f.open();await f.build(index);const pin=await index.open();
   let fetched=false;f.afterRead((store,key)=>{if(store==='control'&&String(key).endsWith('/row/type')){fetched=true;f.deny();}});
   await assert.rejects(index.tasks({pinId:pin.pinId,typeIds:['type']}),{code:'owner_retired'});assert.equal(fetched,true);assert.deepEqual(f.taskCalls,[]);
+});
+
+
+/** The WASM double above supplies opaque facts/policy. These assertions cover
+ * host identity, persistence, counters and fencing, not real Rust parser parity. */
+const parseRows=(f:ReturnType<typeof fixture>)=>[...f.records.get('control')!.values()].filter(row=>typeof row.key==='string'&&row.key.startsWith('document-parse-cache:v1/row/'));
+async function prepared(index:ReturnType<ReturnType<typeof fixture>['open']>){let stage=await index.begin();while(!stage.ready)stage=await index.pump(stage.stageId);await index.publish(stage.stageId);return stage;}
+test('different entries share facts, then same-entry rows remain the preferred reuse path',async()=>{
+  const f=fixture();f.file('a','identical');const index=f.open();let stage=await prepared(index);assert.deepEqual(stage.progress.parseCache,{hits:0,misses:1,unavailable:0,corrupt:0,unsupported:0});
+  f.file('b','identical',{revision:'r2'});f.sequence('1');stage=await prepared(index);assert.equal(stage.progress.reused,1);assert.deepEqual(stage.progress.parseCache,{hits:1,misses:0,unavailable:0,corrupt:0,unsupported:0});assert.deepEqual(f.stats(),{textExtractions:1,reuses:1,cacheBinds:1});assert.equal(parseRows(f).length,1);
+  stage=await prepared(index);assert.equal(stage.progress.reused,2);assert.equal(stage.progress.parseCache.hits,0);assert.equal(stage.progress.parseCache.misses,0);await index.close();
+});
+test('persisted facts survive host reopen while changed content and extraction mode miss',async()=>{
+  const f=fixture();f.file('a','same');const first=f.open();await prepared(first);await first.close();
+  f.file('a','same',{revision:'r2',path:'renamed.md'});f.sequence('1');const reopened=f.open();let stage=await prepared(reopened);assert.equal(stage.progress.parseCache.hits,1);assert.equal(stage.progress.reused,0);
+  f.file('a','same',{revision:'r3',path:'renamed.txt'});f.sequence('2');stage=await prepared(reopened);assert.equal(stage.progress.parseCache.misses,1);
+  f.file('a','different',{revision:'r4',path:'renamed.md'});f.sequence('3');stage=await prepared(reopened);assert.equal(stage.progress.parseCache.misses,1);assert.equal(f.stats().textExtractions,3);await reopened.close();
+});
+test('corrupt and unsupported optional facts re-extract with a single disjoint lookup outcome',async()=>{
+  for(const outcome of ['corrupt','unsupported']){const f=fixture();f.file('a','text');const index=f.open();await prepared(index);const row=parseRows(f)[0],ordinal=row.ordinal;
+    row.payload=outcome==='corrupt'?row.payload.replace(/("factsChecksum":")[0-9a-f]/,'$1z'):row.payload.replace('"fixtureVersion":1','"fixtureVersion":2');
+    f.file('a','text',{revision:'r2'});f.sequence('1');const stage=await prepared(index);assert.equal(stage.progress.parseCache[outcome],1);assert.equal(stage.progress.parseCache.misses,0);assert.equal(stage.progress.parseCache.hits,0);assert.equal(f.stats().textExtractions,2);assert.equal(parseRows(f)[0].ordinal,ordinal,'replacement retains FIFO position');await index.close();
+  }
+});
+test('Rust-supplied capacity drives FIFO eviction, and hits do not promote a row',async()=>{
+  const f=fixture({cacheRows:2});f.file('a','first');f.file('b','second');const index=f.open();await prepared(index);const oldest=parseRows(f).find(row=>JSON.parse(row.payload).key.digest.toString()===sha(new TextEncoder().encode('first')).toString())!;
+  f.file('a','first',{revision:'r2'});f.sequence('1');await prepared(index);assert.equal(parseRows(f).find(row=>row.key===oldest.key)!.ordinal,oldest.ordinal);
+  f.file('c','third');f.sequence('2');await prepared(index);assert.equal(parseRows(f).length,2);assert.equal(parseRows(f).some(row=>row.key===oldest.key),false);assert.equal(f.records.get('control')!.get('document-parse-cache:v1/catalog').value.rows,2);await index.close();
+});
+test('an oversized optional payload skips cache while its supported index row publishes',async()=>{
+  const f=fixture({cacheRowBytes:16});f.file('a','text');const index=f.open();const stage=await prepared(index);assert.equal(stage.progress.prepared,1);assert.equal(stage.progress.parseCache.misses,1);assert.equal(parseRows(f).length,0);assert.equal((await index.status()).current,true);await index.close();
+});
+test('cache lookup cannot swallow retired admission or replace the final source fence',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();await prepared(index);f.file('a','text',{revision:'r2'});f.sequence('1');const stage=await index.begin();let changed=false;
+  f.afterRead((store,key)=>{if(!changed&&store==='control'&&String(key).startsWith('document-parse-cache:v1/row/')){changed=true;f.file('a','later',{revision:'r3'});f.sequence('2');}});
+  await assert.rejects(index.pump(stage.stageId),{code:'index_source_changed'});assert.equal((await index.status()).coveredWatermark,'0');await index.close();
+  const g=fixture();g.file('a','text');const other=g.open();await prepared(other);g.file('a','text',{revision:'r2'});g.sequence('1');const pending=await other.begin();g.afterRead((store,key)=>{if(store==='control'&&String(key).startsWith('document-parse-cache:v1/row/'))g.deny();});await assert.rejects(other.pump(pending.stageId),{code:'owner_retired'});await other.close();
+});
+test('explicit rebuild clears only derived parse/generation prefixes, preserving pending and source data',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();await prepared(index);const source=f.source();f.seed('control','pending-checkpoint',{key:'pending-checkpoint',value:'unsent'});f.seed('control','receipt',{key:'receipt',value:'keep'});await index.rebuild();assert.equal(parseRows(f).length,0);assert.equal(f.records.get('control')!.get('pending-checkpoint').value,'unsent');assert.equal(f.records.get('control')!.get('receipt').value,'keep');assert.deepEqual(f.source(),source);await index.close();
+});
+
+test('unavailable optional lookup re-extracts without also incrementing miss',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();await prepared(index);f.file('a','text',{revision:'r2'});f.sequence('1');f.cacheUnavailable();const stage=await prepared(index);assert.deepEqual(stage.progress.parseCache,{hits:0,misses:0,unavailable:1,corrupt:0,unsupported:0});assert.equal(f.stats().textExtractions,2);await index.close();
+});
+test('an optional write abandons admission after the Rust-supplied victim bound',async()=>{
+  const f=fixture({cacheRows:100,cacheBytes:4096,cacheRowBytes:2048});f.file('a','text');
+  for(let i=0;i<40;i++){const key=i.toString(16).padStart(64,'0'),ordinal=String(i),payload='x'.repeat(i<38?1:2000),bytes=payload.length;f.seed('control','document-parse-cache:v1/row/'+key,{key:'document-parse-cache:v1/row/'+key,locator:key,ordinal,bytes,payload});const ordered='document-parse-cache:v1/oldest/'+ordinal.padStart(20,'0')+'/'+key;f.seed('control',ordered,{key:ordered,locator:key,ordinal,bytes});}
+  f.seed('control','document-parse-cache:v1/catalog',{key:'document-parse-cache:v1/catalog',value:{formatVersion:1,authorityId:authority,rows:40,bytes:4038,nextOrdinal:'40'}});const source=f.source(),index=f.open();const stage=await prepared(index);assert.equal(stage.progress.prepared,1);assert.equal(stage.progress.parseCache.misses,1);assert.equal(parseRows(f).length,8);const usage=f.records.get('control')!.get('document-parse-cache:v1/catalog').value;assert.equal(usage.rows,8);assert.equal(usage.bytes,4006);assert.equal((await index.status()).current,true);assert.deepEqual(f.source(),source);await index.close();
+});
+test('impossible FIFO usage is corrupt optional state, never reset to an invented zero',async()=>{
+  const f=fixture({cacheRows:1});f.file('a','text');f.seed('control','document-parse-cache:v1/catalog',{key:'document-parse-cache:v1/catalog',value:{formatVersion:1,authorityId:authority,rows:1,bytes:1,nextOrdinal:'1'}});const index=f.open();await prepared(index);assert.equal(parseRows(f).length,0);assert.equal(f.records.get('control')!.get('document-parse-cache:v1/catalog').value.rows,1);assert.equal((await index.status()).current,true);await index.close();
+});
+
+test('completed cache hits remain observable when row-output budget defers insertion to another pump',async()=>{
+  const f=fixture({pauseCacheBindOnce:true});f.file('a','same');const index=f.open();await prepared(index);f.file('b','same');f.sequence('1');let stage=await index.begin();stage=await index.pump(stage.stageId);assert.equal(stage.prepared,1);assert.equal(stage.ready,false);assert.equal(stage.progress.reused,1);assert.equal(stage.progress.parseCache.hits,1);stage=await index.pump(stage.stageId);assert.equal(stage.ready,true);assert.equal(stage.progress.parseCache.hits,2);assert.equal(stage.progress.parseCache.misses,0);await index.publish(stage.stageId);await index.close();
+});
+test('unsupported optional catalog and exhausted FIFO ordinal never fail supported indexing',async()=>{
+  for(const value of [{formatVersion:999,authorityId:authority,rows:0,bytes:0,nextOrdinal:'0'},{formatVersion:1,authorityId:authority,rows:0,bytes:0,nextOrdinal:'18446744073709551615'}]){const f=fixture();f.file('a','text');f.seed('control','document-parse-cache:v1/catalog',{key:'document-parse-cache:v1/catalog',value});const source=f.source(),index=f.open();const stage=await prepared(index);assert.equal(stage.progress.parseCache[value.formatVersion===999?'unsupported':'misses'],1);assert.equal((await index.status()).current,true);assert.equal(parseRows(f).length,0);assert.deepEqual(f.source(),source);await index.close();}
 });

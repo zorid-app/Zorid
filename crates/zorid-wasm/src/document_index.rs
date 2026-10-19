@@ -4,11 +4,15 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc, sync::Arc};
 use wasm_bindgen::prelude::*;
 use zorid_core::{EntryId, EntryState};
 use zorid_index::{
-    document_extraction_version, Exclusion, Generation, GenerationBuilder, IndexError, IndexRecord,
+    document_extraction_version, extract_content, parse_cache_admission, ContentExtractionKey,
+    ContentExtractionOutcome, ContentExtractionResult, EntryWitness, Exclusion, ExtractionDomain,
+    ExtractionMode, ExtractionScope, Generation, GenerationBuilder, IndexError, IndexRecord,
     IndexSnapshotId, LiteralPageBuilder, LiteralQuery, LiteralToken, Manifest, MetadataRequest,
-    PersistedIndexRecord, PublicationFence, RelationshipDirection, RelationshipToken,
-    ResolutionView, Resolver, SemanticVersions, SourceSnapshotId, INDEX_SCHEMA_VERSION,
-    LITERAL_QUERY_VERSION, RESOLVER_VERSION,
+    ParseCacheOutcome, ParseCacheUsage, PersistedIndexRecord, PublicationFence,
+    RelationshipDirection, RelationshipToken, ResolutionView, Resolver, SemanticVersions,
+    SourceSnapshotId, FACTS_ENCODING_VERSION, INDEX_SCHEMA_VERSION, LITERAL_QUERY_VERSION,
+    MAX_PARSE_CACHE_BYTES, MAX_PARSE_CACHE_EVICTIONS_PER_WRITE, MAX_PARSE_CACHE_ROWS,
+    MAX_PARSE_CACHE_ROW_BYTES, RESOLVER_VERSION,
 };
 
 const MAX_JSON: usize = 16 * 1024 * 1024;
@@ -85,6 +89,65 @@ pub fn document_index_versions_json() -> Result<String, JsValue> {
         .map_err(contract)?,
     )
 }
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExtractionKeyDescriptor {
+    key: ContentExtractionKey,
+    storage_key: String,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ParseCachePolicy {
+    format_version: u32,
+    max_rows: usize,
+    max_bytes: usize,
+    max_row_bytes: usize,
+    max_evictions_per_write: usize,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CachedTextAdmission {
+    outcome: ParseCacheOutcome,
+    added: bool,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExtractedTextAdmission {
+    payload: Option<String>,
+    added: bool,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ParseCacheAdmissionRequest {
+    usage: ParseCacheUsage,
+    replaced_payload_bytes: Option<usize>,
+    incoming_payload_bytes: usize,
+    evicted_rows: usize,
+}
+#[wasm_bindgen(js_name = documentParseCachePolicyJson)]
+pub fn document_parse_cache_policy_json() -> Result<String, JsValue> {
+    encode(&ParseCachePolicy {
+        format_version: FACTS_ENCODING_VERSION,
+        max_rows: MAX_PARSE_CACHE_ROWS,
+        max_bytes: MAX_PARSE_CACHE_BYTES,
+        max_row_bytes: MAX_PARSE_CACHE_ROW_BYTES,
+        max_evictions_per_write: MAX_PARSE_CACHE_EVICTIONS_PER_WRITE,
+    })
+}
+#[wasm_bindgen(js_name = documentParseCacheAdmissionJson)]
+pub fn document_parse_cache_admission_json(input: &str) -> Result<String, JsValue> {
+    let request: ParseCacheAdmissionRequest = decode(input)?;
+    encode(
+        &parse_cache_admission(
+            request.usage,
+            request.replaced_payload_bytes,
+            request.incoming_payload_bytes,
+            request.evicted_rows,
+        )
+        .map_err(contract)?,
+    )
+}
+
 #[wasm_bindgen]
 pub struct WasmDocumentIndexBuilder {
     header: Header,
@@ -158,6 +221,153 @@ impl WasmDocumentIndexBuilder {
             .map_err(contract)?;
         Ok(())
     }
+    /// The host has already validated captured descriptor/actual bytes. This
+    /// key is content-derived only; final source/publication fencing still runs.
+    #[wasm_bindgen(js_name=cacheKeyJson)]
+    pub fn cache_key_json(&self, id: &str, bytes: &[u8]) -> Result<String, JsValue> {
+        let (witness, scope, mode) = self.extraction_context(id)?;
+        self.builder
+            .as_ref()
+            .ok_or_else(|| error("index_builder_closed"))?
+            .preflight_extraction(&witness, bytes.len())
+            .map_err(contract)?;
+        let descriptor = if bytes.len() > MAX_TEXT {
+            None
+        } else if let Ok(source) = std::str::from_utf8(bytes) {
+            if source.contains('\0') {
+                None
+            } else {
+                let key =
+                    ContentExtractionKey::for_source(scope, mode, source).map_err(contract)?;
+                Some(ExtractionKeyDescriptor {
+                    storage_key: key.storage_key().map_err(contract)?,
+                    key,
+                })
+            }
+        } else {
+            None
+        };
+        encode(&descriptor)
+    }
+    /// A bounded optional-cache decode cannot alter a builder until shared Rust
+    /// key/version/checksum/structure validation and contextual binding succeed.
+    #[wasm_bindgen(js_name=addCachedText)]
+    pub fn add_cached_text(
+        &mut self,
+        id: &str,
+        expected: &str,
+        payload: &str,
+    ) -> Result<String, JsValue> {
+        let descriptor: ExtractionKeyDescriptor = decode(expected)?;
+        let (witness, scope, mode) = self.extraction_context(id)?;
+        if descriptor.key.scope() != &scope
+            || descriptor.key.mode() != mode
+            || descriptor.storage_key != descriptor.key.storage_key().map_err(contract)?
+        {
+            return Err(error("index_source_changed"));
+        }
+        let builder = self
+            .builder
+            .as_mut()
+            .ok_or_else(|| error("index_builder_closed"))?;
+        builder
+            .preflight_extraction(&witness, descriptor.key.source_bytes())
+            .map_err(contract)?;
+        if payload.len() > MAX_PARSE_CACHE_ROW_BYTES {
+            return encode(&CachedTextAdmission {
+                outcome: ParseCacheOutcome::Corrupt,
+                added: false,
+            });
+        }
+        let cached: ContentExtractionResult = match serde_json::from_str(payload) {
+            Ok(value) => value,
+            Err(_) => {
+                return encode(&CachedTextAdmission {
+                    outcome: ParseCacheOutcome::Corrupt,
+                    added: false,
+                })
+            }
+        };
+        let record = match cached.bind(&descriptor.key, witness, mode) {
+            Ok(record) => record,
+            Err(IndexError::InvalidVersion) => {
+                return encode(&CachedTextAdmission {
+                    outcome: ParseCacheOutcome::Unsupported,
+                    added: false,
+                })
+            }
+            Err(_) => {
+                return encode(&CachedTextAdmission {
+                    outcome: ParseCacheOutcome::Corrupt,
+                    added: false,
+                })
+            }
+        };
+        let added = match builder.add(record) {
+            Ok(()) => true,
+            Err(IndexError::PumpLimit) => false,
+            Err(value) => return Err(contract(value)),
+        };
+        encode(&CachedTextAdmission {
+            outcome: ParseCacheOutcome::Hit,
+            added,
+        })
+    }
+    /// A miss and a rejected optional cache use the same pure extractor once.
+    /// Oversized supported facts remain indexable but return no cache payload.
+    #[wasm_bindgen(js_name=extractText)]
+    pub fn extract_text(&mut self, id: &str, bytes: &[u8]) -> Result<String, JsValue> {
+        let (witness, scope, mode) = self.extraction_context(id)?;
+        let builder = self
+            .builder
+            .as_mut()
+            .ok_or_else(|| error("index_builder_closed"))?;
+        builder
+            .preflight_extraction(&witness, bytes.len())
+            .map_err(contract)?;
+        if bytes.len() > MAX_TEXT {
+            builder
+                .add(IndexRecord::excluded(witness, Exclusion::SourceLimit))
+                .map_err(contract)?;
+            return encode(&ExtractedTextAdmission {
+                payload: None,
+                added: true,
+            });
+        }
+        let Some(source) = std::str::from_utf8(bytes).ok() else {
+            builder
+                .add(IndexRecord::excluded(witness, Exclusion::Unreadable))
+                .map_err(contract)?;
+            return encode(&ExtractedTextAdmission {
+                payload: None,
+                added: true,
+            });
+        };
+        let (record, payload) = match extract_content(scope, mode, source).map_err(contract)? {
+            ContentExtractionOutcome::Extracted(result) => {
+                let payload =
+                    if result.encoded_size().map_err(contract)? <= MAX_PARSE_CACHE_ROW_BYTES {
+                        Some(
+                            serde_json::to_string(&result)
+                                .map_err(|_| error("index_invalid_record"))?,
+                        )
+                    } else {
+                        None
+                    };
+                let key = result.key().clone();
+                (result.bind(&key, witness, mode).map_err(contract)?, payload)
+            }
+            ContentExtractionOutcome::Excluded(reason) => {
+                (IndexRecord::excluded(witness, reason), None)
+            }
+        };
+        let added = match builder.add(record) {
+            Ok(()) => true,
+            Err(IndexError::PumpLimit) => false,
+            Err(value) => return Err(contract(value)),
+        };
+        encode(&ExtractedTextAdmission { payload, added })
+    }
     #[wasm_bindgen(js_name=addBinary)]
     pub fn add_binary(&mut self, id: &str) -> Result<(), JsValue> {
         self.add_excluded(id, Exclusion::Binary)
@@ -209,6 +419,33 @@ impl WasmDocumentIndexBuilder {
     }
 }
 impl WasmDocumentIndexBuilder {
+    fn extraction_context(
+        &self,
+        id: &str,
+    ) -> Result<(EntryWitness, ExtractionScope, ExtractionMode), JsValue> {
+        let builder = self
+            .builder
+            .as_ref()
+            .ok_or_else(|| error("index_builder_closed"))?;
+        let id = EntryId::new(id).map_err(|_| error("index_invalid_record"))?;
+        let witness = builder.manifest().witness(&id).map_err(contract)?;
+        let mode = if witness
+            .entry()
+            .path
+            .as_str()
+            .to_ascii_lowercase()
+            .ends_with(".md")
+        {
+            ExtractionMode::Markdown
+        } else {
+            ExtractionMode::PlainText
+        };
+        let scope = ExtractionScope::new(
+            ExtractionDomain::DocumentIndex,
+            self.header.source.local_store_id().clone(),
+        );
+        Ok((witness, scope, mode))
+    }
     fn add_excluded(&mut self, id: &str, reason: Exclusion) -> Result<(), JsValue> {
         let builder = self
             .builder
@@ -967,7 +1204,10 @@ mod tests {
         assert!(report.result.rows.is_empty());
         assert!(!report.result.coverage_complete);
         assert_eq!(report.result.type_diagnostics[0].code, "invalid_type_yaml");
-        assert_eq!(report.result.type_diagnostics[0].witness.revision.as_str(), "r1");
+        assert_eq!(
+            report.result.type_diagnostics[0].witness.revision.as_str(),
+            "r1"
+        );
         for raw in [
             r#"{"filter":null}"#,
             r#"{"clockMs":null}"#,
@@ -1023,5 +1263,167 @@ mod tests {
                 "{raw}"
             );
         }
+    }
+    #[test]
+    fn cache_transport_rebinds_identity_free_facts_and_preserves_legacy_rows() {
+        let source = b"---\ntitle: Same\n---\n# Shared\n[[b]]\nneedle\n";
+        let mut builder = WasmDocumentIndexBuilder::new(&header()).unwrap();
+        let a_key = builder.cache_key_json("a", source).unwrap();
+        let extracted: serde_json::Value =
+            serde_json::from_str(&builder.extract_text("a", source).unwrap()).unwrap();
+        assert_eq!(extracted["added"], true);
+        let payload = extracted["payload"].as_str().unwrap();
+        assert!(!payload.contains("entryId"));
+        assert!(!payload.contains("contentRevision"));
+        let b_key = builder.cache_key_json("b", source).unwrap();
+        assert_eq!(a_key, b_key);
+        let hit: serde_json::Value =
+            serde_json::from_str(&builder.add_cached_text("b", &b_key, payload).unwrap()).unwrap();
+        assert_eq!(hit, serde_json::json!({"outcome":"hit","added":true}));
+        let row: serde_json::Value = serde_json::from_str(&builder.row_json("b").unwrap()).unwrap();
+        assert_eq!(row["metadata"]["entryId"], "b");
+        assert_eq!(row["metadata"]["contentRevision"], "r2");
+        let generation = builder.finish().unwrap();
+        let mut reopened = WasmDocumentIndexBuilder::new(&header()).unwrap();
+        reopened
+            .add_persisted("a", &generation.row_json("a").unwrap())
+            .unwrap();
+        reopened
+            .add_persisted("b", &generation.row_json("b").unwrap())
+            .unwrap();
+        assert!(reopened.ready());
+        assert_eq!(
+            reopened.row_json("b").unwrap(),
+            generation.row_json("b").unwrap()
+        );
+    }
+    #[test]
+    fn cache_transport_rejects_corrupt_versions_modes_and_other_store_facts() {
+        let source = b"# Original\nneedle\n";
+        let mut origin = WasmDocumentIndexBuilder::new(&header()).unwrap();
+        let extracted: serde_json::Value =
+            serde_json::from_str(&origin.extract_text("a", source).unwrap()).unwrap();
+        let payload = extracted["payload"].as_str().unwrap();
+        for kind in ["checksum", "version", "mode", "scope", "oversized"] {
+            let mut h: serde_json::Value = serde_json::from_str(&header()).unwrap();
+            if kind == "mode" {
+                h["entries"][0]["path"] = "a.txt".into();
+            }
+            if kind == "scope" {
+                h["source"]["localStoreId"] = "other".into();
+                h["nextIndex"]["localStoreId"] = "other".into();
+            }
+            let mut builder = WasmDocumentIndexBuilder::new(&h.to_string()).unwrap();
+            let key = builder.cache_key_json("a", source).unwrap();
+            let mut value: serde_json::Value = serde_json::from_str(payload).unwrap();
+            if kind == "checksum" {
+                value["facts"]["facts"]["headings"][0]["text"] = "Changed".into();
+            }
+            if kind == "version" {
+                value["key"]["factsEncodingVersion"] = 999.into();
+            }
+            let modified = if kind == "oversized" {
+                " ".repeat(MAX_PARSE_CACHE_ROW_BYTES + 1)
+            } else {
+                value.to_string()
+            };
+            let outcome: serde_json::Value =
+                serde_json::from_str(&builder.add_cached_text("a", &key, &modified).unwrap())
+                    .unwrap();
+            assert_eq!(
+                outcome["outcome"],
+                if kind == "version" {
+                    "unsupported"
+                } else {
+                    "corrupt"
+                },
+                "{kind}"
+            );
+            assert_eq!(outcome["added"], false);
+            assert_eq!(
+                builder.pending_json().unwrap().contains("\"id\":\"a\""),
+                true
+            );
+            let fresh: serde_json::Value =
+                serde_json::from_str(&builder.extract_text("a", source).unwrap()).unwrap();
+            assert_eq!(fresh["added"], true);
+            let row: serde_json::Value =
+                serde_json::from_str(&builder.row_json("a").unwrap()).unwrap();
+            if kind == "mode" {
+                assert!(row["metadata"].is_null());
+            } else {
+                assert_eq!(row["metadata"]["entryId"], "a");
+            }
+        }
+    }
+    #[test]
+    fn oversized_supported_facts_skip_optional_cache_without_excluding_the_source() {
+        let source = format!("# {}\n", "x".repeat(MAX_PARSE_CACHE_ROW_BYTES));
+        let mut builder = WasmDocumentIndexBuilder::new(&header()).unwrap();
+        let result: serde_json::Value =
+            serde_json::from_str(&builder.extract_text("a", source.as_bytes()).unwrap()).unwrap();
+        assert_eq!(result, serde_json::json!({"payload":null,"added":true}));
+        let row: serde_json::Value = serde_json::from_str(&builder.row_json("a").unwrap()).unwrap();
+        assert!(row["exclusion"].is_null());
+        assert_eq!(
+            row["metadata"]["headings"][0]["text"]
+                .as_str()
+                .unwrap()
+                .len(),
+            MAX_PARSE_CACHE_ROW_BYTES
+        );
+    }
+    #[test]
+    fn cache_transport_keeps_size_before_utf8_and_nul_source_exclusions() {
+        let mut builder = WasmDocumentIndexBuilder::new(&header()).unwrap();
+        let result: serde_json::Value =
+            serde_json::from_str(&builder.extract_text("a", &vec![255; MAX_TEXT + 1]).unwrap())
+                .unwrap();
+        assert_eq!(result, serde_json::json!({"payload":null,"added":true}));
+        let row: serde_json::Value = serde_json::from_str(&builder.row_json("a").unwrap()).unwrap();
+        assert_eq!(row["exclusion"], "sourceLimit");
+        assert_eq!(builder.cache_key_json("b", b"nul\0text").unwrap(), "null");
+        builder.add_text("b", b"nul\0text").unwrap();
+        let row: serde_json::Value = serde_json::from_str(&builder.row_json("b").unwrap()).unwrap();
+        assert_eq!(row["exclusion"], "binary");
+    }
+    #[test]
+    fn cache_policy_transport_exports_shared_limits_and_admission() {
+        let policy: serde_json::Value =
+            serde_json::from_str(&document_parse_cache_policy_json().unwrap()).unwrap();
+        assert_eq!(policy["maxRowBytes"], MAX_PARSE_CACHE_ROW_BYTES);
+        assert_eq!(policy["maxBytes"], MAX_PARSE_CACHE_BYTES);
+        assert_eq!(policy["maxRows"], MAX_PARSE_CACHE_ROWS);
+        assert_eq!(
+            policy["maxEvictionsPerWrite"],
+            MAX_PARSE_CACHE_EVICTIONS_PER_WRITE
+        );
+        let result = document_parse_cache_admission_json(&serde_json::json!({"usage":{"rows":0,"bytes":0},"replacedPayloadBytes":null,"incomingPayloadBytes":1,"evictedRows":0}).to_string()).unwrap();
+        assert_eq!(result, "\"write\"");
+    }
+
+    #[test]
+    fn validated_cache_hit_reports_a_completed_lookup_when_output_budget_pauses_add() {
+        let source = "[text](target) ".repeat(3000);
+        let mut origin = WasmDocumentIndexBuilder::new(&header()).unwrap();
+        let result: serde_json::Value =
+            serde_json::from_str(&origin.extract_text("a", source.as_bytes()).unwrap()).unwrap();
+        let payload = result["payload"].as_str().unwrap();
+        assert!(payload.len() > zorid_index::MAX_PUMP_BYTES / 2);
+        assert!(payload.len() <= MAX_PARSE_CACHE_ROW_BYTES);
+        let mut builder = WasmDocumentIndexBuilder::new(&header()).unwrap();
+        let a = builder.cache_key_json("a", source.as_bytes()).unwrap();
+        let first: serde_json::Value =
+            serde_json::from_str(&builder.add_cached_text("a", &a, payload).unwrap()).unwrap();
+        assert_eq!(first["added"], true);
+        let b = builder.cache_key_json("b", source.as_bytes()).unwrap();
+        let paused: serde_json::Value =
+            serde_json::from_str(&builder.add_cached_text("b", &b, payload).unwrap()).unwrap();
+        assert_eq!(paused, serde_json::json!({"outcome":"hit","added":false}));
+        builder.begin_pump().unwrap();
+        let resumed: serde_json::Value =
+            serde_json::from_str(&builder.add_cached_text("b", &b, payload).unwrap()).unwrap();
+        assert_eq!(resumed, serde_json::json!({"outcome":"hit","added":true}));
+        assert!(builder.ready());
     }
 }
