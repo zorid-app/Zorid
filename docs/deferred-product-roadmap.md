@@ -9,6 +9,41 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Current main through `9226e866`:
+
+- Rust integration: native lookup reductions `b21fed8a`, standalone CLI runtime
+  `eaf73f29`, immutable preview capture `1ba7226b`, and Base clock/refresh hints
+  `b3719af0`. Main's359 Rust/Cargo inputs match tested canonical `f5063107`
+  byte-for-byte.223 focused checks pass:48 retained with unchanged dependency
+  closure,159 resumed after the reviewed one-line formula-vector type correction,
+  plus16 affected family regressions. Initial compile failure is preserved.
+  Evidence `/private/tmp/zorid-s1-rust223-resource/aggregate223.json` and adjacent
+  `main-source-closure.json`. Hosted WASM checks do not establish generated web
+  execution. No index-admission performance gain is claimed from correctness tests.
+- Frontend Base clock, cancellation and retained-view/status changes are
+  integrated through `9226e866`;71 focused Node checks and full TypeScript pass.
+  Tests exposed and verified fixes for disposed busy state and a lost queued
+  refresh race; original31/34 failure evidence is retained. Root additionally
+  passed83 cross-seam checks and full TypeScript on actual main; evidence
+  `/private/tmp/zorid-main-9226-integration-check`.
+- Top-of-note Find host/command/caret guards are integrated through `9231caad`
+  after87 focused checks and TypeScript. The math-focus correction is
+  `b6985fd3` (25 checks). Both still require matching actual-app repaint/rerun;
+  the earlier actual b9 run remains the latest platform evidence. Private
+  Electron/Web harness successors separately track automated functional sorting
+  and CDP composition without claiming physical picker/IME parity.
+- E2 committed metadata batching and F draft parsing remain isolated work.
+  Pure E2 contract is reviewed; native metadata pages must use a separately
+  reviewed bodyless registration fence, not reconstruct the full retained
+  manifest twice per page. F parser/reducer sources are reviewed but untested;
+  cancellation prevents remaining phases, while individual eager dependency
+  calls remain non-preemptible. Preview querying, Base previews, platform wiring,
+  actual autonomous runtime/fairness, and S1.6 measurements remain open.
+- All test processes are gone. Exact13 rebuildable test executables were evicted
+  after fresh ownership/hash/handle proofs, recovering318MB; free disk was1.627GB.
+  Current libraries, CLI/host binaries, release/WASM caches, source and archives
+  remain preserved. Hard floor stays1GiB; no actual app/build is currently running.
+
 Integrated D/E1 foundations through `1cc636ef`: common facade `f2a1a54d`,
 native/host delivery `8505127a`, desktop scheduler `c23026db`, desktop frontend
 `6b4a454b`, browser delivery `d50ee1ca`, and owned consumer cancellation

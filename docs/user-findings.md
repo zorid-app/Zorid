@@ -52,6 +52,10 @@ actual rerun required. Correction is now integrated `b6985fd3`: independent revi
 Root visually confirms the search toolbar/scroll/contrast
 polish, but Find appears below Properties rather than directly beneath the note
 toolbar. Top placement, Reading Find, native sorts and normal quit remain open.
+The top-placement correction and external-panel command/caret guards are now
+integrated through `9231caad` after87 focused checks and TypeScript; actual repaint
+remains pending. This supersedes the placement source status above, not its
+unexecuted platform gate.
 Evidence `/private/tmp/zorid-s1-rich-electron-find-b9d4f069-005/report.json`.
 Owned test processes are gone; artifact/source fences match.
 
