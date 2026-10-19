@@ -112,8 +112,32 @@ finished inventory counters while content imports continued. That run is retaine
 as incomplete setup, not a product/index performance failure. Reviewed fixes are
 integrated through `f3867a92`: public live-file tuple growth, final-map continuity
 and count/hash summaries bound evidence memory; main tooling9 checks pass. A fresh
-normal desktop local-family profile rerun is required. This is not the10k
-representative benchmark or a performance gain.
+normal desktop local-family rerun passed at `b5527cc6`:
+`/private/tmp/zorid-s1-cli-family-smoke-b5527cc6/report.json`. All63 commands exited0;
+eight full text oracles/source-watermark checks pass with complete coverage,
+all103 physical sources and five authority reads match, executable hashes stay
+stable. The PNG is Binary in this normal path; legacy classification remains a
+separate limitation. These are development-build correctness results.
+
+Optimized native build at main `a200ef44` passed with exact unchanged Rust/Cargo/
+proto inputs, HomebrewRust/Cargo1.99.0, jobs1/offline, and a monitored1GiB free-disk
+floor never crossed. Evidence `/private/tmp/zorid-s1-release-a200ef44/build.json`.
+Release CLI SHA `d927dd299b59290b4b6bcdb9c7ed4b4802d51ff31c502fea8e5aa46b851f7988`;
+host SHA `28379b3f6fc9d52127d655d4ee2bfc46b0341327da7092a69c009030b25f9bcc`.
+Release100-note local-family smoke passed all eight full oracles, exact warm/source
+witnesses and preservation checks, all commands exit0:
+`/private/tmp/zorid-s1-cli-family-release-80dfce28-100/report.json`. Cold index941ms,
+queries89–97ms including process startup; setup is separately recorded. One small
+sample and a compiler-profile change are not an algorithm speedup or10k acceptance.
+
+Pure-core baseline source `3f41fe08` was independently reviewed, release-compiled
+and passed actual100-note full external oracles before integration `066c67e7` /
+`6b7c1c4c`. Evidence `/private/tmp/zorid-s1-core-release100-3f41fe08/core-report.json`.
+Main tool checks: native10, core protocol12 plus three synthetic process/report
+lifecycle cases (the latter are explicitly not Rust execution). The first10k
+pure-core observation is underway; normal Electron harness `3d528d03` is source
+reviewed but still isolated pending actual runtime. No S1.0 acceptance or engine
+optimization gain is claimed by these preparatory tools/smokes.
 
 Owners: `s1_execution_audit` owns workload/native CLI baseline tooling;
 `s1_query_audit` owns the integrated language fixtures;
