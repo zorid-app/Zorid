@@ -40,6 +40,19 @@ checks remain pending; do not claim general platform acceptance from core tests.
 
 ## S1 search UI reference — editor find integrated, broader verification pending
 
+
+Latest actual desktop result supersedes the older pending checks below:
+`bc013e3b` passes all 32 functional phases, with zero renderer exceptions and
+normal exit 0. Root visually confirms top-of-note Find in Live Edit and Reading.
+Grouped counts, case toggle, automated semantic sorts, dense navigation and
+pending-edit save/search are verified on the small fixture. Physical native
+picker/OS IME and workload performance remain unverified. Evidence:
+`/private/tmp/zorid-s1-rich-electron-bc013e3b-001/terminal-verification.json`.
+Browser production build passes on `cce43207`, but actual browser acceptance is
+still pending: attempt 002 stops at worker target detection before Search/Find;
+production worker/WASM requests alone do not establish successful execution.
+The test app/server are closed; source-only diagnosis is underway.
+
 Latest actual `b9d4f069` scoped005 passes grouped/case/dense/search navigation,
 filename/property safe-open and pending-edit save followed by fresh results.
 Live Find's count/navigation/options/focus/caret/paint assertions pass before a

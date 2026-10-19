@@ -9,40 +9,56 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
-Current main through `9226e866`:
+Current main `cce43207` (2026-10-19):
 
-- Rust integration: native lookup reductions `b21fed8a`, standalone CLI runtime
-  `eaf73f29`, immutable preview capture `1ba7226b`, and Base clock/refresh hints
-  `b3719af0`. Main's359 Rust/Cargo inputs match tested canonical `f5063107`
-  byte-for-byte.223 focused checks pass:48 retained with unchanged dependency
-  closure,159 resumed after the reviewed one-line formula-vector type correction,
-  plus16 affected family regressions. Initial compile failure is preserved.
-  Evidence `/private/tmp/zorid-s1-rust223-resource/aggregate223.json` and adjacent
-  `main-source-closure.json`. Hosted WASM checks do not establish generated web
-  execution. No index-admission performance gain is claimed from correctness tests.
-- Frontend Base clock, cancellation and retained-view/status changes are
-  integrated through `9226e866`;71 focused Node checks and full TypeScript pass.
-  Tests exposed and verified fixes for disposed busy state and a lost queued
-  refresh race; original31/34 failure evidence is retained. Root additionally
-  passed83 cross-seam checks and full TypeScript on actual main; evidence
-  `/private/tmp/zorid-main-9226-integration-check`.
-- Top-of-note Find host/command/caret guards are integrated through `9231caad`
-  after87 focused checks and TypeScript. The math-focus correction is
-  `b6985fd3` (25 checks). Both still require matching actual-app repaint/rerun;
-  the earlier actual b9 run remains the latest platform evidence. Private
-  Electron/Web harness successors separately track automated functional sorting
-  and CDP composition without claiming physical picker/IME parity.
-- E2 committed metadata batching and F draft parsing remain isolated work.
-  Pure E2 contract is reviewed; native metadata pages must use a separately
-  reviewed bodyless registration fence, not reconstruct the full retained
-  manifest twice per page. F parser/reducer sources are reviewed but untested;
-  cancellation prevents remaining phases, while individual eager dependency
-  calls remain non-preemptible. Preview querying, Base previews, platform wiring,
-  actual autonomous runtime/fairness, and S1.6 measurements remain open.
-- All test processes are gone. Exact13 rebuildable test executables were evicted
-  after fresh ownership/hash/handle proofs, recovering318MB; free disk was1.627GB.
-  Current libraries, CLI/host binaries, release/WASM caches, source and archives
-  remain preserved. Hard floor stays1GiB; no actual app/build is currently running.
+- Actual release Electron acceptance on `bc013e3b` passes all 32 functional
+  phases: grouped Search, case toggle, six automated semantic sorts, dense
+  counts/display limits, source/filename/property navigation, pending-edit save
+  before navigation, and Live/Reading Find options, navigation, focus, caret and
+  painted matches. Root visually confirms Find above the note title/Properties.
+  Zero renderer exceptions; normal quit exits 0 with no forced termination;
+  owned app/native processes are gone. Evidence:
+  `/private/tmp/zorid-s1-rich-electron-bc013e3b-001/terminal-verification.json`.
+  Physical native picker and OS IME remain unverified. This small fixture does
+  not establish workload performance, autonomous scheduling or complete S1.
+- Normal browser production build passes on `cce43207` with real generated WASM
+  and stable source/artifacts. The only change since desktop acceptance is a
+  build-only Cargo.lock dependency ordering normalization plus `--locked` and
+  its regression assertion; three build checks pass. Both installed Cargo
+  versions accept the unchanged lockfile offline. Evidence:
+  `/private/tmp/zorid-s1-rich-web-build-cce43207-001/validation-summary.json`.
+- Actual browser attempt 001 stopped at the disk floor before functional checks.
+  After reclaiming verified disposable caches, attempt 002 completed production
+  fixture writes and loaded the normal workspace, but stopped at the dedicated
+  worker target-count assertion. Production worker/WASM requests were served;
+  the report lacks raw target snapshots, so a real worker failure versus CDP
+  detection remains unresolved. No browser Search/Find pass is claimed. Node and
+  Chrome groups are gone, server closed, source/artifacts unchanged. Evidence:
+  `/private/tmp/zorid-s1-rich-web-watch-dfure_bj/acceptance-terminal-summary.json`.
+  Browser owner `storage_recovery_ui_impl` and reviewer
+  `s1_desktop_scheduler_review` diagnose source only; no blind rerun.
+- Rust lookup/CLI/preview-capture/Base refresh changes through `b3719af0` retain
+  223 focused passing checks. Frontend Base clock/cancellation/retained-view
+  changes through `9226e866` pass 71 checks and TypeScript; actual main additionally
+  passes 83 cross-seam checks and TypeScript. These remain scoped results.
+- Pure next composition owner `architecture_platform_audit`, branch
+  `tingkai-c/s1-pure-facts-composition`, checkout
+  `/private/tmp/zorid-s1-pure-next-composition`, frozen `b6d11e69`, combines reviewed
+  phased draft parsing/reducer, metadata paging and Store registration fence,
+  rich first-build preview query and borrowed preview facts. The 215-check batch
+  is authorized, not yet a pass. Dependencies: platform adapters and Base preview
+  queries follow passing pure checks. Main integration remains root-owned.
+- E2 and F platform wiring, Base first-build queries, normal core runtime
+  activation, actual fairness/liveness and S1.6 workload measurements remain
+  open. Normal runtime activation flags stay OFF. Workspace per-pane Base
+  visibility/configured clock wiring also remains open.
+- Obsolete generated Cargo caches and compressed cache payloads were reclaimed
+  only after exact ownership/hash/handle proofs. Held desktop/CLI/browser
+  artifacts, source and evidence remain preserved. Current free space after
+  browser attempt 002 is about 2.85 GB; hard floor remains 1 GiB. The next pure
+  batch rebuilds one debug profile with jobs 1; no concurrent heavy builds/apps.
+
+Older execution entries below are historical where superseded by this update.
 
 Integrated D/E1 foundations through `1cc636ef`: common facade `f2a1a54d`,
 native/host delivery `8505127a`, desktop scheduler `c23026db`, desktop frontend
