@@ -17,8 +17,10 @@ Vault/Workspace metadata consumption additionally passes132 focused Node checks
 and TypeScript and is integrated through `b3930388`; portable executor extraction
 and duplicate Store graph-derivation removal pass67 checks through `2bf929f9`.
 Portable Rust draft transfer/bindings, buffer projection and preview platform/UI
-mounting are the current implementation work. The Rust166 and buffer-boundary62
-checks remain unrun; available disk is below the validation floor.
+mounting are the current implementation work. The buffer-boundary62 checks and TypeScript pass and are integrated through
+2759322c. Rust166 validation resumed after obsolete-build cleanup:58 planned
+checks pass; a test-only SQL count type correction is required before the
+remaining108. Original filter-count and compile failures remain recorded.
 The common/desktop transport subset is additionally integrated through
 `8a6d20d0`, with190 applicable focused checks and exact-subset TypeScript. The full
 browser composition passes374 focused Node checks and TypeScript in isolation;

@@ -11,17 +11,37 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 Current integration `8a6d20d0` (2026-10-19):
 
-User authorized retiring obsolete build outputs and resuming builds on2026-10-19.
-The repo cleanup removed367 exact generated files (288,583,680 allocated bytes);
+User authorized obsolete-build cleanup and resumed execution on2026-10-19.
+Cleanup removed719 exact generated files,628,330,496 allocated bytes combined;
 current outputs, warm dependencies, source, vaults and evidence were preserved.
-Observed free space afterward was2.79GB; this is a point-in-time reading.
-Canonical buffer64032dc6 now passes all62 focused Node checks and full TypeScript:
-`/private/tmp/zorid-s1-f-buffer-canonical-64032dc6/run/summary.json`.
-The sole heavy slot is handed to the existing Rust166 owner for fresh preflight
-and serialized execution; no Rust result or S1 completion is claimed. The resource
-hold statements below describe the preceding attempts, superseded by this update.
-The user also raised excessive implementation size; a scoped source/test/module
-size audit is in progress before drawing conclusions or expanding abstractions.
+Observed free space after the second cleanup was3.05GB (point-in-time reading).
+Evidence: `/private/tmp/zorid-repo-older-builds-cleanup/terminal.json` and
+`/private/tmp/zorid-obsolete-generated-files-delete-20261019/terminal.json`.
+
+Canonical buffer64032dc6 passes62 focused Node checks and full TypeScript;
+its exact six-file boundary is integrated through2759322c. Editor hooks remain
+isolated with owner `s1_rich_search_controller`: NoteBuffer/Workspace and a narrow
+EditorHandle metadata refresh seam; independent review `baseline_resources_impl`.
+No normal runtime activation or app verification is implied.
+
+Rust166 has58 planned checks passed, plus12 incidental search-preview passes
+reported separately. The first run stopped on a filter-count mismatch (37 actual,
+25 intended); independent source/name reconciliation accepted the exact intended25
+without rerunning. Continuation then stopped at a test-only Store allocator compile
+error: SQL count inferred unsupported u64 instead of i64. Owner
+`storage_recovery_impl` prepares the narrow fixture correction and remaining108
+continuation; reviewer `s1_execution_audit`. Original failures remain recorded.
+No failed runtime assertion or full Rust acceptance is claimed.
+
+Remaining implementation ownership is isolated from the frozen validation tree:
+`s1_query_audit` owns the sealed Store preview prerequisite; `storage_sqlite_impl`
+owns native/host preview; `s1_desktop_scheduler_review` owns WASM/browser preview
+and the common preview DTO leaf; `s1_desktop_runtime_review` assesses the unresolved
+normal10k durable-graph capacity correction before authority edits. Heavy checks
+remain serialized. These implementations and actual platform acceptance are open.
+User asked to stop the size investigation and focus on delivery; no broad rewrite
+or additional abstractions are authorized by that earlier concern. Historical
+resource-hold statements below are superseded by this update.
 
 - Common/desktop F adapters are integrated as the23-file `8a6d20d0` subset.
   Full TypeScript passes on that exact subset;190 applicable common/desktop
