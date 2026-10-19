@@ -25,6 +25,7 @@ pub struct PreparationLookup<T> {
     value: T,
     outcome: PreparationCacheOutcome,
     work_used: usize,
+    cache_work: usize,
 }
 impl<T> PreparationLookup<T> {
     pub fn value(&self) -> &T {
@@ -36,12 +37,18 @@ impl<T> PreparationLookup<T> {
     pub fn work_used(&self) -> usize {
         self.work_used
     }
+    /// Actual separately bounded optional maintenance/probe units. A hit's proof
+    /// work is also charged to semantic evaluation; misses never spend its budget.
+    pub fn cache_work_used(&self) -> usize {
+        self.cache_work
+    }
 }
 /// Sealed owned rows, complete graph/adjacency and generation-only discovery.
 /// No serialization, source writes, transaction, pin or host liveness proof.
 pub struct PreparedBaseGeneration {
     snapshot: BaseSnapshot,
     query: query::QueryPreparation,
+    cold_work: usize,
 }
 impl PreparedBaseGeneration {
     pub fn snapshot_id(&self) -> &IndexSnapshotId {
@@ -54,9 +61,9 @@ struct GenerationProof {
     entries: Vec<EntryState>,
     records: Vec<IndexRecord>,
     facts: Vec<FilePresentationFacts>,
-    record_work: Vec<usize>,
     compare_work: usize,
-    record_heap_bytes: usize,
+    record_work: Vec<usize>,
+    retained_bytes: usize,
 }
 struct GenerationEntry {
     proof: GenerationProof,
@@ -156,11 +163,12 @@ impl BasePreparationCache {
         monotonic_ms: u64,
     ) -> Result<PreparationLookup<Arc<BaseProgram>>, BaseCompileError> {
         self.expire(monotonic_ms);
-        if let Some(index) = self
-            .programs
-            .iter()
-            .position(|e| e.version == program::BASE_COMPILER_VERSION && e.source == source)
-        {
+        let mut maintenance = Maintenance::new(None);
+        if let Some(index) = self.programs.iter().position(|e| {
+            maintenance.bytes(e.source.len()).is_some()
+                && e.version == program::BASE_COMPILER_VERSION
+                && e.source == source
+        }) {
             let mut entry = self.programs.remove(index).expect("found");
             entry.touched = monotonic_ms;
             let value = Arc::clone(&entry.value);
@@ -169,18 +177,28 @@ impl BasePreparationCache {
                 value,
                 outcome: PreparationCacheOutcome::Hit,
                 work_used: 0,
+                cache_work: maintenance.used,
             });
         }
         let value = Arc::new(crate::compile_base_source(source)?);
-        let bytes = source.len().saturating_add(program_bytes(&value));
-        let overhead = size_of::<Self>() + self.programs.capacity() * size_of::<ProgramEntry>();
-        let outcome = if bytes.saturating_add(overhead) <= MAX_COMPILED_PROGRAM_BYTES {
+        let bytes = maintenance
+            .bytes(source.len())
+            .and_then(|_| program_bytes(&value, &mut maintenance))
+            .and_then(|n| n.checked_add(source.len()));
+        let overhead = size_of::<Self>().saturating_add(
+            self.programs
+                .capacity()
+                .saturating_mul(size_of::<ProgramEntry>()),
+        );
+        let outcome = if let Some(bytes) =
+            bytes.filter(|n| n.saturating_add(overhead) <= MAX_COMPILED_PROGRAM_BYTES)
+        {
             while self.programs.len() >= MAX_COMPILED_PROGRAMS
                 || self
                     .programs
                     .iter()
                     .map(|e| e.bytes)
-                    .sum::<usize>()
+                    .fold(0usize, usize::saturating_add)
                     .saturating_add(bytes)
                     .saturating_add(overhead)
                     > MAX_COMPILED_PROGRAM_BYTES
@@ -202,6 +220,7 @@ impl BasePreparationCache {
             value,
             outcome,
             work_used: 0,
+            cache_work: maintenance.used,
         })
     }
     pub fn prepare_generation(
@@ -213,29 +232,43 @@ impl BasePreparationCache {
     ) -> Result<PreparationLookup<Arc<PreparedBaseGeneration>>, ExpressionDiagnostic> {
         limits(options)?;
         self.expire(monotonic_ms);
-        let mut remaining = options.max_steps;
+        let mut maintenance = Maintenance::new(Some(options));
         for index in (0..self.generations.len()).rev() {
-            charge(&mut remaining, options, 1)?;
+            if maintenance.take(1).is_none() {
+                break;
+            }
             let entry = &self.generations[index];
+            if maintenance
+                .bytes(
+                    snapshot_id_heap(&entry.proof.id)
+                        .saturating_add(entry.proof.source.local_store_id().as_str().len())
+                        .saturating_add(entry.proof.source.watermark().as_str().len()),
+                )
+                .is_none()
+            {
+                break;
+            }
             if entry.proof.id != *generation.id()
                 || entry.proof.source != *generation.manifest().source()
                 || entry.proof.facts.len() != facts.len()
             {
                 continue;
             }
-            // O(1) admission before any deep walk. An optional cache probe may
-            // not add a new limit to a valid cold operation.
-            if entry.proof.compare_work > remaining {
-                break;
+            // Admit the complete comparison before any deep visit. Even a hit
+            // cannot charge more semantic work than the exact cold preparation.
+            if entry.proof.compare_work > entry.value.cold_work
+                || entry.proof.compare_work > options.max_steps
+                || !maintenance.can_take(entry.proof.compare_work)
+            {
+                continue;
             }
             let mut equal = entry.proof.entries.len() == generation.manifest().entries().len();
             for (a, b) in entry.proof.facts.iter().zip(facts) {
-                charge(
-                    &mut remaining,
-                    options,
-                    1 + (a.witness.entry_id.as_str().len() + a.witness.revision.as_str().len())
-                        / 64,
-                )?;
+                if maintenance.take(fact_work(a)).is_none() {
+                    stopped(options)?;
+                    unreachable!("comparison allowance pre-admitted");
+                }
+                stopped(options)?;
                 if a != b {
                     equal = false;
                     break;
@@ -248,7 +281,11 @@ impl BasePreparationCache {
                     .iter()
                     .zip(generation.manifest().entries())
                 {
-                    charge(&mut remaining, options, 1 + state_heap(a) / 64)?;
+                    if maintenance.take(state_work(a)).is_none() {
+                        stopped(options)?;
+                        unreachable!("comparison allowance pre-admitted");
+                    }
+                    stopped(options)?;
                     if a != b {
                         equal = false;
                         break;
@@ -258,12 +295,15 @@ impl BasePreparationCache {
             if equal {
                 let mut actual = generation.records();
                 for (saved, work) in entry.proof.records.iter().zip(&entry.proof.record_work) {
-                    charge(&mut remaining, options, *work)?;
+                    if maintenance.take(*work).is_none() {
+                        stopped(options)?;
+                        unreachable!("comparison allowance pre-admitted");
+                    }
+                    stopped(options)?;
                     if actual.next() != Some(saved) {
                         equal = false;
                         break;
                     }
-                    stopped(options)?;
                 }
                 if actual.next().is_some() {
                     equal = false;
@@ -279,45 +319,57 @@ impl BasePreparationCache {
                 }
                 let mut entry = self.generations.remove(index).expect("found");
                 entry.touched = monotonic_ms;
+                let work_used = entry.proof.compare_work;
                 let value = Arc::clone(&entry.value);
                 self.generations.push_back(entry);
                 return Ok(PreparationLookup {
                     value,
                     outcome: PreparationCacheOutcome::Hit,
-                    work_used: options.max_steps - remaining,
+                    work_used,
+                    cache_work: maintenance.used,
                 });
             }
         }
+        stopped(options)?;
+        // Failed optional probes do not consume the mandatory cold budget.
+        let mut remaining = options.max_steps;
         graph::preflight_generation(generation, options)?;
         let snapshot = BaseSnapshot::from_generation_checked(generation, facts, &mut |work| {
             charge(&mut remaining, options, work)
         })?;
         let mut invocation = options.clone();
         invocation.max_steps = remaining;
-        let prepared_query = query::prepare_snapshot(&snapshot, &invocation)?;
+        let mut prepared_query = query::prepare_snapshot(&snapshot, &invocation)?;
+        prepared_query.snapshot_bytes = Some(crate::encoded_size(
+            &snapshot,
+            crate::MAX_BASE_REQUEST_BYTES,
+        )?);
+        query::validate_snapshot_rows(&snapshot)?;
         charge(&mut remaining, options, prepared_query.work_used)?;
         let value = Arc::new(PreparedBaseGeneration {
             snapshot,
             query: prepared_query,
+            cold_work: options.max_steps - remaining,
         });
-        let prepared_bytes = prepared_bytes(&value);
-        let overhead =
-            size_of::<Self>() + self.generations.capacity() * size_of::<GenerationEntry>();
-        let proof = if let Some(allowance) =
-            MAX_PREPARED_GENERATION_BYTES.checked_sub(prepared_bytes.saturating_add(overhead))
-        {
-            GenerationProof::new(generation, facts, options, &mut remaining, allowance)?
-        } else {
-            None
-        };
-        let outcome = if let Some(proof) = proof {
-            let bytes = proof.retained_bytes().saturating_add(prepared_bytes);
+        let overhead = size_of::<Self>().saturating_add(
+            self.generations
+                .capacity()
+                .saturating_mul(size_of::<GenerationEntry>()),
+        );
+        let retained = prepared_bytes(&value, &mut maintenance).and_then(|bytes| {
+            let allowance =
+                MAX_PREPARED_GENERATION_BYTES.checked_sub(bytes.checked_add(overhead)?)?;
+            let proof = GenerationProof::new(generation, facts, &mut maintenance, allowance)?;
+            Some((bytes.checked_add(proof.retained_bytes())?, proof))
+        });
+        stopped(options)?;
+        let outcome = if let Some((bytes, proof)) = retained {
             while self.generations.len() >= MAX_PREPARED_GENERATIONS
                 || self
                     .generations
                     .iter()
                     .map(|e| e.bytes)
-                    .sum::<usize>()
+                    .fold(0usize, usize::saturating_add)
                     .saturating_add(bytes)
                     .saturating_add(overhead)
                     > MAX_PREPARED_GENERATION_BYTES
@@ -338,6 +390,7 @@ impl BasePreparationCache {
             value,
             outcome,
             work_used: options.max_steps - remaining,
+            cache_work: maintenance.used,
         })
     }
 }
@@ -371,267 +424,366 @@ impl GenerationProof {
     fn new(
         generation: &Generation,
         facts: &[FilePresentationFacts],
-        options: &QueryOptions,
-        remaining: &mut usize,
+        maintenance: &mut Maintenance<'_>,
         allowance: usize,
-    ) -> Result<Option<Self>, ExpressionDiagnostic> {
-        let mut records = Vec::new();
-        let mut record_work = Vec::new();
+    ) -> Option<Self> {
+        // Only a bounded bookkeeping vector is allocated during measurement.
+        // No authority-derived entries, facts or metadata are cloned until the
+        // complete structure/copy costs and all retained bytes are admitted.
+        let count = generation.manifest().entries().len();
+        let work_slots = slots::<usize>(count, maintenance)?;
+        if work_slots > allowance {
+            return None;
+        }
+        let mut record_work = Vec::with_capacity(count);
         let mut record_heap_bytes = 0usize;
         for record in generation.records() {
-            stopped(options)?;
-            let heap = record_heap(record);
-            let work = 1 + heap / 64;
-            // Optional retention never adds a new source-size limit. Admit the
-            // deep copy before allocating, and preserve work already performed.
-            if work > *remaining
-                || record_heap_bytes
-                    .saturating_add(heap)
-                    .saturating_add((records.len() + 1) * size_of::<IndexRecord>())
-                    > allowance
-            {
-                return Ok(None);
+            let before = maintenance.used;
+            let heap = record_heap(record, maintenance)?;
+            record_work.push(maintenance.used - before);
+            record_heap_bytes = costs([record_heap_bytes, heap])?;
+            if record_heap_bytes > allowance {
+                return None;
             }
-            charge(remaining, options, work)?;
-            records.push(record.clone());
-            record_work.push(work);
-            record_heap_bytes = record_heap_bytes.saturating_add(heap);
         }
-        let entries = generation.manifest().entries().to_vec();
-        let compare_work = record_work
+        let mut entry_heap = 0usize;
+        let mut compare_work = record_work
             .iter()
             .copied()
-            .sum::<usize>()
-            .saturating_add(
-                entries
-                    .iter()
-                    .map(|e| 1 + state_heap(e) / 64)
-                    .sum::<usize>(),
-            )
-            .saturating_add(
-                facts
-                    .iter()
-                    .map(|f| {
-                        1 + (f.witness.entry_id.as_str().len() + f.witness.revision.as_str().len())
-                            / 64
-                    })
-                    .sum::<usize>(),
-            );
-        let proof = Self {
+            .fold(0usize, usize::saturating_add);
+        for entry in generation.manifest().entries() {
+            maintenance.take(state_work(entry))?;
+            entry_heap = costs([entry_heap, state_heap(entry)])?;
+            compare_work = compare_work.checked_add(state_work(entry))?;
+        }
+        let mut facts_heap = 0usize;
+        for fact in facts {
+            maintenance.take(fact_work(fact))?;
+            facts_heap = costs([facts_heap, fact_heap(fact)])?;
+            compare_work = compare_work.checked_add(fact_work(fact))?;
+        }
+        let fixed = costs([
+            size_of::<Self>(),
+            count.checked_mul(size_of::<EntryState>())?,
+            entry_heap,
+            record_work.len().checked_mul(size_of::<IndexRecord>())?,
+            record_heap_bytes,
+            facts
+                .len()
+                .checked_mul(size_of::<FilePresentationFacts>())?,
+            facts_heap,
+            record_work.capacity().checked_mul(size_of::<usize>())?,
+            snapshot_id_heap(generation.id()),
+            generation
+                .manifest()
+                .source()
+                .local_store_id()
+                .as_str()
+                .len(),
+            generation.manifest().source().watermark().as_str().len(),
+        ])?;
+        if fixed > allowance {
+            return None;
+        }
+        maintenance.take(compare_work)?; // Reserve the whole copy before cloning.
+        maintenance.bytes(
+            snapshot_id_heap(generation.id())
+                .saturating_add(
+                    generation
+                        .manifest()
+                        .source()
+                        .local_store_id()
+                        .as_str()
+                        .len(),
+                )
+                .saturating_add(generation.manifest().source().watermark().as_str().len()),
+        )?;
+        let mut records = Vec::with_capacity(record_work.len());
+        for record in generation.records() {
+            if maintenance.options.is_some_and(|o| stopped(o).is_err()) {
+                return None;
+            }
+            records.push(record.clone());
+        }
+        let mut entries = Vec::with_capacity(count);
+        for entry in generation.manifest().entries() {
+            if maintenance.options.is_some_and(|o| stopped(o).is_err()) {
+                return None;
+            }
+            entries.push(entry.clone());
+        }
+        let mut copied_facts = Vec::with_capacity(facts.len());
+        for fact in facts {
+            if maintenance.options.is_some_and(|o| stopped(o).is_err()) {
+                return None;
+            }
+            copied_facts.push(fact.clone());
+        }
+        let facts = copied_facts;
+        Some(Self {
             id: generation.id().clone(),
             source: generation.manifest().source().clone(),
             entries,
             records,
-            facts: facts.to_vec(),
-            record_work,
+            facts,
             compare_work,
-            record_heap_bytes,
-        };
-        stopped(options)?;
-        Ok((proof.retained_bytes() <= allowance).then_some(proof))
+            record_work,
+            retained_bytes: fixed,
+        })
     }
     fn retained_bytes(&self) -> usize {
-        size_of::<Self>()
-            + self.entries.capacity() * size_of::<EntryState>()
-            + self.entries.iter().map(state_heap).sum::<usize>()
-            + self.records.capacity() * size_of::<IndexRecord>()
-            + self.record_heap_bytes
-            + self.facts.capacity() * size_of::<FilePresentationFacts>()
-            + self
-                .facts
-                .iter()
-                .map(|f| f.witness.entry_id.as_str().len() + f.witness.revision.as_str().len())
-                .sum::<usize>()
-            + self.record_work.capacity() * size_of::<usize>()
-            + self.id.local_store_id().as_str().len()
-            + self.id.generation_epoch().as_str().len()
-            + self.id.versions().extraction().len()
-            + self.id.versions().resolver().len()
-            + self.id.versions().query().len()
-            + self.source.local_store_id().as_str().len()
-            + self.source.watermark().as_str().len()
+        self.retained_bytes
     }
 }
-// Core identity/path wrappers clone their private strings to exact-sized
-// owned backing; public String/Vec fields below use their actual capacities.
-pub(crate) fn state_heap(e: &EntryState) -> usize {
-    e.id.as_str().len() + e.path.as_str().len() + e.revision.as_str().len()
+
+// Optional work has its own fixed allowance. It cannot consume the language's
+// query budget or turn a valid cold query into a failure. All structural visits
+// and byte comparisons/copies are charged before the work; cancellation remains
+// authoritative. Exhaustion simply declines optional reuse/retention.
+const MAX_PREPARATION_CACHE_WORK: usize = crate::MAX_QUERY_STEPS;
+struct Maintenance<'a> {
+    options: Option<&'a QueryOptions>,
+    used: usize,
 }
-pub(crate) fn property_heap(v: &PropertyValue) -> usize {
+impl<'a> Maintenance<'a> {
+    fn new(options: Option<&'a QueryOptions>) -> Self {
+        Self { options, used: 0 }
+    }
+    fn can_take(&self, work: usize) -> bool {
+        self.used
+            .checked_add(work)
+            .is_some_and(|n| n <= MAX_PREPARATION_CACHE_WORK)
+    }
+    fn take(&mut self, work: usize) -> Option<()> {
+        if self.options.is_some_and(|o| stopped(o).is_err()) {
+            return None;
+        }
+        let next = self.used.checked_add(work)?;
+        if next > MAX_PREPARATION_CACHE_WORK {
+            return None;
+        }
+        self.used = next;
+        Some(())
+    }
+    fn bytes(&mut self, bytes: usize) -> Option<usize> {
+        if bytes > MAX_PREPARED_GENERATION_BYTES {
+            return None;
+        }
+        self.take(1usize.checked_add(bytes / 64)?)?;
+        Some(bytes)
+    }
+}
+fn costs(values: impl IntoIterator<Item = usize>) -> Option<usize> {
+    values.into_iter().try_fold(0usize, |total, n| {
+        total
+            .checked_add(n)
+            .filter(|n| *n <= MAX_PREPARED_GENERATION_BYTES)
+    })
+}
+fn slots<T>(capacity: usize, m: &mut Maintenance<'_>) -> Option<usize> {
+    m.bytes(capacity.checked_mul(size_of::<T>())?)
+}
+fn vector_cost<T>(
+    v: &Vec<T>,
+    m: &mut Maintenance<'_>,
+    mut item: impl FnMut(&T, &mut Maintenance<'_>) -> Option<usize>,
+) -> Option<usize> {
+    let mut bytes = slots::<T>(v.capacity(), m)?;
+    for value in v {
+        bytes = costs([bytes, item(value, m)?])?;
+    }
+    Some(bytes)
+}
+fn state_heap(e: &EntryState) -> usize {
+    e.id.as_str()
+        .len()
+        .saturating_add(e.path.as_str().len())
+        .saturating_add(e.revision.as_str().len())
+}
+fn state_work(e: &EntryState) -> usize {
+    1usize.saturating_add(state_heap(e) / 64)
+}
+fn fact_heap(f: &FilePresentationFacts) -> usize {
+    f.witness
+        .entry_id
+        .as_str()
+        .len()
+        .saturating_add(f.witness.revision.as_str().len())
+}
+fn fact_work(f: &FilePresentationFacts) -> usize {
+    1usize.saturating_add(fact_heap(f) / 64)
+}
+fn property_heap(v: &PropertyValue, m: &mut Maintenance<'_>) -> Option<usize> {
     match v {
-        PropertyValue::String(s) => s.capacity(),
-        PropertyValue::Array(v) => {
-            v.capacity() * size_of::<PropertyValue>() + v.iter().map(property_heap).sum::<usize>()
-        }
-        PropertyValue::Object(v) => {
-            v.capacity() * size_of::<(String, PropertyValue)>()
-                + v.iter()
-                    .map(|(k, v)| k.capacity() + property_heap(v))
-                    .sum::<usize>()
-        }
-        _ => 0,
+        PropertyValue::String(s) => m.bytes(s.capacity()),
+        PropertyValue::Array(v) => vector_cost(v, m, property_heap),
+        PropertyValue::Object(v) => vector_cost(v, m, |(k, v), m| {
+            costs([m.bytes(k.capacity())?, property_heap(v, m)?])
+        }),
+        _ => m.bytes(0),
     }
 }
-fn record_heap(r: &IndexRecord) -> usize {
-    let mut bytes = state_heap(r.witness().entry())
-        + r.witness().source().local_store_id().as_str().len()
-        + r.witness().source().watermark().as_str().len();
-    if let Some(m) = r.metadata() {
-        bytes += m.dialect_version.capacity()
-            + m.entry_id.as_str().len()
-            + m.content_revision.as_str().len()
-            + m.properties.capacity() * size_of::<zorid_document::Property>()
-            + m.properties
-                .iter()
-                .map(|p| p.key.capacity() + property_heap(&p.value))
-                .sum::<usize>()
-            + m.aliases.capacity() * size_of::<String>()
-            + m.aliases.iter().map(String::capacity).sum::<usize>()
-            + m.tags.capacity() * size_of::<String>()
-            + m.tags.iter().map(String::capacity).sum::<usize>()
-            + m.tag_occurrences.capacity() * size_of::<zorid_document::TagOccurrence>()
-            + m.tag_occurrences
-                .iter()
-                .map(|t| t.name.capacity())
-                .sum::<usize>()
-            + m.headings.capacity() * size_of::<zorid_document::Heading>()
-            + m.headings.iter().map(|h| h.text.capacity()).sum::<usize>()
-            + m.links.capacity() * size_of::<zorid_document::Link>()
-            + m.links
-                .iter()
-                .map(|l| l.target.capacity() + l.fragment.capacity() + l.destination.capacity())
-                .sum::<usize>()
-            + m.tasks.capacity() * size_of::<zorid_document::Task>()
-            + m.tasks
-                .iter()
-                .map(|t| t.status.capacity() + t.text.capacity())
-                .sum::<usize>()
-            + m.diagnostics.capacity() * size_of::<zorid_document::Diagnostic>();
-    }
-    bytes
+fn record_heap(r: &IndexRecord, m: &mut Maintenance<'_>) -> Option<usize> {
+    let bytes = m.bytes(costs([
+        state_heap(r.witness().entry()),
+        r.witness().source().local_store_id().as_str().len(),
+        r.witness().source().watermark().as_str().len(),
+    ])?)?;
+    let Some(d) = r.metadata() else {
+        return Some(bytes);
+    };
+    costs([
+        bytes,
+        m.bytes(d.dialect_version.capacity())?,
+        m.bytes(
+            d.entry_id
+                .as_str()
+                .len()
+                .saturating_add(d.content_revision.as_str().len()),
+        )?,
+        vector_cost(&d.properties, m, |p, m| {
+            costs([m.bytes(p.key.capacity())?, property_heap(&p.value, m)?])
+        })?,
+        vector_cost(&d.aliases, m, |s, m| m.bytes(s.capacity()))?,
+        vector_cost(&d.tags, m, |s, m| m.bytes(s.capacity()))?,
+        vector_cost(&d.tag_occurrences, m, |t, m| m.bytes(t.name.capacity()))?,
+        vector_cost(&d.headings, m, |h, m| m.bytes(h.text.capacity()))?,
+        vector_cost(&d.links, m, |l, m| {
+            m.bytes(costs([
+                l.target.capacity(),
+                l.fragment.capacity(),
+                l.destination.capacity(),
+            ])?)
+        })?,
+        vector_cost(&d.tasks, m, |t, m| {
+            m.bytes(t.status.capacity().saturating_add(t.text.capacity()))
+        })?,
+        slots::<zorid_document::Diagnostic>(d.diagnostics.capacity(), m)?,
+    ])
 }
-fn record_row_heap(r: &DetachedRecord) -> usize {
-    r.path.capacity()
-        + r.witness
-            .as_ref()
-            .map_or(0, |w| w.entry_id.as_str().len() + w.revision.as_str().len())
-        + r.properties.capacity() * size_of::<(String, PropertyValue)>()
-        + r.properties
-            .iter()
-            .map(|(k, v)| k.capacity() + property_heap(v))
-            .sum::<usize>()
-        + r.property_types.capacity() * size_of::<(String, zorid_document::PropertyType)>()
-        + r.property_types
-            .iter()
-            .map(|(k, _)| k.capacity())
-            .sum::<usize>()
-        + r.tags.capacity() * size_of::<String>()
-        + r.tags.iter().map(String::capacity).sum::<usize>()
+fn record_row_heap(r: &DetachedRecord, m: &mut Maintenance<'_>) -> Option<usize> {
+    costs([
+        m.bytes(r.path.capacity())?,
+        m.bytes(r.witness.as_ref().map_or(0, |w| {
+            w.entry_id
+                .as_str()
+                .len()
+                .saturating_add(w.revision.as_str().len())
+        }))?,
+        vector_cost(&r.properties, m, |(k, v), m| {
+            costs([m.bytes(k.capacity())?, property_heap(v, m)?])
+        })?,
+        vector_cost(&r.property_types, m, |(k, _), m| m.bytes(k.capacity()))?,
+        vector_cost(&r.tags, m, |s, m| m.bytes(s.capacity()))?,
+    ])
 }
-fn prepared_bytes(p: &PreparedBaseGeneration) -> usize {
-    size_of::<PreparedBaseGeneration>()
-        + 2 * size_of::<usize>()
-        + p.snapshot.records.capacity() * size_of::<DetachedRecord>()
-        + p.snapshot
-            .records
-            .iter()
-            .map(record_row_heap)
-            .sum::<usize>()
-        + p.snapshot
+fn prepared_bytes(p: &PreparedBaseGeneration, m: &mut Maintenance<'_>) -> Option<usize> {
+    costs([
+        m.bytes(
+            size_of::<PreparedBaseGeneration>()
+                .saturating_add(2usize.saturating_mul(size_of::<usize>())),
+        )?,
+        vector_cost(&p.snapshot.records, m, record_row_heap)?,
+        m.bytes(
+            p.snapshot
+                .relationships
+                .as_ref()
+                .map_or(0, |g| g.retained_bytes()),
+        )?,
+        vector_cost(&p.snapshot.metadata_issues, m, |i, m| {
+            costs([
+                m.bytes(
+                    i.witness
+                        .entry_id
+                        .as_str()
+                        .len()
+                        .saturating_add(i.witness.revision.as_str().len()),
+                )?,
+                slots::<zorid_document::Diagnostic>(i.diagnostics.capacity(), m)?,
+            ])
+        })?,
+        p.query
             .relationships
             .as_ref()
-            .map_or(0, |g| g.retained_bytes())
-        + p.snapshot.metadata_issues.capacity() * size_of::<crate::MetadataIssue>()
-        + p.snapshot
-            .metadata_issues
-            .iter()
-            .map(|i| {
-                i.witness.entry_id.as_str().len()
-                    + i.witness.revision.as_str().len()
-                    + i.diagnostics.capacity() * size_of::<zorid_document::Diagnostic>()
-            })
-            .sum::<usize>()
-        + p.query
-            .relationships
-            .as_ref()
-            .map_or(0, |g| g.retained_bytes())
-        + p.query.available.capacity() * size_of::<String>()
-        + p.query
-            .available
-            .iter()
-            .map(String::capacity)
-            .sum::<usize>()
-        + p.snapshot.snapshot_id.local_store_id().as_str().len()
-        + p.snapshot.snapshot_id.generation_epoch().as_str().len()
-        + p.snapshot.snapshot_id.versions().extraction().len()
-        + p.snapshot.snapshot_id.versions().resolver().len()
-        + p.snapshot.snapshot_id.versions().query().len()
+            .map_or(Some(0), |g| g.retained_bytes(&mut |work| m.take(work)))?,
+        vector_cost(&p.query.available, m, |s, m| m.bytes(s.capacity()))?,
+        m.bytes(snapshot_id_heap(&p.snapshot.snapshot_id))?,
+    ])
 }
-fn program_bytes(p: &BaseProgram) -> usize {
-    fn filter(f: &program::Filter) -> usize {
+fn snapshot_id_heap(id: &IndexSnapshotId) -> usize {
+    [
+        id.local_store_id().as_str().len(),
+        id.generation_epoch().as_str().len(),
+        id.versions().extraction().len(),
+        id.versions().resolver().len(),
+        id.versions().query().len(),
+    ]
+    .into_iter()
+    .fold(0, usize::saturating_add)
+}
+fn program_bytes(p: &BaseProgram, m: &mut Maintenance<'_>) -> Option<usize> {
+    fn filter(f: &program::Filter, m: &mut Maintenance<'_>) -> Option<usize> {
         match f {
-            program::Filter::Expression(s) => s.capacity(),
+            program::Filter::Expression(s) => m.bytes(s.capacity()),
             program::Filter::And(v) | program::Filter::Or(v) | program::Filter::Not(v) => {
-                v.capacity() * size_of::<program::Filter>() + v.iter().map(filter).sum::<usize>()
+                vector_cost(v, m, filter)
             }
         }
     }
-    fn value(v: &crate::BaseValue) -> usize {
+    fn value(v: &crate::BaseValue, m: &mut Maintenance<'_>) -> Option<usize> {
         match v {
             crate::BaseValue::String { value } | crate::BaseValue::File { path: value } => {
-                value.capacity()
+                m.bytes(value.capacity())
             }
-            crate::BaseValue::List { value: v } => {
-                v.capacity() * size_of::<crate::BaseValue>() + v.iter().map(value).sum::<usize>()
-            }
-            crate::BaseValue::Object { value: v } => {
-                v.capacity() * size_of::<(String, crate::BaseValue)>()
-                    + v.iter()
-                        .map(|(k, v)| k.capacity() + value(v))
-                        .sum::<usize>()
-            }
+            crate::BaseValue::List { value: v } => vector_cost(v, m, value),
+            crate::BaseValue::Object { value: v } => vector_cost(v, m, |(k, v), m| {
+                costs([m.bytes(k.capacity())?, value(v, m)?])
+            }),
             crate::BaseValue::Link {
                 path,
                 target,
                 display,
                 ..
-            } => {
-                path.capacity()
-                    + target
-                        .as_ref()
-                        .map_or(0, |w| w.entry_id.as_str().len() + w.revision.as_str().len())
-                    + display.as_ref().map_or(0, String::capacity)
+            } => m.bytes(costs([
+                path.capacity(),
+                target.as_ref().map_or(0, |w| {
+                    w.entry_id
+                        .as_str()
+                        .len()
+                        .saturating_add(w.revision.as_str().len())
+                }),
+                display.as_ref().map_or(0, String::capacity),
+            ])?),
+            crate::BaseValue::Error { code, message } => {
+                m.bytes(code.capacity().saturating_add(message.capacity()))
             }
-            crate::BaseValue::Error { code, message } => code.capacity() + message.capacity(),
-            _ => 0,
+            _ => m.bytes(0),
         }
     }
-    size_of::<BaseProgram>()
-        + 2 * size_of::<usize>()
-        + property_heap(&p.configuration)
-        + p.formulas.capacity() * size_of::<(String, String)>()
-        + p.formulas
-            .iter()
-            .map(|(k, v)| k.capacity() + v.capacity())
-            .sum::<usize>()
-        + p.filter.as_ref().map_or(0, filter)
-        + p.views.capacity() * size_of::<program::View>()
-        + p.views
-            .iter()
-            .map(|v| {
-                property_heap(&v.configuration)
-                    + v.filter.as_ref().map_or(0, filter)
-                    + v.order.capacity() * size_of::<String>()
-                    + v.order.iter().map(String::capacity).sum::<usize>()
-                    + v.sort.capacity() * size_of::<program::Criterion>()
-                    + v.sort.iter().map(|s| s.property.capacity()).sum::<usize>()
-                    + v.group.as_ref().map_or(0, |s| s.property.capacity())
-                    + v.group_order.as_ref().map_or(0, |g| {
-                        g.capacity() * size_of::<crate::BaseValue>()
-                            + g.iter().map(value).sum::<usize>()
-                    })
-            })
-            .sum::<usize>()
+    costs([
+        m.bytes(
+            size_of::<BaseProgram>().saturating_add(2usize.saturating_mul(size_of::<usize>())),
+        )?,
+        property_heap(&p.configuration, m)?,
+        vector_cost(&p.formulas, m, |(k, v), m| {
+            m.bytes(k.capacity().saturating_add(v.capacity()))
+        })?,
+        p.filter.as_ref().map_or(Some(0), |f| filter(f, m))?,
+        vector_cost(&p.views, m, |v, m| {
+            costs([
+                property_heap(&v.configuration, m)?,
+                v.filter.as_ref().map_or(Some(0), |f| filter(f, m))?,
+                vector_cost(&v.order, m, |s, m| m.bytes(s.capacity()))?,
+                vector_cost(&v.sort, m, |s, m| m.bytes(s.property.capacity()))?,
+                v.group
+                    .as_ref()
+                    .map_or(Some(0), |s| m.bytes(s.property.capacity()))?,
+                v.group_order
+                    .as_ref()
+                    .map_or(Some(0), |v| vector_cost(v, m, value))?,
+            ])
+        })?,
+    ])
 }
 
 #[cfg(test)]

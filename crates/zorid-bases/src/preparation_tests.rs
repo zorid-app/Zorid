@@ -370,7 +370,7 @@ fn actual_structure_bytes_evict_before_count_and_supported_large_prep_is_uncache
     assert_eq!(large.outcome(), PreparationCacheOutcome::Uncached);
     assert!(cache.generations.is_empty());
     let program = crate::compile_base_source(
-        "filters: file.path == \"large-0.md\"\nviews:\n  - type: table\n    order: [file.path]\n",
+        "filters: file.path == \"large-0.md\"\nviews:\n  - type: table\n    name: Table\n    order: [file.path]\n",
     )
     .unwrap();
     assert_eq!(
@@ -380,4 +380,118 @@ fn actual_structure_bytes_evict_before_count_and_supported_large_prep_is_uncache
             .len(),
         1
     );
+}
+
+#[test]
+fn sealed_snapshot_byte_credit_is_exact_and_never_reserializes_static_data() {
+    struct NoStaticSerialization;
+    impl serde::Serialize for NoStaticSerialization {
+        fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+            panic!("sealed request validation serialized the immutable snapshot")
+        }
+    }
+    let r = first();
+    let mut cache = BasePreparationCache::new();
+    let lookup = cache
+        .prepare_generation(&r.generation(), &r.facts, &r.options, 0)
+        .unwrap();
+    let bytes = lookup.value.query.snapshot_bytes.unwrap();
+    let snapshot = &lookup.value.snapshot;
+    for current in [None, Some(snapshot.records[0].clone())] {
+        let mut options = r.options.clone();
+        options.evaluation.current_record = current;
+        options.search_terms = vec!["UTF8 é 🐋 \" \\ ".into()];
+        let exact =
+            crate::encoded_size(&(snapshot, &options), crate::MAX_BASE_REQUEST_BYTES).unwrap();
+        assert_eq!(
+            query::request_size(&NoStaticSerialization, &options, Some(bytes)).unwrap(),
+            exact
+        );
+        assert_eq!(
+            query::request_size(snapshot, &options, None).unwrap(),
+            exact
+        );
+        assert!(query::request_size(
+            &NoStaticSerialization,
+            &options,
+            Some(crate::MAX_BASE_REQUEST_BYTES)
+        )
+        .is_err());
+    }
+}
+
+#[test]
+fn optional_probe_copy_and_expensive_hit_preserve_tight_cold_budget() {
+    let r = first();
+    let generation = r.generation();
+    let program = crate::compile_base(r.configuration.clone()).unwrap();
+    let expected = crate::query_generation(&program, &generation, &r.facts, &r.options).unwrap();
+    let mut tight = r.options.clone();
+    tight.max_steps = expected.steps_used;
+    assert_eq!(
+        semantics(crate::query_generation(&program, &generation, &r.facts, &tight).unwrap()),
+        semantics(expected.clone())
+    );
+    let mut cache = BasePreparationCache::new();
+    let cold = cache
+        .prepare_generation(&generation, &r.facts, &tight, 0)
+        .unwrap();
+    assert_eq!(cold.outcome(), PreparationCacheOutcome::Miss);
+    assert!(cold.cache_work_used() > cold.work_used());
+    assert_eq!(
+        semantics(query_prepared(&program, &cold, &tight).unwrap()),
+        semantics(expected.clone())
+    );
+    // Same claimed generation ID with different real metadata forces a deep
+    // failed probe, then a cold preparation under exactly the original budget.
+    let mut other = r.clone();
+    if let GenerationSource::Text { request, .. } = &mut other.sources[0] {
+        request.source.push_str("\nchanged #cache-mismatch");
+    }
+    let mut foreign = BasePreparationCache::new();
+    foreign
+        .prepare_generation(&other.generation(), &r.facts, &r.options, 0)
+        .unwrap();
+    let failed_probe = foreign
+        .prepare_generation(&generation, &r.facts, &tight, 1)
+        .unwrap();
+    assert_eq!(failed_probe.outcome(), PreparationCacheOutcome::Miss);
+    assert_eq!(
+        semantics(query_prepared(&program, &failed_probe, &tight).unwrap()),
+        semantics(expected.clone())
+    );
+    assert!(failed_probe.cache_work_used() > cold.cache_work_used());
+    // Even an exact match must bypass optional reuse if checking its saved
+    // proof would cost more than the sealed factory's exact cold preparation.
+    let entry = cache.generations.back_mut().unwrap();
+    entry.proof.compare_work = entry.value.cold_work.saturating_add(1);
+    let expensive = cache
+        .prepare_generation(&generation, &r.facts, &tight, 2)
+        .unwrap();
+    assert_eq!(expensive.outcome(), PreparationCacheOutcome::Miss);
+    assert_eq!(
+        semantics(query_prepared(&program, &expensive, &tight).unwrap()),
+        semantics(expected)
+    );
+}
+
+#[test]
+fn optional_allowance_overflow_and_incomplete_copy_decline_without_retaining() {
+    let r = first();
+    let generation = r.generation();
+    let mut maintenance = Maintenance::new(Some(&r.options));
+    assert!(GenerationProof::new(&generation, &r.facts, &mut maintenance, 0).is_none());
+    assert!(maintenance.used <= MAX_PREPARATION_CACHE_WORK);
+    let mut exhausted = Maintenance::new(Some(&r.options));
+    exhausted.used = MAX_PREPARATION_CACHE_WORK;
+    assert!(GenerationProof::new(
+        &generation,
+        &r.facts,
+        &mut exhausted,
+        MAX_PREPARED_GENERATION_BYTES
+    )
+    .is_none());
+    assert_eq!(exhausted.used, MAX_PREPARATION_CACHE_WORK);
+    assert!(costs([usize::MAX, 1]).is_none());
+    assert!(slots::<u64>(usize::MAX, &mut Maintenance::new(None)).is_none());
 }

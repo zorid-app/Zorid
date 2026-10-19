@@ -282,50 +282,59 @@ pub(crate) struct PreparedRelationships<'a> {
     data: &'a OwnedRelationships,
 }
 impl OwnedRelationships {
-    pub(crate) fn retained_bytes(&self) -> usize {
+    pub(crate) fn retained_bytes(
+        &self,
+        check: &mut impl FnMut(usize) -> Option<()>,
+    ) -> Option<usize> {
         use std::mem::size_of;
-        let link_heap = |link: &BasesLink| {
-            link.path.capacity()
-                + link.display.as_ref().map_or(0, String::capacity)
-                + link
-                    .resolved_path
-                    .as_ref()
-                    .and_then(Option::as_ref)
-                    .map_or(0, String::capacity)
-                + link
-                    .target
-                    .as_ref()
-                    .map_or(0, |w| w.entry_id.as_str().len() + w.revision.as_str().len())
-        };
-        // Hash capacity counts usable elements, not physical buckets. Double
-        // table slots/control bytes conservatively account its load factor.
-        size_of::<Self>()
-            + self.namespace.retained_bytes()
-            + self.files.capacity()
-                * 2
-                * (size_of::<(EntryId, FileRelations)>() + size_of::<usize>())
-            + 64
-            + self
-                .files
-                .iter()
-                .map(|(id, relations)| {
-                    id.as_str().len()
-                        + [&relations.links, &relations.embeds, &relations.backlinks]
-                            .into_iter()
-                            .map(|links| {
-                                links.capacity() * size_of::<BasesLink>()
-                                    + links.iter().map(link_heap).sum::<usize>()
-                            })
-                            .sum::<usize>()
-                })
-                .sum::<usize>()
-            + self.unavailable.capacity() * 2 * (size_of::<EntryId>() + size_of::<usize>())
-            + 64
-            + self
-                .unavailable
-                .iter()
-                .map(|id| id.as_str().len())
-                .sum::<usize>()
+        let mut bytes = size_of::<Self>()
+            .checked_add(self.namespace.retained_bytes())?
+            .checked_add(self.files.capacity().checked_mul(2)?.checked_mul(
+                size_of::<(EntryId, FileRelations)>().checked_add(size_of::<usize>())?,
+            )?)?
+            .checked_add(64)?
+            .checked_add(
+                self.unavailable
+                    .capacity()
+                    .checked_mul(2)?
+                    .checked_mul(size_of::<EntryId>().checked_add(size_of::<usize>())?)?,
+            )?
+            .checked_add(64)?;
+        check(1usize.checked_add(bytes / 64)?)?;
+        for (id, relations) in &self.files {
+            check(1usize.checked_add(id.as_str().len() / 64)?)?;
+            bytes = bytes.checked_add(id.as_str().len())?;
+            for links in [&relations.links, &relations.embeds, &relations.backlinks] {
+                let slots = links.capacity().checked_mul(size_of::<BasesLink>())?;
+                check(1usize.checked_add(slots / 64)?)?;
+                bytes = bytes.checked_add(slots)?;
+                for link in links {
+                    let heap = link
+                        .path
+                        .capacity()
+                        .checked_add(link.display.as_ref().map_or(0, String::capacity))?
+                        .checked_add(
+                            link.resolved_path
+                                .as_ref()
+                                .and_then(Option::as_ref)
+                                .map_or(0, String::capacity),
+                        )?
+                        .checked_add(link.target.as_ref().map_or(0, |w| {
+                            w.entry_id
+                                .as_str()
+                                .len()
+                                .saturating_add(w.revision.as_str().len())
+                        }))?;
+                    check(1usize.checked_add(heap / 64)?)?;
+                    bytes = bytes.checked_add(heap)?;
+                }
+            }
+        }
+        for id in &self.unavailable {
+            check(1usize.checked_add(id.as_str().len() / 64)?)?;
+            bytes = bytes.checked_add(id.as_str().len())?;
+        }
+        Some(bytes)
     }
     pub(crate) fn new(
         graph: &ResolutionSnapshot,

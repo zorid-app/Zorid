@@ -323,6 +323,8 @@ fn scalar_for_sort(
 /// Generation-only adjacency and property discovery; invocation formulas and
 /// selected view are added afresh by the evaluator.
 pub(crate) struct QueryPreparation {
+    // Set only by the sealed generation factory after exact bounded encoding.
+    pub(crate) snapshot_bytes: Option<usize>,
     pub(crate) relationships: Option<crate::graph::OwnedRelationships>,
     pub(crate) available: Vec<String>,
     pub(crate) work_used: usize,
@@ -403,10 +405,49 @@ pub(crate) fn prepare_snapshot(
         }
     }
     Ok(QueryPreparation {
+        snapshot_bytes: None,
         relationships,
         available,
         work_used: preparation_work,
     })
+}
+
+pub(crate) fn validate_snapshot_rows(snapshot: &BaseSnapshot) -> Result<(), ExpressionDiagnostic> {
+    let mut ids = HashSet::new();
+    let mut paths = HashSet::new();
+    for record in &snapshot.records {
+        let witness = record.witness.as_ref().ok_or_else(|| {
+            ExpressionDiagnostic::new("input", "Query records require an entry/revision witness")
+        })?;
+        if !ids.insert(&witness.entry_id) || !paths.insert(&record.path) {
+            return Err(ExpressionDiagnostic::new(
+                "input",
+                "Snapshot entry IDs and paths must be nonempty and unique",
+            ));
+        }
+    }
+    Ok(())
+}
+
+// A JSON tuple is exactly `[snapshot,options]`. Only the private sealed factory
+// can supply the immutable snapshot byte credit. Detached callers keep the full
+// streaming validation; fresh options (including selected `this`) are counted
+// on every invocation, without walking the retained graph again.
+pub(crate) fn request_size(
+    snapshot: &impl Serialize,
+    options: &QueryOptions,
+    snapshot_bytes: Option<usize>,
+) -> Result<usize, ExpressionDiagnostic> {
+    if let Some(bytes) = snapshot_bytes {
+        let dynamic = crate::encoded_size(options, crate::MAX_BASE_REQUEST_BYTES)?;
+        bytes
+            .checked_add(dynamic)
+            .and_then(|n| n.checked_add(3))
+            .filter(|n| *n <= crate::MAX_BASE_REQUEST_BYTES)
+            .ok_or_else(|| ExpressionDiagnostic::new("budget", "Base encoded byte budget exceeded"))
+    } else {
+        crate::encoded_size(&(snapshot, options), crate::MAX_BASE_REQUEST_BYTES)
+    }
 }
 
 /// Execute one bounded coherent snapshot. Any resource/cancellation failure is
@@ -435,7 +476,7 @@ pub(crate) fn query_base_prepared(
         return Err(budget("Query ceilings exceed supported maximum"));
     }
 
-    crate::encoded_size(&(snapshot, options), crate::MAX_BASE_REQUEST_BYTES)?;
+    request_size(snapshot, options, prepared.and_then(|p| p.snapshot_bytes))?;
     let view = program
         .views
         .get(options.view_index)
@@ -446,23 +487,15 @@ pub(crate) fn query_base_prepared(
     if options.search_terms.iter().map(String::len).sum::<usize>() > 65_536 {
         return Err(budget("Search terms exceed byte budget"));
     }
-    let mut ids = HashSet::new();
-    let mut paths = HashSet::new();
-    let mut selected_current = None;
-    for record in &snapshot.records {
-        let witness = record.witness.as_ref().ok_or_else(|| {
-            ExpressionDiagnostic::new("input", "Query records require an entry/revision witness")
-        })?;
-        if options.current_entry_id.as_ref() == Some(&witness.entry_id) {
-            selected_current = Some(record);
-        }
-        if !ids.insert(&witness.entry_id) || !paths.insert(&record.path) {
-            return Err(ExpressionDiagnostic::new(
-                "input",
-                "Snapshot entry IDs and paths must be nonempty and unique",
-            ));
-        }
+    if prepared.and_then(|p| p.snapshot_bytes).is_none() {
+        validate_snapshot_rows(snapshot)?;
     }
+    let selected_current = options.current_entry_id.as_ref().and_then(|id| {
+        snapshot
+            .records
+            .iter()
+            .find(|record| record.witness.as_ref().is_some_and(|w| &w.entry_id == id))
+    });
     let selected_options;
     let options = if options.current_entry_id.is_some() {
         let current = selected_current.ok_or_else(|| {
@@ -481,7 +514,7 @@ pub(crate) fn query_base_prepared(
         }
         let mut selected = options.clone();
         selected.evaluation.current_record = Some(current.clone());
-        crate::encoded_size(&(snapshot, &selected), crate::MAX_BASE_REQUEST_BYTES)?;
+        request_size(snapshot, &selected, prepared.and_then(|p| p.snapshot_bytes))?;
         selected_options = selected;
         &selected_options
     } else {
