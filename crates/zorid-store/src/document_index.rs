@@ -1407,8 +1407,8 @@ mod cache_snapshot_tests {
         let actual = capture_authority(&tx).unwrap();
         assert_eq!(
             trace.counts.get(),
-            (1, 0),
-            "one bulk metadata scan and no point reloads"
+            (1, 8),
+            "one bulk scan; only the unchanged presentation metadata reads remain"
         );
         drop(trace);
         // Independent original point reader over the same transaction, including
