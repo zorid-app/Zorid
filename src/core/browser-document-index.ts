@@ -26,8 +26,9 @@ export interface BrowserIndexSnapshot {localStoreId:string;generationEpoch:strin
 export interface BrowserIndexHeader {source:{localStoreId:string;watermark:string};entries:EntryState[];expectedIndex:BrowserIndexSnapshot|null;nextIndex:BrowserIndexSnapshot}
 interface Builder extends Free {headerJson():string;pendingJson():string;beginPump():void;addText(id:string,bytes:Uint8Array):void;cacheKeyJson(id:string,bytes:Uint8Array):string;addCachedText(id:string,key:string,payload:string):string;extractText(id:string,bytes:Uint8Array):string;addBinary(id:string):void;addUnreadable(id:string):void;addPersisted(id:string,row:string):void;rowJson(id:string):string;ready():boolean;finish():Generation}
 interface Generation extends Free {headerJson():string;snapshotJson():string;rowJson(id:string):string;coverageComplete():boolean;metadataJson(id:string):string;tasksJson(sources:string,options:string):string;baseJson(id:string,bytes:Uint8Array,facts:string,options:string,viewName?:string|null):string;resolveJson(id:string,destination:string):string;backlinksJson(id:string,token:string,limit:number):string;openLiteral(query:string,token:string,limit:number):LiteralPage}
+interface PreparationCache extends Free {clear():void;baseJson(generation:Generation,id:string,bytes:Uint8Array,facts:string,options:string,monotonicMs:number,viewName?:string|null):string}
 interface LiteralPage extends Free {nextReadJson():string;accept(bytes:Uint8Array):void;finishJson():string}
-export interface BrowserDocumentIndexWasm {documentIndexVersionsJson():string;documentParseCachePolicyJson():string;documentParseCacheAdmissionJson(input:string):string;WasmDocumentIndexBuilder:new(input:string)=>Builder}
+export interface BrowserDocumentIndexWasm {documentIndexVersionsJson():string;documentParseCachePolicyJson():string;documentParseCacheAdmissionJson(input:string):string;WasmDocumentIndexBuilder:new(input:string)=>Builder;WasmDocumentIndexPreparationCache:new()=>PreparationCache}
 export interface BrowserDocumentIndexHost {
   db:IDBDatabase;authorityId:string;clientId:string;wasm:BrowserDocumentIndexWasm;assertActive():void;
   readPublication(tx:IDBTransaction,done:(value:StreamingPublication)=>void,abort:(error:unknown)=>void):void;
@@ -99,8 +100,10 @@ function rust<T>(action:()=>T):T {try{return action();}catch(error){if(error ins
 
 export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocumentIndex {
   const stages=new Map<string,Stage>(),pins=new Map<string,{generation:string;value:Generation;header:BrowserIndexHeader;capture:SourceCapture}>();
-  let closed=false;
-  const active=()=>{if(closed)throw fail('index_closed');host.assertActive();};
+  let closed=false,preparation:PreparationCache|undefined;
+  const releasePreparation=()=>{const owned=preparation;preparation=undefined;owned?.free();};
+  const active=()=>{if(closed)throw fail('index_closed');try{host.assertActive();}catch(error){try{releasePreparation();}catch{/* Preserve the owner/lease error. */}throw error;}};
+  const monotonicMs=()=>{const value=Math.floor(performance.now());if(!Number.isSafeInteger(value)||value<0)throw fail('index_invalid_budget');return value;};
   const parseCache=browserDocumentParseCache({db:host.db,authorityId:host.authorityId,assertActive:active,
     policy:json<BrowserParseCachePolicy>(rust(()=>host.wasm.documentParseCachePolicyJson())),
     admit:(usage,replaced,incoming,evicted)=>json<BrowserParseCacheAdmission>(rust(()=>host.wasm.documentParseCacheAdmissionJson(JSON.stringify({usage,replacedPayloadBytes:replaced,incomingPayloadBytes:incoming,evictedRows:evicted}))))});
@@ -362,23 +365,30 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
       const sourcesJson=JSON.stringify(sources);if(size(sourcesJson)>7*1024*1024)throw fail('index_input_limit');
       await assertPin(pinId);const result=json<unknown>(rust(()=>g.tasksJson(sourcesJson,options)));await assertPin(pinId);return result;
     },
-    async base(input){const options=baseOptions(input.options),g=await assertPin(input.pinId),pin=pins.get(input.pinId)!,id=inputText(input.id,128),entry=pin.header.entries.find(e=>e.id===id&&e.kind==='file');if(!entry)throw fail('index_missing_source');
+    async base(input){
+      // Capture caller-owned selectors before any await. Admission remains per
+      // invocation; neither the pure-data cache nor an old result admits a pin.
+      const pinId=inputText(input.pinId,128),id=inputText(input.id,128),options=baseOptions(input.options),viewName=input.viewName==null?undefined:inputText(input.viewName,1024);
+      const g=await assertPin(pinId),pin=pins.get(pinId)!,entry=pin.header.entries.find(e=>e.id===id&&e.kind==='file');if(!entry)throw fail('index_missing_source');
       const files=pin.header.entries.filter(e=>e.kind==='file');if(files.length>LIMITS.baseRecords)throw fail('index_input_limit');
       const presentations=new Map<string,BrowserVaultPresentation>();for(const row of pin.capture.publication.presentation){if(presentations.has(row.id))throw fail('index_rebuild_required');presentations.set(row.id,row);}
       const facts=[];let factsBytes=2;for(const e of files){const presentation=presentations.get(e.id);if(!presentation)throw fail('index_rebuild_required');
         const fact={witness:{entryId:e.id,revision:e.revision},size:presentation.size_bytes,ctimeMs:presentation.ctime_ms,mtimeMs:presentation.mtime_ms};factsBytes+=size(JSON.stringify(fact))+(facts.length?1:0);if(factsBytes>LIMITS.baseFacts)throw fail('index_input_limit');facts.push(fact);}
       const row=await readRow(pin.generation,entry);if(!row.projection)throw fail('index_source_unavailable');const factsJson=JSON.stringify(facts);
-      const viewName=input.viewName==null?undefined:inputText(input.viewName,1024);await assertPin(input.pinId);
-      const result=json<unknown>(rust(()=>g.baseJson(id,row.projection!,factsJson,options,viewName)));await assertPin(input.pinId);return result;
+      await assertPin(pinId);
+      // No await after acquiring this owner handle: close/rebuild cannot free it
+      // during use. Rust rechecks retained bytes/UTF8 before lookup and after eval.
+      active();const result=json<unknown>(rust(()=>{preparation??=new host.wasm.WasmDocumentIndexPreparationCache();return preparation.baseJson(g,id,row.projection!,factsJson,options,monotonicMs(),viewName);}));
+      await assertPin(pinId);return result;
     },
-    async rebuild(){active();for(const stage of stages.values()){stage.builder?.free();stage.generation?.free();}stages.clear();for(const pin of pins.values())pin.value.free();pins.clear();
+    async rebuild(){active();releasePreparation();for(const stage of stages.values()){stage.builder?.free();stage.generation?.free();}stages.clear();for(const pin of pins.values())pin.value.free();pins.clear();
       // Explicit rebuild expires every old pin; fresh epochs prevent token ABA.
       recovery=undefined;const nonce=crypto.randomUUID();await run<void>('readwrite',['control'],(tx,done)=>{putCatalog(tx,{...empty(),rebuilding:nonce});done();});
       // Generation rebuild preserves the separate validated content-facts family.
       await cleanupPrefix(PREFIX+'g/');
       await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{if(c.rebuilding===nonce)putCatalog(tx,empty());done();},abort));
     },
-    async close(){if(closed)return;for(const stage of stages.values()){stage.builder?.free();stage.generation?.free();}stages.clear();for(const pin of pins.values())pin.value.free();pins.clear();
+    async close(){if(closed)return;releasePreparation();for(const stage of stages.values()){stage.builder?.free();stage.generation?.free();}stages.clear();for(const pin of pins.values())pin.value.free();pins.clear();
       try{await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{c.pins=c.pins.filter(p=>p.clientId!==host.clientId);for(const g of c.generations)if(g.clientId===host.clientId&&g.state==='staging')g.state='deleting';putCatalog(tx,c);done();},abort));}catch{/* Cache cleanup never blocks source close. Explicit rebuild repairs derived state. */}finally{closed=true;}
     },
   };return api;

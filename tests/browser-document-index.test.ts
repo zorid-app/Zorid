@@ -43,6 +43,7 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
   }};
   let textExtractions=0,reuses=0,cacheBinds=0,pauseCacheBindOnce=!!options.pauseCacheBindOnce;const taskCalls:{sources:{id:string;source:string}[];options:any;snapshot:unknown}[]= [];
   const baseCalls:{id:string;text:string;facts:any[];options:any;viewName?:string|null}[]=[];
+  const preparationCalls:{monotonicMs:number;generation:unknown}[]=[],preparationStats={created:0,freed:0,cleared:0};let afterBase:(()=>void)|undefined;
   class MockBuilder {
     header:BrowserIndexHeader;rows=new Map<string,any>();constructor(input:string){this.header=JSON.parse(input);this.header.entries=this.header.entries.map(({id,path,kind,revision,deleted})=>({id,path,kind,revision,deleted}));}
     free(){}headerJson(){return JSON.stringify(this.header);}beginPump(){}
@@ -66,8 +67,17 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
       };},
     };}
   }
+  class MockPreparationCache {
+    constructor(){preparationStats.created++;}
+    clear(){preparationStats.cleared++;}
+    free(){preparationStats.freed++;}
+    baseJson(generation:any,id:string,bytes:Uint8Array,facts:string,options:string,monotonicMs:number,viewName?:string|null){
+      assert.ok(Number.isSafeInteger(monotonicMs)&&monotonicMs>=0);preparationCalls.push({monotonicMs,generation});
+      const result=generation.baseJson(id,bytes,facts,options,viewName);afterBase?.();return result;
+    }
+  }
   const policy={formatVersion:1,maxRows:options.cacheRows??100000,maxBytes:options.cacheBytes??64*1024*1024,maxRowBytes:options.cacheRowBytes??1024*1024,maxEvictionsPerWrite:options.evictions??32};
-  const wasm={documentParseCachePolicyJson:()=>JSON.stringify(policy),documentParseCacheAdmissionJson:(input:string)=>{const {usage,replacedPayloadBytes:replaced,incomingPayloadBytes:incoming,evictedRows:evicted}=JSON.parse(input),rows=usage.rows-(replaced===null?0:1)+1,bytes=usage.bytes-(replaced??0)+incoming;return JSON.stringify(incoming>policy.maxRowBytes?'skipOversized':rows<=policy.maxRows&&bytes<=policy.maxBytes?'write':evicted===policy.maxEvictionsPerWrite?'skipEvictionLimit':'evictOldest');},documentIndexVersionsJson:()=>'{"schema":1,"extraction":"fixture","resolver":"fixture","query":"fixture"}',WasmDocumentIndexBuilder:MockBuilder} as unknown as BrowserDocumentIndexWasm;
+  const wasm={documentParseCachePolicyJson:()=>JSON.stringify(policy),documentParseCacheAdmissionJson:(input:string)=>{const {usage,replacedPayloadBytes:replaced,incomingPayloadBytes:incoming,evictedRows:evicted}=JSON.parse(input),rows=usage.rows-(replaced===null?0:1)+1,bytes=usage.bytes-(replaced??0)+incoming;return JSON.stringify(incoming>policy.maxRowBytes?'skipOversized':rows<=policy.maxRows&&bytes<=policy.maxBytes?'write':evicted===policy.maxEvictionsPerWrite?'skipEvictionLimit':'evictOldest');},documentIndexVersionsJson:()=>'{"schema":1,"extraction":"fixture","resolver":"fixture","query":"fixture"}',WasmDocumentIndexBuilder:MockBuilder,WasmDocumentIndexPreparationCache:MockPreparationCache} as unknown as BrowserDocumentIndexWasm;
   const open=(clientId='client-a')=>browserDocumentIndex({db,authorityId:authority,clientId,wasm,assertActive(){if(denied)throw Object.assign(new Error('retired'),{code:'owner_retired'});},
     readPublication(tx,done,abort){let entries:any[]|undefined,presentation:any[]|undefined,sequence:string|undefined;
       const finish=()=>{if(entries&&presentation&&sequence!==undefined)done({entries,presentation,sequence});};
@@ -83,7 +93,7 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
   }
   const source=()=>clone(new Map([...records].filter(([n])=>n!=='control').map(([n,m])=>[n,m])));
   const build=async(index:ReturnType<typeof open>)=>{let stage=await index.begin();do{stage=await index.pump(stage.stageId);}while(!stage.ready);return index.publish(stage.stageId);};
-  return {records,calls,transactions,file,open,build,source,seed,baseCalls,taskCalls,stats:()=>({textExtractions,reuses,cacheBinds}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},cacheUnavailable(){cacheReadUnavailable=true;},deny(){denied=true;},afterRead(action:(store:string,key:any)=>void){afterRead=action;}};
+  return {records,calls,transactions,file,open,build,source,seed,baseCalls,taskCalls,preparationCalls,preparationStats,afterBase(action:()=>void){afterBase=action;},stats:()=>({textExtractions,reuses,cacheBinds}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},cacheUnavailable(){cacheReadUnavailable=true;},deny(){denied=true;},afterRead(action:(store:string,key:any)=>void){afterRead=action;}};
 }
 
 test('strict derived publication retains source bytes and uses no aggregate control scan',async()=>{
@@ -176,6 +186,34 @@ test('Base transport keeps retained definition and facts and captures one valida
   await index.base({pinId:pin.pinId,id:'base',options:{maxRows:7}});assert.equal(f.baseCalls[2]!.options.maxRows,7);
   for(const options of [{clockMs:NaN},{clockMs:Infinity},{viewIndex:NaN},{maxRows:Infinity}])await assert.rejects(index.base({pinId:pin.pinId,id:'base',options}),{code:'index_invalid_request'});
   assert.equal(f.baseCalls.length,3);await index.close();
+});
+
+// The mock observes owner/transport lifetime only; actual reusable preparation,
+// source validation, hit classification and TTL are checked in Rust/real WASM.
+test('Base preparation owner survives fresh pins but not rebuild or owner close',async()=>{
+  const f=fixture();f.file('base','definition',{path:'Links.base'});const index=f.open();await f.build(index);
+  assert.equal(f.preparationStats.created,0);const first=await index.open();await index.base({pinId:first.pinId,id:'base',options:{clockMs:0}});
+  const source=f.source();await index.closePin(first.pinId);assert.equal(f.preparationStats.freed,0);
+  const fresh=await index.open();await index.base({pinId:fresh.pinId,id:'base',options:{clockMs:42},viewName:'Other'});
+  assert.equal(f.preparationStats.created,1);assert.equal(f.preparationCalls.length,2);assert.notEqual(f.preparationCalls[0]!.generation,f.preparationCalls[1]!.generation);
+  assert.equal(f.baseCalls[1]!.options.clockMs,42);assert.equal(f.baseCalls[1]!.viewName,'Other');assert.deepEqual(f.source(),source);
+  await index.rebuild();assert.equal(f.preparationStats.freed,1);await assert.rejects(index.base({pinId:fresh.pinId,id:'base'}),{code:'index_snapshot_expired'});
+  await f.build(index);const rebuilt=await index.open();await index.base({pinId:rebuilt.pinId,id:'base'});assert.equal(f.preparationStats.created,2);
+  await index.close();await index.close();assert.equal(f.preparationStats.freed,2);assert.deepEqual(f.source(),source);
+});
+test('Base cache does not replace current pin admission before or after evaluation',async()=>{
+  const f=fixture();f.file('base','definition',{path:'Links.base'});const index=f.open();await f.build(index);const pin=await index.open();
+  await index.base({pinId:pin.pinId,id:'base'});await index.closePin(pin.pinId);
+  await assert.rejects(index.base({pinId:pin.pinId,id:'base'}),{code:'index_snapshot_expired'});assert.equal(f.preparationCalls.length,1);
+  const fresh=await index.open();f.afterBase(()=>f.deny());await assert.rejects(index.base({pinId:fresh.pinId,id:'base'}),{code:'owner_retired'});
+  assert.equal(f.preparationStats.freed,1);await index.close();assert.equal(f.preparationStats.freed,1);
+});
+test('Base selectors are captured before asynchronous admission and TTL clock is independent',async()=>{
+  const f=fixture();f.file('base','definition',{path:'Links.base'});const index=f.open();await f.build(index);const pin=await index.open();
+  const request={pinId:pin.pinId,id:'base',viewName:'Original',options:{clockMs:0,searchTerms:['needle']}};
+  f.afterRead((store,key)=>{if(store==='control'){request.pinId='changed';request.id='other';request.viewName='Other';request.options.clockMs=-1;request.options.searchTerms[0]='different';}});
+  await index.base(request);assert.equal(f.baseCalls[0]!.id,'base');assert.equal(f.baseCalls[0]!.viewName,'Original');assert.equal(f.baseCalls[0]!.options.clockMs,0);assert.deepEqual(f.baseCalls[0]!.options.searchTerms,['needle']);
+  assert.ok(f.preparationCalls[0]!.monotonicMs>=0);assert.equal(f.preparationStats.created,1);await index.close();
 });
 
 test('fresh and explicitly rebuilt caches are uninitialized rather than corrupt',async()=>{

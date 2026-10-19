@@ -554,6 +554,195 @@ fn base_error(code: &str, diagnostic: &impl Serialize) -> JsValue {
             .unwrap_or_else(|_| "{\"code\":\"index_invalid_record\"}".into()),
     )
 }
+// Session-owned pure data, deliberately separate from each admitted generation.
+// Its TTL clock comes from the browser host, never a query's evaluation clock.
+#[wasm_bindgen]
+pub struct WasmDocumentIndexPreparationCache {
+    inner: zorid_bases::BasePreparationCache,
+}
+#[wasm_bindgen]
+impl WasmDocumentIndexPreparationCache {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner: zorid_bases::BasePreparationCache::new(),
+        }
+    }
+    pub fn clear(&mut self) {
+        self.inner.clear();
+    }
+    #[wasm_bindgen(js_name=baseJson)]
+    pub fn base_json(
+        &mut self,
+        generation: &WasmDocumentIndexGeneration,
+        id: &str,
+        bytes: &[u8],
+        facts_json: &str,
+        options_json: &str,
+        monotonic_ms: f64,
+        view_name: Option<String>,
+    ) -> Result<String, JsValue> {
+        let clock = checked_monotonic_ms(monotonic_ms).map_err(error)?;
+        base_report(
+            generation,
+            id,
+            bytes,
+            facts_json,
+            options_json,
+            view_name,
+            Some((&mut self.inner, clock)),
+        )
+    }
+}
+impl Default for WasmDocumentIndexPreparationCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+fn checked_monotonic_ms(value: f64) -> Result<u64, &'static str> {
+    // A JS number must be lossless before conversion; no wasm integer coercion.
+    if !value.is_finite() || value.fract() != 0.0 || !(0.0..=9007199254740991.0).contains(&value) {
+        return Err("index_invalid_budget");
+    }
+    Ok(value as u64)
+}
+#[derive(Debug)]
+enum BaseReadError {
+    Code(&'static str),
+    Index(IndexError),
+    Compile(zorid_bases::BaseCompileError),
+    Evaluation(zorid_bases::ExpressionDiagnostic),
+}
+impl BaseReadError {
+    fn js(self) -> JsValue {
+        match self {
+            Self::Code(code) => error(code),
+            Self::Index(value) => contract(value),
+            Self::Compile(value) => base_error("index_base_compile", &value),
+            Self::Evaluation(value) => base_error("index_base_evaluation", &value),
+        }
+    }
+}
+type BaseOutcomes = (
+    zorid_bases::PreparationCacheOutcome,
+    zorid_bases::PreparationCacheOutcome,
+);
+fn base_query_options(
+    input: BaseReadOptions,
+    view_name: Option<&str>,
+    program: &zorid_bases::BaseProgram,
+) -> Result<zorid_bases::QueryOptions, BaseReadError> {
+    let mut options = zorid_bases::QueryOptions::default();
+    if let Some(index) = input.view_index {
+        options.view_index = index;
+    }
+    if let Some(name) = view_name {
+        options.view_index = program
+            .view_index_by_name(name)
+            .ok_or(BaseReadError::Code("index_view_not_found"))?;
+    }
+    options.current_entry_id = input.current_entry_id;
+    if let Some(steps) = input.max_steps {
+        options.max_steps = steps;
+    }
+    options.search_terms = input.search_terms;
+    options.ignore_paths = input.ignore_paths;
+    if let Some(clock) = input.clock_ms {
+        options.evaluation.clock_ms = clock;
+    }
+    if let Some(timezone) = input.timezone {
+        options.evaluation.timezone = timezone;
+    }
+    if let Some(rows) = input.max_rows {
+        options.max_rows = rows;
+    }
+    Ok(options)
+}
+fn evaluate_base<'a>(
+    generation: &'a Generation,
+    id: &EntryId,
+    bytes: &[u8],
+    facts: &[zorid_bases::FilePresentationFacts],
+    input: BaseReadOptions,
+    view_name: Option<&str>,
+    mut cache: Option<(&mut zorid_bases::BasePreparationCache, u64)>,
+) -> Result<(BaseRead<'a>, Option<BaseOutcomes>), BaseReadError> {
+    let record = generation
+        .record(id)
+        .ok_or(BaseReadError::Code("index_missing_source"))?;
+    // A cached program or generation is no proof of source admission. Even a
+    // warm query must recheck this exact retained definition and UTF8 first.
+    record.check_text(bytes).map_err(BaseReadError::Index)?;
+    let source =
+        std::str::from_utf8(bytes).map_err(|_| BaseReadError::Code("index_source_unavailable"))?;
+    let (program, program_outcome) = if let Some((cache, clock)) = cache.as_mut() {
+        let lookup = cache
+            .compile_source(source, *clock)
+            .map_err(BaseReadError::Compile)?;
+        (Arc::clone(lookup.value()), Some(lookup.outcome()))
+    } else {
+        (
+            Arc::new(zorid_bases::compile_base_source(source).map_err(BaseReadError::Compile)?),
+            None,
+        )
+    };
+    // View/current row/clock/timezone/search and every evaluation run anew.
+    let options = base_query_options(input, view_name, &program)?;
+    let (result, outcomes) = if let Some((cache, clock)) = cache {
+        let prepared = cache
+            .prepare_generation(generation, facts, &options, clock)
+            .map_err(BaseReadError::Evaluation)?;
+        let result = zorid_bases::query_prepared(&program, &prepared, &options)
+            .map_err(BaseReadError::Evaluation)?;
+        (
+            result,
+            Some((program_outcome.expect("cached program"), prepared.outcome())),
+        )
+    } else {
+        (
+            zorid_bases::query_generation(&program, generation, facts, &options)
+                .map_err(BaseReadError::Evaluation)?,
+            None,
+        )
+    };
+    // The generation is immutable; keep the source fence explicit on both paths.
+    record.check_text(bytes).map_err(BaseReadError::Index)?;
+    Ok((
+        BaseRead {
+            definition: record.witness().entry(),
+            result,
+        },
+        outcomes,
+    ))
+}
+fn base_report(
+    generation: &WasmDocumentIndexGeneration,
+    id: &str,
+    bytes: &[u8],
+    facts_json: &str,
+    options_json: &str,
+    view_name: Option<String>,
+    cache: Option<(&mut zorid_bases::BasePreparationCache, u64)>,
+) -> Result<String, JsValue> {
+    if bytes.len() > 262144 || facts_json.len() > 8 * 1024 * 1024 || options_json.len() > 65536 {
+        return Err(error("index_input_limit"));
+    }
+    let id = EntryId::new(id).map_err(|_| error("index_invalid_record"))?;
+    let facts: Vec<zorid_bases::FilePresentationFacts> = decode(facts_json)?;
+    let input: BaseReadOptions = decode(options_json)?;
+    let (read, _) = evaluate_base(
+        &generation.generation,
+        &id,
+        bytes,
+        &facts,
+        input,
+        view_name.as_deref(),
+        cache,
+    )
+    .map_err(BaseReadError::js)?;
+    generation.report(read)
+}
+
 // Selectors carry only lossless retained source text. Witnesses and paths are
 // always recovered from this generation, never accepted from the caller.
 #[derive(Deserialize)]
@@ -781,51 +970,7 @@ impl WasmDocumentIndexGeneration {
         options_json: &str,
         view_name: Option<String>,
     ) -> Result<String, JsValue> {
-        if bytes.len() > 262144 || facts_json.len() > 8 * 1024 * 1024 || options_json.len() > 65536
-        {
-            return Err(error("index_input_limit"));
-        }
-        let id = EntryId::new(id).map_err(|_| error("index_invalid_record"))?;
-        let record = self
-            .generation
-            .record(&id)
-            .ok_or_else(|| error("index_missing_source"))?;
-        record.check_text(bytes).map_err(contract)?;
-        let source = std::str::from_utf8(bytes).map_err(|_| error("index_source_unavailable"))?;
-        let facts: Vec<zorid_bases::FilePresentationFacts> = decode(facts_json)?;
-        let input: BaseReadOptions = decode(options_json)?;
-        let program = zorid_bases::compile_base_source(source)
-            .map_err(|e| base_error("index_base_compile", &e))?;
-        let mut options = zorid_bases::QueryOptions::default();
-        if let Some(index) = input.view_index {
-            options.view_index = index;
-        }
-        if let Some(name) = view_name {
-            options.view_index = program
-                .view_index_by_name(&name)
-                .ok_or_else(|| error("index_view_not_found"))?;
-        }
-        options.current_entry_id = input.current_entry_id;
-        if let Some(steps) = input.max_steps {
-            options.max_steps = steps;
-        }
-        options.search_terms = input.search_terms;
-        options.ignore_paths = input.ignore_paths;
-        if let Some(clock) = input.clock_ms {
-            options.evaluation.clock_ms = clock;
-        }
-        if let Some(timezone) = input.timezone {
-            options.evaluation.timezone = timezone;
-        }
-        if let Some(rows) = input.max_rows {
-            options.max_rows = rows;
-        }
-        let result = zorid_bases::query_generation(&program, &self.generation, &facts, &options)
-            .map_err(|e| base_error("index_base_evaluation", &e))?;
-        self.report(BaseRead {
-            definition: record.witness().entry(),
-            result,
-        })
+        base_report(self, id, bytes, facts_json, options_json, view_name, None)
     }
     #[wasm_bindgen(js_name=resolveJson)]
     pub fn resolve_json(&self, source_id: &str, destination: &str) -> Result<String, JsValue> {
@@ -1065,6 +1210,239 @@ mod tests {
             1
         );
         assert_eq!(report["value"]["result"]["rows"][0]["entryId"], "a");
+    }
+    fn base_generation(definition: &[u8]) -> WasmDocumentIndexGeneration {
+        let mut h: serde_json::Value = serde_json::from_str(&header()).unwrap();
+        h["entries"].as_array_mut().unwrap().push(serde_json::json!({"id":"base","path":"Links.base","kind":"file","revision":"r3","deleted":false}));
+        let mut builder = WasmDocumentIndexBuilder::new(&h.to_string()).unwrap();
+        builder
+            .add_text("a", b"---\ntitle: Original\n---\n[[b]]\n")
+            .unwrap();
+        builder.add_text("b", b"target\n").unwrap();
+        builder.add_text("base", definition).unwrap();
+        builder.finish().unwrap()
+    }
+    const BASE_DEFINITION: &[u8] = b"filters: file.hasLink(\"b\")\nformulas:\n  selected: this.file.path\n  clock: now()\nviews:\n  - type: table\n    name: Links\n    order: [file.path, formula.selected, formula.clock]\n  - type: table\n    name: Paths\n    order: [file.path]\n";
+    fn base_input(clock: i64, current: &str) -> BaseReadOptions {
+        serde_json::from_value(
+            serde_json::json!({"clockMs":clock,"timezone":"UTC","currentEntryId":current}),
+        )
+        .unwrap()
+    }
+    #[test]
+    fn preparation_cache_reuses_fresh_generations_and_reruns_current_invocation() {
+        use zorid_bases::PreparationCacheOutcome::{Hit, Miss};
+        let id = EntryId::new("base").unwrap();
+        let mut owner = WasmDocumentIndexPreparationCache::new();
+        let first = base_generation(BASE_DEFINITION);
+        let (_, outcomes) = evaluate_base(
+            &first.generation,
+            &id,
+            BASE_DEFINITION,
+            &[],
+            base_input(0, "a"),
+            Some("Links"),
+            Some((&mut owner.inner, 100)),
+        )
+        .unwrap();
+        assert_eq!(outcomes, Some((Miss, Miss)));
+        drop(first); // Closing a pin does not close the session-owned pure cache.
+        let fresh = base_generation(BASE_DEFINITION);
+        let (warm, outcomes) = evaluate_base(
+            &fresh.generation,
+            &id,
+            BASE_DEFINITION,
+            &[],
+            base_input(86400000, "b"),
+            Some("Links"),
+            Some((&mut owner.inner, 101)),
+        )
+        .unwrap();
+        assert_eq!(outcomes, Some((Hit, Hit)));
+        let (cold, _) = evaluate_base(
+            &fresh.generation,
+            &id,
+            BASE_DEFINITION,
+            &[],
+            base_input(86400000, "b"),
+            Some("Links"),
+            None,
+        )
+        .unwrap();
+        let mut actual = warm.result;
+        actual.steps_used = 0;
+        let mut expected = cold.result;
+        expected.steps_used = 0;
+        assert_eq!(actual, expected);
+        let (other, outcomes) = evaluate_base(
+            &fresh.generation,
+            &id,
+            BASE_DEFINITION,
+            &[],
+            base_input(0, "a"),
+            Some("Paths"),
+            Some((&mut owner.inner, 102)),
+        )
+        .unwrap();
+        assert_eq!(outcomes, Some((Hit, Hit)));
+        let (cold, _) = evaluate_base(
+            &fresh.generation,
+            &id,
+            BASE_DEFINITION,
+            &[],
+            base_input(0, "a"),
+            Some("Paths"),
+            None,
+        )
+        .unwrap();
+        let mut actual = other.result;
+        actual.steps_used = 0;
+        let mut expected = cold.result;
+        expected.steps_used = 0;
+        assert_eq!(actual, expected);
+    }
+    #[test]
+    fn preparation_cache_wrapper_preserves_base_report_envelope() {
+        let generation = base_generation(BASE_DEFINITION);
+        let mut owner = WasmDocumentIndexPreparationCache::new();
+        let mut cached: serde_json::Value = serde_json::from_str(
+            &owner
+                .base_json(
+                    &generation,
+                    "base",
+                    BASE_DEFINITION,
+                    "[]",
+                    "{}",
+                    0.0,
+                    Some("Links".into()),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        let mut cold: serde_json::Value = serde_json::from_str(
+            &generation
+                .base_json("base", BASE_DEFINITION, "[]", "{}", Some("Links".into()))
+                .unwrap(),
+        )
+        .unwrap();
+        cached["value"]["result"]["stepsUsed"] = serde_json::json!(0);
+        cold["value"]["result"]["stepsUsed"] = serde_json::json!(0);
+        assert_eq!(cached, cold);
+    }
+    #[test]
+    fn preparation_cache_warm_source_admission_budget_and_expiry_remain_independent() {
+        use zorid_bases::PreparationCacheOutcome::{Hit, Miss};
+        let id = EntryId::new("base").unwrap();
+        let generation = base_generation(BASE_DEFINITION);
+        let mut owner = WasmDocumentIndexPreparationCache::new();
+        evaluate_base(
+            &generation.generation,
+            &id,
+            BASE_DEFINITION,
+            &[],
+            base_input(0, "a"),
+            None,
+            Some((&mut owner.inner, 1)),
+        )
+        .unwrap();
+        let mut changed = BASE_DEFINITION.to_vec();
+        changed[0] = b'F';
+        assert!(matches!(
+            evaluate_base(
+                &generation.generation,
+                &id,
+                &changed,
+                &[],
+                base_input(0, "a"),
+                None,
+                Some((&mut owner.inner, 2))
+            ),
+            Err(BaseReadError::Index(_))
+        ));
+        assert!(matches!(
+            evaluate_base(
+                &generation.generation,
+                &id,
+                &[255],
+                &[],
+                base_input(0, "a"),
+                None,
+                Some((&mut owner.inner, 2))
+            ),
+            Err(BaseReadError::Index(_))
+        ));
+        let mut tiny = base_input(0, "a");
+        tiny.max_steps = Some(1);
+        assert!(matches!(
+            evaluate_base(
+                &generation.generation,
+                &id,
+                BASE_DEFINITION,
+                &[],
+                tiny,
+                None,
+                Some((&mut owner.inner, 2))
+            ),
+            Err(BaseReadError::Evaluation(_))
+        ));
+        let (_, outcomes) = evaluate_base(
+            &generation.generation,
+            &id,
+            BASE_DEFINITION,
+            &[],
+            base_input(0, "a"),
+            None,
+            Some((&mut owner.inner, 3)),
+        )
+        .unwrap();
+        assert_eq!(outcomes, Some((Hit, Hit)));
+        // TTL is explicit monotonic host time; unchanged evaluation time cannot
+        // keep an idle entry alive. Backwards host time expires optional data.
+        let (_, outcomes) = evaluate_base(
+            &generation.generation,
+            &id,
+            BASE_DEFINITION,
+            &[],
+            base_input(0, "a"),
+            None,
+            Some((&mut owner.inner, 300003)),
+        )
+        .unwrap();
+        assert_eq!(outcomes, Some((Miss, Miss)));
+        let (_, outcomes) = evaluate_base(
+            &generation.generation,
+            &id,
+            BASE_DEFINITION,
+            &[],
+            base_input(0, "a"),
+            None,
+            Some((&mut owner.inner, 1)),
+        )
+        .unwrap();
+        assert_eq!(outcomes, Some((Miss, Miss)));
+        owner.clear();
+        let (_, outcomes) = evaluate_base(
+            &generation.generation,
+            &id,
+            BASE_DEFINITION,
+            &[],
+            base_input(0, "a"),
+            None,
+            Some((&mut owner.inner, 2)),
+        )
+        .unwrap();
+        assert_eq!(outcomes, Some((Miss, Miss)));
+    }
+    #[test]
+    fn preparation_cache_portable_clock_rejects_lossy_js_numbers() {
+        assert_eq!(checked_monotonic_ms(0.0), Ok(0));
+        assert_eq!(
+            checked_monotonic_ms(9007199254740991.0),
+            Ok(9007199254740991)
+        );
+        for value in [-1.0, 0.5, f64::NAN, f64::INFINITY, 9007199254740992.0] {
+            assert_eq!(checked_monotonic_ms(value), Err("index_invalid_budget"));
+        }
     }
     fn task_generation(type_source: &str, task: &str) -> WasmDocumentIndexGeneration {
         let mut h: serde_json::Value = serde_json::from_str(&header()).unwrap();
