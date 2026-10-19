@@ -1709,7 +1709,7 @@ mod retained_view_tests {
     // Exact private database comparison includes receipts, payloads, graph/text
     // history, materializations and jobs, rather than just the visible listing.
     fn database(db: &Connection) -> Vec<(String, Vec<Vec<Value>>)> {
-        let names = db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").unwrap()
+        let names = db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND (name NOT LIKE 'sqlite_%' OR name='sqlite_sequence') ORDER BY name").unwrap()
             .query_map([], |row| row.get::<_, String>(0)).unwrap()
             .collect::<std::result::Result<Vec<_>, _>>().unwrap();
         names
@@ -1834,11 +1834,14 @@ mod retained_view_tests {
             tx.commit().unwrap();
             let last = EntryId::new(format!("text_{:02}", TEXTS - 1)).unwrap();
             if corrupt_history {
+                let mut historical = get(&store.connection, &last).unwrap().unwrap();
+                historical.identity.bootstrap_id =
+                    UpdateId::new("other_history_bootstrap").unwrap();
                 store
                     .connection
                     .execute(
-                        "UPDATE family_materialization_history SET record='{}' WHERE entry_id=?1",
-                        [last.as_str()],
+                        "UPDATE family_materialization_history SET record=?1 WHERE entry_id=?2",
+                        params![serde_json::to_string(&historical).unwrap(), last.as_str()],
                     )
                     .unwrap();
             } else {
