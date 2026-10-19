@@ -83,6 +83,10 @@ pub struct NativeVault {
     options: Options,
     recovery: Option<zorid_recovery::RecoveryStore>,
     recovery_queue: Option<std::collections::VecDeque<EntryId>>,
+    // Optional immutable Base data belongs to this vault handle, never to a
+    // query pin, lease, transaction or source-write capability. Drop releases it.
+    base_preparation_cache: std::cell::RefCell<zorid_bases::BasePreparationCache>,
+    base_preparation_clock: std::time::Instant,
     #[cfg(test)]
     pub(crate) fault: Option<fn(&str)>,
 }
@@ -123,6 +127,10 @@ impl NativeVault {
             options,
             recovery: None,
             recovery_queue: None,
+            base_preparation_cache: std::cell::RefCell::new(
+                zorid_bases::BasePreparationCache::new(),
+            ),
+            base_preparation_clock: std::time::Instant::now(),
             #[cfg(test)]
             fault: None,
         })
@@ -508,7 +516,10 @@ impl NativeVault {
         }
         self.namespace_clear(path)?;
         self.paths.verify_parent(path, &parent)?;
-        let state = self.store.read_path_metadata(path)?.map(|entry| entry.state);
+        let state = self
+            .store
+            .read_path_metadata(path)?
+            .map(|entry| entry.state);
         if let Some(owner) = self.store.physical_owner_at(path)? {
             if state
                 .as_ref()

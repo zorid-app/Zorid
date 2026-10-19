@@ -806,3 +806,312 @@ fn current_entry_context_uses_retained_properties_and_base_file_facts() {
         source.as_bytes()
     );
 }
+
+const CACHED_BASE: &str = "filters: file.ext == \"md\"\nformulas:\n  context: this.rank\n  today: today().toString()\nviews:\n  - type: table\n    name: Ascending\n    order: [file.name, rank, formula.context, formula.today]\n    sort:\n      - property: rank\n        direction: ASC\n  - type: table\n    name: Descending\n    order: [file.name, rank, formula.context, formula.today]\n    sort:\n      - property: rank\n        direction: DESC\n";
+fn create_cached_base_fixture(vault: &mut NativeVault) {
+    for n in 0..8 {
+        create(
+            vault,
+            &format!("cached-note-{n}"),
+            &format!("Note-{n}.md"),
+            &format!("---\nrank: {n}\n---\n[[Note-0]]\n"),
+        );
+    }
+    create(vault, "cached-base", "All.base", CACHED_BASE);
+    vault.initialize_document_index().unwrap();
+    build(vault);
+}
+fn cached_options() -> QueryOptions {
+    let mut options = QueryOptions::default();
+    options.current_entry_id = Some(id("cached-note-0"));
+    options.evaluation.clock_ms = 1_705_314_030_000;
+    options
+}
+fn number(value: f64) -> zorid_bases::BaseValue {
+    zorid_bases::BaseValue::Number { value }
+}
+fn text(value: &str) -> zorid_bases::BaseValue {
+    zorid_bases::BaseValue::String {
+        value: value.into(),
+    }
+}
+
+#[test]
+fn base_preparation_reuses_across_new_pins_and_reruns_context_view_and_clock() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    create_cached_base_fixture(&mut vault);
+    let source_before = std::fs::read(dir.path().join("All.base")).unwrap();
+    let options = cached_options();
+    let first_pin = vault.open_document_snapshot().unwrap();
+    let first = vault
+        .query_base_document_view(&first_pin, &id("cached-base"), "Ascending", &options)
+        .unwrap();
+    assert_eq!(first.value.result.rows.len(), 8);
+    vault.close_document_snapshot(first_pin);
+    let second_pin = vault.open_document_snapshot().unwrap();
+    let second = vault
+        .query_base_document_view(&second_pin, &id("cached-base"), "Ascending", &options)
+        .unwrap();
+    assert_eq!(second.snapshot, first.snapshot);
+    assert_eq!(second.source, first.source);
+    assert_eq!(second.value.definition, first.value.definition);
+    assert_eq!(second.value.result.rows, first.value.result.rows);
+    assert!(
+        second.value.result.steps_used < first.value.result.steps_used,
+        "a separate pin should reuse pure preparation with checked hit work"
+    );
+    let now = u64::try_from(vault.base_preparation_clock.elapsed().as_millis()).unwrap();
+    assert_eq!(
+        vault
+            .base_preparation_cache
+            .borrow_mut()
+            .compile_source(CACHED_BASE, now)
+            .unwrap()
+            .outcome(),
+        zorid_bases::PreparationCacheOutcome::Hit,
+        "the actual native query must also retain its compiled exact source"
+    );
+    let mut changed = options.clone();
+    changed.current_entry_id = Some(id("cached-note-7"));
+    changed.evaluation.clock_ms += 86_400_000;
+    let different = vault
+        .query_base_document_view(&second_pin, &id("cached-base"), "Descending", &changed)
+        .unwrap();
+    assert_eq!(different.value.result.rows[0].entry_id, id("cached-note-7"));
+    for row in &different.value.result.rows {
+        assert_eq!(row.values["formula.context"], number(7.0));
+        assert_eq!(row.values["formula.today"], text("2024-01-16"));
+    }
+    assert_eq!(
+        second.value.result.rows[0].values["formula.context"],
+        number(0.0)
+    );
+    assert_eq!(
+        second.value.result.rows[0].values["formula.today"],
+        text("2024-01-15")
+    );
+    expect_code(
+        vault.query_base_document_view(&second_pin, &id("cached-base"), "absent", &changed),
+        "view_not_found",
+    );
+    changed.max_steps = 1;
+    expect_code(
+        vault.query_base_document(&second_pin, &id("cached-base"), &changed),
+        "budget",
+    );
+    let cancelled = zorid_bases::OperationCancellation::default();
+    cancelled.cancel();
+    changed = options;
+    changed.evaluation.cancellation = Some(cancelled);
+    expect_code(
+        vault.query_base_document(&second_pin, &id("cached-base"), &changed),
+        "cancelled",
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("All.base")).unwrap(),
+        source_before
+    );
+    vault.close_document_snapshot(second_pin);
+}
+
+#[test]
+fn base_cache_idle_expiry_uses_native_monotonic_time_not_the_evaluation_date() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    create_cached_base_fixture(&mut vault);
+    let pin = vault.open_document_snapshot().unwrap();
+    let mut options = cached_options();
+    let cold = vault
+        .query_base_document(&pin, &id("cached-base"), &options)
+        .unwrap();
+    let warm = vault
+        .query_base_document(&pin, &id("cached-base"), &options)
+        .unwrap();
+    assert!(warm.value.result.steps_used < cold.value.result.steps_used);
+    options.evaluation.clock_ms += 365 * 86_400_000;
+    let next_year = vault
+        .query_base_document(&pin, &id("cached-base"), &options)
+        .unwrap();
+    assert_eq!(
+        next_year.value.result.steps_used, warm.value.result.steps_used,
+        "an evaluation-date change must not expire native monotonic caches"
+    );
+    vault.base_preparation_clock = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_millis(
+            zorid_bases::PREPARATION_IDLE_MS + 1000,
+        ))
+        .unwrap();
+    let expired = vault
+        .query_base_document(&pin, &id("cached-base"), &options)
+        .unwrap();
+    assert!(
+        expired.value.result.steps_used > next_year.value.result.steps_used,
+        "advancing the explicit native monotonic origin must expire the shared cache"
+    );
+    assert_eq!(expired.value.result.rows, next_year.value.result.rows);
+    vault.close_document_snapshot(pin);
+}
+
+#[test]
+fn warmed_program_still_requires_current_retained_definition_and_pin_admission() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    create_cached_base_fixture(&mut vault);
+    let options = cached_options();
+    let old = vault.open_document_snapshot().unwrap();
+    let original = vault
+        .query_base_document(&old, &id("cached-base"), &options)
+        .unwrap();
+    vault
+        .query_base_document(&old, &id("cached-base"), &options)
+        .unwrap();
+    write(
+        &mut vault,
+        "change-cached-definition",
+        "cached-base",
+        "views: [invalid\n",
+    );
+    build(&mut vault);
+    let current = vault.open_document_snapshot().unwrap();
+    expect_code(
+        vault.query_base_document(&current, &id("cached-base"), &options),
+        "base_compile",
+    );
+    let retained = vault
+        .query_base_document(&old, &id("cached-base"), &options)
+        .unwrap();
+    assert_eq!(retained.value.definition, original.value.definition);
+    assert_eq!(retained.value.result.rows, original.value.result.rows);
+    vault.rebuild_document_index().unwrap();
+    expect_code(
+        vault.query_base_document(&old, &id("cached-base"), &options),
+        "snapshot_expired",
+    );
+    expect_code(
+        vault.query_base_document(&current, &id("cached-base"), &options),
+        "snapshot_expired",
+    );
+    let now = u64::try_from(vault.base_preparation_clock.elapsed().as_millis()).unwrap();
+    assert_eq!(
+        vault
+            .base_preparation_cache
+            .borrow_mut()
+            .compile_source(CACHED_BASE, now)
+            .unwrap()
+            .outcome(),
+        zorid_bases::PreparationCacheOutcome::Miss,
+        "successful generation rebuild clears this owner's program/preparation cache"
+    );
+    vault.close_document_snapshot(old);
+    vault.close_document_snapshot(current);
+}
+
+#[test]
+fn warmed_program_cannot_mask_corrupt_retained_projection_or_change_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let cache_path = cache.path().canonicalize().unwrap().join("cache.sqlite");
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    vault.enable_local_document_cache(&cache_path).unwrap();
+    create_cached_base_fixture(&mut vault);
+    let pin = vault.open_document_snapshot().unwrap();
+    let options = cached_options();
+    vault
+        .query_base_document(&pin, &id("cached-base"), &options)
+        .unwrap();
+    vault
+        .query_base_document(&pin, &id("cached-base"), &options)
+        .unwrap();
+    let connection = rusqlite::Connection::open(&cache_path).unwrap();
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE document_index_rows SET text=?1 WHERE entry_id=?2",
+                rusqlite::params![b"views: [tampered]\n".as_slice(), "cached-base"]
+            )
+            .unwrap(),
+        1
+    );
+    expect_code(
+        vault.query_base_document(&pin, &id("cached-base"), &options),
+        "rebuild_required",
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("All.base")).unwrap(),
+        CACHED_BASE.as_bytes()
+    );
+    assert_eq!(
+        vault
+            .read(&id("cached-base"))
+            .unwrap()
+            .unwrap()
+            .content
+            .unwrap(),
+        CACHED_BASE.as_bytes()
+    );
+    vault.close_document_snapshot(pin);
+}
+
+thread_local! {
+    static BASE_POST_QUERY_REBUILD: std::cell::RefCell<Option<(std::path::PathBuf,std::path::PathBuf)>> = const { std::cell::RefCell::new(None) };
+}
+fn rebuild_after_base_evaluation(point: &str) {
+    if point == "base_query_evaluated" {
+        let (root, cache) = BASE_POST_QUERY_REBUILD
+            .with(|value| value.borrow_mut().take())
+            .unwrap();
+        let mut other = NativeVault::open_existing(root).unwrap();
+        other.enable_local_document_cache(cache).unwrap();
+        other.rebuild_document_index().unwrap();
+    }
+}
+#[test]
+fn warm_evaluation_rechecks_pin_after_a_real_independent_rebuild_and_owner_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let cache_path = cache.path().canonicalize().unwrap().join("cache.sqlite");
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    vault.enable_local_document_cache(&cache_path).unwrap();
+    create_cached_base_fixture(&mut vault);
+    let options = cached_options();
+    let pin = vault.open_document_snapshot().unwrap();
+    vault
+        .query_base_document(&pin, &id("cached-base"), &options)
+        .unwrap();
+    BASE_POST_QUERY_REBUILD
+        .with(|value| *value.borrow_mut() = Some((dir.path().to_owned(), cache_path.clone())));
+    vault.fault = Some(rebuild_after_base_evaluation);
+    expect_code(
+        vault.query_base_document(&pin, &id("cached-base"), &options),
+        "snapshot_expired",
+    );
+    vault.fault = None;
+    build(&mut vault);
+    let current = vault.open_document_snapshot().unwrap();
+    vault
+        .query_base_document(&current, &id("cached-base"), &options)
+        .unwrap();
+    drop(vault);
+    let mut reopened = NativeVault::open_existing(dir.path()).unwrap();
+    reopened.enable_local_document_cache(&cache_path).unwrap();
+    expect_code(
+        reopened.query_base_document(&current, &id("cached-base"), &options),
+        "snapshot_expired",
+    );
+    let fresh = reopened.open_document_snapshot().unwrap();
+    let cold = reopened
+        .query_base_document(&fresh, &id("cached-base"), &options)
+        .unwrap();
+    let warm = reopened
+        .query_base_document(&fresh, &id("cached-base"), &options)
+        .unwrap();
+    assert!(
+        warm.value.result.steps_used < cold.value.result.steps_used,
+        "a reopened owner starts an empty pure-data cache"
+    );
+    assert_eq!(warm.value.result.rows, cold.value.result.rows);
+    reopened.close_document_snapshot(fresh);
+    drop(current);
+    drop(pin);
+}

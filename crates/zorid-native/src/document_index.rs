@@ -28,7 +28,9 @@ impl NativeVault {
         let name = path
             .file_name()
             .ok_or_else(|| crate::Error::UnsafePath("cache filename missing".into()))?;
-        Ok(self.store.enable_document_cache(parent.join(name))?)
+        self.store.enable_document_cache(parent.join(name))?;
+        self.base_preparation_cache.borrow_mut().clear();
+        Ok(())
     }
     pub fn document_index_status(&self) -> NativeDocumentResult<DocumentIndexStatus> {
         self.paths.verify()?;
@@ -49,7 +51,9 @@ impl NativeVault {
     /// Explicitly discards only derived state and expires old pins/stages.
     pub fn rebuild_document_index(&mut self) -> NativeDocumentResult<()> {
         self.paths.verify()?;
-        Ok(self.store.rebuild_document_index()?)
+        self.store.rebuild_document_index()?;
+        self.base_preparation_cache.borrow_mut().clear();
+        Ok(())
     }
     pub fn begin_document_index(&mut self) -> NativeDocumentResult<DocumentIndexStage> {
         self.paths.verify()?;
@@ -289,7 +293,17 @@ impl NativeVault {
             .ok_or_else(|| NativeDocumentError::SourceUnavailable(definition.clone()))?;
         let source = std::str::from_utf8(&source)
             .map_err(|_| NativeDocumentError::SourceUnavailable(definition.clone()))?;
-        let program = zorid_bases::compile_base_source(source)?;
+        // Store verified this retained projection against the pin's exact
+        // record commitment above. Program/data reuse cannot authorize a pin.
+        // Expiry uses process-monotonic elapsed time, never the evaluation clock.
+        let monotonic_ms =
+            u64::try_from(self.base_preparation_clock.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let program = self
+            .base_preparation_cache
+            .borrow_mut()
+            .compile_source(source, monotonic_ms)?
+            .value()
+            .clone();
         let mut selected = options.clone();
         if let Some(name) = view_name {
             selected.view_index = program.view_index_by_name(name).ok_or_else(|| {
@@ -311,7 +325,15 @@ impl NativeVault {
                 mtime_ms: i64::try_from(presentation.mtime_ms).ok(),
             })
             .collect::<Vec<_>>();
-        let result = zorid_bases::query_generation(&program, pin.generation(), &facts, &selected)?;
+        let prepared = self
+            .base_preparation_cache
+            .borrow_mut()
+            .prepare_generation(pin.generation(), &facts, &selected, monotonic_ms)?;
+        // No cache borrow or storage transaction spans evaluation. Only pure,
+        // invocation-local handles escape; context/view/clock/formulas rerun.
+        let result = zorid_bases::query_prepared(&program, &prepared, &selected)?;
+        #[cfg(test)]
+        self.point("base_query_evaluated");
         self.document_result(
             pin,
             DocumentBaseResult {
