@@ -20,6 +20,7 @@ import './editor/live-inline.css';
 import './editor/image-embed-controls.css';
 import './editor/wiki-completion.css';
 import './editor/folding.css';
+import './editor/find-panel.css';
 import './editor/live-math.css';
 import './editor/live-fences.css';
 import './editor/live-callouts.css';

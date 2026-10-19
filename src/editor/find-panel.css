@@ -1,0 +1,37 @@
+.cm-search.zorid-find-panel {
+  padding: 8px max(10px, calc((100% - var(--file-line-width, 700px)) / 2));
+  font: 13px var(--font-interface);
+  color: var(--text-normal);
+  background: var(--background-primary);
+}
+.zorid-find-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.zorid-find-field {
+  display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
+  border: 1px solid var(--background-modifier-border); border-radius: 999px;
+  background: var(--background-input); padding: 0 9px;
+}
+.zorid-find-field > svg { flex: none; color: var(--text-muted); }
+.zorid-find-previous > svg { transform: rotate(180deg); }
+.zorid-find-field:focus-within { border-color: var(--interactive-accent); }
+.zorid-find-field > input {
+  flex: 1; width: 100%; min-width: 0; padding: 7px 0; border: 0; border-radius: 0;
+  background: transparent; color: inherit; font: inherit; outline: none; box-shadow: none;
+}
+.zorid-find-count { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.zorid-find-panel[data-state="no-match"] .zorid-find-field,
+.zorid-find-panel[data-state="invalid"] .zorid-find-field { border-color: var(--text-error, #d85c5c); }
+.cm-search.zorid-find-panel .zorid-find-button {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: none; border: 0; border-radius: 5px; min-width: 28px; min-height: 29px;
+  padding: 4px 6px; margin: 0; background: transparent; color: var(--text-muted); font: inherit;
+}
+.cm-search.zorid-find-panel .zorid-find-button:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+.cm-search.zorid-find-panel .zorid-find-button:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
+.cm-search.zorid-find-panel .zorid-find-button:disabled { opacity: .4; cursor: default; }
+.zorid-find-options, .zorid-find-replace { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding-top: 7px; }
+.zorid-find-options label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; color: var(--text-muted); }
+.zorid-find-options input { margin: 0; }
+.zorid-find-replace > input { flex: 1; min-width: 80px; font: inherit; }
+.zorid-find-panel [hidden] { display: none !important; }
+
+.zorid-find-limit-help { flex-basis: 100%; color: var(--text-muted); font-size: 11px; }

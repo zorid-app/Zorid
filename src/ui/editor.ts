@@ -9,6 +9,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { defaultHighlightStyle, HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { searchKeymap } from '@codemirror/search';
+import { noteFindPanel } from '../editor/find-panel.ts';
 import { editorCommandHotkeys, runEditorCommand } from '../editor/editor-commands.ts';
 import type { EditorHotkeySource } from './hotkeys.ts';
 import { activeTableEditor, liveTables, refreshTableInteraction, retainTableEditor } from '../editor/live-tables.ts';
@@ -131,6 +132,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
     state: EditorState.create({ doc: options.value, extensions: [
       interaction.of(interactionExtensions()), EditorState.allowMultipleSelections.of(true),
       nativeUpdates, nativeCaret, history(), listConfiguration.of(markdownListKeymap(options.listOptions)), markdown({base: markdownLanguage,addKeymap:false,extensions:[frontmatterMarkdown, liveInlineMarkdown, liveMathMarkdown]}), syntaxHighlighting(markdownHighlightStyle),
+      noteFindPanel(),
       keymap.of([...defaultKeymap.filter(binding => binding.run !== selectParentSyntax), ...historyKeymap, ...searchKeymap]),
       EditorView.lineWrapping, wiki, editorCommandHotkeys(options.hotkeys),
       markdownFolding(),
