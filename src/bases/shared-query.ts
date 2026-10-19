@@ -95,7 +95,7 @@ export function projectSharedBaseResult(raw: DocumentBaseResult, version: number
   if (definition) saved.set(definition.path, Object.freeze({ entryId: definition.id, revision: definition.revision }));
   witnesses.set(projected, saved); return projected;
 }
-interface Run { active: boolean; opening: boolean; reading: boolean; finalRetry?: boolean; pin?: DocumentPin; closing?: Promise<void> }
+interface Run { active: boolean; abort: AbortController; opening: boolean; reading: boolean; finalRetry?: boolean; pin?: DocumentPin; closing?: Promise<void> }
 export interface SharedBaseQueryInput {
   service: DocumentService; definition: VaultEntry; current: VaultEntry; entries: readonly VaultEntry[];
   query: BaseQueryOptions; viewIndex: number; viewName?: string; version: number; isCurrent(): boolean; clock?: BaseClockHost;
@@ -120,18 +120,20 @@ export class SharedBaseQueryRunner {
       run.finalRetry = true; await this.close(run);
     }
   }
-  cancel(): void { for (const run of this.runs) { run.active = false; void this.retire(run).catch(() => { /* Keep failed closes owned; next refresh retries before opening. */ }); } }
+  cancel(): void { for (const run of this.runs) { run.active = false; run.abort.abort(); void this.retire(run).catch(() => { /* Keep failed closes owned; next refresh retries before opening. */ }); } }
   dispose(): void { this.disposed = true; this.cancel(); }
   async query(input: SharedBaseQueryInput): Promise<BaseQueryResult> {
-    const run: Run = { active: true, opening: false, reading: false }; this.runs.add(run);
-    const live = () => run.active && input.isCurrent();
+    if (this.disposed) throw new DocumentSemanticsError('document_request_cancelled');
+    this.cancel(); // A runner owns only its newest Base invocation.
+    const run: Run = { active: true, abort: new AbortController(), opening: false, reading: false }; this.runs.add(run);
+    const live = () => !this.disposed && run.active && input.isCurrent();
     const check = () => { if (!live()) throw new DocumentSemanticsError('document_request_cancelled'); };
     try {
       await Promise.all([...this.runs].filter(other => other !== run && !other.active).map(other => this.close(other))); check();
       if (input.query.functions) return invalid('Custom Base functions are unavailable with shared document queries.');
       if (!input.definition.entryId || !input.definition.revision || !input.current.entryId || !input.current.revision) return invalid('Saved entry identity is unavailable for this Base.');
       const ignorePaths = input.query.ignore ? input.entries.filter(entry => entry.type === 'file' && input.query.ignore!(entry.path)).map(entry => entry.path) : undefined;
-      const maintained = await catchUpDocumentIndex(input.service, { isCurrent: live }); check();
+      const maintained = await catchUpDocumentIndex(input.service, { isCurrent: live, signal: run.abort.signal }); check();
       if (!maintained.current || !maintained.snapshot || maintained.rebuildRequired) return invalid('Saved notes are still being indexed. Refresh this Base to continue.');
       run.opening = true;
       try { run.pin = await input.service.open(); } finally { run.opening = false; }
@@ -155,6 +157,6 @@ export class SharedBaseQueryRunner {
       const result = projectSharedBaseResult(report.value.result, input.version, input.entries, timezone, definition);
       captures.set(result, Object.freeze({ clockMs, timezone }));
       return result;
-    } finally { run.active = false; await this.retire(run); }
+    } finally { run.active = false; run.abort.abort(); await this.retire(run); }
   }
 }
