@@ -87,7 +87,7 @@ test('CLI opt-in preserves binary stdout and enforces the original combined outp
     assert.deepEqual(result.stdout,Buffer.from([0,0,0,2,0,0,0,0,123,125]));assert.equal(result.stderr,'err');assert.equal(result.exitCode,0);assert.equal(result.signal,null);assert.equal(result.outputLimit,false);
     if(measureResources){assert.equal(result.observedProcessRole,'darwin-time-wrapper');assert.equal(result.measurement.metrics.availability,'available');assert.equal(result.processIncomplete,false);}else assert.equal(result.measurement,undefined);
   }
-  const overflow=await invoke(process.execPath,['-e',"process.on('SIGTERM',()=>{});process.stdout.write('x'.repeat(100));setInterval(()=>{},1000)"],{environment:process.env,timeoutMs:3000,maxOutputBytes:16,measureResources:true,sidecarDirectory:directory});
+  const overflow=await invoke(process.execPath,['-e',"process.on('SIGTERM',()=>{});process.stdout.write('x'.repeat(9));process.stderr.write('y'.repeat(9));setInterval(()=>{},1000)"],{environment:process.env,timeoutMs:3000,maxOutputBytes:16,measureResources:true,sidecarDirectory:directory});
   assert.equal(overflow.outputLimit,true);assert.equal(overflow.processIncomplete,true);assert.equal(overflow.stopReason,'output-limit');assert.equal(overflow.measurement.metrics.availability,'unavailable');assert.ok(overflow.stdout.length<=16);
 }));
 test('valid time stats and exit0 never replace missing core/Base final protocol acknowledgment',runtime,()=>fixture(async directory=>{
