@@ -3,7 +3,8 @@ import type {TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
 import {EditorSelection, EditorState, StateEffect} from '@codemirror/state';
-import {EditorView} from '@codemirror/view';
+import {EditorView, panels} from '@codemirror/view';
+import {openSearchPanel, closeSearchPanel, searchPanelOpen} from '@codemirror/search';
 import {createEditor, type EditorOptions} from '../src/ui/editor.ts';
 
 // Real CM plugins, scroll targets and scrollHandler delivery with controlled RAF.
@@ -161,4 +162,19 @@ test('rendered link role span suppresses native caret reveal but source span ret
  const source=document.createElement('span');source.className=link.className;source.setAttribute('role','link');source.dataset.liveInlineRendered='false';f.view.contentDOM.append(source);
  f.pointer(source,'pointerdown');f.cursor(9);f.pointer(f.view.contentDOM,'pointerup');f.settle();
  assert.equal(f.calls.at(-1)?.head,9);
+});
+
+
+test('external Find panel suppresses native reveal after body refocus until Find closes',t=>{
+  const f=setup(t),findHost=document.createElement('div');document.body.prepend(findHost);
+  f.view.dispatch({effects:StateEffect.appendConfig.of(panels({topContainer:findHost}))});
+  openSearchPanel(f.view);assert.ok(findHost.querySelector('.cm-search'));
+  assert.equal(f.view.dom.querySelector('.cm-search'),null);
+  f.view.focus();f.settle();f.calls.length=0;
+  assert.equal(searchPanelOpen(f.view.state),true);assert.equal(document.activeElement,f.view.contentDOM);
+  f.cursor(10);f.event(f.viewport,'resize');f.settle();assert.deepEqual(f.calls,[]);
+  closeSearchPanel(f.view);f.settle();f.calls.length=0;
+  assert.equal(searchPanelOpen(f.view.state),false);
+  f.cursor(13);f.event(f.viewport,'resize');f.settle();assert.equal(f.calls.length,1);
+  assert.equal(f.calls[0].head,13);
 });

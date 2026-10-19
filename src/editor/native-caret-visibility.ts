@@ -1,3 +1,4 @@
+import {searchPanelOpen} from '@codemirror/search';
 import {EditorView, ViewPlugin, type ViewUpdate} from '@codemirror/view';
 
 /** Native keyboard/layout changes can settle after WebKit's selection reveal.
@@ -42,7 +43,7 @@ export function nativeCaretVisibility(isCurrent?:()=>boolean) {
         &&!this.composing&&!this.view.composing&&!this.view.compositionStarted
         &&this.view.state.selection.ranges.length===1&&this.view.state.selection.main.empty
         &&!this.document.querySelector('.modal-overlay,[aria-modal="true"],[role="menu"]')
-        &&!this.view.dom.querySelector('.cm-tooltip-autocomplete,.cm-search');}catch{return false;}
+        &&!searchPanelOpen(this.view.state)&&!this.view.dom.querySelector('.cm-tooltip-autocomplete,.cm-search');}catch{return false;}
     };
     private cancel=()=>{this.epoch++;if(this.frame!==undefined)this.win.cancelAnimationFrame(this.frame);this.frame=undefined;};
     private cancelGesture=()=>{this.manual=true;if(this.pointer){this.pointer.moved=true;this.pointer.wanted=false;}this.cancel();};
