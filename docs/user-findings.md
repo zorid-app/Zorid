@@ -14,6 +14,11 @@ After targeted lookup integration `03642609`, Electron100 measures1.917s
 edit-to-verified-save: commit enqueued at+973ms, native round trip824ms, remaining
 confirmation~120ms. Target remains unmet; profile the remaining native work and
 inspect the pre-submit timer/checkpoint chain before further implementation.
+Measurement limitation: the harness hides the Electron app; BrowserWindow keeps
+Electron's default background timer throttling. Requested400ms debounce may fire
+later, and the measured first-input marker precedes three edits across78ms.
+No timer-arm/fire or visibility-state trace establishes the share yet. The1.917s
+result is a hidden-app observation, not verified foreground latency.
 
 ## S1 save latency during background work — open comparison finding
 

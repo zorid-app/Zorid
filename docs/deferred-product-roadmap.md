@@ -140,6 +140,13 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   (`storage_recovery_ui_impl`). No new runtime granted until profiling plan review.
   Native source handoff for remaining global recovery/planning candidates:
   `/private/tmp/zorid-commit-intent-source-handoff-917f62fa.md` (not timed attribution).
+  Pre-submit source audit identifies hidden-app timer throttling as a confound:
+  harness hides AppKit app; default backgroundThrottling remains true, and400ms
+  debounce resets across three edits/78ms. Timer firing was not observed. Do not
+  present1.917s as established foreground latency or973ms as entirely active work.
+  Independent after-result review confirms raw pairing/counts and saved data;
+  save app uses200 stat calls outside the save window and only4 full snapshots
+  overall (prior330); current save window has one full snapshot, zero stat calls.
   Evidence `/private/tmp/zorid-s1-electron-fifo-diagnostic-7caf7cd4/summary.json`.
   The app/runtime slot is released. Frontend313 required inputs/dist333 files are
   unchanged from accepted `255caa28`; raw main CJS changed deliberately and is
