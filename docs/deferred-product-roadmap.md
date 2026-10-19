@@ -281,6 +281,29 @@ Optional native resource-helper tooling through `21b81827` is source approved in
 tests and measured smokes remain queued. These source-only tools establish no
 resource measurements or performance acceptance.
 
+One-note input diagnosis at frozen `8060f275` resolves the save mismatch:
+`/private/tmp/zorid-s1-input-multiline-8060f275-evidence/report.json` shows EOF caret
+and original renderer/source exact, but multiline CDP insertion loses one LF in
+the actual CodeMirror document before persistence. Ordinary Enter, single-line
+marker insertion, Enter preserves the unchanged expected source in renderer,
+physical file, native readback and checkpoint draft/base:
+`/private/tmp/zorid-s1-input-enter-8060f275-evidence/report.json`. Four apps across
+both diagnoses exited0 through normal AppKit quit without signals; all eight
+owned app/host PIDs are gone, no renderer exceptions, frozen hashes unchanged.
+This diagnoses simulated multiline input, not Rust save loss or OS clipboard
+parity. Source-approved harness `c58c1383` uses the proven ordinary input sequence
+and retains all original full-source/save/index/warm gates; full100 remains queued.
+
+Follow-up native `d0de1c83` now passes35 focused checks, no ignored cases. Two
+old-selector tests fail on unrelated typed corruption, followed by exact tracked
+source restoration; all before/after tracked hashes match and21 Cargo PIDs are
+gone. Evidence `/private/tmp/zorid-native-lookup-d0de1c83-validation-yjo6psd_/validation-summary.json`.
+This reuses prior unchanged Store proof rather than rerunning it. The serialized
+slot now belongs to `s1_execution_audit` for exactd0 release build, family100 and
+same-caps legacy10k. Prior51060 CLI/host bytes are preserved separately under
+`/private/tmp/zorid-s1-baseline-native-release-51060b1d`. No second-fix performance
+result or complete normal-app save/restart acceptance is claimed yet.
+
 Owners: `s1_execution_audit` owns workload/native CLI baseline tooling;
 `s1_query_audit` owns the integrated language fixtures;
 `architecture_platform_audit` owns actual browser/normal Electron measurement
