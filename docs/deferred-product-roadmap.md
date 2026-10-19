@@ -21,21 +21,29 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   is established. Pure-core10k and actual-browser100 passed within their stated
   scopes. Generated Base100 passed all eight semantic oracles;10k generation completed,
   but all eight queries rejected the existing preparation budget (limited/incomplete).
-- **Active owner/slot:** `storage_sqlite_impl` owns serialized focused Rust
-  validation of reviewed bulk-loader `7858cb20`; no release build/runtime yet.
-  Normal-family10k is terminal incomplete at32 passes:224 live files admitted,
-  inventory3030/unfinished, no index/query stage, all sources/hashes exact and
-  owned PIDs gone. Its sample points to repeated metadata graph-view validation.
-  `storage_recovery_impl` implements invocation-local lazy immutable view reuse
-  (`61fa42af`); exact source review passed, compiled tests/runtime pending.
-  Loader test-only correction `028bc96d` is under review after a new corruption
-  fixture hit the existing immutable-delete guard before its reader assertion;
-  initial Store library116 passed/1 failed/1 existing ignored, not acceptance.
-  This is not a persistent mutation cache or schema/planner contract change.
-  Combined source-only candidate `b069d553` is frozen pending updated validation.
-  `s1_query_audit` owns isolated S1.1 parser facts and contextual binding, preserving
-  existing output/corpus/limits; no cache/platform wiring in that first commit.
-  Root is sole main integrator; no push.
+- **Active owner/slot:** `storage_recovery_impl` owns serialized focused Rust
+  validation on composed `b391179a`, whose four Store files exactly match reviewed
+  release candidate `a55bb5e5`. Invocation-local immutable graph-view reuse through
+  `61fa42af` is source approved; compiled/runtime evidence pending. No release
+  build or new native runtime yet. Normal-family10k remains terminal incomplete:
+  224 live files/32 passes, inventory3030/unfinished, sources exact, no survivors.
+- **Loader integration:** reviewed source through `028bc96d` is integrated
+  `667c4f48`.202 unique scoped checks pass/1 existing ignored. Three broader test
+  expectations fail identically on unchanged main: schema3 presentation migration,
+  schema2 scan migration, and historical directory-baseline revision equality.
+  These remain explicit test debt, not a full-suite pass or a policy expansion.
+  The initial new backing-corruption fixture hit an immutable trigger before its
+  reader assertions; its reviewed fixture-only correction now passes. Evidence:
+  `/private/tmp/zorid-metadata-loader-028bc96d-validation-q3dn7zjm/validation-summary.json`.
+  All tracked hashes remain exact;19 owned Cargo PIDs are gone.
+- **S1.1 ownership:** `s1_query_audit` parser facts `ae342a51` is source reviewed,
+  awaiting compiled corpus tests. `baseline_resources_impl` owns typed scoped
+  extraction/key/binding and bounded cache policy; `storage_sqlite_impl` owns new
+  isolated native cache-only persistence, `architecture_platform_audit` browser/
+  WASM adapter and optional validated cache counters. Source-only until slots;
+  no reusable parse cache or multicore runtime acceptance yet. Preserve existing
+  parser output, source fences and separate authority/cache schemas. Root sole
+  main integrator; no push.
 - **Desktop verification:** corrected normal100 passes exact save/file/native/
   checkpoint, fresh search and retained warm index/revision gates. Three apps quit
   normally; source/build hashes unchanged, no survivors. Evidence:

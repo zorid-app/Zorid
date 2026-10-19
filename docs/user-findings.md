@@ -58,9 +58,14 @@ follow-up passed and is integrated `56dd1de9`. Its same-cap legacy10k reached
 fences pass, all owned processes are gone. Evidence:
 `/private/tmp/zorid-s1-cli-legacy-release-d0de1c83-10000/report.json`.
 One87s setup sample now points to `apply_transaction_text` reloading the complete
-metadata snapshot, especially N+1 metadata SQL reads. Audit full-loader efficiency
-while preserving the complete transaction-current planner snapshot and all typed
-checks; no subset planner or trusted disposable mutation cache is authorized.
+metadata snapshot, especially N+1 metadata SQL reads. The complete checked bulk-loader is now integrated `667c4f48` from reviewed
+`028bc96d`:202 unique scoped checks pass/1 existing ignored, including full Store
+library and new differential/corruption/no-sorter cases. Three broader historical
+migration/directory expectation failures were reproduced on unchanged main and
+remain explicit test debt; no complete suite pass is claimed. Source/proof
+validation is separate from the pending combined release/runtime measurement.
+Preserve the complete transaction-current planner snapshot and typed checks;
+no subset planner or trusted disposable mutation cache is authorized.
 
 The original incomplete setup evidence is retained at
 `/private/tmp/zorid-s1-cli-legacy-release-80dfce28-10000/report.json`. Its global
