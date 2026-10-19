@@ -1,6 +1,6 @@
 # User findings queue
 
-## S1 search UI reference — in-file implementation started
+## S1 search UI reference — editor find integrated, broader verification pending
 
 User supplied Obsidian screenshots for vault search and in-file find. Vault search
 should group collapsible results by file, show per-file match counts and bordered
@@ -11,11 +11,14 @@ preserving note interaction. Implement working behavior with shared search resul
 keyboard/focus/accessibility and correct counts/case semantics; no decorative fake
 controls or new full-index work for every view refresh. REA reference investigation
 owner `architecture_platform_audit`; source artifacts stay outside the repository.
-In-file implementation owner `storage_recovery_ui_impl` has an isolated branch:
-new editor find-panel module/styles and focused tests, narrow editor integration
-and the single main stylesheet import. This independent CodeMirror presentation
-work can proceed while S1.2 cache validation runs; it changes neither shared query
-semantics nor indexing policy. Reading-mode integration remains a required follow-on.
+In-file owner `storage_recovery_ui_impl` delivered `0fad2065`, independently source
+reviewed by `architecture_platform_audit`, integrated `b3df4514`. The top CodeMirror
+panel searches unsaved text, preserves shortcuts/focus/IME state and adds working
+navigation/options/close. All42 focused behavior/regression checks and TypeScript
+pass. Counts are bounded and explicitly unavailable for large notes; navigation
+continues. Painted layout/native IME and actual app behavior remain unverified.
+Reading-mode implementation is a separately owned follow-on: rendered-text ranges,
+refresh/disposal and keyboard routing, without forcing an edit-mode transition.
 Vault-search implementation awaits the S1.3 shared result contract; the source map
 and static REA audit are complete. Implementation is not visual/runtime acceptance.
 This addition does not reopen saving or resume later product stages.

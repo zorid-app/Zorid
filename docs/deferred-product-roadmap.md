@@ -142,10 +142,31 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
   facts and proposes explicit metadata-version/validator changes first. Their
   schema/API agreement precedes edits; `storage_recovery_impl` reviews search.
   No new shared-search platform migration starts before the pure contract passes.
+  Parser schema agreement adds typed block/list-item intervals and explicit task
+  itemRange while preserving existing checkbox/text ranges. Document schema2
+  intentionally invalidates old extraction keys; no SQL/index-schema bump or
+  silent schema1 migration. Parser owner additionally owns document initializer,
+  index restore validation, typed TS metadata DTO and focused affected tests;
+  frozen historical49 fixtures remain checked through explicit test-only legacy
+  projections, with new schema2 raw-source interval fixtures tested independently.
   `storage_sqlite_impl` separately owns conservative answer reuse in Bases only;
   `baseline_resources_impl` owns the opt-in existing generated-Base preparation
   measurement path and reviews the answer cache. Neither changes existing frozen
   defaults/oracles/caps or claims that a cache unit test establishes UX improvement.
+  Preparation measurement `055c82c1` integrated `d70e93c0`: matching release
+  example builds19.53s;100 and10k each pass all24 full-result comparisons and8
+  unchanged oracles.100 has1 miss/15 hits (13,396 cold preparation units versus
+  3,193 hit proof units; ordered hit observations0.017–0.027ms).10k remains
+  Uncached on all16 attempts; no10k preparation reuse gain is established. Both
+  reuse compiled programs. No cap/oracle changes or client-speedup claim. Evidence:
+  `/private/tmp/zorid-bases-cache-observation-055c82c1-k_blpv0b/acceptance-summary.json`.
+  All owned processes exited; reviewer is diagnosing repeated large-generation
+  admission overhead before proposing any additional optimization.
+  Top editor find source `0fad2065` is independently approved and integrated
+  `b3df4514`,42 focused checks plus TypeScript pass. User screenshot layout is
+  implemented using existing icons/styles and CodeMirror commands, not painted
+  verified yet. Reading-mode find remains separately implementing; vault-search
+  result UI remains pending rich-engine transport. Do not claim screenshot parity.
   S1.4 current core-lifecycle source handoff:
   `/private/tmp/zorid-s1-core-lifecycle-handoff.md` (no implementation yet).
 - **Integrated:** scoped observation-lookup fix through `2c53a98d`,193
