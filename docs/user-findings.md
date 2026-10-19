@@ -15,7 +15,7 @@ accepted S1.2 work can address conservative dependency-aware graph preparation,
 indexed resolution and bounded generation-keyed reuse, preserving tie/normalization
 semantics. No engine optimization or budget change has been implemented here.
 
-## S1 native setup scales with repeated full-store work — first fix integrated
+## S1 native setup scales with repeated full-store work — two fixes integrated
 
 The indexed unresolved-observation lookup is integrated through `2c53a98d`
 (production `239e639e`, reviewed source `9d2d3704`). Scoped193 checks pass with one
@@ -31,7 +31,14 @@ native selector replacements (`d0de1c83`) using existing indexed `read_path_meta
 API, preserving selected-row validation, physical proofs, full recovery scans
 and absence inventories. No new schema/cache/API is required. Independent source
 review and35 focused native checks pass; release/runtime verification of this
-follow-up remains separate from the first fix.
+follow-up passed and is integrated `56dd1de9`. Its same-cap legacy10k reached
+6,167 entries in240.656s; still no index/query phase. Exact sources and binary
+fences pass, all owned processes are gone. Evidence:
+`/private/tmp/zorid-s1-cli-legacy-release-d0de1c83-10000/report.json`.
+One87s setup sample now points to `apply_transaction_text` reloading the complete
+metadata snapshot, especially N+1 metadata SQL reads. Audit full-loader efficiency
+while preserving the complete transaction-current planner snapshot and all typed
+checks; no subset planner or trusted disposable mutation cache is authorized.
 
 The original incomplete setup evidence is retained at
 `/private/tmp/zorid-s1-cli-legacy-release-80dfce28-10000/report.json`. Its global

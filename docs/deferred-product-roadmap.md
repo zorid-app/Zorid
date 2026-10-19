@@ -10,19 +10,21 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 - **Stage:** S0 bounded native delivery and S0A contracts accepted; S1.0 baseline
   and measured setup prerequisites implementing. Cached parse facts, multicore
   execution and core-owned scheduling are not implemented yet.
-- **Integrated:** first scoped observation-lookup fix through `2c53a98d`,193
+- **Integrated:** scoped observation-lookup fix through `2c53a98d`,193
   focused checks/1 existing ignored fixture, release build and normal-family100
   source/search checks pass. Small Base17 semantic-baseline tool is integrated
-  through `da536a82` and passed real release execution.
-- **Current limitation:** legacy10k still stops at import,3,383 entries/240.256s
-  versus earlier2,378/240.316s. No native10k index/search result or completion gain
+  through `da536a82` and passed real release execution. Four native indexed path
+  selectors are integrated `56dd1de9`,35 focused checks and family100 pass.
+- **Current limitation:** legacy10k still stops at import,6,167 entries/240.656s
+  versus3,383/240.256s and initially2,378/240.316s. No native10k index/search result or completion gain
   is established. Pure-core10k and actual-browser100 passed within their stated
   scopes. Generated Base10k graph-budget rejection is source-predicted, not yet
   executed.
-- **Active owner/slot:** `s1_execution_audit` builds/runs frozen native candidate
-  `d0de1c83` in `native-import-lookup` (four indexed path selectors, independently
-  reviewed,35 focused native checks pass). Release build, family100 and same-caps
-  legacy10k must finish before integration. Root is sole main integrator; no push.
+- **Active owner/slot:** matching `d0de1c83` release build, family100 and same-caps
+  legacy10k are terminal, all owned processes gone. Corrected Electron100 is next.
+  `storage_sqlite_impl` is auditing the remaining complete-snapshot metadata loader
+  cost; no planner-invariant/cache/schema change is approved. Root is sole main
+  integrator; no push.
 - **Desktop verification:** one-note ordinary typing preserves renderer/file/
   native/checkpoint bytes. Multiline CDP insertion loses a newline before saving;
   source-approved harness `c58c1383` uses ordinary Enter/typing with the original
