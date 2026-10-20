@@ -12,7 +12,7 @@ const compare=(a:any,b:any):number=>Array.isArray(a)&&Array.isArray(b)?a.reduce(
 function databaseFixture(oldVersion=0){
   type Definition={keyPath:string|string[];indexes:Map<string,{keyPath:string|string[];unique:boolean}>};
   const records=new Map<string,Map<string,any>>(),definitions=new Map<string,Definition>();
-  let closed=false;
+  let closed=false;const writes:{store:string;operation:string;key:any}[]=[];
   const matches=(key:any,range:any)=>!range||((range.lower===undefined||compare(key,range.lower)>=(range.lowerOpen?1:0))&&(range.upper===undefined||compare(key,range.upper)<=(range.upperOpen?-1:0)));
   const schemaStore=(name:string)=>({
     createIndex(index:string,keyPath:string|string[],options:any={}){definitions.get(name)!.indexes.set(index,{keyPath,unique:options.unique===true});},
@@ -34,12 +34,12 @@ function databaseFixture(oldVersion=0){
             assert.equal(aborted||complete,false);const result:any={};pending++;
             queueMicrotask(()=>{if(aborted)return;try{result.result=clone(action());result.onsuccess?.();}catch(error){tx.error=error;tx.abort();}finally{pending--;schedule();}});return result;
           }
-          function write(row:any,add:boolean){assert.equal(mode,'readwrite');const copy=clone(row),key=keyOf(copy,definition.keyPath);return request(()=>{
+          function write(row:any,add:boolean){assert.equal(mode,'readwrite');const copy=clone(row),key=keyOf(copy,definition.keyPath);writes.push({store:name,operation:add?'add':'put',key:clone(key)});return request(()=>{
             const values=local.get(name)!;if(add&&values.has(JSON.stringify(key)))throw new Error('duplicate key');
             for(const index of definition.indexes.values())if(index.unique)for(const [oldKey,old]of values)if(oldKey!==JSON.stringify(key)&&compare(keyOf(old,index.keyPath),keyOf(copy,index.keyPath))===0)throw new Error('duplicate index');
             values.set(JSON.stringify(key),copy);modified.add(name);return key;
           });}
-          function remove(key:any){assert.equal(mode,'readwrite');return request(()=>{local.get(name)!.delete(JSON.stringify(key));modified.add(name);});}
+          function remove(key:any){assert.equal(mode,'readwrite');writes.push({store:name,operation:'delete',key:clone(key)});return request(()=>{local.get(name)!.delete(JSON.stringify(key));modified.add(name);});}
           function cursor(range:any,indexPath=definition.keyPath,direction='next'){
             const result:any={};pending++;const rows=[...local.get(name)!.values()].filter(row=>matches(keyOf(row,indexPath),range)).sort((a,b)=>compare(keyOf(a,indexPath),keyOf(b,indexPath)));if(direction==='prev')rows.reverse();let position=0;
             const step=()=>{if(aborted)return;let continued=false;const row=rows[position];result.result=row===undefined?null:{value:clone(row),primaryKey:clone(keyOf(row,definition.keyPath)),continue(){continued=true;position++;queueMicrotask(step);},delete(){return remove(keyOf(row,definition.keyPath));}};
@@ -69,7 +69,7 @@ function databaseFixture(oldVersion=0){
     if(version>db.version){let aborted=false;request.transaction={objectStore:schemaStore,abort(){aborted=true;}};request.onupgradeneeded?.({oldVersion:db.version});if(aborted){request.error=new Error('upgrade aborted');request.onerror?.();return;}db.version=version;}
     request.onsuccess?.();
   });return request;}};
-  return {indexedDB,db,records,definitions,seed(store:string,row:any){records.get(store)!.set(JSON.stringify(keyOf(row,definitions.get(store)!.keyPath)),clone(row));},row(store:string,key:any){return clone(records.get(store)!.get(JSON.stringify(key)));}};
+  return {indexedDB,db,records,definitions,writes,seed(store:string,row:any){records.get(store)!.set(JSON.stringify(keyOf(row,definitions.get(store)!.keyPath)),clone(row));},row(store:string,key:any){return clone(records.get(store)!.get(JSON.stringify(key)));}};
 }
 function wasmFixture(){
   let plans=0,disposed=0;
@@ -123,4 +123,54 @@ for(const corruption of ['missing','extra'])test(`fresh managed schema inventory
   if(corruption==='missing')receipt.indexes.delete('by_retry');else receipt.indexes.set('extra',{keyPath:'status',unique:false});
   await assert.rejects(openBrowserStreamingVault(options),{code:'storage_schema_mismatch'});
   vault.close();
+}));
+
+test('normal mutation skips unchanged publication metadata but still repairs inline content',async()=>withFixture(async f=>{
+  // Opaque planner output drives the real vault intent/engine transaction path.
+  // This checks host publication writes, not Rust classification or CRDT parity.
+  const text=new TextEncoder().encode('text'),identity={...scope,entry_id:'note',bootstrap_id:'bootstrap'};
+  const old=[{id:'note',path:'note.md',kind:'file',revision:'text-revision',deleted:false},{id:'folder',path:'folder',kind:'folder',revision:'folder-revision',deleted:false}];
+  const presentation=old.map(entry=>({id:entry.id,ctime_ms:10,mtime_ms:20,size_bytes:entry.kind==='file'?text.length:0}));
+  const classified=old.map(entry=>({identity:{entry_id:entry.id},outcome:{status:'normal',path:entry.path,kind:entry.kind,content:entry.kind==='file'?{kind:'text',content:{byte_length:String(text.length),witness:{kind:'text',identity,revision:entry.revision}}}:null}}));
+  const mocked=wasmFixture(),wasm=mocked.wasm,digest=Array(32).fill(2),summary=Array(32).fill(3);
+  wasm.validateFamilyCommand=(raw:string)=>raw;
+  wasm.checkIdempotency=(raw:string)=>{const value=JSON.parse(raw);return JSON.stringify(value.record?{status:'replay',result:value.record.result}:{status:'new'});};
+  wasm.validateAuthoredSyncPayload=()=>{};
+  wasm.WasmMetadataStateBuilder=class{
+    version:string;constructor(_scope:string,version:string){this.version=version;}restoreRecord(){}restoreActivity(){}free(){}
+    finish(){const version=this.version;return {free(){},metadataHeadJson:()=>JSON.stringify({scope,version,record_count:0,activity_count:0}),
+      mutationRequirements:()=>JSON.stringify({update_count:1,text:'none'}),
+      prepareMutation(raw:string){const input=JSON.parse(raw),a=input.allocation,id=a.update_ids[0],request=input.command.request;
+        const after={id:request.mutation.id,path:'new-folder',kind:'folder',deleted:false,revision:a.metadata_revision};
+        const metadata={key:{...scope,update_id:id},family:'files',format_version:2,payload_digest:digest,payload_bytes:1,text_binding:null},record={payload_bytes:1,payload_digest:digest};
+        const output={record_delta_count:1,activity_delta_count:0,payload_count:1,allocated_update_ids:[id],changes:[{before:null,after}]};
+        const rows=[...classified,{identity:{entry_id:after.id},outcome:{status:'normal',path:after.path,kind:'folder',content:null}}];
+        const plan={free(){},resultJson:()=>JSON.stringify(output),nextState:()=>({free(){},metadataHeadJson:()=>JSON.stringify({scope,version:a.graph_revision,record_count:1,activity_count:0})}),
+          recordDeltaJson:()=>JSON.stringify({update_id:id,record,summary_digest:summary}),payloadMetadataJson:()=>JSON.stringify(metadata),payloadBytes:()=>Uint8Array.of(7),
+          checkPreconditions(actual:any){assert.equal(actual.metadataHeadJson(),JSON.stringify({scope,version,record_count:0,activity_count:0}));},
+          classify:()=>({length:()=>rows.length,entryJson:(index:number)=>JSON.stringify(rows[index]),textBytes:()=>text.slice(),free(){}})};
+        return {free(){},payloadCount:()=>1,payloadMetadataJson:plan.payloadMetadataJson,payloadBytes:plan.payloadBytes,
+          verificationSession:()=>({free(){},nextChunkJson:()=>undefined,finish:()=>({free(){}})}),finalize:()=>plan};
+      }};}
+  };
+  const vault=await openBrowserStreamingVault({name:'zorid-core-vault:publication-writes',clientId,assertActive(){},wasm,now:()=>30});
+  try{
+    f.seed('sync_state',{key:'config',value:{...scope,key_epoch:1,replica_id:'replica',incarnation_id:'incarnation'}});
+    f.seed('sync_state',{key:'metadata-head',value:{scope,version:'graph',record_count:0,activity_count:0}});
+    f.seed('sync_text',{key:JSON.stringify([scope.realm_id,scope.vault_id,'note','bootstrap']),state:{identity,version:'text-revision',snapshot:[],actors:{}}});
+    for(let index=0;index<old.length;index++){
+      const entry=old[index],stat=presentation[index],content=entry.kind==='file'?{kind:'text',metadata:classified[index].outcome.content!.content}:null;
+      f.seed('metadata',entry);f.seed('presentation',stat);f.seed('sync_materialization_refs',{id:entry.id,status:'normal',fingerprint:JSON.stringify(classified[index]),entry,presentation:stat,content,reason:classified[index].outcome});
+      // Revision/retained descriptor equality does not establish inline bytes.
+      f.seed('content',{id:entry.id,bytes:Uint8Array.of(9,9,9,9)});
+    }
+    f.writes.length=0;
+    const receipt=JSON.parse(await vault.mutate(JSON.stringify({operation_id:'mkdir',mutation:{type:'create',id:'new',path:'new-folder',kind:'folder',content:null}})));
+    assert.equal(receipt.sequence,'1');assert.equal(receipt.changes[0].after.id,'new');
+    for(const store of ['metadata','presentation'])assert.deepEqual(f.writes.filter(row=>row.store===store),[{store,operation:'put',key:'new'}]);
+    assert.deepEqual(f.writes.filter(row=>row.store==='content'),[{store:'content',operation:'put',key:'note'},{store:'content',operation:'delete',key:'folder'},{store:'content',operation:'delete',key:'new'}]);
+    assert.deepEqual(f.row('content','note').bytes,text);assert.equal(f.row('content','folder'),undefined);
+    for(let index=0;index<old.length;index++){assert.deepEqual(f.row('metadata',old[index].id),old[index]);assert.deepEqual(f.row('presentation',old[index].id),presentation[index]);}
+    assert.equal((await vault.readEntry('note.md'))?.entry.revision,'text-revision');assert.deepEqual((await vault.readEntry('note.md'))?.bytes,text);
+  }finally{vault.close();}
 }));
