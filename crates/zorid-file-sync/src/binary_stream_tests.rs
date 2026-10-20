@@ -350,7 +350,7 @@ fn maximal_wire_payload_descriptor_round_trips_with_bounded_wrapper_overhead() {
         id: id("events"),
         body: v2::Body::Events { events },
     };
-    let limit = zorid_sync_protocol::MAX_PLAINTEXT_BYTES;
+    let limit = crate::MAX_PAYLOAD_BYTES;
     let mut length = serde_json::to_vec(&payload).unwrap().len();
     assert!(length < limit);
     if let v2::Body::Events { events } = &mut payload.body {

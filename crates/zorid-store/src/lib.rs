@@ -13,6 +13,8 @@ mod document_parse_cache;
 mod entry_content;
 mod family_metadata_transactions;
 mod immutable_payloads;
+#[cfg(test)]
+mod one_mib_text_tests;
 mod operation_request;
 pub use binary_commit::{
     BinaryStageCommit, BinaryStageRejection, BinaryStageRejectionCode, BinaryStageTerminal,
@@ -122,7 +124,8 @@ use zorid_core::{
     Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
-const SCHEMA_VERSION: i64 = 14;
+const SCHEMA_VERSION: i64 = 15;
+const TEXT_PREDECESSOR_SCHEMA_VERSION: i64 = 14;
 const NAMESPACE_SCHEMA_VERSION: i64 = 13;
 const PREDECESSOR_SCHEMA_VERSION: i64 = 12;
 pub const DEFAULT_STREAMING_LIMITS: StreamingLimits = StreamingLimits {
@@ -174,7 +177,7 @@ fn check_schema(connection: &Connection) -> Result<i64> {
     // Unreleased formats: reject before changing WAL or database bytes.
     if !matches!(
         version,
-        0 | PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION | SCHEMA_VERSION
+        0 | PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION | TEXT_PREDECESSOR_SCHEMA_VERSION | SCHEMA_VERSION
     ) {
         return Err(StoreError::UnsupportedSchema(version));
     }
@@ -196,8 +199,11 @@ fn check_schema(connection: &Connection) -> Result<i64> {
             .into_iter()
             .filter(|(name, _)| {
                 (version != PREDECESSOR_SCHEMA_VERSION || *name != "namespace_successions")
-                    && (version == SCHEMA_VERSION || *name != projection::EXTERNAL_UNRESOLVED_INDEX.0)
+                    && (version >= TEXT_PREDECESSOR_SCHEMA_VERSION || *name != projection::EXTERNAL_UNRESOLVED_INDEX.0)
             })
+            .map(|(name, sql)| if name == "immutable_payloads" && version < SCHEMA_VERSION {
+                (name, immutable_payloads::LEGACY_TABLE_SQL)
+            } else { (name, sql) })
             .collect();
         // SQLite trigger names occupy a separate namespace. A duplicate name
         // must not hide an extra trigger behind a registered table's SQL.
@@ -469,6 +475,10 @@ impl Store {
             text_sync::migrate(&tx)?;
             checkpoints::migrate(&tx)?;
             tx.pragma_update(None, "application_id", APPLICATION_ID)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        if matches!(version, PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION | TEXT_PREDECESSOR_SCHEMA_VERSION) {
+            immutable_payloads::migrate_text_bound(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         if version == PREDECESSOR_SCHEMA_VERSION {

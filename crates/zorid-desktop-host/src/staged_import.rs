@@ -25,8 +25,8 @@ use zorid_store::{
 pub const MAX_IMPORT_RESULT_BYTES: usize = 64 * 1024;
 const MAX_SELECTION: usize = 8192;
 // Existing zorid-client-sync MAX_TEXT_BYTES, enforced again by family_apply.
-const MAX_TEXT: u64 = 256 * 1024;
-const MAX_PLAN: usize = 2 * 1024 * 1024; // Worst-case escaped bounded UTF-8 text.
+const MAX_TEXT: u64 = 1024 * 1024;
+const MAX_PLAN: usize = 8 * 1024 * 1024; // Up to six JSON bytes per text byte, plus framing.
 const MAX_NAMES: usize = 100;
 type Result<T> = std::result::Result<T, Value>;
 fn error(code: &'static str, uncertain: bool) -> Value {
@@ -1261,6 +1261,21 @@ mod tests {
             std::fs::read(dir.path().join("vault/photo (1).bin")).unwrap(),
             b"racer"
         );
+    }
+    #[test]
+    fn one_mib_text_escaped_import_checkpoint_survives_reopen() {
+        let (dir, mut host) = setup();
+        let content = "\u{1}".repeat(MAX_TEXT as usize);
+        let mut selected = selection(&host, content.as_bytes(), "large.md", "text", OP, ENTRY);
+        selected.lease_token.clear();
+        let plan = Plan { selection: selected.clone(), path: VaultPath::new("large.md").unwrap(),
+            phase: Phase::CommitRequested, mode: Some(Kind::Text), content: Some(content) };
+        let bytes = serde_json::to_vec(&plan).unwrap();
+        assert!(bytes.len() > 6 * MAX_TEXT as usize && bytes.len() < MAX_PLAN);
+        save_plan(&mut host.vault, None, &plan).unwrap();
+        drop(host);
+        let mut reopened = EmbeddedHost::open_local(&dir.path().join("vault")).unwrap();
+        assert!(load_plan(&mut reopened.vault, &selected).unwrap().as_ref() == Some(&plan));
     }
     #[test]
     fn text_limits_auto_policy_and_utf8_boundaries_use_existing_core() {

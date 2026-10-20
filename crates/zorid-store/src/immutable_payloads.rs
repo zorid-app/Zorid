@@ -13,12 +13,32 @@ use zorid_file_sync::{
 const MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
 const MAX_DIGEST_JSON_BYTES: usize = 256;
 
+pub(super) const LEGACY_TABLE_SQL: &str = "CREATE TABLE immutable_payloads (realm_id TEXT NOT NULL,vault_id TEXT NOT NULL,update_id TEXT NOT NULL,family TEXT NOT NULL CHECK(family IN ('files','text','records')),payload_bytes INTEGER NOT NULL CHECK(payload_bytes BETWEEN 1 AND 1048576),payload_digest TEXT NOT NULL,file_summary_digest TEXT,descriptor TEXT,payload BLOB NOT NULL CHECK(length(payload)=payload_bytes),CHECK((family='files' AND file_summary_digest IS NOT NULL AND descriptor IS NOT NULL) OR (family IN ('text','records') AND file_summary_digest IS NULL AND descriptor IS NULL)),PRIMARY KEY(realm_id,vault_id,update_id))";
 pub(super) const SCHEMA: &[(&str, &str)] = &[
-    ("immutable_payloads", "CREATE TABLE immutable_payloads (realm_id TEXT NOT NULL,vault_id TEXT NOT NULL,update_id TEXT NOT NULL,family TEXT NOT NULL CHECK(family IN ('files','text','records')),payload_bytes INTEGER NOT NULL CHECK(payload_bytes BETWEEN 1 AND 1048576),payload_digest TEXT NOT NULL,file_summary_digest TEXT,descriptor TEXT,payload BLOB NOT NULL CHECK(length(payload)=payload_bytes),CHECK((family='files' AND file_summary_digest IS NOT NULL AND descriptor IS NOT NULL) OR (family IN ('text','records') AND file_summary_digest IS NULL AND descriptor IS NULL)),PRIMARY KEY(realm_id,vault_id,update_id))"),
+    ("immutable_payloads", "CREATE TABLE \"immutable_payloads\" (realm_id TEXT NOT NULL,vault_id TEXT NOT NULL,update_id TEXT NOT NULL,family TEXT NOT NULL CHECK(family IN ('files','text','records')),payload_bytes INTEGER NOT NULL CHECK(payload_bytes BETWEEN 1 AND CASE WHEN family='text' THEN 8388608 ELSE 1048576 END),payload_digest TEXT NOT NULL,file_summary_digest TEXT,descriptor TEXT,payload BLOB NOT NULL CHECK(length(payload)=payload_bytes),CHECK((family='files' AND file_summary_digest IS NOT NULL AND descriptor IS NOT NULL) OR (family IN ('text','records') AND file_summary_digest IS NULL AND descriptor IS NULL)),PRIMARY KEY(realm_id,vault_id,update_id))"),
     ("immutable_payloads_insert_only", "CREATE TRIGGER immutable_payloads_insert_only BEFORE INSERT ON immutable_payloads WHEN EXISTS(SELECT 1 FROM immutable_payloads WHERE realm_id=NEW.realm_id AND vault_id=NEW.vault_id AND update_id=NEW.update_id) BEGIN SELECT RAISE(ABORT,'immutable payload key is already retained'); END"),
     ("immutable_payloads_no_update", "CREATE TRIGGER immutable_payloads_no_update BEFORE UPDATE ON immutable_payloads BEGIN SELECT RAISE(ABORT,'immutable payload rows cannot be updated'); END"),
     ("immutable_payloads_no_delete", "CREATE TRIGGER immutable_payloads_no_delete BEFORE DELETE ON immutable_payloads BEGIN SELECT RAISE(ABORT,'immutable payload rows cannot be deleted'); END"),
 ];
+
+/** Called only after exact predecessor-schema validation under its IMMEDIATE
+ * writer. Foreign keys remain enabled and are checked before the commit. */
+pub(super) fn migrate_text_bound(tx: &Connection) -> Result<()> {
+    tx.pragma_update(None, "defer_foreign_keys", true)?;
+    tx.execute_batch(&SCHEMA[0].1.replacen("\"immutable_payloads\"", "\"immutable_payloads_next\"", 1))?;
+    tx.execute_batch("INSERT INTO immutable_payloads_next SELECT * FROM immutable_payloads; DROP TABLE immutable_payloads; ALTER TABLE immutable_payloads_next RENAME TO immutable_payloads;")?;
+    for (_, sql) in &SCHEMA[1..] {
+        tx.execute_batch(sql)?;
+    }
+    if tx.prepare("PRAGMA foreign_key_check")?.query([])?.next()?.is_some() {
+        return Err(corrupt("text payload migration found inconsistent foreign keys"));
+    }
+    // DROP recorded deferred misses against the old table. Renaming the fully
+    // copied replacement does not clear SQLite's counter; after checking every
+    // final FK explicitly, restore immediate checking for the rest of this tx.
+    tx.pragma_update(None, "defer_foreign_keys", false)?;
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PayloadHead {
@@ -49,7 +69,7 @@ pub(super) fn head(tx: &Connection, key: &EnvelopeKey) -> Result<Option<PayloadH
     let descriptor_bound = i64::try_from(MAX_GRAPH_RECORD_BYTES)
         .map_err(|_| corrupt("portable descriptor bound exceeds SQLite integer range"))?;
     let bounded: Option<bool> = tx.query_row(
-        "SELECT family IN ('files','text','records') AND payload_bytes BETWEEN 1 AND 1048576 AND length(payload)=payload_bytes AND length(CAST(payload_digest AS BLOB)) BETWEEN 1 AND 256 AND ((family='files' AND file_summary_digest IS NOT NULL AND length(CAST(file_summary_digest AS BLOB)) BETWEEN 1 AND 256 AND descriptor IS NOT NULL AND length(CAST(descriptor AS BLOB)) BETWEEN 1 AND ?4) OR (family IN ('text','records') AND file_summary_digest IS NULL AND descriptor IS NULL)) FROM immutable_payloads WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3",
+        "SELECT family IN ('files','text','records') AND payload_bytes BETWEEN 1 AND CASE WHEN family='text' THEN 8388608 ELSE 1048576 END AND length(payload)=payload_bytes AND length(CAST(payload_digest AS BLOB)) BETWEEN 1 AND 256 AND ((family='files' AND file_summary_digest IS NOT NULL AND length(CAST(file_summary_digest AS BLOB)) BETWEEN 1 AND 256 AND descriptor IS NOT NULL AND length(CAST(descriptor AS BLOB)) BETWEEN 1 AND ?4) OR (family IN ('text','records') AND file_summary_digest IS NULL AND descriptor IS NULL)) FROM immutable_payloads WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3",
         params![key.realm_id.as_str(),key.vault_id.as_str(),key.update_id.as_str(),descriptor_bound], |r|r.get(0),
     ).optional()?;
     match bounded {
@@ -91,7 +111,8 @@ pub(super) fn head(tx: &Connection, key: &EnvelopeKey) -> Result<Option<PayloadH
 }
 
 fn checked_descriptor(metadata: &EnvelopeMetadata, exact: &[u8]) -> Result<Option<String>> {
-    if exact.is_empty() || exact.len() > MAX_PAYLOAD_BYTES {
+    let maximum = if metadata.family == Family::Text { zorid_sync_protocol::MAX_PLAINTEXT_BYTES } else { MAX_PAYLOAD_BYTES };
+    if exact.is_empty() || exact.len() > maximum {
         return Err(corrupt("immutable payload body exceeds bound"));
     }
     metadata.check_payload(exact)?;
@@ -183,7 +204,8 @@ pub(super) fn put_exact(
 /// Resolve only against independently supplied ledger/stage metadata. Missing
 /// backing bytes are corruption; this never reports another missing download.
 pub(super) fn read_exact(tx: &Connection, metadata: &EnvelopeMetadata) -> Result<Vec<u8>> {
-    if metadata.payload_bytes == 0 || metadata.payload_bytes as usize > MAX_PAYLOAD_BYTES {
+    let maximum = if metadata.family == Family::Text { zorid_sync_protocol::MAX_PLAINTEXT_BYTES } else { MAX_PAYLOAD_BYTES };
+    if metadata.payload_bytes == 0 || metadata.payload_bytes as usize > maximum {
         return Err(corrupt(
             "immutable payload expected byte count exceeds bound",
         ));

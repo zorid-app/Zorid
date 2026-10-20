@@ -11,7 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use zorid_client_sync::{v2::TextActivity, TextIdentity};
 use zorid_core::{EntryId, EntryKind, Revision};
 use zorid_crypto::{OpenedEnvelope, VaultKey};
-use zorid_sync_protocol::{ExpectedContext, UpdateId, MAX_PLAINTEXT_BYTES};
+use zorid_sync_protocol::{ExpectedContext, UpdateId};
+use crate::MAX_PAYLOAD_BYTES as MAX_PLAINTEXT_BYTES;
 
 pub const FORMAT_VERSION: u32 = 2;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -282,7 +283,7 @@ impl StoredActivity {
     }
     pub(super) fn from_activity(a: &TextActivity) -> Result<Self> {
         let size = a.payload_bytes().len();
-        if size == 0 || size > MAX_PLAINTEXT_BYTES {
+        if size == 0 || size > zorid_sync_protocol::MAX_PLAINTEXT_BYTES {
             return Err(Error::TooLarge);
         }
         Ok(Self {
@@ -297,7 +298,7 @@ impl StoredActivity {
         if self.identity.realm_id != scope.realm_id || self.identity.vault_id != scope.vault_id {
             return Err(Error::IdentityMismatch);
         }
-        if self.payload_bytes == 0 || self.payload_bytes as usize > MAX_PLAINTEXT_BYTES {
+        if self.payload_bytes == 0 || self.payload_bytes as usize > zorid_sync_protocol::MAX_PLAINTEXT_BYTES {
             return Err(Error::TooLarge);
         }
         parents(&self.update_id, &self.namespace.parents, false)?;

@@ -978,7 +978,8 @@ mod tests {
         let (store, old) = setup(&db);
         let original = proof_rows(&store, &old.job.job_id);
         drop(store);
-        let connection = Connection::open(&db).unwrap();
+        let mut connection = Connection::open(&db).unwrap();
+        crate::one_mib_text_tests::restore_legacy_payload_table(&mut connection);
         connection.execute_batch("DROP INDEX external_observation_unresolved_path; DROP TABLE namespace_successions; PRAGMA user_version=12; PRAGMA journal_mode=DELETE;").unwrap();
         drop(connection);
         let store = Store::open(&db).unwrap();
@@ -987,7 +988,7 @@ mod tests {
                 .connection
                 .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
                 .unwrap(),
-            14
+            15
         );
         assert_eq!(store.namespace_attempt(&old.job.job_id).unwrap(), old);
         assert_eq!(proof_rows(&store, &old.job.job_id), original);
@@ -1007,7 +1008,8 @@ mod tests {
             let db = dir.path().join("db");
             let store = Store::open(&db).unwrap();
             drop(store);
-            let connection = Connection::open(&db).unwrap();
+            let mut connection = Connection::open(&db).unwrap();
+            crate::one_mib_text_tests::restore_legacy_payload_table(&mut connection);
             connection.execute_batch("DROP INDEX external_observation_unresolved_path; DROP TABLE namespace_successions; PRAGMA user_version=12; PRAGMA journal_mode=DELETE;").unwrap();
             connection.execute_batch(change).unwrap();
             drop(connection);

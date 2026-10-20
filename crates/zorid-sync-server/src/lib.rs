@@ -16,13 +16,15 @@ use zorid_sync_protocol::{
 };
 
 const APPLICATION_ID: i64 = 0x5a53524c; // ZSRL
+const SCHEMA_VERSION: i64 = 2;
+const LEGACY_UPDATES_SQL: &str = "CREATE TABLE updates (vault TEXT NOT NULL REFERENCES vaults(id), sequence INTEGER NOT NULL CHECK(sequence>0), update_id TEXT NOT NULL, uploader TEXT NOT NULL REFERENCES devices(id), envelope BLOB NOT NULL CHECK(length(envelope)>=48 AND length(envelope)<=1052720), PRIMARY KEY(vault,sequence), UNIQUE(vault,update_id)) STRICT";
 const SCHEMA: &[(&str, &str)] = &[
     ("identity", "CREATE TABLE identity (singleton INTEGER PRIMARY KEY CHECK(singleton=1), realm TEXT NOT NULL, epoch TEXT NOT NULL) STRICT"),
     ("accounts", "CREATE TABLE accounts (id TEXT PRIMARY KEY NOT NULL) STRICT"),
     ("devices", "CREATE TABLE devices (id TEXT PRIMARY KEY NOT NULL, account TEXT NOT NULL REFERENCES accounts(id), token_hash BLOB NOT NULL UNIQUE CHECK(length(token_hash)=32), revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1))) STRICT"),
     ("vaults", "CREATE TABLE vaults (id TEXT PRIMARY KEY NOT NULL) STRICT"),
     ("memberships", "CREATE TABLE memberships (account TEXT NOT NULL REFERENCES accounts(id), vault TEXT NOT NULL REFERENCES vaults(id), can_write INTEGER NOT NULL CHECK(can_write IN (0,1)), PRIMARY KEY(account,vault)) STRICT"),
-    ("updates", "CREATE TABLE updates (vault TEXT NOT NULL REFERENCES vaults(id), sequence INTEGER NOT NULL CHECK(sequence>0), update_id TEXT NOT NULL, uploader TEXT NOT NULL REFERENCES devices(id), envelope BLOB NOT NULL CHECK(length(envelope)>=48 AND length(envelope)<=1052720), PRIMARY KEY(vault,sequence), UNIQUE(vault,update_id)) STRICT"),
+    ("updates", "CREATE TABLE \"updates\" (vault TEXT NOT NULL REFERENCES vaults(id), sequence INTEGER NOT NULL CHECK(sequence>0), update_id TEXT NOT NULL, uploader TEXT NOT NULL REFERENCES devices(id), envelope BLOB NOT NULL CHECK(length(envelope)>=48 AND length(envelope)<=8392752), PRIMARY KEY(vault,sequence), UNIQUE(vault,update_id)) STRICT"),
 ];
 
 pub const MAX_PAGE_ITEMS: usize = 64;
@@ -150,7 +152,7 @@ impl RelayStore {
         // Inspect before any journal-mode change; unknown DBs are not adopted.
         {
             let tx = connection.transaction()?;
-            if check_schema(&tx)? == 1 && identity(&tx)?.realm_id != *realm {
+            if check_schema(&tx)? != 0 && identity(&tx)?.realm_id != *realm {
                 return Err(RelayError::Protocol(ProtocolError::ContextMismatch));
             }
             tx.commit()?;
@@ -167,8 +169,9 @@ impl RelayStore {
                     params![realm.as_str(), epoch.as_str()],
                 )?;
                 tx.pragma_update(None, "application_id", APPLICATION_ID)?;
-                tx.pragma_update(None, "user_version", 1)?;
+                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             }
+            migrate_schema(&tx)?;
             if identity(&tx)?.realm_id != *realm {
                 return Err(RelayError::Protocol(ProtocolError::ContextMismatch));
             }
@@ -460,7 +463,7 @@ fn check_schema_for_application(connection: &Connection, expected_application: i
     if version == 0 && app == 0 && count == 0 {
         return Ok(0);
     }
-    if version != 1 || app != expected_application || count != SCHEMA.len() as i64 {
+    if !matches!(version, 1 | SCHEMA_VERSION) || app != expected_application || count != SCHEMA.len() as i64 {
         return Err(RelayError::Corrupt);
     }
     for (name, sql) in SCHEMA {
@@ -471,9 +474,26 @@ fn check_schema_for_application(connection: &Connection, expected_application: i
                 |r| r.get(0),
             )
             .optional()?;
-        if actual.as_deref() != Some(*sql) {
+        let expected = if version == 1 && *name == "updates" { LEGACY_UPDATES_SQL } else { *sql };
+        if actual.as_deref() != Some(expected) {
             return Err(RelayError::Corrupt);
         }
     }
     Ok(version)
 }
+
+fn migrate_schema(connection: &Connection) -> Result<()> {
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version != 1 { return Ok(()); }
+    let sql = SCHEMA.iter().find(|(name, _)| *name == "updates").ok_or(RelayError::Corrupt)?.1;
+    connection.execute_batch(&sql.replacen("\"updates\"", "\"updates_next\"", 1))?;
+    connection.execute_batch("INSERT INTO updates_next SELECT * FROM updates; DROP TABLE updates; ALTER TABLE updates_next RENAME TO updates;")?;
+    if connection.prepare("PRAGMA foreign_key_check")?.query([])?.next()?.is_some() {
+        return Err(RelayError::Corrupt);
+    }
+    connection.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod text_limit_tests;

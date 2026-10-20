@@ -11,7 +11,9 @@ pub const ENVELOPE_VERSION: u16 = 1;
 pub const DOCUMENT_FORMAT_VERSION: u32 = 1;
 pub const MAX_HEADER_BYTES: usize = 4096;
 pub const MAX_CONTROL_BYTES: usize = 4096;
-pub const MAX_PLAINTEXT_BYTES: usize = 1024 * 1024;
+// Text updates retain their existing JSON numeric-byte representation. A 1 MiB
+// UTF-8 note can occupy over 4 MiB once CRDT and namespace framing are included.
+pub const MAX_PLAINTEXT_BYTES: usize = 8 * 1024 * 1024;
 pub const NONCE_BYTES: usize = 24;
 pub const TAG_BYTES: usize = 16;
 pub const MAX_WIRE_BYTES: usize =

@@ -242,6 +242,60 @@ fn text_create_and_write_keep_exact_namespace_context_and_payload() {
         Some(&state),
     );
 }
+
+#[test]
+fn one_mib_utf8_text_create_and_write_round_trip_encrypted_wire() {
+    use zorid_crypto::{CryptoError, EntropySource, VaultKey};
+    use zorid_sync_protocol::{ExpectedContext, Header, MAX_PLAINTEXT_BYTES, MAX_WIRE_BYTES};
+    struct Entropy;
+    impl EntropySource for Entropy {
+        fn fill(&mut self, bytes: &mut [u8]) -> std::result::Result<(), CryptoError> {
+            bytes.fill(7);
+            Ok(())
+        }
+    }
+    fn verify(text: &mutation::TextChange, expected: &[u8]) {
+        let plan = text.plan();
+        let authored = &plan.authored;
+        let key = VaultKey::from_bytes([5; 32]);
+        let header = Header::new(authored.identity.realm_id.clone(), authored.identity.vault_id.clone(),
+            authored.update_id.clone(), DeviceId::new("device").unwrap(), 1).unwrap();
+        assert!(authored.payload_bytes.len() <= MAX_PLAINTEXT_BYTES);
+        let wire = zorid_crypto::seal(&header, &authored.payload_bytes, &key, &mut Entropy).unwrap().encode();
+        assert!(wire.len() <= MAX_WIRE_BYTES);
+        let received = zorid_client_sync::v2::AuthenticatedText::open(&wire, &ExpectedContext {
+            realm_id: authored.identity.realm_id.clone(), vault_id: authored.identity.vault_id.clone(),
+            update_id: authored.update_id.clone(), key_epoch: 1,
+        }, &key).unwrap();
+        let applied = zorid_client_sync::v2::plan_received_text(&plan.expected_state,
+            &zorid_client_sync::ReceiveRequest { expected_version: plan.expected_state.version.clone(),
+                next_version: rev("received"), delivery: None }, &received, None, None).unwrap();
+        assert_eq!(applied.materialized_utf8.as_deref(), Some(expected));
+        let reopened: TextState = serde_json::from_slice(&serde_json::to_vec(&plan.next_state).unwrap()).unwrap();
+        assert_eq!(reopened.projection_baseline().unwrap().materialized_utf8, expected);
+    }
+    assert_eq!(zorid_client_sync::MAX_TEXT_BYTES, 1024 * 1024);
+    // Every UTF-8 byte in this three-byte scalar needs three JSON digits. This
+    // exercises the worst per-byte expansion, with one ASCII byte for exact size.
+    let content = format!("{}x", "\u{800}".repeat((1024 * 1024) / 3)).into_bytes();
+    assert_eq!(content.len(), 1024 * 1024);
+    let graph = empty();
+    let created = compare(&create("one-mib", "large.md", EntryKind::File, Some(content.clone())),
+        &[], &graph, Some(CreateMode::Text), None);
+    verify(created.text.as_ref().unwrap(), &content);
+    assert!(created.text.as_ref().unwrap().plan().authored.payload_bytes.len() > 4 * 1024 * 1024,
+        "dense UTF-8 plus CRDT/framing must exercise the expanded envelope bound");
+    let entries = after(&[], &created);
+    let state = &created.text.as_ref().unwrap().plan().next_state;
+    let replacement = format!("{}y", "\u{801}".repeat((1024 * 1024) / 3)).into_bytes();
+    let changed = compare(&request("one-mib-write", Mutation::Write {
+        id: entries[0].id.clone(), expected: entries[0].revision.clone(), content: replacement.clone(),
+    }), &entries, &created.next_graph, None, Some(state));
+    verify(changed.text.as_ref().unwrap(), &replacement);
+    let too_large = create("over-one-mib", "too-large.md", EntryKind::File, Some(vec![b'x'; 1024 * 1024 + 1]));
+    assert!(matches!(requirements(&too_large, &[], &MetadataState::from_legacy(&graph).unwrap(),
+        Some(CreateMode::Text), None), Err(Error::Text(zorid_client_sync::SyncError::TooLarge))));
+}
 #[test]
 fn inline_binary_commands_cannot_bypass_the_staged_mapper() {
     let (graph, entries) = binary_fixture();

@@ -291,7 +291,7 @@ fn text_error(error: zorid_client_sync::SyncError) -> Error {
 
 /// Classify every stable identity in deterministic EntryId order. Binary output
 /// contains retained causal references only and never consumes the text budget.
-/// Text uses client-sync's existing 256 KiB content limit. One temporary decoder
+/// Text uses client-sync's existing content limit. One temporary decoder
 /// result can exist beyond the aggregate retained-output budget; that budget is
 /// checked before retaining content, and does not bound total decoding memory.
 /// Hidden outcomes contain no content.

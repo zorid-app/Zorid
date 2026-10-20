@@ -14,7 +14,7 @@ use zorid_sync_protocol::{
 };
 
 pub const TEXT_FORMAT_VERSION: u32 = 1;
-pub const MAX_TEXT_BYTES: usize = 256 * 1024;
+pub const MAX_TEXT_BYTES: usize = 1024 * 1024;
 pub const MAX_SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_ACTORS: usize = 4096;
 pub const MAX_EDITS: usize = 4096;
@@ -217,7 +217,7 @@ pub struct AuthoredUpdate {
 }
 
 /// Typed text semantics inside encrypted plaintext. Decoder rejects unknown fields
-/// and unsupported versions; JSON numeric bytes count toward envelope's 1 MiB cap.
+/// and unsupported versions; JSON numeric bytes count toward the envelope cap.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TextPayload {

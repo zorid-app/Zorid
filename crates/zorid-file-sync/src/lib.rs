@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use zorid_core::{EntryId, EntryKind, Revision, VaultPath};
 use zorid_crypto::{OpenedEnvelope, VaultKey};
 use zorid_sync_protocol::{
-    ExpectedContext, RealmId, UpdateId, VaultId, MAX_PLAINTEXT_BYTES, MAX_WIRE_BYTES,
+    ExpectedContext, RealmId, UpdateId, VaultId, MAX_WIRE_BYTES,
 };
 
 pub mod binary_stream;
@@ -22,6 +22,9 @@ pub mod mutation;
 pub mod v2;
 
 pub const FORMAT_VERSION: u32 = 1;
+/// Files keep their own payload budget even when Text needs a larger envelope.
+pub const MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
+use MAX_PAYLOAD_BYTES as MAX_PLAINTEXT_BYTES;
 pub const MAX_CHUNK_BYTES: usize = 128 * 1024;
 pub const MAX_PAGE_CHUNKS: usize = 128;
 pub const MAX_MANIFEST_PAGES: usize = 128;

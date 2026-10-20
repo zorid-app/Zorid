@@ -7,7 +7,8 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use zorid_core::{EntryId, Revision};
-use zorid_sync_protocol::{UpdateId, MAX_PLAINTEXT_BYTES};
+use zorid_sync_protocol::UpdateId;
+use crate::MAX_PAYLOAD_BYTES as MAX_PLAINTEXT_BYTES;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

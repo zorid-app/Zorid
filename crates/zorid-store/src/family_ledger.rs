@@ -102,7 +102,7 @@ impl EnvelopeMetadata {
     fn validate(&self) -> Result<()> {
         if self.format_version != if self.family == Family::Records { 1 } else { 2 }
             || self.payload_bytes == 0
-            || self.payload_bytes as usize > zorid_sync_protocol::MAX_PLAINTEXT_BYTES
+            || self.payload_bytes as usize > if self.family == Family::Text { zorid_sync_protocol::MAX_PLAINTEXT_BYTES } else { zorid_file_sync::MAX_PAYLOAD_BYTES }
             || (self.family == Family::Text) != self.text_binding.is_some()
             || (self.family == Family::Files) != self.file_summary_digest.is_some()
         {

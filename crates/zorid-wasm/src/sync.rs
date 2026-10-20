@@ -686,7 +686,7 @@ fn stored_metadata(input: &str) -> Result<StoredMetadata> {
     let value: StoredMetadata = control(input)?;
     if !matches!((value.family.as_str(),value.format_version), ("text",2)|("files",2)|("records",1))
         || value.payload_bytes == 0
-        || value.payload_bytes as usize > zorid_sync_protocol::MAX_PLAINTEXT_BYTES
+        || value.payload_bytes as usize > if value.family == "text" { zorid_sync_protocol::MAX_PLAINTEXT_BYTES } else { zorid_file_sync::MAX_PAYLOAD_BYTES }
         || (value.family == "text") != value.text_binding.is_some()
     {
         return Err("invalid stored sync metadata".into());

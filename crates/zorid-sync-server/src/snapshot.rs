@@ -2,7 +2,7 @@
 //! a different application ID so normal server startup cannot revive old tokens.
 use crate::{
     check_schema_for_application, identity, random_epoch, Identity, RelayError, RelayStore, Result,
-    APPLICATION_ID,
+    APPLICATION_ID, migrate_schema,
 };
 use rusqlite::{
     backup::{Backup, StepResult},
@@ -119,6 +119,7 @@ fn prepare(
         return Err(RelayError::Protocol(ProtocolError::ContextMismatch));
     }
     let tx = copy.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    migrate_schema(&tx)?;
     if restoring {
         let fresh = random_epoch()?;
         if fresh == original.server_epoch {
@@ -226,7 +227,7 @@ fn staging(_destination: &Path) -> Result<(NamedTempFile, PathBuf, File)> {
 }
 
 fn validate(connection: &Connection, application: i64) -> Result<Identity> {
-    if check_schema_for_application(connection, application)? != 1 {
+    if !matches!(check_schema_for_application(connection, application)?, 1 | 2) {
         return Err(RelayError::Corrupt);
     }
     let identity = identity(connection)?;

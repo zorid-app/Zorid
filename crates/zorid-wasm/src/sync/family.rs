@@ -7,7 +7,8 @@ use zorid_client_sync::TextState;
 use zorid_core::EntryState;
 use zorid_file_sync::{mutation as mapper, v2};
 
-const MAX_COMMAND_JSON_BYTES: usize = 4 * 1024 * 1024;
+// A 1 MiB UTF-8 body uses up to four JSON bytes per numeric byte, plus framing.
+const MAX_COMMAND_JSON_BYTES: usize = 8 * 1024 * 1024;
 pub(super) fn command(input: &str) -> Result<mapper::FamilyCommand> {
     if input.len() > MAX_COMMAND_JSON_BYTES {
         return Err("family command exceeds fixture budget".into());

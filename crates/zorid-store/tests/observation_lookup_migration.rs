@@ -76,10 +76,25 @@ fn fixture(database: &std::path::Path) -> NamespaceAttempt {
     attempt
 }
 fn downgrade(database: &std::path::Path, version: i64) {
-    let connection = Connection::open(database).unwrap();
-    connection
-        .execute_batch("DROP INDEX external_observation_unresolved_path;")
-        .unwrap();
+    let mut connection = Connection::open(database).unwrap();
+    // Reconstruct the exact old payload constraint, preserving all fixture rows.
+    // Merely changing user_version on a v15 schema is not a predecessor fixture.
+    connection.pragma_update(None, "foreign_keys", true).unwrap();
+    let current: String = connection.query_row("SELECT sql FROM sqlite_master WHERE name='immutable_payloads'", [], |row| row.get(0)).unwrap();
+    let triggers: Vec<String> = connection.prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND tbl_name='immutable_payloads'").unwrap()
+        .query_map([], |row| row.get(0)).unwrap().map(|row| row.unwrap()).collect();
+    let legacy = current.replacen("CREATE TABLE \"immutable_payloads\"", "CREATE TABLE immutable_payloads", 1)
+        .replace("CASE WHEN family='text' THEN 8388608 ELSE 1048576 END", "1048576");
+    let tx = connection.transaction().unwrap();
+    tx.pragma_update(None, "defer_foreign_keys", true).unwrap();
+    tx.execute_batch("CREATE TEMP TABLE payload_copy AS SELECT * FROM immutable_payloads; DROP TABLE immutable_payloads;").unwrap();
+    tx.execute_batch(&legacy).unwrap();
+    tx.execute_batch("INSERT INTO immutable_payloads SELECT * FROM payload_copy; DROP TABLE payload_copy;").unwrap();
+    for sql in triggers { tx.execute_batch(&sql).unwrap(); }
+    assert!(tx.prepare("PRAGMA foreign_key_check").unwrap().query([]).unwrap().next().unwrap().is_none());
+    tx.pragma_update(None, "defer_foreign_keys", false).unwrap();
+    tx.commit().unwrap();
+    if version < 14 { connection.execute_batch("DROP INDEX external_observation_unresolved_path;").unwrap(); }
     if version == 12 {
         connection
             .execute_batch("DROP TABLE namespace_successions;")
@@ -114,7 +129,7 @@ fn records(database: &std::path::Path) -> Vec<(String, String)> {
     result
 }
 #[test]
-fn known_twelve_and_thirteen_migrate_directly_to_fourteen_preserving_pending_proof_history() {
+fn known_twelve_and_thirteen_migrate_directly_to_current_preserving_pending_proof_history() {
     for version in [12, 13] {
         let directory = tempfile::tempdir().unwrap();
         let database = directory.path().join("db");
@@ -156,7 +171,7 @@ fn known_twelve_and_thirteen_migrate_directly_to_fourteen_preserving_pending_pro
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            14
+            15
         );
         let index: String = connection
             .query_row(
@@ -198,11 +213,11 @@ fn unknown_partial_or_foreign_schema_never_changes_bytes_version_or_journal() {
         (14,"DROP INDEX external_observation_unresolved_path"),
         (14,"DROP INDEX external_observation_unresolved_path; CREATE INDEX external_observation_unresolved_path ON external_observations(observation_id)"),
         (14,"PRAGMA application_id=42"),
-        (15,"SELECT 1"),
+        (16,"SELECT 1"),
     ] {
         let directory=tempfile::tempdir().unwrap();let database=directory.path().join("db");
         drop(Store::open(&database).unwrap());
-        if version<14 {downgrade(&database,version);}else{let connection=Connection::open(&database).unwrap();connection.pragma_update(None,"user_version",version).unwrap();connection.pragma_update(None,"journal_mode","DELETE").unwrap();}
+        if version<=14 {downgrade(&database,version);}else{let connection=Connection::open(&database).unwrap();connection.pragma_update(None,"user_version",version).unwrap();connection.pragma_update(None,"journal_mode","DELETE").unwrap();}
         let connection=Connection::open(&database).unwrap();connection.execute_batch(change).unwrap();drop(connection);
         let before=std::fs::read(&database).unwrap();assert!(Store::open(&database).is_err(),"version {version}: {change}");assert_eq!(std::fs::read(&database).unwrap(),before,"version {version}: {change}");
         let connection=Connection::open(&database).unwrap();assert_eq!(connection.pragma_query_value(None,"user_version",|row|row.get::<_,i64>(0)).unwrap(),version);assert_eq!(connection.pragma_query_value(None,"journal_mode",|row|row.get::<_,String>(0)).unwrap(),"delete");
