@@ -74,6 +74,38 @@ Every pin, stage and client receives an explicit release attempt. A release fail
 fails the phase; terminating Chrome afterward is cleanup and cannot satisfy it.
 Pending source/receipts are never deleted to manufacture a derived-cold state.
 
+## Normal core lifecycle mode
+
+Add `--core-lifecycle` to exercise the same admitted maintenance capability used
+by normal browser startup. The original mode remains a separately labeled
+manual-pump baseline with its original absent-index/stale-reopen requirements.
+In core lifecycle mode:
+
+- Every Worker open requests maintenance and admission must expose the public
+  maintenance subscription. Core-owned scheduling may index during setup.
+- After exact import/readback, a bounded public update subscription plus read-only
+  status checks waits for complete/current coverage. No initialize, begin, pump,
+  publish, rebuild or freshness request is injected. Updates, last status and wait
+  time remain in the phase report, including on failure.
+- The next phase is `startup-query`, requiring the exact retained setup snapshot;
+  it makes no derived-cold indexing claim. Warm reopen retains that same snapshot.
+  Every pin and result page must match the verified generation/source watermark.
+- The independent client's ordinary commit may itself complete background indexing
+  before release. `incremental-reopen` records whether the returning client was
+  already current, verifies the exact changed source, waits for core freshness and
+  checks the unchanged full literal oracles plus the new marker/range. It never
+  manufactures stale state or labels an already-current reopen as missed-change
+  recovery.
+- Release acknowledgments, complete pagination, exact membership/revisions/ranges,
+  origin/profile/artifact fences and owned browser/server cleanup remain required.
+  Core pump counts and progress are unavailable/null; `manualPumps: 0` records only
+  that this harness did not pump. `coreCurrentWaitMs` includes observation/RPC time,
+  not an isolated parse/publication measurement.
+
+This is actual Worker/WASM/IndexedDB facade verification through the existing
+fixture page. It does not establish production-bundle workspace Search rendering,
+draft parsing execution, cancellation, attachment UX or foreground performance.
+
 ## Evidence and limits
 
 `report.json` includes every sample with median/range, source/generator/harness and
@@ -100,3 +132,13 @@ and absent derived state, not a cold OS page cache; no global cache purge occurs
 This subset does not implement eviction/corruption, cancellation, foreground
 contention, browser extraction parallelism, sync-group login, mobile or Safari/
 Firefox verification. It does not satisfy the complete S1.0 campaign alone.
+
+The bounded harness-oracle tests run without Chrome or WASM:
+
+```sh
+node --test --test-concurrency=1 scripts/indexing-search-baseline/web-lifecycle.test.mjs
+```
+
+They use controlled public facade boundaries to reject incomplete coverage, missing
+maintenance and foreign-generation pages, and preserve the manual baseline path.
+They do not establish actual browser storage or runtime acceptance.
