@@ -8,10 +8,12 @@ Older plans remain detailed capability inventories, not competing delivery order
 
 ## Current focus
 
-2026-10-20 scope freeze: the current browser measurement is complete; user asked
-to report and stop opening work. S1 remains open, with final matched builds and
-large-vault/client acceptance pending. Latest results and exact gaps are in the
-execution checkpoint; this is not permission to start another optimization track.
+2026-10-20 latest steering: defer performance optimization, large-vault stress
+and latency/memory budgets. Finish bounded ordinary macOS/web/CLI functionality,
+fix demonstrated errors and close S1 before the next product stage. Current
+builds and scoped CLI/native/browser-storage checks pass. Actual normal browser
+create→rename→edit exposes a rejected durable save; this narrow functional bug
+is the current blocker. See the execution checkpoint for owners and evidence.
 
 **S0 — Storage, saving and local recovery is accepted within the recorded native
 scope. S0A modular-interface gate is accepted.** S0's reviewed implementation and

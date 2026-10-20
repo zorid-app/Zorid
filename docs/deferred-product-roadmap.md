@@ -9,6 +9,34 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Functional closeout update: current native release host/CLI, matching WASM
+(fingerprint f3f53af8), TypeScript and native renderer build pass on256d79b3.
+Actual CLI100-note and complete query oracles pass; actual Electron normal
+create/save/quit/reopen/history passes22 checks; actual Chrome storage lifecycle
+passes all5 phases. Find/Search Node/component checks pass69/69. These do not
+establish normal browser workspace acceptance. Root owns serial runtime/main.
+
+Actual normal web UI found a Vite local-CommonJS boot error, fixed asbbaee0cf
+from reviewed candidate37ff1dc9 (owner finish_normal_indexing, reviewer
+preview_integration_review, isolated codex/s1-vite-local-cjs). The unchanged real
+Vite import/validator regression passes after the fix. Actual UI003 then starts,
+but create → title rename → keyboard edit rejects durable save (entry changed /
+file advanced), leaving51 visible characters and empty committed source. Draft
+remains visible. This is a functional blocker; do not close S1. The same worker
+owns the isolated browser rename/durable-save diagnosis; reviewer independently
+audits that seam. No performance/refactor/feature expansion is authorized.
+Evidence: /private/tmp/zorid-web-functional-ui-003/report.json and
+.worktrees/s1-evidence/functional-web-ui-run-003.log.
+
+Desktop action runs preserve two distinct harness gaps: the original dirty-query
+witness missed autosave and is deferred; hidden Cmd+A appended a title, then a
+corrected selection reached normal rename but the old oracle omitted the known
+outgoing wiki-link canonicalization. A disposable functional adapter models only
+that exact rewrite, preserving full-body/disk/core/binary/reopen checks. Its final
+run remains pending. Independent native/CLI concurrency was interrupted by the
+live1GiB disk guard, not a product assertion; no pass is claimed. Owned processes
+were confirmed closed. Root preserves reports and user profiles/vaults.
+
 Latest user steering: skip further performance optimization, verify ordinary
 functionality and move on. S1 closeout now requires a bounded current-build
 functional pass on macOS Electron, actual web bindings and standalone CLI; defer

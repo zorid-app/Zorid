@@ -6,8 +6,14 @@ User requests skipping performance optimization, ensuring normal functionality
 and moving on. Run bounded current-build macOS/web/CLI acceptance using existing
 harnesses; fix actual functional errors, then close S1 with performance work
 explicitly deferred. Large-vault/stress/timing budgets are no longer closeout gates.
-Implementation and verification remain separate; current matching builds and
-actual runs are pending in the execution checkpoint. No mobile or sync expansion.
+Current matching native/WASM/frontend builds pass, as do CLI100/full query,
+Electron create/save/quit/history22, actual browser storage5 phases and69 focused
+Find/Search checks. Actual normal browser create→rename→edit rejects durable
+save: visible draft retained but committed source stays empty. This blocks S1
+closeout; finish_normal_indexing owns a narrow isolated fix and
+preview_integration_review audits it. Browser boot wiring was already fixed and
+reviewed asbbaee0cf. See the execution checkpoint for exact evidence, deferred
+performance witnesses and disk-interrupted concurrency. No mobile/sync expansion.
 
 ## Remove measured browser repeated work — 2026-10-20
 
