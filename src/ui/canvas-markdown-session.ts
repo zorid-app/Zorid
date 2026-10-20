@@ -65,7 +65,7 @@ export function createCanvasMarkdownBufferSession(options:CanvasMarkdownBufferOp
       await buffer.flush();
     },
     hasPendingChanges(){return buffer.dirty;},
-    get editorOptions(){return options.editorOptions;},
+    get editorOptions(){return options.editorOptions?{...options.editorOptions,validateChange:(next:string)=>buffer.validateTextChange(next)}:undefined;},
     destroy(){if(destroyed)return;destroyed=true;unsubscribe();listeners.clear();options.dispose?.();},
   };
 }

@@ -1,3 +1,4 @@
+import { normalizedLimits } from './browser-normalized-idb.ts';
 import { BrowserVaultError } from './browser-vault.ts';
 import type { EntryState, BrowserVaultPresentation } from './browser-vault.ts';
 
@@ -100,7 +101,7 @@ const bounded=(value:string,cap=32*1024*1024)=>{
   return value;
 };
 const clone=<T>(value:T):T=>structuredClone(value);
-const wireCopy=(bytes:Uint8Array):Uint8Array=>{if(!(bytes instanceof Uint8Array)||bytes.byteLength>2*1024*1024)throw fail('sync_input_too_large','Wire exceeds host bound');return bytes.slice();};
+const wireCopy=(bytes:Uint8Array):Uint8Array=>{if(!(bytes instanceof Uint8Array)||bytes.byteLength>normalizedLimits.wire)throw fail('sync_input_too_large','Wire exceeds host bound');return bytes.slice();};
 function rust<T>(call:()=>T):T {try{return call();}catch(error){throw new BrowserVaultError('sync_plan_rejected','Shared Rust sync planner rejected the operation',{reason:String(error)},'rust');}}
 function stored<T>(call:()=>T):T {try{return call();}catch{throw fail('storage_corrupt','Persisted sync state failed shared Rust validation');}}
 function requireWasm(value:Partial<BrowserSyncWasm>):BrowserSyncWasm {
@@ -381,7 +382,7 @@ export function browserSync(host:BrowserSyncHost,assertActive:()=>void=()=>{}):{
     inspect(){return transaction('readonly',(_tx,s,done)=>done({scope:s.config?{realm_id:s.config.realm_id,vault_id:s.config.vault_id,key_epoch:s.config.key_epoch}:null,namespace:clone(s.view),pending:clone(s.view?.namespace.pending??[]),cursor:s.config?clone(s.cursors.get(json(scopeKey(s.config)))??null):null}));},
     readRetained(id){return transaction('readonly',(_tx,s,done)=>{const row=s.retained.get(id);done(row?{...clone(row),recovery_content:stored(()=>JSON.parse(requireWasm(host.wasm).recoveryFileContent(bounded(json(s.graph)),bounded(json([...s.texts.values()])),id)))}:null);});},
   };
-  const canonicalCommand=(request:Json,commandJson:string|undefined):string=>rust(()=>requireWasm(host.wasm).validateFamilyCommand(bounded(commandJson??json({version:1,request,create_mode:null}),4*1024*1024)));
+  const canonicalCommand=(request:Json,commandJson:string|undefined):string=>rust(()=>requireWasm(host.wasm).validateFamilyCommand(bounded(commandJson??json({version:1,request,create_mode:null}),8*1024*1024)));
   return {api,validate(tx,done,abort){load(tx,()=>done(),abort);},admitMutation(tx,request,commandJson,done,abort){load(tx,s=>{try{
     if(!s.config){if(commandJson!==undefined)throw fail('sync_not_enrolled','Family commands require explicit sync enrollment');done(undefined);return;}
     done(canonicalCommand(request,commandJson));

@@ -1225,7 +1225,7 @@ export class Workspace {
         const embeds=createEmbeds();pane.embeds=embeds;const generation=this.vaultGeneration;
         const ownsEditor=()=>generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path;
         const nativeCurrent=()=>ownsEditor()&&this.activePane===pane&&pane.runtime===runtime&&runtime.phase!=='disposed'&&this.current(pane)?.id===tab.id&&!this.closing&&!this.root.inert&&!this.startupFailed&&!this.platformReleased;
-        pane.editor=factory(host,{subscribeMetadata:this.subscribeDraftMetadata,findPanelHost:findHost,...(this.platform.nativeEditor?{isCurrent:nativeCurrent,onNativeEditorState:(state:NativeEditorState)=>{if(nativeCurrent())this.sendNativeEditorState(state);}}:{}),hotkeys:this.hotkeys,value:buffer.text,mode:tab.mode,paths:()=>ownsEditor()?[...this.vault.entries.keys()]:[],
+        pane.editor=factory(host,{validateChange:next=>buffer.validateTextChange(next),onChangeRejected:error=>notice(error instanceof Error?error.message:String(error)),subscribeMetadata:this.subscribeDraftMetadata,findPanelHost:findHost,...(this.platform.nativeEditor?{isCurrent:nativeCurrent,onNativeEditorState:(state:NativeEditorState)=>{if(nativeCurrent())this.sendNativeEditorState(state);}}:{}),hotkeys:this.hotkeys,value:buffer.text,mode:tab.mode,paths:()=>ownsEditor()?[...this.vault.entries.keys()]:[],
           wiki:{sourcePath:()=>ownsEditor()?path:null,
             metadata:target=>{if(!ownsEditor())return;const metadata=this.buffers.get(target)?.getMetadata()??(this.buffers.has(target)?undefined:this.vault.metadata.get(target));return{aliases:metadata?.aliases,headings:metadata?.headings,mtime:this.vault.entries.get(target)?.mtime};},
             resolvePath:(target,source)=>ownsEditor()?this.vault.metadata.resolveLink(source,target):null,
@@ -1312,7 +1312,7 @@ export class Workspace {
       taskChange:(target,line,checked)=>{validate();return this.changeTask(target,line,checked,validate);},
       contextMenu:(event,request,source)=>{if(!available())return;const target=vault.metadata.resolveLink(source,request.target,request.kind),entry=target?vault.entries.get(target):undefined;if(entry){const point=this.menuPoint(event);event.preventDefault();event.stopPropagation();this.fileMenu(entry,point.x,point.y);}},
     });
-    const options:Omit<EditorOptions,'value'|'mode'|'onChange'>={subscribeMetadata:this.subscribeDraftMetadata,hotkeys:this.hotkeys,paths:()=>available()?[...vault.entries.keys()]:[],open,
+    const options:Omit<EditorOptions,'value'|'mode'|'onChange'>={onChangeRejected:error=>notice(error instanceof Error?error.message:String(error)),subscribeMetadata:this.subscribeDraftMetadata,hotkeys:this.hotkeys,paths:()=>available()?[...vault.entries.keys()]:[],open,
         get listOptions(){return{useTab:workspace.settings.useTab,tabSize:workspace.settings.tabSize,smartIndentList:workspace.settings.smartIndentList};},
         isUnresolved:(target,kind)=>!available()||!vault.metadata.resolveLink(path,target,kind),
         wiki:{sourcePath:()=>available()?path:null,

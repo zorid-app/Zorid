@@ -1,5 +1,37 @@
 # User findings queue
 
+## Markdown save-size admission — 2026-10-20
+
+User's browser stress note reached2,938,328 UTF-8 bytes and showed
+“Couldn’t save — keep this note open”. Its exact unsaved contents were backed up
+privately; the user-owned browser/profile and desktop playground remain untouched.
+Production BrowserCoreRuntime + NoteBuffer + Worker/WASM + IndexedDB repro on
+f237ebfa confirms2,938,328 bytes fails with `encoded_plan_too_large`;262,144
+bytes saves with exact readback,262,145 fails and retains its dirty draft.
+Evidence: `.worktrees/s1-evidence/buffer-save-{uAD06C,ZRcbCj,4709b5}/report.json`.
+
+Latest accepted policy supersedes the initial256 KiB proposal: **1 MiB
+(1,048,576 UTF-8 bytes) per Markdown note**. Explain the limit in plain language
+and reject oversized authoring before changing the editor document, undo history
+or buffer. Existing oversized recovery drafts remain accessible and may shrink.
+This introduces no attachment/file-type-wide size restriction. Underlying text
+capacity must actually support1 MiB, including save/read/reopen; a UI-only cap
+change is insufficient. Implementation is isolated in `codex/large-note-save`
+(frontend/browser) and `codex/one-mib-text-core` (core/envelope constraints).
+Verification and integration remain pending in this entry.
+
+REA inspected installed Obsidian1.7.4 archive
+SHA256454462e6316bb9ea9726403e887a8be691eb34b2cff70a0a8d6db4d3de7615d9:
+complete local read/write/Vault.modify/text-view save methods show no size check.
+Evidence `ev_b00cfbf7c0823c925a6f12dde6890148f5b4cee99a663fda27e291355d9e1db4`
+and `ev_7d5e7d58c6d87f84e681b62daffa4150eec422347ab2ddb82114367d15238203`.
+Full semantic analysis was partial after its512 MiB heap limit; narrow methods
+were inspected directly from the same hashed archive. No live large-file test
+or unlimited-capacity claim. Obsidian's forum separately states no enforced
+Markdown hard cap: https://forum.obsidian.md/t/improve-support-for-very-large-notes-markdown-files-greater-than-1-mb/114238 .
+Zorid's1 MiB cap is an explicit product choice, not an Obsidian parity claim.
+
+
 ## S1 delivery scope freeze — 2026-10-20
 
 User confirmed: finish the existing save → core indexing → query path before

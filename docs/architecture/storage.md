@@ -30,6 +30,27 @@ Browser storage uses TypeScript IndexedDB transactions around portable Rust/WASM
 plans. Its derived index keys also currently share the existing authority DB.
 Current checkpoint/host-intent rows are not periodic File Recovery snapshots.
 
+## Markdown note size
+
+Markdown authoring has an explicit **1 MiB (1,048,576 UTF-8 bytes)** limit.
+The editor checks a proposed change before applying it to its document or undo
+history; the shared note buffer applies the same policy for other edit sources.
+Oversized changes show a plain size explanation and leave the note unchanged.
+Loading/recovery does not discard an existing oversized draft; it may be reduced
+toward the supported size. Attachments and other file types do not inherit this
+Markdown editor limit.
+
+The Rust Text materialization limit and native/browser read/write paths support
+the same1 MiB body. Encrypted Text envelopes have an8 MiB plaintext allowance
+because the existing JSON encoding expands CRDT update bytes; request wrappers
+also allow8 MiB. File-family and managed-record payload bounds stay1 MiB, and
+binary files retain their independent streaming/chunk limits. The envelope
+allowance is not the user-facing Markdown file-size limit.
+
+Store15 updates only the immutable Text payload constraint; relay2 updates its
+envelope constraint. Known predecessor schemas are validated exactly and
+migrated transactionally while retaining existing bytes and identities.
+
 ## Native placement
 
 ```text

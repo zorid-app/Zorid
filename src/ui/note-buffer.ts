@@ -1,3 +1,4 @@
+import { assertNoteTextChange } from '../core/note-text-limit.ts';
 import { DurableNoteState } from './note-durable-state.ts';
 import type { Vault } from '../core/vault.ts';
 import { isMarkdown, normalizePath } from '../core/types.ts';
@@ -231,9 +232,15 @@ export class NoteBuffer {
     });
   }
 
+  /** Check authoring before an editor applies its transaction. Recovery loads bypass this. */
+  validateTextChange(text:string):void {
+    if(this.durable&&isMarkdown(this.path))assertNoteTextChange(this.text,text);
+  }
+
   update(text: string, options: { validateWrite?: () => void } = {}): void {
     this.requireLoaded();
     if(this.disposing)throw new Error('This note buffer is closing');
+    this.validateTextChange(text);
     // Guards belong to the accepted draft, including failed writes and later retries.
     // Ordinary typing cannot discard the lifetime protection of an earlier edit.
     if (options.validateWrite) { options.validateWrite(); this.writeValidators.add(options.validateWrite); }

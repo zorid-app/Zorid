@@ -1,3 +1,4 @@
+import { MAX_NOTE_TEXT_BYTES } from './note-text-limit.ts';
 import { createBrowserManagedRecords, browserManagedStores } from './browser-managed-records.ts';
 import type { ManagedRecordsWasm, ManagedScope, ManagedReceiptHead, AuthenticatedRecordsUpdate } from './browser-managed-records.ts';
 import { BrowserVaultError } from './browser-vault.ts';
@@ -162,6 +163,7 @@ const equals=(left:Json,right:Json):boolean=>{
   return keys.length===other.length&&keys.every((name,index)=>name===other[index]&&equals(left[name],right[name]));
 };
 const sameBytes=(left:Uint8Array,right:Uint8Array)=>left.byteLength===right.byteLength&&left.every((byte,index)=>byte===right[index]);
+const payloadLimit=(family:string)=>family==='text'?normalizedLimits.payload:1024*1024;
 const failure=(code:string,message='Streaming browser sync rejected inconsistent or unavailable state')=>new BrowserVaultError(code,message);
 const rust=<T>(call:()=>T):T=>{try{return call();}catch(error){if(error instanceof BrowserVaultError)throw error;throw new BrowserVaultError('sync_plan_rejected','Shared Rust streaming planner rejected the operation',{reason:String(error)},'rust');}};
 function boundedJson(raw:string,limit=32*1024*1024):Json {
@@ -176,7 +178,7 @@ function descriptor(header:SourceHeader):StreamingSourceDescriptor {
   const value=header.descriptor as unknown as StreamingSourceDescriptor, metadata=value?.metadata;
   if(value?.version!==1||!metadata||!((metadata.family==='records'&&metadata.format_version===1)||(metadata.format_version===2&&['text','files'].includes(metadata.family)))||
     metadata.key?.realm_id!==header.realmId||metadata.key?.vault_id!==header.vaultId||metadata.key?.update_id!==header.updateId||
-    !Number.isInteger(metadata.payload_bytes)||metadata.payload_bytes<1||metadata.payload_bytes>1024*1024||
+    !Number.isInteger(metadata.payload_bytes)||metadata.payload_bytes<1||metadata.payload_bytes>payloadLimit(metadata.family)||
     (metadata.family==='records'?(value.record!==null||value.activity!==null||value.summary_digest!==null||metadata.text_binding!==null):metadata.family==='files'?(!value.record||value.activity!==null||metadata.text_binding!==null):(!value.activity||value.record!==null||!metadata.text_binding)))throw failure('storage_corrupt');
   digest(metadata.payload_digest);if(metadata.family==='records')return value;digest(value.summary_digest);
   if(metadata.family==='files'){
@@ -336,7 +338,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       if(overlay){payload=overlay.payload;}
       else {const source=await exact(identity,'payload');const value=descriptor(source.header);
         if(!equals(value.record,request.expected))throw failure('storage_corrupt');pin(pins,source.header);payload=source.bytes;}
-      active();if(payload.byteLength>1024*1024)throw failure('sync_input_too_large');
+      active();if(payload.byteLength>normalizedLimits.payload)throw failure('sync_input_too_large');
       const chunk=rust(()=>session.providePayload(request.manifest_index,request.sequence,payload));
       if(chunk.byteLength>128*1024)throw failure('invalid_wasm_result');
     }
@@ -378,7 +380,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
           let content:StreamingContent|null=null,bytesLength=0,revision:string;
           if(outcome.content?.kind==='text'){
             const metadata=outcome.content.content,bytes=rust(()=>result.textBytes(index));
-            if(!(bytes instanceof Uint8Array)||bytes.byteLength>256*1024||String(bytes.byteLength)!==metadata.byte_length)throw failure('invalid_wasm_result');
+            if(!(bytes instanceof Uint8Array)||bytes.byteLength>MAX_NOTE_TEXT_BYTES||String(bytes.byteLength)!==metadata.byte_length)throw failure('invalid_wasm_result');
             textBytes+=bytes.byteLength;if(textBytes>4*1024*1024)throw failure('sync_publication_budget_exceeded');
             const witness=metadata.witness,state=texts.get(textKey(witness.identity));
             if(!state||state.version!==witness.revision)throw failure('storage_corrupt');
@@ -476,13 +478,13 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
     const emissions:Emission[]=[];let total=0;
     for(let index=0;index<count;index++){
       const metadata=boundedJson(rust(()=>candidate.payloadMetadataJson(index)),128*1024) as EnvelopeMetadata,payload=rust(()=>candidate.payloadBytes(index));
-      if(!(payload instanceof Uint8Array)||payload.byteLength>1024*1024||(total+=payload.byteLength)>128*1024*1024)throw failure('invalid_wasm_result');
+      if(!(payload instanceof Uint8Array)||payload.byteLength>payloadLimit(metadata.family)||(total+=payload.byteLength)>128*1024*1024)throw failure('invalid_wasm_result');
       emissions.push({metadata,payload});
     }return emissions;
     }catch(error){candidate.free();throw error;}
   }
   async function prepareLocal(input:StreamingLocalInput):Promise<PreparedStreamingMutation> {
-    active();input=copy(input);const request=boundedJson(input.requestJson,4*1024*1024),canonical=rust(()=>host.wasm.validateFamilyCommand(input.familyCommandJson??stringify({version:1,request,create_mode:null}))),command=boundedJson(canonical,4*1024*1024);
+    active();input=copy(input);const request=boundedJson(input.requestJson,8*1024*1024),canonical=rust(()=>host.wasm.validateFamilyCommand(input.familyCommandJson??stringify({version:1,request,create_mode:null}))),command=boundedJson(canonical,8*1024*1024);
     if(!equals(command.request,request))throw failure('family_command_mismatch');
     const s=await snapshot(),config=enrolled(s),graph=state(s);
     try{
@@ -703,7 +705,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
     },abort));
   }
   async function prepareReceive(updateId:string,wireInput:Uint8Array,keyInput:BrowserSyncKey,delivery?:SyncDelivery):Promise<PreparedStreamingMutation|ReceivedDuplicate> {
-    active();delivery=delivery?copy(delivery):undefined;if(!(wireInput instanceof Uint8Array)||wireInput.byteLength>1052720)throw failure('sync_input_too_large');
+    active();delivery=delivery?copy(delivery):undefined;if(!(wireInput instanceof Uint8Array)||wireInput.byteLength>normalizedLimits.wire)throw failure('sync_input_too_large');
     const wire=wireInput.slice(),s=await snapshot(),config=enrolled(s);checkDelivery(s,delivery);
     const opened=rust(()=>keyInput.openSyncUpdate(stringify({realm_id:config.realm_id,vault_id:config.vault_id,update_id:updateId,key_epoch:config.key_epoch}),wire)) as unknown as StreamingOpenedUpdate;
     let ownedGraph:StreamingMetadataState|undefined;
@@ -737,7 +739,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
   }
 
   function validateWire(keyInput:BrowserSyncKey,config:Configuration,metadata:EnvelopeMetadata,payload:Uint8Array,wire:Uint8Array):void {
-    if(wire.byteLength>1052720)throw failure('sync_input_too_large');
+    if(wire.byteLength>normalizedLimits.wire)throw failure('sync_input_too_large');
     const opened=rust(()=>keyInput.openSyncUpdate(stringify({realm_id:config.realm_id,vault_id:config.vault_id,update_id:metadata.key.update_id,key_epoch:config.key_epoch}),wire));
     try{if(!equals(boundedJson(opened.metadataJson(),128*1024),metadata)||!opened.matchesPayload(payload))throw failure('sync_seal_mismatch');}finally{opened.free();}
   }
@@ -967,7 +969,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
           if(!value.sealed){rows.push({metadata:copy(value.metadata),sealed:null,accepted:false});row.continue();return;}
           getExactSource(tx,sourceKey(value.metadata),'wire',source=>{try{
             if(!source||!equals(descriptor(source.header).metadata,value.metadata))throw failure('storage_corrupt');
-            if(wireBytes+source.bytes.byteLength>8*1024*1024){done(rows);return;}
+            if(wireBytes+source.bytes.byteLength>normalizedLimits.wire){done(rows);return;}
             wireBytes+=source.bytes.byteLength;rows.push({metadata:copy(value.metadata),sealed:source.bytes,accepted:false});row.continue();
           }catch(error){abort(error);}},abort);
         },abort,active);
@@ -975,7 +977,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
     },
     seal,
     acknowledge(updateId,wireInput){
-      if(!(wireInput instanceof Uint8Array)||wireInput.byteLength>1052720)return Promise.reject(failure('sync_input_too_large'));
+      if(!(wireInput instanceof Uint8Array)||wireInput.byteLength>normalizedLimits.wire)return Promise.reject(failure('sync_input_too_large'));
       const wire=wireInput.slice();return transact<void>('readwrite',(tx,done,abort)=>loadAuthored(tx,updateId,value=>{
         try{
           if(!value.row.sealed)throw failure('sync_ack_mismatch');
@@ -1005,7 +1007,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
           witness={kind:'binary',event_id:reference.selected_event};content={kind:'binary_reference',reference:copy(reference)};
         }else if(value.status==='complete'&&value.content?.kind==='text'){
           const metadata=value.content.content,body=rust(()=>recovery!.textBytes()),retained=s.texts.get(textKey(metadata.witness?.identity));
-          if(!(body instanceof Uint8Array)||body.byteLength>256*1024||String(body.byteLength)!==metadata.byte_length||
+          if(!(body instanceof Uint8Array)||body.byteLength>MAX_NOTE_TEXT_BYTES||String(body.byteLength)!==metadata.byte_length||
             metadata.witness?.kind!=='text'||metadata.witness.identity?.entry_id!==id||!retained||retained.version!==metadata.witness.revision)throw failure('invalid_wasm_result');
           if(row.status==='normal'&&(row.content?.kind!=='text'||!equals(row.content.metadata,metadata)))throw failure('storage_corrupt');
           bytes=body;witness={kind:'text',state:copy(retained)};content={kind:'text',...copy(metadata),bytes:body};
@@ -1022,7 +1024,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
     const token:PreparedStreamingRead=Object.freeze({get reference(){return copy(reference);},revision,
       length(){live();return decimalU64(plan.length());},chunkCount(){live();return plan.chunkCount();},
       chunkJson(index:number){live();return plan.chunkJson(index);},
-      verifyPayload(index:number,payload:Uint8Array){live();if(!(payload instanceof Uint8Array)||payload.byteLength>1024*1024)throw failure('sync_input_too_large');
+      verifyPayload(index:number,payload:Uint8Array){live();if(!(payload instanceof Uint8Array)||payload.byteLength>normalizedLimits.payload)throw failure('sync_input_too_large');
         const bytes=rust(()=>plan.verifyPayload(index,payload));if(bytes.byteLength>128*1024)throw failure('invalid_wasm_result');return bytes;},
       dispose(){if(!closed){closed=true;reads.delete(token);plan.free();}},
     });return token;
@@ -1096,7 +1098,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       let closed=false;const live=()=>{active();if(closed)throw failure('binary_read_closed');};
       const token:PreparedStreamingRecoveryRead=Object.freeze({get reference(){return copy(reference);},get witness(){return copy(witness);},
         length(){live();return decimalU64(plan.length());},chunkCount(){live();return plan.chunkCount();},chunkJson(index:number){live();return plan.chunkJson(index);},
-        verifyPayload(index:number,payload:Uint8Array){live();if(!(payload instanceof Uint8Array)||payload.byteLength>1024*1024)throw failure('sync_input_too_large');
+        verifyPayload(index:number,payload:Uint8Array){live();if(!(payload instanceof Uint8Array)||payload.byteLength>normalizedLimits.payload)throw failure('sync_input_too_large');
           const bytes=rust(()=>plan.verifyPayload(index,payload));if(bytes.byteLength>128*1024)throw failure('invalid_wasm_result');return bytes;},
         dispose(){if(!closed){closed=true;reads.delete(token);plan.free();}},
       });
@@ -1113,7 +1115,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       // entries. Its partial visible bytes are discarded, never recovery proof.
       for(const text of s.texts.values()){
         let bytes:Uint8Array;try{bytes=host.wasm.materializeTextState(stringify(text));}catch{throw failure('storage_corrupt');}
-        if(!(bytes instanceof Uint8Array)||bytes.byteLength>256*1024)throw failure('storage_corrupt');
+        if(!(bytes instanceof Uint8Array)||bytes.byteLength>MAX_NOTE_TEXT_BYTES)throw failure('storage_corrupt');
       }
       proof=await verify(graph.verificationSession(),new Map(s.headers),new Map());active();
       classification=rust(()=>graph.classify(proof!,stringify([...s.texts.values()])));
@@ -1140,7 +1142,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
           const length=BigInt(decimalU64(outcome.content.content.manifest.bytes));if(length>64n*1024n*1024n)throw failure('invalid_wasm_result');bytesLength=Number(length);
         }else if(outcome.content?.kind==='text'){
           const metadata=outcome.content.content,bytes=rust(()=>classification!.textBytes(index));
-          if(row.content?.kind!=='text'||!equals(row.content.metadata,metadata)||!(bytes instanceof Uint8Array)||bytes.byteLength>256*1024||String(bytes.byteLength)!==metadata.byte_length||
+          if(row.content?.kind!=='text'||!equals(row.content.metadata,metadata)||!(bytes instanceof Uint8Array)||bytes.byteLength>MAX_NOTE_TEXT_BYTES||String(bytes.byteLength)!==metadata.byte_length||
             metadata.witness?.revision!==entry.revision||!s.texts.has(textKey(metadata.witness?.identity)))throw failure('storage_corrupt');
           totalTextBytes+=bytes.byteLength;if(totalTextBytes>4*1024*1024)throw failure('sync_publication_budget_exceeded');bytesLength=bytes.byteLength;
         }else if(row.content!==null||entry.kind!=='folder')throw failure('storage_corrupt');

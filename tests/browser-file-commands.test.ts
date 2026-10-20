@@ -76,7 +76,7 @@ test('tampered request signatures and command plans block recovery without prepa
 test('stored command/intent disagreement prevents ACK or another mutation', async () => { const f = fixture(); f.failCheckpoint(2); await assert.rejects(f.consumer().execute(create)); f.rows.get('operation')!.family_command_json = f.rows.get('operation')!.family_command_json!.replace('Note.md', 'Other.md'); await assert.rejects(f.consumer().recover(), { code: 'intent_identity_mismatch' }); assert.equal(f.rows.get('operation')!.acknowledged, false); });
 test('move/delete/mkdir planning and active fence preserve namespace safety', async () => { const f = fixture(); f.files.set('Note.md', existing()); await f.consumer().execute({ kind: 'move', operationId: 'move', entryId: 'unused', path: 'Note.md', destination: 'Moved.md' }); await f.consumer().execute({ kind: 'delete', operationId: 'delete', entryId: 'unused', path: 'Note.md', force: false }); await f.consumer().execute({ kind: 'mkdir', operationId: 'mkdir', entryId: 'folder', path: 'Folder' }); assert.deepEqual(JSON.parse(f.rows.get('delete')!.request_json).mutation, { type: 'delete', id: 'old-entry', expected: 'old-revision', recursive: false }); const closed = createBrowserFileCommands(f.backend, () => { throw new BrowserVaultError('storage_closed', 'closed'); }); await assert.rejects(closed.execute({ ...create, operationId: 'closed' }), { code: 'storage_closed' }); });
 test('recovery ACKs newly observed rejection and reports already committed trash prefixes', async () => { const f = fixture(); f.files.set('folder/Note.md', existing('folder/Note.md')); f.failCheckpoint(3); await assert.rejects(f.consumer().execute({ kind: 'trash', operationId: 'trash-op', entryId: 'unused', path: 'folder/Note.md' })); f.reject(); assert.equal(await f.consumer().recover(), true); assert.equal(JSON.parse([...f.heads.values()][0].encodedState!).status, 'rejected'); assert.ok([...f.rows.values()].every(row => row.acknowledged)); });
-test('oversized encoded family commands fail before checkpoint or authorization', async () => { const f = fixture(); await assert.rejects(f.consumer().execute({ kind: 'createBinary', operationId: 'large', entryId: 'entry', path: 'large.bin', data: new Uint8Array(2 * 1024 * 1024) }), { code: 'request_limit' }); assert.equal(f.heads.size, 0); assert.equal(f.rows.size, 0); });
+test('oversized encoded family commands fail before checkpoint or authorization', async () => { const f = fixture(); await assert.rejects(f.consumer().execute({ kind: 'createBinary', operationId: 'large', entryId: 'entry', path: 'large.bin', data: new Uint8Array(2 * 1024 * 1024).fill(255) }), { code: 'request_limit' }); assert.equal(f.heads.size, 0); assert.equal(f.rows.size, 0); });
 
 test('Vault binary create rejects a peer created after its inventory check without adopting it as a write', async () => {
     const f = fixture(), commands = f.consumer();
@@ -144,4 +144,14 @@ test('witnessed move retains its exact identity, revision and retry signature af
     await f.consumer().execute(request);
     assert.deepEqual(JSON.parse(f.rows.get('move')!.request_json).mutation, original);
     assert.equal(f.rows.size, 1); assert.equal(f.rows.get('move')!.acknowledged, true);
+});
+
+test('one MiB Markdown creation admits worst-case numeric byte-array framing',async()=>{
+    const f=fixture();const content='z'.repeat(1024*1024);
+    await f.consumer().execute({...create,content});
+    const row=f.rows.get('operation')!;
+    assert.equal(row.status,'committed');
+    assert.ok(new TextEncoder().encode(row.request_json).byteLength>4*1024*1024);
+    assert.equal(row.request_json.length<8*1024*1024,true);
+    assert.deepEqual(JSON.parse(row.request_json).mutation.content,Array.from(new TextEncoder().encode(content)));
 });

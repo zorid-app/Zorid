@@ -2,12 +2,38 @@
 
 ## Execution checkpoint — shared-core coordinator
 
-Current as of2026-10-19. Read this summary first; dated execution evidence below
+Current as of2026-10-20. Read this summary first; dated execution evidence below
 is historical where it conflicts with this checkpoint. The maintained stage
 sequence is in [roadmap.md](roadmap.md); S1 scope is in
 [plans/indexing-search.md](plans/indexing-search.md).
 
 ### Latest execution update
+
+Current integrated source before the active size fix is `f237ebfa` (2026-10-20).
+Normal Electron100-note save → core indexing → visible Search result → reopen
+passes on candidate6fe36157, whose relevant runtime/tool sources match main.
+Evidence: `.worktrees/s1-evidence/native-save-index-query-003/report.json`.
+Normal web/WASM build passes (`web-current-build.log`); user-owned desktop and
+web playgrounds are open. Do not automate, reload or close those playgrounds.
+Desktop/browser product sync joining is not ready and S2 is not being started.
+
+S1 remains open. Normal large-vault targeted storage correction is isolated
+(`codex/s1-finish-graph`,cefb4901), not integrated or verified at10,000 notes.
+Complete browser persistence/performance and standalone CLI acceptance remain
+open. Passing the normal100-note desktop slice does not establish these gates.
+
+Active user finding: oversized browser Markdown note save failure. Final user
+policy is1 MiB UTF-8 per Markdown note, with rejection before document/draft
+mutation and no new attachment cap. Frontend/browser owner `root` works in
+`codex/large-note-save`; Rust text/envelope owner `large_note_save_audit` works
+in `codex/one-mib-text-core`. The1 MiB boundary must pass actual save/read/reopen
+before integration. Preserve the user's private unsaved-note backup. Other
+S1 implementation is held while this scoped bug is resolved. This independent
+Store14→15 constraint migration collides with the held graph branch's schema15:
+graph owner acknowledged HOLD and must rebase/reconcile that correction as
+schema16 before any later integration. No graph acceptance is implied.
+
+The older update below is historical where superseded by this checkpoint.
 
 Current integration `a43e7055` (2026-10-19):
 

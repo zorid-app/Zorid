@@ -21,7 +21,8 @@ export const browserNormalizedStores = Object.freeze(Object.keys(browserNormaliz
 // for decimal-string manifest/page lengths and the bounded source-row envelope.
 // This is a metadata transport budget, not an increased payload/file limit.
 const metadataRow = 1024 * 1024 + 4096 + 64 * 1024;
-export const normalizedLimits = Object.freeze({ payload: 1024 * 1024, wire: 1052720, metadataRow, metadataPage: 2 * metadataRow, pageItems: 1000 });
+// Shared envelope limit; wire adds the bounded header, nonce, tag and framing.
+export const normalizedLimits = Object.freeze({ payload: 8 * 1024 * 1024, wire: 8 * 1024 * 1024 + 4144, metadataRow, metadataPage: 2 * metadataRow, pageItems: 1000 });
 export type MetadataValue = null | boolean | number | string | MetadataValue[] | { [key: string]: MetadataValue };
 export interface SourceKey { realmId: string; vaultId: string; updateId: string }
 export interface SourceHeader extends SourceKey { descriptor: MetadataValue }

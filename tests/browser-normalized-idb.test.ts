@@ -192,6 +192,7 @@ test('body bytes, huge metadata and malformed sequence ordering cannot hide in m
  * All creates use distinct identities; manifests have <=128 bounded page refs.
  * The page bodies are legitimately missing dependencies, not invented proofs.
  * This is a storage-boundary fixture, not a Rust planner/runtime verification. */
+// File-family payloads retain their 1 MiB bound; Text envelopes have a larger budget.
 function upperEventDescriptor(){
   const digest=Array(32).fill(0);
   const event=(index:number,pages=128)=>({id:`create-${index}`,identity:{entry_id:`file-${index}`,bootstrap_id:`create-${index}`},parents:[],effect:{kind:'create',entry_kind:'file',location:{parent:null,name:`file-${index}.bin`},content:{kind:'binary',manifest:{bytes:pages,digest,pages:Array.from({length:pages},(_,page)=>({id:`page-${index}-${page}-`.padEnd(128,'x'),bytes:1,digest}))}}}});
@@ -200,9 +201,9 @@ function upperEventDescriptor(){
   const encoded=()=>new TextEncoder().encode(JSON.stringify(payload));
   while(events.length<128){
     const index=events.length;events.push(event(index));
-    if(encoded().byteLength<=normalizedLimits.payload)continue;
+    if(encoded().byteLength<=1024*1024)continue;
     events.pop();let low=0,high=127;
-    while(low<high){const count=Math.ceil((low+high)/2);events.push(event(index,count));const fits=encoded().byteLength<=normalizedLimits.payload;events.pop();if(fits)low=count;else high=count-1;}
+    while(low<high){const count=Math.ceil((low+high)/2);events.push(event(index,count));const fits=encoded().byteLength<=1024*1024;events.pop();if(fits)low=count;else high=count-1;}
     if(low)events.push(event(index,low));break;
   }
   const bytes=encoded();

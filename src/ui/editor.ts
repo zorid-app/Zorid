@@ -87,6 +87,9 @@ export interface EditorOptions {
   /** Native actions require the owning active pane/runtime/generation to remain current. */
   isCurrent?: () => boolean;
   value: string; mode: 'live' | 'source'; paths: () => string[];
+  /** Reject an authoring transaction before the document or undo history changes. */
+  validateChange?: (value:string)=>void;
+  onChangeRejected?: (error:unknown)=>void;
   onChange: (value: string) => void; open: (target: string, kind?: 'wiki' | 'markdown', event?: MouseEvent) => void;
   isUnresolved?: LiveInlineOptions['isUnresolved'];
   onLinkHover?: LiveInlineOptions['onHover'];
@@ -133,6 +136,10 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
     dispatchTransactions(transactions, target) {
       if (destroyed || transactions.some(transaction => transaction.docChanged
         && !transaction.annotation(externalChange) && (!canAuthor() || target.state.readOnly))) return;
+      if(options.validateChange){
+        try{for(const transaction of transactions)if(transaction.docChanged&&!transaction.annotation(externalChange))options.validateChange(transaction.newDoc.toString());}
+        catch(error){options.onChangeRejected?.(error);return;}
+      }
       target.update(transactions);
     },
     state: EditorState.create({ doc: options.value, extensions: [

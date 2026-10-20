@@ -314,7 +314,7 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
   }});
 
   const validateFamily=(input:string):string=>{
-    if(typeof input!=='string'||input.length>4*1024*1024||new TextEncoder().encode(input).byteLength>4*1024*1024)throw hostError('sync_input_too_large','Family command exceeds encoded host limit');
+    if(typeof input!=='string'||input.length>8*1024*1024||new TextEncoder().encode(input).byteLength>8*1024*1024)throw hostError('sync_input_too_large','Family command exceeds encoded host limit');
     if(!wasm.validateFamilyCommand)throw hostError('sync_bindings_unavailable','Family command Rust validation is unavailable');
     return JSON.stringify(rustCall(()=>wasm.validateFamilyCommand!(input)));
   };

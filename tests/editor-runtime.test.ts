@@ -15,7 +15,7 @@ import { renderMarkdown } from '../src/ui/markdown.ts';
 // Real CM6 state, transactions, plugins and DOM, under jsdom. Zero geometry
 // shims only satisfy CM's measurement scheduler; they prove no pixel, native
 // selection, OS keyboard, IME or clipboard parity.
-function setup(t: TestContext, value: string, mode: 'live' | 'source' = 'live', completion: Partial<Pick<EditorOptions, 'paths' | 'wiki'>> = {}) {
+function setup(t: TestContext, value: string, mode: 'live' | 'source' = 'live', completion: Partial<Pick<EditorOptions, 'paths' | 'wiki' | 'validateChange' | 'onChangeRejected'>> = {}) {
   const dom = new JSDOM('<!doctype html><html><body><div id="host"></div></body></html>', { pretendToBeVisual: true });
   const saved = new Map<string, PropertyDescriptor | undefined>();
   for (const [key, entry] of Object.entries({ window: dom.window, document: dom.window.document,
@@ -773,4 +773,16 @@ test('nested table wiki completion uses the same custom-comment exclusion as its
   await awaitWiki(() => completionStatus(child.state) !== 'pending');
   assert.equal(completionStatus(child.state), null);
   assert.deepEqual(currentCompletions(child.state), []);
+});
+
+
+test('rejected large Markdown edits preserve document, selection and undo history, including filter:false',t=>{
+  const rejected:unknown[]=[];
+  const {editor,view,changes}=setup(t,'small','source',{validateChange:next=>{if(next.length>8)throw Error('Markdown notes support up to 256 KiB');},onChangeRejected:error=>rejected.push(error)});
+  const before=view.state;
+  view.dispatch({changes:{from:0,to:5,insert:'too large'},filter:false});
+  assert.equal(view.state,before);assert.equal(editor.getValue(),'small');assert.deepEqual(changes,[]);assert.equal(undoDepth(view.state),0);assert.equal(rejected.length,1);
+  editor.insert('!');assert.equal(changes.length,1);assert.equal(undoDepth(view.state),1);
+  editor.setValue('existing oversized recovery draft');
+  assert.equal(editor.getValue(),'existing oversized recovery draft');assert.equal(changes.length,1);
 });

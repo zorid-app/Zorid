@@ -1,3 +1,4 @@
+import { MAX_NOTE_TEXT_BYTES } from './note-text-limit.ts';
 import { browserManagedKeyPaths, browserManagedIndexes, createBrowserManagedSchema } from './browser-managed-records.ts';
 import type { BrowserStreamingManagedRecords } from './browser-sync-streaming.ts';
 import {createBrowserDocumentIndexBackend} from './browser-document-index.ts';
@@ -15,7 +16,7 @@ import type {BrowserStreamingSyncHost,BrowserStreamingWasm,StreamingPublication,
 
 /** Fresh development format; the old database is rejected and retained, never
  * adopted, cleared or silently rebound to an empty logical vault. */
-const VERSION=8,metadataBudget=128*1024*1024,textFileBudget=256*1024,textTotalBudget=4*1024*1024,receiptBudget=24*1024;
+const VERSION=8,metadataBudget=128*1024*1024,textFileBudget=MAX_NOTE_TEXT_BYTES,textTotalBudget=4*1024*1024,receiptBudget=24*1024;
 const basePaths:Record<string,string|string[]>={metadata:'id',content:'id',receipts:'operation_id',journal:'sequence',control:'key',presentation:'id',intents:['client_id','intent_id'],checkpoint_heads:['clientId','key'],checkpoint_revisions:['clientId','revision']};
 const stores=[...Object.keys(basePaths),...browserStreamingSyncStores];
 const fail=(code:string,message='Browser streaming authority could not complete the operation')=>new BrowserVaultError(code,message);
@@ -183,7 +184,7 @@ export async function openBrowserStreamingVault(options:BrowserStreamingVaultOpt
     },abort);
   });
   const prepareIntent=async(clientId:string,intentId:string,requestJson:string,familyCommandJson?:string):Promise<void>=>{
-    const key=intentKey(clientId,intentId);if(typeof requestJson!=='string'||new TextEncoder().encode(requestJson).length>4*1024*1024)throw fail('request_limit');
+    const key=intentKey(clientId,intentId);if(typeof requestJson!=='string'||new TextEncoder().encode(requestJson).length>8*1024*1024)throw fail('request_limit');
     core(()=>wasm.checkIdempotency(`{"request":${requestJson},"record":null}`));const request=JSON.parse(requestJson);
     if(familyCommandJson!==undefined){const canonical=core<any>(()=>wasm.validateFamilyCommand(familyCommandJson!));if(!same(canonical.request,request))throw fail('intent_conflict');familyCommandJson=JSON.stringify(canonical);}
     await transact<void>('readwrite',(tx,done,abort)=>{

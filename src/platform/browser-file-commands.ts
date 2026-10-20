@@ -147,7 +147,7 @@ const signature = async (value: unknown) => Array.from(new Uint8Array(await cryp
 function family(step: Step, request: Request): string {
     const mutation = { ...step.mutation, ...(step.mutation.type === 'write' || step.mutation.type === 'create' ? { content: step.mutation.type === 'create' && step.mutation.kind === 'folder' ? null : Array.from(bytes(request.body)) } : {}) };
     const json = JSON.stringify({ version: 1, request: { operation_id: step.operationId, mutation }, create_mode: step.mode });
-    boundedUtf8(json, 4 * 1024 * 1024, 'request_limit');
+    boundedUtf8(json, 8 * 1024 * 1024, 'request_limit');
     return json;
 }
 /** Consumer-owned command checkpoints precede commit authorization. Trash is a

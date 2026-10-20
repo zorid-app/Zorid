@@ -1,3 +1,4 @@
+import { normalizedLimits } from '../src/core/browser-normalized-idb.ts';
 import {createBrowserManagedSchema} from '../src/core/browser-managed-records.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -808,4 +809,14 @@ test('records exact AEAD-open capability pins enrolled epoch through the final c
   await assert.rejects(h.engine.api.receive('record_epoch_race',wire,wrapped),{code:'sync_snapshot_conflict'});
   original.get('sync_state')!.set(JSON.stringify('config'),h.f.row('sync_state','config'));
   assert.deepEqual(h.f.records,original);assert.equal(h.f.records.get('managed_receipts')!.size,0);
+});
+
+test('pending outbox can return one maximum-sized accepted wire',async()=>{
+  const h=await enrolled();await h.commit(await local(h));
+  const meta=(await h.engine.api.pending(10))[0].metadata,id=meta.key.update_id;
+  const wire=new Uint8Array(normalizedLimits.wire);
+  h.f.seed('sync_source_wires',keyOfId(id),{realmId:'realm',vaultId:'vault',updateId:id,bytes:wire});
+  h.f.seed('sync_authored',keyOfId(id),{...h.f.row('sync_authored',keyOfId(id)),sealed:true});
+  const pending=await h.engine.api.pending(1);
+  assert.equal(pending.length,1);assert.equal(pending[0].sealed!.byteLength,normalizedLimits.wire);
 });
