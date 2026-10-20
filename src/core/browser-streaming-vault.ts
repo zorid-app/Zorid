@@ -12,7 +12,7 @@ import type {BrowserVault,BrowserVaultOptions,BrowserVaultRead,BrowserVaultInten
 import {browserCheckpoints} from './browser-checkpoints.ts';
 import {browserNormalizedKeyPaths,browserNormalizedStores,createBrowserNormalizedSchema,normalizedTransact,nextDecimalU64,decimalU64,getExactSource} from './browser-normalized-idb.ts';
 import {browserStreamingSync,browserStreamingSyncKeyPaths,browserStreamingSyncStores} from './browser-sync-streaming.ts';
-import type {BrowserStreamingSyncHost,BrowserStreamingWasm,StreamingPublication,StreamingRetainedRow,PreparedStreamingMutation,PreparedStreamingRead,PreparedStreamingRecoveryRead,StreamingRecoveryReadInput} from './browser-sync-streaming.ts';
+import type {BrowserStreamingSyncEngine,BrowserStreamingSyncHost,BrowserStreamingWasm,StreamingPublication,StreamingRetainedRow,PreparedStreamingMutation,PreparedStreamingRead,PreparedStreamingRecoveryRead,StreamingRecoveryReadInput} from './browser-sync-streaming.ts';
 
 /** Fresh development format; the old database is rejected and retained, never
  * adopted, cleared or silently rebound to an empty logical vault. */
@@ -34,6 +34,7 @@ export interface BrowserStreamingVault extends BrowserVault {
   readonly documentMaintenance?:BrowserDocumentIndexMaintenance;
   /** Internal trusted host seam; no public worker registration endpoint. */
   readonly managedRecords?:BrowserStreamingManagedRecords;
+  readSyncScope:BrowserStreamingSyncEngine['readScope'];
   openRecoveryBinaryRead(requestedReadId:string,input:StreamingRecoveryReadInput):Promise<BrowserRecoveryReadRef>;
   readRecoveryBinaryRange(ref:BrowserRecoveryReadRef,input:{offset:string;maxBytes:number}):ReturnType<BinaryStreams['read']>;
   closeRecoveryBinaryRead(ref:BrowserRecoveryReadRef):Promise<void>;
@@ -406,7 +407,7 @@ export async function openBrowserStreamingVault(options:BrowserStreamingVaultOpt
   }
   const documentBackend=typeof (wasm as unknown as Partial<BrowserDocumentIndexWasm>).WasmDocumentIndexBuilder==='function'?createBrowserDocumentIndexBackend({db,authorityId,clientId:options.clientId,wasm:wasm as unknown as BrowserDocumentIndexWasm,assertActive:active,readPublication}):undefined;
   const documentIndex=documentBackend?.index;
-  const vault:BrowserStreamingVault={authorityId,documentIndex,documentMaintenance:documentBackend?.maintenance,managedRecords:engine.managedRecords,sync:engine.api,openRecoveryBinaryRead,readRecoveryBinaryRange,closeRecoveryBinaryRead,binaryStreams,openBinaryRead,cleanupReadPins,closeBinaryReadRequest,
+  const vault:BrowserStreamingVault={authorityId,documentIndex,documentMaintenance:documentBackend?.maintenance,managedRecords:engine.managedRecords,sync:engine.api,readSyncScope:engine.readScope,openRecoveryBinaryRead,readRecoveryBinaryRange,closeRecoveryBinaryRead,binaryStreams,openBinaryRead,cleanupReadPins,closeBinaryReadRequest,
     validateStorage:()=>engine.validate(),
     checkpoints:clientId=>browserCheckpoints(db,authorityId,clientId),
     inventory,readMetadata,readMetadataById,

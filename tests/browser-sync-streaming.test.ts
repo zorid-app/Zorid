@@ -279,12 +279,16 @@ test('scope-only reads stay fresh without graph restoration or whole-vault scans
 });
 test('scope-only reads preserve enrollment, configuration and ownership admission',async()=>{
   assert.equal(await harness().engine.readScope(),null);
-  for(const corruption of ['missing-head','missing-config','scope','epoch']){
+  for(const corruption of ['missing-head','missing-config','scope','epoch','scope-type']){
     const h=await enrolled(),configuration=h.f.row('sync_state','config'),head=h.f.row('sync_state','metadata-head');
     if(corruption==='missing-head')h.f.records.get('sync_state')!.delete(JSON.stringify('metadata-head'));
     if(corruption==='missing-config')h.f.records.get('sync_state')!.delete(JSON.stringify('config'));
     if(corruption==='scope')h.f.seed('sync_state','metadata-head',{...head,value:{...head.value,scope:{...scope,vault_id:'wrong'}}});
     if(corruption==='epoch')h.f.seed('sync_state','config',{...configuration,value:{...configuration.value,key_epoch:0}});
+    if(corruption==='scope-type'){
+      h.f.seed('sync_state','config',{...configuration,value:{...configuration.value,realm_id:{invalid:true}}});
+      h.f.seed('sync_state','metadata-head',{...head,value:{...head.value,scope:{...scope,realm_id:{invalid:true}}}});
+    }
     await assert.rejects(h.engine.readScope(),{code:'storage_corrupt'});
   }
   const retired=await enrolled();retired.retire();await assert.rejects(retired.engine.readScope(),{code:'owner_retired'});

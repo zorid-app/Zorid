@@ -121,6 +121,8 @@ export type BrowserStreamingManagedRecords = Pick<ReturnType<typeof createBrowse
 export interface BrowserStreamingSyncEngine {
   readonly managedRecords?: BrowserStreamingManagedRecords;
   api:BrowserSync & {readonly concurrentPreparation:true};
+  /** Internal host enrollment lookup, independent of namespace inspection. */
+  readScope():Promise<(SyncScope & {key_epoch:number})|null>;
   prepareLocal(input:StreamingLocalInput):Promise<PreparedStreamingMutation>;
   /** Owns batch and built immediately on call, including every failure path. */
   prepareBinary(input:StreamingBinaryInput):Promise<PreparedStreamingMutation>;
@@ -209,18 +211,26 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
   const active=()=>host.assertActive();
   const transact=<T>(mode:IDBTransactionMode,start:(tx:IDBTransaction,done:(value:T)=>void,abort:Abort)=>void)=>normalizedTransact(host.db,{authorityId:host.authorityId,stores:baseStores(),mode,assertActive:active},start);
   const fresh=()=>crypto.randomUUID();
+  function readConfiguration(tx:IDBTransaction,done:(config:Configuration|null,head:Head|null)=>void,abort:Abort):void {
+    read(tx,tx.objectStore('sync_state').get(streamingSyncKeys.configuration),configRow=>{
+      const config=configRow?.value??null;
+      read(tx,tx.objectStore('sync_state').get(streamingSyncKeys.head),headRow=>{
+        const head=headRow?.value??null;
+        if((config===null)!==(head===null))throw failure('storage_corrupt');
+        if(config&&(typeof config.realm_id!=='string'||typeof config.vault_id!=='string'||!Number.isInteger(config.key_epoch)||config.key_epoch<1||!equals(head?.scope,{realm_id:config.realm_id,vault_id:config.vault_id})))throw failure('storage_corrupt');
+        done(config,head);
+      },abort,active);
+    },abort,active);
+  }
+  const readScope=()=>normalizedTransact<(SyncScope & {key_epoch:number})|null>(host.db,{authorityId:host.authorityId,stores:['sync_state'],mode:'readonly',assertActive:active},(tx,done,abort)=>
+    readConfiguration(tx,config=>done(config?{realm_id:config.realm_id,vault_id:config.vault_id,key_epoch:config.key_epoch}:null),abort));
   function capture(tx:IDBTransaction,done:(snapshot:Snapshot)=>void,abort:Abort):void {
     const authored=new Map<string,Json>(),envelopes=new Map<string,Json>(),orders=new Set<string>();
     const s:Snapshot={config:null,head:null,records:[],activities:[],texts:new Map(),headers:new Map(),retained:new Map(),cursor:null,publication:{entries:[],presentation:[],sequence:'0'}};
-    read(tx,tx.objectStore('sync_state').get(streamingSyncKeys.configuration),config=>{
-      s.config=config?.value??null;
-      read(tx,tx.objectStore('sync_state').get(streamingSyncKeys.head),head=>{
-        s.head=head?.value??null;
-        if((s.config===null)!==(s.head===null))throw failure('storage_corrupt');
-        if(s.config&&(!Number.isInteger(s.config.key_epoch)||s.config.key_epoch<1||!equals(s.head?.scope,{realm_id:s.config.realm_id,vault_id:s.config.vault_id})))throw failure('storage_corrupt');
-        host.readPublication(tx,current=>{try{active();s.publication=copy(current);decimalU64(current.sequence);loadTables();}catch(error){abort(error);}},abort);
-      },abort,active);
-    },abort,active);
+    readConfiguration(tx,(config,head)=>{
+      s.config=config;s.head=head;
+      host.readPublication(tx,current=>{try{active();s.publication=copy(current);decimalU64(current.sequence);loadTables();}catch(error){abort(error);}},abort);
+    },abort);
     function scan(store:string,accept:(row:Json)=>void,next:()=>void):void {
       let count=0,total=0;
       const request=tx.objectStore(store).openCursor();
@@ -1172,5 +1182,5 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       },abort));active();
     }finally{classification?.free();proof?.free();graph.free();}
   }
-  return {api,managedRecords,prepareLocal,prepareBinary,commitLocal,prepareRead,commitRead,prepareRecoveryRead,commitRecoveryRead,validate};
+  return {api,managedRecords,readScope,prepareLocal,prepareBinary,commitLocal,prepareRead,commitRead,prepareRecoveryRead,commitRecoveryRead,validate};
 }

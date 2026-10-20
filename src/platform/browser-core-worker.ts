@@ -106,11 +106,11 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
       if(payload.legacyFixture!==true){
         if(!records)throw new BrowserVaultError('workblocks_unavailable','Managed WorkBlock storage is unavailable');
         workBlocks=createBrowserWorkBlocksHost({records:records as unknown as Parameters<typeof createBrowserWorkBlocksHost>[0]['records'],wasm:wasm as unknown as BrowserWorkBlocksWasm,
-          assertActive:assertManagedActive,scope:async()=>{const inspected=await vault!.sync.inspect();assertManagedActive();return inspected.scope;},
+          assertActive:assertManagedActive,scope:async()=>{const current=streaming(),scope=current?await current.readSyncScope():(await vault!.sync.inspect()).scope;assertManagedActive();return scope;},
           committed:async()=>{assertManagedActive();port.postMessage({event:'change',paths:[]});channel?.postMessage({changed:true});await refresh();assertManagedActive();void managed?.trigger();}});
       }
       if(records)managed=createBrowserManagedRecordsHost({records,consumers:workBlocks?createBrowserManagedRecordConsumers(wasm as unknown as BrowserWorkBlocksWasm,{opened:handle=>workBlocks!.opened(handle),changed:()=>{}}):[],local,assertActive:assertManagedActive,
-        scope:async()=>{const inspected=await vault!.sync.inspect();return inspected.scope;},hasSession:()=>!!sync?.recordsSession(),
+        scope:async()=>{const current=streaming(),scope=current?await current.readSyncScope():(await vault!.sync.inspect()).scope;assertManagedActive();return scope;},hasSession:()=>!!sync?.recordsSession(),
         notify:()=>{assertManagedActive();port.postMessage({event:'change',paths:[]});channel?.postMessage({changed:true});},
         failed:error=>{const code=error instanceof BrowserVaultError?error.code:'managed_host_failed';failStorage(code);
           if(['sync_session_revoked','records_retry_key_unavailable','managed_snapshot_conflict','sync_snapshot_conflict'].includes(code))return;
