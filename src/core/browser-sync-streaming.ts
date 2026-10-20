@@ -222,8 +222,11 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       },abort,active);
     },abort,active);
   }
-  const readScope=()=>normalizedTransact<(SyncScope & {key_epoch:number})|null>(host.db,{authorityId:host.authorityId,stores:['sync_state'],mode:'readonly',assertActive:active},(tx,done,abort)=>
-    readConfiguration(tx,config=>done(config?{realm_id:config.realm_id,vault_id:config.vault_id,key_epoch:config.key_epoch}:null),abort));
+  const readScope=async()=>{
+    const scope=await normalizedTransact<(SyncScope & {key_epoch:number})|null>(host.db,{authorityId:host.authorityId,stores:['sync_state'],mode:'readonly',assertActive:active},(tx,done,abort)=>
+      readConfiguration(tx,config=>done(config?{realm_id:config.realm_id,vault_id:config.vault_id,key_epoch:config.key_epoch}:null),abort));
+    active();return scope;
+  };
   function capture(tx:IDBTransaction,done:(snapshot:Snapshot)=>void,abort:Abort):void {
     const authored=new Map<string,Json>(),envelopes=new Map<string,Json>(),orders=new Set<string>();
     const s:Snapshot={config:null,head:null,records:[],activities:[],texts:new Map(),headers:new Map(),retained:new Map(),cursor:null,publication:{entries:[],presentation:[],sequence:'0'}};

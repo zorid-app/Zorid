@@ -294,6 +294,8 @@ test('scope-only reads preserve enrollment, configuration and ownership admissio
     await assert.rejects(h.engine.readScope(),{code:'storage_corrupt'});
   }
   const retired=await enrolled();retired.retire();await assert.rejects(retired.engine.readScope(),{code:'owner_retired'});
+  const pending=await enrolled();pending.f.hold();const reading=pending.engine.readScope();await flush();pending.retire();pending.f.finish();
+  await assert.rejects(reading,{code:'owner_retired'});
   const replaced=await enrolled();replaced.f.seed('control','local-store-id',{key:'local-store-id',value:'replaced'});
   await assert.rejects(replaced.engine.readScope(),{code:'storage_authority_mismatch'});
 });
