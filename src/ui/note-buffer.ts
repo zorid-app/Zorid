@@ -346,7 +346,7 @@ export class NoteBuffer {
   }
 
   private async relocateNow(destination: string): Promise<void> {
-    if(this.durable){await this.durable.reload();this.syncDurable();return;}
+    if(this.durable){await this.durable.reload(destination);this.syncDurable();return;}
     const oldPath = this.path;
     this.path = destination;
     const migrated = this.persist();

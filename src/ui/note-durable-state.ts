@@ -123,11 +123,17 @@ export class DurableNoteState {
     await this.persist();await this.writes.acknowledge(op.ref,op.pendingAck);
     this.state!.operation=undefined;await this.persist();this.changed();
   }
-  reload():Promise<void>{return this.queue(async()=>{
+  /** A known namespace move may advance only the same entry at its exact new path. */
+  reload(relocatedPath?:string):Promise<void>{return this.queue(async()=>{
     if(this.state!.operation)await this.resume(()=>{throw failure('pending write requires explicit flush');});
     const current=await this.vault.readDurableTextById(this.base.entryId);
     if(!current){this.state!.conflict=true;await this.persist();throw failure('entry missing');}
+    if(relocatedPath!==undefined&&current.path!==relocatedPath){this.state!.conflict=true;await this.persist();throw failure('entry moved elsewhere; draft retained');}
     if(this.text===this.base.content&&!this.state!.conflict){this.state!.base=current;this.state!.draft=current.content;}
+    // Typing can precede adoption of an already committed rename. Preserve
+    // that draft only when the stable entry moved and its baseline bytes did
+    // not change. Ordinary reloads and existing conflicts remain strict.
+    else if(relocatedPath!==undefined&&this.base.path!==relocatedPath&&current.content===this.base.content&&!this.state!.conflict)this.state!.base=current;
     else if(current.revision!==this.base.revision){this.state!.conflict=true;await this.persist();throw failure('entry changed; draft retained');}
     await this.persist();this.changed();
   });}
