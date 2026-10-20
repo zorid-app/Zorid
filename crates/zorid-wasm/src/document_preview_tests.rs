@@ -337,7 +337,8 @@ fn all_queries_share_the_one_owner_allowance_and_tighten_to_remaining_bytes() {
         match p.begin(&request("definition", json!({}))) {
             Ok(q) => {
                 assert!(q.inner._charge.bytes.get() <= QUERY);
-                assert!(q.inner.owned_limit + 2 * q.inner.encoded_limit <= q.inner._charge.bytes.get());
+                assert!(q.inner.owned_limit + CONTROL <= q.inner.result_and_output_limit);
+                assert!(q.inner.result_and_output_limit < q.inner._charge.bytes.get());
                 queries.push(q);
             }
             Err(code) => {
@@ -408,12 +409,17 @@ fn repeated_queries_over_a_large_pending_namespace_use_only_the_prepared_capture
     assert_eq!(capture.source_bytes.len(), 128);
     assert_eq!(capture.snapshot.progress().total_files, 100_000);
     drop(capture);
+    let retained = o.inner.pool.used.get();
     for _ in 0..3 {
         let q = query(&p);
         let reply = q.prepare(BASE.as_bytes()).unwrap();
+        assert!(reply.admitted_owned_bytes > 0);
+        assert!(reply.admitted_owned_bytes + reply.length <= q.inner.result_and_output_limit);
+        assert!(o.inner.pool.used.get() <= POOL);
         assert_eq!(reply.result.rows.len(), 127);
         assert_eq!(reply.result.progress.prepared_files, 128);
         assert_eq!(reply.result.progress.pending_files, 99_872);
         assert!(reply.length < RESPONSE);
     }
+    assert_eq!(o.inner.pool.used.get(), retained);
 }

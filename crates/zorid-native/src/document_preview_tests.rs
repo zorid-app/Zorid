@@ -208,17 +208,15 @@ fn owner_provider_publish_discard_and_rebuild_expire_real_handles_and_preserve_r
 fn pending_definition_unknown_view_and_cancel_are_explicit_and_do_not_publish() {
     let (_dir, _cache, mut vault, stage) = fixture(35);
     let preview = capture(&mut vault, &stage);
-    assert!(
-        vault
-            .query_base_preview(
-                &preview,
-                &id("note-34"),
-                None,
-                QueryOptions::default(),
-                |_| Ok(())
-            )
-            .is_err()
-    );
+    assert!(vault
+        .query_base_preview(
+            &preview,
+            &id("note-34"),
+            None,
+            QueryOptions::default(),
+            |_| Ok(())
+        )
+        .is_err());
     code(
         vault.query_base_preview(
             &preview,
@@ -261,6 +259,23 @@ fn precancelled_token_rejects_before_definition_lookup_without_charging_the_owne
 }
 
 #[test]
+fn a_hundred_twenty_eight_prepared_files_fit_the_existing_native_query_allowance() {
+    let (_dir, _cache, mut vault, stage) = fixture(127);
+    let _first = capture(&mut vault, &stage);
+    for _ in 0..3 {
+        vault.pump_document_index(&stage).unwrap();
+    }
+    let preview = vault.open_document_preview().unwrap().unwrap();
+    let reply = query(&vault, &preview);
+    assert_eq!(reply.value.progress.prepared_files, 128);
+    assert_eq!(reply.value.rows.len(), 128);
+    assert_eq!(reply.value.complete, false);
+    assert!(reply._reservation.bytes <= MAX_QUERY);
+    let owner = vault.base_preview_owner.as_ref().unwrap();
+    assert!(owner.budget.used.load(Ordering::Acquire) <= MAX_OWNED);
+}
+
+#[test]
 fn writer_limit_cancellation_and_partial_io_keep_real_query_charge_until_drop() {
     let (_dir, _cache, mut vault, stage) = fixture(1);
     let preview = capture(&mut vault, &stage);
@@ -294,11 +309,9 @@ fn writer_limit_cancellation_and_partial_io_keep_real_query_charge_until_drop() 
         }
     }
     let mut broken = Broken { bytes: 0 };
-    assert!(
-        reply
-            .write_json(&op("1"), &mut broken, 16 * 1024 * 1024, || Ok(()))
-            .is_err()
-    );
+    assert!(reply
+        .write_json(&op("1"), &mut broken, 16 * 1024 * 1024, || Ok(()))
+        .is_err());
     assert_eq!(broken.bytes, 17);
     assert_eq!(owner.budget.used.load(Ordering::Acquire), charged);
     drop(reply);

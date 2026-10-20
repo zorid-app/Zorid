@@ -61,6 +61,15 @@ pub struct CommittedBasePreviewResult {
     pub capture: PreviewSnapshotId,
     pub source: SourceSnapshotId,
     pub value: BasePreviewResult,
+    admitted_owned_bytes: usize,
+}
+impl CommittedBasePreviewResult {
+    /// Conservative monotonic admission for this invocation's copied data.
+    /// Includes short-lived copies; callers must not reclaim this allowance
+    /// while retaining the result. Encoding remains the caller's responsibility.
+    pub fn admitted_owned_bytes(&self) -> usize {
+        self.admitted_owned_bytes
+    }
 }
 
 /// Tightening ledger for NEW adapter copies and shared result retention only.
@@ -620,6 +629,7 @@ pub fn query_preview(
         capture: view.id().clone(),
         source: view.source().clone(),
         value,
+        admitted_owned_bytes: admission.used,
     })
 }
 

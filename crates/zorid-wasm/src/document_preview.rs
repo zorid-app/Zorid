@@ -624,7 +624,7 @@ struct QueryState {
     entry: usize,
     source_bytes: usize,
     owned_limit: usize,
-    encoded_limit: usize,
+    result_and_output_limit: usize,
     used: Cell<bool>,
     cancelled: Cell<bool>,
     cancellation: zorid_bases::OperationCancellation,
@@ -679,18 +679,22 @@ impl WasmDocumentPreview {
             + request.view_name.as_ref().map_or(0, String::capacity)
             + request.options.retained_bytes().saturating_mul(2)
             + source_bytes.saturating_mul(2)
+            // Serialize(into=String) clones core scalar wrappers before the
+            // writer sees them. Only the definition uses VaultPath here;
+            // result paths are borrowed Strings and all other wrappers are
+            // bounded IDs/watermarks. One scalar is serialized at a time.
+            + capture.entries[entry].path.as_str().len().max(128)
+            + ALLOCATION
             + 4096;
         let rest = limit.checked_sub(fixed).ok_or("index_preview_resource")?;
-        // Keep the result DTO, JS output and serde's current scalar copy live
-        // simultaneously inside this ONE query reservation. Core identity/path
-        // Serialize(into=String) can clone that scalar before the writer sees it.
-        // The equal output/temporary quarters leave the remainder for the DTO;
-        // tightening component ceilings never creates a separate pool.
-        let encoded_limit = (rest / 4).min(RESPONSE);
-        let owned_limit = rest - encoded_limit * 2;
-        if encoded_limit <= CONTROL || owned_limit == 0 {
-            return Err("index_preview_resource");
-        }
+        // The DTO and actual output share this ONE reservation. Keep a bounded
+        // minimum for output while evaluating, then subtract the reducer's
+        // conservative monotonic admission before counting/allocating output.
+        // Do not reserve two maximum-sized outputs for every small result.
+        let owned_limit = rest
+            .checked_sub(CONTROL)
+            .filter(|n| *n > 0)
+            .ok_or("index_preview_resource")?;
         capture.active()?;
         Ok(WasmDocumentPreviewQuery {
             inner: Rc::new(QueryState {
@@ -699,7 +703,7 @@ impl WasmDocumentPreview {
                 entry,
                 source_bytes,
                 owned_limit,
-                encoded_limit,
+                result_and_output_limit: rest,
                 used: Cell::new(false),
                 cancelled: Cell::new(false),
                 cancellation: zorid_bases::OperationCancellation::default(),
@@ -737,6 +741,7 @@ pub struct WasmDocumentPreviewReply {
     result: zorid_bases::BasePreviewResult,
     query: Rc<QueryState>,
     length: usize,
+    admitted_owned_bytes: usize,
     written: Cell<bool>,
 }
 impl WasmDocumentPreviewReply {
@@ -755,6 +760,13 @@ impl WasmDocumentPreviewReply {
     }
     fn write(&self, writer: &mut impl Write) -> Result<()> {
         self.query.active()?;
+        if self
+            .admitted_owned_bytes
+            .checked_add(self.length)
+            .is_none_or(|bytes| bytes > self.query.result_and_output_limit)
+        {
+            return Err("index_preview_resource");
+        }
         let result = serde_json::to_writer(writer, &self.envelope());
         self.query.active()?;
         result.map_err(|_| "index_output_limit")
@@ -862,7 +874,12 @@ impl WasmDocumentPreviewQuery {
             BaseReadError::Code(code) => code,
             _ => "index_base_evaluation",
         })?;
-        options.max_output_bytes = options.max_output_bytes.min(query.encoded_limit - CONTROL);
+        options.max_output_bytes = options.max_output_bytes.min(
+            query
+                .result_and_output_limit
+                .saturating_sub(CONTROL)
+                .min(RESPONSE),
+        );
         options.evaluation.cancellation = Some(query.cancellation.clone());
         query.active()?;
         let result = zorid_bases::query_preview(
@@ -890,16 +907,23 @@ impl WasmDocumentPreviewQuery {
         {
             return Err("index_invalid_request");
         }
+        let admitted_owned_bytes = result.admitted_owned_bytes();
+        let encoded_limit = query
+            .result_and_output_limit
+            .checked_sub(admitted_owned_bytes)
+            .ok_or("index_preview_resource")?
+            .min(RESPONSE);
         let mut reply = WasmDocumentPreviewReply {
             result: result.value,
             query: query.clone(),
             length: 0,
+            admitted_owned_bytes,
             written: Cell::new(false),
         };
         let check = || query.active();
         let mut count = Count {
             bytes: 0,
-            maximum: query.encoded_limit.min(RESPONSE),
+            maximum: encoded_limit,
             check: &check,
         };
         reply.write(&mut count)?;
