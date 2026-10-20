@@ -413,8 +413,10 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
         read(tx,tx.objectStore('sync_authored').get(identity),authored=>read(tx,tx.objectStore('sync_envelopes').get(identity),envelope=>
           read(tx,tx.objectStore('sync_source_wires').getKey(identity),wire=>{
             const metadata=descriptor(expected).metadata;
+            if(authored&&(typeof authored.order!=='string'||!/^\d{20}$/.test(authored.order)||BigInt(authored.order)===0n||BigInt(authored.order)>((1n<<64n)-1n)||
+              BigInt(authored.order)>BigInt(recordsContext.storage!.fence.authoredSequence)||authored.pending===0&&!authored.sealed||!equals(authored.key,identity)))throw failure('storage_corrupt');
             if((!authored&&!envelope)||(authored&&(!equals(authored.metadata,metadata)||![0,1].includes(authored.pending)||typeof authored.sealed!=='boolean'))||
-              (envelope&&(!equals(envelope.metadata,metadata)||!['authored','received'].includes(envelope.direction)))||((wire!==undefined)!==!!envelope)||
+              (envelope&&(!equals(envelope.key,identity)||!equals(envelope.metadata,metadata)||!['authored','received'].includes(envelope.direction)))||((wire!==undefined)!==!!envelope)||
               (authored?(authored.sealed?envelope?.direction!=='authored':!!envelope):envelope?.direction!=='received'))throw failure('storage_corrupt');
             const record=s.records.find(row=>keyString(row)===id),activity=s.activities.find(row=>keyString(row)===id),row=record??activity;
             if(!row){next();return;}
