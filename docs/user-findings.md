@@ -1,5 +1,14 @@
 # User findings queue
 
+## S1 functional closeout; performance deferred — 2026-10-20
+
+User requests skipping performance optimization, ensuring normal functionality
+and moving on. Run bounded current-build macOS/web/CLI acceptance using existing
+harnesses; fix actual functional errors, then close S1 with performance work
+explicitly deferred. Large-vault/stress/timing budgets are no longer closeout gates.
+Implementation and verification remain separate; current matching builds and
+actual runs are pending in the execution checkpoint. No mobile or sync expansion.
+
 ## Remove measured browser repeated work — 2026-10-20
 
 One-capture request is now implemented and measured. Exact reviewed candidate

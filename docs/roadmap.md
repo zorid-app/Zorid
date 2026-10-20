@@ -203,6 +203,13 @@ future feature or a public plugin API freeze.
 
 ## S1 — Rust parsing, indexing, caching and search performance
 
+**Latest closeout decision (2026-10-20):** the user explicitly defers additional
+performance optimization and representative/stress performance gates. Close S1
+on bounded functional acceptance of the current integrated macOS/web/CLI paths.
+Retain the measurements and deferred performance work; do not treat missing
+10k/100k results or extra optimization as blockers to that functional closeout.
+This decision does not establish untested platform or large-vault readiness.
+
 **Design:** confirmed after user interview; S0/S0A gates are accepted. S1.0
 known-limit observations support S1.1 implementation without establishing the full
 representative/stress acceptance gate. [Design](architecture/indexing-search-design.md),

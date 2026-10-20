@@ -9,6 +9,21 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest user steering: skip further performance optimization, verify ordinary
+functionality and move on. S1 closeout now requires a bounded current-build
+functional pass on macOS Electron, actual web bindings and standalone CLI; defer
+10k/100k workloads, latency/memory budgets and further optimization. Existing
+benchmark numbers remain historical observations, not new release gates. Root
+owns serial builds/runtime and main integration. `s1_browser_capacity`,
+`large_note_save_audit`, and `finish_graph_path` supplied read-only existing-harness
+readiness; `finish_normal_indexing` owns only the bounded Find/Search test pass.
+Use disposable owned fixtures, preserve user data, close every test Electron app.
+Check normal create/edit/save/reopen/search, rename and image paste, independent
+CLI operations/concurrent storage, and existing Base/filter/refresh semantics.
+Fix demonstrated functional failures only; do not create new feature/framework or
+optimization scope. Fresh matching native/WASM/frontend artifacts and the actual
+functional runs are pending. S1 is not marked closed until those results exist.
+
 The user-requested one-full-storage-capture follow-up is implemented, reviewed,
 integrated and measured. Implementation owner `s1_browser_capacity` used
 `codex/s1-browser-incremental` / `.worktrees/s1-browser-incremental`, baseline
