@@ -7,9 +7,14 @@ Three narrow fixes are integrated: duplicate next-state clone removed3d64a8b2;
 unchanged metadata/presentation puts skipped784c13ac; per-change managed scope
 lookup now uses fresh guarded point reads1a702c8f/bdcab7b7/e0b9a01e. Final writer
 validation and body repair remain. Composed72 focused checks pass, plus2 affected
-scope regressions after the final owner guard. See the execution checkpoint for
-exact verification/evidence. Browser timing rerun remains unrun due low disk;
-no new speedup or S1 completion claim. No storage redesign was introduced.
+scope regressions after the final owner guard. Matched100-note browser rerun
+now passes26.637s versus30.672s including exact103-file readback and final current/
+complete index wait (one sample per version). Captures330→221; restores326→217.
+Evidence `browser-storage-benchmark-c648fb06/comparison.json` under `.worktrees/s1-evidence`.
+User expects approximately one initial full capture and correctly challenges221:
+preparation/final-writer scans still repeat per commit. These remain unresolved;
+do not present the scope-only lookup fix as eliminating the underlying scans.
+No S1 completion or final-main runtime acceptance follows from this measurement.
 
 User explicitly requests removing the excessive repeated work behind the slow
 browser import. Reopens this narrow optimization after the scope freeze below;

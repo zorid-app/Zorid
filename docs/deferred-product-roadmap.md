@@ -28,9 +28,21 @@ The composed72 checks pass onbdcab7b7; the final owner-guard successor passes
 its2 affected scope regressions on e0b9a01e. Final TypeScript result and exact
 source/evidence correspondence are recorded in
 `.worktrees/s1-evidence/browser-storage-repetition-main-result.json`.
-Browser timing has not been rerun: disk remains below the1GiB runtime admission
-floor after retiring eight closed owned fixture profiles; reports/user data remain.
-Do not infer a speedup percentage or complete S1 from source-level work reduction.
+User-requested remeasurement now passes on matched benchmarkc648fb06: same
+100-note batch plus exact103-file readback and final automatic current/complete
+index wait takes26.637s versus30.672s (13.15% less elapsed, one run per version).
+Storage captures330→221; state restores326→217; final source/covered watermark107.
+Import/readback alone26.327s, final wait0.310s; total phase27.742s includes startup.
+Owned Chrome72770 exited0 without signal; live disk guard stayed above1GiB
+(minimum3,762,688,000bytes). Evidence/report/comparison are retained in
+`.worktrees/s1-evidence/browser-storage-benchmark-c648fb06/`.
+The three browser production files exactly match main; Rust/WASM remain the same
+older matched baseline. This is diagnostic evidence, not final-main/S1 acceptance.
+User correctly challenges221 remaining full captures: per-write preparation and
+final-writer full scans remain, approximately two per commit. This fix removed
+the unnecessary scope inspection, not the main repeated storage scans. A target
+of one initial full capture plus incremental updates/targeted writer checks is
+not implemented; do not imply these scans are eliminated or inherently required.
 Other S1 campaigns remain stopped.
 
 Latest user steering reopens only the measured browser redundancy issue:
