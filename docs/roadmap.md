@@ -8,6 +8,11 @@ Older plans remain detailed capability inventories, not competing delivery order
 
 ## Current focus
 
+2026-10-20 scope freeze: the current browser measurement is complete; user asked
+to report and stop opening work. S1 remains open, with final matched builds and
+large-vault/client acceptance pending. Latest results and exact gaps are in the
+execution checkpoint; this is not permission to start another optimization track.
+
 **S0 — Storage, saving and local recovery is accepted within the recorded native
 scope. S0A modular-interface gate is accepted.** S0's reviewed implementation and
 actual macOS save/close/quit/history/concurrent-CLI/interruption evidence are in the

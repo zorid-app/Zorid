@@ -1,5 +1,17 @@
 # User findings queue
 
+## Stop scope expansion after browser measurement — 2026-10-20
+
+User challenged the expansion from remaining tests into more performance work,
+then agreed to finish the current browser measurement, report outstanding work,
+and stop opening tasks. Measurement is complete and owned Chrome closed cleanly.
+Reviewed fix7b12c1e7 passes120 adapter checks and TypeScript; the matched isolated
+100-note import plus exact103-file readback changes77.16s→36.63s (single run per
+version), source captures11371→660. This is diagnostic evidence, not final-main
+or10k acceptance. See `browser-point-fence-benchmark-1ff7aad6/comparison.json`
+under `.worktrees/s1-evidence/`. S1 remains open. No further optimization,
+architecture, builds or campaigns should start without new user steering.
+
 ## Desktop indexing ownership cleanup — 2026-10-20
 
 User selected indexing-orchestration cleanup and confirmed desktop-only execution.

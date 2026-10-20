@@ -9,6 +9,18 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+**User scope freeze, 2026-10-20:** finish only the running browser measurement,
+report the results/outstanding checks, and stop opening work. That measurement
+is now terminal; all owned test browsers are closed and no heavy slot is active.
+The reviewed two-file browser fix is integrated as7b12c1e7 (120 adapter checks
+and TypeScript pass). Matched100-note import plus exact103-file readback improves
+77.16s→36.63s in one diagnostic run per version; source captures11371→660.
+Evidence: `.worktrees/s1-evidence/browser-point-fence-benchmark-1ff7aad6/comparison.json`.
+This is a matched isolated37ed Rust/WASM baseline, not final-main/10k acceptance.
+Native optimization remains test-only0d1d7ebd, with no production change or RED
+execution. Do not automatically resume optimization, new architecture, builds,
+or remaining campaigns from older instructions. S1 remains open.
+
 2026-10-20 follow-up: actual Chrome100 normal-core run on frozen37ed616e passes
 all five phases and complete literal/range/order oracles. Evidence:
 `.worktrees/s1-evidence/acceptance-web-main-100/report.json`. Warm query samples
@@ -50,9 +62,24 @@ remaining real component/core and desktop foreground harnesses are independently
 source-reviewed and integrated asab497705/162b077d; actual runtime is pending.
 The desktop dirty-query allocator issue and swallowed Base observer assertions
 were corrected before integration. Indexing-overlap absence remains inconclusive.
-An86-check focused Rust cache/time runner is queued after the current browser slot;
-no fake results or new product feature scope. Existing native binaries and generated
+The86-check focused Rust cache/time campaign has21 actual passes:9 extraction
+checks and12 Store checks. Its initial Store compilation stopped at the1GiB disk
+guard; the12 then ran directly from the retained source-identical graph executable,
+with all411 Rust/Cargo input hashes and binary correspondence verified. Remaining
+65 checks are unrun. Native test-only pump-counter compilation was refused below
+its2GiB admission floor; no retry or production optimization occurred. Evidence:
+`cache-preview-clock-rust86/ca6a4fe3-{001,direct-store12}/` and
+`pump-recapture-red-0d1d7ebd/terminal.json`. Existing native binaries and generated
 WASM predatef427885f and must be rebuilt before claims against current main.
+
+Reviewed acceptance harnesses are integrated: desktop foreground162b077d,
+Base component/coreab497705, full CLI pagination34371e41 (9 focused checks).
+Their actual client campaigns remain unrun; they are tools, not acceptance.
+Final matched builds, normal10k desktop/web/CLI and remaining lifecycle/preview/
+clock/performance gates remain open. Stop here under the latest user steering.
+Obsolete compiler/test-profile/generated-bundle cleanup records are retained in
+`.worktrees/s1-evidence/`; source, current binaries, user playgrounds and private
+unsaved-note backup remain intact.
 
 The following update is historical where superseded by the results above.
 
