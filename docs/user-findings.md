@@ -2,6 +2,15 @@
 
 ## Remove measured browser repeated work — 2026-10-20
 
+Latest user correction: “Focus on fixing it instead of introducing more code.”
+Three narrow fixes are integrated: duplicate next-state clone removed3d64a8b2;
+unchanged metadata/presentation puts skipped784c13ac; per-change managed scope
+lookup now uses fresh guarded point reads1a702c8f/bdcab7b7/e0b9a01e. Final writer
+validation and body repair remain. Composed72 focused checks pass, plus2 affected
+scope regressions after the final owner guard. See the execution checkpoint for
+exact verification/evidence. Browser timing rerun remains unrun due low disk;
+no new speedup or S1 completion claim. No storage redesign was introduced.
+
 User explicitly requests removing the excessive repeated work behind the slow
 browser import. Reopens this narrow optimization after the scope freeze below;
 other campaigns remain stopped. Current evidence shows107 ordinary source

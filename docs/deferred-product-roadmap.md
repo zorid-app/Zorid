@@ -9,6 +9,30 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest follow-up fixes existing browser storage repetition, without a storage
+redesign. Root retains sole main integration. Three reviewed changes are now
+integrated:3d64a8b2 removes the second next-state graph clone per mutation;
+784c13ac skips exact unchanged metadata/presentation puts while retaining inline
+body writes/deletes that repair stale content;1a702c8f/bdcab7b7/e0b9a01e replace
+managed-host scope-only full graph inspection with fresh configuration/head point
+reads. Scope changes, protocol IDs, config/head consistency, authority and owner
+retirement remain checked. Final mutation captures/preconditions remain unchanged.
+Normal Markdown readback already uses point reads; prior wording attributing
+whole-vault captures to each text read was too broad.
+
+Owners: `s1_browser_capacity` on `codex/s1-browser-next-head` in
+`.worktrees/s1-browser-next-head`; `preview_integration_review` on
+`codex/s1-browser-publication-skips` in `.worktrees/s1-browser-publication-skips`.
+Root reviewed both leaves; preview independently approved final scope53a9495f.
+The composed72 checks pass onbdcab7b7; the final owner-guard successor passes
+its2 affected scope regressions on e0b9a01e. Final TypeScript result and exact
+source/evidence correspondence are recorded in
+`.worktrees/s1-evidence/browser-storage-repetition-main-result.json`.
+Browser timing has not been rerun: disk remains below the1GiB runtime admission
+floor after retiring eight closed owned fixture profiles; reports/user data remain.
+Do not infer a speedup percentage or complete S1 from source-level work reduction.
+Other S1 campaigns remain stopped.
+
 Latest user steering reopens only the measured browser redundancy issue:
 “Bro just don't do those excessive repeated work please.” Keep other S1
 campaigns and native optimization stopped. `s1_browser_capacity` owns the
