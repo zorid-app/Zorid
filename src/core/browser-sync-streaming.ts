@@ -147,7 +147,7 @@ interface InternalPrepared {
   snapshot:Snapshot; plan:StreamingMetadataPlan; result:Json; rows:StreamingRetainedRow[];
   texts:Map<string,Json>; sources:SourceInput[]; pins:Map<string,SourceHeader>;
   prior:Uint8Array; updateId:string; incoming:boolean; delivery?:SyncDelivery;
-  expectedText:Json|null; revisions:string[]; used:boolean;
+  expectedText:Json|null; nextHead:Json|null; revisions:string[]; used:boolean;
 }
 const textEncoder=new TextEncoder();
 const stringify=(value:unknown)=>JSON.stringify(value);
@@ -452,9 +452,9 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       }
       if(staged.size)throw failure('binary_stage_source_mismatch');
       active();const texts=new Map(s.texts);if(output.next_text)texts.set(textKey(output.next_text.identity),output.next_text);
-      const revisions=new Set<string>();
+      const revisions=new Set<string>();let nextHead:Json|null=null;
       const next=plan.nextState();if(next){try{
-        revisions.add(boundedJson(next.metadataHeadJson()).version);
+        nextHead=boundedJson(next.metadataHeadJson());revisions.add(nextHead.version);
         if(context.initializeTexts){const view=boundedJson(next.namespaceViewJson(),128*1024*1024);
           for(const [entry,binding] of Object.entries(view.content_bindings) as [string,Json][])if(binding.kind==='text'){
             const identity={realm_id:config.realm_id,vault_id:config.vault_id,entry_id:entry,bootstrap_id:binding.text_bootstrap_id};
@@ -468,7 +468,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       const rows=classifications(plan,texts,s,forced,revisions);
       const token:PreparedStreamingMutation=Object.freeze({changes:copy(output.changes??[]),dispose(){const value=prepared.get(token);if(value&&!value.used){value.used=true;value.plan.free();prepared.delete(token);}}});
       prepared.set(token,{snapshot:s,plan,result:output,rows,texts,sources,pins,prior:context.prior??new Uint8Array(),updateId:context.updateId,
-        incoming:context.incoming??false,delivery:context.delivery,expectedText:context.expectedText??null,revisions:[...revisions],used:false});
+        incoming:context.incoming??false,delivery:context.delivery,expectedText:context.expectedText??null,nextHead,revisions:[...revisions],used:false});
       plan=undefined;return token;
     }finally{proof?.free();if(!candidateConsumed)candidate.free();plan?.free();}
   }
@@ -635,7 +635,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       const config=enrolled(value!.snapshot),emissions=value!.sources.filter(source=>!value!.incoming),ids=value!.result.allocated_update_ids??[];
       for(const revision of value!.revisions)tx.objectStore('sync_revisions').add({revision});
       for(const [id,text] of value!.texts)if(!equals(value!.snapshot.texts.get(id),text))tx.objectStore('sync_text').put({key:id,state:text});
-      const next=value!.plan.nextState();if(next){try{tx.objectStore('sync_state').put({key:streamingSyncKeys.head,value:boundedJson(rust(()=>next.metadataHeadJson()))});}finally{next.free();}}
+      if(value!.nextHead)tx.objectStore('sync_state').put({key:streamingSyncKeys.head,value:value!.nextHead});
       const incomingKey=[config.realm_id,config.vault_id,value!.updateId];
       if(value!.incoming&&value!.prior.byteLength===0){
         const meta=descriptor(value!.sources[0].header).metadata;
