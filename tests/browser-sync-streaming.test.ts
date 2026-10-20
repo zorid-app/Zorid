@@ -31,10 +31,11 @@ function fixture(){
       if(mode==='readwrite')assert.deepEqual(options,{durability:'strict'});
       const local=new Map(names.map(name=>{if(!records.has(name))throw new Error('missing store');return[name,structuredClone(records.get(name)!)];}));
       const modified=new Set<string>();let pending=0,aborted=false,completed=false,scheduled=false;
-      const tx:any={durability:strict?'strict':'relaxed',names,mode,isTerminal(){return aborted||completed;},
-        abort(){if(aborted||completed)return;aborted=true;queueMicrotask(()=>tx.onabort?.());},
+      const listeners=new Map<string,Array<()=>void>>();
+      const tx:any={durability:strict?'strict':'relaxed',names,mode,isTerminal(){return aborted||completed;},addEventListener(name:string,callback:()=>void){listeners.set(name,[...(listeners.get(name)??[]),callback]);},
+        abort(){if(aborted||completed)return;aborted=true;queueMicrotask(()=>{for(const callback of listeners.get('abort')??[])callback();tx.onabort?.();});},
         finish(){if(aborted||completed||pending)return;if(hold){return;}if(fail&&mode==='readwrite'){fail=false;tx.abort();return;}
-          completed=true;for(const name of modified)records.set(name,local.get(name)!);tx.oncomplete?.();},
+          completed=true;for(const name of modified)records.set(name,local.get(name)!);for(const callback of listeners.get('complete')??[])callback();tx.oncomplete?.();},
         objectStore(name:string){
           if(!local.has(name))throw new Error('store not in transaction');
           const request=(operation:string,key:any,operationFn:()=>any)=>{
@@ -66,7 +67,7 @@ function fixture(){
               try{result.onsuccess?.();}catch(error){tx.error=error;tx.abort();}pending--;schedule();};
             queueMicrotask(step);return result;
           };
-          return {get(key:any){return request('get',key,()=>local.get(name)!.get(JSON.stringify(key)));},
+          return {count(){return request('count',undefined,()=>local.get(name)!.size);},get(key:any){return request('get',key,()=>local.get(name)!.get(JSON.stringify(key)));},
             getKey(key:any){return request('getKey',key,()=>local.get(name)!.has(JSON.stringify(key))?key:undefined);},
             index(indexName:string){const definition=indexes.get(name)?.find(index=>index.name===indexName);assert.ok(definition,'missing index');return {get(key:any){return request('index-get',key,()=>[...local.get(name)!.values()].find(row=>compare(keyOf(row,definition.path),key)===0));},openCursor(range?:any,direction='next'){return cursor(range,direction,definition.path);}};},
             add(row:any){return write(row,true);},put(row:any){return write(row,false);},
@@ -80,6 +81,7 @@ function fixture(){
     },
   };
   records.get('control')!.set(JSON.stringify('binary-stream-usage:v1'),{key:'binary-stream-usage:v1',value:{version:1,stages:0,activeStages:0,sourcePayloadBytes:'0',chunkRecords:0,pageRecords:0}});
+  records.get('control')!.set(JSON.stringify('sequence'),{key:'sequence',value:'0'});
   createBrowserNormalizedSchema(db);createBrowserManagedSchema(db);
   for(const [name,keyPath] of Object.entries({...browserStreamingSyncKeyPaths,metadata:'id',presentation:'id',content:'id',receipts:'key',journal:'sequence',intents:'key'}))if(!records.has(name))db.createObjectStore(name,{keyPath});
   indexes.set('sync_authored',[{name:'by_pending_order',path:['pending','order'],unique:false}]);
@@ -143,8 +145,8 @@ function harness(recordsEnabled=false){
         const text={identity,version:a.metadata_revision,snapshot:[4,5],actors:{}};
         const binding={entry_id:identity.entry_id,text_bootstrap_id:identity.bootstrap_id,namespace:{bootstrap_id:a.update_ids[0],parents:[a.update_ids[0]]}};
         const e=[register(emission(a.update_ids[0],new Uint8Array([11,12]))),register(emission(a.update_ids[1],new Uint8Array([21,22,23]),binding))];
-        const after={id:identity.entry_id,path:'note.md',kind:'file',revision:a.metadata_revision,deleted:false};
-        const rows=[{identity:{entry_id:identity.entry_id},outcome:{status:'normal',path:'note.md',kind:'file',content:{kind:'text',content:{byte_length:'4',witness:{kind:'text',identity,revision:text.version}}}}}];
+        const path=input.command.request.mutation.path??'note.md',after={id:identity.entry_id,path,kind:'file',revision:a.metadata_revision,deleted:false};
+        const rows=[{identity:{entry_id:identity.entry_id},outcome:{status:'normal',path,kind:'file',content:{kind:'text',content:{byte_length:'4',witness:{kind:'text',identity,revision:text.version}}}}}];
         return candidate(this,a.graph_revision,e,{allocated_update_ids:[...a.update_ids,identity.bootstrap_id],changes:[{before:null,after}],next_text:text},rows);
       },
     };
@@ -197,6 +199,7 @@ function harness(recordsEnabled=false){
     publish(tx:any,rows:any[],_origin:any,_forced:any,current:any){
       const entries=rows.filter(row=>row.entry&&row.status==='normal').map(row=>row.entry),presentation=rows.filter(row=>row.presentation&&row.status==='normal').map(row=>row.presentation);
       const sequence=String(BigInt(current.sequence)+1n);tx.objectStore('control').put({key:'test-publication',value:{entries,presentation,sequence}});
+      tx.objectStore('control').put({key:'sequence',value:sequence});
       for(const row of rows)if(row.status==='normal'&&row.content?.kind==='text')tx.objectStore('content').put({id:row.id,bytes:row.content.bytes});
       return {sequence};
     },
@@ -260,11 +263,16 @@ function harness(recordsEnabled=false){
   };
 }
 async function enrolled(){const h=harness();await h.engine.api.enroll({...scope,key_epoch:1});return h;}
-async function local(h:Awaited<ReturnType<typeof enrolled>>){
-  const request={operation_id:'operation',mutation:{type:'create',id:'note',path:'note.md',kind:'file',content:[116,101,120,116]}};
-  return h.engine.prepareLocal({requestJson:JSON.stringify(request),familyCommandJson:JSON.stringify({version:1,request,create_mode:'text'}),nextRevision:'note-revision'});
+async function local(h:Awaited<ReturnType<typeof enrolled>>,id='note'){
+  const request={operation_id:'operation',mutation:{type:'create',id,path:id+'.md',kind:'file',content:[116,101,120,116]}};
+  return h.engine.prepareLocal({requestJson:JSON.stringify(request),familyCommandJson:JSON.stringify({version:1,request,create_mode:'text'}),nextRevision:id+'-revision'});
 }
 Object.defineProperty(globalThis,'IDBKeyRange',{configurable:true,value:{bound(lower:any,upper:any,lowerOpen=false,upperOpen=false){return {lower,upper,lowerOpen,upperOpen};},lowerBound(lower:any,open=false){return {lower,open};}}});
+test('admission and owned sequential mutations use one full storage capture',async()=>{
+  const h=await enrolled();await h.engine.validate();
+  for(let index=0;index<5;index++)await h.commit(await local(h,'incremental-'+index));
+  assert.equal(h.f.requests.filter(row=>row.store==='sync_graph_records'&&row.operation==='cursor').length,1);
+});
 test('scope-only reads stay fresh without graph restoration or whole-vault scans',async()=>{
   const h=await enrolled(),start=h.f.requests.length,transactionStart=h.f.transactions.length,builds=h.graphBuildCount();
   const first=await h.engine.readScope();assert.deepEqual(first,{...scope,key_epoch:1});
