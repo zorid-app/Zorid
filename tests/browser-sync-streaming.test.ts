@@ -157,7 +157,7 @@ function harness(recordsEnabled=false){
     const recordDeltas=descriptors.filter(e=>e.record).map(e=>({update_id:e.metadata.key.update_id,record:e.record,summary_digest:summary}));
     const activityDeltas=descriptors.filter(e=>e.activity).map(e=>({update_id:e.metadata.key.update_id,activity:e.activity,summary_digest:summary}));
     const result={record_delta_count:recordDeltas.length,activity_delta_count:activityDeltas.length,payload_count:emissions.length,allocated_update_ids:[],changes:[],...output};
-    const plan:any={free(){},resultJson(){return JSON.stringify(result);},nextState:()=>nextPresent?next():undefined,
+    const plan:any={free(){},resultJson(){return JSON.stringify(result);},nextStateCalls:0,nextState(){this.nextStateCalls++;return nextPresent?next():undefined;},
       recordDeltaJson(i:number){return JSON.stringify(recordDeltas[i]);},activityDeltaJson(i:number){return JSON.stringify(activityDeltas[i]);},
       payloadMetadataJson(i:number){return JSON.stringify(emissions[i].metadata);},payloadBytes(i:number){return emissions[i].payload.slice();},textBytes(){return new Uint8Array([116,101,120,116]);},receivedWireBytes(){return output.wire?.slice()??new Uint8Array();},
       checkPreconditions(actual:any){assert.equal(actual.version,base.version,'opaque plan receives current graph for CAS');},
@@ -245,7 +245,7 @@ function harness(recordsEnabled=false){
   const commitRecoveryRead=(token:any,readId='recovery-read')=>f.run<void>([...browserStreamingSyncStores,'metadata','presentation','content','control','receipts','journal','intents'],(tx,done,abort)=>host.readPublication(tx,(current:any)=>engine.commitRecoveryRead(tx,token,current,()=>{
     tx.objectStore('binary_reads').add({clientId:'client',readId,entryId:token.witness.entry_id,witness:token.witness,reference:token.reference});done(undefined);
   },abort),abort));
-  return {f,engine,key,updates,wire,provided,commit,seed,seedStage,commitRead,commitRecoveryRead,
+  return {f,engine,key,updates,wire,provided,plans,commit,seed,seedStage,commitRead,commitRecoveryRead,
     setRecordStatus(value:string){recordStatus=value;},setRecordProvider(value:any){recordProvider=value;host.recordsSession=()=>recordProvider;},
     scriptBinary(script:any){binaryScript=script;register(script.final);},
     failBinaryInvoke(){binaryScript.invokeError=true;},
@@ -267,7 +267,9 @@ Object.defineProperty(globalThis,'IDBKeyRange',{configurable:true,value:{bound(l
 test('Text namespace emissions persist exact immutable sources with header-only pending rows',async()=>{
   const h=await enrolled();assert.equal(h.engine.api.concurrentPreparation,true);
   const prepared=await local(h);assert.equal(h.f.records.get('sync_source_payloads')!.size,0);
+  assert.equal(h.plans[0].nextStateCalls,1);
   await h.commit(prepared);prepared.dispose();
+  assert.equal(h.plans[0].nextStateCalls,1,'commit reuses the head already obtained from the immutable owned plan');
   const pending=await h.engine.api.pending(10);assert.equal(pending.length,2);assert.deepEqual(pending.map(row=>row.metadata.family),['files','text']);
   for(const row of pending){const id=row.metadata.key.update_id,stored=h.f.row('sync_authored',keyOfId(id));
     assert.deepEqual(Object.keys(stored).sort(),['key','metadata','order','pending','sealed']);assert.equal(stored.pending,1);assert.equal(row.sealed,null);
