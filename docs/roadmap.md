@@ -20,7 +20,7 @@ bounded actual Chrome/CLI/Electron cache correctness checks pass.
 Existing feature/iOS work is preserved.
 
 Design for desktop, browser and mobile now; finish the usable desktop feature set
-before resuming iOS implementation. The browser is a connected sync-group client
+and establish solid sync before resuming native mobile implementation. The browser is a connected sync-group client
 with retained local working data, rather than a user-managed filesystem vault.
 Do not reopen all tracks in parallel.
 
@@ -73,7 +73,7 @@ remain **planned**.
 | S2 | Shared E2EE sync backend and usable self-hosted native-client sync | S1A |
 | S9 | Hosted Zorid Cloud service | S2 and S8 |
 | S10 | Connected web client at web.zorid.app | S9; self-hosted service from S2 |
-| S11 | Native iOS app | S8; hosted/web completion is not a hard prerequisite |
+| S11 | Native iOS app | S8 and S2; hosted/web completion is not a hard prerequisite |
 | S12 | Complete history, backup/recovery and administration | S11; basic operational backup already required in S2/S9 |
 
 Latest user steering places usable local desktop Types/Bases/Tasks/Calendar and
@@ -82,9 +82,9 @@ sync-ready; remote transport is not a prerequisite for local feature acceptance.
 Existing stage IDs are retained for links; table and section order define delivery
 order. Reconcile each stage with current main and retained isolated changes first.
 Google-specific authorization is distinct from logging into Zorid sync.
-S9/S10 before S11 is a proposed scheduling order, not an additional user-required
-gate: the hard iOS requirement is desktop completion at S8. Revisit that scheduling
-choice at the desktop gate rather than silently expanding the prerequisite.
+User steering on 2026-10-20 keeps native mobile development paused until desktop
+and sync are solid: S8 and S2 are prerequisites for S11. S9/S10 before S11 remains
+a proposed scheduling order, not an additional hosted/web requirement.
 
 ## S0 — Storage layer, saving and local recovery
 
@@ -360,7 +360,7 @@ normal authorization; this roadmap does not deploy or tag anything.
 recorded real-app acceptance and measured performance, and the chosen packaged
 build reproduces the essential workflow. Remaining limitations are explicit and
 must not contradict a required feature's usability. iOS implementation may resume
-only after this desktop gate. The proposed later hosted/web-before-iOS schedule
+only after this desktop gate and solid sync at S2. The proposed later hosted/web-before-iOS schedule
 is not an additional hard acceptance gate.
 
 ## S1A — E2EE sync-group lifecycle design
@@ -465,7 +465,7 @@ OPFS migration is required merely to match native platforms.
 ## S11 — Native iOS
 
 Resume preserved native work on the accepted native-shell/shared-editor/Rust
-interfaces after the desktop gate. Finish retained WebView routing/editor-window
+interfaces after desktop S8 and sync S2 acceptance. Finish retained WebView routing/editor-window
 ownership, vault selection/tabs, create/edit/save/return/reopen, lifecycle/background
 handling, native menus/keyboard/gestures and accessible navigation. Resolve the
 observed disabled Home controls and incomplete composed runtime gates.

@@ -80,7 +80,7 @@ test('vault selection fences late durable admission before the destination is pe
 });
 
 test('runtime delivery is positive only behind the trusted coherent switch and complete guarded admission',async()=>{
-  const admission={scope:{vaultId:'store',clientId:'client'},documentRuntime:{observe(){},control(){},ackControl(){},ackOutcome(){},subscribe(){return()=>{};}},async retire(){}};
+  const admission={scope:{vaultId:'store',clientId:'client'},documentCommand(){},documentRuntime:{observe(){},control(){},ackControl(){},ackOutcome(){},subscribe(){return()=>{};}},async retire(){}};
   for(const enabled of [false,true]){
     const f=fixture({admission,options:{documentRuntime:enabled,onDocumentRuntimeNudge(){}}}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
     const context=await f.manager.context(f.broker,a,'/vault');assert.equal(context.documentMaintenance,enabled?true:undefined);assert.equal(f.opened[0].configuration.coreFixture.documentRuntime,enabled);
@@ -88,14 +88,14 @@ test('runtime delivery is positive only behind the trusted coherent switch and c
   }
   for(const documentRuntime of [{observe(){}}]){
     let retired=0;const f=fixture({admission:{...admission,documentRuntime,async retire(){retired++;}},options:{documentRuntime:true,onDocumentRuntimeNudge(){}}}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
-    await assert.rejects(f.manager.context(f.broker,a,'/vault'),{code:'unsupported_host_capability'});assert.equal(retired,1);f.closed.resolve();await f.manager.close();
+    await assert.rejects(f.manager.context(f.broker,a,'/vault'),{code:'document_runtime_unavailable'});assert.equal(retired,1);f.closed.resolve();await f.manager.close();
   }
 });
 
 test('runtime IPC guards exact admission and controls; failed release retains receivers until authoritative retirement',async()=>{
   const frame={version:1,scope:{localStoreId:'store',clientId:'client'},update:null,outcomes:[]};
   let changed,retired,stops=0,failRelease=true,calls=0;const messages=[];
-  const admission={scope:{vaultId:'store',clientId:'client'},documentRuntime:{
+  const admission={scope:{vaultId:'store',clientId:'client'},documentCommand(){},documentRuntime:{
     async observe(){calls++;return frame;},async control(input){calls++;return {...input,frame};},async ackControl(){return true;},async ackOutcome(){return true;},
     subscribe(listener,onRetire){changed=listener;retired=onRetire;return()=>stops++;},
   },async release(){if(failRelease)throw new Error('lost release ACK');retired();},async retire(){retired();}};
@@ -116,7 +116,7 @@ test('runtime IPC guards exact admission and controls; failed release retains re
 
 test('late runtime observation cannot cross a changed window generation',async()=>{
   const pending=deferred();let changed;
-  const admission={scope:{vaultId:'store',clientId:'client'},documentRuntime:{observe:()=>pending.promise,control(){},ackControl(){},ackOutcome(){},subscribe(listener){changed=listener;return()=>{};}},async retire(){}};
+  const admission={scope:{vaultId:'store',clientId:'client'},documentCommand(){},documentRuntime:{observe:()=>pending.promise,control(){},ackControl(){},ackOutcome(){},subscribe(listener){changed=listener;return()=>{};}},async retire(){}};
   const messages=[],f=fixture({admission,options:{documentRuntime:true,onDocumentRuntimeNudge:(_record,message)=>messages.push(message)}}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
   const context=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame};
   const observing=f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'documentRuntimeObserve',[]);a.generation++;
@@ -126,14 +126,14 @@ test('late runtime observation cannot cross a changed window generation',async()
 
 test('synchronous runtime retirement during admission cannot advertise a dead capability',async()=>{
   let retired=0,stopped=0;
-  const admission={scope:{vaultId:'store',clientId:'client'},documentRuntime:{observe(){},control(){},ackControl(){},ackOutcome(){},subscribe(_listener,onRetire){onRetire();return()=>stopped++;}},async retire(){retired++;}};
+  const admission={scope:{vaultId:'store',clientId:'client'},documentCommand(){},documentRuntime:{observe(){},control(){},ackControl(){},ackOutcome(){},subscribe(_listener,onRetire){onRetire();return()=>stopped++;}},async retire(){retired++;}};
   const f=fixture({admission,options:{documentRuntime:true,onDocumentRuntimeNudge(){}}}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
   await assert.rejects(f.manager.context(f.broker,a,'/vault'),{code:'client_not_admitted'});assert.equal(stopped,1);assert.equal(retired,1);f.closed.resolve();await f.manager.close();
 });
 
 test('an existing retired runtime context cannot be readmitted or dispatch another public command',async()=>{
   let retired;
-  const admission={scope:{vaultId:'store',clientId:'client'},documentRuntime:{observe(){assert.fail('No revoked observation');},control(){},ackControl(){},ackOutcome(){},subscribe(_listener,onRetire){retired=onRetire;return()=>{};}},async retire(){}};
+  const admission={scope:{vaultId:'store',clientId:'client'},documentCommand(){},documentRuntime:{observe(){assert.fail('No revoked observation');},control(){},ackControl(){},ackOutcome(){},subscribe(_listener,onRetire){retired=onRetire;return()=>{};}},async retire(){}};
   const f=fixture({admission,options:{documentRuntime:true,onDocumentRuntimeNudge(){}}}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
   const context=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame};retired();
   await assert.rejects(f.manager.context(f.broker,a,'/vault'),{code:'client_not_admitted'});
@@ -142,7 +142,7 @@ test('an existing retired runtime context cannot be readmitted or dispatch anoth
 
 test('authoritative runtime retirement before a lost release ACK preserves only exact release retry',async()=>{
   let retired,calls=0,stopped=0;
-  const admission={scope:{vaultId:'store',clientId:'client'},documentRuntime:{observe(){assert.fail('No revoked observation');},control(){},ackControl(){},ackOutcome(){},subscribe(_listener,onRetire){retired=onRetire;return()=>stopped++;}},
+  const admission={scope:{vaultId:'store',clientId:'client'},documentCommand(){},documentRuntime:{observe(){assert.fail('No revoked observation');},control(){},ackControl(){},ackOutcome(){},subscribe(_listener,onRetire){retired=onRetire;return()=>stopped++;}},
     async release(){retired();if(++calls===1)throw new Error('outer release ACK lost');},async retire(){}};
   const f=fixture({admission,options:{documentRuntime:true,onDocumentRuntimeNudge(){}}}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
   const context=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame};
@@ -180,19 +180,55 @@ test('positive draft admission fails closed without complete methods or scoped n
   for(const broken of [{documentDrafts:undefined},{documentCommand:undefined},{noChannel:true},{gateOff:true}]){
     let retired=0;const admission={scope:{vaultId:'store',clientId:'client'},draftsAvailable:true,documentRuntime:{observe(){},control(){},ackControl(){},ackOutcome(){},subscribe(){return()=>{};}},documentCommand(){},documentDrafts:{invoke(){},subscribe(){return()=>{};}},async retire(){retired++;},...broken};
     const f=fixture({admission,options:broken.noChannel?{}:{documentRuntime:!broken.gateOff,onDocumentRuntimeNudge(){}}}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
-    await assert.rejects(f.manager.context(f.broker,a,'/vault'),{code:'unsupported_host_capability'});assert.equal(retired,1);f.closed.resolve();await f.manager.close();
+    const code=Object.hasOwn(broken,'documentCommand')?'document_runtime_unavailable':'unsupported_host_capability';
+    await assert.rejects(f.manager.context(f.broker,a,'/vault'),{code});assert.equal(retired,1);f.closed.resolve();await f.manager.close();
   }
 });
 
 
-test('normal startup can use an older host without advertising unowned maintenance or drafts',async()=>{
-  let retired=0,releases=0;
+test('requested runtime rejects an older admission and retries without caching its rejected context',async()=>{
+  let retired=0,releases=0,subscribed=0,stopped=0;
   const admission={scope:{vaultId:'store',clientId:'client'},documentCommand(){},async release(){releases++;},async retire(){retired++;}};
-  const f=fixture({admission,options:{documentRuntime:true,onDocumentRuntimeNudge(){assert.fail('old host has no runtime hints');}}}),a=f.window();
+  const f=fixture({admission,options:{documentRuntime:true,onDocumentRuntimeNudge(){}}}),a=f.window();
+  await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  const rejection={code:'document_runtime_unavailable',message:'The desktop core does not support document indexing. Update Zorid and restart the app.'};
+  await assert.rejects(f.manager.context(f.broker,a,'/vault'),rejection);
+  await assert.rejects(f.manager.context(f.broker,a,'/vault'),rejection);
+  assert.equal(retired,2);assert.equal(releases,0);
+  admission.documentRuntime={observe(){},control(){},ackControl(){},ackOutcome(){},subscribe(){subscribed++;return()=>stopped++;}};
+  const context=await f.manager.context(f.broker,a,'/vault');
+  assert.equal(context.documentSemantics,true);assert.equal(context.documentMaintenance,true);assert.equal(subscribed,1);
+  assert.equal((await f.manager.context(f.broker,a,'/vault')).admissionId,context.admissionId);assert.equal(subscribed,1);
+  await f.manager.release(f.broker,a,{sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame},'/vault',context.admissionId);
+  assert.equal(releases,1);assert.equal(retired,2);assert.equal(stopped,1);
+  f.closed.resolve();await f.manager.close();
+});
+
+test('requested runtime rejects missing scoped delivery before opening a service',()=>{
+  for(const onDocumentRuntimeNudge of [undefined,null,{}])assert.throws(()=>fixture({options:{documentRuntime:true,onDocumentRuntimeNudge}}),{code:'document_runtime_unavailable',message:'The desktop core does not support document indexing. Update Zorid and restart the app.'});
+});
+
+test('explicitly disabled runtime preserves a compatibility admission without scoped delivery',async()=>{
+  let releases=0;
+  const admission={scope:{vaultId:'store',clientId:'client'},documentCommand(){},async release(){releases++;},async retire(){}};
+  const f=fixture({admission,options:{documentRuntime:false}}),a=f.window();
   await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
   const context=await f.manager.context(f.broker,a,'/vault');
-  assert.equal(context.documentSemantics,true);assert.equal(context.documentMaintenance,undefined);assert.equal(context.draftsAvailable,undefined);
+  assert.equal(context.documentSemantics,true);assert.equal(context.documentMaintenance,undefined);
+  assert.equal(f.opened[0].configuration.coreFixture.documentRuntime,false);
   await f.manager.release(f.broker,a,{sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame},'/vault',context.admissionId);
-  assert.equal(releases,1);assert.equal(retired,0,'normal release uses its existing acknowledgement path');
-  f.closed.resolve();await f.manager.close();
+  assert.equal(releases,1);f.closed.resolve();await f.manager.close();
+});
+
+test('requested runtime requires document commands and every runtime method before subscribing',async()=>{
+  const complete={observe(){},control(){},ackControl(){},ackOutcome(){},subscribe(){assert.fail('Rejected admission must not subscribe');}};
+  for(const missing of ['documentCommand',...Object.keys(complete)]){
+    let retired=0;
+    const admission={scope:{vaultId:'store',clientId:'client'},documentCommand(){},documentRuntime:{...complete},async retire(){retired++;}};
+    if(missing==='documentCommand')delete admission.documentCommand;else delete admission.documentRuntime[missing];
+    const f=fixture({admission,options:{documentRuntime:true,onDocumentRuntimeNudge(){}}}),a=f.window();
+    await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+    await assert.rejects(f.manager.context(f.broker,a,'/vault'),{code:'document_runtime_unavailable'});assert.equal(retired,1);
+    f.closed.resolve();await f.manager.close();
+  }
 });

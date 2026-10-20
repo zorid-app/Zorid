@@ -1,5 +1,30 @@
 # User findings queue
 
+## Desktop indexing ownership cleanup — 2026-10-20
+
+User selected indexing-orchestration cleanup and confirmed desktop-only execution.
+Native mobile development remains paused until desktop and sync are solid;
+existing iOS behavior is retained, not migrated or deleted by this change.
+Current desktop must require Rust document maintenance instead of silently
+selecting the TypeScript foreground planner when a host lacks the capability.
+Missing/incomplete runtime support should give actionable restart/update guidance.
+Explicit runtime-disabled fixtures and the existing iOS compatibility path remain.
+
+Implementation owner: architecture root, with `complexity_pipeline` owning host
+capability negotiation and `complexity_workspace` owning desktop admission.
+Branch `codex/desktop-rust-maintenance`, worktree
+`/private/tmp/zorid-desktop-rust-maintenance`, baseline `37ed616e`.
+Main integration remains with the shared-core coordinator. The isolated change
+is implemented and independently reviewed, with 56 distinct focused checks
+passing (45 carried from unchanged inputs, 11 rerun after one assertion correction).
+Matching app verification and integration remain pending. Details are in
+[the scoped record](plans/desktop-indexing-ownership.md).
+No native mobile, sync, large-vault or full S1 acceptance follows from this cleanup.
+
+Follow-up finding: runtime terminal failure names differ from the rebuild/stale
+names recognized by Search/backlinks. Preserve actionable error behavior when
+that diagnostic mapping is addressed; this admission-only change does not fix it.
+
 ## Complete remaining S1 acceptance — 2026-10-20
 
 User explicitly requests execution/completion of the remaining tests and reports

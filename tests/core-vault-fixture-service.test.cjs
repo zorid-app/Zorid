@@ -126,20 +126,45 @@ test('draft support fails closed without the stdio capability and complete trust
 });
 
 
-test('requested core scheduling negotiates absent older-host support but rejects inconsistent positive support',async()=>{
+test('requested core scheduling rejects incomplete hosts and closes them before initializing or listing a vault',async()=>{
   const {RustVaultService}=require('../desktop/rust-vault-service.cjs');
   const original=RustVaultService.open;
-  const required=['read_path','list_snapshot','changes_after','rescan','prepare_intent','commit_intent','query_intent','list_intents','acknowledge_intent','local_family_status','reconciliation_status'];
-  let closed=0;
+  const required=['read_path','list_snapshot','changes_after','rescan','prepare_intent','commit_intent','query_intent','list_intents','acknowledge_intent','local_family_status','fixture_family_status','reconciliation_status'];
   try{
-    for(const extra of [[],['documents'],['documents','document_runtime']]){
-      RustVaultService.open=async()=>({root:'/owned',capabilities:[...required,...extra],reconciliation:{},async localFamilyStatus(){},async listSnapshot(){return {entries:[],cursor:'0'};},async close(){closed++;}});
-      const core=await CoreVaultFixtureService.open('/owned',{fixture:true,familyMode:true,initializeLocal:true,documentRuntime:true});
-      assert.equal(core.documentRuntimeEnabled,extra.includes('document_runtime'));
-      await core.close();
+    for(const mode of [{},{familyMode:true},{familyMode:true,initializeLocal:true}]){
+      for(const extra of [[],['documents'],['document_runtime']]){
+        const calls=[];
+        RustVaultService.open=async()=>({root:'/owned',capabilities:[...required,...extra],reconciliation:{},
+          async localFamilyStatus(){calls.push('local-family');},async fixtureFamilyStatus(){calls.push('fixture-family');},
+          async rescan(){calls.push('rescan');return {finished:true,complete:true};},
+          async listSnapshot(){calls.push('list');return {entries:[],cursor:'0'};},
+          async close(){await Promise.resolve();calls.push('close');}});
+        await assert.rejects(CoreVaultFixtureService.open('/owned',{fixture:true,...mode,documentRuntime:true}),reason=>{
+          assert.equal(reason.code,'document_runtime_unavailable');
+          assert.match(reason.message,/update Zorid and restart/i);
+          return true;
+        });
+        assert.deepEqual(calls,['close'],`missing capabilities ${JSON.stringify(extra)} must fail before vault initialization`);
+      }
     }
-    RustVaultService.open=async()=>({root:'/owned',capabilities:[...required,'document_runtime'],async close(){closed++;}});
-    await assert.rejects(CoreVaultFixtureService.open('/owned',{fixture:true,documentRuntime:true}),{code:'unsupported_host_capability'});
-    assert.equal(closed,4,'failed positive negotiation closes its owned host too');
+  }finally{RustVaultService.open=original;}
+});
+
+test('complete hosts enable requested scheduling while explicit false preserves older-host fixtures',async()=>{
+  const {RustVaultService}=require('../desktop/rust-vault-service.cjs');
+  const original=RustVaultService.open;
+  const required=['read_path','list_snapshot','changes_after','rescan','prepare_intent','commit_intent','query_intent','list_intents','acknowledge_intent'];
+  try{
+    for(const documentRuntime of [true,false]){
+      const calls=[];
+      RustVaultService.open=async()=>({root:'/owned',capabilities:[...required,...(documentRuntime?['documents','document_runtime']:[])],
+        async rescan(){calls.push('rescan');return {finished:true,complete:true};},
+        async listSnapshot(){calls.push('list');return {entries:[presented],cursor:'7'};},async close(){calls.push('close');}});
+      const core=await CoreVaultFixtureService.open('/owned',{fixture:true,documentRuntime});
+      assert.equal(core.documentRuntimeEnabled,documentRuntime);
+      assert.equal(core.cursor,'7');assert.deepEqual(core.entries.get('file'),presented);
+      assert.deepEqual(calls,['rescan','list']);
+      await core.close();assert.deepEqual(calls,['rescan','list','close']);
+    }
   }finally{RustVaultService.open=original;}
 });

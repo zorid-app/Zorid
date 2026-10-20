@@ -4,7 +4,12 @@ const { RustVaultService } = require('./rust-vault-service.cjs');
 const { DocumentRuntimeScheduler } = require('./document-runtime.cjs');
 const { normalizePath } = require('./vault-service.cjs');
 
-function error(code) { const value = new Error('Rust vault operation failed.'); value.code = code; return value; }
+function error(code, message = 'Rust vault operation failed.') { const value = new Error(message); value.code = code; return value; }
+function requireDocumentRuntime(host) {
+  if (!host.capabilities?.includes('document_runtime') || !host.capabilities?.includes('documents')) {
+    throw error('document_runtime_unavailable', 'The desktop core does not support document indexing. Update Zorid and restart the app.');
+  }
+}
 function metadata(state, presentation) {
   return { path: state.path, entryId:state.id, revision:state.revision, type: state.kind, mtime: presentation.mtime_ms, size: presentation.size_bytes,
     ...(presentation.ctime_ms ? { ctime: presentation.ctime_ms } : {}) };
@@ -35,15 +40,12 @@ class CoreVaultFixtureService {
     if (!Number.isSafeInteger(pollMs) || pollMs < 100 || pollMs > 60000 || !Number.isSafeInteger(rescanMs) || rescanMs < 1000 || rescanMs > 3600000) throw error('invalid_poll_interval');
     const host = await RustVaultService.open(root, options);
     try {
+      if (documentRuntime) requireDocumentRuntime(host);
       for (const capability of ['read_path', 'list_snapshot', 'changes_after', 'rescan', 'prepare_intent', 'commit_intent', 'query_intent', 'list_intents', 'acknowledge_intent']) {
         if (!host.capabilities.includes(capability)) throw error('unsupported_host_capability');
       }
       const familyMode = options.familyMode === true;
-      // Older hosts can still use the existing foreground freshness path. Only
-      // advertise the new scheduler after its positive host capabilities exist.
-      const runtimeAvailable=host.capabilities.includes('document_runtime');
-      if(documentRuntime&&runtimeAvailable&&!host.capabilities.includes('documents'))throw error('unsupported_host_capability');
-      const service = new CoreVaultFixtureService(host, { pollMs, rescanMs, familyMode, documentRuntime:documentRuntime&&runtimeAvailable });
+      const service = new CoreVaultFixtureService(host, { pollMs, rescanMs, familyMode, documentRuntime });
       if (familyMode) {
         if(options.initializeLocal){
           if(!host.capabilities.includes('local_family_status')||!host.capabilities.includes('reconciliation_status')||!host.reconciliation)throw error('unsupported_host_capability');
@@ -61,7 +63,7 @@ class CoreVaultFixtureService {
     } catch (reason) { await host.close(); throw reason; }
   }
   constructor(host, { pollMs, rescanMs, familyMode = false, documentRuntime = false }) {
-    if(documentRuntime&&(!host.capabilities?.includes('document_runtime')||!host.capabilities?.includes('documents')))throw error('unsupported_host_capability');
+    if (documentRuntime) requireDocumentRuntime(host);
     this.documentRuntimeEnabled=documentRuntime;
     this.documentRuntimeOwners=new Set();
     this.documentScheduler=null;

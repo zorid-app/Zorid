@@ -10,6 +10,7 @@ const {admitDesktopFixtureClient}=require('./client-admission.cjs');
 const {captureDocumentRuntimeRequest,captureDocumentRuntimeReply}=require('./document-semantics.cjs');
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 const fail=code=>Object.assign(new Error('Rust vault operation failed.'),{code});
+const runtimeUnavailable=()=>Object.assign(new Error('The desktop core does not support document indexing. Update Zorid and restart the app.'),{code:'document_runtime_unavailable'});
 const methods=new Set(['readText','readTextById','planWrite','prepare','commit','query','listUnacknowledged','acknowledge']);
 const checkpointMethods=new Set(['load','compareAndSwap','list','changes']);
 const runtimeMethods={documentRuntimeObserve:'observe',documentRuntimeControl:'control',documentRuntimeAckControl:'ackControl',documentRuntimeAckOutcome:'ackOutcome'};
@@ -21,9 +22,10 @@ function createEditorCoreManager(environment=process.env, options={}){
   const fixture=environment.ZORID_EDITOR_RUST==='1'&&!!config.root;
   if(fixture&&(!['root','executable','fixtureSyncConfig'].every(key=>typeof config[key]==='string'&&path.isAbsolute(config[key]))||!uuid(config.clientId)))throw fail('invalid_editor_core_configuration');
   let closePromise,closed=false;
-  // Trusted startup requests core scheduling; the opened host negotiates it.
-  // Older hosts keep foreground freshness without advertising maintenance.
-  const documentRuntime=options.documentRuntime===true&&typeof options.onDocumentRuntimeNudge==='function';
+  // Trusted startup requires core scheduling; missing delivery must not select
+  // the foreground compatibility path.
+  const documentRuntime=options.documentRuntime===true;
+  if(documentRuntime&&typeof options.onDocumentRuntimeNudge!=='function')throw runtimeUnavailable();
   const contexts=new Map(), admissions=new Map(), released=new WeakMap(), services=new Set(), openings=new Map(), retirements=new Map();
   const describe=saved=>({admissionId:saved.id,scope:saved.admission.scope,...(saved.admission.documentCommand?{documentSemantics:true}:{}),...(saved.admission.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(saved.admission.basePreviewAvailable===true?{basePreviewAvailable:true}:{}),...(saved.admission.draftsAvailable===true?{draftsAvailable:true}:{}),...(documentRuntime&&runtimeAvailable(saved.admission)?{documentMaintenance:true}:{}),...(saved.admission.workblockCommand?{workBlocks:true}:{}),...(saved.admission.binaryLimits?{binaryLimits:saved.admission.binaryLimits}:{})});
   const executable=()=>require('./host-location.cjs').resolveDesktopHost({...options,override:config.executable});
@@ -108,6 +110,7 @@ function createEditorCoreManager(environment=process.env, options={}){
         catch(error){await admission.retire();throw error;}
         const saved={id:randomUUID(),admission,service,check:(allowRetired=false)=>{check();if((saved.runtimeRetired||saved.draftsRetired)&&!allowRetired)throw fail('client_not_admitted');}};contexts.set(record,saved);
         try{
+          if(documentRuntime&&(!runtimeAvailable(admission)||typeof admission.documentCommand!=='function'))throw runtimeUnavailable();
           if(admission.metadataRowsAvailable===true&&typeof admission.documentCommand!=='function')throw fail('unsupported_host_capability');
           if(admission.basePreviewAvailable===true&&(!documentRuntime||!runtimeAvailable(admission)||typeof options.onDocumentRuntimeNudge!=='function'||typeof admission.documentCommand!=='function'))throw fail('unsupported_host_capability');
           if(admission.draftsAvailable===true){
@@ -123,8 +126,7 @@ function createEditorCoreManager(environment=process.env, options={}){
             const stopDrafts=admission.documentDrafts.subscribe(()=>publish(false),()=>publish(true));
             if(typeof stopDrafts!=='function')throw fail('invalid_document_response');saved.stopDrafts=stopDrafts;saved.check();
           }
-          if(documentRuntime&&admission.documentRuntime!==undefined){
-            if(!runtimeAvailable(admission))throw fail('unsupported_host_capability');
+          if(documentRuntime){
             const publish=retired=>{
               try{
                 if(contexts.get(record)!==saved||saved.runtimeRetired)return;

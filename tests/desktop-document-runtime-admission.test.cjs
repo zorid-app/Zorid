@@ -90,7 +90,7 @@ test('runtime stays disabled by default and legacy admission does not register a
 
 test('explicit runtime selection rejects hosts missing either required capability',()=>{
   for(const capabilities of [[],['documents'],['document_runtime']]){
-    assert.throws(()=>new CoreVaultFixtureService({capabilities,root:'/unused-runtime-admission'},{pollMs:750,rescanMs:30000,documentRuntime:true}),{code:'unsupported_host_capability'});
+    assert.throws(()=>new CoreVaultFixtureService({capabilities,root:'/unused-runtime-admission'},{pollMs:750,rescanMs:30000,documentRuntime:true}),{code:'document_runtime_unavailable',message:'The desktop core does not support document indexing. Update Zorid and restart the app.'});
   }
 });
 
