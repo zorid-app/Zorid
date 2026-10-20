@@ -2,12 +2,17 @@
 
 ## Remove measured browser repeated work — 2026-10-20
 
-Latest instruction: implement approximately one initial full capture, then
-incremental updates and targeted checks. This is now authorized implementation,
-including startup and the fixture binary readback; the previous26.6s/221-capture
-result does not fulfill it. Root records implementation/verification separately
-in the execution checkpoint. Foreign logical updates may invalidate/reload; do
-not obtain count1 merely by hiding full-vault work in point-read loops.
+One-capture request is now implemented and measured. Exact reviewed candidate
+c9acd4fa is integrated throughc99b1b2f;77 focused checks and TypeScript pass.
+Actual matched100-note import/readback/current-index wait takes13.956s versus
+26.637s (one run each); full captures221→1 and state restorations217→3. Startup
+and binary readback count; persisted reopen/query/edit/reopen phases also pass
+with1 capture per separate open. Evidence:
+`.worktrees/s1-evidence/browser-one-capture-benchmark-6df77a14/comparison.json`.
+No hidden full-IDB point loops replace captures. Warm ledger/publication scans
+are removed; memory/Rust classification still scales with vault state. Foreign
+logical changes, explicit audits/recovery may rescan. Other S1 acceptance remains
+open; see the execution checkpoint for source/runtime provenance and boundaries.
 
 Latest user correction: “Focus on fixing it instead of introducing more code.”
 Three narrow fixes are integrated: duplicate next-state clone removed3d64a8b2;

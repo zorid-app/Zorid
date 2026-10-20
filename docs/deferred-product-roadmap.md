@@ -9,22 +9,38 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
-Latest direct authorization: implement the one-full-capture target for a normal
-browser open/import/readback run. `s1_browser_capacity` owns the existing engine
-retained snapshot, incremental commit updates and point fences on
+The user-requested one-full-storage-capture follow-up is implemented, reviewed,
+integrated and measured. Implementation owner `s1_browser_capacity` used
 `codex/s1-browser-incremental` / `.worktrees/s1-browser-incremental`, baseline
-`e8faff3a`, with minimal vault/Worker startup glue; `preview_integration_review` independently reviews
-correctness; `finish_normal_indexing` audits startup/readback callsites only.
-Root retains main integration and the single runtime slot. Other campaigns stay
-paused. Startup plus binary readback are in the capture-count oracle; do not
-rename scans or replace them with whole-vault point-read loops to meet the count.
-Owned commits may advance retained state only after actual transaction completion,
-using the final outer publication sequence. External logical changes invalidate
-and may rescan. Cold/open and explicit integrity audits remain; untouched raw
-same-stamp physical corruption cannot be promised detected on every unrelated
-save without rescanning. Selected rows, body proofs, authority, async-race CAS,
-receipts and rollback remain required. No schema, general framework or native work
-is opened. Implementation and actual one-capture measurement remain pending.
+`e8faff3a`; independent reviewer `preview_integration_review` approved final
+`c9acd4fa`. Root integrated the exact five-file closure as7751eb22/12efdbf8/
+0b460599/47c0a06c/c99b1b2f. Final77 focused checks and TypeScript pass; all source,
+test and compiler-config inputs match the reviewed/validated isolated candidate.
+Evidence: `.worktrees/s1-evidence/browser-one-capture-integrated-result.json`.
+
+Actual matched100-note import plus exact103-file readback and final automatic
+current/complete wait takes13.956s, down from26.637s (47.61% less elapsed, one run
+per version). Full storage captures221→1; state restorations217→3. Startup plus
+binary readback are INCLUDED. The same persisted database also passes startup
+query, warm reopen, one offline edit and incremental reopen/search; each separate
+open records exactly1 capture. Query samples11.8–21.6ms. Offline edit may close
+before indexing settles; incremental reopen verifies final current/complete state.
+All five owned Chrome processes exit0 without signal; live disk guard minimum
+2,489,638,912bytes. Reports/screenshots/guard/comparison are retained in
+`.worktrees/s1-evidence/browser-one-capture-benchmark-6df77a14/`.
+
+The three browser production files exactly match main; the matched diagnostic
+retains the same older Rust/WASM baseline, not final-main/native/10k/S1 acceptance.
+No schema, general framework, or native work was added. Owned commits advance
+retained state only after actual transaction completion with the outer receipt
+sequence; failed/stale/aborted operations cannot promote it. Ordinary warm writes
+avoid full storage/publication/ledger scans; selected actual rows, source bodies,
+ancestor/destination paths, allocations, receipts, cursor and quota checks remain.
+Explicit audits/recovery and foreign logical changes can require another capture.
+Unrelated same-stamp raw physical corruption is checked at audit/read-on-use,
+not claimed detected during every unrelated save. Rust classification/output and
+in-memory bound validation still scale with vault state. Other S1 campaigns stay
+stopped; this scoped result does not complete S1.
 
 Latest follow-up fixes existing browser storage repetition, without a storage
 redesign. Root retains sole main integration. Three reviewed changes are now

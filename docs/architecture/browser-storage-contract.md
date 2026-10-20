@@ -79,11 +79,11 @@ Incoming update application and its next cursor are in the same guarded commit;
 network requests never hold an IndexedDB transaction. [Sweep completeness](../../src/platform/browser-sync-worker.ts#L30)
 is deliberately narrower than a global synced guarantee.
 
-## Retained working state: approved optimization
+## Retained working state
 
-The browser storage engine is being changed to admit one initial full snapshot
-for an uncontended open/import/readback lifetime, then retain that validated
-working state in memory. This is separate from the persistent parsed-document
+The browser storage engine admits one initial full snapshot for an uncontended
+open/import/readback lifetime, then retains that validated working state in
+memory. This is separate from the persistent parsed-document
 cache. Each operation still checks current authority and a fresh logical version
 fence; committed deltas advance the retained state only after IndexedDB reports
 transaction completion. A prepared operation keeps its immutable original base.
@@ -98,9 +98,12 @@ does not promise to detect an unrelated row altered outside all supported writer
 with every logical version unchanged, during every unrelated save: that needs a
 full scan. Such physical corruption is checked at startup/audit and when the
 selected data is used. Ledger count/byte summaries retain the existing admission
-limits and may be reused only with their admitted version. This section records
-the approved contract; implementation and the actual one-capture run are pending
-in the roadmap execution checkpoint.
+limits and may be reused only with their admitted version. In-memory candidate
+bounds and Rust classification still scale with vault state. Reviewed candidate
+`c9acd4fa`, integrated through `c99b1b2f`, passes77 focused checks and TypeScript.
+The matched actual browser diagnostic records one capture per open, including
+binary readback and persisted reopen/query/edit verification; exact evidence and
+remaining platform acceptance limits are in the roadmap execution checkpoint.
 
 ## Scope, reload and multiple tabs
 
