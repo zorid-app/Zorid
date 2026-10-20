@@ -31,13 +31,13 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
     Menu: { buildFromTemplate: value => { template = value; return value; }, setApplicationMenu() {} }, shell: { openExternal() {} } };
   const mainPath = path.resolve(__dirname, '../desktop/main.cjs');
   let slotNumber=0;
-  const retirements=[];let coreFailure;
+  const retirements=[];let coreFailure,coreOptions;
   const openService=async root=>{
     if (!services.has(root)) services.set(root, { root, watchers: 0, stops: 0, subscribe() { this.watchers++; return () => { this.watchers--; this.stops++; }; }, read: async () => 'base', write: async () => {}, recoveryList:async(entryId,options)=>({entryId,options}),recoveryRead:async(entryId,snapshotId)=>({entryId,snapshotId,content:'old'}), remove: async (target, force) => { removals.push([root, target, force]); } });
     return services.get(root);
   };
   const nativeRequire = name => {
-    if (name === './editor-core.cjs') return { createEditorCoreManager: () => ({open:openService,owns:()=>false,requireReleased(){},async invoke(){if(coreFailure)throw coreFailure;return {queryId:'query'};},retire:async(_broker,_record,service)=>{retirements.push(service.root);},close:async()=>{}}) };
+    if (name === './editor-core.cjs') return { createEditorCoreManager: (_environment,options) => {coreOptions=options;return ({open:openService,owns:()=>false,requireReleased(){},async invoke(){if(coreFailure)throw coreFailure;return {queryId:'query'};},retire:async(_broker,_record,service)=>{retirements.push(service.root);},close:async()=>{}}); } };
     if (name === './client-slots.cjs') return {openClientSlots:async()=>({listRestorable:async()=>[],claim:async({primary}={})=>({slotId:primary?'primary':`window-${++slotNumber}`,clientId:'client',vaultPath:null}),setVault:async()=>{},release:async()=>{}})};
     if (name === './document-semantics.cjs') return require('../desktop/document-semantics.cjs');
     if (name === 'electron') return electron;
@@ -52,6 +52,10 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   await new Promise(resolve => setImmediate(resolve));
   const invoke = (window, name, ...args) => handlers.get(`zorid:${name}`)({ sender: window.webContents, senderFrame: window.webContents.mainFrame }, ...args);
   assert.equal(windows.length, 1);
+  assert.equal(coreOptions.documentRuntime,true,'normal desktop startup requests core-owned scheduling');
+  const runtimeMessages=[];
+  coreOptions.onDocumentRuntimeNudge({window:{webContents:{send:(...args)=>runtimeMessages.push(args)}}},{admissionId:'owned',vault:'/first'});
+  assert.deepEqual(runtimeMessages,[['zorid:document-runtime',{admissionId:'owned',vault:'/first'}]]);
   assert.deepEqual(invoke(windows[0], 'getWindowInfo'), { id: 'main', initialState: 'restore' });
   const created = await invoke(windows[0], 'newWindow');
   assert.equal(windows.length, 2);

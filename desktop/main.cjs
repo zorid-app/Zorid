@@ -7,7 +7,7 @@ const { pathToFileURL } = require('node:url');
 const { VaultService } = require('./vault-service.cjs');
 const { WindowBroker } = require('./window-broker.cjs');
 const { captureRichDiagnostic } = require('./document-semantics.cjs');
-const editorCore = require('./editor-core.cjs').createEditorCoreManager(process.env,{isPackaged:app.isPackaged,resourcesPath:process.resourcesPath,
+const editorCore = require('./editor-core.cjs').createEditorCoreManager(process.env,{isPackaged:app.isPackaged,resourcesPath:process.resourcesPath,documentRuntime:true,
   onDocumentRuntimeNudge:(record,message)=>record.window.webContents.send('zorid:document-runtime',message)});
 let clientSlots;
 const { createContextMenuController } = require('./context-menu.cjs');

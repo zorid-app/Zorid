@@ -124,3 +124,22 @@ test('draft support fails closed without the stdio capability and complete trust
     const core=service(host,{documentRuntime:host.enabled});assert.throws(()=>core.registerDocumentDraftOwner({host:{documentDrafts(){}},clientId:'client',localStoreId:'store',assertActive(){}}),{code:'unsupported_host_capability'});assert.equal(core.documentScheduler,null);
   }
 });
+
+
+test('requested core scheduling negotiates absent older-host support but rejects inconsistent positive support',async()=>{
+  const {RustVaultService}=require('../desktop/rust-vault-service.cjs');
+  const original=RustVaultService.open;
+  const required=['read_path','list_snapshot','changes_after','rescan','prepare_intent','commit_intent','query_intent','list_intents','acknowledge_intent','local_family_status','reconciliation_status'];
+  let closed=0;
+  try{
+    for(const extra of [[],['documents'],['documents','document_runtime']]){
+      RustVaultService.open=async()=>({root:'/owned',capabilities:[...required,...extra],reconciliation:{},async localFamilyStatus(){},async listSnapshot(){return {entries:[],cursor:'0'};},async close(){closed++;}});
+      const core=await CoreVaultFixtureService.open('/owned',{fixture:true,familyMode:true,initializeLocal:true,documentRuntime:true});
+      assert.equal(core.documentRuntimeEnabled,extra.includes('document_runtime'));
+      await core.close();
+    }
+    RustVaultService.open=async()=>({root:'/owned',capabilities:[...required,'document_runtime'],async close(){closed++;}});
+    await assert.rejects(CoreVaultFixtureService.open('/owned',{fixture:true,documentRuntime:true}),{code:'unsupported_host_capability'});
+    assert.equal(closed,4,'failed positive negotiation closes its owned host too');
+  }finally{RustVaultService.open=original;}
+});

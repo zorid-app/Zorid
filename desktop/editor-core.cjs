@@ -21,8 +21,8 @@ function createEditorCoreManager(environment=process.env, options={}){
   const fixture=environment.ZORID_EDITOR_RUST==='1'&&!!config.root;
   if(fixture&&(!['root','executable','fixtureSyncConfig'].every(key=>typeof config[key]==='string'&&path.isAbsolute(config[key]))||!uuid(config.clientId)))throw fail('invalid_editor_core_configuration');
   let closePromise,closed=false;
-  // A trusted integration switch, never a renderer-provided option. The host
-  // capability remains absent while the legacy frontend planner is active.
+  // Trusted startup requests core scheduling; the opened host negotiates it.
+  // Older hosts keep foreground freshness without advertising maintenance.
   const documentRuntime=options.documentRuntime===true&&typeof options.onDocumentRuntimeNudge==='function';
   const contexts=new Map(), admissions=new Map(), released=new WeakMap(), services=new Set(), openings=new Map(), retirements=new Map();
   const describe=saved=>({admissionId:saved.id,scope:saved.admission.scope,...(saved.admission.documentCommand?{documentSemantics:true}:{}),...(saved.admission.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(saved.admission.basePreviewAvailable===true?{basePreviewAvailable:true}:{}),...(saved.admission.draftsAvailable===true?{draftsAvailable:true}:{}),...(documentRuntime&&runtimeAvailable(saved.admission)?{documentMaintenance:true}:{}),...(saved.admission.workblockCommand?{workBlocks:true}:{}),...(saved.admission.binaryLimits?{binaryLimits:saved.admission.binaryLimits}:{})});
@@ -123,7 +123,7 @@ function createEditorCoreManager(environment=process.env, options={}){
             const stopDrafts=admission.documentDrafts.subscribe(()=>publish(false),()=>publish(true));
             if(typeof stopDrafts!=='function')throw fail('invalid_document_response');saved.stopDrafts=stopDrafts;saved.check();
           }
-          if(documentRuntime){
+          if(documentRuntime&&admission.documentRuntime!==undefined){
             if(!runtimeAvailable(admission))throw fail('unsupported_host_capability');
             const publish=retired=>{
               try{

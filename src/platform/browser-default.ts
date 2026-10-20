@@ -152,7 +152,7 @@ export async function openDefaultBrowserVault():Promise<PlatformVault>{
   const slot=await openBrowserClientSlot({database:DEFAULT_BROWSER_DATABASE});
   let runtime:BrowserCoreRuntime|undefined;
   try{
-    runtime=await BrowserCoreRuntime.open({database:DEFAULT_BROWSER_DATABASE,clientId:slot.clientId,allowNewVault:true,initializeLocal:true,
+    runtime=await BrowserCoreRuntime.open({database:DEFAULT_BROWSER_DATABASE,clientId:slot.clientId,allowNewVault:true,initializeLocal:true,documentMaintenance:true,
       wasmModuleUrl:new URL(modulePath,document.baseURI).href});
     let active=true;
     const opened=runtime;

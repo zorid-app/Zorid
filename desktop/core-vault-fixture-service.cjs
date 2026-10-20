@@ -39,7 +39,11 @@ class CoreVaultFixtureService {
         if (!host.capabilities.includes(capability)) throw error('unsupported_host_capability');
       }
       const familyMode = options.familyMode === true;
-      const service = new CoreVaultFixtureService(host, { pollMs, rescanMs, familyMode, documentRuntime });
+      // Older hosts can still use the existing foreground freshness path. Only
+      // advertise the new scheduler after its positive host capabilities exist.
+      const runtimeAvailable=host.capabilities.includes('document_runtime');
+      if(documentRuntime&&runtimeAvailable&&!host.capabilities.includes('documents'))throw error('unsupported_host_capability');
+      const service = new CoreVaultFixtureService(host, { pollMs, rescanMs, familyMode, documentRuntime:documentRuntime&&runtimeAvailable });
       if (familyMode) {
         if(options.initializeLocal){
           if(!host.capabilities.includes('local_family_status')||!host.capabilities.includes('reconciliation_status')||!host.reconciliation)throw error('unsupported_host_capability');

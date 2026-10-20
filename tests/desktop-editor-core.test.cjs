@@ -86,7 +86,7 @@ test('runtime delivery is positive only behind the trusted coherent switch and c
     const context=await f.manager.context(f.broker,a,'/vault');assert.equal(context.documentMaintenance,enabled?true:undefined);assert.equal(f.opened[0].configuration.coreFixture.documentRuntime,enabled);
     f.closed.resolve();await f.manager.close();
   }
-  for(const documentRuntime of [undefined,{observe(){}}]){
+  for(const documentRuntime of [{observe(){}}]){
     let retired=0;const f=fixture({admission:{...admission,documentRuntime,async retire(){retired++;}},options:{documentRuntime:true,onDocumentRuntimeNudge(){}}}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
     await assert.rejects(f.manager.context(f.broker,a,'/vault'),{code:'unsupported_host_capability'});assert.equal(retired,1);f.closed.resolve();await f.manager.close();
   }
@@ -182,4 +182,17 @@ test('positive draft admission fails closed without complete methods or scoped n
     const f=fixture({admission,options:broken.noChannel?{}:{documentRuntime:!broken.gateOff,onDocumentRuntimeNudge(){}}}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
     await assert.rejects(f.manager.context(f.broker,a,'/vault'),{code:'unsupported_host_capability'});assert.equal(retired,1);f.closed.resolve();await f.manager.close();
   }
+});
+
+
+test('normal startup can use an older host without advertising unowned maintenance or drafts',async()=>{
+  let retired=0,releases=0;
+  const admission={scope:{vaultId:'store',clientId:'client'},documentCommand(){},async release(){releases++;},async retire(){retired++;}};
+  const f=fixture({admission,options:{documentRuntime:true,onDocumentRuntimeNudge(){assert.fail('old host has no runtime hints');}}}),a=f.window();
+  await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  const context=await f.manager.context(f.broker,a,'/vault');
+  assert.equal(context.documentSemantics,true);assert.equal(context.documentMaintenance,undefined);assert.equal(context.draftsAvailable,undefined);
+  await f.manager.release(f.broker,a,{sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame},'/vault',context.admissionId);
+  assert.equal(releases,1);assert.equal(retired,0,'normal release uses its existing acknowledgement path');
+  f.closed.resolve();await f.manager.close();
 });
