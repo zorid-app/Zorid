@@ -114,6 +114,7 @@ function harness(recordsEnabled=false){
   let lease=true,rejectProof=false,sealHook:(()=>void)|undefined,receiveRows:any[]=[];
   let verifyRequests:any[]=[];
   let binaryScript:any=null;
+  let textSnapshotSize=0;
   const recoveries=new Map<string,{metadata:any;bytes:Uint8Array}>();
   let materializationReads=0,recoveryByteReads=0,recoveryFrees=0,graphBuilds=0;
   const classificationRows=new Map<string,any[]>();
@@ -146,7 +147,7 @@ function harness(recordsEnabled=false){
       },
       mutationRequirements(){return JSON.stringify({update_count:2,text:'create'});},
       prepareMutation(raw:string){const input=JSON.parse(raw),a=input.allocation,identity={...scope,entry_id:input.command.request.mutation.id,bootstrap_id:a.text.new_text.bootstrap_id};
-        const text={identity,version:a.metadata_revision,snapshot:[4,5],actors:{}};
+        const text={identity,version:a.metadata_revision,snapshot:textSnapshotSize?Array(textSnapshotSize).fill(0):[4,5],actors:{}};
         const binding={entry_id:identity.entry_id,text_bootstrap_id:identity.bootstrap_id,namespace:{bootstrap_id:a.update_ids[0],parents:[a.update_ids[0]]}};
         const e=[register(emission(a.update_ids[0],new Uint8Array([11,12]))),register(emission(a.update_ids[1],new Uint8Array([21,22,23]),binding))];
         const path=input.command.request.mutation.path??'note.md',after={id:identity.entry_id,path,kind:'file',revision:a.metadata_revision,deleted:false};
@@ -256,6 +257,7 @@ function harness(recordsEnabled=false){
   },abort),abort));
   return {f,engine,key,updates,wire,provided,plans,commit,seed,seedStage,commitRead,commitRecoveryRead,
     graphBuildCount:()=>graphBuilds,
+    scriptTextSnapshot(size:number){textSnapshotSize=size;},
     setRecordStatus(value:string){recordStatus=value;},setRecordProvider(value:any){recordProvider=value;host.recordsSession=()=>recordProvider;},
     scriptBinary(script:any){binaryScript=script;register(script.final);},
     failBinaryInvoke(){binaryScript.invokeError=true;},
@@ -269,9 +271,9 @@ function harness(recordsEnabled=false){
   };
 }
 async function enrolled(){const h=harness();await h.engine.api.enroll({...scope,key_epoch:1});return h;}
-async function local(h:Awaited<ReturnType<typeof enrolled>>,id='note'){
+async function local(h:Awaited<ReturnType<typeof enrolled>>,id='note',revision=id+'-revision'){
   const request={operation_id:'operation',mutation:{type:'create',id,path:id+'.md',kind:'file',content:[116,101,120,116]}};
-  return h.engine.prepareLocal({requestJson:JSON.stringify(request),familyCommandJson:JSON.stringify({version:1,request,create_mode:'text'}),nextRevision:id+'-revision'});
+  return h.engine.prepareLocal({requestJson:JSON.stringify(request),familyCommandJson:JSON.stringify({version:1,request,create_mode:'text'}),nextRevision:revision});
 }
 Object.defineProperty(globalThis,'IDBKeyRange',{configurable:true,value:{only(value:any){return {lower:value,upper:value};},bound(lower:any,upper:any,lowerOpen=false,upperOpen=false){return {lower,upper,lowerOpen,upperOpen};},lowerBound(lower:any,open=false){return {lower,open};}}});
 test('admission and owned sequential mutations use one full storage capture',async()=>{
@@ -292,6 +294,21 @@ test('warm destination absence is checked against the actual nonunique path inde
   h.f.seed('metadata','unexpected',{id:'unexpected',path:'destination.md',kind:'file',revision:'other',deleted:false});
   await assert.rejects(h.commit(prepared),{code:'sync_snapshot_conflict'});prepared.dispose();
   assert.equal(h.f.row('content','destination'),undefined);
+});
+test('warm selected authored sources retain order and pending-sealed validation',async()=>{
+  for(const corrupt of [{order:undefined},{pending:0,sealed:false}]){
+    const h=await enrolled();await h.commit(await local(h));const prepared=await local(h,'note','updated-note-revision');
+    const source=(await h.engine.api.pending(10)).find(row=>row.metadata.family==='text')!,key=keyOfId(source.metadata.key.update_id);
+    h.f.seed('sync_authored',key,{...h.f.row('sync_authored',key),...corrupt});
+    await assert.rejects(h.commit(prepared),{code:'storage_corrupt'});prepared.dispose();
+    assert.equal(h.f.row('metadata','note').revision,'note-revision');
+  }
+});
+test('warm commits retain the aggregate eight MiB Text state bound',async()=>{
+  const h=await enrolled();h.scriptTextSnapshot(1500000);
+  await h.commit(await local(h,'large-first'));await h.commit(await local(h,'large-second'));
+  const before=clone(h.f.records),prepared=await local(h,'over-budget');
+  await assert.rejects(h.commit(prepared),{code:'storage_metadata_too_large'});prepared.dispose();assert.deepEqual(h.f.records,before);
 });
 test('scope-only reads stay fresh without graph restoration or whole-vault scans',async()=>{
   const h=await enrolled(),start=h.f.requests.length,transactionStart=h.f.transactions.length,builds=h.graphBuildCount();
