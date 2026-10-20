@@ -40,7 +40,13 @@ deadline at172/10003 files, before indexing/query acceptance. Evidence:
 This is an import-timeout finding, not an observed capacity rejection. Source
 audit separately identifies whole-vault browser capacity limits. Graph16's first
 136-check run was86pass/50fail; the independently reviewed narrowed reservation
-fix and current-contract fixtures are now running138 checks on88934488.
+fix and current-contract fixtures pass138/138 checks on88934488, integrated as
+f427885f. Tiny-body Store10k reports all assertions passing, but its timing wrapper
+exits1 after a sandbox sysctl failure; preserve the unaccepted outer result.
+Diagnostic cold/incremental indexing takes121s/108s despite9998 parse reuses.
+Measured repeated manifest verification/restoration is now a narrow optimization
+finding; it is not a parser or multicore conclusion. Matched final platform builds
+and10k performance acceptance remain open.
 Do not claim10k acceptance or overall speedup. Implementation/review/run ownership is in the execution
 checkpoint. This request supersedes the earlier runtime pause.
 

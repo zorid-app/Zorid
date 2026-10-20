@@ -19,11 +19,23 @@ This is a practical import timeout, not an observed4096-source rejection. Root
 retains those failures and is narrowing whole-vault reconstruction, autonomous
 indexing during import, and per-operation serialization/storage hypotheses.
 
-Graph88934488 is independently source-approved for normal Text and schema16.
-Original136 RED result86pass/50fail is preserved; narrowed paired-authorship
-reservation correction retains all original owned-byte/work limits. Fresh138
-checks are running under finish_graph_path's sole heavy slot before Store/cache10k.
-No graph integration or10k pass yet. Root does not overlap app runtimes/builds.
+Graph88934488 is independently source-approved for normal Text and schema16,
+and its exact33-file closure is integrated asf427885f. Original136 RED
+result86pass/50fail is preserved; narrowed paired-authorship reservation correction
+retains all original owned-byte/work limits. Fresh138/138 checks pass naturally.
+The tiny-body10k Store/cache test reports1 passing test, including exact query,
+reopen and9998 unchanged records reused, but its outer timing envelope remains
+RED: `/usr/bin/time -l` fails a sandbox sysctl after the Rust test summary. Direct
+child exit was not independently captured; retain the split classification in
+`graph-focused/88934488-normal10k-001/classified-result.json` rather than calling
+this a clean terminal pass or platform acceptance. Diagnostic timings:33.1s
+creates,121.0s cold index,108.3s incremental index,153ms/34ms first/last writes.
+A2s sample attributes much active time to repeated full-manifest verification
+and builder restoration. `finish_normal_indexing` owns an isolated narrow
+`document_index.rs` proposal; full publication and preview validation must remain.
+Browser ON/OFF cost probes run against separately frozen37ed sources/assets;
+their instrumented results are diagnostic, not client acceptance. Root serializes
+all heavy runtimes/builds.
 
 Desktop-only architecture cleanup8dc9e83e is reviewed and integrated as51db29e0:
 normal desktop requires matching Rust document maintenance, with actionable
@@ -34,8 +46,13 @@ desktop and sync are solid. Only root mutates main.
 Fresh219 focused Node cache/preview/clock checks pass on37ed616e, with source
 closure and coverage map in `.worktrees/s1-evidence/cache-preview-clock-map/`.
 Existing Rust/cache checks are mapped but not rerun by that worker. Narrow
-remaining real component/core witnesses and desktop foreground harness extensions
-are being prepared in isolation; no fake results or new product feature scope.
+remaining real component/core and desktop foreground harnesses are independently
+source-reviewed and integrated asab497705/162b077d; actual runtime is pending.
+The desktop dirty-query allocator issue and swallowed Base observer assertions
+were corrected before integration. Indexing-overlap absence remains inconclusive.
+An86-check focused Rust cache/time runner is queued after the current browser slot;
+no fake results or new product feature scope. Existing native binaries and generated
+WASM predatef427885f and must be rebuilt before claims against current main.
 
 The following update is historical where superseded by the results above.
 
