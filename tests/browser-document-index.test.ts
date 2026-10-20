@@ -849,3 +849,84 @@ test('rebuild during bootstrap cannot capture through a freed still-source-activ
   await assert.rejects(index.previewOpen!({previewId:'1'}),error=>error instanceof BrowserVaultError&&['index_preview_expired','index_stage_expired'].includes(error.code));await rebuilding;
   assert.equal(started,true);assert.equal(f.previewStats.freedBuilderTouches,0);assert.equal((await index.status()).rebuildRequired,false);await index.close();
 });
+
+// These checks exercise the storage seam only. Opaque WASM doubles do not
+// establish parser/query parity or actual browser transaction behavior.
+test('pump point fences avoid whole-source recapture for each selected row',async()=>{
+  const f=fixture();for(let n=0;n<33;n++)f.file('f'+String(n).padStart(2,'0'),'text');
+  const index=f.open();let stage=await index.begin();f.calls.length=0;
+  do{stage=await index.pump(stage.stageId);}while(!stage.ready);
+  assert.equal(stage.prepared,33);
+  assert.equal(f.calls.filter(call=>['metadata','presentation','sync_materialization_refs'].includes(call.store)&&call.op==='cursor').length,0,
+    'A pump must fence selected rows rather than cursor-scan the entire authority for every row');
+  assert.equal(f.calls.filter(call=>call.store==='sync_materialization_refs'&&call.op==='get').length,66,
+    'Every selected row must be point-fenced both when read and in its derived-row writer');
+  await index.publish(stage.stageId);assert.equal((await index.status()).current,true);await index.close();
+});
+
+for(const changed of ['revision','presentation','missing-descriptor','hidden-descriptor','wrong-descriptor-id'] as const)
+test('pump point fence rejects selected '+changed+' with unchanged source sequence',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open(),stage=await index.begin();
+  if(changed==='revision')f.file('a','text',{revision:'r2'});
+  else if(changed==='presentation')f.file('a','text',{mtime:7});
+  else if(changed==='missing-descriptor')f.records.get('sync_materialization_refs')!.delete('a');
+  else {const row=clone(f.records.get('sync_materialization_refs')!.get('a'));if(changed==='hidden-descriptor')row.status='recovery';else row.id='foreign';f.seed('sync_materialization_refs','a',row);}
+  await assert.rejects(index.pump(stage.stageId),(error:unknown)=>error instanceof BrowserVaultError&&['index_source_changed','storage_corrupt'].includes(error.code));
+  assert.equal(f.descriptor(stage.snapshot).rows,0);assert.equal(f.records.get('control')!.has('document-index:v1/g/'+stage.stageId+'/row/a'),false);
+  await index.discard(stage.stageId);await index.close();
+});
+
+test('pump point writer rejects raw same-length body tamper after selected read without a sequence change',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open(),stage=await index.begin();let changed=false;
+  f.afterRead((store,key)=>{if(!changed&&store==='content'&&key==='a'){changed=true;const row=clone(f.records.get('content')!.get('a'));row.bytes[0]^=1;f.seed('content','a',row);}});
+  await assert.rejects(index.pump(stage.stageId),(error:unknown)=>error instanceof BrowserVaultError&&['index_source_changed','storage_corrupt'].includes(error.code));
+  assert.equal(changed,true);assert.equal(f.descriptor(stage.snapshot).rows,0);
+  assert.equal(f.records.get('control')!.has('document-index:v1/g/'+stage.stageId+'/row/a'),false);
+  await index.discard(stage.stageId);await index.close();
+});
+
+for(const changed of ['sequence','index-head','raw-body','descriptor','presentation'] as const)
+test('pump point writer rechecks '+changed+' after optional cache lookup',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();await f.build(index);
+  f.file('a','text',{revision:'r2'});f.sequence('1');const stage=await index.begin();let changedOnce=false;
+  f.afterRead((store,key)=>{if(changedOnce||store!=='control'||!String(key).startsWith('document-parse-cache:v1/row/'))return;changedOnce=true;
+    if(changed==='sequence')f.sequence('2');
+    else if(changed==='index-head'){const row=clone(f.records.get('control')!.get('document-index:v1/catalog'));row.value.head=null;f.seed('control',row.key,row);}
+    else if(changed==='raw-body'){const row=clone(f.records.get('content')!.get('a'));row.bytes[0]^=1;f.seed('content','a',row);}
+    else if(changed==='presentation')f.file('a','text',{revision:'r2',mtime:7});
+    else {const row=clone(f.records.get('sync_materialization_refs')!.get('a'));row.content.metadata.digest[0]^=1;f.seed('sync_materialization_refs','a',row);}
+  });
+  await assert.rejects(index.pump(stage.stageId),(error:unknown)=>error instanceof BrowserVaultError&&['index_source_changed','index_head_changed','storage_corrupt'].includes(error.code));
+  assert.equal(changedOnce,true);assert.equal(f.descriptor(stage.snapshot).rows,0);
+  assert.equal(f.records.get('control')!.has('document-index:v1/g/'+stage.stageId+'/row/a'),false);
+  await index.discard(stage.stageId);await index.close();
+});
+
+test('pump point admission does not replace full publication rejection of unrelated same-sequence tamper',async()=>{
+  const f=fixture();f.file('a','first');f.file('b','second');const index=f.open(),previous=await f.build(index);
+  const previousHead=f.records.get('control')!.get('document-index:v1/catalog').value.head;
+  let stage=await index.begin();do{stage=await index.pump(stage.stageId);}while(!stage.ready);
+  f.file('b','second',{mtime:99});const authorityAfterTamper=f.source();
+  await assert.rejects(index.publish(stage.stageId),{code:'index_source_changed'});
+  const catalog=f.records.get('control')!.get('document-index:v1/catalog').value,status=await index.status();
+  assert.equal(catalog.head,previousHead);assert.deepEqual(status.snapshot,previous);assert.equal(status.current,false);
+  assert.equal(f.descriptor(stage.snapshot).state,'staging');assert.deepEqual(f.source(),authorityAfterTamper);
+  await index.discard(stage.stageId);await index.close();
+});
+
+for(const changed of ['metadata','presentation','materialization'] as const)
+test('new partial preview rejects unrelated same-sequence '+changed+' tamper',async()=>{
+  const f=fixture({preview:true});for(let n=0;n<33;n++)f.file('f'+String(n).padStart(2,'0'),'text');
+  const index=f.open(),stage=await index.begin(),progress=await index.pump(stage.stageId);
+  assert.equal(progress.prepared,32);assert.equal(progress.ready,false);assert.equal(f.previewStats.captures,0);
+  // f32 is outside the prepared prefix. It cannot be protected by a selected
+  // row fence, and the preview stamp deliberately keeps the same sequence/head.
+  if(changed==='metadata')f.file('f32','text',{path:'changed.md',revision:'r2'});
+  else if(changed==='presentation')f.file('f32','text',{mtime:7});
+  else {const row=clone(f.records.get('sync_materialization_refs')!.get('f32'));row.content.metadata.digest[0]^=1;f.seed('sync_materialization_refs','f32',row);}
+  const authority=f.source();
+  await assert.rejects(index.previewOpen!({previewId:'1'}),{code:'index_source_changed'});
+  assert.equal(f.previewStats.captures,0);assert.equal(f.previewStats.queries,0);
+  assert.equal(f.descriptor(stage.snapshot).rows,32);assert.deepEqual(f.source(),authority);
+  await index.discard(stage.stageId);await index.close();
+});

@@ -282,8 +282,12 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
     if(stage.preview?.candidate){await previewFence(stage.preview.candidate);return stage.preview.candidate;}
     const builder=stage.builder;if(!builder||!stage.preview)return;
     try{
-      await preparePreview(stage);active();
-      if(stages.get(stage.id)!==stage||stage.failed||stage.builder!==builder)throw fail('index_preview_expired');
+      await preparePreview(stage);const expectedPrepared=stage.prepared;
+      // A new partial capture exposes the original whole manifest. Validate it
+      // once at this boundary, rather than once for every selected pump row.
+      await run<void>('readonly',['control','metadata','presentation','sync_materialization_refs'],(tx,done,abort)=>readCatalog(tx,c=>
+        sourceFence(tx,stage.header,c,stage.capture,()=>done(),abort),abort));active();
+      if(stages.get(stage.id)!==stage||stage.failed||stage.builder!==builder||stage.prepared!==expectedPrepared)throw fail('index_preview_expired');
       const state=stage.preview;if(state.seen!==stage.prepared)throw fail('index_preview_expired');
       const value=browserPreviewCall(()=>builder.capturePreview!());if(!value)return;
       const candidate:PreviewCandidate={stage,value,stamp:state.stamp};state.candidate=candidate;
@@ -316,6 +320,45 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
   }
   function sourceFence(tx:IDBTransaction,h:BrowserIndexHeader,c:Catalog,expected:SourceCapture,done:()=>void,abort:(error:unknown)=>void):void {
     captureSource(tx,current=>{if(!equal(current,expected))throw fail('index_source_changed');if(!equal(head(c),h.expectedIndex))throw fail('index_head_changed');done();},abort);
+  }
+  interface SelectedSource {entry:EntryState;presentation:BrowserVaultPresentation;bytes?:Uint8Array}
+  function sameBytes(left:Uint8Array|undefined,right:Uint8Array|undefined):boolean {
+    if(left===undefined||right===undefined)return left===right;
+    if(left.length!==right.length)return false;for(let at=0;at<left.length;at++)if(left[at]!==right[at])return false;return true;
+  }
+  // Pump rows are private derived progress. Fence their selected authoritative
+  // rows here; begin/registration/publication/recovery retain the complete source
+  // fence, including unrelated same-sequence changes. Preview guards are separate.
+  function selectedSourceFence(tx:IDBTransaction,stage:Stage,c:Catalog,entry:EntryState,
+    expectedBody:{bytes?:Uint8Array}|undefined,done:(source:SelectedSource)=>void,abort:(error:unknown)=>void):void {
+    if(!equal(head(c),stage.header.expectedIndex))throw fail('index_head_changed');
+    const registered=c.generations.find(g=>g.id===stage.id),expectedPresentation=stage.capture.publication.presentation.find(row=>row.id===entry.id),descriptor=stage.capture.descriptors.find(row=>row.id===entry.id);
+    if(stages.get(stage.id)!==stage||stage.failed||c.rebuilding||!registered||registered.state!=='staging'||registered.wasPublished||registered.clientId!==host.clientId||!equal(registered.snapshot,stage.header.nextIndex)||registered.rows!==stage.prepared)throw fail('index_stage_expired');
+    if(!expectedPresentation||!descriptor)throw fail('index_rebuild_required');
+    on(tx.objectStore('control').get('sequence'),sequence=>{
+      if(decimalU64(sequence?.value)!==stage.header.source.watermark)throw fail('index_source_changed');
+      on(tx.objectStore('metadata').get(entry.id),current=>{
+        if(!equal(current,entry))throw fail('index_source_changed');
+        on(tx.objectStore('presentation').get(entry.id),presentation=>{
+          if(!presentation||presentation.id!==entry.id||![presentation.ctime_ms,presentation.mtime_ms,presentation.size_bytes].every(n=>Number.isSafeInteger(n)&&n>=0))throw fail('storage_corrupt',{invariant:'index_source_presentation',entryId:entry.id});
+          if(!equal(presentation,expectedPresentation))throw fail('index_source_changed');
+          on(tx.objectStore('sync_materialization_refs').get(entry.id),retained=>{
+            if(!retained||retained.id!==entry.id||retained.status!=='normal'||!equal(retained.entry,entry)||!equal(retained.presentation,presentation))throw fail('storage_corrupt',{invariant:'index_capture_descriptor',entryId:entry.id});
+            if(!equal(retained.content,descriptor.content))throw fail('index_source_changed');
+            on(tx.objectStore('content').get(entry.id),content=>{
+              if(content!==undefined&&(content.id!==entry.id||!(content.bytes instanceof Uint8Array)||content.bytes.length!==presentation.size_bytes))throw fail('storage_corrupt',{invariant:'index_source_inline',entryId:entry.id});
+              const mode=descriptor.content?.kind;
+              if(mode==='text'&&!content||mode==='binary'&&content||!['text','binary'].includes(mode))throw fail('storage_corrupt',{invariant:'index_source_mode',entryId:entry.id,textMode:mode==='text',binaryMode:mode==='binary',hasInline:!!content});
+              const bytes=mode==='text'?content.bytes:undefined;
+              // Re-read in the actual row writer after hashing/cache awaits.
+              // Equal length and an unchanged revision do not prove equal bytes.
+              if(expectedBody&&!sameBytes(bytes,expectedBody.bytes))throw fail('index_source_changed');
+              done({entry,presentation,...(bytes?{bytes}:{})});
+            },abort);
+          },abort);
+        },abort);
+      },abort);
+    },abort);
   }
   const stageInfo=(stage:Stage):BrowserIndexStage=>{const ready=!!stage.generation;return {stageId:stage.id,snapshot:stage.header.nextIndex,prepared:stage.prepared,total:stage.total,ready,progress:{prepared:stage.prepared,total:stage.total,reused:stage.reused,ready,parseCache:{...stage.parseCache}}};};
   function liveStage(id:string):Stage {active();const stage=stages.get(id);if(!stage)throw fail('index_stage_expired');if(stage.failed)throw fail('index_rebuild_required');return stage;}
@@ -474,14 +517,8 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
       if(stage.generation)return stageInfo(stage);const builder=stage.builder!;try{rust(()=>builder.beginPump());
       const pending=json<EntryState[]>(rust(()=>builder.pendingJson()));let sourceBytes=0;
       for(const entry of pending){
-        const source=await run<{entry:EntryState;presentation:BrowserVaultPresentation;bytes?:Uint8Array}>('readonly',['control','metadata','presentation','content','sync_materialization_refs'],(tx,done,abort)=>{
-          readCatalog(tx,c=>sourceFence(tx,stage.header,c,stage.capture,()=>{
-            on(tx.objectStore('metadata').get(entry.id),row=>{if(!equal(row,entry))throw fail('index_source_changed');on(tx.objectStore('presentation').get(entry.id),presentation=>{
-              if(!presentation||presentation.id!==entry.id||![presentation.ctime_ms,presentation.mtime_ms,presentation.size_bytes].every(n=>Number.isSafeInteger(n)&&n>=0))throw fail('storage_corrupt',{invariant:'index_source_presentation',entryId:entry.id});
-              on(tx.objectStore('content').get(entry.id),content=>{if(content!==undefined&&(!(content.bytes instanceof Uint8Array)||content.bytes.length!==presentation.size_bytes))throw fail('storage_corrupt',{invariant:'index_source_inline',entryId:entry.id});const mode=stage.capture.descriptors.find(d=>d.id===entry.id)?.content?.kind;if(mode==='text'&&!content||mode==='binary'&&content)throw fail('storage_corrupt',{invariant:'index_source_mode',entryId:entry.id,textMode:mode==='text',binaryMode:mode==='binary',hasInline:!!content});done({entry,presentation,...(mode==='text'?{bytes:content.bytes}:{})});},abort);
-            },abort);},abort);
-          },abort),abort);
-        });
+        const source=await run<SelectedSource>('readonly',['control','metadata','presentation','content','sync_materialization_refs'],(tx,done,abort)=>
+          readCatalog(tx,c=>selectedSourceFence(tx,stage,c,entry,undefined,done,abort),abort));
         const bytes=source.bytes,sourceDescriptor=stage.capture.descriptors.find(d=>d.id===entry.id)?.content;
         if(bytes){const metadata=sourceDescriptor?.metadata;
           if(metadata?.byte_length!==String(bytes.length)||metadata.witness?.identity?.entry_id!==entry.id||metadata.witness?.revision!==entry.revision||!Array.isArray(metadata.digest)||metadata.digest.length!==32||!metadata.digest.every((n:unknown)=>typeof n==='number'&&Number.isInteger(n)&&n>=0&&n<=255)||hex(new Uint8Array(metadata.digest))!==await byteDigest(bytes))throw fail('storage_corrupt',{invariant:'index_source_text_commitment',entryId:entry.id,lengthMatches:metadata?.byte_length===String(bytes.length),identityMatches:metadata?.witness?.identity?.entry_id===entry.id,revisionMatches:metadata?.witness?.revision===entry.revision,digestArray:Array.isArray(metadata?.digest)});
@@ -527,7 +564,7 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
         const projection=bytes&&fields.exclusion==null?bytes:undefined;
         const row:CachedRow={entry,presentation:source.presentation,sourceDescriptor,record,...(projection?{projection}:{})};
         const rowDigest=await digest(JSON.stringify({entry,presentation:source.presentation,sourceDescriptor,record}));
-        const committedStamp=await run<PreviewStamp|undefined>('readwrite',['control','metadata','presentation','sync_materialization_refs',...(Preview?['sync_state']:[])],(tx,done,abort)=>readCatalog(tx,c=>sourceFence(tx,stage.header,c,stage.capture,()=>{
+        const committedStamp=await run<PreviewStamp|undefined>('readwrite',['control','metadata','presentation','content','sync_materialization_refs',...(Preview?['sync_state']:[])],(tx,done,abort)=>readCatalog(tx,c=>selectedSourceFence(tx,stage,c,entry,{bytes:source.bytes},()=>{
           const d=c.generations.find(g=>g.id===stage.id&&g.state==='staging');if(!d)throw fail('index_stage_expired');
           d.rows++;d.bytes+=projection?.length??0;d.metadataBytes+=size(record);
           if(d.rows>LIMITS.records||d.bytes>LIMITS.projection||d.metadataBytes>LIMITS.metadata||c.generations.reduce((n,g)=>n+g.bytes,0)>LIMITS.cache)throw fail('index_cache_limit');
