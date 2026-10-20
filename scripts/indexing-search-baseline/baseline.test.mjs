@@ -78,3 +78,7 @@ test('final completed import cannot adopt changed, missing or duplicate observed
 test('import work budget is explicit and cannot reach or exceed its process bound',async()=>{
  for(const importBudgetMs of [0,-1,1.5,1000,1001])await assert.rejects(runBaseline({out:'/unused',binary:'/unused',timeoutMs:1000,importBudgetMs}),/import-budget-ms/);
 });
+
+test('index work budget rejects invalid counts before opening an executable or fixture',async()=>{
+ for(const maxIndexPumps of [0,-1,1.5,100001,NaN])await assert.rejects(runBaseline({out:'/unused',binary:'/unused',maxIndexPumps}),/max-index-pumps/);
+});

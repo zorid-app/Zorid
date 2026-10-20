@@ -72,7 +72,13 @@ per-pass import counters alone do not replenish the budget, and previously
 observed path/ID/revision tuples must remain unchanged. Full listing artifacts
 stay on disk; report coverage keeps count/hash summaries and only the last
 identity set remains live for continuity checks.
-Setup/import timing remains separate from indexing. The tool records its exact
+Setup/import timing remains separate from indexing. The explicit
+`--max-index-pumps` bound defaults to 1000 and accepts 1..100000; it is forwarded
+to the CLI's existing `document-index build --max-pumps` and recorded in the
+report. A 100k stress observation should use an explicit larger bound (for
+example 10000), since 1000 pumps of 32 documents cannot cover that workload.
+This changes the harness work budget only; engine capacity limits remain intact.
+ The tool records its exact
 logical/physical identity mapping and checks native
 committed bytes for the first/last note and all three extras, builds a cold derived
 index, opens a fresh CLI status process and executes all eight literals. Repeated
