@@ -1,5 +1,16 @@
 # User findings queue
 
+## Complete remaining S1 acceptance — 2026-10-20
+
+User explicitly requests execution/completion of the remaining tests and reports
+closing the manual playground. Continue the accepted macOS/web/CLI S1 scope;
+keep manual data and the unsaved draft backup. Runtime fixtures remain separate.
+Current CLI100 full literal/cold/warm smoke passes; graph16 focused/10k gates and
+actual normal browser lifecycle/performance remain pending. Source audit identifies
+whole-vault browser capacity limits; establish the actual failure before claiming
+a fix or a10k pass. Implementation/review/run ownership is in the execution
+checkpoint. This request supersedes the earlier runtime pause.
+
 ## Markdown save-size admission — 2026-10-20
 
 User's browser stress note reached2,938,328 UTF-8 bytes and showed

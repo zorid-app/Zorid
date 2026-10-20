@@ -9,13 +9,47 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+User requests completion of the remaining S1 tests (2026-10-20), confirms the
+manual playground is closed, and authorizes continued execution. Keep its data
+and unsaved-note backup; use fresh owned fixtures for tests. macOS Electron,
+actual Chrome/WASM/IndexedDB and independent macOS CLI remain the targets.
+
+Current source includes reviewed harnesses756bec5d/a63b889c: explicit CLI pump
+budget (11 checks) and opt-in actual browser core lifecycle verification
+(16 checks). Runtime Rust/WASM source is unchanged from the validated1 MiB batch.
+Current CLI100 representative-smoke setup/cold index/warm restart/all8 complete
+literal oracles pass with exact source preservation and process-resource records:
+`.worktrees/s1-evidence/acceptance-cli-main-100/report.json`. This is100 notes,
+not10k acceptance or Electron/web foreground responsiveness.
+
+Large-vault owner `finish_graph_path` has isolated, source-reviewed schema16
+freeze d6f16758 in `.worktrees/s1-graph`, including schema15 Text compatibility.
+Its136 focused checks are running serially before the ignored10k Store/cache
+capacity/reuse test; neither is yet accepted. Root owns all main integration and
+actual client execution. Normal web10k has additional source-audited whole-graph,
+Text/publication and ledger bounds; no successful normal web10k proof exists.
+`finish_normal_indexing` owns harness-only work; `preview_integration_review`
+provides independent review; `s1_browser_capacity` has a read-only platform audit.
+Do not treat cap increases, raw fixture seeding or a Store-only test as client
+acceptance. Retain failed/incomplete outcomes.
+
+The finite remaining campaign is fixed to S1: normal10k admission; matched native
+and WASM builds; macOS/web save→fresh query/reopen and bounded foreground/cancel
+checks; declared cache/query invalidation matrix; first-build partial/coherent
+results and time-context checks; independent CLI updates/concurrency; representative
+5-run/20-query measurements and one100k stress/limit observation. Reuse unchanged
+focused evidence rather than expanding into new features or indiscriminate S0
+suites. Full S1 remains open.
+
+
 Current integrated source includes the reviewed size-fix batch through
 `2d5df2f3` (2026-10-20); previous normal-workspace proof is atf237ebfa.
 Normal Electron100-note save → core indexing → visible Search result → reopen
 passes on candidate6fe36157, whose relevant runtime/tool sources match main.
 Evidence: `.worktrees/s1-evidence/native-save-index-query-003/report.json`.
 Normal web/WASM build passes (`web-current-build.log`); user-owned desktop and
-web playgrounds are open. Do not automate, reload or close those playgrounds.
+web playgrounds were opened for the user; the user now reports them closed.
+Preserve their profiles/vaults and private backup; never repurpose them for tests.
 Desktop/browser product sync joining is not ready and S2 is not being started.
 
 S1 remains open. Normal large-vault targeted storage correction is isolated
