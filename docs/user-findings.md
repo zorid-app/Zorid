@@ -1,5 +1,17 @@
 # User findings queue
 
+## S1 delivery scope freeze — 2026-10-20
+
+User confirmed: finish the existing save → core indexing → query path before
+adding infrastructure. Lines of code are not evidence of delivered improvement.
+Keep the full S1 acceptance scope, but stop speculative abstractions and broad
+rewrites. Finish and measure coherent vertical slices; remove redundant paths
+only after their replacements are verified. Remaining work includes large-vault
+targeted storage access, normal lifecycle activation, partial-results integration
+and actual desktop/web/CLI acceptance. Implementation resumed after the pause.
+Historical private temporary evidence and worktrees may have been removed;
+recover committed source and rerun missing proof rather than claiming it survives.
+
 ## Storage complexity and obsolete build cleanup — 2026-10-19
 
 User questions whether roughly50,000 lines are justified for a Rust storage layer.
