@@ -109,7 +109,7 @@ function harness(recordsEnabled=false){
   let verifyRequests:any[]=[];
   let binaryScript:any=null;
   const recoveries=new Map<string,{metadata:any;bytes:Uint8Array}>();
-  let materializationReads=0,recoveryByteReads=0,recoveryFrees=0;
+  let materializationReads=0,recoveryByteReads=0,recoveryFrees=0,graphBuilds=0;
   const classificationRows=new Map<string,any[]>();
   const classification=(rows:any[])=>({length(){return rows.length;},entryJson(index:number){return JSON.stringify(rows[index]);},textBytes(){return new Uint8Array([116,101,120,116]);},free(){}});
   const wireKey=(wire:Uint8Array)=>JSON.stringify([...wire]);
@@ -176,7 +176,7 @@ function harness(recordsEnabled=false){
     WasmAuthoredMetadataBatch:class {free(){} pushPayload(){throw new Error('unused fixture capability');}},
     encodeFilePayload(){throw new Error('unused fixture capability');},createEmptyTextState(raw:string){const value=JSON.parse(raw);return JSON.stringify({...value,snapshot:[],actors:{}});},
     WasmMetadataStateBuilder:class {records=new Map();activities=new Map();version:string;
-      constructor(_scope:string,version:string){this.version=version;}
+      constructor(_scope:string,version:string){this.version=version;graphBuilds++;}
       restoreRecord(id:string,record:string){this.records.set(id,JSON.parse(record));}
       restoreActivity(id:string,activity:string){this.activities.set(id,JSON.parse(activity));}
       finish(){return state(this.version,this.records,this.activities);}free(){}
@@ -246,6 +246,7 @@ function harness(recordsEnabled=false){
     tx.objectStore('binary_reads').add({clientId:'client',readId,entryId:token.witness.entry_id,witness:token.witness,reference:token.reference});done(undefined);
   },abort),abort));
   return {f,engine,key,updates,wire,provided,plans,commit,seed,seedStage,commitRead,commitRecoveryRead,
+    graphBuildCount:()=>graphBuilds,
     setRecordStatus(value:string){recordStatus=value;},setRecordProvider(value:any){recordProvider=value;host.recordsSession=()=>recordProvider;},
     scriptBinary(script:any){binaryScript=script;register(script.final);},
     failBinaryInvoke(){binaryScript.invokeError=true;},
@@ -264,6 +265,32 @@ async function local(h:Awaited<ReturnType<typeof enrolled>>){
   return h.engine.prepareLocal({requestJson:JSON.stringify(request),familyCommandJson:JSON.stringify({version:1,request,create_mode:'text'}),nextRevision:'note-revision'});
 }
 Object.defineProperty(globalThis,'IDBKeyRange',{configurable:true,value:{bound(lower:any,upper:any,lowerOpen=false,upperOpen=false){return {lower,upper,lowerOpen,upperOpen};},lowerBound(lower:any,open=false){return {lower,open};}}});
+test('scope-only reads stay fresh without graph restoration or whole-vault scans',async()=>{
+  const h=await enrolled(),start=h.f.requests.length,transactionStart=h.f.transactions.length,builds=h.graphBuildCount();
+  const first=await h.engine.readScope();assert.deepEqual(first,{...scope,key_epoch:1});
+  first!.realm_id='caller-mutated';assert.deepEqual(await h.engine.readScope(),{...scope,key_epoch:1});
+  const configuration=h.f.row('sync_state','config'),head=h.f.row('sync_state','metadata-head'),next={realm_id:'changed',vault_id:'other-vault'};
+  h.f.seed('sync_state','config',{...configuration,value:{...configuration.value,...next,key_epoch:2}});
+  h.f.seed('sync_state','metadata-head',{...head,value:{...head.value,scope:next}});
+  assert.deepEqual(await h.engine.readScope(),{...next,key_epoch:2});
+  assert.equal(h.graphBuildCount(),builds);
+  assert.equal(h.f.requests.slice(start).some(row=>!['control','sync_state'].includes(row.store)||row.operation==='cursor'),false);
+  for(const tx of h.f.transactions.slice(transactionStart))assert.deepEqual(tx.names.sort(),['control','sync_state']);
+});
+test('scope-only reads preserve enrollment, configuration and ownership admission',async()=>{
+  assert.equal(await harness().engine.readScope(),null);
+  for(const corruption of ['missing-head','missing-config','scope','epoch']){
+    const h=await enrolled(),configuration=h.f.row('sync_state','config'),head=h.f.row('sync_state','metadata-head');
+    if(corruption==='missing-head')h.f.records.get('sync_state')!.delete(JSON.stringify('metadata-head'));
+    if(corruption==='missing-config')h.f.records.get('sync_state')!.delete(JSON.stringify('config'));
+    if(corruption==='scope')h.f.seed('sync_state','metadata-head',{...head,value:{...head.value,scope:{...scope,vault_id:'wrong'}}});
+    if(corruption==='epoch')h.f.seed('sync_state','config',{...configuration,value:{...configuration.value,key_epoch:0}});
+    await assert.rejects(h.engine.readScope(),{code:'storage_corrupt'});
+  }
+  const retired=await enrolled();retired.retire();await assert.rejects(retired.engine.readScope(),{code:'owner_retired'});
+  const replaced=await enrolled();replaced.f.seed('control','local-store-id',{key:'local-store-id',value:'replaced'});
+  await assert.rejects(replaced.engine.readScope(),{code:'storage_authority_mismatch'});
+});
 test('Text namespace emissions persist exact immutable sources with header-only pending rows',async()=>{
   const h=await enrolled();assert.equal(h.engine.api.concurrentPreparation,true);
   const prepared=await local(h);assert.equal(h.f.records.get('sync_source_payloads')!.size,0);
