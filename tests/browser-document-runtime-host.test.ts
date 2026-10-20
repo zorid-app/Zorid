@@ -7,8 +7,8 @@ const update={lifetime:'runtime',revision:'1',source,published:null,freshness:'l
 const issued=(id:string)=>({lifetime:'runtime',effectId:id,priority:'background' as const,targetSource:source,effect:{kind:'observe' as const}});
 const pause=()=>{let resolve!:()=>void;const promise=new Promise<void>(yes=>resolve=yes);return {promise,resolve};};
 function fixture(){
-  const tasks=new Map<number,{fn:()=>void;delay:number}>(),commands:any[]=[],steps:string[]=[],changes:any[]=[],errors:unknown[]=[];
-  let serial=0,denied=false,closed=0,barrier:Promise<void>|undefined,throwStep=false;
+  const tasks=new Map<number,{fn:()=>void;delay:number;due:number}>(),commands:any[]=[],steps:string[]=[],changes:any[]=[],errors:unknown[]=[];
+  let serial=0,nowMs=17,denied=false,closed=0,barrier:Promise<void>|undefined,throwStep=false,throwRequestOnce=false;
   let nextStep:{inFlight:DocumentRuntimeSnapshot['inFlight'];execution:DocumentRuntimeReduction['execution'];outcomes:readonly DocumentRuntimeOutcome[]}|undefined;
   let listener:((state:DocumentRuntimeSnapshot,outcomes:readonly DocumentRuntimeOutcome[])=>void)|undefined;
   let tail=Promise.resolve();const events:string[]=[];
@@ -16,26 +16,27 @@ function fixture(){
   let state:DocumentRuntimeSnapshot={update,inFlight:null,lastStep:null,execution:'waitForWake'};
   const reduction=(outcomes:readonly DocumentRuntimeOutcome[]=[]):DocumentRuntimeReduction=>({effect:state.inFlight,update:state.update,execution:state.execution,requestOutcomes:outcomes});
   const maintenance:BrowserDocumentIndexMaintenance={
-    command(command){if(command.kind==='request')assert.deepEqual(Object.keys(command).sort(),['forceRebuild','id','kind','maxPumps','maxRestarts']);commands.push(command);if(command.kind==='wake')state={...state,inFlight:issued('1'),execution:'dispatch'};
+    command(command){if(command.kind==='request'){assert.deepEqual(Object.keys(command).sort(),['forceRebuild','id','kind','maxPumps','maxRestarts']);if(throwRequestOnce){throwRequestOnce=false;throw new Error('request rejected');}}commands.push(command);if(command.kind==='wake')state={...state,inFlight:issued('1'),execution:'dispatch'};
       if(command.kind==='continue')state={...state,inFlight:null,execution:'waitForWake'};
       if(command.kind==='retire')state={...state,execution:'quiesced'};return reduction();},
     async step(token){steps.push(token.effectId);events.push('effect'+token.effectId);await barrier;const selected=nextStep;nextStep=undefined;const result:DocumentRuntimeReduction={...reduction(),effect:selected?.inFlight??null,execution:selected?.execution??'waitForWake',requestOutcomes:selected?.outcomes??[]};state={...state,inFlight:result.effect,execution:result.execution,lastStep:{...token,reduction:result}};if(throwStep){throwStep=false;throw new Error('original IO failed');}return result;},
     update:()=>state.update,snapshot:()=>state,async close(){closed++;},
   };
-  const host=createBrowserDocumentRuntimeHost({maintenance,assertActive(){if(denied)throw new Error('lease lost');},local,changed:(snapshot,outcomes)=>{changes.push({snapshot,outcomes});listener?.(snapshot,outcomes);},failed:error=>errors.push(error),now:()=>17,
-    schedule:(fn,delay)=>{const id=++serial;tasks.set(id,{fn,delay});return id as any;},cancelTimer:timer=>{tasks.delete(timer as any);}});
-  async function turn(delay=0){const pair=[...tasks].find(([,task])=>task.delay===delay);assert.ok(pair,'one scheduled task');tasks.delete(pair[0]);pair[1].fn();for(let n=0;n<12;n++)await Promise.resolve();}
-  return {host,maintenance,tasks,commands,steps,changes,errors,turn,events,foreground(name:string){return local(async()=>{events.push(name);});},listen(value:typeof listener){listener=value;},next(value:NonNullable<typeof nextStep>){nextStep=value;},state:()=>state,set(value:Partial<DocumentRuntimeSnapshot>){state={...state,...value};},hold(promise:Promise<void>){barrier=promise;},throwStep(){throwStep=true;},deny(){denied=true;},closed:()=>closed};
+  const host=createBrowserDocumentRuntimeHost({maintenance,assertActive(){if(denied)throw new Error('lease lost');},local,changed:(snapshot,outcomes)=>{changes.push({snapshot,outcomes});listener?.(snapshot,outcomes);},failed:error=>errors.push(error),now:()=>nowMs,
+    schedule:(fn,delay)=>{const id=++serial;tasks.set(id,{fn,delay,due:nowMs+delay});return id as any;},cancelTimer:timer=>{tasks.delete(timer as any);}});
+  async function turn(delay=0){const pair=[...tasks].find(([,task])=>task.delay===delay);assert.ok(pair,'one scheduled task');tasks.delete(pair[0]);nowMs=Math.max(nowMs,pair[1].due);pair[1].fn();for(let n=0;n<12;n++)await Promise.resolve();}
+  async function tick(ms:number){const target=nowMs+ms;let turns=0;for(;;){const due=[...tasks].filter(([,task])=>task.due<=target).sort((a,b)=>a[1].due-b[1].due)[0];if(!due)break;assert.ok(++turns<1000,'bounded timer progress');tasks.delete(due[0]);nowMs=due[1].due;due[1].fn();for(let n=0;n<24;n++)await Promise.resolve();}nowMs=target;}
+  return {host,maintenance,tasks,commands,steps,changes,errors,turn,tick,events,foreground(name:string){return local(async()=>{events.push(name);});},listen(value:typeof listener){listener=value;},next(value:NonNullable<typeof nextStep>){nextStep=value;},state:()=>state,set(value:Partial<DocumentRuntimeSnapshot>){state={...state,...value};},hold(promise:Promise<void>){barrier=promise;},throwStep(){throwStep=true;},rejectRequest(){throwRequestOnce=true;},deny(){denied=true;},closed:()=>closed};
 }
 test('owner is lazy, independent of feature listeners and executes only one effect per later task',async()=>{
   const f=fixture();assert.equal(f.tasks.size,0);assert.deepEqual(f.commands,[]);f.host.start();assert.deepEqual(f.commands,[{kind:'wake',monotonicMs:17}]);assert.equal(f.steps.length,0);
   await f.turn();assert.deepEqual(f.steps,['1']);assert.equal([...f.tasks.values()].some(t=>t.delay===0),false);await f.turn(30000);assert.equal(f.steps.length,1);await f.turn();assert.deepEqual(f.steps,['1','1']);await f.host.drain();assert.equal(f.closed(),1);assert.equal(f.tasks.size,0);
 });
 test('actual current execution wins over the stale last-step Yield ACK and avoids idle Continue loops',async()=>{
-  const f=fixture();f.host.start();await f.turn();const last=f.state().lastStep!;f.set({lastStep:{...last,reduction:{...last.reduction,execution:'yield'}},execution:'waitForWake'});f.host.sourceHint();assert.equal(f.commands.at(-1).kind,'sourceHint');assert.equal([...f.tasks.values()].filter(t=>t.delay===0).length,0);await f.host.drain();
+  const f=fixture();f.host.start();await f.turn();const last=f.state().lastStep!;f.set({lastStep:{...last,reduction:{...last.reduction,execution:'yield'}},execution:'waitForWake'});f.host.sourceHint();await f.turn(500);assert.equal(f.commands.at(-1).kind,'sourceHint');assert.equal([...f.tasks.values()].filter(t=>t.delay===0).length,0);await f.host.drain();
 });
 test('current core Yield continues once on a later task without inferring work from phase',async()=>{
-  const f=fixture();f.host.start();await f.turn();f.set({execution:'yield'});f.host.sourceHint();assert.equal(f.steps.length,1);await f.turn();assert.equal(f.commands.at(-1).kind,'continue');assert.equal(f.steps.length,1);assert.equal([...f.tasks.values()].some(t=>t.delay===0),false);await f.host.drain();
+  const f=fixture();f.host.start();await f.turn();f.set({execution:'yield'});f.host.sourceHint();assert.equal(f.steps.length,1);await f.turn(500);await f.turn();assert.equal(f.commands.at(-1).kind,'continue');assert.equal(f.steps.length,1);assert.equal([...f.tasks.values()].some(t=>t.delay===0),false);await f.host.drain();
 });
 test('retire stops new work and repair while accepted effect drains before executor close',async()=>{
   const f=fixture(),barrier=pause();f.hold(barrier.promise);f.host.start();await f.turn();assert.equal(f.host.executing(),true);let drained=false;const drain=f.host.drain().then(()=>{drained=true;});await Promise.resolve();assert.equal(f.closed(),0);assert.equal(drained,false);assert.equal(f.tasks.size,0);barrier.resolve();await drain;assert.equal(f.host.executing(),false);assert.equal(f.closed(),1);assert.equal(f.steps.length,1);
@@ -108,7 +109,7 @@ function compositeFixture(){
   const local=<T>(operation:()=>Promise<T>)=>{const accepted=tail.then(async()=>{insideLocal=true;try{return await operation();}finally{insideLocal=false;}});tail=accepted.then(()=>{},()=>{});return accepted;};
   const host=createBrowserDocumentRuntimeHost({maintenance,assertActive(){},local,changed(_snapshot,outcomes){events.push('adopt:'+outcomes.map(row=>row.id).join(','));changes.push([...outcomes]);},failed(error){errors.push(error);},draftChanged(){draftNudges++;},now:()=>17,
     schedule:(fn,delay)=>{const id=++serial;tasks.set(id,{fn,delay});return id as any;},cancelTimer:timer=>{tasks.delete(timer as any);}});
-  async function turn(){const task=[...tasks].find(([,row])=>row.delay===0);assert.ok(task,'one future task must be scheduled');tasks.delete(task[0]);task[1].fn();for(let count=0;count<24;count++)await Promise.resolve();}
+  async function turn(delay=0){const task=[...tasks].find(([,row])=>row.delay===delay);assert.ok(task,'one future task must be scheduled');tasks.delete(task[0]);task[1].fn();for(let count=0;count<24;count++)await Promise.resolve();}
   const immediate=()=>[...tasks.values()].filter(row=>row.delay===0).length;
   return {host,maintenance,tasks,events,changes,errors,turn,immediate,add(...turns:Turn[]){selected.push(...turns);},foreground(){return local(async()=>{events.push('foreground');});},failFirst(){selected[0].fail=true;},failClose(){failClose=true;},closed:()=>closed,releases:()=>releases,draftNudges:()=>draftNudges};
 }
@@ -143,4 +144,54 @@ test('failed final close stays retryable after actual close-ready without recrea
   const f=compositeFixture();f.host.start();f.failClose();const first=f.host.drain(),rejected=assert.rejects(first,/actual close failed/);
   await f.turn();await f.turn();await f.turn();await rejected;assert.equal(f.closed(),0);assert.equal(f.immediate(),0);
   await f.host.drain();assert.equal(f.closed(),1);assert.equal(f.releases(),1);assert.equal(f.events.filter(row=>row==='close').length,2);
+});
+
+const freshness={id:'71',maxPumps:8,maxRestarts:1,forceRebuild:false};
+const hintCount=(f:ReturnType<typeof fixture>)=>f.commands.filter(row=>row.kind==='sourceHint').length;
+test('source hint batch delivers one advisory notification after a spaced burst',async()=>{
+  const f=fixture();f.host.start();await f.turn();
+  for(let n=0;n<100;n++){f.host.sourceHint();await f.tick(1);}
+  assert.equal(hintCount(f),0);assert.equal(f.steps.length,1);
+  await f.tick(498);assert.equal(hintCount(f),0);await f.tick(1);assert.equal(hintCount(f),1);
+  await f.host.drain();assert.equal(f.tasks.size,0);
+});
+test('source hint batch has a first-hint hard bound and a fresh next burst',async()=>{
+  const f=fixture();f.host.start();await f.turn();
+  for(let n=0;n<10;n++){f.host.sourceHint();await f.tick(99);}
+  assert.equal(hintCount(f),0);await f.tick(10);assert.equal(hintCount(f),1);
+  f.host.sourceHint();await f.tick(499);assert.equal(hintCount(f),1);await f.tick(1);assert.equal(hintCount(f),2);
+  await f.host.drain();
+});
+test('source hint batch is absorbed by a successful immediate foreground request',async()=>{
+  const f=fixture();f.host.start();await f.turn();f.host.sourceHint();assert.equal(hintCount(f),0);
+  f.host.request(freshness);assert.equal(f.commands.at(-1).kind,'request');
+  await f.tick(1000);assert.equal(hintCount(f),0);await f.host.drain();
+});
+test('source hint batch is absorbed by an immediate authoritative wake',async()=>{
+  const f=fixture();f.host.start();await f.turn();f.host.sourceHint();assert.equal(hintCount(f),0);
+  f.host.wake();assert.equal(f.commands.at(-1).kind,'wake');await f.tick(0);assert.equal(f.steps.length,2);
+  await f.tick(1000);assert.equal(hintCount(f),0);await f.host.drain();
+});
+test('source hint batch survives a rejected foreground request',async()=>{
+  const f=fixture();f.host.start();await f.turn();f.host.sourceHint();assert.equal(hintCount(f),0);f.rejectRequest();
+  assert.throws(()=>f.host.request(freshness),/request rejected/);
+  await f.tick(500);assert.equal(hintCount(f),1);await f.host.drain();
+});
+test('source hint batch never delays a core-selected draft turn or consumes its committed hint',async()=>{
+  const f=compositeFixture();f.host.start();f.host.sourceHint();
+  assert.equal(f.events.filter(row=>row==='command:sourceHint').length,0);
+  f.add({lane:'draft',id:'1'});f.host.draftsChanged!();assert.equal(f.immediate(),1);
+  await f.turn();assert.ok(f.events.includes('execute:draft:1'));
+  assert.equal(f.events.filter(row=>row==='command:sourceHint').length,0);
+  await f.turn(500);assert.equal(f.events.filter(row=>row==='command:sourceHint').length,1);
+  const closing=f.host.drain();await f.turn();await f.turn();await f.turn();await closing;
+});
+test('source hint batch retirement cancels delivery and rejects an already queued late callback',async()=>{
+  const f=fixture();f.host.start();await f.turn();f.host.sourceHint();
+  const delivery=[...f.tasks.values()].find(row=>row.delay===500);assert.ok(delivery);assert.equal(hintCount(f),0);
+  await f.host.drain();assert.equal(f.tasks.size,0);delivery.fn();assert.equal(hintCount(f),0);assert.equal(f.closed(),1);
+});
+test('source hint batch checks the real owner before delayed delivery',async()=>{
+  const f=fixture();f.host.start();await f.turn();f.host.sourceHint();assert.equal(hintCount(f),0);f.deny();
+  await f.tick(500);assert.equal(hintCount(f),0);assert.equal(f.errors.length,1);await f.host.drain();
 });

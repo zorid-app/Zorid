@@ -37,6 +37,7 @@ export function createBrowserDocumentRuntimeHost(options:BrowserDocumentRuntimeH
   if(!Number.isSafeInteger(repairMs)||repairMs<1000||repairMs>3600000)throw new BrowserVaultError('invalid_request','Invalid owner repair cadence');
   let started=false,retired=false,executing=false,task:Timer|undefined,repair:Timer|undefined;
   let active:Promise<void>|undefined,adoptedStep='';
+  let hintTimer:Timer|undefined,firstHintAt:number|undefined;
   let draining:Promise<void>|undefined,resolveDrain:(()=>void)|undefined,rejectDrain:((error:unknown)=>void)|undefined;
   let closeAttempt:Promise<void>|undefined;
   function guard(){options.assertActive();if(retired)throw new BrowserVaultError('document_runtime_retired','Document owner is retiring');}
@@ -93,17 +94,28 @@ export function createBrowserDocumentRuntimeHost(options:BrowserDocumentRuntimeH
       const finished=accepted.catch(error=>{failure(error);rejectDrain?.(error);draining=undefined;resolveDrain=undefined;rejectDrain=undefined;}).finally(()=>{if(active===finished)active=undefined;try{queue(undefined,continueWork);completeDrain();}catch(error){failure(error);rejectDrain?.(error);draining=undefined;}});active=finished;
     },0);
   }
+  function clearHints(){if(hintTimer!==undefined){cancel(hintTimer);hintTimer=undefined;}firstHintAt=undefined;}
+  // Source hints are lossy advisory notifications, not commits or index policy.
+  // Batch only their delivery: Rust still selects every actual maintenance effect.
+  // Foreground observations and draft execution never wait for this timer.
+  function scheduleHint(){
+    const at=clock();firstHintAt??=at;if(hintTimer!==undefined)cancel(hintTimer);
+    const delay=Math.max(0,Math.min(500,1000-(at-firstHintAt)));
+    hintTimer=schedule(()=>{hintTimer=undefined;firstHintAt=undefined;if(retired||!started)return;
+      try{guard();command({kind:'sourceHint'});}catch(error){failure(error);}
+    },delay);
+  }
   function repairLater(){if(retired||repair!==undefined)return;repair=schedule(()=>{repair=undefined;if(retired)return;try{host.wake();}catch(error){failure(error);}repairLater();},repairMs);}
   const host:BrowserDocumentRuntimeHost={
     start(){guard();if(started)return;started=true;command({kind:'wake',monotonicMs:clock()});repairLater();},
-    wake(){guard();if(!started)return;command({kind:'wake',monotonicMs:clock()});},
-    sourceHint(){guard();if(!started)return;command({kind:'sourceHint'});},
-    request(input){guard();if(!started)throw new BrowserVaultError('document_runtime_unavailable','Document owner has not been activated');return command({kind:'request',id:input.id,maxPumps:input.maxPumps,maxRestarts:input.maxRestarts,forceRebuild:input.forceRebuild});},
+    wake(){guard();if(!started)return;command({kind:'wake',monotonicMs:clock()});clearHints();},
+    sourceHint(){guard();if(!started)return;scheduleHint();},
+    request(input){guard();if(!started)throw new BrowserVaultError('document_runtime_unavailable','Document owner has not been activated');const reduction=command({kind:'request',id:input.id,maxPumps:input.maxPumps,maxRestarts:input.maxRestarts,forceRebuild:input.forceRebuild});clearHints();return reduction;},
     cancel(id){guard();return command({kind:'cancelRequest',id});},
     snapshot(){options.assertActive();return options.maintenance.snapshot();},
     executing:()=>executing,
     draftsChanged(){guard();if(!started)throw new BrowserVaultError('document_runtime_unavailable','Document owner has not been activated');options.draftChanged?.();queue(undefined,true);},
-    retire(){if(retired)return;retired=true;if(task!==undefined){cancel(task);task=undefined;}if(repair!==undefined){cancel(repair);repair=undefined;}
+    retire(){if(retired)return;retired=true;clearHints();if(task!==undefined){cancel(task);task=undefined;}if(repair!==undefined){cancel(repair);repair=undefined;}
       // No future effect is dispatched. A step already admitted on the local
       // tail may settle, and the caller adopts these explicit Retired outcomes.
       if(started){try{if(composite()){
