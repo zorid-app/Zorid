@@ -217,7 +217,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       read(tx,tx.objectStore('sync_state').get(streamingSyncKeys.head),headRow=>{
         const head=headRow?.value??null;
         if((config===null)!==(head===null))throw failure('storage_corrupt');
-        if(config&&(typeof config.realm_id!=='string'||typeof config.vault_id!=='string'||!Number.isInteger(config.key_epoch)||config.key_epoch<1||!equals(head?.scope,{realm_id:config.realm_id,vault_id:config.vault_id})))throw failure('storage_corrupt');
+        if(config&&(![config.realm_id,config.vault_id].every(value=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(value))||!Number.isInteger(config.key_epoch)||config.key_epoch<1||!equals(head?.scope,{realm_id:config.realm_id,vault_id:config.vault_id})))throw failure('storage_corrupt');
         done(config,head);
       },abort,active);
     },abort,active);
