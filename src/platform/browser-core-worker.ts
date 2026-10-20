@@ -94,8 +94,8 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
       });
       assertOwner();
       if(payload.initializeLocal===true){
-        const status=await vault.sync.inspect();
-        if(!status.scope)await vault.sync.enroll({realm_id:`local_${vault.authorityId}`,vault_id:`vault_${vault.authorityId}`,key_epoch:1});
+        const scope=streaming()?await streaming()!.readSyncScope():(await vault.sync.inspect()).scope;
+        if(!scope)await vault.sync.enroll({realm_id:`local_${vault.authorityId}`,vault_id:`vault_${vault.authorityId}`,key_epoch:1});
         assertOwner();
       }
       if(streaming()){await streaming()!.validateStorage();await streaming()!.cleanupReadPins();binary=await streaming()!.binaryStreams().catch(error=>{if(payload.initializeLocal!==true&&error instanceof BrowserVaultError&&error.code==='not_enrolled')return undefined;throw error;});assertOwner();}

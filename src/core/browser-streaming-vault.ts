@@ -107,7 +107,8 @@ export async function openBrowserStreamingVault(options:BrowserStreamingVaultOpt
       resolve(database);
     }catch(error){opening.result.close();reject(error);}};
   });
-  const close=()=>{closed=true;db.close();};db.onversionchange=close;db.onclose=()=>{closed=true;};
+  let closeEngine=()=>{};
+  const close=()=>{closed=true;closeEngine();db.close();};db.onversionchange=close;db.onclose=()=>{closed=true;closeEngine();};
   // Opening the authority is read-only and precedes the worker lifetime lease.
   const authorityId=await new Promise<string>((resolve,reject)=>{const tx=db.transaction(['control'],'readonly'),read=tx.objectStore('control').get('local-store-id');let value:string;
     read.onsuccess=()=>{value=read.result?.value;if(typeof value!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value))tx.abort();};tx.onabort=()=>reject(fail('storage_corrupt'));tx.oncomplete=()=>resolve(value);
@@ -147,6 +148,7 @@ export async function openBrowserStreamingVault(options:BrowserStreamingVaultOpt
     if(forced||!changes.length)return{sequence:current.sequence};const sequence=nextDecimalU64(current.sequence);
     tx.objectStore('journal').add({sequence,origin:{kind:'sync',direction:origin.kind,update_id:origin.update_id},changes});tx.objectStore('control').put({key:'sequence',value:sequence});return{sequence};
   }});
+  closeEngine=engine.close;
   function intentKey(clientId:string,intentId:string):[string,string]{if(!operationId(clientId)||!operationId(intentId))throw fail('invalid_intent_identity');return[clientId,intentId];}
   function metadataById(tx:IDBTransaction,id:string,done:(row:BrowserVaultRead|null)=>void,abort:(error:unknown)=>void):void{
     on(tx.objectStore('metadata').get(id),entry=>{
@@ -224,14 +226,14 @@ export async function openBrowserStreamingVault(options:BrowserStreamingVaultOpt
       return await transact<string>('readwrite',(tx,done,abort)=>on(tx.objectStore('intents').get(key),current=>{
         if(!current||current.request_json!==intent.request_json||current.family_command_json!==intent.family_command_json||!['commit_requested','committed'].includes(current.status))throw fail('intent_conflict');
         committedReceipt(tx,current,prior=>{if(prior!==undefined){done(prior);return;}
-          readPublication(tx,publication=>{
+          engine.readPublication(tx,publication=>{
             const sequence=nextDecimalU64(publication.sequence),request=JSON.parse(intent.request_json),result={operation_id:intent.operation_id,sequence,changes};
             const record={request,result};core(()=>wasm.checkIdempotency(JSON.stringify({request,record})));
             const receipt=JSON.stringify(result);if(new TextEncoder().encode(receipt).length>receiptBudget)throw new BrowserVaultError('too_large','Commit receipt exceeds the declared transport limit',undefined,'rust');
             engine.commitLocal(tx,prepared!,publication,()=>{
               tx.objectStore('receipts').add({operation_id:intent.operation_id,record,...(intent.family_command_json===undefined?{}:{family_command_json:intent.family_command_json})});
               tx.objectStore('journal').add({sequence,request,result});tx.objectStore('control').put({key:'sequence',value:sequence});tx.objectStore('intents').put({...current,status:'committed',receipt});done(receipt);
-            },abort);
+            },abort,sequence);
           },abort);
         },abort);
       },abort));
@@ -281,7 +283,7 @@ export async function openBrowserStreamingVault(options:BrowserStreamingVaultOpt
         if(current?.phase==='committed'&&current.outcome?.status==='committed'){done(current.outcome.receipt);return;}
         if(!current||current.phase!=='commit_requested'||current.generation!==staged!.stageGeneration||!same(current.request,staged!.request))throw fail('revision_conflict');
         on(tx.objectStore('control').get(commitKey(ref)),row=>{if(!row||!same(row.value,original))throw fail('storage_corrupt');
-          readPublication(tx,publication=>{
+          engine.readPublication(tx,publication=>{
             const sequence=nextDecimalU64(publication.sequence),changes=prepared!.changes,receipt=JSON.stringify({operation_id:ref.operationId,sequence,changes});
             if(new TextEncoder().encode(receipt).length>receiptBudget)throw fail('too_large');
             engine.commitLocal(tx,prepared!,publication,()=>{
@@ -290,7 +292,7 @@ export async function openBrowserStreamingVault(options:BrowserStreamingVaultOpt
                 tx.objectStore('control').put({key:'binary-stream-usage:v1',value:{...usage,activeStages:usage.activeStages-1}});
                 tx.objectStore('journal').add({sequence,origin:{kind:'binary',operation_id:ref.operationId},changes});tx.objectStore('control').put({key:'sequence',value:sequence});done(receipt);
               },abort);
-            },abort);
+            },abort,sequence);
           },abort);
         },abort);
       },abort));
@@ -322,7 +324,7 @@ export async function openBrowserStreamingVault(options:BrowserStreamingVaultOpt
       await transact<void>('readwrite',(tx,done,abort)=>on(tx.objectStore('binary_reads').get([options.clientId,requestedReadId]),current=>{
         if(prior?!same(current,prior):current!==undefined)throw fail('revision_conflict');
         on(tx.objectStore('binary_reads').index('by_active').count(1),count=>{if(!prior&&count>=4)throw fail('too_large');
-          readPublication(tx,publication=>engine.commitRead(tx,plan,publication,()=>{if(!prior)tx.objectStore('binary_reads').add(row);done();},abort),abort);
+          engine.readPublication(tx,publication=>engine.commitRead(tx,plan,publication,()=>{if(!prior)tx.objectStore('binary_reads').add(row);done();},abort),abort);
         },abort);
       },abort));active();readCache.set(row.pinId,{row,plan});return readRef(row);
     }catch(error){plan.dispose();throw error;}
@@ -398,8 +400,8 @@ export async function openBrowserStreamingVault(options:BrowserStreamingVaultOpt
   readBinarySmall=async id=>{const metadata=await readMetadataById(id);if(!metadata||metadata.entry.kind!=='file')throw fail('not_found');if(BigInt(metadata.presentation.size_bytes)>BigInt(binaryLimits.smallReadBytes))throw fail('stream_required');const ref=await openBinaryRead(crypto.randomUUID(),{entryId:id,expectedRevision:metadata.entry.revision});try{if(BigInt(ref.length)>BigInt(binaryLimits.smallReadBytes))throw fail('stream_required');const bytes=new Uint8Array(Number(ref.length));let offset='0';for(;;){const part=await rangeRead(ref,{offset,maxBytes:128*1024});bytes.set(part.bytes,Number(offset));offset=part.nextOffset;if(part.eof)return bytes;}}finally{await closeBinaryRead(ref);}};
   async function binaryStreams():Promise<BinaryStreams>{
     active();if(binaryCapability)return binaryCapability;
-    const status=await engine.api.inspect();active();if(!status.scope)throw fail('not_enrolled');
-    stageStore=createBrowserBinaryStageStore({db,authorityId,clientId:options.clientId,scope:{realmId:status.scope.realm_id,vaultId:status.scope.vault_id},assertActive:active,wasm,allocateId:()=>crypto.randomUUID(),limits:{maxFileBytes:binaryLimits.maxFileBytes,maxChunkBytes:binaryLimits.maxChunkBytes,maxPayloadBytes:1048576,maxStages:4096,maxActiveStages:8,maxSourceBytes:'536870912',maxChunkRecords:4096,maxPageRecords:256}});
+    const scope=await engine.readScope();active();if(!scope)throw fail('not_enrolled');
+    stageStore=createBrowserBinaryStageStore({db,authorityId,clientId:options.clientId,scope:{realmId:scope.realm_id,vaultId:scope.vault_id},assertActive:active,wasm,allocateId:()=>crypto.randomUUID(),limits:{maxFileBytes:binaryLimits.maxFileBytes,maxChunkBytes:binaryLimits.maxChunkBytes,maxPayloadBytes:1048576,maxStages:4096,maxActiveStages:8,maxSourceBytes:'536870912',maxChunkRecords:4096,maxPageRecords:256}});
     // Pinned read functions are installed with the same authority before exposure.
     binaryCapability={limits:binaryLimits,begin:input=>stageStore!.begin(input),append:(ref,input)=>stageStore!.append(ref,input),query:ref=>stageStore!.query(ref),seal:(ref,input)=>stageStore!.seal(ref,input),abort:ref=>stageStore!.abort(ref),commit:commitBinary,
       openRead:input=>openBinaryRead(crypto.randomUUID(),input),read:rangeRead,closeRead:closeBinaryRead};

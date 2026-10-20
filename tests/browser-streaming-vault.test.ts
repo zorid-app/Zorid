@@ -26,8 +26,9 @@ function databaseFixture(oldVersion=0){
       assert.equal(closed,false);if(mode==='readwrite')assert.deepEqual(options,{durability:'strict'});
       const local=new Map(names.map(name=>{assert.ok(records.has(name),name);return [name,clone(records.get(name)!)];}));
       let pending=0,complete=false,aborted=false,scheduled=false;const modified=new Set<string>();
-      const tx:any={durability:'strict',
-        abort(){if(aborted||complete)return;aborted=true;queueMicrotask(()=>tx.onabort?.());},
+      const listeners=new Map<string,Array<()=>void>>();
+      const tx:any={durability:'strict',addEventListener(name:string,callback:()=>void){listeners.set(name,[...(listeners.get(name)??[]),callback]);},
+        abort(){if(aborted||complete)return;aborted=true;queueMicrotask(()=>{for(const callback of listeners.get('abort')??[])callback();tx.onabort?.();});},
         objectStore(name:string){
           assert.ok(local.has(name));const definition=definitions.get(name)!;
           function request(action:()=>any){
@@ -49,6 +50,7 @@ function databaseFixture(oldVersion=0){
             createIndex:schemaStore(name).createIndex,
             get:(key:any)=>request(()=>local.get(name)!.get(JSON.stringify(key))),
             getKey:(key:any)=>request(()=>local.get(name)!.has(JSON.stringify(key))?key:undefined),
+            count:()=>request(()=>local.get(name)!.size),
             add:(row:any)=>write(row,true),put:(row:any)=>write(row,false),delete:remove,
             openCursor:(range?:any,direction?:string)=>cursor(range,definition.keyPath,direction),
             getAll(){assert.fail('getAll is forbidden');},
@@ -60,7 +62,7 @@ function databaseFixture(oldVersion=0){
           };
         },
       };
-      function schedule(){if(scheduled)return;scheduled=true;queueMicrotask(()=>{scheduled=false;if(aborted||complete||pending)return;complete=true;for(const name of modified)records.set(name,local.get(name)!);tx.oncomplete?.();});}
+      function schedule(){if(scheduled)return;scheduled=true;queueMicrotask(()=>{scheduled=false;if(aborted||complete||pending)return;complete=true;for(const name of modified)records.set(name,local.get(name)!);for(const callback of listeners.get('complete')??[])callback();tx.oncomplete?.();});}
       schedule();return tx;
     },
   };

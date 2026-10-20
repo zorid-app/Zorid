@@ -123,11 +123,13 @@ export interface BrowserStreamingSyncEngine {
   api:BrowserSync & {readonly concurrentPreparation:true};
   /** Internal host enrollment lookup, independent of namespace inspection. */
   readScope():Promise<(SyncScope & {key_epoch:number})|null>;
+  readPublication(tx:IDBTransaction,done:(current:StreamingPublication)=>void,abort:Abort):void;
   prepareLocal(input:StreamingLocalInput):Promise<PreparedStreamingMutation>;
   /** Owns batch and built immediately on call, including every failure path. */
   prepareBinary(input:StreamingBinaryInput):Promise<PreparedStreamingMutation>;
   commitLocal(tx:IDBTransaction,prepared:PreparedStreamingMutation,current:StreamingPublication,
-    done:(result:{sequence:string})=>void,abort:Abort):void;
+    done:(result:{sequence:string})=>void,abort:Abort,finalSequence?:string):void;
+  close():void;
   prepareRead(input:StreamingReadInput):Promise<PreparedStreamingRead>;
   commitRead(tx:IDBTransaction,prepared:PreparedStreamingRead,current:StreamingPublication,done:()=>void,abort:Abort):void;
   prepareRecoveryRead(input:StreamingRecoveryReadInput):Promise<PreparedStreamingRecoveryRead>;
@@ -143,13 +145,16 @@ interface Snapshot {
   config:Configuration|null; head:Head|null; records:GraphRow[]; activities:GraphRow[];
   texts:Map<string,Json>; headers:Map<string,SourceHeader>; retained:Map<string,Json>;
   cursor:SyncCursor|null; publication:StreamingPublication;
+  ledgerBytes:{authored:number;envelopes:number};
 }
+interface StorageFence {config:Configuration|null;head:Head|null;sequence:string;cursor:SyncCursor|null;authoredSequence:string;authored:number;envelopes:number}
+interface RetainedStorage {snapshot:Snapshot;fence:StorageFence;graph?:StreamingMetadataState;admission:boolean}
 interface Emission { metadata:EnvelopeMetadata; payload:Uint8Array }
 interface InternalPrepared {
   snapshot:Snapshot; plan:StreamingMetadataPlan; result:Json; rows:StreamingRetainedRow[];
   texts:Map<string,Json>; sources:SourceInput[]; pins:Map<string,SourceHeader>;
   prior:Uint8Array; updateId:string; incoming:boolean; delivery?:SyncDelivery;
-  expectedText:Json|null; nextHead:Json|null; revisions:string[]; used:boolean;
+  expectedText:Json|null; nextHead:Json|null; nextGraph?:StreamingMetadataState; touched:string[];paths:string[];changedTexts:string[];revisions:string[]; used:boolean;
 }
 const textEncoder=new TextEncoder();
 const stringify=(value:unknown)=>JSON.stringify(value);
@@ -203,12 +208,14 @@ const baseStores=()=>[...browserStreamingSyncStores,'metadata','presentation','c
 
 /** Fresh-format engine. Each prepare owns its metadata/proof snapshot; no mutable
  * graph cache or writer transaction spans asynchronous chunk reads. */
-interface RecordsSessionContext { current?:{key:BrowserSyncKey;assertActive():void} }
+interface RecordsSessionContext { current?:{key:BrowserSyncKey;assertActive():void};storage?:RetainedStorage;closed?:boolean }
 export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContext:RecordsSessionContext={}):BrowserStreamingSyncEngine {
   for(const name of ['WasmMetadataStateBuilder','WasmAuthoredMetadataBatch','validateFamilyCommand','checkFamilyCommandReplay','validateAuthoredSyncPayload','validateSyncWire','encodeFilePayload','materializeTextState','createEmptyTextState','rebindTextState'] as const)if(typeof host.wasm[name]!=='function')throw failure('sync_bindings_unavailable');
   const prepared=new WeakMap<PreparedStreamingMutation,InternalPrepared>();
   const openedRecordsContexts=new WeakMap<AuthenticatedRecordsUpdate,Configuration>();
-  const active=()=>host.assertActive();
+  const active=()=>{host.assertActive();if(recordsContext.closed)throw failure('storage_closed');};
+  const invalidate=()=>{recordsContext.storage?.graph?.free();recordsContext.storage=undefined;};
+  const close=()=>{invalidate();recordsContext.closed=true;};
   const transact=<T>(mode:IDBTransactionMode,start:(tx:IDBTransaction,done:(value:T)=>void,abort:Abort)=>void)=>normalizedTransact(host.db,{authorityId:host.authorityId,stores:baseStores(),mode,assertActive:active},start);
   const fresh=()=>crypto.randomUUID();
   function readConfiguration(tx:IDBTransaction,done:(config:Configuration|null,head:Head|null)=>void,abort:Abort):void {
@@ -227,9 +234,38 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       readConfiguration(tx,config=>done(config?{realm_id:config.realm_id,vault_id:config.vault_id,key_epoch:config.key_epoch}:null),abort));
     active();return scope;
   };
+  function readFence(tx:IDBTransaction,done:(fence:StorageFence)=>void,abort:Abort):void {
+    readConfiguration(tx,(config,head)=>read(tx,tx.objectStore('control').get('sequence'),sequence=>
+      read(tx,tx.objectStore('sync_state').get('authored-sequence'),authoredSequence=>{
+        const finish=(cursor:SyncCursor|null)=>read(tx,tx.objectStore('sync_authored').count(),authored=>
+          read(tx,tx.objectStore('sync_envelopes').count(),envelopes=>done({config,head,sequence:decimalU64(sequence?.value),cursor,authoredSequence:decimalU64(authoredSequence?.value??'0'),authored,envelopes}),abort,active),abort,active);
+        if(config)read(tx,tx.objectStore('sync_cursors').get([config.realm_id,config.vault_id]),row=>finish(row?.value??null),abort,active);else finish(null);
+      },abort,active),abort,active),abort);
+  }
+  function retained(tx:IDBTransaction,expected:Snapshot,done:(fence:StorageFence)=>void,abort:Abort):void {
+    readFence(tx,fence=>{
+      const storage=recordsContext.storage;
+      if(!storage||storage.snapshot!==expected||!equals(fence,storage.fence)){const cursorChanged=storage&&!equals(fence.cursor,storage.fence.cursor);invalidate();capture(tx,()=>abort(failure(cursorChanged?'sync_cursor_conflict':'sync_snapshot_conflict')),abort);return;}
+      done(fence);
+    },abort);
+  }
+  function retainOnComplete(tx:IDBTransaction,s:Snapshot,graph:StreamingMetadataState|undefined,admission:boolean,sequence:string|undefined,done:()=>void,abort:Abort):void {
+    let fence:StorageFence|undefined;
+    tx.addEventListener('abort',()=>{graph?.free();invalidate();},{once:true});
+    tx.addEventListener('complete',()=>{
+      if(!fence||recordsContext.closed){graph?.free();return;}
+      try{active();invalidate();recordsContext.storage={snapshot:s,fence,graph,admission};}catch{graph?.free();invalidate();}
+    },{once:true});
+    readFence(tx,current=>{fence={...current,sequence:sequence??current.sequence};s.publication={...s.publication,sequence:fence.sequence};done();},abort);
+  }
+  function readPublication(tx:IDBTransaction,done:(current:StreamingPublication)=>void,abort:Abort):void {
+    const storage=recordsContext.storage;
+    if(!storage){host.readPublication(tx,done,abort);return;}
+    retained(tx,storage.snapshot,()=>done(copy(storage.snapshot.publication)),abort);
+  }
   function capture(tx:IDBTransaction,done:(snapshot:Snapshot)=>void,abort:Abort):void {
     const authored=new Map<string,Json>(),envelopes=new Map<string,Json>(),orders=new Set<string>();
-    const s:Snapshot={config:null,head:null,records:[],activities:[],texts:new Map(),headers:new Map(),retained:new Map(),cursor:null,publication:{entries:[],presentation:[],sequence:'0'}};
+    const s:Snapshot={config:null,head:null,records:[],activities:[],texts:new Map(),headers:new Map(),retained:new Map(),cursor:null,publication:{entries:[],presentation:[],sequence:'0'},ledgerBytes:{authored:0,envelopes:0}};
     readConfiguration(tx,(config,head)=>{
       s.config=config;s.head=head;
       host.readPublication(tx,current=>{try{active();s.publication=copy(current);decimalU64(current.sequence);loadTables();}catch(error){abort(error);}},abort);
@@ -256,6 +292,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       }));
     }
     function loadLedger(row:Json,table:Map<string,Json>,local:boolean):void {
+      s.ledgerBytes[local?'authored':'envelopes']+=textEncoder.encode(stringify(row)).byteLength;
       const metadata=row?.metadata;
       if(!s.config||!metadata||!equals(row.key,[s.config.realm_id,s.config.vault_id,metadata.key?.update_id])||
         metadata.key?.realm_id!==s.config.realm_id||metadata.key?.vault_id!==s.config.vault_id||table.has(stringify(row.key)))throw failure('storage_corrupt');
@@ -325,7 +362,15 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
     }
   }
 
-  const snapshot=async()=>{const result=await transact<Snapshot>('readonly',(tx,done,abort)=>capture(tx,done,abort));active();return result;};
+  const snapshot=async(force=false)=>{
+    if(force)invalidate();
+    let candidate:RetainedStorage|undefined;
+    const result=await transact<Snapshot>('readonly',(tx,done,abort)=>{
+      const load=()=>capture(tx,s=>readFence(tx,fence=>{candidate={snapshot:s,fence,admission:true};done(s);},abort),abort);
+      if(!recordsContext.storage){load();return;}
+      readFence(tx,fence=>{const storage=recordsContext.storage;if(storage&&equals(storage.fence,fence))done(storage.snapshot);else{invalidate();load();}},abort);
+    });active();if(candidate){invalidate();recordsContext.storage=candidate;}return result;
+  };
   function enrolled(s:Snapshot):Configuration {if(!s.config||!s.head)throw failure('sync_not_enrolled');return s.config;}
   function state(s:Snapshot):StreamingMetadataState {
     const config=enrolled(s),builder=new host.wasm.WasmMetadataStateBuilder(stringify({realm_id:config.realm_id,vault_id:config.vault_id}),s.head!.version);
@@ -341,6 +386,51 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
   }
   function pin(pins:Map<string,SourceHeader>,header:SourceHeader):void {
     const prior=pins.get(keyString(header));if(prior&&!equals(prior,header))throw failure('immutable_source_conflict');pins.set(keyString(header),copy(header));
+  }
+  function selectPins(s:Snapshot,ids:Set<string>,pins:Map<string,SourceHeader>):void {
+    for(const row of [...s.records,...s.activities])if(ids.has(row.activity?.identity?.entry_id)||row.record?.body?.events?.some((event:Json)=>ids.has(event.identity?.entry_id))){
+      const header=s.headers.get(keyString(row));if(!header)throw failure('storage_corrupt');pin(pins,header);
+    }
+  }
+  function checkRows(tx:IDBTransaction,s:Snapshot,ids:string[],done:()=>void,abort:Abort):void {
+    let index=0;
+    const next=()=>{
+      if(index===ids.length){done();return;}const id=ids[index++];
+      const expected=[s.publication.entries.find(row=>row.id===id),s.publication.presentation.find(row=>row.id===id),s.retained.get(id)];
+      const names=['metadata','presentation','sync_materialization_refs'];let position=0;
+      const check=()=>{if(position===names.length){next();return;}const at=position++;
+        read(tx,tx.objectStore(names[at]).get(id),row=>{if(!equals(row,expected[at]))throw failure('sync_snapshot_conflict');check();},abort,active);};check();
+    };next();
+  }
+  function checkProofPins(tx:IDBTransaction,s:Snapshot,pins:SourceHeader[],done:()=>void,abort:Abort):void {
+    let index=0;
+    const next=()=>{
+      if(index===pins.length){done();return;}const expected=pins[index++],id=keyString(expected),identity=key(expected);
+      getExactSource(tx,expected,'payload',source=>{
+        if(!source||!equals(source.header,expected))throw failure('immutable_source_conflict');
+        rust(()=>host.wasm.validateAuthoredSyncPayload(stringify(descriptor(expected).metadata),source.bytes));
+        if(!s.headers.has(id)){next();return;}
+        read(tx,tx.objectStore('sync_authored').get(identity),authored=>read(tx,tx.objectStore('sync_envelopes').get(identity),envelope=>
+          read(tx,tx.objectStore('sync_source_wires').getKey(identity),wire=>{
+            const metadata=descriptor(expected).metadata;
+            if((!authored&&!envelope)||(authored&&(!equals(authored.metadata,metadata)||![0,1].includes(authored.pending)||typeof authored.sealed!=='boolean'))||
+              (envelope&&(!equals(envelope.metadata,metadata)||!['authored','received'].includes(envelope.direction)))||((wire!==undefined)!==!!envelope)||
+              (authored?(authored.sealed?envelope?.direction!=='authored':!!envelope):envelope?.direction!=='received'))throw failure('storage_corrupt');
+            const record=s.records.find(row=>keyString(row)===id),activity=s.activities.find(row=>keyString(row)===id),row=record??activity;
+            if(!row){next();return;}
+            read(tx,tx.objectStore(record?'sync_graph_records':'sync_graph_activities').get(identity),actual=>{if(!equals(actual,row))throw failure('storage_corrupt');next();},abort,active);
+          },abort,active),abort,active),abort,active);
+      },abort);
+    };next();
+  }
+  function checkPaths(tx:IDBTransaction,s:Snapshot,paths:string[],done:()=>void,abort:Abort):void {
+    let index=0;
+    const next=()=>{if(index===paths.length){done();return;}const path=paths[index++],expected=s.publication.entries.find(row=>row.path===path);let found=false;
+      read(tx,tx.objectStore('metadata').index('by_path').openCursor(IDBKeyRange.only(path)),cursor=>{
+        if(!cursor){if(!!expected!==found)throw failure('sync_snapshot_conflict');next();return;}
+        if(found||!equals(cursor.value,expected))throw failure('sync_snapshot_conflict');found=true;cursor.continue();
+      },abort,active);
+    };next();
   }
   async function verify(session:StreamingVerificationSession,pins:Map<string,SourceHeader>,overlays:Map<string,Emission>):Promise<StreamingVerifiedSet> {
     let consumed=false;
@@ -427,8 +517,8 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
     return run(!forced);
   }
   async function finish(s:Snapshot,candidate:StreamingCandidate,emissions:Emission[],context:{updateId:string;incoming?:boolean;prior?:Uint8Array;delivery?:SyncDelivery;expectedText?:Json|null;incomingHeader?:SourceHeader;sourceKeys?:SourceKey[];initializeTexts?:boolean}):Promise<PreparedStreamingMutation> {
-    const config=enrolled(s),pins=new Map(s.headers),overlays=new Map<string,Emission>();
-    let plan:StreamingMetadataPlan|undefined,proof:StreamingVerifiedSet|undefined,candidateConsumed=false;
+    const config=enrolled(s),pins=new Map<string,SourceHeader>(),overlays=new Map<string,Emission>();
+    let plan:StreamingMetadataPlan|undefined,proof:StreamingVerifiedSet|undefined,nextGraph:StreamingMetadataState|undefined,candidateConsumed=false;
     try{
       for(const emission of emissions){assertScope(config,emission.metadata);overlays.set(keyString(sourceKey(emission.metadata)),emission);}
       proof=await verify(rust(()=>candidate.verificationSession()),pins,overlays);
@@ -474,16 +564,21 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
             if(!texts.has(textKey(identity))){const initial=boundedJson(rust(()=>host.wasm.createEmptyTextState(stringify({identity,version:fresh()}))),8*1024*1024);texts.set(textKey(identity),initial);revisions.add(initial.version);}
           }
         }
-      }finally{next.free();}}
+      }finally{nextGraph=next;}}
       if(output.next_text)revisions.add(output.next_text.version);
       const forced=context.incoming||!output.changes?.length?undefined:output.changes;
       for(const change of output.changes??[])revisions.add(change.after.revision);
       const rows=classifications(plan,texts,s,forced,revisions);
-      const token:PreparedStreamingMutation=Object.freeze({changes:copy(output.changes??[]),dispose(){const value=prepared.get(token);if(value&&!value.used){value.used=true;value.plan.free();prepared.delete(token);}}});
+      const touched=[...new Set([...rows.filter(row=>!equals(persistedRow(row),s.retained.get(row.id))).map(row=>row.id),...[...s.retained.keys()].filter(id=>!rows.some(row=>row.id===id))])];
+      const paths=[...new Set(touched.flatMap(id=>[s.retained.get(id)?.entry?.path,rows.find(row=>row.id===id)?.entry?.path]).filter(Boolean).flatMap(path=>path.split('/').map((_:string,index:number)=>path.split('/').slice(0,index+1).join('/'))))] as string[];
+      for(const entry of s.publication.entries)if(paths.includes(entry.path)&&!touched.includes(entry.id))touched.push(entry.id);
+      const changedTexts=[...new Set([...texts].filter(([id,text])=>!equals(text,s.texts.get(id))).map(([id])=>id).concat(context.expectedText?[textKey(context.expectedText.identity)]:[]))];
+      selectPins(s,new Set(touched),pins);
+      const token:PreparedStreamingMutation=Object.freeze({changes:copy(output.changes??[]),dispose(){const value=prepared.get(token);if(value&&!value.used){value.used=true;value.plan.free();value.nextGraph?.free();prepared.delete(token);}}});
       prepared.set(token,{snapshot:s,plan,result:output,rows,texts,sources,pins,prior:context.prior??new Uint8Array(),updateId:context.updateId,
-        incoming:context.incoming??false,delivery:context.delivery,expectedText:context.expectedText??null,nextHead,revisions:[...revisions],used:false});
-      plan=undefined;return token;
-    }finally{proof?.free();if(!candidateConsumed)candidate.free();plan?.free();}
+        incoming:context.incoming??false,delivery:context.delivery,expectedText:context.expectedText??null,nextHead,nextGraph,touched,paths,changedTexts,revisions:[...revisions],used:false});
+      plan=undefined;nextGraph=undefined;return token;
+    }finally{proof?.free();if(!candidateConsumed)candidate.free();plan?.free();nextGraph?.free();}
   }
   function candidateEmissions(candidate:StreamingCandidate):Emission[] {
     try {
@@ -499,7 +594,8 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
   async function prepareLocal(input:StreamingLocalInput):Promise<PreparedStreamingMutation> {
     active();input=copy(input);const request=boundedJson(input.requestJson,8*1024*1024),canonical=rust(()=>host.wasm.validateFamilyCommand(input.familyCommandJson??stringify({version:1,request,create_mode:null}))),command=boundedJson(canonical,8*1024*1024);
     if(!equals(command.request,request))throw failure('family_command_mismatch');
-    const s=await snapshot(),config=enrolled(s),graph=state(s);
+    const s=await snapshot(),config=enrolled(s),storage=recordsContext.storage,borrowed=storage?.snapshot===s;
+    const graph=borrowed?(storage.graph??=state(s)):state(s);
     try{
       const text=request.mutation.type==='write'?[...s.texts.values()].find(text=>text.identity.entry_id===request.mutation.id)??null:null;
       const need=boundedJson(rust(()=>graph.mutationRequirements(stringify({command,entries:s.publication.entries,text}))));
@@ -508,7 +604,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
         text:need.text==='none'?null:{actor:{actor,owner:{replica_id:config.replica_id,incarnation_id:config.incarnation_id}},new_text:need.text==='create'?{bootstrap_id:fresh(),empty_revision:fresh()}:null}};
       const candidate=rust(()=>graph.prepareMutation(stringify({command,entries:s.publication.entries,text,allocation})));
       return await finish(s,candidate,candidateEmissions(candidate),{updateId:allocation.update_ids[0],expectedText:text});
-    }finally{graph.free();}
+    }finally{if(!borrowed)graph.free();}
   }
   async function prepareBinary(input:StreamingBinaryInput):Promise<PreparedStreamingMutation> {
     const batch=input.batch,built=input.built;let graph:StreamingMetadataState|undefined,consumed=false;
@@ -525,7 +621,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
     }
   }
 
-  function commitLocal(tx:IDBTransaction,token:PreparedStreamingMutation,current:StreamingPublication,done:(result:{sequence:string})=>void,abort:Abort):void {
+  function commitLocal(tx:IDBTransaction,token:PreparedStreamingMutation,current:StreamingPublication,done:(result:{sequence:string})=>void,abort:Abort,finalSequence?:string):void {
     const value=prepared.get(token);
     if(!value||value.used){abort(failure('invalid_prepared_sync_plan'));return;}
     value.used=true;prepared.delete(token);
@@ -533,13 +629,15 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
     const close=()=>{actualGraph?.free();actualGraph=undefined;value.plan.free();};let closed=false;
     const release=()=>{if(!closed){closed=true;close();}};
     tx.addEventListener?.('abort',release,{once:true});tx.addEventListener?.('complete',release,{once:true});
-    const reject:Abort=error=>{release();abort(error);};
-    try{active();capture(tx,actual=>{
+    tx.addEventListener('abort',()=>{value.nextGraph?.free();value.nextGraph=undefined;invalidate();},{once:true});
+    const reject:Abort=error=>{value.nextGraph?.free();value.nextGraph=undefined;invalidate();release();abort(error);};
+    const actual=value.snapshot,ledgerBytes={...actual.ledgerBytes};let recordDeltas:GraphRow[]=[],activityDeltas:GraphRow[]=[];
+    try{active();retained(tx,actual,()=>{
       try{
         if(!equals(actual.config,value.snapshot.config)||!equals(actual.publication,current)||!equals(actual.publication,value.snapshot.publication)||
           !equals([...actual.texts],[...value.snapshot.texts])||!equals([...actual.retained],[...value.snapshot.retained]))throw failure('sync_snapshot_conflict');
         checkDelivery(actual,value.delivery);
-        const graph=state(actual),config=enrolled(actual);actualGraph=graph;
+        const config=enrolled(actual);
         const incomingKey:SourceKey={realmId:config.realm_id,vaultId:config.vault_id,updateId:value.updateId};
         read(tx,tx.objectStore('sync_source_wires').get(key(incomingKey)),wireRow=>{
           try{
@@ -565,22 +663,19 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
               // same new plan, never by an earlier committed publication.
               read(tx,tx.objectStore('sync_revisions').getKey(revision),exists=>{if(exists!==undefined)throw failure('sync_revision_collision');checkRevisions();},reject,active);
             };
-            const pins=[...value.pins.values()];let pinIndex=0;
-            const checkPins=()=>{
-              if(pinIndex===pins.length){checkPlan();return;}
-              const expected=pins[pinIndex++];
-              read(tx,tx.objectStore('sync_source_headers').get(key(expected)),header=>{
-                if(!equals(header,expected))throw failure('immutable_source_conflict');
-                read(tx,tx.objectStore('sync_source_payloads').getKey(key(expected)),exists=>{if(exists===undefined)throw failure('source_body_missing');checkPins();},reject,active);
-              },reject,active);
-            };
+            const checkPins=()=>checkProofPins(tx,actual,[...value.pins.values()],checkPlan,reject);
             const checkPlan=()=>{
               active();
               const actualText=value.expectedText?[...actual.texts.values()].find(text=>text.identity.entry_id===value.expectedText.identity.entry_id)??value.expectedText:null;
+              const storage=recordsContext.storage,borrowed=storage?.snapshot===actual&&storage.graph;
+              const graph=borrowed||state(actual);if(!borrowed)actualGraph=graph;
               rust(()=>value.plan.checkPreconditions(graph,stringify({entries:actual.publication.entries,text:actualText,allocated_ids_unused:true,cursor:actual.cursor}),prior));
-              graph.free();actualGraph=undefined;writeSources();
+              if(!borrowed)graph.free();actualGraph=undefined;writeSources();
             };
-            checkIds();
+            checkPaths(tx,actual,value.paths,()=>checkRows(tx,actual,value.touched,()=>{
+              let at=0;const next=()=>{if(at===value.changedTexts.length){checkIds();return;}const id=value.changedTexts[at++],expected=actual.texts.get(id);
+                read(tx,tx.objectStore('sync_text').get(id),row=>{if(row&&row.key!==id||!equals(row?.state,expected))throw failure('sync_snapshot_conflict');next();},reject,active);};next();
+            },reject),reject);
           }catch(error){reject(error);}
         },reject,active);
       }catch(error){reject(error);}
@@ -629,6 +724,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
         const row=boundedJson(rust(()=>value!.plan.activityDeltaJson(index)),128*1024);
         activities.push({realmId:config.realm_id,vaultId:config.vault_id,updateId:row.update_id,activity:row.activity,summary_digest:row.summary_digest});
       }
+      recordDeltas=records;activityDeltas=activities;
       let index=0;
       const next=()=>{
         if(index<records.length){addImmutableMetadata(tx,'sync_graph_records',records[index++],()=>next(),reject);return;}
@@ -642,7 +738,11 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       const authored:Json[]=[];
       for(const id of ids){const source=emissions.find(source=>source.header.updateId===id),header=source?.header??value!.pins.get(stringify([config.realm_id,config.vault_id,id]));if(header)authored.push({key:[config.realm_id,config.vault_id,id],metadata:descriptor(header).metadata,pending:1,order:'0'.repeat(20),sealed:false});}
       const envelopes=value!.incoming&&value!.prior.byteLength===0?[{key:[config.realm_id,config.vault_id,value!.updateId],metadata:descriptor(value!.sources[0].header).metadata,direction:'received'}]:[];
-      admitLedgerRows(tx,'sync_authored',authored,()=>admitLedgerRows(tx,'sync_envelopes',envelopes,writeAdmittedHeaders,reject),reject);
+      const fence=recordsContext.storage!.fence;
+      admitLedgerRows(tx,'sync_authored',authored,()=>admitLedgerRows(tx,'sync_envelopes',envelopes,()=>{
+        ledgerBytes.authored+=authored.reduce((sum,row)=>sum+textEncoder.encode(stringify(row)).byteLength,0);
+        ledgerBytes.envelopes+=envelopes.reduce((sum,row)=>sum+textEncoder.encode(stringify(row)).byteLength,0);writeAdmittedHeaders();
+      },reject,{count:fence.envelopes,bytes:ledgerBytes.envelopes}),reject,{count:fence.authored,bytes:ledgerBytes.authored});
     }
     function writeAdmittedHeaders():void {
       const config=enrolled(value!.snapshot),emissions=value!.sources.filter(source=>!value!.incoming),ids=value!.result.allocated_update_ids??[];
@@ -680,7 +780,13 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       const next=()=>{
         if(index===value!.rows.length){
           try{active();const result=host.publish(tx,value!.rows,{kind:value!.incoming?'received':'authored',update_id:value!.updateId},value!.incoming||!value!.result.changes?.length?undefined:value!.result.changes,current);
-            if(!closed){closed=true;close();}done(result);
+            const merge=(previous:GraphRow[],added:GraphRow[])=>[...new Map([...previous,...added].map(row=>[keyString(row),row])).values()];
+            const next:Snapshot={...actual,head:value!.nextHead??actual.head,records:merge(actual.records,recordDeltas),activities:merge(actual.activities,activityDeltas),
+              texts:value!.texts,headers:new Map([...actual.headers,...value!.pins,...value!.sources.map(source=>[keyString(source.header),source.header] as const)]),
+              retained:new Map(value!.rows.map(row=>[row.id,persistedRow(row)])),cursor:value!.delivery?.next??actual.cursor,ledgerBytes,
+              publication:{entries:value!.rows.filter(row=>row.status==='normal').map(row=>row.entry!),presentation:value!.rows.filter(row=>row.status==='normal').map(row=>row.presentation!),sequence:finalSequence??result.sequence}};
+            const nextGraph=value!.nextGraph;value!.nextGraph=undefined;
+            retainOnComplete(tx,next,nextGraph,false,finalSequence??result.sequence,()=>{if(!closed){closed=true;close();}done(result);},reject);
           }catch(error){reject(error);}return;
         }
         const row=value!.rows[index++],stored=persistedRow(row);
@@ -797,8 +903,9 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       read(tx,tx.objectStore('sync_cursors').get([config.realm_id,config.vault_id]),cursor=>done(config,cursor?.value??null),abort,active);
     },abort,active);
   }
-  function admitLedgerRows(tx:IDBTransaction,store:'sync_authored'|'sync_envelopes',additions:Json[],done:()=>void,abort:Abort):void{
+  function admitLedgerRows(tx:IDBTransaction,store:'sync_authored'|'sync_envelopes',additions:Json[],done:()=>void,abort:Abort,known?:{count:number;bytes:number}):void{
     let count=additions.length,bytes=additions.reduce((sum,row)=>sum+textEncoder.encode(stringify(row)).byteLength,0);
+    if(known){if(count+known.count>4096||bytes+known.bytes>128*1024*1024)throw failure('storage_metadata_too_large');done();return;}
     const request=tx.objectStore(store).openCursor();
     read(tx,request,cursor=>{
       if(cursor){count++;bytes+=textEncoder.encode(stringify(cursor.value)).byteLength;}
@@ -931,11 +1038,11 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
         read(tx,tx.objectStore('intents').openCursor(),intent=>{
           if(intent)throw failure('sync_enrollment_requires_empty');
           const version=fresh(),builder=new host.wasm.WasmMetadataStateBuilder(stringify({realm_id:scope.realm_id,vault_id:scope.vault_id}),version),graph=rust(()=>builder.finish());
-          try{
-            tx.objectStore('sync_state').add({key:streamingSyncKeys.configuration,value:{...scope,replica_id:fresh(),incarnation_id:fresh()}});
-            tx.objectStore('sync_state').add({key:streamingSyncKeys.head,value:boundedJson(graph.metadataHeadJson())});
-            tx.objectStore('sync_state').put({key:'authored-sequence',value:'0'});tx.objectStore('sync_revisions').add({revision:version});done(undefined);
-          }finally{graph.free();}
+          const config={...scope,replica_id:fresh(),incarnation_id:fresh()},head=boundedJson(graph.metadataHeadJson());
+          tx.objectStore('sync_state').add({key:streamingSyncKeys.configuration,value:config});
+          tx.objectStore('sync_state').add({key:streamingSyncKeys.head,value:head});
+          tx.objectStore('sync_state').put({key:'authored-sequence',value:'0'});tx.objectStore('sync_revisions').add({revision:version});
+          retainOnComplete(tx,{...s,config,head},graph,true,undefined,()=>done(undefined),abort);
         },abort,active);
       }catch(error){abort(error);}
     },abort));},
@@ -949,7 +1056,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
         active();if(existing){const retained=await exact(sourceKey(metadata),'payload');if(!sameBytes(retained.bytes,payload)||!equals(existing.metadata,metadata))throw failure('sync_update_collision');return stringify(metadata);}
         const candidate=rust(()=>graph.prepareAuthoredBatch(batch,fresh()));consumed=true;
         const token=await finish(s,candidate,[{metadata,payload}],{updateId:metadata.key.update_id,initializeTexts:true});
-        try{await transact<{sequence:string}>('readwrite',(tx,done,abort)=>host.readPublication(tx,current=>commitLocal(tx,token,current,done,abort),abort));return stringify(metadata);}finally{token.dispose();}
+        try{await transact<{sequence:string}>('readwrite',(tx,done,abort)=>readPublication(tx,current=>commitLocal(tx,token,current,done,abort),abort));return stringify(metadata);}finally{token.dispose();}
       }finally{graph.free();if(!consumed)batch.free();}
     },
     async receive(updateId,wire,keyInput,delivery){
@@ -957,7 +1064,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       if('duplicate' in token)return token;
       const value=prepared.get(token)!;
       const duplicate=value.prior.byteLength>0;
-      try{const result=await transact<{sequence:string}>('readwrite',(tx,done,abort)=>host.readPublication(tx,current=>commitLocal(tx,token,current,done,abort),abort));return {duplicate,sequence:result.sequence};}finally{token.dispose();}
+      try{const result=await transact<{sequence:string}>('readwrite',(tx,done,abort)=>readPublication(tx,current=>commitLocal(tx,token,current,done,abort),abort));return {duplicate,sequence:result.sequence};}finally{token.dispose();}
     },
     setCursor(nextInput,expectedInput){const next=copy(nextInput),expected=copy(expectedInput);return transact<void>('readwrite',(tx,done,abort)=>capture(tx,s=>{
       try{
@@ -1001,12 +1108,12 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
         }catch(error){abort(error);}
       },abort));
     },
-    async inspect(){const s=await snapshot();if(!s.config)return {scope:null,namespace:null,pending:[],cursor:null};const graph=state(s);try{
+    async inspect(){const s=await snapshot();if(!s.config)return {scope:null,namespace:null,pending:[],cursor:null};const storage=recordsContext.storage,borrowed=storage?.snapshot===s,graph=borrowed?(storage.graph??=state(s)):state(s);try{
       const namespace=boundedJson(rust(()=>graph.namespaceViewJson()),128*1024*1024);
       return {scope:{realm_id:s.config.realm_id,vault_id:s.config.vault_id,key_epoch:s.config.key_epoch},namespace,pending:copy(namespace.namespace.pending),cursor:copy(s.cursor)};
-    }finally{graph.free();}},
+    }finally{if(!borrowed)graph.free();}},
     async readRetained(id){
-      const s=await snapshot(),row=s.retained.get(id);if(!row)return null;
+      const s=await snapshot(true),row=s.retained.get(id);if(!row)return null;
       const graph=state(s);let proof:StreamingVerifiedSet|undefined,recovery:StreamingRecovery|undefined;
       try{
         proof=await verify(graph.verificationSession(),new Map(s.headers),new Map());active();
@@ -1062,7 +1169,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
           published.row?.entry?.revision!==revision||published.row?.content?.kind!=='binary'||!equals(published.row.content.reference,reference))throw failure('binary_read_revision_conflict');
         publicationRef=published;
       }
-      const pins=new Map(s.headers);proof=await verify(graph.verificationSession(),pins,new Map());active();
+      const pins=new Map<string,SourceHeader>();selectPins(s,new Set([request.entryId]),pins);proof=await verify(graph.verificationSession(),pins,new Map());active();
       const plan=rust(()=>graph.openBinaryRead(proof!,stringify(reference))),token=readHandle(plan,reference,revision);
       reads.set(token,{snapshot:s,pins,publicationRef,kind:'published'});return token;
     }finally{proof?.free();graph.free();}
@@ -1071,22 +1178,14 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
     const value=reads.get(token);if(!value||value.kind!==kind){abort(failure('invalid_prepared_binary_read'));return;}
     const reject:Abort=error=>{token.dispose();abort(error);};
     tx.addEventListener?.('abort',()=>token.dispose(),{once:true});
-    capture(tx,actual=>{try{
+    const actual=value.snapshot;retained(tx,actual,()=>{try{
       if(!equals(actual.config,value.snapshot.config)||!equals(actual.head,value.snapshot.head)||!equals(actual.records,value.snapshot.records)||
         !equals(actual.activities,value.snapshot.activities)||(kind==='recovery'&&(!equals([...actual.texts],[...value.snapshot.texts])||!equals([...actual.retained],[...value.snapshot.retained])))||!equals(actual.publication,current)||!equals(current,value.snapshot.publication))throw failure('sync_snapshot_conflict');
-      const pins=[...value.pins.values()];let position=0;
       const next=()=>{
-        if(position===pins.length){
-          if(value.publicationRef){read(tx,tx.objectStore('sync_publication_refs').get([value.publicationRef.id,value.publicationRef.revision]),actual=>{
-            if(!equals(actual,value.publicationRef))throw failure('binary_read_revision_conflict');active();reads.delete(token);done();
-          },reject,active);}else{active();reads.delete(token);done();}return;
-        }
-        const expected=pins[position++];
-        read(tx,tx.objectStore('sync_source_headers').get(key(expected)),header=>{
-          if(!equals(header,expected))throw failure('immutable_source_conflict');
-          read(tx,tx.objectStore('sync_source_payloads').getKey(key(expected)),exists=>{if(exists===undefined)throw failure('source_body_missing');next();},reject,active);
-        },reject,active);
-      };next();
+        if(value.publicationRef){read(tx,tx.objectStore('sync_publication_refs').get([value.publicationRef.id,value.publicationRef.revision]),actual=>{
+          if(!equals(actual,value.publicationRef))throw failure('binary_read_revision_conflict');active();reads.delete(token);done();
+        },reject,active);}else{active();reads.delete(token);done();}
+      };checkRows(tx,actual,[token.reference.entry?.entry_id??token.reference.entry_id],()=>checkProofPins(tx,actual,[...value.pins.values()],next,reject),reject);
     }catch(error){reject(error);}},reject);
   }
   function commitRead(tx:IDBTransaction,token:PreparedStreamingRead,current:StreamingPublication,done:()=>void,abort:Abort):void {
@@ -1096,7 +1195,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
     commitPinnedRead(tx,token,'recovery',current,done,abort);
   }
   async function prepareRecoveryRead(input:StreamingRecoveryReadInput):Promise<PreparedStreamingRecoveryRead> {
-    const request=copy(input),s=await snapshot(),graph=state(s);let proof:StreamingVerifiedSet|undefined,recovery:StreamingRecovery|undefined,ownedPlan:StreamingBinaryReadPlan|undefined;
+    const request=copy(input),s=await snapshot(true),graph=state(s);let proof:StreamingVerifiedSet|undefined,recovery:StreamingRecovery|undefined,ownedPlan:StreamingBinaryReadPlan|undefined;
     try{
       if(!s.retained.has(request.entryId))throw failure('binary_recovery_read_unavailable');
       const pins=new Map(s.headers);proof=await verify(graph.verificationSession(),pins,new Map());active();
@@ -1119,9 +1218,10 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
     }finally{ownedPlan?.free();recovery?.free();proof?.free();graph.free();}
   }
   async function validate():Promise<void> {
+    try{
     if(managedAdapter)await managedAdapter.validate();
     else await transact<void>('readonly',(tx,done,abort)=>read(tx,tx.objectStore('managed_collections').openCursor(),cursor=>{if(cursor)throw failure('records_bindings_unavailable');done();},abort,active));
-    const s=await snapshot();if(!s.config)return;
+    const s=await snapshot(!recordsContext.storage?.admission);if(!s.config)return;
     const graph=state(s);let proof:StreamingVerifiedSet|undefined,classification:StreamingClassification|undefined;
     try{
       // Decode every retained bounded CRDT, including hidden or dependency-pending
@@ -1163,7 +1263,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
         visible.delete(id);stats.delete(id);revisions.add(entry.revision);history.push({id,revision:entry.revision,row});
       }
       if(visible.size||stats.size)throw failure('storage_corrupt');
-      await transact<void>('readonly',(tx,done,abort)=>capture(tx,actual=>{
+      await transact<void>('readonly',(tx,done,abort)=>retained(tx,s,()=>{const actual=s;
         try{
           if(!equals(actual.config,s.config)||!equals(actual.head,s.head)||!equals(actual.records,s.records)||!equals(actual.activities,s.activities)||
             !equals([...actual.texts],[...s.texts])||!equals([...actual.retained],[...s.retained])||!equals(actual.publication,s.publication))throw failure('sync_snapshot_conflict');
@@ -1183,7 +1283,9 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
           };nextRevision();
         }catch(error){abort(error);}
       },abort));active();
+      if(recordsContext.storage?.snapshot===s)recordsContext.storage.admission=false;
     }finally{classification?.free();proof?.free();graph.free();}
+    }catch(error){invalidate();throw error;}
   }
-  return {api,managedRecords,readScope,prepareLocal,prepareBinary,commitLocal,prepareRead,commitRead,prepareRecoveryRead,commitRecoveryRead,validate};
+  return {api,managedRecords,readScope,readPublication,close,prepareLocal,prepareBinary,commitLocal,prepareRead,commitRead,prepareRecoveryRead,commitRecoveryRead,validate};
 }

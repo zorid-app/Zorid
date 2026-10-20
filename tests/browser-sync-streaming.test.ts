@@ -70,7 +70,7 @@ function fixture(){
           return {count(){return request('count',undefined,()=>local.get(name)!.size);},get(key:any){return request('get',key,()=>local.get(name)!.get(JSON.stringify(key)));},
             getKey(key:any){return request('getKey',key,()=>local.get(name)!.has(JSON.stringify(key))?key:undefined);},
             index(indexName:string){const definition=indexes.get(name)?.find(index=>index.name===indexName);assert.ok(definition,'missing index');return {get(key:any){return request('index-get',key,()=>[...local.get(name)!.values()].find(row=>compare(keyOf(row,definition.path),key)===0));},openCursor(range?:any,direction='next'){return cursor(range,direction,definition.path);}};},
-            add(row:any){return write(row,true);},put(row:any){return write(row,false);},
+            add(row:any){return write(row,true);},put(row:any){return write(row,false);},delete(key:any){return request('delete',key,()=>{local.get(name)!.delete(JSON.stringify(key));modified.add(name);});},
             getAll(){assert.fail('byte-bearing aggregate scan is forbidden');},
             openCursor(range?:any,direction='next'){return cursor(range,direction);},
           };
@@ -85,13 +85,17 @@ function fixture(){
   createBrowserNormalizedSchema(db);createBrowserManagedSchema(db);
   for(const [name,keyPath] of Object.entries({...browserStreamingSyncKeyPaths,metadata:'id',presentation:'id',content:'id',receipts:'key',journal:'sequence',intents:'key'}))if(!records.has(name))db.createObjectStore(name,{keyPath});
   indexes.set('sync_authored',[{name:'by_pending_order',path:['pending','order'],unique:false}]);
+  indexes.set('metadata',[{name:'by_path',path:'path',unique:false}]);
   const run=<T>(stores:readonly string[],action:Parameters<typeof normalizedTransact<T>>[2],mode:IDBTransactionMode='readwrite',owner=authority)=>
     normalizedTransact<T>(db,{authorityId:owner,stores,mode,assertActive(){if(denied)throw Object.assign(new Error('retired'),{code:'owner_retired'});}},action);
   return {db,records,paths,indexes,requests,transactions,run,
     holdPayloadRead(mode='readonly'){let entered!:()=>void;const ready=new Promise<void>(resolve=>entered=resolve);const gate:any={entered,release:null,mode};payloadGate=gate;return {ready,release(){assert.equal(typeof gate.release,'function');gate.release();}};},
     deny(){denied=true;},relax(){strict=false;},hold(){hold=true;},finish(){hold=false;for(const tx of transactions)tx.finish();},failNextCommit(){fail=true;},
     row(store:string,key:any){return records.get(store)!.get(JSON.stringify(key));},
-    seed(store:string,key:any,row:any){records.get(store)!.set(JSON.stringify(key),structuredClone(row));},
+    seed(store:string,key:any,row:any){records.get(store)!.set(JSON.stringify(key),structuredClone(row));if(store==='control'&&key==='test-publication'){
+      records.get('metadata')!.clear();records.get('presentation')!.clear();for(const entry of row.value.entries)records.get('metadata')!.set(JSON.stringify(entry.id),clone(entry));
+      for(const value of row.value.presentation)records.get('presentation')!.set(JSON.stringify(value.id),clone(value));records.get('control')!.set(JSON.stringify('sequence'),{key:'sequence',value:row.value.sequence});
+    }},
   };
 }
 const scope={realm_id:'realm',vault_id:'vault'};
@@ -200,6 +204,8 @@ function harness(recordsEnabled=false){
       const entries=rows.filter(row=>row.entry&&row.status==='normal').map(row=>row.entry),presentation=rows.filter(row=>row.presentation&&row.status==='normal').map(row=>row.presentation);
       const sequence=String(BigInt(current.sequence)+1n);tx.objectStore('control').put({key:'test-publication',value:{entries,presentation,sequence}});
       tx.objectStore('control').put({key:'sequence',value:sequence});
+      for(const row of rows)if(row.status==='normal'){tx.objectStore('metadata').put(row.entry);tx.objectStore('presentation').put(row.presentation);}
+      for(const entry of current.entries)if(!entries.some(row=>row.id===entry.id)){tx.objectStore('metadata').delete(entry.id);tx.objectStore('presentation').delete(entry.id);}
       for(const row of rows)if(row.status==='normal'&&row.content?.kind==='text')tx.objectStore('content').put({id:row.id,bytes:row.content.bytes});
       return {sequence};
     },
@@ -219,7 +225,7 @@ function harness(recordsEnabled=false){
       };
     },
   };
-  const commit=(token:any)=>f.run<any>([...browserStreamingSyncStores,'metadata','presentation','content','control','receipts','journal','intents'],(tx,done,abort)=>host.readPublication(tx,(current:any)=>engine.commitLocal(tx,token,current,done,abort),abort));
+  const commit=(token:any)=>f.run<any>([...browserStreamingSyncStores,'metadata','presentation','content','control','receipts','journal','intents'],(tx,done,abort)=>engine.readPublication(tx,(current:any)=>engine.commitLocal(tx,token,current,done,abort),abort));
   const charge=(e:any)=>{
     if(f.row('sync_source_payloads',keyOfId(e.metadata.key.update_id)))return;
     const usage=clone(f.row('control','binary-stream-usage:v1').value);usage.sourcePayloadBytes=String(BigInt(usage.sourcePayloadBytes)+BigInt(e.payload.length));
@@ -267,11 +273,25 @@ async function local(h:Awaited<ReturnType<typeof enrolled>>,id='note'){
   const request={operation_id:'operation',mutation:{type:'create',id,path:id+'.md',kind:'file',content:[116,101,120,116]}};
   return h.engine.prepareLocal({requestJson:JSON.stringify(request),familyCommandJson:JSON.stringify({version:1,request,create_mode:'text'}),nextRevision:id+'-revision'});
 }
-Object.defineProperty(globalThis,'IDBKeyRange',{configurable:true,value:{bound(lower:any,upper:any,lowerOpen=false,upperOpen=false){return {lower,upper,lowerOpen,upperOpen};},lowerBound(lower:any,open=false){return {lower,open};}}});
+Object.defineProperty(globalThis,'IDBKeyRange',{configurable:true,value:{only(value:any){return {lower:value,upper:value};},bound(lower:any,upper:any,lowerOpen=false,upperOpen=false){return {lower,upper,lowerOpen,upperOpen};},lowerBound(lower:any,open=false){return {lower,open};}}});
 test('admission and owned sequential mutations use one full storage capture',async()=>{
   const h=await enrolled();await h.engine.validate();
   for(let index=0;index<5;index++)await h.commit(await local(h,'incremental-'+index));
   assert.equal(h.f.requests.filter(row=>row.store==='sync_graph_records'&&row.operation==='cursor').length,1);
+  for(const store of ['sync_authored','sync_envelopes'])assert.equal(h.f.requests.filter(row=>row.store===store&&row.operation==='cursor').length,1,'warm admission uses the exact ledger byte/count summaries');
+});
+test('warm overlapping and aborted commits preserve committed storage and invalidate stale work',async()=>{
+  const h=await enrolled();await h.engine.validate();const first=await local(h,'first'),stale=await local(h,'stale');
+  await h.commit(first);await assert.rejects(h.commit(stale),{code:'sync_snapshot_conflict'});stale.dispose();
+  const before=clone(h.f.records),aborted=await local(h,'aborted');h.f.failNextCommit();await assert.rejects(h.commit(aborted),{code:'storage_failure'});aborted.dispose();
+  assert.deepEqual(h.f.records,before);await h.commit(await local(h,'after-abort'));
+  assert.equal(h.f.row('control','test-publication').value.entries[0].id,'after-abort');
+});
+test('warm destination absence is checked against the actual nonunique path index',async()=>{
+  const h=await enrolled();await h.engine.validate();const prepared=await local(h,'destination');
+  h.f.seed('metadata','unexpected',{id:'unexpected',path:'destination.md',kind:'file',revision:'other',deleted:false});
+  await assert.rejects(h.commit(prepared),{code:'sync_snapshot_conflict'});prepared.dispose();
+  assert.equal(h.f.row('content','destination'),undefined);
 });
 test('scope-only reads stay fresh without graph restoration or whole-vault scans',async()=>{
   const h=await enrolled(),start=h.f.requests.length,transactionStart=h.f.transactions.length,builds=h.graphBuildCount();
@@ -537,10 +557,12 @@ test('staged Binary admission reuses source bodies and orders chunk page final e
 });
 test('bounded Binary read retains only private read handle after commit and rechecks each later payload',async()=>{
   const h=await binaryStage();await h.commit(await h.engine.prepareBinary(h.input));
+  const captures=h.f.requests.filter(row=>row.store==='sync_graph_records'&&row.operation==='cursor').length;
   const prepared=await h.engine.prepareRead({entryId:'binary',expectedRevision:'binary-revision',expectedContentEvent:'binary-final'});
   assert.equal(prepared.length(),'3');assert.equal(prepared.chunkCount(),1);
   assert.equal(JSON.parse(prepared.chunkJson(0)).update_id,'staged-chunk');
   await h.commitRead(prepared);
+  assert.equal(h.f.requests.filter(row=>row.store==='sync_graph_records'&&row.operation==='cursor').length,captures,'warm binary preparation and pin commit do not capture the vault again');
   assert.deepEqual(Object.keys(prepared).sort(),['chunkCount','chunkJson','dispose','length','reference','revision','verifyPayload']);
   const pin=h.f.row('binary_reads',['client','read']);assert.deepEqual(Object.keys(pin).sort(),['clientId','entryId','readId','reference','revision']);
   same(prepared.verifyPayload(0,h.f.row('sync_source_payloads',keyOfId('staged-chunk')).bytes),new Uint8Array([41,42,43]));
