@@ -466,6 +466,15 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
   function persistedRow(row:StreamingRetainedRow):Json {
     return {...row,content:row.content?.kind==='text'?{kind:'text',metadata:row.content.metadata}:row.content};
   }
+  function checkRetainedBounds(s:Snapshot):void {
+    if(s.records.length+s.activities.length>4096)throw failure('storage_metadata_too_large');
+    const textRows=[...s.texts].map(([key,state])=>({key,state}));
+    for(const rows of [s.records,s.activities,textRows,[...s.retained.values()]]){
+      if(rows.length>4096)throw failure('storage_metadata_too_large');let bytes=0;
+      for(const row of rows)if((bytes+=textEncoder.encode(stringify(row)).byteLength)>128*1024*1024)throw failure('storage_metadata_too_large');
+    }
+    let bytes=0;for(const text of s.texts.values())if((bytes+=textEncoder.encode(stringify(text)).byteLength)>8*1024*1024)throw failure('storage_metadata_too_large');
+  }
   function classifications(plan:StreamingMetadataPlan,texts:Map<string,Json>,s:Snapshot,forced:Json[]|undefined,revisions:Set<string>):StreamingRetainedRow[] {
     if(forced)for(const change of forced){const text=[...texts.values()].find(text=>text.identity.entry_id===change.after.id);
       if(text&&text.version!==change.after.revision){const next=boundedJson(rust(()=>host.wasm.rebindTextState(stringify(text),text.version,change.after.revision)),8*1024*1024);texts.set(textKey(next.identity),next);}}
@@ -785,6 +794,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
               texts:value!.texts,headers:new Map([...actual.headers,...value!.pins,...value!.sources.map(source=>[keyString(source.header),source.header] as const)]),
               retained:new Map(value!.rows.map(row=>[row.id,persistedRow(row)])),cursor:value!.delivery?.next??actual.cursor,ledgerBytes,
               publication:{entries:value!.rows.filter(row=>row.status==='normal').map(row=>row.entry!),presentation:value!.rows.filter(row=>row.status==='normal').map(row=>row.presentation!),sequence:finalSequence??result.sequence}};
+            checkRetainedBounds(next);
             const nextGraph=value!.nextGraph;value!.nextGraph=undefined;
             retainOnComplete(tx,next,nextGraph,false,finalSequence??result.sequence,()=>{if(!closed){closed=true;close();}done(result);},reject);
           }catch(error){reject(error);}return;
