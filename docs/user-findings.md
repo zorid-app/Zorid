@@ -18,7 +18,26 @@ This introduces no attachment/file-type-wide size restriction. Underlying text
 capacity must actually support1 MiB, including save/read/reopen; a UI-only cap
 change is insufficient. Implementation is isolated in `codex/large-note-save`
 (frontend/browser) and `codex/one-mib-text-core` (core/envelope constraints).
-Verification and integration remain pending in this entry.
+Reviewed source is composed in2d5df2f3 (Rust44ba278c, browser/editor8714ddf9,
+table child consistencyb6b7216f).169 focused Node checks and full TypeScript pass;
+33 focused Rust checks pass, including actual populated predecessor migration,
+rollback on corruption, preservation of pending checkpoints, portable encrypted
+Text receive/reopen and native import checkpoints. Normal generated-WASM and
+web builds and rebuilt native host/CLI builds pass.
+
+Actual Chrome/WASM/IndexedDB fixture acceptance:1 MiB Unicode edit and creation
+both save/read/reopen with the same persisted authority and no browser errors
+(`buffer-save-7DvTkR`, `buffer-save-qyhZSg`). Original2,938,328-byte clipboard
+paste is prevented before modifying editor DOM, buffer, or durable content
+(`buffer-save-5J5NF7`). Native NoteBuffer + admitted desktop host fixture saves
+1 MiB Unicode, reads exact filesystem bytes, rejects cap+1 without mutation and
+reopens it in a new host process (`native-one-mib-FUd11j/report.json`).
+Independent rebuilt CLI also reads the native fixture, writes a full1 MiB
+note, then reads exact bytes in another process and matches the filesystem
+(`native-one-mib-FUd11j/cli-report-fixed.json`).
+These are size-specific real-platform fixtures, not complete normal workspace
+or full S1 acceptance. User-owned playgrounds stay on their frozen older builds;
+the original unsaved draft remains backed up and neither playground was reloaded.
 
 REA inspected installed Obsidian1.7.4 archive
 SHA256454462e6316bb9ea9726403e887a8be691eb34b2cff70a0a8d6db4d3de7615d9:

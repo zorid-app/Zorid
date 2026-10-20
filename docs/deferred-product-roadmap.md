@@ -9,7 +9,8 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
-Current integrated source before the active size fix is `f237ebfa` (2026-10-20).
+Current integrated source includes the reviewed size-fix batch through
+`2d5df2f3` (2026-10-20); previous normal-workspace proof is atf237ebfa.
 Normal Electron100-note save → core indexing → visible Search result → reopen
 passes on candidate6fe36157, whose relevant runtime/tool sources match main.
 Evidence: `.worktrees/s1-evidence/native-save-index-query-003/report.json`.
@@ -22,16 +23,28 @@ S1 remains open. Normal large-vault targeted storage correction is isolated
 Complete browser persistence/performance and standalone CLI acceptance remain
 open. Passing the normal100-note desktop slice does not establish these gates.
 
-Active user finding: oversized browser Markdown note save failure. Final user
-policy is1 MiB UTF-8 per Markdown note, with rejection before document/draft
-mutation and no new attachment cap. Frontend/browser owner `root` works in
-`codex/large-note-save`; Rust text/envelope owner `large_note_save_audit` works
-in `codex/one-mib-text-core`. The1 MiB boundary must pass actual save/read/reopen
-before integration. Preserve the user's private unsaved-note backup. Other
-S1 implementation is held while this scoped bug is resolved. This independent
-Store14→15 constraint migration collides with the held graph branch's schema15:
-graph owner acknowledged HOLD and must rebase/reconcile that correction as
-schema16 before any later integration. No graph acceptance is implied.
+The oversized browser Markdown save finding is resolved with an explicit1 MiB
+UTF-8 Markdown authoring cap and actual supporting storage capacity. Source
+2d5df2f3 composes browser/editor8714ddf9, table consistencyb6b7216f and Rust
+44ba278c.169 focused Node checks, TypeScript,33 Rust checks, normal WASM/web
+builds and native host/CLI builds pass. Actual Chrome fixture1 MiB Unicode create
+and edit both survive exact readback and storage reopen. The original2.94 MB
+clipboard paste leaves editor/durable content unchanged with a plain limit notice.
+Native NoteBuffer/admitted host1 MiB save, filesystem readback, cap+1 rejection
+and new-process reopen pass. Evidence lives in `.worktrees/s1-evidence/`:
+`one-mib-core-gate/report.json`, `one-mib-browser-final-tests.log`,
+`buffer-save-{7DvTkR,qyhZSg,5J5NF7}/report.json`,
+`native-one-mib-FUd11j/report.json`, its `cli-report-fixed.json` (independent
+CLI read/edit/new-process readback) and the named build logs.
+The user's frozen desktop/web playgrounds and private unsaved backup are intact;
+this does not establish full normal-workspace or large-vault S1 acceptance.
+
+Store14→15 widens only the immutable Text payload constraint; relay1→2 widens
+the envelope constraint. Both migrate verified predecessors transactionally.
+This collides with the held graph branch's schema15: graph owner acknowledged
+that its correction must reconcile this migration and advance toschema16
+before any later integration. S1's remaining implementation and acceptance
+gates listed above are unchanged.
 
 The older update below is historical where superseded by this checkpoint.
 
