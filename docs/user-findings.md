@@ -1,5 +1,16 @@
 # User findings queue
 
+## Remove measured browser repeated work — 2026-10-20
+
+User explicitly requests removing the excessive repeated work behind the slow
+browser import. Reopens this narrow optimization after the scope freeze below;
+other campaigns remain stopped. Current evidence shows107 ordinary source
+commits plus startup producing108 generations. Source hints coalesce only while
+one core effect remains pending. Investigate bounded advisory notification
+delivery at the existing host seam without moving index policy out of Rust,
+delaying foreground requests, hiding commits or weakening publication checks.
+Implementation and actual before/after verification remain pending.
+
 ## Stop scope expansion after browser measurement — 2026-10-20
 
 User challenged the expansion from remaining tests into more performance work,

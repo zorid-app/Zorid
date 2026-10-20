@@ -9,6 +9,14 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest user steering reopens only the measured browser redundancy issue:
+“Bro just don't do those excessive repeated work please.” Keep other S1
+campaigns and native optimization stopped. `s1_browser_capacity` owns the
+source-only proposal for coalescing redundant advisory source notifications;
+`preview_integration_review` reviews Rust ownership, foreground latency and
+bounded delivery/retirement. Root retains sole integration and runtime ownership.
+No storage redesign, new API/framework or broader acceptance campaign is opened.
+
 **User scope freeze, 2026-10-20:** finish only the running browser measurement,
 report the results/outstanding checks, and stop opening work. That measurement
 is now terminal; all owned test browsers are closed and no heavy slot is active.
