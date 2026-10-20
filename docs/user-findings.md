@@ -1,19 +1,22 @@
 # User findings queue
 
-## S1 functional closeout; performance deferred — 2026-10-20
+## S1 functional closeout accepted; performance deferred — 2026-10-20
 
-User requests skipping performance optimization, ensuring normal functionality
-and moving on. Run bounded current-build macOS/web/CLI acceptance using existing
-harnesses; fix actual functional errors, then close S1 with performance work
-explicitly deferred. Large-vault/stress/timing budgets are no longer closeout gates.
-Current matching native/WASM/frontend builds pass, as do CLI100/full query,
-Electron create/save/quit/history22, actual browser storage5 phases and69 focused
-Find/Search checks. Actual normal browser create→rename→edit rejects durable
-save: visible draft retained but committed source stays empty. This blocks S1
-closeout; finish_normal_indexing owns a narrow isolated fix and
-preview_integration_review audits it. Browser boot wiring was already fixed and
-reviewed asbbaee0cf. See the execution checkpoint for exact evidence, deferred
-performance witnesses and disk-interrupted concurrency. No mobile/sync expansion.
+User requests skipping performance optimization, verifying normal functionality
+and moving on. S1 is accepted within that bounded scope on integrated610ada26.
+Matching builds, actual normal macOS/web/CLI flows and Base/filter/refresh checks
+pass; the exact evidence and deferrals are in the execution checkpoint. S3 is next;
+sync/native mobile remain later stages.
+
+The campaign found and fixed two real errors: normal Vite dev startup could not
+load shared CommonJS exports (bbaee0cf), and typing during owned rename could
+produce a false durable-save conflict (610ada26). Both are independently reviewed;
+normal web create/rename/type/save/new-page reload/Search/open now passes. Final
+current desktop create/history22 and save/rename/image/Search/reopen also pass.
+Original failures and corrected test-input/focus/reload/clock assumptions remain
+in retained evidence. Tests do not establish universal errorlessness, full language
+parity, other OS/mobile behavior or large-vault performance. No further optimization
+was opened during closeout.
 
 ## Remove measured browser repeated work — 2026-10-20
 

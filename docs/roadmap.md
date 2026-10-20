@@ -8,23 +8,13 @@ Older plans remain detailed capability inventories, not competing delivery order
 
 ## Current focus
 
-2026-10-20 latest steering: defer performance optimization, large-vault stress
-and latency/memory budgets. Finish bounded ordinary macOS/web/CLI functionality,
-fix demonstrated errors and close S1 before the next product stage. Current
-builds and scoped CLI/native/browser-storage checks pass. Actual normal browser
-create→rename→edit exposes a rejected durable save; this narrow functional bug
-is the current blocker. See the execution checkpoint for owners and evidence.
-
-**S0 — Storage, saving and local recovery is accepted within the recorded native
-scope. S0A modular-interface gate is accepted.** S0's reviewed implementation and
-actual macOS save/close/quit/history/concurrent-CLI/interruption evidence are in the
-[execution checkpoint](deferred-product-roadmap.md#latest-integration-checkpoint--2026-10-18).
-S0A's reviewed consumer matrix and contracts include the integrated browser
-binary-helper admission correction. **S1.0 has retained baseline observations and
-known limits; bounded S1.1 parsing/cache correctness passes and S1.2 query
-preparation reuse is implementing.** The typed extraction foundation is integrated;
-bounded actual Chrome/CLI/Electron cache correctness checks pass.
-Existing feature/iOS work is preserved.
+**S0, S0A and S1 are accepted within their recorded scopes.** On2026-10-20,
+the user deferred further performance optimization/stress budgets and requested
+ordinary functional acceptance. Matching macOS Electron, actual web and standalone
+CLI checks pass; the browser startup and rename/save failures found during this
+closeout are fixed, reviewed and verified in the app. See the execution checkpoint
+for exact source, results and limits. **Next: S3 managed-data services/contracts.**
+Existing feature/iOS work is preserved; no later stage was implemented here.
 
 Design for desktop, browser and mobile now; finish the usable desktop feature set
 and establish solid sync before resuming native mobile implementation. The browser is a connected sync-group client
@@ -61,9 +51,8 @@ that invalidate a closed gate reopen that bounded gate, not every earlier milest
 ## Delivery order
 
 S0 is **accepted** within its explicit scope/limitations; S0A is **accepted** as a
-contract gate. S1 is **implementing** query-preparation reuse after bounded
-parse-cache acceptance; full performance acceptance remains open. Later milestones
-remain **planned**.
+contract gate. S1 is **accepted for bounded ordinary functionality**; further
+performance work is deferred by the user. Later milestones remain **planned**.
 
 | ID | Milestone | Prerequisite |
 | --- | --- | --- |
@@ -205,65 +194,44 @@ future feature or a public plugin API freeze.
 
 ## S1 — Rust parsing, indexing, caching and search performance
 
-**Latest closeout decision (2026-10-20):** the user explicitly defers additional
-performance optimization and representative/stress performance gates. Close S1
-on bounded functional acceptance of the current integrated macOS/web/CLI paths.
-Retain the measurements and deferred performance work; do not treat missing
-10k/100k results or extra optimization as blockers to that functional closeout.
-This decision does not establish untested platform or large-vault readiness.
+**Status: accepted for bounded ordinary functionality, 2026-10-20.** Further
+optimization, performance budgets and representative/stress gates are explicitly
+deferred by the user. This advances the roadmap without claiming those gates pass.
 
-**Design:** confirmed after user interview; S0/S0A gates are accepted. S1.0
-known-limit observations support S1.1 implementation without establishing the full
-representative/stress acceptance gate. [Design](architecture/indexing-search-design.md),
+Shared core owns committed-document indexing, versioned parsed-fact caching,
+query preparation and update lifecycle; platform hosts provide storage/effect
+execution. Immediate editor syntax remains local. Native reusable facts live in
+app-local cache storage; browser working state survives visits. Supported search
+and Bases semantics remain bounded by the maintained language matrix.
+
+Final integrated source610ada26 has matching native/WASM/frontend builds and
+actual macOS Electron, web and standalone CLI acceptance. Verified flows include
+create/edit/save, rename, image transfer/read/render, Search, exact reopen/history,
+independent CLI CAS/conflict/recovery and Base/filter/source/time refresh. The two
+functional regressions discovered during closeout are fixed and independently
+reviewed. Focused checks and actual source/artifact correspondence are recorded in
+the [execution checkpoint](deferred-product-roadmap.md#latest-execution-update).
+
+Deferred work and limits:
+
+- Multicore and further computation/latency/memory optimization, including
+  renderer startup work beyond demonstrated functional fixes.
+- Representative10000-note/100000-note stress and performance budgets. Historical
+  measurements remain observations, not release acceptance or new speed claims.
+- Contention/dirty-query and partial-first-build DOM timing witnesses; the small
+  functional fixtures do not establish stress, cancellation-race or partial-preview
+  timing coverage. Unexecuted broader Rust cache/time matrix remains unverified.
+- Complete Obsidian query/visual compatibility and Windows/Linux/iOS/Android
+  runtime acceptance. No fully usable Base/Task/Calendar feature UI or sync service
+  follows merely from this shared-core foundation.
+
+**Exit satisfied:** supported ordinary flows pass through integrated macOS/web/CLI
+paths, demonstrated functional failures are resolved, and limitations are explicit.
+S3 is next. Do not reopen an optimization campaign without new user steering.
+
+Design: [indexing/search](architecture/indexing-search-design.md),
 [implementation slices](plans/indexing-search.md),
 [query boundary ADR](adr/0001-shared-query-semantics.md).
-
-**Current:** portable parsing/index generations and native prior-generation reuse
-exist; pumps are sequential, Rust literal search scans text and Bases rebuilds
-substantial state per call. Identity-free parser facts and scoped extraction/
-binding/cache-admission contracts are integrated and focused tests pass. Native
-and browser reusable-facts storage is integrated with focused checks. The matching
-WASM build, actual Chrome100 smoke and tiny nine-phase persisted-cache cohort
-pass on `6f2b177b`; matching native build, Electron100 and CLI14-phase cache
-acceptance pass through `44181d1c` within their bounded scopes. Normal10k admission
-remains incomplete before indexing; full app speedup and complete Obsidian query
-compatibility are not established.
-
-- [ ] Preserve distinct documented Obsidian Bases/search languages and results in
-  shared Rust; inventory supported syntax, gaps and deliberate differences first.
-- [ ] Measure 10,000-note baseline/100,000-note stress plus large-note workflows:
-  cold/warm startup, indexing, incremental edits, search/Base latency and memory.
-- [x] Separate identity-free parsed facts from current entry witnesses; implement
-  scoped/versioned extraction keys, integrity/range validation and shared bounded
-  optional-cache admission. Parser19 and index37 focused tests pass; this does not
-  establish persistent reuse or runtime-owned scheduling.
-- [x] Persist content-derived parse/index reuse with semantic-version keys and safe
-  identity rebinding; incrementally invalidate changed inputs and survive restart.
-  Bounded real-client checks pass; representative/stress performance gates remain open.
-- [ ] Reuse compiled Base programs, graph/generation preparation and eligible query
-  answers in bounded memory; include all relevant dependencies and time context.
-- [ ] Move indexing/semantic-parsing lifecycle into shared Rust core: commit-driven
-  invalidation/coalescing, cache access, job scheduling and update subscriptions.
-  Platform adapters execute work; editors refresh relevant views. Retain local
-  interactive syntax parsing and separate revision-tagged draft analysis.
-- [ ] Remove unnecessary computation with coalesced incremental work, priority for
-  editing/saves/active queries and real cancellation/bounded chunks without stale
-  publication. Multicore implementation is deferred by latest explicit user
-  steering (2026-10-19); no native pool or browser parallel executor is required.
-- [ ] Query committed source; retain coherent previous results while updating and
-  clearly mark partial first-build results/counts. Refresh time-dependent visible
-  views using configured timezone (device-local default), one time context/query.
-- [ ] Cover supported text/properties and attachment names/metadata; PDF extraction/
-  OCR later. Keep browser working data/indexes across visits with incremental
-  catch-up and on-demand bounded attachment caching.
-- [ ] Measure renderer startup/lazy loading and fix demonstrated bottlenecks.
-
-**Exit:** same representative workloads have retained before/after results and
-measurement-based budgets. Semantic compatibility, invalidation/cancellation,
-coverage and actual foreground responsiveness pass on the integrated changed
-paths. No new Base/Task/Calendar feature UI or paused native mobile implementation
-is smuggled into S1. Execute slices one at a time; source approval alone is not
-runtime or performance acceptance.
 
 ## S3 — Managed-data services and contracts
 

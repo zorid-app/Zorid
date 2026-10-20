@@ -9,48 +9,49 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
-Functional closeout update: current native release host/CLI, matching WASM
-(fingerprint f3f53af8), TypeScript and native renderer build pass on256d79b3.
-Actual CLI100-note and complete query oracles pass; actual Electron normal
-create/save/quit/reopen/history passes22 checks; actual Chrome storage lifecycle
-passes all5 phases. Find/Search Node/component checks pass69/69. These do not
-establish normal browser workspace acceptance. Root owns serial runtime/main.
+**S1 accepted for bounded ordinary functionality — 2026-10-20.** The user
+explicitly deferred further optimization, performance budgets and large-vault
+stress. Final product source is610ada26; root retains sole main integration.
+Stop the S1 campaign here. S3 managed-data services/contracts is next in delivery
+order; no sync/mobile or new feature implementation was opened by this closeout.
 
-Actual normal web UI found a Vite local-CommonJS boot error, fixed asbbaee0cf
-from reviewed candidate37ff1dc9 (owner finish_normal_indexing, reviewer
-preview_integration_review, isolated codex/s1-vite-local-cjs). The unchanged real
-Vite import/validator regression passes after the fix. Actual UI003 then starts,
-but create → title rename → keyboard edit rejects durable save (entry changed /
-file advanced), leaving51 visible characters and empty committed source. Draft
-remains visible. This is a functional blocker; do not close S1. The same worker
-owns the isolated browser rename/durable-save diagnosis; reviewer independently
-audits that seam. No performance/refactor/feature expansion is authorized.
-Evidence: /private/tmp/zorid-web-functional-ui-003/report.json and
-.worktrees/s1-evidence/functional-web-ui-run-003.log.
+Current native release CLI/host, matching WASM, TypeScript, desktop renderer and
+normal production web bundle build successfully. The396-input Rust/WASM closure
+and measured artifact hashes are retained. Actual normal web UI006 passes create,
+title rename, accepted keyboard input, exact durable save, a genuinely new-page
+reload, rich Search and exact result opening. Final Electron create002 passes22
+save/quit/reopen/history checks; actions005 passes save/Search, three stable-ID
+renames, pasted PNG byte/pixel verification and normal quit/exact reopen. Actual
+browser storage lifecycle passes5 phases; standalone CLI100/full-query oracles
+pass; Base003 passes128-row table/filter/source refresh/time-formula checks.
+Independent CLI/Electron concurrency003 passes6 CAS/replay/conflict/interruption/
+recovery checks onb28a29b8, before the final rename-only change; final current
+Electron regression and58 focused/adjacent save checks cover that last change.
+Find/Search has69 passing focused checks. No full-platform/full-language claim.
 
-Desktop action runs preserve two distinct harness gaps: the original dirty-query
-witness missed autosave and is deferred; hidden Cmd+A appended a title, then a
-corrected selection reached normal rename but the old oracle omitted the known
-outgoing wiki-link canonicalization. A disposable functional adapter models only
-that exact rewrite, preserving full-body/disk/core/binary/reopen checks. Its final
-run remains pending. Independent native/CLI concurrency was interrupted by the
-live1GiB disk guard, not a product assertion; no pass is claimed. Owned processes
-were confirmed closed. Root preserves reports and user profiles/vaults.
+Two demonstrated bugs were fixed, independently reviewed and integrated:
+bbaee0cf routes the two local CommonJS boundaries through Vite's dev optimizer;
+610ada26 preserves typing while adopting a known rename with matching stable
+identity, destination and saved content. Generic conflict/receipt/CAS protections
+remain strict. Owner finish_normal_indexing used isolated branches
+codex/s1-vite-local-cjs and codex/s1-browser-rename-save; reviewer
+preview_integration_review approved exact candidates37ff1dc9 and4b48e202.
+Root performed matching builds and actual app verification. Evidence index:
+`.worktrees/s1-evidence/functional-closeout-evidence-final.md`.
 
-Latest user steering: skip further performance optimization, verify ordinary
-functionality and move on. S1 closeout now requires a bounded current-build
-functional pass on macOS Electron, actual web bindings and standalone CLI; defer
-10k/100k workloads, latency/memory budgets and further optimization. Existing
-benchmark numbers remain historical observations, not new release gates. Root
-owns serial builds/runtime and main integration. `s1_browser_capacity`,
-`large_note_save_audit`, and `finish_graph_path` supplied read-only existing-harness
-readiness; `finish_normal_indexing` owns only the bounded Find/Search test pass.
-Use disposable owned fixtures, preserve user data, close every test Electron app.
-Check normal create/edit/save/reopen/search, rename and image paste, independent
-CLI operations/concurrent storage, and existing Base/filter/refresh semantics.
-Fix demonstrated functional failures only; do not create new feature/framework or
-optimization scope. Fresh matching native/WASM/frontend artifacts and the actual
-functional runs are pending. S1 is not marked closed until those results exist.
+Retained unsuccessful runs distinguish actual regressions from fixture issues:
+dirty-query/partial-preview timing witnesses are deferred, hidden title selection
+and reload readiness were corrected, a redundant-publication assumption was
+replaced by strict current/complete checks, and the injected clock now fires its
+actual scheduled deadline. One concurrency attempt hit the1GiB disk guard and
+was rerun successfully. Reports, screenshots, exact temporary adapters and source
+hashes remain; owned test apps are closed and user data is preserved.
+
+Deferred: multicore; further compute/latency/memory optimization; representative
+10k/100k workloads; contention/partial-preview timing witnesses; unexecuted broader
+Rust cache/time matrix (65 of86 not run in that campaign); other OS/mobile runtime
+and complete Obsidian language/visual parity. These are explicit limits/backlog,
+not claims of passing or hidden blockers to the revised functional acceptance.
 
 The user-requested one-full-storage-capture follow-up is implemented, reviewed,
 integrated and measured. Implementation owner `s1_browser_capacity` used

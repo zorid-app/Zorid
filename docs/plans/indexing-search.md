@@ -3,35 +3,19 @@
 [Roadmap](../roadmap.md#s1--rust-parsing-indexing-caching-and-search-performance) ·
 [Confirmed design](../architecture/indexing-search-design.md)
 
-Status: S1 in progress after bounded S0 delivery and S0A contract acceptance.
-S1.1 bounded client cache checks pass; S1.2 core and host answer reuse are
-integrated with focused checks, while full client acceptance remains pending.
-S1.3 rich search and in-note Find are integrated; 32 actual desktop functional
-phases pass on their recorded freeze. Browser production execution reaches Search
-but its first query failed; the canonical pin-order correction is integrated,
-with a matching browser rebuild and full UI rerun pending. The pure phased-parser,
-draft, metadata and preview foundation passes216 scoped checks on `4da43cf7`.
-Rust metadata/preview bindings pass114 checks; metadata client adapters pass275
-focused Node checks and TypeScript; native draft execution passes40 checks.
-Vault/Workspace metadata consumption additionally passes132 focused Node checks
-and TypeScript and is integrated through `b3930388`; portable executor extraction
-and duplicate Store graph-derivation removal pass67 checks through `2bf929f9`.
-Portable Rust draft transfer/bindings, buffer projection and preview platform/UI
-mounting are the current implementation work. The buffer-boundary62 and editor-hook113 checks plus full TypeScript pass,
-integrated througha43e7055. All166 planned Rust checks pass on60e868ac; its exact
-29-file composition is integrated through6d59c8d6. Original filter-count, compile,
-strict-decoder and hook-fixture failures remain recorded. Actual generated-WASM
-and rebuilt app acceptance remain pending.
-The common/desktop transport subset is additionally integrated through
-`8a6d20d0`, with190 applicable focused checks and exact-subset TypeScript. The full
-browser composition passes374 focused Node checks and TypeScript in isolation;
-Rust/WASM dependencies, actual bindings and normal activation remain pending.
-Platform wiring/activation and S1.4–S1.6 acceptance remain open.
-The [execution checkpoint](../deferred-product-roadmap.md) records exact evidence
-and remaining10k admission/cache limitations. No overall app speedup or complete
-language implementation is claimed. Deliver one
-coherent slice at a time, with independent owned subtasks/review where contracts
-permit them; later slice implementations wait for the measured baseline.
+Status: **accepted for bounded ordinary functionality, 2026-10-20**. The user
+explicitly deferred further optimization, representative/stress performance gates
+and latency/memory budgets. Integrated610ada26 passes matching native/WASM/frontend
+builds and actual normal web/desktop acceptance; standalone CLI, storage lifecycle,
+Base/filter/time refresh and focused regressions also pass within their recorded
+freezes. Browser Vite startup and durable rename/typing bugs found during closeout
+are fixed and independently reviewed. The execution checkpoint records exact
+owners, commits, source/artifact hashes, unsuccessful runs and subsequent passes.
+
+The slice inventory below preserves design scope. It does not turn deferred S1.6
+performance, unobserved contention/partial-preview timing or untested platform/
+language coverage into passing results. Keep those as explicit backlog; proceed
+to S3 rather than expanding this campaign. No overall app speedup is claimed.
 
 | Slice | Deliverable | Acceptance evidence |
 | --- | --- | --- |
@@ -41,7 +25,7 @@ permit them; later slice implementations wait for the measured baseline.
 | S1.3 Shared search execution | Intended Obsidian search syntax in Rust over retained indexed source; choose acceleration only after defining matches/ranges/coverage | Correct text/metadata/filter/substring cases and coherent pagination; unsupported/missing capability explicit; no silent word-only or case-semantics regression |
 | S1.4 Core-owned scheduling | Coalesced incremental extraction/queries, interactive priorities, bounded chunks and actual cancellation where supported | Measure foreground typing/save/query latency during indexing; stale work cannot publish; cancellation doesn't erase committed operations; resources remain bounded |
 | S1.5 Freshness and first-build behavior | Previous coherent results while updating; clearly incomplete first-build results/counts; time-dependent refresh in selected timezone | Changed results refresh without mixed generations; first-build absence/aggregates aren't presented as complete; midnight/timezone/now dependencies invalidate relevant visible views |
-| S1.6 Integrated performance gate | Same frozen implementation across required desktop/native and actual browser bindings, with retained before/after scenarios | 10,000-note baseline and 100,000-note stress case plus large notes; cold/warm/index/query/memory results; semantic regressions resolved and agreed measured budgets met |
+| S1.6 Integrated performance gate — deferred by user2026-10-20 | Same frozen implementation across required desktop/native and actual browser bindings, with retained before/after scenarios | 10,000-note baseline and 100,000-note stress case plus large notes; cold/warm/index/query/memory results; semantic regressions resolved and agreed measured budgets met |
 
 The reviewed [S1.0 baseline specification](indexing-search-baseline.md) defines
 workloads, semantic oracles, measurement phases and current platform limits.
