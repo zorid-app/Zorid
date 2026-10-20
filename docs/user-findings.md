@@ -2,6 +2,13 @@
 
 ## Remove measured browser repeated work — 2026-10-20
 
+Latest instruction: implement approximately one initial full capture, then
+incremental updates and targeted checks. This is now authorized implementation,
+including startup and the fixture binary readback; the previous26.6s/221-capture
+result does not fulfill it. Root records implementation/verification separately
+in the execution checkpoint. Foreign logical updates may invalidate/reload; do
+not obtain count1 merely by hiding full-vault work in point-read loops.
+
 Latest user correction: “Focus on fixing it instead of introducing more code.”
 Three narrow fixes are integrated: duplicate next-state clone removed3d64a8b2;
 unchanged metadata/presentation puts skipped784c13ac; per-change managed scope

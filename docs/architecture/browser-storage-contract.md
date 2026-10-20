@@ -79,6 +79,29 @@ Incoming update application and its next cursor are in the same guarded commit;
 network requests never hold an IndexedDB transaction. [Sweep completeness](../../src/platform/browser-sync-worker.ts#L30)
 is deliberately narrower than a global synced guarantee.
 
+## Retained working state: approved optimization
+
+The browser storage engine is being changed to admit one initial full snapshot
+for an uncontended open/import/readback lifetime, then retain that validated
+working state in memory. This is separate from the persistent parsed-document
+cache. Each operation still checks current authority and a fresh logical version
+fence; committed deltas advance the retained state only after IndexedDB reports
+transaction completion. A prepared operation keeps its immutable original base.
+Foreign logical changes invalidate the retained version and can require another
+capture. Abort, failed integrity validation and close must not leave a trusted
+candidate installed.
+
+The final writer checks actual selected rows, source bodies and metadata,
+allocation/path absence, receipts and cursor/version prerequisites. Startup and
+explicit integrity audits still check the full authority. This intentionally
+does not promise to detect an unrelated row altered outside all supported writers,
+with every logical version unchanged, during every unrelated save: that needs a
+full scan. Such physical corruption is checked at startup/audit and when the
+selected data is used. Ledger count/byte summaries retain the existing admission
+limits and may be reused only with their admitted version. This section records
+the approved contract; implementation and the actual one-capture run are pending
+in the roadmap execution checkpoint.
+
 ## Scope, reload and multiple tabs
 
 Three identities must remain distinct:

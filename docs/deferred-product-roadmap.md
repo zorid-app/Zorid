@@ -9,6 +9,23 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest direct authorization: implement the one-full-capture target for a normal
+browser open/import/readback run. `s1_browser_capacity` owns the existing engine
+retained snapshot, incremental commit updates and point fences on
+`codex/s1-browser-incremental` / `.worktrees/s1-browser-incremental`, baseline
+`e8faff3a`, with minimal vault/Worker startup glue; `preview_integration_review` independently reviews
+correctness; `finish_normal_indexing` audits startup/readback callsites only.
+Root retains main integration and the single runtime slot. Other campaigns stay
+paused. Startup plus binary readback are in the capture-count oracle; do not
+rename scans or replace them with whole-vault point-read loops to meet the count.
+Owned commits may advance retained state only after actual transaction completion,
+using the final outer publication sequence. External logical changes invalidate
+and may rescan. Cold/open and explicit integrity audits remain; untouched raw
+same-stamp physical corruption cannot be promised detected on every unrelated
+save without rescanning. Selected rows, body proofs, authority, async-race CAS,
+receipts and rollback remain required. No schema, general framework or native work
+is opened. Implementation and actual one-capture measurement remain pending.
+
 Latest follow-up fixes existing browser storage repetition, without a storage
 redesign. Root retains sole main integration. Three reviewed changes are now
 integrated:3d64a8b2 removes the second next-state graph clone per mutation;
