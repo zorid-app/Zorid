@@ -130,12 +130,7 @@ fn bind_scope(tx: &Connection, text: &TextIdentity) -> Result<()> {
 /// Commit revisions are vault-wide tokens because file changes also advance
 /// shared ancestors. Attaching causal provenance to old tokens does not allocate.
 pub(super) fn reserve_revision(tx: &Connection, revision: &Revision) -> Result<()> {
-    let (count,head,allocated):(i64,i64,i64)=tx.query_row("SELECT (SELECT count(*) FROM revision_fences),(SELECT coalesce(max(ordinal),0) FROM revision_fences),(SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name='revision_fences'),0))",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
-    if count != head || head != allocated {
-        return Err(StoreError::Corrupt(
-            "revision allocation history has a gap".into(),
-        ));
-    }
+    storage_accounting::check_revisions(tx)?;
     let used: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM revision_fences WHERE revision=?1)",
         [revision.as_str()],

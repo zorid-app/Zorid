@@ -29,7 +29,7 @@ fn key(scope: &Scope, id: &UpdateId) -> EnvelopeKey {
     }
 }
 
-fn file_record(tx: &Connection, scope: &Scope, id: &UpdateId) -> Result<GraphRecord> {
+pub(super) fn file_record(tx: &Connection, scope: &Scope, id: &UpdateId) -> Result<GraphRecord> {
     let owned:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM family_file_records WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3)",params![scope.realm_id.as_str(),scope.vault_id.as_str(),id.as_str()],|r|r.get(0))?;
     if !owned {
         return Err(corrupt("file metadata is not a retained graph member"));
@@ -114,7 +114,7 @@ pub(super) fn check_activity(
     Ok(())
 }
 
-fn activity(tx: &Connection, scope: &Scope, id: &UpdateId) -> Result<StoredActivity> {
+pub(super) fn activity(tx: &Connection, scope: &Scope, id: &UpdateId) -> Result<StoredActivity> {
     let len:Option<i64>=tx.query_row("SELECT length(CAST(record AS BLOB)) FROM family_text_activities WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3",params![scope.realm_id.as_str(),scope.vault_id.as_str(),id.as_str()],|r|r.get(0)).optional()?;
     if len.is_none_or(|n| n <= 0 || n > zorid_sync_protocol::MAX_PLAINTEXT_BYTES as i64) {
         return Err(corrupt("text activity missing or oversized"));
@@ -597,13 +597,16 @@ pub(crate) mod test_support {
         db.pragma_update(None, "foreign_keys", true).unwrap();
         for (_, sql) in immutable_payloads::SCHEMA
             .iter()
+            .chain(storage_accounting::PAYLOAD_SCHEMA)
             .chain(family_ledger::SCHEMA)
             .chain(file_state::SCHEMA)
+            .chain(family_graph::SCHEMA)
             .chain(blob_stage::SCHEMA)
             .chain(binary_commit::SCHEMA)
         {
             db.execute_batch(sql).unwrap();
         }
+        storage_accounting::initialize_payloads(&db).unwrap();
         db
     }
     pub(crate) fn scope() -> Scope {

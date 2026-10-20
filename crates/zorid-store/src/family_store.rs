@@ -337,6 +337,34 @@ fn pending_count(tx: &Connection) -> Result<u32> {
         .ok_or_else(|| StoreError::Corrupt("combined family pending count overflow".into()))
 }
 
+/// Status is an observation, not a full integrity scrub or a publication proof.
+/// Count the exact existing JSON encoding without decoding every graph record,
+/// allocating a whole MetadataState, or imposing its per-invocation size cap.
+/// Positive content/publication reads retain independent point source checks.
+fn graph_metrics(tx: &Connection, scope: &Scope, snapshot: &family_graph_read::GraphSnapshot<'_>) -> Result<(u64,u64)> {
+    let (files, file_bytes, invalid_files): (i64,i64,i64) = tx.query_row(
+        "SELECT count(*),coalesce(sum(length(CAST(p.descriptor AS BLOB))+length(CAST(json_quote(m.update_id) AS BLOB))+1),0),coalesce(sum(CASE WHEN p.family='files' AND typeof(p.descriptor)='text' AND length(CAST(p.descriptor AS BLOB)) BETWEEN 1 AND ?3 THEN 0 ELSE 1 END),0) FROM family_file_records m LEFT JOIN immutable_payloads p USING(realm_id,vault_id,update_id) WHERE m.realm_id=?1 AND m.vault_id=?2",
+        params![scope.realm_id.as_str(),scope.vault_id.as_str(),zorid_file_sync::metadata::MAX_GRAPH_RECORD_BYTES as i64], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)))?;
+    let (texts, text_bytes, invalid_texts): (i64,i64,i64) = tx.query_row(
+        "SELECT count(*),coalesce(sum(length(CAST(m.record AS BLOB))+length(CAST(json_quote(m.update_id) AS BLOB))+1),0),coalesce(sum(CASE WHEN p.family='text' AND typeof(m.record)='text' AND length(CAST(m.record AS BLOB)) BETWEEN 1 AND ?3 THEN 0 ELSE 1 END),0) FROM family_text_activities m LEFT JOIN immutable_payloads p USING(realm_id,vault_id,update_id) WHERE m.realm_id=?1 AND m.vault_id=?2",
+        params![scope.realm_id.as_str(),scope.vault_id.as_str(),zorid_sync_protocol::MAX_PLAINTEXT_BYTES as i64], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)))?;
+    if invalid_files != 0 || invalid_texts != 0 || u64::try_from(files).ok() != Some(snapshot.record_count()) || u64::try_from(texts).ok() != Some(snapshot.activity_count()) || file_bytes < 0 || text_bytes < 0 {
+        return Err(StoreError::Corrupt("graph status source counts differ from committed head".into()));
+    }
+    // Cache identity coverage remains checked in SQLite. The maintained event
+    // selector includes pending entries which have no reduced EntryView yet.
+    let mismatch: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM family_materializations m WHERE json_extract(m.record,'$.identity.entry_id') IS NOT m.entry_id OR NOT EXISTS(SELECT 1 FROM family_graph_events e WHERE e.realm_id=?1 AND e.vault_id=?2 AND e.entry_id=m.entry_id AND e.bootstrap_id=json_extract(m.record,'$.identity.bootstrap_id')) UNION ALL SELECT 1 FROM family_graph_events e WHERE e.realm_id=?1 AND e.vault_id=?2 AND NOT EXISTS(SELECT 1 FROM family_materializations m WHERE m.entry_id=e.entry_id))",
+        params![scope.realm_id.as_str(),scope.vault_id.as_str()], |row| row.get(0))?;
+    if mismatch { return Err(StoreError::Corrupt("publication cache identity coverage mismatch".into())); }
+    let empty = zorid_file_sync::metadata::MetadataState::empty(scope.clone(), snapshot.revision().clone());
+    let base = serde_json::to_vec(&empty)?.len() as u64;
+    let separators = snapshot.record_count().saturating_sub(1) + snapshot.activity_count().saturating_sub(1);
+    let bytes = base.checked_add(file_bytes as u64).and_then(|sum| sum.checked_add(text_bytes as u64)).and_then(|sum| sum.checked_add(separators)).ok_or_else(|| StoreError::Corrupt("graph status byte count overflow".into()))?;
+    snapshot.check_current()?;
+    Ok((snapshot.source_count(),bytes))
+}
+
 fn status_in(tx: &Connection) -> Result<FamilyStatus> {
     let authority = text_sync::identity(tx)?;
     let scope = match (authority.realm_id, authority.vault_id) {
@@ -356,61 +384,19 @@ fn status_in(tx: &Connection) -> Result<FamilyStatus> {
         recovery_entries: "0".into(),
     };
     if let Some(scope) = &scope {
-        let state = blob_index::load_metadata(tx, scope)?
-            .ok_or_else(|| StoreError::Corrupt("enrolled family graph head missing".into()))?;
-        // Status restores committed descriptors; publication validation requires
-        // an in-process content proof and runs on mutation/receive snapshots.
-        state.metadata_view()?;
-        // Include identities awaiting a bootstrap, which are absent from the
-        // namespace view but still have a Pending materialization. The restored
-        // graph bounds this set; no text or binary bodies are read here.
-        let identities: std::collections::BTreeMap<_, _> = state
-            .records()
-            .values()
-            .flat_map(|record| match record.body() {
-                zorid_file_sync::metadata::GraphRecordBody::Events { events }
-                | zorid_file_sync::metadata::GraphRecordBody::ObservedDelete { events } => {
-                    events.as_slice()
-                }
-                _ => &[],
-            })
-            .map(|event| event.identity.clone())
-            .chain(state.activities().values().map(|activity| {
-                zorid_file_sync::EntryIdentity {
-                    entry_id: activity.identity().entry_id.clone(),
-                    bootstrap_id: activity.namespace().bootstrap_id.clone(),
-                }
-            }))
-            .map(|identity| (identity.entry_id.clone(), identity))
-            .collect();
-        let cached: i64 = tx.query_row("SELECT count(*) FROM family_materializations", [], |r| {
-            r.get(0)
-        })?;
-        if usize::try_from(cached).ok() != Some(identities.len()) {
-            return Err(StoreError::Corrupt(
-                "publication cache identity coverage mismatch".into(),
-            ));
-        }
-        for (id, identity) in identities {
-            if family_materialization::get(tx, &id)?
-                .is_none_or(|record| record.identity != identity)
-            {
-                return Err(StoreError::Corrupt(
-                    "publication cache identity differs from causal authority".into(),
-                ));
-            }
-        }
-        output.graph_records = u32::try_from(state.records().len() + state.activities().len())
-            .map_err(|_| zorid_client_sync::SyncError::TooLarge)?;
-        output.graph_encoded_bytes = serde_json::to_vec(&state)?.len() as u64;
+        let snapshot = family_graph_read::GraphSnapshot::open(tx, scope)?;
+        let (records, bytes) = graph_metrics(tx, scope, &snapshot)?;
+        output.graph_records = u32::try_from(records).map_err(|_| zorid_client_sync::SyncError::TooLarge)?;
+        output.graph_encoded_bytes = bytes;
         output.cursor = family_ledger::cursor(tx, &scope.realm_id, &scope.vault_id)?;
         let (authored,projection):(i64,i64)=tx.query_row("SELECT (SELECT count(*) FROM authored_envelopes WHERE realm_id=?1 AND vault_id=?2 AND accepted=0),(SELECT count(*) FROM projection_jobs WHERE completed=0)",params![scope.realm_id.as_str(),scope.vault_id.as_str()],|r|Ok((r.get(0)?,r.get(1)?)))?;
-        let pending = pending_count(tx)?;
+        let (file_pending, recovery) = family_materialization::publication_counts(tx)?;
+        let pending = file_pending.checked_add(super::managed_records::pending_count(tx)?).ok_or_else(|| StoreError::Corrupt("combined family pending count overflow".into()))?;
         output.pending_authored = authored.to_string();
         // Pending file/text publications and unresolved record receipts. Summary
         // counts include record errors; managed snapshots expose their reasons.
         output.pending_dependencies = pending.to_string();
-        output.recovery_entries = family_materialization::recovery_count(tx)?.to_string();
+        output.recovery_entries = recovery.to_string();
         output.pending_projection = projection.to_string();
     }
     Ok(output)
@@ -432,8 +418,8 @@ impl Store {
         if identity.realm_id.is_some() || identity.vault_id.is_some() {
             if identity.realm_id.as_ref() == Some(&scope.realm_id)
                 && identity.vault_id.as_ref() == Some(&scope.vault_id)
-                && blob_index::load_metadata(&tx, scope)?.is_some()
             {
+                family_graph_read::GraphSnapshot::open(&tx, scope)?;
                 let status = status_in(&tx)?;
                 tx.commit()?;
                 return Ok(status);

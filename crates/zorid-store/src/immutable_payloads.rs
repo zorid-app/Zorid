@@ -237,12 +237,7 @@ pub(super) fn read_exact(tx: &Connection, metadata: &EnvelopeMetadata) -> Result
 /// Counts all retained sources, including rows referenced only by aborted stages.
 /// There is deliberately no deletion, reclamation or default quota here.
 pub(super) fn total_bytes(tx: &Connection) -> Result<u64> {
-    let total: i64 = tx.query_row(
-        "SELECT coalesce(sum(length(payload)),0) FROM immutable_payloads",
-        [],
-        |r| r.get(0),
-    )?;
-    u64::try_from(total).map_err(|_| corrupt("immutable payload byte total is negative"))
+    super::storage_accounting::payload_bytes(tx)
 }
 
 #[cfg(test)]
@@ -254,9 +249,13 @@ mod tests {
     const QUOTA: u64 = 8 * 1024 * 1024;
     fn db() -> Connection {
         let connection = Connection::open_in_memory().unwrap();
-        for (_, sql) in SCHEMA {
+        for (_, sql) in SCHEMA
+            .iter()
+            .chain(super::super::storage_accounting::PAYLOAD_SCHEMA)
+        {
             connection.execute_batch(sql).unwrap();
         }
+        super::super::storage_accounting::initialize_payloads(&connection).unwrap();
         connection
     }
     fn file(id: &str, bytes: &[u8]) -> (EnvelopeMetadata, Vec<u8>) {

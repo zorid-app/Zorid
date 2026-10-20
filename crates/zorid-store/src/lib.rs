@@ -63,6 +63,18 @@ pub use family_external_namespace::{
     ExternalNamespaceObservation, ExternalScanProof,
 };
 mod family_ingress;
+mod family_graph;
+mod family_graph_read;
+mod family_indexed;
+mod storage_accounting;
+#[cfg(test)]
+mod storage_accounting_tests;
+#[cfg(test)]
+mod family_graph_read_tests;
+#[cfg(test)]
+mod family_graph_migration_tests;
+#[cfg(test)]
+mod family_graph_tests;
 mod family_materialization;
 mod family_observations;
 pub use family_materialization::{FamilyContentWitness, FamilyMaterialization, FamilyPublication};
@@ -124,8 +136,9 @@ use zorid_core::{
     Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
-const SCHEMA_VERSION: i64 = 15;
-const TEXT_PREDECESSOR_SCHEMA_VERSION: i64 = 14;
+const SCHEMA_VERSION: i64 = 16;
+const TEXT_SCHEMA_VERSION: i64 = 15;
+const OBSERVATION_SCHEMA_VERSION: i64 = 14;
 const NAMESPACE_SCHEMA_VERSION: i64 = 13;
 const PREDECESSOR_SCHEMA_VERSION: i64 = 12;
 pub const DEFAULT_STREAMING_LIMITS: StreamingLimits = StreamingLimits {
@@ -160,6 +173,8 @@ fn schema_objects() -> Vec<(&'static str, &'static str)> {
         .chain(family_external_create::SCHEMA)
         .chain(family_external_namespace::SCHEMA)
         .chain(immutable_payloads::SCHEMA)
+        .chain(storage_accounting::PAYLOAD_SCHEMA)
+        .chain(storage_accounting::REVISION_SCHEMA)
         .chain(family_ledger::SCHEMA)
         .chain(managed_records::SCHEMA)
         .chain(file_state::SCHEMA)
@@ -168,6 +183,7 @@ fn schema_objects() -> Vec<(&'static str, &'static str)> {
         .chain(blob_read::SCHEMA)
         .chain(binary_commit::SCHEMA)
         .chain(family_materialization::SCHEMA)
+        .chain(family_graph::SCHEMA)
         .copied()
         .collect()
 }
@@ -177,7 +193,7 @@ fn check_schema(connection: &Connection) -> Result<i64> {
     // Unreleased formats: reject before changing WAL or database bytes.
     if !matches!(
         version,
-        0 | PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION | TEXT_PREDECESSOR_SCHEMA_VERSION | SCHEMA_VERSION
+        0 | PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION | OBSERVATION_SCHEMA_VERSION | TEXT_SCHEMA_VERSION | SCHEMA_VERSION
     ) {
         return Err(StoreError::UnsupportedSchema(version));
     }
@@ -199,9 +215,13 @@ fn check_schema(connection: &Connection) -> Result<i64> {
             .into_iter()
             .filter(|(name, _)| {
                 (version != PREDECESSOR_SCHEMA_VERSION || *name != "namespace_successions")
-                    && (version >= TEXT_PREDECESSOR_SCHEMA_VERSION || *name != projection::EXTERNAL_UNRESOLVED_INDEX.0)
+                    && (version >= OBSERVATION_SCHEMA_VERSION
+                        || *name != projection::EXTERNAL_UNRESOLVED_INDEX.0)
+                    && (version == SCHEMA_VERSION
+                        || (!family_graph::SCHEMA.iter().any(|(graph_name, _)| graph_name == name)
+                            && !storage_accounting::schema().any(|(accounting_name, _)| accounting_name == name)))
             })
-            .map(|(name, sql)| if name == "immutable_payloads" && version < SCHEMA_VERSION {
+            .map(|(name, sql)| if name == "immutable_payloads" && version < TEXT_SCHEMA_VERSION {
                 (name, immutable_payloads::LEGACY_TABLE_SQL)
             } else { (name, sql) })
             .collect();
@@ -250,6 +270,9 @@ fn check_schema(connection: &Connection) -> Result<i64> {
             PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION
         ) {
             projection::check_observation_index_inputs(connection)?;
+        }
+        if version == SCHEMA_VERSION {
+            family_graph::check_current(connection)?;
         }
     }
     Ok(version)
@@ -468,18 +491,24 @@ impl Store {
                 .chain(blob_read::SCHEMA)
                 .chain(binary_commit::SCHEMA)
                 .chain(family_materialization::SCHEMA)
+                .chain(family_graph::SCHEMA)
             {
                 tx.execute_batch(sql)?;
             }
             presentation::migrate(&tx)?;
             text_sync::migrate(&tx)?;
             checkpoints::migrate(&tx)?;
+            for (_, sql) in storage_accounting::schema() {
+                tx.execute_batch(sql)?;
+            }
+            storage_accounting::initialize_payloads(&tx)?;
+            storage_accounting::initialize_revisions(&tx)?;
             tx.pragma_update(None, "application_id", APPLICATION_ID)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
-        if matches!(version, PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION | TEXT_PREDECESSOR_SCHEMA_VERSION) {
+        if matches!(version, PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION | OBSERVATION_SCHEMA_VERSION) {
             immutable_payloads::migrate_text_bound(&tx)?;
-            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.pragma_update(None, "user_version", TEXT_SCHEMA_VERSION)?;
         }
         if version == PREDECESSOR_SCHEMA_VERSION {
             // Add only the explicit delegation journal after exact old-format
@@ -493,7 +522,30 @@ impl Store {
             PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION
         ) {
             tx.execute_batch(projection::EXTERNAL_UNRESOLVED_INDEX.1)?;
+        }
+        if matches!(
+            version,
+            PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION | OBSERVATION_SCHEMA_VERSION | TEXT_SCHEMA_VERSION
+        ) {
+            // Backfill only after the known legacy schema has reached observation
+            // index semantics. All authority/fact/schema changes share this writer;
+            // failure leaves the original schema version and source rows intact.
+            for (_, sql) in family_graph::SCHEMA {
+                tx.execute_batch(sql)?;
+            }
+            for (_, sql) in storage_accounting::schema() {
+                tx.execute_batch(sql)?;
+            }
+            storage_accounting::initialize_payloads(&tx)?;
+            storage_accounting::initialize_revisions(&tx)?;
+            family_graph::backfill(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        // Reopen checks the exact schema and scalar graph head/readiness state.
+        // Full historical validation belongs to migration and explicit integrity
+        // traversal, rather than every CLI command's Store::open.
+        if version != SCHEMA_VERSION {
+            family_graph::check_current(&tx)?;
         }
         tx.commit()?;
         let document_cache = document_cache::DocumentCache::memory()?;

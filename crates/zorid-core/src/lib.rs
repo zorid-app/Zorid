@@ -9,6 +9,7 @@ mod identity;
 mod mutation;
 mod path;
 mod plan;
+mod plan_indexed;
 
 pub use identity::{EntryId, OperationId, Revision};
 pub use mutation::{
@@ -19,6 +20,10 @@ pub use path::VaultPath;
 pub use plan::{
     plan_file_content_mutation, plan_file_materialization, plan_mutation, validate_snapshot,
     FileContentTarget,
+};
+pub use plan_indexed::{
+    plan_indexed_file_content_mutation, plan_indexed_file_materialization,
+    plan_indexed_mutation, IndexedMutationReader, IndexedMutationWork,
 };
 
 use serde::{Deserialize, Serialize};

@@ -28,6 +28,7 @@ pub(super) fn initialize(
             revision.as_str()
         ],
     )?;
+    family_graph::initialize(tx, scope, revision)?;
     Ok(MetadataState::empty(scope.clone(), revision.clone()))
 }
 
@@ -44,7 +45,8 @@ pub(super) fn persist_plan(tx: &Connection, plan: &MetadataPlan) -> Result<()> {
     plan.verified_binaries()
         .check_preconditions(plan.verification_state())?;
     let Some(next) = plan.next_state() else {
-        return blob_index::check_sources(tx, &actual);
+        blob_index::check_sources(tx, &actual)?;
+        return family_graph::maintain_legacy_plan(tx, plan);
     };
     if next.scope() != expected.scope() || next.version() == expected.version() {
         return Err(corrupt("invalid metadata plan scope/revision transition"));
@@ -104,6 +106,7 @@ pub(super) fn persist_plan(tx: &Connection, plan: &MetadataPlan) -> Result<()> {
         )?;
     }
     blob_index::check_sources(tx, next)?;
+    family_graph::maintain_legacy_plan(tx, plan)?;
     let changed=tx.execute("UPDATE family_graph_heads SET revision=?1,record_count=?2,activity_count=?3 WHERE realm_id=?4 AND vault_id=?5 AND revision=?6",params![next.version().as_str(),i64::try_from(next.records().len()).map_err(|_|corrupt("metadata file count overflow"))?,i64::try_from(next.activities().len()).map_err(|_|corrupt("metadata activity count overflow"))?,next.scope().realm_id.as_str(),next.scope().vault_id.as_str(),expected.version().as_str()])?;
     if changed != 1 {
         return Err(zorid_client_sync::SyncError::VersionConflict.into());

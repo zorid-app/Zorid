@@ -13,6 +13,11 @@ use zorid_sync_protocol::{
 pub mod binary_stream;
 pub mod binary_mutation;
 pub mod external_namespace;
+pub mod graph_facts;
+pub mod graph_roles;
+pub mod graph_entry;
+pub mod graph_namespace;
+pub mod indexed_authorship;
 pub mod materialization;
 pub mod metadata;
 pub mod metadata_plan;

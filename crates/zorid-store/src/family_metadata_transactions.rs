@@ -13,7 +13,11 @@ use zorid_file_sync::{
 use zorid_sync_protocol::UpdateId;
 
 /// Private in-process preparation, never caller-deserializable authorization.
-pub(super) struct PreparedFamilyCommand {
+pub(super) enum PreparedFamilyCommand {
+    Legacy(LegacyPreparedFamilyCommand),
+    Indexed(family_indexed::Ready),
+}
+pub(super) struct LegacyPreparedFamilyCommand {
     command: command::FamilyCommand,
     allocation: command::Allocation,
     expected_entries: Vec<EntryState>,
@@ -25,8 +29,18 @@ pub(super) struct PreparedFamilyCommand {
     graph: MetadataPlan,
 }
 impl PreparedFamilyCommand {
-    pub(super) fn request(&self) -> &MutationRequest { &self.command.request }
-    pub(super) fn changes(&self) -> &[zorid_core::EntryChange] { &self.changes }
+    pub(super) fn request(&self) -> &MutationRequest {
+        match self {
+            Self::Legacy(plan) => &plan.command.request,
+            Self::Indexed(plan) => plan.request(),
+        }
+    }
+    pub(super) fn changes(&self) -> &[zorid_core::EntryChange] {
+        match self {
+            Self::Legacy(plan) => &plan.changes,
+            Self::Indexed(plan) => plan.changes(),
+        }
+    }
 }
 
 /// Exact original command replay precedes mode validation and state planning.
@@ -38,7 +52,10 @@ pub(super) fn replay(
     let command = command::FamilyCommand::new(request.clone(), mode).map_err(mapped)?;
     replay_command(tx, &command)
 }
-pub(super) fn replay_command(tx: &Connection, command: &command::FamilyCommand) -> Result<Option<CommitResult>> {
+pub(super) fn replay_command(
+    tx: &Connection,
+    command: &command::FamilyCommand,
+) -> Result<Option<CommitResult>> {
     command.validate().map_err(mapped)?;
     let request = &command.request;
     let mode = command.create_mode;
@@ -48,7 +65,9 @@ pub(super) fn replay_command(tx: &Connection, command: &command::FamilyCommand) 
     };
     let recorded = operation_request::decode_record(&raw, &receipt, &request.operation_id)?;
     if sequence <= 0 || recorded.result.sequence != sequence as u64 {
-        return Err(StoreError::Corrupt("family receipt SQL sequence mismatch".into()));
+        return Err(StoreError::Corrupt(
+            "family receipt SQL sequence mismatch".into(),
+        ));
     }
     if matches!(
         &recorded.request,
@@ -61,7 +80,9 @@ pub(super) fn replay_command(tx: &Connection, command: &command::FamilyCommand) 
                 )
             })?)?;
         if recorded.request.inline() != Some(&prior_command.request) {
-            return Err(StoreError::Corrupt("family composite and operation request differ".into()));
+            return Err(StoreError::Corrupt(
+                "family composite and operation request differ".into(),
+            ));
         }
         command.check_replay(&prior_command).map_err(mapped)?;
     }
@@ -98,10 +119,7 @@ pub(super) fn inline_binary(
             ..
         } => Ok(mode == Some(FamilyCreateMode::Binary)),
         Mutation::Write { id, .. } => Ok(matches!(
-            graph(tx, &scope(tx)?)?
-                .metadata_view()?
-                .content_bindings()
-                .get(id),
+            family_indexed::binding(tx, &scope(tx)?, id)?.as_ref(),
             Some(zorid_file_sync::v2::ContentBinding::Binary)
         )),
         _ => Ok(false),
@@ -138,7 +156,10 @@ pub(super) fn prepare_command(
     let command = command::FamilyCommand::new(request.clone(), mode).map_err(mapped)?;
     prepare_family_command(tx, &command)
 }
-pub(super) fn prepare_family_command(tx: &Connection, command: &command::FamilyCommand) -> Result<PreparedFamilyCommand> {
+pub(super) fn prepare_family_command(
+    tx: &Connection,
+    command: &command::FamilyCommand,
+) -> Result<PreparedFamilyCommand> {
     command.validate().map_err(mapped)?;
     let request = &command.request;
     let mode = command.create_mode;
@@ -151,9 +172,35 @@ pub(super) fn prepare_family_command(tx: &Connection, command: &command::FamilyC
     }
     check_mode_bound_intent(tx, request, mode)?;
     let scope = scope(tx)?;
+    if matches!(
+        (&request.mutation, mode),
+        (
+            Mutation::Create {
+                kind: EntryKind::Folder,
+                ..
+            },
+            None
+        ) | (
+            Mutation::Create {
+                kind: EntryKind::File,
+                ..
+            },
+            Some(FamilyCreateMode::Text)
+        ) | (Mutation::Write { .. }, None)
+    ) {
+        return family_indexed::prepare(tx, command, &scope).map(PreparedFamilyCommand::Indexed);
+    }
+    prepare_legacy_family_command(tx, command)
+}
+fn prepare_legacy_family_command(tx: &Connection, command: &command::FamilyCommand) -> Result<PreparedFamilyCommand> {
+    let request = &command.request;
+    let mode = command.create_mode;
+    let scope = scope(tx)?;
     let graph = graph(tx, &scope)?;
     let entries = entries(tx)?;
-    command.validate_destination_parent(&entries).map_err(mapped)?;
+    command
+        .validate_destination_parent(&entries)
+        .map_err(mapped)?;
     let text = if matches!(request.mutation, Mutation::Write { .. }) {
         text_sync::retained(tx, request.mutation.id())?
     } else {
@@ -227,8 +274,16 @@ pub(super) fn prepare_parts(
 ) -> Result<PreparedFamilyCommand> {
     let checked_entries = entries(tx)?;
     prepare_parts_with_entries(
-        tx, &checked_entries, command, allocation, expected_entries, changes,
-        allocated_update_ids, authored_files, text, candidate,
+        tx,
+        &checked_entries,
+        command,
+        allocation,
+        expected_entries,
+        changes,
+        allocated_update_ids,
+        authored_files,
+        text,
+        candidate,
     )
 }
 /// Same preparation snapshot only. The local planner has no database handle or
@@ -264,7 +319,7 @@ fn prepare_parts_with_entries(
         .collect();
     let verified = blob_index::verify_metadata(tx, candidate.verification_state(), &overlay)?;
     let graph = candidate.finalize(verified)?;
-    Ok(PreparedFamilyCommand {
+    Ok(PreparedFamilyCommand::Legacy(LegacyPreparedFamilyCommand {
         command,
         allocation,
         expected_entries,
@@ -274,7 +329,7 @@ fn prepare_parts_with_entries(
         authored_files,
         text,
         graph,
-    })
+    }))
 }
 
 /// Receipt replay, exact metadata/entries/Text/source CAS, durable authority and
@@ -284,6 +339,26 @@ pub(super) fn commit_prepared(
     tx: &Connection,
     plan: &PreparedFamilyCommand,
 ) -> Result<CommitResult> {
+    let plan = match plan {
+        PreparedFamilyCommand::Indexed(ready) => {
+            if let Some(receipt) = replay_command(tx, ready.command())? {
+                return Ok(receipt);
+            }
+            check_mode_bound_intent(tx, ready.request(), ready.command().create_mode)?;
+            host_intents::check_execution(tx, ready.request())?;
+            if blob_stage::operation_reserved(tx, &ready.request().operation_id)? {
+                return Err(ContractError::IdempotencyConflict {
+                    operation_id: ready.request().operation_id.clone(),
+                }
+                .into());
+            }
+            return family_indexed::commit(tx, ready);
+        }
+        PreparedFamilyCommand::Legacy(plan) => plan,
+    };
+    commit_legacy_prepared(tx, plan)
+}
+fn commit_legacy_prepared(tx: &Connection, plan: &LegacyPreparedFamilyCommand) -> Result<CommitResult> {
     let request = &plan.command.request;
     if let Some(receipt) = replay_command(tx, &plan.command)? {
         return Ok(receipt);
@@ -300,7 +375,9 @@ pub(super) fn commit_prepared(
     let actual = graph(tx, &scope)?;
     plan.graph.check_preconditions(&actual, None)?;
     let actual_entries = entries(tx)?;
-    plan.command.validate_destination_parent(&actual_entries).map_err(mapped)?;
+    plan.command
+        .validate_destination_parent(&actual_entries)
+        .map_err(mapped)?;
     if actual_entries != plan.expected_entries
         || family_ingress::retained_texts(tx, &scope)? != plan.expected_texts
     {
@@ -444,6 +521,17 @@ pub(super) fn commit_prepared(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // These tests retain the full-snapshot contract used by the external/legacy
+    // planner. Normal indexed local commands have their own targeted tests.
+    fn prepare_legacy_command(tx: &Connection, request: &MutationRequest, mode: Option<FamilyCreateMode>) -> Result<LegacyPreparedFamilyCommand> {
+        let command = command::FamilyCommand::new(request.clone(), mode).map_err(mapped)?;
+        match prepare_legacy_family_command(tx, &command)? {
+            PreparedFamilyCommand::Legacy(plan) => Ok(plan),
+            PreparedFamilyCommand::Indexed(_) => unreachable!(),
+        }
+    }
+    fn commit_legacy(tx: &Connection, plan: &LegacyPreparedFamilyCommand) -> Result<CommitResult> { commit_legacy_prepared(tx, plan) }
+
     use zorid_core::{OperationId, VaultPath};
     use zorid_sync_protocol::{RealmId, VaultId};
 
@@ -591,13 +679,13 @@ mod tests {
             .collect()
     }
     #[test]
-    fn preparation_reuses_one_complete_checked_entry_snapshot() {
+    fn legacy_preparation_reuses_one_complete_checked_entry_snapshot() {
         let (_dir, store) = snapshot_fixture();
         let before = database(&store.connection);
         let tx = store.connection.unchecked_transaction().unwrap();
         let expected = entries(&tx).unwrap();
         let reads = SnapshotReads::new(&tx, b"SELECT\n    length(content),length(CAST(content_ref AS BLOB))");
-        let prepared = prepare_command(&tx, &text("new_entry", "new.md"), Some(FamilyCreateMode::Text)).unwrap();
+        let prepared = prepare_legacy_command(&tx, &text("new_entry", "new.md"), Some(FamilyCreateMode::Text)).unwrap();
         assert_eq!(reads.get(), 1, "preparation reloaded the complete checked entries");
         assert_eq!(prepared.expected_entries, expected);
         assert_eq!(expected.iter().map(|entry| entry.id.as_str()).collect::<Vec<_>>(), vec!["a_entry", "b_entry"]);
@@ -653,21 +741,21 @@ mod tests {
     }
 
     #[test]
-    fn malformed_checked_entry_still_rejects_preparation() {
+    fn legacy_malformed_checked_entry_still_rejects_preparation() {
         let (_dir, store) = snapshot_fixture();
         store.connection.execute("UPDATE entries SET path='different.md' WHERE id='a_entry'", []).unwrap();
         let before = database(&store.connection);
         let tx = store.connection.unchecked_transaction().unwrap();
-        assert!(prepare_command(&tx, &text("new_entry", "new.md"), Some(FamilyCreateMode::Text)).is_err());
+        assert!(prepare_legacy_command(&tx, &text("new_entry", "new.md"), Some(FamilyCreateMode::Text)).is_err());
         tx.rollback().unwrap();
         assert_eq!(database(&store.connection), before);
     }
 
     #[test]
-    fn entry_only_peer_change_still_rejects_fresh_final_writer() {
+    fn legacy_entry_only_peer_change_still_rejects_fresh_final_writer() {
         let (dir, mut store) = snapshot_fixture();
         let tx = store.connection.unchecked_transaction().unwrap();
-        let prepared = prepare_command(&tx, &text("new_entry", "new.md"), Some(FamilyCreateMode::Text)).unwrap();
+        let prepared = prepare_legacy_command(&tx, &text("new_entry", "new.md"), Some(FamilyCreateMode::Text)).unwrap();
         tx.commit().unwrap();
         let peer = Store::open(dir.path().join("store")).unwrap();
         let mut entry = prepared.expected_entries[0].clone();
@@ -679,14 +767,14 @@ mod tests {
         prepared.graph.check_preconditions(&actual, None).unwrap();
         assert_eq!(family_ingress::retained_texts(&tx, actual.scope()).unwrap(), prepared.expected_texts);
         let reads = SnapshotReads::new(&tx, b"SELECT\n    length(content),length(CAST(content_ref AS BLOB))");
-        assert!(matches!(commit_prepared(&tx, &prepared), Err(StoreError::Sync(zorid_client_sync::SyncError::VersionConflict))));
+        assert!(matches!(commit_legacy(&tx, &prepared), Err(StoreError::Sync(zorid_client_sync::SyncError::VersionConflict))));
         assert_eq!(reads.get(), 1, "writer must independently reload checked entries");
         drop(reads); tx.rollback().unwrap();
         assert_eq!(database(&store.connection), before);
     }
 
     #[test]
-    fn preparation_reuses_one_complete_text_snapshot_including_tombstones() {
+    fn legacy_preparation_reuses_one_complete_text_snapshot_including_tombstones() {
         let (_dir, mut store) = snapshot_fixture();
         let original = database(&store.connection);
         let sequence: i64 = store
@@ -703,7 +791,7 @@ mod tests {
         let expected = family_ingress::retained_texts(&tx, graph.scope()).unwrap();
         assert_eq!(reads.get(), 2);
         reads.reset();
-        let prepared = prepare_command(&tx, &request, Some(FamilyCreateMode::Text)).unwrap();
+        let prepared = prepare_legacy_command(&tx, &request, Some(FamilyCreateMode::Text)).unwrap();
         assert_eq!(
             reads.get(),
             1,
@@ -742,7 +830,7 @@ mod tests {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .unwrap();
-        let receipt = commit_prepared(&tx, &prepared).unwrap();
+        let receipt = commit_legacy(&tx, &prepared).unwrap();
         assert_eq!(receipt.changes, prepared.changes);
         assert_eq!(receipt.sequence, sequence as u64 + 1);
         tx.commit().unwrap();
@@ -756,7 +844,7 @@ mod tests {
         assert_eq!(database(&store.connection), committed);
     }
     #[test]
-    fn hidden_text_or_history_corruption_still_rejects_preparation_and_writer() {
+    fn legacy_hidden_text_or_history_corruption_still_rejects_preparation_and_writer() {
         for corruption in [
             "entry",
             "scope",
@@ -768,7 +856,7 @@ mod tests {
             let (_dir, mut store) = snapshot_fixture();
             let request = text("new_entry", "new.md");
             let tx = store.connection.unchecked_transaction().unwrap();
-            let prepared = prepare_command(&tx, &request, Some(FamilyCreateMode::Text)).unwrap();
+            let prepared = prepare_legacy_command(&tx, &request, Some(FamilyCreateMode::Text)).unwrap();
             tx.commit().unwrap();
             let id = EntryId::new("c_entry").unwrap();
             if corruption == "history" {
@@ -816,7 +904,7 @@ mod tests {
             let corrupted = database(&store.connection);
             let tx = store.connection.unchecked_transaction().unwrap();
             assert!(
-                prepare_command(&tx, &request, Some(FamilyCreateMode::Text)).is_err(),
+                prepare_legacy_command(&tx, &request, Some(FamilyCreateMode::Text)).is_err(),
                 "{corruption}"
             );
             tx.rollback().unwrap();
@@ -824,17 +912,17 @@ mod tests {
                 .connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .unwrap();
-            assert!(commit_prepared(&tx, &prepared).is_err(), "{corruption}");
+            assert!(commit_legacy(&tx, &prepared).is_err(), "{corruption}");
             tx.rollback().unwrap();
             assert_eq!(database(&store.connection), corrupted, "{corruption}");
         }
     }
     #[test]
-    fn text_head_only_change_after_preparation_keeps_fresh_writer_cas() {
+    fn legacy_text_head_only_change_after_preparation_keeps_fresh_writer_cas() {
         let (dir, mut store) = snapshot_fixture();
         let request = text("new_entry", "new.md");
         let tx = store.connection.unchecked_transaction().unwrap();
-        let prepared = prepare_command(&tx, &request, Some(FamilyCreateMode::Text)).unwrap();
+        let prepared = prepare_legacy_command(&tx, &request, Some(FamilyCreateMode::Text)).unwrap();
         tx.commit().unwrap();
         let before_entries = entries(&store.connection).unwrap();
         let mut peer = Store::open(dir.path().join("store")).unwrap();
@@ -866,7 +954,7 @@ mod tests {
             prepared.expected_texts
         );
         assert!(matches!(
-            commit_prepared(&tx, &prepared),
+            commit_legacy(&tx, &prepared),
             Err(StoreError::Sync(
                 zorid_client_sync::SyncError::VersionConflict
             ))

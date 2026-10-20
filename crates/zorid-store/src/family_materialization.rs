@@ -655,37 +655,36 @@ pub(super) fn validate_and_return_texts(
     }
     Ok(texts)
 }
-pub(super) fn pending_count(tx: &Connection) -> Result<u32> {
-    let raws: Vec<String> = tx
-        .prepare("SELECT record FROM family_materializations")?
-        .query_map([], |r| r.get(0))?
-        .collect::<std::result::Result<_, _>>()?;
-    let mut count = 0u32;
-    for raw in raws {
+/// Strict row validation keeps status observations fail-closed without retaining
+/// every publication. This remains O(vault size), with at most one bounded row
+/// and its decoded materialization alive at a time.
+pub(super) fn publication_counts(tx: &Connection) -> Result<(u32, u32)> {
+    let mut statement = tx.prepare(
+        "SELECT CASE WHEN typeof(record)='text' AND length(CAST(record AS BLOB)) BETWEEN 1 AND ?1 THEN record END FROM family_materializations",
+    )?;
+    let mut rows = statement.query([zorid_file_sync::MAX_STATE_BYTES as i64])?;
+    let (mut pending, mut recovery) = (0u32, 0u32);
+    while let Some(row) = rows.next()? {
+        let raw: String = row.get::<_, Option<String>>(0)?.ok_or_else(|| {
+            StoreError::Corrupt("publication record type or size exceeds status bound".into())
+        })?;
         let value: FamilyMaterialization = serde_json::from_str(&raw)?;
-        if matches!(value.publication, FamilyPublication::Pending { .. }) {
-            count = count
-                .checked_add(1)
-                .ok_or_else(|| StoreError::Corrupt("pending count overflow".into()))?;
-        }
+        let count = match value.publication {
+            FamilyPublication::Pending { .. } => &mut pending,
+            FamilyPublication::Recovery { .. } => &mut recovery,
+            FamilyPublication::Normal { .. } | FamilyPublication::Tombstone => continue,
+        };
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| StoreError::Corrupt("publication count overflow".into()))?;
     }
-    Ok(count)
+    Ok((pending, recovery))
+}
+pub(super) fn pending_count(tx: &Connection) -> Result<u32> {
+    publication_counts(tx).map(|counts| counts.0)
 }
 pub(super) fn recovery_count(tx: &Connection) -> Result<u32> {
-    let records: Vec<String> = tx
-        .prepare("SELECT record FROM family_materializations")?
-        .query_map([], |row| row.get(0))?
-        .collect::<std::result::Result<_, _>>()?;
-    let mut count = 0u32;
-    for raw in records {
-        let record: FamilyMaterialization = serde_json::from_str(&raw)?;
-        if matches!(record.publication, FamilyPublication::Recovery { .. }) {
-            count = count
-                .checked_add(1)
-                .ok_or_else(|| StoreError::Corrupt("recovery count overflow".into()))?;
-        }
-    }
-    Ok(count)
+    publication_counts(tx).map(|counts| counts.1)
 }
 /// Every changed metadata token is fresh across the whole vault, including
 /// ancestors. Metadata-only changes keep immutable causal snapshots intact.
@@ -911,34 +910,382 @@ pub(super) fn apply(
     Ok(changed_ids)
 }
 
+/// Publish the source-checked local Text/create-folder delta without loading the
+/// vault graph. The private caller proves namespace/binding semantics and has
+/// already persisted `next_text` in this same transaction. This layer checks the
+/// exact retained rows and immutable witnesses it replaces, never unrelated rows.
+pub(super) fn apply_indexed_local_text(
+    tx: &Connection,
+    request: &MutationRequest,
+    changes: &[EntryChange],
+    publications: &BTreeMap<EntryId, FamilyMaterialization>,
+    next_text: Option<&zorid_client_sync::TextState>,
+) -> Result<()> {
+    let corrupt = |reason: &str| StoreError::Corrupt(reason.into());
+    request.validate()?;
+    let target = changes
+        .iter()
+        .find(|change| change.after.id == *request.mutation.id())
+        .ok_or_else(|| corrupt("indexed publication target missing"))?;
+    let bytes = match &request.mutation {
+        Mutation::Create {
+            path,
+            kind,
+            content,
+            ..
+        } if target.before.is_none()
+            && path == &target.after.path
+            && kind == &target.after.kind =>
+        {
+            content.as_deref()
+        }
+        Mutation::Write {
+            expected, content, ..
+        } if target.before.as_ref().is_some_and(|before| {
+            &before.revision == expected
+                && before.path == target.after.path
+                && before.kind == EntryKind::File
+                && !before.deleted
+        }) && target.after.kind == EntryKind::File =>
+        {
+            Some(content.as_slice())
+        }
+        _ => {
+            return Err(corrupt(
+                "indexed publication requires local Text write or create",
+            ))
+        }
+    };
+    if changes.len() != publications.len() || changes.is_empty() {
+        return Err(corrupt("indexed publication coverage mismatch"));
+    }
+    let authority = text_sync::identity(tx)?;
+    let (Some(realm), Some(vault)) = (&authority.realm_id, &authority.vault_id) else {
+        return Err(corrupt("indexed publication scope missing"));
+    };
+    let next_witness = match (bytes, next_text) {
+        (Some(bytes), Some(text)) => {
+            if text.identity.entry_id != target.after.id
+                || text.version != target.after.revision
+                || &text.identity.realm_id != realm
+                || &text.identity.vault_id != vault
+                || text.complete_materialized_utf8()?.as_deref() != Some(bytes)
+                || text_sync::retained(tx, &target.after.id)?.as_ref() != Some(text)
+            {
+                return Err(corrupt(
+                    "indexed publication next Text differs from retained state",
+                ));
+            }
+            Some(FamilyContentWitness {
+                digest: Sha256Digest::of(bytes),
+                witness: ContentWitness::Text {
+                    identity: text.identity.clone(),
+                    revision: text.version.clone(),
+                    snapshot_digest: Sha256Digest::of(&text.snapshot),
+                },
+            })
+        }
+        (None, None) if target.after.kind == EntryKind::Folder => None,
+        _ => return Err(corrupt("indexed publication content kind mismatch")),
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    // Validate the complete affected delta before writing any publication row.
+    for change in changes {
+        let after = &change.after;
+        if !seen.insert(&after.id) || after.deleted || after.revision != target.after.revision {
+            return Err(corrupt("indexed publication malformed changed state"));
+        }
+        let record = publications
+            .get(&after.id)
+            .ok_or_else(|| corrupt("indexed publication identity missing"))?;
+        check_indexed_normal(record, after)?;
+        let prior = get(tx, &after.id)?;
+        let retained = retained_entry(tx, &after.id)?;
+        match (&change.before, &prior, &retained) {
+            (None, None, None) if after.id == target.after.id => {
+                let historical: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM family_materialization_history WHERE entry_id=?1)",
+                    [after.id.as_str()],
+                    |row| row.get(0),
+                )?;
+                if historical {
+                    return Err(corrupt("indexed new publication has retained history"));
+                }
+            }
+            (Some(before), Some(old), Some((row, true))) => {
+                if &row.state != before
+                    || before.id != after.id
+                    || before.deleted
+                    || before.revision == after.revision
+                    || before.kind != after.kind
+                    || before.path != after.path
+                    || old.identity != record.identity
+                    || history(tx, &after.id, &before.revision)?.as_ref() != Some(old)
+                {
+                    return Err(corrupt(
+                        "indexed publication before state or history changed",
+                    ));
+                }
+                check_indexed_normal(old, before)?;
+                match (&row.content, &old.retained_content) {
+                    (Some(StoredContent::InlineBytes(old_bytes)), Some(witness))
+                        if before.kind == EntryKind::File && before.id == target.after.id =>
+                    {
+                        let ContentWitness::Text {
+                            identity,
+                            revision,
+                            snapshot_digest,
+                        } = &witness.witness
+                        else {
+                            return Err(corrupt("indexed prior publication is not Text"));
+                        };
+                        let text = text_sync::revision(tx, &before.id, revision)?
+                            .ok_or_else(|| corrupt("indexed retained Text witness missing"))?;
+                        if revision != &before.revision
+                            || &text.identity != identity
+                            || identity.entry_id != before.id
+                            || &identity.realm_id != realm
+                            || &identity.vault_id != vault
+                            || next_text.is_none_or(|next| &next.identity != identity)
+                            || Sha256Digest::of(&text.snapshot) != *snapshot_digest
+                            || Sha256Digest::of(old_bytes) != witness.digest
+                            || text.complete_materialized_utf8()?.as_deref()
+                                != Some(old_bytes.as_slice())
+                        {
+                            return Err(corrupt(
+                                "indexed retained Text witness does not prove bytes",
+                            ));
+                        }
+                    }
+                    (None, None) if before.kind == EntryKind::Folder => {}
+                    _ => return Err(corrupt("indexed retained publication content mismatch")),
+                }
+                if after.id == target.after.id {
+                    // The authored Text activity advances the namespace frontier;
+                    // its exact next heads were source-checked by the caller.
+                    // Text writes cannot change the selected location event.
+                    if !matches!((&old.publication, &record.publication),
+                        (FamilyPublication::Normal { location_event: before, .. },
+                         FamilyPublication::Normal { location_event: after, .. }) if before == after)
+                    {
+                        return Err(corrupt("indexed Text write changed location publication"));
+                    }
+                } else if old != record {
+                    return Err(corrupt("indexed ancestor publication changed"));
+                }
+            }
+            _ => {
+                return Err(corrupt(
+                    "indexed publication retained row or visibility changed",
+                ))
+            }
+        }
+        if after.id == target.after.id {
+            if record.retained_content != next_witness {
+                return Err(corrupt("indexed target witness differs from next Text"));
+            }
+        } else if after.kind != EntryKind::Folder
+            || change.before.is_none()
+            || !target.after.path.is_descendant_of(&after.path)
+            || record.retained_content.is_some()
+        {
+            return Err(corrupt("indexed publication contains non-ancestor change"));
+        }
+        // A new token cannot overwrite even byte-identical immutable history.
+        if history(tx, &after.id, &after.revision)?.is_some() {
+            return Err(corrupt("indexed publication revision already retained"));
+        }
+    }
+    for change in changes {
+        let after = &change.after;
+        let record = &publications[&after.id];
+        let content = if after.id == target.after.id {
+            bytes
+        } else {
+            None
+        };
+        let digest = content
+            .map(|bytes| serde_json::to_string(&Sha256Digest::of(bytes)))
+            .transpose()?;
+        tx.execute("INSERT INTO entries(id,path,deleted,state,content,visible,content_ref,content_digest) VALUES(?1,?2,0,?3,?4,1,NULL,?5) ON CONFLICT(id) DO UPDATE SET path=excluded.path,deleted=0,state=excluded.state,content=excluded.content,visible=1,content_ref=NULL,content_digest=excluded.content_digest",
+            params![after.id.as_str(), after.path.as_str(), serde_json::to_string(after)?, content, digest])?;
+        let encoded = serde_json::to_string(record)?;
+        tx.execute(
+            "INSERT INTO family_materialization_history VALUES(?1,?2,?3)",
+            params![after.id.as_str(), after.revision.as_str(), encoded],
+        )?;
+        tx.execute("INSERT INTO family_materializations VALUES(?1,?2) ON CONFLICT(entry_id) DO UPDATE SET record=excluded.record",
+            params![after.id.as_str(), encoded])?;
+    }
+    presentation::record_family_reload(
+        tx,
+        ProjectionOrigin::LocalCommand {
+            operation_id: request.operation_id.clone(),
+        },
+        changes,
+        presentation::now_ms()?,
+    )
+}
+
+fn check_indexed_normal(record: &FamilyMaterialization, state: &EntryState) -> Result<()> {
+    let FamilyPublication::Normal {
+        path,
+        kind,
+        namespace_heads,
+        ..
+    } = &record.publication
+    else {
+        return Err(StoreError::Corrupt(
+            "indexed publication is not normal".into(),
+        ));
+    };
+    if record.identity.entry_id != state.id
+        || state.deleted
+        || path != &state.path
+        || kind != &state.kind
+        || namespace_heads.is_empty()
+        || namespace_heads.windows(2).any(|pair| pair[0] >= pair[1])
+        || (*kind == EntryKind::Folder && record.retained_content.is_some())
+    {
+        return Err(StoreError::Corrupt(
+            "indexed normal publication shape mismatch".into(),
+        ));
+    }
+    Ok(())
+}
+
+// Text and folders have bounded independent source witnesses. Binary history
+// retains its existing graph/manifest validation until its reader is converted.
+fn binary_witness(record: &FamilyMaterialization) -> bool {
+    matches!(
+        record.retained_content.as_ref().map(|value| &value.witness),
+        Some(ContentWitness::Binary { .. })
+    )
+}
+fn check_indexed_history(
+    tx: &Connection,
+    record: &FamilyMaterialization,
+) -> Result<Option<(zorid_client_sync::TextState, Vec<u8>)>> {
+    let invalid = |reason: &str| StoreError::Corrupt(reason.into());
+    let (identity, binding) = family_indexed::checked_binding(tx, &record.identity.entry_id)?
+        .ok_or_else(|| invalid("publication history lacks causal identity"))?;
+    if identity != record.identity {
+        return Err(invalid("publication history differs from causal identity"));
+    }
+    let Some(witness) = &record.retained_content else {
+        return Ok(None);
+    };
+    let ContentWitness::Text {
+        identity,
+        revision,
+        snapshot_digest,
+    } = &witness.witness
+    else {
+        return Err(invalid("indexed history requires a Text witness"));
+    };
+    if identity.entry_id != record.identity.entry_id
+        || !matches!(binding, Some(zorid_file_sync::v2::ContentBinding::Text { text_bootstrap_id, text_format })
+            if text_bootstrap_id == identity.bootstrap_id && text_format == zorid_client_sync::v2::TEXT_FORMAT_VERSION)
+    {
+        return Err(invalid(
+            "historical Text binding differs from causal source",
+        ));
+    }
+    let authority = text_sync::identity(tx)?;
+    let text = text_sync::revision(tx, &record.identity.entry_id, revision)?
+        .ok_or_else(|| invalid("historical Text witness missing"))?;
+    let bytes = text
+        .complete_materialized_utf8()?
+        .ok_or_else(|| invalid("historical Text has missing dependencies"))?;
+    if &text.identity != identity
+        || authority.realm_id.as_ref() != Some(&identity.realm_id)
+        || authority.vault_id.as_ref() != Some(&identity.vault_id)
+        || Sha256Digest::of(&text.snapshot) != *snapshot_digest
+        || Sha256Digest::of(&bytes) != witness.digest
+    {
+        return Err(invalid("historical Text witness differs from snapshot"));
+    }
+    Ok(Some((text, bytes)))
+}
+fn check_indexed_current(tx: &Connection, record: &FamilyMaterialization) -> Result<()> {
+    let invalid = |reason: &str| StoreError::Corrupt(reason.into());
+    let text = check_indexed_history(tx, record)?;
+    let row = retained_entry(tx, &record.identity.entry_id)?;
+    let normal = matches!(&record.publication, FamilyPublication::Normal { .. });
+    if normal != row.as_ref().is_some_and(|(_, visible)| *visible) {
+        return Err(invalid("publication visibility differs from metadata"));
+    }
+    let Some((row, _)) = row else {
+        let had_row: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM family_materialization_history WHERE entry_id=?1)",
+            [record.identity.entry_id.as_str()],
+            |row| row.get(0),
+        )?;
+        if normal || record.retained_content.is_some() || had_row {
+            return Err(invalid("retained publication row missing"));
+        }
+        return Ok(());
+    };
+    if history(tx, &row.state.id, &row.state.revision)?.as_ref() != Some(record) {
+        return Err(invalid(
+            "current publication differs from immutable history",
+        ));
+    }
+    match (&row.content, &text, &record.retained_content) {
+        (Some(StoredContent::InlineBytes(bytes)), Some((_, witnessed)), Some(_))
+            if witnessed == bytes => {}
+        (None, None, None) if row.state.kind == EntryKind::Folder => {}
+        _ => return Err(invalid("retained publication content differs from witness")),
+    }
+    if let FamilyPublication::Normal {
+        path,
+        kind,
+        namespace_heads,
+        location_event,
+    } = &record.publication
+    {
+        let entry = family_indexed::checked_entry(tx, &row.state.id)?
+            .ok_or_else(|| invalid("Normal publication identity missing from metadata"))?;
+        if row.state.deleted
+            || &row.state.path != path
+            || &row.state.kind != kind
+            || entry.identity != record.identity
+            || entry.kind != *kind
+            || entry.projection != (zorid_file_sync::Projection::Normal { path: path.clone() })
+            || &entry.heads != namespace_heads
+            || entry.locations.last().map(|value| &value.event) != Some(location_event)
+        {
+            return Err(invalid(
+                "Normal publication differs from current causal source",
+            ));
+        }
+        if let Some((text, _)) = text {
+            if text_sync::retained(tx, &row.state.id)?.as_ref() != Some(&text) {
+                return Err(invalid("Normal Text witness differs from current snapshot"));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Store {
     pub fn family_materialization(&self, id: &EntryId) -> Result<Option<FamilyMaterialization>> {
         let tx = self.connection.unchecked_transaction()?;
         let authority = text_sync::identity(&tx)?;
-        let (Some(realm_id), Some(vault_id)) = (authority.realm_id, authority.vault_id) else {
+        if authority.realm_id.is_none() || authority.vault_id.is_none() {
             return Err(zorid_client_sync::SyncError::IdentityMismatch.into());
-        };
-        let graph = blob_index::load_metadata(&tx, &zorid_file_sync::Scope { realm_id, vault_id })?
-            .ok_or_else(|| StoreError::Corrupt("enrolled graph missing".into()))?;
+        }
         let value = get(&tx, id)?;
         if let Some(record) = &value {
-            check_current_metadata(&tx, &graph, record)?;
-        } else {
-            let known = graph.records().values().any(|record| match record.body() {
-                zorid_file_sync::metadata::GraphRecordBody::Events { events }
-                | zorid_file_sync::metadata::GraphRecordBody::ObservedDelete { events } => {
-                    events.iter().any(|event| event.identity.entry_id == *id)
-                }
-                _ => false,
-            }) || graph
-                .activities()
-                .values()
-                .any(|activity| activity.identity().entry_id == *id);
-            if known {
-                return Err(StoreError::Corrupt(
-                    "graph identity lacks publication cache".into(),
-                ));
+            if binary_witness(record) {
+                check_current_metadata(&tx, &load_metadata(&tx)?, record)?;
+            } else {
+                check_indexed_current(&tx, record)?;
             }
+        } else if family_indexed::checked_binding(&tx, id)?.is_some() {
+            return Err(StoreError::Corrupt(
+                "graph identity lacks publication cache".into(),
+            ));
         }
         tx.commit()?;
         Ok(value)
@@ -954,20 +1301,13 @@ impl Store {
         revision: &Revision,
     ) -> Result<Option<FamilyMaterialization>> {
         let tx = self.connection.unchecked_transaction()?;
-        let raw:Option<String>=tx.query_row("SELECT record FROM family_materialization_history WHERE entry_id=?1 AND revision=?2",params![id.as_str(),revision.as_str()],|r|r.get(0)).optional()?;
-        let value = raw
-            .map(|raw| -> Result<FamilyMaterialization> {
-                let record: FamilyMaterialization = serde_json::from_str(&raw)?;
-                if record.identity.entry_id != *id {
-                    return Err(StoreError::Corrupt(
-                        "publication history identity mismatch".into(),
-                    ));
-                }
-                Ok(record)
-            })
-            .transpose()?;
+        let value = history(&tx, id, revision)?;
         if let Some(record) = &value {
-            check_history_metadata(&tx, &load_metadata(&tx)?, record)?;
+            if binary_witness(record) {
+                check_history_metadata(&tx, &load_metadata(&tx)?, record)?;
+            } else {
+                check_indexed_history(&tx, record)?;
+            }
         }
         tx.commit()?;
         Ok(value)
@@ -1040,11 +1380,38 @@ pub(super) fn check_publication_content(
             "physical publication is not its exact historical Normal target".into(),
         ));
     }
-    let graph = load_metadata(tx)?;
     match (content, &record.retained_content) {
-        (None, None) if state.kind == EntryKind::Folder => Ok(()),
+        (None, None) if state.kind == EntryKind::Folder => {
+            check_indexed_history(tx, &record)?;
+            let entry = family_indexed::checked_entry(tx, &state.id)?.ok_or_else(|| {
+                StoreError::Corrupt("physical folder lost causal identity".into())
+            })?;
+            if entry.identity != record.identity || entry.kind != EntryKind::Folder {
+                return Err(StoreError::Corrupt(
+                    "physical folder identity or kind changed".into(),
+                ));
+            }
+            Ok(())
+        }
         (Some(value), Some(witness)) if state.kind == EntryKind::File => {
-            check_retained_content(tx, &graph, &record.identity, witness, value, None)?;
+            if binary_witness(&record) {
+                check_retained_content(
+                    tx,
+                    &load_metadata(tx)?,
+                    &record.identity,
+                    witness,
+                    value,
+                    None,
+                )?;
+            } else {
+                let (_, witnessed) = check_indexed_history(tx, &record)?
+                    .ok_or_else(|| StoreError::Corrupt("physical Text witness missing".into()))?;
+                if !matches!(value, StoredContent::InlineBytes(bytes) if bytes == &witnessed) {
+                    return Err(StoreError::Corrupt(
+                        "physical Text differs from historical bytes".into(),
+                    ));
+                }
+            }
             if let ContentWitness::Text { revision, .. } = &witness.witness {
                 if revision != &state.revision {
                     return Err(StoreError::Corrupt(
@@ -1985,5 +2352,379 @@ mod retained_view_tests {
         tx.rollback().unwrap();
         assert_eq!(database(&store.connection), advanced);
         assert!(store.read(request.mutation.id()).unwrap().is_none());
+    }
+}
+
+#[cfg(test)]
+mod indexed_local_publication_tests {
+    use super::*;
+    use zorid_core::{OperationId, VaultPath};
+    use zorid_sync_protocol::{RealmId, VaultId};
+
+    fn fixture() -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("store")).unwrap();
+        store
+            .family_enroll(&FamilyScope {
+                realm_id: RealmId::new("realm").unwrap(),
+                vault_id: VaultId::new("vault").unwrap(),
+            })
+            .unwrap();
+        for (id, path, kind, content) in [
+            ("folder", "folder", EntryKind::Folder, None),
+            (
+                "note",
+                "folder/note.md",
+                EntryKind::File,
+                Some(b"old text".to_vec()),
+            ),
+        ] {
+            store
+                .family_apply(
+                    &MutationRequest {
+                        operation_id: OperationId::new(format!("create_{id}")).unwrap(),
+                        mutation: Mutation::Create {
+                            id: EntryId::new(id).unwrap(),
+                            path: VaultPath::new(path).unwrap(),
+                            kind,
+                            content,
+                        },
+                    },
+                    (kind == EntryKind::File).then_some(FamilyCreateMode::Text),
+                )
+                .unwrap();
+        }
+        (dir, store)
+    }
+    fn delta(
+        db: &Connection,
+    ) -> (
+        MutationRequest,
+        Vec<EntryChange>,
+        BTreeMap<EntryId, FamilyMaterialization>,
+        zorid_client_sync::TextState,
+    ) {
+        let id = EntryId::new("note").unwrap();
+        let revision = Revision::new("indexed_revision").unwrap();
+        let mut text = text_sync::retained(db, &id).unwrap().unwrap();
+        text = zorid_client_sync::TextState::empty(text.identity, revision.clone());
+        let mut changes = Vec::new();
+        let mut publications = BTreeMap::new();
+        for name in ["folder", "note"] {
+            let id = EntryId::new(name).unwrap();
+            let before = retained_entry(db, &id).unwrap().unwrap().0.state;
+            let mut after = before.clone();
+            after.revision = revision.clone();
+            let mut record = get(db, &id).unwrap().unwrap();
+            if name == "note" {
+                let FamilyPublication::Normal {
+                    namespace_heads, ..
+                } = &mut record.publication
+                else {
+                    panic!()
+                };
+                *namespace_heads = vec![UpdateId::new("next_text_activity").unwrap()];
+                record.retained_content = Some(FamilyContentWitness {
+                    digest: Sha256Digest::of(b""),
+                    witness: ContentWitness::Text {
+                        identity: text.identity.clone(),
+                        revision: revision.clone(),
+                        snapshot_digest: Sha256Digest::of(&text.snapshot),
+                    },
+                });
+            }
+            publications.insert(id, record);
+            changes.push(EntryChange {
+                before: Some(before),
+                after,
+            });
+        }
+        let request = MutationRequest {
+            operation_id: OperationId::new("indexed_write").unwrap(),
+            mutation: Mutation::Write {
+                id,
+                expected: changes[1].before.as_ref().unwrap().revision.clone(),
+                content: vec![],
+            },
+        };
+        (request, changes, publications, text)
+    }
+    #[test]
+    fn publication_counts_stream_pending_and_recovery_in_one_strict_pass() {
+        let (_dir, store) = fixture();
+        assert_eq!(publication_counts(&store.connection).unwrap(), (0, 0));
+        for (id, publication) in [
+            (
+                "note",
+                FamilyPublication::Pending {
+                    reason: PendingReason::MissingText,
+                },
+            ),
+            (
+                "folder",
+                FamilyPublication::Recovery {
+                    reason: zorid_file_sync::RecoveryReason::Cycle,
+                },
+            ),
+        ] {
+            let id = EntryId::new(id).unwrap();
+            let mut record = get(&store.connection, &id).unwrap().unwrap();
+            record.publication = publication;
+            store
+                .connection
+                .execute(
+                    "UPDATE family_materializations SET record=?1 WHERE entry_id=?2",
+                    params![serde_json::to_string(&record).unwrap(), id.as_str()],
+                )
+                .unwrap();
+        }
+        assert_eq!(publication_counts(&store.connection).unwrap(), (1, 1));
+        assert_eq!(pending_count(&store.connection).unwrap(), 1);
+        assert_eq!(recovery_count(&store.connection).unwrap(), 1);
+    }
+    #[test]
+    fn publication_counts_reject_malformed_unknown_and_non_text_rows() {
+        let (_dir, store) = fixture();
+        let original = serde_json::to_value(
+            get(&store.connection, &EntryId::new("note").unwrap())
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        let mut unknown_status = original.clone();
+        unknown_status["publication"] = serde_json::json!({"status": "unknown"});
+        let mut unknown_reason = original;
+        unknown_reason["publication"] =
+            serde_json::json!({"status": "pending", "reason": {"kind": "unknown"}});
+        for raw in [
+            "".to_owned(),
+            "{".to_owned(),
+            "{}".to_owned(),
+            unknown_status.to_string(),
+            unknown_reason.to_string(),
+        ] {
+            store
+                .connection
+                .execute(
+                    "UPDATE family_materializations SET record=?1 WHERE entry_id='note'",
+                    [raw],
+                )
+                .unwrap();
+            assert!(publication_counts(&store.connection).is_err());
+        }
+        store
+            .connection
+            .execute(
+                "UPDATE family_materializations SET record=?1 WHERE entry_id='note'",
+                [b"{}".as_slice()],
+            )
+            .unwrap();
+        assert!(publication_counts(&store.connection).is_err());
+    }
+    #[test]
+    fn indexed_text_write_keeps_ancestor_publication_and_records_both_revisions() {
+        let (_dir, store) = fixture();
+        let (request, changes, publications, text) = delta(&store.connection);
+        let tx = store.connection.unchecked_transaction().unwrap();
+        text_sync::reserve_revision(&tx, &text.version).unwrap();
+        text_sync::put_current(&tx, &text).unwrap();
+        apply_indexed_local_text(&tx, &request, &changes, &publications, Some(&text)).unwrap();
+        tx.commit().unwrap();
+        for change in &changes {
+            let (retained, visible) = retained_entry(&store.connection, &change.after.id)
+                .unwrap()
+                .unwrap();
+            assert!(visible);
+            assert_eq!(retained.state, change.after);
+            assert_eq!(
+                history(&store.connection, &change.after.id, &text.version)
+                    .unwrap()
+                    .as_ref(),
+                publications.get(&change.after.id)
+            );
+        }
+        assert_eq!(
+            store
+                .read(&text.identity.entry_id)
+                .unwrap()
+                .unwrap()
+                .content,
+            Some(vec![])
+        );
+        assert_eq!(
+            text_sync::retained(&store.connection, &text.identity.entry_id).unwrap(),
+            Some(text)
+        );
+    }
+    #[test]
+    fn targeted_text_current_and_history_keep_exact_old_physical_witness_after_write() {
+        let (_dir, mut store) = fixture();
+        let id = EntryId::new("note").unwrap();
+        let folder = EntryId::new("folder").unwrap();
+        let old = store.read(&id).unwrap().unwrap();
+        let old_folder = store.read(&folder).unwrap().unwrap().state;
+        let old_record = store.family_materialization(&id).unwrap().unwrap();
+        store
+            .family_apply(
+                &MutationRequest {
+                    operation_id: OperationId::new("point_read_write").unwrap(),
+                    mutation: Mutation::Write {
+                        id: id.clone(),
+                        expected: old.state.revision.clone(),
+                        content: b"new text".to_vec(),
+                    },
+                },
+                None,
+            )
+            .unwrap();
+        let current = store.read(&id).unwrap().unwrap();
+        let current_folder = store.read(&folder).unwrap().unwrap().state;
+        assert_ne!(old.state.revision, current.state.revision);
+        assert_eq!(
+            store.family_publication(&id, &old.state.revision).unwrap(),
+            Some(old_record.clone())
+        );
+        let current_record = store.family_materialization(&id).unwrap().unwrap();
+        assert_ne!(current_record, old_record);
+        assert_eq!(
+            store
+                .family_publication(&id, &current.state.revision)
+                .unwrap(),
+            Some(current_record)
+        );
+        let tx = store.connection.unchecked_transaction().unwrap();
+        check_publication(&tx, &old.state, old.content.as_deref()).unwrap();
+        check_publication(&tx, &current.state, current.content.as_deref()).unwrap();
+        assert!(check_publication(&tx, &old.state, Some(b"new text")).is_err());
+        check_publication(&tx, &old_folder, None).unwrap();
+        check_publication(&tx, &current_folder, None).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(
+            store
+                .family_publication(&folder, &old_folder.revision)
+                .unwrap(),
+            store.family_materialization(&folder).unwrap()
+        );
+    }
+    #[test]
+    fn targeted_text_reads_reject_history_bytes_scope_and_current_binding_corruption() {
+        for fault in ["history", "bytes", "scope", "current"] {
+            let (_dir, mut store) = fixture();
+            let id = EntryId::new("note").unwrap();
+            let before = store.read(&id).unwrap().unwrap();
+            store
+                .family_apply(
+                    &MutationRequest {
+                        operation_id: OperationId::new("corruption_write").unwrap(),
+                        mutation: Mutation::Write {
+                            id: id.clone(),
+                            expected: before.state.revision.clone(),
+                            content: b"new text".to_vec(),
+                        },
+                    },
+                    None,
+                )
+                .unwrap();
+            let state = store.read(&id).unwrap().unwrap().state;
+            match fault {
+                "history" => {
+                    let mut record = get(&store.connection, &id).unwrap().unwrap();
+                    record.retained_content.as_mut().unwrap().digest = Sha256Digest::of(b"wrong");
+                    store.connection.execute("UPDATE family_materialization_history SET record=?1 WHERE entry_id=?2 AND revision=?3",
+                        params![serde_json::to_string(&record).unwrap(), id.as_str(), state.revision.as_str()]).unwrap();
+                    assert!(store.family_publication(&id, &state.revision).is_err());
+                }
+                "bytes" => {
+                    store
+                        .connection
+                        .execute(
+                            "UPDATE entries SET content=?1,content_digest=?2 WHERE id=?3",
+                            params![
+                                b"wrong".as_slice(),
+                                serde_json::to_string(&Sha256Digest::of(b"wrong")).unwrap(),
+                                id.as_str()
+                            ],
+                        )
+                        .unwrap();
+                }
+                "scope" => {
+                    let mut text = text_sync::retained(&store.connection, &id)
+                        .unwrap()
+                        .unwrap();
+                    text.identity.realm_id = RealmId::new("wrong_realm").unwrap();
+                    store
+                        .connection
+                        .execute(
+                            "UPDATE text_revisions SET record=?1 WHERE entry_id=?2 AND revision=?3",
+                            params![
+                                serde_json::to_string(&text).unwrap(),
+                                id.as_str(),
+                                state.revision.as_str()
+                            ],
+                        )
+                        .unwrap();
+                    assert!(store.family_publication(&id, &state.revision).is_err());
+                }
+                "current" => {
+                    store
+                        .connection
+                        .execute(
+                            "UPDATE text_bindings SET revision=?1 WHERE entry_id=?2",
+                            params![before.state.revision.as_str(), id.as_str()],
+                        )
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(store.family_materialization(&id).is_err(), "{fault}");
+        }
+    }
+    #[test]
+    fn indexed_before_mismatch_or_corrupt_history_rolls_back_text_and_ancestor_rows() {
+        for corrupt_history in [false, true] {
+            let (_dir, store) = fixture();
+            let (request, mut changes, publications, text) = delta(&store.connection);
+            if corrupt_history {
+                let before = changes[1].before.as_ref().unwrap();
+                let mut damaged = publications[&before.id].clone();
+                damaged.identity.bootstrap_id = UpdateId::new("wrong_bootstrap").unwrap();
+                store.connection.execute("UPDATE family_materialization_history SET record=?1 WHERE entry_id=?2 AND revision=?3",
+                    params![serde_json::to_string(&damaged).unwrap(), before.id.as_str(), before.revision.as_str()]).unwrap();
+            } else {
+                changes[1].before.as_mut().unwrap().revision =
+                    Revision::new("wrong_before").unwrap();
+            }
+            let old_text = text_sync::retained(&store.connection, &text.identity.entry_id).unwrap();
+            let before_rows: Vec<_> = changes
+                .iter()
+                .map(|change| retained_entry(&store.connection, &change.after.id).unwrap())
+                .collect();
+            let tx = store.connection.unchecked_transaction().unwrap();
+            text_sync::reserve_revision(&tx, &text.version).unwrap();
+            text_sync::put_current(&tx, &text).unwrap();
+            assert!(
+                apply_indexed_local_text(&tx, &request, &changes, &publications, Some(&text))
+                    .is_err()
+            );
+            tx.rollback().unwrap();
+            assert_eq!(
+                text_sync::retained(&store.connection, &text.identity.entry_id).unwrap(),
+                old_text
+            );
+            for (change, before) in changes.iter().zip(before_rows) {
+                assert_eq!(
+                    retained_entry(&store.connection, &change.after.id).unwrap(),
+                    before
+                );
+                assert!(history(&store.connection, &change.after.id, &text.version)
+                    .unwrap()
+                    .is_none());
+            }
+            assert!(
+                text_sync::revision(&store.connection, &text.identity.entry_id, &text.version)
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 }

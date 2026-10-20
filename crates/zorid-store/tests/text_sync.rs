@@ -4,8 +4,51 @@ use zorid_client_sync::{
 };
 use zorid_core::{EntryId, EntryKind, Mutation, MutationRequest, OperationId, Revision, VaultPath};
 use zorid_crypto::VaultKey;
-use zorid_store::{ChangeOrigin, ProjectionOrigin, ProjectionPhase, Store};
+use zorid_store::{ChangeOrigin, ProjectionOrigin, ProjectionPhase, Store, StoredContent};
 use zorid_sync_protocol::{ExpectedContext, LogPosition, RealmId, ServerEpoch, UpdateId, VaultId};
+// Recreate the oldest currently supported schema while retaining every source,
+// receipt, revision fence and in-flight projection record byte for byte.
+fn downgrade_current_to_twelve(db: &mut rusqlite::Connection) {
+    assert_eq!(db.query_row("SELECT count(*) FROM text_bindings", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+    assert_eq!(db.query_row("SELECT count(*) FROM namespace_successions", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+    let tables: Vec<String> = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND (name NOT GLOB 'sqlite_*' OR name='sqlite_sequence') AND (name NOT GLOB 'family_graph_*' OR name='family_graph_heads') AND name!='namespace_successions' ORDER BY name").unwrap()
+        .query_map([], |row| row.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+    let retained = |db: &rusqlite::Connection| -> Vec<Vec<Vec<rusqlite::types::Value>>> {
+        tables.iter().map(|table| {
+            let mut statement = db.prepare(&format!("SELECT * FROM \"{table}\" ORDER BY rowid")).unwrap();
+            let columns = statement.column_count();
+            let rows = statement.query_map([], |row| (0..columns).map(|column| row.get(column)).collect::<rusqlite::Result<_>>()).unwrap()
+                .collect::<rusqlite::Result<_>>().unwrap();
+            rows
+        }).collect()
+    };
+    let before = retained(db);
+    let objects: Vec<(String, String)> = db.prepare("SELECT type,name FROM sqlite_master WHERE name GLOB 'family_graph_*' AND name!='family_graph_heads' ORDER BY CASE type WHEN 'trigger' THEN 0 WHEN 'index' THEN 1 ELSE 2 END,rowid DESC").unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+    for (kind, name) in objects {
+        assert!(matches!(kind.as_str(), "table" | "index" | "trigger"));
+        db.execute_batch(&format!("DROP {kind} \"{name}\"" )).unwrap();
+    }
+    db.pragma_update(None, "foreign_keys", true).unwrap();
+    let current: String = db.query_row("SELECT sql FROM sqlite_master WHERE name='immutable_payloads'", [], |row| row.get(0)).unwrap();
+    let triggers: Vec<String> = db.prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND tbl_name='immutable_payloads'").unwrap()
+        .query_map([], |row| row.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+    let legacy = current.replacen("CREATE TABLE \"immutable_payloads\"", "CREATE TABLE immutable_payloads", 1)
+        .replace("CASE WHEN family='text' THEN 8388608 ELSE 1048576 END", "1048576");
+    assert_ne!(legacy, current);
+    let tx = db.transaction().unwrap();
+    tx.pragma_update(None, "defer_foreign_keys", true).unwrap();
+    tx.execute_batch("CREATE TEMP TABLE payload_copy AS SELECT * FROM immutable_payloads; DROP TABLE immutable_payloads;").unwrap();
+    tx.execute_batch(&legacy).unwrap();
+    tx.execute_batch("INSERT INTO immutable_payloads SELECT * FROM payload_copy ORDER BY rowid; DROP TABLE payload_copy;").unwrap();
+    for trigger in triggers { tx.execute_batch(&trigger).unwrap(); }
+    tx.execute_batch("DROP TABLE namespace_successions; DROP INDEX external_observation_unresolved_path;").unwrap();
+    assert!(tx.prepare("PRAGMA foreign_key_check").unwrap().query([]).unwrap().next().unwrap().is_none());
+    tx.pragma_update(None, "user_version", 12).unwrap();
+    tx.commit().unwrap();
+    assert_eq!(retained(db), before);
+    db.pragma_update(None, "journal_mode", "DELETE").unwrap();
+}
 fn identity() -> TextIdentity {
     TextIdentity {
         realm_id: RealmId::new("realm").unwrap(),
@@ -180,7 +223,7 @@ fn adoption_cas_and_exact_replay_produce_one_persisted_envelope_and_self_echo_is
     let historical = store
         .text_baseline(&zorid_store::ProjectionBaseline {
             state: old.state,
-            content: old.content.unwrap(),
+            content: StoredContent::InlineBytes(old.content.unwrap()),
         })
         .unwrap()
         .unwrap();
@@ -253,10 +296,13 @@ fn prior_inflight_projection_cannot_retire_later_received_job() {
             .unwrap()
             .unwrap()
             .content,
-        b""
+        StoredContent::InlineBytes(b"".to_vec())
     );
     let next = b.begin_projection(&identity().entry_id).unwrap();
-    assert_eq!(next.target.content, b"remote");
+    assert_eq!(
+        next.target.content,
+        StoredContent::InlineBytes(b"remote".to_vec())
+    );
 }
 #[test]
 fn authority_survives_reopen_and_move_but_new_database_has_new_authority() {
@@ -283,7 +329,7 @@ fn authority_survives_reopen_and_move_but_new_database_has_new_authority() {
     );
 }
 #[test]
-fn v5_migration_preserves_inflight_cutoff_and_exact_directory_job() {
+fn v12_migration_preserves_inflight_cutoff_and_exact_directory_job() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db");
     let mut store = Store::open(&path).unwrap();
@@ -318,8 +364,8 @@ fn v5_migration_preserves_inflight_cutoff_and_exact_directory_job() {
         )
         .unwrap();
     drop(store);
-    let db = rusqlite::Connection::open(&path).unwrap();
-    common::downgrade_v6_to_v5(&db);
+    let mut db = rusqlite::Connection::open(&path).unwrap();
+    downgrade_current_to_twelve(&mut db);
     drop(db);
     let mut store = Store::open(&path).unwrap();
     store.finish_projection(&file.attempt_id, true).unwrap();
@@ -337,11 +383,11 @@ fn v5_migration_preserves_inflight_cutoff_and_exact_directory_job() {
             .unwrap()
             .unwrap()
             .content,
-        b"old"
+        StoredContent::InlineBytes(b"old".to_vec())
     );
 }
 #[test]
-fn same_path_move_remains_valid_and_legacy_history_does_not_block_migration() {
+fn same_path_move_replays_after_supported_v12_migration() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db");
     let mut store = Store::open(&path).unwrap();
@@ -367,8 +413,8 @@ fn same_path_move_remains_valid_and_legacy_history_does_not_block_migration() {
         )
         .unwrap();
     drop(store);
-    let db = rusqlite::Connection::open(&path).unwrap();
-    common::downgrade_v6_to_v5(&db);
+    let mut db = rusqlite::Connection::open(&path).unwrap();
+    downgrade_current_to_twelve(&mut db);
     drop(db);
     let mut store = Store::open(&path).unwrap();
     assert_eq!(store.apply(&command).unwrap(), receipt);
@@ -432,7 +478,10 @@ fn external_old_baseline_merges_remote_change_and_persists_observed_branch_then_
         .projection_baseline(&identity().entry_id)
         .unwrap()
         .unwrap();
-    assert_eq!(observed.content, b"local base");
+    assert_eq!(
+        observed.content,
+        StoredContent::InlineBytes(b"local base".to_vec())
+    );
     assert_ne!(observed.state.revision, merged.state.revision);
     assert_eq!(
         b.text_baseline(&observed)
@@ -450,10 +499,13 @@ fn external_old_baseline_merges_remote_change_and_persists_observed_branch_then_
     assert_eq!(b.list_snapshot().unwrap(), snapshot);
     let attempt = b.begin_projection(&identity().entry_id).unwrap();
     assert_eq!(attempt.baseline, Some(observed));
-    assert_eq!(attempt.target.content, b"local base remote");
+    assert_eq!(
+        attempt.target.content,
+        StoredContent::InlineBytes(b"local base remote".to_vec())
+    );
 }
 #[test]
-fn stale_managed_write_has_no_authored_update_and_prepared_intent_cannot_be_bypassed() {
+fn stale_legacy_managed_write_has_no_authored_update() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db");
     let mut a = Store::open(&path).unwrap();
@@ -466,13 +518,34 @@ fn stale_managed_write_has_no_authored_update_and_prepared_intent_cannot_be_bypa
     assert!(a.apply(&stale).is_err());
     assert_eq!(a.list_snapshot().unwrap(), snapshot);
     assert_eq!(a.pending_authored_text(None, 100).unwrap(), pending);
+}
+#[test]
+fn enrolled_text_prepared_intent_cannot_be_bypassed() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut a = Store::open(dir.path().join("db")).unwrap();
+    a.family_enroll(&zorid_file_sync::Scope {
+        realm_id: identity().realm_id, vault_id: identity().vault_id,
+    }).unwrap();
+    a.family_apply(&create(b"newer"), Some(zorid_store::FamilyCreateMode::Text)).unwrap();
+    let snapshot = a.list_snapshot().unwrap();
+    let pending = a.family_pending_authored(None, 100).unwrap();
     let command = write(&a, "prepared", b"next");
-    let view = a
-        .prepare_host_intent(&OperationId::new("client").unwrap(), &command)
-        .unwrap();
+    let client = OperationId::new("client").unwrap();
+    let view = a.prepare_host_intent(&client, &command).unwrap();
     assert_eq!(view.mutation_kind, zorid_store::HostMutationKind::Write);
-    assert!(a.apply(&command).is_err());
-    assert_eq!(a.pending_authored_text(None, 100).unwrap(), pending);
+    assert_eq!(view.state, zorid_store::HostIntentState::Prepared);
+    assert_eq!(view.client_id, client);
+    assert_eq!(view.operation_id, command.operation_id);
+    assert_eq!(view.entry_id, identity().entry_id);
+    assert_eq!(a.prepare_host_intent(&client, &command).unwrap(), view);
+    let reference = zorid_store::HostIntentRef { client_id: client, token: view.token.clone() };
+    assert_eq!(a.query_host_intent(&reference).unwrap(), Some(view.clone()));
+    assert!(matches!(a.family_apply(&command, None),
+        Err(zorid_store::StoreError::Contract(zorid_core::ContractError::InvalidMutation { reason }))
+        if reason == "host intent has not authorized this operation"));
+    assert_eq!(a.list_snapshot().unwrap(), snapshot);
+    assert_eq!(a.family_pending_authored(None, 100).unwrap(), pending);
+    assert_eq!(a.query_host_intent(&reference).unwrap(), Some(view));
 }
 
 #[test]
@@ -485,8 +558,11 @@ fn migration_rejects_orphan_legacy_queue_without_dropping_it() {
     db.pragma_update(None, "foreign_keys", false).unwrap();
     db.execute("INSERT INTO projection_queue(sequence) VALUES(999)", [])
         .unwrap();
+    db.pragma_update(None, "journal_mode", "DELETE").unwrap();
     drop(db);
-    assert!(Store::open(&path).is_err());
+    let before = std::fs::read(&path).unwrap();
+    assert!(matches!(Store::open(&path), Err(zorid_store::StoreError::UnsupportedSchema(5))));
+    assert_eq!(std::fs::read(&path).unwrap(), before);
     let db = rusqlite::Connection::open(&path).unwrap();
     assert_eq!(
         db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
@@ -680,8 +756,8 @@ fn received_sibling_update_cannot_reset_ancestor_to_any_historical_local_revisio
             .unwrap();
         if migrate {
             drop(receiver);
-            let db = rusqlite::Connection::open(&path).unwrap();
-            common::downgrade_v6_to_v5(&db);
+            let mut db = rusqlite::Connection::open(&path).unwrap();
+            downgrade_current_to_twelve(&mut db);
             drop(db);
             receiver = Store::open(&path).unwrap();
         }

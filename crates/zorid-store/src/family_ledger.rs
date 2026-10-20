@@ -610,12 +610,14 @@ mod tests {
         db.pragma_update(None, "foreign_keys", true).unwrap();
         for (_, sql) in super::super::immutable_payloads::SCHEMA
             .iter()
+            .chain(super::super::storage_accounting::PAYLOAD_SCHEMA)
             .chain(SCHEMA)
             .chain(super::super::blob_stage::SCHEMA)
             .chain(super::super::binary_commit::SCHEMA)
         {
             db.execute_batch(sql).unwrap();
         }
+        super::super::storage_accounting::initialize_payloads(&db).unwrap();
         db.execute_batch("CREATE TABLE receive_cursors (realm_id TEXT NOT NULL,vault_id TEXT NOT NULL,record TEXT NOT NULL,PRIMARY KEY(realm_id,vault_id))").unwrap();
         db
     }
