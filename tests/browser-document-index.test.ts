@@ -13,10 +13,11 @@ const range=(globalThis as any).IDBKeyRange;
 (globalThis as any).IDBKeyRange={bound:(lower:string,upper:string)=>({lower,upper})};
 /** Transaction/opaque-WASM doubles test host storage and transport only. No JS
  * parser, resolver or query evaluator stands in for Rust corpus parity. */
-function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:number;evictions?:number;pauseCacheBindOnce?:boolean;richRead?:boolean;richCompile?:boolean;richInvalidPage?:boolean;metadataRows?:boolean;metadataDelta?:boolean}={}){
-  const records=new Map<string,Map<string,any>>(['control','metadata','presentation','content','sync_materialization_refs'].map(n=>[n,new Map()]));
+function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:number;evictions?:number;pauseCacheBindOnce?:boolean;richRead?:boolean;richCompile?:boolean;richInvalidPage?:boolean;metadataRows?:boolean;metadataDelta?:boolean;preview?:boolean}={}){
+  const records=new Map<string,Map<string,any>>(['control','metadata','presentation','content','sync_materialization_refs',...(options.preview?['sync_state']:[])].map(n=>[n,new Map()]));
   const seed=(store:string,key:string,value:any)=>records.get(store)!.set(key,clone(value));
   seed('control','local-store-id',{key:'local-store-id',value:authority});seed('control','sequence',{key:'sequence',value:'0'});
+  if(options.preview){seed('sync_state','config',{key:'config',value:{realm_id:'realm',vault_id:'vault',key_epoch:1,replica_id:'replica',incarnation_id:'incarnation'}});seed('sync_state','metadata-head',{key:'metadata-head',value:{scope:{realm_id:'realm',vault_id:'vault'},version:'head1',counts:{records:0,activities:0}}});}
   const calls:{store:string;op:string;key?:any}[]=[],transactions:string[][]=[];let failCommit=false,denied=false,fatal=false,cacheReadUnavailable=false;let afterRead:((store:string,key:any)=>void)|undefined,afterCommit:(()=>void)|undefined;
   const db:any={transaction(names:string[],mode:string,options:any){
     if(mode==='readwrite')assert.deepEqual(options,{durability:'strict'});transactions.push(names);
@@ -26,7 +27,7 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
         const request=(op:string,key:any,action:()=>any)=>{const result:any={};calls.push({store:name,op,key});pending++;
           queueMicrotask(()=>{if(aborted)return;try{if(cacheReadUnavailable&&name==='control'&&op==='get'&&String(key).startsWith('document-parse-cache:v1/row/')){cacheReadUnavailable=false;throw new DOMException('fixture optional cache unavailable','UnknownError');}result.result=clone(action());if(op==='get')afterRead?.(name,key);result.onsuccess?.();}catch{tx.abort();}finally{pending--;schedule();}});return result;};
         const put=(row:any,add:boolean)=>request(add?'add':'put',row.key??row.id,()=>{assert.equal(mode,'readwrite');const key=row.key??row.id;if(add&&local.get(name)!.has(key))throw new Error('duplicate');local.get(name)!.set(key,clone(row));writes.add(name);return key;});
-        return {get:(key:string)=>request('get',key,()=>local.get(name)!.get(key)),put:(row:any)=>put(row,false),add:(row:any)=>put(row,true),
+        return {getKey:(key:string)=>request('getKey',key,()=>local.get(name)!.has(key)?key:undefined),get:(key:string)=>request('get',key,()=>local.get(name)!.get(key)),put:(row:any)=>put(row,false),add:(row:any)=>put(row,true),
           getAll(){assert.fail('aggregate source/control scan is forbidden');},
           delete:(key:string)=>request('delete',key,()=>{local.get(name)!.delete(key);writes.add(name);}),
           openKeyCursor(bounds?:any){return this.openCursor(bounds);},
@@ -46,8 +47,13 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
   const baseCalls:{id:string;text:string;facts:any[];options:any;viewName?:string|null}[]=[];
   const preparationCalls:{monotonicMs:number;generation:unknown}[]=[],preparationStats={created:0,freed:0,cleared:0};let afterBase:(()=>void)|undefined;
   class MockBuilder {
+    preview:any;freed=false;
+    configurePreview(owner:MockPreviewOwner,nonce:string,stageId:string){this.preview={owner,nonce,stageId,receipts:new Set<string>()};}
+    commitPreviewRowsJson(raw:string){if(previewResource)throw JSON.stringify({code:'index_preview_resource'});for(const row of JSON.parse(raw)){assert.deepEqual(row.entry,this.header.entries.find(entry=>entry.id===row.entry.id));assert.ok(this.rows.has(row.entry.id));assert.equal(this.preview.receipts.has(row.entry.id),false);this.preview.receipts.add(row.entry.id);previewStats.receipts++;}}
+    capturePreview(){if(this.freed){previewStats.freedBuilderTouches++;throw new Error('freed generated builder');}const p=this.preview;if(!p)return;assert.equal(p.receipts.size,this.rows.size);p.owner.retireStage(p.stageId);const capture={alive:true,owner:p.owner,stage:p.stageId,nonce:p.nonce,serial:String(++previewStats.serial),header:this.header,rows:new Map(this.rows)};p.owner.latest=capture;previewStats.captures++;afterPreviewCapture?.();return new MockPreviewValue(capture);}
+    retirePreview(){if(this.preview)this.preview.owner.retireStage(this.preview.stageId);}
     header:BrowserIndexHeader;rows=new Map<string,any>();constructor(input:string){this.header=JSON.parse(input);this.header.entries=this.header.entries.map(({id,path,kind,revision,deleted})=>({id,path,kind,revision,deleted}));}
-    free(){}headerJson(){return JSON.stringify(this.header);}beginPump(){}
+    free(){this.freed=true;}headerJson(){return JSON.stringify(this.header);}beginPump(){}
     pendingJson(){return JSON.stringify(this.header.entries.filter(e=>e.kind==='file'&&!this.rows.has(e.id)).slice(0,32));}
     addText(id:string,bytes:Uint8Array){textExtractions++;this.rows.set(id,{metadata:null,digest:sha(bytes),textBytes:bytes.length,exclusion:null});}
     cacheKeyJson(id:string,bytes:Uint8Array){if(bytes.includes(0))return 'null';const entry=this.header.entries.find(e=>e.id===id)!,key={scope:this.header.source.localStoreId,mode:entry.path.toLowerCase().endsWith('.md')?'markdown':'plainText',digest:sha(bytes),bytes:bytes.length};return JSON.stringify({key,storageKey:createHash('sha256').update(JSON.stringify(key)).digest('hex')});}
@@ -56,7 +62,7 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
     addBinary(id:string){this.rows.set(id,{metadata:null,digest:null,textBytes:0,exclusion:'binary'});}
     addUnreadable(id:string){this.rows.set(id,{metadata:null,digest:null,textBytes:0,exclusion:'unreadable'});}
     addPersisted(id:string,row:string){reuses++;this.rows.set(id,JSON.parse(row));}
-    rowJson(id:string){return JSON.stringify(this.rows.get(id));}ready(){return this.header.entries.filter(e=>e.kind==='file').length===this.rows.size;}
+    rowJson(id:string){return JSON.stringify(this.rows.get(id));}ready(){if(this.freed){previewStats.freedBuilderTouches++;throw new Error('freed generated builder');}return this.header.entries.filter(e=>e.kind==='file').length===this.rows.size;}
     finish(){const header=this.header,rows=this.rows;assert.ok(this.ready());return {
       free(){},headerJson:()=>JSON.stringify(header),snapshotJson:()=>JSON.stringify(header.nextIndex),coverageComplete:()=>{metadataStats.coverageReads++;return true;},rowJson:(id:string)=>JSON.stringify(rows.get(id)),
       metadataJson:(id:string)=>JSON.stringify({fixture:'opaque-metadata-transport',id,snapshot:header.nextIndex}),
@@ -121,12 +127,18 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
     retire(){assert.equal(this.freed,false);metadataStats.retired++;this.retirement.value=true;}
     free(){assert.equal(this.freed,false);this.freed=true;metadataStats.freed++;metadataStats.live--;}
   }
+  const previewStats={receipts:0,captures:0,serial:0,queries:0,queryFreed:0,replies:0,replyFreed:0,freedBuilderTouches:0};let previewResource=false,afterPreviewCapture:(()=>void)|undefined;
+  class MockPreviewOwner {latest:any;constructor(_client:string,_nonce:string){}clear(){if(this.latest)this.latest.alive=false;this.latest=undefined;}retireStage(id:string){if(this.latest?.stage===id)this.clear();}free(){this.clear();}}
+  class MockPreviewValue {freed=false;readonly capture:any;constructor(capture:any){this.capture=capture;}free(){this.freed=true;}sameCapture(other:MockPreviewValue){return !this.freed&&!other.freed&&this.capture.alive&&other.capture.alive&&this.capture===other.capture;}descriptorJson(){const c=this.capture;return JSON.stringify({capture:{ownerNonce:c.nonce,stageId:c.stage,serial:c.serial},source:c.header.source,progress:{preparedFiles:c.rows.size,totalFiles:c.header.entries.filter((entry:any)=>entry.kind==='file').length,pendingFiles:c.header.entries.filter((entry:any)=>entry.kind==='file').length-c.rows.size}});}beginBase(raw:string){assert.ok(this.sameCapture(this));const input=JSON.parse(raw);return new MockPreviewQuery(this.capture,input);}}
+  class MockPreviewQuery {readonly capture:any;readonly input:any;constructor(capture:any,input:any){this.capture=capture;this.input=input;previewStats.queries++;}descriptorJson(){const definition=this.capture.header.entries.find((entry:any)=>entry.id===this.input.id);if(!definition||!this.capture.rows.has(definition.id))throw JSON.stringify({code:'index_source_unavailable'});return JSON.stringify({definition,sourceBytes:this.capture.rows.get(definition.id).textBytes});}prepareBase(bytes:Uint8Array){assert.equal(this.capture.alive,true);assert.deepEqual(sha(bytes),this.capture.rows.get(this.input.id).digest);return new MockPreviewReply();}cancel(){}free(){previewStats.queryFreed++;}}
+  class MockPreviewReply {constructor(){previewStats.replies++;}encodedLength(){return 1;}writeInto(bytes:Uint8Array){bytes[0]=17;}free(){previewStats.replyFreed++;}}
   const policy={formatVersion:1,maxRows:options.cacheRows??100000,maxBytes:options.cacheBytes??64*1024*1024,maxRowBytes:options.cacheRowBytes??1024*1024,maxEvictionsPerWrite:options.evictions??32};
   const wasm={documentParseCachePolicyJson:()=>JSON.stringify(policy),documentParseCacheAdmissionJson:(input:string)=>{const {usage,replacedPayloadBytes:replaced,incomingPayloadBytes:incoming,evictedRows:evicted}=JSON.parse(input),rows=usage.rows-(replaced===null?0:1)+1,bytes=usage.bytes-(replaced??0)+incoming;return JSON.stringify(incoming>policy.maxRowBytes?'skipOversized':rows<=policy.maxRows&&bytes<=policy.maxBytes?'write':evicted===policy.maxEvictionsPerWrite?'skipEvictionLimit':'evictOldest');},documentIndexVersionsJson:()=>'{"schema":1,"extraction":"fixture","resolver":"fixture","query":"fixture"}',WasmDocumentIndexBuilder:MockBuilder,WasmDocumentIndexPreparationCache:MockPreparationCache,WasmDocumentRichSearchOwner:MockRichOwner} as unknown as BrowserDocumentIndexWasm;
   // This double exposes reservation inputs/outputs for transaction assertions.
   // Arithmetic and actual WASM wire semantics have independent Rust gates.
   const allocationCalls:any[]=[];wasm.documentIndexAllocateJson=(input:string)=>{const clock=JSON.parse(input);allocationCalls.push(clone(clock));if(clock.allocated==='18446744073709551615')throw JSON.stringify({code:'index_rebuild_required'});return JSON.stringify({localStoreId:clock.localStoreId,generationEpoch:clock.generationEpoch,generation:String(BigInt(clock.allocated)+1n),versions:JSON.parse(wasm.documentIndexVersionsJson())});};
   if(options.metadataRows)wasm.WasmDocumentMetadataRowsScan=MockMetadataScan;
+  if(options.preview)Object.assign(wasm,{WasmDocumentPreviewOwner:MockPreviewOwner,WasmDocumentPreview:MockPreviewValue,WasmDocumentPreviewQuery:MockPreviewQuery,WasmDocumentPreviewReply:MockPreviewReply});
   const backend=(clientId='client-a')=>createBrowserDocumentIndexBackend({db,authorityId:authority,clientId,wasm,assertActive(){if(fatal)throw new BrowserVaultError('storage_closed','fatal host close');if(denied)throw Object.assign(new Error('retired'),{code:'owner_retired'});},
     readPublication(tx,done,abort){let entries:any[]|undefined,presentation:any[]|undefined,sequence:string|undefined;
       const finish=()=>{if(entries&&presentation&&sequence!==undefined)done({entries,presentation,sequence});};
@@ -144,7 +156,7 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
   const source=()=>clone(new Map([...records].filter(([n])=>n!=='control').map(([n,m])=>[n,m])));
   const build=async(index:ReturnType<typeof open>)=>{let stage=await index.begin();do{stage=await index.pump(stage.stageId);}while(!stage.ready);return index.publish(stage.stageId);};
   const descriptor=(snapshot:{generationEpoch:string;generation:string})=>records.get('control')!.get('document-index:v1/catalog').value.generations.find((g:any)=>g.snapshot.generationEpoch===snapshot.generationEpoch&&g.snapshot.generation===snapshot.generation);
-  return {records,calls,transactions,file,open,backend,wasm,build,source,seed,descriptor,allocationCalls,metadataStats,metadataInvalid(value:boolean){metadataInvalid=value;},metadataThrow(){metadataThrow=true;},afterMetadataPage(action?:()=>void){afterMetadataPage=action;},richCalls,richStats,afterRichCommit(action:()=>void){afterRichCommit=action;},baseCalls,taskCalls,preparationCalls,preparationStats,afterBase(action:()=>void){afterBase=action;},stats:()=>({textExtractions,reuses,cacheBinds}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},cacheUnavailable(){cacheReadUnavailable=true;},deny(){denied=true;},allow(){denied=false;},fatal(){fatal=true;},afterCommit(action?:()=>void){afterCommit=action;},afterRead(action:(store:string,key:any)=>void){afterRead=action;}};
+  return {records,calls,transactions,file,open,backend,wasm,build,source,seed,descriptor,allocationCalls,previewStats,afterPreviewCapture(action:()=>void){afterPreviewCapture=action;},previewResource(value:boolean){previewResource=value;},metadataStats,metadataInvalid(value:boolean){metadataInvalid=value;},metadataThrow(){metadataThrow=true;},afterMetadataPage(action?:()=>void){afterMetadataPage=action;},richCalls,richStats,afterRichCommit(action:()=>void){afterRichCommit=action;},baseCalls,taskCalls,preparationCalls,preparationStats,afterBase(action:()=>void){afterBase=action;},stats:()=>({textExtractions,reuses,cacheBinds}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},cacheUnavailable(){cacheReadUnavailable=true;},deny(){denied=true;},allow(){denied=false;},fatal(){fatal=true;},afterCommit(action?:()=>void){afterCommit=action;},afterRead(action:(store:string,key:any)=>void){afterRead=action;}};
 }
 
 test('strict derived publication retains source bytes and uses no aggregate control scan',async()=>{
@@ -568,7 +580,7 @@ test('maintenance rejects a foreign captured snapshot before source IO and prese
   const reads=f.calls.filter(row=>row.store==='content').length;await assert.rejects(maintenance.step(script.select({kind:'pump',snapshot:{...stage.snapshot,localStoreId:'foreign'}})),{code:'index_stage_expired'});assert.equal(f.calls.filter(row=>row.store==='content').length,reads);assert.deepEqual(f.source(),source);await maintenance.step(script.select({kind:'recoverStage'}));assert.deepEqual(script.completions.at(-1).stage.snapshot,stage.snapshot);await index.close();
 });
 
-async function metadataFixture(options:{metadataDelta?:boolean}={},count=3){
+async function metadataFixture(options:{metadataDelta?:boolean;preview?:boolean}={},count=3){
   const f=fixture({metadataRows:true,...options});for(let n=0;n<count;n++)f.file('entry-'+n,'opaque source '+n,{path:`Note ${n}.txt`});
   const index=f.open();await f.build(index);const pin=await index.open();return {...f,index,pin};
 }
@@ -783,4 +795,57 @@ test('allocation beyond JavaScript safe integer remains decimal-exact and maximu
   const stage=await index.begin();assert.equal(stage.snapshot.generation,'9007199254740993');assert.equal(allocationCatalog(f).allocated,'9007199254740993');assert.equal(f.allocationCalls.at(-1).allocated,'9007199254740992');await index.discard(stage.stageId);
   seedAllocationCatalog(f,c=>{c.allocated='18446744073709551615';});const before=clone(allocationCatalog(f));await assert.rejects(index.begin(),{code:'index_rebuild_required'});
   assert.deepEqual(allocationCatalog(f),before);assert.equal(f.allocationCalls.at(-1).allocated,'18446744073709551615');assert.equal(allocationCatalog(f).epoch,epoch);await index.close();
+});
+
+
+// The following doubles verify source/registration/bridge admission only. Actual
+// Rust Base query and partial-result semantics have independent WASM gates.
+test('preview bootstraps committed keys without restoring rows and remains readable until publication',async()=>{
+  const f=fixture({preview:true});for(let n=0;n<33;n++)f.file('f'+String(n).padStart(2,'0'),'text '+n,{path:n===0?'view.base':undefined});const index=f.open();
+  assert.equal(await index.previewOpen!({previewId:'1'}),null);let stage=await index.begin();stage=await index.pump(stage.stageId);assert.equal(stage.prepared,32);assert.equal(stage.ready,false);
+  f.calls.length=0;const opened=await index.previewOpen!({previewId:'2'}) as any;assert.equal(opened.progress.preparedFiles,32);assert.equal(opened.progress.pendingFiles,1);assert.equal(f.previewStats.receipts,32);
+  assert.equal(f.calls.some(call=>call.op==='get'&&String(call.key).includes('/row/')),false,'bootstrap must not load parser rows or projections');
+  f.calls.length=0;const before=f.stats();const reply=await index.previewBase!({previewId:'2',id:'f00'});const bytes=new Uint8Array(reply.length);reply.writeInto(bytes);await reply.validate();reply.free();assert.deepEqual([...bytes],[17]);assert.deepEqual(f.stats(),before);
+  assert.equal(f.calls.some(call=>call.op==='cursor'),false);assert.ok(f.calls.every(call=>['control','sync_state'].includes(call.store)));
+  stage=await index.pump(stage.stageId);assert.equal(stage.ready,true);await assert.rejects(index.previewBase!({previewId:'2',id:'f00'}),{code:'index_preview_expired'});
+  const latest=await index.previewOpen!({previewId:'3'}) as any;assert.equal(latest.progress.pendingFiles,0);const finalReply=await index.previewBase!({previewId:'3',id:'f00'});await finalReply.validate();finalReply.free();
+  await index.publish(stage.stageId);await assert.rejects(index.previewBase!({previewId:'3',id:'f00'}),{code:'index_preview_expired'});const pin=await index.open();await index.closePin(pin.pinId);await index.close();
+});
+for(const changed of ['sequence','head','incarnation'] as const)test('preview rejects changed '+changed+' without a whole-source recapture',async()=>{
+  const f=fixture({preview:true});f.file('a','definition',{path:'view.base'});for(let n=0;n<32;n++)f.file('z'+n,'text');const index=f.open(),stage=await index.begin();await index.pump(stage.stageId);await index.previewOpen!({previewId:'1'});f.calls.length=0;
+  if(changed==='sequence')f.sequence('1');else{const key=changed==='head'?'metadata-head':'config',row=clone(f.records.get('sync_state')!.get(key));if(changed==='head')row.value.version='head2';else row.value.incarnation_id='other';f.seed('sync_state',key,row);}
+  await assert.rejects(index.previewBase!({previewId:'1',id:'a'}),{code:'index_preview_expired'});assert.equal(f.previewStats.queries,0);assert.equal(f.calls.some(call=>call.op==='cursor'),false);await index.close();
+});
+test('preview rejects writer changes after definition point read and frees accepted query',async()=>{
+  const f=fixture({preview:true});f.file('a','definition',{path:'view.base'});for(let n=0;n<32;n++)f.file('z'+n,'text');const index=f.open(),stage=await index.begin();await index.pump(stage.stageId);await index.previewOpen!({previewId:'1'});
+  f.afterRead((store,key)=>{if(store==='control'&&String(key).endsWith('/row/a'))f.sequence('1');});await assert.rejects(index.previewBase!({previewId:'1',id:'a'}),{code:'index_preview_expired'});assert.equal(f.previewStats.queries,1);assert.equal(f.previewStats.queryFreed,1);assert.equal(f.previewStats.replies,0);await index.close();
+});
+test('optional preview receipt resource failure never fails committed indexing progress',async()=>{
+  const f=fixture({preview:true});for(let n=0;n<33;n++)f.file('f'+n,'text');const index=f.open(),stage=await index.begin();await index.previewOpen!({previewId:'1'});f.previewResource(true);
+  const progress=await index.pump(stage.stageId);assert.equal(progress.prepared,32);assert.equal(f.descriptor(progress.snapshot).rows,32);assert.equal(progress.ready,false);await assert.rejects(index.previewOpen!({previewId:'2'}),{code:'index_preview_resource'});
+  f.previewResource(false);const ready=await index.pump(stage.stageId);assert.equal(ready.ready,true);await index.publish(stage.stageId);assert.equal((await index.status()).current,true);await index.close();
+});
+test('failed committed-row transaction retires previews and never admits ahead-of-commit builder facts',async()=>{
+  const f=fixture({preview:true});f.file('a','text');const index=f.open(),stage=await index.begin();await index.previewOpen!({previewId:'1'});f.fail();await assert.rejects(index.pump(stage.stageId));assert.equal(f.previewStats.receipts,0);assert.equal(f.descriptor(stage.snapshot).rows,0);
+  await assert.rejects(index.previewBase!({previewId:'1',id:'a'}),{code:'index_preview_expired'});await index.discard(stage.stageId);await index.close();
+});
+test('partial generated preview capability fails closed before stage allocation',()=>{
+  const f=fixture({preview:true});for(const key of ['WasmDocumentPreview','WasmDocumentPreviewQuery','WasmDocumentPreviewReply'] as const){const original=f.wasm[key];delete f.wasm[key];assert.throws(()=>f.open(),{code:'index_rebuild_required'});f.wasm[key]=original as any;}assert.equal(f.allocationCalls.length,0);
+});
+
+test('factory preview capability stays boolean and legacy methods remain absent',async()=>{
+  const legacy=fixture().open();assert.equal(legacy.basePreviewAvailable,false);assert.equal(legacy.previewOpen,undefined);await legacy.close();
+  const supported=fixture({preview:true}).open();assert.equal(supported.basePreviewAvailable,true);assert.equal(typeof supported.previewOpen,'function');assert.equal(typeof supported.previewBase,'function');assert.equal(typeof supported.previewClose,'function');await supported.close();
+});
+test('optional capture retirement rechecks owner and actual stage before touching its old builder',async()=>{
+  const f=fixture({preview:true});f.file('a','text');const index=f.open(),stage=await index.begin();await index.previewOpen!({previewId:'1'});let closing:Promise<void>|undefined;
+  f.afterPreviewCapture(()=>{f.deny();closing=index.close();});await assert.rejects(index.pump(stage.stageId),{code:'owner_retired'});await closing;
+  assert.equal(f.previewStats.freedBuilderTouches,0);await assert.rejects(index.previewOpen!({previewId:'2'}),{code:'index_closed'});
+});
+
+test('rebuild during bootstrap cannot capture through a freed still-source-active builder',async()=>{
+  const f=fixture({preview:true});for(let n=0;n<33;n++)f.file('f'+n,'text');const index=f.open(),stage=await index.begin();await index.pump(stage.stageId);let rebuilding:Promise<void>|undefined,started=false;
+  f.afterRead((store,key)=>{if(!started&&store==='control'&&key==='sequence'){started=true;rebuilding=index.rebuild();}});
+  await assert.rejects(index.previewOpen!({previewId:'1'}),error=>error instanceof BrowserVaultError&&['index_preview_expired','index_stage_expired'].includes(error.code));await rebuilding;
+  assert.equal(started,true);assert.equal(f.previewStats.freedBuilderTouches,0);assert.equal((await index.status()).rebuildRequired,false);await index.close();
 });

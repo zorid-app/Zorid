@@ -25,7 +25,7 @@ function createEditorCoreManager(environment=process.env, options={}){
   // capability remains absent while the legacy frontend planner is active.
   const documentRuntime=options.documentRuntime===true&&typeof options.onDocumentRuntimeNudge==='function';
   const contexts=new Map(), admissions=new Map(), released=new WeakMap(), services=new Set(), openings=new Map(), retirements=new Map();
-  const describe=saved=>({admissionId:saved.id,scope:saved.admission.scope,...(saved.admission.documentCommand?{documentSemantics:true}:{}),...(saved.admission.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(saved.admission.draftsAvailable===true?{draftsAvailable:true}:{}),...(documentRuntime&&runtimeAvailable(saved.admission)?{documentMaintenance:true}:{}),...(saved.admission.workblockCommand?{workBlocks:true}:{}),...(saved.admission.binaryLimits?{binaryLimits:saved.admission.binaryLimits}:{})});
+  const describe=saved=>({admissionId:saved.id,scope:saved.admission.scope,...(saved.admission.documentCommand?{documentSemantics:true}:{}),...(saved.admission.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(saved.admission.basePreviewAvailable===true?{basePreviewAvailable:true}:{}),...(saved.admission.draftsAvailable===true?{draftsAvailable:true}:{}),...(documentRuntime&&runtimeAvailable(saved.admission)?{documentMaintenance:true}:{}),...(saved.admission.workblockCommand?{workBlocks:true}:{}),...(saved.admission.binaryLimits?{binaryLimits:saved.admission.binaryLimits}:{})});
   const executable=()=>require('./host-location.cjs').resolveDesktopHost({...options,override:config.executable});
   function checked(broker,record,expectedRoot,admissionId,allowRetired=false){
     broker.assertLive(record);
@@ -109,6 +109,7 @@ function createEditorCoreManager(environment=process.env, options={}){
         const saved={id:randomUUID(),admission,service,check:(allowRetired=false)=>{check();if((saved.runtimeRetired||saved.draftsRetired)&&!allowRetired)throw fail('client_not_admitted');}};contexts.set(record,saved);
         try{
           if(admission.metadataRowsAvailable===true&&typeof admission.documentCommand!=='function')throw fail('unsupported_host_capability');
+          if(admission.basePreviewAvailable===true&&(!documentRuntime||!runtimeAvailable(admission)||typeof options.onDocumentRuntimeNudge!=='function'||typeof admission.documentCommand!=='function'))throw fail('unsupported_host_capability');
           if(admission.draftsAvailable===true){
             if(!documentRuntime||!runtimeAvailable(admission)||typeof options.onDocumentRuntimeNudge!=='function'||!admission.documentCommand||!admission.documentDrafts||!['invoke','subscribe'].every(name=>typeof admission.documentDrafts[name]==='function'))throw fail('unsupported_host_capability');
             const publish=retired=>{

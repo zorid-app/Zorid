@@ -292,6 +292,121 @@ pub struct DocumentIndexPumpResult<E> {
     pub progress: DocumentIndexProgress,
     pub preview: Option<std::result::Result<PreviewSnapshot, PreviewCaptureError<E>>>,
 }
+/// Sealed postcommit data registration. No pin, mutation witness, source body
+/// or second namespace is retained. Revalidate through Store before each read
+/// and after evaluation; scalar labels are never a new admission proof.
+#[derive(Debug)]
+pub struct DocumentPreviewCapture {
+    snapshot: PreviewSnapshot,
+    store_owner: OperationId,
+    // Weak identity only: no query pin/count or capability is retained.
+    store_provider: std::sync::Weak<std::sync::atomic::AtomicUsize>,
+    stage: Snapshot,
+    expected_head: Option<Snapshot>,
+    stage_key: String,
+    presentations: Vec<DocumentPreviewPresentation>,
+    retained_bytes: usize,
+}
+impl DocumentPreviewCapture {
+    pub fn snapshot(&self) -> &PreviewSnapshot {
+        &self.snapshot
+    }
+    pub fn source(&self) -> &SourceSnapshotId {
+        self.snapshot.source()
+    }
+    pub fn is_first_build(&self) -> bool {
+        self.expected_head.is_none()
+    }
+    pub fn presentations(&self) -> &[DocumentPreviewPresentation] {
+        &self.presentations
+    }
+    /// Full cached capture+registration charge; consumers retain it until actual
+    /// backing disposal, including in-flight queries after registry retirement.
+    /// Native registry/query buffers are separate components in the same owner.
+    pub fn retained_bytes(&self) -> usize {
+        self.retained_bytes
+    }
+}
+#[derive(Debug)]
+pub struct DocumentPreviewPresentation {
+    entry: EntryState,
+    presentation: EntryPresentation,
+    source_text_bytes: Option<usize>,
+}
+impl DocumentPreviewPresentation {
+    pub fn entry(&self) -> &EntryState {
+        &self.entry
+    }
+    pub fn presentation(&self) -> &EntryPresentation {
+        &self.presentation
+    }
+    pub fn source_text_bytes(&self) -> Option<usize> {
+        self.source_text_bytes
+    }
+}
+/// Borrowed captured identity plus one bounded retained-projection body. The
+/// caller's invocation reservation must remain live through body disposal.
+#[derive(Debug)]
+pub struct DocumentPreviewDefinition<'capture> {
+    row: &'capture DocumentPreviewPresentation,
+    text: String,
+}
+impl DocumentPreviewDefinition<'_> {
+    pub fn entry(&self) -> &EntryState {
+        self.row.entry()
+    }
+    pub fn presentation(&self) -> &EntryPresentation {
+        self.row.presentation()
+    }
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+    pub fn text_heap_bytes(&self) -> usize {
+        preview_allocation(self.text.capacity())
+    }
+    pub fn into_text(self) -> String {
+        self.text
+    }
+}
+#[derive(Debug)]
+pub struct DocumentRegisteredPreviewPumpResult<E> {
+    pub progress: DocumentIndexProgress,
+    pub preview: Option<std::result::Result<DocumentPreviewCapture, PreviewCaptureError<E>>>,
+}
+const PREVIEW_MAX_DEFINITION_BYTES: usize = 262_144;
+fn preview_allocation(capacity: usize) -> usize {
+    if capacity == 0 {
+        0
+    } else {
+        capacity.saturating_add(2 * std::mem::size_of::<usize>())
+    }
+}
+fn preview_entry_heap(entry: &EntryState) -> usize {
+    preview_allocation(entry.id.heap_capacity_bytes())
+        .saturating_add(preview_allocation(entry.revision.heap_capacity_bytes()))
+        .saturating_add(preview_allocation(entry.path.heap_capacity_bytes()))
+}
+fn preview_admit<E>(
+    bytes: &mut usize,
+    amount: usize,
+    limit: usize,
+) -> std::result::Result<(), PreviewCaptureError<E>> {
+    *bytes =
+        bytes
+            .checked_add(amount)
+            .filter(|n| *n <= limit)
+            .ok_or(PreviewCaptureError::Resource(
+                "preview registration retained byte limit",
+            ))?;
+    Ok(())
+}
+fn preview_snapshot_heap(snapshot: &Snapshot) -> usize {
+    preview_allocation(snapshot.local.heap_capacity_bytes())
+        .saturating_add(preview_allocation(snapshot.epoch.heap_capacity_bytes()))
+        .saturating_add(preview_allocation(snapshot.extraction.capacity()))
+        .saturating_add(preview_allocation(snapshot.resolver.capacity()))
+        .saturating_add(preview_allocation(snapshot.query.capacity()))
+}
 #[derive(Debug, Serialize)]
 #[serde(
     tag = "state",
@@ -423,6 +538,11 @@ fn control(tx: &DocumentTransaction<'_>) -> IndexResult<Control> {
         return Err(DocumentIndexError::RebuildRequired);
     }
     generation_bounds(tx, false)?;
+    control_record(tx)
+}
+// Already admitted schema/control callers can validate the bounded scalar
+// record without reading any generation header lengths or namespace facts.
+fn control_record(tx: &DocumentTransaction<'_>) -> IndexResult<Control> {
     let raw: Option<String> = tx
         .query_row(
             "SELECT record FROM document_index_control WHERE singleton=1 AND length(CAST(record AS BLOB)) BETWEEN 1 AND ?1",
@@ -1156,6 +1276,46 @@ impl Store {
         capture: Option<DocumentPreviewCaptureRequest>,
         check: impl FnMut(usize) -> std::result::Result<(), E>,
     ) -> IndexResult<DocumentIndexPumpResult<E>> {
+        let (progress, preview) =
+            self.pump_document_index_capture(stage, capture, check, |_, snapshot, _, _, _| {
+                Ok(snapshot)
+            })?;
+        Ok(DocumentIndexPumpResult { progress, preview })
+    }
+    /// Same single pump/commit as the legacy producer, followed by a sealed
+    /// registration. Optional postcommit refusal never changes durable progress.
+    pub fn pump_document_index_with_registered_preview<E>(
+        &mut self,
+        stage: &DocumentIndexStage,
+        capture: Option<DocumentPreviewCaptureRequest>,
+        check: impl FnMut(usize) -> std::result::Result<(), E>,
+    ) -> IndexResult<DocumentRegisteredPreviewPumpResult<E>> {
+        let (progress, preview) = self.pump_document_index_capture(
+            stage,
+            capture,
+            check,
+            |store, snapshot, header, limit, check| {
+                store.register_document_preview(snapshot, header, limit, check)
+            },
+        )?;
+        Ok(DocumentRegisteredPreviewPumpResult { progress, preview })
+    }
+    fn pump_document_index_capture<E, T>(
+        &mut self,
+        stage: &DocumentIndexStage,
+        capture: Option<DocumentPreviewCaptureRequest>,
+        check: impl FnMut(usize) -> std::result::Result<(), E>,
+        finish: impl FnOnce(
+            &Store,
+            PreviewSnapshot,
+            &Header,
+            usize,
+            &mut dyn FnMut(usize) -> std::result::Result<(), E>,
+        ) -> std::result::Result<T, PreviewCaptureError<E>>,
+    ) -> IndexResult<(
+        DocumentIndexProgress,
+        Option<std::result::Result<T, PreviewCaptureError<E>>>,
+    )> {
         let (h, mut b, previous) = {
             let tx = self.document_transaction(TransactionBehavior::Deferred)?;
             let h = header(&tx, &stage.snapshot)?;
@@ -1369,10 +1529,256 @@ impl Store {
             }
             // The core's cached total includes this identity once; this early
             // preflight is not a second deduction from the retained budget.
-            PreviewCaptureOwner::new(request.owner_nonce, request.stage_id, &b)
-                .capture_prepared_checked(&b, retained_limit, check)
+            let snapshot = PreviewCaptureOwner::new(request.owner_nonce, request.stage_id, &b)
+                .capture_prepared_checked(&b, retained_limit, &mut check)?;
+            finish(self, snapshot, &h, retained_limit, &mut check)
         });
-        Ok(DocumentIndexPumpResult { progress, preview })
+        Ok((progress, preview))
+    }
+    fn register_document_preview<E>(
+        &self,
+        snapshot: PreviewSnapshot,
+        header: &Header,
+        retained_limit: usize,
+        check: &mut dyn FnMut(usize) -> std::result::Result<(), E>,
+    ) -> std::result::Result<DocumentPreviewCapture, PreviewCaptureError<E>> {
+        let limit = retained_limit.min(zorid_index::MAX_SEARCH_OWNED_BYTES);
+        let mut bytes = snapshot.retention().total_bytes();
+        let fixed = std::mem::size_of::<DocumentPreviewCapture>()
+            .saturating_add(4 * std::mem::size_of::<usize>())
+            // Weak provider identity may retain the expired Arc's control block.
+            .saturating_add(std::mem::size_of::<std::sync::atomic::AtomicUsize>())
+            .saturating_add(4 * std::mem::size_of::<usize>());
+        let predicted = fixed
+            .saturating_add(preview_allocation(
+                self.document_query_owner.heap_capacity_bytes(),
+            ))
+            .saturating_add(preview_snapshot_heap(&header.snapshot))
+            .saturating_add(header.expected.as_ref().map_or(0, preview_snapshot_heap))
+            .saturating_add(preview_allocation(
+                header.snapshot.epoch.as_str().len() + 21,
+            ));
+        preview_admit(&mut bytes, predicted, limit)?;
+        check(predicted.div_ceil(64).saturating_add(1)).map_err(PreviewCaptureError::Host)?;
+        let store_owner = self.document_query_owner.clone();
+        let stage = header.snapshot.clone();
+        let expected_head = header.expected.clone();
+        let stage_key = stage.key();
+        let actual = fixed
+            .saturating_add(preview_allocation(store_owner.heap_capacity_bytes()))
+            .saturating_add(preview_snapshot_heap(&stage))
+            .saturating_add(expected_head.as_ref().map_or(0, preview_snapshot_heap))
+            .saturating_add(preview_allocation(stage_key.capacity()));
+        bytes -= predicted;
+        preview_admit(&mut bytes, actual, limit)?;
+        let view = snapshot
+            .facts_view_checked(&mut |n| check(n))
+            .map_err(PreviewCaptureError::Host)?;
+        let count = view.rows().len();
+        let planned_slots = count
+            .checked_mul(std::mem::size_of::<DocumentPreviewPresentation>())
+            .map(preview_allocation)
+            .ok_or(PreviewCaptureError::Resource("preview registration slots"))?;
+        preview_admit(&mut bytes, planned_slots, limit)?;
+        check(count.saturating_add(1)).map_err(PreviewCaptureError::Host)?;
+        let mut presentations = Vec::new();
+        presentations
+            .try_reserve_exact(count)
+            .map_err(|_| PreviewCaptureError::Resource("preview registration allocation"))?;
+        let actual_slots = presentations
+            .capacity()
+            .checked_mul(std::mem::size_of::<DocumentPreviewPresentation>())
+            .map(preview_allocation)
+            .ok_or(PreviewCaptureError::Resource("preview registration slots"))?;
+        bytes -= planned_slots;
+        preview_admit(&mut bytes, actual_slots, limit)?;
+        // Header namespace is already captured in canonical path order by this
+        // successful pump's check_stage. Search it in place per prepared row;
+        // no all-namespace sidecar, sort, restoration or query-time scan exists.
+        for row in view.rows() {
+            check(1).map_err(PreviewCaptureError::Host)?;
+            let mut failed = None;
+            let found = header.manifest.entries.binary_search_by(|entry| {
+                if failed.is_some() {
+                    return std::cmp::Ordering::Equal;
+                }
+                let work = entry
+                    .state
+                    .path
+                    .as_str()
+                    .len()
+                    .saturating_add(row.path().as_str().len())
+                    .div_ceil(64)
+                    .saturating_add(1);
+                if let Err(error) = check(work) {
+                    failed = Some(error);
+                    return std::cmp::Ordering::Equal;
+                }
+                entry.state.path.cmp(row.path())
+            });
+            if let Some(error) = failed {
+                return Err(PreviewCaptureError::Host(error));
+            }
+            let at = found.map_err(|_| PreviewCaptureError::Index(IndexError::InvalidRecord))?;
+            let original = &header.manifest.entries[at];
+            let presentation = header
+                .manifest
+                .presentations
+                .get(at)
+                .ok_or(PreviewCaptureError::Index(IndexError::InvalidRecord))?;
+            check(row.path().as_str().len().div_ceil(64).saturating_add(16))
+                .map_err(PreviewCaptureError::Host)?;
+            if original.state.id != *row.entry_id()
+                || original.state.revision != *row.revision()
+                || original.state.kind != EntryKind::File
+                || presentation.id != original.state.id
+            {
+                return Err(PreviewCaptureError::Index(IndexError::InvalidRecord));
+            }
+            let predicted = preview_entry_heap(&original.state)
+                .saturating_add(preview_allocation(presentation.id.heap_capacity_bytes()));
+            preview_admit(&mut bytes, predicted, limit)?;
+            check(predicted.div_ceil(64).saturating_add(1)).map_err(PreviewCaptureError::Host)?;
+            let copied = DocumentPreviewPresentation {
+                entry: original.state.clone(),
+                presentation: presentation.clone(),
+                source_text_bytes: row.source_text_bytes(),
+            };
+            let actual = preview_entry_heap(&copied.entry).saturating_add(preview_allocation(
+                copied.presentation.id.heap_capacity_bytes(),
+            ));
+            bytes -= predicted;
+            preview_admit(&mut bytes, actual, limit)?;
+            presentations.push(copied);
+        }
+        drop(view);
+        let registered = DocumentPreviewCapture {
+            snapshot,
+            store_owner,
+            store_provider: std::sync::Arc::downgrade(&self.document_query_pins),
+            stage,
+            expected_head,
+            stage_key,
+            presentations,
+            retained_bytes: bytes,
+        };
+        // The package reports this commit's exact captured facts, not a claim
+        // that source cannot advance after commit. Every native use must call
+        // the live registration guard; no authority/read error is disguised as
+        // an optional capture failure here.
+        check(0).map_err(PreviewCaptureError::Host)?;
+        Ok(registered)
+    }
+    /// Constant-size registration checks, independent of namespace size. The
+    /// sealed package came from a validated committed pump; only live scalar
+    /// fences and stage-key existence are read, never a generation header/body.
+    pub fn check_document_preview_registration(
+        &self,
+        capture: &DocumentPreviewCapture,
+    ) -> IndexResult<()> {
+        self.check_preview_provider(capture)?;
+        let tx = self.document_transaction(TransactionBehavior::Deferred)?;
+        self.check_preview_registration_in(&tx, capture)?;
+        tx.commit()?;
+        Ok(())
+    }
+    fn check_preview_provider(&self, capture: &DocumentPreviewCapture) -> IndexResult<()> {
+        if capture.store_owner != self.document_query_owner
+            || !std::sync::Weak::ptr_eq(
+                &capture.store_provider,
+                &std::sync::Arc::downgrade(&self.document_query_pins),
+            )
+        {
+            return Err(IndexError::SnapshotExpired.into());
+        }
+        Ok(())
+    }
+    // Both callers check actual provider identity before opening any SQL tx.
+    fn check_preview_registration_in(
+        &self,
+        tx: &DocumentTransaction<'_>,
+        capture: &DocumentPreviewCapture,
+    ) -> IndexResult<()> {
+        if cache_tables(tx)? != SCHEMA.len() {
+            return Err(DocumentIndexError::RebuildRequired);
+        }
+        let current = control_record(tx)?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM document_index_generations WHERE snapshot_key=?1)",
+            [&capture.stage_key],
+            |row| row.get(0),
+        )?;
+        if !exists
+            || current.epoch != capture.stage.epoch
+            || current.allocated < capture.stage.generation
+            || current.head != capture.expected_head
+            || source(tx)? != *capture.source()
+            || capture.stage.local != *capture.source().local_store_id()
+            || capture.stage.schema != INDEX_SCHEMA_VERSION
+            || capture.stage.extraction != document_extraction_version()
+            || capture.stage.resolver != RESOLVER_VERSION
+            || capture.stage.query != LITERAL_QUERY_VERSION
+        {
+            return Err(IndexError::SnapshotExpired.into());
+        }
+        Ok(())
+    }
+    /// Read only this prepared member's immutable staged text. Caller reserves
+    /// its invocation source buffer first; max_bytes tightens the256KiB source
+    /// bound. Borrowed identity/presentation do not allocate or become writable.
+    pub fn read_document_preview_definition<'capture>(
+        &self,
+        capture: &'capture DocumentPreviewCapture,
+        id: &EntryId,
+        max_bytes: usize,
+    ) -> IndexResult<DocumentPreviewDefinition<'capture>> {
+        if max_bytes > PREVIEW_MAX_DEFINITION_BYTES {
+            return Err(IndexError::InvalidBudget.into());
+        }
+        self.check_preview_provider(capture)?;
+        let at = capture
+            .presentations
+            .binary_search_by(|row| row.entry.id.cmp(id));
+        let tx = self.document_transaction(TransactionBehavior::Deferred)?;
+        self.check_preview_registration_in(&tx, capture)?;
+        let prepared = &capture.presentations[at.map_err(|_| DocumentIndexError::NotReady)?];
+        let expected = prepared
+            .source_text_bytes
+            .ok_or(IndexError::InvalidTarget)?;
+        if expected > max_bytes {
+            return Err(IndexError::GenerationLimit.into());
+        }
+        let mut stmt = tx.prepare("SELECT CASE WHEN typeof(text)='blob' AND length(text)=?3 AND length(text)<=?4 THEN text ELSE NULL END FROM document_index_rows WHERE snapshot_key=?1 AND entry_id=?2")?;
+        let mut rows = stmt.query(params![
+            &capture.stage_key,
+            id.as_str(),
+            expected as i64,
+            max_bytes as i64
+        ])?;
+        let row = rows.next()?.ok_or(IndexError::SnapshotExpired)?;
+        let rusqlite::types::ValueRef::Blob(raw) = row.get_ref(0)? else {
+            return Err(IndexError::ContentMismatch.into());
+        };
+        if raw.len() != expected {
+            return Err(IndexError::ContentMismatch.into());
+        }
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(expected)
+            .map_err(|_| IndexError::GenerationLimit)?;
+        if bytes.capacity() > max_bytes {
+            return Err(IndexError::GenerationLimit.into());
+        }
+        bytes.extend_from_slice(raw);
+        drop(rows);
+        drop(stmt);
+        capture.snapshot.check_text(id, &bytes)?;
+        let text = String::from_utf8(bytes).map_err(|_| IndexError::ContentMismatch)?;
+        tx.commit()?;
+        Ok(DocumentPreviewDefinition {
+            row: prepared,
+            text,
+        })
     }
     pub fn publish_document_index(
         &mut self,
@@ -1539,6 +1945,10 @@ impl Store {
 #[cfg(test)]
 #[path = "document_preview_tests.rs"]
 mod preview_capture_tests;
+
+#[cfg(test)]
+#[path = "document_preview_registration_tests.rs"]
+mod preview_registration_tests;
 
 #[cfg(test)]
 mod cache_snapshot_tests {

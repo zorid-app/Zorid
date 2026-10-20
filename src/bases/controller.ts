@@ -2,7 +2,7 @@ import { BaseDocument } from './document.ts';
 import type { BaseValue, BaseViewPatch } from './document.ts';
 import { executeBaseQuery, normalizeBaseProperty } from './query.ts';
 import type { BaseQueryOptions, BaseQueryResult } from './query.ts';
-import { SharedBaseQueryRunner, sharedBaseWitness, sharedBaseCapture, sharedBaseCoverage } from './shared-query.ts';
+import { SharedBaseQueryRunner, sharedBaseWitness, sharedBaseCapture, sharedBaseCoverage, sharedBasePreview } from './shared-query.ts';
 import { createBaseClockHost } from './clock.ts';
 import type { BaseClockCapture, BaseClockHost } from './clock.ts';
 import type { BaseSavedWitness } from './shared-query.ts';
@@ -71,6 +71,8 @@ export interface BaseControllerState {
   readonly error: Error | null;
   /** Refresh activity is separate from the coherent retained result. */
   readonly updating: boolean;
+  /** Pending first-build explanation; never a successful empty result. */
+  readonly previewStatus?: string;
 }
 export interface BaseControllerOptions {
   vault: Vault;
@@ -194,7 +196,7 @@ export class BaseController {
         const definition = service ? await observe(this.path) : undefined;
         const source = await this.options.vault.read(this.path);
         if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
-        const version = this.version + 1;
+        let version = this.version + 1;
         const document = BaseDocument.parse(source);
         let viewIndex = this.query.viewIndex ?? 0;
         if (this.viewName !== undefined) {
@@ -206,8 +208,21 @@ export class BaseController {
           const currentPath = this.query.currentFilePath ?? this.path;
           const current = currentPath === this.path ? definition : await observe(currentPath);
           if (!definition || !current) throw new Error('The saved Base or current file is unavailable.');
+          const owner = this, allowPreview = !this.current.result || !!sharedBasePreview(this.current.result);
           result = await this.sharedQueries.query({ service, definition, current, entries: [...this.options.vault.entries.values()], query: this.query,
-            viewIndex, viewName: this.viewName, version, clock: this.clock, isCurrent: () => !this.disposed && epoch === this.epoch });
+            viewIndex, viewName: this.viewName, get version() { return owner.version + 1; }, clock: this.clock, isCurrent: () => !this.disposed && epoch === this.epoch,
+            ...(allowPreview ? {
+              onPreview: (result: BaseQueryResult) => {
+                if (this.disposed || epoch !== this.epoch || this.current.result && !sharedBasePreview(this.current.result)) return;
+                this.version = Number(result.version);
+                this.publish({ version: this.version, source, result, error: null, updating: true });
+              },
+              onPreviewStatus: (message: string) => {
+                if (!this.disposed && epoch === this.epoch) this.publish({ ...this.current, previewStatus: message, error: null, updating: true });
+              },
+            } : {}),
+          });
+          version = Number(result.version);
           if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
           const latest = await observe(this.path);
           if (!latest || latest.entryId !== definition.entryId || latest.revision !== definition.revision) throw new Error('The Base definition changed. Refresh before editing.');
@@ -275,6 +290,7 @@ export class BaseController {
     };
     const validate = () => {
       validateWrite();
+      if (this.current.result && sharedBasePreview(this.current.result)) throw new Error('Indexing previews are read-only. Wait for saved results before editing.');
       if (this.current.error || !this.current.result || version !== this.current.version || epoch !== this.epoch) throw new Error('This base result is stale; refresh before editing');
     };
     validate(); return { validate, validateWrite };

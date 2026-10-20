@@ -249,3 +249,15 @@ test('browser admitted draft calls join release drain before scoped flush and le
   assert.equal(flushed,false);assert.equal(f.releaseCount,0);wait.resolve();await pending;await closing;
   assert.equal(flushed,true);assert.equal(f.releaseCount,1);assert.equal(f.requests.length,1);
 });
+
+function previewFixture(wait?:Promise<void>,reject=false){const f=fixture(),requests:string[]=[];const index={basePreviewAvailable:true,async previewOpen(){requests.push('open');if(wait)await wait;if(reject)throw failure('index_preview_expired');return null;},async previewBase(){requests.push('base');return null;},async previewClose(){requests.push('close');return {closed:true};}};Object.assign(f.backend,{documentIndex:index});return Object.assign(f,{index,requests});}
+test('both browser admission layers preserve complete preview routes and fail closed on partial positive capability',async()=>{
+  const f=previewFixture(),context=f.admit();assert.equal(context.documentIndex!.basePreviewAvailable,true);assert.equal(await context.documentIndex!.previewOpen!({previewId:'1'}),null);assert.deepEqual(f.requests,['open']);
+  for(const missing of ['previewOpen','previewBase','previewClose']){const partial=previewFixture();Reflect.deleteProperty(partial.index,missing);assert.throws(()=>partial.admit(),{code:'invalid_document_response'});assert.deepEqual(partial.requests,[]);}
+  const legacy=previewFixture();legacy.index.basePreviewAvailable=false;assert.equal(legacy.admit().documentIndex!.previewOpen,undefined);
+});
+test('admitted preview calls fence both reply paths and join release drain before relinquishing the lease',async()=>{
+  for(const rejected of [false,true]){const wait=deferred(),f=previewFixture(wait.promise,rejected),context=f.admit(),pending=context.documentIndex!.previewOpen!({previewId:'1'});f.retire();wait.resolve();await assert.rejects(pending,{code:'owner_retired'});}
+  const wait=deferred(),f=previewFixture(wait.promise),context=f.admit(),pending=context.documentIndex!.previewOpen!({previewId:'1'}),closing=context.release(()=>{});
+  await assert.rejects(context.documentIndex!.previewOpen!({previewId:'2'}),{code:'client_not_admitted'});assert.equal(f.releaseCount,0);wait.resolve();assert.equal(await pending,null);await closing;assert.equal(f.releaseCount,1);assert.deepEqual(f.requests,['open']);
+});

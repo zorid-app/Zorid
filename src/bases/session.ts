@@ -1,7 +1,7 @@
 import { BaseController, createBaseMutationHost } from './controller.ts';
 import type { BaseBufferHost, BaseControllerState } from './controller.ts';
 import { BaseDocument } from './document.ts';
-import { sharedBaseCoverage } from './shared-query.ts';
+import { sharedBaseCoverage, sharedBasePreview } from './shared-query.ts';
 import { createBaseClockHost } from './clock.ts';
 import type { BaseClockHost } from './clock.ts';
 import { BaseToolbarSaveError, createBaseToolbar } from './toolbar.ts';
@@ -65,7 +65,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   root.append(toolbar, content, status); container.append(root);
   let disposed = false, closing = false, mounted: MountedView | undefined, mountedType: string | undefined;
   let mountedResult: BaseQueryResult | undefined, deferred: BaseControllerState | undefined;
-  let mountedIndex = -1, mountedMove = false;
+  let mountedIndex = -1, mountedMove = false, mountedWritable = false;
   let propertyLabels: unknown;
   let selectedIndex = options.query?.viewIndex ?? 0;
   let scheduled: ReturnType<typeof setTimeout> | undefined;
@@ -144,6 +144,17 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     content.setAttribute('aria-busy', String(state.updating));
     if (state.error) { status.textContent = state.error.message; return; }
     if ([...changedBuffers].some(buffer => buffer.dirty || buffer.error)) return;
+    const preview = state.result && sharedBasePreview(state.result);
+    if (preview) {
+      const p = preview.progress, unavailable = preview.unavailablePreparedFiles, filtered = preview.unavailableFilterRows;
+      status.textContent = `Indexing… ${p.preparedFiles} of ${p.totalFiles} files indexed; ${p.pendingFiles} remaining. Read-only preview. Counts and aggregates cover indexed notes only.`
+        + (!preview.preparedScanComplete ? ' Some indexed files have not been checked yet.' : '')
+        + (unavailable ? ` ${unavailable} ${unavailable === 1 ? 'file is' : 'files are'} unavailable.` : '')
+        + (filtered ? ` ${filtered} ${filtered === 1 ? 'note' : 'notes'} could not be checked against the filters.` : '')
+        + (state.previewStatus ? ` ${state.previewStatus}` : '');
+      return;
+    }
+    if (state.previewStatus) { status.textContent = state.previewStatus; return; }
     if (state.updating) { status.textContent = state.result ? 'Updating…' : 'Loading saved results…'; return; }
     const coverage = state.result && sharedBaseCoverage(state.result);
     status.textContent = coverage && !coverage.generationComplete ? 'Some saved files are unavailable in these results.'
@@ -170,15 +181,23 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       }
       return property.replace(/^(?:note|file|formula)\./, '');
     };
-    toolbarUI.update({ result, views: choices, selectedIndex, rootFilters: document.getRoot('filters'), readOnly: !!options.readOnly, allowRename: options.viewName === undefined, label: getPropertyLabel });
-    const writable = !options.readOnly;
+    const writable = !options.readOnly && !sharedBasePreview(result);
+    toolbarUI.update({ result, views: choices, selectedIndex, rootFilters: document.getRoot('filters'), readOnly: !writable, allowRename: options.viewName === undefined, label: getPropertyLabel });
     const shared = { result, getPropertyLabel,
       openFile(path: string, event: MouseEvent | KeyboardEvent) { try { action(); options.openFile(path, event); } catch (error) { report(error); } },
       ...(writable ? { editProperty: (edit: Parameters<typeof actions.editProperty>[0]) => track(() => actions.editProperty(edit)) } : {}),
       onError: report, onEditStateChange: schedule,
     };
+    if (sharedBasePreview(result) && !result.rows.length) {
+      // A prepared subset cannot establish global absence. Keep its exact
+      // counts/status, without installing a published-view empty-state claim.
+      mounted?.destroy(); mounted = undefined; mountedType = undefined;
+      content.textContent = 'No matches in indexed notes yet.';
+      mountedResult = result;
+      return;
+    }
     const moveEnabled = writable && actions.canMove(result);
-    if (mounted && mountedType === result.view.type && mountedIndex === selectedIndex && mountedMove === moveEnabled) mounted.update(result);
+    if (mounted && mountedType === result.view.type && mountedIndex === selectedIndex && mountedMove === moveEnabled && mountedWritable === writable) mounted.update(result);
     else {
       mounted?.destroy(); mounted = undefined; content.replaceChildren();
       switch (result.view.type) {
@@ -192,7 +211,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         }); break;
         default: content.textContent = `Unsupported base view: ${result.view.type}`;
       }
-      mountedType = result.view.type; mountedIndex = selectedIndex; mountedMove = moveEnabled;
+      mountedType = result.view.type; mountedIndex = selectedIndex; mountedMove = moveEnabled; mountedWritable = writable;
     }
     mountedResult = result; renderStatus(state);
   }

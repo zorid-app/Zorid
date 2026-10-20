@@ -5,6 +5,7 @@ mod bases;
 mod crypto;
 mod document;
 mod document_index;
+mod document_preview;
 mod document_runtime;
 mod document_drafts;
 mod rpc;

@@ -34,6 +34,9 @@ pub enum NativeDocumentError {
     SearchExpired,
     SearchBusy,
     QueryCancelled,
+    PreviewExpired,
+    PreviewResource,
+    PreviewBusy,
     Calendar(crate::WorkBlockError),
 }
 impl fmt::Display for NativeDocumentError {
@@ -50,6 +53,9 @@ impl fmt::Display for NativeDocumentError {
             Self::SearchExpired => f.write_str("Search query or cursor expired"),
             Self::SearchBusy => f.write_str("Search query is already being driven"),
             Self::QueryCancelled => f.write_str("Query cancelled"),
+            Self::PreviewExpired => f.write_str("Preview capture expired"),
+            Self::PreviewResource => f.write_str("Preview resource limit"),
+            Self::PreviewBusy => f.write_str("Preview is already borrowed"),
             Self::SourceUnavailable(id) => {
                 write!(f, "No eligible text projection for entry {}", id.as_str())
             }
@@ -131,6 +137,9 @@ impl NativeDocumentError {
             Self::SearchExpired => "search_expired",
             Self::SearchBusy => "search_busy",
             Self::QueryCancelled => "cancelled",
+            Self::PreviewExpired => "index_preview_expired",
+            Self::PreviewResource => "index_preview_resource",
+            Self::PreviewBusy => "index_preview_busy",
             Self::Native(crate::Error::UnsafePath(_)) => "unsafe_path",
             Self::Native(_) => "native_error",
             Self::Index(D::RebuildRequired) => "rebuild_required",
@@ -327,4 +336,9 @@ pub use zorid_index::draft_runtime::{
 pub use zorid_index::document_work_runtime::{
     Ticket as DocumentWorkTicket, ChildEffect as DocumentWorkChildEffect,
     Lane as DocumentWorkLane, WorkState as DocumentWorkState,
+};
+
+/// Read-only first-build captures, deliberately distinct from ordinary pins.
+pub use crate::native::document_preview::{
+    NativeBasePreview, NativeBasePreviewReply, NativePreviewDescriptor, NativePreviewStamp,
 };

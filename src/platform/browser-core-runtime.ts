@@ -1,3 +1,4 @@
+import {previewRequest,decodePreviewEnvelope,documentPreviewOpen,documentPreviewClose,DOCUMENT_PREVIEW_REQUEST_BYTES,DOCUMENT_PREVIEW_RESPONSE_BYTES,DocumentPreviewError,type DocumentPreviewBaseInput,type DocumentPreviewIdInput} from '../core/document-preview.ts';
 import {createBrowserWorkBlocks,workBlockFailure} from './browser-workblocks.ts';
 import type {WorkBlockService} from '../core/workblocks.ts';
 import {captureBrowserTaskQuery,captureBrowserMetadataRows,type BrowserDocumentIndex} from '../core/browser-document-index.ts';
@@ -56,6 +57,8 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
   private dispatchTail: Promise<void> = Promise.resolve();
   private queuedCalls = 0;
   private admissionGuard?: () => void;
+  private readonly previewInFlight=new Set<Promise<unknown>>();
+  private previewCalls=0;private previewBytes=0;
   private readonly draftInFlight=new Set<Promise<unknown>>();
   private draftCalls=0;
   private draftBytes=0;
@@ -120,7 +123,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       // this named client's pending intents, using Rust
       // receipt lookup, before this Promise exposes a ready adapter.
       const clientId = options.clientId;
-      const opened = await runtime.call<{recovery:string[];authorityId:string;binaryLimits?:BinaryStreamLimits;documentIndexAvailable?:boolean;metadataRowsAvailable?:boolean;documentMaintenance?:boolean;draftsAvailable?:boolean;workBlocks?:boolean}>('open', {...options, wasmModuleUrl:moduleUrl.href});
+      const opened = await runtime.call<{recovery:string[];authorityId:string;binaryLimits?:BinaryStreamLimits;documentIndexAvailable?:boolean;metadataRowsAvailable?:boolean;documentMaintenance?:boolean;draftsAvailable?:boolean;basePreviewAvailable?:boolean;workBlocks?:boolean}>('open', {...options, wasmModuleUrl:moduleUrl.href});
       if (typeof opened.authorityId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(opened.authorityId)) throw new BrowserVaultError('storage_corrupt','Worker returned no valid local storage authority');
       runtime.authorityScope = Object.freeze({vaultId:opened.authorityId,clientId});
       const pageOptions=(input:CheckpointListOptions)=>{
@@ -141,12 +144,14 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       if(options.documentMaintenance===true&&opened.documentMaintenance!==true)throw new BrowserVaultError('document_runtime_unavailable','Required document maintenance capability is absent');
       if(opened.documentMaintenance===true&&options.documentMaintenance!==true)throw new BrowserVaultError('invalid_wasm_result','Unrequested maintenance capability');
       if(opened.draftsAvailable!==undefined&&typeof opened.draftsAvailable!=='boolean'||opened.draftsAvailable===true&&(options.documentMaintenance!==true||opened.documentMaintenance!==true||opened.documentIndexAvailable!==true))throw new DocumentDraftError('document_runtime_unavailable');
+      if(opened.basePreviewAvailable!==undefined&&typeof opened.basePreviewAvailable!=='boolean'||opened.basePreviewAvailable===true&&(options.documentMaintenance!==true||opened.documentMaintenance!==true||opened.documentIndexAvailable!==true))throw new DocumentPreviewError();
       const drafts=opened.draftsAvailable===true?runtime.createDocumentDraftTransport():undefined;
       const maintenance=opened.documentMaintenance===true?runtime.createDocumentMaintenanceTransport():undefined;
       if(opened.metadataRowsAvailable!==undefined&&typeof opened.metadataRowsAvailable!=='boolean'||opened.metadataRowsAvailable===true&&opened.documentIndexAvailable!==true)throw new BrowserVaultError('invalid_wasm_result','Invalid metadata page capability');
       if(opened.documentIndexAvailable)runtime.indexProvider=Object.freeze<BrowserDocumentIndexProvider>({
         ...(maintenance?{maintenance}:{}),
         ...(drafts?{draftsAvailable:true,drafts}:{}),
+        ...(opened.basePreviewAvailable===true?{basePreviewAvailable:true,previewOpen:(input:DocumentPreviewIdInput)=>runtime.callPreview('preview_open',input),previewBase:(input:DocumentPreviewBaseInput)=>runtime.callPreview('preview_base',input),previewClose:(input:DocumentPreviewIdInput)=>runtime.callPreview('preview_close',input)}:{}),
         ...(opened.metadataRowsAvailable===true?{metadataRowsAvailable:true,metadataRows:async(input:Parameters<NonNullable<BrowserDocumentIndex['metadataRows']>>[0])=>{const captured=captureBrowserMetadataRows(input);try{return await runtime.call('document-index-metadata-rows',captured);}finally{runtime.assertDispatch('document-index-metadata-rows');}}}:{}),
         initialize:()=>runtime.call('document-index-initialize'),discard:id=>runtime.call('document-index-discard',id),
         status:()=>runtime.call('document-index-status'),begin:()=>runtime.call('document-index-begin'),
@@ -178,6 +183,17 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       ackControl:input=>this.call('document-runtime-ack-control',input),ackOutcome:input=>this.call('document-runtime-ack-outcome',input),
       subscribe:(nudge,onRetire)=>{this.assertActive();const receiver={nudge,retire:onRetire};this.runtimeListeners.add(receiver);return()=>this.runtimeListeners.delete(receiver);},
     });
+  }
+  private callPreview(op:'preview_open'|'preview_base'|'preview_close',input:unknown):Promise<unknown>{
+    const operation='document-'+op.replace('_','-');let captured:DocumentPreviewIdInput|DocumentPreviewBaseInput;const credit=op==='preview_base'?DOCUMENT_PREVIEW_RESPONSE_BYTES:DOCUMENT_PREVIEW_REQUEST_BYTES;
+    try{this.assertDispatch(operation);if(this.previewCalls>=4||this.previewBytes+credit>2*DOCUMENT_PREVIEW_RESPONSE_BYTES)throw new DocumentPreviewError('document_preview_capacity');}catch(error){return Promise.reject(error);}
+    this.previewCalls++;this.previewBytes+=credit;
+    try{captured=previewRequest(op,input);}catch(error){this.previewCalls--;this.previewBytes-=credit;return Promise.reject(error);}
+    const action=(async()=>{try{const value=await this.call<unknown>(operation,captured);this.assertDispatch(operation);if(op==='preview_close'){documentPreviewClose(value);return value;}if(op==='preview_open'){const opened=documentPreviewOpen(value,captured.previewId);if(opened&&opened.source.localStoreId!==this.authorityScope!.vaultId)throw new DocumentPreviewError();return opened;}
+      if(!value||typeof value!=='object'||Array.isArray(value)||![Object.prototype,null].includes(Object.getPrototypeOf(value))||Object.keys(value).length!==1)throw new DocumentPreviewError();const descriptor=Object.getOwnPropertyDescriptor(value,'previewBytes');if(!descriptor?.enumerable||!Object.hasOwn(descriptor,'value'))throw new DocumentPreviewError();
+      const decoded=decodePreviewEnvelope(descriptor.value);if(decoded.previewId!==captured.previewId||decoded.definition.id!==(captured as DocumentPreviewBaseInput).id||decoded.source.localStoreId!==this.authorityScope!.vaultId)throw new DocumentPreviewError();return decoded;
+    }catch(error){this.assertDispatch(operation);throw error;}})();
+    const tracked=action.finally(()=>{this.previewCalls--;this.previewBytes-=credit;this.previewInFlight.delete(tracked);});this.previewInFlight.add(tracked);return tracked;
   }
   private createDocumentDraftTransport():DocumentDraftTransport {
     const scope=this.authorityScope!;
@@ -375,7 +391,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
     this.workBlockBinding?.stop();
     this.releasing=true;this.workBlockDraining=true;
     document.removeEventListener('visibilitychange', this.visibility);
-    this.releasePending = (async()=>{await this.workBlockBinding?.drain();this.workBlockDraining=false;while(this.draftInFlight.size)await Promise.allSettled([...this.draftInFlight]);while(this.binaryInFlight.size)await Promise.allSettled([...this.binaryInFlight]);await this.call<void>('release-client');this.close();})()
+    this.releasePending = (async()=>{await this.workBlockBinding?.drain();this.workBlockDraining=false;while(this.draftInFlight.size)await Promise.allSettled([...this.draftInFlight]);while(this.previewInFlight.size)await Promise.allSettled([...this.previewInFlight]);while(this.binaryInFlight.size)await Promise.allSettled([...this.binaryInFlight]);await this.call<void>('release-client');this.close();})()
       .finally(() => { this.releasePending = undefined; });
     return this.releasePending;
   }

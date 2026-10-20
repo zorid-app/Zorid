@@ -29,6 +29,7 @@ impl NativeVault {
             .file_name()
             .ok_or_else(|| crate::Error::UnsafePath("cache filename missing".into()))?;
         self.store.enable_document_cache(parent.join(name))?;
+        self.retire_document_previews();
         self.base_preparation_cache.borrow_mut().clear();
         self.clear_rich_document_queries();
         self.retire_document_runtime_for_cache_change();
@@ -54,6 +55,7 @@ impl NativeVault {
     pub fn rebuild_document_index(&mut self) -> NativeDocumentResult<()> {
         self.paths.verify()?;
         self.store.rebuild_document_index()?;
+        self.retire_document_previews();
         self.base_preparation_cache.borrow_mut().clear();
         self.clear_rich_document_queries();
         Ok(())
@@ -69,7 +71,9 @@ impl NativeVault {
         snapshot: &IndexSnapshotId,
     ) -> NativeDocumentResult<()> {
         self.paths.verify()?;
-        Ok(self.store.discard_document_index_stage(snapshot)?)
+        self.store.discard_document_index_stage(snapshot)?;
+        self.retire_document_previews();
+        Ok(())
     }
     pub fn document_index_stages(&self) -> NativeDocumentResult<Vec<DocumentIndexStage>> {
         self.paths.verify()?;
@@ -98,7 +102,10 @@ impl NativeVault {
         stage: &DocumentIndexStage,
     ) -> NativeDocumentResult<DocumentIndexProgress> {
         self.paths.verify()?;
-        let progress = self.store.pump_document_index(stage)?;
+        let progress = match self.pump_document_index_preview(stage)? {
+            Some(progress) => progress,
+            None => self.store.pump_document_index(stage)?,
+        };
         self.paths.verify()?;
         Ok(progress)
     }
@@ -107,7 +114,9 @@ impl NativeVault {
         stage: &DocumentIndexStage,
     ) -> NativeDocumentResult<IndexSnapshotId> {
         self.paths.verify()?;
-        Ok(self.store.publish_document_index(stage)?)
+        let published = self.store.publish_document_index(stage)?;
+        self.retire_document_previews();
+        Ok(published)
     }
     pub fn open_document_snapshot(&self) -> NativeDocumentResult<DocumentQueryPin> {
         self.paths.verify()?;

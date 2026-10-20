@@ -9,7 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use zorid_core::{EntryId, OperationId};
 use zorid_native::{
     DocumentQueryPin, IndexSnapshotId, LiteralQuery, LiteralToken, NativeDocumentError,
-    NativeMetadataRows, NativeRichCursor, NativeRichPreparation, NativeRichQuery, NativeVault,
+    NativeBasePreview, NativeBasePreviewReply, NativeMetadataRows, NativeRichCursor,
+    NativeRichPreparation, NativeRichQuery, NativeVault,
     QueryOptions, RelationshipToken, RichPageProfile, SearchSpec, TaskFilter, TaskQueryOptions,
 };
 
@@ -69,6 +70,15 @@ enum DocumentCommand {
     Close {
         pin_id: OperationId,
     },
+    PreviewOpen { preview_id: OperationId },
+    PreviewBase {
+        preview_id: OperationId,
+        id: EntryId,
+        view_name: Option<String>,
+        #[serde(default)]
+        options: BaseOptions,
+    },
+    PreviewClose { preview_id: OperationId },
     Metadata {
         pin_id: OperationId,
         id: EntryId,
@@ -132,6 +142,16 @@ enum DocumentCommand {
         #[serde(default)]
         options: BaseOptions,
     },
+}
+impl Request {
+    pub(crate) fn is_preview(&self) -> bool {
+        matches!(self.command,
+            DocumentCommand::PreviewOpen { .. } | DocumentCommand::PreviewBase { .. }
+            | DocumentCommand::PreviewClose { .. })
+    }
+    pub(crate) fn is_preview_base(&self) -> bool {
+        matches!(self.command, DocumentCommand::PreviewBase { .. })
+    }
 }
 #[derive(Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
@@ -385,6 +405,8 @@ struct Client {
     // Constant-size retry fence permits indefinitely many opens. An ID at or
     // below this floor can only replay its still-live original pin or expire.
     last_open: u64,
+    previews: BTreeMap<OperationId, NativeBasePreview>,
+    last_preview_open: u64,
 }
 #[derive(Default)]
 pub(crate) struct Sessions {
@@ -403,6 +425,7 @@ impl Sessions {
         if rebuilt {
             for client in self.clients.values_mut() {
                 client.pins.clear();
+                client.previews.clear();
             }
         }
     }
@@ -419,13 +442,17 @@ impl Sessions {
         if self.runtime.release_after_work(vault, client, last)? {
             for client in self.clients.values_mut() {
                 client.pins.clear();
+                client.previews.clear();
             }
         }
         Ok(())
     }
     pub(crate) fn release_runtime(&mut self, vault: &mut NativeVault, client: &OperationId, last: bool) -> Result<(),Value> {
         if self.runtime.release(vault,client,last)? {
-            for client in self.clients.values_mut() { client.pins.clear(); }
+            for client in self.clients.values_mut() {
+                client.pins.clear();
+                client.previews.clear();
+            }
         }
         Ok(())
     }
@@ -449,7 +476,7 @@ fn native_transport_code(code: &str) -> String {
     }
     code.replace('-', "_")
 }
-fn native(error: NativeDocumentError) -> Value {
+pub(crate) fn native(error: NativeDocumentError) -> Value {
     let mut value = failure(&native_transport_code(error.code()));
     if let NativeDocumentError::SearchCompile(diagnostic) = error {
         value["details"] = json!({"diagnostic": diagnostic});
@@ -873,11 +900,57 @@ fn metadata_rows_inner(
 
 fn runtime_answer(vault:&mut NativeVault,sessions:&mut Sessions,client:&OperationId,op:&str,command:crate::document_runtime::Command)->Result<(Value,Vec<u8>),Value> {
     let reply=sessions.runtime.execute(vault,client,command)?;
-    if reply.rebuilt {for client in sessions.clients.values_mut(){client.pins.clear();}}
+    if reply.rebuilt {
+        for client in sessions.clients.values_mut() {
+            client.pins.clear();
+            client.previews.clear();
+        }
+    }
     let encoded=answer(op,reply.value)?;
     if encoded.1.len()>crate::document_runtime::MAX_BYTES {return Err(failure("document_runtime_capacity"));}
     Ok(encoded)
 }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewOpened<'a> {
+    preview_id: &'a OperationId,
+    #[serde(flatten)]
+    descriptor: zorid_native::NativePreviewDescriptor,
+}
+fn preview_expired(error: &NativeDocumentError) -> bool {
+    matches!(error.code(), "index_preview_expired" | "snapshot_expired" | "stale_source" | "stale_index")
+}
+fn prune_previews(vault: &NativeVault, client: &mut Client) -> Result<(), Value> {
+    let mut expired = Vec::with_capacity(MAX_PINS_PER_CLIENT);
+    for (id, preview) in &client.previews {
+        if let Err(error) = vault.check_document_preview_handle(preview) {
+            if preview_expired(&error) { expired.push(id.clone()); } else { return Err(native(error)); }
+        }
+    }
+    for id in expired { client.previews.remove(&id); }
+    Ok(())
+}
+/// Preserve the actual request for final lease authorization. Only its owned
+/// options move into the query; no complete response Vec escapes this path.
+pub(crate) fn preview_base_reply(
+    vault: &NativeVault,
+    sessions: &Sessions,
+    client: &OperationId,
+    request: &mut Request,
+) -> Result<(OperationId, NativeBasePreviewReply), Value> {
+    if request.schema_version != 1 { return Err(failure("unsupported_protocol")); }
+    let DocumentCommand::PreviewBase { preview_id, id, view_name, options } = &mut request.command else {
+        return Err(failure("invalid_request"));
+    };
+    pin_sequence(preview_id)?;
+    let preview = sessions.clients.get(client).and_then(|c| c.previews.get(preview_id))
+        .ok_or_else(|| failure("index_preview_expired"))?;
+    let options = std::mem::take(options).into_options()?;
+    let reply = vault.query_base_preview(preview, id, view_name.as_deref(), options, |_| Ok(()))
+        .map_err(native)?;
+    Ok((preview_id.clone(), reply))
+}
+
 pub(crate) fn execute(
     vault: &mut NativeVault,
     sessions: &mut Sessions,
@@ -933,6 +1006,7 @@ pub(crate) fn execute(
                 // Keep replay floors fenced; only a new sequence may open again.
                 for client in sessions.clients.values_mut() {
                     client.pins.clear();
+                    client.previews.clear();
                 }
                 answer("rebuild", true)
             }
@@ -964,11 +1038,12 @@ pub(crate) fn execute(
             Open { pin_id } => {
                 let sequence = pin_sequence(&pin_id)?;
                 let client = sessions.clients.entry(client.clone()).or_default();
+                prune_previews(vault, client)?;
                 if !client.pins.contains_key(&pin_id) {
                     if sequence <= client.last_open {
                         return Err(failure("snapshot_expired"));
                     }
-                    if client.pins.len() >= MAX_PINS_PER_CLIENT {
+                    if client.pins.len() + client.previews.len() >= MAX_PINS_PER_CLIENT {
                         return Err(failure("pin_capacity"));
                     }
                     let value = vault.open_document_snapshot().map_err(native)?;
@@ -999,6 +1074,41 @@ pub(crate) fn execute(
                     },
                 )
             }
+            PreviewOpen { preview_id } => {
+                let sequence = pin_sequence(&preview_id)?;
+                let client = sessions.clients.entry(client.clone()).or_default();
+                prune_previews(vault, client)?;
+                if let Some(preview) = client.previews.get(&preview_id) {
+                    let descriptor = preview.descriptor().map_err(native)?;
+                    return answer("preview_open", PreviewOpened { preview_id: &preview_id, descriptor });
+                }
+                if sequence <= client.last_preview_open {
+                    return Err(failure("index_preview_expired"));
+                }
+                if client.pins.len() + client.previews.len() >= MAX_PINS_PER_CLIENT {
+                    return Err(failure("pin_capacity"));
+                }
+                let preview = vault.open_document_preview().map_err(native)?;
+                // Null consumes its sequence without retaining a map entry.
+                client.last_preview_open = sequence;
+                let Some(preview) = preview else { return answer("preview_open", Option::<bool>::None); };
+                let descriptor = preview.descriptor().map_err(native)?;
+                client.previews.insert(preview_id.clone(), preview);
+                answer("preview_open", PreviewOpened { preview_id: &preview_id, descriptor })
+            }
+            PreviewClose { preview_id } => {
+                let sequence = pin_sequence(&preview_id)?;
+                let client = sessions.clients.entry(client.clone()).or_default();
+                if client.previews.remove(&preview_id).is_none()
+                    && sequence > client.last_preview_open
+                {
+                    // Match ordinary close: fabricated future tokens are not
+                    // acknowledged and do not reserve or advance open history.
+                    return Err(failure("index_preview_expired"));
+                }
+                answer("preview_close", json!({"closed":true}))
+            }
+            PreviewBase { .. } => Err(failure("preview_requires_stdio")),
             Close { pin_id } => {
                 let sequence = pin_sequence(&pin_id)?;
                 let client = sessions.clients.entry(client.clone()).or_default();
@@ -2068,3 +2178,7 @@ mod metadata_rows_expiry_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "document_preview_tests.rs"]
+mod preview_tests;

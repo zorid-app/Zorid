@@ -13,6 +13,8 @@ import { createBrowserManagedRecordsHost } from './browser-managed-records-host.
 import { createBrowserManagedRecordConsumers } from './browser-managed-records-registry.ts';
 import { createBrowserWorkBlocksHost } from './browser-workblocks-host.ts';
 import type { BrowserWorkBlocksWasm } from './browser-workblocks-host.ts';
+import {previewRequest} from '../core/document-preview.ts';
+import type {DocumentPreviewBaseInput,DocumentPreviewIdInput} from '../core/document-preview.ts';
 import {documentDraftRequest,DocumentDraftError,DOCUMENT_DRAFT_CHUNK_BYTES} from '../core/document-drafts.ts';
 
 // DOM builds and worker builds share this file without mixing lib.dom/lib.webworker.
@@ -28,6 +30,7 @@ let managed:ReturnType<typeof createBrowserManagedRecordsHost>|undefined;
 let workBlocks:ReturnType<typeof createBrowserWorkBlocksHost>|undefined;
 let documentRuntime:ReturnType<typeof createBrowserDocumentRuntimeHost>|undefined;
 let documentChannel:ReturnType<typeof createBrowserDocumentRuntimeChannel>|undefined;
+let previewEnabled=false,previewPending=0;
 let draftsEnabled=false,draftPending=0,draftPendingBytes=0,releasePromise:Promise<void>|undefined;
 const assertManagedActive=()=>{assertOwner();if(closing)throw new BrowserVaultError('client_not_admitted','Browser client is releasing');};
 // Public closing admission belongs at the message/producer boundaries. Private
@@ -148,7 +151,11 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
       }
       const index=streaming()?.documentIndex;
       if(index?.metadataRowsAvailable===true&&typeof index.metadataRows!=='function')throw new BrowserVaultError('index_rebuild_required','Invalid metadata page capability');
-      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{}),documentIndexAvailable:!!index,...(index?.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(documentChannel?{documentMaintenance:true}:{}),...(draftsEnabled?{draftsAvailable:true}:{}),...(workBlocks?.ready?{workBlocks:true}:{})};
+      if(payload.documentMaintenance===true&&index?.basePreviewAvailable===true){
+        if(['previewOpen','previewBase','previewClose'].some(name=>typeof (index as unknown as Record<string,unknown>)[name]!=='function'))throw new BrowserVaultError('index_unavailable','Invalid prepared preview capability');
+        previewEnabled=true;
+      }
+      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{}),documentIndexAvailable:!!index,...(index?.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(documentChannel?{documentMaintenance:true}:{}),...(draftsEnabled?{draftsAvailable:true}:{}),...(previewEnabled?{basePreviewAvailable:true}:{}),...(workBlocks?.ready?{workBlocks:true}:{})};
     } catch (error) {
       try{documentRuntime?.retire();await documentRuntime?.drain();}catch{/* Preserve the original opening failure after accepted work settles. */}
       documentChannel=undefined;documentRuntime=undefined;
@@ -251,7 +258,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
 port.onmessage = ({data}) => {
   const {id, operation, payload} = data;
   // Revoke before queued storage dispatch. Network work never occupies the local-operation tail.
-  const reject=(error:unknown)=>{const failure=error instanceof BrowserVaultError?error:new BrowserVaultError(error instanceof DocumentDraftError?error.code:'draft_invalid_request','Browser request was not admitted');try{port.postMessage({id,ok:false,error:{code:failure.code,message:failure.message,source:failure.source}});}catch{};};
+  const reject=(error:unknown)=>{const failure=error instanceof BrowserVaultError?error:new BrowserVaultError(error instanceof DocumentDraftError?error.code:typeof operation==='string'&&operation.startsWith('document-preview-')&&typeof (error as {code?:unknown})?.code==='string'?(error as {code:string}).code:'draft_invalid_request','Browser request was not admitted');try{port.postMessage({id,ok:false,error:{code:failure.code,message:failure.message,source:failure.source}});}catch{};};
   if (operation === 'release-client') {
     if(!releasePromise){
       // Capture foreground FIFO before scheduling any private close turn. The
@@ -263,6 +270,35 @@ port.onmessage = ({data}) => {
     void releasePromise.then(()=>{port.postMessage({id,ok:true,result:undefined});},reject);return;
   }
   if(closing||released||storageFailed){reject(new BrowserVaultError('client_not_admitted','Browser client is releasing'));return;}
+  if(typeof operation==='string'&&operation.startsWith('document-preview-')){
+    let request:DocumentPreviewIdInput|DocumentPreviewBaseInput;
+    try{
+      assertManagedActive();if(!previewEnabled)throw new BrowserVaultError('index_unavailable','Prepared preview capability is not enabled');
+      const op=operation==='document-preview-open'?'preview_open':operation==='document-preview-base'?'preview_base':operation==='document-preview-close'?'preview_close':undefined;
+      if(!op||data.bytes!==undefined)throw new BrowserVaultError('index_invalid_request','Invalid prepared preview request');
+      request=previewRequest(op,payload);
+      if(previewPending>=4)throw new BrowserVaultError('index_preview_resource','Prepared preview bridge is full');
+      // At most four bounded64KiB controls wait; one borrowed reply (<=16MiB)
+      // is allocated on this actual FIFO tail and transferred without cloning.
+      previewPending++;
+    }catch(error){reject(error);return;}
+    let entered=false;
+    void local(async()=>{
+      entered=true;let reply:Awaited<ReturnType<NonNullable<NonNullable<BrowserStreamingVault['documentIndex']>['previewBase']>>>|undefined;
+      try{
+        assertManagedActive();const index=streaming()?.documentIndex;
+        if(!index?.basePreviewAvailable||!index.previewOpen||!index.previewBase||!index.previewClose)throw new BrowserVaultError('index_unavailable','Prepared preview capability is unavailable');
+        if(operation==='document-preview-base'){
+          reply=await index.previewBase(request as DocumentPreviewBaseInput);assertManagedActive();
+          const bytes=new Uint8Array(reply.length);reply.writeInto(bytes);await reply.validate();assertManagedActive();
+          port.postMessage({id,ok:true,result:{previewBytes:bytes}},[bytes.buffer]);
+        }else{
+          const result=operation==='document-preview-open'?await index.previewOpen(request):await index.previewClose(request);
+          assertManagedActive();port.postMessage({id,ok:true,result});
+        }
+      }catch(error){reject(error);}finally{try{reply?.free();}finally{previewPending--;}}
+    }).catch(error=>{reject(error);if(!entered)previewPending--;});return;
+  }
   if(operation==='document-drafts'){
     let request:ReturnType<typeof documentDraftRequest>,reserved=0;
     try{

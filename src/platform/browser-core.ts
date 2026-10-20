@@ -1,3 +1,4 @@
+import type {DocumentPreviewTransport} from '../core/document-preview.ts';
 import type {DocumentDraftTransport} from '../core/document-drafts.ts';
 import type {DocumentRuntimeTransport} from '../core/document-runtime.ts';
 import type {BrowserDocumentIndex} from '../core/browser-document-index.ts';
@@ -12,7 +13,7 @@ import type { DurableCheckpoints } from '../core/durable-checkpoints.ts';
 
 /** Stable identity preserves the existing workspace/session/draft namespace. */
 export const BROWSER_CORE_VAULT_ID = 'browser:default';
-export type BrowserDocumentIndexProvider=Omit<BrowserDocumentIndex,'close'>&{readonly maintenance?:DocumentRuntimeTransport;readonly draftsAvailable?:boolean;readonly drafts?:DocumentDraftTransport};
+export type BrowserDocumentIndexProvider=Omit<BrowserDocumentIndex,'close'|'previewOpen'|'previewBase'|'previewClose'>&{readonly basePreviewAvailable?:boolean;readonly previewOpen?:DocumentPreviewTransport['previewOpen'];readonly previewBase?:DocumentPreviewTransport['previewBase'];readonly previewClose?:DocumentPreviewTransport['previewClose'];readonly maintenance?:DocumentRuntimeTransport;readonly draftsAvailable?:boolean;readonly drafts?:DocumentDraftTransport};
 export interface BrowserCoreBackend {
   /** Authoritative persistence scope, captured by the runtime that opens it. */
   readonly durableScope?: Readonly<{vaultId:string;clientId:string}>;

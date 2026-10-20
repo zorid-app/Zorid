@@ -1,3 +1,6 @@
+import {createBrowserDocumentPreview,browserPreviewCall} from './browser-document-preview.ts';
+import type {PreviewWasm,PreviewOwner,PreviewBuilder,PreviewCandidate,PreviewReadReply} from './browser-document-preview.ts';
+import {previewRequest} from './document-preview.ts';
 import {documentSnapshot} from './document-semantics.ts';
 import {browserDocumentRuntime} from './browser-document-runtime.ts';
 import type {BrowserDocumentIndexMaintenance,BrowserDocumentRuntimeWasm,DocumentRuntimeStage} from './browser-document-runtime.ts';
@@ -41,7 +44,7 @@ interface Free {free():void}
 export interface BrowserIndexSource {localStoreId:string;watermark:string}
 export interface BrowserIndexSnapshot {localStoreId:string;generationEpoch:string;generation:string;versions:unknown}
 export interface BrowserIndexHeader {source:{localStoreId:string;watermark:string};entries:EntryState[];expectedIndex:BrowserIndexSnapshot|null;nextIndex:BrowserIndexSnapshot}
-interface Builder extends Free {headerJson():string;pendingJson():string;beginPump():void;addText(id:string,bytes:Uint8Array):void;cacheKeyJson(id:string,bytes:Uint8Array):string;addCachedText(id:string,key:string,payload:string):string;extractText(id:string,bytes:Uint8Array):string;addBinary(id:string):void;addUnreadable(id:string):void;addPersisted(id:string,row:string):void;rowJson(id:string):string;ready():boolean;finish():Generation}
+interface Builder extends Free, Partial<PreviewBuilder> {headerJson():string;pendingJson():string;beginPump():void;addText(id:string,bytes:Uint8Array):void;cacheKeyJson(id:string,bytes:Uint8Array):string;addCachedText(id:string,key:string,payload:string):string;extractText(id:string,bytes:Uint8Array):string;addBinary(id:string):void;addUnreadable(id:string):void;addPersisted(id:string,row:string):void;rowJson(id:string):string;ready():boolean;finish():Generation}
 interface Generation extends Free {headerJson():string;snapshotJson():string;rowJson(id:string):string;coverageComplete():boolean;metadataJson(id:string):string;tasksJson(sources:string,options:string):string;baseJson(id:string,bytes:Uint8Array,facts:string,options:string,viewName?:string|null):string;resolveJson(id:string,destination:string):string;backlinksJson(id:string,token:string,limit:number):string;openLiteral(query:string,token:string,limit:number):LiteralPage}
 interface PreparationCache extends Free {clear():void;baseJson(generation:Generation,id:string,bytes:Uint8Array,facts:string,options:string,monotonicMs:number,viewName?:string|null):string}
 interface LiteralPage extends Free {nextReadJson():string;accept(bytes:Uint8Array):void;finishJson():string}
@@ -50,7 +53,7 @@ interface RichDrive extends Free {nextActionJson():string;accept(bytes:Uint8Arra
 interface RichOwner extends Free {clear():void;startQuery(generation:Generation,spec:string,facts:string):string;prepareJson(query:string):string;openDrive(query:string,cursor:string):RichDrive;commitJson(prepared:RichPrepared):string;closeQuery(query:string):void}
 interface MetadataScan extends Free {fork():MetadataScan;sameCheckpoint(other:MetadataScan):boolean;isNextCheckpointOf(other:MetadataScan):boolean;usesBaseline():boolean;pageJson(nextOpaqueCursor:string):string;retire():void}
 interface MetadataScanConstructor {new(destination:Generation,limit:number):MetadataScan;readonly prototype:MetadataScan;withBaseline(destination:Generation,baseline:Generation,limit:number):MetadataScan}
-export interface BrowserDocumentIndexWasm extends BrowserDocumentRuntimeWasm {documentIndexAllocateJson(input:string):string;documentIndexVersionsJson():string;documentParseCachePolicyJson():string;documentParseCacheAdmissionJson(input:string):string;WasmDocumentIndexBuilder:new(input:string)=>Builder;WasmDocumentIndexPreparationCache:new()=>PreparationCache;WasmDocumentRichSearchOwner:new(nonce:string)=>RichOwner;WasmDocumentMetadataRowsScan?:MetadataScanConstructor}
+export interface BrowserDocumentIndexWasm extends BrowserDocumentRuntimeWasm,PreviewWasm {documentIndexAllocateJson(input:string):string;documentIndexVersionsJson():string;documentParseCachePolicyJson():string;documentParseCacheAdmissionJson(input:string):string;WasmDocumentIndexBuilder:new(input:string)=>Builder;WasmDocumentIndexPreparationCache:new()=>PreparationCache;WasmDocumentRichSearchOwner:new(nonce:string)=>RichOwner;WasmDocumentMetadataRowsScan?:MetadataScanConstructor}
 export interface BrowserDocumentIndexHost {
   db:IDBDatabase;authorityId:string;clientId:string;wasm:BrowserDocumentIndexWasm;assertActive():void;
   readPublication(tx:IDBTransaction,done:(value:StreamingPublication)=>void,abort:(error:unknown)=>void):void;
@@ -58,6 +61,7 @@ export interface BrowserDocumentIndexHost {
 export interface BrowserIndexStage {stageId:string;snapshot:BrowserIndexSnapshot;progress:{prepared:number;total:number;reused:number;ready:boolean;parseCache:DocumentParseCacheCounters};prepared:number;total:number;ready:boolean}
 export interface BrowserIndexPin {pinId:string;snapshot:BrowserIndexSnapshot;source:BrowserIndexSource;coverageComplete:boolean}
 export interface BrowserDocumentIndex extends Pick<DocumentTransport,'metadataRowsAvailable'|'metadataRows'> {
+  readonly basePreviewAvailable?:boolean;previewOpen?(input:{previewId:string}):Promise<unknown>;previewBase?(input:{previewId:string;id:string;viewName?:string|null;options?:unknown}):Promise<PreviewReadReply>;previewClose?(input:{previewId:string}):Promise<unknown>;
   initialize():Promise<void>;discard(stageId:string):Promise<void>;
   status():Promise<{sourceWatermark:string;snapshot:BrowserIndexSnapshot|null;coveredWatermark:string|null;rebuildRequired:boolean;current:boolean;source:BrowserIndexSource;coveredSource:BrowserIndexSource|null;coverageComplete:boolean|null}>;
   begin():Promise<BrowserIndexStage>;pump(stageId:string):Promise<BrowserIndexStage>;publish(stageId:string):Promise<BrowserIndexSnapshot>;
@@ -79,7 +83,9 @@ interface Descriptor {id:string;clientId:string;state:'staging'|'published'|'del
 interface CachedRow {sourceDescriptor:unknown;entry:EntryState;presentation:BrowserVaultPresentation;record:string;projection?:Uint8Array}
 interface SourceCapture {publication:StreamingPublication;descriptors:{id:string;content:any}[]}
 interface StoredHeader {rust:string;capture:SourceCapture}
-interface Stage {failed?:boolean;capture:SourceCapture;id:string;previous:string|null;header:BrowserIndexHeader;builder?:Builder;generation?:Generation;prepared:number;total:number;reused:number;parseCache:{hits:number;misses:number;unavailable:number;corrupt:number;unsupported:number}}
+interface PreviewStamp {sequence:string;configuration:unknown;head:unknown}
+interface StagePreview {stamp:PreviewStamp;configured:boolean;seen:number;candidate?:PreviewCandidate;error?:unknown}
+interface Stage {preview?:StagePreview;failed?:boolean;capture:SourceCapture;id:string;previous:string|null;header:BrowserIndexHeader;builder?:Builder;generation?:Generation;prepared:number;total:number;reused:number;parseCache:{hits:number;misses:number;unavailable:number;corrupt:number;unsupported:number}}
 type ParseCacheOutcome='hit'|'miss'|'unavailable'|'corrupt'|'unsupported';
 const root=(id:string)=>PREFIX+'g/'+id+'/';
 const rowKey=(id:string,entryId:string)=>root(id)+'row/'+entryId;
@@ -159,6 +165,17 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
   type Pin=ReturnType<typeof pins.get> & {};
   interface MetadataBinding {pinId:string;pin:Pin;baseline?:{pinId:string;pin:Pin};requested?:NonNullable<Parameters<NonNullable<DocumentTransport['metadataRows']>>[0]['baseline']>;limit:number;initial:boolean;scan:MetadataScan}
   const metadataCursors=new Map<string,Map<string,MetadataBinding>>(),metadataBusy=new Set<string>();
+  const Preview=host.wasm.WasmDocumentPreviewOwner;
+  const previewParts:[unknown,readonly string[]][]=[
+    [Preview,['clear','retireStage','free']],[host.wasm.WasmDocumentPreview,['descriptorJson','sameCapture','beginBase','free']],
+    [host.wasm.WasmDocumentPreviewQuery,['descriptorJson','prepareBase','cancel','free']],
+    [host.wasm.WasmDocumentPreviewReply,['encodedLength','writeInto','free']],
+    [host.wasm.WasmDocumentIndexBuilder,['configurePreview','commitPreviewRowsJson','capturePreview','retirePreview']],
+  ];
+  if(Preview!==undefined&&previewParts.some(([ctor,methods])=>typeof ctor!=='function'||methods.some(method=>typeof (ctor as {prototype?:Record<string,unknown>}).prototype?.[method]!=='function')))throw fail('index_rebuild_required');
+  let previewOwner:PreviewOwner|undefined;
+  const retirePreviewStage=(stage:Stage)=>{const owned=stage.preview;if(!owned)return;try{try{stage.builder?.retirePreview?.();}finally{previewOwner?.retireStage(stage.id);}}finally{owned.candidate?.value.free();owned.candidate=undefined;}};
+  const retirePreviews=()=>{previews.clear();for(const stage of stages.values())retirePreviewStage(stage);if(previewOwner){try{previewOwner.clear();}finally{previewOwner.free();previewOwner=undefined;}}};
   const MetadataRows=host.wasm.WasmDocumentMetadataRowsScan;
   if(MetadataRows!==undefined&&(typeof MetadataRows!=='function'||typeof MetadataRows.withBaseline!=='function'||(['fork','pageJson','sameCheckpoint','isNextCheckpointOf','usesBaseline','retire','free'] as const).some(method=>typeof MetadataRows.prototype?.[method]!=='function')))throw fail('index_rebuild_required');
   function releaseMetadata(){for(const slots of metadataCursors.values())for(const binding of slots.values()){binding.scan.retire();binding.scan.free();}metadataCursors.clear();}
@@ -169,8 +186,8 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
   const releaseRich=()=>{const session=richOwner;richOwner=undefined;for(const query of richQueries.values())query.retired=true;richQueries.clear();if(session){session.alive=false;try{session.value.clear();}finally{session.value.free();}}};
   let closed=false,preparation:PreparationCache|undefined;let maintenance:BrowserDocumentIndexMaintenance|undefined;
   const releasePreparation=()=>{const owned=preparation;preparation=undefined;owned?.free();};
-  const releaseQueryOwners=()=>{releaseMetadata();releaseRich();releasePreparation();for(const pin of pins.values())pin.value.free();pins.clear();};
-  const active=()=>{if(closed)throw fail('index_closed');try{host.assertActive();}catch(error){void maintenance?.close().catch(()=>{});try{releaseMetadata();}catch{/* Preserve the owner/lease error. */}try{releasePreparation();}catch{/* Preserve the owner/lease error. */}try{releaseRich();}catch{/* Preserve the owner/lease error. */}throw error;}};
+  const releaseQueryOwners=()=>{retirePreviews();releaseMetadata();releaseRich();releasePreparation();for(const pin of pins.values())pin.value.free();pins.clear();};
+  const active=()=>{if(closed)throw fail('index_closed');try{host.assertActive();}catch(error){void maintenance?.close().catch(()=>{});try{releaseMetadata();}catch{/* Preserve the owner/lease error. */}try{releasePreparation();}catch{/* Preserve the owner/lease error. */}try{releaseRich();}catch{/* Preserve the owner/lease error. */}try{retirePreviews();}catch{/* Preserve the owner/lease error. */}throw error;}};
   const monotonicMs=()=>{const value=Math.floor(performance.now());if(!Number.isSafeInteger(value)||value<0)throw fail('index_invalid_budget');return value;};
   const richSession=()=>{active();if(!richOwner)richOwner={value:new host.wasm.WasmDocumentRichSearchOwner(crypto.randomUUID()),alive:true};return richOwner;};
   function admittedRichPin(pinId:string,pin:Pin,session:RichSession){active();if(pins.get(pinId)!==pin||richOwner!==session||!session.alive)throw richFail('search_expired');}
@@ -208,6 +225,82 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
     if(h.source?.localStoreId!==host.authorityId||h.nextIndex?.localStoreId!==host.authorityId||!Array.isArray(h.entries)||h.entries.length>LIMITS.records)throw fail('index_rebuild_required');
     decimalU64(h.source.watermark);return h;
   };
+  function readPreviewStamp(tx:IDBTransaction,done:(stamp:PreviewStamp)=>void,abort:(error:unknown)=>void){
+    on(tx.objectStore('control').get('sequence'),row=>{const sequence=decimalU64(row?.value);
+      on(tx.objectStore('sync_state').get('config'),configuration=>on(tx.objectStore('sync_state').get('metadata-head'),head=>{
+        const value={sequence,configuration:configuration?.value??null,head:head?.value??null};
+        if(size(JSON.stringify(value))>16384)throw fail('index_preview_resource');done(value);
+      },abort),abort);
+    },abort);
+  }
+  function previewLocal(candidate:PreviewCandidate):Stage {
+    active();const stage=candidate.stage as Stage;
+    if(stages.get(stage.id)!==stage||stage.failed||stage.preview?.candidate!==candidate||stage.preview.stamp!==candidate.stamp||!browserPreviewCall(()=>candidate.value.sameCapture(candidate.value)))throw fail('index_preview_expired');
+    return stage;
+  }
+  async function previewFence(candidate:PreviewCandidate,definition?:EntryState){
+    const stage=previewLocal(candidate);
+    await run<void>('readonly',['control','sync_state'],(tx,done,abort)=>readCatalog(tx,c=>readPreviewStamp(tx,stamp=>{
+      const d=c.generations.find(d=>d.id===stage.id);
+      if(c.rebuilding||!d||d.clientId!==host.clientId||d.state!=='staging'||d.wasPublished||!equal(d.snapshot,stage.header.nextIndex)||!equal(head(c),stage.header.expectedIndex)||!equal(stamp,candidate.stamp)||d.rows!==stage.prepared)throw fail('index_preview_expired');
+      on(tx.objectStore('control').getKey(headerKey(stage.id)),key=>{if(key===undefined)throw fail('index_preview_expired');
+        if(definition)on(tx.objectStore('control').getKey(rowKey(stage.id,definition.id)),key=>{if(key===undefined)throw fail('index_preview_expired');done();},abort);else done();
+      },abort);
+    },abort),abort));previewLocal(candidate);
+  }
+  // Bootstrap only proven committed membership, never persisted parser rows or
+  // source bodies. The existing live builder supplies the facts in Rust. Each
+  // transaction is <=32 keys and final registration checks the same actual stage.
+  async function preparePreview(stage:Stage){
+    if(!Preview||!stage.builder||stage.failed)return;
+    const state=stage.preview;if(!state)throw fail('index_preview_expired');
+    if(state.error)throw state.error;
+    const builder=stage.builder as Builder&PreviewBuilder;
+    if(!state.configured){
+      previewOwner??=new Preview(host.clientId,crypto.randomUUID());
+      browserPreviewCall(()=>builder.configurePreview(previewOwner!,crypto.randomUUID(),stage.id));state.configured=true;
+      const expected=stage.prepared;if(expected===0){state.seen=0;return;}
+      const presentations=new Map(stage.capture.publication.presentation.map(row=>[row.id,row]));
+      let committed=0;
+      for(let start=0;start<stage.header.entries.length;start+=32){
+        const entries=stage.header.entries.slice(start,start+32).filter(entry=>entry.kind==='file');
+        const actual=await run<EntryState[]>('readonly',['control','sync_state'],(tx,done,abort)=>readCatalog(tx,c=>readPreviewStamp(tx,stamp=>{
+          const d=c.generations.find(d=>d.id===stage.id);if(!d||d.state!=='staging'||d.clientId!==host.clientId||d.rows!==expected||!equal(stamp,state.stamp)||!equal(head(c),stage.header.expectedIndex)||c.rebuilding)throw fail('index_preview_expired');
+          const found:EntryState[]=[];let at=0;const next=()=>{if(at===entries.length){done(found);return;}const entry=entries[at++]!;on(tx.objectStore('control').getKey(rowKey(stage.id,entry.id)),key=>{if(key!==undefined)found.push(entry);next();},abort);};next();
+        },abort),abort));
+        active();if(stages.get(stage.id)!==stage||stage.failed||stage.prepared!==expected||stage.builder!==builder)throw fail('index_preview_expired');
+        const batch=actual.map(entry=>{const fact=presentations.get(entry.id);if(!fact)throw fail('index_preview_expired');return {entry,presentation:{size:fact.size_bytes,ctimeMs:fact.ctime_ms,mtimeMs:fact.mtime_ms}};});
+        if(batch.length)browserPreviewCall(()=>builder.commitPreviewRowsJson(JSON.stringify(batch)));committed+=batch.length;
+        if(start+32<stage.header.entries.length)await new Promise<void>(resolve=>setTimeout(resolve,0));
+      }
+      if(committed!==expected)throw fail('index_preview_expired');state.seen=committed;
+    }
+  }
+  async function capturePreview():Promise<PreviewCandidate|undefined>{
+    active();const stage=[...stages.values()].find(stage=>!stage.failed);if(!stage)return;
+    if(stage.preview?.error)throw stage.preview.error;
+    if(stage.preview?.candidate){await previewFence(stage.preview.candidate);return stage.preview.candidate;}
+    const builder=stage.builder;if(!builder||!stage.preview)return;
+    try{
+      await preparePreview(stage);active();
+      if(stages.get(stage.id)!==stage||stage.failed||stage.builder!==builder)throw fail('index_preview_expired');
+      const state=stage.preview;if(state.seen!==stage.prepared)throw fail('index_preview_expired');
+      const value=browserPreviewCall(()=>builder.capturePreview!());if(!value)return;
+      const candidate:PreviewCandidate={stage,value,stamp:state.stamp};state.candidate=candidate;
+      try{await previewFence(candidate);return candidate;}catch(error){try{retirePreviewStage(stage);}catch{/* Preserve the original admission failure. */}throw error;}
+    }catch(error){if(stage.preview?.configured&&!stage.preview.candidate&&stage.preview.seen!==stage.prepared)stage.preview.error=error;throw error;}
+  }
+  const previews=createBrowserDocumentPreview({assertActive:active,isLive(candidate){try{previewLocal(candidate);return true;}catch{return false;}},capture:capturePreview,fence:previewFence,ordinarySlots:()=>run<number>('readonly',['control'],(tx,done,abort)=>readCatalog(tx,c=>done(c.pins.filter(pin=>pin.clientId===host.clientId).length),abort)),
+    async read(candidate,definition,sourceBytes){
+      const stage=previewLocal(candidate);await previewFence(candidate,definition);
+      // Point-read this immutable definition only. Rust checks its retained text
+      // commitment; parser-row serialization/hashing is unnecessary here. The IDB
+      // row clone is bridge memory, not part of the Rust owner32MiB allowance.
+      const bytes=await run<Uint8Array>('readonly',['control'],(tx,done,abort)=>on(tx.objectStore('control').get(rowKey(stage.id,definition.id)),row=>{
+        const value=row?.value as CachedRow;if(!value||!equal(value.entry,definition)||!(value.projection instanceof Uint8Array)||value.projection.byteLength!==sourceBytes)throw fail('index_preview_expired');done(value.projection);
+      },abort));await previewFence(candidate,definition);return bytes;
+    },
+  });
   function captureSource(tx:IDBTransaction,done:(value:SourceCapture)=>void,abort:(error:unknown)=>void):void {
     host.readPublication(tx,publication=>{
       if(publication.entries.length>LIMITS.records)throw fail('index_generation_limit');
@@ -334,7 +427,7 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
           on(tx.objectStore('control').get(headerKey(stageId)),row=>{if(!row&&stage.state==='deleting'){done();return;}if(row?.value!==captured.header||row?.digest!==captured.digest)throw fail('index_rebuild_required');done();},abort);
         },abort));return;
       }
-      const stage=stages.get(stageId);stage?.builder?.free();stage?.generation?.free();stages.delete(stageId);await purge(stageId);
+      const stage=stages.get(stageId);if(stage)retirePreviewStage(stage);stage?.builder?.free();stage?.generation?.free();stages.delete(stageId);await purge(stageId);
     },
     async status(){
       const captured=await run<{source:SourceCapture;catalog?:Catalog;raw?:string;digest?:string}>('readonly',['control','metadata','presentation','sync_materialization_refs'],(tx,done,abort)=>{
@@ -349,6 +442,8 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
         return {sourceWatermark,snapshot:g.snapshot,coveredWatermark:g.sourceWatermark,rebuildRequired:!!c?.rebuilding,current:equal(stored.capture,captured.source),source:{localStoreId:host.authorityId,watermark:sourceWatermark},coverageComplete:g.coverageComplete,coveredSource:{localStoreId:host.authorityId,watermark:g.sourceWatermark}};
       }catch{return {sourceWatermark,snapshot:null,coveredWatermark:null,rebuildRequired:true,current:false,source:{localStoreId:host.authorityId,watermark:sourceWatermark},coverageComplete:null,coveredSource:null};}
     },
+    basePreviewAvailable:!!Preview,
+    ...(Preview?{previewOpen:(input:{previewId:string})=>previews.open(previewRequest('preview_open',input) as {previewId:string}),previewBase:(input:{previewId:string;id:string;viewName?:string|null;options?:unknown})=>previews.base(previewRequest('preview_base',input) as typeof input),previewClose:(input:{previewId:string})=>previews.close(previewRequest('preview_close',input) as {previewId:string})}:{}),
     async begin(){
       active();await recover();if(stages.size>=1)throw fail('index_stage_limit');await prune();
       const capture=await run<{source:SourceCapture;catalog:Catalog}>('readonly',['control','metadata','presentation','sync_materialization_refs'],(tx,done,abort)=>{
@@ -362,15 +457,15 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
       if(h.entries.length>LIMITS.records)throw fail('index_generation_limit');
       const header=JSON.stringify(h);if(size(header)>LIMITS.header)throw fail('index_generation_limit');
       const builder=rust(()=>new host.wasm.WasmDocumentIndexBuilder(header)),canonicalHeader=rust(()=>builder.headerJson()),storedHeader=JSON.stringify({rust:canonicalHeader,capture:capture.source} satisfies StoredHeader),headerDigest=await digest(storedHeader);
-      try{await run<void>('readwrite',['control','metadata','presentation','sync_materialization_refs'],(tx,done,abort)=>readCatalog(tx,c=>sourceFence(tx,h,c,capture.source,()=>{
+      let previewStamp:PreviewStamp|undefined;try{previewStamp=await run<PreviewStamp|undefined>('readwrite',['control','metadata','presentation','sync_materialization_refs',...(Preview?['sync_state']:[])],(tx,done,abort)=>readCatalog(tx,c=>sourceFence(tx,h,c,capture.source,()=>{
         if(c.rebuilding)throw fail('index_rebuild_required');
         if(c.epoch!==capture.catalog.epoch||c.allocated!==capture.catalog.allocated)throw fail('index_head_changed');
         if(c.generations.filter(g=>g.state==='staging').length>=LIMITS.stages||c.generations.length>=LIMITS.generations+LIMITS.stages)throw fail('index_cache_limit');
         c.generations.push({id,clientId:host.clientId,state:'staging',snapshot:h.nextIndex,sourceWatermark:h.source.watermark,coverageComplete:false,wasPublished:false,rows:0,bytes:0,metadataBytes:0});
-        c.allocated=nextIndex.generation;tx.objectStore('control').add({key:headerKey(id),value:storedHeader,digest:headerDigest});putCatalog(tx,c);done();
+        c.allocated=nextIndex.generation;tx.objectStore('control').add({key:headerKey(id),value:storedHeader,digest:headerDigest});putCatalog(tx,c);if(Preview)readPreviewStamp(tx,done,abort);else done(undefined);
       },abort),abort));}catch(error){builder.free();throw error;}
       try{active();}catch(error){builder.free();throw error;}
-      const stage:Stage={id,previous:capture.catalog.head,capture:capture.source,header:h,builder,prepared:0,total:h.entries.filter(e=>e.kind==='file').length,reused:0,parseCache:{hits:0,misses:0,unavailable:0,corrupt:0,unsupported:0}};if(rust(()=>builder.ready())){stage.generation=rust(()=>builder.finish());builder.free();stage.builder=undefined;}stages.set(id,stage);return stageInfo(stage);
+      const stage:Stage={...(previewStamp?{preview:{stamp:previewStamp,configured:false,seen:0}}:{}),id,previous:capture.catalog.head,capture:capture.source,header:h,builder,prepared:0,total:h.entries.filter(e=>e.kind==='file').length,reused:0,parseCache:{hits:0,misses:0,unavailable:0,corrupt:0,unsupported:0}};if(rust(()=>builder.ready())){stage.generation=rust(()=>builder.finish());builder.free();stage.builder=undefined;}stages.set(id,stage);return stageInfo(stage);
     },
     async pump(stageId){
       const stage=liveStage(stageId);
@@ -432,27 +527,39 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
         const projection=bytes&&fields.exclusion==null?bytes:undefined;
         const row:CachedRow={entry,presentation:source.presentation,sourceDescriptor,record,...(projection?{projection}:{})};
         const rowDigest=await digest(JSON.stringify({entry,presentation:source.presentation,sourceDescriptor,record}));
-        await run<void>('readwrite',['control','metadata','presentation','sync_materialization_refs'],(tx,done,abort)=>readCatalog(tx,c=>sourceFence(tx,stage.header,c,stage.capture,()=>{
+        const committedStamp=await run<PreviewStamp|undefined>('readwrite',['control','metadata','presentation','sync_materialization_refs',...(Preview?['sync_state']:[])],(tx,done,abort)=>readCatalog(tx,c=>sourceFence(tx,stage.header,c,stage.capture,()=>{
           const d=c.generations.find(g=>g.id===stage.id&&g.state==='staging');if(!d)throw fail('index_stage_expired');
           d.rows++;d.bytes+=projection?.length??0;d.metadataBytes+=size(record);
           if(d.rows>LIMITS.records||d.bytes>LIMITS.projection||d.metadataBytes>LIMITS.metadata||c.generations.reduce((n,g)=>n+g.bytes,0)>LIMITS.cache)throw fail('index_cache_limit');
-          tx.objectStore('control').add({key:rowKey(stage.id,entry.id),value:row,digest:rowDigest});putCatalog(tx,c);done();
-        },abort),abort));stage.prepared++;if(reused)stage.reused++;sourceBytes+=bytes?.length??0;
+          tx.objectStore('control').add({key:rowKey(stage.id,entry.id),value:row,digest:rowDigest});putCatalog(tx,c);if(Preview)readPreviewStamp(tx,done,abort);else done(undefined);
+        },abort),abort));stage.prepared++;
+        if(stage.preview&&committedStamp){
+          const state=stage.preview;
+          // Committed progress retires the previous actual capture even if the
+          // last viewer has closed and no replacement capture is requested.
+          try{browserPreviewCall(()=>previewOwner?.retireStage(stage.id));state.candidate?.value.free();}catch(error){state.error=error;}finally{state.candidate=undefined;state.stamp=committedStamp;}
+          if(state.configured&&!state.error){try{browserPreviewCall(()=>builder.commitPreviewRowsJson!(JSON.stringify([{entry,presentation:{size:source.presentation.size_bytes,ctimeMs:source.presentation.ctime_ms,mtimeMs:source.presentation.mtime_ms}}])));state.seen++;}catch(error){state.error=error;try{retirePreviewStage(stage);}catch{/* Optional preview cannot fail committed indexing. */}}}
+        }
+        if(reused)stage.reused++;sourceBytes+=bytes?.length??0;
         if(cacheLocator!==undefined&&cachePayload!==undefined)await parseCache.store(cacheLocator,cachePayload);
       }
+      if(Preview&&previews.wantsCapture()){previews.consumeRequest();try{await capturePreview();}catch{/* Optional preview resource failure never fails durable indexing. */}}
+      // Capture may yield. Revalidate the exact accepted owner/stage before
+      // touching its cached generated builder after close/rebuild/revocation.
+      active();if(liveStage(stageId)!==stage||stage.builder!==builder)throw fail('index_stage_expired');
       if(rust(()=>builder.ready())){stage.generation=rust(()=>builder.finish());builder.free();stage.builder=undefined;}
       return stageInfo(stage);
-      }catch(error){stage.failed=true;throw error;}
+      }catch(error){stage.failed=true;try{retirePreviewStage(stage);}catch{/* Preserve the accepted operation's actual failure. */}throw error;}
     },
     async publish(stageId){const stage=liveStage(stageId);if(!stage.generation)throw fail('index_not_ready');
       const snapshot=json<BrowserIndexSnapshot>(rust(()=>stage.generation!.snapshotJson()));
       await run<void>('readwrite',['control','metadata','presentation','sync_materialization_refs'],(tx,done,abort)=>readCatalog(tx,c=>sourceFence(tx,stage.header,c,stage.capture,()=>{
         const d=c.generations.find(g=>g.id===stage.id);if(!d||d.state!=='staging'||d.rows!==stage.total)throw fail('index_rebuild_required');d.state='published';d.wasPublished=true;d.coverageComplete=rust(()=>stage.generation!.coverageComplete());c.head=stage.id;putCatalog(tx,c);done();
-      },abort),abort));stage.generation.free();stages.delete(stageId);await prune();return snapshot;
+      },abort),abort));retirePreviewStage(stage);stage.generation.free();stages.delete(stageId);await prune();return snapshot;
     },
     async open(){
       await recover();const pinId=crypto.randomUUID();const captured=await run<{id:string;header:string;digest:string;snapshot:BrowserIndexSnapshot}>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{
-        const g=c.generations.find(g=>g.id===c.head&&g.state==='published');if(!g)throw fail('index_not_ready');if(c.pins.length>=LIMITS.pins)throw fail('index_pin_limit');
+        const g=c.generations.find(g=>g.id===c.head&&g.state==='published');if(!g)throw fail('index_not_ready');if(c.pins.length>=LIMITS.pins||c.pins.filter(p=>p.clientId===host.clientId).length+previews.slotCount()>=4)throw fail('index_pin_limit');
         on(tx.objectStore('control').get(headerKey(g.id)),row=>{if(typeof row?.value!=='string'||size(row.value)>3*LIMITS.header)throw fail('index_rebuild_required');c.pins.push({id:pinId,clientId:host.clientId,generation:g.id});putCatalog(tx,c);done({id:g.id,header:row.value,digest:row.digest,snapshot:g.snapshot});},abort);
       },abort));
       if(captured.digest!==await digest(captured.header)){await api.closePin(pinId);throw fail('index_rebuild_required');}
@@ -669,7 +776,7 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
   // Public admission is revoked synchronously, while the internal executor can
   // still finish its one accepted raw operation before builders are released.
   const publicApi={...api};
-  for(const [name,operation]of Object.entries(api))Reflect.set(publicApi,name,(...args:unknown[])=>{
+  for(const [name,operation]of Object.entries(api))if(typeof operation==='function')Reflect.set(publicApi,name,(...args:unknown[])=>{
     if(maintenanceClosed||closing)return Promise.reject(fail('index_closed'));
     if(rebuilding)return Promise.reject(fail('document_runtime_busy'));
     return Reflect.apply(operation,api,args);

@@ -105,12 +105,13 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
         subscribe:(listener,onRetire)=>subscribe(info.path,admissionId,listener,onRetire)});
     }
     if(binding.metadataRowsAvailable===true&&binding.documentSemantics!==true)throw new Error('Incomplete document metadata capability');
+    if(binding.basePreviewAvailable===true&&(binding.documentSemantics!==true||binding.documentMaintenance!==true||!documentRuntime))throw new Error('Incomplete document preview capability');
     if(binding.draftsAvailable===true){
       if(binding.documentSemantics!==true||binding.documentMaintenance!==true||!documentRuntime||!bridge.onDocumentRuntimeNudge)throw new Error('Incomplete document draft capability');
       const subscribe=bridge.onDocumentRuntimeNudge.bind(bridge);
       drafts=createDesktopDocumentDraftTransport({scope:{localStoreId:scope.vaultId,clientId:scope.clientId},invoke:(request,bytes)=>call('documentDrafts',request,bytes),subscribe:(listener,onRetire)=>subscribe(info.path,admissionId,listener,onRetire)});
     }
-    if(binding.documentSemantics)documents=createDesktopDocumentService(request=>call('documentCommand',request),documentRuntime?.transport,{metadataRowsAvailable:binding.metadataRowsAvailable===true,draftsAvailable:binding.draftsAvailable===true,drafts:drafts?.transport});
+    if(binding.documentSemantics)documents=createDesktopDocumentService(request=>call('documentCommand',request),documentRuntime?.transport,{metadataRowsAvailable:binding.metadataRowsAvailable===true,basePreviewAvailable:binding.basePreviewAvailable===true,draftsAvailable:binding.draftsAvailable===true,drafts:drafts?.transport});
     if(binding.binaryLimits)binary=createDesktopBinaryStreams({scope,checkpoints:durableWrites.checkpoints,limits:binding.binaryLimits,assertActive:()=>{if(released||binaryDrained)throw new Error('Desktop binary context released');},invoke:bytes=>call<Uint8Array>('binaryCommand',bytes)});
     release = async () => { if (!released) { if(drafts&&!draftsDrained){await drafts.release();draftsDrained=true;} if(workBlocks)await workBlocks.release(); if(binary&&!binaryDrained){await scheduleBinaryTransfer(binary.streams,()=>binary!.release());binaryDrained=true;} if(documents&&!documentsDrained){await documents.release();documentsDrained=true;} await releaseContext(info.path, admissionId); documentRuntime?.retire();released = true; } };
   }

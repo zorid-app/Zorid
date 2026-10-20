@@ -1,4 +1,5 @@
 import type { DocumentBaseResult } from '../core/document-semantics.ts';
+import type { DocumentBasePreviewResult } from '../core/document-preview.ts';
 import { BaseDocument } from './document.ts';
 import type { BaseValue, BaseViewConfig } from './document.ts';
 import { BASE_NULL, BaseExpressionError, BaseFunctionRegistry, baseDate, baseExpressionValue, baseValueIsTruthy, baseValuesEqual, baseValueToString, evaluateBaseExpression, evaluateBaseExpressionOrThrow, parseBaseExpression } from './expression.ts';
@@ -58,7 +59,7 @@ export interface BaseQueryGroupOption {
 }
 export interface BaseQueryResult {
   /** Read-only shared evidence marks Rust-owned row/group/query semantics. */
-  readonly shared?: DocumentBaseResult;
+  readonly shared?: DocumentBaseResult | DocumentBasePreviewResult;
   readonly version: BaseQuerySnapshot['version'];
   /** The selected complete view configuration, including unknown presentation options. */
   readonly view: BaseViewConfig;

@@ -1,3 +1,5 @@
+import {createDocumentPreviewService} from './document-preview.ts';
+import type {DocumentPreviewHandle,DocumentPreviewTransport} from './document-preview.ts';
 import { createDocumentMaintenance } from './document-runtime.ts';
 import type { DocumentMaintenance, DocumentRuntimeTransport, DocumentFreshnessHandle, DocumentRuntimeUpdate } from './document-runtime.ts';
 import {searchSpec,searchCompileDiagnostic,richStart,richPreparation,richPage,richToken,DocumentSearchValidationError} from './document-search-validation.ts';
@@ -119,6 +121,8 @@ export interface DocumentPin {
  * Every read stays on its retained generation. Expiry requires explicit reopen;
  * callers must never silently retry against a different generation. */
 export interface DocumentService {
+  readonly basePreviewAvailable?:boolean;
+  openPreview?():Promise<DocumentPreviewHandle|null>;
   readonly draftsAvailable?:boolean;
   readonly drafts?:DocumentDraftService;
   readonly maintenance?:DocumentMaintenance;
@@ -139,6 +143,10 @@ export class DocumentSemanticsError extends Error {
 /** Already-admitted host transport. Query payloads come directly from Rust JSON.
  * This seam adds lifecycle ownership and validates retained generation headers. */
 export interface DocumentTransport {
+  readonly basePreviewAvailable?:boolean;
+  readonly previewOpen?:DocumentPreviewTransport['previewOpen'];
+  readonly previewBase?:DocumentPreviewTransport['previewBase'];
+  readonly previewClose?:DocumentPreviewTransport['previewClose'];
   readonly draftsAvailable?:boolean;
   readonly drafts?:DocumentDraftTransport;
   readonly metadataRowsAvailable?:boolean;
@@ -187,6 +195,9 @@ function baseRefreshHint(value:unknown,clockMs:number):DocumentBaseRefreshHint|n
 }
 export function documentErrorCode(error:unknown):string|undefined{return error&&typeof error==='object'&&'code'in error&&typeof error.code==='string'?error.code:undefined;}
 export function createDocumentService(transport:DocumentTransport):DocumentService{
+  if(transport.basePreviewAvailable!==undefined&&typeof transport.basePreviewAvailable!=='boolean'||transport.basePreviewAvailable===true&&![transport.previewOpen,transport.previewBase,transport.previewClose].every(method=>typeof method==='function'))return invalid();
+  const basePreviewAvailable=transport.basePreviewAvailable===true;
+  const preview=basePreviewAvailable?createDocumentPreviewService(transport as DocumentTransport&DocumentPreviewTransport):undefined;
   if(transport.draftsAvailable!==undefined&&typeof transport.draftsAvailable!=='boolean'||transport.draftsAvailable===true&&!transport.drafts)return invalid();
   const draftsAvailable=transport.draftsAvailable===true;
   if(transport.metadataRowsAvailable!==undefined&&typeof transport.metadataRowsAvailable!=='boolean'||transport.metadataRowsAvailable===true&&typeof transport.metadataRows!=='function')return invalid();
@@ -197,6 +208,7 @@ export function createDocumentService(transport:DocumentTransport):DocumentServi
   const call=async<T>(input:unknown,action:()=>Promise<T>):Promise<T>=>{bounded(input,DOCUMENT_REQUEST_BYTES,true);const value=await action();if(value!==undefined)bounded(value,DOCUMENT_RESPONSE_BYTES);return value;};
   const stage=(value:unknown):DocumentStage=>{const row=object(value),p=row.progress===null?null:object(row.progress);return Object.freeze({stageId:text(row.stageId) as DocumentStageId,snapshot:documentSnapshot(row.snapshot),progress:p===null?null:Object.freeze({prepared:integer(p.prepared),total:integer(p.total),reused:p.reused===null?null:integer(p.reused),ready:bool(p.ready),...(p.parseCache===undefined?{}:{parseCache:(()=>{const c=object(p.parseCache);return Object.freeze({hits:integer(c.hits),misses:integer(c.misses),unavailable:integer(c.unavailable),corrupt:integer(c.corrupt),unsupported:integer(c.unsupported)});})()})})});};
   return {
+    basePreviewAvailable,...(preview?{openPreview:()=>preview.openPreview()}:{}),
     draftsAvailable,...(drafts?{drafts}:{}),
     ...(maintenance?{maintenance}:{}),
     richSearchAvailable,metadataRowsAvailable,

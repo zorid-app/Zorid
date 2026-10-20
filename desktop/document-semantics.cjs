@@ -8,6 +8,7 @@ const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value)
 const id=value=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(value);
 const scalar=value=>typeof value==='string'&&!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
 const opaque=value=>scalar(value)&&byteLength(value)>0&&byteLength(value)<=256;
+const previewOp=op=>['preview_open','preview_base','preview_close'].includes(op);
 const richOp=op=>['rich_start','rich_prepare','rich_page','rich_close'].includes(op);
 const decimal=value=>typeof value==='string'&&/^(0|[1-9][0-9]{0,19})$/.test(value)&&BigInt(value)<=18446744073709551615n;
 const integer=(value,max=Number.MAX_SAFE_INTEGER)=>Number.isSafeInteger(value)&&value>=0&&value<=max;
@@ -91,10 +92,32 @@ function captureRichDiagnostic(diagnostic){
   if(!keys(diagnostic,['code','queryRange','message'])||!['unknown-operator','invalid-nesting','invalid-operand','invalid-regex','unsupported-regex','resource','invalid-document'].includes(diagnostic.code)||!range(diagnostic.queryRange)||!scalar(diagnostic.message)||byteLength(diagnostic.message)>4096)throw fail('invalid_document_response');
   return {code:diagnostic.code,queryRange:{bytes:[...diagnostic.queryRange.bytes],utf16:[...diagnostic.queryRange.utf16]},message:diagnostic.message};
 }
+// Preview controls are bounded before JSON serialization or argument cloning.
+// The shape is only the existing documents control plus scalar Base options.
+function previewRequestBound(value){
+  let remaining=MAX_DOCUMENT_REQUEST;
+  const take=size=>{remaining-=size;if(remaining<0)throw fail('request_limit');};
+  const string=value=>{take(2);for(let index=0;index<value.length;index++){const n=value.charCodeAt(index);if(n===34||n===92||n===8||n===9||n===10||n===12||n===13)take(2);else if(n<32)take(6);else if(n<128)take(1);else if(n<2048)take(2);else if(n>=0xd800&&n<=0xdbff){const low=value.charCodeAt(++index);if(!(low>=0xdc00&&low<=0xdfff))throw fail('invalid_document_request');take(4);}else{if(n>=0xdc00&&n<=0xdfff)throw fail('invalid_document_request');take(3);}}};
+  const walk=(value,depth)=>{if(depth>6)throw fail('invalid_document_request');if(value===null){take(4);return;}if(typeof value==='string'){string(value);return;}if(typeof value==='number'&&Number.isFinite(value)){take(String(value).length);return;}if(typeof value==='boolean'){take(value?4:5);return;}
+    if(Array.isArray(value)){if(value.length>1000)throw fail('invalid_document_request');take(2);for(let index=0;index<value.length;index++){if(index)take(1);walk(value[index],depth+1);}return;}
+    if(!object(value)||![Object.prototype,null].includes(Object.getPrototypeOf(value)))throw fail('invalid_document_request');take(2);let count=0;for(const key of Object.keys(value)){const descriptor=Object.getOwnPropertyDescriptor(value,key);if(!descriptor||!Object.hasOwn(descriptor,'value'))throw fail('invalid_document_request');if(descriptor.value===undefined)continue;if(count++)take(1);string(key);take(1);walk(descriptor.value,depth+1);}
+  };walk(value,0);
+}
+const positive=value=>decimal(value)&&value!=='0';
+function previewOpened(value,previewId){
+  if(value===null)return true;
+  const c=value?.capture,p=value?.progress;
+  return keys(value,['previewId','capture','source','progress'])&&value.previewId===previewId&&positive(value.previewId)
+    &&keys(c,['ownerNonce','stageId','serial'])&&id(c.ownerNonce)&&id(c.stageId)&&positive(c.serial)&&source(value.source)
+    &&keys(p,['preparedFiles','totalFiles','pendingFiles'])&&['preparedFiles','totalFiles','pendingFiles'].every(key=>integer(p[key],0xffffffff)&&!Object.is(p[key],-0))&&p.preparedFiles+p.pendingFiles===p.totalFiles;
+}
+const samePreview=(a,b)=>a.previewId===b.previewId&&sameSource(a.source,b.source)&&['ownerNonce','stageId','serial'].every(key=>a.capture[key]===b.capture[key])&&['preparedFiles','totalFiles','pendingFiles'].every(key=>a.progress[key]===b.progress[key]);
+function previewBytes(value){return keys(value,['previewBytes'])&&value.previewBytes instanceof Uint8Array&&value.previewBytes.buffer instanceof ArrayBuffer&&value.previewBytes.byteOffset===0&&value.previewBytes.byteLength===value.previewBytes.buffer.byteLength&&value.previewBytes.byteLength>0&&value.previewBytes.byteLength<=MAX_DOCUMENT_RESPONSE;}
 function captureDocumentRequest(input){
   if(!keys(input,['schemaVersion','command'])||input.schemaVersion!==1||!object(input.command)||typeof input.command.op!=='string')throw fail('invalid_document_request');
   const command=input.command,op=command.op;
-  const fields={status:[],initialize:[],rebuild:[],begin:[],stages:[],resume:['snapshot'],pump:['snapshot'],publish:['snapshot'],discard:['snapshot'],open:['pinId'],close:['pinId'],metadata:['pinId','id'],metadata_rows:['pinId','baseline','cursor','limit'],search:['pinId','query','cursor','limit'],backlinks:['pinId','id','cursor','limit'],base:['pinId','id','viewName','options'],tasks:['pinId','typeIds','options'],rich_start:['pinId','spec'],rich_prepare:['pinId','queryId'],rich_page:['pinId','queryId','cursor'],rich_close:['pinId','queryId']}[op];
+  if(previewOp(op))previewRequestBound(input);
+  const fields={preview_open:['previewId'],preview_base:['previewId','id','viewName','options'],preview_close:['previewId'],status:[],initialize:[],rebuild:[],begin:[],stages:[],resume:['snapshot'],pump:['snapshot'],publish:['snapshot'],discard:['snapshot'],open:['pinId'],close:['pinId'],metadata:['pinId','id'],metadata_rows:['pinId','baseline','cursor','limit'],search:['pinId','query','cursor','limit'],backlinks:['pinId','id','cursor','limit'],base:['pinId','id','viewName','options'],tasks:['pinId','typeIds','options'],rich_start:['pinId','spec'],rich_prepare:['pinId','queryId'],rich_page:['pinId','queryId','cursor'],rich_close:['pinId','queryId']}[op];
   if(!fields||!keys(command,['op',...fields],['op',...fields.filter(key=>!['viewName','options',...(op==='metadata_rows'?['baseline','limit']:[]),...(op==='rich_page'?[]:['cursor'])].includes(key))]))throw fail('invalid_document_request');
   const captured={op};
   for(const key of fields){
@@ -105,6 +128,7 @@ function captureDocumentRequest(input){
       if(!keys(value,['pinId','snapshot'])||!decimal(value.pinId)||value.pinId==='0'||!snapshot(value.snapshot))throw fail('invalid_document_request');
       captured.baseline={pinId:value.pinId,snapshot:structuredClone(value.snapshot)};
     }
+    else if(key==='previewId'){if(!positive(value))throw fail('invalid_document_request');captured[key]=value;}
     else if(key==='pinId'){if(!decimal(value)||value==='0')throw fail('invalid_pin_id');captured[key]=value;}
     else if(key==='typeIds'){if(!Array.isArray(value)||value.length>128||value.some(item=>!id(item))||new Set(value).size!==value.length)throw fail('invalid_document_request');captured[key]=[...value];}
     else if(key==='id'){if(!id(value))throw fail('invalid_document_request');captured[key]=value;}
@@ -116,15 +140,15 @@ function captureDocumentRequest(input){
     else if(key==='cursor'){if(op==='rich_page'?!opaque(value):value!==undefined&&value!==null&&!(op==='metadata_rows'?opaque(value):id(value)))throw fail('invalid_document_request');captured[key]=value??null;}
     else if(key==='query'){if(typeof value!=='string'||!value||byteLength(value)>4096||/[\r\n]/.test(value))throw fail('invalid_query');captured[key]=value;}
     else if(key==='limit'){if(op==='metadata_rows'&&value===undefined)continue;if(!integer(value,op==='metadata_rows'?32:1000)||value===0)throw fail('invalid_budget');captured[key]=value;}
-    else if(key==='viewName'){if(value!==undefined&&value!==null&&(typeof value!=='string'||byteLength(value)>1024))throw fail('invalid_document_request');captured[key]=value??null;}
+    else if(key==='viewName'){if(value!==undefined&&value!==null&&(typeof value!=='string'||previewOp(op)&&!scalar(value)||byteLength(value)>(previewOp(op)?MAX_DOCUMENT_REQUEST:1024)))throw fail('invalid_document_request');captured[key]=value??null;}
     else if(key==='options'){
-      if(op==='tasks'&&value===null)throw fail('invalid_document_request');
+      if((op==='tasks'||previewOp(op))&&value===null)throw fail('invalid_document_request');
       const options=value??{},allowed=op==='tasks'?['filter','clockMs','timezone','showDone','maxRows']:['viewIndex','searchTerms','ignorePaths','clockMs','timezone','maxRows','currentEntryId','maxSteps'];
       if(!keys(options,allowed,[]))throw fail('invalid_document_request');
       captured.options={};
       for(const key of Object.keys(options)){
         const value=options[key];
-        if(key==='filter'&&!['all','today','unscheduled'].includes(value)||key==='showDone'&&typeof value!=='boolean'||key==='currentEntryId'&&!id(value)||key==='maxSteps'&&(!integer(value,2000000)||value===0)||key==='viewIndex'&&!integer(value,1000)||key==='maxRows'&&(!integer(value,10000)||value===0)||key==='clockMs'&&!Number.isSafeInteger(value)||['searchTerms','ignorePaths'].includes(key)&&!strings(value)||key==='timezone'&&(typeof value!=='string'||byteLength(value)>128))throw fail('invalid_document_request');
+        if(key==='filter'&&!['all','today','unscheduled'].includes(value)||key==='showDone'&&typeof value!=='boolean'||key==='currentEntryId'&&!id(value)||key==='maxSteps'&&(!integer(value,2000000)||value===0)||key==='viewIndex'&&!integer(value,previewOp(op)?0xffffffff:1000)||key==='maxRows'&&(!integer(value,10000)||!previewOp(op)&&value===0)||key==='clockMs'&&(!Number.isSafeInteger(value)||previewOp(op)&&(value< -62167219200000||value>253402300799999))||['searchTerms','ignorePaths'].includes(key)&&!(previewOp(op)?Array.isArray(value)&&value.length<=1000&&value.every(scalar):strings(value))||key==='timezone'&&(typeof value!=='string'||previewOp(op)&&!scalar(value)||byteLength(value)>128))throw fail('invalid_document_request');
         captured.options[key]=Array.isArray(value)?[...value]:value;
       }
     }
@@ -192,12 +216,15 @@ function taskRead(value,command){
 function decodeDocumentReply(request,marker,bytes){
   if(!keys(marker,['documents','schemaVersion','bytes'])||marker.documents!==true||marker.schemaVersion!==1||!integer(marker.bytes,MAX_DOCUMENT_RESPONSE)||!(bytes instanceof Uint8Array)||marker.bytes!==bytes.length||!bytes.length)throw fail('invalid_document_response');
   if(request.command.op==='rich_page'&&bytes.length>MAX_RICH_RESPONSE)throw fail('invalid_document_response');
+  if(request.command.op==='preview_base'){const raw={previewBytes:bytes};if(!previewBytes(raw))throw fail('invalid_document_response');return raw;}
   let reply;try{reply=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{throw fail('invalid_document_response');}
   const command=request.command,op=command.op;
   if(!keys(reply,['schemaVersion','op','value'])||reply.schemaVersion!==1||reply.op!==op)throw fail('invalid_document_response');
   const value=reply.value;
   let valid=false;
-  if(['initialize','rebuild','close','discard','rich_close'].includes(op))valid=value===true;
+  if(op==='preview_open')valid=previewOpened(value,command.previewId);
+  else if(op==='preview_close')valid=keys(value,['closed'])&&value.closed===true;
+  else if(['initialize','rebuild','close','discard','rich_close'].includes(op))valid=value===true;
   else if(op==='status')valid=object(value)&&source(value.source)&&['uninitialized','rebuild_required','building','ready'].includes(value.state)
     &&(value.state==='ready'?keys(value,['source','state','snapshot','coveredWatermark','observedSourceHead','coverageComplete'])&&snapshot(value.snapshot)&&value.snapshot.localStoreId===value.source.localStoreId&&decimal(value.coveredWatermark)&&value.observedSourceHead===value.source.watermark&&typeof value.coverageComplete==='boolean':keys(value,['source','state']));
   else if(['begin','resume'].includes(op))valid=keys(value,['snapshot'])&&snapshot(value.snapshot)&&(op!=='resume'||same(value.snapshot,command.snapshot));
@@ -232,15 +259,97 @@ function decodeDocumentReply(request,marker,bytes){
   return value;
 }
 function validDocumentReply(command,marker,bytes){try{decodeDocumentReply(command.request,marker,bytes);return true;}catch{return false;}}
-function createDesktopDocumentSemantics(host,clientId,localStoreId,{metadataRowsAvailable=false}={}){
+function createDesktopDocumentSemantics(host,clientId,localStoreId,{metadataRowsAvailable=false,basePreviewAvailable=false}={}){
   if(!id(clientId)||!id(localStoreId))throw fail('client_scope_mismatch');
   if(metadataRowsAvailable===true&&typeof host.documentCommand!=='function')throw fail('unsupported_host_capability');
-  const pins=new Map();let retired=false;
+  if(basePreviewAvailable===true&&typeof host.documentCommand!=='function')throw fail('unsupported_host_capability');
+  const pins=new Map(),pendingPins=new Map(),previews=new Map();const slotCount=()=>pins.size+[...pendingPins.keys()].filter(key=>!pins.has(key)).length+previews.size;let retired=false,previewHighwater=0n,previewCalls=0,previewPressure;
+  // A separate maintenance publication can retire native captures without
+  // entering this controller. Under slot pressure only, revalidate at most the
+  // four known resolved registrations; never infer expiry from a UI hint.
+  function revalidatePreviewSlots(){
+    if(previewPressure)return previewPressure;
+    previewPressure=Promise.resolve().then(async()=>{
+      for(const [key,selected] of [...previews]){
+        if(retired)throw fail('client_not_admitted');
+        if(selected.closing||selected.value===null)continue;
+        let value;
+        try{value=await host.documentCommand(clientId,{schemaVersion:1,command:{op:'preview_open',previewId:key}});}
+        catch(error){
+          if(retired)throw fail('client_not_admitted');
+          if(error?.code!=='index_preview_expired')throw error;
+          if(previews.get(key)===selected&&!selected.closing)previews.delete(key);
+          continue;
+        }
+        if(retired)throw fail('client_not_admitted');
+        if(previews.get(key)!==selected||selected.closing)continue;
+        if(!previewOpened(value,key)||value===null||!samePreview(selected.value,value))throw fail('invalid_document_response');
+      }
+    }).finally(()=>{previewPressure=undefined;});
+    return previewPressure;
+  }
+  async function invokePreview(request){
+    if(basePreviewAvailable!==true)throw fail('unsupported_host_capability');
+    if(previewCalls>=8)throw fail('document_preview_capacity');
+    previewCalls++;
+    try{
+      const command=request.command,op=command.op,key=command.previewId,sequence=BigInt(key);
+      let selected=previews.get(key);
+      if(op==='preview_open'){
+        if(selected?.closing)throw fail('index_preview_expired');
+        if(!selected){
+          if(sequence<=previewHighwater)throw fail('index_preview_expired');
+          if(slotCount()>=4){await revalidatePreviewSlots();if(retired)throw fail('client_not_admitted');selected=previews.get(key);}
+          if(selected?.closing)throw fail('index_preview_expired');
+          if(!selected){if(sequence<=previewHighwater)throw fail('index_preview_expired');if(slotCount()>=4)throw fail('pin_capacity');selected={value:null,closing:false,openCalls:0,mayHaveOpened:false};previews.set(key,selected);previewHighwater=sequence;}
+        }
+      }else if(op==='preview_close'){
+        if(!selected&&sequence>previewHighwater)throw fail('index_preview_expired');
+        if(selected)selected.closing=true;
+      }else if(!selected||selected.closing||selected.value===null)throw fail('index_preview_expired');
+      if(op==='preview_open')selected.openCalls++;
+      try{
+        let value;try{value=await host.documentCommand(clientId,request);}
+        catch(error){
+          if(retired)throw fail('client_not_admitted');
+          if(op==='preview_open'){
+            if(error?.commitUncertain!==false||error?.code==='invalid_document_response')selected.mayHaveOpened=true;
+            // A definite failed open owns no client registration. Keep uncertain
+            // opens for same-ID retry/close, including concurrent pending retries.
+            if(!selected.mayHaveOpened&&selected.value===null&&selected.openCalls===1&&previews.get(key)===selected)previews.delete(key);
+          }
+          if(error?.code==='index_preview_expired'&&previews.get(key)===selected)previews.delete(key);throw error;
+        }
+        if(retired)throw fail('client_not_admitted');
+        if(op!=='preview_close'&&(previews.get(key)!==selected||selected.closing))throw fail('index_preview_expired');
+        if(op==='preview_open'){
+          if(value!==null)selected.mayHaveOpened=true;
+          if(!previewOpened(value,key)||value!==null&&value.source.localStoreId!==localStoreId||selected.value!==null&&(value===null||!samePreview(selected.value,value)))throw fail('invalid_document_response');
+          if(value===null)previews.delete(key);else selected.value=structuredClone(value);
+        }else if(op==='preview_close'){
+          if(!keys(value,['closed'])||value.closed!==true)throw fail('invalid_document_response');
+          if(previews.get(key)===selected)previews.delete(key);
+        }else if(!previewBytes(value))throw fail('invalid_document_response');
+        return value;
+      }finally{if(op==='preview_open')selected.openCalls--;}
+    }finally{previewCalls--;}
+  }
   return Object.freeze({
     ...(metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),
+    ...(basePreviewAvailable===true?{basePreviewAvailable:true}:{}),
     async invoke(input){
       const request=captureDocumentRequest(input),command=request.command,op=command.op;
       if(retired)throw fail('client_not_admitted');
+      if(previewOp(op))return invokePreview(request);
+      let pendingPin;
+      if(op==='open'&&!pins.has(command.pinId)){
+        pendingPin=pendingPins.get(command.pinId);
+        if(!pendingPin&&slotCount()>=4){await revalidatePreviewSlots();if(retired)throw fail('client_not_admitted');pendingPin=pendingPins.get(command.pinId);}
+        if(!pins.has(command.pinId)){
+          if(!pendingPin){if(slotCount()>=4)throw fail('pin_capacity');pendingPin={calls:0};pendingPins.set(command.pinId,pendingPin);}pendingPin.calls++;
+        }else pendingPin=undefined;
+      }
+      const settlePendingPin=()=>{if(pendingPin&&pendingPins.get(command.pinId)===pendingPin&&--pendingPin.calls===0)pendingPins.delete(command.pinId);};
       const selected=pins.get(command.pinId);
       if(command.pinId&&!['open','close'].includes(op)&&!pins.has(command.pinId))throw fail('snapshot_expired');
       let metadataProfile,baseline;
@@ -269,9 +378,11 @@ function createDesktopDocumentSemantics(host,clientId,localStoreId,{metadataRows
       let value;
       try{value=await host.documentCommand(clientId,request);}
       catch(error){
+        settlePendingPin();
         if(op==='metadata_rows'&&(retired||pins.get(command.pinId)!==selected||selected.closing||baseline&&(pins.get(baseline.pinId)!==baseline.actual||baseline.actual.closing)))throw fail(retired?'client_not_admitted':'snapshot_expired');
         if(error?.code==='snapshot_expired'&&command.pinId&&op!=='metadata_rows')pins.delete(command.pinId);throw error;
       }
+      settlePendingPin();
       if(retired)throw fail('client_not_admitted');
       if(op==='metadata_rows'&&(pins.get(command.pinId)!==selected||selected.closing||baseline&&(pins.get(baseline.pinId)!==baseline.actual||baseline.actual.closing)))throw fail('snapshot_expired');
       if(richOp(op)&&(pins.get(command.pinId)!==selected||op!=='rich_start'&&selected.queries.get(command.queryId)!==query))throw fail('search_expired');
@@ -306,7 +417,7 @@ function createDesktopDocumentSemantics(host,clientId,localStoreId,{metadataRows
       }
       return value;
     },
-    forget(){retired=true;pins.clear();},
+    forget(){retired=true;pins.clear();pendingPins.clear();previews.clear();},
   });
 }
 module.exports={MAX_DOCUMENT_REQUEST,MAX_DOCUMENT_RESPONSE,MAX_RICH_PAGE,MAX_RICH_RESPONSE,captureDocumentRuntimeRequest,captureDocumentRuntimeReply,captureDocumentRequest,captureRichDiagnostic,decodeDocumentReply,validDocumentReply,createDesktopDocumentSemantics};

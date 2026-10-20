@@ -60,12 +60,14 @@ async function runtimeFixture(action: (runtime:BrowserCoreRuntime,calls:any[],wo
   class FixtureWorker {
     onmessage?: (event:any)=>void;onerror?:()=>void;terminated=false;releaseCount=0;
     block?:string;blocked:any;onPosted?: (message:any)=>void;
+    previewReply=(message:any):unknown=>message.operation==='document-preview-open'?null:message.operation==='document-preview-close'?{closed:true}:{previewBytes:new TextEncoder().encode(JSON.stringify({schemaVersion:1,op:'preview_base',value:previewRuntimeValue(message.payload.previewId)}))};
     draftReply=(_message:any)=>({result:{state:null,transfer:null,transfer_scratch_bytes:0},bytes:new Uint8Array()});
     visibility(){listeners.get('visibilitychange')?.();}
     constructor(){worker=this;}
-    completeBlocked(error?:{code:string;message:string}){const message=this.blocked;this.block=undefined;this.blocked=undefined;this.onmessage?.({data:error?{id:message.id,ok:false,error}:{id:message.id,ok:true,...(message.operation==='document-drafts'?this.draftReply(message):{result:[]})}});}
+    completeBlocked(error?:{code:string;message:string}){const message=this.blocked;this.block=undefined;this.blocked=undefined;this.onmessage?.({data:error?{id:message.id,ok:false,error}:{id:message.id,ok:true,...(message.operation==='document-drafts'?this.draftReply(message):message.operation.startsWith('document-preview-')?{result:this.previewReply(message)}:{result:[]})}});}
     postMessage(message:any,transfer?:ArrayBuffer[]){if(transfer?.length)message=structuredClone(message,{transfer});calls.push(message);this.onPosted?.(message);if(this.block===message.operation){this.blocked=message;return;}queueMicrotask(()=>{
       if(message.operation==='release-client' && ++this.releaseCount===1){this.onmessage?.({data:{id:message.id,ok:false,error:{code:'outcome_unknown',message:'lost release ACK'}}});return;}
+      if(message.operation.startsWith('document-preview-')){this.onmessage?.({data:{id:message.id,ok:true,result:this.previewReply(message)}});return;}
       if(message.operation==='document-drafts'){this.onmessage?.({data:{id:message.id,ok:true,...this.draftReply(message)}});return;}
       this.onmessage?.({data:{id:message.id,ok:true,result:message.operation==='open'?{authorityId:'12345678-1234-4123-8123-123456789abc',recovery:[],...openFields}:undefined}});
     });}
@@ -360,4 +362,30 @@ test('browser release drains accepted draft frames before worker release and ret
     assert.equal(calls.some(call=>call.operation==='release-client'),false);worker.completeBlocked();await pending;await closing;
     assert.equal(calls.at(-1).operation,'release-client');assert.equal(retired,1);
   },20000,draftCapabilities,draftOptions);
+});
+
+const previewCapability={documentIndexAvailable:true,documentMaintenance:true,basePreviewAvailable:true};
+function previewRuntimeValue(previewId='1'){return {previewId,capture:{ownerNonce:'owner',stageId:'stage',serial:'1'},source:{localStoreId:'12345678-1234-4123-8123-123456789abc',watermark:'0'},definition:{id:'base',revision:'r1',path:'Board.base',kind:'file',deleted:false},result:{status:'indexing',complete:false,aggregatesComplete:false,countsScope:'preparedSubset',progress:{preparedFiles:0,totalFiles:1,pendingFiles:1},preparedScanComplete:true,unavailablePreparedFiles:0,unavailableFilterRows:0,view:null,rows:[],groups:[],groupOptions:[],properties:[],availableProperties:[],counts:{scanned:0,matched:0,afterGroupOrder:0,afterSearch:0,returned:0},diagnostics:[],stepsUsed:0,relationshipsAvailable:false,metadataIssues:[],metadataComplete:false,refreshHint:null}};}
+test('browser preview capability uses maintenance opt-in, keeps legacy providers and rejects malformed positive advertisements',async()=>{
+  await runtimeFixture(async runtime=>{assert.equal(runtime.documentIndex!.basePreviewAvailable,true);assert.equal(await runtime.documentIndex!.previewOpen!({previewId:'1'}),null);},20000,previewCapability,{documentMaintenance:true});
+  await runtimeFixture(async runtime=>assert.equal(runtime.documentIndex!.previewBase,undefined),20000,{documentIndexAvailable:true,documentMaintenance:true},{documentMaintenance:true});
+  for(const marker of [{documentIndexAvailable:true,basePreviewAvailable:true},{documentIndexAvailable:true,basePreviewAvailable:'yes'}])await assert.rejects(runtimeFixture(async()=>assert.fail('invalid preview capability'),20000,marker),{code:'invalid_document_response'});
+});
+test('browser preview decodes transferred complete envelopes and fences success or failure after owner retirement',async()=>{
+  await runtimeFixture(async(runtime,calls,worker)=>{
+    const preview=runtime.documentIndex!;assert.equal((await preview.previewBase!({previewId:'1',id:'base'}) as any).result.status,'indexing');assert.equal(calls.at(-1).operation,'document-preview-base');
+    const before=calls.length;await assert.rejects(preview.previewBase!({previewId:'1',id:'base',options:{searchTerms:['x'.repeat(65536)]}}),{code:'invalid_request'});assert.equal(calls.length,before);
+    worker.previewReply=()=>({previewBytes:new Uint8Array([255])});await assert.rejects(preview.previewBase!({previewId:'1',id:'base'}),{code:'invalid_document_response'});
+    let owner=true;runtime.installAdmissionGuard(()=>{if(!owner)throw Object.assign(new Error('retired'),{code:'owner_retired'});});
+    for(const error of [undefined,{code:'index_preview_expired',message:'expired'}]){worker.block='document-preview-base';const entered=enteredRequest(worker,worker.block),pending=preview.previewBase!({previewId:'1',id:'base'});await entered;owner=false;worker.completeBlocked(error);await assert.rejects(pending,{code:'owner_retired'});owner=true;}
+  },20000,previewCapability,{documentMaintenance:true});
+});
+test('preview bridge credits bound held raw replies and release waits for accepted transport settlement',async()=>{
+  await runtimeFixture(async(runtime,calls,worker)=>{
+    worker.releaseCount=1;worker.block='document-preview-base';const entered=enteredRequest(worker,worker.block),first=runtime.documentIndex!.previewBase!({previewId:'1',id:'base'});await entered;
+    const second=runtime.documentIndex!.previewBase!({previewId:'2',id:'base'});await assert.rejects(runtime.documentIndex!.previewBase!({previewId:'3',id:'base'}),{code:'document_preview_capacity'});
+    worker.completeBlocked();await Promise.all([first,second]);
+    worker.block='document-preview-base';const enteredAgain=enteredRequest(worker,worker.block),pending=runtime.documentIndex!.previewBase!({previewId:'4',id:'base'});await enteredAgain;
+    const rejected=assert.rejects(pending,{code:'client_not_admitted'}),closing=runtime.releaseClient();assert.equal(calls.some(call=>call.operation==='release-client'),false);worker.completeBlocked();await rejected;await closing;assert.equal(calls.at(-1).operation,'release-client');
+  },20000,previewCapability,{documentMaintenance:true});
 });

@@ -6,7 +6,8 @@ export function captureDocumentRuntimeReply(method:string,args:readonly unknown[
 export function captureDocumentRequest(input: unknown): DesktopDocumentRequest;
 export function decodeDocumentReply(request: DesktopDocumentRequest, marker: unknown, bytes: Uint8Array): unknown;
 export function validDocumentReply(command: {request: DesktopDocumentRequest}, marker: unknown, bytes: Uint8Array): boolean;
-export function createDesktopDocumentSemantics(host: {documentCommand(clientId: string, request: DesktopDocumentRequest): Promise<unknown>}, clientId: string, localStoreId: string): {
+export function createDesktopDocumentSemantics(host: {documentCommand(clientId: string, request: DesktopDocumentRequest): Promise<unknown>}, clientId: string, localStoreId: string, options?:{readonly metadataRowsAvailable?:boolean;readonly basePreviewAvailable?:boolean}): {
+  readonly basePreviewAvailable?:true;
   invoke(input: unknown): Promise<unknown>;
   forget(): void;
 };

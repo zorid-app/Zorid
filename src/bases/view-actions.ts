@@ -4,6 +4,7 @@ import { baseValuesEqual } from './expression.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import type { BaseKanbanMoveRequest } from './kanban-view.ts';
 import type { BaseKanbanGroupOrderRequest } from './kanban-columns.ts';
+import { sharedBasePreview } from './shared-query.ts';
 import { normalizeBaseProperty } from './query.ts';
 import type { BaseQueryResult } from './query.ts';
 import type { BaseTableEdit } from './table-view.ts';
@@ -48,6 +49,7 @@ export function createBaseViewActions(controller: BaseController, options: {
   const current = (version: BaseQueryResult['version']) => {
     options.validate();
     const state = controller.state;
+    if (state.result && sharedBasePreview(state.result)) throw new Error('Indexing previews are read-only.');
     if (typeof version !== 'number' || !Number.isSafeInteger(version) || version !== state.version || state.error || !state.result) {
       throw new Error('This base result is stale; refresh before editing');
     }
@@ -70,6 +72,7 @@ export function createBaseViewActions(controller: BaseController, options: {
       await controller.updateView(request.version as number, patch);
     },
     canMove(result: BaseQueryResult): boolean {
+      if (sharedBasePreview(result)) return false;
       const group = result.view.groupBy;
       if (!group || typeof group !== 'object' || Array.isArray(group) || !('property' in group) || typeof group.property !== 'string') return false;
       const property = normalizeBaseProperty(group.property);

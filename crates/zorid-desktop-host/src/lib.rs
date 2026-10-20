@@ -266,7 +266,9 @@ fn read_frame_head(input: &mut impl Read) -> io::Result<Option<FrameHead>> {
         &request.command,
         Command::DocumentDrafts { .. } | Command::DocumentWork { .. }
     );
+    let preview = matches!(&request.command, Command::Documents { request, .. } if request.is_preview());
     let maximum = match &request.command {
+        Command::Documents { request, .. } if request.is_preview() => 0,
         Command::DocumentDrafts { request, .. } if request.accepts_body() => {
             document_drafts::MAX_CHUNK
         }
@@ -275,7 +277,7 @@ fn read_frame_head(input: &mut impl Read) -> io::Result<Option<FrameHead>> {
         Command::CheckpointCas { .. } => MAX_CHECKPOINT_BODY,
         _ => MAX_BODY,
     };
-    if body_len > maximum || (transient && header_len > document_drafts::MAX_CONTROL) {
+    if body_len > maximum || ((transient || preview) && header_len > document_drafts::MAX_CONTROL) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "body/control limit",
@@ -635,6 +637,11 @@ fn execute(
             {
                 let last_runtime_owner = leases.active.values().all(|lease| lease.reference().client_id == reference.client_id);
                 let composite = vault.document_draft_snapshot().is_some();
+                if last_runtime_owner {
+                    // Actual authenticated last-client revocation retires weak
+                    // preview backing immediately, even if F must still drain.
+                    vault.retire_document_preview_owner();
+                }
                 if composite {
                     leases
                         .revoking
@@ -1119,7 +1126,8 @@ impl EmbeddedHost {
             Command::DocumentDrafts { .. } | Command::DocumentWork { .. }
         );
         // Reject before making an embedded payload or response-body copy.
-        let body = if transient {
+        let preview = matches!(&request.command, Command::Documents { request, .. } if request.is_preview());
+        let body = if transient || preview {
             vec![]
         } else {
             read_frame_body(&mut input, head.body_len)?
@@ -1137,7 +1145,7 @@ impl EmbeddedHost {
             Command::FixtureFamilyStatus | Command::Reconcile { .. } |
             Command::Recover | Command::Rescan);
         let may_commit = command_may_commit(&request.command);
-        let answer = if trusted_only || transient { Err(fault("client_operation_unsupported")) }
+        let answer = if trusted_only || transient || preview { Err(fault("client_operation_unsupported")) }
         else if request.version == 1 {
             self.leases.authorize(&self.vault, &request.command, request.lease.as_ref())
                 .and_then(|()| execute(&mut self.vault, &mut self.leases, None, request.command, body))
@@ -1147,6 +1155,47 @@ impl EmbeddedHost {
         reply(&mut output, &request.request_id, answer, may_commit)?;
         Ok(output)
     }
+}
+
+/// A first-build Base result is written while its actual capture/query guard
+/// remains charged. Once a prefix is written, any failure is terminal.
+fn preview_base_frame(
+    vault: &NativeVault,
+    leases: &ClientLeases,
+    mut request: Request,
+    output: &mut impl Write,
+) -> io::Result<()> {
+    let prepared = (|| {
+        if request.version != 1 { return Err(fault("unsupported_protocol")); }
+        leases.authorize(vault, &request.command, request.lease.as_ref())?;
+        let Command::Documents { client_id, request: document } = &mut request.command else {
+            return Err(fault("invalid_request"));
+        };
+        let (preview_id, reply) = documents::preview_base_reply(vault, &leases.documents, client_id, document)?;
+        let length = reply.write_json(&preview_id, &mut io::sink(), documents::MAX_RESPONSE_BYTES, || Ok(()))
+            .map_err(documents::native)?;
+        leases.authorize(vault, &request.command, request.lease.as_ref())?;
+        vault.check_document_preview_reply(&reply)
+            .map_err(documents::native)?;
+        Ok((preview_id, reply, length))
+    })();
+    let (preview_id, reply, length) = match prepared {
+        Ok(value) => value,
+        Err(error) => return reply(output, &request.request_id, Err(error), false),
+    };
+    let header = encode_header(&json!({"version":1,"request_id":request.request_id,"ok":true,
+        "result":{"documents":true,"schemaVersion":1,"bytes":length}}))?;
+    output.write_all(&(header.len() as u32).to_be_bytes())?;
+    output.write_all(&(length as u32).to_be_bytes())?;
+    output.write_all(&header)?;
+    let written = reply.write_json(&preview_id, output, documents::MAX_RESPONSE_BYTES, || Ok(()))
+        .map_err(|_| io::Error::other("preview response interrupted"))?;
+    if written != length { return Err(io::Error::other("preview response changed")); }
+    leases.authorize(vault, &request.command, request.lease.as_ref())
+        .map_err(|_| io::Error::other("preview lease expired"))?;
+    vault.check_document_preview_reply(&reply)
+        .map_err(|_| io::Error::other("preview capture expired"))?;
+    output.flush()
 }
 
 pub fn run_stdio() -> io::Result<()> {
@@ -1248,7 +1297,7 @@ pub fn run_stdio() -> io::Result<()> {
     if initialize_local { snapshot_local_recovery_if_due(&mut vault, &mut leases, now_ms()); }
     write_frame(
         &mut output,
-        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"max_binary_frame":binary::MAX_FRAME,"binary_limits":{"maxFileBytes":"67108864","maxChunkBytes":binary::MAX_CHUNK,"smallReadBytes":binary::SMALL_READ.to_string()},"reconciliation":reconciliation,"capabilities":["workblocks","documents","document_metadata_rows","document_runtime","document_drafts","binary_streams","reconciliation_status","local_family_status","file_command","file_command_compact","file_command_status","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","stat_path","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
+        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"max_binary_frame":binary::MAX_FRAME,"binary_limits":{"maxFileBytes":"67108864","maxChunkBytes":binary::MAX_CHUNK,"smallReadBytes":binary::SMALL_READ.to_string()},"reconciliation":reconciliation,"capabilities":["workblocks","documents","document_base_preview","document_metadata_rows","document_runtime","document_drafts","binary_streams","reconciliation_status","local_family_status","file_command","file_command_compact","file_command_status","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","stat_path","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
         &[],
     )?;
     let mut input = io::stdin().lock();
@@ -1276,6 +1325,10 @@ pub fn run_stdio() -> io::Result<()> {
                 &mut input,
                 &mut output,
             )?;
+            continue;
+        }
+        if matches!(&request.command, Command::Documents { request, .. } if request.is_preview_base()) {
+            preview_base_frame(&vault, &leases, request, &mut output)?;
             continue;
         }
         let body = read_frame_body(&mut input, head.body_len)?;

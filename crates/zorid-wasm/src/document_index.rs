@@ -197,7 +197,8 @@ pub fn document_parse_cache_admission_json(input: &str) -> Result<String, JsValu
 #[wasm_bindgen]
 pub struct WasmDocumentIndexBuilder {
     header: Header,
-    builder: Option<GenerationBuilder>,
+    pub(crate) builder: Option<GenerationBuilder>,
+    pub(crate) preview: Option<crate::document_preview::PreviewProducer>,
 }
 #[wasm_bindgen]
 impl WasmDocumentIndexBuilder {
@@ -208,6 +209,7 @@ impl WasmDocumentIndexBuilder {
         Ok(Self {
             header,
             builder: Some(builder),
+            preview: None,
         })
     }
     #[wasm_bindgen(js_name=headerJson)]
@@ -573,9 +575,9 @@ struct BaseRead<'a> {
     definition: &'a EntryState,
     result: zorid_bases::BaseQueryResult,
 }
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
-struct BaseReadOptions {
+pub(crate) struct BaseReadOptions {
     view_index: Option<usize>,
     search_terms: Vec<String>,
     ignore_paths: Vec<String>,
@@ -586,6 +588,17 @@ struct BaseReadOptions {
     current_entry_id: Option<EntryId>,
     #[serde(default, deserialize_with = "present_option")]
     max_steps: Option<usize>,
+}
+impl BaseReadOptions {
+    pub(crate) fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            .saturating_add(self.search_terms.capacity().saturating_mul(std::mem::size_of::<String>()))
+            .saturating_add(self.search_terms.iter().map(String::capacity).sum::<usize>())
+            .saturating_add(self.ignore_paths.capacity().saturating_mul(std::mem::size_of::<String>()))
+            .saturating_add(self.ignore_paths.iter().map(String::capacity).sum::<usize>())
+            .saturating_add(self.timezone.as_ref().map_or(0, String::capacity))
+            .saturating_add(self.current_entry_id.as_ref().map_or(0, |id| id.heap_capacity_bytes()))
+    }
 }
 fn present_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -1141,7 +1154,7 @@ fn checked_monotonic_ms(value: f64) -> Result<u64, &'static str> {
     Ok(value as u64)
 }
 #[derive(Debug)]
-enum BaseReadError {
+pub(crate) enum BaseReadError {
     Code(&'static str),
     Index(IndexError),
     Compile(zorid_bases::BaseCompileError),
@@ -1164,7 +1177,7 @@ struct BaseOutcomes {
     preparation: zorid_bases::PreparationCacheOutcome,
     answer: zorid_bases::PreparationCacheOutcome,
 }
-fn base_query_options(
+pub(crate) fn base_query_options(
     input: BaseReadOptions,
     view_name: Option<&str>,
     program: &zorid_bases::BaseProgram,
