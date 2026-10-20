@@ -130,14 +130,16 @@ export async function openBrowserStreamingVault(options:BrowserStreamingVaultOpt
   const engine=browserStreamingSync({db,authorityId,wasm,now,assertActive:active,recordsSession:options.managedRecordsSession,readPublication,publish(tx,retained,origin,forced,current){
     const visible=retained.filter(row=>row.status==='normal'),next:EntryState[]=visible.map(row=>{if(!row.entry||!row.presentation)throw fail('storage_corrupt');return row.entry;});
     wasm.validateSnapshot(JSON.stringify(next));const previous=new Map(current.entries.map(entry=>[entry.id,entry]));
-    const changes:{before:EntryState|null;after:EntryState|null}[]=[];
-    for(const row of visible){const before=previous.get(row.id)??null;if(!same(before,row.entry))changes.push({before,after:row.entry});previous.delete(row.id);}
+    const changes:{before:EntryState|null;after:EntryState|null}[]=[],unchanged=new Set<string>();
+    for(const row of visible){const before=previous.get(row.id)??null;if(!same(before,row.entry))changes.push({before,after:row.entry});else unchanged.add(row.id);previous.delete(row.id);}
     for(const before of previous.values())changes.push({before,after:null});
     if(forced){const expected=forced.map(change=>({before:change.before,after:change.after.deleted?null:change.after}));const order=(items:typeof changes)=>[...items].sort((a,b)=>(a.after?.id??a.before!.id).localeCompare(b.after?.id??b.before!.id));if(!same(order(changes),order(expected)))throw fail('sync_projection_conflict');}
+    const previousPresentation=new Map(current.presentation.map(row=>[row.id,row]));
     let textBytes=0;for(const row of visible){
       if(row.entry!.kind==='file'&&!row.content)throw fail('storage_corrupt');
       if(row.content?.kind==='text'){if(!(row.content.bytes instanceof Uint8Array)||row.content.bytes.length>textFileBudget)throw fail('text_output_limit');textBytes+=row.content.bytes.length;if(textBytes>textTotalBudget)throw fail('text_output_limit');}
-      tx.objectStore('metadata').put(row.entry!);tx.objectStore('presentation').put(row.presentation!);
+      if(!unchanged.has(row.id))tx.objectStore('metadata').put(row.entry!);
+      if(!same(previousPresentation.get(row.id),row.presentation))tx.objectStore('presentation').put(row.presentation!);
       if(row.content?.kind==='text')tx.objectStore('content').put({id:row.id,bytes:row.content.bytes});else tx.objectStore('content').delete(row.id);
     }
     for(const {before,after} of changes)if(!after&&before){tx.objectStore('metadata').delete(before.id);tx.objectStore('presentation').delete(before.id);tx.objectStore('content').delete(before.id);}
