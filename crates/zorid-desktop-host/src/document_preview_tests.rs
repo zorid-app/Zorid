@@ -59,23 +59,27 @@ fn capture(
     sessions: &mut Sessions,
     stage: &zorid_native::DocumentIndexStage,
 ) {
-    assert!(call(
-        vault,
-        sessions,
-        CLIENT,
-        json!({"op":"preview_open","previewId":"1"})
-    )
-    .unwrap()
-    .is_null());
+    assert!(
+        call(
+            vault,
+            sessions,
+            CLIENT,
+            json!({"op":"preview_open","previewId":"1"})
+        )
+        .unwrap()
+        .is_null()
+    );
     assert!(vault.pump_document_index(stage).unwrap().ready);
-    assert!(!call(
-        vault,
-        sessions,
-        CLIENT,
-        json!({"op":"preview_open","previewId":"2"})
-    )
-    .unwrap()
-    .is_null());
+    assert!(
+        !call(
+            vault,
+            sessions,
+            CLIENT,
+            json!({"op":"preview_open","previewId":"2"})
+        )
+        .unwrap()
+        .is_null()
+    );
 }
 fn query_request(preview: &str) -> Request {
     serde_json::from_value(json!({"schemaVersion":1,"command":{"op":"preview_base","previewId":preview,"id":"base","options":{"clockMs":0}}})).unwrap()
@@ -165,14 +169,16 @@ fn future_unknown_close_rejects_without_advancing_client_history() {
     assert_eq!(sessions.clients[&op(CLIENT)].last_preview_open, 2);
     // A rejected future close makes no history claim. Admission still owns
     // that sequence; only after actual open can close acknowledge it.
-    assert!(!call(
-        &mut vault,
-        &mut sessions,
-        CLIENT,
-        json!({"op":"preview_open","previewId":"10"})
-    )
-    .unwrap()
-    .is_null());
+    assert!(
+        !call(
+            &mut vault,
+            &mut sessions,
+            CLIENT,
+            json!({"op":"preview_open","previewId":"10"})
+        )
+        .unwrap()
+        .is_null()
+    );
     for _ in 0..2 {
         assert_eq!(
             call(
@@ -200,30 +206,36 @@ fn future_unknown_close_rejects_without_advancing_client_history() {
     }
     // Existing lower live IDs retain their original capture; the floor never
     // substitutes another capture or invalidates another authenticated client.
-    assert!(!call(
-        &mut vault,
-        &mut sessions,
-        CLIENT,
-        json!({"op":"preview_open","previewId":"2"})
-    )
-    .unwrap()
-    .is_null());
-    assert!(!call(
-        &mut vault,
-        &mut sessions,
-        CLIENT,
-        json!({"op":"preview_open","previewId":"11"})
-    )
-    .unwrap()
-    .is_null());
-    assert!(!call(
-        &mut vault,
-        &mut sessions,
-        OTHER,
-        json!({"op":"preview_open","previewId":"10"})
-    )
-    .unwrap()
-    .is_null());
+    assert!(
+        !call(
+            &mut vault,
+            &mut sessions,
+            CLIENT,
+            json!({"op":"preview_open","previewId":"2"})
+        )
+        .unwrap()
+        .is_null()
+    );
+    assert!(
+        !call(
+            &mut vault,
+            &mut sessions,
+            CLIENT,
+            json!({"op":"preview_open","previewId":"11"})
+        )
+        .unwrap()
+        .is_null()
+    );
+    assert!(
+        !call(
+            &mut vault,
+            &mut sessions,
+            OTHER,
+            json!({"op":"preview_open","previewId":"10"})
+        )
+        .unwrap()
+        .is_null()
+    );
     assert_eq!(sessions.clients[&op(CLIENT)].last_preview_open, 11);
     assert_eq!(sessions.clients[&op(OTHER)].last_preview_open, 10);
 }
@@ -339,13 +351,10 @@ fn strict_preview_requests_have_no_body_and_cannot_escape_the_vec_dispatch_path(
             .body_len
             == 0
     );
-    let reconciliation = crate::initialize_desktop_vault(&mut vault).unwrap();
-    let mut embedded = crate::EmbeddedHost {
-        vault,
-        leases: crate::ClientLeases::default(),
-        reconciliation,
-        fixture_sync: None,
-    };
+    // Embedded startup enrolls a fresh local family; the legacy preview fixture
+    // above already contains mutations and cannot be enrolled retroactively.
+    let embedded_root = tempfile::tempdir().unwrap();
+    let mut embedded = crate::EmbeddedHost::open_local(embedded_root.path()).unwrap();
     let refused = embedded.dispatch(&frame).unwrap();
     let n = u32::from_be_bytes(refused[..4].try_into().unwrap()) as usize;
     let head: Value = serde_json::from_slice(&refused[8..8 + n]).unwrap();

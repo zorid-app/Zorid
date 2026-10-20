@@ -394,7 +394,7 @@ impl NativeVault {
             .evaluation
             .cancellation
             .as_ref()
-            .is_some_and(|c| c.stop_reason().is_some())
+            .is_some_and(|c| c.is_cancelled())
         {
             return Err(NativeDocumentError::QueryCancelled);
         }

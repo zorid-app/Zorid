@@ -151,8 +151,12 @@ impl OperationCancellation {
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Relaxed);
     }
+    /// Whether the caller has requested cancellation of this operation.
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
     pub(crate) fn stop_reason(&self) -> Option<()> {
-        self.0.load(Ordering::Relaxed).then_some(())
+        self.is_cancelled().then_some(())
     }
 }
 

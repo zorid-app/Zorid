@@ -208,15 +208,17 @@ fn owner_provider_publish_discard_and_rebuild_expire_real_handles_and_preserve_r
 fn pending_definition_unknown_view_and_cancel_are_explicit_and_do_not_publish() {
     let (_dir, _cache, mut vault, stage) = fixture(35);
     let preview = capture(&mut vault, &stage);
-    assert!(vault
-        .query_base_preview(
-            &preview,
-            &id("note-34"),
-            None,
-            QueryOptions::default(),
-            |_| Ok(())
-        )
-        .is_err());
+    assert!(
+        vault
+            .query_base_preview(
+                &preview,
+                &id("note-34"),
+                None,
+                QueryOptions::default(),
+                |_| Ok(())
+            )
+            .is_err()
+    );
     code(
         vault.query_base_preview(
             &preview,
@@ -235,6 +237,27 @@ fn pending_definition_unknown_view_and_cancel_are_explicit_and_do_not_publish() 
     );
     assert!(vault.open_document_snapshot().is_err());
     assert!(vault.check_document_preview_handle(&preview).is_ok());
+}
+
+#[test]
+fn precancelled_token_rejects_before_definition_lookup_without_charging_the_owner() {
+    let (_dir, _cache, mut vault, stage) = fixture(1);
+    let preview = capture(&mut vault, &stage);
+    let owner = vault.base_preview_owner.as_ref().unwrap().clone();
+    let charged = owner.budget.used.load(Ordering::Acquire);
+    let cancellation = zorid_bases::OperationCancellation::default();
+    cancellation.cancel();
+    let mut options = QueryOptions::default();
+    options.evaluation.cancellation = Some(cancellation);
+    code(
+        vault.query_base_preview(&preview, &id("missing"), Some("missing"), options, |_| {
+            Ok(())
+        }),
+        "cancelled",
+    );
+    assert_eq!(owner.budget.used.load(Ordering::Acquire), charged);
+    assert!(vault.check_document_preview_handle(&preview).is_ok());
+    assert!(query(&vault, &preview).is_live());
 }
 
 #[test]
@@ -271,9 +294,11 @@ fn writer_limit_cancellation_and_partial_io_keep_real_query_charge_until_drop() 
         }
     }
     let mut broken = Broken { bytes: 0 };
-    assert!(reply
-        .write_json(&op("1"), &mut broken, 16 * 1024 * 1024, || Ok(()))
-        .is_err());
+    assert!(
+        reply
+            .write_json(&op("1"), &mut broken, 16 * 1024 * 1024, || Ok(()))
+            .is_err()
+    );
     assert_eq!(broken.bytes, 17);
     assert_eq!(owner.budget.used.load(Ordering::Acquire), charged);
     drop(reply);
