@@ -140,8 +140,8 @@ class DocumentRuntimeScheduler{
     const handle={
       observe:()=>call('runtime_observe'),
       control:async input=>{const captured=captureRuntimeRequest('runtime_control',input),raw=await call('runtime_control',captured);this.adopt(raw.snapshot,owner);this.nudge();this.schedule();return captureDocumentRuntimeReply('documentRuntimeControl',[captured],{sequence:raw.sequence,command:raw.command,frame:raw.frame},{localStoreId,clientId});},
-      ackControl:async input=>{await call('runtime_ack',captureRuntimeRequest('runtime_ack',input));},
-      ackOutcome:async input=>{await call('runtime_outcome_ack',captureRuntimeRequest('runtime_outcome_ack',input));},
+      ackControl:async input=>call('runtime_ack',captureRuntimeRequest('runtime_ack',input)),
+      ackOutcome:async input=>call('runtime_outcome_ack',captureRuntimeRequest('runtime_outcome_ack',input)),
       subscribe:(listener,onRetire=()=>{})=>{if(typeof listener!=='function'||typeof onRetire!=='function'||owner.released||this.closed)throw fail('client_not_admitted');const slot={listener,onRetire};owner.listeners.add(slot);return()=>owner.listeners.delete(slot);},
       pause:async()=>{owner.paused=true;if(!this.select())this.unschedule();await this.running?.catch(()=>{});},
       resume:()=>{if(owner.released||this.closed)throw fail('client_not_admitted');owner.paused=false;owner.prepared=false;owner.releasing=false;this.wake();},

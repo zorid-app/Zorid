@@ -182,13 +182,14 @@ test('feature observation, controls and subscription delivery never expose priva
 test('new owned outcomes nudge subscribers even when the update lifetime and revision are unchanged',async()=>{
   const f=fixture(),owner=f.addOwner(),notifications=[];owner.subscribe(value=>notifications.push(value));await f.drain();
   const first=await owner.control(request());assert.equal(first.frame.update.revision,'0');
-  await owner.ackControl({sequence:'1'});
+  assert.equal(await owner.ackControl({sequence:'1'}),true,'preserve the validated host acknowledgement for the renderer boundary');
   const count=notifications.length;
   f.setFrame(frame('client-a',[{lifetime:'life',outcome:{kind:'cancelled',id:'9007199254740993'}}]));
   const second=await owner.control(request('2'));
   assert.equal(second.frame.update.revision,first.frame.update.revision);
   assert.ok(notifications.length>count,'revision-only deduplication must not hide an outcome');
-  await owner.ackControl({sequence:'2'});await owner.ackOutcome({lifetime:'life',id:'9007199254740993'});
+  assert.equal(await owner.ackControl({sequence:'2'}),true);
+  assert.equal(await owner.ackOutcome({lifetime:'life',id:'9007199254740993'}),true,'preserve outcome acknowledgement for the renderer boundary');
   assert.ok(f.calls.some(row=>row.op==='runtime_outcome_ack'&&row.args.id==='9007199254740993'));
 });
 
