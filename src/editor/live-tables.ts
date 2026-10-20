@@ -498,6 +498,8 @@ class TableController {
         // programmatic input/paste transactions, while allowing owner snapshots
         // to synchronize the child through update()'s explicit syncing path.
         if (!this.syncing && (this.authoringBlocked || this.selected) && transactions.some(t => t.docChanged)) return;
+        const previousChildState = child.state, previousOwnerState = this.owner.state;
+        const previousActive = this.active ? { ...this.active } : null;
         child.update(transactions);
         if (this.syncing || this.destroyed || !this.active || !transactions.some(t => t.docChanged || t.selection)) return;
         const active = this.active;
@@ -519,7 +521,18 @@ class TableController {
           selection: EditorSelection.single(map(selection.anchor), map(selection.head)),
           annotations: [cellSync.of(true), Transaction.userEvent.of(transactions.find(t => t.annotation(Transaction.userEvent))?.annotation(Transaction.userEvent) ?? (changed ? 'input.type' : 'select')),
             ...transactions.flatMap(transaction => { const isolation = transaction.annotation(isolateHistory); return isolation ? [isolateHistory.of(isolation)] : []; })] });
-        } finally { this.syncing = false; }
+        } finally {
+          this.syncing = false;
+          // The note may reject an authoring transaction (for example its text
+          // size limit). Its unchanged state is not acceptance of the child's
+          // speculative text or offsets. Restore both before another cell edit.
+          if (changed && this.owner.state === previousOwnerState && previousActive
+            && this.active === active && !this.destroyed) {
+            active.from = previousActive.from; active.to = previousActive.to;
+            active.insertion = previousActive.insertion;
+            child.setState(previousChildState);
+          }
+        }
       },
     });
     this.decorateCell(row, column);
