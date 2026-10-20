@@ -17,6 +17,25 @@ source-only proposal for coalescing redundant advisory source notifications;
 bounded delivery/retirement. Root retains sole integration and runtime ownership.
 No storage redesign, new API/framework or broader acceptance campaign is opened.
 
+This narrow follow-up is now implemented and measured. Reviewed host-only change
+05d7fcb8 batches payload-free source hints at500ms quiet/1000ms maximum timer
+eligibility; Rust still chooses indexing effects, foreground freshness bypasses
+the batching, rejected requests retain hints, and retirement cancels delivery.
+Eight regressions fail before the fix;66 focused checks plus28 runtime checks
+and TypeScript pass afterwards. Only the host and its test file changed.
+Matched100-note import plus exact103-file readback and final automatic complete/
+current wait improves36.786s→30.672s in one diagnostic run each. Generations
+108→37; full index source captures660→259; pumps220→102. Final source and covered
+watermarks are107 with complete/current coverage. Final wait grows0.151s→0.996s
+and is INCLUDED in the comparison, so this is not just deferred work. Owned
+Chrome exited0 and no heavy slot remains active. Evidence:
+`.worktrees/s1-evidence/browser-hint-benchmark-391b7e2c/comparison.json` and
+`browser-hint-batch-source-review-b094293d.json`. This uses a matching isolated
+old Rust/WASM baseline, not final-main/reopen/10k acceptance. Bulk import remains
+slow overall. No further work is opened by this result; other S1 work stays stopped.
+Post-run free disk was800,332KiB, below the1GiB floor; no in-run disk-floor trace
+was captured. Do not launch more runtimes/builds without recovering headroom.
+
 **User scope freeze, 2026-10-20:** finish only the running browser measurement,
 report the results/outstanding checks, and stop opening work. That measurement
 is now terminal; all owned test browsers are closed and no heavy slot is active.

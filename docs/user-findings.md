@@ -9,7 +9,16 @@ commits plus startup producing108 generations. Source hints coalesce only while
 one core effect remains pending. Investigate bounded advisory notification
 delivery at the existing host seam without moving index policy out of Rust,
 delaying foreground requests, hiding commits or weakening publication checks.
-Implementation and actual before/after verification remain pending.
+Implemented as05d7fcb8 after independent review: advisory hint delivery batches
+at500ms quiet/1000ms maximum eligibility; foreground requests remain immediate,
+and Rust retains indexing policy. Eight baseline RED cases become green;
+66 focused and28 runtime checks plus TypeScript pass. Matched100-note import,
+exact103-file verification and complete/current index wait changes36.786s→30.672s
+(one diagnostic run each), generations108→37 and captures660→259. All103 files
+match and covered source equals107. Browser closed cleanly. Evidence:
+`.worktrees/s1-evidence/browser-hint-benchmark-391b7e2c/comparison.json`.
+This reduces measured repeated work; bulk import is still slow and final-main/
+10k/S1 acceptance remains open. Other work stays stopped.
 
 ## Stop scope expansion after browser measurement — 2026-10-20
 
