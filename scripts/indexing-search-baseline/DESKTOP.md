@@ -71,6 +71,32 @@ read-only requests use the already admitted, root-scoped bridge.
    note revision/bytes before searching. The ordinary marker search must render
    the exact same entry/snippet and retain that snapshot. Quit normally again.
 
+## Normal core lifecycle mode
+
+For builds with core-owned scheduling enabled in normal startup, add
+`--core-lifecycle` to the command above. The default mode retains its original
+uninitialized/derived-cold requirements; it never silently relaxes those oracles.
+Normal core scheduling can build the index during automatic import/setup, so the
+explicit mode measures a different startup scenario:
+
+- Every launch must advertise positive admitted `documentMaintenance` support.
+- After all exact setup source checks, read-only status polling waits for a
+  complete, source-current index produced by normal background scheduling. The
+  report records the initial state, bounded status samples and elapsed wait
+  separately from subsequent query timing. No initialize, freshness request,
+  pump, rebuild or cache deletion is injected.
+- After normal quit and restart, the index must still be complete/current and
+  retain exactly the setup snapshot. The first unique query must preserve that
+  snapshot. Its phase and screenshot are labeled `startup-query`; this is a
+  retained-index query, not a derived-cold indexing measurement.
+- The editor's exact original-plus-suffix byte oracle, pending-save witness,
+  filesystem/native/checkpoint agreement, saved-marker result, warm restart and
+  unchanged source checks remain the same as above. Every quit still requires
+  natural exit 0, no signal and native-host drain.
+
+This mode remains a small correctness smoke. It does not establish cold-index
+latency, whole-vault performance, core draft execution or cancellation behavior.
+
 Every normal quit requires actual exit 0 with no signal and native-host drain.
 A SIGTERM/SIGKILL fallback is cleanup only and cannot satisfy those checks.
 Failures preserve their screenshot, DOM, raw runtime output and available facts.
