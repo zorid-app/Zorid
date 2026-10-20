@@ -14,10 +14,10 @@ Implementation owner: architecture root, with `complexity_pipeline` owning host
 capability negotiation and `complexity_workspace` owning desktop admission.
 Branch `codex/desktop-rust-maintenance`, worktree
 `/private/tmp/zorid-desktop-rust-maintenance`, baseline `37ed616e`.
-Main integration remains with the shared-core coordinator. The isolated change
-is implemented and independently reviewed, with 56 distinct focused checks
-passing (45 carried from unchanged inputs, 11 rerun after one assertion correction).
-Matching app verification and integration remain pending. Details are in
+Main integration remains with the shared-core coordinator. The change is
+independently reviewed and integrated as `51db29e0`; the complete56-check
+composed command freshly passes, no skips. Matching app verification remains
+pending. Details are in
 [the scoped record](plans/desktop-indexing-ownership.md).
 No native mobile, sync, large-vault or full S1 acceptance follows from this cleanup.
 
@@ -30,10 +30,18 @@ that diagnostic mapping is addressed; this admission-only change does not fix it
 User explicitly requests execution/completion of the remaining tests and reports
 closing the manual playground. Continue the accepted macOS/web/CLI S1 scope;
 keep manual data and the unsaved draft backup. Runtime fixtures remain separate.
-Current CLI100 full literal/cold/warm smoke passes; graph16 focused/10k gates and
-actual normal browser lifecycle/performance remain pending. Source audit identifies
-whole-vault browser capacity limits; establish the actual failure before claiming
-a fix or a10k pass. Implementation/review/run ownership is in the execution
+Current CLI100 full literal/cold/warm smoke passes. Actual Chrome100 normal core
+lifecycle passes all five phases (import, retained query, warm reopen, independent
+commit, incremental reopen), with exact ordered/range oracles; this uses production
+core modules and fixture DOM, not the full workspace. Warm queries12–32ms;
+import plus exact readback83.3s. Actual normal10k browser import failed its300s
+deadline at172/10003 files, before indexing/query acceptance. Evidence:
+`.worktrees/s1-evidence/acceptance-web-main-{100,10000-red}/report.json`.
+This is an import-timeout finding, not an observed capacity rejection. Source
+audit separately identifies whole-vault browser capacity limits. Graph16's first
+136-check run was86pass/50fail; the independently reviewed narrowed reservation
+fix and current-contract fixtures are now running138 checks on88934488.
+Do not claim10k acceptance or overall speedup. Implementation/review/run ownership is in the execution
 checkpoint. This request supersedes the earlier runtime pause.
 
 ## Markdown save-size admission — 2026-10-20

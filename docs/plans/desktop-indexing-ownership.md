@@ -16,7 +16,8 @@ sole main integration; this checkout does not mutate main or push.
 ## Contract
 
 - Normal desktop explicitly requests Rust maintenance. Missing `documents` or
-  `document_runtime` capability rejects opening before initialization/mutation,
+  `document_runtime` capability rejects before service initialization, rescan,
+  list and admission requests (the host opening handshake may initialize storage),
   closes the opened host and supplies restart/update guidance.
 - Requested maintenance also requires a complete admitted runtime, document
   commands and scoped notification route. Failed admission is retired and must
@@ -50,3 +51,9 @@ No native app, WASM, mobile or full S1 acceptance is claimed. A matching-host
 normal desktop smoke and the real missing-host startup path remain integration
 verification, owned by the shared-core coordinator; do not interrupt its ongoing
 campaign or describe focused Node checks as actual app acceptance.
+
+Integration update: shared-core coordinator independently reviewed and integrated
+the coherent change as `51db29e0`. The full four-file command above freshly reran
+**56/56 passing**, no skips, natural exit0; evidence:
+`.worktrees/s1-evidence/desktop-maintenance-8dc9e83e-56.log`. Matching desktop
+runtime verification remains in the S1 campaign.

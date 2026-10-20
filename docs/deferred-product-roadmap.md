@@ -9,6 +9,36 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+2026-10-20 follow-up: actual Chrome100 normal-core run on frozen37ed616e passes
+all five phases and complete literal/range/order oracles. Evidence:
+`.worktrees/s1-evidence/acceptance-web-main-100/report.json`. Warm query samples
+12–32ms; import plus exact readback83.3s; component fixture DOM, not full workspace.
+Actual normal10k browser import fails the300s deadline at172/10003 files, with
+owned Chrome cleanup exit0; evidence `acceptance-web-main-10000-red/report.json`.
+This is a practical import timeout, not an observed4096-source rejection. Root
+retains those failures and is narrowing whole-vault reconstruction, autonomous
+indexing during import, and per-operation serialization/storage hypotheses.
+
+Graph88934488 is independently source-approved for normal Text and schema16.
+Original136 RED result86pass/50fail is preserved; narrowed paired-authorship
+reservation correction retains all original owned-byte/work limits. Fresh138
+checks are running under finish_graph_path's sole heavy slot before Store/cache10k.
+No graph integration or10k pass yet. Root does not overlap app runtimes/builds.
+
+Desktop-only architecture cleanup8dc9e83e is reviewed and integrated as51db29e0:
+normal desktop requires matching Rust document maintenance, with actionable
+failure/cleanup instead of silent fallback. All56 focused checks freshly pass.
+Matching actual desktop verification remains open; mobile stays paused until
+desktop and sync are solid. Only root mutates main.
+
+Fresh219 focused Node cache/preview/clock checks pass on37ed616e, with source
+closure and coverage map in `.worktrees/s1-evidence/cache-preview-clock-map/`.
+Existing Rust/cache checks are mapped but not rerun by that worker. Narrow
+remaining real component/core witnesses and desktop foreground harness extensions
+are being prepared in isolation; no fake results or new product feature scope.
+
+The following update is historical where superseded by the results above.
+
 User requests completion of the remaining S1 tests (2026-10-20), confirms the
 manual playground is closed, and authorizes continued execution. Keep its data
 and unsaved-note backup; use fresh owned fixtures for tests. macOS Electron,
