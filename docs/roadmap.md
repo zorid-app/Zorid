@@ -235,6 +235,14 @@ Design: [indexing/search](architecture/indexing-search-design.md),
 
 ## S3 — Managed-data services and contracts
 
+**Latest authority correction (2026-10-20):** work blocks, time entries and similar
+first-party user content must also be note files. S3 first reconciles feature
+contracts and existing record-backed prototypes with that model; it must not
+create a second authoritative database representation of those notes. Exact note
+schemas/granularity remain discussion items. Operational records, recovery,
+indexes/caches and secrets keep their distinct roles. This is design steering,
+not authorization to implement an undecided file schema.
+
 **Current:** portable record semantics, native/browser transactions and WorkBlock
 foundations exist; complete production consumer wiring remains unfinished.
 

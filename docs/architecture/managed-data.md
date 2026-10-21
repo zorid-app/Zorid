@@ -7,9 +7,17 @@
 Bases are declarative file-backed query/view definitions. Types configure typed
 properties and capabilities. Note-backed Tasks are derived from/edit ordinary note
 content and properties; they are not all independent managed database rows.
-Calendar WorkBlocks are first-party structured managed records and can refer to
-Tasks. Calendar joins combine these sources without making presentation the owner
-of storage or identity.
+Latest user direction (2026-10-20): work blocks, time entries and similar
+first-party user content are also note files, with structured properties and
+ordinary note bodies/links. SQLite/index rows are derived projections of that
+content, not a second authority. Calendar joins query those notes without making
+presentation the owner of storage or identity. Exact field schemas and whether
+individual entries use separate notes or an embedded representation remain open.
+
+Durable operational records (pending operations, receipts and provider progress),
+local recovery, disposable caches and protected secrets remain separate from
+user-authored notes. Existing record-backed WorkBlock code is implementation
+history, not proof of the new note-backed target; reconciliation belongs in S3.
 
 `zorid-bases` compiles/evaluates host-fed expressions and implements Type/task/
 Calendar query semantics. `zorid-records` defines scoped record operations,

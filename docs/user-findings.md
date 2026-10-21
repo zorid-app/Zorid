@@ -1,5 +1,15 @@
 # User findings queue
 
+## Work blocks and time entries are note-backed — 2026-10-20
+
+User corrects the S3 explanation: work blocks, time entries and similar structured
+first-party user content should also be note files. The target is file authority
+with derived query/index projections, not record-only user content in SQLite.
+Architecture/feature-plan/S3 notes now record that direction. Exact schemas and
+note granularity remain open; no implementation or migration has been performed.
+Existing record-backed WorkBlock code must be reconciled before feature delivery.
+Operational records, local recovery, caches and secrets are distinct concerns.
+
 ## S1 functional closeout accepted; performance deferred — 2026-10-20
 
 User requests skipping performance optimization, verifying normal functionality

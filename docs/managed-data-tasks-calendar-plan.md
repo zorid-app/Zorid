@@ -38,7 +38,7 @@ The user explicitly requests desktop AND native mobile UI delivery stages. Backe
 9. Connections and fetched external events are centrally managed. Multiple views query the same store and subscribe to changes; they do not each run independent fetch loops.
 10. Base publishing settings choose destination calendar and field mappings. A view's display-source selection is independent of publishing/importing records. Displaying an external event does not automatically create a note.
 11. Desktop calendar uses FullCalendar. iOS calendar is native, visually and interactively informed by Apple Calendar: month/event grid, day and multi-day timelines, week strip, all-day lane, overlapping cards, current-time line, Today/search/add/source controls and native translucent controls. Rich note bodies retain the shared web editor.
-12. Use a managed structured-record platform backed by SQL where appropriate. The final choice supersedes the interim recommendation to make all plugin state file-based. Notes/attachments remain files; structured records need not have corresponding files.
+12. Latest user correction (2026-10-20): work blocks, time entries and similar first-party user content also live in note files. Their structured properties may be indexed in SQLite, but those rows are derived rather than authoritative. This supersedes the earlier record-only direction for that content. Exact note granularity and schemas remain open; durable operational bookkeeping, recovery and caches can still use appropriate host storage.
 13. Synced/local/cache data all use host APIs. Secrets use a separate protected service. Features do not own arbitrary SQLite replication.
 14. Removed by direct user instruction on 2026-10-17: spaced repetition is outside this implementation scope.
 
@@ -72,7 +72,7 @@ Provider adapters run on eligible devices and access secrets through the host. T
 | Note title/body/properties | Markdown/file model; SQL is derived projection |
 | Attachments | File/blob model |
 | Types and Bases | Vault configuration files (YAML proposed); parsed indexes derived |
-| Work blocks and time entries | Managed structured records |
+| Work blocks and time entries | Note files; exact schemas/granularity to be designed, SQL projections derived |
 | Recurrence occurrence state | Managed structured records linked to task IDs |
 | External event mirror | Provider-derived state, subject to pending local edits |
 | External IDs, pending mutations, receipts | Durable operational records, never disposable cache |

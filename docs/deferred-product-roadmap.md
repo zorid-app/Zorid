@@ -9,6 +9,12 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest S3 design correction (2026-10-20): work blocks, time entries and similar
+first-party user content are note-backed; SQL/index representations are derived.
+Reconcile existing record-backed WorkBlock prototypes before feature delivery.
+File schemas/granularity remain open; no implementation/migration is authorized
+by this correction. S1 acceptance is unchanged; S3 remains planned.
+
 **S1 accepted for bounded ordinary functionality — 2026-10-20.** The user
 explicitly deferred further optimization, performance budgets and large-vault
 stress. Final product source is610ada26; root retains sole main integration.
