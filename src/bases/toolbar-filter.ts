@@ -60,9 +60,9 @@ export function readBaseFilterDraft(node:BaseFilterDraftNode):BaseFilterNode|und
     return node.source;
   }
   const children=node.children.map(readBaseFilterDraft).filter((value):value is BaseFilterNode=>value!==undefined);
-  if(!children.length)return node.persistedEmpty?{[node.conjunction]:[]} as BaseFilterNode:undefined;
+  if(!children.length&&!node.persistedEmpty)return undefined;
   if(node.implicit&&node.conjunction==='and'&&children.length===1)return children[0];
-  return {[node.conjunction]:children} as BaseFilterNode;
+  return node.conjunction==='and'?{and:children}:node.conjunction==='or'?{or:children}:{not:children};
 }
 /** Capture the submitted identities, not queued controls changed during saving. */
 export function captureBaseFilterAcknowledgement(root:BaseFilterDraftNode):()=>void {
