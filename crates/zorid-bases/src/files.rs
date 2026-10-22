@@ -110,3 +110,57 @@ pub(crate) fn hydrate(
     check(files.len())?;
     Ok(Arc::new(BasesFiles::new(files)))
 }
+
+#[cfg(test)]
+mod hydration_tests {
+    use super::*;
+    use crate::{DetachedRecord, ExpressionDiagnostic};
+
+    #[test]
+    fn memory_admission_and_cancellation_precede_file_conversion() {
+        // This path would fail the runtime converter. A rejected copy must
+        // return its admission failure before interpreting or copying the file.
+        let record = DetachedRecord {
+            path: "../outside.md".into(),
+            ..Default::default()
+        };
+        let error = hydrate(
+            &[record.clone()],
+            None,
+            None,
+            None,
+            &Default::default(),
+            &mut |_| Ok(()),
+            &mut |_| Err(ExpressionDiagnostic::new("budget", "test memory allowance")),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "budget");
+        let mut admissions = 0;
+        let error = hydrate(
+            &[record],
+            None,
+            None,
+            None,
+            &Default::default(),
+            &mut |_| Err(ExpressionDiagnostic::new("cancelled", "test cancellation")),
+            &mut |_| {
+                admissions += 1;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "cancelled");
+        assert_eq!(admissions, 0);
+    }
+
+    #[test]
+    fn file_container_never_substitutes_a_name_match_for_a_resolved_path() {
+        let files = BasesFiles::new(vec![BasesFile {
+            path: "Folder/Target.md".into(),
+            ..Default::default()
+        }]);
+        assert!(files.by_path("Folder/Target.md").is_some());
+        assert!(files.by_path("Target").is_none());
+        assert!(files.by_path("Folder/Target").is_none());
+    }
+}
