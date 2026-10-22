@@ -100,7 +100,7 @@ fn property_definitions_use_exact_saved_root_source_in_each_retained_generation(
     create(&mut vault, "settings", "Properties.yaml", settings);
     create(&mut vault, "author", "Author.md", "---\ntype: author\n---\n");
     create(&mut vault, "book", "Book.md", "---\nauthor: '[[Author]]'\n---\n");
-    create(&mut vault, "base", "Books.base", "filters: file.path == \"Author.md\"\nviews:\n  - type: table\n    order: [file.path, note.bookCount]\n");
+    create(&mut vault, "base", "Books.base", "filters: file.path == \"Author.md\"\nviews:\n  - type: table\n    name: Authors\n    order: [file.path, note.bookCount]\n");
     vault.initialize_document_index().unwrap();
     build(&mut vault);
     let old = vault.open_document_snapshot().unwrap();

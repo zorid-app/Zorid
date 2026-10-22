@@ -264,7 +264,7 @@ pub fn query_generation_property_targets(
     definitions: &crate::properties::PropertyDefinitions,
     options: &QueryOptions,
 ) -> Result<BaseQueryResult, ExpressionDiagnostic> {
-    let program = crate::compile_base_source("filters: 'false'\nviews:\n  - type: table\n    limit: 1\n    order: [file.path]\n")
+    let program = crate::compile_base_source("filters: 'false'\nviews:\n  - type: table\n    name: Property targets\n    limit: 1\n    order: [file.path]\n")
         .map_err(|_| ExpressionDiagnostic::new("internal", "Invalid internal property-target query"))?;
     let mut invocation = options.clone();
     invocation.view_index = 0;

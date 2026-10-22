@@ -2337,7 +2337,7 @@ mod tests {
     #[test]
     fn property_settings_attachment_is_required_and_checked_against_exact_retained_source() {
         let settings = "properties:\n  author:\n    type: relation\n    relation: {multiple: false, targetFilter: 'type == \"author\"'}\n  books:\n    type: reverseRelation\n    reverseRelation: {property: author}\n  bookCount:\n    type: rollup\n    rollup: {relation: books, aggregation: count}\n";
-        let base = "filters: file.path == \"a.md\"\nviews:\n  - type: table\n    order: [file.path, note.bookCount]\n";
+        let base = "filters: file.path == \"a.md\"\nviews:\n  - type: table\n    name: Authors\n    order: [file.path, note.bookCount]\n";
         let mut h: serde_json::Value = serde_json::from_str(&header()).unwrap();
         h["entries"].as_array_mut().unwrap().extend([
             serde_json::json!({"id":"settings","path":"Properties.yaml","kind":"file","revision":"r3","deleted":false}),
@@ -3137,7 +3137,7 @@ mod tests {
                 "{raw}"
             );
         }
-        let program=zorid_bases::compile_base_source("views:\n  - type: table\n").unwrap();
+        let program=zorid_bases::compile_base_source("views:\n  - type: table\n    name: Table\n").unwrap();
         let options=base_query_options(serde_json::from_str(r#"{"summaryPreviewProperty":"note.rating","randomSeed":0}"#).unwrap(),None,&program).unwrap();
         assert_eq!(options.summary_preview_property.as_deref(),Some("note.rating"));assert_eq!(options.evaluation.random_seed,Some(0));
         assert!(base_query_options(serde_json::from_str(r#"{"randomSeed":9007199254740992}"#).unwrap(),None,&program).is_err());
