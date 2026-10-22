@@ -2050,8 +2050,13 @@ pub(crate) fn query_rows_validated(
     let null = BaseValue::Null;
     admit(&mut admission, |_| {
         Ok(input.records.len().saturating_mul(
-            map_slot::<&crate::EntryId, &DetachedRecord>()
-                .saturating_add(map_slot::<&str, &DetachedRecord>()),
+            map_slot::<&crate::EntryId, &DetachedRecord>().saturating_add(
+                if view.group.is_some() {
+                    map_slot::<&str, &DetachedRecord>()
+                } else {
+                    0
+                },
+            ),
         ))
     })?;
     let by_id = input
@@ -2064,11 +2069,15 @@ pub(crate) fn query_rows_validated(
             )
         })
         .collect::<HashMap<_, _>>();
-    let by_path = input
-        .records
-        .iter()
-        .map(|record| (record.path.as_str(), record))
-        .collect::<HashMap<_, _>>();
+    let by_path = if view.group.is_some() {
+        input
+            .records
+            .iter()
+            .map(|record| (record.path.as_str(), record))
+            .collect::<HashMap<_, _>>()
+    } else {
+        HashMap::new()
+    };
     let group_timezone = if view.group.is_some() {
         expression::BasesTimezone::from_setting(Some(&options.evaluation.timezone))
             .map_err(|message| ExpressionDiagnostic::new("input", message))?
