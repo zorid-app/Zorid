@@ -249,6 +249,7 @@ fn schema_fifteen_backfill_accounts_unpublished_sources_and_existing_fences() {
     }
     // Version15 already has the expanded Text payload constraint; only graph
     // facts/accounting are introduced by the version16 migration.
+    store.connection.execute_batch("DROP TABLE host_intent_sources").unwrap();
     store
         .connection
         .pragma_update(None, "user_version", TEXT_SCHEMA_VERSION)

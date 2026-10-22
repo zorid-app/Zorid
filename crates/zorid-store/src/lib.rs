@@ -106,6 +106,8 @@ pub use namespace::{
     MAX_NAMESPACE_EVIDENCE_BYTES, MAX_NAMESPACE_MEMBERS,
 };
 mod host_intents;
+mod host_source_guards;
+pub use host_source_guards::{HostSourceGuard, MAX_HOST_SOURCE_BYTES, MAX_HOST_SOURCE_PATH_BYTES};
 pub use host_intents::{
     HostIntentAcknowledgment, HostIntentPage, HostIntentRef, HostIntentState, HostIntentView,
     HostMutationKind, HostProjectionState, HostRejection, HostRejectionCode,
@@ -136,7 +138,8 @@ use zorid_core::{
     Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
-const SCHEMA_VERSION: i64 = 16;
+const SCHEMA_VERSION: i64 = 17;
+const GRAPH_SCHEMA_VERSION: i64 = 16;
 const TEXT_SCHEMA_VERSION: i64 = 15;
 const OBSERVATION_SCHEMA_VERSION: i64 = 14;
 const NAMESPACE_SCHEMA_VERSION: i64 = 13;
@@ -164,6 +167,7 @@ fn schema_objects() -> Vec<(&'static str, &'static str)> {
         .chain(scan::SCHEMA)
         .chain(presentation::SCHEMA)
         .chain(host_intents::SCHEMA)
+        .chain(host_source_guards::SCHEMA)
         .chain(projection_jobs::SCHEMA)
         .chain(namespace::SCHEMA)
         .chain(text_sync::SCHEMA)
@@ -193,7 +197,7 @@ fn check_schema(connection: &Connection) -> Result<i64> {
     // Unreleased formats: reject before changing WAL or database bytes.
     if !matches!(
         version,
-        0 | PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION | OBSERVATION_SCHEMA_VERSION | TEXT_SCHEMA_VERSION | SCHEMA_VERSION
+        0 | PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION | OBSERVATION_SCHEMA_VERSION | TEXT_SCHEMA_VERSION | GRAPH_SCHEMA_VERSION | SCHEMA_VERSION
     ) {
         return Err(StoreError::UnsupportedSchema(version));
     }
@@ -217,9 +221,11 @@ fn check_schema(connection: &Connection) -> Result<i64> {
                 (version != PREDECESSOR_SCHEMA_VERSION || *name != "namespace_successions")
                     && (version >= OBSERVATION_SCHEMA_VERSION
                         || *name != projection::EXTERNAL_UNRESOLVED_INDEX.0)
-                    && (version == SCHEMA_VERSION
+                    && (version >= GRAPH_SCHEMA_VERSION
                         || (!family_graph::SCHEMA.iter().any(|(graph_name, _)| graph_name == name)
                             && !storage_accounting::schema().any(|(accounting_name, _)| accounting_name == name)))
+                    && (version == SCHEMA_VERSION
+                        || !host_source_guards::SCHEMA.iter().any(|(guard_name, _)| guard_name == name))
             })
             .map(|(name, sql)| if name == "immutable_payloads" && version < TEXT_SCHEMA_VERSION {
                 (name, immutable_payloads::LEGACY_TABLE_SQL)
@@ -271,7 +277,7 @@ fn check_schema(connection: &Connection) -> Result<i64> {
         ) {
             projection::check_observation_index_inputs(connection)?;
         }
-        if version == SCHEMA_VERSION {
+        if version >= GRAPH_SCHEMA_VERSION {
             family_graph::check_current(connection)?;
         }
     }
@@ -476,6 +482,7 @@ impl Store {
                 .chain(directory::SCHEMA_V6)
                 .chain(scan::SCHEMA)
                 .chain(host_intents::SCHEMA)
+                .chain(host_source_guards::SCHEMA)
                 .chain(projection_jobs::SCHEMA)
                 .chain(namespace::SCHEMA)
                 .chain(physical_bindings::SCHEMA)
@@ -539,6 +546,12 @@ impl Store {
             storage_accounting::initialize_payloads(&tx)?;
             storage_accounting::initialize_revisions(&tx)?;
             family_graph::backfill(&tx)?;
+            tx.pragma_update(None, "user_version", GRAPH_SCHEMA_VERSION)?;
+        }
+        if matches!(version, PREDECESSOR_SCHEMA_VERSION | NAMESPACE_SCHEMA_VERSION | OBSERVATION_SCHEMA_VERSION | TEXT_SCHEMA_VERSION | GRAPH_SCHEMA_VERSION) {
+            for (_, sql) in host_source_guards::SCHEMA {
+                tx.execute_batch(sql)?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         // Reopen checks the exact schema and scalar graph head/readiness state.

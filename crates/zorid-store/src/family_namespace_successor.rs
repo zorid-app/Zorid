@@ -978,17 +978,14 @@ mod tests {
         let (store, old) = setup(&db);
         let original = proof_rows(&store, &old.job.job_id);
         drop(store);
-        let mut connection = Connection::open(&db).unwrap();
-        crate::one_mib_text_tests::restore_legacy_payload_table(&mut connection);
-        connection.execute_batch("DROP INDEX external_observation_unresolved_path; DROP TABLE namespace_successions; PRAGMA user_version=12; PRAGMA journal_mode=DELETE;").unwrap();
-        drop(connection);
+        crate::family_graph_migration_tests::downgrade(&db, 12);
         let store = Store::open(&db).unwrap();
         assert_eq!(
             store
                 .connection
                 .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
                 .unwrap(),
-            15
+            crate::SCHEMA_VERSION
         );
         assert_eq!(store.namespace_attempt(&old.job.job_id).unwrap(), old);
         assert_eq!(proof_rows(&store, &old.job.job_id), original);
@@ -1008,9 +1005,8 @@ mod tests {
             let db = dir.path().join("db");
             let store = Store::open(&db).unwrap();
             drop(store);
-            let mut connection = Connection::open(&db).unwrap();
-            crate::one_mib_text_tests::restore_legacy_payload_table(&mut connection);
-            connection.execute_batch("DROP INDEX external_observation_unresolved_path; DROP TABLE namespace_successions; PRAGMA user_version=12; PRAGMA journal_mode=DELETE;").unwrap();
+            crate::family_graph_migration_tests::downgrade(&db, 12);
+            let connection = Connection::open(&db).unwrap();
             connection.execute_batch(change).unwrap();
             drop(connection);
             let before = std::fs::read(&db).unwrap();

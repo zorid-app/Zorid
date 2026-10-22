@@ -24,8 +24,9 @@ fn drop_graph_schema(connection: &Connection) {
     }
 }
 
-fn downgrade(path: &Path, version: i64) {
+pub(super) fn downgrade(path: &Path, version: i64) {
     let mut connection = Connection::open(path).unwrap();
+    connection.execute_batch("DROP TABLE host_intent_sources").unwrap();
     drop_graph_schema(&connection);
     if version < TEXT_SCHEMA_VERSION {
         one_mib_text_tests::restore_legacy_payload_table(&mut connection);
@@ -62,6 +63,7 @@ fn source_rows(connection: &Connection) -> Vec<(String, Vec<Vec<Value>>)> {
                 && !storage_accounting::schema()
                     .any(|(accounting_name, _)| *accounting_name == name.as_str())
                 && name != "namespace_successions"
+                && name != "host_intent_sources"
         })
         .map(|name| {
             let mut statement = connection
@@ -92,7 +94,7 @@ fn seeded(path: &Path) -> zorid_file_sync::metadata::MetadataState {
 }
 
 #[test]
-fn empty_initialization_registers_schema_sixteen_and_reopens() {
+fn empty_initialization_registers_current_schema_and_reopens() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("db");
     let store = Store::open(&path).unwrap();

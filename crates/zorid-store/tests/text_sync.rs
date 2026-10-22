@@ -11,7 +11,7 @@ use zorid_sync_protocol::{ExpectedContext, LogPosition, RealmId, ServerEpoch, Up
 fn downgrade_current_to_twelve(db: &mut rusqlite::Connection) {
     assert_eq!(db.query_row("SELECT count(*) FROM text_bindings", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
     assert_eq!(db.query_row("SELECT count(*) FROM namespace_successions", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
-    let tables: Vec<String> = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND (name NOT GLOB 'sqlite_*' OR name='sqlite_sequence') AND (name NOT GLOB 'family_graph_*' OR name='family_graph_heads') AND name!='namespace_successions' ORDER BY name").unwrap()
+    let tables: Vec<String> = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND (name NOT GLOB 'sqlite_*' OR name='sqlite_sequence') AND (name NOT GLOB 'family_graph_*' OR name='family_graph_heads') AND name!='namespace_successions' AND name!='host_intent_sources' ORDER BY name").unwrap()
         .query_map([], |row| row.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
     let retained = |db: &rusqlite::Connection| -> Vec<Vec<Vec<rusqlite::types::Value>>> {
         tables.iter().map(|table| {
@@ -42,7 +42,7 @@ fn downgrade_current_to_twelve(db: &mut rusqlite::Connection) {
     tx.execute_batch(&legacy).unwrap();
     tx.execute_batch("INSERT INTO immutable_payloads SELECT * FROM payload_copy ORDER BY rowid; DROP TABLE payload_copy;").unwrap();
     for trigger in triggers { tx.execute_batch(&trigger).unwrap(); }
-    tx.execute_batch("DROP TABLE namespace_successions; DROP INDEX external_observation_unresolved_path;").unwrap();
+    tx.execute_batch("DROP TABLE host_intent_sources; DROP TABLE namespace_successions; DROP INDEX external_observation_unresolved_path;").unwrap();
     assert!(tx.prepare("PRAGMA foreign_key_check").unwrap().query([]).unwrap().next().unwrap().is_none());
     tx.pragma_update(None, "user_version", 12).unwrap();
     tx.commit().unwrap();

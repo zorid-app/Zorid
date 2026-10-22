@@ -1,5 +1,6 @@
 //! Durable host-to-core handoff, separate from synchronization outbox/receipts.
 use super::*;
+use super::host_source_guards::HostSourceBinding;
 use zorid_core::OperationId;
 pub(crate) const SCHEMA: &[(&str,&str)] = &[
     ("host_intents", "CREATE TABLE host_intents (intent_order INTEGER PRIMARY KEY AUTOINCREMENT, client_id TEXT NOT NULL, token TEXT NOT NULL UNIQUE, operation_id TEXT NOT NULL UNIQUE, entry_id TEXT NOT NULL, request TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('prepared','commit_requested','committed','rejected')), acknowledged INTEGER NOT NULL CHECK(acknowledged IN (0,1)), rejection TEXT, UNIQUE(client_id,token))"),
@@ -28,6 +29,10 @@ pub enum HostRejectionCode {
     EntryDeleted,
     RevisionConflict,
     IdempotencyConflict,
+    /// Native proved a definite physical source mismatch before authorship.
+    ConditionalSourceChanged,
+    /// The host's legitimate capture is no longer available at prepare time.
+    SourceCaptureExpired,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -202,6 +207,27 @@ fn prior(tx: &Connection, request: &MutationRequest) -> Result<Option<CommitResu
     })
     .transpose()
 }
+fn admit_inline_intent(tx: &Connection, command: &MutationRequest) -> Result<()> {
+    // Binary intent bytes must never become a second durable body in this
+    // generic checkpoint journal. Enrolled binary clients authorize their
+    // opaque stage; the editor's bounded Text intent keeps this protocol.
+    let authority = text_sync::identity(tx)?;
+    if let (Some(realm_id), Some(vault_id)) = (authority.realm_id, authority.vault_id) {
+        let metadata = blob_index::load_metadata(tx, &zorid_file_sync::Scope { realm_id, vault_id })?
+            .ok_or_else(|| StoreError::Corrupt("enrolled intent graph missing".into()))?;
+        match &command.mutation {
+            Mutation::Write { id, content, .. }
+                if metadata.metadata_view()?.content_bindings().get(id)
+                    == Some(&zorid_file_sync::v2::ContentBinding::Binary) =>
+            { return Err(StoreError::StreamRequired { bytes: content.len() as u64, limit: 0 }); }
+            Mutation::Create { kind: EntryKind::File, .. } => {
+                return Err(invalid("enrolled file creation requires a mode-bound family command"));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
 /// Called under the same write transaction before ordinary mutation planning.
 pub(crate) fn check_execution(tx: &Connection, command: &MutationRequest) -> Result<()> {
     if super::blob_stage::operation_reserved(tx, &command.operation_id)? {
@@ -257,39 +283,45 @@ impl Store {
         client: &OperationId,
         command: &MutationRequest,
     ) -> Result<HostIntentView> {
+        self.prepare_host_intent_with_source(client, command, None)
+    }
+    pub fn prepare_guarded_host_intent(
+        &mut self,
+        client: &OperationId,
+        command: &MutationRequest,
+        source: &HostSourceGuard,
+    ) -> Result<HostIntentView> {
+        self.prepare_host_intent_with_source(client, command, Some(HostSourceBinding::Verified(source.clone())))
+    }
+    pub fn prepare_rejected_guarded_host_intent(
+        &mut self,
+        client: &OperationId,
+        command: &MutationRequest,
+        capture: &OperationId,
+        code: HostRejectionCode,
+    ) -> Result<HostIntentView> {
+        if !host_source_guards::rejection_code(code) {
+            return Err(invalid("invalid conditional source rejection"));
+        }
+        let binding = HostSourceBinding::Rejected {
+            capture_id: capture.clone(), local_store_id: self.identity()?.local_store_id, code,
+        };
+        self.prepare_host_intent_with_source(client, command, Some(binding))
+    }
+    fn prepare_host_intent_with_source(
+        &mut self,
+        client: &OperationId,
+        command: &MutationRequest,
+        source: Option<HostSourceBinding>,
+    ) -> Result<HostIntentView> {
         command.validate()?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        // Binary intent bytes must never become a second durable body in this
-        // generic checkpoint journal. Enrolled binary clients authorize their
-        // opaque stage; the editor's bounded Text intent keeps this protocol.
-        let authority = text_sync::identity(&tx)?;
-        if let (Some(realm_id), Some(vault_id)) = (authority.realm_id, authority.vault_id) {
-            let metadata =
-                blob_index::load_metadata(&tx, &zorid_file_sync::Scope { realm_id, vault_id })?
-                    .ok_or_else(|| StoreError::Corrupt("enrolled intent graph missing".into()))?;
-            match &command.mutation {
-                Mutation::Write { id, content, .. }
-                    if metadata.metadata_view()?.content_bindings().get(id)
-                        == Some(&zorid_file_sync::v2::ContentBinding::Binary) =>
-                {
-                    return Err(StoreError::StreamRequired {
-                        bytes: content.len() as u64,
-                        limit: 0,
-                    });
-                }
-                Mutation::Create {
-                    kind: EntryKind::File,
-                    ..
-                } => {
-                    return Err(invalid(
-                        "enrolled file creation requires a mode-bound family command",
-                    ));
-                }
-                _ => {}
-            }
+        if let Some(source) = &source {
+            source.validate(&tx, command)?;
         }
+        if source.is_none() { admit_inline_intent(&tx, command)?; }
         let existing = tx
             .query_row(
                 "SELECT client_id,token FROM host_intents WHERE operation_id=?1",
@@ -314,29 +346,101 @@ impl Store {
                 }
                 .into());
             }
+            let persisted = host_source_guards::load(&tx, &command.operation_id)?;
+            let same_source = match (&persisted, &source) {
+                (Some(persisted), Some(HostSourceBinding::Rejected { capture_id, .. })) => persisted.capture_id() == capture_id,
+                _ => persisted == source,
+            };
+            if !same_source {
+                return Err(ContractError::IdempotencyConflict {
+                    operation_id: command.operation_id.clone(),
+                }.into());
+            }
             reference
         } else {
+            if source.is_some() { admit_inline_intent(&tx, command)?; }
             if super::blob_stage::operation_reserved(&tx, &command.operation_id)? {
                 return Err(ContractError::IdempotencyConflict {
                     operation_id: command.operation_id.clone(),
                 }
                 .into());
             }
-            prior(&tx, command)?;
+            let receipt = prior(&tx, command)?;
+            if source.is_some() && receipt.is_some() {
+                return Err(ContractError::IdempotencyConflict {
+                    operation_id: command.operation_id.clone(),
+                }.into());
+            }
             let reference = HostIntentRef {
                 client_id: client.clone(),
                 token: OperationId::new(uuid::Uuid::new_v4().to_string())?,
             };
-            tx.execute("INSERT INTO host_intents(client_id,token,operation_id,entry_id,request,state,acknowledged) VALUES(?1,?2,?3,?4,?5,'prepared',0)",params![client.as_str(),reference.token.as_str(),command.operation_id.as_str(),command.mutation.id().as_str(),serde_json::to_string(command)?])?;
+            let rejected = match &source { Some(HostSourceBinding::Rejected { code, .. }) => Some(HostRejection { code: *code }), _ => None };
+            tx.execute("INSERT INTO host_intents(client_id,token,operation_id,entry_id,request,state,acknowledged,rejection) VALUES(?1,?2,?3,?4,?5,?6,0,?7)",params![client.as_str(),reference.token.as_str(),command.operation_id.as_str(),command.mutation.id().as_str(),serde_json::to_string(command)?,if rejected.is_some() { "rejected" } else { "prepared" },rejected.map(|rejection| serde_json::to_string(&rejection)).transpose()?])?;
+            if let Some(source) = &source {
+                host_source_guards::insert(&tx, command, source)?;
+            }
             reference
         };
         let outcome = view(&tx, &reference)?.unwrap();
         tx.commit()?;
         Ok(outcome)
     }
+    /// Exact durable replay before the native host consults ephemeral captures.
+    pub fn replay_guarded_host_intent(
+        &self,
+        client: &OperationId,
+        command: &MutationRequest,
+        capture: &OperationId,
+    ) -> Result<Option<HostIntentView>> {
+        command.validate()?;
+        let tx = self.connection.unchecked_transaction()?;
+        let owner = tx.query_row(
+            "SELECT client_id,token FROM host_intents WHERE operation_id=?1",
+            [command.operation_id.as_str()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        ).optional()?;
+        let conflict = || StoreError::Contract(ContractError::IdempotencyConflict {
+            operation_id: command.operation_id.clone(),
+        });
+        let outcome = if let Some((owner, token)) = owner {
+            if owner != client.as_str() { return Err(conflict()); }
+            let reference = HostIntentRef { client_id: client.clone(), token: OperationId::new(token)? };
+            if request(&tx, &reference)? != *command { return Err(conflict()); }
+            let source = host_source_guards::load(&tx, &command.operation_id)?.ok_or_else(|| conflict())?;
+            if source.capture_id() != capture { return Err(conflict()); }
+            view(&tx, &reference)?
+        } else {
+            let capture_used: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM host_intent_sources WHERE capture_id=?1)",
+                [capture.as_str()], |row| row.get(0),
+            )?;
+            if capture_used || super::blob_stage::operation_reserved(&tx, &command.operation_id)?
+                || prior(&tx, command)?.is_some() { return Err(conflict()); }
+            None
+        };
+        tx.commit()?;
+        Ok(outcome)
+    }
     pub fn query_host_intent(&self, reference: &HostIntentRef) -> Result<Option<HostIntentView>> {
         let tx = self.connection.unchecked_transaction()?;
         let value = view(&tx, reference)?;
+        tx.commit()?;
+        Ok(value)
+    }
+    /// Native recovery lookup using the original persisted client and token.
+    pub fn host_intent_for_operation(&self, operation: &OperationId) -> Result<Option<HostIntentView>> {
+        let tx = self.connection.unchecked_transaction()?;
+        let owner = tx.query_row(
+            "SELECT client_id,token FROM host_intents WHERE operation_id=?1",
+            [operation.as_str()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        ).optional()?;
+        let value = owner.map(|(client, token)| {
+            view(&tx, &HostIntentRef {
+                client_id: OperationId::new(client)?, token: OperationId::new(token)?,
+            })
+        }).transpose()?.flatten();
         tx.commit()?;
         Ok(value)
     }

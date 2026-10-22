@@ -94,6 +94,7 @@ fn drop_graph_schema(connection: &Connection) {
 }
 fn downgrade(database: &std::path::Path, version: i64) {
     let mut connection = Connection::open(database).unwrap();
+    connection.execute_batch("DROP TABLE host_intent_sources").unwrap();
     drop_graph_schema(&connection);
     // Reconstruct the exact old payload constraint, preserving all fixture rows.
     // Version15 already owns the expanded Text constraint; versions12–14 do not.
@@ -191,7 +192,7 @@ fn known_twelve_through_fifteen_migrate_preserving_pending_proof_history() {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            16
+            17
         );
         let index: String = connection
             .query_row(
@@ -235,7 +236,7 @@ fn unknown_partial_or_foreign_schema_never_changes_bytes_version_or_journal() {
         (14,"PRAGMA application_id=42"),
         (15,"DROP INDEX external_observation_unresolved_path"),
         (15,"CREATE TABLE family_graph_state(wrong)"),
-        (17,"SELECT 1"),
+        (18,"SELECT 1"),
     ] {
         let directory=tempfile::tempdir().unwrap();let database=directory.path().join("db");
         drop(Store::open(&database).unwrap());
