@@ -745,8 +745,7 @@ fn aggregate(
             let mut seen = BTreeSet::new();
             for value in values {
                 budget.charge(1)?;
-                let key = serde_json::to_string(&value)
-                    .map_err(|_| ExpressionDiagnostic::new("input", "Invalid rollup value"))?;
+                let key = crate::query::canonical(&value);
                 budget.charge(1 + key.len() / 64)?;
                 if seen.insert(key) {
                     unique.push(value);

@@ -307,19 +307,31 @@ fn validate_definition(name: &str, definition: &PropertyDefinition) -> Result<()
         return Err("Too many property options".into());
     }
     let mut values = BTreeSet::new();
+    let mut identities = BTreeSet::new();
     for option in &definition.options {
         if !valid_name(&option.value) || !values.insert(&option.value) {
             return Err("Property options require unique nonempty readable values".into());
         }
+        for field in [&option.id, &option.label, &option.color]
+            .into_iter()
+            .flatten()
+        {
+            if !valid_name(field) {
+                return Err(
+                    "Option identities, labels, and colors must be nonempty bounded text".into(),
+                );
+            }
+        }
+        if option.id.as_ref().is_some_and(|id| !identities.insert(id)) {
+            return Err("Option configuration identities must be unique".into());
+        }
     }
-    if definition.kind == PropertyKind::Status
-        && definition.options.iter().any(|option| {
-            option
-                .category
-                .as_deref()
-                .is_some_and(|category| !matches!(category, "todo" | "in-progress" | "done"))
-        })
-    {
+    if definition.options.iter().any(|option| {
+        option
+            .category
+            .as_deref()
+            .is_some_and(|category| !matches!(category, "todo" | "in-progress" | "done"))
+    }) {
         return Err("Status option category must be todo, in-progress, or done".into());
     }
     match definition.kind {

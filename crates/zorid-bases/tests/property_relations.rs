@@ -316,6 +316,36 @@ fn count_deduplicates_targets_and_empty_numeric_rollups_have_defined_values() {
 }
 
 #[test]
+fn relations_group_by_target_identity_even_when_source_links_have_different_aliases() {
+    let generation = generation(
+        SETTINGS,
+        &[
+            ("first", "---\nauthor: '[[Authors/Ada]]'\n---\n"),
+            (
+                "second",
+                "---\nauthor: '[[Authors/Ada|Ada Lovelace]]'\n---\n",
+            ),
+            ("third", "---\nauthor: '[[Authors/Grace]]'\n---\n"),
+        ],
+    );
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), SETTINGS)
+            .unwrap();
+    let program = compile_base_source("filters: 'file.inFolder(\"Books\")'\nviews:\n  - type: table\n    name: Books\n    order: [file.name, author]\n    groupBy: {property: author, direction: ASC}\n").unwrap();
+    let result = query_generation_with_properties(
+        &program,
+        &generation,
+        &[],
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(result.groups.len(), 2);
+    let ada = result.groups.iter().find(|group| matches!(&group.key, Some(BaseValue::Link { target: Some(target), .. }) if target.entry_id == id("ada"))).unwrap();
+    assert_eq!(ada.entry_ids.len(), 2);
+}
+
+#[test]
 fn invalid_yaml_and_unknown_definition_kinds_are_visible_and_never_discard_source() {
     for settings in [
         "properties: [",
