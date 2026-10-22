@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {until,delay} from '../tasks-electron-integration/cdp.mjs';
 import {parseCSV} from './csv.mjs';
+import {assertScopedGroupSummaries} from './summary-oracle.mjs';
 import {MOD} from './ui.mjs';
 
 const active='.pane.is-active .bases-session';
@@ -158,12 +159,23 @@ export async function journey(c){
   await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).summaries.CustomTotalRenamed,'values.sum() + 1'),'existing-custom-summary-expression-live-edit');await backSummary(c);
   await c.ui.wait(`return document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.rating"] .summary-function-value')?.textContent==='214';`,'Edited custom summary evaluated by Rust');
   await c.ui.button('Group',active);await c.ui.select(`${dialog('Group')} select[aria-label="Group property"]`,'note.status');await apply(c,'Group');
-  const groupSummaryValues=new Set();
+  // The all-null group's sum and Null + 1 are Null, rendered as a blank. Keep
+  // text intact: Number('') would fabricate zero and hide this distinction.
+  const groupSummaries=new Map(),groupHeaders=new Map(),groupPaths=new Map(),visibleAlerts=new Set();
+  await c.ui.scroll(`${active} [role="grid"]`,-10000);
   for(let i=0;i<10;i++){
-    const values=await c.ui.dom(`return [...document.querySelectorAll('${active} .zorid-bases-table-body .zorid-bases-table-summary [data-summary-property="note.rating"] .summary-function-value')].map(e=>Number(e.textContent));`);for(const value of values)groupSummaryValues.add(value);
+    const frame=await c.ui.dom(`const root=document.querySelector('${active}');const body=root.querySelector('.zorid-bases-table-body');return {
+      summaries:[...body.querySelectorAll('.zorid-bases-table-summary [data-summary-property="note.rating"]')].map(e=>({scope:e.dataset.summaryGroup,display:e.querySelector('.summary-function-value')?.textContent??null,name:e.querySelector('.summary-function-name')?.textContent})),
+      headers:[...body.querySelectorAll('[data-group-button]')].map(e=>({scope:e.dataset.groupButton,text:e.textContent})),
+      paths:[...body.querySelectorAll('[data-path][data-property="file.name"]')].map(e=>({scope:e.dataset.group,path:e.dataset.path})),
+      alerts:[...root.querySelectorAll('[role="alert"]')].filter(e=>e.getClientRects().length&&e.textContent.trim()).map(e=>e.textContent.trim())};`);
+    for(const summary of frame.summaries){assert.equal(summary.name,'CustomTotalRenamed');assert.equal(typeof summary.display,'string','Summary value span must exist even for Null');const previous=groupSummaries.get(summary.scope);if(previous)assert.deepEqual(summary,previous,'A group summary remains stable while scrolling');groupSummaries.set(summary.scope,summary);}
+    for(const header of frame.headers){const match=/^[▾▸]\s+(.*) \((\d+)\)$/.exec(header.text);assert.ok(match,'Rendered group label includes its row count');groupHeaders.set(header.scope,{label:match[1],count:Number(match[2])});}
+    for(const row of frame.paths){if(!groupPaths.has(row.scope))groupPaths.set(row.scope,new Set());groupPaths.get(row.scope).add(row.path);}
+    for(const alert of frame.alerts)visibleAlerts.add(alert);
     await c.ui.scroll(`${active} [role="grid"]`,500);
   }
-  assert.deepEqual([...groupSummaryValues].sort((a,b)=>a-b),[1,71,72,73],'Each of four groups has its own Rust summary, independent of viewport');c.evidence.checks.push({name:'group-custom-summary-scope',values:[...groupSummaryValues].sort((a,b)=>a-b),overall:214});await c.screenshot('02c-group-summaries');
+  c.evidence.checks.push(assertScopedGroupSummaries([...groupSummaries].map(([scope,summary])=>({scope,...groupHeaders.get(scope),display:summary.display,paths:[...(groupPaths.get(scope)??[])],visibleAlerts:[...visibleAlerts]}))));await c.screenshot('02c-group-summaries');
   await c.ui.button('Group',active);await c.ui.button('Remove grouping',dialog('Group'));await apply(c,'Group');await c.ui.scroll(`${active} [role="grid"]`,-10000);
   await openSummary(c);await c.ui.button('Edit CustomTotalRenamed','.zorid-bases-summary-picker');await c.ui.button('Summary actions',dialog('Edit summary'));await c.ui.button('Delete summary',dialog('Edit summary'));
   await c.saved('Library.base',source=>{const doc=c.yaml.parse(source);assert.equal(doc.summaries.CustomTotalRenamed,undefined);assert.equal(doc.views.find(v=>v.name==='Books table').summaries?.['note.rating'],undefined);assert.equal(doc.summaries.RatingTotal,'values.sum()');},'summary-more-delete-removes-definition-and-selected-reference');
