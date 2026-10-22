@@ -3149,7 +3149,7 @@ fn plain_string(value: &RuntimeValue) -> String {
             .map(|display| format!("[[{}|{display}]]", value.path))
             .unwrap_or_else(|| format!("[[{}]]", value.path)),
         RuntimeValue::Regex(pattern, flags) => format!("/{pattern}/{flags}"),
-        RuntimeValue::Image(value) => format!("![]({value})"),
+        RuntimeValue::Image(value) => super::order::image_text(value),
         RuntimeValue::Error(message) => message.clone(),
     }
 }
@@ -4471,6 +4471,22 @@ mod rich_expression_tests {
             .and_then(typed_result)
             .unwrap();
         assert_eq!(round_trip, value);
+    }
+
+    #[test]
+    fn image_string_representation_matches_internal_and_external_resource_forms() {
+        assert_eq!(
+            eval("image('covers/Dune.png').toString()").unwrap(),
+            BaseValue::String {
+                value: "![[covers/Dune.png]]".into()
+            }
+        );
+        assert_eq!(
+            eval("image('https://example.test/cover.png').toString()").unwrap(),
+            BaseValue::String {
+                value: "![](https://example.test/cover.png)".into()
+            }
+        );
     }
 
     #[test]

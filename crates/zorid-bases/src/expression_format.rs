@@ -10,10 +10,15 @@ pub(super) fn format(value: &DateValue, pattern: &str) -> Result<String, String>
     }
     // The old adapter accepted parts of strftime accidentally. Do not pretend
     // those are Moment tokens; keep the explicit corpus diagnostic.
-    if pattern.contains('%') {
-        return Err("unsupported\0Date formatting uses Moment tokens, not strftime".into());
-    }
-    render(value, pattern, 0)
+    render(
+        value,
+        if pattern.is_empty() {
+            "YYYY-MM-DDTHH:mm:ssZ"
+        } else {
+            pattern
+        },
+        0,
+    )
 }
 
 fn render(value: &DateValue, pattern: &str, depth: usize) -> Result<String, String> {
@@ -156,6 +161,9 @@ fn render(value: &DateValue, pattern: &str, depth: usize) -> Result<String, Stri
                 cursor += character.len_utf8();
             }
             continue;
+        }
+        if rest.starts_with('%') {
+            return Err("unsupported\0Date formatting uses Moment tokens, not strftime".into());
         }
         let token = TOKENS
             .iter()
@@ -333,6 +341,8 @@ mod tests {
     fn offset_tokens_use_captured_timezone_and_patterns_are_bounded() {
         assert_eq!(text("Z ZZ", "+05:30"), "+05:30 +0530");
         assert_eq!(text("[Z] \\Z", "UTC"), "Z Z");
+        assert_eq!(text("[100%]", "UTC"), "100%");
+        assert_eq!(text("", "UTC"), "2024-01-21T19:04:05+00:00");
         let value = super::DateValue {
             millis: 0,
             date_only: false,
