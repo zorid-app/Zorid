@@ -1563,6 +1563,7 @@ fn result_heap(r: &BaseQueryResult, m: &mut Maintenance<'_>) -> Option<usize> {
             m.bytes(r.values.len().checked_mul(cell)?)?;
             let mut bytes = costs([
                 nodes,
+                summary_heap(&r.edit_values, m)?,
                 m.retained(
                     r.entry_id
                         .as_str()
@@ -1799,6 +1800,11 @@ fn copy_result(
                     .values
                     .iter()
                     .map(|(k, v)| Ok((k.clone(), copy_value(v, o)?)))
+                    .collect::<Result<_, ExpressionDiagnostic>>()?,
+                edit_values: r
+                    .edit_values
+                    .iter()
+                    .map(|(key, value)| Ok((key.clone(), copy_value(value, o)?)))
                     .collect::<Result<_, ExpressionDiagnostic>>()?,
             })
         })?,

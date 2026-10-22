@@ -772,3 +772,56 @@ fn relation_work_and_output_are_bounded_and_cancellable() {
     options.evaluation.cancellation = Some(cancellation);
     assert!(query_property_relations(&snapshot, &definitions, &options).is_err());
 }
+
+#[test]
+fn raw_edit_values_preserve_aliases_and_cached_date_source() {
+    let generation = generation(SETTINGS, &[("first", "---\nauthor: '[[../Authors/Ada|A. Lovelace]]'\npublished: 2026-01-01\nplain: text\n---\n")]);
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), SETTINGS)
+            .unwrap();
+    let source = "filters: 'published != null'\nviews:\n  - type: table\n    name: Books\n    order: [file.name, author, published, plain]\n";
+    let program = compile_base_source(source).unwrap();
+    let options = QueryOptions::default();
+    let result =
+        query_generation_with_properties(&program, &generation, &[], &definitions, &options)
+            .unwrap();
+    assert_eq!(
+        result.rows[0].edit_values["note.author"],
+        BaseValue::String {
+            value: "[[../Authors/Ada|A. Lovelace]]".into()
+        }
+    );
+    assert_eq!(
+        result.rows[0].edit_values["note.published"],
+        BaseValue::String {
+            value: "2026-01-01".into()
+        }
+    );
+    assert!(!result.rows[0].edit_values.contains_key("note.plain"));
+    let mut cache = zorid_bases::BasePreparationCache::default();
+    let compiled = cache.compile_source(source, 0).unwrap();
+    let prepared = cache
+        .prepare_generation(&generation, &[], &options, 0)
+        .unwrap();
+    cache
+        .query_prepared_cached(&compiled, &prepared, &options, 0)
+        .unwrap();
+    let hit = cache
+        .query_prepared_cached(&compiled, &prepared, &options, 1)
+        .unwrap();
+    assert_eq!(hit.outcome(), zorid_bases::PreparationCacheOutcome::Hit);
+    let mut copied = hit.into_value();
+    assert_eq!(
+        copied.rows[0].edit_values["note.published"],
+        BaseValue::String {
+            value: "2026-01-01".into()
+        }
+    );
+    copied.rows[0].edit_values.clear();
+    let next = cache
+        .query_prepared_cached(&compiled, &prepared, &options, 2)
+        .unwrap();
+    assert!(next.value().rows[0]
+        .edit_values
+        .contains_key("note.published"));
+}

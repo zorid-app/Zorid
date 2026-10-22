@@ -154,6 +154,11 @@ pub struct BaseRow {
     pub revision: crate::Revision,
     pub path: String,
     pub values: BTreeMap<String, BaseValue>,
+    /// Exact logical persisted note values where rendering inferred another
+    /// value type. Absent entries may fall back only to raw-safe primitives,
+    /// lists and objects; generated file/formula/derived values are not source.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub edit_values: BTreeMap<String, BaseValue>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -623,6 +628,41 @@ fn value_expression(property: &str) -> String {
             serde_json::to_string(name).expect("string serializes")
         )
     }
+}
+
+fn raw_matches_rendered(
+    raw: &PropertyValue,
+    rendered: &BaseValue,
+    check: &mut impl FnMut() -> Result<(), ExpressionDiagnostic>,
+) -> Result<bool, ExpressionDiagnostic> {
+    check()?;
+    Ok(match (raw, rendered) {
+        (PropertyValue::Null, BaseValue::Null) => true,
+        (PropertyValue::Bool(raw), BaseValue::Boolean { value }) => raw == value,
+        (PropertyValue::Number(raw), BaseValue::Number { value }) => raw.as_f64() == Some(*value),
+        (PropertyValue::String(raw), BaseValue::String { value }) => raw == value,
+        (PropertyValue::Array(raw), BaseValue::List { value }) if raw.len() == value.len() => {
+            let mut equal = true;
+            for (raw, rendered) in raw.iter().zip(value) {
+                if !raw_matches_rendered(raw, rendered, check)? {
+                    equal = false;
+                    break;
+                }
+            }
+            equal
+        }
+        (PropertyValue::Object(raw), BaseValue::Object { value }) if raw.len() == value.len() => {
+            let mut equal = true;
+            for ((raw_key, raw), (key, rendered)) in raw.iter().zip(value) {
+                if raw_key != key || !raw_matches_rendered(raw, rendered, check)? {
+                    equal = false;
+                    break;
+                }
+            }
+            equal
+        }
+        _ => false,
+    })
 }
 
 fn needs_shared_files(program: &BaseProgram, view: &program::View, preview: bool) -> bool {
@@ -1427,6 +1467,49 @@ pub(crate) fn query_rows_validated(
                         "Preview admission exceeds query work budget",
                     )?;
                 }
+                let mut edit_values = BTreeMap::new();
+                for (name, raw) in &record.properties {
+                    let property = format!("note.{name}");
+                    let Some(rendered) = values.get(&property) else {
+                        continue;
+                    };
+                    if raw_matches_rendered(raw, rendered, &mut || {
+                        steps_used = steps_used.saturating_add(1);
+                        if options
+                            .evaluation
+                            .cancellation
+                            .as_ref()
+                            .is_some_and(|c| c.is_cancelled())
+                        {
+                            return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+                        }
+                        check_query_work(
+                            steps_used.saturating_add(session.steps_used()),
+                            &admission,
+                            options,
+                            "Raw edit value comparison exceeds query work budget",
+                        )
+                    })? {
+                        continue;
+                    }
+                    admit(&mut admission, |admission| {
+                        admission.charge(0)?;
+                        Ok(map_slot::<String, BaseValue>()
+                            .saturating_add(crate::preview::string_bytes(&property))
+                            .saturating_add(
+                                crate::preview::property_bytes(raw, admission)?.saturating_mul(4),
+                            ))
+                    })?;
+                    let raw = expression::typed_result(crate::runtime_value(raw, 0, &mut 0usize)?)?;
+                    edit_values.insert(property, raw);
+                    steps_used = steps_used.saturating_add(1);
+                    check_query_work(
+                        steps_used.saturating_add(session.steps_used()),
+                        &admission,
+                        options,
+                        "Raw edit values exceed query work budget",
+                    )?;
+                }
                 steps_used = steps_used.saturating_add(session.steps_used());
                 admit(&mut admission, |admission| {
                     admission.charge(0)?;
@@ -1464,6 +1547,7 @@ pub(crate) fn query_rows_validated(
                         .clone(),
                     path: record.path.clone(),
                     values,
+                    edit_values,
                 }))
             },
         )?;
@@ -1748,6 +1832,8 @@ pub(crate) fn query_rows_validated(
     }
     for row in &mut rows {
         row.values.retain(|property, _| retained.contains(property));
+        row.edit_values
+            .retain(|property, _| retained.contains(property));
     }
     admit(&mut admission, |admission| {
         admission.charge(0)?;
