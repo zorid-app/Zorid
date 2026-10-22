@@ -2,6 +2,32 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Latest continuation: native safety009 on rootba6304a5/new Rust79bb passes the
+entire shared-body/conditional-history scenario, including touched-property
+external-edit rejection. Six durable checks and39 actions precede its next
+failure: the partial-bulk fixture expects an ordinary concurrent body edit to
+produce recovery, but the actual note contains both local and external text.
+`bases_guarded_buffer` audits whether that conflict precondition contradicts
+intended CRDT merging; neither a product defect nor partial-bulk acceptance is
+established. Owned app closes SIGTERM exit0/no leaks; source/artifacts reverify.
+Evidence `/private/tmp/zorid-bases-safety-current-20261022-009/result.json`.
+Attempt008 had0actions/0checks: root supplied the wrong full commit hash and the
+provenance guard refused launch;009 uses the correct frozen hash.
+
+Read-only review confirms ordinary standalone Base config and inline fence
+config saves omit the new physical-source capture. They can logically commit
+and acknowledge against stale core state while external physical bytes remain
+protected in pending projection. No physical overwrite is demonstrated.
+`bases_controller` owns the standalone config fix/tests on an isolated branch;
+inline containing-note ownership/dirty-body policy is being reconciled before
+implementation. Keep exact original attempt/retry identity and occurrence checks.
+
+Matching guard-core host/CLI build19034 and frontend009/77853 pass; all30 new
+Rust guard cases pass. Full affected Rust run82532 remains incomplete after disk
+exhaustion; it is not a full-suite pass. Resource headroom subsequently recovers
+to5898764KiB; user requests continuing with available space. Reference typed003
+now has the single owned app slot (worker5952); no concurrent heavy build/app.
+
 Date-v8 full Rust run passes361 tests/20 targets at8074eabf; matching native/CLI
 build9637 is live, no current date-v8 client acceptance yet. Expanded shared
 fixtures146 assertions are ready for fresh125-command CLI/19-group browser
