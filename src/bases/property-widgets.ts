@@ -249,14 +249,22 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
         const ownedFocus = document.activeElement === checkbox;
         let focusMoved = false;
         const moved = (event: FocusEvent) => { if (event.target !== checkbox) focusMoved = true; };
-        if (ownedFocus) { document.addEventListener('focusin', moved, true); removeFocusObserver = () => document.removeEventListener('focusin', moved, true); }
+        const pointedOutside = (event: PointerEvent) => { if (!element.contains(event.target as Node)) focusMoved = true; };
+        const leftWindow = () => { focusMoved = true; };
+        const removeObservers = () => {
+          document.removeEventListener('focusin', moved, true); document.removeEventListener('pointerdown', pointedOutside, true); win?.removeEventListener('blur', leftWindow);
+        };
+        if (ownedFocus) {
+          document.addEventListener('focusin', moved, true); document.addEventListener('pointerdown', pointedOutside, true); win?.addEventListener('blur', leftWindow);
+          removeFocusObserver = removeObservers;
+        }
         checkbox.disabled = true; const next = checkbox.checked;
         try {
           if (!await commit({ type: 'boolean', value: next })) {
             checkbox.disabled = !editable; checkbox.checked = value.type === 'boolean' && value.value; checkbox.indeterminate = value.type === 'null';
           }
         } finally {
-          if (ownedFocus) { document.removeEventListener('focusin', moved, true); removeFocusObserver = undefined; }
+          if (ownedFocus) { removeObservers(); removeFocusObserver = undefined; }
           const active = document.activeElement;
           if (ownedFocus && !focusMoved && current() && (active === checkbox || active === document.body || active === document.documentElement)) {
             const replacement = element.querySelector<HTMLInputElement>('.metadata-input-checkbox');

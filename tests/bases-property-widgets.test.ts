@@ -341,3 +341,14 @@ test('settled checkbox save never steals focus after another control gained it w
     checkbox.focus();checkbox.click();outside.focus();if(blurOutside)outside.blur();release();await tick();assert.equal(s.input().checked,true);assert.equal(s.dom.window.document.activeElement,blurOutside?s.dom.window.document.body:outside);s.close();
   }
 });
+
+
+test('checkbox acknowledgement does not restore focus after outside pointer intent or window blur', async () => {
+  for(const intent of ['pointer','window-blur']) {
+    let release!:()=>void;const s=setup(false,{type:'checkbox'},{commit:async edit=>{await new Promise<void>(resolve=>{release=resolve;});return {version:Number(edit.version)+1,row:edit.row,value:edit.value};}});const checkbox=s.input();
+    checkbox.focus();checkbox.click();/* Emulate Chromium's disabled-input blur in JSDOM. */checkbox.disabled=false;checkbox.blur();checkbox.disabled=true;
+    if(intent==='pointer') {const outside=s.dom.window.document.createElement('section');s.dom.window.document.body.append(outside);outside.dispatchEvent(new s.dom.window.Event('pointerdown',{bubbles:true}));}
+    else s.dom.window.dispatchEvent(new s.dom.window.Event('blur'));
+    assert.equal(s.dom.window.document.activeElement,s.dom.window.document.body);release();await tick();assert.equal(s.input().checked,true);assert.equal(s.dom.window.document.activeElement,s.dom.window.document.body);s.close();
+  }
+});
