@@ -234,8 +234,14 @@ fn captured_internal_link_string_methods_read_original_data_without_mutating_loo
         evaluated("note.payload.toString()", value),
         expected("[[../Original#H|Alias]]")
     );
-    assert_eq!(evaluated("note.payload.length", RuntimeValue::Link(link.clone())), BaseValue::Number { value: 13.0 });
-    assert_eq!(evaluated("note.payload.lower()", RuntimeValue::Link(link.clone())), expected("../original#h"));
+    assert_eq!(
+        evaluated("note.payload.length", RuntimeValue::Link(link.clone())),
+        BaseValue::Number { value: 13.0 }
+    );
+    assert_eq!(
+        evaluated("note.payload.lower()", RuntimeValue::Link(link.clone())),
+        expected("../original#h")
+    );
     assert_eq!(link.path, "Canonical/Resolved.md");
     assert_eq!(
         link.resolved_path,
@@ -375,6 +381,119 @@ fn work_cancellation_depth_and_expansion_are_admitted_cooperatively() {
     let oversized = object(&[("control", RuntimeValue::String("\u{0}".repeat(1_500_000)))]);
     assert_eq!(
         runtime_diagnostic(stringify_checked(&oversized, &mut |_| Ok(())).unwrap_err()).code,
+        "budget"
+    );
+}
+
+#[test]
+fn recursive_key_scratch_is_bounded_by_the_callers_remaining_headroom() {
+    let mut value = RuntimeValue::String("x".repeat(4096));
+    for _ in 0..8 {
+        value = object(&[("k", value)]);
+    }
+    let normal = stringify_checked(&value, &mut |_| Ok(())).unwrap();
+    assert!(normal.len() < 16 * 1024, "the final key is small");
+    let failure = reference_stringification::stringify_with_scratch_limit(
+        &value,
+        reference_stringification::LinkPolicy::Presentation,
+        16 * 1024,
+        &mut |_| Ok(()),
+    )
+    .unwrap_err();
+    assert_eq!(runtime_diagnostic(failure).code, "budget");
+    assert!(checked_sort_values_with_limit(&[value.clone()], 32 * 1024, &mut |_| Ok(())).is_ok());
+    // The same candidate fits alone, but the previous retained key reduces the
+    // render allowance. An 8MiB final-output-only reservation would miss this.
+    let failure = checked_sort_values_with_limit(
+        &[RuntimeValue::String("p".repeat(9000)), value.clone()],
+        32 * 1024,
+        &mut |_| Ok(()),
+    )
+    .unwrap_err();
+    assert_eq!(runtime_diagnostic(failure).code, "budget");
+    let failure = reference_stringification::stringify_with_scratch_limit(
+        &value,
+        reference_stringification::LinkPolicy::Presentation,
+        32 * 1024,
+        &mut |_| Err(RuntimeValue::Error("cancelled\0caller cancelled".into())),
+    )
+    .unwrap_err();
+    assert_eq!(
+        runtime_diagnostic(failure),
+        ExpressionDiagnostic::new("cancelled", "caller cancelled")
+    );
+}
+
+#[test]
+fn legacy_display_carries_its_converted_tree_and_enclosing_allocations() {
+    let mut input = serde_json::Value::String("x".repeat(4096));
+    for _ in 0..8 {
+        input = serde_json::json!({"k": input});
+    }
+    let rendered = runtime_display_string_checked(&input, 0, &mut 0usize, &mut |_| Ok(())).unwrap();
+    assert!(rendered.len() < 16 * 1024);
+    let mut outer = crate::MAX_BASE_REQUEST_BYTES - 16 * 1024;
+    let failure =
+        runtime_display_string_checked(&input, 0, &mut outer, &mut |_| Ok(())).unwrap_err();
+    let diagnostic = runtime_diagnostic(failure);
+    assert_eq!(diagnostic.code, "budget");
+    assert!(
+        diagnostic.message.contains("scratch"),
+        "conversion fits; live rendering does not"
+    );
+}
+
+#[test]
+fn unique_preserves_strict_collisions_and_limits_live_recursive_keys() {
+    let values = [
+        RuntimeValue::Number(1.0),
+        RuntimeValue::String("1".into()),
+        RuntimeValue::Number(1.0),
+        RuntimeValue::Null,
+        RuntimeValue::String("null".into()),
+        RuntimeValue::Bool(true),
+    ];
+    let output = unique_values(&values, &mut |_| Ok(())).unwrap();
+    assert_eq!(
+        to_plain(&RuntimeValue::List(output)),
+        serde_json::json!([1.0, "1", null, "null", true])
+    );
+    let mut value = RuntimeValue::String("x".repeat(4096));
+    for _ in 0..8 {
+        value = object(&[("k", value)]);
+    }
+    assert!(unique_values_with_limit(&[value.clone()], 24 * 1024, &mut |_| Ok(())).is_ok());
+    let failure = unique_values_with_limit(
+        &[RuntimeValue::String("p".repeat(9000)), value],
+        24 * 1024,
+        &mut |_| Ok(()),
+    )
+    .unwrap_err();
+    assert_eq!(runtime_diagnostic(failure).code, "budget");
+}
+
+#[test]
+fn output_clone_admission_counts_real_enum_slots_in_nested_vectors() {
+    let value = RuntimeValue::List(vec![RuntimeValue::Null; 256]);
+    let logical = charged_value_bytes(&value, &mut |_| Ok(())).unwrap();
+    let plan = runtime_clone::prepare_clone(&value, &mut |_| Ok(())).unwrap();
+    let allocated = plan.allocation_bytes();
+    assert!(
+        allocated > logical,
+        "logical payload is not the Vec allocation"
+    );
+    let failure = plan
+        .materialize(allocated - 1, &mut |_| Ok(()))
+        .unwrap_err();
+    assert_eq!(runtime_diagnostic(failure).code, "budget");
+    let plan = runtime_clone::prepare_clone(&value, &mut |_| Ok(())).unwrap();
+    let copied = plan.materialize(allocated, &mut |_| Ok(())).unwrap();
+    assert!(strict_values_equal(&value, &copied, &mut |_| Ok(())).unwrap());
+    assert_eq!(
+        runtime_diagnostic(
+            checked_sort_values_with_limit(&[value], allocated - 1, &mut |_| Ok(())).unwrap_err()
+        )
+        .code,
         "budget"
     );
 }

@@ -32,6 +32,8 @@ mod regex_admission;
 mod regex_admission_tests;
 #[path = "expression_stringification.rs"]
 mod reference_stringification;
+#[path = "expression_clone.rs"]
+mod runtime_clone;
 #[cfg(test)]
 #[path = "object_stringification_tests.rs"]
 mod object_stringification_tests;
@@ -4358,7 +4360,7 @@ fn from_json_checked(
         Value::Bool(value) => RuntimeValue::Bool(*value),
         Value::Number(value) => RuntimeValue::Number(value.as_f64().unwrap_or(f64::NAN)),
         Value::String(value) => {
-            admit_legacy_json(bytes, value.len(), check)?;
+            admit_legacy_json(bytes, value.len().max(32), check)?;
             RuntimeValue::String(reference_stringification::copy_text(value, check)?)
         }
         Value::Array(values) => {
@@ -4369,11 +4371,11 @@ fn from_json_checked(
             RuntimeValue::List(output)
         }
         Value::Object(values) => {
-            admit_legacy_json(bytes, values.len().saturating_mul(std::mem::size_of::<(String, RuntimeValue)>()).saturating_mul(2), check)?;
+            admit_legacy_json(bytes, runtime_clone::object_map_allocation_bound(values.len())?, check)?;
             let mut output = IndexMap::new();
-            output.try_reserve(values.len()).map_err(|_| RuntimeValue::Error("budget\0Legacy object allocation failed".into()))?;
+            output.try_reserve_exact(values.len()).map_err(|_| RuntimeValue::Error("budget\0Legacy object allocation failed".into()))?;
             for (key, value) in values {
-                admit_legacy_json(bytes, key.len(), check)?;
+                admit_legacy_json(bytes, key.len().max(32), check)?;
                 output.insert(reference_stringification::copy_text(key, check)?, from_json_checked(value, depth + 1, bytes, check)?);
             }
             RuntimeValue::Object(output)
@@ -4403,9 +4405,9 @@ fn runtime_link_from_json_checked(
     })();
     let Some((link, path, subpath)) = parsed else { return Ok(None); };
     let resolved = link.get("resolvedPath").map(|value| value.as_str());
-    admit_legacy_json(bytes, std::mem::size_of::<BasesLink>().saturating_add(path.len())
-        .saturating_add(subpath.map_or(0, str::len))
-        .saturating_add(resolved.flatten().map_or(0, str::len)), check)?;
+    admit_legacy_json(bytes, std::mem::size_of::<BasesLink>().saturating_add(path.len().max(32))
+        .saturating_add(subpath.map_or(0, |value| value.len().max(32)))
+        .saturating_add(resolved.flatten().map_or(0, |value| value.len().max(32))), check)?;
     Ok(Some(BasesLink {
         raw_destination: None,
         source_path: None,
@@ -4434,11 +4436,21 @@ fn runtime_display_string_checked(
     if let Some(value) = value.as_object()
         .filter(|value| value.get("type").and_then(Value::as_str) == Some("String"))
         .and_then(|value| value.get("value")).and_then(Value::as_str) {
-        admit_legacy_json(bytes, value.len(), check)?;
+        admit_legacy_json(bytes, value.len().max(32), check)?;
         return reference_stringification::copy_text(value, check);
     }
+    let outer_bytes = *bytes;
     let value = from_json_checked(value, depth, bytes, check)?;
-    stringify_checked(&value, check)
+    let headroom = crate::MAX_BASE_REQUEST_BYTES.saturating_sub(*bytes);
+    let output = reference_stringification::stringify_with_scratch_limit(&value,
+        reference_stringification::LinkPolicy::Presentation, headroom, check)?;
+    // The converted tree is temporary; only its rendered display survives in
+    // the enclosing legacy value. It remained charged throughout rendering.
+    drop(value);
+    *bytes = outer_bytes.checked_add(output.capacity())
+        .filter(|bytes| *bytes <= crate::MAX_BASE_REQUEST_BYTES)
+        .ok_or_else(|| RuntimeValue::Error("budget\0Legacy display retention exceeds byte budget".into()))?;
+    Ok(output)
 }
 
 fn to_plain(value: &RuntimeValue) -> Value {
@@ -5798,32 +5810,54 @@ fn checked_sort_values(
     values: &[RuntimeValue],
     check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
 ) -> Result<Vec<RuntimeValue>, RuntimeValue> {
+    checked_sort_values_with_limit(values, crate::MAX_BASE_REQUEST_BYTES, check)
+}
+
+fn checked_sort_values_with_limit(
+    values: &[RuntimeValue],
+    scratch_limit: usize,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<Vec<RuntimeValue>, RuntimeValue> {
+    let scratch_limit = scratch_limit.min(crate::MAX_BASE_REQUEST_BYTES);
     type Key = (Option<f64>, String, usize);
     let key_slots = values.len().saturating_mul(std::mem::size_of::<Key>());
-    let output_slots = values.len().saturating_mul(std::mem::size_of::<RuntimeValue>());
+    let plan_slots = values.len().saturating_mul(std::mem::size_of::<Option<runtime_clone::ClonePlan<'_>>>());
+    let collation_slots = values.len().saturating_mul(std::mem::size_of::<crate::list_sort::ListSortKey<'_>>())
+        .saturating_add(values.len().saturating_mul(2 * std::mem::size_of::<usize>()));
+    let metadata_slots = key_slots.saturating_add(plan_slots).saturating_add(collation_slots);
+    if metadata_slots > scratch_limit {
+        return Err(RuntimeValue::Error("budget\0Sort scratch exceeds byte budget".into()));
+    }
+    check(1 + metadata_slots / 16)?;
+    let mut plans = Vec::new();
+    plans.try_reserve_exact(values.len()).map_err(|_| RuntimeValue::Error("budget\0Sort clone plan allocation failed".into()))?;
     let mut payload = 0usize;
+    let mut copy_allocations = 0usize;
     for value in values {
         payload = payload.saturating_add(charged_value_bytes(value, check)?);
         if payload > 8 * 1024 * 1024 {
             return Err(RuntimeValue::Error("budget\0Sorted values exceed byte budget".into()));
         }
+        let plan = runtime_clone::prepare_clone(value, check)?;
+        copy_allocations = copy_allocations.saturating_add(plan.allocation_bytes());
+        if copy_allocations > scratch_limit - metadata_slots {
+            return Err(RuntimeValue::Error("budget\0Sort output allocation exceeds byte budget".into()));
+        }
+        plans.push(Some(plan));
     }
-    let collation_slots = values.len().saturating_mul(std::mem::size_of::<crate::list_sort::ListSortKey<'_>>())
-        .saturating_add(values.len().saturating_mul(2 * std::mem::size_of::<usize>()));
-    // Retain the key vector, borrowed collation view, two index work vectors,
-    // result vector, cloned values, keys and one in-flight checked key.
-    if key_slots.saturating_add(collation_slots).saturating_add(output_slots)
-        .saturating_add(payload).saturating_add(16 * 1024 * 1024) > crate::MAX_BASE_REQUEST_BYTES {
-        return Err(RuntimeValue::Error("budget\0Sort scratch exceeds byte budget".into()));
-    }
-    check(1 + key_slots / 16 + output_slots / 16)?;
+    // Plan bytes include each root RuntimeValue slot in the result vector.
+    // Recursive renderers share the rest with every retained key, the borrowed
+    // collation view and both stable-sort index vectors.
+    let fixed_scratch = metadata_slots + copy_allocations;
     let mut keys = Vec::new();
     keys.try_reserve_exact(values.len()).map_err(|_| RuntimeValue::Error("budget\0Sort key allocation failed".into()))?;
     let mut text_bytes = 0usize;
     for (index, value) in values.iter().enumerate() {
+        let headroom = scratch_limit.saturating_sub(fixed_scratch).saturating_sub(text_bytes);
         let text = match string_data(value) {
-            Some(data) => reference_stringification::copy_text(data, check)?,
-            None => stringify_checked(value, check)?,
+            Some(data) => reference_stringification::copy_text_with_scratch_limit(data, headroom, check)?,
+            None => reference_stringification::stringify_with_scratch_limit(value,
+                reference_stringification::LinkPolicy::Presentation, headroom, check)?,
         };
         text_bytes = text_bytes.saturating_add(text.capacity());
         if text_bytes > 8 * 1024 * 1024 {
@@ -5840,9 +5874,12 @@ fn checked_sort_values(
     let order = crate::list_sort::sorted_indices(&collation, check)?;
     let mut output = Vec::new();
     output.try_reserve_exact(values.len()).map_err(|_| RuntimeValue::Error("budget\0Sort result allocation failed".into()))?;
+    let mut remaining = scratch_limit - metadata_slots - text_bytes;
     for position in order {
-        check(0)?;
-        output.push(values[keys[position].2].clone());
+        let plan = plans[keys[position].2].take().expect("sort permutation visits each clone plan once");
+        let bytes = plan.allocation_bytes();
+        output.push(plan.materialize(remaining, check)?);
+        remaining -= bytes;
     }
     Ok(output)
 }
@@ -6353,57 +6390,108 @@ fn unique_values(
     values: &[RuntimeValue],
     check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
 ) -> Result<Vec<RuntimeValue>, RuntimeValue> {
-    let mut buckets = IndexMap::<String, Vec<&RuntimeValue>>::new();
+    unique_values_with_limit(values, crate::MAX_BASE_REQUEST_BYTES, check)
+}
+
+fn unique_values_with_limit(
+    values: &[RuntimeValue],
+    scratch_limit: usize,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<Vec<RuntimeValue>, RuntimeValue> {
+    #[derive(Clone, Copy)]
+    struct Bucket { head: usize, tail: usize }
+    struct Candidate<'a> { value: &'a RuntimeValue, next: Option<usize> }
+    type Ordered = (Option<u32>, usize, usize);
+    let scratch_limit = scratch_limit.min(crate::MAX_BASE_REQUEST_BYTES);
+    let map_bytes = runtime_clone::fresh_map_allocation_bound::<String, Bucket>(values.len())?;
+    let candidate_bytes = values.len().saturating_mul(std::mem::size_of::<Candidate<'_>>());
+    let ordered_bytes = values.len().saturating_mul(std::mem::size_of::<Ordered>());
+    // One admitted reservation per fresh structure. Buckets point into one
+    // fixed reference vector, avoiding untracked per-bucket Vec reallocations.
+    let grouping_bytes = map_bytes.saturating_add(candidate_bytes).saturating_add(ordered_bytes);
+    if grouping_bytes > scratch_limit {
+        return Err(RuntimeValue::Error("budget\0Unique scratch exceeds byte budget".into()));
+    }
+    check(1 + grouping_bytes / 16)?;
+    let mut buckets = IndexMap::<String, Bucket>::new();
+    buckets.try_reserve_exact(values.len()).map_err(|_| RuntimeValue::Error("budget\0Unique bucket allocation failed".into()))?;
+    let mut candidates = Vec::<Candidate<'_>>::new();
+    candidates.try_reserve_exact(values.len()).map_err(|_| RuntimeValue::Error("budget\0Unique candidate allocation failed".into()))?;
     let mut bytes = 0usize;
-    let mut count = 0usize;
+    let mut key_capacities = 0usize;
     for value in values {
         check(1)?;
-        let key = unique_bucket_key(value, check)?;
-        if !buckets.contains_key(&key) {
-            bytes = bytes.saturating_add(key.len() + 32);
-        }
-        let bucket = buckets.entry(key).or_default();
-        let mut seen = false;
-        for prior in bucket.iter() {
-            if strict_values_equal(prior, value, check)? {
-                seen = true;
-                break;
+        let headroom = scratch_limit.saturating_sub(grouping_bytes).saturating_sub(key_capacities);
+        let key = reference_stringification::stringify_with_scratch_limit(value,
+            reference_stringification::LinkPolicy::StrictOrigin, headroom, check)?;
+        if let Some(bucket) = buckets.get_mut(&key) {
+            let mut current = Some(bucket.head);
+            let mut seen = false;
+            while let Some(index) = current {
+                if strict_values_equal(candidates[index].value, value, check)? { seen = true; break; }
+                current = candidates[index].next;
             }
-        }
-        if !seen {
-            let size = charged_value_bytes(value, check)?;
-            bytes = bytes.saturating_add(size);
-            count += 1;
-            if bytes > 8 * 1024 * 1024 || count > 100_000 {
-                return Err(RuntimeValue::Error(
-                    "budget\0Unique result exceeds budget".into(),
-                ));
+            if seen { continue; }
+            bytes = bytes.saturating_add(charged_value_bytes(value, check)?);
+            if bytes > 8 * 1024 * 1024 || candidates.len() >= 100_000 {
+                return Err(RuntimeValue::Error("budget\0Unique result exceeds budget".into()));
             }
-            bucket.push(value);
+            candidates[bucket.tail].next = Some(candidates.len());
+            bucket.tail = candidates.len();
+            candidates.push(Candidate { value, next: None });
+        } else {
+            bytes = bytes.saturating_add(key.len() + 32).saturating_add(charged_value_bytes(value, check)?);
+            if bytes > 8 * 1024 * 1024 || candidates.len() >= 100_000 {
+                return Err(RuntimeValue::Error("budget\0Unique result exceeds budget".into()));
+            }
+            key_capacities = key_capacities.saturating_add(key.capacity());
+            let index = candidates.len();
+            buckets.insert(key, Bucket { head: index, tail: index });
+            candidates.push(Candidate { value, next: None });
         }
     }
-    check(
-        buckets
-            .len()
-            .saturating_mul((usize::BITS - buckets.len().max(1).leading_zeros()) as usize),
-    )?;
-    let mut ordered = buckets
-        .into_iter()
-        .enumerate()
-        .map(|(ordinal, (key, values))| (js_array_index(&key), ordinal, values))
-        .collect::<Vec<_>>();
+    check(buckets.len().saturating_mul((usize::BITS - buckets.len().max(1).leading_zeros()) as usize))?;
+    let mut ordered = Vec::<Ordered>::new();
+    ordered.try_reserve_exact(buckets.len()).map_err(|_| RuntimeValue::Error("budget\0Unique ordering allocation failed".into()))?;
+    for (ordinal, (key, bucket)) in buckets.into_iter().enumerate() {
+        ordered.push((js_array_index(&key), ordinal, bucket.head));
+    }
+    // The key strings and map have now been dropped. Output-clone allocation
+    // shares the remaining allowance with references, ordering and clone plans.
     ordered.sort_unstable_by(|a, b| match (a.0, b.0) {
         (Some(a), Some(b)) => a.cmp(&b),
         (Some(_), None) => std::cmp::Ordering::Less,
         (None, Some(_)) => std::cmp::Ordering::Greater,
         (None, None) => a.1.cmp(&b.1),
     });
-    let mut output = Vec::with_capacity(count);
-    for (_, _, values) in ordered {
-        for value in values {
-            check(0)?;
-            output.push(value.clone());
+    let plan_bytes = candidates.len().saturating_mul(std::mem::size_of::<runtime_clone::ClonePlan<'_>>());
+    let retained = candidate_bytes.saturating_add(ordered_bytes).saturating_add(plan_bytes);
+    if retained > scratch_limit {
+        return Err(RuntimeValue::Error("budget\0Unique clone scratch exceeds byte budget".into()));
+    }
+    check(1 + plan_bytes / 16)?;
+    let mut plans = Vec::new();
+    plans.try_reserve_exact(candidates.len()).map_err(|_| RuntimeValue::Error("budget\0Unique clone plan allocation failed".into()))?;
+    let mut allocation_bytes = 0usize;
+    for (_, _, head) in &ordered {
+        let mut current = Some(*head);
+        while let Some(index) = current {
+            let plan = runtime_clone::prepare_clone(candidates[index].value, check)?;
+            allocation_bytes = allocation_bytes.saturating_add(plan.allocation_bytes());
+            if allocation_bytes > scratch_limit - retained {
+                return Err(RuntimeValue::Error("budget\0Unique output allocation exceeds byte budget".into()));
+            }
+            plans.push(plan);
+            current = candidates[index].next;
         }
+    }
+    let mut output = Vec::new();
+    output.try_reserve_exact(plans.len()).map_err(|_| RuntimeValue::Error("budget\0Unique result allocation failed".into()))?;
+    let mut remaining = scratch_limit - retained;
+    for plan in plans {
+        let bytes = plan.allocation_bytes();
+        output.push(plan.materialize(remaining, check)?);
+        remaining -= bytes;
     }
     Ok(output)
 }

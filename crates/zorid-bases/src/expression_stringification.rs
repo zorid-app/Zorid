@@ -24,10 +24,20 @@ pub(super) fn stringify(
     policy: LinkPolicy,
     check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
 ) -> Result<String, RuntimeValue> {
+    stringify_with_scratch_limit(value, policy, SCRATCH_LIMIT, check)
+}
+
+pub(super) fn stringify_with_scratch_limit(
+    value: &RuntimeValue,
+    policy: LinkPolicy,
+    scratch_limit: usize,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<String, RuntimeValue> {
     Renderer {
         check,
         policy,
         held: 0,
+        limit: scratch_limit.min(SCRATCH_LIMIT),
     }
     .render(value, 0)
 }
@@ -36,10 +46,19 @@ pub(super) fn copy_text(
     text: &str,
     check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
 ) -> Result<String, RuntimeValue> {
+    copy_text_with_scratch_limit(text, SCRATCH_LIMIT, check)
+}
+
+pub(super) fn copy_text_with_scratch_limit(
+    text: &str,
+    scratch_limit: usize,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<String, RuntimeValue> {
     let mut renderer = Renderer {
         check,
         policy: LinkPolicy::Presentation,
         held: 0,
+        limit: scratch_limit.min(SCRATCH_LIMIT),
     };
     let mut output = String::new();
     renderer.append(&mut output, text)?;
@@ -55,6 +74,7 @@ pub(super) fn join(
         check,
         policy: LinkPolicy::Presentation,
         held: 0,
+        limit: SCRATCH_LIMIT,
     };
     let mut output = String::new();
     for (index, value) in values.iter().enumerate() {
@@ -75,6 +95,7 @@ pub(super) fn concatenate(
         check,
         policy: LinkPolicy::Presentation,
         held: 0,
+        limit: SCRATCH_LIMIT,
     };
     let mut output = String::new();
     for value in [left, right] {
@@ -91,6 +112,7 @@ struct Renderer<'a, F> {
     // Includes live child strings, ordered-entry scratch and output capacities.
     // Admission precedes allocation, including old+new capacity during growth.
     held: usize,
+    limit: usize,
 }
 impl<F: FnMut(usize) -> Result<(), RuntimeValue>> Renderer<'_, F> {
     fn reserve(&mut self, bytes: usize) -> Result<(), RuntimeValue> {
@@ -98,7 +120,7 @@ impl<F: FnMut(usize) -> Result<(), RuntimeValue>> Renderer<'_, F> {
         self.held = self
             .held
             .checked_add(bytes)
-            .filter(|bytes| *bytes <= SCRATCH_LIMIT)
+            .filter(|bytes| *bytes <= self.limit)
             .ok_or_else(|| budget("String conversion scratch exceeds byte budget"))?;
         Ok(())
     }
@@ -288,9 +310,9 @@ impl<F: FnMut(usize) -> Result<(), RuntimeValue>> Renderer<'_, F> {
             RuntimeValue::File(value) => self.append(output, &value.path)?,
             RuntimeValue::Link(value) => self.append(output, &value.path)?,
             RuntimeValue::Image(value) => {
+                (self.check)(value.len() / 16 + 1)?;
                 let wiki =
                     value.starts_with("./") || value.starts_with("../") || !value.contains(':');
-                (self.check)(value.len() / 16 + 1)?;
                 self.append(output, if wiki { "![[" } else { "![](" })?;
                 self.append(output, value)?;
                 self.append(output, if wiki { "]]" } else { ")" })?;
