@@ -2,7 +2,7 @@ import { BASE_PROPERTY_TYPES, basePropertyName, validateBasePropertyDefinition }
 import type { BasePropertyDefinition, BasePropertyDefinitions, BasePropertyOption, BasePropertyType } from './property-definitions.ts';
 
 export interface BasePropertySettingsPanel {
-  open(property?: string, anchor?: HTMLElement): void;
+  open(property?: string, anchor?: HTMLElement, type?: BasePropertyType): void;
   hasDraft(): boolean;
   destroy(): void;
 }
@@ -21,7 +21,7 @@ export function createBasePropertySettingsPanel(container: HTMLElement, options:
   let cleanup: (() => void) | undefined;
   const close = (restore = true) => { if (pending) return; cleanup?.(); cleanup = undefined; panel?.remove(); panel = undefined; dirty = false; options.onDraftChange(); void restore; };
   const element = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string) => { const el = doc.createElement(tag); if (text !== undefined) el.textContent = text; return el; };
-  const open = (initial?: string, anchor?: HTMLElement) => {
+  const open = (initial?: string, anchor?: HTMLElement, initialType?: BasePropertyType) => {
     options.preflight(); if (panel && dirty) throw new Error('Apply or cancel the property settings first.'); close(false);
     panel = element('section'); panel.className = 'bases-toolbar-popover bases-property-settings'; panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Property settings');
     panel.append(element('h3', 'Property settings'));
@@ -81,7 +81,7 @@ export function createBasePropertySettingsPanel(container: HTMLElement, options:
         readDetail = () => ({ type: kind, rollup: { relation: relation.value, ...(target.value ? { property: target.value } : {}), aggregation: aggregation.value as NonNullable<BasePropertyDefinition['rollup']>['aggregation'] } });
       } else readDetail = () => ({ type: kind });
     };
-    const load = () => { expected = options.definitions().properties[property.value] ?? null; definition = expected ?? { type: 'text' }; activeProperty = property.value; activeType = definition.type; const cached = detailDrafts.get(`${activeProperty}\0${activeType}`); if (cached) { definition = cached.definition; expected = cached.expected; } type.value = definition.type; draw(); };
+    const load = () => { expected = options.definitions().properties[property.value] ?? null; definition = expected ?? { type: 'text' }; if (initialType) { definition = { ...definition, type: initialType }; initialType = undefined; dirty = true; } activeProperty = property.value; activeType = definition.type; const cached = detailDrafts.get(`${activeProperty}\0${activeType}`); if (cached) { definition = cached.definition; expected = cached.expected; } type.value = definition.type; draw(); };
     property.addEventListener('change', () => { remember(); load(); }); type.addEventListener('change', () => { remember(); activeType = type.value as BasePropertyType; const cached = detailDrafts.get(`${activeProperty}\0${activeType}`); definition = cached?.definition ?? { ...definition, type: activeType }; if (cached) expected = cached.expected; draw(); dirty = true; options.onDraftChange(); }); load();
     form.addEventListener('input', () => { dirty = true; options.onDraftChange(); });
     const save = async (definition: BasePropertyDefinition | null) => { if (pending) return; pending = true; fields.disabled = true; apply.disabled = remove.disabled = cancel.disabled = true;

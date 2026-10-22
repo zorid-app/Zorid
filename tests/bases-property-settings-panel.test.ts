@@ -47,3 +47,25 @@ test('failed property settings save preserves the exact form for recovery', asyn
     assert.equal(doc.querySelector('[role="alert"]')!.textContent, 'Disk unavailable');
   } finally { panel.destroy(); dom.window.close(); }
 });
+
+test('switching property controls retains option drafts and the original definition baseline', async () => {
+  const dom = new JSDOM('<main></main>', { pretendToBeVisual: true }), doc = dom.window.document;
+  const original: BasePropertyDefinition = { type: 'status', options: [{ value: 'Todo' }] };
+  let current = original, received: BasePropertyDefinition | null | undefined;
+  const panel = createBasePropertySettingsPanel(doc.querySelector('main')!, {
+    definitions: () => ({ properties: { 'note.foo': current }, diagnostics: [] }), properties: () => ['note.note.foo'],
+    preflight() {}, onDraftChange() {}, onError() {}, async save(_property, definition, expected) { received = expected; assert.equal(definition?.options?.[0].label, 'To do'); },
+  });
+  try {
+    panel.open('note.note.foo');
+    const label = doc.querySelector<HTMLInputElement>('[aria-label="Option label"]')!; label.value = 'To do'; label.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    const type = doc.querySelector<HTMLSelectElement>('[aria-label="Property type"]')!;
+    type.value = 'text'; type.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    current = { type: 'status', options: [{ value: 'Externally changed' }] };
+    type.value = 'status'; type.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    assert.equal(doc.querySelector<HTMLInputElement>('[aria-label="Option label"]')!.value, 'To do');
+    doc.querySelector('form')!.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    await Promise.resolve(); await Promise.resolve();
+    assert.equal(received, original);
+  } finally { panel.destroy(); dom.window.close(); }
+});

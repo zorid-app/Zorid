@@ -92,6 +92,10 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   let mountedResult: BaseQueryResult | undefined, deferred: BaseControllerState | undefined;
   let mountedIndex = -1, mountedMove = false, mountedWritable = false;
   const widgetResults = new Map<string | number, BaseQueryResult>(), widgetSources = new Map<string | number, string>();
+  const rememberWidgetResult = (result: BaseQueryResult, source: string) => {
+    widgetResults.set(result.version, result); widgetSources.set(result.version, source);
+    while (widgetResults.size > 4) { const key = [...widgetResults.keys()].find(key => key !== mountedResult?.version); if (key === undefined) break; widgetResults.delete(key); widgetSources.delete(key); }
+  };
   let propertyLabels: unknown;
   let definitions: BasePropertyDefinitions = { properties: {}, diagnostics: [] };
   let creation: BaseCreationOperation | undefined;
@@ -232,6 +236,20 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     }, alive);
     await loadDefinitions();
   }
+  function editSummary(property: string, id: string, anchor: HTMLElement): void {
+    const document = BaseDocument.parse(controller.state.source), raw = document.getRoot('summaries');
+    const summaries: Record<string, BaseValue> = raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as Record<string, BaseValue>) } : {};
+    if (Object.hasOwn(summaries, id)) { openSummaryEditor(property, anchor, id); return; }
+    const active = controller.state.result;
+    const first = active?.rows.map(row => row.values[property]).find(value => value && value.type !== 'null');
+    const definition = definitions.properties[basePropertyName(property)] ?? (first ? inferBasePropertyDefinition(first) : undefined);
+    const dateRange = definition?.type === 'date' || definition?.type === 'datetime' || first?.type === 'date';
+    // Functional expression definitions observed in the shipped reference registry.
+    const builtins: Record<string, string> = { Average: 'values.mean().round(2)', Min: 'values.min()', Max: 'values.max()', Sum: 'values.sum().round(2)', Range: dateRange ? '(values.latest() - values.earliest())' : 'values.max() - values.min()', Median: 'values.median()', Stddev: 'values.stddev().round(2)', Earliest: 'values.earliest()', Latest: 'values.latest()', Checked: 'values.filter(value == true).length', Unchecked: 'values.filter(value == false).length', Empty: 'values.filter(value.isType("null")).length', Filled: 'values.filter(!value.isType("null")).length', Unique: 'values.unique().length' };
+    const expression = builtins[id]; if (!expression) throw new Error('This summary is no longer available.');
+    summaries[id] = expression;
+    void track(() => controller.updateRoot(controller.state.version, { summaries })).then(() => openSummaryEditor(property, anchor, id)).catch(report);
+  }
   function openSummaryEditor(property: string, anchor: HTMLElement, originalName?: string, suggestedName?: string): void {
     action(); if (options.readOnly || pending.size || activeDraft()) throw new Error('Finish or cancel the current edit first.');
     const opening = controller.state, document = BaseDocument.parse(opening.source);
@@ -334,8 +352,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if (pending.size || activeDraft()) { deferred = state; return; }
     deferred = undefined;
     if (mountedResult === result && mountedDefinitionsRevision === definitionsRevision) return;
-    widgetResults.set(result.version, result); widgetSources.set(result.version, state.source);
-    while (widgetResults.size > 4) { const key = [...widgetResults.keys()].find(key => key !== mountedResult?.version); if (key === undefined) break; widgetResults.delete(key); widgetSources.delete(key); }
+    rememberWidgetResult(result, state.source);
     const acknowledgeWidget = (original: BasePropertyPresentation, savedValue?: import('./expression.ts').BaseExpressionValue): BasePropertyWidgetAcknowledgement | undefined => {
       const before = widgetResults.get(original.version), latest = controller.state.result;
       if (!before?.shared || !latest?.shared || sharedBasePreview(latest) || widgetSources.get(original.version) !== controller.state.source) return;
@@ -346,7 +363,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       if (!baseValuesEqual(value, savedValue ?? original.value, true)) return;
       const oldBase = sharedBaseWitness(before, options.basePath), newBase = sharedBaseWitness(latest, options.basePath);
       if (!oldBase || !newBase || oldBase.entryId !== newBase.entryId) return;
-      widgetResults.set(latest.version, latest); widgetSources.set(latest.version, controller.state.source);
+      rememberWidgetResult(latest, controller.state.source);
       return { version: latest.version, row, value };
     };
     const shared = { result, getPropertyLabel, getPropertyType: (property: string) => definitions.properties[basePropertyName(property)]?.type,
@@ -368,8 +385,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         const label = selection && typeof selection === 'object' && !Array.isArray(selection) ? (selection as Record<string, BaseValue>)[property] ?? (selection as Record<string, BaseValue>)[basePropertyName(property)] : undefined;
         return value ? { value, ...(typeof label === 'string' ? { label } : {}) } : undefined;
       },
+      ...(writable ? {
       requestAddSummary: (property: string, anchor: HTMLElement, name?: string) => openSummaryEditor(property, anchor, undefined, name),
-      requestEditSummary: (property: string, id: string, anchor: HTMLElement) => openSummaryEditor(property, anchor, id),
+      requestEditSummary: (property: string, id: string, anchor: HTMLElement) => editSummary(property, id, anchor),
       requestHideSummary: (property: string) => track(() => {
         const active = mountedResult ?? result, current = active.view.summaries;
         const selection: Record<string, BaseValue> = current && typeof current === 'object' && !Array.isArray(current) ? { ...(current as Record<string, BaseValue>) } : {};
@@ -377,21 +395,31 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         return controller.updateView(numericVersion(active.version), { summaries: selection });
       }),
       propertyTypes: BASE_PROPERTY_TYPES.map(id => ({ id, label: id === 'datetime' ? 'Date & time' : id === 'reverseRelation' ? 'Reverse relation' : id[0].toUpperCase() + id.slice(1) })),
-      requestPropertyType: (property: string, id: string) => track(() => {
+      requestPropertyType: (property: string, id: string) => {
+        if (id === 'rollup' || id === 'reverseRelation') { settings.open(property, undefined, id); return Promise.resolve(); }
+        return track(() => {
         if (!property.startsWith('note.') || !BASE_PROPERTY_TYPES.includes(id as BasePropertyType)) throw new Error('Choose a supported note property type.');
         const bare = basePropertyName(property), previous = definitions.properties[bare];
         return saveDefinition(bare, { ...previous, type: id as BasePropertyType }, previous ?? null);
-      }),
+      }); },
+      } : {}),
+      getSummaryOptions: async (property: string, groupIndex: number | null) => {
+        const previews = await controller.summaryPreviews(property);
+        const custom = BaseDocument.parse(controller.state.source).getRoot('summaries');
+        const order = [...new Set(['Empty', 'Filled', 'Unique', 'Average', 'Min', 'Max', 'Sum', 'Range', 'Median', 'Stddev', 'Earliest', 'Latest', 'Checked', 'Unchecked', ...Object.keys(custom && typeof custom === 'object' && !Array.isArray(custom) ? custom : {})])];
+        return order.filter(id => Object.hasOwn(previews, id)).map(id => ({ id, label: id, ...(groupIndex === null ? { preview: previews[id] } : {}) }));
+      },
       summaryOptions: [...new Set(['Average','Min','Max','Sum','Range','Median','Stddev','Earliest','Latest','Checked','Unchecked','Empty','Filled','Unique', ...Object.keys((document.getRoot('summaries') as Record<string, BaseValue>) ?? {})])].map(id => ({ id, label: id })),
-      requestSummary: (property: string, id: string) => track(() => {
+      ...(writable ? { requestSummary: (property: string, id: string) => track(() => {
         const active = mountedResult ?? result;
         const current = active.view.summaries;
         const selections: Record<string, BaseValue> = current && typeof current === 'object' && !Array.isArray(current) ? { ...(current as Record<string, BaseValue>) } : {};
         if (id) selections[property] = id; else delete selections[property];
         return controller.updateView(numericVersion(active.version), { summaries: selections });
       }),
+      } : {}),
       isPropertyEditable: (property: string) => { try { assertPropertyWritable(property); return writable; } catch { return false; } },
-      validatePropertyValue: (value: import('./expression.ts').BaseExpressionValue, property: string) => { assertPropertyWritable(property, value); return value; },
+      validatePropertyValue: (value: import('./expression.ts').BaseExpressionValue, property: string) => { assertPropertyWritable(property); return value; },
       parsePropertyInput: (raw: string, property: string, row: import('./query.ts').BaseQueryRow) => parseBasePropertyInput(raw, definitions.properties[basePropertyName(property)] ?? inferBasePropertyDefinition(row.values[property] ?? { type: 'null' }), row.values[property]),
       ...(writable ? {
         ...(options.deleteFiles ? { deleteFiles: (rows: readonly import('./query.ts').BaseQueryRow[]) => track(async () => {
@@ -399,7 +427,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
           if (active.version !== controller.state.version) throw new Error('The Base result is stale; refresh before deleting files.');
           await options.deleteFiles!(rows, active);
         }) } : {}),
-        editProperties: (edits: readonly import('./table-view.ts').BaseTableEdit[]) => track(() => { edits.forEach(edit => assertPropertyWritable(edit.property, edit.value)); return actions.editProperties(edits); }),
+        editProperties: (edits: readonly import('./table-view.ts').BaseTableEdit[]) => track(() => { edits.forEach(edit => assertPropertyWritable(edit.property)); return actions.editProperties(edits); }),
         patchView: (patch: BaseViewPatch) => track(() => controller.updateView(numericVersion(mountedResult?.version ?? result.version), patch)),
         undo: () => track(() => controller.undo()), redo: () => track(() => controller.redo()),
         requestEditProperty: (property: string, anchor: HTMLElement) => settings.open(property, anchor),
@@ -413,7 +441,10 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       mountedResult = result;
       return;
     }
-    const moveEnabled = writable && actions.canMove(result);
+    const grouping = result.view.groupBy;
+    const groupingProperty = grouping && typeof grouping === 'object' && !Array.isArray(grouping) ? (grouping as Record<string, BaseValue>).property : undefined;
+    let groupWritable = true; if (typeof groupingProperty === 'string') { try { assertPropertyWritable(groupingProperty); } catch { groupWritable = false; } }
+    const moveEnabled = writable && groupWritable && actions.canMove(result);
     if (mounted && mountedType === result.view.type && mountedIndex === selectedIndex && mountedMove === moveEnabled && mountedWritable === writable && mountedDefinitionsRevision === definitionsRevision) mounted.update(result);
     else {
       mounted?.destroy(); mounted = undefined; content.replaceChildren();
