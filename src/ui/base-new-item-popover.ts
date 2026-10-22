@@ -191,6 +191,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     // Native change/blur and shared widget commits enter their queues first.
     await Promise.resolve(); await Promise.resolve();
     const propertyGeneration = propertyInputGeneration;
+    await properties.flush();
     await (currentTitleAttempt?.requested === titleText() ? currentTitleAttempt.promise : saveTitle());
     while (writes.size) await Promise.all([...writes]);
     await options.flushEditor?.();
@@ -202,7 +203,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     if (buffer.dirty || buffer.error) throw buffer.error ?? new Error('The new note still has pending changes.');
     propertyDraft = false; error.hidden = retry.hidden = true;
   }
-  function hasPendingChanges() { return !closed && (composingTitle || titleProblem || propertyDraft || titleText().trim() !== titleBaseline || !!writes.size || !!loading || buffer.dirty || !!buffer.error || !!options.hasPendingEditorChanges?.() || !!root.querySelector('[data-base-editing]') || [...root.querySelectorAll<HTMLElement>('.metadata-property-error')].some(node => !node.hidden && !!node.textContent?.trim())); }
+  function hasPendingChanges() { return !closed && (composingTitle || titleProblem || propertyDraft || properties.hasPendingChanges() || titleText().trim() !== titleBaseline || !!writes.size || !!loading || buffer.dirty || !!buffer.error || !!options.hasPendingEditorChanges?.() || !!root.querySelector('[data-base-editing]') || [...root.querySelectorAll<HTMLElement>('.metadata-property-error')].some(node => !node.hidden && !!node.textContent?.trim())); }
   function ownedPropertyPopover(target: Node) { return properties.owns(target); }
   function remove(restoreFocus: boolean) {
     if (closed) return;
@@ -221,7 +222,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
       const closingText=buffer.text,closingSavedText=buffer.savedText,closingPath=buffer.path;
       root.inert=true;
       await options.closeEditor?.();
-      if(buffer.text!==closingText||buffer.savedText!==closingSavedText||buffer.path!==closingPath||buffer.dirty||buffer.error||composingTitle||propertyDraft||writes.size||titleText().trim()!==titleBaseline||options.hasPendingEditorChanges?.()||root.querySelector('[data-base-editing]')||[...root.querySelectorAll<HTMLElement>('.metadata-property-error')].some(node=>!node.hidden&&!!node.textContent?.trim()))throw new Error('The new note changed while closing. Its draft is preserved.');
+      if(buffer.text!==closingText||buffer.savedText!==closingSavedText||buffer.path!==closingPath||buffer.dirty||buffer.error||composingTitle||propertyDraft||properties.hasPendingChanges()||writes.size||titleText().trim()!==titleBaseline||options.hasPendingEditorChanges?.()||root.querySelector('[data-base-editing]')||[...root.querySelectorAll<HTMLElement>('.metadata-property-error')].some(node=>!node.hidden&&!!node.textContent?.trim()))throw new Error('The new note changed while closing. Its draft is preserved.');
       remove(!!closeOptions.restoreFocus);
     }).catch(failure => { report(failure); throw failure; }).finally(() => { if(!closed)root.inert=wasInert;closing = undefined; });
     return closing;

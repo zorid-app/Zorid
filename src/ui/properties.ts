@@ -567,6 +567,9 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     if(destroyed)return;
     for(;;){const captured=pending;await captured;await Promise.resolve();if(captured===pending)break;}
     if(mutationFailure)throw mutationFailure;
+    const invalid=[...rows.values()].find(row=>hasDraft(row)&&!row.error.hidden&&!!row.error.textContent?.trim());
+    if(invalid)throw new Error(invalid.error.textContent!);
+    if(addForm&&!globalError.hidden&&globalError.textContent?.trim())throw new Error(globalError.textContent);
     if(addForm||[...rows.values()].some(hasDraft))throw new Error('Finish editing the current property before closing.');
   };
   const owns=(node:Node)=>{if(destroyed||!root.isConnected||!node.isConnected)return false;if(root.contains(node))return true;const owner=basePropertyPopoverOwner(node);return !!owner&&[...rows.values()].some(row=>row.value===owner);};
