@@ -41,14 +41,19 @@ performance/large-vault benchmark, OS foreground-focus test or mobile claim.
 
 Pass the explicit `--show-window` flag for campaigns that require a genuinely
 visible document, including ordinary-note property queries gated on visibility.
-This brings the owned page forward and sends AppKit unhide/activation requests.
-The runner then verifies the exact owned app PID is active/unhidden, a CoreGraphics
+This attempts to bring the owned page forward and sends AppKit unhide/activation
+requests. The runner verifies the exact owned app PID is unhidden, a CoreGraphics
 on-screen layer0 window owned by that PID has positive bounds, and the renderer's
-actual `document.visibilityState`, `document.hidden` and `document.hasFocus()`
-report visible/false/true. Native receipts and renderer observations are retained.
+actual `document.visibilityState` and `document.hidden` report visible/false.
+Request acceptance, native `isActive` and document `hasFocus()` are recorded as
+diagnostics; they cannot substitute for actual visibility and are not required
+to be true. macOS can decline foreground activation while a window remains on
+screen. Document state is captured before policy assertions for complete failure
+diagnostics. Native receipts and renderer observations are retained.
 It does not override visibility, clock policy or production queries. Such a run
-uses an actual foreground window and can be affected by user interaction; input
-is still CDP automation and does not establish physical keyboard parity.
+uses an actual visible window and can be affected by user interaction; input is
+still CDP automation and establishes neither OS foreground nor physical keyboard
+parity. No production activation or query policy is changed.
 The default hidden proof and cleanup behavior remain unchanged.
 
 Offline evidence-policy checks:
