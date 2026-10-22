@@ -1,0 +1,2320 @@
+{
+  "kind": "read-only-main-reconciliation-source-manifest",
+  "observedAt": "2026-10-22T13:59:58.006318+00:00",
+  "owner": "bases_expressions",
+  "worktree": "/Users/ctk/Projects/Zorid/.worktrees/bases-main-reconciliation",
+  "branch": "codex/bases-main-reconciliation",
+  "base": "e7d655e1d807769840b9d87c9d63dc7a9b70c29d",
+  "candidate": "5686f6b32c06c503a41a7978dedfb42466a7368b",
+  "mergeBase": "e7d655e1d807769840b9d87c9d63dc7a9b70c29d",
+  "mainOnlyCommits": 0,
+  "candidateOnlyCommits": 425,
+  "candidateMergeCommits": 0,
+  "mainWorktreeStatusObserved": [],
+  "candidateUntrackedObserved": [
+    "node_modules"
+  ],
+  "shortstat": "383 files changed, 55699 insertions(+), 2897 deletions(-)",
+  "files": [
+    {
+      "status": "M",
+      "path": "Cargo.lock",
+      "baseBlob": "87fd8176dc28adb1dfa8b4331a02b0201b46a19f",
+      "candidateBlob": "3c5ae0aac485e1739fa57e824c28bae89c2cce7b"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-bases/Cargo.toml",
+      "baseBlob": "1a3d19a2e0a7d52b6cdfd8f63f55156dabdd2c13",
+      "candidateBlob": "785000f4b815658bbbe38a3f9cb65d0559fd5bb3"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/LICENSE-ICU4X",
+      "baseBlob": null,
+      "candidateBlob": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/LICENSE-MOMENT",
+      "baseBlob": null,
+      "candidateBlob": "19bd75eeed6cc57b60e28e9db2ea9badf48cec86"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/PROPERTIES.md",
+      "baseBlob": null,
+      "candidateBlob": "ece76817e866c6db7a8425840d155eba9fdb37b2"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-bases/UPSTREAM.md",
+      "baseBlob": "63413a39faffef34173a46843f6bd46fccf60682",
+      "candidateBlob": "9d76da8958a60d94c906851e2b324926c7dc9dbb"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/computed_property_key_tests.rs",
+      "baseBlob": null,
+      "candidateBlob": "56ac222c49d5fae129b500048e72ab333cb2f779"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/duration_semantics_tests.rs",
+      "baseBlob": null,
+      "candidateBlob": "7515f5ffeda4dca3cf59f8f6a59dcc075c14a41a"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-bases/src/expression.rs",
+      "baseBlob": "a622beed1539ed1cc15436f94d928bd85d89d148",
+      "candidateBlob": "1554533f187ff56655318bee5eb163b8ff9f4d63"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/expression_call_tests.rs",
+      "baseBlob": null,
+      "candidateBlob": "0e9c1a71fa10bf66932f50c43b8f4e5d20f20336"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/expression_clone.rs",
+      "baseBlob": null,
+      "candidateBlob": "88cb944646d4c60cc4756bc658c90840c80caab7"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/expression_collection_tests.rs",
+      "baseBlob": null,
+      "candidateBlob": "b65a90db281497e93d3b8bb384deddd001c163cb"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/expression_duration.rs",
+      "baseBlob": null,
+      "candidateBlob": "9b5afe9e4d45cfc68e24bd4f7b71c5488e094929"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/expression_duration_dependency.rs",
+      "baseBlob": null,
+      "candidateBlob": "de04bf4affd2abf39be9ea762c2dd21cbfbf21cf"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/expression_format.rs",
+      "baseBlob": null,
+      "candidateBlob": "6abbac162dbc7bfb9cea30cb325ba4a1582844ac"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/expression_regex_admission.rs",
+      "baseBlob": null,
+      "candidateBlob": "e90f1fa0362e56943c9bf19c2fa2238b43dc4272"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/expression_regex_admission_tests.rs",
+      "baseBlob": null,
+      "candidateBlob": "92719386a29ef38cb71f76107e60c816162299e2"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/expression_shape.rs",
+      "baseBlob": null,
+      "candidateBlob": "84d3eeb3f58f753048cb0b3da31b13d8066b5e92"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/expression_signatures.rs",
+      "baseBlob": null,
+      "candidateBlob": "edcd265b298e829b4e16f20eed38057a229f3799"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/expression_stringification.rs",
+      "baseBlob": null,
+      "candidateBlob": "d86971639db0eb0a5c382bca3cb0b059988eddf3"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/expression_title_date_tests.rs",
+      "baseBlob": null,
+      "candidateBlob": "3a13f9ec12761b9fd82891f40b2ffc2703bca41d"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-bases/src/files.rs",
+      "baseBlob": "e1d188ade96052bc6d69b301cc9103aa47416df7",
+      "candidateBlob": "b8332199890464c3304533117f5398b83481540f"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-bases/src/graph.rs",
+      "baseBlob": "6334c7ae98ddfca799cce6bd9f797b6a6612d4ca",
+      "candidateBlob": "f899a93964945659cdc284f4e492030cd8fe342f"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/grouping.rs",
+      "baseBlob": null,
+      "candidateBlob": "3686de25b2ce0cd7ffb07ff7e0aee19d177f9459"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-bases/src/lib.rs",
+      "baseBlob": "2be1f0b7d9c536e6d917428ac8263421f42126f5",
+      "candidateBlob": "78976b54e11c9f94a01c2f777f1b031ba9e973f4"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/link_identity_admission_tests.rs",
+      "baseBlob": null,
+      "candidateBlob": "14ac6d638140c08d734705da80c6e1de2e56689c"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/link_subpath_tests.rs",
+      "baseBlob": null,
+      "candidateBlob": "32fc519082acd727cf0d617e207500f070cf7fa0"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/list_sort.rs",
+      "baseBlob": null,
+      "candidateBlob": "2c0e600c40654325b41e7d0f573294ac8a329c27"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/object_stringification_tests.rs",
+      "baseBlob": null,
+      "candidateBlob": "8101fd3bdbe872dd937aeb7b48e3abe200c51436"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-bases/src/order.rs",
+      "baseBlob": "436d1d2eb223d6887d3625fa41ef27e271b6e54e",
+      "candidateBlob": "09f3a08791ecffc2d225d8da36aa9c300317d09f"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-bases/src/preparation.rs",
+      "baseBlob": "eed864958f816afb67934b5c4c7cf707e54186d7",
+      "candidateBlob": "4791ac9897cc947771beb86c2f7ce5ef799b1a01"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-bases/src/preparation_tests.rs",
+      "baseBlob": "0f2a3312aef4615b186b0574715ce2a5c740561e",
+      "candidateBlob": "e71eeedfe05bed4e856ad3b4586fe6a85ed9015e"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-bases/src/preview.rs",
+      "baseBlob": "ecb759af0a9637aeabc74011c832417c5579f3e4",
+      "candidateBlob": "571a5bad0c0257d8dfb9e1d160e35e24580839a2"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-bases/src/program.rs",
+      "baseBlob": "c62daae08d57c957c008a9a6b4cee13eac45156f",
+      "candidateBlob": "c1e5afc673a031c3a50b34d86d726e64d2b6db60"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/properties.rs",
+      "baseBlob": null,
+      "candidateBlob": "45f222451a690283d586a5adbf75e1bbc466aed1"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/property_targets.rs",
+      "baseBlob": null,
+      "candidateBlob": "5f931ec82a7495e4d0d46c7f05363c86799d9324"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-bases/src/query.rs",
+      "baseBlob": "ecd3a5fb927db2e24b58652f33961a072ffb6097",
+      "candidateBlob": "8c025bf2b9a7c8cc266de3ecfb94b85aeb863399"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/relation_filter_sentinel_tests.rs",
+      "baseBlob": null,
+      "candidateBlob": "7bdd107f90bc2bd867acc537167c687115107ceb"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/relations.rs",
+      "baseBlob": null,
+      "candidateBlob": "07271b8e34b5d2b04f1e629ad96464424b6c9276"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/src/summaries.rs",
+      "baseBlob": null,
+      "candidateBlob": "6f33b80abbda06f69a50f7145362fccf1556f05f"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/tests/collection_expressions.rs",
+      "baseBlob": null,
+      "candidateBlob": "92641593bee3e18034359d58719deb92581b002c"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-bases/tests/corpus.rs",
+      "baseBlob": "1f9dbb0ebd56e7c47e458b735614fe710c4a65c9",
+      "candidateBlob": "8db4b7ace2eb48af81a16e1a3fe59c59e8432d69"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/tests/file_method_reference.rs",
+      "baseBlob": null,
+      "candidateBlob": "f300c6553198bee95d6f7b7be5f95bd131fa22dd"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/tests/frontmatter_tags_overlay.rs",
+      "baseBlob": null,
+      "candidateBlob": "206865efb307fcd35c9b5b5364dbef7317a03edf"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/tests/link_origin_provenance.rs",
+      "baseBlob": null,
+      "candidateBlob": "044a4eacf79bc132f8453a020f26560f9b99c502"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/tests/link_subpaths.rs",
+      "baseBlob": null,
+      "candidateBlob": "68bd3e39da63e646f339fc19d9003b59d78ac0ce"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/tests/object_tag_expressions.rs",
+      "baseBlob": null,
+      "candidateBlob": "36c70bd9bdefcd148380289df994c2c6a76eb20b"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-bases/tests/preview.rs",
+      "baseBlob": "2b1212a7f4a8655dc98a986c2883bb9216e06fb7",
+      "candidateBlob": "09899ac79c3fba39ac1a4f2c7a794512ea59873b"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/tests/property_relations.rs",
+      "baseBlob": null,
+      "candidateBlob": "5b4dec402d0e15727f3bd4dc7b963dfe277cb8ee"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-bases/tests/query_corpus.rs",
+      "baseBlob": "f816428bb83f8dbd743b47b2033bde34e264e29a",
+      "candidateBlob": "f96ea41ba99cfc4a28ced79e2f129a44c0ab90b1"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/tests/regex_construction.rs",
+      "baseBlob": null,
+      "candidateBlob": "a32aa5eef2b9f75dbed6c9dd16d32bfd528b68d0"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/tests/regex_query_admission.rs",
+      "baseBlob": null,
+      "candidateBlob": "2c1ab0b9ff9c8d0b800088971170bbde0233c27b"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/tests/rich_query.rs",
+      "baseBlob": null,
+      "candidateBlob": "3a4feb31914a377445a048140a31e01a77338b61"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-bases/tests/summaries.rs",
+      "baseBlob": null,
+      "candidateBlob": "c3d297cb3193094f59f890bdcf7f29c67d239afe"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-desktop-host/src/documents.rs",
+      "baseBlob": "d78c6655c84fdd308d4440193a066b9377774e1c",
+      "candidateBlob": "b432882783376743a0593f622abe73534fc0f0f1"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-desktop-host/src/lib.rs",
+      "baseBlob": "fd871276212bee5c45a1343fe56787744d29b34b",
+      "candidateBlob": "9dee3be65176df7e069e7cce1c84703ffade7838"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-document/src/inline_base.rs",
+      "baseBlob": null,
+      "candidateBlob": "d701e2dc587e1e8420c013d3a7e59ede138073ca"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-document/src/lib.rs",
+      "baseBlob": "b10d743a09dc26294d1da5223039dfa8cb513995",
+      "candidateBlob": "6c1ad839325c109254c338c1e00eec358e1b65d4"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-document/src/markdown.rs",
+      "baseBlob": "17ad62d3fbada64e69f78073a5d779a94e8e9ec9",
+      "candidateBlob": "5e6aa6b721203c773e7802d9bcaa72f892d82b4c"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-document/src/phases.rs",
+      "baseBlob": "f54f4198c721013eb3429b917ee23b0ceec9d69e",
+      "candidateBlob": "c979a12cd5c1544e39a5d03ceba77aa9e4ab2640"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-index/src/resolver.rs",
+      "baseBlob": "d7d50b77e819a39a8be7689d9f4914d069c22d0f",
+      "candidateBlob": "47c38011696dbab96d6de00dd210883161c01336"
+    },
+    {
+      "status": "A",
+      "path": "crates/zorid-index/tests/root_resolver.rs",
+      "baseBlob": null,
+      "candidateBlob": "985b1d3d8b5fa555f8c677982a51727965f8fb4f"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-native/src/document_api.rs",
+      "baseBlob": "8815085d46d929afda140c727de5cf55266cac65",
+      "candidateBlob": "3e17df1735b17b0d7af30a9ed272f34743dbd9cc"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-native/src/document_index.rs",
+      "baseBlob": "fcfdb0f30a5d53994611e57884b725ae0e0fc253",
+      "candidateBlob": "62ae0eec937ffb3e049262917ec6a03f9b64c818"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-native/src/document_index_tests.rs",
+      "baseBlob": "2b4d6887a09df414d114c72a3d805c9d5ae59bb6",
+      "candidateBlob": "ec541687f09b97eebb3fc725946bdc8fff79467e"
+    },
+    {
+      "status": "M",
+      "path": "crates/zorid-wasm/src/document_index.rs",
+      "baseBlob": "6d10ac2de61f3a41505d2e5a2e63e804570bacd7",
+      "candidateBlob": "3d5b874c4e601478c8579c7cf3e03e8e34f90f02"
+    },
+    {
+      "status": "M",
+      "path": "desktop/client-admission.cjs",
+      "baseBlob": "f1bbb6d4503fca22dfcd457552e4d0cd6e93bd07",
+      "candidateBlob": "1602e7557c35d35305dded80a5a5575dc4348452"
+    },
+    {
+      "status": "M",
+      "path": "desktop/document-semantics.cjs",
+      "baseBlob": "983b67e4b7f3f3d00f24a2df6c5a56353a2eb2b6",
+      "candidateBlob": "3b649f0f7fbe4eb64b8b5a1571d8647e3e59ecce"
+    },
+    {
+      "status": "M",
+      "path": "desktop/document-semantics.d.cts",
+      "baseBlob": "09a2e294f8d64a0c1d59df91abbee9284882377a",
+      "candidateBlob": "5005c76422e57e7165666a5a466278327f04684f"
+    },
+    {
+      "status": "M",
+      "path": "desktop/editor-core.cjs",
+      "baseBlob": "74daaede3ebe3863bd0c008ee37fc49a4c8771c0",
+      "candidateBlob": "9bcd2eb71ae32fc844f48775e775eaec8ea2019c"
+    },
+    {
+      "status": "M",
+      "path": "desktop/text-create.cjs",
+      "baseBlob": "dfc79875d13f07ae253091bd120705363e7a4bc7",
+      "candidateBlob": "8112cafb59b2e88883b514eece769b8e86cd5087"
+    },
+    {
+      "status": "M",
+      "path": "docs/architecture/README.md",
+      "baseBlob": "5809b3f9d78ae3d85b6db9d8f8c9ed86240011a3",
+      "candidateBlob": "ac866179467aaf16efc5c17dd2480651b8d9710f"
+    },
+    {
+      "status": "M",
+      "path": "docs/architecture/interfaces.md",
+      "baseBlob": "d8f4aa73a99affa6ce9f2d31b4f8b71dd6524f8c",
+      "candidateBlob": "1dfe67186f09d3b1688ce62c1d676f496bbc8f15"
+    },
+    {
+      "status": "M",
+      "path": "docs/architecture/managed-data.md",
+      "baseBlob": "9f08f846d43976891ef2c611e0a845e19669865e",
+      "candidateBlob": "c3ac6f049d79afb1ac83ae3c97df657b1efff165"
+    },
+    {
+      "status": "M",
+      "path": "docs/architecture/rust-core.md",
+      "baseBlob": "a659df47f3591ef2e0823e6f28c03f7d3e487d12",
+      "candidateBlob": "d9a90f98f83a072f345db83e3cc974075c9cc455"
+    },
+    {
+      "status": "M",
+      "path": "docs/bases-status.md",
+      "baseBlob": "00bfad0de9bc8420a557d05877655cacb736c80b",
+      "candidateBlob": "fdc57c7b73369824fd542def60ce2acb4b5bdb17"
+    },
+    {
+      "status": "M",
+      "path": "docs/bases-tasks-calendar-plan.md",
+      "baseBlob": "58097ac601aadbc0191e0052598832e968421526",
+      "candidateBlob": "ab7fce1ac514a4e983bc2830f19a938b7a8ee87b"
+    },
+    {
+      "status": "M",
+      "path": "docs/deferred-product-roadmap.md",
+      "baseBlob": "c2abb9dfb7e963bcc9b48f85940cb9082ab6967e",
+      "candidateBlob": "dad59cc90c4ff79b59c408de8ed6d47df112a2b5"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-acceptance-audit-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "65c31bffbe04518baf51488ccc0887db35b51fb8"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-browser-actual-006-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "ce544439bc1b14ac03fb06c12c41848db6a3e65d"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-browser-actual-007-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "48dce221d45784c93f98eaf870cb8898d0cf1be2"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-browser-actual-008-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "882c401876bb8d27cce896153bac51a777ae6ac4"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-browser-actual-009-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "40d71d66e3876104f1df3602e7dad5da781a48c3"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-browser-actual-010-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "e6ff69526d9331c807097dbdef9dcbb0be9ca08b"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-cell-edit-admission-reference-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "10c57ceec30e416b907abf2553983928df4e5534"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-cli-actual-006-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "f467cdf218c128114d68691dffffe1c9bd3c325a"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-cli-actual-007-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "1b8a6bbac8498512c81ac51d32443ea74026ad48"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-duration-reference-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "48c8fe69d1330d339aa64bb6caefad090531d180"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-electron-heavy-010-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "91fdfad3f3358c5a09128fca55a61c4cce07f055"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-electron-heavy-011-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "52e14cea0155a506ba651f002f0c6ec76128a1ca"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-electron-heavy-012-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "8386e5d4f531c4ff20ea23322889a342f7027179"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-electron-heavy-013-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "110d1f51d43b287f0cdd646f006cb7449be3458e"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-electron-heavy-014-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "257187da192c75bb520520da9fc7d55a8fbf4d40"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-electron-heavy-015-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "cf33c6178597463de653e0b788536b4c6de67067"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-electron-heavy-016-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "c6ce444a93232cc5d32d1475596776e8656de5ca"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-expression-completion-audit-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "a0f522d234748ae9f01e2b1782845ef6afc2d9ab"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-expression-validation-20261021.json",
+      "baseBlob": null,
+      "candidateBlob": "5dcd4f006ef05bb0accb80a487e8f2e871df8943"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-heavy-user-e2e-plan.md",
+      "baseBlob": null,
+      "candidateBlob": "737d6168b172bf4def1db39e1c51a668c8b42f47"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-hover-reference-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "f781591b836daeb8ec873aeff7232615dfe9b1d7"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-native-select-probe-003-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "3b8a4efdf23373e80c268dc7923abeb91db2f670"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-pass-reference-20261021.md",
+      "baseBlob": null,
+      "candidateBlob": "fc7cd0074496edc76434a7cd177e86ced718d1e3"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-query-host-policy-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "d0adff728de8bb5e50d10f948f1a1f6bc276e4ca"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-regex-construction-reference-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "f94147548fca364fd075ff56d194f3e28b5fad8f"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-source-recovery-reference-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "92df366a204c0c7b12aadcb2e628672c34b96c37"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-tasks-calendar-plan-20261017-superseded.md",
+      "baseBlob": null,
+      "candidateBlob": "edf4cc452bdfe35e4b7b65f2832e0d7223daa88d"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-type-retirement-inventory-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "ad0106039f9583a51a441b564aed1a2871f499f8"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-web-ui-actual-002-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "45285b9b689e5cd88dc7aa359c45e84d6c736172"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/bases-web-ui-actual-003-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "4c8d76e72d314786d5152a37b43b2e72e06cfa38"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/managed-data-implementation-plan-20261017-superseded.md",
+      "baseBlob": null,
+      "candidateBlob": "497c15b6b480d86084ba1fd873265a8cc24c4421"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/managed-data-root-next-assignments-20261018-superseded.md",
+      "baseBlob": null,
+      "candidateBlob": "44fa892164db6a1ed1a73d8697e38c23fb76287d"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/managed-data-task-calendar-owners-20261018-superseded.md",
+      "baseBlob": null,
+      "candidateBlob": "da334e91695c4d63e132a9ad221dd38142f85291"
+    },
+    {
+      "status": "A",
+      "path": "docs/history/managed-data-tasks-calendar-plan-20261017-superseded.md",
+      "baseBlob": null,
+      "candidateBlob": "5406c905b5b50888d991d91b4aea530c382d4074"
+    },
+    {
+      "status": "M",
+      "path": "docs/managed-data-tasks-calendar-plan.md",
+      "baseBlob": "9fe90643e79595c34c3774664b1d9b89b78552b7",
+      "candidateBlob": "ac2fb837f4bf82432ed47bb909192fe2dd2340c2"
+    },
+    {
+      "status": "M",
+      "path": "docs/managed-data/execution.md",
+      "baseBlob": "87d01daed2687ac50f2eae95166146174ae402a4",
+      "candidateBlob": "6ecbbf49b58a4d871810901bde00a9ecdd59b185"
+    },
+    {
+      "status": "M",
+      "path": "docs/managed-data/first-party-consumer-contract.md",
+      "baseBlob": "214a081cefc3ebe7e31c08dc48fa454ebb0ab0db",
+      "candidateBlob": "928ed2aeb76a7267f3025b820978dd2c02723918"
+    },
+    {
+      "status": "M",
+      "path": "docs/managed-data/implementation-plan.md",
+      "baseBlob": "436c97b42611f4148c9e1a995d3696d5f2f3aed5",
+      "candidateBlob": "5688cfc052244856b899aaf72bf47202cde996e7"
+    },
+    {
+      "status": "M",
+      "path": "docs/managed-data/internal-contract-draft.md",
+      "baseBlob": "b5e6e8edd9225b98ddb8063e61444e9074549398",
+      "candidateBlob": "74dc67cb9e65df4794cde20ae052c92f67195d69"
+    },
+    {
+      "status": "M",
+      "path": "docs/managed-data/root-next-assignments.md",
+      "baseBlob": "7acc6355f924628c9bd33c2aa8c696477d6d04c2",
+      "candidateBlob": "9da1ad4c358987d2fa52cec8e1bc2e8a3513878d"
+    },
+    {
+      "status": "M",
+      "path": "docs/managed-data/task-calendar-base-contract.md",
+      "baseBlob": "8e8a608fe9ad4fcf0472c5c64b46d263b8f36422",
+      "candidateBlob": "8f8b513f9a1154493de47f3974c72bda1c48d847"
+    },
+    {
+      "status": "M",
+      "path": "docs/managed-data/task-calendar-owners.md",
+      "baseBlob": "a228148b47d1c33ecf2842cc7d17061a5f37464d",
+      "candidateBlob": "ab10e7d04138f85de313485572eca0ef553af75d"
+    },
+    {
+      "status": "A",
+      "path": "docs/plans/bases-implementation-goal.md",
+      "baseBlob": null,
+      "candidateBlob": "53eba8f139842ee2ba78515fabfd06d52c085a24"
+    },
+    {
+      "status": "A",
+      "path": "docs/reference/bases-expression-matrix.md",
+      "baseBlob": null,
+      "candidateBlob": "7e2c870ddb62c583d0f7653b17a507f55708aca4"
+    },
+    {
+      "status": "A",
+      "path": "docs/reference/bases-mental-model.md",
+      "baseBlob": null,
+      "candidateBlob": "a9ee132bed7255b540a9518ada9d50e2c4df1bd2"
+    },
+    {
+      "status": "A",
+      "path": "docs/reference/bases-null-summaries-2026-10-22.md",
+      "baseBlob": null,
+      "candidateBlob": "fd60c552ac681265ac0eddaacd47fe0a8399329c"
+    },
+    {
+      "status": "M",
+      "path": "docs/roadmap.md",
+      "baseBlob": "4827598e170db82a7c875d0e0fadbb604ac2679e",
+      "candidateBlob": "66a48fe520d97cc0086e59381f7a2ffd379c30e3"
+    },
+    {
+      "status": "M",
+      "path": "docs/stage4-base-contract.md",
+      "baseBlob": "0b8994ad3808ebf3579645218adf277bcc8b67b4",
+      "candidateBlob": "33d90ee907c4db029eb3d16daafbff0375ce784e"
+    },
+    {
+      "status": "M",
+      "path": "docs/task-calendar-contract.md",
+      "baseBlob": "fe3880c0d634dfc1b5ddba0feb865a021730ca09",
+      "candidateBlob": "908e91071fa3d1d1a9d814caba1509d38cf6e5ea"
+    },
+    {
+      "status": "M",
+      "path": "docs/user-findings.md",
+      "baseBlob": "0449696fcc5635e862bf23ee2823988df38196b4",
+      "candidateBlob": "c997f0327be564c14a02b54eb7afc4b7d8ba1014"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/cards-view.css",
+      "baseBlob": "981cfec9e474f05841f9071910bc68e20babeb92",
+      "candidateBlob": "65d9618a3a02509b6fcb329a0f9a4de02e47ca92"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/cards-view.ts",
+      "baseBlob": "3e9206575de9c1006e35679b7dbf5b99968f39ce",
+      "candidateBlob": "eb58a70f3d5e5bc8be07a1a8fcdf6d9ad6e54380"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/controller.ts",
+      "baseBlob": "4146671e4ee20992e6d8d03c5c812f852b3c5837",
+      "candidateBlob": "2013e6b91463058a00ec631623f5b472b037b08d"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/creation.ts",
+      "baseBlob": null,
+      "candidateBlob": "8a09c2a608c12eef5549893ecdffbd5573fb2747"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/document.ts",
+      "baseBlob": "df0f35fcf1e1bbbb978d52c9dbcb0a9fd0c337ea",
+      "candidateBlob": "6c7fbfc70a61ea29f921226dd6c21d46694648f6"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/edit-admission-diagnostics.ts",
+      "baseBlob": null,
+      "candidateBlob": "cbe0e1702021077565d77843de343a27a5a16481"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/export.ts",
+      "baseBlob": null,
+      "candidateBlob": "e0fd308b1bb86cea68a3dbd7b6ac5e3e7b71a34d"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/expression.ts",
+      "baseBlob": "f298d46a75a5ab29816c8920a96fcc0e542623cb",
+      "candidateBlob": "04cf306c94a46415e71dcff43924c12bf8943ca5"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/file-hover.ts",
+      "baseBlob": null,
+      "candidateBlob": "a9f8fad3598a0989e5520000bfcc8fed7507a0f7"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/inline-base.ts",
+      "baseBlob": null,
+      "candidateBlob": "e25a7723a33e2dabcfba1f046ed3ac6fdcc3b55b"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/kanban-columns.ts",
+      "baseBlob": "28daf47f5f10825f0f2d08de144330a9033ed041",
+      "candidateBlob": "99b245919765190b36e96a9bbfe8a148fb8b43a6"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/kanban-view.css",
+      "baseBlob": "aab28d34753fd95877e08c1a7a456b9601cd8d95",
+      "candidateBlob": "ad4d04b6023a7cc0f1c8140bc053c3c5edc86d77"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/kanban-view.ts",
+      "baseBlob": "1bb9b911b03a23b5e8f2ec3ab0b3419c0ad1b679",
+      "candidateBlob": "c6e5dfdb72cf8545e343356342ba8cfc92bcac1d"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/list-view.ts",
+      "baseBlob": "98dcc39da8713096e354d192255ed73af201fe3f",
+      "candidateBlob": "4dd0926eb006de2f9200df6b44d6a63fca7b4e69"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/presentation-common.ts",
+      "baseBlob": "505f48fbc0aa5bac26789309241f6c0d8d3cdbf3",
+      "candidateBlob": "a6c18b9226990c198bb460d747abf18ca05ad315"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/property-definitions.ts",
+      "baseBlob": null,
+      "candidateBlob": "8623d6f4cf104521fdb6e2984903e61cb1636846"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/property-settings-panel.css",
+      "baseBlob": null,
+      "candidateBlob": "a00ec646e1091a6d60cb90ff36eb797866b9bd9c"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/property-settings-panel.ts",
+      "baseBlob": null,
+      "candidateBlob": "5c2212169be9282bf881f91b864630d3d13ccda7"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/property-targets.ts",
+      "baseBlob": null,
+      "candidateBlob": "f9f16c97bc762e0784a2b80ffaac5c3aa58ca2e4"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/property-widgets.css",
+      "baseBlob": null,
+      "candidateBlob": "7acd999e8cf13627cef16c00e82a34852f1aea5c"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/property-widgets.ts",
+      "baseBlob": null,
+      "candidateBlob": "5e49140e9d3f736eb72e5a414ba593dc82ba0172"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/query.ts",
+      "baseBlob": "561f0e209391baa38fa33d04877a66b91220a372",
+      "candidateBlob": "4f79be44c42d10c55c450cb7cf7286b785f648b9"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/rich-values.css",
+      "baseBlob": null,
+      "candidateBlob": "24aeb6ba075d71c9a0c9cb9d6ce0d6dc88f4be94"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/rich-values.ts",
+      "baseBlob": null,
+      "candidateBlob": "2728ca9db5b005fdef8b9ff9bcd0a5b5f7d3ce89"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/session.css",
+      "baseBlob": "3c9252b46935ef78f983b9d8ad60be2ed76a2ecc",
+      "candidateBlob": "721c1a0d4b6b94d48d79e41b7e65eaa95558c960"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/session.ts",
+      "baseBlob": "ed181eeb9a544677d3b99211d87829db1348c899",
+      "candidateBlob": "0f320ae9a12c01df5bd961d01a269c5a084eece4"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/shared-query.ts",
+      "baseBlob": "c8e0cdd63cf6fa41170d8b528e5a269d0355ec84",
+      "candidateBlob": "cc4f54d4a6923de5738980bb9ed90609702c592f"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/shared-values.ts",
+      "baseBlob": null,
+      "candidateBlob": "1f3df76c5db2fa3587666d0808eb8674ac7ecbf4"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/table-clipboard.ts",
+      "baseBlob": null,
+      "candidateBlob": "d7a06d521a89be37e6cacd378f65aac681d6d63b"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/table-view.css",
+      "baseBlob": "ed7276bdf039c57aac7946de6c8ee6a9506c0cd6",
+      "candidateBlob": "5f21000dc0d8b23a27a49eebcc469c878dfeefd2"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/table-view.ts",
+      "baseBlob": "7ec29702375f55ace6d1fb569e41e94b069e26cf",
+      "candidateBlob": "e9a6a4486d146386a2f040bf34ea9fa43fe67bf7"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/toolbar-combobox.ts",
+      "baseBlob": null,
+      "candidateBlob": "e314de5fc22efc7ae518143c77d8a3f76e0a892e"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/toolbar-config.ts",
+      "baseBlob": "d6c5fa90af14c50f955c04a34007672878e1ef86",
+      "candidateBlob": "0774884b28113551b13d1248b73c3abd70454336"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/toolbar-formula-editor.ts",
+      "baseBlob": null,
+      "candidateBlob": "e4edccfb5d1084216878abbde768906dfff3d903"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/toolbar-groups.ts",
+      "baseBlob": null,
+      "candidateBlob": "a8bf73f19361d867ff19f841de9e88ea60c03be9"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/toolbar-panels.ts",
+      "baseBlob": null,
+      "candidateBlob": "c718845b899ccc3e08d1ccc29c973a05d118a29f"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/toolbar.ts",
+      "baseBlob": "0e6d3b59128fd379dd9f2d58b5e399b5cb2609bc",
+      "candidateBlob": "b1d55c2e7ac5635c6fbe4eaebacf8b3a331963b0"
+    },
+    {
+      "status": "M",
+      "path": "src/bases/view-actions.ts",
+      "baseBlob": "182106fb65742ff2ef3d0edc4376063018d856bd",
+      "candidateBlob": "2d9d525c4aeee10fdcbe6dee8b968bf1a4eab60c"
+    },
+    {
+      "status": "A",
+      "path": "src/bases/view-references.ts",
+      "baseBlob": null,
+      "candidateBlob": "831ef4935d41af4e336ab507371757776af644d5"
+    },
+    {
+      "status": "M",
+      "path": "src/core/browser-document-index.ts",
+      "baseBlob": "06e6c9a6d6928413ecb5a7bf6ec19d78704b6868",
+      "candidateBlob": "2ef51e3e0d31ec054468ce448b3132567c7fdb2b"
+    },
+    {
+      "status": "M",
+      "path": "src/core/document-semantics.ts",
+      "baseBlob": "148ad6d572ca03c517a9c271df1c394096ab3bcc",
+      "candidateBlob": "a79b6237bdda437d440d88914b2f23af2a62e52a"
+    },
+    {
+      "status": "M",
+      "path": "src/core/metadata.ts",
+      "baseBlob": "1d0919e5e5dff2cc122f12f82e4c70d277fb3df4",
+      "candidateBlob": "ca932d0d89e272b33d988fbc6cd97dc499fba005"
+    },
+    {
+      "status": "A",
+      "path": "src/core/text-create.ts",
+      "baseBlob": null,
+      "candidateBlob": "1bbf05cf1a5f33fd6819a22b6994d7fa308c84ec"
+    },
+    {
+      "status": "M",
+      "path": "src/core/types.ts",
+      "baseBlob": "894a585ea5597ca535a43f0a769925c4867dd6eb",
+      "candidateBlob": "aaa27de73c38cfb60dffd0c8f2fb18661d3485c0"
+    },
+    {
+      "status": "M",
+      "path": "src/core/vault.ts",
+      "baseBlob": "e48ca38bdc792f06970618d7c3a4c14885716ebc",
+      "candidateBlob": "c17e4208cef58bde64fc641d673e36b5e15f322b"
+    },
+    {
+      "status": "A",
+      "path": "src/editor/live-bases.ts",
+      "baseBlob": null,
+      "candidateBlob": "d57945367e536b0dd334a895a30ca4ba291b309a"
+    },
+    {
+      "status": "M",
+      "path": "src/editor/live-callouts.ts",
+      "baseBlob": "7b4fc082e79daeb6d42389d033e10e95dbd71505",
+      "candidateBlob": "2165184d9a83f8f651ac9ca607c4cc2c5d2276d8"
+    },
+    {
+      "status": "M",
+      "path": "src/main.ts",
+      "baseBlob": "bc6df46a876a09c1e2bf1d262e291f903c3767c6",
+      "candidateBlob": "d9982837e66ef5dd9e374b4111a29367bb7505fb"
+    },
+    {
+      "status": "M",
+      "path": "src/platform/bridge.d.ts",
+      "baseBlob": "972083170ed8398bc6960f2ec4692e3980bfe3e0",
+      "candidateBlob": "bb77fb1878e926b57c76373e7a53f941c160c4d9"
+    },
+    {
+      "status": "M",
+      "path": "src/platform/browser-client-admission.ts",
+      "baseBlob": "95a19571312d13125b013d9c14ab7d694fec224f",
+      "candidateBlob": "e99f83bd54226fa869ca261d59be8aff1e2707d7"
+    },
+    {
+      "status": "M",
+      "path": "src/platform/browser-core-runtime.ts",
+      "baseBlob": "92a7a68e5b07c37559ca22ec72192628d6d2fd3c",
+      "candidateBlob": "81a825eb67968558405054cce1e3df11e18f20c2"
+    },
+    {
+      "status": "M",
+      "path": "src/platform/browser-core-worker.ts",
+      "baseBlob": "8939a44767f4e3018d343047195a2e73e235707f",
+      "candidateBlob": "53ce2b6fd721ae1b4acf3a0c711dfbb5a4e36f92"
+    },
+    {
+      "status": "M",
+      "path": "src/platform/browser-default.ts",
+      "baseBlob": "8fa2c503a0b4abb2d7f9e476dd6d1436aab3187f",
+      "candidateBlob": "93f9a9da6818626bffb096f6bf120e7af63b2c0b"
+    },
+    {
+      "status": "M",
+      "path": "src/platform/browser-file-commands.ts",
+      "baseBlob": "aa502bed99795c59ebbc0865a2eaa8e492d21664",
+      "candidateBlob": "a52be0dce44754fef4eb6d44a2f70d9ff7043d65"
+    },
+    {
+      "status": "M",
+      "path": "src/platform/context-menu.ts",
+      "baseBlob": "16e3b3c68a5d747dd744557804f80c20e93250d7",
+      "candidateBlob": "2050bb7308991cc45ee9b2373407d575a7437783"
+    },
+    {
+      "status": "M",
+      "path": "src/platform/desktop-document-semantics.ts",
+      "baseBlob": "a001030d55b805d82f4b427e1fdc6baf92e59983",
+      "candidateBlob": "196c378767f2535c1faa13686debdfa2aa396dfb"
+    },
+    {
+      "status": "M",
+      "path": "src/platform/index.ts",
+      "baseBlob": "eee68c08b66e9bad628da08ba7ee31280c985826",
+      "candidateBlob": "a7f8a36572a6d4db5ba17c3fd4bbbf8d9c0433a6"
+    },
+    {
+      "status": "M",
+      "path": "src/ui/base-embed-sessions.ts",
+      "baseBlob": "12a6ba8a3ea9f4d6ca8201d37aa04c36484c9335",
+      "candidateBlob": "9016481bd04062f113918f58205e0f60c7d71e12"
+    },
+    {
+      "status": "A",
+      "path": "src/ui/base-file-hover.ts",
+      "baseBlob": null,
+      "candidateBlob": "fc2e0b2636aaf8883575c5f4add1dcd5547eb2e7"
+    },
+    {
+      "status": "A",
+      "path": "src/ui/base-new-item-popover.css",
+      "baseBlob": null,
+      "candidateBlob": "0baecbc8c14cd0e17777dda6a7277369918643bd"
+    },
+    {
+      "status": "A",
+      "path": "src/ui/base-new-item-popover.ts",
+      "baseBlob": null,
+      "candidateBlob": "89e6119bf0ac55e0267cc4e304d50c971fdd97ad"
+    },
+    {
+      "status": "M",
+      "path": "src/ui/editor.ts",
+      "baseBlob": "a251550168b794794ba3aaa6deaf1d747871b4e9",
+      "candidateBlob": "0332d3217a142c9a0992c190624457cda9440b30"
+    },
+    {
+      "status": "M",
+      "path": "src/ui/embeds.ts",
+      "baseBlob": "b7d7435e2e341467c4f14058105f01c20567b436",
+      "candidateBlob": "28137b771819b9bb83e22ef0d638fbd16c35e4b6"
+    },
+    {
+      "status": "M",
+      "path": "src/ui/file-list-background-menu.ts",
+      "baseBlob": "62501fb579536af793f7b966ef64786615480122",
+      "candidateBlob": "ad25b4954958531569d576ffba288026ea5dc4bd"
+    },
+    {
+      "status": "M",
+      "path": "src/ui/icons.ts",
+      "baseBlob": "ec976fd4772cf87b16b23d3e82cea22dcc8dcc05",
+      "candidateBlob": "b5ef8c4f66c3c3ba8a3d43947cdac334b21765d0"
+    },
+    {
+      "status": "M",
+      "path": "src/ui/markdown-lists.ts",
+      "baseBlob": "4faa257cfdf722f251f61ba1e555e5a3d465eeca",
+      "candidateBlob": "1b183489576921f56bcfceb0ad04a8bfc2cb009b"
+    },
+    {
+      "status": "M",
+      "path": "src/ui/markdown.ts",
+      "baseBlob": "9cba98d9f96cd7eaea57d791c1f6cb17d00ebde1",
+      "candidateBlob": "91006b9145efe99cb627421d9af20e6da4725548"
+    },
+    {
+      "status": "A",
+      "path": "src/ui/note-property-targets.ts",
+      "baseBlob": null,
+      "candidateBlob": "d8bb42cf977cc163debf5d08011cef739778d103"
+    },
+    {
+      "status": "M",
+      "path": "src/ui/properties.ts",
+      "baseBlob": "603d7c5933dfb1de63105f105229c5fdcd80c703",
+      "candidateBlob": "20f8a49fa36fb1459969dd6d0961d9675cc65602"
+    },
+    {
+      "status": "M",
+      "path": "src/ui/styles.css",
+      "baseBlob": "c87a276b3d6118cf8a41710ec9ce682115b89a15",
+      "candidateBlob": "f7cf4e87277e8cc3232fd7a9fc8799df526bafc8"
+    },
+    {
+      "status": "M",
+      "path": "src/ui/workspace.ts",
+      "baseBlob": "c29f7e998029763505f0af1aa3a3d0d3dc5676f1",
+      "candidateBlob": "b37a8ab4d8ba4fe52d53d748555f34745cda5dcd"
+    },
+    {
+      "status": "M",
+      "path": "tests/base-embed-sessions.test.ts",
+      "baseBlob": "b60cb61811de4e28d31a31ba8fcdc1ce7e068202",
+      "candidateBlob": "961a2304edb542cf1470523f958870c14a20422b"
+    },
+    {
+      "status": "A",
+      "path": "tests/base-new-item-popover.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "be59311edb146048267f46e0159d1e7222882b3e"
+    },
+    {
+      "status": "A",
+      "path": "tests/base-new-item-properties-lifecycle.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "1f344ac7e0d9f19d43defb225cef3fa302d1a4ed"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-browser-integration/README.md",
+      "baseBlob": null,
+      "candidateBlob": "6d4c21c2168498c22f2880280ebc4c212211435c"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-browser-integration/cases.mjs",
+      "baseBlob": null,
+      "candidateBlob": "5df8caba18cf737f6dfbd3146f26e2a1de584151"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-browser-integration/fixture.mjs",
+      "baseBlob": null,
+      "candidateBlob": "b80d8248e207fc58b47a133ac8c9281cba3d2c4a"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-browser-integration/index.html",
+      "baseBlob": null,
+      "candidateBlob": "323cf717f710b8121d0aa47f024e18154d4f6329"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-browser-integration/malformed-rollup-captured-007.mjs",
+      "baseBlob": null,
+      "candidateBlob": "fdde3e62a97da6bcacfe4ab3ba0ca2691a4bf020"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-browser-integration/malformed-rollup-oracle.mjs",
+      "baseBlob": null,
+      "candidateBlob": "2019939aa3f192a154e017777dbbfb23bbfd428e"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-browser-integration/malformed-rollup-oracle.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "c13ef927edf0062a2fe2d84882b5a822749ba923"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-browser-integration/optional-summary-map.mjs",
+      "baseBlob": null,
+      "candidateBlob": "9cf6b00cb9c863196edc1896035d6db292ea828f"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-browser-integration/optional-summary-map.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "c2c9ad7f0610fd9ba5d2a32cfe723a61f50ea970"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-browser-integration/run.mjs",
+      "baseBlob": null,
+      "candidateBlob": "ba364eef87ebad78eda93b3c27abda33e7f763bd"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-cli-integration/README.md",
+      "baseBlob": null,
+      "candidateBlob": "7f2042e2edf3d5e70be7f1a05f79455a9243c15e"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-cli-integration/acceptance-20261022.md",
+      "baseBlob": null,
+      "candidateBlob": "117509a5c399a3e301edf1ffb77f63430004f411"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-cli-integration/fixtures.mjs",
+      "baseBlob": null,
+      "candidateBlob": "29de4505a6c281624665d4fc150f4af70b34394b"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-cli-integration/q3-oracles.mjs",
+      "baseBlob": null,
+      "candidateBlob": "31d16e20db447c3e0f7e3d8db2986c310cc98eaf"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-cli-integration/q3-oracles.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "5df34b722f5545a4e8d5a7c2a81150e16a589b13"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-cli-integration/q3-provenance-oracles.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "b94388f66ce4e6a7480177057aa24685481ad8ec"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-cli-integration/run.mjs",
+      "baseBlob": null,
+      "candidateBlob": "99ff78f64a07e48e3cdf557b16afa6c3a83e700e"
+    },
+    {
+      "status": "M",
+      "path": "tests/bases-column-actions.test.ts",
+      "baseBlob": "bceccdc64400c47dd43169b718a894ca9d82230f",
+      "candidateBlob": "1fda34a8cb07e120f2ba7a44cb7b61d921b32988"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-configuration-ack-lifecycle.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "bb86f12564a2b99fd6aac29ff33aecfc9f232b30"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-controller-commands.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "96acde54d64e435fe85872f927dac2dcbfef2755"
+    },
+    {
+      "status": "M",
+      "path": "tests/bases-controller.test.ts",
+      "baseBlob": "00b6b3cbd9b45e507ae7cec9374bfaa702796754",
+      "candidateBlob": "5584c4fa859a2c69c75f622e72b2c99172abef67"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-creation.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "4dbda3879b4e4cfeffd22db9997d2cc46063ead8"
+    },
+    {
+      "status": "M",
+      "path": "tests/bases-document.test.ts",
+      "baseBlob": "7fb2f0cbbcc67873bddae71c65ac18fe76883001",
+      "candidateBlob": "ac03f74affc825f991bd4e2d6784b1431a576a88"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-edit-admission-diagnostics.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "d35c25d1f7b37631ba873c4aba4126bf0c7c4886"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-edit-invalidation-diagnostics.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "2999385c5090f4c7b8ce32d457f4acdb0c0d3c25"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-clipboard-integration/README.md",
+      "baseBlob": null,
+      "candidateBlob": "5b14bc1289f807a83fb09073be63b3d25331c9f1"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-clipboard-integration/campaign.mjs",
+      "baseBlob": null,
+      "candidateBlob": "3cd368ab116e85dd1ca1b33543761aede7814b77"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-clipboard-integration/clipboard.mjs",
+      "baseBlob": null,
+      "candidateBlob": "982c471352a2503390b8cf8ec2fd2f5947017219"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-clipboard-integration/clipboard.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "999a8176d23989478ba68f2c3199313169f86322"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-clipboard-integration/paste-probe.mjs",
+      "baseBlob": null,
+      "candidateBlob": "b16201cd02bd8de572c269262aaa44e2f9b4a82b"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-clipboard-integration/paste-probe.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "527b5d1d229be4b06f84f87ba9d4bd746d23e9b7"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-clipboard-integration/run.mjs",
+      "baseBlob": null,
+      "candidateBlob": "4d7483d79b737f4816f0d46b717ebaadd7c27c35"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-config-integration/README.md",
+      "baseBlob": null,
+      "candidateBlob": "7bbb0e908dfdc940e31cc876a88104bb677525bb"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-config-integration/admission.mjs",
+      "baseBlob": null,
+      "candidateBlob": "4bbe23397c79c7e4d8f3e0c93b65446e4ed18fc7"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-config-integration/admission.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "655b79a4d92582842aedf6608cce83d87702aa3c"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-config-integration/campaign.mjs",
+      "baseBlob": null,
+      "candidateBlob": "c67fc77a5c6a6434ff38d5816b267e373822bd1b"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-config-integration/controls.mjs",
+      "baseBlob": null,
+      "candidateBlob": "8be203cb75d639a59df27d3be3a56b213152ef4c"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-config-integration/fixtures.mjs",
+      "baseBlob": null,
+      "candidateBlob": "9f2798911ce88e1a262ba713a2e24b211be2dbe9"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-config-integration/oracles.mjs",
+      "baseBlob": null,
+      "candidateBlob": "9d99f96d825e6462d4797234d8e951cd62265f94"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-config-integration/oracles.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "77fd5c65002f1a65fb32fc9ffa49b329f22f1a9b"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/README.md",
+      "baseBlob": null,
+      "candidateBlob": "7865691bb7e7053987a02bd70d60df7448b2b9c7"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/csv.mjs",
+      "baseBlob": null,
+      "candidateBlob": "df586d90e06a4a01106aefb670d2f8af08bd31e0"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/fixtures.mjs",
+      "baseBlob": null,
+      "candidateBlob": "7af60a4af642875eb071e1d5f549324720e77064"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/journey.mjs",
+      "baseBlob": null,
+      "candidateBlob": "31688f7b3595232004603f5ef54d264923dd1642"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/native-ownership.mjs",
+      "baseBlob": null,
+      "candidateBlob": "b7a0414f8f7399a402274de0c49bd4ef8772f59f"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/native-ownership.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "b826eeac8ce1ec23fe65af5ad2ae5e75765b865e"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/numeric-edit-diagnostics.mjs",
+      "baseBlob": null,
+      "candidateBlob": "a63fcb30bdcf3f69a8f95bc3e0af89fd6b35f435"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/numeric-edit-diagnostics.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "4781e9d19bd45c00d21db06a4217517a848000c6"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/owned-fixtures.mjs",
+      "baseBlob": null,
+      "candidateBlob": "7532b62079376651cf88be528bd3429ad31aad7c"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/owned-fixtures.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "6041520c739f3af2ff311c0160009c2dba299bd8"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/run.mjs",
+      "baseBlob": null,
+      "candidateBlob": "b9ca1d25482f57b87e207adf0fe6c3bb8d978ffb"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/summary-oracle.mjs",
+      "baseBlob": null,
+      "candidateBlob": "7e1bbc2619cbd6c8a5c9be08ab094ab983ef61bf"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/ui-actionability.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "2a897941b7eca69e0b97bacc55dcacc7d9cc2d1d"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/ui-native-select.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "361d89335272437005bd3e4a3940b5be6ac6c2c9"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/ui.mjs",
+      "baseBlob": null,
+      "candidateBlob": "b25e0faa56c1ef0fc456c12c56eace24cdcdce4f"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/window-native-adapter.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "27a9e6468672e8cbfeb8d2b268000b78a54ddd5d"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/window-probe.mjs",
+      "baseBlob": null,
+      "candidateBlob": "14af01a2e9d514294770cd2ebca8a0ebbee8403e"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/window-probe.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "ffb3d0084e9deeff85fb8d4fe33e70343d21ea32"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/window-visibility.mjs",
+      "baseBlob": null,
+      "candidateBlob": "25dddb077a34c794f2b264e8dcd189ca509571b9"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-integration/window-visibility.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "42c74c2b9b3760d054f6a95ee8e6c167cbbf1d1e"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-layouts-integration/README.md",
+      "baseBlob": null,
+      "candidateBlob": "56a7168781e72e5c886df163f59a801f5c5655e9"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-layouts-integration/campaign.mjs",
+      "baseBlob": null,
+      "candidateBlob": "7ebd761015d08877cf7181810ad3b72b811c65a8"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-layouts-integration/contract.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "89d52b329014da73daf6cbd301adfb24a5c59a7a"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-layouts-integration/drag.mjs",
+      "baseBlob": null,
+      "candidateBlob": "6eaba80fbc06b98be5c37179e35a5406e2f9cc2b"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-layouts-integration/drag.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "2e4908cb2fa46c4d2f33acbbc60242f6d8f9739a"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-layouts-integration/fixtures.mjs",
+      "baseBlob": null,
+      "candidateBlob": "e41b00bf199a5dc9f19c17c37a0e53cd2292183f"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-layouts-integration/hover.mjs",
+      "baseBlob": null,
+      "candidateBlob": "25799f8ce03d7d08468fb708be9058cabf5ac6b7"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-layouts-integration/run.mjs",
+      "baseBlob": null,
+      "candidateBlob": "eaf9d6ad3b0345c77491472390edd5d3ead3fac7"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-native-select-integration/README.md",
+      "baseBlob": null,
+      "candidateBlob": "196a9d667b91d27ae74f1f9c7bb131bfe043f150"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-native-select-integration/campaign.mjs",
+      "baseBlob": null,
+      "candidateBlob": "4ab3eaf48594ae695707cf49b621c042354a279e"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-native-select-integration/contracts.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "8a8d1405584bd14f7274bee361484421bbdbdb00"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-native-select-integration/run.mjs",
+      "baseBlob": null,
+      "candidateBlob": "45d158f62bec530bc826a34efaa12ff6c0e39f78"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-properties-integration/README.md",
+      "baseBlob": null,
+      "candidateBlob": "b1baadb079193f75010dabced3bf71b1e1940ebc"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-properties-integration/acceptance-20261022-001.md",
+      "baseBlob": null,
+      "candidateBlob": "a3ed52ac5360f8823f1ed4908e14bc97f340e72f"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-properties-integration/acceptance-20261022-002.md",
+      "baseBlob": null,
+      "candidateBlob": "b0f50e4c89e2f1dbb1faf23ff454a6cb02bf0790"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-properties-integration/campaign.mjs",
+      "baseBlob": null,
+      "candidateBlob": "a4006195f69444888d1e804a390d0de713ece6c8"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-properties-integration/fixtures.mjs",
+      "baseBlob": null,
+      "candidateBlob": "fc59b2a3a781a1bbe3f0ac55bd3ab4006e7bcd47"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-properties-integration/oracles.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "14d7b29e647509d87b53b6bb2169d352c529aecc"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-properties-integration/raw-oracle.mjs",
+      "baseBlob": null,
+      "candidateBlob": "8541b612053d5136bf4da18b8e14be1c3bbe8eb2"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-recovery-integration/README.md",
+      "baseBlob": null,
+      "candidateBlob": "1d22ffd841a60e152a95cd5386e11d0b8e0e20dd"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-recovery-integration/campaign.mjs",
+      "baseBlob": null,
+      "candidateBlob": "9cd4a190e6811719985320f53a02a60b7c491b4d"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-recovery-integration/control.mjs",
+      "baseBlob": null,
+      "candidateBlob": "f7241fc123e613b1728184bc29a9eb97c821d9b3"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-recovery-integration/protocol.mjs",
+      "baseBlob": null,
+      "candidateBlob": "f6e3343c76aa811444e829b2f9eb4d370352da1d"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-recovery-integration/protocol.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "99d49330154c3a295bd0d4ac145a0ca596885257"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-recovery-integration/relay-process.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "ce7c2112f1049894cf5a96bc3a7e457bcffd2c21"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-recovery-integration/relay.mjs",
+      "baseBlob": null,
+      "candidateBlob": "b81d819c00cdcba30e395fd378ec48546d664fd5"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-recovery-integration/run.mjs",
+      "baseBlob": null,
+      "candidateBlob": "fc641809b550a11a0a098d64237ffcba15950333"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-safety-integration/README.md",
+      "baseBlob": null,
+      "candidateBlob": "b06bed1c82625458a02ec6472ea047261effece6"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-safety-integration/campaign.mjs",
+      "baseBlob": null,
+      "candidateBlob": "e2334ef4cbf847906bb70fa1e9f0718806b618a6"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-safety-integration/fixtures.mjs",
+      "baseBlob": null,
+      "candidateBlob": "4aec474a1268fe7110ea1f18af141a2a69136b16"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-safety-integration/mounted-rename-contract.mjs",
+      "baseBlob": null,
+      "candidateBlob": "f6ed9cb2aeae0acc4a56d73d1a0ef4b9cd309b36"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-safety-integration/mounted-rename-contract.test.mjs",
+      "baseBlob": null,
+      "candidateBlob": "8ff9d864283fd819fb6ffdc9d5b4cc10260047ef"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-safety-integration/run.mjs",
+      "baseBlob": null,
+      "candidateBlob": "4bb636c7a1ed02ad497b945df3c9c28402d300f6"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-electron-summary-oracle.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "7b31ddd422c9bf90b824c9db1408ec77037b27b0"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-export.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "ed50b023a0a12a9a389dafc26daf249eadd7b23c"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-file-hover-anchor.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "60e16391a046de49bb4725b2bd4a7021c6343923"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-file-hover.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "2f2208cae488c6d75ce0e0270d410b9b40b51899"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-group-edit-values.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "b4176478b76f14347eac1b42a3db00c0327db176"
+    },
+    {
+      "status": "M",
+      "path": "tests/bases-kanban-columns.test.ts",
+      "baseBlob": "99ed89e611da271e2bdb01b98354961dc2a51efa",
+      "candidateBlob": "3121a73251dccc9d632c13f40354b27a7f115740"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-layout-completion.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "89f521287632669d1c0ea8c193602ad696e7079b"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-list-file-drag.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "19998c3925c8e22a9b242b38c71a6f117cdb4220"
+    },
+    {
+      "status": "M",
+      "path": "tests/bases-named-view-review.test.ts",
+      "baseBlob": "eeefd0e28327d286bb0a9a36d719edaab6d75aba",
+      "candidateBlob": "eb7517b0a21c5aa6fb903ca7c47a164d8c3570ef"
+    },
+    {
+      "status": "M",
+      "path": "tests/bases-named-view.test.ts",
+      "baseBlob": "45f85efbc2db9c6fdc11c183813e0916a715f5ac",
+      "candidateBlob": "7569b26c0d93590ef82f785c17247595a4e3374e"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-plain-link-controls.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "2342fbde2f16ce074dba8724b4a1a1ca723ef6c0"
+    },
+    {
+      "status": "M",
+      "path": "tests/bases-preview-session.test.ts",
+      "baseBlob": "577a9a5bd0e498eadd4998a2853928a6485629c2",
+      "candidateBlob": "fbe926713f072b9b7d06372ae96b6d8696fc9c66"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-property-admission.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "3326c68cb6a83edf16b69fc9ca3d8374fb3e7e21"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-property-definitions.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "abfc69eac60ec85bb6db6eb1e84c26fd90346767"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-property-settings-panel.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "08de3fd5908bc4756d48cecd6337a40a4e017f95"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-property-targets.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "a44ed3cf811db2771a30ea519033da5ebea219d3"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-property-version-markers.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "6231ccc6e306c69859b3069fd169ede3e00fa378"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-property-widgets.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "40f7c3a719a7787c25ae4eeca0578792ff16f202"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-rich-values.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "15502c623f56e8c995214a5f97de7fd3946f13f2"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-row-open-witness.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "023a7f413ba8dbb01e9e59e53310fcb6edd0950e"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-session-completion.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "67a5b398f9d2b5482cae4868f6591ce99ace78b8"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-session-group-writable.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "4fbad033413107f6a20831773ef872950564a45c"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-session-relation-targets.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "a76e556837a5aa542e2a93d2ea50c0179940af34"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-session-resize-queue.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "ff7cc7b18454b44af18f7f3b4cf16da1cb38259a"
+    },
+    {
+      "status": "M",
+      "path": "tests/bases-session-review.test.ts",
+      "baseBlob": "efcbb1f87ec925e9b8ec3f4ecba719c5a0ff85c9",
+      "candidateBlob": "9911d74a41c6982603bc23a098cfb8a83877c7be"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-session-rich-integration.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "87aac682713cfe50572b1bc077cd41fc30bc19f8"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-session-version-markers.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "63f6c685520aafe380013ac02bc164631070b57e"
+    },
+    {
+      "status": "M",
+      "path": "tests/bases-session.test.ts",
+      "baseBlob": "af4dd7064346f615439e4bc1e9ffb685e031191c",
+      "candidateBlob": "b66d7d86dbdd0dae7a4eb6745570efc6ff76fcc6"
+    },
+    {
+      "status": "M",
+      "path": "tests/bases-shared-controller.test.ts",
+      "baseBlob": "d1868f40b4f371d258d16b26461e27e449a9befc",
+      "candidateBlob": "27554190a997863ccc58eb22d4c33d2d864e20c7"
+    },
+    {
+      "status": "M",
+      "path": "tests/bases-shared-group-presentation.test.ts",
+      "baseBlob": "8bfe92c3a220737475502a9e73d556c81abd194f",
+      "candidateBlob": "aa88ba41cf7ef62e8bdd8e8597e36dce7ee84e52"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-shared-values.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "9d6c5aeb090540761e5baa76af72120978cd509c"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-summary-geometry.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "ada283a9cb39eca2ef119af5f012d9b4f9a038fb"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-summary-retry-continuation.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "a020000d5d424b046196079540900b4953efbe3f"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-table-commands.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "255c2806867ce8480f3dc551f89a892bb41ee604"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-table-file-witness.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "8d05d5b3fafc9c72762cb8f2866738c9d5905bb8"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-table-header-focus.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "ca04cbfb08e708e002116070263b9caf4dd2932a"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-table-resize-queue.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "94bb46aedc85d7e4ba89691faa61871b28d7a22c"
+    },
+    {
+      "status": "M",
+      "path": "tests/bases-table-selection.test.ts",
+      "baseBlob": "5970d5aaa4ced2ac3474c2ee6a5cdde5e59f15d0",
+      "candidateBlob": "2f5b2e27b13b79bd67fab909ca7c8804d867781b"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-toolbar-combobox.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "b612e0924acec0a36b0c564020571bfe20c4452a"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-toolbar-commands.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "a44b16a09420333f03b2767e3b6c2a33854d3746"
+    },
+    {
+      "status": "M",
+      "path": "tests/bases-toolbar-config.test.ts",
+      "baseBlob": "a67a3e5a6028f164d5153e3c5db012e95a51c75d",
+      "candidateBlob": "901a054ade4ef2af64e99753b614b017fa26c1f1"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-toolbar-formula-editor.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "bdad3e31858941dd23930c54ac8f0ff37e4642e2"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-toolbar-group-reorder.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "06d0786102c7b746e3f67c754af4b1e451757325"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-toolbar-groups.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "d648d1c56f3298d85a33ad58a85372cf0b667917"
+    },
+    {
+      "status": "M",
+      "path": "tests/bases-toolbar-review.test.ts",
+      "baseBlob": "e356d3ba9701e5b31c069f0327c8bfc57f60539f",
+      "candidateBlob": "c36e96f5407a859a9647d57b4e3e873c410341f3"
+    },
+    {
+      "status": "M",
+      "path": "tests/bases-toolbar-session.test.ts",
+      "baseBlob": "159d73a8d1452644e74e6cb67c7bc0dc1c7731f5",
+      "candidateBlob": "2dd3c095cb734935ee5ddfe0b4501a5573d7b276"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-view-references.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "8b418605143764a842416360ebdd94dc7e0b46b8"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-visual-reference/README.md",
+      "baseBlob": null,
+      "candidateBlob": "fa46104230bd40088fe1ec939ab40b40083cd5c7"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-visual-reference/campaign.mjs",
+      "baseBlob": null,
+      "candidateBlob": "0c4a3e0b674b1df8d837a5e03f07d36ce9dc2c41"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-visual-reference/fixtures.mjs",
+      "baseBlob": null,
+      "candidateBlob": "8302ad7fb87a1413dcde047d0d754cba644e3699"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-visual-reference/run.mjs",
+      "baseBlob": null,
+      "candidateBlob": "13c3b139e487e310437a72cb6494bb0bd11654be"
+    },
+    {
+      "status": "A",
+      "path": "tests/bases-widget-ack-witness.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "e0082247d88dfc6af27f198ca3e4bb61a6ba72e2"
+    },
+    {
+      "status": "M",
+      "path": "tests/browser-client-admission.test.ts",
+      "baseBlob": "7946e099513aa62e72339c4665559aa81d142641",
+      "candidateBlob": "8cb502c0c6ef8f451c6797d5f8fc07ee267d0a40"
+    },
+    {
+      "status": "M",
+      "path": "tests/browser-core-runtime.test.ts",
+      "baseBlob": "9a8811162f3c5263ae29bd9e5f1dd1f73821f30d",
+      "candidateBlob": "afe8ca5d9aad97b12ec84efae343533780952f26"
+    },
+    {
+      "status": "M",
+      "path": "tests/browser-default-adapter.test.ts",
+      "baseBlob": "debc1a45297cc4b86d7d4d7be0a2a7afaa6d99fa",
+      "candidateBlob": "ae1c702f6943882cccdc7d100c0854a4ff857eb8"
+    },
+    {
+      "status": "M",
+      "path": "tests/browser-document-index.test.ts",
+      "baseBlob": "695532f264c9e8d6ab1466dc79445f133925f8e7",
+      "candidateBlob": "dd3aee23eee495c885905994a1cfbcb244e4c5be"
+    },
+    {
+      "status": "M",
+      "path": "tests/browser-file-commands.test.ts",
+      "baseBlob": "6f86db884421d29429c588dc31b1bdf4c86bb9b2",
+      "candidateBlob": "3209da88b0d9ab544e5bc5298207ab1946c28a9f"
+    },
+    {
+      "status": "M",
+      "path": "tests/context-menu.test.cjs",
+      "baseBlob": "f10fbc5e22c3662b3169b396718b34f642527b47",
+      "candidateBlob": "7551a5650becb2fa8e75e04f29538dc377aedaa6"
+    },
+    {
+      "status": "M",
+      "path": "tests/desktop-client-admission.test.cjs",
+      "baseBlob": "aad8bc463edeb9de0e09fb9e1132ff4150c8c429",
+      "candidateBlob": "fb9c8bfa7fd55096da87042cc607bb000da18fa9"
+    },
+    {
+      "status": "M",
+      "path": "tests/desktop-document-semantics.test.cjs",
+      "baseBlob": "bf118d28fd79b91c5f85274d72b52237b31bc5fb",
+      "candidateBlob": "96261b06051318cc8aba2cd6f41dd9eb022280e1"
+    },
+    {
+      "status": "M",
+      "path": "tests/desktop-editor-core.test.cjs",
+      "baseBlob": "72a0b9db9cfb55abf502610eb21e62cb1a0cde83",
+      "candidateBlob": "f03ab0f3605a370f3fb479b6cefd8168c026b420"
+    },
+    {
+      "status": "M",
+      "path": "tests/desktop-text-create.test.cjs",
+      "baseBlob": "3d0ce61415826afd0dce2e87692a223eefea5bac",
+      "candidateBlob": "a9aeee4e031c85c34357de74d9f2cba958515f9d"
+    },
+    {
+      "status": "A",
+      "path": "tests/fixtures/bases-q3-semantics.mjs",
+      "baseBlob": null,
+      "candidateBlob": "0f343b43277ef29bd38c3d2eea7e4f644505789d"
+    },
+    {
+      "status": "M",
+      "path": "tests/fixtures/document-semantics/bases/README.md",
+      "baseBlob": "f659743144368f037cc794b4cdcb6bd19e48802b",
+      "candidateBlob": "b845f272d412c06df663a175a4e3668d3453e281"
+    },
+    {
+      "status": "M",
+      "path": "tests/fixtures/document-semantics/bases/accepted-expressions.json",
+      "baseBlob": "81a460fe2cf0ad651eea1ea91c409c16e9b0e5df",
+      "candidateBlob": "6102ee6acb2de7ded927de129b9ff32b1fec7ef4"
+    },
+    {
+      "status": "M",
+      "path": "tests/fixtures/document-semantics/bases/accepted-queries.json",
+      "baseBlob": "116c8398b120ff8c51ea335d340b0f438e0a16dd",
+      "candidateBlob": "f25ab1178dcf1e87462bb6e8e55c554464c0c243"
+    },
+    {
+      "status": "M",
+      "path": "tests/fixtures/document-semantics/bases/project-accepted.mjs",
+      "baseBlob": "9d57193e29e67bf16840b4a77d21c148a1c69209",
+      "candidateBlob": "baa41786aa0ed6c40f5fc04d22a5ee9a948958c0"
+    },
+    {
+      "status": "M",
+      "path": "tests/fixtures/document-semantics/bases/queries.json",
+      "baseBlob": "37a8733ff8c5b198bb362bf61664d6e53002cab6",
+      "candidateBlob": "81ea16b1097c55f3a7c8ce1f06afc7fc3e76be72"
+    },
+    {
+      "status": "A",
+      "path": "tests/inline-bases.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "07ef8b70f11fbc1efa24204ab6676f517cf5414b"
+    },
+    {
+      "status": "A",
+      "path": "tests/note-property-targets.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "5ea197e2e7a627edd15023682222ce62280eb719"
+    },
+    {
+      "status": "M",
+      "path": "tests/platform-desktop-durable.test.ts",
+      "baseBlob": "e767a65e93f7e4613146b2433f97f8a8f47452e1",
+      "candidateBlob": "d1db875ecd87ade8346ad61a59eeb8590e55c4c2"
+    },
+    {
+      "status": "A",
+      "path": "tests/properties-lifecycle.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "f5de96ced7cd38ebae4e0cd8c623e345a8d7644b"
+    },
+    {
+      "status": "A",
+      "path": "tests/properties-relation-display.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "32e6df45429cb0780a91ce14224cabbb58e2ba41"
+    },
+    {
+      "status": "A",
+      "path": "tests/properties-shared-definitions.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "28e9bff555dd03f6f1b2159d6c0b22617638e624"
+    },
+    {
+      "status": "A",
+      "path": "tests/text-create-receipt.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "55b32374e8dbcc76b752faee2e7cb0e643d7db5a"
+    },
+    {
+      "status": "A",
+      "path": "tests/text-create-receipts/README.md",
+      "baseBlob": null,
+      "candidateBlob": "9d5a3dcdc54a231aca6c3d413ee551eb851a0f8a"
+    },
+    {
+      "status": "A",
+      "path": "tests/text-create-receipts/browser.fixture.mjs",
+      "baseBlob": null,
+      "candidateBlob": "05b4aacc9f2e3a9bbc4644e40fcac38a7e029478"
+    },
+    {
+      "status": "A",
+      "path": "tests/text-create-receipts/browser.html",
+      "baseBlob": null,
+      "candidateBlob": "32a7e58bac9db75fd225b5b4d941c2b2980656e0"
+    },
+    {
+      "status": "A",
+      "path": "tests/text-create-receipts/browser.run.mjs",
+      "baseBlob": null,
+      "candidateBlob": "b6b033b3a5ee5dd0d86889887b550ea1d282adcd"
+    },
+    {
+      "status": "A",
+      "path": "tests/text-create-receipts/native.integration.ts",
+      "baseBlob": null,
+      "candidateBlob": "a474556f72fdbacb7863fb82c2859d4b77eccb30"
+    },
+    {
+      "status": "A",
+      "path": "tests/vault-create-operation.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "d0b9d70bb11af08489d3c6379b09e939ac0fa2d9"
+    },
+    {
+      "status": "A",
+      "path": "tests/vault-wiki-rename.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "bcd3238c604ccb9fa4f36b98106ad713701f4b37"
+    },
+    {
+      "status": "M",
+      "path": "tests/workspace-base-embeds.test.ts",
+      "baseBlob": "25c73163f306ff5f0c7983ccea73953ba53bb298",
+      "candidateBlob": "eb77750908185ddccdcdf55782d7d67521e4c226"
+    },
+    {
+      "status": "A",
+      "path": "tests/workspace-base-hover.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "ff1889757f8f5470df2ec0d04b441e75325251b8"
+    },
+    {
+      "status": "A",
+      "path": "tests/workspace-base-source.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "8642d4faebba54a82c77c0a2326152b6cf0c3768"
+    },
+    {
+      "status": "A",
+      "path": "tests/workspace-base-thumbnail-witness.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "6dde053c5f25d47c9ce7e96cb6f367d568653774"
+    },
+    {
+      "status": "A",
+      "path": "tests/workspace-properties-lifecycle.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "72bc23a28782daaab0fd81acfe3f81bac472a9d2"
+    },
+    {
+      "status": "A",
+      "path": "tests/workspace-property-link-witness.test.ts",
+      "baseBlob": null,
+      "candidateBlob": "ba32b412d299c38a59d3b75007c1338710d97752"
+    }
+  ],
+  "runtimeVerificationPerformed": false,
+  "integrationPerformed": false
+}
