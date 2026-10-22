@@ -3556,26 +3556,49 @@ impl<'a> Evaluator<'a> {
                     .is_some_and(|value| file.properties.contains_key(&plain_string(value))),
             ),
             "hasTag" => {
-                let needles = arguments
-                    .iter()
-                    .map(|value| normalize_tag(&plain_string(value)))
-                    .collect::<Vec<_>>();
-                RuntimeValue::Bool(needles.iter().any(|needle| {
-                    file.tags
-                        .iter()
-                        .map(|tag| normalize_tag(tag))
-                        .any(|tag| tag == *needle || tag.starts_with(&format!("{needle}/")))
-                }))
+                // File metadata retains its captured spelling. Only a missing
+                // leading hash is added; repeated hashes and whitespace matter.
+                if arguments.is_empty() {
+                    return RuntimeValue::Bool(false);
+                }
+                if let Err(error) = self.charge(arguments.len()) {
+                    return error;
+                }
+                let mut needles = Vec::with_capacity(arguments.len());
+                for value in arguments {
+                    let needle = string_data(value).unwrap_or_default();
+                    if let Err(error) = self.charge(1 + needle.len() / 16) {
+                        return error;
+                    }
+                    needles.push(needle);
+                }
+                for tag in &file.tags {
+                    for needle in &needles {
+                        if let Err(error) = self.charge(1 + (tag.len() + needle.len()) / 16) {
+                            return error;
+                        }
+                        if tag_matches(&tag_text(tag), needle) {
+                            return RuntimeValue::Bool(true);
+                        }
+                    }
+                }
+                RuntimeValue::Bool(false)
             }
             "inFolder" => {
-                let folder = arguments
-                    .first()
-                    .map(plain_string)
-                    .unwrap_or_default()
-                    .trim_end_matches('/')
-                    .to_string();
+                let query = arguments.first().and_then(string_data).unwrap_or_default();
+                // Admit the normalization scan and canonical combining-order
+                // work before allocating its temporary strings.
+                let scale = (usize::BITS - query.len().max(1).leading_zeros()) as usize;
+                if let Err(error) = self.charge(1 + query.len().saturating_mul(scale) / 16) {
+                    return error;
+                }
+                let folder = file_folder_query(query);
                 RuntimeValue::Bool(
-                    file.folder == folder || file.folder.starts_with(&format!("{folder}/")),
+                    folder == "/"
+                        || file
+                            .path
+                            .strip_prefix(&folder)
+                            .is_some_and(|tail| tail.starts_with('/')),
                 )
             }
             _ => method_not_found("File", name),
@@ -5189,6 +5212,34 @@ fn file_property(file: &BasesFile, property: &str, timezone: &BasesTimezone) -> 
             .unwrap_or(RuntimeValue::Null),
         "file" => RuntimeValue::File(Box::new(file.clone())),
         _ => member_not_found("File", property),
+    }
+}
+
+/// File.inFolder normalizes its query, never the captured file path. This
+/// narrowly mirrors the shipped slash, nonbreaking-space and NFC operations;
+/// ordinary whitespace, dot segments and case retain their literal meaning.
+fn file_folder_query(value: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    let mut normalized = String::with_capacity(value.len());
+    let mut separator = false;
+    for character in value.chars() {
+        if character == '/' || character == '\\' {
+            separator = !normalized.is_empty();
+            continue;
+        }
+        if separator {
+            normalized.push('/');
+            separator = false;
+        }
+        normalized.push(match character {
+            '\u{00a0}' | '\u{202f}' => ' ',
+            character => character,
+        });
+    }
+    if normalized.is_empty() {
+        "/".into()
+    } else {
+        normalized.nfc().collect()
     }
 }
 
