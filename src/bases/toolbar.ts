@@ -179,7 +179,8 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       // Results edits only the limit. A just-accepted summary selection or
       // definition must not dismiss a newly opened menu or stale its limit draft.
       // Other configuration/view changes still invalidate its exact baseline.
-      if(name==='Results'&&(next.selectedIndex!==opening.selectedIndex||next.readOnly!==opening.readOnly))return false;
+      if(name!=='Views'&&next.selectedIndex!==opening.selectedIndex)return false;
+      if(name==='Results'&&next.readOnly!==opening.readOnly)return false;
       const exact=JSON.stringify(snapshot)===JSON.stringify(configuration);
       const summaryOnly=name==='Results'&&!own.failure&&JSON.stringify(resultsConfigurationWitness(snapshot))===JSON.stringify(resultsConfigurationWitness(configuration));
       if((!exact&&!summaryOnly)||next.views[selectedIndex]?.name!==expectedName)return false;
@@ -602,6 +603,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       if (own.innerDraft) { error.textContent = 'Finish or cancel the new group first.'; return; }
       if (!own.dirty && !own.failure) { if (close) own.close(); return; }
       if (!form.checkValidity()) { error.textContent = 'Check the invalid condition value before applying.'; return; }
+      if(!retryPersistence&&name!=='Views'&&deferredState&&deferredState.selectedIndex!==opening.selectedIndex){error.textContent='The selected view changed. Your draft is still here. Cancel and reopen the view before saving.';footer.hidden=false;options.onDraftChange();return;}
       if (deferredState && own.rebase?.(deferredState)) { state = deferredState; deferredState = undefined; }
       let operation: () => Promise<void>;
       expectedPatch = undefined; expectedSnapshot = undefined;

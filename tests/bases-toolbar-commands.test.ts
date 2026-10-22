@@ -112,6 +112,39 @@ test('Results retains strict guards for changed limits, selected views and reado
  }
 });
 
+test('active-view panels retire their controls when a keyboard view switch publishes another index',async()=>{
+ for(const name of ['Sort','Filter','Group','Properties','Results','View options','New item settings','Formula','Property'] as const){
+  const f=fixture(true);try{
+   if(name==='View options'||name==='New item settings'){
+    f.click('Views');f.click('Configure view Library');if(name==='New item settings'){f.click('View actions');f.click('New item settings');await tick();}
+   }else if(name==='Formula'||name==='Property'){
+    f.click('Properties');f.click(name==='Formula'?'Add formula':'Configure property note.score');
+   }else f.click(name);
+   const oldForm=f.doc.querySelector<HTMLFormElement>('form')!;assert.ok(oldForm,name);const oldInput=oldForm.querySelector<HTMLInputElement>('input');
+   f.toolbar.update({...f.state,selectedIndex:1,result:{...f.result,version:2,view:f.state.views[1]}});
+   assert.equal(f.doc.querySelector('[role="dialog"]'),null,name);
+   if(oldInput){oldInput.value='10';oldInput.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));}
+   oldForm.dispatchEvent(new f.dom.window.Event('submit',{bubbles:true,cancelable:true}));await tick();assert.deepEqual(f.calls,[],`${name} cannot save old controls into the newly selected view`);
+  }finally{f.cleanup();}
+ }
+});
+
+test('same-view note refresh keeps clean controls current and Views can continue its selection workflow',async()=>{
+ const f=fixture(true);try{
+  f.click('Sort');const form=f.doc.querySelector('form')!;f.toolbar.update({...f.state,result:{...f.result,version:2}});assert.equal(form.isConnected,true);
+  const add=f.get<HTMLButtonElement>('Add sort');add.focus();add.click();add.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));await tick();assert.deepEqual(f.calls.pop(),['save',2,{sort:[{property:f.result.availableProperties[0],direction:'ASC'}]}]);
+  f.click('Views');f.toolbar.update({...f.state,selectedIndex:1,result:{...f.result,version:3,view:f.state.views[1]}});assert.equal(f.doc.querySelector('[role="dialog"]')?.getAttribute('aria-label'),'Views');f.click('Open view Library');await tick();assert.deepEqual(f.calls.pop(),['select',0]);
+ }finally{f.cleanup();}
+});
+
+test('a retained dirty panel cannot issue a new semantic save after the selected view changes',async()=>{
+ const f=fixture(true);try{
+  f.click('Sort');f.click('Add sort');const form=f.doc.querySelector('form')!;
+  f.toolbar.update({...f.state,selectedIndex:1,result:{...f.result,version:2,view:f.state.views[1]}});assert.equal(form.isConnected,true);assert.equal(f.toolbar.hasDraft(),true);
+  form.dispatchEvent(new f.dom.window.Event('submit',{bubbles:true,cancelable:true}));await tick();assert.deepEqual(f.calls,[]);assert.match(f.doc.querySelector('[role="alert"]')?.textContent??'',/selected view changed/);assert.equal(form.isConnected,true);
+ }finally{f.cleanup();}
+});
+
 test('actual query-backed immediate Group edits manual visibility and creates an empty group',async()=>{
  const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
  let document=BaseDocument.parse('views: [{type: table, name: A, groupBy: {property: status, direction: ASC}}]'),version=1;
