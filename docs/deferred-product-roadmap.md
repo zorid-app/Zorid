@@ -65,6 +65,30 @@ actual clipboard/IME/recovery,23 matched visual states and main reconciliation/
 integration are still required. Do not infer native completion from Node/client
 passes. Production app47540 and unrelated user vaults/apps remain untouched.
 
+Latest composed followup `0d660bb1` integrates reviewed Hover ownership source;
+independent141+3 focused cases pass. Fresh desktop build003 session22473 is
+terminal0 (TypeScript and native Vite), private receipt
+`/private/tmp/zorid-bases-date-c2-desktop-build-003-receipt.json`, SHA
+`333613bc5bbf321f56f22b9a17dd11e1f381a1331160700566371613534e20fe`.
+Actual native-select-current003 on pre-Hover `ba37415b` reproduces strict purple
+readback failure:45 actions,23 passive frames show connected enabled focused
+SELECT with menu open but unchanged default value through CDP keys. Input-route
+cause remains unproven; optional computer-use checkpoint is being prepared by
+`bases_e2e`, independent reviewer `bases_core_review`. SIGKILL cleanup has no
+leaked owned processes; frozen source/artifacts verified. No app-product fix is
+inferred from this automation failure.
+
+Actual safety-current002 on `0d660bb1` uses default hidden window, fails11actions /
+0durable checks at first Base cell while showing Loading saved results. Source
+suggests hidden renderer refresh suppression; report lacks renderer visibility,
+so exact causality is not established. Visible-window003 advances through23
+actions /4 durable checks (shared dirty-body+property write, editor undo/redo)
+then fails exact cell text readback after unrelated external edit. Both reports
+and failed traces retained under `/private/tmp/zorid-bases-safety-current-20261022-*`.
+`bases_controller` owns causal followup; no weakened checks or product bypass.
+Visible003 app cleanup requires SIGKILL, no leaked owned processes; freeze verified.
+All owned apps are now closed. These are partial failed runs, not safety acceptance.
+
 ### Superseded checkpoint snapshot — retained evidence
 
 ### Latest execution update
