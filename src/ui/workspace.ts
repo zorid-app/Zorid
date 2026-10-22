@@ -60,6 +60,7 @@ import {BaseEmbedSessions} from './base-embed-sessions.ts';
 import {openBaseNewItemPopover} from './base-new-item-popover.ts';
 import type {BaseNewItemPopoverHandle} from './base-new-item-popover.ts';
 import {createBaseFileHover} from './base-file-hover.ts';
+import {baseFileHoverAnchor} from '../bases/file-hover.ts';
 import type {BaseFileHoverTarget,BaseFileHoverContent} from './base-file-hover.ts';
 import {createNotePropertyTargets} from './note-property-targets.ts';
 import type {NotePropertyTargets} from './note-property-targets.ts';
@@ -1357,7 +1358,7 @@ export class Workspace {
     }:undefined;
     let session:BaseSession;
     try{session=(this.viewFactories.base??createBaseSession)(host,{vault,basePath:path,validate,viewName,inlineSource,query:{currentFilePath:sourcePath??path},
-            hoverFile:(row,event)=>{try{validate();hover.hover(row,event);}catch(error){notice(error instanceof Error?error.message:String(error));}},
+            hoverFile:(row,event)=>{try{validate();const anchor=baseFileHoverAnchor(row,event);if(anchor)hover.hover(row,event,anchor);}catch(error){notice(error instanceof Error?error.message:String(error));}},
             ...(onSourceError?{onState:state=>onSourceError(state.error)}:{}),
             onViewRenamed:event=>{validate();const identity=this.treeEntryToken(event.basePath);if(!identity)return;for(const sessions of new Set([this.baseNewItemEmbeds,...this.baseHoverEmbeds,...this.loadedViews().map(pane=>pane.baseEmbeds)].filter((sessions):sessions is BaseEmbedSessions=>!!sessions)))sessions.renameViewBinding(event.basePath,event.from,event.to,identity);},
             closeCreatedFile:()=>this.baseNewItem?.element.contains(host)?false:this.closeBaseNewItem(),

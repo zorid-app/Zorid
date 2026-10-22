@@ -48,14 +48,28 @@ async function setup(t:TestContext,factories:WorkspaceViewFactories={}){
   const workspace=new Workspace(root,(host,value)=>{options.push(value);return createEditor(host,value);},{...factories,base:(host,value)=>{sessions.push(value);const session=createBaseSession(host,value),close=session.close.bind(session);session.close=()=>{closes++;return close();};return session;}});
   t.after(async()=>{try{f.fail(false);await workspace.destroy();}finally{dom.window.close();for(const[key,descriptor]of saved){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}}});
   await workspace.start({adapter:f.adapter,id:'test:hover',label:'Test'});await workspace.openNote('Work.base');
-  const hover=(path='One.md',modified=true)=>{const anchor=root.querySelector<HTMLElement>('[data-property="file.name"][role="gridcell"]')!;assert.ok(anchor);const entry=workspace.vault.entries.get(path)!;const callback=sessions.find(value=>value.basePath==='Work.base')!.hoverFile!;
-    const listener=(event:MouseEvent)=>callback({path,entryId:entry.entryId,revision:entry.revision,values:{}},event);anchor.addEventListener('mouseover',listener,{once:true});anchor.dispatchEvent(new dom.window.MouseEvent('mouseover',{bubbles:true,ctrlKey:modified,metaKey:modified,clientX:20,clientY:20}));return anchor;};
+  const hover=(path='One.md',modified=true)=>{
+    let cell=[...root.querySelectorAll<HTMLElement>('[data-property="file.name"][role="gridcell"]')].find(node=>node.dataset.path===path);
+    if(!cell){
+      // This fixture injects a captured core row for binary resources. Give that
+      // row its own filename cell rather than borrowing another file's anchor.
+      cell=document.createElement('div');cell.className='zorid-bases-table-cell';cell.setAttribute('role','gridcell');cell.dataset.path=path;cell.dataset.property='file.name';const link=document.createElement('a');link.className='internal-link';link.textContent=path;cell.append(link);root.querySelector('.bases-session')!.append(cell);
+    }
+    const anchor=cell.querySelector<HTMLElement>('a.internal-link')!;assert.ok(anchor);const entry=workspace.vault.entries.get(path)!;const callback=sessions.find(value=>value.basePath==='Work.base')!.hoverFile!;
+    const listener=(event:MouseEvent)=>callback({path,entryId:entry.entryId,revision:entry.revision,values:{}},event);cell.addEventListener('mouseover',listener,{once:true});anchor.dispatchEvent(new dom.window.MouseEvent('mouseover',{bubbles:true,ctrlKey:modified,metaKey:modified,clientX:20,clientY:20}));return anchor;};
   return{...f,workspace,root,dom,options,sessions,hover,get closes(){return closes;}};
 }
 async function until(check:()=>boolean,label:string){const end=Date.now()+3500;while(!check()){assert.ok(Date.now()<end,`${label}: ${document.body.textContent}`);await new Promise(resolve=>setTimeout(resolve,5));}}
 function popup(){return document.querySelector<HTMLElement>('.bases-file-hover')!;}
 async function openHover(f:Awaited<ReturnType<typeof setup>>,path='One.md'){f.hover(path);await until(()=>!!popup()?.querySelector('.bases-file-hover-preview,.image-container,.test-pdf,.test-media,.bases-file-hover-unavailable'),'hover content mounts');return popup();}
 async function editHover(root:HTMLElement){root.querySelector('.bases-file-hover-preview p')!.dispatchEvent(new window.MouseEvent('click',{bubbles:true,clientX:20,clientY:20}));await until(()=>!!root.querySelector('.cm-editor'),'normal editor mounts');return EditorView.findFromDOM(root.querySelector<HTMLElement>('.cm-editor')!)!;}
+
+test('Workspace positions a table hover from the filename link rather than the containing cell',async t=>{
+  const f=await setup(t),cell=[...f.root.querySelectorAll<HTMLElement>('[data-property="file.name"][role="gridcell"]')].find(node=>node.dataset.path==='One.md')!,link=cell.querySelector<HTMLElement>('a.internal-link')!;
+  const rect=(left:number,top:number,width:number,height:number)=>({x:left,y:top,left,top,right:left+width,bottom:top+height,width,height,toJSON(){return{};}});
+  cell.getBoundingClientRect=()=>rect(300,140,450,60);link.getBoundingClientRect=()=>rect(352,154.516,74.258,17.063);
+  const root=await openHover(f);assert.equal(root.style.left,'352px');assert.ok(Math.abs(parseFloat(root.style.top)-181.579)<1e-9);
+});
 
 test('Base hover modifier opens rendered Markdown and click edits the same durable shared buffer across own save revisions',async t=>{
   const f=await setup(t);f.hover('One.md',false);await new Promise(resolve=>setTimeout(resolve,350));assert.equal(popup(),null);
