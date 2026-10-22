@@ -38,7 +38,7 @@ fn captured(settings: Option<&str>, note: &str) -> Generation {
         .iter()
         .map(|(name, path, _, _)| EntryState {
             id: id(name),
-            path: VaultPath::new(path).unwrap(),
+            path: VaultPath::new(*path).unwrap(),
             kind: EntryKind::File,
             revision: Revision::new("r1").unwrap(),
             deleted: false,
