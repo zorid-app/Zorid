@@ -646,6 +646,73 @@ fn value_expression(property: &str) -> String {
     }
 }
 
+/// Runtime property access is exact-first, then Unicode case-folded in
+/// insertion order. Preserve that same source selection for edit provenance
+/// and readonly derived-property decisions, including exact-case siblings.
+fn resolved_note_property<'a>(
+    record: &'a DetachedRecord,
+    properties: Option<&'a crate::relations::PropertyRelationValues>,
+    requested: &str,
+) -> Option<&'a str> {
+    let overlay = record
+        .witness
+        .as_ref()
+        .and_then(|witness| {
+            properties
+                .and_then(|properties| properties.rows().get(&witness.entry_id))
+                .filter(|row| &row.witness == witness)
+        })
+        .map(|row| &row.values);
+    record
+        .properties
+        .iter()
+        .find(|(key, _)| key == requested)
+        .map(|(key, _)| key.as_str())
+        .or_else(|| {
+            overlay
+                .and_then(|values| values.get_key_value(requested))
+                .map(|(key, _)| key.as_str())
+        })
+        .or_else(|| {
+            let folded = requested.to_lowercase();
+            record
+                .properties
+                .iter()
+                .find(|(key, _)| key.to_lowercase() == folded)
+                .map(|(key, _)| key.as_str())
+                .or_else(|| {
+                    overlay
+                        .and_then(|values| values.keys().find(|key| key.to_lowercase() == folded))
+                        .map(String::as_str)
+                })
+        })
+}
+fn readonly_note_property(
+    record: &DetachedRecord,
+    properties: Option<&crate::relations::PropertyRelationValues>,
+    requested: &str,
+) -> bool {
+    let resolved = resolved_note_property(record, properties, requested).unwrap_or(requested);
+    properties.is_some_and(|properties| properties.is_read_only_property(resolved))
+}
+fn readonly_empty_group_property(
+    properties: Option<&crate::relations::PropertyRelationValues>,
+    requested: &str,
+) -> bool {
+    properties.is_some_and(|properties| {
+        let resolved = properties
+            .property_names()
+            .find(|name| *name == requested)
+            .or_else(|| {
+                let folded = requested.to_lowercase();
+                properties
+                    .property_names()
+                    .find(|name| name.to_lowercase() == folded)
+            });
+        resolved.is_some_and(|name| properties.is_read_only_property(name))
+    })
+}
+
 fn raw_matches_rendered(
     raw: &PropertyValue,
     rendered: &BaseValue,
@@ -1890,9 +1957,20 @@ pub(crate) fn query_rows_validated(
                     )?;
                 }
                 let mut edit_values = BTreeMap::new();
-                for (name, raw) in &record.properties {
-                    let property = format!("note.{name}");
-                    let Some(rendered) = values.get(&property) else {
+                for (property, rendered) in &values {
+                    let Some(requested) = property.strip_prefix("note.") else {
+                        continue;
+                    };
+                    if readonly_note_property(record, input.property_values, requested) {
+                        continue;
+                    }
+                    let Some(actual) =
+                        resolved_note_property(record, input.property_values, requested)
+                    else {
+                        continue;
+                    };
+                    let Some((_, raw)) = record.properties.iter().find(|(name, _)| name == actual)
+                    else {
                         continue;
                     };
                     if raw_matches_rendered(raw, rendered, &mut || {
@@ -1923,7 +2001,7 @@ pub(crate) fn query_rows_validated(
                             ))
                     })?;
                     let raw = expression::typed_result(crate::runtime_value(raw, 0, &mut 0usize)?)?;
-                    edit_values.insert(property, raw);
+                    edit_values.insert(property.clone(), raw);
                     steps_used = steps_used.saturating_add(1);
                     check_query_work(
                         steps_used.saturating_add(session.steps_used()),
@@ -2026,9 +2104,12 @@ pub(crate) fn query_rows_validated(
                 .property_values
                 .is_some_and(|values| values.is_read_only_property(name))
         });
-    let group_timezone =
+    let group_timezone = if view.group.is_some() {
         expression::BasesTimezone::from_setting(Some(&options.evaluation.timezone))
-            .map_err(|message| ExpressionDiagnostic::new("input", message))?;
+            .map_err(|message| ExpressionDiagnostic::new("input", message))?
+    } else {
+        expression::BasesTimezone::default()
+    };
     let definition_origin = options
         .definition_entry_id
         .as_ref()
@@ -2041,6 +2122,8 @@ pub(crate) fn query_rows_validated(
             })
         })
         .transpose()?;
+    let empty_group_writable = writable_group_property
+        .is_some_and(|name| !readonly_empty_group_property(input.property_values, name));
     let mut group_edit_keys = BTreeMap::<String, Option<BaseValue>>::new();
     let mut group_order_keys = BTreeMap::<String, Option<BaseValue>>::new();
     let mut rendered_group_keys = BTreeMap::<String, &BaseValue>::new();
@@ -2057,7 +2140,13 @@ pub(crate) fn query_rows_validated(
             let rendered = group_value(view, row, &null);
             canonical_admission(rendered, &mut admission)?;
             let identity = canonical(rendered);
-            if group_edit_keys.contains_key(&identity) {
+            let row_writable = writable_group_property.is_some_and(|name| {
+                !readonly_note_property(by_id[&row.entry_id], input.property_values, name)
+            });
+            if let Some(existing) = group_edit_keys.get_mut(&identity) {
+                if !row_writable {
+                    *existing = None;
+                }
                 continue;
             }
             if group_edit_keys.len() >= options.max_groups {
@@ -2084,7 +2173,7 @@ pub(crate) fn query_rows_validated(
             admit(&mut admission, |admission| {
                 crate::preview::value_bytes(candidate, admission)
             })?;
-            let value = if writable_group_property.is_some() {
+            let value = if row_writable {
                 match transfer_group_edit_key(
                     rendered,
                     candidate,
@@ -2339,9 +2428,7 @@ pub(crate) fn query_rows_validated(
                 }
                 Ok(())
             };
-            let transfer = if writable_group_property.is_some()
-                && !group_edit_keys.contains_key(&identity)
-            {
+            let transfer = if empty_group_writable && !group_edit_keys.contains_key(&identity) {
                 transfer_group_edit_key(&key, source, &by_id, relationships.as_ref(), &mut check)
             } else {
                 Ok(None)

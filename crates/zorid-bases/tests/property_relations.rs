@@ -1093,7 +1093,7 @@ fn configured_empty_group_edit_keys_are_raw_and_derived_group_keys_stay_readonly
         })
     );
     for property in ["averageRating", "books", "file.name", "formula.constant"] {
-        let source = format!("formulas:\n  constant: 3\nviews:\n  - type: table\n    name: Readonly\n    groupBy: {{property: {property}, direction: ASC}}\n");
+        let source = format!("formulas:\n  constant: '3'\nviews:\n  - type: table\n    name: Readonly\n    groupBy: {{property: {property}, direction: ASC}}\n");
         let result = query_generation_with_properties(
             &compile_base_source(&source).unwrap(),
             &generation,
@@ -1115,13 +1115,13 @@ fn group_link_transfers_keep_targets_across_folders_duplicates_and_reserved_path
         let mut records = vec![
             (
                 "ada",
-                "People/A#% space.md".into(),
+                "People/A#% [x]|漢字 space.md".into(),
                 "---\ntype: author\n---\n".into(),
                 true,
             ),
             (
                 "decoy",
-                "Elsewhere/People/A#% space.md".into(),
+                "Elsewhere/People/A#% [x]|漢字 space.md".into(),
                 "---\ntype: author\n---\n".into(),
                 true,
             ),
@@ -1138,8 +1138,8 @@ fn group_link_transfers_keep_targets_across_folders_duplicates_and_reserved_path
         }
         generation_from_records(records)
     }
-    let first = "---\nkind: card\nauthor: '[[../People/A%23%25%20space.md|Original Alias]]'\n---\n";
-    let second = "---\nkind: card\nauthor: '[[../People/A%23%25%20space.md|Other]]'\n---\n";
+    let first = "---\nkind: card\nauthor: '[[../People/A%23%25%20%5Bx%5D%7C%E6%BC%A2%E5%AD%97%20space.md|Original Alias]]'\n---\n";
+    let second = "---\nkind: card\nauthor: '[[../People/A%23%25%20%5Bx%5D%7C%E6%BC%A2%E5%AD%97%20space.md|Other]]'\n---\n";
     let program = compile_base_source("filters: 'kind == \"card\"'\nviews:\n  - type: table\n    name: Cards\n    order: [file.name, author]\n    groupBy: {property: author, direction: ASC}\n").unwrap();
     let before = records(first, second, None);
     let result =
@@ -1157,7 +1157,10 @@ fn group_link_transfers_keep_targets_across_folders_duplicates_and_reserved_path
     let Some(BaseValue::String { value: raw }) = &target.edit_key else {
         panic!("resolved group must expose a safe transfer key")
     };
-    assert_eq!(raw, "[[/People/A%23%25%20space.md|Original Alias]]");
+    assert_eq!(
+        raw,
+        "[[/People/A%23%25%20%5Bx%5D%7C%E6%BC%A2%E5%AD%97%20space.md|Original Alias]]"
+    );
     let persisted_source = format!(
         "---\nkind: card\nauthor: {}\n---\n",
         serde_json::to_string(raw).unwrap()
@@ -1181,7 +1184,8 @@ fn group_link_transfers_keep_targets_across_folders_duplicates_and_reserved_path
             .unwrap()
             .edit_values["note.author"],
         BaseValue::String {
-            value: "[[../People/A%23%25%20space.md|Original Alias]]".into()
+            value: "[[../People/A%23%25%20%5Bx%5D%7C%E6%BC%A2%E5%AD%97%20space.md|Original Alias]]"
+                .into()
         }
     );
 }
@@ -1528,4 +1532,69 @@ fn explicit_text_group_keys_keep_their_original_raw_identity_during_manual_order
         .iter()
         .all(|group| matches!(&group.key, Some(BaseValue::String { .. }))));
     assert_eq!(result.groups[0].entry_ids, vec![id("first")]);
+}
+
+#[test]
+fn derived_group_readonly_uses_exact_first_casefold_resolution_and_raw_alias_sources() {
+    let before = generation(
+        SETTINGS,
+        &[(
+            "first",
+            "---\nauthor: '[[Authors/Ada|Raw Alias]]'\nrating: 4\nAVERAGERATING: 4\n---\n",
+        )],
+    );
+    let definitions =
+        PropertyDefinitions::from_generation_source(&before, &id("settings"), SETTINGS).unwrap();
+    let source = |filter: &str| {
+        format!("filters: '{filter}'\nviews:\n  - type: table\n    name: Groups\n    order: [file.name, AVERAGERATING]\n    groupBy: {{property: AVERAGERATING, direction: ASC}}\n")
+    };
+    let derived = query_generation_with_properties(
+        &compile_base_source(&source("type == \"author\"")).unwrap(),
+        &before,
+        &[],
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert!(derived.groups.iter().all(|group| group.edit_key.is_none()));
+    let raw = query_generation_with_properties(
+        &compile_base_source(&source("file.inFolder(\"Books\")")).unwrap(),
+        &before,
+        &[],
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        raw.groups[0].edit_key,
+        Some(BaseValue::Number { value: 4.0 })
+    );
+    let mixed = query_generation_with_properties(
+        &compile_base_source(&source("AVERAGERATING == 4")).unwrap(),
+        &before,
+        &[],
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(mixed.groups.len(), 1);
+    assert!(
+        mixed.groups[0].edit_key.is_none(),
+        "a group mixing derived and raw source access must stay readonly"
+    );
+    let aliases=compile_base_source("filters: 'file.inFolder(\"Books\")'\nviews:\n  - type: table\n    name: Sources\n    order: [AUTHOR]\n").unwrap();
+    let result = query_generation_with_properties(
+        &aliases,
+        &before,
+        &[],
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        result.rows[0].edit_values["note.AUTHOR"],
+        BaseValue::String {
+            value: "[[Authors/Ada|Raw Alias]]".into()
+        }
+    );
 }
