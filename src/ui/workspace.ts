@@ -2634,13 +2634,22 @@ export class Workspace {
   private async dailyNote():Promise<void>{const now=new Date();const name=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}.md`;if(!this.vault.entries.has(name))await this.vault.create(name,'');await this.openNote(name);}
   private async split(edge:'right'|'bottom'='right',source=this.activePane,tab=this.current(source)):Promise<void>{
     if(this.tasksRetiring)return;
-    const generation=this.vaultGeneration;
+    const vault=this.vault,generation=this.vaultGeneration,activation=this.paneActivationRevision;
+    const navigation=this.navigationIntent.get(source),active=source.active,path=tab.path,kind=tab.kind;
     await this.flushPane(source);
-    if(this.tasksRetiring||generation!==this.vaultGeneration||!this.panes.includes(source)||!source.tabs.includes(tab))return;
+    if(this.tasksRetiring||vault!==this.vault||generation!==this.vaultGeneration||activation!==this.paneActivationRevision
+      ||this.navigationIntent.get(source)!==navigation||!this.panes.includes(source)||!source.tabs.includes(tab)||source.active!==active||tab.path!==path||tab.kind!==kind)return;
     this.capturePaneState(source);
-    const pane=this.addPane([{...tab,id:makeId(),viewState:tab.viewState?structuredClone(tab.viewState):undefined}]);
+    const clone={...tab,id:makeId(),viewState:tab.viewState?structuredClone(tab.viewState):undefined};
+    const pane=this.addPane([clone]);
     if(!this.splitLayout?.split(source.id,pane.id,pane.element,edge)){this.panes=this.panes.filter(item=>item!==pane);pane.element.remove();return;}
-    this.activate(pane);await this.renderPane(pane);if(this.tasksRetiring||generation!==this.vaultGeneration||!this.panes.includes(pane))return;this.focusPane(pane);this.saveSession();
+    this.activate(pane);
+    const destinationActivation=this.paneActivationRevision,destinationNavigation=this.navigationIntent.get(pane);
+    await this.renderPane(pane);
+    if(this.tasksRetiring||vault!==this.vault||generation!==this.vaultGeneration||!this.panes.includes(pane))return;
+    if(this.activePane===pane&&this.paneActivationRevision===destinationActivation&&this.navigationIntent.get(pane)===destinationNavigation
+      &&this.current(pane)===clone&&clone.path===path&&clone.kind===kind)this.focusPane(pane);
+    this.saveSession();
   }
   private toggleLeft():void{this.root.classList.toggle('left-hidden');this.saveSession();}
   private toggleRight():void{this.root.classList.toggle('right-hidden');this.renderRight();this.saveSession();}
