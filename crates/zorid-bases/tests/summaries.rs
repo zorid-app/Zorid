@@ -222,14 +222,14 @@ fn all_null_group_custom_sum_plus_one_stays_null_with_independent_overall_scope(
     let null_group = result
         .groups
         .iter()
-        .find(|group| matches!(group.key, BaseValue::Null))
+        .find(|group| matches!(group.key, Some(BaseValue::Null)))
         .expect("missing and explicit-null properties share the empty group");
     assert_eq!(null_group.entry_ids.len(), 2);
     assert_eq!(null_group.summaries.get("note.n"), Some(&BaseValue::Null));
     let numeric_group = result
         .groups
         .iter()
-        .find(|group| matches!(&group.key, BaseValue::String { value } if value == "Numbers"))
+        .find(|group| matches!(&group.key, Some(BaseValue::String { value }) if value == "Numbers"))
         .expect("numeric rows retain their separate group");
     assert_eq!(numeric_group.entry_ids.len(), 2);
     assert_eq!(number(&numeric_group.summaries["note.n"]), 31.0);
