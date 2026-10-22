@@ -28,7 +28,7 @@ export async function journey(c){
 
   // Create through the normal app command; the preseeded Base is not creation proof.
   const basesBefore=new Set((await fs.readdir(c.vault)).filter(name=>name.endsWith('.base')));
-  await c.ui.command('Create new base');await c.ui.idle();
+  await c.ui.command('Bases: Create new base');await c.ui.idle();
   const created=await until(async()=>{const names=(await fs.readdir(c.vault)).filter(name=>name.endsWith('.base')&&!basesBefore.has(name));assert.equal(names.length,1,'One ordinary Base created');return names[0];},30000);
   assert.notEqual(created,'Library.base');
   await c.saved(created,source=>assert.ok(c.yaml.parse(source).views?.length>=1),'ordinary-create-base-writes-real-config');
@@ -130,6 +130,17 @@ export async function journey(c){
   await fmSaved(c,'Book 001.md',p=>{assert.equal(p.rating,5);assert.equal(p.status,'Reading');},'single-command-undo-restores-rectangular-edit');
   await c.ui.key('z',{modifiers:5});await c.ui.idle();
   await fmSaved(c,'Book 001.md',p=>{assert.equal(p.rating,4);assert.equal(p.status,'Finished');},'redo-restores-rectangular-edit');
+  await c.ui.click(c.ui.cell('Book 001.md','note.rating'));await c.ui.key('ArrowRight',{modifiers:1});await c.ui.key('ArrowDown',{modifiers:1});
+  await c.ui.key('Delete');await c.ui.idle();
+  for(const file of['Book 001.md','Book 002.md'])await fmSaved(c,file,p=>{assert.equal(p.rating??null,null);assert.equal(p.status??null,null);},'range-clear-'+file);
+  await c.ui.key('z',{modifiers:4});await c.ui.idle();
+  await fmSaved(c,'Book 001.md',p=>{assert.equal(p.rating,4);assert.equal(p.status,'Finished');},'undo-range-clear-restores-first-row');
+  await fmSaved(c,'Book 002.md',p=>{assert.equal(p.rating,2);assert.equal(p.status,'Reading');},'undo-range-clear-restores-second-row');
+
+  await c.ui.drag(`${active} [role="columnheader"][title="note.status"]`,`${active} [role="columnheader"][title="note.rating"]`);await c.ui.idle();
+  await c.saved('Library.base',source=>{const order=c.yaml.parse(source).views.find(v=>v.name==='Books table').order;assert.ok(order.indexOf('note.status')<order.indexOf('note.rating'));},'header-drag-runs-production-reorder');
+  await c.ui.drag(`${active} [role="columnheader"][title="note.rating"]`,`${active} [role="columnheader"][title="note.status"]`);await c.ui.idle();
+  await c.saved('Library.base',source=>{const order=c.yaml.parse(source).views.find(v=>v.name==='Books table').order;assert.ok(order.indexOf('note.rating')<order.indexOf('note.status'));},'header-drag-restores-property-order');
 
   // A second Base observes the same relation edits through Rust-derived reverse
   // relations and rollups. The oracle is authored from all durable book files,
@@ -181,10 +192,27 @@ export async function journey(c){
   await choose(c,'Covers');await c.ui.wait(`return [...document.querySelectorAll('${active} .bases-cards-item')].some(e=>e.dataset.path==='Book 001.md');`,'Cards shows edited book');await c.screenshot('04-cards');
   await choose(c,'Compact');await c.ui.wait(`return [...document.querySelectorAll('${active} .bases-list-item')].some(e=>e.dataset.path==='Book 001.md'&&e.textContent.includes('Finished'));`,'List agrees with table status');await c.screenshot('05-list');
   await choose(c,'Reading board');await c.ui.wait(`return !!document.querySelector('${active} .bases-kanban-card[data-path="Book 001.md"]');`,'Kanban shows saved book');await c.screenshot('06-kanban-before-move');
+  await c.ui.drag(`${active} .bases-kanban-card[data-path="Book 001.md"]`,`${active} .bases-kanban-column-body[aria-label="Reading"]`);await c.ui.idle();
+  await fmSaved(c,'Book 001.md',p=>assert.equal(p.status,'Reading'),'kanban-pointer-drag-writes-original-note');
   await c.ui.click(`${active} .bases-kanban-card[data-path="Book 001.md"]`);await c.ui.key('ArrowLeft',{modifiers:8});await c.ui.idle();
   // Exact target is determined by visible adjacent columns, not guessed status order.
-  const move=await fmSaved(c,'Book 001.md',p=>assert.notEqual(p.status,'Finished'),'kanban-keyboard-move-writes-original-note');
+  const move=await fmSaved(c,'Book 001.md',p=>assert.notEqual(p.status,'Reading'),'kanban-keyboard-move-writes-original-note');
   await c.screenshot('07-kanban-after-move');
+
+  await c.ui.openFile('Library.base');await c.ui.idle();await choose(c,'Books table');
+  await c.ui.command('Split right');
+  await c.ui.wait(`return document.querySelectorAll('.pane .bases-session').length===2;`,'Ordinary split duplicates Base presentation');await c.ui.idle();
+  await c.ui.edit('Book 003.md','note.rating','5');await fmSaved(c,'Book 003.md',p=>assert.equal(p.rating,5),'split-base-edit-writes-shared-file');
+  await c.ui.wait(`return [...document.querySelectorAll(${JSON.stringify(c.ui.cell('Book 003.md','note.rating'))})].length===2&&[...document.querySelectorAll(${JSON.stringify(c.ui.cell('Book 003.md','note.rating'))})].every(e=>e.textContent==='5');`,'Both split Bases agree after save');await c.screenshot('07b-split-base-consistency');
+  await c.ui.click('.pane.is-active .tab.is-active .tab-close');await c.ui.wait(`return document.querySelectorAll('.pane').length===1;`,'Close temporary split through normal tab');
+
+  await c.ui.openFile('Context.base');await c.ui.idle();await c.ui.command('Bases: Open in right sidebar');
+  await c.ui.wait(`return !!document.querySelector('.right-content .bases-session');`,'Sidebar Base mounted through palette');
+  await c.ui.openFile('Context One.md');
+  await c.ui.wait(`const root=document.querySelector('.right-content .bases-session');return root?.querySelector('[role="grid"]')?.getAttribute('aria-rowcount')==='38'&&root.querySelector('[data-path="Book 001.md"][data-property="note.category"]')?.textContent==='One';`,'Sidebar this follows first active Markdown note');
+  await c.ui.openFile('Context Two.md');
+  await c.ui.wait(`const root=document.querySelector('.right-content .bases-session');return root?.querySelector('[role="grid"]')?.getAttribute('aria-rowcount')==='38'&&root.querySelector('[data-path="Book 002.md"][data-property="note.category"]')?.textContent==='Two'&&!root.querySelector('[data-path="Book 001.md"]');`,'Sidebar this refreshes to second active Markdown note');await c.screenshot('07c-sidebar-active-note-context');
+  c.evidence.checks.push({name:'sidebar-this-active-note-context',first:'Context One.md',second:'Context Two.md',expectedRows:37});
 
   await c.ui.openFile('Embed host.md');
   await c.ui.wait(`return document.querySelectorAll('.pane.is-active .bases-embed .bases-session').length>=2;`,'File and fenced embeds mount through actual editor');await c.screenshot('08-file-and-fenced-embeds');

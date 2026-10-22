@@ -22,7 +22,9 @@ host. It does not call production stores/controllers to simulate positive edits.
 - Edit number, checkbox, multiselect, status and relation using actual controls;
   check exact YAML values and preserve original body/unrelated fields.
 - Paste two rows/two columns through the production ClipboardEvent handler;
-  one command undo/redo, exact durable field checks.
+  one command undo/redo, keyboard range clear/undo, exact durable field checks.
+- Actual Chromium dragstart/intercept/drop header reorder and Kanban pointer move;
+  no injected application drag state or mutation calls.
 - Create two notes through New with exact full literal template and collision
   handling; assert unchanged template and no expanded placeholders.
 - Missing-template failure creates no blank fallback; repair settings and retry.
@@ -32,6 +34,8 @@ host. It does not call production stores/controllers to simulate positive edits.
 - Switch Table/Cards/List/Kanban; move one card through actual keyboard behavior
   and assert original file changed.
 - Mount both file/named-view and fenced Base embeds; preserve containing Markdown.
+- Ordinary Split right: edit one shared file and assert both presentations agree.
+  Palette-mounted right-sidebar Base follows two active main notes' `this` context.
 - External editor writes while a real cell draft retains its original baseline;
   verify stale rejection/draft feedback and exact authoritative external bytes.
 - Signal-free normal quit; restart same profile; verify note/config bytes and UI.
@@ -47,11 +51,10 @@ controls before runtime. A failed early gate does not establish later coverage.
 - Property definition option creation/rename/reorder/color/removal and unknown
   values; date/datetime/list/link editing and invalid-value diagnostics.
 - Relation target rename/delete/unresolved and refresh.
-- Table pointer resize/reorder/header menus/range clear; Kanban pointer drag, empty/null/
+- Table pointer resize/header menus; Kanban empty/null/
   list/folder groups; Cards covers/sizing, List markers/separators.
 - Unreadable-template failure and create-in-group precedence.
-- Split/sidebar mounting and active-main-note `this` context changes; fenced
-  configuration UI saves original Markdown block; close/remount pending drafts.
+- Fenced configuration UI saves original Markdown block; close/remount pending drafts.
 - Real native interruption/failure retained recovery, report actual atomic/partial
   boundaries and repeat safe retry; this needs integration-owner fault scheduling.
 - Matched Obsidian reference screenshots/interaction evidence remains the REA/

@@ -40,6 +40,30 @@ export class UI {
     await this.cdp.call('Input.insertText',{text});
     this.actions.push({action:'text',selector,text,at:Date.now()});
   }
+  async drag(source,target) {
+    const from=await this.point(source),to=await this.point(target);
+    await this.cdp.call('Input.setInterceptDrags',{enabled:true});
+    let listener,timer;
+    const intercepted=new Promise((resolve,reject)=>{
+      timer=setTimeout(()=>reject(Error('Real Chromium dragstart was not intercepted')),8000);
+      listener=event=>{const value=JSON.parse(event.data);if(value.method==='Input.dragIntercepted'){clearTimeout(timer);resolve(value.params.data);}};
+      this.cdp.ws.addEventListener('message',listener);
+    });
+    // Observe rejection immediately while CDP inputs are still being dispatched.
+    intercepted.catch(()=>{});
+    try{
+      await this.cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',...from});
+      await this.cdp.call('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',buttons:1,clickCount:1,...from});
+      for(let i=1;i<=12;i++)await this.cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',button:'left',buttons:1,x:from.x+(to.x-from.x)*i/12,y:from.y+(to.y-from.y)*i/12});
+      const data=await intercepted;
+      for(const type of ['dragEnter','dragOver','drop'])await this.cdp.call('Input.dispatchDragEvent',{type,...to,data});
+      this.actions.push({action:'chromium-intercepted-drag',source,target,types:data.items.map(item=>item.mimeType),at:Date.now()});
+    }finally{
+      clearTimeout(timer);if(listener)this.cdp.ws.removeEventListener('message',listener);
+      await this.cdp.call('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',buttons:0,clickCount:1,...to});
+      await this.cdp.call('Input.setInterceptDrags',{enabled:false});
+    }
+  }
   async select(selector, value) {
     const values = await this.wait(`const e=document.querySelector(${JSON.stringify(selector)});return e?.tagName==='SELECT'?[...e.options].map(o=>({value:o.value,label:o.textContent,disabled:o.disabled})):false;`, 'Native select options');
     const index = values.findIndex(o => o.value === value || o.label === value);
