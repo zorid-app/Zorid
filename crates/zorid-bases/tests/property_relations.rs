@@ -581,6 +581,82 @@ fn plain_link_definitions_resolve_notes_and_preserve_external_urls() {
 }
 
 #[test]
+fn file_and_link_expressions_read_the_same_snapshot_property_overlays() {
+    let settings = format!("{SETTINGS}  code: {{type: text}}\n");
+    let generation = generation(&settings, &[
+        ("first", "---\nauthor: '[[Authors/Ada]]'\nrating: 4\ncode: '2026-01-01'\n---\n[[Authors/Ada]]\n"),
+        ("second", "---\nauthor: '[[Authors/Ada]]'\nrating: 2\n---\n"),
+    ]);
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), &settings)
+            .unwrap();
+    let program = compile_base_source("filters: 'file.inFolder(\"Books\")'\nformulas:\n  code: 'file(\"Books/first\").properties.code'\n  count: 'author.asFile().properties.bookCount'\n  linked: 'link(\"Authors/Ada\").asFile().properties.type'\n  missing: 'file(\"Missing\")'\n  hasAuthor: 'file.hasLink(\"Authors/Ada\")'\nsummaries:\n  AuthorKind: 'file(\"Authors/Ada\").properties.type'\nviews:\n  - type: table\n    name: Books\n    order: [file.name, formula.code, formula.count, formula.linked, formula.missing, formula.hasAuthor]\n    summaries: {file.name: AuthorKind}\n").unwrap();
+    let result = query_generation_with_properties(
+        &program,
+        &generation,
+        &[],
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(result.rows.len(), 2);
+    for row in &result.rows {
+        assert_eq!(
+            row.values["formula.code"],
+            BaseValue::String {
+                value: "2026-01-01".into()
+            }
+        );
+        assert_eq!(
+            row.values["formula.count"],
+            BaseValue::Number { value: 2.0 }
+        );
+        assert_eq!(
+            row.values["formula.linked"],
+            BaseValue::String {
+                value: "author".into()
+            }
+        );
+        assert_eq!(row.values["formula.missing"], BaseValue::Null);
+    }
+    let first = result
+        .rows
+        .iter()
+        .find(|row| row.entry_id == id("first"))
+        .unwrap();
+    assert_eq!(
+        first.values["formula.hasAuthor"],
+        BaseValue::Boolean { value: true }
+    );
+    assert_eq!(
+        result.summaries["file.name"],
+        BaseValue::String {
+            value: "author".into()
+        }
+    );
+}
+
+#[test]
+fn relation_target_filters_use_the_same_shared_file_context() {
+    let settings = SETTINGS.replace(
+        "type == \"author\"",
+        "type == file(\"Authors/Ada\").properties.type",
+    );
+    let generation = generation(&settings, &[]);
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), &settings)
+            .unwrap();
+    assert!(definitions.diagnostics().is_empty());
+    let values = query_property_relations(
+        &BaseSnapshot::from_generation(&generation, &[]).unwrap(),
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(values.relation_targets()["author"].len(), 2);
+}
+
+#[test]
 fn derived_values_cannot_be_attached_to_detached_rows_or_forged_graphs() {
     let generation = generation(SETTINGS, &[]);
     let definitions =

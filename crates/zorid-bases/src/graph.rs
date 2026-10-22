@@ -394,6 +394,7 @@ impl OwnedRelationships {
                 path: edge.link().destination.clone(),
                 target,
                 display: None,
+                display_value: None,
                 resolved_path: Some(edge.target().map(|e| e.path.as_str().into())),
                 external: zorid_index::is_external_destination(&edge.link().destination)
                     .map_err(index_error)?,
@@ -416,6 +417,7 @@ impl OwnedRelationships {
                                 revision: edge.source().revision.clone(),
                             }),
                             display: None,
+                            display_value: None,
                             resolved_path: Some(Some(edge.source().path.as_str().into())),
                             external: false,
                         });

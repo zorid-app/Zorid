@@ -613,6 +613,7 @@ pub fn query_property_relations(
                         revision: entry.revision.clone(),
                     }),
                     display,
+                    display_value: None,
                     external,
                 };
                 budget.keep(&link)?;
@@ -670,6 +671,7 @@ pub fn query_property_relations(
                                 path: source.path.clone(),
                                 target: source.witness.clone(),
                                 display: None,
+                                display_value: None,
                                 external: false,
                             }
                         })
