@@ -47,7 +47,7 @@ test('Kanban header and footer creation preserve exact group key and snapshot; r
   const view = createBaseKanbanView(container, { result, openFile() {}, createItem: async request => { created.push(request); } });
   container.querySelector<HTMLElement>('.bases-kanban-column-create')!.click(); await tick();
   container.querySelector<HTMLElement>('.bases-kanban-column-footer button')!.click(); await tick();
-  assert.deepEqual(created, Array(2).fill({ version: 1, property: 'note.status', group: value('Todo') }));
+  assert.deepEqual(created.map(item => { const { anchor, ...request } = item as { anchor: HTMLElement; [key: string]: unknown }; assert.ok(container.contains(anchor)); return request; }), Array(2).fill({ version: 1, property: 'note.status', group: value('Todo') }));
   const retained = container.querySelector<HTMLElement>('.bases-kanban-column-create')!;
   view.update({ ...result, version: 2 }); retained.click(); await tick(); assert.equal(created.length, 2);
   view.destroy();
@@ -128,5 +128,86 @@ test('Kanban drag feedback previews sorted insertion without changing data or di
   assert.equal(container.querySelector('.bases-kanban-card-drop-placeholder'), null);
   assert.equal(source.classList.contains('is-being-dragged'), false);
   assert.equal(container.querySelector<HTMLElement>('[data-path="B.md"]')!.style.top, '0px');
+  view.destroy(); dom.window.close();
+});
+
+function columnDragEvent(dom: JSDOM, type: string) {
+  const event = new dom.window.Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'dataTransfer', { value: { setData() {}, setDragImage() {}, dropEffect: '' } });
+  return event;
+}
+
+test('live column preview moves existing columns, keeps source DOM and restores exact positions on cancel', () => {
+  const { dom, container, result } = fixture(); let writes = 0;
+  const view = createBaseKanbanView(container, { result, openFile() {}, requestGroupOrder: async () => { writes++; } });
+  const [source, target] = [...container.querySelectorAll<HTMLElement>('.bases-kanban-column')];
+  const heading = source.querySelector<HTMLElement>('.bases-kanban-column-header')!;
+  heading.dispatchEvent(columnDragEvent(dom, 'dragstart')); target.dispatchEvent(columnDragEvent(dom, 'dragover'));
+  assert.equal(source.style.left, '288px'); assert.equal(target.style.left, '0px');
+  assert.ok(container.querySelector('.bases-kanban-column-drop-placeholder')); assert.equal(writes, 0);
+  container.querySelector<HTMLElement>('.bases-kanban-view')!.dispatchEvent(new dom.window.Event('scroll'));
+  assert.ok(container.contains(heading), 'scroll does not retire the native drag source');
+  assert.deepEqual(result.groups.map(group => group.key), [value('Todo'), value('Done')]);
+  heading.dispatchEvent(columnDragEvent(dom, 'dragend'));
+  assert.equal(source.style.left, '0px'); assert.equal(target.style.left, '288px');
+  assert.equal(container.querySelector('.bases-kanban-column-drop-placeholder'), null);
+  view.destroy(); dom.window.close();
+});
+
+test('column drop keeps preview until host refresh and rolls back only its own failed operation', async () => {
+  const { dom, container, result } = fixture(); let reject!: (error: unknown) => void; const errors: unknown[] = [], orders: unknown[] = [];
+  const view = createBaseKanbanView(container, { result, openFile() {}, onPresentationError: error => errors.push(error), requestGroupOrder: request => {
+    orders.push(request.order); return new Promise<void>((_resolve, no) => { reject = no; });
+  } });
+  const [source, target] = [...container.querySelectorAll<HTMLElement>('.bases-kanban-column')];
+  const heading = source.querySelector<HTMLElement>('.bases-kanban-column-header')!;
+  heading.dispatchEvent(columnDragEvent(dom, 'dragstart')); target.dispatchEvent(columnDragEvent(dom, 'dragover')); target.dispatchEvent(columnDragEvent(dom, 'drop')); heading.dispatchEvent(columnDragEvent(dom, 'dragend'));
+  assert.deepEqual(orders, [['Done', 'Todo']]); assert.equal(source.style.left, '288px');
+  assert.equal(container.querySelector('.bases-kanban-column-drop-placeholder'), null);
+  reject(Error('Config conflict')); await tick();
+  assert.equal(source.style.left, '0px'); assert.equal(target.style.left, '288px'); assert.equal(errors.length, 1);
+  view.destroy(); dom.window.close();
+});
+
+test('new snapshots invalidate column previews and stale drop/failure cannot change current board', async () => {
+  const { dom, container, result } = fixture(); let writes = 0, reject!: (error: unknown) => void; const errors: unknown[] = [];
+  const view = createBaseKanbanView(container, { result, openFile() {}, onPresentationError: error => errors.push(error), requestGroupOrder: () => {
+    writes++; return new Promise<void>((_resolve, no) => { reject = no; });
+  } });
+  const old = [...container.querySelectorAll<HTMLElement>('.bases-kanban-column')];
+  old[0].querySelector('div')!.dispatchEvent(columnDragEvent(dom, 'dragstart')); old[1].dispatchEvent(columnDragEvent(dom, 'dragover'));
+  view.update({ ...result, version: 2 }); old[1].dispatchEvent(columnDragEvent(dom, 'drop')); assert.equal(writes, 0);
+  const current = [...container.querySelectorAll<HTMLElement>('.bases-kanban-column')];
+  current[0].querySelector('div')!.dispatchEvent(columnDragEvent(dom, 'dragstart')); current[1].dispatchEvent(columnDragEvent(dom, 'drop'));
+  assert.equal(writes, 1); view.update({ ...result, version: 3 }); reject(Error('obsolete failure')); await tick();
+  assert.equal(errors.length, 0); assert.doesNotMatch(container.textContent!, /obsolete failure/);
+  assert.equal(container.querySelector<HTMLElement>('.bases-kanban-column')!.style.left, '0px');
+  view.destroy(); dom.window.close();
+});
+
+test('column ordering retains typed opaque identities and every saved alias; drafts prohibit drag', async () => {
+  const { dom, container, result } = fixture(); const orders: unknown[] = [];
+  const numeric = value(2), text = value('2');
+  const source: BaseQueryResult = { ...result, shared: {} as NonNullable<BaseQueryResult['shared']>,
+    view: { ...result.view, groupOrder: [2, '2', 'alias-two'] },
+    groups: [{ key: numeric, sharedKeyId: 'numeric', rows: [result.rows[0]] }, { key: text, sharedKeyId: 'text', rows: [result.rows[1]] }],
+    groupOptions: [{ key: numeric, sharedKeyId: 'numeric', count: 1, listed: true }, { key: text, sharedKeyId: 'text', count: 1, listed: true }, { key: text, sharedKeyId: 'text', count: 1, listed: true }] };
+  const view = createBaseKanbanView(container, { result: source, openFile() {}, requestGroupOrder: async request => { orders.push(request.order); } });
+  const columns = [...container.querySelectorAll<HTMLElement>('.bases-kanban-column')], heading = columns[0].querySelector('div')!;
+  const property = container.querySelector<HTMLElement>('.bases-kanban-card-line')!; property.dataset.baseEditing = 'draft';
+  const refused = columnDragEvent(dom, 'dragstart'); heading.dispatchEvent(refused); assert.equal(refused.defaultPrevented, true);
+  property.removeAttribute('data-base-editing'); heading.dispatchEvent(columnDragEvent(dom, 'dragstart')); columns[1].dispatchEvent(columnDragEvent(dom, 'drop')); await tick();
+  assert.deepEqual(orders, [['2', 'alias-two', 2]]);
+  view.destroy(); dom.window.close();
+});
+
+test('column context menu uses a current renderer witness and cannot dispatch after snapshot replacement', async () => {
+  const { dom, container, result } = fixture(); let nativeMenus = 0, writes = 0;
+  Object.defineProperty(dom.window, 'zorid', { value: { showContextMenu() { nativeMenus++; return Promise.resolve('hide'); } } });
+  const view = createBaseKanbanView(container, { result, openFile() {}, requestGroupOrder: async () => { writes++; } });
+  container.querySelector('.bases-kanban-column-header')!.dispatchEvent(new dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  assert.equal(nativeMenus, 0, 'the guarded menu uses renderer icons and validity checks');
+  const hide = dom.window.document.querySelector<HTMLButtonElement>('.context-menu-item')!;
+  assert.match(hide.textContent!, /Hide column/); view.update({ ...result, version: 2 }); hide.click(); await tick(); assert.equal(writes, 0);
   view.destroy(); dom.window.close();
 });
