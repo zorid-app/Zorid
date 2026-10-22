@@ -54,6 +54,8 @@ export interface BaseToolbarOptions {
 export interface BaseToolbar {
   update(state: BaseToolbarState): void;
   hasDraft(): boolean;
+  /** Only this live toolbar's current connected portal, including its child controls. */
+  owns(node: Node): boolean;
   captureSaveAcknowledgement(): () => void;
   destroy(): void;
 }
@@ -731,7 +733,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     if (!next.readOnly && !options.commands) { const node = button(doc, 'View', () => open('View options',node), 'View options'); node.className = 'bases-toolbar-action'; actions.append(node); }
     if (focusedLabel) Array.from(actions.querySelectorAll<HTMLButtonElement>('button')).find(node => node.getAttribute('aria-label') === focusedLabel)?.focus({ preventScroll: true });
   }
-  return { update, hasDraft, captureSaveAcknowledgement() { const token = panel?.failure, captured = panel; return () => { if (!destroyed && captured && captured === panel && token && captured.failure === token && !captured.saving && captured.acceptsSaveAcknowledgement?.()) { captured.failure = undefined; captured.dirty = false; captured.close(false); } }; },
+  return { update, hasDraft, owns: node => !!(!destroyed && container.isConnected && panel?.node.isConnected && panel.trigger.isConnected && container.contains(panel.trigger) && panel.node.contains(node)), captureSaveAcknowledgement() { const token = panel?.failure, captured = panel; return () => { if (!destroyed && captured && captured === panel && token && captured.failure === token && !captured.saving && captured.acceptsSaveAcknowledgement?.()) { captured.failure = undefined; captured.dirty = false; captured.close(false); } }; },
     destroy() { destroyed = true; if (panel) { panel.saving = false; panel.close(false); } container.replaceChildren(); },
   };
 }

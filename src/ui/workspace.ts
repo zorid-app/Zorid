@@ -155,6 +155,7 @@ export class Workspace {
   private sidebarBaseIntent=0;
   private sidebarBasePath?:string;
   private baseNewItem?:BaseNewItemPopoverHandle;
+  /** Stable initiating host; popover positioning keeps its separate button anchor. */
   private baseNewItemAnchor?:HTMLElement;
   private baseNewItemOpening?:Promise<void>;
   private notePropertyQueries=new Set<{vault:Vault;session:NotePropertyTargets}>();
@@ -1423,7 +1424,7 @@ export class Workspace {
               // A nested Base's own New operation is still tracked by its
               // session. Release that operation before draining its parent.
               if(this.baseNewItem?.element.contains(host)){this.run(async()=>{await this.closeBaseNewItem();await this.openBaseNewItem(target,this.root);});return;}
-              await this.openBaseNewItem(target,anchor??host);
+              await this.openBaseNewItem(target,anchor??host,host);
             },
             buffers:{getBuffer:target=>this.baseBufferFor(target,validate),validate,
               onBufferChange:(target,buffer,previous)=>{
@@ -1465,7 +1466,7 @@ export class Workspace {
     let flushing:Promise<void>|undefined,closing:Promise<void>|undefined,closed=false;
     const flush=()=>{if(closed)return Promise.resolve();if(closing)return closing;if(flushing)return flushing;const pending=Promise.resolve().then(async()=>{await this.finishInlinePublicationAt(path);await hover.flush();await session.flush();});flushing=pending;const clear=()=>{if(flushing===pending)flushing=undefined;};void pending.then(clear,clear);return pending;};
     const close=()=>{if(closed)return Promise.resolve();if(closing)return closing;const pending=Promise.resolve().then(async()=>{await flushing;await this.finishInlinePublicationAt(path);await hover.close();await session.close();await hover.destroy();closed=true;});closing=pending;const clear=()=>{if(closing===pending)closing=undefined;};void pending.then(clear,clear);return pending;};
-    return{get ready(){return session.ready;},get state(){return session.state;},refresh:()=>session.refresh(),selectView:index=>session.selectView(index),setCurrentFile:target=>session.setCurrentFile(target),rebindViewName:(from,to)=>session.rebindViewName(from,to),flush,close,hasPendingChanges:()=>hover.hasPendingChanges()||session.hasPendingChanges()};
+    return{get ready(){return session.ready;},get state(){return session.state;},refresh:()=>session.refresh(),selectView:index=>session.selectView(index),setCurrentFile:target=>session.setCurrentFile(target),rebindViewName:(from,to)=>session.rebindViewName(from,to),flush,close,owns:node=>!closed&&!closing&&session.owns?.(node)===true,hasPendingChanges:()=>hover.hasPendingChanges()||session.hasPendingChanges()};
   }
 
   /** Base hover uses the ordinary shared draft, editor and embed save boundary. */
@@ -1546,7 +1547,7 @@ export class Workspace {
     };
     preview.addEventListener('click',openEditor);
     try{render();}catch(error){unsubscribe();recoveryCleanup();properties.destroy();targets.destroy();embeds.destroy();this.canvasMarkdownEmbeds.delete(embeds);this.baseHoverEmbeds.delete(sessions);await sessions.close();throw error;}
-    return{isCurrent:current,owns:node=>host.contains(node)||ownsPropertyPopover(node)||!!this.baseNewItemAnchor&&host.contains(this.baseNewItemAnchor)&&!!this.baseNewItem?.element.contains(node),hasPendingChanges:()=>!!loading||!!pending.size||buffer.dirty||!!buffer.error||buffer.hasRecoveryConflict||sessions.hasPendingChanges()||propertyDraft(),
+    return{isCurrent:current,owns:node=>host.contains(node)||sessions.owns(node)||ownsPropertyPopover(node)||!!this.baseNewItemAnchor?.isConnected&&host.contains(this.baseNewItemAnchor)&&!!this.baseNewItem?.element.isConnected&&(this.baseNewItem.element.contains(node)||this.baseNewItemEmbeds?.owns(node)===true),hasPendingChanges:()=>!!loading||!!pending.size||buffer.dirty||!!buffer.error||buffer.hasRecoveryConflict||sessions.hasPendingChanges()||propertyDraft(),
       flush:async()=>{await loading;const focused=host.ownerDocument.activeElement as HTMLElement|null;if(focused&&(host.contains(focused)||ownsPropertyPopover(focused)))focused.blur();await Promise.resolve();await Promise.resolve();const inputGeneration=propertyInputGeneration;await properties?.flush();while(pending.size)await Promise.all([...pending]);await sessions.flush();if(buffer.dirty){validateFile();buffer.update(buffer.text,{validateWrite:validateFile});}await buffer.flush();if(inputGeneration!==propertyInputGeneration)throw new Error('Property input changed while saving; finish the edit before closing.');},
       dispose:async()=>{if(disposed)return;closing=true;try{await sessions.close();await targets.close();}catch(error){closing=false;throw error;}disposed=true;preview.removeEventListener('click',openEditor);heading.removeEventListener('click',toggleProperties);heading.removeEventListener('keydown',propertiesKey);propertiesHost.removeEventListener('input',propertyInput);properties?.destroy();targets.destroy();unsubscribe();recoveryCleanup();editor?.destroy();destroyMarkdown(preview);embeds.destroy();this.canvasMarkdownEmbeds.delete(embeds);this.baseHoverEmbeds.delete(sessions);},
     };
@@ -1584,8 +1585,8 @@ export class Workspace {
     const current=this.baseNewItem;if(!current)return false;
     await current.close();return true;
   }
-  private openBaseNewItem(path:string,anchor:HTMLElement):Promise<void>{
-    if(this.baseNewItemOpening)return this.baseNewItemOpening.then(()=>this.openBaseNewItem(path,anchor));
+  private openBaseNewItem(path:string,anchor:HTMLElement,ownershipHost:HTMLElement=anchor):Promise<void>{
+    if(this.baseNewItemOpening)return this.baseNewItemOpening.then(()=>this.openBaseNewItem(path,anchor,ownershipHost));
     const vault=this.vault,generation=this.vaultGeneration;
     const opening=Promise.resolve().then(async()=>{
       await this.baseNewItem?.close();
@@ -1630,6 +1631,7 @@ export class Workspace {
             await shared.relocate(destination);
           },
           deferSourceUpdate:()=>this.deferInlinePublication(shared),
+          ownsEditorPortal:node=>sessions.owns(node),
           subscribeBuffer:(target,listener)=>this.bufferSubscriptions.subscribe(target,()=>{
             if(shared.path!==observedPath){observedPath=shared.path;for(const remount of [...remounts])remount();}
             listener();
@@ -1649,8 +1651,8 @@ export class Workspace {
             transfers:{autoConvertHtml:()=>this.settings.autoConvertHtml,importFile:async file=>{validateFile();const result=await this.importAttachment(file,shared.path,generation);validateFile();return result;},nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
           },onError:error=>notice(error instanceof Error?error.message:String(error)),onClose:cleanup,
         });
-        validateFile();popup.element.append(recovery);this.baseNewItem=popup;this.baseNewItemAnchor=anchor;
-      }catch(error){if(popup?.element.isConnected){this.baseNewItem=popup;this.baseNewItemAnchor=anchor;throw error;}cleanup();await sessions.close();throw error;}
+        validateFile();popup.element.append(recovery);this.baseNewItem=popup;this.baseNewItemAnchor=ownershipHost;
+      }catch(error){if(popup?.element.isConnected){this.baseNewItem=popup;this.baseNewItemAnchor=ownershipHost;throw error;}cleanup();await sessions.close();throw error;}
     });
     this.baseNewItemOpening=opening;
     const clear=()=>{if(this.baseNewItemOpening===opening)this.baseNewItemOpening=undefined;};void opening.then(clear,clear);

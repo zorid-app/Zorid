@@ -82,6 +82,8 @@ export interface BaseSession {
   /** Workspace preflight: retain the mounted view while settling accepted edits. */
   flush(): Promise<void>;
   hasPendingChanges(): boolean;
+  /** Lifecycle-owned portals may be outside the session's DOM root. */
+  owns?(node: Node): boolean;
   /** Retains UI/controller on failure; callers must not silently discard this rejection. */
   close(): Promise<void>;
 }
@@ -748,6 +750,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     setCurrentFile: path => { action(); return controller.setCurrentFilePath(path); },
     rebindViewName: (from, to) => { alive(); return controller.rebindViewName(from, to); },
     hasPendingChanges: () => !disposed && (!!pending.size || !!mounted?.hasQueuedConfiguration?.() || controller.hasPendingViewReferences || creation?.status === 'uncertain' || activeDraft() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error)),
+    owns: node => { try { alive(); return !closing && root.isConnected && toolbarUI.owns(node); } catch { return false; } },
     flush: () => finish(false),
     close: () => finish(true),
   };

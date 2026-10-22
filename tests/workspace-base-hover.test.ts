@@ -9,6 +9,9 @@ import type {WorkspaceViewFactories} from '../src/ui/workspace.ts';
 import {createEditor} from '../src/ui/editor.ts';
 import type {EditorOptions} from '../src/ui/editor.ts';
 import {createBaseSession} from '../src/bases/session.ts';
+import type {BaseSession} from '../src/bases/session.ts';
+import {BaseEmbedSessions} from '../src/ui/base-embed-sessions.ts';
+import {inlineBaseRequest} from '../src/bases/inline-base.ts';
 import {renderProperties} from '../src/ui/properties.ts';
 import type {BaseSessionOptions} from '../src/bases/session.ts';
 import {MemoryAdapter} from '../src/core/memory-adapter.ts';
@@ -16,7 +19,7 @@ import type {DurableWrites,DurableWriteInput,DurableWriteIntent,DurableWriteRead
 
 const base='filters: file.ext == "md"\nviews: [{type: table, name: Table, order: [file.name, status]}]\n';
 const note='---\n# Keep the comment\nstatus: Todo\nunknown: [one, two]\n---\n# Original\n\nEditable body\n';
-function fixture(){
+function fixture(seed:Record<string,string>={}){
   const ids=new Map<string,string>(),revisions=new Map<string,number>(),heads=new Map<string,any>(),inputs=new Map<string,DurableWriteInput>(),intents=new Map<string,DurableWriteIntent>();
   let sequence=0,fail=false;const scope={vaultId:'hover-fixture',clientId:'hover-window'};
   class Adapter extends MemoryAdapter{
@@ -26,7 +29,7 @@ function fixture(){
     async stat(path:string){return this.identify(await super.stat(path));}
     async write(path:string,text:string){await super.write(path,text);revisions.set(path,(revisions.get(path)??1)+1);}
   }
-  const adapter=new Adapter({'Work.base':base,'One.md':note,'Other.md':'Other','Nested.base':base,'Image.png':'image','Sound.mp3':'sound','Document.pdf':'pdf','Unsupported.bin':'binary'});
+  const adapter=new Adapter({'Work.base':base,'One.md':note,'Other.md':'Other','Nested.base':base,'Image.png':'image','Sound.mp3':'sound','Document.pdf':'pdf','Unsupported.bin':'binary',...seed});
   const read=async(path:string):Promise<DurableWriteRead>=>{const entry=await adapter.stat(path);assert.ok(entry?.type==='file');return{path,entryId:entry.entryId!,revision:entry.revision!,content:await adapter.read(path),stat:{ctime:1,mtime:1,size:entry.size}};};
   adapter.durableWrites={checkpoints:{scope,async load(key){return structuredClone(heads.get(key)??null);},async compareAndSwap(change){assert.equal(heads.get(change.key)?.revision??null,change.expectedRevision);const head={version:1,...scope,key:change.key,revision:change.nextRevision,encodedState:change.encodedState,sequence:String(++sequence),deleted:change.encodedState===null,byteLength:change.encodedState?Buffer.byteLength(change.encodedState):0};heads.set(change.key,head);return structuredClone(head);},async list(){return{items:[...heads.values()],cursor:null,highWater:String(sequence)};},async changes(){return{items:[],cursor:null,highWater:String(sequence)};}},
     readText:read,readTextById:async id=>{const entry=(await adapter.list()).find(entry=>entry.entryId===id);return entry?read(entry.path):null;},
@@ -37,15 +40,15 @@ function fixture(){
   };
   return{adapter,ids,revisions,fail(value:boolean){fail=value;}};
 }
-async function setup(t:TestContext,factories:WorkspaceViewFactories={}){
+async function setup(t:TestContext,factories:WorkspaceViewFactories={},seed:Record<string,string>={}){
   const dom=new JSDOM('<!doctype html><body><div id="app"></div>',{url:'https://zorid.test/',pretendToBeVisual:true}),saved=new Map<string,PropertyDescriptor|undefined>();
   const matchMedia=(media:string)=>({matches:false,media,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});
   for(const[key,value]of Object.entries({window:dom.window,document:dom.window.document,localStorage:dom.window.localStorage,navigator:dom.window.navigator,HTMLElement:dom.window.HTMLElement,Node:dom.window.Node,Text:dom.window.Text,Window:dom.window.Window,MutationObserver:dom.window.MutationObserver,getComputedStyle:dom.window.getComputedStyle.bind(dom.window),requestAnimationFrame:dom.window.requestAnimationFrame.bind(dom.window),cancelAnimationFrame:dom.window.cancelAnimationFrame.bind(dom.window),matchMedia})){saved.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});}
   dom.window.matchMedia=matchMedia as typeof window.matchMedia;
   dom.window.Range.prototype.getBoundingClientRect=()=>({top:0,left:0,right:1000,bottom:600,width:1000,height:600,x:0,y:0,toJSON(){return{};}});dom.window.Range.prototype.getClientRects=()=>Object.assign([],{item:()=>null});
-  const f=fixture(),root=document.querySelector<HTMLElement>('#app')!,options:EditorOptions[]=[],sessions:BaseSessionOptions[]=[];
+  const f=fixture(seed),root=document.querySelector<HTMLElement>('#app')!,options:EditorOptions[]=[],sessions:BaseSessionOptions[]=[],liveSessions:BaseSession[]=[];
   let closes=0;
-  const workspace=new Workspace(root,(host,value)=>{options.push(value);return createEditor(host,value);},{...factories,base:(host,value)=>{sessions.push(value);const session=createBaseSession(host,value),close=session.close.bind(session);session.close=()=>{closes++;return close();};return session;}});
+  const workspace=new Workspace(root,(host,value)=>{options.push(value);return createEditor(host,value);},{...factories,base:(host,value)=>{sessions.push(value);const session=createBaseSession(host,value),close=session.close.bind(session);liveSessions.push(session);session.close=()=>{closes++;return close();};return session;}});
   t.after(async()=>{try{f.fail(false);await workspace.destroy();}finally{dom.window.close();for(const[key,descriptor]of saved){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}}});
   await workspace.start({adapter:f.adapter,id:'test:hover',label:'Test'});await workspace.openNote('Work.base');
   const hover=(path='One.md',modified=true)=>{
@@ -57,7 +60,7 @@ async function setup(t:TestContext,factories:WorkspaceViewFactories={}){
     }
     const anchor=cell.querySelector<HTMLElement>('a.internal-link')!;assert.ok(anchor);const entry=workspace.vault.entries.get(path)!;const callback=sessions.find(value=>value.basePath==='Work.base')!.hoverFile!;
     const listener=(event:MouseEvent)=>callback({path,entryId:entry.entryId,revision:entry.revision,values:{}},event);cell.addEventListener('mouseover',listener,{once:true});anchor.dispatchEvent(new dom.window.MouseEvent('mouseover',{bubbles:true,ctrlKey:modified,metaKey:modified,clientX:20,clientY:20}));return anchor;};
-  return{...f,workspace,root,dom,options,sessions,hover,get closes(){return closes;}};
+  return{...f,workspace,root,dom,options,sessions,liveSessions,hover,get closes(){return closes;}};
 }
 async function until(check:()=>boolean,label:string){const end=Date.now()+3500;while(!check()){assert.ok(Date.now()<end,`${label}: ${document.body.textContent}`);await new Promise(resolve=>setTimeout(resolve,5));}}
 function popup(){return document.querySelector<HTMLElement>('.bases-file-hover')!;}
@@ -177,4 +180,109 @@ for(const failed of [false,true])test(`inline Reading hover ${failed?'failed sav
     const panel=document.querySelector('[role="dialog"][aria-label="View options"]');[...panel?.querySelectorAll<HTMLButtonElement>('button')??[]].find(button=>button.textContent==='Cancel')?.click();
     assert.equal(root.querySelector('.bases-session'),sessionRoot);assert.equal(root.querySelector<HTMLElement>('[role="gridcell"][tabindex="0"]')?.dataset.property,'note.score');assert.equal(await f.adapter.read('One.md'),source.replace('name: Fence old','name: Fence renamed'));await f.workspace.flush();
   }finally{release();f.fail(false);f.adapter.durableWrites.planWrite=plan;const panel=document.querySelector('[role="dialog"][aria-label="View options"]');[...panel?.querySelectorAll<HTMLButtonElement>('button')??[]].find(button=>button.textContent==='Cancel')?.click();}
+});
+
+for(const configure of [false,true])test(`a clean nested Hover ${configure?'View options':'Views'} portal remains owned while pointer and focus leave the preview`,async t=>{
+  const f=await setup(t,{}, {'One.md':'Before\n\n![[Nested.base#Table]]\n\nAfter\n'});
+  const root=await openHover(f);await until(()=>!!root.querySelector('.bases-session [aria-label="Views"]'),'nested Base mounts');
+  const anchor=[...f.root.querySelectorAll<HTMLElement>('[data-property="file.name"][role="gridcell"]')].find(cell=>cell.dataset.path==='One.md')!.querySelector<HTMLElement>('a.internal-link')!;
+  anchor.dispatchEvent(new f.dom.window.MouseEvent('mouseout',{bubbles:true,relatedTarget:root}));root.dispatchEvent(new f.dom.window.MouseEvent('mouseover',{bubbles:true,relatedTarget:anchor}));
+  root.querySelector<HTMLButtonElement>('.bases-session [aria-label="Views"]')!.click();
+  const next=document.querySelector<HTMLButtonElement>('[aria-label="Configure view Table"]')!;assert.ok(next);
+  if(configure)next.click();
+  const panel=document.querySelector<HTMLElement>(`[role="dialog"][aria-label="${configure?'View options':'Views'}"]`)!;assert.ok(panel);
+  const control=configure?panel.querySelector<HTMLInputElement>('[aria-label="View name"]')!:next;control.focus();
+  root.dispatchEvent(new f.dom.window.MouseEvent('mouseout',{bubbles:true,relatedTarget:control}));control.dispatchEvent(new f.dom.window.MouseEvent('mouseover',{bubbles:true,relatedTarget:root}));
+  try{
+    const index=f.sessions.findIndex(value=>value.basePath==='Nested.base'),session=f.liveSessions[index];assert.ok(session);assert.equal(session.hasPendingChanges(),false,'clean portal does not count as an invalid draft');
+    assert.equal(session.owns?.(control),true);assert.equal(f.liveSessions[0].owns?.(control),false,'another Base cannot own this portal');
+    assert.equal(session.owns?.(document.body),false);
+    const validate=f.sessions[index].validate;try{(f.sessions[index] as {validate:()=>void}).validate=()=>{throw new Error('retired captured host');};assert.equal(session.owns?.(control),false,'stale captured actor cannot own a portal');}finally{(f.sessions[index] as {validate:()=>void}).validate=validate;}
+    assert.equal(session.owns?.(control),true,'restored valid actor still owns its clean portal');
+    const trigger=root.querySelector<HTMLButtonElement>('.bases-session [aria-label="Views"]')!,parent=trigger.parentNode!,sibling=trigger.nextSibling;
+    trigger.remove();assert.equal(session.owns?.(control),false,'removed current trigger retires portal ownership');parent.insertBefore(trigger,sibling);
+    assert.equal(session.owns?.(control),true);
+    assert.equal(f.workspace.buffers.get('One.md')!.dirty,false,'no draft keeps the clean preview alive');assert.equal(f.workspace.buffers.get('One.md')!.hasRecoveryConflict,false,'no recovery conflict keeps preview alive');
+    await new Promise(resolve=>setTimeout(resolve,450));
+    assert.equal(root.isConnected,true,'the lifecycle-owned clean portal retains its preview beyond the normal hide grace');assert.equal(panel.isConnected,true);assert.equal(document.activeElement,control);
+    if(configure){const closing=session.close();assert.equal(session.owns?.(control),false,'closing session no longer owns portals');await closing;assert.equal(session.owns?.(control),false,'destroyed toolbar/session never own an old portal');}
+    else {panel.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));assert.equal(session.owns?.(control),false,'closed panel is no longer current');
+      root.querySelector<HTMLButtonElement>('.bases-session [aria-label="Views"]')!.click();
+      const replacement=document.querySelector<HTMLElement>('[role="dialog"][aria-label="Views"]')!;assert.notEqual(replacement,panel);assert.equal(session.owns?.(replacement),true);assert.equal(session.owns?.(control),false,'replacement panel never adopts old controls');
+      replacement.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+    }
+    document.body.tabIndex=-1;document.body.focus();
+    await until(()=>!root.isConnected,'closed or destroyed owned portal releases its clean hover without another pointer event');
+  }finally{[...panel.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Cancel')?.click();}
+});
+
+
+test('embedded portal ownership follows the live binding lease and rejects detached foreign error and closing entries',async()=>{
+  const dom=new JSDOM('<body><main></main><aside></aside></body>'),doc=dom.window.document,host=doc.querySelector('main')!,other=doc.querySelector('aside')!;
+  const block='```base\nviews: []\n```',source=block.replace('views: []','views: [{type: table}]'),identity={},occurrence={},inline=inlineBaseRequest(block,0,block.length)!,fresh=inlineBaseRequest(source,0,source.length)!;
+  const target={sourcePath:'Source.md',targetPath:'Source.md',viewName:'',sourceIdentity:identity,targetIdentity:identity,inline,occurrence};
+  const portals:HTMLElement[]=[];let save!:NonNullable<import('../src/ui/base-embed-sessions.ts').BaseEmbedCreationTarget['onInlineSourceSaved']>,release!:()=>void,hold=false,dirty=false;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const manager=new BaseEmbedSessions({recoveryHost:doc.body,create(root,target){const portal=doc.createElement('section');portal.append(doc.createElement('input'));doc.body.append(portal);portals.push(portal);save??=target.onInlineSourceSaved!;return{ready:Promise.resolve(),state:{},owns:node=>portal.contains(node),hasPendingChanges:()=>dirty,flush:async()=>{},close:async()=>{if(hold)await gate;portal.remove();}} as unknown as BaseSession;}});
+  const foreign=new BaseEmbedSessions({recoveryHost:doc.body,create(){throw new Error('foreign manager must not create');}});
+  try{
+    const first=manager.mount(target,host);await first.ready;const control=portals[0].firstChild!;assert.equal(manager.owns(control),true);assert.equal(foreign.owns(control),false);
+    assert.equal(save(fresh),true);const next=manager.mount({...target,inline:fresh},other);await next.ready;first.detach();assert.equal(manager.owns(control),true,'obsolete lease detach cannot revoke active handoff owner');
+    dirty=true;next.detach();assert.ok(doc.querySelector('.base-embed-recovery .base-embed-session'),'detached root remains connected in recovery');assert.equal(manager.owns(control),false,'connected portal from a detached recovery is not owned');dirty=false;
+    const third=manager.mount({...target,inline:fresh},host);await third.ready;assert.equal(manager.owns(control),true);hold=true;const closing=manager.close();assert.equal(manager.owns(control),false,'closing manager rejects its still-connected portal');release();await closing;assert.equal(manager.owns(control),false);
+    const badPortal=doc.createElement('section');doc.body.append(badPortal);const bad=new BaseEmbedSessions({recoveryHost:doc.body,create(){return{ready:Promise.reject(new Error('failed session')),state:{},owns:()=>true,hasPendingChanges:()=>false,close:async()=>{},flush:async()=>{}} as unknown as BaseSession;}});
+    try{const badBinding=bad.mount(target,host);await assert.rejects(badBinding.ready,/failed session/);assert.equal(bad.owns(badPortal),false,'error entry cannot claim arbitrary connected nodes');}finally{await bad.close();badPortal.remove();}
+  }finally{release();await manager.close();await foreign.close();dom.window.close();}
+});
+
+
+test('retiring embedded session cannot own its surviving portal while another attached session remains live',async()=>{
+  const dom=new JSDOM('<body><main></main></body>'),doc=dom.window.document,portals:HTMLElement[]=[];let release!:()=>void,entered!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
+  const manager=new BaseEmbedSessions({recoveryHost:doc.body,create(){const portal=doc.createElement('section');doc.body.append(portal);const index=portals.push(portal)-1;return{ready:Promise.resolve(),state:{},owns:node=>portal.contains(node),hasPendingChanges:()=>false,flush:async()=>{},close:async()=>{if(index===0){entered();await gate;}portal.remove();}} as unknown as BaseSession;}});
+  try{
+    for(let i=0;i<6;i++){const identity={};const binding=manager.mount({sourcePath:'Source.md',targetPath:'Work.base',viewName:'',sourceIdentity:identity,targetIdentity:identity,occurrence:{}},doc.querySelector('main')!);await binding.ready;binding.detach();}
+    await started;assert.equal(portals[0].isConnected,true);assert.equal(manager.owns(portals[0]),false,'retiring portal is not owned even while its close awaits');
+    const identity={};await manager.mount({sourcePath:'Source.md',targetPath:'Work.base',viewName:'',sourceIdentity:identity,targetIdentity:identity,occurrence:{}},doc.querySelector('main')!).ready;
+    assert.equal(manager.owns(portals[6]),true,'independent attached session remains owned');
+  }finally{release();await manager.close();dom.window.close();}
+});
+
+for(const anchored of [true,false])test(`a clean New-from-${anchored?'Hover':'foreign main pane'} toolbar portal ${anchored?'retains only its parent preview':'does not retain an unrelated preview'}`,async t=>{
+  const config='newItemTemplate: Template.md\n'+base;
+  const f=await setup(t,{}, {'Work.base':config,'Nested.base':config,'One.md':'Before\n\n![[Nested.base#Table]]\n\nAfter\n','Deep.base':base,'Template.md':'Created body\n\n![[Deep.base#Table]]\n\nEnd\n'});
+  const root=await openHover(f);await until(()=>!!root.querySelector('.bases-session [aria-label="New"]'),'nested New command mounts');
+  const anchor=[...f.root.querySelectorAll<HTMLElement>('[data-property="file.name"][role="gridcell"]')].find(cell=>cell.dataset.path==='One.md')!.querySelector<HTMLElement>('a.internal-link')!;
+  anchor.dispatchEvent(new f.dom.window.MouseEvent('mouseout',{bubbles:true,relatedTarget:root}));root.dispatchEvent(new f.dom.window.MouseEvent('mouseover',{bubbles:true,relatedTarget:anchor}));
+  const launcher=anchored?root:f.root;launcher.querySelector<HTMLButtonElement>('.bases-session [aria-label="New"]')!.click();
+  await until(()=>!!document.querySelector('.bases-new-item-popover'),'ordinary New note opens');const popup=document.querySelector<HTMLElement>('.bases-new-item-popover')!;
+  popup.querySelector<HTMLElement>('[aria-label="Edit note body"]')!.click();await until(()=>!!popup.querySelector('.cm-live-base .bases-session,.internal-embed .bases-session'),'new note nested Base mounts');
+  popup.querySelector<HTMLButtonElement>('.bases-session [aria-label="Views"]')!.click();
+  const control=document.querySelector<HTMLButtonElement>('[aria-label="Configure view Table"]')!,panel=control.closest<HTMLElement>('[role="dialog"]')!;control.focus();
+  root.dispatchEvent(new f.dom.window.MouseEvent('mouseout',{bubbles:true,relatedTarget:control}));control.dispatchEvent(new f.dom.window.MouseEvent('mouseover',{bubbles:true,relatedTarget:root}));
+  try{
+    const index=f.sessions.findIndex(value=>value.basePath==='Deep.base');assert.equal(f.liveSessions[index].hasPendingChanges(),false);
+    if(anchored){
+      await new Promise(resolve=>setTimeout(resolve,450));assert.equal(root.isConnected,true);assert.equal(popup.isConnected,true);
+      // A real control click begins with pointerdown outside New's DOM root.
+      control.dispatchEvent(new f.dom.window.MouseEvent('pointerdown',{bubbles:true,cancelable:true,button:0}));control.click();
+      await until(()=>!!document.querySelector('[role="dialog"][aria-label="View options"]'),'configuration portal opens');await new Promise(resolve=>setTimeout(resolve,450));
+      assert.equal(popup.isConnected,true,'its owned clean toolbar interaction must not close the New note');assert.equal(root.isConnected,true);
+    }else {
+      await until(()=>!root.isConnected,'foreign New toolbar cannot keep the other Hover alive');
+      control.dispatchEvent(new f.dom.window.MouseEvent('pointerdown',{bubbles:true,cancelable:true,button:0}));control.click();
+      await until(()=>!!document.querySelector('[role="dialog"][aria-label="View options"]'),'foreign New configuration portal opens');await new Promise(resolve=>setTimeout(resolve,450));
+      assert.equal(popup.isConnected,true,'a New note must not close when its own clean toolbar control receives pointerdown');
+    }
+    const childPanel=document.querySelector<HTMLElement>('[role="dialog"][aria-label="View options"]')!;assert.ok(childPanel);
+    childPanel.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+    assert.equal(childPanel.isConnected,false,'Escape closes only the child toolbar panel');assert.equal(popup.isConnected,true,'Escape from child portal keeps the New note');
+    const childSession=f.liveSessions[index];assert.equal(childSession.owns?.(childPanel),false);
+    document.body.dispatchEvent(new f.dom.window.MouseEvent('pointerdown',{bubbles:true,cancelable:true,button:0}));document.body.tabIndex=-1;document.body.focus();
+    await until(()=>!popup.isConnected,'ordinary outside click dismisses the clean New note');assert.equal(childSession.owns?.(childPanel),false,'closed New cannot own its former portal');
+    if(anchored)await until(()=>!root.isConnected,'closing the exact New owner releases the parent Hover');
+  }finally{
+    const current=document.querySelector<HTMLElement>('[role="dialog"][aria-label="View options"]')??panel;current.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+    if(popup.isConnected){const title=popup.querySelector<HTMLElement>('[aria-label="Note title"]')!;title.focus();title.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));await until(()=>!popup.isConnected,'New note closes normally');}
+  }
 });

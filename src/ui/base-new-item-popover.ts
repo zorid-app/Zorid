@@ -24,6 +24,8 @@ export interface BaseNewItemPopoverOptions {
   /** The workspace owns subscriptions and the buffer's lifetime. */
   /** Defer only body publication while an owned inline configuration saves. */
   readonly deferSourceUpdate?: () => boolean;
+  /** Portals belong only to this note's live embedded editor sessions. */
+  readonly ownsEditorPortal?: (node: Node) => boolean;
   readonly subscribeBuffer?: (buffer: NoteBuffer, listener: () => void) => () => void;
   /** Embedded editors retain their own accepted writes and unaccepted drafts. */
   readonly flushEditor?: () => Promise<void>;
@@ -190,7 +192,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     }
     validate();
     const focused = document.activeElement as HTMLElement | null;
-    if (focused && (root.contains(focused) || ownedPropertyPopover(focused))) focused.blur();
+    if (focused && (root.contains(focused) || properties.owns(focused))) focused.blur();
     const currentTitleAttempt = titleAttempt;
     // Native change/blur and shared widget commits enter their queues first.
     await Promise.resolve(); await Promise.resolve();
@@ -208,7 +210,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     propertyDraft = false; error.hidden = retry.hidden = true;
   }
   function hasPendingChanges() { return !closed && (composingTitle || titleProblem || propertyDraft || properties.hasPendingChanges() || titleText().trim() !== titleBaseline || !!writes.size || !!loading || buffer.dirty || !!buffer.error || !!options.hasPendingEditorChanges?.() || !!root.querySelector('[data-base-editing]') || [...root.querySelectorAll<HTMLElement>('.metadata-property-error')].some(node => !node.hidden && !!node.textContent?.trim())); }
-  function ownedPropertyPopover(target: Node) { return properties.owns(target); }
+  function ownedPortal(target: Node) { return properties.owns(target) || options.ownsEditorPortal?.(target) === true; }
   function remove(restoreFocus: boolean) {
     if (closed) return;
     closed = true;
@@ -231,11 +233,11 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     }).catch(failure => { report(failure); throw failure; }).finally(() => { if(!closed)root.inert=wasInert;closing = undefined; });
     return closing;
   }
-  function contextOwner(event: MouseEvent) { ownedContextMenu = root.contains(event.target as Node) || ownedPropertyPopover(event.target as Node); }
-  function outside(event: PointerEvent) { const target = event.target as Node; if (ownedContextMenu && (target as HTMLElement).closest?.('.context-menu')) return; if (!root.contains(target) && !ownedPropertyPopover(target)) void close().catch(() => {}); }
+  function contextOwner(event: MouseEvent) { ownedContextMenu = root.contains(event.target as Node) || ownedPortal(event.target as Node); }
+  function outside(event: PointerEvent) { const target = event.target as Node; if (ownedContextMenu && (target as HTMLElement).closest?.('.context-menu')) return; if (!root.contains(target) && !ownedPortal(target)) void close().catch(() => {}); }
   function escape(event: KeyboardEvent) {
-    if (event.key === 'ContextMenu' || event.key === 'F10' && event.shiftKey) ownedContextMenu = root.contains(event.target as Node) || ownedPropertyPopover(event.target as Node);
-    if (event.defaultPrevented || event.isComposing || composingTitle || event.key !== 'Escape' || ownedPropertyPopover(event.target as Node)) return;
+    if (event.key === 'ContextMenu' || event.key === 'F10' && event.shiftKey) ownedContextMenu = root.contains(event.target as Node) || ownedPortal(event.target as Node);
+    if (event.defaultPrevented || event.isComposing || composingTitle || event.key !== 'Escape' || ownedPortal(event.target as Node)) return;
     if (!root.contains(event.target as Node)) return;
     event.preventDefault(); event.stopPropagation(); void close({ restoreFocus: true }).catch(() => {});
   }

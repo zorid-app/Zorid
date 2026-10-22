@@ -155,6 +155,11 @@ export class BaseEmbedSessions {
     return changed;
   }
 
+  /** Portal ownership follows an attached live binding, never a detached cache. */
+  owns(node:Node):boolean {
+    return !this.closed&&!this.closing&&[...this.entries].some(entry=>entry.attached&&!!entry.lease&&!entry.retiring&&!entry.error&&entry.root.isConnected&&entry.session?.owns?.(node)===true);
+  }
+
   hasPendingChanges(): boolean { return [...this.entries].some(entry => entry.session?.hasPendingChanges()); }
 
   flush(): Promise<void> {
