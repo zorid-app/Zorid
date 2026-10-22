@@ -14,3 +14,11 @@ test('projection preserves captured date timezone and core diagnostic codes with
  const project=createSharedBaseValueProjector('Asia/Tokyo'),date=project({type:'date',timestamp:0,hasTime:false}),error=project({type:'error',code:'unavailable',message:'Core graph unavailable'});
  assert.deepEqual(date,{type:'date',timestamp:0,hasTime:false,presentationTimezone:'Asia/Tokyo'});assert.equal(error.type,'error');assert.equal(error.error.code,'unavailable');assert.equal(error.error.message,'Core graph unavailable');assert.ok(Object.isFrozen(error.error));
 });
+test('link projection retains only explicit core subpaths and never parses a filename',()=>{
+ const project=createSharedBaseValueProjector(),target={entryId:'ada',revision:'r1'};
+ const headed=project({type:'link',path:'Ada#^block',subpath:'#^block',target,display:null,external:false});
+ assert.equal(headed.type,'namespace');if(headed.type!=='namespace')return;assert.equal(headed.presentation?.subpath,'#^block');
+ const literal=project({type:'link',path:'People/A#B.md',target,display:null,external:false});
+ assert.equal(literal.type,'namespace');if(literal.type!=='namespace')return;assert.equal(literal.presentation?.subpath,undefined);
+ assert.throws(()=>project({type:'link',path:'Ada',subpath:'untrusted',target,display:null,external:false}),/subpath is invalid/);
+});

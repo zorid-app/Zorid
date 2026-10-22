@@ -47,7 +47,7 @@ test('retired or changed property targets cannot open or create a replacement', 
 test('witnessed opens preserve a proven heading suffix without inventing one from a renamed filename',async()=>{
   const f=fixture();const args:unknown[][]=[];
   const owner={vault:{entries:f.entries},openNote:async(...value:unknown[])=>{args.push(value);}};
-  await open.call(owner,'Books/Note.md','People/Renamed.md#Heading',f.pane,{entryId:'ada',revision:'r1'});
+  await open.call(owner,'Books/Note.md','Ada#Heading',f.pane,{entryId:'ada',revision:'r1',subpath:'#Heading'});
   await open.call(owner,'Books/Note.md','People/Old#literal.md',f.pane,{entryId:'ada',revision:'r1'});
   assert.equal(args[0][4],'#Heading');assert.equal(args[1][4],'');
 });

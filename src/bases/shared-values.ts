@@ -29,12 +29,13 @@ export function createSharedBaseValueProjector(timezone = 'UTC', budget: SharedB
       }
       case 'html': case 'image': case 'icon': return Object.freeze({type:'namespace',name:input.value,presentation:Object.freeze({kind:input.type,value:input.value}),get(){return BASE_NULL;}});
       case 'file': case 'link': {
+        if(input.type==='link'&&input.subpath!==undefined&&(typeof input.subpath!=='string'||!input.subpath.startsWith('#')))return invalid('The shared link subpath is invalid.');
         const key = JSON.stringify(input), existing = namespaces.get(key);
         if (existing) return existing;
         // The existing view renders a namespace by name. Its inert data getter
         // is not an evaluator/host callback and cannot access a live vault.
         const projected: BaseExpressionValue = Object.freeze({ type: 'namespace', name: input.type === 'link' ? input.display ?? input.path : input.path,
-          sharedValue: Object.freeze({ ...input }), ...(input.type==='link'?{presentation:Object.freeze({kind:'link' as const,value:input.path,...(input.displayValue?{label:value(input.displayValue,depth+1)}:{}),...(input.target?{target:input.target}:{}),external:input.external})}:{}), get(name: string) { return name === 'path' ? Object.freeze({ type: 'string', value: input.path }) : BASE_NULL; } });
+          sharedValue: Object.freeze({ ...input }), ...(input.type==='link'?{presentation:Object.freeze({kind:'link' as const,value:input.path,...(input.subpath!==undefined?{subpath:input.subpath}:{}),...(input.displayValue?{label:value(input.displayValue,depth+1)}:{}),...(input.target?{target:input.target}:{}),external:input.external})}:{}), get(name: string) { return name === 'path' ? Object.freeze({ type: 'string', value: input.path }) : BASE_NULL; } });
         namespaces.set(key, projected); return projected;
       }
     }

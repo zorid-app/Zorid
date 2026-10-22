@@ -58,7 +58,7 @@ export function mountBaseRichValue(element: HTMLElement, value: BaseExpressionVa
   const cleanup = () => { for (const release of cleanups.splice(0)) { try { release(); } catch (error) { report(error); } } };
   const take = (depth: number) => { if (--nodes < 0 || depth > depthLimit) throw new Error('The rich property value is too large to display.'); };
   const appendText = (parent: HTMLElement, value: string) => { text -= value.length; if (text < 0) throw new Error('The rich property value is too large to display.'); parent.append(document.createTextNode(value)); };
-  const wireLink = (anchor: HTMLAnchorElement, target: string, witness?: { readonly entryId: string; readonly revision: string }) => {
+  const wireLink = (anchor: HTMLAnchorElement, target: string, witness?: { readonly entryId: string; readonly revision: string; readonly subpath?: string }) => {
     const safe = destination(target);
     if (!safe) { anchor.className = 'unsupported-link'; anchor.setAttribute('aria-disabled', 'true'); }
     else if (safe.external) { anchor.className = 'external-link'; anchor.href = safe.value; anchor.target = '_blank'; anchor.rel = 'noopener noreferrer'; anchor.referrerPolicy = 'no-referrer'; }
@@ -128,7 +128,7 @@ export function mountBaseRichValue(element: HTMLElement, value: BaseExpressionVa
         else if (kind === 'icon') { const name = source.replace(/^lucide-/, ''); let node = icon(name === 'book-open' ? 'book' : name, 16, document); if (name !== 'file' && node.isEqualNode(icon('file', 16, document))) node = icon('help', 16, document); node.classList.add('bases-rich-icon'); parent.append(node); }
         else if (kind === 'link') {
           const link = document.createElement(insideLink ? 'span' : 'a');
-          if (!insideLink) { const target = own(presentation, 'target'), entryId = own(target, 'entryId'), revision = own(target, 'revision'); wireLink(link as HTMLAnchorElement, source, typeof entryId === 'string' && typeof revision === 'string' ? { entryId, revision } : undefined); }
+          if (!insideLink) { const target = own(presentation, 'target'), entryId = own(target, 'entryId'), revision = own(target, 'revision'), subpath=own(presentation,'subpath'); wireLink(link as HTMLAnchorElement, source, typeof entryId === 'string' && typeof revision === 'string' ? { entryId, revision,...(typeof subpath==='string'&&subpath.startsWith('#')?{subpath}:{}) } : undefined); }
           const label = own(presentation, 'label') as BaseExpressionValue | undefined;
           if (label) render(link, label, depth + 1, true); else appendText(link, typeof own(value, 'name') === 'string' ? own(value, 'name') as string : source);
           parent.append(link);

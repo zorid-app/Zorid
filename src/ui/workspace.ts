@@ -2344,15 +2344,15 @@ export class Workspace {
   }
   private async navigate(delta:number,pane:Pane):Promise<void>{const index=pane.historyIndex+delta;if(index<0||index>=pane.history.length)return;pane.historyIndex=index;this.current(pane).historyIndex=index;await this.openNote(pane.history[index],false,pane,false);}
   private async toggleReading(pane=this.activePane):Promise<void>{const tab=this.current(pane);if(tab.kind!=='note')return;if(tab.path&&!isMarkdown(tab.path))return;await this.flushPane(pane);tab.mode=tab.mode==='reading'?this.settings.defaultMode:'reading';await this.renderPane(pane);this.saveSession();}
-  private async openPropertyLink(source:string,target:string,pane:Pane,witness?:{readonly entryId:string;readonly revision:string},newTab=false):Promise<void>{
+  private async openPropertyLink(source:string,target:string,pane:Pane,witness?:{readonly entryId:string;readonly revision:string;readonly subpath?:string},newTab=false):Promise<void>{
     if(!witness){await this.followLink(source,target,pane);return;}
     const vault=this.vault,generation=this.vaultGeneration;
     const saved=[...vault.entries.values()].find(entry=>entry.type==='file'&&entry.entryId===witness.entryId&&entry.revision===witness.revision);
     if(!saved)throw new Error('The related note changed. Refresh the property before opening it.');
     const current=()=>this.vault===vault&&this.vaultGeneration===generation&&vault.entries.get(saved.path)?.entryId===witness.entryId&&vault.entries.get(saved.path)?.revision===witness.revision;
-    // A literal # in an old filename must never turn into a heading after a
-    // rename. Only a suffix of the witnessed current path proves a subpath.
-    const subpath=target.startsWith(saved.path+'#')?target.slice(saved.path.length):'';
+    // Core distinguishes a heading from a literal # in a captured filename.
+    // Older DTOs remain safe file opens without inferring a fragment locally.
+    const subpath=typeof witness.subpath==='string'&&witness.subpath.startsWith('#')?witness.subpath:'';
     await this.openNote(saved.path,newTab,pane,true,subpath,undefined,current,witness.entryId);
   }
   private async followLink(source:string,target:string,pane:Pane,kind:'wiki'|'markdown'='wiki'):Promise<void>{if(/^[a-z][\w+.-]*:/i.test(target)||target.startsWith('//')){if(/^(?:https?:\/\/|mailto:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');return;}const resolved=this.vault.metadata.resolveLink(source,target,kind);if(resolved){await this.openNote(resolved,false,pane,true,target.includes('#')?target.slice(target.indexOf('#')):'');return;}const path=target.split('#')[0].replace(/\.md$/,'')+'.md';if(!path||path==='.md')return;const parent=parentOf(path);if(parent&&!this.vault.entries.has(parent))throw new Error(`Folder does not exist: ${parent}`);await this.vault.create(path,'');await this.openNote(path,false,pane);}

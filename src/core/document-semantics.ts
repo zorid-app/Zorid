@@ -57,7 +57,7 @@ export type DocumentBaseValue=
   |{readonly type:'date';readonly timestamp:number;readonly hasTime:boolean}
   |{readonly type:'duration';readonly years:number;readonly months:number;readonly weeks:number;readonly days:number;readonly hours:number;readonly minutes:number;readonly seconds:number;readonly milliseconds:number}
   |{readonly type:'html'|'image'|'icon';readonly value:string}
-  |{readonly type:'file';readonly path:string}|{readonly type:'link';readonly path:string;readonly target:{readonly entryId:string;readonly revision:string}|null;readonly display:string|null;readonly displayValue?:DocumentBaseValue|null;readonly external:boolean}
+  |{readonly type:'file';readonly path:string}|{readonly type:'link';readonly path:string;readonly subpath?:string;readonly target:{readonly entryId:string;readonly revision:string}|null;readonly display:string|null;readonly displayValue?:DocumentBaseValue|null;readonly external:boolean}
   |{readonly type:'error';readonly code:string;readonly message:string};
 export interface DocumentBaseRefreshHint {
   readonly dependency:'none'|'day'|'instant';readonly timezone:string;readonly nextWakeMs:number|null;

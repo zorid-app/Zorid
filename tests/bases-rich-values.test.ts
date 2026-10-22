@@ -67,6 +67,14 @@ test('rich file-link opening carries its exact target witness and never runs lab
   let captured:unknown,gets=0;const value=rich('link','Target.md') as BaseExpressionValue & {presentation:BaseRichPresentation};value.presentation={kind:'link',value:'Target.md',target:{entryId:'target-1',revision:'r7'},label:{type:'string',get value(){gets++;return 'unsafe';}} as BaseExpressionValue};
   const s=setup(value,{openFile:(_path,_event,witness)=>{captured=witness;}});s.element.querySelector('a')!.dispatchEvent(new s.dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));assert.deepEqual(captured,{entryId:'target-1',revision:'r7'});assert.equal(gets,0);s.close();
 });
+test('rich links forward core heading metadata independently from literal filename characters',()=>{
+ for(const subpath of ['#^block',undefined]){
+  let captured:unknown;const value=rich('link','People/A#B.md') as BaseExpressionValue & {presentation:BaseRichPresentation};
+  value.presentation={kind:'link',value:'People/A#B.md',...(subpath?{subpath}:{}),target:{entryId:'ada',revision:'r1'}};
+  const s=setup(value,{openFile:(_path,_event,witness)=>{captured=witness;}});s.element.querySelector('a')!.dispatchEvent(new s.dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));
+  assert.deepEqual(captured,{entryId:'ada',revision:'r1',...(subpath?{subpath}:{})});s.close();
+ }
+});
 
 
 test('list rendering never invokes accessor elements or array callback methods', () => {
