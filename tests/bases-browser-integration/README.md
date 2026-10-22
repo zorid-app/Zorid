@@ -1,5 +1,16 @@
 # Actual browser/WASM Bases semantic integration
 
+Actual runs 006 and 007 stopped after eight passed groups at the old malformed-
+rollup filter diagnostic assertion. Capture 007 proves two exact author `type`
+conversion diagnostics plus 28 still-`unavailable` property diagnostics, with
+empty rows and incomplete metadata. The source correction now requires the full
+30-diagnostic multiset bound to independently read file witnesses; 20 bounded
+oracle tests pass. The corrected actual campaign remains unexecuted. See
+[006 evidence](../../docs/history/bases-browser-actual-006-20261022.md) and
+[007 capture](../../docs/history/bases-browser-actual-007-20261022.md). Their raw
+reports and cleanup/source proofs are preserved; neither run accepts the ten
+Q3 groups.
+
 Actual run005 **passed all nine then-current semantic integration groups**, including
 plain Link alias/date-filename/URL values, all-note suggestions, the temporary
 unreadable-metadata stage, exact restoration and retained healthy snapshots, on
