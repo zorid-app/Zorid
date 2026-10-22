@@ -199,6 +199,12 @@ export class BaseController {
 
   get state(): BaseControllerState { return this.current; }
   get basePath(): string { return this.path; }
+  /** Host-wide saved-name notification. Passive embeds retain their drafts and
+   * exact original binding; the host chooses when to refresh/render them. */
+  rebindViewName(from: string, to: string): boolean {
+    if (this.disposed || this.viewName !== from) return false;
+    this.viewName = to; return true;
+  }
   get selectedViewIndex(): number { return this.query.viewIndex ?? 0; }
   get canUndo(): boolean { return !this.disposed && !this.historyBusy && this.undoCommands.length > 0; }
   get canRedo(): boolean { return !this.disposed && !this.historyBusy && this.redoCommands.length > 0; }
@@ -775,6 +781,7 @@ export class BaseController {
     const { validate, validateWrite } = this.guard(version, this.path);
     const document = BaseDocument.parse(this.current.source), from = document.views[index]?.name;
     if (from === undefined) throw new Error('The renamed Base view does not exist');
+    const viewNames = document.views.map(view => view.name);
     const to = validateBaseViewName(rawName, document.views, index), active = this.selectedViewIndex;
     if (to === from) {
       await this.changeConfiguration(version, next => { if (root) next.updateRoot(root); next.updateView(index, { ...patch, name: to }); return active; });
@@ -792,13 +799,18 @@ export class BaseController {
     };
     const validateRenamed = async () => {
       referenceWrite();
-      const saved = adapter.stat ? await adapter.stat(this.path) : this.options.vault.entries.get(this.path);
+      const observe = async () => adapter.stat ? await adapter.stat(this.path) : (await adapter.list()).find(entry => entry.path === this.path);
+      const before = await observe();
       referenceWrite();
-      if (!saved || original.entryId && saved.entryId !== original.entryId || await this.options.vault.read(this.path) !== desired) throw new Error('The saved renamed Base configuration changed before its references were updated');
+      if (!before || before.type !== 'file' || original.entryId && before.entryId !== original.entryId) throw new Error('The saved renamed Base configuration changed before its references were updated');
+      const source = await adapter.read(this.path);
       referenceWrite();
+      const after = await observe();
+      referenceWrite();
+      if (!after || after.type !== 'file' || before.entryId !== after.entryId || before.revision !== after.revision || before.mtime !== after.mtime || before.size !== after.size || source !== desired) throw new Error('The saved renamed Base changed while its references were being validated');
     };
     if (adapter.documentSemantics) this.referenceServices.add(adapter.documentSemantics);
-    const operation = this.options.inlineSource ? undefined : await prepareBaseViewReferences({ vault: this.options.vault, base: original, from, to,
+    const operation = this.options.inlineSource ? undefined : await prepareBaseViewReferences({ vault: this.options.vault, base: original, from, to, viewNames,
       mutations: this.options.mutations, validate, validateWrite: referenceWrite, validateRenamed });
     validate();
     let report: BaseViewRenameReport = Object.freeze({ basePath: this.path, from, to, completedPaths: Object.freeze([]), failedPaths: Object.freeze([]), references: 0, mode: adapter.documentSemantics ? 'core' : 'legacy' });

@@ -18,6 +18,7 @@ export interface BaseViewReferencePlan {
   readonly basePath: string;
   readonly from: string;
   readonly to: string;
+  readonly viewNames: readonly string[];
   readonly changes: readonly BaseViewReferenceChange[];
   readonly mode: 'core' | 'legacy';
 }
@@ -47,6 +48,7 @@ export interface PrepareBaseViewReferences {
   readonly base: Readonly<VaultEntry>;
   readonly from: string;
   readonly to: string;
+  readonly viewNames: readonly string[];
   readonly mutations: BaseMutationHost;
   /** Preparation is tied to the originating displayed configuration. */
   readonly validate: () => void;
@@ -61,17 +63,21 @@ export interface PrepareBaseViewReferences {
 export function baseViewReferenceKey(value: string): string {
   return value.replace(/[!"#$%&()*+,.:;<=>?@^`{|}~\/\[\]\\\r\n]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
 }
-function fragmentMatches(fragment: string, from: string, kind: 'wiki' | 'markdown'): boolean {
+function fragmentMatches(fragment: string, from: string, kind: 'wiki' | 'markdown', names: readonly string[]): boolean {
   if (!fragment.startsWith('#')) return false;
   let name = fragment.slice(1);
   if (kind === 'markdown') try { name = decodeURIComponent(name); } catch { /* Keep malformed literal spelling. */ }
-  return baseViewReferenceKey(name) === baseViewReferenceKey(from);
+  // Existing exact named-view links win over heading-style normalization. A
+  // normalized spelling cannot choose between distinct case/punctuation peers.
+  if (names.includes(name)) return name === from;
+  const candidates = names.filter(candidate => baseViewReferenceKey(candidate) === baseViewReferenceKey(name));
+  return candidates.length === 1 && candidates[0] === from;
 }
 interface Edit { readonly start: number; readonly end: number; readonly before: string; readonly after: string }
-function changedSource(source: string, links: readonly Pick<DocumentLink, 'fragment' | 'kind' | 'targetRange'>[], from: string, to: string): { after: string; count: number } {
+function changedSource(source: string, links: readonly Pick<DocumentLink, 'fragment' | 'kind' | 'targetRange'>[], from: string, to: string, names: readonly string[]): { after: string; count: number } {
   const edits = new Map<string, Edit>();
   for (const link of links) {
-    if (!fragmentMatches(link.fragment, from, link.kind)) continue;
+    if (!fragmentMatches(link.fragment, from, link.kind, names)) continue;
     const start = link.targetRange.utf16[1], end = start + link.fragment.length;
     if (!Number.isSafeInteger(start) || start < 0 || end > source.length || source.slice(start, end) !== link.fragment) throw new Error('A saved Base reference no longer matches its original source range');
     const after = `#${link.kind === 'markdown' ? encodeURIComponent(to) : to}`;
@@ -122,7 +128,7 @@ export async function prepareBaseViewReferences(input: PrepareBaseViewReferences
           || !sameSnapshot(page.result.value.snapshot, pin.snapshot) || !page.result.value.coverageComplete || page.result.value.next !== null || (page.cursor === null) !== page.result.value.scanComplete || (page.cursor === null && !page.result.value.complete)) throw new DocumentSemanticsError('document_invalid_response');
         for (const edge of page.result.value.edges) {
           if (edge.target.id !== input.base.entryId || edge.target.revision !== input.base.revision || edge.target.path !== input.base.path || edge.source.deleted || edge.source.kind !== 'file') throw new DocumentSemanticsError('document_invalid_response');
-          if (!fragmentMatches(edge.link.fragment, input.from, edge.link.kind)) continue;
+          if (!fragmentMatches(edge.link.fragment, input.from, edge.link.kind, input.viewNames)) continue;
           const existing = sources.get(edge.source.id);
           if (existing && (existing.entry.revision !== edge.source.revision || existing.entry.path !== edge.source.path)) throw new DocumentSemanticsError('document_invalid_response');
           if (existing) existing.links.push(edge.link); else sources.set(edge.source.id, { entry: edge.source, links: [edge.link] });
@@ -138,7 +144,7 @@ export async function prepareBaseViewReferences(input: PrepareBaseViewReferences
         const before = await adapter.read(entry.path); check();
         const afterEntry = await observe(); check();
         if (!sameEntry(afterEntry, entry)) throw new Error(`A referencing file changed: ${entry.path}`);
-        const updated = changedSource(before, links, input.from, input.to);
+        const updated = changedSource(before, links, input.from, input.to, input.viewNames);
         if (updated.after !== before) changes.push(Object.freeze({ path: entry.path, before, after: updated.after, references: updated.count, witness: Object.freeze({ entryId: entry.id, revision: entry.revision }) }));
       }
       const current = await service.status(); check();
@@ -157,12 +163,12 @@ export async function prepareBaseViewReferences(input: PrepareBaseViewReferences
       if (entry.type !== 'file' || !isMarkdown(entry.path)) continue;
       const before = await adapter.read(entry.path); check();
       const links = parseMetadata(entry.path, before).links.filter(link => cache.resolveLink(entry.path, link.target, link.kind) === input.base.path);
-      const updated = changedSource(before, links.map(link => ({ fragment: link.fragment, kind: link.kind, targetRange: { utf16: [link.start, link.end], bytes: [0, 0] } })), input.from, input.to);
+      const updated = changedSource(before, links.map(link => ({ fragment: link.fragment, kind: link.kind, targetRange: { utf16: [link.start, link.end], bytes: [0, 0] } })), input.from, input.to, input.viewNames);
       if (updated.after !== before) changes.push(Object.freeze({ path: entry.path, before, after: updated.after, references: updated.count }));
     }
   }
   check();
-  const plan: BaseViewReferencePlan = Object.freeze({ basePath: input.base.path, from: input.from, to: input.to, mode: service ? 'core' : 'legacy', changes: Object.freeze(changes) });
+  const plan: BaseViewReferencePlan = Object.freeze({ basePath: input.base.path, from: input.from, to: input.to, viewNames: Object.freeze([...input.viewNames]), mode: service ? 'core' : 'legacy', changes: Object.freeze(changes) });
   const completed = new Set<string>(); let running: Promise<BaseViewRenameReport> | undefined;
   return Object.freeze({ plan, run() {
     if (running) return running;

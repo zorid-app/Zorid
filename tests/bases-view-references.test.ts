@@ -56,7 +56,7 @@ async function fixture() {
   } as unknown as DocumentService;
   adapter.documentSemantics = service;
   const validate = () => { if (!live) throw new Error('stale owner'); };
-  const input = { vault, base, from: 'Old View', to: 'New & Name', validate, validateWrite: validate, validateRenamed: async () => { validate(); },
+  const input = { vault, base, from: 'Old View', to: 'New & Name', viewNames: ['Old View', 'Other'], validate, validateWrite: validate, validateRenamed: async () => { validate(); },
     mutations: { async transform(path: string, transform: (source: string) => string, check: () => void, _write: unknown, witness: any) {
       check(); const entry = await adapter.stat(path); check();
       assert.ok(witness); if (entry?.entryId !== witness.entryId || entry?.revision !== witness.revision) throw new Error('saved reference identity changed');

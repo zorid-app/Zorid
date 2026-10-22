@@ -87,6 +87,46 @@ test('named-view rename saves its config, rebinds the active embed, then updates
   } finally { await f.stop(); }
 });
 
+test('renaming a view preserves exact linked siblings with case or punctuation-equivalent names', async () => {
+  for (const [from, sibling] of [['First', 'FIRST'], ['A!', 'A']]) {
+    const source = base.replace('name: First', `name: ${from}`).replace('name: Second', `name: ${sibling}`);
+    const adapter = new MemoryAdapter({ 'Work.base': source, 'One.md': `[[Work.base#${from}]] [[Work.base#${sibling}]]` }), f = await fixture(adapter, from);
+    try {
+      await f.controller.renameView(f.controller.state.version, 0, 'Renamed');
+      assert.equal(await adapter.read('One.md'), `[[Work.base#Renamed]] [[Work.base#${sibling}]]`);
+      assert.equal(BaseDocument.parse(await adapter.read('Work.base')).views[1].name, sibling);
+    } finally { await f.stop(); }
+  }
+});
+
+test('passive named-view rebind only changes its exact binding and waits for an explicit refresh', async () => {
+  const f = await fixture(undefined, 'First');
+  try {
+    const state = f.controller.state, index = f.controller.selectedViewIndex;
+    assert.equal(f.controller.rebindViewName('FIRST', 'Other'), false);
+    assert.equal(f.controller.rebindViewName('First', 'Second'), true);
+    assert.equal(f.controller.state, state); assert.equal(f.controller.selectedViewIndex, index);
+    assert.equal(f.controller.rebindViewName('First', 'Other'), false);
+    await f.controller.refresh(); assert.equal(f.controller.state.result?.view.name, 'Second');
+  } finally { await f.stop(); }
+});
+
+test('a same-text Base replacement during per-note saved-source validation cannot receive renamed references', async () => {
+  class Adapter extends MemoryAdapter {
+    armed = false; reads = 0; replaced = false; revision = 1;
+    identify(entry: import('../src/core/types.ts').VaultEntry) { return { ...entry, entryId: entry.path === 'Work.base' && this.replaced ? 'replacement' : entry.path, revision: String(this.revision) }; }
+    override async list() { return (await super.list()).map(entry => this.identify(entry)); }
+    override async stat(path: string) { const entry = await super.stat(path); return entry ? this.identify(entry) : null; }
+    override async write(path: string, text: string) { await super.write(path, text); if (path === 'Work.base') this.revision++; }
+    override async read(path: string) { const text = await super.read(path); if (path === 'Work.base' && this.armed && ++this.reads === 2) this.replaced = true; return text; }
+  }
+  const adapter = new Adapter({ 'Work.base': base, 'One.md': '[[Work.base#First]]' }), f = await fixture(adapter, 'First', () => { adapter.armed = true; });
+  try {
+    await assert.rejects(f.controller.renameView(f.controller.state.version, 0, 'Renamed'), error => (error as any).report.failedPaths.includes('One.md'));
+    assert.ok(adapter.replaced); assert.equal(await adapter.read('One.md'), '[[Work.base#First]]');
+  } finally { adapter.armed = false; await f.stop(); }
+});
+
 test('partial named-view reference failure retains original plans and skips already saved files on retry', async () => {
   class Adapter extends MemoryAdapter { fail = true; writes = new Map<string, number>(); override async write(path: string, text: string) { if (path === 'Two.md' && this.fail) throw new Error('reference disk full'); this.writes.set(path, (this.writes.get(path) ?? 0) + 1); return super.write(path, text); } }
   const adapter = new Adapter({ 'Work.base': base, 'One.md': '[[Work.base#First]]', 'Two.md': '[[Work.base#First]]' }), f = await fixture(adapter, 'First');
