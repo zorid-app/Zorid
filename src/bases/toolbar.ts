@@ -557,7 +557,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
           if(--renderBudget<0||depth>32){row.append(doc.createTextNode('This filter exceeds the visual editor’s size or nesting limit.'));return row;}
           const live=()=>alive()&&row.isConnected&&tree.contains(row);
           if(value.kind==='condition'){
-            const removeButton=button(doc,'Remove',()=>{if(!live()||!canRestructure(row))return;remove();semanticChanged();render();focusVisible(tree,'Match');},'Remove filter');
+            const removeButton=button(doc,'Remove',()=>{if(!live()||!canRestructure(row))return;remove();render();semanticChanged();focusVisible(tree,'Match');},'Remove filter');
             if(options.immediate){removeButton.replaceChildren(icon('trash',16,doc));removeButton.className='bases-toolbar-menu-next';}
             if(value.advanced||!value.fields){
               const expression=doc.createElement('textarea');expression.setAttribute('aria-label','Filter expression');expression.value=value.source??'';expression.rows=2;
@@ -593,16 +593,18 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
               validators.add(validate);
               property.addEventListener('change',()=>{
                 if(!live())return;
+                if(own.innerDraft){property.value=value.fields!.property;error.textContent='Press Enter to add the tag, or clear the unfinished tag before changing its property.';return;}
                 const configured=opening.propertyType?.(property.value),example=result.rows.map(row=>row.values[property.value]).find(item=>item&&item.type!=='null');
                 const kind=configured??example?.type,type=kind==='number'||kind==='rating'?'number':kind==='boolean'||kind==='checkbox'?'boolean':'text';
                 publish({property:property.value,operator:property.value==='file.file'?'hasLink':'eq',text:'',type,values:property.value==='file.file'?[]:undefined});render();focusNode(value);
               });
               operator.addEventListener('change',()=>{
                 if(!live())return;
+                if(own.innerDraft){operator.value=value.fields!.operator;error.textContent='Press Enter to add the tag, or clear the unfinished tag before changing its condition.';return;}
                 const next=operator.value as BaseFilterOperator;
                 publish({...value.fields!,operator:next});render();focusNode(value);
               });
-              const advanced=button(doc,'',()=>{if(!live()||!canRestructure(row))return;value.advanced=true;render();const target=rendered.get(value);focusVisible(target??tree,'Filter expression');},'Edit expression');
+              const advanced=button(doc,'',()=>{if(!live()||!canRestructure())return;value.advanced=true;render();const target=rendered.get(value);focusVisible(target??tree,'Filter expression');},'Edit expression');
               advanced.className='bases-toolbar-menu-next';advanced.append(icon('code',16,doc));row.append(advanced,removeButton);
             }
           }else{
@@ -612,7 +614,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
               const child=value.children[index];row.append(renderNode(child,()=>{value.children.splice(value.children.indexOf(child),1);if(!value.children.length)value.children.push(newBaseFilterCondition());},depth+1));if(renderBudget<0)break;
             }
             const append=(next:BaseFilterDraftNode)=>{if(!live()||!canRestructure())return;value.children.push(next);semanticChanged();render();focusNode(next);};
-            row.append(button(doc,'Add condition',()=>append(newBaseFilterCondition())),button(doc,'Add group',()=>append(newBaseFilterGroup())),button(doc,'Remove group',()=>{if(!live()||!canRestructure(row))return;remove();semanticChanged();render();}));
+            row.append(button(doc,'Add condition',()=>append(newBaseFilterCondition())),button(doc,'Add group',()=>append(newBaseFilterGroup())),button(doc,'Remove group',()=>{if(!live()||!canRestructure(row))return;remove();render();semanticChanged();}));
           }
           return row;
         };

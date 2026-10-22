@@ -41,7 +41,7 @@ export function createBaseFilterOperand(doc: Document, container: HTMLElement, o
   if (multiple) root.append(chips);
   root.append(input); container.append(root);
   const usable = () => !destroyed && root.isConnected && container.contains(root) && (options.alive?.() ?? true);
-  const hasDraft = () => multiple && input.value.trim().length > 0;
+  const hasDraft = () => multiple && input.value.length > 0;
   const read = (): readonly string[] => multiple ? [...values, ...(hasDraft() ? [input.value] : [])] : input.value === '' ? [] : [input.value];
   const source = options.snapshot?.[({ file: 'files', folder: 'folders', tag: 'tags', property: 'properties' } as const)[options.kind]] ?? [];
   const status = options.snapshot?.metadataStatus ?? (options.snapshot ? 'current' : 'unavailable');
@@ -89,7 +89,7 @@ export function createBaseFilterOperand(doc: Document, container: HTMLElement, o
   function accept(value: string) {
     if (!usable()) return;
     if (multiple) {
-      if (!value.trim()) return;
+      if (value.length===0) return;
       if (!values.includes(value)) values.push(value);
       input.value = ''; renderChips();
     } else { input.value = value; values = [value]; }

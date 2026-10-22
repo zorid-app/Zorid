@@ -73,9 +73,16 @@ test('tag literals become chips only on Enter and retain pending text for valida
     f.key('Enter'); assert.equal(f.control.hasDraft(), false); assert.equal(f.input.value, '');
     assert.deepEqual(f.changes, [['#reading', '  #custom "quoted"  ']]);
     assert.equal(f.doc.querySelectorAll('.bases-filter-operand-chip').length, 2);
-    f.type('   '); assert.equal(f.control.hasDraft(), false); assert.deepEqual(f.control.read(), ['#reading', '  #custom "quoted"  ']);
+    f.type('   '); assert.equal(f.control.hasDraft(), true); assert.deepEqual(f.control.read(), ['#reading', '  #custom "quoted"  ', '   ']);
     f.type(''); f.key('Backspace'); assert.deepEqual(f.control.read(), ['#reading']); assert.deepEqual(f.changes.at(-1), ['#reading']);
   } finally { f.cleanup(); }
+});
+
+test('whitespace-only tag literals are pending until Enter and remain exact after commit',()=>{
+  const f=fixture('tag');try{
+    f.control.focus();f.type('  ');assert.equal(f.control.hasDraft(),true);assert.deepEqual(f.control.read(),['  ']);assert.equal(f.changes.length,0);
+    f.key('Enter');assert.equal(f.control.hasDraft(),false);assert.deepEqual(f.changes,[['  ']]);assert.equal(f.doc.querySelector('.bases-filter-operand-chip > span')?.textContent,'  ');
+  }finally{f.cleanup();}
 });
 
 test('variadic tags select several suggestions and remove chips without changing other values', () => {

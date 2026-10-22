@@ -87,3 +87,34 @@ test('failed accepted filter save retries its exact source before a newer queued
     assert.equal(f.calls.length,2);assert.deepEqual(f.calls.map(call=>[call.version,call.patch]),[[1,{view:{filters:{and:['file.hasLink("A.md")']}}}],[2,{view:{filters:{and:['file.hasLink("B.md")']}}}]]);
   }finally{f.cleanup();}
 });
+test('invalid numeric draft cannot be discarded by switching to the expression editor',async()=>{
+  const f=fixture('note.score > 1');try{
+    f.click('Filter');const input=f.get<HTMLInputElement>('Filter value');f.edit('Filter value','not a number');f.click('Edit expression');
+    assert.equal(input.isConnected,true);assert.equal(input.value,'not a number');assert.equal(f.doc.querySelector('textarea[aria-label="Filter expression"]'),null);f.submit();await tick();assert.equal(f.calls.length,0);
+    f.edit('Filter value','3');f.click('Edit expression');assert.equal(f.get<HTMLTextAreaElement>('Filter expression').value,'note["score"] > 3');f.submit();await tick();assert.deepEqual(f.calls[0].patch,{view:{filters:'note["score"] > 3'}});
+  }finally{f.cleanup();}
+});
+test('pending tag text blocks property/operator/advanced rebuilds until explicitly committed',async()=>{
+  const f=fixture();try{
+    f.click('Filter');f.edit('Condition','hasTag','change');const input=f.get<HTMLInputElement>('Filter value');f.edit('Filter value',' unfinished ');
+    f.edit('Condition','hasLink','change');assert.equal(f.get<HTMLSelectElement>('Condition').value,'hasTag');
+    f.edit('Filter property','note.score','change');assert.equal(f.get<HTMLSelectElement>('Filter property').value,'file.file');
+    f.click('Edit expression');assert.equal(input.isConnected,true);assert.equal(input.value,' unfinished ');assert.equal(f.doc.querySelector('textarea[aria-label="Filter expression"]'),null);f.submit();await tick();assert.equal(f.calls.length,0);
+    input.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));f.submit();await tick();assert.deepEqual(f.calls[0].patch,{view:{filters:{and:['file.hasTag(" unfinished ")']}}});
+  }finally{f.cleanup();}
+});
+test('explicit Remove discards a new pending tag locally and clears its draft guard without saving',async()=>{
+  const f=fixture();try{
+    f.click('Filter');f.edit('Condition','hasTag','change');f.edit('Filter value','unfinished');assert.equal(f.toolbar.hasDraft(),true);
+    f.click('Remove filter');assert.equal(f.toolbar.hasDraft(),false);f.submit();await tick();assert.equal(f.calls.length,0);assert.equal(f.version,1);
+  }finally{f.cleanup();}
+});
+test('acknowledging an awaited new condition preserves its newer blank draft and saved authority',async()=>{
+  const f=fixture();let release:()=>void=()=>{};try{
+    f.setHook(async patch=>{await new Promise<void>(resolve=>{release=resolve;});f.commit(patch);});
+    f.click('Filter');f.edit('Filter value','A.md');f.submit();await tick();const input=f.get<HTMLInputElement>('Filter value');f.edit('Filter value','');
+    release();await tick();await tick();
+    assert.deepEqual(f.document.views[0].filters,{and:['file.hasLink("A.md")']});assert.equal(input.isConnected,true);assert.equal(input.value,'');assert.equal(f.toolbar.hasDraft(),true);
+    f.submit();await tick();assert.equal(f.calls.length,1,'Blank queued draft cannot remove the newly accepted condition');assert.match(f.doc.querySelector('[role=alert]')?.textContent??'',/invalid|existing filter/);
+  }finally{f.cleanup();}
+});
