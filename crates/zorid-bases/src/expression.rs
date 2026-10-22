@@ -3069,7 +3069,15 @@ impl<'a> Evaluator<'a> {
                 }
                 Ok(links_loosely_equal(link, &parsed) || link.path == *text)
             }
-            _ => Ok(self.equals(left, right)),
+            _ => {
+                // Scalar fallback may materialize plain values. Membership
+                // reuses a needle across pairs, so its upfront validation
+                // cannot pay for these repeated copies. Charge each pair's
+                // complete fallback trees before invoking the converter.
+                self.comparison_preflight(left)?;
+                self.comparison_preflight(right)?;
+                Ok(self.equals(left, right))
+            }
         }
     }
 
@@ -5615,7 +5623,7 @@ mod checked_comparison_admission_tests {
         );
         let small = object(1);
         let context = BasesEvaluationContext {
-            work_limit: Some(22),
+            work_limit: Some(40),
             ..Default::default()
         };
         let mut evaluator = Evaluator::new(&context);
@@ -5632,6 +5640,31 @@ mod checked_comparison_admission_tests {
         };
         assert!(
             matches!(Evaluator::new(&context).equals_checked(&wide,&wide),Err(RuntimeValue::Error(message))if message.starts_with("cancelled\0"))
+        );
+    }
+    #[test]
+    fn repeated_large_object_and_string_needles_pay_for_each_fallback_copy() {
+        let payload = "x".repeat(1024 * 1024);
+        let object_needle = RuntimeValue::Object(IndexMap::from([(
+            "payload".into(),
+            RuntimeValue::String(payload.clone()),
+        )]));
+        let empty_objects = (0..1000)
+            .map(|_| RuntimeValue::Object(IndexMap::new()))
+            .collect::<Vec<_>>();
+        let context = BasesEvaluationContext {
+            work_limit: Some(100_000),
+            ..Default::default()
+        };
+        assert!(
+            matches!(Evaluator::new(&context).contains_checked(&empty_objects,&object_needle),Err(RuntimeValue::Error(message))if message.starts_with("budget\0"))
+        );
+        let string_needle = RuntimeValue::String(payload);
+        let empty_strings = (0..1000)
+            .map(|_| RuntimeValue::String(String::new()))
+            .collect::<Vec<_>>();
+        assert!(
+            matches!(Evaluator::new(&context).contains_checked(&empty_strings,&string_needle),Err(RuntimeValue::Error(message))if message.starts_with("budget\0"))
         );
     }
     #[test]
