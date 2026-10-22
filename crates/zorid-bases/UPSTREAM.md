@@ -83,3 +83,81 @@ setter semantics. Every conversion uses the captured clock and timezone, retains
 finite/budget diagnostics, and preserves the existing explicit invalid-local-time
 gap/fold policy. Reference evidence and verification boundaries are recorded in
 `docs/history/bases-duration-reference-20261022.md`.
+
+## Concrete List.sort collation (2026-10-22)
+
+`src/list_sort.rs` uses the ICU4X Rust dependency for Unicode collation; it does
+not implement an ad hoc natural-sort or locale approximation. The explicit
+portable policy is English (`en`), `Strength::Primary`, `CaseLevel::Off`, and
+`CollationNumericOrdering::True`, with compiled data and no runtime data download
+or ambient operating-system locale lookup. The dependency and data versions are
+locked below. Numeric collation compares decimal digit runs, rather than parsing
+an entire text as a number. ICU handles canonical equivalence and the locale's
+base-letter rules. See the official
+[ICU4X 2.3.1 collator API](https://docs.rs/icu_collator/2.3.1/icu_collator/),
+[options](https://docs.rs/icu_collator/2.3.1/icu_collator/options/struct.CollatorOptions.html),
+and [compiled-data features](https://docs.rs/crate/icu_collator/2.3.1/features).
+
+Reference basis: Obsidian 1.14.4 `app.js`, SHA-256
+`958ce57fe22f87fdf121546e46dfccd9c8ee971ce3fd8f801d60d4ece39a2df9`,
+Python Unicode character ranges `2196926..2197194` (List.sort) and
+`1302374..1302462` (shared comparator). The shipped comparator uses
+`Intl.Collator(undefined, {usage: "sort", sensitivity: "base", numeric: true})`.
+The selected value slice is retained by REA Evidence
+`ev_49e7bfdc2a564c07615cfa54720f5554fe8d64deaa251aa105a7958fdf532c3c`;
+static source analysis does not establish runtime parity. Recovered proprietary
+source remains outside this repository.
+
+Only two actual Number operands take the numeric comparison branch. Other
+operands use checked reference-derived text keys: String subclasses retain raw
+string data; Dates use their formatted date/time text rather than epoch
+milliseconds; Null uses `null`; List/Object/File/Error values use their checked
+type-specific conversion. This is concrete list sorting, separate from the
+reducer's row ordering and from Unicode scalar string indexing/slicing.
+
+The reference's ambient locale is deliberately replaced by pinned English so
+native, CLI and WASM use the same rules. This is not a universal-locale or
+cross-version Intl equivalence claim. Mixed Number/String comparisons may be
+nontransitive (numeric comparison for a pair of negative Numbers can disagree
+with collation of those Numbers against a numeric-looking String). The bounded,
+fallible index merge preserves the pairwise comparator and takes the left item
+on equality. Its deterministic result does not promise the same permutation as
+a particular JavaScript engine for inconsistent comparisons. No lexical or
+ambient-host fallback is used if collator initialization fails.
+
+The helper admits total text-key bytes and both index buffers against separate
+8 MiB ceilings before allocation, charges both complete text lengths before each
+collation call, and checks the invocation work/cancellation guard throughout the
+merge. ICU comparison itself has no internal cancellation callback; cancellation
+is observed between bounded comparisons. These admission limits are not a claim
+to measure every allocation inside ICU.
+
+Resolved new packages from the coordinated dependency fetch, with crates.io
+package SHA-256 checksums verified against the cached `.crate` bytes and root
+`Cargo.lock`:
+
+| Package | Version | Package SHA-256 |
+| --- | --- | --- |
+| [icu_collator](https://crates.io/crates/icu_collator/2.3.1) | 2.3.1 | `08984ed58ac439ebf3e13d2cf26b0c46a60afcd21721c1d14087c0b240344dda` |
+| [icu_collator_data](https://crates.io/crates/icu_collator_data/2.3.0) | 2.3.0 | `f7d7e54efdddeb1208c08dd5d32b53a879ac00d2d3d051b2255fd26821d16368` |
+| [icu_locale_fallback](https://crates.io/crates/icu_locale_fallback/2.3.0) | 2.3.0 | `251af8e57c9400e3eb58242fe5b8b1152b2a64fdf4cf632f923c38ccee6f2fa9` |
+| [icu_locale_fallback_data](https://crates.io/crates/icu_locale_fallback_data/2.3.0) | 2.3.0 | `decf2a22ec8fa68f1a0c1129a3f8583f8f8bc24e8b9ccbe98ead99f62a4dc3a8` |
+| [utf16_iter](https://crates.io/crates/utf16_iter/1.0.5) | 1.0.5 | `c8232dd3cdaed5356e0f716d285e4b40b932ac434100fe9b7e0e8e935b9e6246` |
+| [write16](https://crates.io/crates/write16/1.0.0) | 1.0.0 | `d1890f4022759daae28ed4fe62859b1236caebfc61ede2f63ed4e695f3f6d936` |
+
+The four ICU4X packages above declare `Unicode-3.0` and contain byte-identical
+LICENSE files. [LICENSE-ICU4X](LICENSE-ICU4X) is an exact copy, including the
+ICU4C/ICU4J attribution, SHA-256
+`f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2`.
+`utf16_iter` and `write16` declare `Apache-2.0 OR MIT`; the combined ICU notice
+does not replace their separate upstream notices. ICU4X 2.3 requires Rust 1.88.
+The collator data package records CLDR 48.2.1 and ICU release-78.1rc as generation
+inputs; data remains pinned by the package checksum rather than host ICU data.
+
+Local fetched-package measurements (`du -k`, rounded allocated disk usage):
+collator cache 1300 KiB / unpacked source 5836 KiB; collator-data cache 468 KiB /
+unpacked source 3220 KiB. These are cache/source disk measurements, not measured
+network transfer, executable, WASM, resident-memory or runtime-cost increases.
+Matching native/CLI/WASM builds, size deltas and runtime acceptance require
+separate recorded verification; the provenance addition itself establishes none
+of those results.
