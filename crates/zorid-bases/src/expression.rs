@@ -2010,7 +2010,7 @@ impl<'a> Evaluator<'a> {
             },
             "/" => match (&left, &right) {
                 (RuntimeValue::Duration(value), RuntimeValue::Number(scale)) =>
-                    RuntimeValue::Duration(scale_duration(value, 1.0 / *scale)),
+                    RuntimeValue::Duration(divide_duration(value, *scale)),
                 (RuntimeValue::Duration(_), _) | (_, RuntimeValue::Duration(_)) =>
                     RuntimeValue::Error("Invalid operator involving Duration".into()),
                 _ => numeric_pair(self, &left, &right, |a, b| a / b),
@@ -4696,6 +4696,20 @@ fn scale_duration(value: &DurationValue, scale: f64) -> DurationValue {
         minutes: value.minutes * scale,
         seconds: value.seconds * scale,
         milliseconds: value.milliseconds * scale,
+    }
+}
+fn divide_duration(value: &DurationValue, divisor: f64) -> DurationValue {
+    // Component division is deliberate: multiplying by a pre-rounded reciprocal
+    // changes observable IEEE results (e.g. 3 / 10 versus 3 * 0.1).
+    DurationValue {
+        years: value.years / divisor,
+        months: value.months / divisor,
+        weeks: value.weeks / divisor,
+        days: value.days / divisor,
+        hours: value.hours / divisor,
+        minutes: value.minutes / divisor,
+        seconds: value.seconds / divisor,
+        milliseconds: value.milliseconds / divisor,
     }
 }
 fn coerce_duration(value: &RuntimeValue) -> Option<DurationValue> {

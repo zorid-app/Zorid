@@ -137,6 +137,10 @@ fn zero_truth_is_component_based_and_division_preserves_duration_type() {
         eval("duration('3h') / 2", JAN, "UTC"),
         BaseValue::Duration { hours: 1.5, .. }
     ));
+    assert!(matches!(
+        eval("duration('3h') / 10", JAN, "UTC"),
+        BaseValue::Duration { hours: 0.3, .. }
+    ));
     number("(duration('3h') - duration('1h')).hours", JAN, "UTC", 2.0);
     number("(duration('3h') * 2).hours", JAN, "UTC", 6.0);
     for source in ["duration('1h') / 0", "duration('1h') * 1e308"] {
