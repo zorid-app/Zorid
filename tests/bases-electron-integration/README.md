@@ -27,8 +27,8 @@ CSV export uses the actual Results action and a Chromium test download directory
 it does not exercise the native Save dialog or write to the user's Downloads.
 The disposable vault, profile, app data, screenshots, exact durable content,
 actions, native process outcomes and source/artifact hashes remain there. One
-owned app runs at a time; it is verified hidden before edits so CDP input cannot
-type into another app. Positive creation and changes use ordinary UI controls;
+owned app runs at a time; by default it is verified hidden before edits so CDP
+input cannot type into another app. Positive creation and changes use ordinary UI controls;
 prelaunch files and explicit external-editor negative fixtures are separately
 labeled. Normal quit/restart requires signal-free exit; cleanup signals cannot
 satisfy that assertion. Cleanup validates exact owned native processes.
@@ -38,6 +38,23 @@ not reported as passed. The scope ledger in
 `docs/history/bases-heavy-user-e2e-plan.md` distinguishes authored scenarios from
 actual runtime acceptance. This is functional end-to-end verification, not a
 performance/large-vault benchmark, OS foreground-focus test or mobile claim.
+
+Pass the explicit `--show-window` flag for campaigns that require a genuinely
+visible document, including ordinary-note property queries gated on visibility.
+This brings the owned page forward and sends AppKit unhide/activation requests.
+The runner then verifies the exact owned app PID is active/unhidden, a CoreGraphics
+on-screen layer0 window owned by that PID has positive bounds, and the renderer's
+actual `document.visibilityState`, `document.hidden` and `document.hasFocus()`
+report visible/false/true. Native receipts and renderer observations are retained.
+It does not override visibility, clock policy or production queries. Such a run
+uses an actual foreground window and can be affected by user interaction; input
+is still CDP automation and does not establish physical keyboard parity.
+The default hidden proof and cleanup behavior remain unchanged.
+
+Offline evidence-policy checks:
+`node --test tests/bases-electron-integration/window-visibility.test.mjs`.
+They reject activation-only or wrong-window evidence but do not replace a native
+visible-window runtime pass.
 
 Explicit supplemental campaigns can reuse this same bootstrap with
 `--campaign-module /absolute/tests/OWNED-CAMPAIGN/campaign.mjs`. The fixed owned
