@@ -573,7 +573,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
               if(!choices.some(([key])=>key===fields.property))choices.unshift([fields.property,fields.property]);
               const property=select(doc,'Filter property',choices,fields.property);
               const descriptor=baseFilterProperty(fields.property,opening.filterProperty?.(fields.property),opening.propertyType?.(fields.property));
-              const catalog=baseFilterOperators(descriptor,fields.operator);
+              let catalog=baseFilterOperators(descriptor,fields.operator);
               let selected=catalog.find(item=>item.id===fields.operator);
               // A recognized AST can still require a different property family.
               // Keep such saved source editable verbatim, never coerce its data.
@@ -587,7 +587,9 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
               // Unknown property category stays unknown. An already-authored
               // literal can still retain its own numeric/Boolean/list editor.
               if(descriptor.kind==='unknown'&&selected.comparison&&initialValues?.length===1){
-                const literal=initialValues[0];selected={...selected,operand:typeof literal==='number'?'number':typeof literal==='boolean'?'boolean':Array.isArray(literal)?'list':selected.operand};
+                const literal=initialValues[0],operand=typeof literal==='number'?'number':typeof literal==='boolean'?'boolean':Array.isArray(literal)?'list':selected.operand;
+                catalog=catalog.map(item=>item.comparison&&item.arity==='one'?{...item,operand}:item);
+                selected=catalog.find(item=>item.id===fields.operator)!;
               }
               const operator=select(doc,'Condition',catalog.map(item=>[item.id,item.label] as const),fields.operator);row.append(property,operator);
               const host=doc.createElement('div');host.className='bases-filter-operand-host';row.append(host);

@@ -215,3 +215,30 @@ test('disabled and retired controls cannot publish changes and destroy removes o
   try { const remove = chips.doc.querySelector<HTMLButtonElement>('.bases-filter-operand-chip button')!, input = chips.get<HTMLInputElement>('Filter value'); chips.click('Empty list'); const count = chips.changes; remove.click(); assert.equal(chips.changes, count); chips.control.destroy(); chips.control.destroy(); input.value = 'retired'; input.dispatchEvent(new chips.dom.window.Event('input', { bubbles: true })); assert.equal(chips.changes, count); assert.equal(chips.doc.querySelector('.bases-filter-values'), null); }
   finally { chips.cleanup(); }
 });
+
+test('native dateTime validity accepts saved seconds and fractions without changing offset text', () => {
+  for (const raw of ['2026-10-22T12:34:30', '2026-10-22T12:34:30.123-04:00']) {
+    const f = fixture(eq('datetime'), {kind:'date',withTime:true}, [raw]);
+    try {
+      const form=f.doc.createElement('form');f.container.replaceWith(form);form.append(f.container);
+      const input=f.get<HTMLInputElement>('Filter value');
+      assert.equal(input.type,'datetime-local');assert.equal(input.step,'any');
+      assert.equal(input.validity.stepMismatch,false);assert.equal(form.checkValidity(),true);
+      assert.deepEqual(f.control.read(),{values:[raw]});assert.equal(f.changes,0);
+    } finally {f.cleanup();}
+  }
+});
+
+test('removing the focused list chip retains adjacent focus then input without stealing outside focus', () => {
+  const f=fixture(eq('list'),{kind:'list'},[['one','two','three']]);
+  try {
+    f.get('Remove item two').focus();f.click('Remove item two');
+    assert.equal(f.doc.activeElement,f.get('Remove item three'));
+    f.click('Remove item three');assert.equal(f.doc.activeElement,f.get('Remove item one'));
+    f.click('Remove item one');assert.equal(f.doc.activeElement,f.get('Filter value'));
+    assert.deepEqual(f.control.read(),{values:[[]]});assert.equal(f.changes,3);
+  } finally {f.cleanup();}
+  const outside=fixture(eq('list'),{kind:'list'},[['one','two']]);
+  try {outside.doc.getElementById('outside')!.focus();outside.click('Remove item one');assert.equal(outside.doc.activeElement,outside.doc.getElementById('outside'));assert.deepEqual(outside.control.read(),{values:[['two']]});}
+  finally {outside.cleanup();}
+});

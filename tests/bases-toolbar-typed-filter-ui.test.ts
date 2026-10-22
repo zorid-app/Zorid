@@ -73,3 +73,34 @@ test('pending typed member prevents operator/property/advanced changes and expli
 test('changing an operator preserves an already-authored empty literal and explicit empty list members remain data',async()=>{
  const f=fixture('note.text == ""',kinds);try{f.click('Filter');f.edit('Condition','neq','change');await save(f);assert.equal(source(f),'note["text"] != ""');f.edit('Condition','containsAny','change');f.click('Add item');await save(f);assert.equal(source(f),'note["text"].containsAny("")');}finally{f.cleanup();}
 });
+
+test('unknown property category preserves authored Number Boolean and List operands across comparisons',async()=>{
+ for(const [literal,expectedType]of [['1','text'],['false','checkbox'],['[1, true, "one"]','text']]){
+  const f=fixture(`note.unknown == ${literal}`);try{
+   f.click('Filter');assert.equal(f.get<HTMLInputElement>('Filter value').type,expectedType);
+   f.edit('Condition','neq','change');assert.equal(f.doc.querySelector('form')!.checkValidity(),true);
+   await save(f);assert.equal(source(f),`note["unknown"] != ${literal}`);
+   f.edit('Condition','eq','change');await save(f);assert.equal(source(f),`note["unknown"] == ${literal}`);
+  }finally{f.cleanup();}
+ }
+});
+
+test('dateTime seconds and fractional offsets remain valid through operator-only saves',async()=>{
+ for(const raw of ['2026-10-22T12:34:30','2026-10-22T12:34:30.123-04:00']){
+  const f=fixture(`note.when < "${raw}"`,kinds);try{
+   f.click('Filter');const input=f.get<HTMLInputElement>('Filter value');
+   assert.equal(input.validity.stepMismatch,false);assert.equal(f.doc.querySelector('form')!.checkValidity(),true);
+   f.edit('Condition','gte','change');assert.equal(f.doc.querySelector('form')!.checkValidity(),true);
+   await save(f);assert.equal(source(f),`note["when"] >= "${raw}"`);
+  }finally{f.cleanup();}
+ }
+});
+
+test('focused list-chip removal keeps toolbar Escape ownership at the actual adjacent control',async()=>{
+ const f=fixture('note.items == ["one", "two"]',kinds);try{
+  f.click('Filter');f.get('Remove item one').focus();f.click('Remove item one');
+  assert.equal(f.doc.activeElement,f.get('Remove item two'));
+  f.doc.activeElement!.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+  await tick();await tick();assert.equal(f.doc.querySelector('[role="dialog"]'),null);assert.equal(source(f),'note["items"] == ["two"]');
+ }finally{f.cleanup();}
+});

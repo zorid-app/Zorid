@@ -183,7 +183,17 @@ export function createBaseFilterValues(doc: Document, container: HTMLElement, op
     listen(field, 'change', () => { if (itemType === 'boolean') { pendingIntent = true; draft(field); } });
     listen(field, 'keydown', event => { if (!event.isComposing && !event.defaultPrevented && event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); if (pendingText()) add(); } });
     root.append(button('Add item', () => add()), button('Clear item', node => { clearDraft(); draft(node); }));
-    listen(chips, 'click', event => { const target = event.target as HTMLElement, remove = target.closest<HTMLButtonElement>('button[data-index]'); if (!remove || !chips.contains(remove) || !enabled(remove)) return; items.splice(Number(remove.dataset.index), 1); initialized = true; pristine = false; explicitNull = false; renderItems(); emit(chips); });
+    listen(chips, 'click', event => {
+      const target = event.target as HTMLElement, remove = target.closest<HTMLButtonElement>('button[data-index]');
+      if (!remove || !chips.contains(remove) || !enabled(remove)) return;
+      const focused = doc.activeElement === remove, index = Number(remove.dataset.index);
+      items.splice(index, 1); initialized = true; pristine = false; explicitNull = false; renderItems();
+      if (focused) {
+        const adjacent = Array.from(chips.querySelectorAll<HTMLButtonElement>('button[data-index]'));
+        (adjacent[Math.min(index, adjacent.length - 1)] ?? (!field.hidden ? field : root.querySelector<HTMLButtonElement>('[aria-label="Add item"]')))?.focus({ preventScroll: true });
+      }
+      emit(chips);
+    });
     if (exact) root.append(button('Empty list', node => { items = []; initialized = true; pristine = false; explicitNull = false; clearDraft(); renderItems(); emit(node); }));
     pending = pendingText;
     reset = () => { clearDraft(); items = []; initialized = false; pristine = false; renderItems(); };
@@ -217,6 +227,7 @@ export function createBaseFilterValues(doc: Document, container: HTMLElement, op
     let edited = false, raw = '', checkboxValue: boolean | undefined, offset = '', preserveRawDate = false;
     const initialValue = initial?.[0], isDate = operand === 'date' || operand === 'datetime';
     const field = input(operand === 'boolean' ? 'checkbox' : isDate ? operand === 'datetime' ? 'datetime-local' : 'date' : 'text');
+    if (operand === 'datetime') field.step = 'any';
     if (operand === 'number') field.inputMode = 'decimal';
     if (typeof initialValue === 'string') raw = initialValue; else if (initialValue !== undefined && initialValue !== null) raw = display(initialValue);
     if (operand === 'boolean') { checkboxValue = typeof initialValue === 'boolean' ? initialValue : undefined; field.checked = checkboxValue ?? false; field.indeterminate = checkboxValue === undefined; }
