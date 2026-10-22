@@ -4,6 +4,7 @@ import type { BaseQueryResult } from './query.ts';
 import { normalizeBaseProperty } from './query.ts';
 import { icon } from '../ui/icons.ts';
 import { buildFilterCondition, decodeFilterCondition, validateToolbarPatch } from './toolbar-config.ts';
+import { enhanceBaseFormulaEditor } from './toolbar-formula-editor.ts';
 import { createBaseCombobox } from './toolbar-combobox.ts';
 import { createBaseManualGroups } from './toolbar-groups.ts';
 import { BASE_LAYOUTS, layoutIcon, uniqueViewName, validateViewName, createLayoutSettings, propertyDisplayPatch } from './toolbar-panels.ts';
@@ -167,7 +168,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       if ((auto || autoAdd) && own.dirty && !retryPersistence) { submit(true); return; }
       if (!hasDraft()) own.close(false);
     } };
-    const keydown = (event: KeyboardEvent) => { const target = event.target as Element; if (target.closest?.('.bases-toolbar-combobox-popover,.bases-manual-group-new') || target.closest?.('[role=combobox]') && (event.key !== 'Escape' || target.closest('[role=combobox]')?.getAttribute('aria-expanded') === 'true')) return; if (['ArrowDown','ArrowUp','Home','End'].includes(event.key) && !event.isComposing && (event.target instanceof doc.defaultView!.HTMLButtonElement || event.target === node)) { const buttons = Array.from(node.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')).filter(item => !item.closest('[hidden]')); if (buttons.length) { const index = buttons.indexOf(doc.activeElement as HTMLButtonElement); const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length; buttons[next].focus(); event.preventDefault(); event.stopPropagation(); } } if (event.key === 'Escape' && !event.isComposing && !own.saving && node.contains(event.target as Node)) { event.preventDefault(); event.stopPropagation(); if ((auto || autoAdd) && own.dirty && !retryPersistence) submit(true); else own.close(); } };
+    const keydown = (event: KeyboardEvent) => { const target = event.target as Element; if (target.closest?.('.bases-toolbar-combobox-popover,.bases-manual-group-new,.bases-formula-editor') || target.closest?.('[role=combobox]') && (event.key !== 'Escape' || target.closest('[role=combobox]')?.getAttribute('aria-expanded') === 'true')) return; if (['ArrowDown','ArrowUp','Home','End'].includes(event.key) && !event.isComposing && (event.target instanceof doc.defaultView!.HTMLButtonElement || event.target === node)) { const buttons = Array.from(node.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')).filter(item => !item.closest('[hidden]')); if (buttons.length) { const index = buttons.indexOf(doc.activeElement as HTMLButtonElement); const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length; buttons[next].focus(); event.preventDefault(); event.stopPropagation(); } } if (event.key === 'Escape' && !event.isComposing && !own.saving && node.contains(event.target as Node)) { event.preventDefault(); event.stopPropagation(); if ((auto || autoAdd) && own.dirty && !retryPersistence) submit(true); else own.close(); } };
     doc.addEventListener('pointerdown', outside, true); doc.addEventListener('keydown', keydown, true); win?.addEventListener('resize', place); win?.addEventListener('scroll', place, true);
     const observer = win && 'ResizeObserver' in win ? new win.ResizeObserver(place) : undefined; observer?.observe(container); observer?.observe(node);
     const changed = () => {
@@ -326,14 +327,21 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       }
     } else if (name === 'Properties') {
       const displayNames = new Map<string, string>();
+      let propertyDrag: {property:string;source:HTMLElement;token:string;version:BaseQueryResult['version']} | undefined;
       let order = (Array.isArray(result.view.order) ? result.view.order as string[] : ['file.name']).map(normalizeBaseProperty);
       const search = doc.createElement('input'); search.type = 'search'; search.placeholder = 'Find or create…'; search.setAttribute('aria-label', 'Find a property');
       const list = doc.createElement('div'); list.className = 'bases-toolbar-property-list'; fields.append(search, list);
       const render = () => {
-        list.replaceChildren(); const query = search.value.toLowerCase(); const candidates = [...new Set([...order, ...properties])].filter(property => opening.label(property).toLowerCase().includes(query) || property.toLowerCase().includes(query));
+        propertyDrag = undefined; list.replaceChildren(); const query = search.value.toLowerCase(); const candidates = [...new Set([...order, ...properties])].filter(property => opening.label(property).toLowerCase().includes(query) || property.toLowerCase().includes(query));
         for (const property of candidates.slice(0, 100)) {
           const row = doc.createElement('div'); row.className = 'bases-toolbar-property-row';
-          const label = doc.createElement('label'), check = doc.createElement('input'); check.type = 'checkbox'; check.dataset.property = property; check.checked = order.includes(property); label.append(check, doc.createTextNode(opening.label(property))); row.append(label);
+          const label = doc.createElement('label'), check = doc.createElement('input'); check.type = 'checkbox'; check.dataset.property = property; check.checked = order.includes(property); const grip = doc.createElement('span'); grip.className = 'bases-property-grip';
+          const kind = opening.propertyType?.(property); const glyph = property.startsWith('file.') ? 'info' : property.startsWith('formula.') ? 'square-function' : kind === 'number' || kind === 'rating' ? 'binary' : kind === 'checkbox' || kind === 'boolean' ? 'square-check' : kind === 'date' || kind === 'datetime' ? 'calendar' : kind === 'list' || kind === 'multiselect' ? 'list' : 'text';
+          grip.append(icon(glyph,16,doc)); grip.draggable = order.includes(property); label.append(check,grip,doc.createTextNode(opening.label(property))); row.append(label);
+          grip.addEventListener('dragstart',event=>{if(destroyed||panel!==own||!grip.isConnected||!order.includes(property)||!event.dataTransfer){event.preventDefault();return;}const token=`${Date.now()}-${Math.random()}`;propertyDrag={property,source:grip,token,version};event.dataTransfer.setData('application/x-zorid-base-property',token);event.dataTransfer.effectAllowed='move';});
+          grip.addEventListener('dragend',()=>{propertyDrag=undefined;});
+          row.addEventListener('dragover',event=>{if(propertyDrag?.source.isConnected&&propertyDrag.version===version&&order.includes(property))event.preventDefault();});
+          row.addEventListener('drop',event=>{const drag=propertyDrag;propertyDrag=undefined;if(!drag?.source.isConnected||!row.isConnected||panel!==own||drag.version!==version||event.dataTransfer?.getData('application/x-zorid-base-property')!==drag.token)return;const from=order.indexOf(drag.property),to=order.indexOf(property);if(from<0||to<0||from===to)return;event.preventDefault();order.splice(from,1);order.splice(to,0,drag.property);changed();render();});
           check.addEventListener('change', () => { order = check.checked ? [...order, property] : order.filter(value => value !== property); changed(); render(); Array.from(list.querySelectorAll<HTMLInputElement>('input')).find(input => input.dataset.property === property)?.focus(); });
           const index = order.indexOf(property);
           const move = (delta: number) => { const next = [...order]; [next[index], next[index + delta]] = [next[index + delta], next[index]]; order = next; changed(); render(); Array.from(list.querySelectorAll<HTMLInputElement>('input')).find(input => input.dataset.property === property)?.focus(); };
@@ -366,19 +374,26 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         const name = search.value.trim(); if (!name) { search.focus(); return; }
         const property = normalizeBaseProperty(name.startsWith('note.') ? name : `note.${name}`);
         if (!order.includes(property)) { order.push(property); changed(); }
-        search.value = ''; render();
+        search.value = ''; render(); updateAddProperty();
       },'Add property'); addProperty.className = 'bases-toolbar-menu-item';
       const updateAddProperty = () => { addProperty.hidden = !search.value.trim() || properties.some(property => property === normalizeBaseProperty(`note.${search.value.trim()}`)); addProperty.textContent = `Add property “${search.value.trim()}”`; };
       fields.append(addProperty,button(doc,'Hide all',() => { order = []; changed(); render(); }));
       search.addEventListener('input',() => { render(); updateAddProperty(); }); updateAddProperty(); render(); readPatch = () => ({ order });
       readOperation = () => { const view = validateToolbarPatch(result, {order}); if (!displayNames.size) { expectedPatch = {view}; return () => options.save(version, view); } if (!options.saveConfiguration) throw new Error('Combined property configuration is unavailable.'); const root = propertyDisplayPatch(opening.root, displayNames); expectedPatch = {view,root}; return () => options.saveConfiguration!(version, {view,root}); };
     } else if (name === 'Sort') {
+      let sortDrag: {item:BaseValue;source:HTMLElement;token:string;version:BaseQueryResult['version']} | undefined;
       const sort = Array.isArray(result.view.sort) ? structuredClone(result.view.sort) as BaseValue[] : [];
       const list = doc.createElement('div'); fields.append(list);
       const render = () => {
         const focusedLabel = list.contains(doc.activeElement) ? doc.activeElement?.getAttribute('aria-label') : undefined;
-        list.replaceChildren(); sort.forEach((value, index) => {
+        sortDrag = undefined; list.replaceChildren(); sort.forEach((value, index) => {
           const row = doc.createElement('div'); row.className = 'bases-toolbar-rule';
+          const grip=doc.createElement('span');grip.className='bases-sort-grip';grip.draggable=true;grip.append(icon('grip-vertical',14,doc));row.append(grip);
+          grip.addEventListener('dragstart',event=>{if(destroyed||panel!==own||!grip.isConnected||!event.dataTransfer){event.preventDefault();return;}const token=`${Date.now()}-${Math.random()}`;sortDrag={item:sort[index],source:grip,token,version};event.dataTransfer.setData('application/x-zorid-base-sort',token);event.dataTransfer.effectAllowed='move';});
+          grip.addEventListener('dragend',()=>{sortDrag=undefined;});
+          row.addEventListener('dragover',event=>{if(sortDrag?.source.isConnected&&sortDrag.version===version)event.preventDefault();});
+          row.addEventListener('drop',event=>{const drag=sortDrag;sortDrag=undefined;if(!drag?.source.isConnected||!row.isConnected||panel!==own||drag.version!==version||event.dataTransfer?.getData('application/x-zorid-base-sort')!==drag.token)return;const from=sort.indexOf(drag.item);if(from<0||from===index)return;event.preventDefault();sort.splice(from,1);sort.splice(index,0,drag.item);changed();render();});
+          row.addEventListener('keydown',event=>{if(event.isComposing||!event.altKey||!['ArrowUp','ArrowDown'].includes(event.key))return;const to=Math.max(0,Math.min(sort.length-1,index+(event.key==='ArrowUp'?-1:1)));if(to===index)return;event.preventDefault();event.stopPropagation();const label=(event.target as Element).getAttribute('aria-label');[sort[index],sort[to]]=[sort[to],sort[index]];changed();render();queueMicrotask(()=>{const controls=Array.from(list.children[to]?.querySelectorAll<HTMLElement>('[aria-label]')??[]);(controls.find(control=>control.getAttribute('aria-label')===label&&!control.hidden)??controls.find(control=>!control.hidden))?.focus();});},true);
           if (!mapping(value)) { row.append(doc.createTextNode('Unsupported existing sort rule')); }
           else {
             const currentProperty = propertyId(value.column || value.property), choices = availableOptions.some(([key]) => key === currentProperty) ? availableOptions : [[currentProperty, opening.label(currentProperty)] as const, ...availableOptions];
@@ -575,7 +590,15 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     own.flush = () => submit(true);
     if (options.immediate && win?.MutationObserver) {
       const enhanced = new Map<HTMLSelectElement,ReturnType<typeof createBaseCombobox>>();
+      const editors = new Map<HTMLTextAreaElement,ReturnType<typeof enhanceBaseFormulaEditor>>();
+      const attemptedEditors = new WeakSet<HTMLTextAreaElement>();
       const enhance = () => {
+        for (const [source,editor] of editors) if (!node.contains(source)) { editor.destroy(); editors.delete(source); }
+        for (const source of node.querySelectorAll<HTMLTextAreaElement>('textarea')) {
+          if (attemptedEditors.has(source) || !['Formula expression','Filter expression'].includes(source.getAttribute('aria-label')??'')) continue;
+          attemptedEditors.add(source); const focused = doc.activeElement === source;
+          try { const editor = enhanceBaseFormulaEditor(source,{propertyIds:properties,onEscape:()=>submit(true)}); editors.set(source,editor); if (focused) editor.focus(); } catch (failure) { report(failure); }
+        }
         for (const [source,control] of enhanced) if (!node.contains(source)) { control.destroy(); enhanced.delete(source); }
         for (const source of node.querySelectorAll<HTMLSelectElement>('select')) {
           if (enhanced.has(source) || source.getAttribute('aria-label') === 'Value type') continue;
@@ -584,7 +607,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         }
       };
       const observer = new win.MutationObserver(enhance); observer.observe(node,{childList:true,subtree:true}); enhance();
-      disposers.push(()=>{observer.disconnect();for(const control of enhanced.values())control.destroy();enhanced.clear();});
+      disposers.push(()=>{observer.disconnect();for(const control of enhanced.values())control.destroy();enhanced.clear();for(const editor of editors.values())editor.destroy();editors.clear();});
     }
     place(); const initialFocus = Array.from(fields.querySelectorAll<HTMLElement>('input,select,textarea,button')).find(control=>!control.hidden&&!control.closest('[hidden]')); initialFocus?.focus({ preventScroll: true }); if (name === 'Add view' && initialFocus?.tagName === 'INPUT') (initialFocus as HTMLInputElement).select();
   }

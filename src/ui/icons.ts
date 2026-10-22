@@ -1,9 +1,9 @@
 import {
-  ArrowUpDown, ArrowUpNarrowWide, BookOpen, Bookmark, Calendar, Check, ChevronDown,
+  ArrowUpDown, ArrowUpNarrowWide, BookOpen, Bookmark, Binary, Calendar, Check, ChevronDown,
   ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleHelp,
   CodeXml, Columns2, Columns3, Copy, Ellipsis, EllipsisVertical, Eye, EyeOff, File, FileDown, FileQuestion, FileSearch, Filter, FolderClosed, FolderPlus, GalleryVertical,
-  GitFork, Group, GripHorizontal, GripVertical, House, LayoutDashboard, LayoutGrid, Link, List, ListFilter, Maximize, Minus, PanelLeft, PanelRight, PanelTop, StretchHorizontal,
-  Plus, Redo2, RotateCcw, RotateCw, Search, Settings, SlidersHorizontal, SquarePen, StickyNote, Table, Tag, Terminal, TextAlignStart, Trash2, Undo2, X, ZoomIn,
+  GitFork, Group, GripHorizontal, GripVertical, House, Info, LayoutDashboard, LayoutGrid, Link, List, ListFilter, Maximize, Minus, PanelLeft, PanelRight, PanelTop, StretchHorizontal,
+  Plus, Redo2, RotateCcw, RotateCw, Search, Settings, SlidersHorizontal, SquareCheck, SquareFunction, SquarePen, StickyNote, Table, Tag, Terminal, Text, TextAlignStart, Trash2, Undo2, X, ZoomIn,
 } from 'lucide';
 import type { IconNode } from 'lucide';
 
@@ -26,6 +26,7 @@ const glyphs: Record<string, IconNode> = {
   'chevrons-up-down': ChevronsUpDown, 'chevrons-down-up': ChevronsDownUp,
   'sticky-note': StickyNote, minus: Minus, 'rotate-cw': RotateCw,
   'grip-horizontal': GripHorizontal, 'grip-vertical': GripVertical,
+  info: Info, binary: Binary, 'square-check': SquareCheck, 'square-function': SquareFunction, text: Text,
   'file-down': FileDown, 'rotate-ccw': RotateCcw,
   table: Table, 'layout-grid': LayoutGrid, 'list-filter': ListFilter, 'text-align-start': TextAlignStart,
   'ellipsis-vertical': EllipsisVertical, 'chevron-right': ChevronRight, 'chevron-left': ChevronLeft, 'file-question': FileQuestion,

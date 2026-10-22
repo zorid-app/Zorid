@@ -139,3 +139,14 @@ test('reference Add formula creates a visible field, then expression and identit
   expression.focus();expression.value='score * 3';expression.dispatchEvent(new dom.window.Event('input',{bubbles:true}));await settle();assert.deepEqual(calls.at(-1),['Twice','Twice','score * 3']);assert.equal(toolbar.hasDraft(),false);assert.deepEqual(errors,[]);
  }finally{toolbar.destroy();dom.window.close();}
 });
+
+test('property and sort grip drops reorder only their live configuration panel',async()=>{
+ const f=fixture(),other=fixture();
+ const transfer={types:[] as string[],payload:'',effectAllowed:'',setData(kind:string,value:string){this.types=[kind];this.payload=value;},getData(){return this.payload;}};
+ const dispatch=(owner:ReturnType<typeof fixture>,node:HTMLElement,type:string)=>{const event=new owner.dom.window.Event(type,{bubbles:true,cancelable:true});Object.defineProperty(event,'dataTransfer',{value:transfer});node.dispatchEvent(event);};
+ try{
+  f.click('Properties');other.click('Properties');let source=f.doc.querySelectorAll<HTMLElement>('.bases-property-grip')[1],target=other.doc.querySelector<HTMLElement>('.bases-toolbar-property-row')!;dispatch(f,source,'dragstart');dispatch(other,target,'drop');other.submit();await tick();assert.equal(other.calls.length,0,'foreign property drag changes nothing');
+  target=f.doc.querySelector<HTMLElement>('.bases-toolbar-property-row')!;dispatch(f,source,'dragstart');dispatch(f,target,'drop');f.submit();await tick();assert.deepEqual(f.calls.pop(),['save',1,{order:['note.score','file.name']}]);
+  const view={...f.state.views[0],sort:[{property:'file.name',direction:'ASC'},{property:'note.score',direction:'DESC'}]};f.toolbar.update({...f.state,views:[view,f.state.views[1]],result:{...f.result,view}});f.click('Sort');source=f.doc.querySelectorAll<HTMLElement>('.bases-sort-grip')[1];target=f.doc.querySelector<HTMLElement>('.bases-toolbar-rule')!;dispatch(f,source,'dragstart');dispatch(f,target,'drop');f.submit();await tick();assert.deepEqual(f.calls.pop(),['save',1,{sort:[{property:'note.score',direction:'DESC'},{property:'file.name',direction:'ASC'}]}]);
+ }finally{f.cleanup();other.cleanup();}
+});
