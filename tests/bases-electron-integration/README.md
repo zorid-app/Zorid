@@ -41,7 +41,7 @@ performance/large-vault benchmark, OS foreground-focus test or mobile claim.
 
 Explicit supplemental campaigns can reuse this same bootstrap with
 `--campaign-module /absolute/tests/OWNED-CAMPAIGN/campaign.mjs`. The fixed owned
-directories are visual-reference, safety, config, properties and clipboard under
+directories are visual-reference, safety, config, properties, clipboard and layouts under
 tests/bases-*. A module exports `fixtureFiles(): Map<string,string|Buffer>` and
 `async journey(c)`, optionally `template` and a safe `vaultName` basename. It owns
 the complete fixture map: automatic Properties.yaml and Created injection are

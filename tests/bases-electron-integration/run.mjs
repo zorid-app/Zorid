@@ -23,7 +23,7 @@ const harness=path.dirname(fileURLToPath(import.meta.url));
 const campaignRequested=arg('--campaign-module');
 const campaignPath=campaignRequested?await fs.realpath(campaignRequested):undefined;
 if(campaignPath){
-  const owned=['bases-visual-reference','bases-electron-safety-integration','bases-electron-config-integration','bases-electron-properties-integration','bases-electron-clipboard-integration'];
+  const owned=['bases-visual-reference','bases-electron-safety-integration','bases-electron-config-integration','bases-electron-properties-integration','bases-electron-clipboard-integration','bases-electron-layouts-integration'];
   assert.ok(owned.some(name=>campaignPath===path.join(path.dirname(harness),name,'campaign.mjs')),'Only an explicitly owned supplemental campaign module is admitted');
 }
 const campaign=campaignPath?await import(pathToFileURL(campaignPath).href):undefined;
