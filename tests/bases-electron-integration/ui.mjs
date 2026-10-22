@@ -41,7 +41,7 @@ function nativeSelectFrame(document, selector) {
 // Every positive mutation is routed through visible app controls. DOM evaluation
 // locates/reads elements; it does not call workspace/controller/store APIs.
 export class UI {
-  constructor(cdp, actions) { this.cdp = cdp; this.actions = actions; }
+  constructor(cdp, actions, {nativeSelectInput} = {}) { this.cdp = cdp; this.actions = actions; this.nativeSelectInput = nativeSelectInput; }
   dom(body) { return this.cdp.evaluate(`(()=>{${body}})()`); }
   async wait(body, label, timeout = 20000) {
     return until(async () => { const result = await this.dom(body); assert.ok(result, label); return result; }, timeout);
@@ -122,14 +122,22 @@ export class UI {
       await this.cdp.call('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...chosen});await this.cdp.call('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...chosen});
       this.actions.push({action:'custom-option',selector,label:values[index].label,value:values[index].value,at:Date.now()});
     }else{
-      const frame=async phase=>this.actions.push({action:'native-select-frame',selector,phase,expectedValue:values[index].value,...await this.dom(`return (${nativeSelectFrame.toString()})(document,${JSON.stringify(selector)});`),at:Date.now()});
+      const frame=async phase=>{const observed={action:'native-select-frame',selector,phase,expectedValue:values[index].value,...await this.dom(`return (${nativeSelectFrame.toString()})(document,${JSON.stringify(selector)});`),at:Date.now()};this.actions.push(observed);return observed;};
       const key=async(key,phase)=>{await frame('before-'+phase);await this.key(key);await frame('after-'+phase);};
-      await frame('before-click');await this.click(selector);await frame('after-click');
+      await frame('before-click');await this.click(selector);const opened=await frame('after-click');
       // Preserve the existing platform recipe while observing each key. These
       // CDP reads add round trips, not sleeps, semantic waits, retries or writes.
-      await key('Home','Home');
-      for (let i = 0; i < index; i++) await key('ArrowDown','ArrowDown-'+(i+1));
-      await key('Enter','Enter');
+      if(this.nativeSelectInput){
+        try{await this.nativeSelectInput(opened);}catch(error){
+          try{await frame('cua-input-failed');}catch(diagnostic){this.actions.push({action:'native-select-diagnostic-error',selector,message:diagnostic.message,at:Date.now()});}
+          throw error;
+        }
+        await frame('after-cua-input');
+      }else{
+        await key('Home','Home');
+        for (let i = 0; i < index; i++) await key('ArrowDown','ArrowDown-'+(i+1));
+        await key('Enter','Enter');
+      }
       try{
         await this.wait(`return document.querySelector(${JSON.stringify(selector)})?.value===${JSON.stringify(values[index].value)};`, 'Native select accepted keyboard input');
         await frame('readback-succeeded');
