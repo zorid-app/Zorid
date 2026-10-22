@@ -273,7 +273,13 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   }
   async function exportResults(format: BaseExportFormat, copy: boolean): Promise<void> {
     const result = controller.state.result; if (!result) throw new Error('Wait for results before exporting.');
-    const text = exportBaseResults(result, format);
+    const labels = BaseDocument.parse(controller.state.source).getRoot('properties');
+    const text = exportBaseResults(result, format, property => {
+      const settings = labels && typeof labels === 'object' && !Array.isArray(labels) ? labels as Record<string, BaseValue> : {};
+      const setting = settings[property] ?? settings[basePropertyName(property)];
+      if (setting && typeof setting === 'object' && !Array.isArray(setting) && typeof (setting as Record<string, BaseValue>).displayName === 'string') return (setting as Record<string, BaseValue>).displayName as string;
+      return property.startsWith('file.') ? property.replace(/^file\./, 'file ') : property.replace(/^(?:note|formula)\./, '');
+    });
     if (options.exportResults) return options.exportResults(text, format, copy);
     if (copy) { if (!win?.navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable.'); await win.navigator.clipboard.writeText(text); return; }
     if (!win?.URL?.createObjectURL) throw new Error('File export is unavailable in this window.');
