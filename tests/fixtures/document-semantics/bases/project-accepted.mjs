@@ -36,22 +36,21 @@ async function publish(name,value) {
   if(process.argv.includes('--write')) await writeFile(target,contents);
   else assert.equal(await readFile(target,'utf8'),contents,`${name} is stale; review source changes and approval list before regenerating`);
 }
-await publish('accepted-expressions.json',projected);
+if(!process.argv.includes('--queries-only')) await publish('accepted-expressions.json',projected);
 const queryBaseline=JSON.parse(await readFile(resolve(here,'queries.json'),'utf8'));
-const approvedQueryChanges=new Map([['default-natural-order','current'],['typed-group-keys','proposed'],['empty-or-composed','proposed'],['unsupported-link-metadata','proposed']]);
+const approvedQueryChanges=new Map([['default-natural-order','current'],['typed-group-keys','current'],['empty-or-composed','proposed'],['unsupported-link-metadata','proposed']]);
 // Reviewed literal Rust canonical-key oracles, not a second canonicalizer.
 // Number payloads use serde_json's f64 spelling; consumers treat every token opaque.
 const acceptedGroupIds=new Map([
   ['typed-group-keys',{groups:[
-    'base-key-v1:{"type":"list","value":[{"type":"number","value":1.0},{"type":"number","value":2.0}]}',
-    'base-key-v1:{"type":"string","value":"2"}',
     'base-key-v1:{"type":"number","value":2.0}',
+    'base-key-v1:{"type":"list","value":[{"type":"number","value":1.0},{"type":"number","value":2.0}]}',
     'base-key-v1:{"type":"null"}',
   ]}],
-  ['group-search-limit-pipeline',{groupOptions:[
-    'base-key-v1:{"type":"string","value":"todo"}',
-    'base-key-v1:{"type":"string","value":"done"}',
-    'base-key-v1:{"type":"string","value":"empty"}',
+  ['group-search-limit-pipeline',{groups:['base-key-v2:manual:1:{"type":"string","value":"done"}'],groupOptions:[
+    'base-key-v2:manual:0:{"type":"string","value":"todo"}',
+    'base-key-v2:manual:1:{"type":"string","value":"done"}',
+    'base-key-v2:manual:2:{"type":"string","value":"empty"}',
     'base-key-v1:{"type":"string","value":"unlisted"}',
   ]}],
 ]);
@@ -67,7 +66,7 @@ const queryCases=queryBaseline.cases.map(item=>{
   if(expected.groups){const tokens=acceptedGroupIds.get(item.id)?.groups;assert.equal(tokens?.length,expected.groups.length,`${item.id}: reviewed group identity literals required`);expected.groups=expected.groups.map((group,index)=>({key:group.key,keyId:tokens[index],entryIds:group.paths.map(path=>{assert.ok(ids.has(path),`${item.id}: expected group path absent`);return ids.get(path);})}));}
   if(expected.groupOptions){const tokens=acceptedGroupIds.get(item.id)?.groupOptions;assert.equal(tokens?.length,expected.groupOptions.length,`${item.id}: reviewed option identity literals required`);expected.groupOptions=expected.groupOptions.map((option,index)=>({...option,keyId:tokens[index]}));}
   const options={searchTerms:item.options.searchTerms ?? [],evaluation:{clockMs:Date.parse('2024-01-15T10:20:30Z'),timezone:'UTC',currentRecord:records.find(record=>record.path===item.options.currentFilePath) ?? null}};
-  const result={id:item.id,request:{configuration:item.document,snapshot:{snapshotId,records},options},expected,expectationSource:expectation,evidence:item.evidence};scalarStrings(result,item.id);return result;
+  const result={id:item.id,request:{configuration:item.document,snapshot:{snapshotId,records},options},expected,expectationSource:expectation,...(item.acceptedDecision?{acceptedDecision:item.acceptedDecision}:{}),evidence:item.evidence};scalarStrings(result,item.id);return result;
 });
 await publish('accepted-queries.json',{schemaVersion:1,baselineRevision:queryBaseline.baselineRevision,source:'queries.json',approvedChangeSources:Object.fromEntries(approvedQueryChanges),cases:queryCases});
-console.log(JSON.stringify({scope:'accepted-fixture-projection',expressions:cases.length,queries:queryCases.length,approvedExpressionChanges:approvedChanges.size,approvedQueryChanges:approvedQueryChanges.size,mode:process.argv.includes('--write')?'write':'check'}));
+console.log(JSON.stringify({scope:process.argv.includes('--queries-only')?'accepted-query-fixture-projection':'accepted-fixture-projection',expressions:process.argv.includes('--queries-only')?0:cases.length,queries:queryCases.length,approvedExpressionChanges:approvedChanges.size,approvedQueryChanges:approvedQueryChanges.size,mode:process.argv.includes('--write')?'write':'check'}));

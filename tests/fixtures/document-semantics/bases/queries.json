@@ -198,7 +198,10 @@
       "evidence": [
         "src/bases/query.ts",
         "tests/bases-query.test.ts",
-        "tests/bases-query-review.test.ts"
+        "tests/bases-query-review.test.ts",
+        "docs/reference/bases-mental-model.md",
+        "REA ev_9783c03d2a914d4515990a738fb4bb7497672f9a802eea8c548195e6f596bee8: qJ/WJ and jJ",
+        "crates/zorid-bases/tests/property_relations.rs: automatic_grouping_uses_first_match_without_changing_persisted_values"
       ],
       "proposal": "Use typed structural grouping: number 2 and string \"2\" occupy different groups; preserve whole-list keys and null-last. Group ordering must use the selected total-order contract.",
       "proposed": {
@@ -254,7 +257,8 @@
             ]
           }
         ]
-      }
+      },
+      "acceptedDecision": "2026-10-22: retain current loose first-match grouping, superseding the proposed strict structural partition. REA qJ chooses the first typed representative, with numeric-both or typed-tostring group ordering after global sort/limit."
     },
     {
       "id": "filter-error-isolated",
@@ -699,14 +703,29 @@
             "count": 1,
             "listed": false
           }
+        ],
+        "groups": [
+          {
+            "key": {
+              "type": "string",
+              "value": "done"
+            },
+            "paths": [
+              "b.md"
+            ]
+          }
         ]
       },
       "decision": "retain",
       "evidence": [
         "src/bases/query.ts",
         "tests/bases-query.test.ts",
-        "tests/bases-query-review.test.ts"
-      ]
+        "tests/bases-query-review.test.ts",
+        "docs/reference/bases-mental-model.md",
+        "REA ev_9783c03d2a914d4515990a738fb4bb7497672f9a802eea8c548195e6f596bee8: independent chooser WJ+qJ and display WJ",
+        "crates/zorid-bases/tests/property_relations.rs: manual_group_slots_keep_duplicate_keys_and_first_match_admission"
+      ],
+      "acceptedDecision": "2026-10-22: chooser counts use all matched rows before manual admission/search/sort/global limit; displayed Table groups use only the final rows and omit empty configured slots. Manual slot IDs bind raw config key plus ordinal, independently of typed representative."
     }
   ]
 }

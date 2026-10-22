@@ -206,13 +206,22 @@ fn group_identity_wire_fields_are_camel_case_and_null_only_for_ungrouped() {
         let encoded = serde_json::to_value(&result).unwrap();
         if case.id == "group-search-limit-pipeline" {
             assert!(!result.group_options.is_empty());
-            for option in encoded["groupOptions"].as_array().unwrap() {
-                assert!(option["keyId"]
-                    .as_str()
-                    .unwrap()
-                    .starts_with("base-key-v1:"));
+            let options = encoded["groupOptions"].as_array().unwrap();
+            for (ordinal, option) in options.iter().enumerate() {
+                let id = option["keyId"].as_str().unwrap();
+                if option["listed"] == Value::Bool(true) {
+                    assert!(id.starts_with(&format!("base-key-v2:manual:{ordinal}:")));
+                } else {
+                    assert!(id.starts_with("base-key-v1:"));
+                }
                 assert!(option.get("key_id").is_none());
             }
+            let ids = options
+                .iter()
+                .map(|option| option["keyId"].as_str().unwrap())
+                .collect::<std::collections::HashSet<_>>();
+            assert_eq!(ids.len(), options.len());
+            assert_eq!(encoded["groups"][0]["keyId"], options[1]["keyId"]);
         } else {
             assert_eq!(result.groups.len(), 1);
             assert!(encoded["groups"][0]["key"].is_null());

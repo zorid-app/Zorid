@@ -4,7 +4,7 @@
   "source": "queries.json",
   "approvedChangeSources": {
     "default-natural-order": "current",
-    "typed-group-keys": "proposed",
+    "typed-group-keys": "current",
     "empty-or-composed": "proposed",
     "unsupported-link-metadata": "proposed"
   },
@@ -331,6 +331,17 @@
         "groups": [
           {
             "key": {
+              "type": "number",
+              "value": 2
+            },
+            "keyId": "base-key-v1:{\"type\":\"number\",\"value\":2.0}",
+            "entryIds": [
+              "fixture-0",
+              "fixture-1"
+            ]
+          },
+          {
+            "key": {
               "type": "list",
               "value": [
                 {
@@ -350,26 +361,6 @@
           },
           {
             "key": {
-              "type": "string",
-              "value": "2"
-            },
-            "keyId": "base-key-v1:{\"type\":\"string\",\"value\":\"2\"}",
-            "entryIds": [
-              "fixture-1"
-            ]
-          },
-          {
-            "key": {
-              "type": "number",
-              "value": 2
-            },
-            "keyId": "base-key-v1:{\"type\":\"number\",\"value\":2.0}",
-            "entryIds": [
-              "fixture-0"
-            ]
-          },
-          {
-            "key": {
               "type": "null"
             },
             "keyId": "base-key-v1:{\"type\":\"null\"}",
@@ -379,11 +370,15 @@
           }
         ]
       },
-      "expectationSource": "proposed",
+      "expectationSource": "current",
+      "acceptedDecision": "2026-10-22: retain current loose first-match grouping, superseding the proposed strict structural partition. REA qJ chooses the first typed representative, with numeric-both or typed-tostring group ordering after global sort/limit.",
       "evidence": [
         "src/bases/query.ts",
         "tests/bases-query.test.ts",
-        "tests/bases-query-review.test.ts"
+        "tests/bases-query-review.test.ts",
+        "docs/reference/bases-mental-model.md",
+        "REA ev_9783c03d2a914d4515990a738fb4bb7497672f9a802eea8c548195e6f596bee8: qJ/WJ and jJ",
+        "crates/zorid-bases/tests/property_relations.rs: automatic_grouping_uses_first_match_without_changing_persisted_values"
       ]
     },
     {
@@ -1146,7 +1141,7 @@
             },
             "count": 1,
             "listed": true,
-            "keyId": "base-key-v1:{\"type\":\"string\",\"value\":\"todo\"}"
+            "keyId": "base-key-v2:manual:0:{\"type\":\"string\",\"value\":\"todo\"}"
           },
           {
             "key": {
@@ -1155,7 +1150,7 @@
             },
             "count": 2,
             "listed": true,
-            "keyId": "base-key-v1:{\"type\":\"string\",\"value\":\"done\"}"
+            "keyId": "base-key-v2:manual:1:{\"type\":\"string\",\"value\":\"done\"}"
           },
           {
             "key": {
@@ -1164,7 +1159,7 @@
             },
             "count": 0,
             "listed": true,
-            "keyId": "base-key-v1:{\"type\":\"string\",\"value\":\"empty\"}"
+            "keyId": "base-key-v2:manual:2:{\"type\":\"string\",\"value\":\"empty\"}"
           },
           {
             "key": {
@@ -1175,13 +1170,29 @@
             "listed": false,
             "keyId": "base-key-v1:{\"type\":\"string\",\"value\":\"unlisted\"}"
           }
+        ],
+        "groups": [
+          {
+            "key": {
+              "type": "string",
+              "value": "done"
+            },
+            "keyId": "base-key-v2:manual:1:{\"type\":\"string\",\"value\":\"done\"}",
+            "entryIds": [
+              "fixture-1"
+            ]
+          }
         ]
       },
       "expectationSource": "current",
+      "acceptedDecision": "2026-10-22: chooser counts use all matched rows before manual admission/search/sort/global limit; displayed Table groups use only the final rows and omit empty configured slots. Manual slot IDs bind raw config key plus ordinal, independently of typed representative.",
       "evidence": [
         "src/bases/query.ts",
         "tests/bases-query.test.ts",
-        "tests/bases-query-review.test.ts"
+        "tests/bases-query-review.test.ts",
+        "docs/reference/bases-mental-model.md",
+        "REA ev_9783c03d2a914d4515990a738fb4bb7497672f9a802eea8c548195e6f596bee8: independent chooser WJ+qJ and display WJ",
+        "crates/zorid-bases/tests/property_relations.rs: manual_group_slots_keep_duplicate_keys_and_first_match_admission"
       ]
     }
   ]

@@ -52,3 +52,16 @@ ID set is the only source of accepted `proposed` values; unknown proposal IDs
 fail until separately approved. Regenerate with `--write` only after reviewing
 the source fixture and approval list. Native/WASM use `expected` directly and
 aggregate all expression mismatches in one pass.
+
+The 2026-10-22 grouping approval retains the original `typed-group-keys.current`
+loose first-match expectation, superseding its strict-partition proposal. The
+`group-search-limit-pipeline` oracle also asserts that Table displays only the
+final `done` row while its independent chooser still counts all four matched
+rows, including an empty configured slot and an unlisted value. Configured
+column identities use reviewed literal raw-key-plus-ordinal tokens; they are not
+an equivalence-class encoding. The source cases record the REA evidence.
+
+For scoped query-fixture maintenance, `project-accepted.mjs --queries-only
+--check` checks the reviewed query projection without replacing separately added
+expression oracles. `--queries-only --write` derives only that projection from
+reviewed source literals and performs no evaluator execution.
