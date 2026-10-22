@@ -86,11 +86,13 @@ views:
     sort: [{property: bookCount, direction: DESC}]
     summaries: {bookCount: Sum}
 `;
-export const inlinePrefix = '# Café 🦀\r\n\r\n```base\r\n';
-export const inlineBase = [
+export const inlinePrelude = '# Café 🦀\r\n\r\n';
+export const inlinePrefix = inlinePrelude + '```base\r\n';
+export const inlineNormalized = [
   'filters: file.path == this.file.path', 'views:',
   '  - type: table', '    name: Here', '    order: [file.name]', '',
-].join('\r\n');
+].join('\n');
+export const inlineBase = inlineNormalized.replaceAll('\n', '\r\n');
 export const inlineNote = inlinePrefix + inlineBase + '```\r\nExact trailing body.\r\n';
 export const files = new Map([
   ['Authors/Ada.md', '---\ntype: author\n---\nAda body.\n'],

@@ -11,6 +11,16 @@ the owned profile and synthetic database were cleaned up. No other group or
 full campaign acceptance follows from that run. A fresh matching build/runtime
 grant is required for the next run.
 
+Actual run002 on `9d086a97b9f7fb16c3dc54452c16914ae5918c18` passed groups0–4,
+then stopped because the fenced fixture supplied a body-only span and raw CRLF
+source. The contract requires the complete fence span and CommonMark-normalized
+source. The corrected hand-authored oracle is checked against the actual UI
+`inlineBaseRequest` producer before the core read; forged source, actor and span
+rejections remain. Partial report and failure screenshot are in
+`/private/tmp/zorid-bases-browser-actual-20261022-002/`. Worker GET200, exact WASM
+GETs and clean owned-resource/database teardown were observed. Groups5–8 remain
+unaccepted until a fresh actual run.
+
 The fixture uses the normal `BrowserCoreRuntime`, admitted client,
 `defaultBrowserAdapter.documentSemantics`, unchanged product Worker, generated
 Rust/WASM and actual IndexedDB. Notes, folders, attachments and edits go through

@@ -4,7 +4,8 @@ import {defaultBrowserAdapter} from '../../src/platform/browser-default.ts';
 import {catchUpDocumentIndex} from '../../src/core/document-semantics.ts';
 import {setProperty, readProperties} from '../../src/core/properties.ts';
 import {projectSharedBaseResult, sharedBaseWitness} from '../../src/bases/shared-query.ts';
-import {files, alias, body, pioneer, settings, inlinePrefix, inlineBase, clockMs, timezone, groupNames} from './cases.mjs';
+import {inlineBaseRequest} from '../../src/bases/inline-base.ts';
+import {files, alias, body, pioneer, settings, inlinePrelude, inlinePrefix, inlineBase, inlineNormalized, inlineNote, clockMs, timezone, groupNames} from './cases.mjs';
 
 // Product Worker, admitted client, generated WASM and IndexedDB only. No direct
 // WASM evaluator, synthetic generation, replacement Worker, private storage write
@@ -183,13 +184,20 @@ try {
   });
   await group(5, async () => {
     const entry = await metadata(host, 'Inline host.md');
-    const inlineSource = {source: inlineBase, startByte: bytes(inlinePrefix), endByte: bytes(inlinePrefix) + bytes(inlineBase)};
+    // The public contract selects the entire physical fence, while its source
+    // is normalized YAML. Compare the hand-authored oracle with the actual
+    // UI source producer before passing that independent oracle to the core.
+    const inlineSource = {source: inlineNormalized, startByte: bytes(inlinePrelude), endByte: bytes(inlinePrefix) + bytes(inlineBase) + 3};
+    const produced = inlineBaseRequest(inlineNote, inlinePrelude.length, inlinePrefix.length + inlineBase.length + 3);
+    assert(produced, 'Product inline source producer rejected the authored fence');
+    equal({source: produced.source, startByte: bytes(inlineNote.slice(0, produced.from)), endByte: bytes(inlineNote.slice(0, produced.to))}, inlineSource, 'Product producer must match full-fence/normalized-source oracle');
+    equal(new TextDecoder().decode(new TextEncoder().encode(inlineNote).slice(inlineSource.startByte, inlineSource.endByte)), '```base\r\n' + inlineBase + '```', 'Independent UTF-8 full-fence selection');
     const options = {clockMs, timezone, currentEntryId: entry.id, inlineSource};
     const read = await afterRawEdit.base({id: entry.id, viewName: 'Here', options});
     equal(read.value.result.rows.map(row => row.path), ['Inline host.md'], 'Saved fenced this context');
     const rejected = [];
     rejected.push(await rejects(() => afterRawEdit.base({id: entry.id, options: {...options, currentEntryId: ada.id}}), 'index_inline_source_mismatch'));
-    rejected.push(await rejects(() => afterRawEdit.base({id: entry.id, options: {...options, inlineSource: {...inlineSource, source: inlineBase + '# forged\r\n'}}}), 'index_inline_source_mismatch'));
+    rejected.push(await rejects(() => afterRawEdit.base({id: entry.id, options: {...options, inlineSource: {...inlineSource, source: inlineNormalized + '# forged\n'}}}), 'index_inline_source_mismatch'));
     rejected.push(await rejects(() => afterRawEdit.base({id: entry.id, options: {...options, inlineSource: {...inlineSource, startByte: inlineSource.startByte + 1}}}), 'index_inline_source_mismatch'));
     return {read, inlineSource, rejected};
   });
