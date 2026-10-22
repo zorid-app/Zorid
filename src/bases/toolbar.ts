@@ -3,12 +3,16 @@ import type { BaseValue, BaseViewConfig, BaseViewPatch } from './document.ts';
 import type { BaseQueryResult } from './query.ts';
 import { normalizeBaseProperty } from './query.ts';
 import { icon } from '../ui/icons.ts';
-import { BASE_FILE_FILTER_OPERATORS, baseFileFilterOperator, validateToolbarPatch } from './toolbar-config.ts';
+import { filterConditionValues, validateToolbarPatch } from './toolbar-config.ts';
 import type { BaseFilterCondition, BaseFilterOperator } from './toolbar-config.ts';
 import { createBaseFilterDraft, newBaseFilterCondition, newBaseFilterGroup, readBaseFilterDraft, updateBaseFilterCondition, updateBaseFilterExpression, captureBaseFilterAcknowledgement, baseFilterCount } from './toolbar-filter.ts';
 import type { BaseFilterNode, BaseFilterDraftNode, BaseFilterDraftCondition, BaseFilterConjunction } from './toolbar-filter.ts';
-import { createBaseFilterOperand } from './toolbar-filter-operands.ts';
-import type { BaseFilterOperand, BaseFilterOperandsSnapshot } from './toolbar-filter-operands.ts';
+import type { BaseFilterOperandsSnapshot } from './toolbar-filter-operands.ts';
+import {baseFilterOperators,baseFilterProperty,baseFilterMethod} from './toolbar-filter-types.ts';
+import type {BaseFilterPropertyDescriptor,BaseFilterLiteral,BaseFilterOperatorDescriptor} from './toolbar-filter-types.ts';
+export type {BaseFilterPropertyDescriptor} from './toolbar-filter-types.ts';
+import {createBaseFilterValues} from './toolbar-filter-values.ts';
+import type {BaseFilterValues} from './toolbar-filter-values.ts';
 export type { BaseFilterOperandsSnapshot } from './toolbar-filter-operands.ts';
 import { enhanceBaseFormulaEditor } from './toolbar-formula-editor.ts';
 import { createBaseCombobox } from './toolbar-combobox.ts';
@@ -23,6 +27,7 @@ export interface BaseToolbarState {
   root?: Readonly<Record<string, BaseValue>>;
   search?: string;
   propertyType?(property: string): string | undefined;
+  filterProperty?(property: string): BaseFilterPropertyDescriptor | undefined;
   functionNames?: readonly string[];
   methodNames?: readonly string[];
   readOnly: boolean;
@@ -517,7 +522,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       let savedViewFilter = JSON.stringify(initialView), savedRootFilter = JSON.stringify(initialRoot);
       let operandSnapshot:BaseFilterOperandsSnapshot|undefined;
       try{operandSnapshot=options.filterOperands?.();}catch(failure){report(failure);}
-      const operandEditors=new Set<BaseFilterOperand>();
+      const operandEditors=new Set<BaseFilterValues>();
       disposers.push(()=>{for(const editor of operandEditors)editor.destroy();operandEditors.clear();});
       type Section={section:HTMLElement;get():FilterNode|undefined;acknowledge():()=>void};
       let rootEditor:Section|undefined,viewEditor:Section|undefined;
@@ -548,7 +553,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         const flair=doc.createElement('span');flair.className='bases-filter-count';
         const count=(source:FilterNode|undefined)=>{const n=baseFilterCount(source);flair.textContent=String(n);flair.hidden=n===0;};count(initial);disclosure.append(flair);section.append(disclosure,content);
         const alive=()=>!destroyed&&panel===own&&section.isConnected;
-        const localEditors=new Set<BaseFilterOperand>(),validators=new Set<()=>void>(),rendered=new WeakMap<BaseFilterDraftNode,HTMLElement>();
+        const localEditors=new Set<BaseFilterValues>(),validators=new Set<()=>void>(),rendered=new WeakMap<BaseFilterDraftNode,HTMLElement>();
         let tree:HTMLElement,renderBudget=1000;
         const release=()=>{for(const editor of localEditors){editor.destroy();operandEditors.delete(editor);}localEditors.clear();validators.clear();syncDraft();};
         const focusNode=(value:BaseFilterDraftNode)=>{const row=rendered.get(value);if(row)focusVisible(row,'Filter property');};
@@ -567,42 +572,64 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
               const choices=[['file.file',opening.label('file.file')==='file file'?'file':opening.label('file.file')] as const,...propertyOptions.filter(([key])=>key!=='file.file')];
               if(!choices.some(([key])=>key===fields.property))choices.unshift([fields.property,fields.property]);
               const property=select(doc,'Filter property',choices,fields.property);
-              const method=baseFileFilterOperator(fields.operator);
-              const operators=fields.property==='file.file'?BASE_FILE_FILTER_OPERATORS.map(item=>[item.id,item.label] as const):[['eq','Is'],['neq','Is not'],['contains','Contains'],['gt','Greater than'],['lt','Less than'],['gte','Greater than or equal'],['lte','Less than or equal'],['unset','Is not set'],['set','Is set']] as const;
-              const operator=select(doc,'Condition',operators,fields.operator);row.append(property,operator);
-              let input:HTMLInputElement;
-              const validate=()=>{
-                if(!input)return;
-                try{readBaseFilterDraft(value);input.setCustomValidity('');}catch(failure){input.setCustomValidity(failure instanceof Error?failure.message:String(failure));}
-              };
-              const publish=(next:BaseFilterCondition)=>{updateBaseFilterCondition(value,next);validate();semanticChanged();};
-              if(method){
-                const host=doc.createElement('div');host.className='bases-filter-operand-host';row.append(host);
-                const editor=createBaseFilterOperand(doc,host,{kind:method.kind,values:fields.values??[fields.text],snapshot:operandSnapshot,alive:live,
-                  onChange(values){publish({...value.fields!,text:values[0]??'',values});},
-                  onDraftChange(){syncDraft();input.setCustomValidity(editor.hasDraft()?'Press Enter to add the tag, or clear the unfinished tag.':'');semanticChanged();},
-                });
-                localEditors.add(editor);operandEditors.add(editor);input=host.querySelector('input')!;
-              }else{
-                const type=select(doc,'Value type',[['text','Text'],['number','Number'],['boolean','Checkbox']],fields.type);
-                if(options.immediate)type.hidden=true;
-                input=doc.createElement('input');input.setAttribute('aria-label','Filter value');input.value=fields.text;if(fields.type==='number')input.inputMode='decimal';
-                const edit=()=>{if(!live())return;input.disabled=type.disabled=operator.value==='unset'||operator.value==='set';publish({...value.fields!,text:input.value,type:type.value as BaseFilterCondition['type'],values:undefined});};
-                type.addEventListener('change',edit);input.addEventListener('input',edit);input.disabled=type.disabled=fields.operator==='unset'||fields.operator==='set';row.append(type,input);
+              const descriptor=baseFilterProperty(fields.property,opening.filterProperty?.(fields.property),opening.propertyType?.(fields.property));
+              const catalog=baseFilterOperators(descriptor,fields.operator);
+              let selected=catalog.find(item=>item.id===fields.operator);
+              // A recognized AST can still require a different property family.
+              // Keep such saved source editable verbatim, never coerce its data.
+              if(!selected){
+                const expression=doc.createElement('textarea');expression.setAttribute('aria-label','Filter expression');expression.value=value.source??'';expression.rows=2;
+                expression.addEventListener('input',()=>{if(live()){updateBaseFilterExpression(value,expression.value);semanticChanged();}});row.append(expression,removeButton);return row;
               }
-              validators.add(validate);
+              let initialValues:readonly BaseFilterLiteral[]|undefined;
+              try{initialValues=filterConditionValues(fields);}catch{/* incomplete local draft */}
+              if(value.source===undefined&&fields.text===''&&fields.arguments===undefined&&!Object.hasOwn(fields,'operand'))initialValues=undefined;
+              // Unknown property category stays unknown. An already-authored
+              // literal can still retain its own numeric/Boolean/list editor.
+              if(descriptor.kind==='unknown'&&selected.comparison&&initialValues?.length===1){
+                const literal=initialValues[0];selected={...selected,operand:typeof literal==='number'?'number':typeof literal==='boolean'?'boolean':Array.isArray(literal)?'list':selected.operand};
+              }
+              const operator=select(doc,'Condition',catalog.map(item=>[item.id,item.label] as const),fields.operator);row.append(property,operator);
+              const host=doc.createElement('div');host.className='bases-filter-operand-host';row.append(host);
+              let editor:BaseFilterValues;
+              const primary=()=>host.querySelector<HTMLInputElement|HTMLTextAreaElement>('input,textarea');
+              const validate=()=>{
+                const input=primary();if(!input)return;
+                try{readBaseFilterDraft(value);input.setCustomValidity(editor?.hasDraft()?'Add or clear the pending item.':'');}catch(failure){input.setCustomValidity(failure instanceof Error?failure.message:String(failure));}
+              };
+              const publish=(next:BaseFilterCondition,issue?:{incomplete?:boolean;error?:string})=>{updateBaseFilterCondition(value,next,issue);validate();semanticChanged();};
+              const fromValues=(next:BaseFilterCondition,values:readonly BaseFilterLiteral[]|undefined):BaseFilterCondition=>{
+                const clean={...next};delete clean.values;delete clean.arguments;delete clean.operand;
+                const method=baseFilterMethod(clean.operator);
+                if(method)clean.arguments=values;
+                else if(values?.length===1)clean.operand=values[0];
+                return clean;
+              };
+              const missing=(item:BaseFilterOperatorDescriptor,values:readonly BaseFilterLiteral[]|undefined)=>item.arity!=='none'&&(values===undefined||values.length===0||(!(item.operand==='tokens'||((descriptor.kind==='list'||descriptor.kind==='tagList')&&item.method==='contains'))&&values.some(part=>typeof part==='string'&&part==='')));
+              editor=createBaseFilterValues(doc,host,{operator:selected,property:descriptor,values:initialValues,snapshot:operandSnapshot,alive:live,
+                onChange(){const current=editor.read();publish(fromValues(value.fields!,current.values),{error:current.error,incomplete:missing(selected!,current.values)});},
+                onDraftChange(){syncDraft();validate();semanticChanged();},
+              });
+              localEditors.add(editor);operandEditors.add(editor);validators.add(validate);
+              const blocked=()=>{syncDraft();if(own.innerDraft){error.textContent='Add or clear the pending item before changing its condition.';return true;}return !canRestructure();};
               property.addEventListener('change',()=>{
                 if(!live())return;
-                if(own.innerDraft){property.value=value.fields!.property;error.textContent='Press Enter to add the tag, or clear the unfinished tag before changing its property.';return;}
-                const configured=opening.propertyType?.(property.value),example=result.rows.map(row=>row.values[property.value]).find(item=>item&&item.type!=='null');
-                const kind=configured??example?.type,type=kind==='number'||kind==='rating'?'number':kind==='boolean'||kind==='checkbox'?'boolean':'text';
-                publish({property:property.value,operator:property.value==='file.file'?'hasLink':'eq',text:'',type,values:property.value==='file.file'?[]:undefined});render();focusNode(value);
+                if(blocked()){property.value=value.fields!.property;return;}
+                const category=baseFilterProperty(property.value,opening.filterProperty?.(property.value),opening.propertyType?.(property.value));
+                const next=baseFilterOperators(category)[0];
+                publish({property:property.value,operator:next.id,text:'',type:'text'},{incomplete:next.arity!=='none'});render();focusNode(value);
               });
               operator.addEventListener('change',()=>{
                 if(!live())return;
-                if(own.innerDraft){operator.value=value.fields!.operator;error.textContent='Press Enter to add the tag, or clear the unfinished tag before changing its condition.';return;}
-                const next=operator.value as BaseFilterOperator;
-                publish({...value.fields!,operator:next});render();focusNode(value);
+                if(blocked()){operator.value=value.fields!.operator;return;}
+                const next=catalog.find(item=>item.id===operator.value);
+                if(!next){operator.value=value.fields!.operator;return;}
+                const current=editor.read();
+                // Reuse data only for the same operand family/arity; changing
+                // exact-list versus variadic membership never flattens arrays.
+                const compatible=next.operand===selected!.operand&&next.arity===selected!.arity;
+                const values=next.arity==='none'?[]:compatible?current.values:undefined;
+                publish(fromValues({...value.fields!,operator:next.id,text:''},values),{incomplete:!(compatible&&value.source!==undefined)&&missing(next,values)});render();focusNode(value);
               });
               const advanced=button(doc,'',()=>{if(!live()||!canRestructure())return;value.advanced=true;render();const target=rendered.get(value);focusVisible(target??tree,'Filter expression');},'Edit expression');
               advanced.className='bases-toolbar-menu-next';advanced.append(icon('code',16,doc));row.append(advanced,removeButton);

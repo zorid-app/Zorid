@@ -1,5 +1,6 @@
-import { baseFileFilterOperator, buildFilterCondition, decodeFilterCondition } from './toolbar-config.ts';
+import { baseFileFilterOperator, serializeFilterCondition, decodeFilterCondition } from './toolbar-config.ts';
 import type { BaseFilterCondition } from './toolbar-config.ts';
+import {baseFilterMethod} from './toolbar-filter-types.ts';
 
 /** Persisted filter syntax is never optimized using a client evaluator. */
 export type BaseFilterNode = string | {and:BaseFilterNode[]} | {or:BaseFilterNode[]} | {not:BaseFilterNode[]};
@@ -39,15 +40,18 @@ export function createBaseFilterDraft(source:BaseFilterNode|undefined):BaseFilte
   const node=draft(source);
   return node.kind==='group'?node:{kind:'group',conjunction:'and',children:[node],persistedEmpty:false,implicit:true};
 }
-export function updateBaseFilterCondition(node:BaseFilterDraftCondition,fields:BaseFilterCondition):void {
-  node.fields={...fields,...(fields.values?{values:[...fields.values]}:{})};node.advanced=false;node.problem=undefined;
-  const method=baseFileFilterOperator(fields.operator),values=fields.values??[fields.text];
-  // Rendering never calls this mutation. Authored empty literals therefore
-  // roundtrip untouched; an actively cleared operand remains an incomplete edit.
-  const missing=method?values.length===0||values.some(value=>value.length===0)
-    :!['set','unset'].includes(fields.operator)&&fields.text.length===0;
+export function updateBaseFilterCondition(node:BaseFilterDraftCondition,fields:BaseFilterCondition,issue?:{incomplete?:boolean;error?:string}):void {
+  node.fields={...fields,...(fields.values?{values:[...fields.values]}:{}),...(fields.arguments?{arguments:structuredClone(fields.arguments)}:{})};node.advanced=false;node.problem=issue?.error;
+  if(issue?.error)return;
+  if(issue?.incomplete){node.source=undefined;return;}
+  const method=baseFilterMethod(fields.operator),file=baseFileFilterOperator(fields.operator),values=fields.values??[fields.text];
+  // Rendering never mutates authored literals. A control must explicitly report
+  // an incomplete edit; zero-argument methods and explicit null/list are complete.
+  const typed=Object.hasOwn(fields,'operand')||fields.arguments!==undefined;
+  const missing=!typed&&method?.arity!=='none'&&(file?values.length===0||values.some(value=>value.length===0)
+    :!['set','unset'].includes(fields.operator)&&fields.text.length===0);
   if(missing){node.source=undefined;return;}
-  try{node.source=buildFilterCondition(fields.property,fields.operator,method?values:fields.text,fields.type);}
+  try{node.source=serializeFilterCondition(fields);}
   catch(error){node.problem=error instanceof Error?error.message:String(error);}
 }
 export function updateBaseFilterExpression(node:BaseFilterDraftCondition,source:string):void {

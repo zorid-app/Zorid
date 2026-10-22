@@ -5,9 +5,10 @@ import { normalizeBaseProperty } from './query.ts';
 import type { BaseQueryResult } from './query.ts';
 
 export type BaseToolbarPatch = BaseViewPatch;
-export type BaseFileFilterOperator = 'hasLink' | 'notHasLink' | 'inFolder' | 'notInFolder' | 'hasTag' | 'notHasTag' | 'hasProperty' | 'notHasProperty';
-export type BaseFilterOperator = 'eq' | 'neq' | 'contains' | 'gt' | 'lt' | 'gte' | 'lte' | 'unset' | 'set' | BaseFileFilterOperator;
-export type BaseFilterValueType = 'text' | 'number' | 'boolean';
+import { baseFilterMethod } from './toolbar-filter-types.ts';
+import type { BaseFileFilterOperator, BaseFilterOperator, BaseFilterLiteral } from './toolbar-filter-types.ts';
+export type { BaseFileFilterOperator, BaseFilterOperator, BaseFilterLiteral } from './toolbar-filter-types.ts';
+export type BaseFilterValueType = 'text' | 'number' | 'boolean' | 'date' | 'datetime' | 'list' | 'null';
 export const BASE_FILE_FILTER_OPERATORS = [
   {id:'hasLink',label:'links to',method:'hasLink',kind:'file',inverse:false},
   {id:'inFolder',label:'in folder',method:'inFolder',kind:'folder',inverse:false},
@@ -152,72 +153,143 @@ export function propertyExpression(property: string): string {
   return `${normalized.slice(0, split)}[${JSON.stringify(normalized.slice(split + 1))}]`;
 }
 
-/** Construct only supported expression syntax, never interpolate user text as code. */
-export function buildFilterCondition(property: string, operator: BaseFilterOperator, value: string | readonly string[], valueType: BaseFilterValueType): string {
-  const expression = propertyExpression(property);
-  const method=baseFileFilterOperator(operator);
-  if(method){
-    if(propertyId(property)!=='file.file')return fail('File operators require the file property');
-    const values=typeof value==='string'?[value]:value;
-    if(!Array.isArray(values)||!values.length||values.some(item=>typeof item!=='string')||(method.method!=='hasTag'&&values.length!==1))return fail('Enter the supported file filter values');
-    return `${method.inverse?'!':''}file.${method.method}(${values.map(item=>JSON.stringify(item)).join(', ')})`;
-  }
-  if (!['eq', 'neq', 'contains', 'gt', 'lt', 'gte', 'lte', 'unset', 'set'].includes(operator)) return fail('Unknown filter operator');
-  if (!['text', 'number', 'boolean'].includes(valueType) || typeof value !== 'string') return fail('Unknown filter value type');
-  if (operator === 'unset' || operator === 'set') return `${expression} ${operator === 'unset' ? '==' : '!='} null`;
-  let literal: string | number | boolean = value;
-  if (valueType === 'number') {
-    if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value) || !Number.isFinite(Number(value))) return fail('Enter a finite decimal number');
-    literal = Number(value);
-  } else if (valueType === 'boolean') {
-    if (value !== 'true' && value !== 'false') return fail('Boolean values must be true or false');
-    literal = value === 'true';
-  }
-  const encoded = JSON.stringify(literal);
-  const comparisons:Partial<Record<BaseFilterOperator,string>>={eq:'==',neq:'!=',gt:'>',lt:'<',gte:'>=',lte:'<='};
-  return operator === 'contains' ? `${expression}.contains(${encoded})` : `${expression} ${comparisons[operator]} ${encoded}`;
-}
-
 export interface BaseFilterCondition {
-  property: string;
-  operator: BaseFilterOperator;
-  text: string;
-  type: BaseFilterValueType;
-  /** File.hasTag accepts multiple literal tag arguments; other values remain scalar. */
-  values?: readonly string[];
+  property:string;
+  operator:BaseFilterOperator;
+  text:string;
+  type:BaseFilterValueType;
+  /** Legacy File operands remain readable for existing hosts. */
+  values?:readonly string[];
+  /** One comparison RHS, including one complete list literal. */
+  operand?:BaseFilterLiteral;
+  /** Exact method arguments: one list argument differs from variadic members. */
+  arguments?:readonly BaseFilterLiteral[];
 }
-/** Decode ordinary dotted/bare/bracketed syntax without evaluating expressions. */
-export function decodeFilterCondition(source: string): BaseFilterCondition | undefined {
-  try {
-    let expression = parseBaseExpression(source);
-    const property = (node: ReturnType<typeof parseBaseExpression>): string | undefined => {
-      if (node.kind === 'identifier') return normalizeBaseProperty(node.name);
-      if (node.kind === 'member' && node.object.kind === 'identifier' && ['note','file','formula'].includes(node.object.name) && node.key.kind === 'literal' && node.key.value.type === 'string') return `${node.object.name}.${node.key.value.value}`;
+const comparisons:Partial<Record<BaseFilterOperator,string>>={eq:'==',neq:'!=',lt:'<',lte:'<=',gt:'>',gte:'>='};
+
+/** Only literal data enters source; nested members retain primitive types. */
+export function encodeFilterLiteral(value:BaseFilterLiteral):string {
+  const active=new Set<readonly BaseFilterLiteral[]>(),budget={remaining:10000};
+  const encode=(item:BaseFilterLiteral,depth=0):string=>{
+    if(--budget.remaining<0||depth>64)return fail('Filter literal exceeds its size or nesting limit');
+    if(item===null)return 'null';
+    if(typeof item==='string')return JSON.stringify(item);
+    if(typeof item==='boolean')return String(item);
+    if(typeof item==='number'){if(!Number.isFinite(item))return fail('Enter a finite decimal number');return Object.is(item,-0)?'-0':String(item);}
+    if(!Array.isArray(item)||active.has(item))return fail('Only finite primitive and list filter literals are supported');
+    active.add(item);
+    try{
+      if(Object.getOwnPropertySymbols(item).length||Object.getOwnPropertyNames(item).some(key=>key!=='length'&&(!/^(?:0|[1-9]\d*)$/.test(key)||Number(key)>=item.length)))return fail('Filter lists contain only indexed values');
+      const values:string[]=[];
+      for(let index=0;index<item.length;index++){const property=Object.getOwnPropertyDescriptor(item,String(index));if(!property||!('value'in property))return fail('Filter lists cannot be sparse or contain accessors');values.push(encode(property.value as BaseFilterLiteral,depth+1));}
+      return `[${values.join(', ')}]`;
+    }finally{active.delete(item);}
+  };return encode(value);
+}
+function legacyLiteral(value:string,type:BaseFilterValueType):BaseFilterLiteral {
+  if(type==='text'||type==='date'||type==='datetime')return value;
+  if(type==='number'){
+    if(!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)||!Number.isFinite(Number(value)))return fail('Enter a finite decimal number');
+    return Number(value);
+  }
+  if(type==='boolean'){if(value!=='true'&&value!=='false')return fail('Boolean values must be true or false');return value==='true';}
+  if(type==='null'){if(value!==''&&value!=='null')return fail('Enter null');return null;}
+  if(type==='list'){
+    let parsed:unknown;try{parsed=JSON.parse(value);}catch{return fail('Enter a list literal');}
+    if(!Array.isArray(parsed))return fail('Enter a list literal');encodeFilterLiteral(parsed as BaseFilterLiteral[]);return parsed as BaseFilterLiteral[];
+  }
+  return fail('Unknown filter value type');
+}
+/** Values for the operand control, never inferred by evaluating an expression. */
+export function filterConditionValues(condition:BaseFilterCondition):readonly BaseFilterLiteral[] {
+  if(condition.operator==='unset'||condition.operator==='set')return [];
+  const method=baseFilterMethod(condition.operator);
+  if(method){
+    if(condition.arguments!==undefined)return condition.arguments;
+    if(method.arity==='none')return [];
+    if(condition.values!==undefined)return condition.values;
+    return [legacyLiteral(condition.text,condition.type)];
+  }
+  if(Object.hasOwn(condition,'operand')){if(condition.operand===undefined)return fail('Enter a filter value');return [condition.operand];}
+  return [legacyLiteral(condition.text,condition.type)];
+}
+/** Construct supported syntax without converting user text to code or dates. */
+export function serializeFilterCondition(condition:BaseFilterCondition):string {
+  const property=propertyId(condition.property),receiver=property==='file.file'?'file':propertyExpression(property);
+  if(condition.operator==='unset'||condition.operator==='set')return `${receiver} ${condition.operator==='unset'?'==':'!='} null`;
+  const method=baseFilterMethod(condition.operator),values=filterConditionValues(condition);
+  // Validate the outer argument container before indexing or invoking array methods.
+  encodeFilterLiteral(values);
+  if(method){
+    const file=baseFileFilterOperator(condition.operator);
+    if(file&&property!=='file.file')return fail('File operators require the file property');
+    if(property==='file.file'&&!file)return fail('This method requires a supported non-File property');
+    if(method.arity==='none'?values.length!==0:method.arity==='one'?values.length!==1:values.length===0)return fail('Enter the supported file filter values or method arguments');
+    if(file&&values.some(value=>typeof value!=='string'))return fail('File filter operands must be literal strings');
+    return `${method.inverse?'!':''}${receiver}.${method.method}(${values.map(value=>encodeFilterLiteral(value)).join(', ')})`;
+  }
+  const comparison=comparisons[condition.operator];
+  if(!comparison||values.length!==1)return fail('Unknown filter operator or operand count');
+  if(property==='file.file')return fail('File comparisons remain in the advanced editor');
+  return `${receiver} ${comparison} ${encodeFilterLiteral(values[0])}`;
+}
+/** Backward-compatible construction entry point; typed controls use the model. */
+export function buildFilterCondition(property:string,operator:BaseFilterOperator,value:string|readonly BaseFilterLiteral[],valueType:BaseFilterValueType):string {
+  if(!['text','number','boolean','date','datetime','list','null'].includes(valueType))return fail('Unknown filter value type');
+  const method=baseFilterMethod(operator);
+  const condition:BaseFilterCondition={property,operator,text:typeof value==='string'?value:'',type:valueType};
+  if(method){
+    condition.arguments=method.arity==='none'?[]:Array.isArray(value)?(method.arity==='one'&&valueType==='list'?[value]:value):[legacyLiteral(value as string,valueType)];
+  }else if(operator!=='set'&&operator!=='unset')condition.operand=Array.isArray(value)?value:legacyLiteral(value as string,valueType);
+  return serializeFilterCondition(condition);
+}
+/** Decode only exact supported literal AST shapes; arbitrary source stays advanced. */
+export function decodeFilterCondition(source:string):BaseFilterCondition|undefined {
+  try{
+    let expression=parseBaseExpression(source);
+    const property=(node:ReturnType<typeof parseBaseExpression>):string|undefined=>{
+      if(node.kind==='identifier')return normalizeBaseProperty(node.name);
+      if(node.kind==='member'&&node.object.kind==='identifier'&&['note','file','formula'].includes(node.object.name)&&node.key.kind==='literal'&&node.key.value.type==='string')return `${node.object.name}.${node.key.value.value}`;
       return undefined;
     };
-    const inverse=expression.kind==='unary'&&expression.operator==='!';
-    if(inverse&&expression.kind==='unary')expression=expression.operand;
-    if(expression.kind==='call'&&expression.callee.kind==='member'&&expression.callee.key.kind==='literal'&&expression.callee.key.value.type==='string'){
-      const name=expression.callee.key.value.value;
-      const method=BASE_FILE_FILTER_OPERATORS.find(item=>item.method===name&&item.inverse===inverse);
-      if(method&&property(expression.callee.object)==='file.file'&&expression.args.length>0&&(method.method==='hasTag'||expression.args.length===1)&&expression.args.every(arg=>arg.kind==='literal'&&arg.value.type==='string')){
-        const values=expression.args.map(arg=>arg.kind==='literal'&&arg.value.type==='string'?arg.value.value:'');
-        return {property:'file.file',operator:method.id,text:values[0],type:'text',values};
+    let remaining=10000;
+    const literal=(node:ReturnType<typeof parseBaseExpression>,depth=0):BaseFilterLiteral=>{
+      if(--remaining<0||depth>64)throw Error('Literal limit');
+      if(node.kind==='literal'){
+        const value=node.value;
+        if(value.type==='null')return null;
+        if(value.type==='string'||value.type==='boolean')return value.value;
+        if(value.type==='number'&&Number.isFinite(value.value))return value.value;
       }
+      if(node.kind==='unary'&&node.operator==='-'&&node.operand.kind==='literal'&&node.operand.value.type==='number'&&Number.isFinite(node.operand.value.value))return -node.operand.value.value;
+      if(node.kind==='list')return node.items.map(item=>literal(item,depth+1));
+      throw Error('Unsupported literal');
+    };
+    const scalar=(target:string,operator:BaseFilterOperator,value:BaseFilterLiteral):BaseFilterCondition=>{
+      if(value===null&&(operator==='eq'||operator==='neq'))return {property:target,operator:operator==='eq'?'unset':'set',text:'',type:'text'};
+      if(Array.isArray(value))return {property:target,operator,text:'',type:'list',operand:value};
+      return {property:target,operator,text:value===null?'null':typeof value==='number'&&Object.is(value,-0)?'-0':String(value),type:value===null?'null':typeof value==='number'?'number':typeof value==='boolean'?'boolean':'text'};
+    };
+    const inverse=expression.kind==='unary'&&expression.operator==='!';if(inverse&&expression.kind==='unary')expression=expression.operand;
+    if(expression.kind==='call'&&expression.callee.kind==='member'&&expression.callee.key.kind==='literal'&&expression.callee.key.value.type==='string'){
+      const target=property(expression.callee.object),name=expression.callee.key.value.value;
+      if(!target)return undefined;
+      const methodIds:BaseFilterOperator[]=['startsWith','notStartsWith','endsWith','notEndsWith','isEmpty','isNotEmpty','contains','notContains','containsAny','notContainsAny','containsAll','notContainsAll','linksTo','notLinksTo','matches','notMatches',...BASE_FILE_FILTER_OPERATORS.map(item=>item.id)];
+      const operator=methodIds.find(id=>{const item=baseFilterMethod(id);return item?.method===name&&!!item.inverse===inverse;});
+      if(!operator)return undefined;
+      const method=baseFilterMethod(operator)!;
+      if(method.arity==='none'?expression.args.length!==0:method.arity==='one'?expression.args.length!==1:expression.args.length===0)return undefined;
+      const args=expression.args.map(item=>literal(item));
+      const file=baseFileFilterOperator(operator);
+      if(file){if(target!=='file.file'||args.some(value=>typeof value!=='string'))return undefined;const values=args as string[];return {property:target,operator,text:values[0]??'',type:'text',values};}
+      if(target==='file.file')return undefined;
+      if(method.arity==='none')return {property:target,operator,text:'',type:'text'};
+      if(args.length===1&&!Array.isArray(args[0]))return scalar(target,operator,args[0]);
+      return {property:target,operator,text:'',type:'list',arguments:args};
     }
-    if(inverse)return undefined;
-    let target: string | undefined, operator: BaseFilterOperator | undefined, literal: ReturnType<typeof parseBaseExpression> | undefined;
-    if (expression.kind === 'binary') {
-      target = property(expression.left); operator = ({'==':'eq','!=':'neq','>':'gt','<':'lt','>=':'gte','<=':'lte'} as Record<string,BaseFilterOperator>)[expression.operator]; literal = expression.right;
-    } else if (expression.kind === 'call' && expression.callee.kind === 'member' && expression.callee.key.kind === 'literal' && expression.callee.key.value.type === 'string' && expression.callee.key.value.value === 'contains' && expression.args.length === 1) {
-      target = property(expression.callee.object); operator = 'contains'; literal = expression.args[0];
-    }
-    if (!target || !operator || !literal || target==='file.file') return undefined;
-    if (literal.kind === 'unary' && literal.operator === '-' && literal.operand.kind === 'literal' && literal.operand.value.type === 'number') literal = {kind:'literal',value:{type:'number',value:-literal.operand.value.value}};
-    if (literal.kind !== 'literal') return undefined;
-    const value = literal.value;
-    if (value.type === 'null' && (operator === 'eq' || operator === 'neq')) return {property:target,operator:operator === 'eq' ? 'unset' : 'set',text:'',type:'text'};
-    if (value.type !== 'string' && value.type !== 'number' && value.type !== 'boolean') return undefined;
-    return {property:target,operator,text:String(value.value),type:value.type === 'string' ? 'text' : value.type};
-  } catch { return undefined; }
+    if(inverse||expression.kind!=='binary')return undefined;
+    const target=property(expression.left),operator=({'==':'eq','!=':'neq','<':'lt','<=':'lte','>':'gt','>=':'gte'} as Record<string,BaseFilterOperator>)[expression.operator];
+    if(!target||target==='file.file'||!operator)return undefined;
+    return scalar(target,operator,literal(expression.right));
+  }catch{return undefined;}
 }

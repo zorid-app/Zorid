@@ -63,8 +63,8 @@ test('view configuration automatically changes only the selected view layout/nam
 });
 
 test('typed view filter changes actual rows while retaining the base-wide filter and note bytes',async()=>{
- const f=await fixture();try{
-  f.click('Filter');f.click('Add filter');f.change('Filter property','note.score');f.change('Condition','gt');f.change('Filter value','1','input');f.change('Value type','number');
+ const f=await fixture({files:{'Properties.yaml':'properties:\n  score: {type: number}\n'}});try{
+  f.click('Filter');f.click('Add filter');f.change('Filter property','note.score');f.change('Condition','gt');f.change('Filter value','1','input');
   assert.equal(f.session.state.result!.rows.length,3);assert.equal(await f.adapter.read('Work.base'),source);
   await f.applied();assert.deepEqual(f.paths(),['Tasks/Alpha.md','Tasks/Gamma.md']);
   const saved=await f.disk();assert.equal(saved.getRoot('filters'),BaseDocument.parse(source).getRoot('filters'));assert.deepEqual(saved.views[0].filters,{and:['note["score"] > 1']});

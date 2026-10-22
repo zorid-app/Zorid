@@ -175,3 +175,10 @@
 .bases-filter-actions > button { border: 0; box-shadow: none; background: transparent; color: var(--text-muted); padding: 4px; }
 .bases-filter-actions > button:hover { color: var(--text-normal); }
 .bases-filter-actions > button::before { content: '+'; padding-inline-end: 6px; font-size: 18px; }
+/* Typed filter operands keep Boolean controls compact and literal chips readable. */
+.bases-filter-values { flex: 1 1 130px; }
+.bases-filter-values input[type="checkbox"] { flex: none; min-width: 0; width: var(--checkbox-size,16px); margin-inline: 4px; }
+.bases-filter-values > textarea[readonly] { width: 100%; min-height: 32px; font-family: var(--font-monospace,monospace); }
+.bases-filter-values .bases-filter-operand-chip > button { flex: none; border: 0; padding: 0 2px; box-shadow: none; background: transparent; color: var(--text-muted); }
+.bases-filter-value-hint, .bases-filter-values > [role="status"] { flex-basis: 100%; color: var(--text-muted); font-size: var(--font-ui-smaller,12px); }
+.bases-filter-values > [role="status"]:empty { display: none; }
