@@ -8,7 +8,7 @@ import { BaseController, BaseBulkEditError, createBaseMutationHost } from '../sr
 
 const base = '# keep\nplugin: {retain: true}\nfilters: file.ext == "md"\nviews:\n  - type: table\n    name: First\n    order: [file.name, status, score]\n    pluginView: {keep: true}\n  - type: cards\n    name: Second\n';
 const note = '---\nstatus: Todo\nscore: 1\n---\nBody\n';
-async function fixture(adapter = new MemoryAdapter({ 'Work.base': base, 'One.md': note, 'Two.md': note }), viewName?: string) {
+async function fixture(adapter = new MemoryAdapter({ 'Work.base': base, 'One.md': note, 'Two.md': note }), viewName?: string, onViewRenamed?: (event: import('../src/bases/controller.ts').BaseViewRenamed) => void) {
   const vault = new Vault(adapter); await vault.initialize();
   const buffers = new Map<string, NoteBuffer>();
   const getBuffer = async (path: string) => {
@@ -17,7 +17,7 @@ async function fixture(adapter = new MemoryAdapter({ 'Work.base': base, 'One.md'
     await buffer.load(); return buffer;
   };
   const mutations = createBaseMutationHost({ getBuffer, validate() {}, rename: (from, to, validate, witness) => vault.rename(from, to, validate, witness) });
-  const controller = new BaseController({ vault, basePath: 'Work.base', mutations, viewName, delayMs: 1000 });
+  const controller = new BaseController({ vault, basePath: 'Work.base', mutations, viewName, onViewRenamed, delayMs: 1000 });
   await controller.refresh();
   return { vault, buffers, getBuffer, controller, async stop() { controller.dispose(); for (const buffer of buffers.values()) { try { await buffer.dispose(); } catch {} } } };
 }
@@ -72,6 +72,43 @@ test('summary edit and removal each persist one guarded configuration transactio
     await f.controller.removeSummary(f.controller.state.version, 'Grand total'); assert.equal(adapter.writes, 2);
     assert.deepEqual(BaseDocument.parse(await f.vault.read('Work.base')).views.map(view => view.summaries), [{}, {}]);
   } finally { await f.stop(); }
+});
+
+test('named-view rename saves its config, rebinds the active embed, then updates vault references through shared buffers', async () => {
+  const adapter = new MemoryAdapter({ 'Work.base': base, 'One.md': 'Before ![[Work.base#First|Alias]] after\n`[[Work.base#First]]`\n', 'Other/Two.md': '[link](../Work.base#first "title")\n' });
+  const callbacks: unknown[] = [];
+  const f = await fixture(adapter, 'First', event => { callbacks.push(event); assert.match(f.vault.entries.get('Work.base') ? f.buffers.get('Work.base')!.savedText : '', /name: Renamed/); assert.match(f.buffers.get('One.md')?.savedText ?? '[[Work.base#First]]', /#First/); });
+  try {
+    const report = await f.controller.renameView(f.controller.state.version, 0, 'Renamed');
+    assert.deepEqual(callbacks, [{ basePath: 'Work.base', index: 0, from: 'First', to: 'Renamed' }]);
+    assert.equal(f.controller.state.result?.view.name, 'Renamed'); assert.equal(report.references, 2); assert.equal(report.mode, 'legacy');
+    assert.equal(await f.vault.read('One.md'), 'Before ![[Work.base#Renamed|Alias]] after\n`[[Work.base#First]]`\n');
+    assert.equal(await f.vault.read('Other/Two.md'), '[link](../Work.base#Renamed "title")\n');
+  } finally { await f.stop(); }
+});
+
+test('partial named-view reference failure retains original plans and skips already saved files on retry', async () => {
+  class Adapter extends MemoryAdapter { fail = true; writes = new Map<string, number>(); override async write(path: string, text: string) { if (path === 'Two.md' && this.fail) throw new Error('reference disk full'); this.writes.set(path, (this.writes.get(path) ?? 0) + 1); return super.write(path, text); } }
+  const adapter = new Adapter({ 'Work.base': base, 'One.md': '[[Work.base#First]]', 'Two.md': '[[Work.base#First]]' }), f = await fixture(adapter, 'First');
+  try {
+    await assert.rejects(f.controller.renameView(f.controller.state.version, 0, 'Renamed'), error => (error as any).report.completedPaths.includes('One.md') && (error as any).report.failedPaths.includes('Two.md'));
+    assert.equal(f.controller.state.result?.view.name, 'Renamed'); assert.equal(f.controller.hasPendingViewReferences, true);
+    assert.equal((await f.getBuffer('Two.md')).text, '[[Work.base#Renamed]]'); assert.equal(await adapter.read('Two.md'), '[[Work.base#First]]');
+    adapter.fail = false; const report = await f.controller.retryViewRenameReferences();
+    assert.equal(report?.references, 2); assert.equal(adapter.writes.get('Work.base'), 1); assert.equal(adapter.writes.get('One.md'), 1); assert.equal(adapter.writes.get('Two.md'), 1);
+    assert.equal(f.controller.hasPendingViewReferences, false);
+  } finally { adapter.fail = false; await f.stop(); }
+});
+
+test('failed view-config flush retries exact saved config before reference changes or binding callbacks', async () => {
+  class Adapter extends MemoryAdapter { fail = true; override async write(path: string, text: string) { if (path === 'Work.base' && this.fail) throw new Error('config disk full'); return super.write(path, text); } }
+  const adapter = new Adapter({ 'Work.base': base, 'One.md': '[[Work.base#First]]' }), callbacks: string[] = [], f = await fixture(adapter, 'First', event => callbacks.push(event.to));
+  try {
+    await assert.rejects(f.controller.renameView(f.controller.state.version, 0, 'Renamed'), /config disk full/);
+    assert.deepEqual(callbacks, []); assert.equal(await adapter.read('One.md'), '[[Work.base#First]]');
+    adapter.fail = false; await (await f.getBuffer('Work.base')).flush(); await f.controller.acknowledgeConfigurationRetry();
+    assert.deepEqual(callbacks, ['Renamed']); assert.equal(await adapter.read('One.md'), '[[Work.base#Renamed]]'); assert.equal(f.controller.state.result?.view.name, 'Renamed');
+  } finally { adapter.fail = false; await f.stop(); }
 });
 
 test('host-flushed failed add-view retry acknowledges original saved selection without replay', async () => {
