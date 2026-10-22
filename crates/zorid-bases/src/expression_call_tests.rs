@@ -290,3 +290,53 @@ fn returned_error_comparisons_pay_for_message_bytes_on_every_pair() {
         matches!(evaluator.equals_checked(&error, &error), Err(RuntimeValue::Error(message)) if message.starts_with("budget\0"))
     );
 }
+
+#[test]
+fn formula_namespace_rethrows_while_materialized_summary_errors_remain_values() {
+    let context = BasesEvaluationContext {
+        formulas: Arc::new(IndexMap::from([("bad".into(), "unknown()".into())])),
+        ..Default::default()
+    };
+    for source in ["formula.bad.isType('Error')", "formula.bad.toString()"] {
+        assert_eq!(
+            evaluate(source, &context).unwrap_err().code,
+            "unknown-function",
+            "{source}"
+        );
+    }
+    let value = BaseValue::Error {
+        code: "unknown-function".into(),
+        message: "captured failure".into(),
+    };
+    let result = evaluate_summary(
+        "values.map(value.isType('Error'))",
+        &[&value],
+        &[None],
+        &crate::EvaluationOptions::default(),
+        None,
+        None,
+        |_| panic!("no file lookup"),
+    )
+    .unwrap();
+    assert_eq!(
+        result.value,
+        BaseValue::List {
+            value: vec![bool_value(true)]
+        }
+    );
+}
+
+#[test]
+fn returned_error_method_conversions_charge_message_bytes_before_copying() {
+    let context = BasesEvaluationContext {
+        work_limit: Some(10),
+        ..Default::default()
+    };
+    let scope = BTreeMap::from([(
+        "problem".into(),
+        RuntimeValue::ErrorValue(format!("type\0{}", "x".repeat(8192))),
+    )]);
+    let mut evaluator = Evaluator::new(&context);
+    let result = evaluator.evaluate(&parse_cached("problem.toString()").unwrap(), &scope);
+    assert!(matches!(result, RuntimeValue::Error(message) if message.starts_with("budget\0")));
+}

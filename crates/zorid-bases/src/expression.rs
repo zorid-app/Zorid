@@ -2792,6 +2792,7 @@ impl<'a> Evaluator<'a> {
             RuntimeValue::List(values) | RuntimeValue::TagList(values) => values.len(),
             RuntimeValue::Object(values) => values.len(),
             RuntimeValue::File(file) if name == "hasLink" => file.links.len(),
+            RuntimeValue::ErrorValue(message) => message.len() / 256,
             value => string_data(value).map_or(0, |data| data.len() / 256),
         };
         if let Err(error) = self.charge(work) {
