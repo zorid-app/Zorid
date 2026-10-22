@@ -189,3 +189,16 @@ test('retained retry refuses an externally changed file and keeps both external 
   f.adapter.fail=false;await f.adapter.write('Work.base',source);await f.cleanup();
  }
 });
+
+
+test('passive sibling view rebinding preserves its property draft until the saved rename refresh settles',async()=>{
+ const f=await fixture({viewName:'Table'});try{
+  const cell=f.host.querySelector('[data-path="Tasks/Alpha.md"][data-property="note.status"][role="gridcell"]')!;f.key(cell,'Enter');
+  const input=cell.querySelector<HTMLInputElement>('input')!;input.value='Retained';
+  assert.equal(f.session.rebindViewName('Other','Renamed'),false);assert.equal(f.session.rebindViewName('Table','Renamed'),true);
+  const next=BaseDocument.parse(await f.vault.read('Work.base'));next.updateView(0,{name:'Renamed'});await f.vault.modify('Work.base',next.toString());await f.session.refresh();
+  assert.equal(input.isConnected,true);assert.equal(input.value,'Retained');assert.equal(f.session.hasPendingChanges(),true);
+  f.key(input,'Escape');await until(()=>f.session.state.result?.view.name==='Renamed','sibling refreshed binding');
+  assert.equal(f.session.rebindViewName('Table','Renamed'),false);await f.unchangedNotes();
+ }finally{await f.cleanup();}
+});
