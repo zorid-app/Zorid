@@ -5,7 +5,7 @@ import { sharedBaseCoverage, sharedBasePreview, sharedBaseWitness } from './shar
 import { createBaseClockHost } from './clock.ts';
 import type { BaseClockHost } from './clock.ts';
 import { BaseToolbarSaveError, createBaseToolbar } from './toolbar.ts';
-import type { BaseFilterOperandsSnapshot } from './toolbar.ts';
+import type { BaseFilterOperandsSnapshot, BaseFilterPropertyDescriptor } from './toolbar.ts';
 import { createBaseViewActions } from './view-actions.ts';
 import { createBaseTableView } from './table-view.ts';
 import { baseEditAdmissionReceipt } from './edit-admission-diagnostics.ts';
@@ -70,6 +70,77 @@ export function baseSessionFilterOperands(vault: Vault, definitions: BasePropert
   } else if (metadataStatus === 'current') metadataStatus = 'unavailable';
   if (!isCurrent() || vault.metadataFrame !== state) return unavailableFilterOperands;
   return Object.freeze({ files: Object.freeze(files.sort()), folders: Object.freeze([...folders].sort()), tags: Object.freeze([...tags].sort()), properties: Object.freeze([...properties].sort()), metadataStatus });
+}
+
+const unavailableFilterProperty: BaseFilterPropertyDescriptor = Object.freeze({ kind: 'unknown', metadataStatus: 'unavailable' });
+
+/** Captured editor categories, not a promise that every row has that runtime type.
+ * Only saved declarations or consistently witnessed Rust metadata supply them. */
+export function baseSessionFilterProperties(vault: Vault, definitions: BasePropertyDefinitions, knownProperties: readonly string[], isCurrent: () => boolean): Readonly<Record<string, BaseFilterPropertyDescriptor>> {
+  const result: Record<string, BaseFilterPropertyDescriptor> = Object.create(null);
+  if (!isCurrent()) return Object.freeze(result);
+  const state = vault.metadataFrame, frame = state?.frame;
+  let metadataStatus: NonNullable<BaseFilterPropertyDescriptor['metadataStatus']> = state?.status ?? 'unavailable';
+  const categories = new Map<string, string>();
+  if (frame) {
+    if (!frame.coverageComplete && metadataStatus === 'current') metadataStatus = 'stale';
+    for (const entry of vault.entries.values()) {
+      if (entry.type !== 'file') continue;
+      const row = frame.row(entry.path);
+      if (row?.kind !== 'file' || row.value.entry.id !== entry.entryId || row.value.entry.revision !== entry.revision) {
+        if (metadataStatus === 'current') metadataStatus = 'stale';
+      }
+    }
+    for (const [path, witnessed] of frame.entries()) {
+      if (witnessed.kind !== 'file') continue;
+      const live = vault.entries.get(path), row = frame.row(path);
+      if (!live || live.type !== 'file' || live.entryId !== witnessed.id || live.revision !== witnessed.revision) {
+        if (metadataStatus === 'current') metadataStatus = 'stale';
+        continue;
+      }
+      // Historical frame rows alone cannot bypass retirement/cache admission.
+      if (!vault.metadata.get(path)) {
+        if (row?.kind === 'file' && row.value.metadata) metadataStatus = 'unavailable';
+        continue;
+      }
+      if (row?.kind !== 'file') continue;
+      for (const property of row.value.metadata?.properties ?? []) {
+        const previous = categories.get(property.key);
+        categories.set(property.key, previous === undefined || previous === property.type ? property.type : 'unknown');
+      }
+    }
+  } else if (metadataStatus === 'current') metadataStatus = 'unavailable';
+  const metadataKinds: Readonly<Record<string, BaseFilterPropertyDescriptor['kind']>> = {
+    text: 'string', number: 'number', checkbox: 'boolean', date: 'date', datetime: 'date', list: 'list', tags: 'tagList', unknown: 'unknown',
+  };
+  const unknown: BaseFilterPropertyDescriptor = Object.freeze({ kind: 'unknown', metadataStatus });
+  for (const property of knownProperties) if (property.startsWith('note.') || property.startsWith('formula.')) result[property] = unknown;
+  for (const [property, category] of categories) result[`note.${property}`] = Object.freeze({
+    kind: metadataStatus === 'current' ? metadataKinds[category] ?? 'unknown' : 'unknown', metadataStatus,
+    ...(metadataStatus === 'current' && (category === 'date' || category === 'datetime') ? { withTime: category === 'datetime' } : {}),
+  });
+  for (const [property, definition] of Object.entries(definitions.properties)) {
+    let kind: BaseFilterPropertyDescriptor['kind'];
+    switch (definition.type) {
+      case 'text': case 'select': case 'status': kind = 'string'; break;
+      case 'number': kind = 'number'; break;
+      case 'checkbox': kind = 'boolean'; break;
+      case 'date': case 'datetime': kind = 'date'; break;
+      case 'list': case 'multiselect': case 'reverseRelation': kind = 'list'; break;
+      case 'tags': kind = 'tagList'; break;
+      case 'link': kind = 'link'; break;
+      case 'relation': kind = definition.relation?.multiple ? 'list' : 'link'; break;
+      default: kind = 'unknown';
+    }
+    result[`note.${property}`] = Object.freeze({ kind, metadataStatus,
+      ...(definition.type === 'date' || definition.type === 'datetime' ? { withTime: definition.type === 'datetime' } : {}),
+      ...(['select', 'multiselect', 'status'].includes(definition.type) && definition.options ? { choices: Object.freeze(definition.options.map(option => Object.freeze({ value: option.value, ...(option.label !== undefined ? { label: option.label } : {}), ...(option.color !== undefined ? { color: option.color } : {}) }))) } : {}),
+    });
+  }
+  // Invalid declarations do not acquire a replacement category from note values.
+  for (const diagnostic of definitions.diagnostics) if (diagnostic.property !== undefined) result[`note.${diagnostic.property}`] = unknown;
+  if (!isCurrent() || vault.metadataFrame !== state) return Object.freeze(Object.create(null));
+  return Object.freeze(result);
 }
 
 /** Pane hosts notify only when their explicit visibility state changes. */
@@ -246,12 +317,13 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     save: (property, definition, expected) => track(() => saveDefinition(property, definition, expected)),
     onDraftChange: schedule, onError: report,
   });
+  const filterOwnerCurrent = () => {
+    if (disposed || closing) return false;
+    try { options.validate(); return true; } catch { return false; }
+  };
   const toolbarUI = createBaseToolbar(toolbar, {
     immediate: true,
-    filterOperands: () => baseSessionFilterOperands(options.vault, definitions, controller.state.result?.availableProperties ?? [], () => {
-      if (disposed || closing) return false;
-      try { options.validate(); return true; } catch { return false; }
-    }),
+    filterOperands: () => baseSessionFilterOperands(options.vault, definitions, controller.state.result?.availableProperties ?? [], filterOwnerCurrent),
     preflight() { action(); if (pending.size || propertyDraft() || settings.hasDraft() || summaryPanel) throw new Error('Finish or cancel the current edit before changing the view.'); },
     selectView,
     save(version, patch) { return saveConfigurationCommand(() => controller.updateView(numericVersion(version), patch)); },
@@ -555,7 +627,14 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       return property.startsWith('file.') ? property.replace(/^file\./, 'file ') : property.replace(/^(?:note|formula)\./, '');
     };
     const writable = !options.readOnly && !sharedBasePreview(result);
-    toolbarUI.update({ result, views: choices, selectedIndex, rootFilters: document.getRoot('filters'), root: Object.fromEntries(['filters','formulas','properties','summaries','newItemFolder','newItemTemplate'].map(key => [key, document.getRoot(key)]).filter((entry): entry is [string, BaseValue] => entry[1] !== undefined)), readOnly: !writable, allowRename: true, propertyType: property => definitions.properties[basePropertyName(property)]?.type, label: getPropertyLabel });
+    const filterFrame = options.vault.metadataFrame, filterDefinitions = definitions;
+    let filterProperties: Readonly<Record<string, BaseFilterPropertyDescriptor>> | undefined;
+    toolbarUI.update({ result, views: choices, selectedIndex, rootFilters: document.getRoot('filters'), root: Object.fromEntries(['filters','formulas','properties','summaries','newItemFolder','newItemTemplate'].map(key => [key, document.getRoot(key)]).filter((entry): entry is [string, BaseValue] => entry[1] !== undefined)), readOnly: !writable, allowRename: true, propertyType: property => definitions.properties[basePropertyName(property)]?.type,
+      filterProperty: property => {
+        if (!filterOwnerCurrent() || definitionsError || options.vault.metadataFrame !== filterFrame) return unavailableFilterProperty;
+        filterProperties ??= baseSessionFilterProperties(options.vault, filterDefinitions, result.availableProperties, filterOwnerCurrent);
+        return filterProperties[property];
+      }, label: getPropertyLabel });
     // Toolbar rebases its own in-flight configuration without replacing row drafts.
     if (pending.size || activeDraft()) { deferred = state; return; }
     deferred = undefined;
