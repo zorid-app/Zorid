@@ -7,7 +7,7 @@ import type { DocumentBaseResult, DocumentService, DocumentBaseValue } from '../
 import { NoteBuffer } from '../src/ui/note-buffer.ts';
 import { BaseDocument } from '../src/bases/document.ts';
 import { createBaseSession } from '../src/bases/session.ts';
-import { baseEditablePropertyValue } from '../src/bases/view-actions.ts';
+import { baseEditablePropertyValue, baseImageSourceValue } from '../src/bases/view-actions.ts';
 import type { BaseExpressionValue } from '../src/bases/expression.ts';
 
 const tick = () => new Promise<void>(resolve => setTimeout(resolve, 8));
@@ -48,12 +48,12 @@ async function fixture(base = summaryBase, omitRaw = false) {
     }),
   };
   const vault = new Vault(adapter); await vault.initialize();
-  const dom = new JSDOM('<main></main>', { pretendToBeVisual: true }), host = dom.window.document.querySelector('main')!, buffers = new Map<string, NoteBuffer>(), errors: unknown[] = [];
-  const session = createBaseSession(host, { vault, basePath: 'Work.base', validate() {}, openFile() {}, onError(error) { errors.push(error); }, getRelationTargets: () => [{ path: 'Projects/B.md', label: 'B', value: '[[Projects/B]]', entryId: 'b', revision: 'r1' }, { path: 'Projects/C.md', label: 'C', value: '[[Projects/C]]', entryId: 'c', revision: 'r1' }],
+  const dom = new JSDOM('<main></main>', { pretendToBeVisual: true }), host = dom.window.document.querySelector('main')!, buffers = new Map<string, NoteBuffer>(), errors: unknown[] = [], opened: {path:string;witness?:{entryId:string;revision:string}}[] = [];
+  const session = createBaseSession(host, { vault, basePath: 'Work.base', validate() {}, openFile(path,_event,witness) {opened.push({path,witness});}, onError(error) { errors.push(error); }, getRelationTargets: () => [{ path: 'Projects/B.md', label: 'B', value: '[[Projects/B]]', entryId: 'b', revision: 'r1' }, { path: 'Projects/C.md', label: 'C', value: '[[Projects/C]]', entryId: 'c', revision: 'r1' }],
     buffers: { validate() {}, async getBuffer(path) { let buffer = buffers.get(path); if (!buffer) { buffer = new NoteBuffer(vault, path); Object.defineProperty(buffer, 'savedDurableWitness', { get: () => ({ path, entryId: path, revision: `r${adapter.revisions.get(path) ?? 1}` }) }); buffers.set(path, buffer); } await buffer.load(); return buffer; } },
   }); await session.ready; assert.ifError(session.state.error);
   const key = (element: Element, key: string, extra = {}) => element.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...extra }));
-  return { vault, dom, host, session, errors, key, async cleanup() { for (const input of dom.window.document.querySelectorAll('.bases-property-popover input,[data-base-editing] input')) key(input, 'Escape'); const back = dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]'); back?.click(); await until(() => !session.hasPendingChanges()); await session.close(); for (const buffer of buffers.values()) await buffer.dispose(); dom.window.close(); } };
+  return { vault, dom, host, session, errors, opened, key, async cleanup() { for (const input of dom.window.document.querySelectorAll('.bases-property-popover input,[data-base-editing] input')) key(input, 'Escape'); const back = dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]'); back?.click(); await until(() => !session.hasPendingChanges()); await session.close(); for (const buffer of buffers.values()) await buffer.dispose(); dom.window.close(); } };
 }
 
 test('raw editing adapter accepts inert values and rejects rich values without saved source', () => {
@@ -154,4 +154,16 @@ test('a summary draft rejects an intervening configuration change and can discar
     [...f.dom.window.document.querySelectorAll<HTMLButtonElement>('.bases-summary-editor button')].find(button => button.textContent === 'Cancel changes')!.click(); await until(() => !f.dom.window.document.querySelector('[aria-label="Summary expression"]'));
     assert.equal(BaseDocument.parse(await f.vault.read('Work.base')).getRoot('externalSetting'), 'kept');
   } finally { await f.cleanup(); }
+});
+
+
+test('file title opening forwards its captured row identity and image acquisition preserves target namespaces', async () => {
+  const f = await fixture();
+  try {
+    const title = f.host.querySelector<HTMLElement>('[data-property="file.name"][role="gridcell"] a')!; assert.ok(title); title.click();
+    assert.deepEqual(f.opened, [{path:'One.md',witness:{entryId:'One.md',revision:'r1'}}]);
+    const image = {type:'namespace',name:'image',presentation:{kind:'image',value:'Cover.png',target:{entryId:'cover',revision:'r4'}},get(){return {type:'null'};}} as BaseExpressionValue;
+    assert.equal(baseImageSourceValue({type:'list',value:[{type:'string',value:'Other.png'},image]},'Cover.png'),image);
+    assert.deepEqual(baseImageSourceValue(image,'Different.png'),{type:'string',value:'Different.png'});
+  } finally {await f.cleanup();}
 });

@@ -47,6 +47,22 @@ export function baseEditablePropertyValue(row: BaseQueryRow, property: string): 
   try { baseEditValue(value); return value; } catch { return undefined; }
 }
 
+/** Preserve an image namespace's captured target witness when the rich renderer
+ * asks its host to acquire a local image. This is formatting, never resolution. */
+export function baseImageSourceValue(value: BaseExpressionValue, source: string): BaseExpressionValue {
+  let remaining = 10000;
+  const active = new Set<object>();
+  const find = (value: BaseExpressionValue, depth: number): BaseExpressionValue | undefined => {
+    if (--remaining < 0 || depth > 64 || !value || typeof value !== 'object' || active.has(value)) return;
+    if (value.type === 'namespace' && value.presentation?.kind === 'image' && value.presentation.value === source) return value;
+    active.add(value);
+    const children = value.type === 'list' ? value.value : value.type === 'object' ? Object.values(value.value) : [];
+    try { for (const child of children) { const found = find(child, depth + 1); if (found) return found; } }
+    finally { active.delete(value); }
+  };
+  return find(value, 0) ?? { type: 'string', value: source };
+}
+
 /** Internal bridge between the already-existing presentation and controller contracts. */
 export function createBaseViewActions(controller: BaseController, options: {
   validate(): void;

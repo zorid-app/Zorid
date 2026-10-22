@@ -18,7 +18,7 @@ import { exportBaseResults } from './export.ts';
 import type { BaseExportFormat } from './export.ts';
 import { prepareBaseItemCreation } from './creation.ts';
 import type { BaseCreationOperation } from './creation.ts';
-import { baseEditValue, baseEditablePropertyValue } from './view-actions.ts';
+import { baseEditValue, baseEditablePropertyValue, baseImageSourceValue } from './view-actions.ts';
 import type { BaseValue, BaseViewPatch } from './document.ts';
 import type { BasePresentationOptions, BasePropertyPresentation } from './presentation-common.ts';
 import { createBasePropertyRenderer } from './property-widgets.ts';
@@ -462,8 +462,16 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       rememberWidgetResult(latest, controller.state.source);
       return { version: latest.version, row, value };
     };
+    const openResultFile = (path: string, event: MouseEvent | KeyboardEvent, witness?: { readonly entryId: string; readonly revision: string }) => {
+      try {
+        action();
+        const active = mountedResult ?? result, row = active.rows.find(row => row.path === path);
+        const captured = row ? sharedBaseWitness(active, row.path) : undefined;
+        options.openFile(path, event, witness ?? captured);
+      } catch (error) { report(error); }
+    };
     const shared = { result, getPropertyLabel, getPropertyType: (property: string) => definitions.properties[basePropertyName(property)]?.type,
-      openFile(path: string, event: MouseEvent | KeyboardEvent, witness?: { readonly entryId: string; readonly revision: string }) { try { action(); options.openFile(path, event, witness); } catch (error) { report(error); } },
+      openFile: openResultFile,
       ...(writable ? { editProperty: (edit: Parameters<typeof actions.editProperty>[0]) => track(() => { assertPropertyWritable(edit.property, edit.value); return actions.editProperty(edit); }) } : {}),
       onError: report, onEditStateChange: schedule,
       contextMenu: options.contextMenu, hoverFile: options.hoverFile, dragFile: options.dragFile,
@@ -471,8 +479,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         commit: (edit: BasePropertyWidgetEdit) => track(async () => { assertPropertyWritable(edit.property, edit.value); await actions.editProperty(edit); return acknowledgeWidget(edit, edit.value); }), readOnly: presentation => !writable || !!definitionsError || definitions.diagnostics.some(item => item.property === basePropertyName(presentation.property)),
         isCurrent: presentation => !disposed && !!mountedResult && widgetResults.has(presentation.version),
         getRelationTargets: options.getRelationTargets,
-        loadImage: options.loadThumbnail ? (source, signal, presentation) => options.loadThumbnail!({ row: presentation.row, property: presentation.property, value: { type: 'string', value: source }, version: presentation.version, signal }) : undefined,
-        openFile: (path, event, witness) => { try { action(); options.openFile(path, event, witness); } catch (error) { report(error); } }, onError: report,
+        loadImage: options.loadThumbnail ? (source, signal, presentation) => options.loadThumbnail!({ row: presentation.row, property: presentation.property, value: baseImageSourceValue(presentation.value, source), version: presentation.version, signal }) : undefined,
+        openFile: openResultFile, onError: report,
         createOption: (property, value, presentation) => track(async () => { const definition = definitions.properties[basePropertyName(property)]; if (!definition) throw new Error('Configure this property first.'); await saveDefinition(basePropertyName(property), { ...definition, options: [...definition.options ?? [], { value }] }, definition); return acknowledgeWidget(presentation); }),
       }),
       getSummary: (property: string, groupIndex: number | null) => {
