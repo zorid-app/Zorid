@@ -2011,3 +2011,73 @@ fn group_link_writes_preserve_explicit_fragments_and_literal_hash_file_identity(
         Some(BaseValue::Link { subpath: None, .. })
     ));
 }
+
+#[test]
+fn note_link_string_equality_resolves_from_root_without_hydrating_global_file_maps() {
+    let generation=generation_from_records(vec![
+        ("target","People/Ada.md".into(),"Ada\n".into(),true),
+        ("decoy","Books/People/Ada.md".into(),"Decoy\n".into(),true),
+        ("book","Books/Source.md".into(),"---\nkind: card\nauthor: '[[../People/Ada|Source Alias]]'\nmissing: '[[Absent]]'\n---\n".into(),true),
+    ]);
+    let source = r#"filters: 'kind == "card"'
+formulas:
+  root: 'author == "[[People/Ada|Other Alias]]"'
+  reverse: '"[[People/Ada]]" == author'
+  wrongOrigin: 'author == "[[Books/People/Ada]]"'
+  raw: 'author == "../People/Ada"'
+  missing: 'missing == "[[Absent|Alias]]"'
+  nested: '[author] == ["[[People/Ada]]"]'
+  membership: '[author].contains("[[People/Ada|Alias]]")'
+  fileRaw: 'file == "Books/Source.md"'
+  fileWiki: 'file == "[[Books/Source.md]]"'
+views:
+  - type: table
+    name: Equality
+    order: [file.name, formula.root, formula.reverse, formula.wrongOrigin, formula.raw, formula.missing, formula.nested, formula.membership, formula.fileRaw, formula.fileWiki]
+"#;
+    let result = zorid_bases::query_generation(
+        &compile_base_source(source).unwrap(),
+        &generation,
+        &[],
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(result.rows.len(), 1);
+    let row = &result.rows[0];
+    for (name, expected) in [
+        ("root", true),
+        ("reverse", true),
+        ("wrongOrigin", false),
+        ("raw", true),
+        ("missing", true),
+        ("nested", true),
+        ("membership", true),
+        ("fileRaw", true),
+        ("fileWiki", false),
+    ] {
+        assert_eq!(
+            row.values[&format!("formula.{name}")],
+            BaseValue::Boolean { value: expected },
+            "{name}"
+        );
+    }
+    // A group formula that mixes the captured typed link with a wiki String
+    // must use this same root-origin comparison, not a separate renderer rule.
+    let source = r#"formulas:
+  mixed: 'if(file.basename == "Source", author, "[[People/Ada|String Alias]]")'
+views:
+  - type: table
+    name: Mixed
+    order: [file.name,formula.mixed]
+    groupBy: {property: formula.mixed, direction: ASC}
+"#;
+    let grouped = zorid_bases::query_generation(
+        &compile_base_source(source).unwrap(),
+        &generation,
+        &[],
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(grouped.groups.len(), 1);
+    assert_eq!(grouped.groups[0].entry_ids.len(), 3);
+}

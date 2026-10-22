@@ -848,17 +848,30 @@ pub(crate) fn group_values_match(
     value: &RuntimeValue,
     manual: bool,
     timezone: &BasesTimezone,
+    relationships: Option<&super::graph::PreparedRelationships<'_>>,
+    options: &crate::EvaluationOptions,
     check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
 ) -> Result<bool, ExpressionDiagnostic> {
     group_comparison_work(key, check)?;
     group_comparison_work(value, check)?;
     let context = BasesEvaluationContext {
         timezone: timezone.clone(),
+        relationships,
+        work_limit: Some(options.max_steps),
+        cancellation: options.cancellation.clone(),
         ..Default::default()
     };
-    let evaluator = Evaluator::new(&context);
-    Ok(evaluator.equals(key, value)
-        || manual && matches!(key,RuntimeValue::String(key) if key==&stringify(value)))
+    let mut evaluator = Evaluator::new(&context);
+    let equal = evaluator.equals_checked(key, value);
+    check(options.max_steps.saturating_sub(evaluator.remaining_work))?;
+    let equal = equal.map_err(|error| match error {
+        RuntimeValue::Error(message) => {
+            let (code, text) = message.split_once('\0').unwrap_or(("evaluation", &message));
+            ExpressionDiagnostic::new(code, text)
+        }
+        _ => unreachable!("comparison errors are diagnostics"),
+    })?;
+    Ok(equal || manual && matches!(key,RuntimeValue::String(key) if key==&stringify(value)))
 }
 pub(crate) fn group_value_string(
     value: &RuntimeValue,
@@ -1895,8 +1908,14 @@ impl<'a> Evaluator<'a> {
             },
             "/" => numeric_pair(self, &left, &right, |a, b| a / b),
             "%" => numeric_pair(self, &left, &right, |a, b| a % b),
-            "==" => RuntimeValue::Bool(self.equals(&left, &right)),
-            "!=" => RuntimeValue::Bool(!self.equals(&left, &right)),
+            "==" => self
+                .equals_checked(&left, &right)
+                .map(RuntimeValue::Bool)
+                .unwrap_or_else(|error| error),
+            "!=" => self
+                .equals_checked(&left, &right)
+                .map(|equal| RuntimeValue::Bool(!equal))
+                .unwrap_or_else(|error| error),
             ">" | "<" | ">=" | "<=" => self
                 .compare(&left, &right, operator)
                 .map(RuntimeValue::Bool)
@@ -2495,18 +2514,21 @@ impl<'a> Evaluator<'a> {
         match name {
             "contains" => {
                 let needle = eager.first().cloned().unwrap_or(RuntimeValue::Null);
-                RuntimeValue::Bool(values.iter().any(|value| self.equals(value, &needle)))
+                self.contains_checked(values, &needle)
+                    .map(RuntimeValue::Bool)
+                    .unwrap_or_else(|error| error)
             }
-            "containsAll" => RuntimeValue::Bool(
-                eager
-                    .iter()
-                    .all(|needle| values.iter().any(|value| self.equals(value, needle))),
-            ),
-            "containsAny" => RuntimeValue::Bool(
-                eager
-                    .iter()
-                    .any(|needle| values.iter().any(|value| self.equals(value, needle))),
-            ),
+            "containsAll" | "containsAny" => {
+                let all = name == "containsAll";
+                for needle in &eager {
+                    match self.contains_checked(values, needle) {
+                        Ok(found) if found != all => return RuntimeValue::Bool(!all),
+                        Ok(_) => {}
+                        Err(error) => return error,
+                    }
+                }
+                RuntimeValue::Bool(all)
+            }
             "filter" => {
                 let mut result = Vec::new();
                 for (index, value) in values.iter().enumerate() {
@@ -2915,23 +2937,114 @@ impl<'a> Evaluator<'a> {
         }
     }
 
+    fn contains_checked(
+        &mut self,
+        values: &[RuntimeValue],
+        needle: &RuntimeValue,
+    ) -> Result<bool, RuntimeValue> {
+        for value in values {
+            if self.equals_checked(value, needle)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+    /// Shared loose comparison may resolve wiki-shaped String operands from
+    /// vault root. Propagate work/cancellation/unavailable errors to every caller
+    /// instead of converting them into absent membership.
+    fn equals_checked(
+        &mut self,
+        left: &RuntimeValue,
+        right: &RuntimeValue,
+    ) -> Result<bool, RuntimeValue> {
+        let text_bytes = |value: &RuntimeValue| match value {
+            RuntimeValue::String(value) => value.len(),
+            RuntimeValue::Link(link) => link.path.len(),
+            RuntimeValue::File(file) => file.path.len(),
+            _ => 0,
+        };
+        self.charge(1 + text_bytes(left).saturating_add(text_bytes(right)) / 16)?;
+        match (left, right) {
+            (RuntimeValue::List(a), RuntimeValue::List(b)) => {
+                if a.len() != b.len() {
+                    return Ok(false);
+                }
+                for (a, b) in a.iter().zip(b) {
+                    if !self.equals_checked(a, b)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            (RuntimeValue::List(values), other) | (other, RuntimeValue::List(values))
+                if values.len() == 1 =>
+            {
+                self.equals_checked(&values[0], other)
+            }
+            (RuntimeValue::Link(link), RuntimeValue::String(text))
+            | (RuntimeValue::String(text), RuntimeValue::Link(link))
+                if !link.external =>
+            {
+                self.charge(text.len() / 16 + 1)?;
+                let Some(inner) = text
+                    .strip_prefix("[[")
+                    .and_then(|value| value.strip_suffix("]]"))
+                else {
+                    // The String-side primitive fallback can match a Link's
+                    // exact raw data even when it is not wiki-shaped.
+                    return Ok(link.path == *text);
+                };
+                // xK.parseFromString uses the last alias delimiter. No path or
+                // note metadata is supplied by this String; authority comes
+                // only from the immutable namespace below.
+                let path = inner.rsplit_once('|').map_or(inner, |(path, _)| path);
+                let mut parsed = BasesLink {
+                    path: path.into(),
+                    subpath: link_subpath(path),
+                    ..Default::default()
+                };
+                if let Some(graph) = self.context.relationships {
+                    if !graph.complete() {
+                        return Err(RuntimeValue::Error("unavailable\0Wiki String equality requires a complete captured namespace".into()));
+                    }
+                    let resolved = self.resolve_target(path)?;
+                    parsed.target = resolved.as_ref().map(|(_, witness)| witness.clone());
+                    parsed.resolved_path = Some(resolved.map(|(path, _)| path));
+                }
+                Ok(links_loosely_equal(link, &parsed) || link.path == *text)
+            }
+            _ => Ok(self.equals(left, right)),
+        }
+    }
+
     fn equals(&self, left: &RuntimeValue, right: &RuntimeValue) -> bool {
         match (left, right) {
             (RuntimeValue::Link(left), RuntimeValue::Link(right)) => {
-                self.link_identity(left) == self.link_identity(right)
+                links_loosely_equal(left, right)
             }
-            (RuntimeValue::Link(left), RuntimeValue::File(right)) => self
-                .link_resolved(left)
-                .is_some_and(|path| path == right.path),
-            (RuntimeValue::File(left), RuntimeValue::Link(right)) => self
-                .link_resolved(right)
-                .is_some_and(|path| path == left.path),
+            (RuntimeValue::Link(left), RuntimeValue::File(right)) => {
+                left.path == right.path
+                    || self
+                        .link_resolved(left)
+                        .is_some_and(|path| path == right.path)
+            }
+            (RuntimeValue::File(left), RuntimeValue::Link(right)) => {
+                left.path == right.path
+                    || self
+                        .link_resolved(right)
+                        .is_some_and(|path| path == left.path)
+            }
             (RuntimeValue::Date(left), RuntimeValue::Date(right)) => {
                 dates_loosely_equal(left, right)
             }
             (RuntimeValue::Date(date), RuntimeValue::String(text))
             | (RuntimeValue::String(text), RuntimeValue::Date(date)) => {
                 parse_frontmatter_date(text, &self.context.timezone)
+                    .is_some_and(|other| dates_loosely_equal(date, &other))
+            }
+            (RuntimeValue::Date(date), RuntimeValue::Link(link))
+            | (RuntimeValue::Link(link), RuntimeValue::Date(date)) => {
+                parse_frontmatter_date(&link.path, &self.context.timezone)
                     .is_some_and(|other| dates_loosely_equal(date, &other))
             }
             (RuntimeValue::Null, RuntimeValue::Null) => true,
@@ -2943,7 +3056,15 @@ impl<'a> Evaluator<'a> {
             (a, RuntimeValue::List(b)) if b.len() == 1 => self.equals(a, &b[0]),
             (RuntimeValue::String(a), RuntimeValue::Number(b))
             | (RuntimeValue::Number(b), RuntimeValue::String(a)) => {
-                a.trim().parse::<f64>().ok() == Some(*b)
+                loose_numeric_text(a) == Some(*b)
+            }
+            (RuntimeValue::Link(link), RuntimeValue::Number(number))
+            | (RuntimeValue::Number(number), RuntimeValue::Link(link)) => {
+                loose_numeric_text(&link.path) == Some(*number)
+            }
+            (RuntimeValue::Link(link), RuntimeValue::Bool(boolean))
+            | (RuntimeValue::Bool(boolean), RuntimeValue::Link(link)) => {
+                loose_numeric_text(&link.path) == Some(if *boolean { 1.0 } else { 0.0 })
             }
             (RuntimeValue::Bool(a), RuntimeValue::Number(b))
             | (RuntimeValue::Number(b), RuntimeValue::Bool(a)) => {
@@ -2951,12 +3072,7 @@ impl<'a> Evaluator<'a> {
             }
             (RuntimeValue::Bool(a), RuntimeValue::String(b))
             | (RuntimeValue::String(b), RuntimeValue::Bool(a)) => {
-                (if *a { 1.0 } else { 0.0 })
-                    == if b.is_empty() {
-                        0.0
-                    } else {
-                        b.trim().parse::<f64>().unwrap_or(f64::NAN)
-                    }
+                loose_numeric_text(b) == Some(if *a { 1.0 } else { 0.0 })
             }
             _ => to_plain(left) == to_plain(right),
         }
@@ -3410,6 +3526,54 @@ fn parse_timezone_offset(value: &str) -> Option<FixedOffset> {
     let minutes = minutes.parse::<i32>().ok()?.checked_mul(60)?;
     let seconds = hours.checked_add(minutes)?.checked_mul(sign)?;
     FixedOffset::east_opt(seconds)
+}
+
+/// Numeric conversion for primitive loose equality follows the String side's
+/// Number semantics, including empty/whitespace and unsigned radix literals.
+/// It is intentionally separate from explicit number() and parseFloat().
+fn loose_numeric_text(value: &str) -> Option<f64> {
+    let value=value.trim_matches(|c:char|matches!(c,'\u{0009}'..='\u{000d}'|'\u{0020}'|'\u{00a0}'|'\u{1680}'|'\u{2000}'..='\u{200a}'|'\u{2028}'|'\u{2029}'|'\u{202f}'|'\u{205f}'|'\u{3000}'|'\u{feff}'));
+    if value.is_empty() {
+        return Some(0.0);
+    }
+    let radix = if value.starts_with("0x") || value.starts_with("0X") {
+        Some(16)
+    } else if value.starts_with("0b") || value.starts_with("0B") {
+        Some(2)
+    } else if value.starts_with("0o") || value.starts_with("0O") {
+        Some(8)
+    } else {
+        None
+    };
+    if let Some(radix) = radix {
+        let digits = &value[2..];
+        if digits.is_empty() {
+            return None;
+        }
+        let mut result = 0.0;
+        for digit in digits.chars() {
+            result = result * (radix as f64) + digit.to_digit(radix)? as f64;
+        }
+        return Some(result);
+    }
+    static DECIMAL: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^[+-]?(?:Infinity|(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)$")
+            .expect("loose numeric shape")
+    });
+    DECIMAL
+        .is_match(value)
+        .then(|| value.parse::<f64>().ok())
+        .flatten()
+}
+
+fn links_loosely_equal(left: &BasesLink, right: &BasesLink) -> bool {
+    match (
+        left.resolved_path.as_ref().and_then(Option::as_deref),
+        right.resolved_path.as_ref().and_then(Option::as_deref),
+    ) {
+        (Some(left), Some(right)) => left == right,
+        _ => left.path == right.path,
+    }
 }
 
 fn dates_loosely_equal(left: &DateValue, right: &DateValue) -> bool {
@@ -5127,6 +5291,8 @@ mod loose_group_reference_tests {
             &value,
             true,
             &BasesTimezone::Utc,
+            None,
+            &crate::EvaluationOptions::default(),
             &mut |_| Ok(())
         )
         .unwrap());
@@ -5137,6 +5303,8 @@ mod loose_group_reference_tests {
                 &value,
                 true,
                 &BasesTimezone::Utc,
+                None,
+                &crate::EvaluationOptions::default(),
                 &mut |work| {
                     charged += work;
                     if charged > 3 {
@@ -5202,5 +5370,112 @@ mod group_link_spelling_tests {
             });
             assert_eq!(stringify(&value), expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod loose_link_reference_tests {
+    use super::*;
+    #[test]
+    fn reciprocal_primitives_and_dates_preserve_link_raw_data_rules() {
+        let context = BasesEvaluationContext::default();
+        for (source, expected) in [
+            ("link('Missing') == '[[Missing|Alias]]'", true),
+            ("'[[Missing|Alias]]' == link('Missing')", true),
+            ("link('Missing') == 'Missing'", true),
+            ("link('Missing') == '42'", false),
+            ("link('Missing') == ' [[Missing]] '", false),
+            ("link('Missing') == '[[Other]]'", false),
+            ("[link('Missing')] == ['[[Missing|Alias]]']", true),
+            ("[link('Missing')].contains('[[Missing|Alias]]')", true),
+            (
+                "[link('Missing')].containsAll('Missing','[[Missing]]')",
+                true,
+            ),
+            ("[link('Missing')].containsAny('Other','[[Missing]]')", true),
+            ("link('2') == 2", true),
+            ("2 == link('2')", true),
+            ("link('false') == false", false),
+            ("link('0') == false", true),
+            ("link('') == false", true),
+            ("link('1') == true", true),
+            ("link('') == null", false),
+            ("null == link('null')", false),
+            ("date('2026-01-01') == link('2026-01-01T12:00:00Z')", true),
+            ("link('2026-01-01') == date('2026-01-01T12:00:00Z')", true),
+            ("date('2026-01-01') == link('20260101')", false),
+            ("date('2026-01-01') == 1767225600000", false),
+            ("'' == 0", true),
+            ("'  ' == 0", true),
+            ("'0x10' == 16", true),
+            ("'0b10' == 2", true),
+            ("'0o10' == 8", true),
+            ("'+0x10' == 16", false),
+            ("'inf' == 1", false),
+        ] {
+            assert_eq!(
+                evaluate(source, &context).unwrap().value,
+                BaseValue::Boolean { value: expected },
+                "{source}"
+            );
+        }
+    }
+    #[test]
+    fn checked_wiki_comparison_propagates_budget_and_cancellation() {
+        let link = RuntimeValue::Link(BasesLink {
+            path: "Missing".into(),
+            ..Default::default()
+        });
+        let text = RuntimeValue::String("[[Missing|Alias]]".into());
+        let context = BasesEvaluationContext {
+            work_limit: Some(0),
+            ..Default::default()
+        };
+        let error = Evaluator::new(&context)
+            .equals_checked(&link, &text)
+            .unwrap_err();
+        assert!(matches!(error,RuntimeValue::Error(message)if message.starts_with("budget\0")));
+        let cancelled = OperationCancellation::default();
+        cancelled.cancel();
+        let context = BasesEvaluationContext {
+            cancellation: Some(cancelled),
+            ..Default::default()
+        };
+        let error = Evaluator::new(&context)
+            .equals_checked(&link, &text)
+            .unwrap_err();
+        assert!(matches!(error,RuntimeValue::Error(message)if message.starts_with("cancelled\0")));
+    }
+    #[test]
+    fn file_string_is_exact_path_and_file_link_accepts_raw_or_resolved_identity() {
+        let file = RuntimeValue::File(Box::new(BasesFile {
+            path: "People/A.md".into(),
+            ..Default::default()
+        }));
+        let context = BasesEvaluationContext::default();
+        let mut evaluator = Evaluator::new(&context);
+        assert!(evaluator
+            .equals_checked(&file, &RuntimeValue::String("People/A.md".into()))
+            .unwrap());
+        assert!(!evaluator
+            .equals_checked(&file, &RuntimeValue::String("[[People/A.md|Alias]]".into()))
+            .unwrap());
+        let raw = RuntimeValue::Link(BasesLink {
+            path: "People/A.md".into(),
+            ..Default::default()
+        });
+        assert!(evaluator.equals_checked(&file, &raw).unwrap());
+        let resolved = RuntimeValue::Link(BasesLink {
+            path: "../People/A".into(),
+            resolved_path: Some(Some("People/A.md".into())),
+            ..Default::default()
+        });
+        assert!(evaluator.equals_checked(&resolved, &file).unwrap());
+        let unresolved = RuntimeValue::Link(BasesLink {
+            path: "../People/A".into(),
+            resolved_path: Some(None),
+            ..Default::default()
+        });
+        assert!(evaluator.equals_checked(&resolved, &unresolved).unwrap());
     }
 }

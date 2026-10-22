@@ -510,3 +510,39 @@ fn summaries_describe_prepared_subset_without_claiming_complete_aggregates() {
     );
     assert_eq!(result.value.progress.pending_files, 1);
 }
+
+#[test]
+fn wiki_string_equality_in_partial_previews_is_unavailable_without_namespace_expansion() {
+    let program_source="filters: author == '[[Target|Alias]]'\nviews:\n  - type: table\n    name: Partial\n    order: [file.path]\n";
+    let mut builder = builder(vec![
+        entry("definition", "View.base"),
+        entry("a", "Folder/A.md"),
+        entry("target", "Target.md"),
+    ]);
+    source(&mut builder, "definition", program_source, false);
+    source(
+        &mut builder,
+        "a",
+        "---\nauthor: '[[../Target]]'\n---\n",
+        true,
+    );
+    let capture = capture_rows(&builder, &["definition", "a"]);
+    let result = query_preview(
+        &compile_base_source(program_source).unwrap(),
+        &capture,
+        &id("definition"),
+        &[],
+        &QueryOptions::default(),
+        MAX_PREVIEW_QUERY_OWNED_BYTES,
+    )
+    .unwrap();
+    assert_eq!(result.value.counts.scanned, 2);
+    assert_eq!(result.value.progress.pending_files, 1);
+    assert!(!result.value.complete);
+    assert!(result.value.rows.is_empty());
+    assert!(result
+        .value
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "unavailable"));
+}

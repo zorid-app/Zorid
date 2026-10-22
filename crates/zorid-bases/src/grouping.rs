@@ -140,7 +140,17 @@ impl Context<'_, '_, '_, '_> {
         manual: bool,
     ) -> Result<bool, ExpressionDiagnostic> {
         let timezone = self.timezone;
-        expression::group_values_match(key, value, manual, timezone, &mut |work| self.check(work))
+        let graph = self.graph;
+        let mut options = self.options.evaluation.clone();
+        options.max_steps = options.max_steps.min(
+            self.options
+                .max_steps
+                .saturating_sub(*self.steps)
+                .saturating_sub(admission_work(self.admission)),
+        );
+        expression::group_values_match(key, value, manual, timezone, graph, &options, &mut |work| {
+            self.check(work)
+        })
     }
     fn spelling(&mut self, value: &RuntimeValue) -> Result<String, ExpressionDiagnostic> {
         expression::group_value_string(value, &mut |work| self.check(work))
