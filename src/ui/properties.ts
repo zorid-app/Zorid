@@ -8,7 +8,7 @@ import { baseExpressionValue } from '../bases/expression.ts';
 import type { BaseExpressionValue } from '../bases/expression.ts';
 import { BASE_PROPERTY_DEFINITIONS_PATH, parseBasePropertyDefinitions } from '../bases/property-definitions.ts';
 import type { BasePropertyDefinition } from '../bases/property-definitions.ts';
-import { mountBasePropertyWidget } from '../bases/property-widgets.ts';
+import { basePropertyPopoverOwner,mountBasePropertyWidget } from '../bases/property-widgets.ts';
 import type { BaseRelationTarget } from '../bases/property-widgets.ts';
 
 export interface PropertiesOptions {
@@ -37,6 +37,8 @@ export interface PropertiesView {
   hasPendingChanges(): boolean;
   /** Settle accepted writes; unresolved input stays mounted for correction. */
   flush(): Promise<void>;
+  /** Only this panel and rich-property portals opened by its exact rows. */
+  owns(node:Node):boolean;
   destroy(): void;
 }
 
@@ -567,7 +569,8 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     if(mutationFailure)throw mutationFailure;
     if(addForm||[...rows.values()].some(hasDraft))throw new Error('Finish editing the current property before closing.');
   };
-  return { refresh,hasPendingChanges,flush, destroy() {
+  const owns=(node:Node)=>{if(destroyed||!root.isConnected||!node.isConnected)return false;if(root.contains(node))return true;const owner=basePropertyPopoverOwner(node);return !!owner&&[...rows.values()].some(row=>row.value===owner);};
+  return { refresh,hasPendingChanges,flush,owns, destroy() {
     if (destroyed) return;
     destroyed = true; menuSerial++;
     document.removeEventListener('contextmenu', supersede, true); document.removeEventListener('keydown', keyboardSupersede, true);

@@ -203,7 +203,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     propertyDraft = false; error.hidden = retry.hidden = true;
   }
   function hasPendingChanges() { return !closed && (composingTitle || titleProblem || propertyDraft || titleText().trim() !== titleBaseline || !!writes.size || !!loading || buffer.dirty || !!buffer.error || !!options.hasPendingEditorChanges?.() || !!root.querySelector('[data-base-editing]') || [...root.querySelectorAll<HTMLElement>('.metadata-property-error')].some(node => !node.hidden && !!node.textContent?.trim())); }
-  function ownedPropertyPopover(target: Node) { return !!root.querySelector('[data-base-editing]') && !!(target as HTMLElement).closest?.('.bases-property-popover'); }
+  function ownedPropertyPopover(target: Node) { return properties.owns(target); }
   function remove(restoreFocus: boolean) {
     if (closed) return;
     closed = true;

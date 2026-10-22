@@ -1439,7 +1439,7 @@ export class Workspace {
     const propertiesKey=(event:KeyboardEvent)=>{if(!event.isComposing&&(event.key==='Enter'||event.key===' ')){event.preventDefault();toggleProperties();}};
     const propertyInput=()=>{propertyInputGeneration++;onStateChange();};heading.addEventListener('click',toggleProperties);heading.addEventListener('keydown',propertiesKey);propertiesHost.addEventListener('input',propertyInput);drawProperties();
     const propertyDraft=()=>properties?.hasPendingChanges()??false;
-    const ownsPropertyPopover=(node:Node)=>!!propertiesHost.querySelector('[data-base-editing]')&&!!(node as Element).closest?.('.bases-property-popover');
+    const ownsPropertyPopover=(node:Node)=>properties?.owns(node)??false;
     const recoveryCleanup=this.mountNoteRecovery(host,buffer);
     const sessions=new BaseEmbedSessions({recoveryHost:host,create:async(container,nested)=>{
       const validate=()=>{validateFile();if(disposed||!nested.sourceIdentity||this.treeEntryToken(nested.sourcePath)!==nested.sourceIdentity||!nested.targetIdentity||this.treeEntryToken(nested.targetPath)!==nested.targetIdentity)throw new Error('The preview embedded Base changed. Its draft is retained.');};

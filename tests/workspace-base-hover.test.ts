@@ -9,6 +9,7 @@ import type {WorkspaceViewFactories} from '../src/ui/workspace.ts';
 import {createEditor} from '../src/ui/editor.ts';
 import type {EditorOptions} from '../src/ui/editor.ts';
 import {createBaseSession} from '../src/bases/session.ts';
+import {renderProperties} from '../src/ui/properties.ts';
 import type {BaseSessionOptions} from '../src/bases/session.ts';
 import {MemoryAdapter} from '../src/core/memory-adapter.ts';
 import type {DurableWrites,DurableWriteInput,DurableWriteIntent,DurableWriteRead} from '../src/core/durable-writes.ts';
@@ -100,6 +101,13 @@ test('hover Properties uses the normal editor, preserves YAML and blocks unresol
   const input=root.querySelector<HTMLInputElement>('[data-property-key="status"] .metadata-property-value input')!;assert.ok(input);input.value='Done';input.dispatchEvent(new window.Event('input',{bubbles:true}));input.dispatchEvent(new window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));
   await until(()=>!f.workspace.buffers.get('One.md')!.dirty&&/status: Done/.test(f.workspace.buffers.get('One.md')!.text),'shared property save');assert.match(await f.adapter.read('One.md'),/# Keep the comment/);assert.match(await f.adapter.read('One.md'),/Editable body/);
   const key=root.querySelector<HTMLInputElement>('[data-property-key="status"] .metadata-property-key-input')!;key.value='Unaccepted name';key.dispatchEvent(new window.Event('input',{bubbles:true}));await assert.rejects(f.workspace.openNote('Other.md'),/Finish editing/);assert.ok(root.isConnected);assert.equal(key.value,'Unaccepted name');key.value='status';await f.workspace.openNote('Other.md');
+});
+test('hover flush never blurs a foreign panel picker while its own rich-property draft is open',async t=>{
+  const f=await setup(t);await f.adapter.write('Properties.yaml','properties:\n  status:\n    type: select\n    options: [{value: Todo}, {value: Done}]\n');await f.workspace.vault.reload();await new Promise(resolve=>setTimeout(resolve,50));const root=await openHover(f);await until(()=>root.querySelector('[data-property-key="status"] .metadata-property-value')?.getAttribute('data-property-type')==='select','shared definition loads');
+  root.querySelector<HTMLElement>('.metadata-properties-heading')!.click();root.querySelector<HTMLElement>('[data-property-key="status"] .metadata-property-value')!.click();const own=document.querySelector<HTMLInputElement>('.bases-property-popover input')!;assert.ok(own);own.dispatchEvent(new window.CompositionEvent('compositionstart',{bubbles:true}));
+  const host=document.createElement('div');document.body.append(host);const foreign=renderProperties(host,{vault:f.workspace.vault,path:'Other.md',getSource:()=>note,onChange:()=>{}});await new Promise(resolve=>setTimeout(resolve,0));host.querySelector<HTMLElement>('[data-property-key="status"] .metadata-property-value')!.click();const input=[...document.querySelectorAll<HTMLInputElement>('.bases-property-popover input')].find(input=>input!==own)!;assert.ok(input);let blurs=0;input.addEventListener('blur',()=>{blurs++;});
+  try{await assert.rejects(f.workspace.flush(),/Finish editing/);assert.equal(blurs,0);assert.equal(document.activeElement,input);assert.ok(root.isConnected);}
+  finally{own.dispatchEvent(new window.CompositionEvent('compositionend',{bubbles:true}));own.dispatchEvent(new window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));foreign.destroy();host.remove();await Promise.resolve();}
 });
 
 test('a clean image preview closes without awaiting delayed bytes and releases its late lease',async t=>{

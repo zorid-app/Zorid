@@ -52,6 +52,12 @@ export interface BasePropertyWidgetOptions {
   readonly onError?: (error: unknown) => void;
 }
 const str = (value: string): BaseExpressionValue => ({ type: 'string', value });
+const propertyPopoverOwners=new WeakMap<Node,HTMLElement>();
+/** Process-local ownership of a currently mounted rich-property portal. */
+export function basePropertyPopoverOwner(node:Node):HTMLElement|undefined {
+  for(let current:Node|null=node;current;current=current.parentNode){const owner=propertyPopoverOwners.get(current);if(owner&&current.isConnected&&owner.isConnected)return owner;}
+  return undefined;
+}
 function renderText(value: BaseExpressionValue): string {
   if (value.type === 'namespace') return value.name;
   if (value.type === 'error') return value.error.message;
@@ -158,7 +164,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   };
   pairTargets();
   const targetFor = (text: string) => pairedTargets.get(text) ?? targets().find(target => targetValue(target) === text || target.path === text);
-  const closePopup = () => { popup?.remove(); popup = undefined; document.removeEventListener('pointerdown', outside, true); win?.removeEventListener('resize', position); win?.removeEventListener('scroll', position, true); };
+  const closePopup = () => { if(popup){propertyPopoverOwners.delete(popup);popup.remove();} popup = undefined; document.removeEventListener('pointerdown', outside, true); win?.removeEventListener('resize', position); win?.removeEventListener('scroll', position, true); };
   const error = (failure: unknown) => {
     if (disposed) return;
     mark('draft'); element.classList.add('mod-error'); input?.setAttribute('aria-invalid', 'true');
@@ -452,6 +458,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (picker) {
       input.setAttribute('role', 'combobox'); input.setAttribute('aria-autocomplete', 'list');
       popup = document.createElement('div'); popup.className = inlineList ? 'bases-property-inline-editor' : 'bases-property-popover popover';
+      propertyPopoverOwners.set(popup,element);
       if (inlineList) element.replaceChildren(popup); else document.body.append(popup); renderEditor(); document.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', position); win?.addEventListener('scroll', position, true);
     } else element.replaceChildren(input);
     input.focus(); if (!multiple) input.select();
