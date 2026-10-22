@@ -180,13 +180,21 @@ test('editing prefers the exact property key when YAML contains case-distinct ke
   } finally { await f.stop(); }
 });
 
-test('Kanban refuses to discard list membership through a scalar destination', async () => {
+test('Kanban scalar destinations replace list membership with one item and undo restores the whole original list', async () => {
   const f = await fixture(new MemoryAdapter({ 'Work.base': base, 'One.md': note.replace('Status: Todo', 'Status: [Todo, Later]') }));
   try {
-    await assert.rejects(f.controller.moveToGroup({ version: f.controller.state.version, path: 'One.md', value: 'Done' }), /explicit list/);
+    const buffer = await f.getBuffer('One.md'); buffer.update(buffer.text + 'Unrelated typing\n');
+    await f.controller.moveToGroup({ version: f.controller.state.version, path: 'One.md', value: 'Done' });
+    assert.deepEqual(readProperties(await f.vault.read('One.md'))[0].value, ['Done']);
+    assert.ok((await f.vault.read('One.md')).endsWith('Body\nUnrelated typing\n'));
+    await f.controller.undo();
     assert.deepEqual(readProperties(await f.vault.read('One.md'))[0].value, ['Todo', 'Later']);
+    await f.controller.redo();
+    assert.deepEqual(readProperties(await f.vault.read('One.md'))[0].value, ['Done']);
     await f.controller.moveToGroup({ version: f.controller.state.version, path: 'One.md', value: ['Done', 'Later'] });
     assert.deepEqual(readProperties(await f.vault.read('One.md'))[0].value, ['Done', 'Later']);
+    await f.controller.undo();
+    assert.deepEqual(readProperties(await f.vault.read('One.md'))[0].value, ['Done']);
   } finally { await f.stop(); }
 });
 

@@ -521,8 +521,10 @@ export class BaseController {
     // Reference Kanban clears the key for the empty group; table null edits remain values.
     if (edit.value === null) return this.writeProperty({ ...edit, property: group.property }, true);
     const current = this.current.result?.rows.find(row => row.path === edit.path)?.values[normalizeBaseProperty(group.property)];
-    if (current?.type === 'list' && !Array.isArray(edit.value)) return Promise.reject(new Error('List-valued group membership requires an explicit list destination'));
-    return this.editProperty({ ...edit, property: group.property });
+    // Inferred multitext retains its value type, but moving groups replaces
+    // membership in full. A composite destination remains one exact list.
+    const value = current?.type === 'list' && !Array.isArray(edit.value) ? [edit.value] : edit.value;
+    return this.editProperty({ ...edit, property: group.property, value });
   }
 
   async renameFile(version: number, path: string, destination: string): Promise<void> {
