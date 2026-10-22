@@ -18,6 +18,7 @@ export interface BaseToolbarState {
   search?: string;
   propertyType?(property: string): string | undefined;
   functionNames?: readonly string[];
+  methodNames?: readonly string[];
   readOnly: boolean;
   allowRename: boolean;
   label(property: string): string;
@@ -632,7 +633,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         for (const source of node.querySelectorAll<HTMLTextAreaElement>('textarea')) {
           if (attemptedEditors.has(source) || !['Formula expression','Filter expression'].includes(source.getAttribute('aria-label')??'')) continue;
           attemptedEditors.add(source); const focused = doc.activeElement === source;
-          try { const editor = enhanceBaseFormulaEditor(source,{propertyIds:properties,functionNames:opening.functionNames??['if','date','duration','list','max','min','number','now','today','escapeHTML'],onEscape:()=>submit(true)}); editors.set(source,editor); if (focused) editor.focus(); } catch (failure) { report(failure); }
+          try { const editor = enhanceBaseFormulaEditor(source,{propertyIds:properties,functionNames:opening.functionNames??['if','date','duration','list','max','min','number','now','today','escapeHTML'],methodNames:opening.methodNames??['isTruthy','isEmpty','toString','isType','contains','containsAll','containsAny','endsWith','lower','replace','repeat','reverse','slice','split','startsWith','title','trim','abs','ceil','floor','round','toFixed','date','format','time','filter','flat','join','map','reduce','sort','unique','sum','mean','keys','values','matches','hasLink','asLink','hasProperty','hasTag','inFolder','relative'],onEscape:()=>submit(true)}); editors.set(source,editor); if (focused) editor.focus(); } catch (failure) { report(failure); }
         }
         for (const [source,control] of enhanced) if (!node.contains(source)) { control.destroy(); enhanced.delete(source); }
         for (const source of node.querySelectorAll<HTMLSelectElement>('select')) {

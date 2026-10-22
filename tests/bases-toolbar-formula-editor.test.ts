@@ -104,6 +104,80 @@ test('destroy restores native attributes and does not overwrite the latest draft
   } finally { f.cleanup(); }
 });
 
+test('receiver method completion replaces only the member suffix, preserving nested calls and bracket properties', async () => {
+  const f = fixture({ propertyIds: ['note.tags', 'note.score'], functionNames: ['round'], methodNames: ['contains', 'format', 'contains()'] });
+  try {
+    f.editor.focus();
+    for (const [expression, expected, method] of [
+      ['note.tags.co', 'note.tags.contains()', 'contains()'],
+      ['note.tags.', 'note.tags.contains()', 'contains()'],
+      ['date("2026-10-21").fo', 'date("2026-10-21").format()', 'format()'],
+      ['note["Tags list"].co', 'note["Tags list"].contains()', 'contains()'],
+      ['note["Project name"].tags.co', 'note["Project name"].tags.contains()', 'contains()'],
+      ['"quoted value".co', '"quoted value".contains()', 'contains()'],
+      ['round(note.score) + note.tags.co', 'round(note.score) + note.tags.contains()', 'contains()'],
+    ]) {
+      closeCompletion(f.view);
+      f.view.dispatch({ changes: { from: 0, to: f.view.state.doc.length, insert: expression }, selection: { anchor: expression.length } });
+      startCompletion(f.view); await new Promise(resolve => setTimeout(resolve, 170));
+      const suggestions = currentCompletions(f.view.state);
+      assert.equal(suggestions[0]?.label, method, expression);
+      assert.equal(suggestions.filter(item => item.label === 'contains()').length, method === 'contains()' ? 1 : 0, 'method names are deduplicated');
+      assert.equal(acceptCompletion(f.view), true, expression);
+      assert.equal(f.textarea.value, expected, expression);
+      assert.equal(f.view.state.selection.main.head, expected.length - 1);
+    }
+  } finally { f.cleanup(); }
+});
+
+test('namespace properties and global functions remain distinct from receiver methods', async () => {
+  const f = fixture({ propertyIds: ['note.score', 'note.Project name', 'file.name', 'this.score'], functionNames: ['round'], methodNames: ['contains', 'format'] });
+  try {
+    f.editor.focus();
+    for (const [expression, expected] of [
+      ['note.sc', 'note.score'], ['file.na', 'file.name'], ['this.sc', 'this.score'],
+      ['note.Pr', 'note["Project name"]'], ['1 + note.sc', '1 + note.score'],
+      ['rou', 'round()'],
+    ]) {
+      closeCompletion(f.view);
+      f.view.dispatch({ changes: { from: 0, to: f.view.state.doc.length, insert: expression }, selection: { anchor: expression.length } });
+      startCompletion(f.view); await new Promise(resolve => setTimeout(resolve, 170));
+      assert.ok(currentCompletions(f.view.state).length, expression);
+      assert.equal(currentCompletions(f.view.state).some(item => item.type === 'method'), false, expression);
+      assert.equal(acceptCompletion(f.view), true, expression); assert.equal(f.textarea.value, expected, expression);
+    }
+  } finally { f.cleanup(); }
+});
+
+test('completion never offers properties or methods inside unfinished quoted strings', async () => {
+  const f = fixture({ propertyIds: ['note.score'], functionNames: ['round'], methodNames: ['contains'] });
+  try {
+    f.editor.focus();
+    for (const expression of ['"note.tags.co', "'note.tags.co", '"escaped \\" note.tags.co', 'note["Tags co']) {
+      closeCompletion(f.view);
+      f.view.dispatch({ changes: { from: 0, to: f.view.state.doc.length, insert: expression }, selection: { anchor: expression.length } });
+      startCompletion(f.view); await new Promise(resolve => setTimeout(resolve, 80));
+      assert.deepEqual(currentCompletions(f.view.state), [], expression);
+    }
+  } finally { f.cleanup(); }
+});
+
+test('typing dots invalidates cached global and namespace completions before receiver methods are offered', async () => {
+  const f = fixture({ propertyIds: ['note.tags'], functionNames: ['now'], methodNames: ['contains'] }, 'no');
+  try {
+    f.editor.focus(); f.view.dispatch({ selection: { anchor: 2 } });
+    startCompletion(f.view); await new Promise(resolve => setTimeout(resolve, 170));
+    assert.ok(currentCompletions(f.view.state).some(item => item.label === 'note.tags'));
+    f.view.dispatch({ changes: { from: 2, insert: 'te.' }, selection: { anchor: 5 }, userEvent: 'input.type' });
+    await new Promise(resolve => setTimeout(resolve, 170));
+    assert.deepEqual(currentCompletions(f.view.state).map(item => item.label), ['note.tags']);
+    f.view.dispatch({ changes: { from: 5, insert: 'tags.co' }, selection: { anchor: 12 }, userEvent: 'input.type' });
+    await new Promise(resolve => setTimeout(resolve, 170));
+    assert.deepEqual(currentCompletions(f.view.state).map(item => item.label), ['contains()']);
+    assert.equal(acceptCompletion(f.view), true); assert.equal(f.textarea.value, 'note.tags.contains()');
+  } finally { f.cleanup(); }
+});
+
 test('owner-document-only hosts keep a native editor and cleanly restore its location', () => {
   const dom = new JSDOM('<main><textarea aria-label="Formula expression"></textarea><button>Next</button></main>');
   const textarea = dom.window.document.querySelector('textarea')!;

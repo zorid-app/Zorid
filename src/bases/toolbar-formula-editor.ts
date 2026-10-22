@@ -10,6 +10,8 @@ import { parseBaseExpression } from './expression.ts';
 export interface BaseFormulaEditorOptions {
   propertyIds?: readonly string[];
   functionNames?: readonly string[];
+  /** Supported receiver methods supplied by the caller, never discovered by evaluation. */
+  methodNames?: readonly string[];
   /** Invoked by Escape only after CodeMirror's completion handler declines it. */
   onEscape?(): void;
   /** Syntax diagnostics only: editing never evaluates an expression. */
@@ -44,23 +46,50 @@ const formulaHighlight = HighlightStyle.define([
 ]);
 
 function propertyExpression(id: string): string {
-  const match = /^(note|file|formula)\.(.*)$/u.exec(id);
+  const match = /^(note|file|formula|this)\.(.*)$/u.exec(id);
   if (!match || /^[$_\p{L}][$_\p{L}\p{N}\p{M}]*$/u.test(match[2])) return id;
   return `${match[1]}[${JSON.stringify(match[2])}]`;
 }
 
 function completions(options: BaseFormulaEditorOptions) {
-  const values: Completion[] = [
-    ...Array.from(new Set(options.propertyIds ?? []), id => ({ label: id, type: 'property', apply: propertyExpression(id) })),
-    ...Array.from(new Set(options.functionNames ?? []), name => snippetCompletion(`${name.replace(/\(\)$/u, '')}(\${})`, { label: `${name.replace(/\(\)$/u, '')}()`, type: 'function' })),
-  ];
+  const properties: Completion[] = Array.from(new Set(options.propertyIds ?? []), id => ({ label: id, type: 'property', apply: propertyExpression(id) }));
+  const callable = (names: readonly string[], type: string) => Array.from(new Set(names.map(name => name.replace(/\(\)$/u, ''))), name => snippetCompletion(`${name}(\${})`, { label: `${name}()`, type }));
+  const values = [...properties, ...callable(options.functionNames ?? [], 'function')];
+  const methods = callable(options.methodNames ?? [], 'method');
   return (context: CompletionContext) => {
+    const source = context.state.sliceDoc(0, context.pos);
+    // Scan quotes rather than matching a trailing quote: a completed string
+    // receiver ("text".contains) is different from an unfinished string value.
+    let quote: string | undefined, escaped = false;
+    for (const character of source) {
+      if (quote) {
+        if (escaped) escaped = false;
+        else if (character === '\\') escaped = true;
+        else if (character === quote) quote = undefined;
+      } else if (character === '"' || character === "'") quote = character;
+    }
+    if (quote) return null;
+    const suffix = context.matchBefore(/[$_\p{L}\p{N}\p{M}]*$/u)!;
+    const receiver = source.slice(0, suffix.from).trimEnd();
+    if (receiver.endsWith('.')) {
+      // Only a bare namespace uses full property IDs. For actual receivers,
+      // replace the identifier after the final dot, preserving calls, bracket
+      // properties, nested members and all preceding expression text.
+      const namespace = /(^|[^.$_\p{L}\p{N}\p{M}])([$_\p{L}][$_\p{L}\p{N}\p{M}]*)\.$/u.exec(receiver);
+      const namespaceProperties = namespace && properties.filter(property => property.label.startsWith(`${namespace[2]}.`));
+      if (namespace && namespaceProperties?.length) {
+        const prefix = `${namespace[2]}.`;
+        return { from: receiver.length - prefix.length, options: namespaceProperties,
+          validFor: (text: string) => text.startsWith(prefix) && /^[$_\p{L}\p{N}\p{M}]*$/u.test(text.slice(prefix.length)) };
+      }
+      if (!receiver.slice(0, -1).trim() || !methods.length) return null;
+      return { from: suffix.from, options: methods, validFor: /^[$_\p{L}\p{N}\p{M}]*$/u };
+    }
     const word = context.matchBefore(/[$\p{L}\p{N}\p{M}_.]*/u);
     if (!word || (!context.explicit && word.from === word.to)) return null;
-    // Do not propose properties while the user is typing an ordinary string.
-    const prefix = context.state.sliceDoc(0, word.from);
-    if (/(?:"(?:[^"\\]|\\.)*|'(?:[^'\\]|\\.)*)$/u.test(prefix)) return null;
-    return { from: word.from, options: values, validFor: /^[$\p{L}\p{N}\p{M}_.]*$/u };
+    // A new dot changes completion context, so cached global candidates must
+    // expire rather than replacing the receiver with a global/property value.
+    return { from: word.from, options: values, validFor: /^[$_\p{L}\p{N}\p{M}]*$/u };
   };
 }
 

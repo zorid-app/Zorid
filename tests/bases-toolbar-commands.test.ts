@@ -163,3 +163,16 @@ test('persistence retry settles its original generation then saves the newer que
   const retry=doc.querySelector<HTMLButtonElement>('button[type="submit"]')!;assert.equal(retry.textContent,'Retry save');retry.click();await tick();await tick();assert.deepEqual(calls,[[1,{limit:10}],[2,{limit:20}]]);assert.equal(retries,1);assert.equal(document.views[0].limit,20);assert.equal(toolbar.hasDraft(),false);assert.equal(doc.querySelector('[role="dialog"]'),null);
  }finally{toolbar.destroy();dom.window.close();}
 });
+
+test('formula retry preserves its accepted identity before applying a newer queued rename',async()=>{
+ const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
+ let document=BaseDocument.parse('formulas: {Original: "score * 2"}\nviews: [{type: table, name: A, order: [file.name, formula.Original]}]'),version=1,pendingDocument:BaseDocument|undefined;
+ const calls:unknown[][]=[];let rejectFirst:((error:unknown)=>void)|undefined;
+ const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(){},async save(){},commands:{async updateRoot(){},async editFormula(expected,original,name,expression){assert.equal(expected,version);calls.push([original,name,expression]);const next=BaseDocument.parse(document.toString());if(original&&original!==name)next.renameFormula(original,name);next.setFormula(name,expression);if(calls.length===1){pendingDocument=next;await new Promise<void>((_resolve,reject)=>{rejectFirst=reject;});}document=BaseDocument.parse(next.toString());version++;refresh();}},onDraftChange(){},onError(){}});
+ function refresh(){const result=executeBaseQuery(document,{version,files:[{path:'One.md',properties:{score:4}}]});toolbar.update({result,views:document.views,root:{formulas:document.getRoot('formulas')!},selectedIndex:0,readOnly:false,allowRename:true,label:p=>p});}refresh();
+ const get=<T extends HTMLElement>(label:string)=>{const node=doc.querySelector<T>(`[aria-label="${label}"]`);assert.ok(node,label);return node;};
+ try{
+  get<HTMLButtonElement>('Properties').click();get<HTMLButtonElement>('Configure property formula.Original').click();get<HTMLButtonElement>('Edit formula').click();const name=get<HTMLInputElement>('Formula name');name.focus();name.value='Accepted';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.blur();await tick();assert.equal(calls.length,1);
+  name.focus();name.value='Newest';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.blur();rejectFirst!(new BaseToolbarSaveError('disk failed',async()=>{document=BaseDocument.parse(pendingDocument!.toString());version++;refresh();}));await tick();assert.equal(name.value,'Newest');doc.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();await tick();await tick();assert.deepEqual(calls,[['Original','Accepted','score * 2'],['Accepted','Newest','score * 2']]);assert.deepEqual(document.views[0].order,['file.name','formula.Newest']);assert.equal((document.getRoot('formulas') as any).Newest,'score * 2');assert.equal(toolbar.hasDraft(),false);
+ }finally{toolbar.destroy();dom.window.close();}
+});
