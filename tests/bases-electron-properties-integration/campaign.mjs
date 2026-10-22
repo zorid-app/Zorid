@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {alpha,beta,bodies,initial,fixtureFiles} from './fixtures.mjs';
 import {applyRawEdit} from './raw-oracle.mjs';
+import {withNavigationObservation} from './navigation-observer.mjs';
 export {fixtureFiles,vaultName} from './fixtures.mjs';
 const active='.pane.is-active';
 const dialog=name=>`[role="dialog"][aria-label=${JSON.stringify(name)}]`;
@@ -138,7 +139,7 @@ async function verifySummaryDeletion(c,name){
   await c.ui.wait(`return ${JSON.stringify(['note.rating','note.peerCount'])}.every(property=>{const cell=document.querySelector(${esc(active+' .zorid-bases-table-footer')}+' [data-summary-property='+JSON.stringify(property)+']');return cell?.isConnected&&cell.getClientRects().length&&!cell.closest('[hidden]')&&cell.dataset.summaryGroup==='overall'&&!cell.querySelector('.summary-function-name,.summary-function-value')&&cell.querySelector('.placeholder')?.textContent==='Summarize';});`,'C1 actual footer cells have neither deleted summary label nor value in '+name);
 }
 
-export async function journey(c){
+async function propertiesJourney(c){
   const expected=structuredClone(initial),expectedRaw=fixtureFiles();
   const expectedConfig=c.yaml.parse(expectedRaw.get(baseFile));
   const configSource=source=>assertSummaryConfiguration(c.yaml,source,expectedConfig);
@@ -204,4 +205,10 @@ export async function journey(c){
   for(const name of [originalTable,mirrorTable])await verifySummaryDeletion(c,name);await chooseView(c,originalTable);
   for(const [file,source]of expectedRaw)await c.saved(file,current=>expectedFile(file,current,source),'P7-restart-independent-source-or-config-'+file);
   await c.screenshot('properties-06-restart');await c.quit('P7-normal-quit-after-restart');
+}
+
+// Preserve the original actions/oracles; add only bounded passive diagnostics.
+export async function journey(c){
+  const allowedPaths=[...fixtureFiles().keys()],allowedProperties=[...new Set(Object.values(initial).flatMap(value=>Object.keys(value)).flatMap(key=>[key,'note.'+key])),'file.name'];
+  return withNavigationObservation(c,propertiesJourney,{allowedPaths,allowedProperties});
 }

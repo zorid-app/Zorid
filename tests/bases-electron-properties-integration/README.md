@@ -104,3 +104,60 @@ from these checks. Runtime owner records pass/failure separately.
 The C1 extension has source-only syntax and fixture-oracle checks. It remains
 unexecuted; the existing property campaign acceptance records do not cover C1.
 A future frozen actual run must record these additional actions and checks.
+
+## Properties001 navigation diagnosis and passive trace
+
+Actual properties001 failed after34 recorded actions and10 durable checks at
+`Ordinary note relation is core-resolved and clickable`. The last recorded tree
+locator targeted `Items/Alpha.md`; the final screenshot instead shows the YAML
+viewer for `Properties.yaml`. This does **not** establish a relation or pointer
+helper defect. Retained Chromium workspace history also includes Alpha, Beta,
+Ada, Base and YAML admissions without matching later recorded campaign actions.
+Storage metadata timestamps are persistence evidence, not precise DOM navigation
+timestamps; batching prevents attributing the final viewer to the last click.
+Neither external input nor an internal callback is established as the cause.
+The visible-window runner already records possible concurrent user input as a
+limitation. The original relation assertion and every mutation/source oracle stay
+unchanged; there is no navigation retry or weakened acceptance condition.
+
+`navigation-observer.mjs` now adds properties-only passive diagnostics. Each
+normal launch installs capture listeners before the first campaign input, plus
+a MutationObserver for DOM-derived navigation/relation state. The trace records
+actual pointer/key/focus routes, epoch and monotonic timestamps, coordinates,
+modifiers and `isTrusted`, together with the active tree paths, note/tab title and
+author property's present/linked/unresolved flags. Existing recorded CDP actions
+can be correlated by time and target. `isTrusted` alone cannot distinguish CDP
+input from physical input, and an unmatched event does not by itself identify its
+origin. Navigation without a corresponding input is captured separately.
+
+Only the six owned fixture paths/labels and known property names are retained;
+foreign paths/link text and unknown roles/tags are redacted, character keys become `<character>`, and
+body text, input values and URLs are never recorded. A global cap of2500 events
+spans both launches, with dropped/observed counters and a separate final frame.
+Active-path arrays retain at most eight entries and retained strings have fixed
+length caps. At the event cap the MutationObserver disconnects, and subsequent
+input listeners only count dropped events without traversing targets/DOM. The
+final bounded frame is still captured; navigation transitions after the cap are
+not counted or reconstructed.
+The wrapper attempts to disconnect and drain before each original quit and in
+the failure `finally` path, so a successfully drained trace is retained in
+`result.json` even when the original strict assertion fails. A failed CDP drain
+sets `navigationObserverCleanupUnconfirmed`; it may have failed before remote
+stop ran. No retry or cleanup success is invented: the normal runner's owned
+window teardown is the fallback that releases those renderer listeners. Observer-only installation/drain errors mark the trace incomplete using fixed
+stage/reason codes and allowlisted error names (at most eight records plus an
+overflow count). They never replace the original campaign result, actions, quit
+or exception. A fresh UUID per launch identifies ownership; unknown handles are never disconnected as if this observer owned them. No product API, focus/selection mutation, event
+cancellation, replay, extra product action or deliberate settling delay is introduced.
+Passive listeners/DOM queries still add synchronous work and start/drain add CDP
+round trips. This diagnostic can alter timing; it does not establish timing
+neutrality, and capped/incomplete traces cannot establish a missing event's cause.
+The shared UI helper and runner remain unchanged.
+
+Ten focused offline tests cover actual target versus later DOM navigation,
+redaction, caps with no subsequent per-event DOM reads, bounded final state,
+failure drain, restart teardown and observer-only install/drain failures that
+preserve original outcomes, foreign-owner refusal and failed-before-stop cleanup uncertainty. They verify
+only the diagnostic seam. A new authorized native execution with the observer is
+required to diagnose properties001; no causal product fix or runtime acceptance
+follows from these source checks.
