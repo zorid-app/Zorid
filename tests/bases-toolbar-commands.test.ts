@@ -89,6 +89,29 @@ test('same-name external sort changes invalidate cloned controls instead of adop
  }finally{f.cleanup();}
 });
 
+test('a pointer-opened Results menu survives summary acknowledgement and rebases only its limit draft',async()=>{
+ const f=fixture(true);try{
+  const pointerOpen=()=>{const trigger=f.get<HTMLButtonElement>('Results');trigger.dispatchEvent(new f.dom.window.MouseEvent('pointerdown',{bubbles:true,cancelable:true}));trigger.focus();trigger.click();return trigger;};
+  const trigger=pointerOpen(),limit=f.get<HTMLInputElement>('Limit');assert.equal(f.doc.activeElement,limit);
+  const view={...f.state.views[0],summaries:{'note.score':'RatingTotal'}},views=[view,f.state.views[1]],root={...f.state.root,summaries:{RatingTotal:'values.sum()'}};
+  const accepted={...f.state,root,views,result:{...f.result,version:2,view}};f.toolbar.update(accepted);
+  assert.equal(f.doc.querySelector('[role="dialog"]')?.getAttribute('aria-label'),'Results');assert.equal(f.doc.activeElement,limit);assert.equal(trigger.getAttribute('aria-expanded'),'true');
+  f.click('Export CSV');await tick();assert.deepEqual(f.calls.pop(),['export','csv',false]);assert.equal(f.doc.querySelector('[role="dialog"]'),null);
+  pointerOpen();const draft=f.get<HTMLInputElement>('Limit');draft.value='10';draft.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));
+  f.toolbar.update({...accepted,root:{...root,summaries:{RatingTotal:'values.sum() + 1'}},result:{...accepted.result,version:3}});
+  draft.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));await tick();assert.deepEqual(f.calls.pop(),['save',3,{limit:10}]);assert.equal(f.doc.querySelector('[role="dialog"]'),null);assert.deepEqual(f.errors,[]);
+ }finally{f.cleanup();}
+});
+
+test('Results retains strict guards for changed limits, selected views and readonly snapshots',()=>{
+ for(const change of ['limit','selection','readonly'] as const){
+  const f=fixture(true);try{
+   f.click('Results');const next=change==='limit'?(()=>{const view={...f.state.views[0],limit:5};return{...f.state,views:[view,f.state.views[1]],result:{...f.result,version:2,view}};})():change==='selection'?{...f.state,selectedIndex:1,result:{...f.result,version:2,view:f.state.views[1]}}:{...f.state,readOnly:true,result:{...f.result,version:2}};
+   f.toolbar.update(next);assert.equal(f.doc.querySelector('[role="dialog"]'),null,change);assert.equal(f.calls.length,0);
+  }finally{f.cleanup();}
+ }
+});
+
 test('actual query-backed immediate Group edits manual visibility and creates an empty group',async()=>{
  const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
  let document=BaseDocument.parse('views: [{type: table, name: A, groupBy: {property: status, direction: ASC}}]'),version=1;

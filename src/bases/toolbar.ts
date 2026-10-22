@@ -71,6 +71,9 @@ function configurationSnapshot(state: BaseToolbarState): {views: BaseViewConfig[
   const root = state.root ? Object.fromEntries(Object.entries(state.root).filter(([key]) => key !== 'views')) : {filters:state.rootFilters};
   return {views:structuredClone(state.views) as BaseViewConfig[],root};
 }
+function resultsConfigurationWitness(snapshot:ReturnType<typeof configurationSnapshot>):ReturnType<typeof configurationSnapshot>{
+  const witness=structuredClone(snapshot);delete witness.root.summaries;for(const view of witness.views)delete (view as BaseViewPatch).summaries;return witness;
+}
 function applyConfigurationPatch(snapshot: ReturnType<typeof configurationSnapshot>, patch: {view?:BaseViewPatch;root?:Record<string,BaseValue|undefined>}, index: number): ReturnType<typeof configurationSnapshot> {
   const next = structuredClone(snapshot);
   const merge = (target:Record<string,BaseValue|undefined>, values:Record<string,BaseValue|undefined>) => { for (const [key,value] of Object.entries(values)) { if (value === undefined) delete target[key]; else target[key] = structuredClone(value); } };
@@ -171,7 +174,17 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         if (restore && focusOwned && trigger.isConnected) trigger.focus({ preventScroll: true }); options.onDraftChange();
       },
     };
-    own.rebase = (next, expectedName = configuredView.name) => { const snapshot = configurationSnapshot(next); if (JSON.stringify(snapshot) !== JSON.stringify(configuration) || next.views[selectedIndex]?.name !== expectedName) return false; opening = next; result = next.result; version = result.version; configuredView = next.views[selectedIndex] ?? result.view; refreshPanel?.(result,own.dirty); return true; };
+    own.rebase = (next, expectedName = configuredView.name) => {
+      const snapshot=configurationSnapshot(next);
+      // Results edits only the limit. A just-accepted summary selection or
+      // definition must not dismiss a newly opened menu or stale its limit draft.
+      // Other configuration/view changes still invalidate its exact baseline.
+      if(name==='Results'&&(next.selectedIndex!==opening.selectedIndex||next.readOnly!==opening.readOnly))return false;
+      const exact=JSON.stringify(snapshot)===JSON.stringify(configuration);
+      const summaryOnly=name==='Results'&&!own.failure&&JSON.stringify(resultsConfigurationWitness(snapshot))===JSON.stringify(resultsConfigurationWitness(configuration));
+      if((!exact&&!summaryOnly)||next.views[selectedIndex]?.name!==expectedName)return false;
+      configuration=snapshot;opening=next;result=next.result;version=result.version;configuredView=next.views[selectedIndex]??result.view;refreshPanel?.(result,own.dirty);return true;
+    };
     panel = own; trigger.setAttribute('aria-expanded', 'true');
     let retryPersistence: (() => Promise<void>) | undefined;
     type Control = HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement;
