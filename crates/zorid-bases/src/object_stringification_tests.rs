@@ -40,7 +40,7 @@ fn object_to_string_uses_child_strings_without_changing_typed_json() {
     // to_plain remains typed projection, not reference toString.
     assert_eq!(
         to_plain(&value),
-        serde_json::json!({"n":1.0,"b":true,"none":null})
+        serde_json::json!({"n":1,"b":true,"none":null})
     );
 }
 
@@ -456,7 +456,7 @@ fn unique_preserves_strict_collisions_and_limits_live_recursive_keys() {
     let output = unique_values(&values, &mut |_| Ok(())).unwrap();
     assert_eq!(
         to_plain(&RuntimeValue::List(output)),
-        serde_json::json!([1.0, "1", null, "null", true])
+        serde_json::json!([1, "1", null, "null", true])
     );
     let mut value = RuntimeValue::String("x".repeat(4096));
     for _ in 0..8 {
