@@ -41,7 +41,7 @@ export interface BaseBufferHost {
 /** No private buffers or direct disk writes: use the same recovery/CAS path as typing. */
 export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHost {
   let pending: Promise<unknown> = Promise.resolve();
-  const conditional = new WeakMap<NoteBuffer, { attempt: object; capture: ConditionalSavedSourceCapture }>();
+  const conditional = new WeakMap<NoteBuffer, { attempt: object; capture: ConditionalSavedSourceCapture; desiredSource?: string }>();
   const conditionalAttempts = new WeakMap<object, { buffer: NoteBuffer; capture: ConditionalSavedSourceCapture }>();
   return {
     transform(path, transform, validate, validateWrite = validate, expectedWitness, sourceCondition) {
@@ -64,6 +64,16 @@ export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHos
         const original = conditionalSource && conditionalAttempts.get(conditionalSource.attempt);
         if (original && original.buffer !== buffer) throw new Error('The original conditional Base buffer was replaced; its save cannot be replayed');
         let retained = conditional.get(buffer);
+        // A generic shared-buffer Save may settle the exact original operation
+        // without reentering this host. Retire only its clean, acknowledged text;
+        // a pending/rejected guard or newer draft still belongs to that attempt.
+        if (retained && (!conditionalSource || retained.attempt !== conditionalSource.attempt)
+          && guarded.conditionalSavedSourceStatus?.(retained.capture) === 'settled'
+          && !buffer.dirty && !buffer.error && !buffer.hasRecoveryConflict
+          && retained.desiredSource !== undefined && buffer.text === retained.desiredSource && buffer.savedText === retained.desiredSource
+          && admitted?.entryId === retained.capture.logicalWitness.entryId && admitted.path === retained.capture.logicalWitness.path) {
+          conditional.delete(buffer); conditionalAttempts.delete(retained.attempt); retained = undefined;
+        }
         if (original && original.capture !== retained?.capture) throw new Error('The original conditional Base capture is no longer owned by this buffer');
         if (retained && (!conditionalSource || retained.attempt !== conditionalSource.attempt)) throw new Error('Retry the original conditional Base command before editing this note');
         const status = retained && guarded.conditionalSavedSourceStatus?.(retained.capture);
@@ -110,6 +120,7 @@ export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHos
           }
           const attach = retained && guarded.conditionalSavedSourceStatus!(retained.capture) === 'unattached' ? retained.capture : undefined;
           buffer.update(next, { validateWrite: () => withBaseEditAdmissionPhase('durable-validation', () => { options.validate(); validateWrite(); validateIdentity(); }), ...(attach ? { conditionalSavedSource: attach } : {}) });
+          if (retained && retained.desiredSource === undefined) retained.desiredSource = next;
           options.onBufferChange?.(path, buffer, source);
           // Do not replay or roll back a failed write: recovery draft owns that state.
           await buffer.flush();
@@ -216,7 +227,7 @@ export class BaseController {
   private pendingPropertyHistory = new Map<string, PropertyHistoryEntry>();
   private pendingHistoryDirection = new WeakMap<BaseHistoryEntry, 'undo' | 'redo'>();
   private historySourceAttempts = new WeakMap<PropertyHistoryEntry, Record<'undo' | 'redo', object>>();
-  private pendingConfigurations = new Map<string, { readonly index: number; readonly name: string; readonly bound: boolean; readonly selectionSerial: number; readonly entryId?: string; readonly adapter: Vault['adapter']; validate(): void; committed?(): Promise<void> }>();
+  private pendingConfigurations = new Map<string, { readonly expected: string; readonly witness?: BaseSavedWitness; readonly attempt: object; readonly index: number; readonly name: string; readonly bound: boolean; readonly selectionSerial: number; readonly entryId?: string; readonly adapter: Vault['adapter']; validate(): void; committed?(): Promise<BaseViewRenameReport | void> }>();
   private pendingViewReferences?: BaseViewReferenceOperation;
   private referenceServices = new Set<NonNullable<Vault['adapter']['documentSemantics']>>();
   private epoch = 0;
@@ -806,14 +817,21 @@ export class BaseController {
   }
 
   /** Shared absolute-source transaction. A retry persists the same draft once. */
-  private async changeConfiguration(version: number, change: (document: BaseDocument) => number, committed?: () => Promise<void>): Promise<void> {
+  private async changeConfiguration(version: number, change: (document: BaseDocument) => number, committed?: () => Promise<BaseViewRenameReport | void>): Promise<BaseViewRenameReport | void> {
     const { validate, validateWrite } = this.guard(version, this.path), expected = this.current.source;
     const document = BaseDocument.parse(expected), index = change(document), desired = document.toString();
     const selected = document.views[index];
     if (!selected) throw new Error('The selected base view does not exist');
     const selectionSerial = this.selectionSerial;
     const witness = sharedBaseWitness(this.current.result!, this.path);
-    const retry = { index, name: selected.name, bound: this.viewName !== undefined, selectionSerial, entryId: witness?.entryId, adapter: this.options.vault.adapter, validate: validateWrite, committed };
+    const previous = !this.options.inlineSource ? this.pendingConfigurations.get(desired) : undefined;
+    if (previous && (previous.expected !== expected || previous.selectionSerial !== selectionSerial || previous.index !== index || previous.name !== selected.name
+      || previous.bound !== (this.viewName !== undefined) || previous.adapter !== this.options.vault.adapter
+      || previous.witness?.entryId !== witness?.entryId || previous.witness?.revision !== witness?.revision)) {
+      throw new Error('Retry the original Base configuration save before changing its command');
+    }
+    const attempt = previous?.attempt ?? {};
+    const retry = previous ?? { expected, witness: witness && Object.freeze({ ...witness }), attempt, index, name: selected.name, bound: this.viewName !== undefined, selectionSerial, entryId: witness?.entryId, adapter: this.options.vault.adapter, validate: validateWrite, committed };
     let prepared = false;
     const validateSelection = () => {
       // Even an explicit switch back to the same view retires the command.
@@ -833,7 +851,14 @@ export class BaseController {
       // The host replaces only its captured fence and retains the whole draft.
       validateSelection();
       await this.options.inlineSource.transform(expected, desired, validateSelection);
-    } else await this.options.mutations.transform(this.path, transform, validateSelection, validateWrite, witness);
+    } else await this.options.mutations.transform(this.path, transform, validateSelection, validateWrite, witness, {
+      attempt,
+      validate(source) {
+        // Standalone configuration is an absolute whole-file CAS. Even an
+        // unrelated external comment cannot be merged into this saved command.
+        if (source !== expected) throw new Error('The Base physical saved source changed; its external edit was preserved');
+      },
+    });
     } catch (error) {
       if (prepared || this.options.inlineSource) this.pendingConfigurations.set(desired, retry);
       throw error;
@@ -847,7 +872,7 @@ export class BaseController {
       this.stale = true; this.clearWake();
       this.epoch++; this.lastInvalidation = { kind: 'configuration-commit' }; this.sharedQueries.cancel();
     }
-    try { await committed?.(); } finally { await this.refresh(); }
+    try { return await retry.committed?.(); } finally { await this.refresh(); }
   }
 
   /** The session may flush an already transformed recovery draft itself. Only
@@ -907,7 +932,16 @@ export class BaseController {
     }
     if (root) document.updateRoot(root);
     document.updateView(index, { ...patch, name: to });
-    const desired = document.toString(), adapter = this.options.vault.adapter, service = adapter.documentSemantics;
+    const desired = document.toString();
+    if (!this.options.inlineSource && this.pendingConfigurations.has(desired)) {
+      // Resume the exact saved command before consulting backlinks again. Its
+      // reference witnesses and result belong to the original continuation.
+      if (!this.pendingConfigurations.get(desired)!.committed) throw new Error('Retry the original Base configuration save before renaming its view');
+      const report = await this.changeConfiguration(version, next => { if (root) next.updateRoot(root); next.updateView(index, { ...patch, name: to }); return active; });
+      if (!report) throw new Error('The original view rename has no retained reference outcome');
+      return report;
+    }
+    const adapter = this.options.vault.adapter, service = adapter.documentSemantics;
     const original = this.options.vault.entries.get(this.path);
     if (!original) throw new Error('The renamed Base file is unavailable');
     const identity = this.identities.get(this.path);
@@ -937,9 +971,10 @@ export class BaseController {
       // the independently saved references subsequently fails.
       if (operation) this.pendingViewReferences = operation;
       this.options.onViewRenamed?.(Object.freeze({ basePath: this.path, index, from, to }));
-      if (!operation) return;
+      if (!operation) return report;
       report = await operation.run();
       if (this.pendingViewReferences === operation) this.pendingViewReferences = undefined;
+      return report;
     };
     await this.changeConfiguration(version, next => { if (root) next.updateRoot(root); next.updateView(index, { ...patch, name: to }); return active; }, committed);
     return report;
