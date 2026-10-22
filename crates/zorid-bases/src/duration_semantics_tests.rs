@@ -13,6 +13,20 @@ fn eval(source: &str, clock: &str, zone: &str) -> BaseValue {
         .unwrap_or_else(|error| panic!("{source}: {error:?}"))
         .value
 }
+fn diagnostic(source: &str, clock: &str, zone: &str, code: &str, message: &str) {
+    let actual = match evaluate(source, &context(clock, zone)) {
+        Err(error) => error,
+        Ok(result) => panic!(
+            "{source} at {clock}/{zone}: expected diagnostic, got {:?}",
+            result.value
+        ),
+    };
+    assert_eq!(
+        actual,
+        ExpressionDiagnostic::new(code, message),
+        "{source} at {clock}/{zone}"
+    );
+}
 fn number(source: &str, clock: &str, zone: &str, expected: f64) {
     let actual = eval(source, clock, zone);
     let BaseValue::Number { value } = actual else {
@@ -101,10 +115,12 @@ fn iso_duration_retains_reference_mandatory_t_unanchored_and_integer_components(
     assert!(parse_duration("P1Y").is_none());
     assert!(duration_finite(&parse_duration("PT").unwrap()));
     assert!(!duration_finite(&parse_duration("P.5YT").unwrap()));
-    let value = eval("duration('P.5YT')", JAN, "UTC");
-    assert!(
-        matches!(value,BaseValue::Error {ref code,..} if code=="numeric-domain"),
-        "{value:?}"
+    diagnostic(
+        "duration('P.5YT')",
+        JAN,
+        "UTC",
+        "numeric-domain",
+        "Nonfinite duration result",
     );
 }
 #[test]
@@ -141,9 +157,12 @@ fn zero_truth_is_component_based_and_division_preserves_duration_type() {
     number("(duration('3h') - duration('1h')).hours", JAN, "UTC", 2.0);
     number("(duration('3h') * 2).hours", JAN, "UTC", 6.0);
     for source in ["duration('1h') / 0", "duration('3h') * 1e308"] {
-        assert!(
-            matches!(eval(source,JAN,"UTC"),BaseValue::Error {ref code,..} if code=="numeric-domain"),
-            "{source}"
+        diagnostic(
+            source,
+            JAN,
+            "UTC",
+            "numeric-domain",
+            "Nonfinite duration result",
         );
     }
     for source in [
@@ -153,9 +172,12 @@ fn zero_truth_is_component_based_and_division_preserves_duration_type() {
         "duration('1h') - 2",
         "duration('1h') + 2",
     ] {
-        assert!(
-            matches!(eval(source, JAN, "UTC"), BaseValue::Error { .. }),
-            "{source}"
+        diagnostic(
+            source,
+            JAN,
+            "UTC",
+            "type",
+            "Invalid operator involving Duration",
         );
     }
 }
@@ -226,8 +248,12 @@ fn calendar_fields_and_elapsed_comparisons_observe_dst_but_not_ambient_time() {
         ("2024-03-09T07:30:00Z", "America/New_York"),
         ("2024-11-02T05:30:00Z", "America/New_York"),
     ] {
-        assert!(
-            matches!(eval("duration('1d').hours",clock,zone),BaseValue::Error {ref code,..} if code=="invalid-local-time")
+        diagnostic(
+            "duration('1d').hours",
+            clock,
+            zone,
+            "invalid-local-time",
+            "Calendar arithmetic produced a nonunique local time",
         );
     }
     boolean("duration('1M') > duration('30d')", JAN, true);
