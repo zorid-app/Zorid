@@ -6,6 +6,7 @@ import {parseCSV} from './csv.mjs';
 import {assertScopedGroupSummaries} from './summary-oracle.mjs';
 import {MOD} from './ui.mjs';
 import {numericEditFrame} from './numeric-edit-diagnostics.mjs';
+import {waitForBaseHistoryReady} from './history-readiness.mjs';
 
 const active='.pane.is-active .bases-session';
 const dialog=name=>`[role="dialog"][aria-label=${JSON.stringify(name)}]`;
@@ -282,13 +283,17 @@ export async function journey(c){
   assert.equal(pasted,true,'Actual production paste handler accepted typed Bases clipboard');c.evidence.actions.push({action:'synthetic-clipboard-event',mime:['text/plain','obsidian/bases-cells'],text:paste,rawCells});
   await fmSaved(c,'Book 001.md',p=>{assert.equal(p.rating,4);assert.equal(p.status,'Finished');},'rectangular-paste-row-one');
   await fmSaved(c,'Book 002.md',p=>{assert.equal(p.rating,2);assert.equal(p.status,'Reading');},'rectangular-paste-row-two');
+  await waitForBaseHistoryReady(c,'Book 001.md','note.rating','undo rectangular paste');
   await c.ui.key('z',{modifiers:4});await c.ui.idle();
   await fmSaved(c,'Book 001.md',p=>{assert.equal(p.rating,5);assert.equal(p.status,'Reading');},'single-command-undo-restores-rectangular-edit');
+  await waitForBaseHistoryReady(c,'Book 001.md','note.rating','redo rectangular paste');
   await c.ui.key('z',{modifiers:MOD.meta|MOD.shift});await c.ui.idle();
   await fmSaved(c,'Book 001.md',p=>{assert.equal(p.rating,4);assert.equal(p.status,'Finished');},'redo-restores-rectangular-edit');
   await c.ui.selectCell('Book 001.md','note.rating');await c.ui.key('ArrowRight',{modifiers:MOD.shift});await c.ui.key('ArrowDown',{modifiers:MOD.shift});
+  await waitForBaseHistoryReady(c,'Book 002.md','note.status','clear rectangle after redo');
   await c.ui.key('Delete');await c.ui.idle();
   for(const file of['Book 001.md','Book 002.md'])await fmSaved(c,file,p=>{assert.equal(p.rating??null,null);assert.equal(p.status??null,null);},'range-clear-'+file);
+  await waitForBaseHistoryReady(c,'Book 002.md','note.status','undo rectangular clear');
   await c.ui.key('z',{modifiers:4});await c.ui.idle();
   await fmSaved(c,'Book 001.md',p=>{assert.equal(p.rating,4);assert.equal(p.status,'Finished');},'undo-range-clear-restores-first-row');
   await fmSaved(c,'Book 002.md',p=>{assert.equal(p.rating,2);assert.equal(p.status,'Reading');},'undo-range-clear-restores-second-row');
@@ -298,6 +303,7 @@ export async function journey(c){
   assert.equal(plainAccepted,true);c.evidence.actions.push({action:'synthetic-clipboard-event',mime:['text/plain'],text:'4'});
   await fmSaved(c,'Book 001.md',p=>assert.equal(p.rating,'4'),'external-plain-paste-preserves-string-type');
   await c.ui.wait(`return document.querySelector(${JSON.stringify(c.ui.cell('Book 001.md','note.rating'))})?.classList.contains('mod-error');`,'Incompatible pasted number visibly diagnosed');
+  await waitForBaseHistoryReady(c,'Book 001.md','note.rating','undo plain paste');
   await c.ui.key('z',{modifiers:4});await c.ui.idle();await fmSaved(c,'Book 001.md',p=>assert.equal(p.rating,4),'undo-plain-paste-restores-number-type');
 
   await c.ui.drag(`${active} [role="columnheader"][title="note.status"]`,`${active} [role="columnheader"][title="note.rating"]`);await c.ui.idle();
