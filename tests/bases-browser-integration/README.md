@@ -22,7 +22,7 @@ have **not been executed against matching generated WASM**. The historical
 run005 result above remains nine executed groups; it does not cover this extension.
 
 The shared [Q3 fixture](../fixtures/bases-q3-semantics.mjs) adds 14 inert source
-files (four Markdown notes and ten saved Bases), with 127 authored typed row-value
+files (four Markdown notes and ten saved Bases), with 133 authored typed row-value
 oracles and 16 expected diagnostic entries. These counts describe assertions and
 fixture data, not additional executed groups. The ten appended groups cover:
 
@@ -48,6 +48,13 @@ The inert `__proto__` Object key is deliberately preserved as user data. Sort
 expectations use Zorid's pinned English base-sensitivity/numeric policy, not an
 assertion of identical ordering in every host locale. These new expectations are
 also unexecuted against matching artifacts.
+
+The provenance group additionally distinguishes ordinary inferred Link raw public
+path `/Q3/Source` from its canonical `Q3/Source.md` target witness and `.asFile()`
+lookup. Six explicit row expectations cover raw string conversion/prefix behavior
+and canonical File lookup for both source notes. Strict Object grouping still
+requires two distinct group identities and an overall unique count of two. This
+is a source-only oracle correction, not evidence of a successful browser run.
 
 The runner requires the exact planned group-name list and all 19 passed results;
 no skipped or unexecuted group can produce success. Shared fixture bytes join the

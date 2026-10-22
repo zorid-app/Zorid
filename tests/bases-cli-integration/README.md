@@ -29,7 +29,7 @@ original scenario, not acceptance of this extension.
 The 40 added invocations are one mkdir, 14 creates, one index build, ten saved
 Base queries and 14 exact raw reads. The shared
 [Q3 fixture](../fixtures/bases-q3-semantics.mjs) has 14 added files (four ordinary
-Markdown notes and ten Bases), 127 typed row-value oracles and 16 expected diagnostic
+Markdown notes and ten Bases), 133 typed row-value oracles and 16 expected diagnostic
 entries. Assertions are not CLI commands. The runner checks that the original
 phase ends at 85 and that the completed new plan ends at 125.
 
@@ -49,7 +49,8 @@ configured relation raw-string coercion; normalized File folder/tag methods;
 literal-space title boundaries; rich String raw-date selection; and stable natural
 List sorting. Inert `__proto__` user data is deliberately preserved. Collation is
 the pinned English base-sensitivity/numeric policy, not universal locale parity.
-This follow-up has no actual CLI execution evidence yet.
+This follow-up has not passed a full actual CLI campaign; partial failures are
+recorded below.
 
 Actual campaign 004 on frozen `f95ab6beea41999fe45eabfe9e882f7bdb1bec3c`
 stopped at command 102, the first Q3 query, after the original seven checks passed.
@@ -64,8 +65,21 @@ phase `property`, entry `delta`, path `Books/Delta.md`, property `note.author`, 
 receipt and compares the complete diagnostic multiset, including phase and entry
 identity. Missing, changed, duplicate or unknown diagnostics still fail. The 16
 Q3 expression diagnostics remain distinct from this one legacy context diagnostic
-expected in each Q3 query. Browser expectations, all 127 typed row oracles and the
-125-command plan remain unchanged. A fresh actual campaign is still required.
+expected in each Q3 query. At that correction, browser expectations, all 127 typed
+row oracles and the 125-command plan remained unchanged. A fresh actual campaign
+was still required.
+
+Actual campaign 005 on `c9560248b7513c743752d1a116f6bfc0c77ea9bc` stopped at
+command 110 after the original seven checks and eight Q3 groups passed. The common
+provenance oracle incorrectly expected canonical public Link path `Q3/Source.md`
+for the ordinary inferred `[[/Q3/Source]]` value; that unconfigured Link retains
+raw public path `/Q3/Source`, while its target witness and `.asFile()` lookup remain
+canonical. Failed evidence remains at
+`/private/tmp/zorid-bases-cli-actual-20261022-005/zorid-bases-cli-5Set89/report.json`.
+The corrected shared oracle retains the exact target witness, two strict Object
+groups and unique count of two, and adds six raw String/canonical File row
+expectations (133 total). File, query, command and diagnostic counts are unchanged.
+Campaign 005 remains failed; the corrected full campaign has not been executed.
 
 Read-only `--help` and `base-query --help` inspection used the older existing
 October 20 CLI artifact with SHA-256

@@ -268,21 +268,31 @@ views:
 };
 // Public Link DTOs omit the captured source path. Identical DTOs must not be
 // rehydrated by guessing a new origin before strict Object child comparisons.
-const pointer=object([['ref',{type:'link',path:sourcePath,target:{$fixtureWitness:sourcePath},display:null,external:false}]]);
+// Ordinary unconfigured links retain the parsed raw destination in public path;
+// canonical lookup lives in the independently bound target witness and asFile.
+// Configured relation display projection is a separate canonical-path contract.
+const pointer=object([['ref',{type:'link',path:'/Q3/Source',target:{$fixtureWitness:sourcePath},display:null,external:false}]]);
 const provenanceGroups={
   name:'Q3 strict Object Link children retain captured provenance across grouping and summaries',baseId:'q3-provenance',basePath:'Q3-provenance.base',view:'Q3 provenance',clockMs:q3ClockMs,timezone:q3Timezone,
   source:`filters: 'file.path == "Q3/Source.md" || file.path == "Q3/Twin.md"'
+formulas:
+  pointerString: 'pointer.ref.toString()'
+  pointerRawPrefix: 'pointer.ref.startsWith("/")'
+  pointerFile: 'pointer.ref.asFile().path'
 summaries:
   StrictUnique: 'values.unique().length'
 views:
   - type: table
     name: Q3 provenance
-    order: [file.path, note.pointer]
+    order: [file.path, note.pointer, formula.pointerString, formula.pointerRawPrefix, formula.pointerFile]
     sort: [{property: file.path, direction: ASC}]
     groupBy: {property: note.pointer, direction: ASC}
     summaries: {note.pointer: StrictUnique}
 `,
-  rows:[{path:sourcePath,values:{'note.pointer':pointer}},{path:'Q3/Twin.md',values:{'note.pointer':pointer}}],
+  rows:[
+    {path:sourcePath,values:{'note.pointer':pointer,'formula.pointerString':s('[[/Q3/Source]]'),'formula.pointerRawPrefix':b(true),'formula.pointerFile':s('Q3/Source.md')}},
+    {path:'Q3/Twin.md',values:{'note.pointer':pointer,'formula.pointerString':s('[[/Q3/Source]]'),'formula.pointerRawPrefix':b(true),'formula.pointerFile':s('Q3/Source.md')}},
+  ],
   summaries:{'note.pointer':n(2)},diagnostics:[],groups:[
     {key:pointer,paths:[sourcePath],summaries:{'note.pointer':n(1)}},
     {key:pointer,paths:['Q3/Twin.md'],summaries:{'note.pointer':n(1)}},
