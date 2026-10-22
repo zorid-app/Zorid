@@ -35,6 +35,19 @@ export function createBaseListView(container: HTMLElement, options: BaseListView
       }
       const value = document.createElement('span'); cell.append(value);
       disposers.push(mountBaseProperty(value, row, property, snapshot, options, current));
+      if (options.dragFile && (property === 'file.name' || property === 'file.file')) {
+        value.draggable = true;
+        value.addEventListener('dragstart', event => {
+          if (!current()) { event.preventDefault(); return; }
+          if (event.defaultPrevented || (event.target as Element | null)?.closest('input,textarea,select,button,[contenteditable="true"]')) return;
+          const selection = document.defaultView?.getSelection();
+          if (selection && !selection.isCollapsed) for (let index = 0; index < selection.rangeCount; index++) {
+            const range = selection.getRangeAt(index);
+            if (value.contains(range.startContainer) || value.contains(range.endContainer)) return;
+          }
+          options.dragFile!(row, event);
+        });
+      }
       if (settings.indentProperties && propertyIndex > 0) nested.append(cell);
       else {
         if (propertyIndex > 0) { const separator = document.createElement('span'); separator.className = 'bases-list-separator'; separator.textContent = settings.separator; first.append(separator); }
