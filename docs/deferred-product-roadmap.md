@@ -53,11 +53,18 @@ and property-alias preservation (`499acedd`, root33 focused checks pass).
 C1 multi-view summary/name guards, C2 mounted/nested/fenced rename and C3
 preview/failure scenarios are composed; root fixture/protocol checks10+3 pass.
 Their native runs remain pending. `bases_inline_core` owns the remaining C2
-selection fix: `src/ui/base-embed-sessions.ts` and minimal inline-host callback
-in `src/ui/workspace.ts`, plus focused tests. Exact successful own durable-save
-acknowledgement may retain the session across clean remount, with host/fence/
-surrounding-source validation. No foreign/stale reuse or dirty-guard relaxation.
-`bases_controller` is independent reviewer; no other worker owns that seam.
+selection fix: `src/ui/base-embed-sessions.ts`, `src/editor/live-bases.ts` and
+minimal inline-host callback in `src/ui/workspace.ts`, plus focused tests.
+A focused actual-Workspace UI test shows own-save acknowledgement alone is
+insufficient: CodeMirror constructs the new widget while the old entry is still
+attached. Scope now includes stable mapped-fence occurrence identity and a
+single-use successful-own-save handoff with exact host/scope/identity/fence/
+surrounding-source validation. A binding lease must prevent the old widget's
+later disposal from detaching the new owner; consume the handoff before DOM
+transfer. No foreign/stale/external cache reuse or dirty-guard relaxation.
+`bases_controller` approved this design and is independent source reviewer;
+implementation/tests remain in progress, no final source approval yet. No other
+worker owns this Workspace/editor seam.
 
 Latest heavy Electron016 reaches244 actions/29 checks on **old Rust5e010112 /
 host176fcff5**, not the current359-test core. Rich-property durable edits pass,
