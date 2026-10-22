@@ -1822,3 +1822,56 @@ fn scalar_to_list_group_move_lands_in_the_destination_without_flattening_lists()
         BaseValue::List { .. }
     ));
 }
+
+#[test]
+fn manual_string_group_matches_typed_list_tostring_and_date_string_loose_values() {
+    let generation = generation_with_settings_file(
+        "",
+        &[
+            ("a-day", "---\nkind: card\nstatus: [1, 2]\n---\n"),
+            ("b-noon", "---\nkind: card\nstatus: [1, 2]\n---\n"),
+        ],
+        false,
+    );
+    let source="filters: 'kind == \"card\"'\nviews:\n  - type: table\n    name: Lists\n    order: [file.name,status]\n    groupBy: {property: status, direction: ASC}\n    groupOrder: ['1, 2']\n";
+    let result = zorid_bases::query_generation(
+        &compile_base_source(source).unwrap(),
+        &generation,
+        &[],
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(result.groups.len(), 1);
+    assert_eq!(result.groups[0].entry_ids.len(), 2);
+    assert!(matches!(result.groups[0].key, Some(BaseValue::List { .. })));
+    let source="filters: 'kind == \"card\"'\nformulas:\n  mixed: 'if(file.basename == \"a-day\", date(\"2026-01-01\"), \"2026-01-01T12:00:00Z\")'\nviews:\n  - type: table\n    name: Dates\n    order: [file.name, formula.mixed]\n    groupBy: {property: formula.mixed, direction: ASC}\n";
+    let result = zorid_bases::query_generation(
+        &compile_base_source(source).unwrap(),
+        &generation,
+        &[],
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(result.groups.len(), 1);
+    assert_eq!(result.groups[0].entry_ids.len(), 2);
+    assert!(result.groups[0].edit_key.is_none());
+    let mut searched = QueryOptions::default();
+    searched.search_terms = vec!["b-noon".into()];
+    let result = zorid_bases::query_generation(
+        &compile_base_source(source).unwrap(),
+        &generation,
+        &[],
+        &searched,
+    )
+    .unwrap();
+    assert_eq!(result.groups[0].entry_ids, vec![id("b-noon")]);
+    assert!(matches!(
+        result.groups[0].key,
+        Some(BaseValue::String { .. })
+    ));
+    assert!(matches!(
+        result.group_options[0].key,
+        BaseValue::Date { .. }
+    ));
+    assert_eq!(result.group_options[0].count, 2);
+}
