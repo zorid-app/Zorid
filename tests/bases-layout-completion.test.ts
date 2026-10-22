@@ -112,3 +112,21 @@ test('Kanban retains logical card focus across refreshes and keyboard moves igno
   assert.equal(opens, 0);
   view.destroy(); dom.window.close();
 });
+
+test('Kanban drag feedback previews sorted insertion without changing data or dispatching a write', () => {
+  const { dom, container, result } = fixture(); let writes = 0;
+  const view = createBaseKanbanView(container, { result, openFile() {}, requestMove: async () => { writes++; } });
+  const source = container.querySelector<HTMLElement>('[data-path="A.md"]')!, destination = container.querySelector('[data-path="B.md"]')!.closest('section')!;
+  let ghost: unknown;
+  const start = new dom.window.Event('dragstart', { cancelable: true });
+  Object.defineProperty(start, 'dataTransfer', { value: { setData() {}, setDragImage(element: unknown) { ghost = element; } } }); source.dispatchEvent(start);
+  assert.equal(ghost, source); assert.equal(source.classList.contains('is-being-dragged'), true);
+  const over = new dom.window.Event('dragover', { bubbles: true, cancelable: true }); destination.dispatchEvent(over);
+  assert.equal(over.defaultPrevented, true); assert.ok(destination.querySelector('.bases-kanban-card-drop-placeholder'));
+  assert.equal(writes, 0); assert.deepEqual(result.groups[1].rows.map(row => row.path), ['B.md']);
+  source.dispatchEvent(new dom.window.Event('dragend'));
+  assert.equal(container.querySelector('.bases-kanban-card-drop-placeholder'), null);
+  assert.equal(source.classList.contains('is-being-dragged'), false);
+  assert.equal(container.querySelector<HTMLElement>('[data-path="B.md"]')!.style.top, '0px');
+  view.destroy(); dom.window.close();
+});

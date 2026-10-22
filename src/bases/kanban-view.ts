@@ -171,7 +171,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
   }
   function card(row: BaseQueryRow, index: number): HTMLElement {
     const item = doc.createElement('div'); item.className = 'bases-kanban-card'; item.dataset.path = row.path;
-    item.style.top = `${index * rowHeight}px`; item.style.height = `${rowHeight - gap}px`;
+    item.dataset.rowIndex = String(index); item.style.top = `${index * rowHeight}px`; item.style.height = `${rowHeight - gap}px`;
     item.setAttribute('role', 'option'); item.setAttribute('aria-selected', String(selected === row.path));
     item.classList.toggle('is-selected', selected === row.path);
     item.classList.toggle('is-pending', pending.has(row.path)); item.setAttribute('aria-busy', String(pending.has(row.path)));
@@ -228,11 +228,32 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     item.addEventListener('dragstart', event => {
       if (destroyed || !root.contains(item) || !item.draggable || !canMove(row.path) || hasActiveEdits() || !event.dataTransfer) { event.preventDefault(); return; }
       drag = ownedDrag = { path: row.path, version: result.version }; select(row.path);
+      item.classList.add('is-being-dragged');
+      event.dataTransfer.setDragImage?.(item, Math.min(event.offsetX, width), Math.min(event.offsetY, rowHeight));
       event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', row.path);
       options.dragFile?.(row, event);
     });
-    item.addEventListener('dragend', () => { if (ownedDrag && drag === ownedDrag) drag = undefined; ownedDrag = undefined; });
+    item.addEventListener('dragend', () => { if (ownedDrag && drag === ownedDrag) { drag = undefined; clearCardPreview(); } item.classList.remove('is-being-dragged'); ownedDrag = undefined; });
     return item;
+  }
+  function clearCardPreview() {
+    for (const placeholder of board.querySelectorAll('.bases-kanban-card-drop-placeholder')) {
+      const space = placeholder.parentElement!; placeholder.remove();
+      const originalHeight = space.dataset.previewHeight;
+      if (originalHeight !== undefined) { space.style.height = originalHeight; delete space.dataset.previewHeight; }
+      for (const card of space.querySelectorAll<HTMLElement>('.bases-kanban-card')) card.style.top = `${Number(card.dataset.rowIndex) * rowHeight}px`;
+    }
+  }
+  function previewCardDrop(column: HTMLElement, group: BaseQueryGroup) {
+    clearCardPreview();
+    if (!drag || !group.key || locate(drag.path) === group) return;
+    const rows = displayedRows(group), sourceIndex = rowOrder.get(drag.path) ?? 0;
+    const index = rows.filter(row => (rowOrder.get(row.path) ?? 0) < sourceIndex).length;
+    const space = column.querySelector<HTMLElement>('.bases-kanban-column-space'); if (!space) return;
+    space.dataset.previewHeight = space.style.height; space.style.height = `${(rows.length + 1) * rowHeight}px`;
+    for (const card of space.querySelectorAll<HTMLElement>('.bases-kanban-card')) if (Number(card.dataset.rowIndex) >= index) card.style.top = `${(Number(card.dataset.rowIndex) + 1) * rowHeight}px`;
+    const placeholder = doc.createElement('div'); placeholder.className = 'bases-kanban-card-drop-placeholder';
+    placeholder.style.top = `${index * rowHeight}px`; placeholder.style.height = `${rowHeight - gap}px`; space.append(placeholder);
   }
   function renderRows(body: HTMLElement, group: BaseQueryGroup, requestedTop = body.scrollTop) {
     if (hasActiveEdits()) return;
@@ -288,9 +309,11 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
         heading.addEventListener('dragstart', event => {
           if (destroyed || groupOrderPending || !root.contains(heading) || (event.target as Element)?.closest('button') || !event.dataTransfer) { event.preventDefault(); return; }
           columnDrag = ownedColumnDrag = { group, version: result.version };
+          column.classList.add('is-being-dragged');
+          event.dataTransfer.setDragImage?.(column, Math.min(event.offsetX, width), event.offsetY);
           event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', label(group.key));
         });
-        heading.addEventListener('dragend', () => { if (columnDrag === ownedColumnDrag) columnDrag = undefined; });
+        heading.addEventListener('dragend', () => { if (columnDrag === ownedColumnDrag) columnDrag = undefined; column.classList.remove('is-being-dragged'); });
         heading.addEventListener('dragover', event => { if (!destroyed && !groupOrderPending && columnDrag && columnDrag.version === result.version) event.preventDefault(); });
         heading.addEventListener('drop', event => {
           const source = columnDrag; columnDrag = undefined;
@@ -325,11 +348,12 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
       });
       body.addEventListener('scroll', () => { if (destroyed || !root.contains(body)) return; saveScroll(group.key, body.scrollTop); renderRows(body, group); });
       column.addEventListener('dragover', event => {
-        if (!destroyed && root.contains(column) && drag && drag.version === result.version && canMove(drag.path) && group.key) { event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'; }
+        if (!destroyed && root.contains(column) && drag && drag.version === result.version && canMove(drag.path) && group.key) { event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'; previewCardDrop(column, group); }
       });
+      column.addEventListener('dragleave', event => { if (!(event.relatedTarget instanceof doc.defaultView!.Node) || !column.contains(event.relatedTarget)) clearCardPreview(); });
       column.addEventListener('drop', event => {
         if (destroyed || !root.contains(column)) return;
-        const source = drag; drag = undefined;
+        const source = drag; drag = undefined; clearCardPreview();
         if (!source || source.version !== result.version || !group.key) return;
         event.preventDefault(); void move(source.path, group.key);
       });

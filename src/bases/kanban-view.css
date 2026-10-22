@@ -46,3 +46,6 @@
 .bases-columns-toggle { width: 100%; display: flex; align-items: center; gap: 8px; text-align: left; padding: 8px; border: 0; border-radius: 4px; color: inherit; background: transparent; cursor: pointer; }
 .bases-columns-toggle:hover { background: var(--background-modifier-hover, #eee); }
 .bases-columns-error { padding: 8px; color: var(--text-error, #b33); }
+
+.bases-kanban-card.is-being-dragged, .bases-kanban-column.is-being-dragged { opacity: .5; }
+.bases-kanban-card-drop-placeholder { position: absolute; inset-inline: 0; border-radius: var(--radius-m, 8px); background: var(--background-modifier-hover, #eee); pointer-events: none; }
