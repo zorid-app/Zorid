@@ -1,13 +1,19 @@
 # Actual browser/WASM Bases semantic integration
 
-Actual run010 **passed all 19 semantic integration groups**, including all 146
-current Q3 typed row-value expectations and 16 exact Q3 diagnostics, on frozen
-`c90d254b63eef0ef8571bba177b327ff04922495`. It used the normal admitted service,
-product Worker, rebuilt date-v8 WASM and real IndexedDB. Source/artifact proofs
-matched before and after; every group ran, no events were dropped, and owned
-Chrome/profile/Vite/database cleanup succeeded. See [010 evidence](../../docs/history/bases-browser-actual-010-20261022.md).
-Rendered UI/widgets/sanitization, mobile, other-browser, sync and stress acceptance
-remain separate.
+Actual run011 **passed all 19 semantic integration groups**, including all 162
+Q3 typed expectations and 16 exact diagnostics, on frozen
+`4025d6c89e178b8241fa420e83eb1b5402b7a0dd`, Rust tree `dbfc9221`. It used the
+normal admitted service, product Worker, rebuilt v9 WASM and real IndexedDB.
+All groups completed, exact source/artifact guards passed, no events were dropped,
+and owned Chrome/profile/Vite/database cleanup succeeded. Independent frozen-Git
+and preserved-asset audit agrees. See [011 evidence](../../docs/history/bases-browser-actual-011-20261022.md).
+Rendered UI/widgets/sanitization, native/mobile, other-browser, sync, stress and
+later native C1 fix `12869443` acceptance remain separate.
+
+[Run010](../../docs/history/bases-browser-actual-010-20261022.md) passed all 19
+groups and its then-current 146 typed expectations on the earlier Rust8074
+module. Run011 adds the 16 Date/String comparison and existing-null-guard cases;
+its pass does not relabel historical counts or failed runs.
 
 [Run009](../../docs/history/bases-browser-actual-009-20261022.md) passed all 19
 groups and its then-current 133 typed expectations on the earlier Rust958 module.
@@ -42,14 +48,14 @@ remain separate.
 ## Executed Q3 extension
 
 Source batch `64bee169` → `19ae330c`, composed at `eb6e0346`, appends **ten
-new groups to the original nine: 19 browser groups**. All ten passed in run009 and run010.
+new groups to the original nine: 19 browser groups**. All ten passed in run009, run010 and run011.
 The historical run005 result above remains nine executed groups; it does not
 cover this extension.
 
 The shared [Q3 fixture](../fixtures/bases-q3-semantics.mjs) adds 14 inert source
-files (four Markdown notes and ten saved Bases), with 146 current typed row-value
+files (four Markdown notes and ten saved Bases), with 162 current typed row-value
 oracles and 16 expected diagnostic entries. All these assertions executed
-successfully in run010 (133 earlier expectations in run009). The counts describe fixture assertions, not additional
+successfully in run011 (146 earlier expectations in run010, 133 in run009). The counts describe fixture assertions, not additional
 groups. The ten appended groups cover:
 
 1. Object callback keys, values and outer scope.
@@ -88,11 +94,17 @@ dates are skipped by extrema, while hyphenated controls and explicit compact
 `date()` values remain eligible. All 13 passed in run010 against the rebuilt
 WASM. The group/file/diagnostic counts are unchanged.
 
+The G18 follow-up adds 16 Date/String relational and existing-null-guard
+expectations inside the same groups. Left Date parses quoted/raw date strings;
+invalid and reversed String/Date cases preserve numeric fallback behavior. Null
+cases pin the existing guard, not a new null semantic. All 16 passed in run011
+against the rebuilt WASM; group/file/diagnostic counts remain unchanged.
+
 The runner requires the exact planned group-name list and all 19 passed results;
 no skipped or unexecuted group can produce success. Shared fixture bytes join the
 source fingerprint. Authored-data/syntax/oracle checks are source verification,
-not actual Worker/WASM, native, CLI or rendered UI acceptance. Run010 supplies
-the current matching Worker/WASM result for this fixture; the separate
+not actual Worker/WASM, native, CLI or rendered UI acceptance. Run011 supplies
+the matching Worker/WASM result for its pinned source; the separate
 UI/platform/stress gates above remain open.
 
 Earlier actual run003 **passed all nine then-current groups** on frozen
