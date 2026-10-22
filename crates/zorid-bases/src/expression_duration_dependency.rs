@@ -97,7 +97,7 @@ fn walk(expr: &Expr, locals: Locals, check: &mut impl FnMut(usize) -> Option<()>
             }))
         }
         Expr::Literal(Value::Number(_)) => Fact::pure(Shape::scalar(NUMBER)),
-        Expr::Literal(_) | Expr::Regex(_, _) => Fact::pure(Shape::scalar(OTHER)),
+        Expr::Literal(_) | Expr::Regex(..) => Fact::pure(Shape::scalar(OTHER)),
         Expr::Identifier(name) => Fact::pure(match name.as_str() {
             "value" => locals.value,
             "acc" => locals.acc,

@@ -107,7 +107,9 @@ fn published_values_clear_the_candidate_phase_and_replace_all_temporary_sentinel
     // Retained published overlays attach their completed values, never the
     // construction-phase placeholder or a thrown unavailable diagnostic.
     let mut file = crate::runtime_file(record, &BasesTimezone::Utc).unwrap();
-    values.attach(&mut file, &BasesTimezone::Utc).unwrap();
+    values
+        .attach(&mut file, &BasesTimezone::Utc, &mut |_| Ok(()))
+        .unwrap();
     assert!(matches!(file.properties["count"], RuntimeValue::Number(value) if value == 0.0));
 }
 
