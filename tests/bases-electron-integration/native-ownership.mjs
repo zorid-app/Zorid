@@ -19,3 +19,13 @@ export function relayProcessOwnership({events,rows,native,vault,identity,appPid,
   return expected;
 }
 export function livingOwnedProcesses(owned,rows){return [...owned].filter(value=>rows.some(row=>row.pid===value.pid&&row.command===value.command));}
+
+/** Startup can die before its first event append. The fresh private relay
+ * control path and fresh private vault identify these exact two allowed argv
+ * forms independently of PPID; an app/relay exit must not hide their children. */
+export function discoverUnannouncedRelayProcesses({rows,native,vault,identity}){
+  assert.ok(path.isAbsolute(identity?.executable)&&Array.isArray(identity.args),'Exact relay prefix');
+  const nativeArgs=[['--vault',vault],['--vault',vault,'--initialize-local']];
+  const commands=new Map(nativeArgs.flatMap(args=>[[[identity.executable,...identity.args,...args].join(' '),'relay'],[[native,...args].join(' '),'genuine-native']]));
+  return rows.flatMap(row=>{const kind=commands.get(row.command);return kind?[{...row,kind,discoveredBeforeEvent:true}]:[];});
+}

@@ -13,7 +13,7 @@ import {UI} from './ui.mjs';
 import {fixtureFiles,template} from './fixtures.mjs';
 import {journey} from './journey.mjs';
 import {CAMPAIGN_DIRECTORIES,validateFixtureName,readFixture,writeFixture,campaignClosure} from './owned-fixtures.mjs';
-import {relayProcessOwnership,livingOwnedProcesses} from './native-ownership.mjs';
+import {relayProcessOwnership,livingOwnedProcesses,discoverUnannouncedRelayProcesses} from './native-ownership.mjs';
 
 const arg = name => { const i=process.argv.indexOf(name); return i<0?undefined:process.argv[i+1]; };
 const required = name => { const value=arg(name); assert.ok(value,`Explicit ${name} required`); return value; };
@@ -51,10 +51,7 @@ const exited=()=>!child||child.exitCode!==null||child.signalCode!==null;
 async function nativeChildren(requireLineage=false){
   const rows=processes();
   if(!relay){const owned=rows.filter(row=>row.parent===child?.pid&&row.command.startsWith(native+' --vault '+vault));for(const row of owned)natives.set(row.pid,row);return owned;}
-  const prefix=[relayIdentity.executable,...relayIdentity.args].join(' ')+' --vault '+vault;
-  // Capture direct owned descendants even if startup failed before its first
-  // lifecycle record was flushed. Their unique generated control path scopes IO.
-  for(const row of rows.filter(row=>row.parent===child?.pid&&row.command.startsWith(prefix))){natives.set(row.pid,{...row,kind:'relay'});for(const nativeRow of rows.filter(value=>value.parent===row.pid&&value.command.startsWith(native+' --vault '+vault)))natives.set(nativeRow.pid,{...nativeRow,kind:'genuine-native'});}
+  for(const row of discoverUnannouncedRelayProcesses({rows,native,vault,identity:relayIdentity}))natives.set(row.pid,row);
   const events=(await relay.events()).slice(record?.relayEventOffset??0);if(!events.some(event=>event.kind==='started')){assert.ok(!requireLineage,'Relay launch event required');return livingOwnedProcesses(natives.values(),rows);}
   const owned=relayProcessOwnership({events,rows,native,vault,identity:relayIdentity,appPid:child?.pid,requireLineage});
   for(const value of owned)natives.set(value.pid,value);return livingOwnedProcesses(owned,rows);
