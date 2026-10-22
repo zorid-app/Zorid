@@ -10,7 +10,7 @@ Types/Bases designs and combined Bases/Tasks/Calendar implementation assignments
 Deliver fully usable local Bases over ordinary vault files, using the shared Rust
 core and TypeScript workspace. Match **Obsidian 1.14.4 Bases appearance and
 interaction** as the initial target, including menus, editing, keyboard behavior
-and all four built-in layouts. One approved difference: **New copies the complete
+and all four built-in layouts. Approved template difference: **New copies the complete
 configured template note, properties and body, rather than only its properties**.
 
 - Files own content and properties. Bases own saved selection/configuration;
@@ -30,6 +30,27 @@ configured template note, properties and body, rather than only its properties**
   retain their existing supported paths. Native mobile, other OS runtime parity,
   Tasks, Calendar, recurrence, Google, sync and public plugin frameworks remain
   later work. A Base's local date/relation fields do not activate those features.
+
+## UI fidelity and retained improvements
+
+Latest direct steering: use REA heavily throughout implementation, not just for
+initial research. Exact reference UI/UX is the default for existing Bases
+features; the agreed improvements below remain requirements, not parity defects.
+
+- Inspect each feature's shipped implementation with REA before building it;
+  reuse retained evidence and inspect focused areas rather than repeatedly
+  analyzing the entire bundle. Follow up unclear behavior with runtime scenarios.
+- Match layout, spacing, typography, sizing, icons, menu structure/order,
+  popover placement, focus, selection, shortcuts, pointer/drag interactions,
+  disabled states and empty/error states against the identified reference build.
+- Compare corresponding reference/Zorid screenshots and executed interactions
+  during each UI batch. A similar-looking default screen is insufficient.
+- Preserve full literal template copying, richer property definitions including
+  select/multiselect/status, and relations/reverse relations/rollups. Use the
+  reference's visual language and interaction conventions for these additions.
+- Record each intended addition/deviation and its user-facing reason alongside
+  reference evidence. Fix accidental differences; exact matching must not remove
+  agreed capabilities or weaken storage, stale-edit and recovery guarantees.
 
 ## Readiness, ownership and reference baseline
 

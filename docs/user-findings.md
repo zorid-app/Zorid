@@ -1,5 +1,15 @@
 # User findings queue
 
+## Continuous REA-based Bases UI/UX matching — 2026-10-21
+
+User reiterates exact Obsidian UI/UX during implementation and heavy REA use,
+while preserving the agreed improvements. Goal now requires per-feature focused
+REA inspection, reference runtime scenarios and matching screenshots/interactions
+throughout delivery. Full template copying, rich property definitions including
+multiselect/status, relations/reverse relations and rollups remain requirements;
+their additions follow the reference visual language. No new UI parity pass is
+claimed by this documentation clarification.
+
 ## Bases implementation goal and design cleanup — 2026-10-21
 
 User requests one file covering everything in the implementation pass and editing
