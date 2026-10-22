@@ -494,6 +494,13 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         if (manual) return {groupBy,groupOrder:property.value ? manual.read() : undefined};
         return property.value === propertyId(existing?.property) ? { groupBy } : { groupBy, groupOrder: undefined };
       };
+      readOperation = () => {
+        const patch = validateToolbarPatch(result, readPatch()), saved = configuredView.groupBy;
+        // Validation canonicalizes IDs; an unchanged selection must retain its
+        // original persisted spelling when only visibility/order/direction moves.
+        if (mapping(patch.groupBy) && mapping(saved) && typeof saved.property === 'string' && propertyId(patch.groupBy.property) === propertyId(saved.property)) patch.groupBy.property = saved.property;
+        expectedPatch = {view:patch}; return () => options.save(version,patch);
+      };
     } else {
       const initialView = result.view.filters === undefined ? undefined : structuredClone(result.view.filters) as FilterNode;
       const initialRoot = opening.rootFilters === undefined ? undefined : structuredClone(opening.rootFilters) as FilterNode;
