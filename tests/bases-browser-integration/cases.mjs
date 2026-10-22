@@ -74,6 +74,7 @@ properties:
     options:
       - {value: Rust, color: orange}
       - {value: Design, color: blue}
+      - {value: Compilers, color: purple}
 `;
 export const authorsBase = `filters: 'type == "author" && bookCount >= 1'
 formulas:
