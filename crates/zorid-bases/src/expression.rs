@@ -2713,14 +2713,14 @@ impl<'a> Evaluator<'a> {
             | RuntimeValue::Html(value)
             | RuntimeValue::Image(value)
             | RuntimeValue::Icon(value)
-                if property == "length" =>
+                if property.eq_ignore_ascii_case("length") =>
             {
                 RuntimeValue::Number(value.chars().count() as f64)
             }
-            RuntimeValue::Link(value) if property == "length" => {
+            RuntimeValue::Link(value) if property.eq_ignore_ascii_case("length") => {
                 RuntimeValue::Number(value.path.chars().count() as f64)
             }
-            RuntimeValue::List(values) if property == "length" => {
+            RuntimeValue::List(values) if property.eq_ignore_ascii_case("length") => {
                 RuntimeValue::Number(values.len() as f64)
             }
             RuntimeValue::List(values) => property
@@ -2732,7 +2732,7 @@ impl<'a> Evaluator<'a> {
                 .get(own_key(&values, property).unwrap_or(property))
                 .cloned()
                 .unwrap_or(RuntimeValue::Null),
-            RuntimeValue::Date(value) => date_property(&value, property),
+            RuntimeValue::Date(value) => date_property(&value, &property.to_lowercase()),
             RuntimeValue::File(value) => {
                 if value.metadata_unavailable
                     && ["tags", "properties"]
@@ -3166,7 +3166,11 @@ fn is_truthy(value: &RuntimeValue) -> bool {
         RuntimeValue::Null | RuntimeValue::Error(_) => false,
         RuntimeValue::Bool(value) => *value,
         RuntimeValue::Number(value) => *value != 0.0 && !value.is_nan(),
-        RuntimeValue::String(value) => !value.is_empty(),
+        RuntimeValue::String(value)
+        | RuntimeValue::Html(value)
+        | RuntimeValue::Image(value)
+        | RuntimeValue::Icon(value) => !value.is_empty(),
+        RuntimeValue::Link(link) if link.external => !link.path.is_empty(),
         RuntimeValue::List(value) => !value.is_empty(),
         RuntimeValue::Object(value) => !value.is_empty(),
         _ => true,
@@ -3176,7 +3180,11 @@ fn is_truthy(value: &RuntimeValue) -> bool {
 fn is_empty(value: &RuntimeValue) -> bool {
     match value {
         RuntimeValue::Null => true,
-        RuntimeValue::String(value) => value.is_empty(),
+        RuntimeValue::String(value)
+        | RuntimeValue::Html(value)
+        | RuntimeValue::Image(value)
+        | RuntimeValue::Icon(value) => value.is_empty(),
+        RuntimeValue::Link(link) => link.path.is_empty(),
         RuntimeValue::Number(value) => value.is_nan(),
         RuntimeValue::List(values) => values.is_empty(),
         RuntimeValue::Object(values) => values.is_empty(),
@@ -4517,6 +4525,10 @@ mod rich_expression_tests {
             "link('https://example.test').isType('string')",
             "icon('book').isType('icon')",
             "icon('book').isType('string')",
+            "html('').isEmpty()",
+            "image('').isEmpty()",
+            "icon('').isTruthy() == false",
+            "icon('book').LENGTH == 4",
         ]
         .into_iter()
         {
