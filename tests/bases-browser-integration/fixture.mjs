@@ -189,7 +189,7 @@ try {
     rejected.push(await rejects(() => afterRawEdit.base({id: entry.id, options: {...options, inlineSource: {...inlineSource, startByte: inlineSource.startByte + 1}}}), 'index_inline_source_mismatch'));
     return {read, inlineSource, rejected};
   });
-  let configured, definition;
+  let configured, definition, currentActor, relationBaseline;
   await group(6, async () => {
     await host.adapter.createText('Properties.yaml', settings); await build(host); configured = await pin(host); definition = await metadata(host, 'Properties.yaml');
     const authors = await query(host, configured, 'Authors.base', 'Authors'); noErrors(authors);
@@ -211,8 +211,21 @@ try {
     equal(targets.value.relationTargets.author.map(target => target.path).sort(), ['Authors/Ada.md', 'Authors/Grace.md'], 'Target filter candidates');
     equal(targets.value.relationTargets.author.find(target => target.path === 'Authors/Ada.md').entryId, ada.id, 'Target identity');
     equal(targets.value.propertyDefinitionDiagnostics, [], 'Property settings diagnostics');
+    assert(!Object.hasOwn(targets.value, 'currentRelationValues'), 'No-current request must omit saved relation values');
+    currentActor = await metadata(host, 'Books/Pioneer.md');
+    relationBaseline = await configured.propertyTargets({options: {clockMs, timezone, currentEntryId: currentActor.id}});
+    equal(relationBaseline.snapshot, configured.snapshot, 'Current relation frame snapshot');
+    equal(relationBaseline.source, configured.source, 'Current relation frame source');
+    const current = relationBaseline.value.currentRelationValues;
+    assert(current, 'Ordinary current relation values missing from admitted endpoint');
+    equal(current.witness, witness(currentActor), 'Current relation actor identity/revision');
+    equal(current.editValues.author, string(alias), 'Current saved raw alias');
+    assert(current.values.author.type === 'link', 'Current relation display must be typed');
+    equal(current.values.author.path, 'Authors/Ada.md', 'Current relation canonical display path');
+    equal(current.values.author.target, witness(ada), 'Current relation resolved target witness');
+    equal(current.values.author.display, 'A. Lovelace', 'Current relation display alias');
     sameSemanticRead(await query(host, original, 'Books.base', 'All'), all, 'New property registry substituted into old pin');
-    return {authors: authors.value.result, targets};
+    return {authors: authors.value.result, targets, currentRelationValues: relationBaseline};
   });
   await group(7, async () => {
     const base = await metadata(host, 'Authors.base'), rejected = [];
@@ -230,7 +243,46 @@ try {
     finally { await close(other); }
     const expired = await pin(host); await closePin(host, expired);
     const closed = await rejects(() => expired.base({id: baseId, options: {clockMs}}), 'snapshot_expired');
+    // The browser owns four pin slots. Earlier no-settings pin assertions are
+    // complete; retain only the configured baseline across this next mutation.
+    await closePin(host, original); await closePin(host, afterRawEdit);
     const originalSource = await host.adapter.read('Books/Pioneer.md');
+    const authorSource = await host.adapter.read('Authors/Ada.md');
+    const ineligibleSource = setProperty(authorSource, 'type', 'project', 'text');
+    // Candidate eligibility changes independently of the current note. Existing
+    // saved links still display their real target; this is not picker membership.
+    await host.adapter.compareAndWrite('Authors/Ada.md', authorSource, ineligibleSource, witness(ada));
+    await build(host); const eligibilityPin = await pin(host);
+    const ineligibleAuthor = await metadata(host, 'Authors/Ada.md');
+    const eligibility = await eligibilityPin.propertyTargets({options: {clockMs, timezone, currentEntryId: currentActor.id}});
+    equal(eligibility.value.currentRelationValues.witness, witness(currentActor), 'Unedited actor witness changed with target eligibility');
+    equal(eligibility.value.relationTargets.author.map(target => target.path), ['Authors/Grace.md'], 'Ineligible existing target remained a picker candidate');
+    equal(eligibility.value.currentRelationValues.editValues.author, string(alias), 'Eligibility change rewrote saved alias');
+    equal(eligibility.value.currentRelationValues.values.author.target, witness(ineligibleAuthor), 'Existing ineligible relation lost its actual current target witness');
+    equal(await configured.propertyTargets({options: {clockMs, timezone, currentEntryId: currentActor.id}}), relationBaseline, 'Retained relation frame substituted target eligibility/revision');
+    await closePin(host, eligibilityPin);
+    const unresolvedAlias = '[[../Authors/Missing|Lost alias]]';
+    const unresolvedSource = setProperty(originalSource, 'author', unresolvedAlias, 'text');
+    await host.adapter.compareAndWrite('Books/Pioneer.md', originalSource, unresolvedSource, witness(currentActor));
+    await build(host); const unresolvedPin = await pin(host);
+    const changedActor = await metadata(host, 'Books/Pioneer.md');
+    assert(changedActor.id === currentActor.id && changedActor.revision !== currentActor.revision, 'Changed relation did not retain identity and advance revision');
+    const unresolved = await unresolvedPin.propertyTargets({options: {clockMs, timezone, currentEntryId: changedActor.id}});
+    equal(unresolved.value.currentRelationValues.witness, witness(changedActor), 'Unresolved relation actor witness');
+    equal(unresolved.value.currentRelationValues.editValues.author, string(unresolvedAlias), 'Unresolved raw relation was erased or canonicalized');
+    const lost = unresolved.value.currentRelationValues.values.author;
+    assert(lost.type === 'link' && lost.target === null && lost.display === 'Lost alias', 'Unresolved relation must remain a typed unresolved link');
+    equal(await host.adapter.read('Books/Pioneer.md'), unresolvedSource, 'Read-only relation discovery mutated unresolved source');
+    equal(await configured.propertyTargets({options: {clockMs, timezone, currentEntryId: currentActor.id}}), relationBaseline, 'Retained relation frame substituted modified current note');
+    const unbound = await unresolvedPin.propertyTargets({options: {clockMs, timezone}});
+    assert(!Object.hasOwn(unbound.value, 'currentRelationValues'), 'No-current request returned another actor frame');
+    await closePin(host, unresolvedPin);
+    // Restore only these disposable owned notes before the existing restart
+    // oracle, using fresh admitted revisions and the exact original source.
+    await host.adapter.compareAndWrite('Books/Pioneer.md', unresolvedSource, originalSource, witness(changedActor));
+    await host.adapter.compareAndWrite('Authors/Ada.md', ineligibleSource, authorSource, witness(ineligibleAuthor));
+    await build(host);
+    equal(await host.adapter.read('Books/Pioneer.md'), originalSource, 'Restoration did not preserve the exact aliased note');
     const database = host.database, clientId = host.clientId;
     await close(host); host = await start(database, clientId); await build(host);
     equal(await host.adapter.read('Books/Pioneer.md'), originalSource, 'Restart lost exact note source');
@@ -238,7 +290,7 @@ try {
     const reopened = await pin(host), authors = await query(host, reopened, 'Authors.base', 'Authors'); noErrors(authors);
     equal(row(authors, 'Authors/Ada.md').values['note.bookCount'], number(2), 'Restart lost derived index semantics');
     equal((await reopened.propertyTargets({options: {clockMs}})).value.definition.id, definition.id, 'Restart changed settings identity');
-    return {foreign, closed, reopenedSnapshot: reopened.snapshot, rows: authors.value.result.rows, exactRawSource: originalSource};
+    return {foreign, closed, eligibility, unresolved, noCurrentOmitted: !Object.hasOwn(unbound.value, 'currentRelationValues'), retainedCurrent: relationBaseline, reopenedSnapshot: reopened.snapshot, rows: authors.value.result.rows, exactRawSource: originalSource};
   });
   report.status = 'passed';
 } catch (error) { report.status = 'failed'; report.error = {code: error.code, message: String(error.stack ?? error)}; }

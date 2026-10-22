@@ -31,10 +31,17 @@ The nine independently authored groups cover:
    context, rejecting forged source, invalid spans and wrong contextual identity.
 7. Optional property settings: filtered relation target choices, reverse
    relations, counts, averages and formulas/filtering over derived values.
+   Current-note relation frames must carry the exact actor revision, raw alias
+   baseline and typed resolved target, while no-current requests omit the field.
 8. Exact saved settings source/witness proof for Base reads and ordinary-note
    property target reads, plus invalid option rejection.
 9. Retained old pins after edits/settings creation, foreign-client denial,
    explicit close, real Worker/IDB restart and exact durable source readback.
+   An independent target eligibility change removes it from picker candidates
+   while retaining the existing saved link display. A subsequent current-note
+   edit to an unresolved alias remains raw and unresolved; the old pin keeps its
+   original actor/target witnesses and candidate list. These disposable sources
+   are restored exactly through fresh admitted CAS before restart assertions.
 
 Expected values are hand-authored (`7 + 3 + 5 = 15`; global limit keeps `7, 5`;
 Ada has two books with average five). Seed checks assert the public bounded,
