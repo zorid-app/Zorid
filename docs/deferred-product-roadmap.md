@@ -9,6 +9,75 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Current Bases branch/worktree: `codex/types-bases-model`,
+`.worktrees/types-bases-model`; root remains sole main integration owner.
+Main is unchanged `e7d655e1`; the full goal is **not complete**. Current goal:
+[implementation pass](plans/bases-implementation-goal.md). Ordinary files and
+optional property definitions are independent of named note Types; retain the
+deferred Tasks/Calendar Type consumers and their data.
+
+Verified current core is Rust tree
+`958b19aca4666414e956fbb2f406558af5a18366`:
+
+- Full pinned/offline Rust run: **359 tests/20 nonempty targets pass**, plus
+  empty doctests. Unchanged500,000-step preview passes. Log
+  `/private/tmp/zorid-bases-g9-final-full-composed-001.log`.
+- Matching native/CLI build passes. Preserved host SHA8e818002 and CLI SHA39ac0029
+  receipts: `/private/tmp/zorid-bases-final-native-958b19ac/receipt.json`.
+- Standalone CLI006: **125 commands/17 checks/133 typed assertions pass**;
+  exact16 Q3 plus10 legacy diagnostics. See
+  [CLI006 record](history/bases-cli-actual-006-20261022.md).
+- Actual browser009: **all19 groups/133 typed assertions/16 Q3 diagnostics pass**,
+  no unexecuted groups. Frozen checkout `caec33ecb9752979922ae008ab3caffd37194669`.
+  Report `/private/tmp/zorid-bases-browser-actual-20261022-009/report.json`, SHA
+  `ee24aebc4ad96028addd7223ea82ce6f2ea83c0e9f4031a60f2cc750d36ad221`;
+  adjacent postproof verifies source/module hashes unchanged, normal Worker and
+  exact asset loads. Chrome67075 exits0, profile absent, Vite55741 closes,
+  fixture DB deletes, cleanup/artifact failures empty. Build fingerprint
+  `36809d020fb8c1ad52736417717d9b1418b866547f99d62cf347bfbee6250e9b`,
+  WASM SHA79563768; preservation receipt
+  `/private/tmp/zorid-bases-final-wasm-958b19ac/receipt.json`.
+  `bases_expressions` owns the independently reviewed009 history record.
+- Normal supported-web002-retry: **5 phases pass**, current module/core,
+  normal browser adapter/storage, trusted edit/reload/search/reopen. See
+  [web002 record](history/bases-web-ui-actual-002-20261022.md).
+
+These accept the stated core/client campaigns, not full rendered Bases UI,
+visual equivalence, native recovery, mobile, sync or stress behavior.
+Failed browser006/007/008 are retained; strict reviewed test corrections handle
+published Error data's exact30 diagnostics and omitted authored-empty summary
+maps. No production semantic change or relaxed populated-summary checks.
+
+Reviewed source now includes C3 live manual-group preview, cancel/focus ownership
+and property-alias preservation (`499acedd`, root33 focused checks pass).
+C1 multi-view summary/name guards, C2 mounted/nested/fenced rename and C3
+preview/failure scenarios are composed; root fixture/protocol checks10+3 pass.
+Their native runs remain pending. `bases_inline_core` owns the remaining C2
+selection fix: `src/ui/base-embed-sessions.ts` and minimal inline-host callback
+in `src/ui/workspace.ts`, plus focused tests. Exact successful own durable-save
+acknowledgement may retain the session across clean remount, with host/fence/
+surrounding-source validation. No foreign/stale reuse or dirty-guard relaxation.
+`bases_controller` is independent reviewer; no other worker owns that seam.
+
+Latest heavy Electron016 reaches244 actions/29 checks on **old Rust5e010112 /
+host176fcff5**, not the current359-test core. Rich-property durable edits pass,
+then native color SELECT readback fails. Passive diagnostic probe001 aborts
+before launch at its disk guard; prepared002 remains unlaunched. A fresh current
+frontend build paired explicitly with preserved host8e818002 is required for
+final current-core native acceptance. Existing source-corrected safety/config/
+properties,14-phase layouts, clipboard/recovery and23 matched visual states also
+need actual runs and review. Main integration/reconciliation remains required.
+
+Disk is still the native blocker: latest actual249108KiB free, below the
+unchanged1GiB runner guard. User request to free2–3GB remains unanswered; no
+recovery is assumed. Completed compiler/generated-profile caches were retired
+with exact protected-file receipts; source/products/raw storage/evidence remain.
+No browser/Cargo/native test app is live after009. Source-only isolated work and
+bounded focused checks may continue. Keep the user's production PID47540 and
+unrelated applications/data untouched.
+
+### Earlier execution updates — historical where superseded
+
 Named C2 seam ownership: `bases_inline_core` may edit
 `src/ui/base-embed-sessions.ts` and the minimal inline-host forwarding/callback
 in `src/ui/workspace.ts`, plus focused tests. `src/editor/live-bases.ts` is the

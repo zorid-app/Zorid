@@ -2,6 +2,14 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Actual browser009 now **passes all19 groups/133 typed assertions/16 Q3
+diagnostics**, with exact current Rust/WASM, unchanged source/module postproof,
+no skipped groups and confirmed owned cleanup. This closes the expanded core
+browser campaign; full rendered/native/visual/recovery acceptance stays open.
+359-test Rust,125-command CLI and5-phase normal web passes remain verified.
+C3 source fix is reviewed/composed; C2 fenced-selection own-save acknowledgement
+is still being implemented/reviewed. Native disk guard remains unmet.
+
 Browser008 passes all9 original groups; the first expanded Q3 group stops at an
 empty-summary map omitted by the intentionally optional DTO contract. A narrow
 undefined-only empty default is under review; populated summaries/diagnostics
