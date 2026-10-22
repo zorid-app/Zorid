@@ -9,6 +9,51 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest resource/resume update: observed free5898764KiB after the user status
+request; no additional cleanup is attributed to this session. Native/CLI
+build76433 ended101 at ENOSPC in clap_derive; fresh serialized build19034 is
+running with restored headroom, log
+`/private/tmp/zorid-bases-conditional-native-cli-build-20261022-002.log`.
+Root `ed225fae` composes independently reviewed sidebar race campaign87c1630b;
+16 independent protocol/fixture tests pass, actual race remains unexecuted.
+Earlier proposed live-summary failure fixture51b772d1 is WITHHELD: review proves
+ordinary summary saves lack the conditional source check, so public parent
+permissions would permit logical commit plus pending projection. Author now
+owns a revised test-only genuine checkpoint-I/O fault against the disposable
+vault.lock; no production guard is being added to make the fixture work.
+`bases_core_review` separately audits ordinary config stale-physical-save safety.
+
+Continuation update: isolated root `7d925c33` includes independently reviewed
+props007 diagnostics (`cf6ab67f` original), preserving every campaign input,
+coordinate, wait and assertion. Independent and composed runs both pass16/16;
+composed session69137 terminal0, log
+`/private/tmp/zorid-props007-diagnostics-composed-001.log`.
+Composed conditional Node62414 is terminal0,134/134 passing.
+
+Rust53036 compiles all affected targets successfully in12m19s, then stops at
+two existing loopback binds denied by the sandbox. Escalated rerun82532 passes
+those9 fixture tests,15 process tests,87 host unit tests (including5 new wire
+tests), and the earlier Bases targets. It later exhausts disk during native
+filesystem suites and exits101; its truncated log is NOT full-suite acceptance:
+`/private/tmp/zorid-bases-conditional-composed-rust-20261022-002.log`.
+Focused executions of the same compiled products separately pass all11 native
+conditional-source tests (38270) and14 Store guard tests (84146), logs
+`/private/tmp/zorid-bases-conditional-native-focused-20261022-001.log` and
+`/private/tmp/zorid-bases-conditional-store-focused-20261022-001.log`.
+All30 new Rust guard tests have therefore executed successfully; the broader
+affected suite still requires a clean finish. Owned completed23 test executables
+retired214940304B, receipt
+`/private/tmp/zorid-bases-completed-test-exe-retirement-20261022-004.json`;
+no active cache/source/evidence/user data removed. Matching native/CLI build76433
+is active, log `/private/tmp/zorid-bases-conditional-native-cli-build-20261022-001.log`.
+No owned app is running. User explicitly requests continuing with available space.
+
+New test-only authoring owners: `bases_summaries` owns six recovery-campaign
+files for genuine prepared-reply hold + actual precommit filesystem-I/O failure
+with newer live-summary input; `bases_controller` owns a new sidebar-race
+campaign and its minimal fixture admission registration. Both are isolated from
+`7d925c33`; no app/build/Cargo permission or runtime acceptance is implied.
+
 Latest composition/validation update: isolated root `9d133333` now composes
 reviewed typed toolbar/provider/campaign through `6c12a6a5` (TypeScript95070 and
 220 integrated Node tests89689 pass), plus reviewed conditional-source batch:
