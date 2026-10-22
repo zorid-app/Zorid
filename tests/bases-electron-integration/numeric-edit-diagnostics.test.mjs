@@ -19,6 +19,17 @@ test('passive numeric receipts distinguish a current begin from an advanced cont
 test('missing DOM or markers are recorded rather than admitted, polled or fabricated',()=>{
   const dom=new JSDOM('<main></main>');try{
     const frame=numericEditFrame(dom.window.document,selector);
-    assert.equal(frame.controllerVersion,null);assert.equal(frame.renderedVersion,null);assert.equal(frame.widgetVersion,null);assert.equal(frame.cell,null);assert.equal(frame.cellCount,0);assert.equal(frame.editorCount,0);assert.deepEqual(frame.editors,[]);
+    assert.equal(frame.controllerVersion,null);assert.equal(frame.renderedVersion,null);assert.equal(frame.widgetVersion,null);assert.equal(frame.lastEditRejection,null);assert.equal(frame.lastEditRejectionMalformed,false);assert.equal(frame.cell,null);assert.equal(frame.cellCount,0);assert.equal(frame.editorCount,0);assert.deepEqual(frame.editors,[]);
+  }finally{dom.window.close();}
+});
+test('passive rejection receipts retain the serial and phase without changing the edit or failing on malformed JSON',()=>{
+  const dom=new JSDOM('<div class="pane is-active"><div class="bases-session"><input value="5"></div></div>');try{
+    const d=dom.window.document,session=d.querySelector('.bases-session'),input=d.querySelector('input');input.focus();
+    const rejection={serial:2,guard:'controller',phase:'after-buffer-load',reason:'epoch',submittedVersion:31,currentVersion:31,capturedEpoch:40,currentEpoch:41,targetIdentityMatches:true,baseIdentityMatches:true};
+    session.setAttribute('data-base-last-edit-rejection',JSON.stringify(rejection));
+    const before=d.documentElement.outerHTML,frame=numericEditFrame(d,selector);
+    assert.deepEqual(frame.lastEditRejection,rejection);assert.equal(frame.lastEditRejectionMalformed,false);assert.equal(d.documentElement.outerHTML,before);assert.equal(d.activeElement,input);assert.equal(input.value,'5');
+    session.setAttribute('data-base-last-edit-rejection','{');
+    const malformed=numericEditFrame(d,selector);assert.equal(malformed.lastEditRejection,null);assert.equal(malformed.lastEditRejectionMalformed,true);assert.equal(d.activeElement,input);assert.equal(input.value,'5');
   }finally{dom.window.close();}
 });

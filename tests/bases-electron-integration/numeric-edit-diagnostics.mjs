@@ -8,12 +8,20 @@ export function numericEditFrame(document, cellSelector) {
   const editors = cell ? [...cell.querySelectorAll('input:not([type="checkbox"]),textarea')] : [];
   const focused = document.activeElement;
   const attr = (node, name) => node?.getAttribute(name) ?? null;
+  let lastEditRejection = null, lastEditRejectionMalformed = false;
+  const rejectionJSON = attr(session, 'data-base-last-edit-rejection');
+  if (rejectionJSON !== null) {
+    try { lastEditRejection = JSON.parse(rejectionJSON); }
+    catch { lastEditRejectionMalformed = true; }
+  }
   return {
     controllerVersion: attr(session, 'data-base-controller-version'),
     controllerUpdating: attr(session, 'data-base-controller-updating'),
     controllerError: attr(session, 'data-base-controller-error'),
     renderedVersion: attr(table, 'data-base-rendered-version'),
     widgetVersion: attr(cell, 'data-base-widget-version'),
+    lastEditRejection,
+    lastEditRejectionMalformed,
     busy: attr(session?.querySelector('.bases-session-content'), 'aria-busy'),
     gridRowCount: attr(table, 'aria-rowcount'),
     cellCount: cells.length,
