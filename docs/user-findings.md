@@ -1,5 +1,58 @@
 # User findings queue
 
+## Bases implementation goal and design cleanup — 2026-10-21
+
+User requests one file covering everything in the implementation pass and editing
+or removing earlier Bases designs. Canonical pass checklist:
+`docs/plans/bases-implementation-goal.md`. Scope includes Obsidian-matching UI/
+interactions, all four layouts, file-backed configuration, rich property settings
+(including multiselect), relations/rollups, editing/undo, embeds/export and actual
+verification. New deliberately copies complete template properties and body;
+literal copy, not template scripting. Older named-Type plans are superseded and
+duplicate planning entry points route to the checklist/maintained roadmap.
+Documentation is isolated in `codex/types-bases-model`; feature implementation,
+runtime verification and main integration remain pending.
+
+## Obsidian Bases UI/interaction starting target; New templates — 2026-10-21
+
+Latest direct user direction: make Bases UI and interaction look exactly like
+Obsidian as the starting point. This supersedes earlier best-UX/reference-only
+steering for this scoped Bases work. Use REA plus actual reference scenarios to
+establish layout, menus, controls, keyboard/pointer behavior and editing flows;
+do not claim visual/runtime parity from static code. Rich property definitions
+(including multiselect) remain separate from removed named note Types.
+
+Requested New-template investigation: Obsidian 1.14.4 has an undocumented root
+`newItemTemplate` path. Focused static inspection shows New copies cached template
+frontmatter only, not its body, and skips ordinary inferred frontmatter when that
+template resolves. No documented native chooser was found in the consulted Bases
+Help pages. This is static evidence, not a live UI pass; full-template insertion
+or a built-in picker must not be claimed. See reference research supplement.
+Implementation/visual verification remain pending in this isolated batch.
+
+## Remove named Types; use ordinary properties — 2026-10-21
+
+Direct user decision: ditch the named Types feature. Bases use Obsidian-style
+selection and views over files; a user can add `type: book` as a normal property.
+No Type editor, registry or mandatory schema assignment in the current plan.
+Property value types and appropriate controls remain. This supersedes earlier
+requests for Types, including the research proposal immediately below. Updated
+roadmap/architecture/research are isolated in `codex/types-bases-model`; code
+removal/migration, actual Base UI verification and main integration are pending.
+Deferred task capability mappings require later reconciliation, not a reserved
+meaning for arbitrary `type` values.
+
+## Types and Bases before broader managed data — 2026-10-21
+
+Direct user correction: defer broader task/calendar/managed-data work; focus on
+local Types and Bases now. They use file-backed data/view configuration and must
+not wait for synced structured records. User requests REA and official Obsidian
+documentation research into the Bases mental model. Research and roadmap changes
+are isolated in `codex/types-bases-model` / `.worktrees/types-bases-model`;
+see `docs/reference/bases-mental-model.md`. Research complete within its static
+scope; implementation and actual UI verification remain pending. No main
+integration or completed feature is claimed.
+
 ## Disposable Desktop vault recovery reset — 2026-10-21
 
 User explicitly confirms `/Users/ctk/Desktop/Zorid` is **always disposable**.

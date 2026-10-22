@@ -1,5 +1,11 @@
 # Task and calendar implementation contract
 
+Current routing (2026-10-21): this document is historical. Neither its original
+aggregate model nor its later named-Type supersession is the active Bases design.
+Use [Bases implementation goal](plans/bases-implementation-goal.md); future
+Tasks/Calendar reconciliation follows the [roadmap](roadmap.md). Preserve recorded
+evidence below without treating old implementation defaults as current assignments.
+
 SUPERSEDED — latest user design on2026-10-17 defines Markdown records with
 configurable types and optional task capabilities. Markdown checkboxes remain
 separate; conversion is explicit. The tag-defined task-note plus inline aggregate

@@ -2,12 +2,46 @@
 
 ## Execution checkpoint — shared-core coordinator
 
-Current as of2026-10-20. Read this summary first; dated execution evidence below
+Current as of2026-10-21. Read this summary first; dated execution evidence below
 is historical where it conflicts with this checkpoint. The maintained stage
 sequence is in [roadmap.md](roadmap.md); S1 scope is in
 [plans/indexing-search.md](plans/indexing-search.md).
 
 ### Latest execution update
+
+2026-10-21 current implementation pass is defined by
+`docs/plans/bases-implementation-goal.md`. User requests a durable goal file and
+cleanup of superseded Bases designs. Named note Types are removed; rich property
+definitions, multiselect and relations remain. Match Obsidian's appearance and
+interactions, with one deliberate change: New copies the full template note
+(frontmatter and body), literally. Earlier frontmatter-only behavior is reference
+evidence, not Zorid's target. Old combined plans/dispatches are routed to the goal
+or clearly historical; later non-Bases milestones remain in the roadmap.
+Documentation owner: current root with independent docs worker
+`bases_docs_model`; branch/worktree unchanged below. Main integration remains
+unperformed under the existing sole-owner protocol. No feature code/runtime
+acceptance follows from this documentation pass.
+
+2026-10-21 subsequent direct decision supersedes the earlier Types proposal:
+remove named Types, Type editor and mandatory Type/schema assignment from the
+product plan. Follow Obsidian-style Bases over ordinary files/properties.
+`type: book` is optional ordinary frontmatter, with normal property filtering;
+it does not require a Type registry. Property value types/editing controls remain.
+Owner/branch/worktree remain the research batch below. These are documentation
+changes only: existing Type-dependent source is not removed or migrated here.
+Deferred Tasks/Calendar contracts must be reconciled before their implementation.
+
+2026-10-21 direct user priority correction: build local Types and Bases now;
+defer broader managed-data, Tasks and Calendar work. S4 no longer waits for the
+whole S3 stage or synced structured data. Owner for this research/tracking batch:
+current root; branch `codex/types-bases-model`, worktree
+`.worktrees/types-bases-model`, baseline `e7d655e1`. Scope: official Obsidian docs,
+REA/static artifact inspection, roadmap correction and findings only. No runtime
+feature code, schema migration, main integration or feature acceptance claimed.
+Research is recorded in `docs/reference/bases-mental-model.md`. Sole main
+integration ownership remains with the existing shared-core coordinator; this
+isolated batch has no integrated commit yet. Older “S3 next” text below is
+superseded by this direct steering.
 
 Latest S3 design correction (2026-10-20): work blocks, time entries and similar
 first-party user content are note-backed; SQL/index representations are derived.

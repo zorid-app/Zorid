@@ -1,6 +1,6 @@
 # Product roadmap
 
-Updated 2026-10-19. This is the maintained delivery order and scope register for
+Updated 2026-10-21. This is the maintained delivery order and scope register for
 Zorid. The [architecture manual](architecture/README.md) explains system design;
 the [execution checkpoint](deferred-product-roadmap.md) records owners, branches
 and evidence; [user findings](user-findings.md) records incoming bugs/requests.
@@ -13,8 +13,20 @@ the user deferred further performance optimization/stress budgets and requested
 ordinary functional acceptance. Matching macOS Electron, actual web and standalone
 CLI checks pass; the browser startup and rename/save failures found during this
 closeout are fixed, reviewed and verified in the app. See the execution checkpoint
-for exact source, results and limits. **Next: S3 managed-data services/contracts.**
+for exact source, results and limits. **Next: local S4 Bases.**
 Existing feature/iOS work is preserved; no later stage was implemented here.
+
+Direct user steering (2026-10-21) defers the broader managed-data/Tasks/Calendar
+work and prioritizes Bases now. File-backed query/view configuration
+and note property editing do not depend on synced structured records. Settle
+only their concrete local contracts within S4; broader S3 remains planned.
+See [Obsidian mental-model findings](reference/bases-mental-model.md).
+
+Latest direct user decision: remove the named Types feature, rather than defer
+it. Bases select ordinary files using tags, folders and property filters. Users
+may write `type: book` like any other frontmatter property. Property value types
+(text, number, date, checkbox, etc.) remain necessary; they are not named Types.
+No implicit collection or schema ownership follows from a property called `type`.
 
 Design for desktop, browser and mobile now; finish the usable desktop feature set
 and establish solid sync before resuming native mobile implementation. The browser is a connected sync-group client
@@ -59,9 +71,9 @@ performance work is deferred by the user. Later milestones remain **planned**.
 | S0 | Storage layer, saving and local recovery — immediate priority | Current source/retained-artifact inventory |
 | S0A | Modular interfaces and feature-consumer contract review | S0; storage contract design starts within S0 |
 | S1 | Rust parsing, indexing, caching and search performance | S0A |
-| S3 | Managed-data services and feature contracts | S1 |
-| S4 | Fully usable desktop Types and Bases | S3 |
-| S5 | Fully usable desktop Tasks | S4 |
+| S4 | Fully usable local desktop Bases — next | S1; bounded local Base/property contracts |
+| S3 | Managed-data services and feature contracts — deferred until after S4 | S1 |
+| S5 | Fully usable desktop Tasks | S4 and relevant S3 contracts |
 | S6 | Fully usable desktop Calendar and planning | S5 |
 | S7 | Google Calendar two-way integration | S6; provider job/credential decisions |
 | S8 | Complete desktop experience and distribution gate | S0, S0A, S1, S3–S7 |
@@ -72,7 +84,7 @@ performance work is deferred by the user. Later milestones remain **planned**.
 | S11 | Native iOS app | S8 and S2; hosted/web completion is not a hard prerequisite |
 | S12 | Complete history, backup/recovery and administration | S11; basic operational backup already required in S2/S9 |
 
-Latest user steering places usable local desktop Types/Bases/Tasks/Calendar and
+Latest user steering places usable local desktop Bases/Tasks/Calendar and
 Google integration before Zorid sync. Stable IDs and storage boundaries remain
 sync-ready; remote transport is not a prerequisite for local feature acceptance.
 Existing stage IDs are retained for links; table and section order define delivery
@@ -249,7 +261,7 @@ foundations exist; complete production consumer wiring remains unfinished.
 - [ ] Finish core-owned scoped records, transactions, subscriptions, revisions,
   tombstones/conflicts and bounded local queries; explicitly label local/cache data.
   Preserve sync-compatible identities/export; remote transport acceptance is in S2.
-- [ ] Finalize first-party Types/Base/Task/Calendar contracts using existing
+- [ ] Finalize first-party Base/Task/Calendar contracts using existing
   foundations; retain unknown supported fields and source-preserving file edits.
 - [ ] Establish required schema/version handling, export and finite operation-log/
   retired-intent retention without discarding uncertain or dependency-critical work.
@@ -264,24 +276,41 @@ meaningful checks. Source/component acceptance alone does not activate a UI.
 Detail: [managed-data architecture](architecture/managed-data.md),
 [feature capability plan](managed-data-tasks-calendar-plan.md).
 
-## S4 — Desktop Types and Bases
+## S4 — Desktop Bases
 
-- [ ] Create/open/configure Bases and Types through normal UI; useful presets and
-  creation defaults; typed properties, stable select/status options and mappings.
+Execution scope and completion checklist:
+[Bases implementation pass](plans/bases-implementation-goal.md). Read it before
+implementing Base queries, property definitions, layouts, commands or embeds.
+
+2026-10-21 latest UI direction: use Obsidian's Bases appearance and interaction
+as the exact starting target. Verify concrete reference scenarios with REA and
+actual UI evidence; static inventories are not visual or interaction acceptance.
+This scoped instruction supersedes earlier reference-only UX discretion for Bases.
+
+- [ ] Create/open/configure Bases through normal UI; useful presets and creation
+  defaults; property value types and appropriate editing controls. No named Types
+  or Type editor. An ordinary `type: book` property is user data, not a reserved
+  schema declaration. Select/status option configuration remains a property concern.
 - [ ] Multiple named saved views: table/cards/list/Kanban, filtering, grouping,
   sorting, formulas, visible fields and source-preserving configuration editing.
-- [ ] Record creation and inline editing work in file tabs and embeds/splits, with
+- [ ] Note creation and inline editing work in file tabs and embeds/splits, with
   stale identity, dirty-buffer, pin-close and mount-lifecycle rules intact.
 - [ ] Invalid definitions remain editable/saveable with clear diagnostics.
+- [ ] Shared property settings support select/multiselect/status and relations/
+  reverse relations/rollups without named note Types. Settle persistence locally.
+- [ ] New copies the configured template's complete properties and body literally;
+  this is the approved difference from the inspected Obsidian implementation.
 
-**Exit:** actual Electron create Type/Base → configure views → create/edit records
+**Exit:** actual Electron create Base → configure views → create/edit notes
 → open in a split/embed → restart retains the intended state. Multiple views see
 the same data; rejected stale edits do not mutate a newly selected note.
 
 ## S5 — Desktop Tasks
 
-- [ ] Built-in Tasks destination and useful Task type. Task behavior is a type
-  capability, including explicit mappings for custom types; no reserved type name.
+- [ ] Built-in Tasks destination using ordinary note data. Earlier named-Type
+  capability requirements are superseded. Task identification/field mappings
+  must be reconciled when this deferred milestone resumes; no automatic task
+  behavior is assigned to an ordinary `type` property by this decision.
 - [ ] Capture, body/properties, status/priority, planned day versus deadline,
   grouping/sorting/filtering/Kanban and inline editing through ordinary note data.
 - [ ] Markdown checkboxes stay separate. Provide explicit checkbox-to-task-note
@@ -383,7 +412,7 @@ user-facing administration/onboarding are not complete.
 
 - [ ] Reconcile native storage changes with E2EE sync for files and managed records;
   distinguish local commit, physical publication and remote acknowledgment.
-- [ ] Verify Types/Bases/Tasks/Calendar records and provider-job ownership across
+- [ ] Verify Bases/Tasks/Calendar records and provider-job ownership across
   devices; remote propagation must preserve the locally accepted feature behavior.
 - [ ] Make server URL/account/group selection, credential/key handling and sync
   status usable through ordinary client settings and standalone CLI.

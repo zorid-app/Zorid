@@ -14,7 +14,7 @@ Desktop, browser and mobile share semantics without sharing a runtime instance.
 | Native filesystem | `zorid-native` | Locks, scans/reconciliation, file publication, namespace changes and native query endpoints |
 | Markdown semantics | `zorid-document` | Frontmatter/properties, headings, tags, aliases, links and task extraction |
 | Index and search | `zorid-index` | Generations, publication fences, literal queries, link resolution and relationships |
-| Bases/Types/Tasks/Calendar queries | `zorid-bases` | Portable compilation/evaluation and joined projections |
+| Bases/Tasks/Calendar queries | `zorid-bases` | Portable compilation/evaluation and joined projections; existing Type-dependent paths require reconciliation |
 | Managed records | `zorid-records` | Scoped structured record operations, conflicts, schemas, tombstones and first-party WorkBlocks |
 | Sync planning | `zorid-client-sync`, `zorid-file-sync` | Causal text, binary and namespace changes; prepare authored/received state |
 | Encryption | `zorid-crypto` | Authenticated envelopes and key-recovery primitives |
@@ -23,6 +23,15 @@ Desktop, browser and mobile share semantics without sharing a runtime instance.
 | Encrypted relay | `zorid-sync-server` | Authorized ciphertext storage/transport and server backup/restore |
 | Host boundaries | `zorid-desktop-host`, `zorid-wasm`, `mobile/rust` | Framed process RPC, browser exports and embedded native C ABI |
 | Independent client | `zorid-cli` | Native file/index/query/sync commands without Electron or a mandatory daemon |
+
+Current Bases direction is recorded in the
+[implementation goal](../plans/bases-implementation-goal.md): ordinary files,
+property definitions and saved views, with Rust owning query/data semantics and
+TypeScript owning presentation. Named note Types and a Type registry/editor are
+removed from the target; ordinary `type:` frontmatter is allowed. Existing source
+retains Type-dependent queries and record-backed WorkBlock helpers. This map
+inventories that source; it does not claim their removal, migration or acceptance
+against the current product decisions.
 
 Each workspace crate is under [crates](../../crates/).
 [Mobile FFI](../../mobile/rust/) is a separate Cargo workspace embedding the host

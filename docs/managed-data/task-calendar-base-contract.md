@@ -1,4 +1,18 @@
-# Next slice: linked-task Calendar and Base Calendar
+# Historical contract: linked-task Calendar and Base Calendar
+
+> Historical contract/evidence — superseded for current execution on 2026-10-21.
+> For Bases implementation read [the current goal](../plans/bases-implementation-goal.md);
+> for delivery order and ownership read [the roadmap](../roadmap.md) and
+> [current checkpoint](../deferred-product-roadmap.md). Dates, owners, source grants,
+> “current/next” instructions and completion claims below apply only to their
+> recorded historical snapshots; they grant no present source ownership.
+> Named note Types, Type registries/editors and Type-capability requirements are
+> superseded by ordinary file properties and editable rich property definitions.
+> `type: book` remains optional user data. Existing Type-dependent code has not
+> been removed by this documentation update. Record-backed WorkBlock assumptions
+> also require reconciliation with the later note-backed-content decision.
+> Tasks, Calendar, Google integration, sync and native mobile remain later roadmap
+> work. Public plugin APIs remain under discussion; spaced repetition is removed.
 
 2026-10-18. Contract proposal for named implementation workers, not a source grant
 or a delivery report. Author: C, task `task_bae1121e8cfb`, dispatch

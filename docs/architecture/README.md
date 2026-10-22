@@ -9,6 +9,16 @@ incremental catch-up. It has no user-managed native vault directory. Its current
 IndexedDB/Rust-WASM path is implemented; connected service onboarding is not yet
 complete.
 
+For the current local Bases implementation, read the
+[implementation goal](../plans/bases-implementation-goal.md). Bases select ordinary
+files and properties; named note Types and the Type editor are removed from the
+product target. Rich property definitions, including select/multiselect/status,
+relations and rollups, remain in scope. The goal owns the
+initial Obsidian 1.14.4 appearance/interaction target and literal full-template-copy
+exception. Existing Type-dependent source is legacy implementation awaiting
+reconciliation, not a requirement to restore the old design. Later Tasks, Calendar,
+providers and mobile retain their [roadmap](../roadmap.md) milestones.
+
 This manual's source baseline is canonical main `2bf929f9` (2026-10-19).
 S1 parsing, indexing, caching and search is in progress: rich Rust search and its
 desktop presentation are integrated, as are phased draft/metadata/preview core
@@ -67,7 +77,7 @@ This manual describes system boundaries rather than an execution log.
 | [Documents and indexing](indexing.md) | Identity-free parsing/cache reuse, generation publication, lifecycle and pending draft/metadata/preview wiring |
 | [Query performance design](indexing-search-design.md) | Confirmed indexing/search/Bases behavior, compatibility and cache policy |
 | [Search and relationships](search.md) | Rust rich syntax, retained paging/counts/snippets, grouped presentation and relationship queries |
-| [Managed data and features](managed-data.md) | Bases, Types, Tasks, Calendar and provider boundaries |
+| [Managed data and features](managed-data.md) | Bases, ordinary properties, Tasks, Calendar and provider boundaries |
 | [Sync and security](sync.md) | Convergence, encrypted transport, relay and local-only data |
 | [Bindings and CLI](bindings.md) | Desktop process, mobile C ABI, WASM and independent CLI |
 | [Build and delivery](build.md) | Vite/native/WASM artifacts and meaningful validation boundaries |

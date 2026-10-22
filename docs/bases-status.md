@@ -1,5 +1,11 @@
 # Current Bases status
 
+Current pass scope: [Bases implementation goal](plans/bases-implementation-goal.md).
+The table below records older observed implementation/evidence; reconcile it with
+current source rather than treating its age or aggregate checks as acceptance of
+the new pass. Named note Types are removed from the target; rich property value
+definitions and complete template copying remain required.
+
 Updated after main `87c3eb1`. Bases does not yet have complete Obsidian feature or
 interaction parity. This document distinguishes integrated behavior from older
 module-only checkpoints; it is not a completion certificate.

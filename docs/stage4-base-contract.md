@@ -1,5 +1,11 @@
 # Stage4 Base reuse boundary and behavior contract proposal
 
+Historical S1 extraction/portability contract and evidence. Its current-query
+observations remain useful; it does not define the new feature pass or authorize
+old source assignments. Use the [Bases implementation goal](plans/bases-implementation-goal.md)
+for current scope; named note Types are removed, rich property definitions remain,
+and New copies complete template notes. Preserve the evidence below as recorded.
+
 Prepared 2026-10-17 by `/root/stage4_base_reuse`, against Zorid
 `f69dc90de0de697dfb75a5a3d1805b69dba982b3`. Scope is this document and
 `tests/fixtures/document-semantics/bases/*`. Branch

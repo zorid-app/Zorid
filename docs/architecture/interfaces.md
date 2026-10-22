@@ -40,8 +40,14 @@ No single generic interface is required to expose every capability below.
 | [Native Calendar join](../../crates/zorid-native/src/calendar.rs#L516) | Bounded task/Base selection, WorkBlock window/membership and link labels with document snapshot, WorkBlock watermark, coverage and diagnostic evidence | Native host-facing API; the shared TS Calendar view currently consumes WorkBlockService. The join explicitly observes two sources, not a cross-Store atomic snapshot. Complete joined UI and Google provider operations are not established by this API |
 | [Shared sync](sync.md) and [CLI](../../crates/zorid-cli/src/main.rs) | Scoped authored/received changes, retained outbox/receipt/cursor state, explicit remote acknowledgment; CLI embeds its own core for file lifecycle, read/write/search, rescan/recover/watch and explicit document-index commands | Desktop/browser/native hosts and independent CLI processes. Sync uses source/managed operations, not local history/cache databases. [CLI document queries](../../crates/zorid-cli/src/documents.rs#L137) do not implicitly build missing indexes |
 
-Task notes remain ordinary files interpreted through Type definitions. Managed
-records do not make Task rows independently authoritative. Providers need their
+The historical source inventory includes task interpretation through Type
+definitions; that source remains present, but named note Types and their
+registry/editor are removed from the product target (2026-10-21). Current Bases
+work uses ordinary files/properties and rich property definitions under the
+[implementation goal](../plans/bases-implementation-goal.md). A normal `type:`
+property grants no schema or task capability. Deferred task identification and
+field mappings require reconciliation before implementation. Managed records
+do not make Task rows independently authoritative. Providers need their
 own reviewed authorization/mapping/reconciliation contract; no implemented Google
 provider was found in this inventory. See [managed data](managed-data.md).
 
@@ -99,7 +105,7 @@ acceptance from this table.
 | Binary transfer ownership | Vault owns complete transfers on the exact streams FIFO; reviewed `b843d4da` extends that ownership to direct browser adapter conveniences and uncertain-result queries | Current S0A source seam resolved by the reviewed extension, subject to integration/checks; no new S1 executor or browser-runtime claim |
 | Existing document query lifecycle | DocumentService/Pin has explicit stage/source/version/coverage and close ownership; [maintenance](../../tests/document-maintenance.test.ts), [Bases binding](../../tests/bases-document.test.ts), [Tasks binding](../../tests/task-document-binding.test.ts) and [backlinks](../../tests/document-backlinks.test.ts) check representative typed consumers | Shared-core automatic maintenance, update subscription/reconciliation and migration of feature pumping are S1.1/S1.4; first-build/freshness/time refresh is S1.5 |
 | Cache isolation and safe rebuild | Native cache reserves before authority; browser rebuild is prefix-scoped. [Native index storage](../../crates/zorid-store/tests/document_index.rs) and [browser index checks](../../tests/browser-document-index.test.ts) cover current source fences, retained pins and rebuild behavior. Features do not access private index/DB tables | Typed content-derived parse/work contracts and new persistence/reuse are S1.1; query preparation/answer caches S1.2; bounded executor/cancellation S1.4. Missing generic cache API is not a reason to invent a SQL framework |
-| Managed records and feature reach | Scoped registration/handles, revisions, receipts, bounded changes and WorkBlockService are current host boundaries; [managed intent checks](../../crates/zorid-store/tests/managed_intents.rs) and [browser managed checks](../../tests/browser-managed-records.test.ts) exercise them. Rich Calendar join is not advertised by DocumentService | Managed consumer extensions S3; complete desktop Types/Bases S4, Tasks S5, joined Calendar S6, Google authorization/provider mapping S7 |
+| Managed records and feature reach | Scoped registration/handles, revisions, receipts, bounded changes and WorkBlockService are current host boundaries; [managed intent checks](../../crates/zorid-store/tests/managed_intents.rs) and [browser managed checks](../../tests/browser-managed-records.test.ts) exercise them. Rich Calendar join is not advertised by DocumentService | Managed consumer extensions S3; complete local desktop Bases S4, Tasks S5, joined Calendar S6, Google authorization/provider mapping S7 |
 | Native/browser/CLI platform scope | [Browser contract](browser-storage-contract.md) explicitly separates local authority, sync group, pending state and disposal. CLI embeds native core; platform capabilities omit unsupported operations rather than selecting a replacement authority | Web connection/bootstrap/eviction/key-retention product policies S10; iOS runtime/feature delivery S11 after desktop completion. No broad browser/mobile runtime gate is passed here |
 
 The [document runtime proposal](document-runtime-interface.md) defines the accepted
