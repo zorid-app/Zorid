@@ -318,7 +318,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const cancelChanges = doc.createElement('button'); cancelChanges.type = 'button'; cancelChanges.textContent = 'Cancel changes'; cancelChanges.hidden = true;
     panel.append(heading, fields, menu, error, retry, cancelChanges); doc.body.append(panel); summaryPanel = panel;
     let dirty = false, saving = false, destroyed = false, generation = 0, closeRequest: boolean | undefined, retryPersistence: (() => Promise<void>) | undefined;
-    let retryAccepted: { name: string; expression: string; deleted?: boolean } | undefined, timer: ReturnType<typeof setTimeout> | undefined;
+    type SummaryAttempt = { name: string; expression: string; source: string; deleted?: boolean };
+    let retryAccepted: SummaryAttempt | undefined, timer: ReturnType<typeof setTimeout> | undefined;
     let formulaEditor: BaseFormulaEditor | undefined;
     const mark = () => { summaryDraft = dirty || saving || !!retryPersistence; panel.setAttribute('aria-busy', String(saving)); schedule(); };
     const updateDirty = () => { dirty = name.value.trim() !== acceptedName || expression.value !== acceptedExpression; mark(); };
@@ -337,24 +338,27 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       } else if (anchor.isConnected) anchor.focus({ preventScroll: true });
       schedule();
     };
-    const accept = (next: { name: string; expression: string; deleted?: boolean }) => {
-      acceptedName = next.name; acceptedExpression = next.expression; expectedSource = controller.state.source;
+    const accept = (next: SummaryAttempt): boolean => {
+      if (controller.state.source !== next.source) { fail(new Error('This Base changed before the summary save was acknowledged. Reopen its editor before saving.'), next); return false; }
+      acceptedName = next.name; acceptedExpression = next.expression; expectedSource = next.source;
       title.textContent = `Edit property ${acceptedName}`; retryPersistence = undefined; retryAccepted = undefined; retry.hidden = true; cancelChanges.hidden = true; fields.disabled = false; expression.disabled = false; formulaEditor?.sync(); error.textContent = '';
       updateDirty(); if (next.deleted) { dirty = false; mark(); close(true); } else if (closeRequest !== undefined && !dirty) close(closeRequest);
+      return true;
     };
-    const fail = (failure: unknown, next: { name: string; expression: string; deleted?: boolean }) => {
+    const fail = (failure: unknown, next: SummaryAttempt) => {
       error.textContent = failure instanceof Error ? failure.message : String(failure); dirty = true;
-      if (failure instanceof BaseToolbarSaveError) { retryPersistence = failure.retry; retryAccepted = next; retry.hidden = false; fields.disabled = true; expression.disabled = true; formulaEditor?.sync(); } else cancelChanges.hidden = false;
+      if (failure instanceof BaseToolbarSaveError) { retryPersistence = failure.retry; retryAccepted = next; retry.hidden = false; fields.disabled = true; expression.disabled = true; formulaEditor?.sync(); } else { retryPersistence = undefined; retryAccepted = undefined; retry.hidden = true; fields.disabled = false; expression.disabled = false; formulaEditor?.sync(); cancelChanges.hidden = false; }
       mark();
     };
     async function save(): Promise<void> {
       if (destroyed || retryPersistence) return; if (saving) return; if (!dirty) { if (closeRequest !== undefined) close(closeRequest); return; }
       if (timer) { clearTimeout(timer); timer = undefined; }
-      const next = { name: name.value.trim(), expression: expression.value }, submitted = generation;
+      const next: SummaryAttempt = { name: name.value.trim(), expression: expression.value, source: expectedSource }, submitted = generation;
       if (!next.name) { error.textContent = 'Summary name must not be empty.'; return; }
       if (controller.state.source !== expectedSource) { error.textContent = 'This Base changed while the summary was open. Reopen its editor before saving.'; cancelChanges.hidden = false; return; }
+      try { const projected = BaseDocument.parse(expectedSource); projected.editSummary(acceptedName, next.name, next.expression); next.source = projected.toString(); } catch (failure) { fail(failure, next); return; }
       saving = true; mark();
-      try { await saveConfigurationCommand(() => controller.editSummary(controller.state.version, acceptedName, next.name, next.expression)); if (!destroyed) { saving = false; accept(next); if (generation !== submitted && dirty && doc.activeElement !== name) void save(); } }
+      try { await saveConfigurationCommand(() => controller.editSummary(controller.state.version, acceptedName, next.name, next.expression)); if (!destroyed) { saving = false; if (accept(next) && generation !== submitted && dirty && doc.activeElement !== name) void save(); } }
       catch (failure) { if (!destroyed) { saving = false; fail(failure, next); } }
       finally { saving = false; if (!destroyed) mark(); }
     }
@@ -368,11 +372,12 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     panel.addEventListener('keydown', event => { if (!event.defaultPrevented && event.key === 'Escape' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); close(true); } });
     more.addEventListener('click', () => { menu.hidden = !menu.hidden; more.setAttribute('aria-expanded', String(!menu.hidden)); });
     remove.addEventListener('click', () => { if (saving || retryPersistence) return; if (timer) clearTimeout(timer); menu.hidden = true;
-      const next = { name: acceptedName, expression: acceptedExpression, deleted: true }; saving = true; fields.disabled = true; expression.disabled = true; formulaEditor?.sync(); mark();
+      const projected = BaseDocument.parse(expectedSource); projected.removeSummary(acceptedName);
+      const next: SummaryAttempt = { name: acceptedName, expression: acceptedExpression, deleted: true, source: projected.toString() }; saving = true; fields.disabled = true; expression.disabled = true; formulaEditor?.sync(); mark();
       void saveConfigurationCommand(() => { if (controller.state.source !== expectedSource) throw new Error('This Base changed while the summary was open.'); return controller.removeSummary(controller.state.version, acceptedName); }).then(() => { saving = false; accept(next); }, failure => { saving = false; fields.disabled = false; expression.disabled = false; formulaEditor?.sync(); fail(failure, next); });
     });
     retry.addEventListener('click', () => { if (!retryPersistence || !retryAccepted || saving) return; saving = true; mark(); const operation = retryPersistence, next = retryAccepted;
-      void track(operation).then(() => { saving = false; accept(next); if (dirty && doc.activeElement !== name) void save(); }, failure => { saving = false; fail(failure, next); });
+      void track(operation).then(() => { saving = false; if (accept(next) && dirty && doc.activeElement !== name) void save(); }, failure => { saving = false; fail(failure, next); });
     });
     const outside = (event: Event) => { if (!panel.contains(event.target as Node)) close(false); };
     doc.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', place); destroySummaryEditor = cleanup;
