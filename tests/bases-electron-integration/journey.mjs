@@ -9,6 +9,12 @@ import {numericEditFrame} from './numeric-edit-diagnostics.mjs';
 
 const active='.pane.is-active .bases-session';
 const dialog=name=>`[role="dialog"][aria-label=${JSON.stringify(name)}]`;
+const viewFilterSection=`${dialog('Filter')} .bases-filter-section:nth-of-type(2)`;
+export const heavyFilterRoutes={
+  section:viewFilterSection,
+  added:`${viewFilterSection} .bases-filter-tree > .bases-filter-group > .bases-filter-condition:nth-of-type(2)`,
+  saved:`${viewFilterSection} .bases-filter-tree > .bases-filter-group > .bases-filter-condition:nth-of-type(1)`,
+};
 const input=(name,scope='body')=>`${scope} input[aria-label=${JSON.stringify(name)}],${scope} textarea[aria-label=${JSON.stringify(name)}],${scope} [contenteditable="true"][aria-label=${JSON.stringify(name)}]`;
 async function choose(c,name){await c.ui.button('Views',active);await c.ui.button(`Open view ${name}`,dialog('Views'));await c.ui.idle();}
 async function apply(c,name){
@@ -113,11 +119,14 @@ export async function journey(c){
   await choose(c,'Books table');
 
   // View-level advanced filter composes with the fixture's Base-wide membership.
-  await c.ui.button('Filter',active);await c.ui.button('Add filter',dialog('Filter'));await c.ui.button('Edit expression',dialog('Filter'));
-  await c.ui.type(input('Filter expression',dialog('Filter')),'note.rating >= 4');await apply(c,'Filter');
+  // Keep Add coverage: the first blank condition is local presentation; edit
+  // the second condition just added through the normal This view action.
+  await c.ui.button('Filter',active);await c.ui.button('Add filter',heavyFilterRoutes.section);await c.ui.button('Edit expression',heavyFilterRoutes.added);
+  await c.ui.type(input('Filter expression',heavyFilterRoutes.added),'note.rating >= 4');await apply(c,'Filter');
   await c.ui.wait(`return document.querySelector('${active} [role="grid"]')?.getAttribute('aria-rowcount')==='29';`,'28 high-rating rows');
   await c.screenshot('02-view-filter');
-  await c.ui.button('Filter',active);await c.ui.button('Remove filter',dialog('Filter'));
+  // Only the completed condition persists and reopens as the first row.
+  await c.ui.button('Filter',active);await c.ui.button('Remove filter',heavyFilterRoutes.saved);
   await c.ui.wait(`const panel=document.querySelector(${JSON.stringify(dialog('Filter'))});return panel?.contains(document.activeElement)&&document.activeElement?.getClientRects().length;`,'Removing a filter retains focus on a visible control');await apply(c,'Filter');
 
   // Formula UI edits the same portable Base configuration. Adding a formula does
