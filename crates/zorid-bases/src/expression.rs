@@ -37,6 +37,9 @@ mod runtime_clone;
 #[cfg(test)]
 #[path = "object_stringification_tests.rs"]
 mod object_stringification_tests;
+#[cfg(test)]
+#[path = "computed_property_key_tests.rs"]
+mod computed_property_key_tests;
 #[path = "expression_duration.rs"]
 mod duration_semantics;
 #[path = "expression_duration_dependency.rs"]
@@ -2488,9 +2491,14 @@ impl<'a> Evaluator<'a> {
                         _ => RuntimeValue::Error("access\0String index must be a number".into()),
                     };
                 }
-                match stringify_checked(&value, &mut |work| self.charge(work)) {
-                    Ok(value) => value,
-                    Err(error) => return error,
+                match value {
+                    // Evaluation already produced and admitted this owned text.
+                    // Consuming it as a key needs no second rendered copy.
+                    RuntimeValue::String(value) => value,
+                    value => match stringify_checked(&value, &mut |work| self.charge(work)) {
+                        Ok(value) => value,
+                        Err(error) => return error,
+                    },
                 }
             }
         };
