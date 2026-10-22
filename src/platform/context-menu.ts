@@ -1,7 +1,8 @@
+import { icon } from '../ui/icons.ts';
 export type ContextMenuRole = 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'pasteAndMatchStyle' | 'selectAll';
 export type ContextMenuItem =
   | { type: 'separator' }
-  | { id: string; label: string; enabled?: boolean; checked?: boolean }
+  | { id: string; label: string; enabled?: boolean; checked?: boolean; icon?: string }
   | { label: string; submenu: ContextMenuItem[]; enabled?: boolean }
   | { role: ContextMenuRole; label?: string; enabled?: boolean };
 export interface ContextMenuRequest { x: number; y: number; items: ContextMenuItem[] }
@@ -168,6 +169,7 @@ function showBrowserMenu(doc: Document, request: ContextMenuRequest, options: Co
         row.role = 'checked' in item ? 'menuitemcheckbox' : 'menuitem';
         if ('checked' in item) row.setAttribute('aria-checked', String(item.checked));
         row.textContent = item.label ?? ('role' in item ? roleLabels[item.role] : '');
+        if ('icon' in item && item.icon) { const glyph = icon(item.icon, 16, doc); glyph.classList.add('context-menu-icon'); row.prepend(glyph); }
         row.disabled = item.enabled === false;
         if ('role' in item && item.role !== 'selectAll' && typeof doc.execCommand !== 'function') row.disabled = true;
         if ('role' in item && item.role === 'paste') {

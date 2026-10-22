@@ -140,7 +140,7 @@ test('main IPC rejects a foreign sender, child frame and unexpected document bef
     static getFocusedWindow() { return window; }
   }
   const electron = {
-    app: { setName() {}, whenReady: () => ({ then(callback) { ready = callback; } }), getPath: () => '/unused-test-path', on() {} },
+    app: { setName() {}, requestSingleInstanceLock: () => true, whenReady: () => ({ then(callback) { ready = callback; return { catch() {} }; } }), getPath: () => '/unused-test-path', on() {} },
     BrowserWindow: Window, ipcMain: { handle(name, callback) { handlers.set(name, callback); } },
     Menu: { setApplicationMenu() {}, buildFromTemplate() { return { popup(options) { popupOptions = options; }, closePopup() {} }; } },
     dialog: {}, shell: {},
@@ -150,12 +150,13 @@ test('main IPC rejects a foreign sender, child frame and unexpected document bef
     require(name) {
       if (name === 'electron') return electron;
       if (name === 'node:fs/promises') return { async readFile() { throw new Error('No saved vault'); } };
+      if (name === './client-slots.cjs') return { async openClientSlots() { return { async listRestorable() { return []; }, async claim() { return { slotId: 'primary', clientId: 'fixture-client', vaultPath: null }; }, async release() {}, async setVault() {} }; } };
       if (name === './vault-service.cjs') return { VaultService: {} };
       if (name === './vault-dispatch.cjs') return { dispatchVaultOperation() {} };
       if (name === './context-menu.cjs') return { createContextMenuController };
       if (name === './menu-hotkeys.cjs') return require('../desktop/menu-hotkeys.cjs');
       if (name === './window-broker.cjs') return require('../desktop/window-broker.cjs');
-      return require(name);
+      return require(name.startsWith('./') ? path.join(directory, name) : name);
     },
   });
   await ready();
