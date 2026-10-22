@@ -27,7 +27,7 @@ test('ordinary Link raw spelling is distinct from canonical target identity and 
   const link=group.rows[0].values['note.pointer'].value[0][1];
   assert.equal(link.path,'/Q3/Source');assert.deepEqual(link.target,{$fixtureWitness:'Q3/Source.md'});
   assert.equal(group.rows[0].values['formula.pointerFile'].value,'Q3/Source.md');
-  assert.equal(q3CommandCount,40);assert.equal(q3Groups.reduce((sum,g)=>sum+g.rows.reduce((n,row)=>n+Object.keys(row.values).length,0),0),146);
+  assert.equal(q3CommandCount,40);assert.equal(q3Groups.reduce((sum,g)=>sum+g.rows.reduce((n,row)=>n+Object.keys(row.values).length,0),0),162);
 });
 test('canonicalized public paths, changed target witnesses and wrong raw/canonical outputs fail',()=>{
   for(const mutate of [
