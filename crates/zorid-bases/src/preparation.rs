@@ -1378,6 +1378,7 @@ fn options_exact(a: &QueryOptions, b: &QueryOptions, independent: bool) -> bool 
         && a.ignore_paths == b.ignore_paths
         && a.current_entry_id == b.current_entry_id
         && a.summary_preview_property == b.summary_preview_property
+        && a.summary_preview_group_key_id == b.summary_preview_group_key_id
         && a.max_steps == b.max_steps
         && a.max_scanned == b.max_scanned
         && a.max_rows == b.max_rows
@@ -1406,6 +1407,11 @@ fn options_heap(o: &QueryOptions, m: &mut Maintenance<'_>) -> Option<usize> {
         )?,
         m.bytes(
             o.summary_preview_property
+                .as_ref()
+                .map_or(0, String::capacity),
+        )?,
+        m.bytes(
+            o.summary_preview_group_key_id
                 .as_ref()
                 .map_or(0, String::capacity),
         )?,
@@ -1733,6 +1739,7 @@ fn copy_options(o: &QueryOptions, independent: bool) -> Result<QueryOptions, Exp
         ignore_paths: copy_strings(&o.ignore_paths, o)?,
         current_entry_id: o.current_entry_id.clone(),
         summary_preview_property: o.summary_preview_property.clone(),
+        summary_preview_group_key_id: o.summary_preview_group_key_id.clone(),
         max_steps: o.max_steps,
         max_scanned: o.max_scanned,
         max_rows: o.max_rows,

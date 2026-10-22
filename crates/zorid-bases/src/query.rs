@@ -105,6 +105,9 @@ pub struct QueryOptions {
     /// Ephemeral footer-picker previews for one property, never saved settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary_preview_property: Option<String>,
+    /// Exact opaque group identity for a footer picker; None selects overall.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_preview_group_key_id: Option<String>,
     pub max_steps: usize,
     pub max_scanned: usize,
     pub max_rows: usize,
@@ -125,6 +128,7 @@ impl Default for QueryOptions {
             evaluation: EvaluationOptions::default(),
             current_entry_id: None,
             summary_preview_property: None,
+            summary_preview_group_key_id: None,
             max_steps: 2_000_000,
             max_scanned: 50_000,
             max_rows: 10_000,
@@ -988,6 +992,17 @@ pub(crate) fn validate_rows_invocation(
         .ok_or_else(|| ExpressionDiagnostic::new("configuration", "View index out of range"))?;
     if input.records.len() > options.max_scanned {
         return Err(budget("Snapshot exceeds scanned-record budget"));
+    }
+    if let Some(group) = &options.summary_preview_group_key_id {
+        if options.summary_preview_property.is_none() || group.is_empty() {
+            return Err(ExpressionDiagnostic::new(
+                "configuration",
+                "A group summary preview requires a property and nonempty group identity",
+            ));
+        }
+        if group.len() > MAX_QUERY_OUTPUT_BYTES {
+            return Err(budget("Summary preview group identity exceeds byte budget"));
+        }
     }
     if options
         .summary_preview_property
@@ -2249,7 +2264,35 @@ fn summarize_rows(
     let overall = evaluate(&selected, &configured, steps, admission)?;
     let previews = if let Some(property) = &options.summary_preview_property {
         let property = program::property_id(property);
-        let first = rows
+        let scoped;
+        let preview_rows = if let Some(key_id) = &options.summary_preview_group_key_id {
+            *steps = steps.saturating_add(groups.len());
+            check_query_work(
+                *steps,
+                admission,
+                options,
+                "Summary preview group lookup exceeds work budget",
+            )?;
+            let group = groups
+                .iter()
+                .find(|group| group.key_id.as_ref() == Some(key_id))
+                .ok_or_else(|| {
+                    ExpressionDiagnostic::new(
+                        "stale-source",
+                        "Summary preview group is not in the current result",
+                    )
+                })?;
+            admit(admission, |_| Ok(slots::<&BaseRow>(group.entry_ids.len())))?;
+            scoped = group
+                .entry_ids
+                .iter()
+                .map(|id| by_id[id])
+                .collect::<Vec<_>>();
+            &scoped
+        } else {
+            &selected
+        };
+        let first = preview_rows
             .iter()
             .filter_map(|row| row.values.get(&property))
             .find(|value| !matches!(value, BaseValue::Null));
@@ -2258,7 +2301,7 @@ fn summarize_rows(
             .iter()
             .map(|name| (name.as_str(), property.as_str(), name.as_str()))
             .collect::<Vec<_>>();
-        Some(evaluate(&selected, &selections, steps, admission)?)
+        Some(evaluate(preview_rows, &selections, steps, admission)?)
     } else {
         None
     };

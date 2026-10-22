@@ -1790,3 +1790,45 @@ fn rich_result_labels_are_deep_copied_and_view_seed_is_in_answer_identity() {
         expected_random
     );
 }
+
+#[test]
+fn summary_picker_group_identity_is_part_of_the_exact_answer_key() {
+    let r = first();
+    let mut cache = BasePreparationCache::new();
+    let source="views:\n  - type: table\n    name: T\n    groupBy: {property: file.name, direction: ASC}\n";
+    let (program, prepared) = answer_inputs(&mut cache, &r, source, 0);
+    let mut options = r.options.clone();
+    options.summary_preview_property = Some("file.name".into());
+    let overall = cache
+        .query_prepared_cached(&program, &prepared, &options, 0)
+        .unwrap()
+        .into_value();
+    assert_eq!(
+        overall.summary_previews.as_ref().unwrap()["Filled"],
+        crate::BaseValue::Number { value: 3.0 }
+    );
+    options.summary_preview_group_key_id = overall.groups[0].key_id.clone();
+    let scoped = cache
+        .query_prepared_cached(&program, &prepared, &options, 1)
+        .unwrap();
+    assert_eq!(scoped.outcome(), PreparationCacheOutcome::Miss);
+    assert_eq!(
+        scoped.value().summary_previews.as_ref().unwrap()["Filled"],
+        crate::BaseValue::Number { value: 1.0 }
+    );
+    assert_eq!(
+        cache
+            .query_prepared_cached(&program, &prepared, &options, 2)
+            .unwrap()
+            .outcome(),
+        PreparationCacheOutcome::Hit
+    );
+    options.summary_preview_group_key_id = overall.groups[1].key_id.clone();
+    assert_eq!(
+        cache
+            .query_prepared_cached(&program, &prepared, &options, 3)
+            .unwrap()
+            .outcome(),
+        PreparationCacheOutcome::Miss
+    );
+}

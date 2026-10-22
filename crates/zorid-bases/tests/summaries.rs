@@ -371,3 +371,70 @@ fn picker_previews_keep_custom_errors_and_clock_refresh_without_widening_normal_
         zorid_bases::BaseClockDependency::None
     );
 }
+
+#[test]
+fn group_footer_previews_use_only_that_groups_final_limited_rows() {
+    let program=compile_base_source("views:\n  - type: table\n    name: T\n    groupBy: {property: group, direction: ASC}\n    sort: [{property: n, direction: DESC}]\n    limit: 2\n").unwrap();
+    let rows = snapshot(vec![
+        row("A.md", json!([["group", "A"], ["n", 2]])),
+        row("B.md", json!([["group", "A"], ["n", 6]])),
+        row("C.md", json!([["group", "B"], ["n", 100]])),
+    ]);
+    let mut options = QueryOptions::default();
+    options.summary_preview_property = Some("n".into());
+    let overall = query_base(&program, &rows, &options).unwrap();
+    assert_eq!(
+        number(&overall.summary_previews.as_ref().unwrap()["Sum"]),
+        106.0
+    );
+    options.summary_preview_group_key_id = overall
+        .groups
+        .iter()
+        .find(|group| group.key == Some(BaseValue::String { value: "A".into() }))
+        .unwrap()
+        .key_id
+        .clone();
+    let scoped = query_base(&program, &rows, &options).unwrap();
+    assert_eq!(
+        number(&scoped.summary_previews.as_ref().unwrap()["Sum"]),
+        6.0,
+        "limit excludes the other A row before summary grouping"
+    );
+    assert_eq!(scoped.rows, overall.rows);
+    assert_eq!(scoped.counts, overall.counts);
+    assert!(scoped.summaries.is_empty());
+    options.summary_preview_group_key_id = Some("base-key-v1:no-longer-present".into());
+    assert_eq!(
+        query_base(&program, &rows, &options).unwrap_err().code,
+        "stale-source"
+    );
+    options.summary_preview_property = None;
+    assert_eq!(
+        query_base(&program, &rows, &options).unwrap_err().code,
+        "configuration"
+    );
+}
+
+#[test]
+fn group_picker_candidates_use_the_groups_own_first_nonnull_value_class() {
+    let program=compile_base_source("summaries:\n  Count: values.length\nviews:\n  - type: table\n    name: T\n    groupBy: {property: group, direction: ASC}\n").unwrap();
+    let rows = snapshot(vec![
+        row("A.md", json!([["group", "A"], ["n", 10]])),
+        row("B.md", json!([["group", "B"], ["n", "ten"]])),
+    ]);
+    let baseline = query_base(&program, &rows, &QueryOptions::default()).unwrap();
+    let mut options = QueryOptions::default();
+    options.summary_preview_property = Some("n".into());
+    options.summary_preview_group_key_id = baseline
+        .groups
+        .iter()
+        .find(|group| group.key == Some(BaseValue::String { value: "B".into() }))
+        .unwrap()
+        .key_id
+        .clone();
+    let result = query_base(&program, &rows, &options).unwrap();
+    let previews = result.summary_previews.unwrap();
+    assert!(!previews.contains_key("Sum"));
+    assert_eq!(number(&previews["Count"]), 1.0);
+    assert_eq!(number(&previews["Filled"]), 1.0);
+}

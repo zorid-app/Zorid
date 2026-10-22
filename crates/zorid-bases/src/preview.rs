@@ -350,6 +350,9 @@ pub(crate) fn options_bytes(
     if let Some(property) = &options.summary_preview_property {
         bytes = bytes.saturating_add(string_bytes(property));
     }
+    if let Some(group) = &options.summary_preview_group_key_id {
+        bytes = bytes.saturating_add(string_bytes(group));
+    }
     if let Some(id) = &options.current_entry_id {
         bytes = bytes.saturating_add(string_bytes(id.as_str()));
     }
