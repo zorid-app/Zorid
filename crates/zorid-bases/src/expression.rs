@@ -3883,11 +3883,12 @@ fn normalize_tag(value: &str) -> String {
     value.trim_start_matches('#').to_lowercase()
 }
 fn is_external(value: &str) -> bool {
-    static EXTERNAL: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^[A-Za-z][A-Za-z0-9+.-]*:").expect("external link expression")
-    });
-    EXTERNAL.is_match(value)
+    // Obsidian's QC delegates to the WHATWG URL constructor. Use the existing
+    // locked portable parser rather than a scheme-only regex accepting malformed
+    // HTTP hosts/ports. Parsing does not fetch or resolve the URL.
+    url::Url::parse(value).is_ok()
 }
+
 pub(super) fn strip_subpath(value: &str) -> String {
     value
         .split_once('#')
@@ -4849,6 +4850,43 @@ mod rich_expression_tests {
                 RuntimeValue::String(_)
             ));
         }
+    }
+
+    #[test]
+    fn url_classification_matches_url_constructor_and_frontmatter_space_guard() {
+        for value in [
+            "https://example.test",
+            "http:example.test",
+            "mailto:a@example.test",
+            "obsidian://open?vault=Test",
+            "data:text/plain,hello",
+        ] {
+            assert!(is_external(value), "{value}");
+            assert!(
+                matches!(infer_frontmatter_value(RuntimeValue::String(value.into()),&BasesTimezone::Utc),RuntimeValue::Link(link) if link.external),
+                "{value}"
+            );
+        }
+        for value in [
+            "https://",
+            "http://[invalid]",
+            "https://example.test:999999",
+            "ordinary text",
+            "Project: Draft",
+        ] {
+            assert!(
+                matches!(
+                    infer_frontmatter_value(
+                        RuntimeValue::String(value.into()),
+                        &BasesTimezone::Utc
+                    ),
+                    RuntimeValue::String(_)
+                ),
+                "{value}"
+            );
+        }
+        assert!(is_external("Project: Draft")); // Valid opaque URL, deliberately not frontmatter auto-link text.
+        assert!(!is_external("https://"));
     }
 
     #[test]

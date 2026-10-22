@@ -1953,6 +1953,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "url",
  "zorid-core",
  "zorid-document",
  "zorid-index",
