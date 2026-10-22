@@ -212,6 +212,7 @@ mod tests {
             target: None,
             display: None,
             display_value: None,
+            subpath: None,
             external: false,
         };
         assert_eq!(compare(&a, &z, false), Ordering::Less);

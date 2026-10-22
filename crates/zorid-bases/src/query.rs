@@ -748,6 +748,7 @@ fn transfer_group_edit_key(
             target,
             display,
             external,
+            subpath,
             ..
         } => {
             if *external {
@@ -777,8 +778,20 @@ fn transfer_group_edit_key(
                 })?;
             check(record.path.len())?;
             let mut rooted = encode_rooted_group_path(&record.path);
-            if let Some((_, fragment)) = original_path.split_once('#') {
-                rooted.push('#');
+            // Captured paths can contain literal '#'. Only parsed destination
+            // metadata denotes a heading/block; never split the file path.
+            let fragment = raw_link
+                .as_ref()
+                .map(|link| link.subpath.as_deref())
+                .unwrap_or(subpath.as_deref());
+            if let Some(fragment) = fragment {
+                if !fragment.starts_with('#') {
+                    return Err(ExpressionDiagnostic::new(
+                        "unavailable",
+                        "Group link has invalid subpath metadata",
+                    ));
+                }
+                check(fragment.len())?;
                 rooted.push_str(fragment);
             }
             let alias = raw_link
@@ -986,6 +999,7 @@ fn serialize_group_order_key(
                     target: Some(witness),
                     display: None,
                     display_value: None,
+                    subpath: None,
                     external: false,
                 },
                 source,
@@ -2980,6 +2994,7 @@ mod relation_group_identity_tests {
             path: path.into(),
             display: Some(display.into()),
             display_value: None,
+            subpath: None,
             external: false,
             target: Some(crate::RecordWitness {
                 entry_id: crate::EntryId::new(entry).unwrap(),
@@ -3009,6 +3024,7 @@ mod relation_group_identity_tests {
             target: None,
             display: Some("Alias".into()),
             display_value: None,
+            subpath: None,
             external: false,
         };
         let mut other_alias = unresolved.clone();

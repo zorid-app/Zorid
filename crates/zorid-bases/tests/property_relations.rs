@@ -1895,3 +1895,119 @@ fn manual_string_group_matches_typed_list_tostring_and_date_string_loose_values(
     ));
     assert_eq!(result.group_options[0].count, 2);
 }
+
+#[test]
+fn group_link_writes_preserve_explicit_fragments_and_literal_hash_file_identity() {
+    let settings = "properties:\n  author:\n    type: relation\n";
+    let source="filters: 'kind == \"card\"'\nviews:\n  - type: table\n    name: Authors\n    order: [file.name,author]\n    groupBy: {property: author, direction: ASC}\n";
+    for fragment in ["", "#Heading", "#^block-id"] {
+        let original =
+            format!("---\nkind: card\nauthor: '[[../People/A%23B.md{fragment}|Boss]]'\n---\n");
+        let records = |new: Option<&str>| {
+            let mut records = vec![
+                ("settings", "Properties.yaml".into(), settings.into(), false),
+                (
+                    "target",
+                    "People/A#B.md".into(),
+                    "---\ntype: author\n---\n# Heading\nText ^block-id\n".into(),
+                    true,
+                ),
+                ("book", "Books/Book.md".into(), original.clone(), true),
+            ];
+            if let Some(new) = new {
+                records.push(("new", "Other/New.md".into(), new.into(), true));
+            }
+            generation_from_records(records)
+        };
+        let before = records(None);
+        let definitions =
+            PropertyDefinitions::from_generation_source(&before, &id("settings"), settings)
+                .unwrap();
+        let result = query_generation_with_properties(
+            &compile_base_source(source).unwrap(),
+            &before,
+            &[],
+            &definitions,
+            &QueryOptions::default(),
+        )
+        .unwrap();
+        let expected = format!("[[/People/A%23B.md{fragment}|Boss]]");
+        assert_eq!(
+            result.groups[0].edit_key,
+            Some(BaseValue::String {
+                value: expected.clone()
+            })
+        );
+        assert_eq!(
+            result.groups[0].order_key,
+            Some(BaseValue::String {
+                value: expected.clone()
+            })
+        );
+        let new = format!(
+            "---\nkind: card\nauthor: {}\n---\n",
+            serde_json::to_string(&expected).unwrap()
+        );
+        let after = records(Some(&new));
+        let definitions =
+            PropertyDefinitions::from_generation_source(&after, &id("settings"), settings).unwrap();
+        let persisted = query_generation_with_properties(
+            &compile_base_source(source).unwrap(),
+            &after,
+            &[],
+            &definitions,
+            &QueryOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(persisted.groups.len(), 1);
+        assert_eq!(persisted.groups[0].entry_ids, vec![id("book"), id("new")]);
+        for row in &persisted.rows {
+            assert!(
+                matches!(&row.values["note.author"],BaseValue::Link{target:Some(target),subpath,..} if target.entry_id==id("target")&&subpath.as_deref()==(!fragment.is_empty()).then_some(fragment))
+            );
+        }
+        assert_eq!(
+            persisted
+                .rows
+                .iter()
+                .find(|row| row.entry_id == id("new"))
+                .unwrap()
+                .edit_values["note.author"],
+            BaseValue::String { value: expected }
+        );
+    }
+    let literal = generation_from_records(vec![(
+        "literal",
+        "People/A#B.md".into(),
+        "---\nkind: card\n---\n".into(),
+        true,
+    )]);
+    let source="filters: 'kind == \"card\"'\nformulas:\n  identity: file.asLink()\nviews:\n  - type: table\n    name: Identity\n    groupBy: {property: formula.identity, direction: ASC}\n";
+    let result = zorid_bases::query_generation(
+        &compile_base_source(source).unwrap(),
+        &literal,
+        &[],
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert!(result.groups[0].edit_key.is_none());
+    assert_eq!(
+        result.groups[0].order_key,
+        Some(BaseValue::String {
+            value: "[[/People/A%23B.md]]".into()
+        })
+    );
+    let reordered = format!("{source}    groupOrder: ['[[/People/A%23B.md]]']\n");
+    let persisted = zorid_bases::query_generation(
+        &compile_base_source(&reordered).unwrap(),
+        &literal,
+        &[],
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(persisted.groups[0].entry_ids, vec![id("literal")]);
+    assert!(matches!(
+        &persisted.groups[0].key,
+        Some(BaseValue::Link { subpath: None, .. })
+    ));
+}

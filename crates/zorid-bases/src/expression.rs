@@ -818,6 +818,7 @@ fn group_comparison_work(
             link.path
                 .len()
                 .saturating_add(link.display.as_ref().map_or(0, String::len))
+                .saturating_add(link.subpath.as_ref().map_or(0, String::len))
                 .saturating_add(
                     link.resolved_path
                         .as_ref()
