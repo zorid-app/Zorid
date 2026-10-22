@@ -332,7 +332,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       if (chooser) {
         const currentGroups = controller.state.result?.groups ?? [];
         const index = groupKey === undefined ? groupIndex : currentGroups.findIndex(group => group.sharedKeyId === groupKey);
-        mounted?.openSummaryPicker?.(property, anchor, index !== null && index < 0 ? null : index);
+        if (index !== null && index < 0) report(new Error('This result group changed. Reopen its summary picker from the current group.'));
+        else mounted?.openSummaryPicker?.(property, anchor, index);
       } else if (anchor.isConnected) anchor.focus({ preventScroll: true });
       schedule();
     };

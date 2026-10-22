@@ -24,6 +24,7 @@ const snapshot = { localStoreId: 'store', generationEpoch: 'epoch', generation: 
 const summaryBase = 'views:\n  - type: table\n    name: Table\n    order: [file.name, score, projects]\n    summaries: {score: Sum}\n  - type: cards\n    name: Cards\n    summaries: {score: Sum}\n';
 async function fixture(base = summaryBase, omitRaw = false) {
   const adapter = new Adapter({ 'Work.base': base, 'One.md': '---\nscore: 10\nprojects: ["[[Projects/A|My alias]]", "[[Unknown|Keep me]]"]\n---\nBody', 'Properties.yaml': 'properties:\n  projects:\n    type: relation\n    relation: {multiple: true}\n' });
+  let dropGroups = false;
   const definition = async () => { const row = (await adapter.stat('Work.base'))!; return { id: row.entryId, revision: row.revision, path: row.path, kind: 'file' as const, deleted: false }; };
   const unused = async (): Promise<never> => { throw new Error('Unexpected core operation'); };
   // A transport fixture, not a TS evaluator: the core owns summary values and
@@ -40,7 +41,7 @@ async function fixture(base = summaryBase, omitRaw = false) {
         const projects: DocumentBaseValue = { type: 'list', value: raw.projects.map(() => ({ type: 'link', path: 'Projects/A', display: 'Rendered label', external: false })) };
         const selections = (view.summaries ?? {}) as Record<string, string>;
         const result: DocumentBaseResult = { snapshotId: snapshot, view, rows: [{ entryId: identity.entryId, revision: identity.revision, path: 'One.md', values: { 'file.name': { type: 'string', value: 'One' }, 'note.score': { type: 'number', value: 10 }, 'note.projects': projects }, ...(!omitRaw ? { editValues: { 'note.projects': { type: 'list', value: raw.projects.map(value => ({ type: 'string' as const, value })) } } } : {}) }],
-          groups: [{ key: null, keyId: null, entryIds: ['One.md'] }], groupOptions: [], properties: ['file.name', 'note.score', 'note.projects'], availableProperties: ['file.name', 'note.score', 'note.projects'], counts: { scanned: 1, matched: 1, afterGroupOrder: 1, afterSearch: 1, returned: 1 }, diagnostics: [], relationshipsAvailable: true, metadataComplete: true, metadataIssues: [], stepsUsed: 1,
+          groups: view.groupBy && !dropGroups ? [{ key:{type:'number',value:10},keyId:'ten',entryIds:['One.md'],summaries:{'note.score':{type:'number',value:10}} },{key:{type:'number',value:20},keyId:'twenty',entryIds:[],summaries:{'note.score':{type:'number',value:0}}}] : [{ key: null, keyId: null, entryIds: ['One.md'] }], groupOptions: [], properties: ['file.name', 'note.score', 'note.projects'], availableProperties: ['file.name', 'note.score', 'note.projects'], counts: { scanned: 1, matched: 1, afterGroupOrder: 1, afterSearch: 1, returned: 1 }, diagnostics: [], relationshipsAvailable: true, metadataComplete: true, metadataIssues: [], stepsUsed: 1,
           summaries: Object.fromEntries(Object.keys(selections).map(key => [`note.${key.replace(/^note\./, '')}`, { type: 'number' as const, value: 10 }])), summaryPreviews: { Sum: { type: 'number', value: 10 }, Empty: { type: 'number', value: 0 } },
         };
         return { source, snapshot, coverageComplete: true, value: { definition: await definition(), result } };
@@ -53,7 +54,7 @@ async function fixture(base = summaryBase, omitRaw = false) {
     buffers: { validate() {}, async getBuffer(path) { let buffer = buffers.get(path); if (!buffer) { buffer = new NoteBuffer(vault, path); Object.defineProperty(buffer, 'savedDurableWitness', { get: () => ({ path, entryId: path, revision: `r${adapter.revisions.get(path) ?? 1}` }) }); buffers.set(path, buffer); } await buffer.load(); return buffer; } },
   }); await session.ready; assert.ifError(session.state.error);
   const key = (element: Element, key: string, extra = {}) => element.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...extra }));
-  return { vault, dom, host, session, errors, opened, key, async cleanup() { for (const input of dom.window.document.querySelectorAll('.bases-property-popover input,[data-base-editing] input')) key(input, 'Escape'); const back = dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]'); back?.click(); await until(() => !session.hasPendingChanges()); await session.close(); for (const buffer of buffers.values()) await buffer.dispose(); dom.window.close(); } };
+  return { adapter, vault, dom, host, session, errors, opened, key, dropGroups() {dropGroups=true;}, async cleanup() { adapter.fail = false; for (const input of dom.window.document.querySelectorAll('.bases-property-popover input,[data-base-editing] input')) key(input, 'Escape'); const back = dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]'); back?.click(); await until(() => !session.hasPendingChanges()); await session.close(); for (const buffer of buffers.values()) await buffer.dispose(); dom.window.close(); } };
 }
 
 test('raw editing adapter accepts inert values and rejects rich values without saved source', () => {
@@ -185,4 +186,15 @@ test('failed live summary saves lock and retry the exact accepted configuration 
     await until(async () => (BaseDocument.parse(await f.vault.read('Work.base')).getRoot('summaries') as Record<string,string>).Sum === 'values.length'); await until(() => !f.session.hasPendingChanges());
     assert.equal(expression.closest('fieldset')!.disabled, false); assert.equal(expression.disabled, false); assert.equal(expression.value, 'values.length'); assert.equal(f.adapter.revisions.get('Work.base'), 3, 'one builtin seed and one accepted summary write');
   } finally { await f.cleanup(); }
+});
+
+
+test('returning from a vanished group summary never silently switches to the overall chooser', async () => {
+  const f=await fixture(summaryBase.replace('    summaries: {score: Sum}','    groupBy: {property: score, direction: ASC}\n    summaries: {score: Sum}'));
+  try {
+    f.host.querySelector<HTMLButtonElement>('[data-summary-property="note.score"][data-summary-group="0"]')!.click(); await until(()=>!!f.dom.window.document.querySelector('[aria-label="Edit Sum"]'));
+    f.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Edit Sum"]')!.click(); await until(()=>!!f.dom.window.document.querySelector('[aria-label="Summary name"]'));
+    f.dropGroups(); await f.session.refresh(); f.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]')!.click(); await tick();
+    assert.equal(f.dom.window.document.querySelector('[aria-label="Summarize"]'),null); assert.match(String(f.errors.at(-1)),/result group changed/);
+  } finally {await f.cleanup();}
 });
