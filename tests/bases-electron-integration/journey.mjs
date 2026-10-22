@@ -323,7 +323,9 @@ export async function journey(c){
   await choose(c,'Reading board');await c.ui.wait(`return !!document.querySelector('${active} .bases-kanban-card[data-path="Book 001.md"]');`,'Kanban shows saved book');await c.screenshot('06-kanban-before-move');
   await c.ui.drag(`${active} .bases-kanban-card[data-path="Book 001.md"]`,`${active} .bases-kanban-column-body[aria-label="Reading"]`);await c.ui.idle();
   await fmSaved(c,'Book 001.md',p=>assert.equal(p.status,'Reading'),'kanban-pointer-drag-writes-original-note');
-  await c.ui.click(`${active} .bases-kanban-card[data-path="Book 001.md"]`);await c.ui.key('ArrowLeft',{modifiers:8});await c.ui.idle();
+  await c.ui.wait(`return document.querySelector('${active} .bases-kanban-card[data-path="Book 001.md"]')?.getAttribute('aria-selected')==='true';`,'Dragged card remains selected');
+  await c.ui.button('Search',active);await c.ui.key('Escape');await c.ui.key('Tab');await c.ui.key('Tab');
+  await c.ui.wait(`return document.activeElement?.classList.contains('bases-kanban-view');`,'Keyboard Tab enters Kanban surface from toolbar');await c.ui.key('ArrowLeft',{modifiers:8});await c.ui.idle();
   // Exact target is determined by visible adjacent columns, not guessed status order.
   const move=await fmSaved(c,'Book 001.md',p=>assert.notEqual(p.status,'Reading'),'kanban-keyboard-move-writes-original-note');
   await c.screenshot('07-kanban-after-move');
