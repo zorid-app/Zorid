@@ -85,6 +85,7 @@ impl NativeVault {
     pub(super) fn family_apply_locked(&mut self, request: &MutationRequest,
         mode: Option<FamilyCreateMode>) -> Result<ApplyOutcome> {
         self.paths.verify()?;
+        self.validate_conditional_operation(request)?;
         let commit = self.store.family_apply(request, mode)?;
         Ok(self.family_apply_projection(commit, request.mutation.id()))
     }
@@ -94,6 +95,7 @@ impl NativeVault {
     }
     fn family_apply_command_locked(&mut self, command: &FamilyCommand) -> Result<ApplyOutcome> {
         self.paths.verify()?;
+        self.validate_conditional_operation(&command.request)?;
         let commit = self.store.family_apply_command(command)?;
         Ok(self.family_apply_projection(commit, command.request.mutation.id()))
     }
@@ -120,6 +122,7 @@ impl NativeVault {
     pub fn family_apply_command_compact(&mut self, command: &FamilyCommand) -> Result<FamilyCommandStatus> {
         let _guard = self.paths.lock(self.options.lock_timeout)?;
         self.paths.verify()?;
+        self.validate_conditional_operation(&command.request)?;
         self.store.family_apply_command_compact(command)?;
         self.point("family_committed");
         let _ = self.recover_locked();

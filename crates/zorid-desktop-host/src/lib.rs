@@ -10,6 +10,8 @@ mod embedded_fixture_sync;
 mod staged_import;
 #[cfg(test)]
 mod rescan_recovery_tests;
+#[cfg(test)]
+mod conditional_saved_source_tests;
 pub use staged_import::{
     ImportProgress, TrustedImportSelection, TrustedStagedImportSource, MAX_IMPORT_RESULT_BYTES,
 };
@@ -128,10 +130,22 @@ enum Command {
         cursor: Option<String>,
     },
     List,
+    CaptureSavedSource {
+        client_id: OperationId,
+        entry_id: EntryId,
+        revision: Revision,
+        path: VaultPath,
+    },
+    ReleaseSavedSource {
+        client_id: OperationId,
+        capture_id: OperationId,
+    },
     PrepareIntent {
         client_id: OperationId,
         operation_id: OperationId,
         mutation: WireMutation,
+        #[serde(default, deserialize_with = "optional_source_capture")]
+        source_capture: Option<OperationId>,
     },
     CommitIntent {
         reference: HostIntentRef,
@@ -217,6 +231,9 @@ fn core_code(error: &zorid_core::ContractError) -> &'static str {
 fn native_fault(error: zorid_native::Error) -> Value {
     use zorid_native::Error::*;
     fault(match error {
+        ConditionalSource(zorid_native::ConditionalSourceError::Changed) => "conditional_source_changed",
+        ConditionalSource(zorid_native::ConditionalSourceError::Owner) => "source_capture_owner",
+        ConditionalSource(zorid_native::ConditionalSourceError::Limit) => "source_capture_limit",
         Contract(ref e) | Store(zorid_store::StoreError::Contract(ref e)) => core_code(e),
         UnsafePath(_) => "unsafe_path",
         Busy(_) => "filesystem_changed",
@@ -235,6 +252,10 @@ fn native_fault(error: zorid_native::Error) -> Value {
         Io(_) => "filesystem_io",
         Recovery(_) => "local_recovery_unavailable",
     })
+}
+
+fn optional_source_capture<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<OperationId>, D::Error> {
+    OperationId::deserialize(deserializer).map(Some)
 }
 
 // Two big-endian u32 lengths, then UTF-8 JSON header and exact binary bytes.
@@ -447,6 +468,8 @@ impl ClientLeases {
             | Command::Workblocks { client_id, .. }
             | Command::DocumentDrafts { client_id, .. }
             | Command::PrepareIntent { client_id, .. }
+            | Command::CaptureSavedSource { client_id, .. }
+            | Command::ReleaseSavedSource { client_id, .. }
             | Command::ListIntents { client_id, .. }
             | Command::CreateText { client_id, .. }
             | Command::FileCommand { client_id, .. }
@@ -670,6 +693,7 @@ fn execute(
                     .retain(|(client, _), _| client != &reference.client_id);
                 leases.documents.release(&reference.client_id);
                 leases.workblocks.release(&reference.client_id);
+                vault.retire_conditional_saved_sources(&reference);
                 leases.active.remove(reference.token.as_str()); // Drop releases kernel ownership; NEVER unlink.
                 leases.revoking.remove(reference.token.as_str());
                 leases
@@ -741,16 +765,40 @@ fn execute(
             empty(&body)?;
             json!({"identity":vault.identity().map_err(native_fault)?})
         }
+        Command::CaptureSavedSource { client_id, entry_id, revision, path } => {
+            empty(&body)?;
+            let lease = leases.active.values().find(|lease| lease.reference().client_id == client_id)
+                .ok_or_else(|| fault("client_not_admitted"))?;
+            let capture = vault.capture_conditional_saved_source(lease, &zorid_native::ConditionalSavedSourceWitness { entry_id, revision, path })
+                .map_err(native_fault)?;
+            let result = json!({"capture":{"capture_id":capture.capture_id,"logical_witness":capture.logical_witness,"byte_length":capture.source.len()}});
+            return Ok((result, capture.source));
+        }
+        Command::ReleaseSavedSource { client_id, capture_id } => {
+            empty(&body)?;
+            let lease = leases.active.values().find(|lease| lease.reference().client_id == client_id)
+                .ok_or_else(|| fault("client_not_admitted"))?;
+            vault.release_conditional_saved_source(lease, &capture_id).map_err(native_fault)?;
+            json!({"released":true})
+        }
         Command::PrepareIntent {
             client_id,
             operation_id,
             mutation,
+            source_capture,
         } => {
             let request = MutationRequest {
                 operation_id,
                 mutation: wire_mutation(mutation, body)?,
             };
-            json!({"intent":vault.prepare_host_intent(&client_id, &request).map_err(native_fault)?})
+            let intent = if let Some(capture_id) = source_capture {
+                let lease = leases.active.values().find(|lease| lease.reference().client_id == client_id)
+                    .ok_or_else(|| fault("client_not_admitted"))?;
+                vault.prepare_guarded_host_intent(lease, &request, &capture_id).map_err(native_fault)?
+            } else {
+                vault.prepare_host_intent(&client_id, &request).map_err(native_fault)?
+            };
+            json!({"intent":intent})
         }
         Command::CommitIntent { reference } => {
             empty(&body)?;
@@ -1302,7 +1350,7 @@ pub fn run_stdio() -> io::Result<()> {
     if initialize_local { snapshot_local_recovery_if_due(&mut vault, &mut leases, now_ms()); }
     write_frame(
         &mut output,
-        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"max_binary_frame":binary::MAX_FRAME,"binary_limits":{"maxFileBytes":"67108864","maxChunkBytes":binary::MAX_CHUNK,"smallReadBytes":binary::SMALL_READ.to_string()},"reconciliation":reconciliation,"capabilities":["workblocks","documents","document_base_preview","document_metadata_rows","document_property_targets","document_runtime","document_drafts","binary_streams","reconciliation_status","local_family_status","file_command","file_command_compact","file_command_status","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","stat_path","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
+        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"max_binary_frame":binary::MAX_FRAME,"binary_limits":{"maxFileBytes":"67108864","maxChunkBytes":binary::MAX_CHUNK,"smallReadBytes":binary::SMALL_READ.to_string()},"reconciliation":reconciliation,"capabilities":["conditional_saved_source","workblocks","documents","document_base_preview","document_metadata_rows","document_property_targets","document_runtime","document_drafts","binary_streams","reconciliation_status","local_family_status","file_command","file_command_compact","file_command_status","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","stat_path","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
         &[],
     )?;
     let mut input = io::stdin().lock();

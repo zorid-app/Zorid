@@ -1,5 +1,8 @@
 use super::*;
 fn rejection(error: &Error) -> Option<HostRejectionCode> {
+    if matches!(error, Error::ConditionalSource(ConditionalSourceError::Changed)) {
+        return Some(HostRejectionCode::ConditionalSourceChanged);
+    }
     let contract = match error {
         Error::Contract(e) | Error::Store(zorid_store::StoreError::Contract(e)) => e,
         _ => return None,
@@ -66,6 +69,13 @@ impl NativeVault {
             })
         })?;
         if current.state == HostIntentState::Rejected {
+            return Ok(current);
+        }
+        if current.state == HostIntentState::Committed
+            && self.store.host_intent_source_guard(reference)?.is_some()
+        {
+            // The exact guarded operation already authored its durable receipt.
+            // A later external edit cannot turn its retry into another write.
             return Ok(current);
         }
         let request = self.store.request_host_commit(reference)?;

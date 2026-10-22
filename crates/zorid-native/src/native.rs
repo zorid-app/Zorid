@@ -55,6 +55,11 @@ mod family_namespace_tests;
 mod family_observation_tests;
 #[path = "host_intents.rs"]
 mod host_intents;
+#[path = "conditional_source.rs"]
+mod conditional_source;
+#[cfg(test)]
+#[path = "conditional_source_tests.rs"]
+mod conditional_source_tests;
 #[path = "namespace.rs"]
 mod namespace;
 #[cfg(test)]
@@ -86,6 +91,7 @@ pub use workblocks::*;
 mod local_recovery;
 
 pub struct NativeVault {
+    conditional_sources: conditional_source::ConditionalSources,
     paths: Paths,
     store: Store,
     options: Options,
@@ -139,6 +145,7 @@ impl NativeVault {
         );
         paths.private.sync_all()?;
         Ok(Self {
+            conditional_sources: conditional_source::ConditionalSources::default(),
             paths,
             store,
             options,
@@ -349,6 +356,7 @@ impl NativeVault {
             self.parent_imports(&path)?;
         }
         self.paths.verify()?;
+        self.validate_conditional_operation(request)?;
         let commit = self.store.apply(request)?;
         self.point("committed");
         // After this boundary errors are represented as Pending with the receipt;

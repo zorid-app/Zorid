@@ -14,6 +14,8 @@ mod document_api;
 mod local_storage;
 pub use local_storage::LocalStoragePaths;
 pub use document_api::*;
+mod conditional_source_api;
+pub use conditional_source_api::*;
 pub use client_admission::{ClientAdmissionError, ClientLease, ClientLeaseRef};
 pub use zorid_store::{
     AuthoredTextStatus, AuthorityIdentity, ChangeOrigin, ChangePage, Checkpoint, CheckpointError,
@@ -46,6 +48,7 @@ use zorid_store::{DirectoryPhase, ProjectionPhase, ScanRun, StoredEntry};
 
 #[derive(Debug)]
 pub enum Error {
+    ConditionalSource(ConditionalSourceError),
     Io(std::io::Error),
     Recovery(zorid_recovery::RecoveryError),
     Store(zorid_store::StoreError),
@@ -58,6 +61,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ConditionalSource(error) => error.fmt(f),
             Self::Io(e) => e.fmt(f),
             Self::Recovery(e) => e.fmt(f),
             Self::Store(e) => e.fmt(f),
@@ -259,6 +263,10 @@ pub enum ExternalFileMode {
 }
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
 impl NativeVault {
+    pub fn capture_conditional_saved_source(&mut self, _: &ClientLease, _: &ConditionalSavedSourceWitness) -> Result<ConditionalSavedSourceCapture> { unsupported() }
+    pub fn release_conditional_saved_source(&mut self, _: &ClientLease, _: &OperationId) -> Result<()> { unsupported() }
+    pub fn retire_conditional_saved_sources(&mut self, _: &ClientLeaseRef) {}
+    pub fn prepare_guarded_host_intent(&mut self, _: &ClientLease, _: &MutationRequest, _: &OperationId) -> Result<HostIntentView> { unsupported() }
     pub fn list_local_recovery(&self, _: &EntryId, _: Option<LocalRecoveryCursor>, _: usize) -> Result<Vec<LocalRecoveryVersion>> { unsupported() }
     pub fn read_local_recovery(&self, _: &EntryId, _: i64) -> Result<Option<LocalRecoverySnapshot>> { unsupported() }
     pub fn enable_local_recovery(&mut self, _: impl AsRef<std::path::Path>, _: i64) -> Result<()> { unsupported() }

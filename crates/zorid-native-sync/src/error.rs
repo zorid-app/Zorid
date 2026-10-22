@@ -58,6 +58,11 @@ impl From<zorid_native::Error> for Error {
     fn from(error: zorid_native::Error) -> Self {
         use zorid_native::Error::*;
         let (code, exit) = match error {
+            ConditionalSource(error) => match error {
+                zorid_native::ConditionalSourceError::Changed => ("conditional_source_changed", 3),
+                zorid_native::ConditionalSourceError::Owner => ("source_capture_owner", 3),
+                zorid_native::ConditionalSourceError::Limit => ("source_capture_limit", 2),
+            },
             Contract(e) | Store(zorid_store::StoreError::Contract(e)) => return e.into(),
             UnsafePath(_) => ("unsafe_path", 1),
             Busy(_) => ("filesystem_changed", 3),

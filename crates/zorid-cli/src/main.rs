@@ -416,6 +416,15 @@ impl From<zorid_native::Error> for Failure {
     fn from(error: zorid_native::Error) -> Self {
         use zorid_native::Error::*;
         match error {
+            ConditionalSource(error) => {
+                use zorid_native::ConditionalSourceError::*;
+                let (code, exit) = match error {
+                    Changed => ("conditional_source_changed", 3),
+                    Owner => ("source_capture_owner", 3),
+                    Limit => ("source_capture_limit", 2),
+                };
+                Self::new(code, "Conditional source precondition rejected", exit)
+            }
             Recovery(_) => Self::new("local_recovery_unavailable", "Local recovery is temporarily unavailable", 1),
             Contract(error) | Store(zorid_store::StoreError::Contract(error)) => error.into(),
             UnsafePath(_) => Self::new("unsafe_path", "Filesystem safety checks rejected this path", 1),
