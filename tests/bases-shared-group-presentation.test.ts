@@ -165,3 +165,17 @@ test('duplicate opaque IDs keep Rust unique-group order while popover retains ev
     assert.deepEqual(orders, [['2']], 'hiding one canonical group removes all of its listed aliases');
   } finally { columns.destroy(); board.destroy(); window.close(); }
 });
+
+test('rich Rust presentation crosses projection with nested labels and frozen target identity', () => {
+  const source = raw();
+  const values = source.rows[0].values as Record<string, DocumentBaseValue>;
+  values.rich = { type:'list',value:[{type:'html',value:'<b>Hello</b>'},{type:'image',value:'cover.png'},{type:'icon',value:'star'},{type:'link',path:'Target.md',display:'fallback',displayValue:{type:'icon',value:'heart'},target:{entryId:'target',revision:'r2'},external:false}] };
+  const output = project(source).rows[0].values.rich;
+  assert.equal(output.type,'list'); if(output.type!=='list')return;
+  assert.deepEqual(output.value.slice(0,3).map(item=>item.type==='namespace'?item.presentation:undefined),[{kind:'html',value:'<b>Hello</b>'},{kind:'image',value:'cover.png'},{kind:'icon',value:'star'}]);
+  const link=output.value[3]; assert.equal(link.type,'namespace'); if(link.type!=='namespace')return;
+  assert.deepEqual(link.presentation?.target,{entryId:'target',revision:'r2'});
+  assert.equal(link.presentation?.label?.type,'namespace');
+  assert.ok(Object.isFrozen(link.presentation)); assert.ok(Object.isFrozen(link.presentation?.target));
+  assert.equal((values.rich.value[3] as {display:string}).display,'fallback','projection leaves raw data unchanged');
+});

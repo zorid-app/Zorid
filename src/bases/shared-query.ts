@@ -62,13 +62,14 @@ function projectBaseResult(raw: DocumentBaseResult|DocumentBasePreviewResult, ve
         Object.defineProperty(error, 'code', { value: input.code, enumerable: true });
         return Object.freeze({ type: 'error', error: Object.freeze(error) });
       }
+      case 'html': case 'image': case 'icon': return Object.freeze({type:'namespace',name:input.value,presentation:Object.freeze({kind:input.type,value:input.value}),get(){return BASE_NULL;}});
       case 'file': case 'link': {
         const key = JSON.stringify(input), existing = namespaces.get(key);
         if (existing) return existing;
         // The existing view renders a namespace by name. Its inert data getter
         // is not an evaluator/host callback and cannot access a live vault.
         const projected: BaseExpressionValue = Object.freeze({ type: 'namespace', name: input.type === 'link' ? input.display ?? input.path : input.path,
-          sharedValue: Object.freeze({ ...input }), get(name: string) { return name === 'path' ? Object.freeze({ type: 'string', value: input.path }) : BASE_NULL; } });
+          sharedValue: Object.freeze({ ...input }), ...(input.type==='link'?{presentation:Object.freeze({kind:'link' as const,value:input.path,...(input.displayValue?{label:value(input.displayValue,depth+1)}:{}),...(input.target?{target:input.target}:{}),external:input.external})}:{}), get(name: string) { return name === 'path' ? Object.freeze({ type: 'string', value: input.path }) : BASE_NULL; } });
         namespaces.set(key, projected); return projected;
       }
     }
@@ -81,9 +82,11 @@ function projectBaseResult(raw: DocumentBaseResult|DocumentBasePreviewResult, ve
     const keyId = (group as typeof group & { readonly keyId?: string | null }).keyId;
     if (group.key === null ? keyId !== null : typeof keyId !== 'string' || !keyId.length) return invalid('Shared Base group identity is missing.');
     return Object.freeze({ key: group.key === null ? null : value(group.key), sharedKeyId: keyId,
+      ...(group.summaries ? { summaries: Object.freeze(Object.fromEntries(Object.entries(group.summaries).map(([key, item]) => [key, value(item)]))) } : {}),
       rows: Object.freeze(group.entryIds.map(id => byId.get(id) ?? invalid())) });
   }));
   const diagnostics: BaseQueryDiagnostic[] = result.diagnostics.map(item => Object.freeze({ ...item, property: item.property ?? undefined, phase: item.phase as BaseQueryDiagnostic['phase'] }));
+  if ('propertyDefinitionDiagnostics' in result && Array.isArray(result.propertyDefinitionDiagnostics)) for(const diagnostic of result.propertyDefinitionDiagnostics) diagnostics.push(Object.freeze({phase:'input',path:'Properties.yaml',property:diagnostic.property??undefined,code:diagnostic.code??'configuration',message:diagnostic.message}));
   const paths = new Map(entries.filter(entry => entry.entryId).map(entry => [entry.entryId, entry.path]));
   for (const issue of result.metadataIssues) {
     const path = paths.get(issue.witness.entryId) ?? '';
@@ -92,7 +95,11 @@ function projectBaseResult(raw: DocumentBaseResult|DocumentBasePreviewResult, ve
   }
   const view = result.view as Readonly<Record<string, unknown>>;
   if (!view || typeof view !== 'object' || Array.isArray(view) || typeof view.type !== 'string' || typeof view.name !== 'string') return invalid();
-  const projected = Object.freeze({ version, view: view as BaseViewConfig, rows, groups,
+  const projected = Object.freeze({
+    ...('summaryPreviews' in result && result.summaryPreviews ? { summaryPreviews: Object.freeze(Object.fromEntries(Object.entries(result.summaryPreviews).map(([key,item]) => [key,value(item)]))) } : {}),
+    ...('summaries' in result && result.summaries ? { summaries: Object.freeze(Object.fromEntries(Object.entries(result.summaries).map(([key,item]) => [key,value(item)]))) } : {}),
+    ...('relationTargets' in result && result.relationTargets ? { relationTargets: result.relationTargets } : {}),
+    version, view: view as BaseViewConfig, rows, groups,
     groupOptions: Object.freeze(result.groupOptions.map(option => {
       const keyId = (option as typeof option & { readonly keyId?: string }).keyId;
       if (typeof keyId !== 'string' || !keyId.length) return invalid('Shared Base group option identity is missing.');
@@ -124,6 +131,7 @@ interface Run {
 }
 export interface SharedBaseQueryInput {
   service: DocumentService; definition: VaultEntry; current: VaultEntry; entries: readonly VaultEntry[];
+  readFile?(path: string): Promise<string>;
   query: BaseQueryOptions; viewIndex: number; viewName?: string; readonly version: number; isCurrent(): boolean; clock?: BaseClockHost;
   onPreview?(result: BaseQueryResult): void;
   onPreviewStatus?(message: string): void;
@@ -172,7 +180,7 @@ export class SharedBaseQueryRunner {
       if (input.query.functions) return invalid('Custom Base functions are unavailable with shared document queries.');
       if (!input.definition.entryId || !input.definition.revision || !input.current.entryId || !input.current.revision) return invalid('Saved entry identity is unavailable for this Base.');
       const ignorePaths = input.query.ignore ? input.entries.filter(entry => entry.type === 'file' && input.query.ignore!(entry.path)).map(entry => entry.path) : undefined;
-      const previewSupported = input.service.basePreviewAvailable === true && !!input.service.maintenance;
+      const previewSupported = !input.query.inlineSource && !input.entries.some(entry => entry.path === 'Properties.yaml' && entry.type === 'file') && input.service.basePreviewAvailable === true && !!input.service.maintenance;
       if (previewSupported && typeof input.service.openPreview !== 'function') return invalid('The Base preview capability is incomplete.');
       run.previewEnabled = previewSupported && !!input.onPreview;
       const previewLive = () => live() && run.previewEnabled === true;
@@ -201,7 +209,7 @@ export class SharedBaseQueryRunner {
               if (!Number.isSafeInteger(clockMs)) return invalid('The Base query clock is invalid.');
               const report = await handle.base({ id: input.definition.entryId!, viewName: input.viewName, options: {
                 viewIndex: input.viewIndex, searchTerms: input.query.searchTerms, ignorePaths, clockMs, timezone: captured.timezone,
-                maxRows: 1000, currentEntryId: input.current.entryId, maxSteps: input.query.maxSteps,
+                maxRows: 10000, currentEntryId: input.current.entryId, maxSteps: input.query.maxSteps,
               } });
               if (!previewLive()) return;
               if (report.definition.id !== input.definition.entryId || report.definition.revision !== input.definition.revision || report.definition.path !== input.definition.path) return invalid('The captured Base definition changed.');
@@ -274,8 +282,17 @@ export class SharedBaseQueryRunner {
       const clockMs = input.query.now?.().getTime() ?? captured.clockMs;
       if (!Number.isSafeInteger(clockMs)) return invalid('The Base query clock is invalid.');
       const timezone = captured.timezone;
-      const options = { viewIndex: input.viewIndex, searchTerms: input.query.searchTerms, ignorePaths, clockMs, timezone, maxRows: 1000,
-        currentEntryId: input.current.entryId, maxSteps: input.query.maxSteps };
+      let propertyDefinitionsSource: { id: string; source: string } | undefined;
+      const settings = input.entries.find(entry => entry.path === 'Properties.yaml' && entry.type === 'file');
+      if (settings) {
+        if (!settings.entryId || !input.readFile) return invalid('Saved property settings are unavailable. Refresh this Base to retry.');
+        const metadata = await read(() => pin.metadata(settings.entryId!)); check();
+        if (metadata.value.entry.path !== settings.path || metadata.value.entry.revision !== settings.revision) return invalid('Property settings changed. Refresh this Base before editing.');
+        const source = await input.readFile(settings.path); check();
+        propertyDefinitionsSource = { id: settings.entryId, source };
+      }
+      const options = { viewIndex: input.viewIndex, searchTerms: input.query.searchTerms, ignorePaths, clockMs, timezone, maxRows: 10000, propertyDefinitionsSource, summaryPreviewProperty: input.query.summaryPreviewProperty, summaryPreviewGroupKeyId: input.query.summaryPreviewGroupKeyId, randomSeed: input.query.randomSeed,
+        currentEntryId: input.current.entryId, maxSteps: input.query.maxSteps, inlineSource: input.query.inlineSource };
       const report = await read(() => pin.base({ id: definition.id, viewName: input.viewName, options })); check();
       if (report.value.definition.id !== definition.id || report.value.definition.revision !== definition.revision || report.value.definition.path !== definition.path
         || JSON.stringify(report.value.result.snapshotId) !== JSON.stringify(pin.snapshot)) return invalid();

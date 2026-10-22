@@ -30,6 +30,8 @@ export type BaseExpressionValue =
   | BaseNamespaceValue;
 export interface BaseNamespaceValue {
   readonly type: 'namespace'; readonly name: string;
+  /** Inert Rust-produced presentation data; never an evaluator or live vault handle. */
+  readonly presentation?: { readonly kind: 'html'|'image'|'icon'|'link'; readonly value: string; readonly label?: BaseExpressionValue; readonly target?: {readonly entryId:string;readonly revision:string}; readonly external?: boolean };
   readonly get: (name: string, runtime: BaseExpressionRuntime) => BaseExpressionValue | undefined;
 }
 export type BaseValueType = BaseExpressionValue['type'];

@@ -1,4 +1,4 @@
-import type { DocumentBaseResult } from '../core/document-semantics.ts';
+import type { DocumentBaseInlineSource, DocumentBaseResult } from '../core/document-semantics.ts';
 import type { DocumentBasePreviewResult } from '../core/document-preview.ts';
 import { BaseDocument } from './document.ts';
 import type { BaseValue, BaseViewConfig } from './document.ts';
@@ -30,6 +30,10 @@ export interface BaseQueryOptions {
   readonly ignore?: (path: string) => boolean;
   /** Pre-tokenized terms; matching spans visible properties, never file contents. */
   readonly searchTerms?: readonly string[];
+  readonly inlineSource?: DocumentBaseInlineSource;
+  readonly summaryPreviewProperty?: string;
+  readonly summaryPreviewGroupKeyId?: string;
+  readonly randomSeed?: number;
 }
 export interface BaseQueryDiagnostic {
   readonly phase: 'input' | 'filter' | 'value' | 'search' | 'group' | 'sort';
@@ -49,6 +53,7 @@ export interface BaseQueryGroup {
   /** JS null denotes an ungrouped result; typed null denotes the empty-key group. */
   readonly key: BaseExpressionValue | null;
   readonly rows: readonly BaseQueryRow[];
+  readonly summaries?: Readonly<Record<string, BaseExpressionValue>>;
 }
 export interface BaseQueryGroupOption {
   readonly sharedKeyId?: string;
@@ -58,6 +63,9 @@ export interface BaseQueryGroupOption {
   readonly listed: boolean;
 }
 export interface BaseQueryResult {
+  readonly summaryPreviews?: Readonly<Record<string, BaseExpressionValue>>;
+  readonly summaries?: Readonly<Record<string, BaseExpressionValue>>;
+  readonly relationTargets?: DocumentBaseResult['relationTargets'];
   /** Read-only shared evidence marks Rust-owned row/group/query semantics. */
   readonly shared?: DocumentBaseResult | DocumentBasePreviewResult;
   readonly version: BaseQuerySnapshot['version'];
