@@ -56,6 +56,44 @@ test('one atomic configuration edit changes root and view and refuses unrelated 
   } finally { await f.stop(); }
 });
 
+test('host-flushed failed add-view retry acknowledges original saved selection without replay', async () => {
+  class Adapter extends MemoryAdapter { fail = false; override async write(path: string, text: string) { if (this.fail && path === 'Work.base') throw new Error('disk full'); return super.write(path, text); } }
+  const adapter = new Adapter({ 'Work.base': base, 'One.md': note }), f = await fixture(adapter, 'First');
+  try {
+    adapter.fail = true; await assert.rejects(f.controller.addView(f.controller.state.version, 'kanban'), /disk full/);
+    const buffer = await f.getBuffer('Work.base'); const desired = buffer.text;
+    adapter.fail = false; await buffer.flush();
+    assert.equal(await f.controller.acknowledgeConfigurationRetry(), true);
+    assert.equal(f.controller.state.result?.view.name, 'Kanban'); assert.equal(await f.vault.read('Work.base'), desired);
+    assert.equal(await f.controller.acknowledgeConfigurationRetry(), false);
+  } finally { adapter.fail = false; await f.stop(); }
+});
+
+test('host-flushed failed selected-view deletion recovers after named refresh reports removed view', async () => {
+  class Adapter extends MemoryAdapter { fail = false; override async write(path: string, text: string) { if (this.fail && path === 'Work.base') throw new Error('disk full'); return super.write(path, text); } }
+  const adapter = new Adapter({ 'Work.base': base, 'One.md': note }), f = await fixture(adapter, 'First');
+  try {
+    adapter.fail = true; await assert.rejects(f.controller.removeView(f.controller.state.version, 0), /disk full/);
+    adapter.fail = false; await (await f.getBuffer('Work.base')).flush(); await f.controller.refresh();
+    assert.match(f.controller.state.error?.message ?? '', /not found: First/);
+    assert.equal(await f.controller.acknowledgeConfigurationRetry(), true);
+    assert.equal(f.controller.state.error, null); assert.equal(f.controller.state.result?.view.name, 'Second');
+  } finally { adapter.fail = false; await f.stop(); }
+});
+
+test('configuration acknowledgement refuses source changes during its saved-source observation', async () => {
+  class Adapter extends MemoryAdapter { fail = false; override async write(path: string, text: string) { if (this.fail && path === 'Work.base') throw new Error('disk full'); return super.write(path, text); } }
+  const adapter = new Adapter({ 'Work.base': base, 'One.md': note }), f = await fixture(adapter, 'First');
+  try {
+    adapter.fail = true; await assert.rejects(f.controller.addView(f.controller.state.version, 'kanban'), /disk full/);
+    adapter.fail = false; await (await f.getBuffer('Work.base')).flush();
+    const stat = adapter.stat.bind(adapter); let calls = 0;
+    adapter.stat = async path => { if (path === 'Work.base' && ++calls === 2) await adapter.write(path, (await adapter.read(path)) + '# external\n'); return stat(path); };
+    await assert.rejects(f.controller.acknowledgeConfigurationRetry(), /changed while/);
+    assert.equal(f.controller.state.result?.view.name, 'First'); assert.match(await adapter.read('Work.base'), /# external/);
+  } finally { adapter.fail = false; await f.stop(); }
+});
+
 test('bulk edits transform each file once; undo and redo preserve subsequent unrelated typing and missing values', async () => {
   class Adapter extends MemoryAdapter { writes = new Map<string, number>(); override async write(path: string, text: string) { this.writes.set(path, (this.writes.get(path) ?? 0) + 1); await super.write(path, text); } }
   const adapter = new Adapter({ 'Work.base': base, 'One.md': note, 'Two.md': note }), f = await fixture(adapter);

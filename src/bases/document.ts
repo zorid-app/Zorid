@@ -97,6 +97,15 @@ function rootValues(doc: Document): Readonly<Record<string, BaseValue>> {
   return values as Readonly<Record<string, BaseValue>>;
 }
 
+function equalValues(left: BaseValue, right: BaseValue): boolean {
+  if (Object.is(left, right)) return true;
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) || Array.isArray(right)) return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((item, index) => equalValues(item, right[index]));
+  const keys = Object.keys(left), other = Object.keys(right);
+  // Mapping order can affect case-insensitive first-match lookup. Preserve it.
+  return keys.length === other.length && keys.every((key, index) => key === other[index] && equalValues((left as Readonly<Record<string, BaseValue>>)[key], (right as Readonly<Record<string, BaseValue>>)[key]));
+}
+
 function validateDocument(doc: Document): Readonly<Record<string, BaseValue>> {
   if (doc.errors.length || doc.warnings.length) {
     throw new BaseDocumentError(`Invalid or unsupported base YAML: ${[...doc.errors, ...doc.warnings].map(error => error.message).join('; ')}`);
@@ -198,6 +207,7 @@ export class BaseDocument {
     try {
       operation(next);
       const values = validateDocument(next);
+      if (equalValues(values, this.values)) return;
       const source = this.serialize(next); // Verify alias order before publishing any mutation.
       this.document = next; this.source = source; this.values = values;
     } catch (error) {

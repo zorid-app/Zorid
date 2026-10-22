@@ -179,6 +179,16 @@ test('BOM and CRLF convention survive edits and untouched source is byte-exact',
   assert.equal(BaseDocument.parse(output).views[0].limit, 5);
 });
 
+test('semantic no-op patches preserve exact original formatting and published snapshots', () => {
+  const source = '\uFEFF# keep\r\nviews: [ {type: table, name: \'Table\', order: [file.name]} ]\r\nplugin: {quoted: "001"}';
+  const base = BaseDocument.parse(source), views = base.views;
+  base.updateView(0, { type: 'table' }); base.updateRoot({ missing: undefined }); base.setDefaultView(0);
+  assert.equal(base.toString(), source); assert.equal(base.views, views);
+  // JSON.stringify would conflate an existing NaN with a requested null.
+  const nonfinite = BaseDocument.parse('custom: .nan\nviews: [{type: table, name: Table}]');
+  nonfinite.setRoot('custom', null); assert.equal(nonfinite.getRoot('custom'), null);
+});
+
 test('duplicating a view renames internal anchors and preserves external aliases and original targets', () => {
   const source = 'shared: &outside [shared]\nviews:\n  - type: table\n    name: Original\n    own: &inside [one, two]\n    reference: *inside\n    external: *outside\nlast: *inside\n';
   const base = BaseDocument.parse(source); base.duplicateView(0, 'Copy');

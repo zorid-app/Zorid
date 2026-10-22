@@ -145,6 +145,7 @@ export class BaseController {
   private historyBusy = false;
   private pendingPropertyHistory = new Map<string, PropertyHistoryEntry>();
   private pendingHistoryDirection = new WeakMap<BaseHistoryEntry, 'undo' | 'redo'>();
+  private pendingConfigurations = new Map<string, { readonly index: number; readonly name: string; readonly bound: boolean; readonly selectionSerial: number; readonly entryId?: string; readonly adapter: Vault['adapter']; validate(): void }>();
   private epoch = 0;
   private version = 0;
   private disposed = false;
@@ -670,7 +671,10 @@ export class BaseController {
     const document = BaseDocument.parse(expected), index = change(document), desired = document.toString();
     const selected = document.views[index];
     if (!selected) throw new Error('The selected base view does not exist');
-    const expectedEpoch = this.epoch, expectedView = this.query.viewIndex, expectedName = this.viewName, selectionSerial = this.selectionSerial;
+    const selectionSerial = this.selectionSerial;
+    const witness = sharedBaseWitness(this.current.result!, this.path);
+    const retry = { index, name: selected.name, bound: this.viewName !== undefined, selectionSerial, entryId: witness?.entryId, adapter: this.options.vault.adapter, validate: validateWrite };
+    let prepared = false;
     const validateSelection = () => {
       // Even an explicit switch back to the same view retires the command.
       if (this.selectionSerial !== selectionSerial) throw new Error('This base result is stale; the selected view changed before the configuration was saved');
@@ -681,23 +685,57 @@ export class BaseController {
       // A failed flush may already retain exactly this absolute patch. Retry its
       // guarded persistence, but never merge unrelated unsaved configuration.
       if (source !== expected && source !== desired) throw new Error('The base configuration has an unsaved or external edit');
+      prepared = true;
       return desired;
     };
-    if (this.options.inlineSource) {
+    try { if (this.options.inlineSource) {
       // Inline configuration is not the containing note's property transform.
       // The host replaces only its captured fence and retains the whole draft.
       validateSelection();
       await this.options.inlineSource.transform(expected, desired, validateSelection);
-    } else await this.options.mutations.transform(this.path, transform, validateSelection, validateWrite, sharedBaseWitness(this.current.result!, this.path));
+    } else await this.options.mutations.transform(this.path, transform, validateSelection, validateWrite, witness);
+    } catch (error) {
+      if (prepared || this.options.inlineSource) this.pendingConfigurations.set(desired, retry);
+      throw error;
+    }
+    this.pendingConfigurations.clear();
     // A config's own modify event advances epoch. An explicit view selection
     // also advances it, but updates query/name: never undo that later choice.
     if (!this.disposed && this.selectionSerial === selectionSerial) {
       this.query = { ...this.query, viewIndex: index };
       if (this.viewName !== undefined) this.viewName = selected.name;
       this.stale = true; this.clearWake();
-      if (this.epoch === expectedEpoch) { this.epoch++; this.sharedQueries.cancel(); }
+      this.epoch++; this.sharedQueries.cancel();
     }
     await this.refresh();
+  }
+
+  /** The session may flush an already transformed recovery draft itself. Only
+   * acknowledge an exact originally attempted configuration and file identity;
+   * never reconstruct or replay the original semantic command. */
+  async acknowledgeConfigurationRetry(): Promise<boolean> {
+    if (!this.pendingConfigurations.size) return false;
+    if (this.disposed) throw new Error('This base result is stale; the controller was closed');
+    const adapter = this.options.vault.adapter, epoch = this.configurationEpoch;
+    const observe = () => adapter.stat ? adapter.stat(this.path) : Promise.resolve(this.options.vault.entries.get(this.path));
+    const before = await observe();
+    const inline = this.options.inlineSource ? await this.options.inlineSource.read() : undefined;
+    const source = inline ? inline.source : await this.options.vault.read(this.path);
+    const retry = this.pendingConfigurations.get(source);
+    if (!retry) throw new Error('The saved Base does not match an attempted configuration retry');
+    retry.validate();
+    const entry = await observe();
+    retry.validate();
+    if (this.options.vault.adapter !== adapter || adapter !== retry.adapter || !entry || retry.entryId && entry.entryId !== retry.entryId) throw new Error('The original Base was replaced before its configuration retry was acknowledged');
+    if (!before || before.entryId !== entry.entryId || before.revision !== entry.revision || before.mtime !== entry.mtime || before.size !== entry.size || epoch !== this.configurationEpoch
+      || inline?.witness && (inline.witness.entryId !== entry.entryId || inline.witness.revision !== entry.revision)) throw new Error('The Base changed while its configuration retry was being acknowledged');
+    if (this.selectionSerial === retry.selectionSerial) {
+      this.query = { ...this.query, viewIndex: retry.index };
+      if (retry.bound) this.viewName = retry.name;
+      this.stale = true; this.clearWake(); this.epoch++; this.sharedQueries.cancel();
+    }
+    this.pendingConfigurations.clear();
+    await this.refresh(); return true;
   }
 
   async addView(version: number, type: string, name?: string): Promise<void> {
@@ -765,7 +803,7 @@ export class BaseController {
   dispose(): void {
     this.disposed = true; this.clearWake(); this.epoch++; this.sharedQueries.dispose();
     for (const runner of this.summaryQueries) runner.dispose(); this.summaryQueries.clear();
-    this.undoCommands = []; this.redoCommands = []; this.pendingPropertyHistory.clear();
+    this.undoCommands = []; this.redoCommands = []; this.pendingPropertyHistory.clear(); this.pendingConfigurations.clear();
     // Disposal retires activity without publishing an observer after closure.
     this.current = this.settled;
     if (this.timer !== undefined) clearTimeout(this.timer);
