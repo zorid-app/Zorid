@@ -20,6 +20,27 @@ core. Its separate post-run check verified numeric oracles and all ten remaining
 authoritative files byte-for-byte; see campaign 003 in the acceptance record.
 A new run still requires a matched build receipt and a coordinated runtime slot.
 
+The authored Q3 extension (`64bee169` → `19ae330c`, composed at `eb6e0346`)
+adds **40 CLI invocations**, so the new campaign plans **125 commands under a
+128-command ceiling**. It is **unexecuted against a matching rebuilt CLI**.
+Campaign 003's 85 executed commands above remain historical evidence for the
+original scenario, not acceptance of this extension.
+
+The 40 added invocations are one mkdir, 14 creates, one index build, ten saved
+Base queries and 14 exact raw reads. The shared
+[Q3 fixture](../fixtures/bases-q3-semantics.mjs) has 14 added files (four ordinary
+Markdown notes and ten Bases), 92 typed row-value oracles and 13 expected diagnostic
+entries. Assertions are not CLI commands. The runner checks that the original
+phase ends at 85 and that the completed new plan ends at 125.
+
+These ten query groups cover Object/Tag behavior; registered signatures and exact
+special-call spelling; strings/regex/numbers; strict collections; two explicitly
+captured Duration clocks (January 31 and February 1); Tag and Object Link provenance
+through grouped/overall summaries; and returned Error data versus formula access
+rethrows. Exact fixture-source reads follow the queries. Source/oracle checks do
+not establish actual CLI, native/WASM or rendered application acceptance; a new
+matched build receipt and coordinated run are still required.
+
 Read-only `--help` and `base-query --help` inspection used the older existing
 October 20 CLI artifact with SHA-256
 `e48d7d949fb84a2c9d89d5995f3f33b757598eb64584bc3d4c8e20df4e649e78`.
@@ -46,7 +67,7 @@ The desktop campaign covers those surfaces separately.
 
 ## Independent fixture oracle
 
-There are five ordinary book notes, two author notes, one excluded project note,
+The original fixture has five ordinary book notes, two author notes, one excluded project note,
 `Properties.yaml`, and two `.base` files. One book has CRLF and a Unicode filename;
 one book has only `type: book`. No named note Type or Type registry is created.
 
@@ -113,7 +134,7 @@ version string.
 Every run creates a unique `zorid-bases-cli-*` directory under `--out`, with its
 own vault and app-local cache. It does not reuse or delete a preexisting vault.
 Environment IPC endpoints and `DISPLAY` are removed from child processes.
-Commands run sequentially, with at most 120 invocations, a 25-second child timeout,
+Commands run sequentially, with at most 128 invocations, a 25-second child timeout,
 a 12 MiB combined-output bound, and a five-minute scenario guard. These are test
 containment limits, not a performance acceptance campaign.
 

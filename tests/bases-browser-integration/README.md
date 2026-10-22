@@ -1,6 +1,6 @@
 # Actual browser/WASM Bases semantic integration
 
-Actual run005 **passed all nine current semantic integration groups**, including
+Actual run005 **passed all nine then-current semantic integration groups**, including
 plain Link alias/date-filename/URL values, all-note suggestions, the temporary
 unreadable-metadata stage, exact restoration and retained healthy snapshots, on
 frozen `055e985f3534af44b8fef1daafe40e372aa127cd`. Report and screenshot:
@@ -13,6 +13,35 @@ no protocol events dropped, and runner/artifact/cleanup failures were absent.
 Chrome exited0, its profile was removed, Vite closed and the synthetic database
 was deleted. Rendered UI, other browsers, mobile, sync and stress acceptance
 remain separate.
+
+## Authored Q3 extension — awaiting execution
+
+Source batch `64bee169` → `19ae330c`, composed at `eb6e0346`, appends **ten
+new groups to the original nine: 19 planned browser groups**. These new groups
+have **not been executed against matching generated WASM**. The historical
+run005 result above remains nine executed groups; it does not cover this extension.
+
+The shared [Q3 fixture](../fixtures/bases-q3-semantics.mjs) adds 14 inert source
+files (four Markdown notes and ten saved Bases), with 92 authored typed row-value
+oracles and 13 expected diagnostic entries. These counts describe assertions and
+fixture data, not additional executed groups. The ten appended groups cover:
+
+1. Object callback keys, values and outer scope.
+2. Tag hierarchy versus generic String/transformed List membership.
+3. Registered arity, null/type rules and exact special-call spelling.
+4. String/regex replacement and finite numeric conversions.
+5. Recursive flatten and strict constructor-aware uniqueness.
+6. Duration components and January 31 overflow under a captured clock.
+7. Duration fields/comparison under a separate February 1 clock.
+8. Nested TagList provenance in overall/grouped summaries.
+9. Strict Object Link-child provenance in grouping/summaries.
+10. Returned summary Error data versus formula-namespace rethrows.
+
+The runner requires the exact planned group-name list and all 19 passed results;
+no skipped or unexecuted group can produce success. Shared fixture bytes join the
+source fingerprint. Authored-data/syntax/oracle checks are source verification,
+not actual Worker/WASM, native, CLI or rendered UI acceptance. A new matched
+artifact build and coordinated runtime run remain required.
 
 Earlier actual run003 **passed all nine then-current groups** on frozen
 `6808bf5ef48c099c9ebf3ad1877a12332dc0f902`. The report and screenshot are in
@@ -53,7 +82,7 @@ public admitted adapter commands. It neither calls a detached evaluator nor
 constructs an index generation, modifies an IDB store, substitutes a Worker,
 injects a registry, or supplies expected results to product code.
 
-The nine independently authored groups cover:
+The original nine independently authored groups cover:
 
 1. Ordinary notes **without Properties.yaml**: source-relative wikilinks,
    recursive list/object links, cross-file `.asFile`, URLs, dates, missing values
@@ -146,7 +175,7 @@ The assigned build uses the existing toolchain, including
 `/Users/ctk/Projects/Zorid/tmp/stage4-tools/wasm-bindgen` and the shared Rust
 sysroot; only the coordinator should launch that build.
 
-The final `report.json` must have all nine groups passed, no unexecuted group,
+The next `report.json` must have all 19 authored groups passed, no unexecuted group,
 observed product Worker and WASM GETs, no cleanup failures and no runner error.
 Full rendered Electron heavy-user acceptance, normal web UI/CLI, native/mobile,
 sync and large-vault performance are separate evidence.
