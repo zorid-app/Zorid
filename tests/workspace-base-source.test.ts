@@ -154,3 +154,41 @@ test('source controls captured from a retired Base cannot switch the newer tab o
   await f.workspace.openNote('Other.md'); const handle = f.workspace.activePane.editor!; retired.click(); await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal(f.workspace.activePane.editor, handle); assert.equal(f.workspace.activePane.element.querySelector('.base-source-view'), null); assert.equal(await f.adapter.read('Other.md'), 'Other');
 });
+
+test('a preserve-only durable navigation flush cannot retire source before its conflict is resolved', async t => {
+  const f = await setup(t); await f.workspace.openNote('Invalid.base'); await editSource(f.workspace); replace(f.workspace, repaired);
+  const pane = f.workspace.activePane, handle = pane.editor!, view = sourceEditor(f.workspace), buffer = f.workspace.buffers.get('Invalid.base')!;
+  view.dispatch({ selection: EditorSelection.single(4, 17) }); const selection = view.state.selection.toJSON();
+  const flush = buffer.flush.bind(buffer), navigation = buffer.flushForNavigation.bind(buffer); let preserved = 0;
+  // Exercise NoteBuffer's durable-conflict control flow without pretending this legacy fixture is native storage.
+  buffer.flushForNavigation = async () => { preserved++; }; buffer.flush = async () => { throw new Error('Retained durable conflict'); };
+  try {
+    await assert.rejects((f.workspace as any).setBaseSource(pane, false), /Retained durable conflict/);
+    assert.equal(preserved, 1); assert.equal(pane.editor, handle); assert.deepEqual(view.state.selection.toJSON(), selection);
+    assert.ok(pane.element.querySelector('.base-source-view')); assert.ok(sourceToggle(f.workspace, 'Return to Base')); assert.equal(buffer.text, repaired);
+  } finally { buffer.flush = flush; buffer.flushForNavigation = navigation; }
+});
+
+test('a late Base close failure keeps the original mode and its retry action', async t => {
+  const f = await setup(t); await f.workspace.openNote('Invalid.base'); const pane = f.workspace.activePane, session = pane.baseView!, content = pane.element.querySelector('.bases-session')!;
+  const close = session.close.bind(session); session.close = async () => { throw new Error('Late close failure'); };
+  try {
+    await assert.rejects((f.workspace as any).setBaseSource(pane, true), /Late close failure/);
+    assert.equal(pane.baseView, session); assert.ok(content.isConnected); assert.equal(pane.element.querySelector('.bases-session'), content);
+    assert.equal((pane.tabs.find(tab => tab.id === pane.active) as any).baseSource, undefined);
+    assert.ok(sourceToggle(f.workspace, 'Edit source')); assert.equal(pane.editor, undefined);
+  } finally { session.close = close; }
+  await editSource(f.workspace); assert.equal(sourceEditor(f.workspace).state.doc.toString(), invalid);
+});
+
+for (const active of ['Other.md', 'Other.base']) test(`an inactive Base context-menu source action targets its captured tab while ${active} is active`, async t => {
+  const f = await setup(t); await f.adapter.write('Other.base', repaired); await f.workspace.vault.reload(); await f.workspace.openNote('Invalid.base');
+  const pane = f.workspace.activePane, target = pane.tabs.find(tab => tab.id === pane.active)!;
+  await f.workspace.openNote(active, true); const other = pane.tabs.find(tab => tab.id === pane.active)!;
+  let commands: {name: string; action(): Promise<void>}[] = []; const menu = (f.workspace as any).menu;
+  (f.workspace as any).menu = (items: typeof commands) => { commands = items; };
+  try { (f.workspace as any).tabMenu(pane, target); } finally { (f.workspace as any).menu = menu; }
+  const command = commands.find(item => item.name === 'Edit source')!; assert.ok(command); await command.action();
+  assert.equal(pane.active, target.id); assert.equal(sourceEditor(f.workspace).state.doc.toString(), invalid);
+  assert.equal((other as any).baseSource, undefined); assert.equal((target as any).baseSource, true);
+});

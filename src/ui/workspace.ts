@@ -2395,13 +2395,21 @@ export class Workspace {
   }
   private async navigate(delta:number,pane:Pane):Promise<void>{const index=pane.historyIndex+delta;if(index<0||index>=pane.history.length)return;pane.historyIndex=index;this.current(pane).historyIndex=index;await this.openNote(pane.history[index],false,pane,false);}
   private async toggleReading(pane=this.activePane):Promise<void>{const tab=this.current(pane);if(tab.kind!=='note')return;if(tab.path&&!isMarkdown(tab.path))return;await this.flushPane(pane);tab.mode=tab.mode==='reading'?this.settings.defaultMode:'reading';await this.renderPane(pane);this.saveSession();}
-  private async setBaseSource(pane:Pane,source:boolean):Promise<void>{
-    const tab=this.current(pane),path=tab?.path;if(tab?.kind!=='note'||!path||!/\.base$/i.test(path)||!!tab.baseSource===source)return;
-    const generation=this.vaultGeneration,vault=this.vault,runtime=pane.runtime,token=this.treeEntryToken(path);
+  private async setBaseSource(pane:Pane,source:boolean,tab=this.current(pane)):Promise<void>{
+    const path=tab?.path;if(tab?.kind!=='note'||!path||!/\.base$/i.test(path)||!!tab.baseSource===source)return;
+    const generation=this.vaultGeneration,vault=this.vault,token=this.treeEntryToken(path);
+    if(this.current(pane)!==tab){await this.selectTab(pane,tab);if(this.current(pane)!==tab||generation!==this.vaultGeneration||vault!==this.vault||tab.path!==path||this.treeEntryToken(path)!==token)return;}
+    const runtime=pane.runtime,version=pane.renderVersion,previous=tab.baseSource;
     const validate=()=>{if(generation!==this.vaultGeneration||vault!==this.vault||this.current(pane)!==tab||pane.runtime!==runtime||!this.panes.includes(pane)||!token||this.treeEntryToken(path)!==token)throw new Error('The Base source request changed.');};
-    await this.baseBufferFor(path,validate);validate();await this.flushPane(pane);validate();
+    const buffer=await this.baseBufferFor(path,validate);validate();await this.flushPane(pane);validate();
+    // Unlike navigation, a mode switch must save before retiring this editor.
+    // Retained durable conflicts deliberately make flushForNavigation preserve-only.
+    await buffer.flush();validate();
     this.capturePaneState(pane);tab.baseSource=source;
-    await this.renderPane(pane,{flush:false});this.saveSession();if(this.activePane===pane)this.focusPane(pane);
+    const rendering=this.renderPane(pane,{flush:false}),request=this.renderRequests.get(pane);
+    try{await rendering;}
+    catch(error){if(generation===this.vaultGeneration&&vault===this.vault&&this.current(pane)===tab&&pane.runtime===runtime&&pane.renderVersion===version&&this.renderRequests.get(pane)===request)tab.baseSource=previous;throw error;}
+    this.saveSession();if(this.activePane===pane)this.focusPane(pane);
   }
   private async openPropertyLink(source:string,target:string,pane:Pane,witness?:{readonly entryId:string;readonly revision:string;readonly subpath?:string},newTab=false):Promise<void>{
     if(!witness){await this.followLink(source,target,pane);return;}
@@ -2577,7 +2585,7 @@ export class Workspace {
       action:async()=>{tab.mode=mode;pane.active=tab.id;await this.renderPane(pane);this.saveSession();},
     })):[];
     const path=tab.path;
-    if(tab.kind==='note'&&path&&/\.base$/i.test(path)){const source=!tab.baseSource;modes.push({name:source?'Edit source':'Return to Base',action:()=>this.setBaseSource(pane,source)});}
+    if(tab.kind==='note'&&path&&/\.base$/i.test(path)){const source=!tab.baseSource;modes.push({name:source?'Edit source':'Return to Base',action:()=>this.setBaseSource(pane,source,tab)});}
     this.menu([...(path&&isMarkdown(path)&&this.platform.recoveryHistory?[{name:'Version history',action:()=>this.showVersionHistory(path)}]:[]),{name:'Split right',action:()=>this.split('right',pane,tab)},{name:'Split down',action:()=>this.split('bottom',pane,tab)},...modes,...(path?[{name:'Rename…',action:()=>this.renameDialog(path)}]:[]),{name:'Close tab',action:()=>this.closeTab(pane,tab)}],x,y,()=>this.panes.includes(pane)&&pane.tabs.includes(tab)&&tab.path===path);
   }
   private menuPoint(event:MouseEvent):{x:number;y:number}{
