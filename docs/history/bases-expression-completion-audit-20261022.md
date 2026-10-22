@@ -1,6 +1,63 @@
 # Bases expression completion audit — 2026-10-22
 
-## Successor evidence — 2026-10-22, `60c1d4fd`
+## Final core successor evidence — 2026-10-22, `8f18b965`
+
+The coordinator's pinned-tool full run completed with exit 0 at source
+`8f18b96574ec7b7e5dc01ac7365a1c643bd66b9f`, `crates` tree
+`958b19aca4666414e956fbb2f406558af5a18366`, `zorid-bases` subtree
+`a7ea02e4a9993a1d7fde41c3601036882d37f18e`. Retained
+`/private/tmp/zorid-bases-g9-final-full-composed-001.log` reports **359 passed
+across 20 nonempty targets**, comprising 196 library and 163 integration tests,
+plus a zero-test doc-test target. The separate focused log
+`/private/tmp/zorid-bases-g9-named-key-focused-001.log` passes all 196 library
+and all 10 preview tests; those 206 results are overlapping evidence, not tests
+to add to the 359 total. Adjacent/deferred Tasks and Calendar targets remain
+part of the full count.
+
+The previously failing
+`small_prepared_subset_does_not_prepare_a_hundred_thousand_entry_namespace`
+now passes in both focused and full runs with its **500,000-step budget
+unchanged**. The historical 60c1d4fd failure and preceding baselines below remain
+retained; this successor supersedes that failure as a current source/test
+blocker without rewriting its outcome.
+
+The repair retains the checked conversion/admission contract. `1e9a7f25` moves
+an already admitted owned String key instead of rendering/copying it a second
+time. `8f18b965` projects safe ASCII property identifiers through named
+AST members and borrows their text for lookup, while retaining scan work and
+cancellation checks. Names outside that safe subset keep the quoted/computed
+path; the tests preserve captured values and dependency planning. Named passing
+cases include `computed_string_key_consumes_admitted_text_without_rendering_a_second_copy`,
+`named_keys_borrow_ast_text_but_still_charge_the_lookup_scan`,
+`cached_named_keys_poll_cancellation_and_leave_string_member_semantics_intact`,
+`generated_named_keys_use_only_the_safe_ascii_identifier_subset` and
+`generated_named_and_quoted_keys_select_the_same_captured_values`.
+
+The earlier measured A/B diagnosis is retained at
+`/private/tmp/zorid-bases-g9-cost-diagnosis.json`. After the first owned-String
+repair, it records comparator totals 507,857 versus baseline 497,182 with
+identical preview-admission cost 486,120: a **10,675-step delta**, accounted for
+as `(127 rows × 11 computed String keys + 128 filter String literals) × 7`
+checked literal-import steps. The fixture budget remains 500,000. This explains
+that measured intermediate failure; it is not a new elapsed-time, memory or
+universal cost claim for final source. The final named-key repair avoids
+synthetic String keys where safe rather than dropping the remaining literal,
+lookup or cancellation charges.
+
+The full successor passes the named source regressions for G9 Object/raw-Link
+conversion and allocation guards, G10 regex admission, G11/G15 File methods,
+G12/G14 title/date extrema and G13 pinned collation recorded below. It establishes
+the current Rust core test closure for these identified repairs, **not complete
+Q3, native transport, actual WASM/CLI or rendered acceptance**. D1–D6 and the
+explicit pinned-collation/safe-key policies remain. The authored **127 typed-value
+oracles and 16 expected diagnostics** still require matching product artifacts
+and actual runtime execution. Historical Browser005 nine groups and CLI003 85
+commands do not become proof for this successor.
+
+This documentation task ran no app, build or product test and changed only this
+audit record; the observed test evidence belongs to the coordinator's runs.
+
+## Historical successor evidence — 2026-10-22, `60c1d4fd`
 
 This dated update supersedes the source-status entries in the historical
 sections below, preserving their findings and earlier outcomes. It records
