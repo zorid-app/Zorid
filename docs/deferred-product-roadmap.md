@@ -9,6 +9,47 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest composition/validation update: isolated root `9d133333` now composes
+reviewed typed toolbar/provider/campaign through `6c12a6a5` (TypeScript95070 and
+220 integrated Node tests89689 pass), plus reviewed conditional-source batch:
+Store92639e8f→d0a583b1, Nativecd8f5889→00d1f1e1,
+Buffer39a78ee3/aafe1dcf→cb69f001/8e6cda85,
+desktop9cdbbf78→9d9b9d03, history3f0c5aee→9d133333.
+Store/Native reviews cover30 NEW Rust tests, still uncompiled at composition;
+Buffer80, history60 and bridge75 focused author tests pass with independent
+source reviews (reviewers personally replayed72/60/75 respectively).
+Composed TypeScript87596 passes. Root serialized cold-cache Rust run53036
+is ACTIVE: all targets in zorid-store/native/desktop-host/bases, release/offline/
+locked/j1/test-threads1; log
+`/private/tmp/zorid-bases-conditional-composed-rust-20261022-001.log`.
+Composed scoped Node62414 also active, log
+`/private/tmp/zorid-bases-conditional-composed-node-20261022-001.log`.
+No native/runtime acceptance follows from source composition.
+
+User requests continuing with available space. Completed native compiler cache
+retirement5591 files/812021468 logical bytes preserves all26 product hashes,
+receipt `/private/tmp/zorid-bases-resume-native-cache-retirement-20261022-003.json`.
+Actual free space at this retirement was4526202880→5287358464B; the cause of
+the earlier independent space increase is not established. Current observed
+2548872KiB. Compiler caches were retired, so run53036 is intentionally cold.
+Preserved host/CLI/WASM products remain usable; no source/user data retired.
+
+Desktop build008/55320 passes on typed root6c12a6a5. Actual properties007/45626
+fails75actions/17checks at first Kanban status picker after earlier edits/relation/
+Cards/List pass. Padding hit has no combobox focus, generic DIV focus disappears
+16ms later; no cause proven from current diagnostics. App closes SIGTERM0/no
+leaks/freeze verified. `bases_properties` owns only causal regression + bounded
+passive target/admission diagnostics in isolated branch; no product fix authorized
+without proof. This run does not validate C1's picker fix or restart.
+
+Owned Obsidian reference typed001 stops before target discovery; typed002 admits
+exact target/version then baseline locator incorrectly requires A instead of the
+shipped SPAN internal-link. Both runs have0 semantic inputs; full owned cleanup,
+original18files/3configs and old51-capture catalog restoration verified; unrelated
+Obsidian remains untouched. Corrected private003 is source-approved by root at
+manifest34b9a48a (exact names+paths, original13 scenarios unchanged), NOT granted
+execution while Rust53036 owns the heavy lane. No owned app is now running.
+
 Current continuation update: root `7e66e619` includes independently approved
 C1 picker lifecycle fix `12869443` (44 scoped +6 dependent tests pass) and
 audited [browser011](history/bases-browser-actual-011-20261022.md). WASM build73113
