@@ -56,12 +56,14 @@ impl Fact {
 struct Locals {
     value: Shape,
     acc: Shape,
+    index: Shape,
 }
 impl Default for Locals {
     fn default() -> Self {
         Self {
             value: Shape::unknown(),
             acc: Shape::unknown(),
+            index: Shape::unknown(),
         }
     }
 }
@@ -99,7 +101,7 @@ fn walk(expr: &Expr, locals: Locals, check: &mut impl FnMut(usize) -> Option<()>
         Expr::Identifier(name) => Fact::pure(match name.as_str() {
             "value" => locals.value,
             "acc" => locals.acc,
-            "index" => Shape::scalar(NUMBER),
+            "index" => locals.index,
             "note" | "formula" | "this" | "file" => Shape::scalar(OTHER),
             _ => Shape::unknown(),
         }),
@@ -236,6 +238,7 @@ fn walk(expr: &Expr, locals: Locals, check: &mut impl FnMut(usize) -> Option<()>
                 let method = canonical_function_name(method);
                 let mut nested = locals;
                 if matches!(method, "map" | "filter" | "reduce") {
+                    nested.index = Shape::scalar(NUMBER);
                     nested.value = if receiver.shape.kind == LIST {
                         Shape {
                             kind: receiver.shape.items,
@@ -353,8 +356,10 @@ fn walk(expr: &Expr, locals: Locals, check: &mut impl FnMut(usize) -> Option<()>
                             }
                         }
                         "max" | "min" | "number" | "random" => Shape::scalar(NUMBER),
-                        "escapeHTML" | "html" | "image" | "icon" => Shape::scalar(TEXT),
-                        "link" | "file" => Shape::scalar(OTHER),
+                        "escapeHTML" | "html" | "image" | "icon" | "link" => {
+                            Shape::scalar(TEXT | DURATION_TEXT)
+                        }
+                        "file" => Shape::scalar(OTHER),
                         _ => Shape::unknown(),
                     }
                 } else {
