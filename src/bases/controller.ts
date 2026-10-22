@@ -339,6 +339,14 @@ export class BaseController {
     return this.refresh();
   }
 
+  setCurrentFilePath(path: string): Promise<void> {
+    path = normalizePath(path);
+    if (this.query.currentFilePath === path) return Promise.resolve();
+    this.query = { ...this.query, currentFilePath: path };
+    this.stale = true; this.clearWake(); this.epoch++; this.sharedQueries.cancel();
+    return this.refresh();
+  }
+
   private guard(version: number, path: string): { validate: () => void; validateWrite: () => void } {
     const epoch = this.epoch, identity = this.identities.get(path), base = this.identities.get(this.path);
     const validateWrite = () => {
