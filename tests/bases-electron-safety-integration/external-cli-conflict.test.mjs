@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {spawn,execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {artifactHash,admitExternalCli,assertExternalCli,auditSavedNote,assertUnsavedBeforeCli,assertCliAdvancedBeforeDesktopIntent,assertRetainedExternalConflict,createExternalCliConflicts} from './external-cli-conflict.mjs';
+import {parseExternalCliWrite,artifactHash,admitExternalCli,assertExternalCli,auditSavedNote,assertUnsavedBeforeCli,assertCliAdvancedBeforeDesktopIntent,assertRetainedExternalConflict,createExternalCliConflicts} from './external-cli-conflict.mjs';
 import {conflictNote} from './campaign.mjs';
 const exec=promisify(execFile),safety='/owned/tests/bases-electron-safety-integration/campaign.mjs';
 const before='---\nscore: 2\n---\n# Body sentinel\n',draft=before+'\nLocal marker\n',external=before+'\nIndependent peer marker\n';
@@ -26,7 +26,7 @@ import fs from 'node:fs';import path from 'node:path';import {spawnSync} from 'n
 const a=process.argv.slice(2),get=k=>a[a.indexOf(k)+1],vault=get('--vault'),id=get('--id'),revision=get('--expected-revision'),op=get('--operation-id'),db=path.join(vault,'.zorid','vault.sqlite');
 const fd=fs.openSync(db,'r');let body='';process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>body+=chunk);process.stdin.on('end',()=>{
  const py=\`import sqlite3,json,sys
-c=sqlite3.connect(sys.argv[1]);row=c.execute('SELECT state FROM entries WHERE id=?',(sys.argv[2],)).fetchone();before=json.loads(row[0]);assert before['revision']==sys.argv[3];after={**before,'revision':'peer-revision'};c.execute('UPDATE entries SET state=?,content=? WHERE id=?',(json.dumps(after),sys.argv[5].encode(),sys.argv[2]));c.commit();print(json.dumps({'durable_local_commit':True,'synced':False,'commit':{'operation_id':sys.argv[4],'sequence':'2','changes':[{'before':before,'after':after}]}}));c.close()\`;
+c=sqlite3.connect(sys.argv[1]);row=c.execute('SELECT state FROM entries WHERE id=?',(sys.argv[2],)).fetchone();before=json.loads(row[0]);assert before['revision']==sys.argv[3];after={**before,'revision':'peer-revision'};c.execute('UPDATE entries SET state=?,content=? WHERE id=?',(json.dumps(after),sys.argv[5].encode(),sys.argv[2]));c.commit();receipt={'durable_local_commit':True,'synced':False,'projection':{'state':'projected'},'commit':{'operation_id':sys.argv[4],'sequence':'2','changes':[{'before':before,'after':after}]}};print(json.dumps({'version':1,'ok':True,'result':receipt}));c.close()\`;
  const result=spawnSync('python3',['-c',py,db,id,revision,op,body],{encoding:'utf8'});if(result.status!==0){process.stderr.write(result.stderr);process.exit(3);}fs.writeFileSync(path.join(vault,'B.md'),body);fs.closeSync(fd);process.stdout.write(result.stdout);
 });
 `,{mode:0o700});
@@ -78,7 +78,7 @@ test('ordering oracles reject early desktop intent, changed logical source and u
 
 test('prewarmed real child opens the owned vault before input, receives one exact request and closes normally',async t=>{
   const f=await setup(t),writer=await f.helper.prime('B.md',before);assert.equal(f.evidence.externalCli.length,1);const record=f.evidence.externalCli[0];assert.equal(record.stdinSent,false);assert.ok(record.ready.at>=record.started);assert.ok(record.ready.process.includes(f.cli));assert.equal(record.ready.database,f.db);
-  await f.state({...saved,draft});const ordered=await writer.commit(draft,external);assert.equal(record.exitCode,0);assert.equal(record.signal,null);assert.equal(record.cleanupVerified,true);assert.equal(record.inputBytes,Buffer.byteLength(external));assert.equal(record.receipt.commit.operation_id,record.operationId);assert.equal((await auditSavedNote(f.vault,'B.md')).source,external);
+  await f.state({...saved,draft});const ordered=await writer.commit(draft,external);assert.equal(record.exitCode,0);assert.equal(record.signal,null);assert.equal(record.cleanupVerified,true);assert.equal(record.inputBytes,Buffer.byteLength(external));assert.equal(record.envelope.version,1);assert.equal(record.envelope.ok,true);assert.deepEqual(record.envelope.result,record.receipt);assert.deepEqual(record.envelope,JSON.parse(record.stdout));assert.equal(record.receipt.commit.operation_id,record.operationId);assert.equal((await auditSavedNote(f.vault,'B.md')).source,external);
   await assert.rejects(ordered.assertConflict(),/external-revision conflict/);await f.state({...saved,draft,conflict:true});await ordered.assertConflict();await writer.close();assert.equal(f.evidence.externalCli.length,1);
 });
 
@@ -108,3 +108,32 @@ test('campaign conflict protocol closes the primed child when its exact precondi
   let closed=0;const c={evidence:{actions:[]},read:async()=>before,externalCliConflicts:{async prime(){return{async commit(){throw Error('Strict missed precondition');},async close(){closed++;}};}},ui:{async openFile(){},async wait(){},async click(){},async key(){},async dom(){return{collapsed:true,lastText:'',atLast:true};}},cdp:{async call(){}}};
   await assert.rejects(conflictNote(c,'B.md','marker'),/Strict missed precondition/);assert.equal(closed,1);
 });
+
+
+const publicWrite={version:1,ok:true,result:{commit:{operation_id:'external-operation',sequence:'66',changes:[{before:entry,after:{...entry,revision:'external-revision'}}]},durable_local_commit:true,projection:{state:'projected'},synced:false}};
+test('strict parser unwraps the actual public versioned CLI write shape and preserves the entire envelope',()=>{
+  const {envelope,receipt}=parseExternalCliWrite(JSON.stringify(publicWrite)+'\n','external-operation');assert.deepEqual(envelope,publicWrite);assert.deepEqual(receipt,publicWrite.result);assert.equal(envelope.result,receipt);
+});
+for(const [name,alter] of [
+  ['unwrapped result',()=>JSON.stringify(publicWrite.result)],
+  ['malformed JSON',()=>'{'],
+  ['null envelope',()=>JSON.stringify(null)],
+  ['array envelope',()=>JSON.stringify([publicWrite])],
+  ['rejected public envelope',()=>JSON.stringify({version:1,ok:false,error:{code:'revision_conflict',message:'Rejected'}})],
+  ['unsupported version',x=>{x.version=2;}],
+  ['missing version',x=>{delete x.version;}],
+  ['false success',x=>{x.ok=false;}],
+  ['missing result',x=>{delete x.result;}],
+  ['null result',x=>{x.result=null;}],
+  ['missing durable commit proof',x=>{delete x.result.durable_local_commit;}],
+  ['false durable commit proof',x=>{x.result.durable_local_commit=false;}],
+  ['missing projection proof',x=>{delete x.result.projection;}],
+  ['pending physical projection',x=>{x.result.projection={state:'pending',code:'projection_pending',message:'Publication remains pending'};}],
+  ['contradictory projection fields',x=>{x.result.projection.code='projection_pending';}],
+  ['unexpected sync claim',x=>{x.result.synced=true;}],
+  ['missing commit',x=>{delete x.result.commit;}],
+  ['wrong operation identity',x=>{x.result.commit.operation_id='other-operation';}],
+  ['numeric journal sequence',x=>{x.result.commit.sequence=66;}],
+  ['zero journal sequence',x=>{x.result.commit.sequence='0';}],
+  ['missing change list',x=>{delete x.result.commit.changes;}],
+])test('strict parser rejects '+name,()=>{const value=structuredClone(publicWrite),encoded=alter(value)??JSON.stringify(value);assert.throws(()=>parseExternalCliWrite(encoded,'external-operation'));});

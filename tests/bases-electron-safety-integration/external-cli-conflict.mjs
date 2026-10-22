@@ -23,6 +23,22 @@ export async function admitExternalCli({argv,campaignPath,safetyCampaignPath}){
   return Object.freeze({file,sha256:expected,stat:Object.freeze(stat)});
 }
 export async function assertExternalCli(artifact){assert.deepEqual(await identity(artifact.file),artifact.stat,'External CLI file identity changed');assert.equal(await artifactHash(artifact.file),artifact.sha256,'External CLI artifact changed');}
+/** The public CLI writes a versioned success envelope, never a bare receipt.
+ * This fixture requires physical publication as well as a durable local commit;
+ * pending projection is a failed fixture precondition, not a retry invitation. */
+export function parseExternalCliWrite(stdout,operationId){
+  const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
+  const envelope=JSON.parse(stdout);
+  assert.ok(object(envelope),'External CLI returned a malformed public envelope');
+  assert.deepEqual(Object.keys(envelope).sort(),['ok','result','version'],'External CLI requires the public success envelope');
+  assert.equal(envelope.version,1,'External CLI envelope version');assert.equal(envelope.ok,true,'External CLI must report success');
+  const receipt=envelope.result;assert.ok(object(receipt),'External CLI success result is missing');
+  assert.equal(receipt.durable_local_commit,true,'External CLI must prove a durable local commit');assert.equal(receipt.synced,false,'External fixture is local only');
+  assert.deepEqual(receipt.projection,{state:'projected'},'External CLI must prove completed physical projection');
+  assert.ok(object(receipt.commit),'External CLI commit receipt is missing');assert.equal(receipt.commit.operation_id,operationId,'External CLI returned another operation');
+  assert.match(receipt.commit.sequence,/^[1-9][0-9]*$/,'External CLI commit sequence must be a positive decimal string');assert.ok(Array.isArray(receipt.commit.changes),'External CLI commit changes are missing');
+  return{envelope,receipt};
+}
 
 // One coherent SQLite read transaction. mode=ro is intentional: immutable=1
 // would ignore a live WAL. No write connection, schema edit or checkpoint API.
@@ -91,7 +107,7 @@ export async function createExternalCliConflicts({artifact,vault,outputDirectory
           boundedSource(draft);boundedSource(external);
           assert.deepEqual(await identity(artifact.file),artifact.stat,'External CLI changed before input');assert.equal(await readFixture(vault,file),before,'Actual saved bytes changed before CLI input');const pre=await auditSavedNote(vault,file),expected={before,draft,entry,intents:initial.intents,external};assertUnsavedBeforeCli(pre,expected);record.beforeCli=pre;
           assert.ok(!closed&&!record.stdinSent);record.stdinSent=true;record.inputBytes=Buffer.byteLength(external);record.inputSha256=sha(external);record.inputSentAt=Date.now();child.stdin.end(external);
-          await waitClosed(15000);assert.ok(closed,'Independent CLI result must be observed');await close();if(failure)throw failure;assert.equal(record.exitCode,0,record.stderr);assert.equal(record.signal,null);const receipt=JSON.parse(record.stdout);assert.equal(receipt.commit?.operation_id,operationId);record.receipt=receipt;
+          await waitClosed(15000);assert.ok(closed,'Independent CLI result must be observed');await close();if(failure)throw failure;assert.equal(record.exitCode,0,record.stderr);assert.equal(record.signal,null);const{envelope,receipt}=parseExternalCliWrite(record.stdout,operationId);record.envelope=envelope;record.receipt=receipt;
           const post=await auditSavedNote(vault,file);record.afterCli=post;assertCliAdvancedBeforeDesktopIntent(post,{...expected,receipt});await assertExternalCli(artifact);
           return{...expected,receipt,async assertConflict(){const observed=await auditSavedNote(vault,file);assertRetainedExternalConflict(observed,{...expected,receipt});record.retainedConflict=observed;assert.equal(await readFixture(vault,file),external);}};
         }finally{await close();}
