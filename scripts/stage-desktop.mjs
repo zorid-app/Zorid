@@ -11,6 +11,7 @@ export const desktopFiles = [
   'desktop/vault-dispatch.cjs', 'desktop/window-broker.cjs', 'desktop/context-menu.cjs', 'desktop/menu-hotkeys.cjs',
   'desktop/editor-core.cjs', 'desktop/host-location.cjs', 'desktop/client-slots.cjs', 'desktop/client-admission.cjs',
   'desktop/core-vault-fixture-service.cjs', 'desktop/rust-vault-service.cjs', 'desktop/document-semantics.cjs', 'desktop/workblocks.cjs',
+  'desktop/recovery-history.cjs', 'desktop/document-runtime.cjs', 'desktop/document-drafts.cjs',
   'desktop/durable-writes.cjs', 'desktop/durable-checkpoints.cjs', 'desktop/text-create.cjs',
   'desktop/family-sync-protocol.cjs', 'desktop/family-fixture.cjs', 'desktop/family-fixture-preload.cjs',
   'desktop/family-fixture-renderer.js', 'desktop/family-fixture.html', 'desktop/family-fixture.css',

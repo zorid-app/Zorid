@@ -32,6 +32,12 @@ WASM generation, packaging and mobile builds have separate requirements; see the
 [build architecture](docs/architecture/build.md) before selecting a check. Source
 or component success does not establish native/mobile runtime behavior.
 
+On macOS, run `pnpm build:mac` to build the current native host and renderer,
+check packaged runtime dependencies, and verify the resulting local app at
+`release/mac-arm64/Zorid.app` (Apple Silicon) or `release/mac/Zorid.app` (Intel).
+It uses the installed Electron runtime and produces an unsigned, unnotarized app;
+`pnpm build:desktop` builds only the renderer. Rust/Cargo must be installed.
+
 ## Source layout
 
 | Directory | Responsibility |

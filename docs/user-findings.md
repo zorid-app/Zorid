@@ -1,5 +1,17 @@
 # User findings queue
 
+## Packaged macOS startup and one-command build — 2026-10-21
+
+Root owns `codex/desktop-package-runtime-fix` in
+`/private/tmp/zorid-desktop-package-runtime-fix`; baseline7455673a.
+The delivered Desktop app failed at startup because the explicit package list
+omitted recovery-history.cjs, document-runtime.cjs and document-drafts.cjs.
+The existing runtime-dependency regression reproduces the omission. All three
+are now included; that regression runs before packaging. All18 package tests
+pass; independent review approved the allowlist fix. `pnpm build:mac` builds the
+current native host and renderer, uses installed Electron and verifies the app.
+Packaged launch and Applications installation remain pending verification.
+
 ## Work blocks and time entries are note-backed — 2026-10-20
 
 User corrects the S3 explanation: work blocks, time entries and similar structured

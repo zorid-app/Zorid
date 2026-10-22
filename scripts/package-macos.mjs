@@ -22,9 +22,12 @@ try {
   }
   const architecture = args.find(argument => ['--arm64', '--x64'].includes(argument)) ?? `--${process.arch}`;
   if (!['--arm64', '--x64'].includes(architecture)) throw new Error('Only arm64 and x64 macOS releases are supported');
-  await verifyElectronRuntime(root, architecture.slice(2));
+  const runtime = await verifyElectronRuntime(root, architecture.slice(2));
+  const runtimeCheck = spawnSync(process.execPath, ['--test', '--test-name-pattern=runtime allowlist', 'tests/desktop-package.test.mjs'], { cwd: root, stdio: 'inherit' });
+  if (runtimeCheck.error) throw runtimeCheck.error;
+  if (runtimeCheck.status !== 0) throw new Error('Desktop runtime dependency check failed');
   await stageDesktop(root, { architecture: architecture.slice(2) });
-  const result = spawnSync(process.execPath, [require.resolve('electron-builder/cli.js'), '--config', 'electron-builder.cjs', '--mac', '--publish', 'never', architecture, ...(args.includes('--dir') ? ['--dir'] : [])], { cwd: root, env: environment, stdio: 'inherit' });
+  const result = spawnSync(process.execPath, [require.resolve('electron-builder/cli.js'), '--config', 'electron-builder.cjs', `--config.electronDist=${runtime.distribution}`, '--mac', '--publish', 'never', architecture, ...(args.includes('--dir') ? ['--dir'] : [])], { cwd: root, env: environment, stdio: 'inherit' });
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
 } catch (error) { console.error(error.message); process.exitCode = 1; }
