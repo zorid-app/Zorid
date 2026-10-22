@@ -9,6 +9,37 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest resumed results (supersede running/pending statements below): root
+`6fcd58a2` includes reviewed relation lifecycle fix `ef383205` and canonical
+recovery fixture correction `e38e2461`. Rust library run47903 passes205 Bases
+tests and80 existing host tests, but its two new recovery tests fail strict
+SQLite admission through macOS `/var` alias. Test-only canonical-root correction
+preserves production guards/all assertions; focused run58881 then passes both
+tests, terminal0. Frontend check85529 and desktop build006/62175 both pass.
+Matched native+CLI build55913 passes; preserved receipt
+`/private/tmp/zorid-bases-resume-native-e38e2461/receipt.json`, crates tree
+`dbfc92218e82c6ecb8aeb23027366c37f096f80a`, host SHA3eebb68a/CLI fca404ed.
+Frontend006 producer `ef383205`,333 dist files; receipt
+`/private/tmp/zorid-bases-resume-desktop-build-20261022-006-receipt.json`.
+Actual independently verified [CLI008](history/bases-cli-actual-008-20261022.md)
+passes125 commands/17 checks/162 typed expectations/16 Q3+10 legacy diagnostics.
+Current-v9 WASM build/browser validation remains pending.
+
+Native properties003 fails18actions/4checks after status-padding click. Passive
+trace proves that click hit the status cell; its missing picker cause remains
+unknown. Separate Alpha click9.6s later is confirmed user interaction. Safety006
+fails7actions/1visibilitycheck before opening ordinary A; no durable safety phase
+accepted. Both apps close SIGTERM exit0/leaked[], freeze verified. User confirms
+interacting and agrees to leave subsequent tests untouched. Fresh properties004
+then passes124actions/32checks through P1–P6: ordinary relation opens Ada without
+rewriting alias, relation add/remove, actual property edits across all4 layouts,
+and derived readonly controls. It stops at C1's acknowledged custom-summary editor
+return-to-picker assertion. Full C1/restart remains unexecuted, not passed.
+`bases_summaries` owns read-only causal diagnosis. Properties004 closes SIGTERM
+exit0/leaked[], freeze verified. No owned app remains running at this checkpoint.
+Typed-filter toolbar/provider/campaign batches remain isolated pending review/
+composition; provider `0a809ff0` has independent10/10 tests and source approval.
+
 Resume update, 2026-10-22: user explicitly resumed the paused implementation.
 Root isolated HEAD `307f801f` composes reviewed host rescan recovery
 (`9e46750e` → `87eab7dc`) and Date/String comparison
