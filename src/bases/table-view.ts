@@ -541,7 +541,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
         event.preventDefault();
         const activeRow = result.groups[active.group].rows[active.row];
         focusCell(activeRow.path, result.properties[active.column], active); paintRange();
-      } else if (event.target === cell) { range = undefined; anchor = undefined; cell.focus(); paintRange(); }
+      } else if (!event.defaultPrevented && event.target === cell) { range = undefined; anchor = undefined; cell.focus(); paintRange(); }
     });
     cell.addEventListener('dblclick', event => { if (!options.renderProperty && current() && !(event.target as Element).closest('a,input,textarea')) startEdit(cell, row, property, value); });
     cell.addEventListener('keydown', event => {
