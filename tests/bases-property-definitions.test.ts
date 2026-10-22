@@ -11,7 +11,7 @@ test('property settings are vault-wide definitions, with independent diagnostics
   assert.equal(result.diagnostics[0].property, 'broken');
   assert.throws(() => parseBasePropertyDefinitions('properties: []'), /mapping/);
   assert.throws(() => parseBasePropertyDefinitions('properties: &p\n  topics: *p'), /alias|value type/i);
-  assert.throws(() => parseBasePropertyDefinitions('shared: &a {type: text}\nproperties: {title: *a}'), /aliases/i);
+  assert.equal(parseBasePropertyDefinitions('shared: &a {type: text}\nproperties: {title: *a}').properties.title.type, 'text');
   assert.equal(parseBasePropertyDefinitions('properties: {sum: {type: rollup, rollup: {relation: project, aggregation: sum}}}').diagnostics.length, 1);
 });
 
@@ -69,4 +69,19 @@ test('ISO datetime offsets and nanosecond text remain readable without timezone 
   }
   assert.equal(validDateText('2026-01-01T24:00:00Z', true), false); assert.equal(validDateText('2026-01-01T17:30:00+00:99', true), false);
   assert.equal(inferBasePropertyDefinition(baseExpressionValue('2026-01-01')).type, 'date'); assert.equal(inferBasePropertyDefinition(baseExpressionValue([]), 'note.tags').type, 'tags');
+});
+
+
+test('bounded noncyclic YAML aliases parse and unrelated targeted edits retain anchors and aliases', () => {
+  const source='future: &future\n  keep: true\nproperties:\n  common: &definition\n    type: select\n    options: [{value: A}]\n  other: *definition\n  title: {type: text}\nfutureCopy: *future\n';
+  const initial=parseBasePropertyDefinitions(source); assert.equal(initial.diagnostics.length,0); assert.equal(initial.properties.other.type,'select');
+  const changed=updateBasePropertyDefinition(source,'title',{type:'number'}); assert.match(changed,/&definition/);assert.match(changed,/\*definition/);assert.match(changed,/&future/);assert.match(changed,/\*future/);
+  assert.equal(parseBasePropertyDefinitions(changed).properties.common.type,'select');assert.equal(parseBasePropertyDefinitions(changed).properties.other.type,'select');
+  const detached=updateBasePropertyDefinition(source,'other',{type:'multiselect',options:[{value:'A'},{value:'B'}]});const parsed=parseBasePropertyDefinitions(detached);assert.equal(parsed.properties.common.type,'select');assert.equal(parsed.properties.common.options?.length,1);assert.equal(parsed.properties.other.options?.length,2);assert.match(detached,/&definition/);
+});
+
+
+test('new property definitions are materialized as YAML nodes before targeted fields are set', () => {
+  const created=updateBasePropertyDefinition('', 'status', {type:'select',options:[{value:'Todo'}]}); assert.equal(parseBasePropertyDefinitions(created).properties.status.options?.[0].value,'Todo');
+  const absent=updateBasePropertyDefinition('version: 1\n', 'rating', {type:'number'}); assert.equal(parseBasePropertyDefinitions(absent).properties.rating.type,'number'); assert.match(absent,/version: 1/);
 });

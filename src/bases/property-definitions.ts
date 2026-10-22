@@ -1,4 +1,4 @@
-import { isMap, parseDocument, visit } from 'yaml';
+import { isMap, parseDocument } from 'yaml';
 import type { BaseExpressionValue } from './expression.ts';
 
 /** Ordinary visible vault file. There is no named note-Type registry. */
@@ -62,7 +62,6 @@ function readDocument(source: string) {
   if (new TextEncoder().encode(source).length > MAX_BASE_PROPERTY_SETTINGS_BYTES) throw new BasePropertyDefinitionError('Property settings exceed source byte budget.');
   const document = parseDocument(source || 'properties: {}\n', { uniqueKeys: true });
   if (document.errors.length || document.warnings.length) throw new BasePropertyDefinitionError([...document.errors, ...document.warnings].map(e => e.message).join('; '));
-  visit(document, { Alias() { throw new BasePropertyDefinitionError('YAML aliases are not supported in property settings.'); } });
   if (!isMap(document.contents)) throw new BasePropertyDefinitionError('Property settings must be a YAML mapping.');
   const raw = document.toJS({ maxAliasCount: 100 });
   const active = new Set<object>();
@@ -103,10 +102,10 @@ export function updateBasePropertyDefinition(source: string, property: string, d
   if (!text(property)) throw new BasePropertyDefinitionError('Property name must be nonempty bounded text.');
   if (definition !== null) validateBasePropertyDefinition(definition);
   const { document } = readDocument(source);
-  if (!document.has('properties')) document.set('properties', {});
+  if (!document.has('properties')) document.set('properties', document.createNode({}));
   if (definition === null) document.deleteIn(['properties', property]);
   else {
-    if (!isMap(document.getIn(['properties', property], true))) document.setIn(['properties', property], {});
+    if (!isMap(document.getIn(['properties', property], true))) document.setIn(['properties', property], document.createNode({}));
     for (const key of ['type', 'options', 'relation', 'reverseRelation', 'rollup'] as const) {
       if (definition[key] === undefined) document.deleteIn(['properties', property, key]);
       else document.setIn(['properties', property, key], definition[key]);
