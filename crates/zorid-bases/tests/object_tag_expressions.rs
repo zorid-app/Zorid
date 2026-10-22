@@ -553,3 +553,302 @@ fn object_callbacks_and_tag_queries_respect_public_work_and_cancellation_limits(
         );
     }
 }
+
+#[test]
+fn grouping_actual_nested_durations_adds_clock_refresh_to_pure_formulas() {
+    for expression in ["duration('1 month')", "[duration('1 month')]"] {
+        let source=format!("formulas:\n  calendarKey: \"{expression}\"\nviews:\n  - type: table\n    name: Durations\n    groupBy: {{property: formula.calendarKey, direction: ASC}}\n");
+        let program = compile_base_source(&source).unwrap();
+        let rows = snapshot(vec![
+            json!({"path":"A.md","properties":[]}),
+            json!({"path":"B.md","properties":[]}),
+        ]);
+        let result = query_base(&program, &rows, &QueryOptions::default()).unwrap();
+        assert_eq!(
+            result.refresh_hint.unwrap().dependency,
+            zorid_bases::BaseClockDependency::Instant,
+            "{expression}"
+        );
+    }
+}
+
+fn generation(inputs: &[(&str, &str, &str)]) -> zorid_index::Generation {
+    use zorid_core::{EntryId, EntryKind, EntryState, OperationId, Revision, VaultPath};
+    use zorid_index::{
+        document_extraction_version, Generation, GenerationSource, IndexSnapshotId,
+        MetadataRequest, SemanticVersions, SourceSnapshotId, SourceWatermark, INDEX_SCHEMA_VERSION,
+        LITERAL_QUERY_VERSION, RESOLVER_VERSION,
+    };
+    let store = OperationId::new("object-link-group-store").unwrap();
+    let source = SourceSnapshotId::new(store.clone(), SourceWatermark::new("1").unwrap());
+    let snapshot = IndexSnapshotId::new(
+        store,
+        OperationId::new("object-link-group-epoch").unwrap(),
+        1,
+        SemanticVersions::new(
+            INDEX_SCHEMA_VERSION,
+            document_extraction_version(),
+            RESOLVER_VERSION,
+            LITERAL_QUERY_VERSION,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let entries = inputs
+        .iter()
+        .map(|(id, path, _)| EntryState {
+            id: EntryId::new(*id).unwrap(),
+            path: VaultPath::new(*path).unwrap(),
+            kind: EntryKind::File,
+            revision: Revision::new("r1").unwrap(),
+            deleted: false,
+        })
+        .collect();
+    let sources = inputs
+        .iter()
+        .map(|(id, _, text)| GenerationSource::Text {
+            request: MetadataRequest {
+                entry_id: EntryId::new(*id).unwrap(),
+                content_revision: Revision::new("r1").unwrap(),
+                source: (*text).into(),
+            },
+            markdown: true,
+        })
+        .collect();
+    Generation::from_sources(source, snapshot, entries, sources).unwrap()
+}
+
+#[test]
+fn object_link_alias_groups_have_distinct_chooser_display_and_summary_preview_identity() {
+    let generation = generation(&[
+        (
+            "shared",
+            "Shared.md",
+            "---\nvariants:\n  - ref: '[[People/A|One]]'\n  - ref: '[[People/A|Two]]'\n---\n",
+        ),
+        ("target", "People/A.md", "Target\n"),
+        ("row-a", "Row A.md", "---\nkind: row\nn: 10\n---\n"),
+        ("row-b", "Row B.md", "---\nkind: row\nn: 20\n---\n"),
+    ]);
+    let program = compile_base_source(
+        r#"
+filters: 'kind == "row"'
+formulas:
+  variant: 'file("Shared.md").properties.variants[if(file.basename == "Row A", 0, 1)]'
+summaries:
+  Total: 'values.sum()'
+views:
+  - type: table
+    name: Aliases
+    order: [file.name, n, formula.variant]
+    groupBy: {property: formula.variant, direction: ASC}
+    summaries: {n: Total}
+"#,
+    )
+    .unwrap();
+    let mut options = QueryOptions::default();
+    options.summary_preview_property = Some("n".into());
+    let result = zorid_bases::query_generation(&program, &generation, &[], &options).unwrap();
+    assert_eq!(result.rows.len(), 2);
+    assert_eq!(result.groups.len(), 2);
+    assert_eq!(result.group_options.len(), 2);
+    let display_ids = result
+        .groups
+        .iter()
+        .map(|group| group.key_id.as_deref().expect("grouped identity"))
+        .collect::<std::collections::BTreeSet<_>>();
+    let chooser_ids = result
+        .group_options
+        .iter()
+        .map(|group| group.key_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(display_ids.len(), 2);
+    assert_eq!(chooser_ids.len(), 2);
+    assert_eq!(display_ids, chooser_ids);
+    assert_eq!(
+        result.summaries["note.n"],
+        BaseValue::Number { value: 30.0 }
+    );
+    assert_eq!(
+        result.summary_previews.as_ref().unwrap()["Total"],
+        BaseValue::Number { value: 30.0 }
+    );
+    for group in &result.groups {
+        assert_eq!(group.entry_ids.len(), 1);
+        let row_a = group.entry_ids[0].as_str() == "row-a";
+        let expected = BaseValue::Number {
+            value: if row_a { 10.0 } else { 20.0 },
+        };
+        let Some(BaseValue::Object { value: fields }) = group.key.as_ref() else {
+            panic!("Object grouping key");
+        };
+        let BaseValue::Link { display, .. } =
+            &fields.iter().find(|(key, _)| key == "ref").unwrap().1
+        else {
+            panic!("Link Object child");
+        };
+        assert_eq!(display.as_deref(), Some(if row_a { "One" } else { "Two" }));
+        assert_eq!(group.summaries["note.n"], expected);
+        let chooser = result
+            .group_options
+            .iter()
+            .find(|option| Some(&option.key_id) == group.key_id.as_ref())
+            .unwrap();
+        assert_eq!(chooser.count, 1);
+        options.summary_preview_group_key_id = Some(chooser.key_id.clone());
+        let scoped = zorid_bases::query_generation(&program, &generation, &[], &options).unwrap();
+        assert_eq!(scoped.summary_previews.as_ref().unwrap()["Total"], expected);
+    }
+}
+
+#[test]
+fn regex_grouping_and_summary_identity_follow_literal_ast_nodes_not_string_dtos() {
+    let rows = snapshot(vec![
+        json!({"path":"A.md","properties":[]}),
+        json!({"path":"B.md","properties":[]}),
+    ]);
+    for (expression, expected_groups) in [
+        ("/a/", 1usize),
+        ("if(file.basename == 'A', /a/, /a/)", 2usize),
+    ] {
+        let source = format!(
+            r#"
+formulas:
+  pattern: "{expression}"
+summaries:
+  Distinct: 'values.unique().length'
+views:
+  - type: table
+    name: Regex
+    order: [file.name, formula.pattern]
+    groupBy: {{property: formula.pattern, direction: ASC}}
+    summaries: {{formula.pattern: Distinct}}
+"#
+        );
+        let program = compile_base_source(&source).unwrap();
+        let mut options = QueryOptions::default();
+        options.summary_preview_property = Some("formula.pattern".into());
+        let result = query_base(&program, &rows, &options).unwrap();
+        assert_eq!(result.groups.len(), expected_groups, "{expression}");
+        assert_eq!(result.group_options.len(), expected_groups, "{expression}");
+        let display_ids = result
+            .groups
+            .iter()
+            .map(|group| group.key_id.as_deref().expect("group identity"))
+            .collect::<std::collections::BTreeSet<_>>();
+        let chooser_ids = result
+            .group_options
+            .iter()
+            .map(|group| group.key_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(display_ids.len(), expected_groups, "{expression}");
+        assert_eq!(chooser_ids.len(), expected_groups, "{expression}");
+        assert_eq!(display_ids, chooser_ids, "{expression}");
+        for row in &result.rows {
+            assert_eq!(row.values["formula.pattern"], string("/a/"));
+        }
+        let distinct = BaseValue::Number {
+            value: expected_groups as f64,
+        };
+        assert_eq!(
+            result.summaries["formula.pattern"], distinct,
+            "{expression}"
+        );
+        assert_eq!(
+            result.summary_previews.as_ref().unwrap()["Distinct"],
+            distinct,
+            "{expression}"
+        );
+        for group in &result.groups {
+            assert_eq!(group.key.as_ref(), Some(&string("/a/")));
+            assert_eq!(group.entry_ids.len(), 2 / expected_groups);
+            assert_eq!(
+                group.summaries["formula.pattern"],
+                BaseValue::Number { value: 1.0 }
+            );
+            options.summary_preview_group_key_id = group.key_id.clone();
+            let scoped = query_base(&program, &rows, &options).unwrap();
+            assert_eq!(
+                scoped.summary_previews.as_ref().unwrap()["Distinct"],
+                BaseValue::Number { value: 1.0 }
+            );
+        }
+    }
+}
+
+#[test]
+fn repeated_regex_literals_in_one_callback_share_identity_through_summary_projection() {
+    boolean("/a/ == /a/", false);
+    boolean("/a/ == '/a/'", false);
+    assert_eq!(
+        value("[1, 2].map(/a/).unique().length"),
+        BaseValue::Number { value: 1.0 }
+    );
+    let program = compile_base_source(
+        r#"
+formulas:
+  patterns: '[1, 2].map(/a/)'
+summaries:
+  Distinct: 'values.flat().unique().length'
+views:
+  - type: table
+    name: Regex callback
+    order: [file.name, formula.patterns]
+    summaries: {formula.patterns: Distinct}
+"#,
+    )
+    .unwrap();
+    let rows = snapshot(vec![
+        json!({"path":"A.md","properties":[]}),
+        json!({"path":"B.md","properties":[]}),
+    ]);
+    let mut options = QueryOptions::default();
+    options.summary_preview_property = Some("formula.patterns".into());
+    let result = query_base(&program, &rows, &options).unwrap();
+    for row in &result.rows {
+        assert_eq!(
+            row.values["formula.patterns"],
+            list(vec![string("/a/"), string("/a/")])
+        );
+    }
+    assert_eq!(
+        result.summaries["formula.patterns"],
+        BaseValue::Number { value: 1.0 }
+    );
+    assert_eq!(
+        result.summary_previews.as_ref().unwrap()["Distinct"],
+        BaseValue::Number { value: 1.0 }
+    );
+}
+
+#[test]
+fn query_keeps_named_regex_definitions_distinct_after_optional_cache_eviction() {
+    let mut source = String::from("formulas:\n");
+    for index in 0..70 {
+        source.push_str(&format!("  rx{index}: '/a/'\n"));
+    }
+    source.push_str("  pair: '[formula.rx0, formula.rx0, formula.rx69]'\nsummaries:\n  Distinct: 'values.flat().unique().length'\nviews:\n  - type: table\n    name: Retained definitions\n    order: [file.name, formula.pair]\n    summaries: {formula.pair: Distinct}\n");
+    let program = compile_base_source(&source).unwrap();
+    let rows = snapshot(vec![
+        json!({"path":"A.md","properties":[]}),
+        json!({"path":"B.md","properties":[]}),
+    ]);
+    let mut options = QueryOptions::default();
+    options.summary_preview_property = Some("formula.pair".into());
+    let result = query_base(&program, &rows, &options).unwrap();
+    assert!(result.diagnostics.is_empty());
+    for row in &result.rows {
+        assert_eq!(
+            row.values["formula.pair"],
+            list(vec![string("/a/"), string("/a/"), string("/a/")])
+        );
+    }
+    assert_eq!(
+        result.summaries["formula.pair"],
+        BaseValue::Number { value: 2.0 }
+    );
+    assert_eq!(
+        result.summary_previews.as_ref().unwrap()["Distinct"],
+        BaseValue::Number { value: 2.0 }
+    );
+}

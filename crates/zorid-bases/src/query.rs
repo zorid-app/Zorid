@@ -4,8 +4,8 @@
 use crate::{
     expression, order,
     program::{self, BaseProgram, Criterion, Filter},
-    with_session_files, BaseValue, DetachedRecord, EvaluationOptions, ExpressionDiagnostic,
-    PropertyValue,
+    with_session_prepared_files, BaseValue, DetachedRecord, EvaluationOptions,
+    ExpressionDiagnostic, PropertyValue,
 };
 use serde::{Deserialize, Serialize};
 #[path = "grouping.rs"]
@@ -1744,8 +1744,66 @@ pub(crate) fn query_rows_validated(
         })?;
         tag_properties.insert(program::property_id(property));
     }
+    if let Some(group) = &view.group {
+        admit(&mut admission, |_| {
+            Ok(map_slot::<String, ()>() + crate::preview::string_bytes(&group.property))
+        })?;
+        tag_properties.insert(group.property.clone());
+    }
     let mut rows = Vec::new();
     let mut steps_used = preparation_work;
+    // Keep definition-owned syntax alive for the complete invocation. This
+    // preserves literal identity across rows and optional parse-cache eviction.
+    let prepared_formulas = if program.formulas.is_empty() {
+        None
+    } else {
+        admit(&mut admission, |admission| {
+            Ok(
+                slots::<(String, String)>(program.formulas.len()).saturating_add(string_copies(
+                    program
+                        .formulas
+                        .iter()
+                        .flat_map(|(name, source)| [name.as_str(), source.as_str()]),
+                    admission,
+                )?),
+            )
+        })?;
+        let work = std::cell::Cell::new(0usize);
+        let ledger = std::cell::RefCell::new(&mut admission);
+        let prepared = expression::prepare_formula_expressions(
+            &program.formulas,
+            &mut |bytes| {
+                admit(&mut **ledger.borrow_mut(), |_| Ok(bytes)).map_err(|error| {
+                    expression::RuntimeValue::Error(format!("{}\0{}", error.code, error.message))
+                })
+            },
+            &mut |cost| {
+                work.set(work.get().saturating_add(cost));
+                if options
+                    .evaluation
+                    .cancellation
+                    .as_ref()
+                    .is_some_and(|token| token.is_cancelled())
+                {
+                    return Err(expression::RuntimeValue::Error(
+                        "cancelled\0Query cancelled".into(),
+                    ));
+                }
+                check_query_work(
+                    steps_used.saturating_add(work.get()),
+                    &**ledger.borrow(),
+                    options,
+                    "Formula syntax preparation exceeds query work budget",
+                )
+                .map_err(|error| {
+                    expression::RuntimeValue::Error(format!("{}\0{}", error.code, error.message))
+                })
+            },
+        )
+        .map_err(expression::runtime_diagnostic)?;
+        steps_used = steps_used.saturating_add(work.get());
+        Some(prepared)
+    };
     let mut retained_bytes = 0usize;
     admit(&mut admission, |admission| {
         admission.charge(0)?;
@@ -1816,7 +1874,7 @@ pub(crate) fn query_rows_validated(
                 .saturating_sub(admission_work(&admission)),
         );
         let mut row_tag_shapes = BTreeMap::new();
-        let row = with_session_files(
+        let row = with_session_prepared_files(
             "",
             record,
             &invocation,
@@ -1824,6 +1882,7 @@ pub(crate) fn query_rows_validated(
             input.unavailable,
             input.property_values,
             shared_files.clone(),
+            prepared_formulas.clone(),
             |session| {
                 let filtered = (|| {
                     for filter in [program.filter.as_ref(), view.filter.as_ref()]
@@ -2160,6 +2219,8 @@ pub(crate) fn query_rows_validated(
             &mut grouping::Context {
                 view,
                 options,
+                tag_shapes: &tag_shapes,
+                clock_sensitive: clock_sensitive_sort,
                 timezone: &group_timezone,
                 records: &by_id,
                 paths: &by_path,
@@ -2183,6 +2244,8 @@ pub(crate) fn query_rows_validated(
             &mut grouping::Context {
                 view,
                 options,
+                tag_shapes: &tag_shapes,
+                clock_sensitive: clock_sensitive_sort,
                 timezone: &group_timezone,
                 records: &by_id,
                 paths: &by_path,
@@ -2486,6 +2549,8 @@ pub(crate) fn query_rows_validated(
             &mut grouping::Context {
                 view,
                 options,
+                tag_shapes: &tag_shapes,
+                clock_sensitive: clock_sensitive_sort,
                 timezone: &group_timezone,
                 records: &by_id,
                 paths: &by_path,
@@ -2521,6 +2586,7 @@ pub(crate) fn query_rows_validated(
         &rows,
         &mut groups,
         &tag_shapes,
+        prepared_formulas.as_ref(),
         input,
         options,
         relationships.as_ref(),
@@ -2655,6 +2721,7 @@ fn summarize_rows(
     rows: &[BaseRow],
     groups: &mut [BaseGroup],
     tag_shapes: &HashMap<crate::EntryId, BTreeMap<String, expression::TagShape>>,
+    prepared_formulas: Option<&std::sync::Arc<expression::PreparedFormulaExpressions>>,
     input: &QueryRows<'_>,
     options: &QueryOptions,
     relationships: Option<&crate::graph::PreparedRelationships<'_>>,
@@ -2741,6 +2808,28 @@ fn summarize_rows(
                         .and_then(|shapes| shapes.get(property))
                 })
                 .collect::<Vec<_>>();
+            // Each summary invocation owns newly rehydrated private constructor
+            // data. Admit those copies before restoring any runtime values.
+            for shape in selected_shapes.iter().flatten() {
+                let bytes = expression::runtime_shape_restore_bytes(shape, &mut |work| {
+                    *steps = steps.saturating_add(work);
+                    if options
+                        .evaluation
+                        .cancellation
+                        .as_ref()
+                        .is_some_and(|token| token.is_cancelled())
+                    {
+                        return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+                    }
+                    check_query_work(
+                        *steps,
+                        admission,
+                        options,
+                        "Summary runtime provenance exceeds work budget",
+                    )
+                })?;
+                admit(admission, |_| Ok(bytes))?;
+            }
             // File values expose complete captured properties, including nested
             // links. Build their shared projection once for all summaries, even
             // when the summary uses only value.properties and no global lookup.
@@ -2836,11 +2925,13 @@ fn summarize_rows(
                     .saturating_sub(*steps)
                     .saturating_sub(admission_work(admission)),
             );
+            let mut file_work = 0usize;
             let evaluated = crate::summaries::evaluate(
                 program,
                 name,
                 &values,
                 &selected_shapes,
+                prepared_formulas.cloned(),
                 &invocation,
                 relationships,
                 summary_files.clone(),
@@ -2859,12 +2950,44 @@ fn summarize_rows(
                             "Summary file is not in the query snapshot",
                         )
                     })?;
-                    let mut file = crate::runtime_file(record, &timezone)?;
+                    let mut check_file = |work| {
+                        file_work = file_work.saturating_add(work);
+                        if options
+                            .evaluation
+                            .cancellation
+                            .as_ref()
+                            .is_some_and(|cancel| cancel.is_cancelled())
+                        {
+                            return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+                        }
+                        if file_work > invocation.max_steps {
+                            return Err(ExpressionDiagnostic::new(
+                                "budget",
+                                "Summary file identity exceeds work budget",
+                            ));
+                        }
+                        Ok(())
+                    };
+                    let identity_bytes =
+                        crate::frontmatter_link_identity_bytes(record, &mut check_file)?;
+                    let shape_bytes = input.property_values.map_or(0, |derived| {
+                        record.witness.as_ref().map_or(0, |witness| {
+                            derived.attachment_shape_bytes(&witness.entry_id)
+                        })
+                    });
+                    admit(
+                        admission,
+                        |_| Ok(identity_bytes.saturating_add(shape_bytes)),
+                    )?;
+                    let mut file = crate::runtime_file_checked(record, &timezone, &mut check_file)?;
                     if let Some(graph) = relationships {
                         graph.attach(&mut file);
+                        graph.resolve_property_links(&mut file, &mut check_file, &mut |bytes| {
+                            admit(admission, |_| Ok(bytes))
+                        })?;
                     }
                     if let Some(derived) = input.property_values {
-                        derived.attach(&mut file, &timezone)?;
+                        derived.attach(&mut file, &timezone, &mut check_file)?;
                     }
                     file.metadata_unavailable |= record.witness.as_ref().is_some_and(|witness| {
                         input
@@ -2874,7 +2997,9 @@ fn summarize_rows(
                     Ok(file)
                 },
             )?;
-            *steps = steps.saturating_add(evaluated.steps_used);
+            *steps = steps
+                .saturating_add(evaluated.steps_used)
+                .saturating_add(file_work);
             check_query_work(
                 *steps,
                 admission,

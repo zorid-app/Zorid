@@ -6,6 +6,8 @@ use expression::{BasesTimezone, RuntimeValue};
 pub(super) struct Context<'a, 's, 'g, 'p> {
     pub view: &'a program::View,
     pub options: &'a QueryOptions,
+    pub tag_shapes: &'a HashMap<crate::EntryId, BTreeMap<String, expression::TagShape>>,
+    pub clock_sensitive: &'a mut bool,
     pub timezone: &'a BasesTimezone,
     pub records: &'a HashMap<&'s crate::EntryId, &'s DetachedRecord>,
     pub paths: &'a HashMap<&'s str, &'s DetachedRecord>,
@@ -47,6 +49,7 @@ impl Context<'_, '_, '_, '_> {
         &mut self,
         value: &BaseValue,
         remaining_bytes: usize,
+        tag_shape: Option<&expression::TagShape>,
     ) -> Result<(RuntimeValue, usize), ExpressionDiagnostic> {
         let mut options = self.options.evaluation.clone();
         options.max_steps = options.max_steps.min(
@@ -59,32 +62,67 @@ impl Context<'_, '_, '_, '_> {
         let paths = self.paths;
         let mut file_work = 0usize;
         let mut file_bytes = 0usize;
+        if let Some(shape) = tag_shape {
+            let bytes =
+                expression::runtime_shape_restore_bytes(shape, &mut |work| self.check(work))?;
+            if bytes > remaining_bytes {
+                return Err(ExpressionDiagnostic::new(
+                    "budget",
+                    "Grouped runtime provenance exceeds byte budget",
+                ));
+            }
+            self.reserve(bytes)?;
+            file_bytes = bytes;
+        }
+        options.max_steps = options.max_steps.min(
+            self.options
+                .max_steps
+                .saturating_sub(*self.steps)
+                .saturating_sub(admission_work(self.admission)),
+        );
         let admission = &mut self.admission;
         let (mut runtime, steps) =
-            expression::group_runtime_from_base(value, timezone, &options, |path| {
+            expression::group_runtime_from_base(value, tag_shape, timezone, &options, |path| {
                 let record = paths.get(path).copied().ok_or_else(|| {
                     ExpressionDiagnostic::new(
                         "unavailable",
                         "Grouped File has no captured metadata",
                     )
                 })?;
+                let mut check_file = |work| {
+                    file_work = file_work.saturating_add(work);
+                    if options
+                        .cancellation
+                        .as_ref()
+                        .is_some_and(|token| token.is_cancelled())
+                    {
+                        return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+                    }
+                    if file_work > options.max_steps {
+                        return Err(ExpressionDiagnostic::new(
+                            "budget",
+                            "Grouped File metadata exceeds work budget",
+                        ));
+                    }
+                    Ok(())
+                };
+                let identity_bytes =
+                    crate::frontmatter_link_identity_bytes(record, &mut check_file)?;
                 let bytes = crate::encoded_size(record, crate::MAX_BASE_REQUEST_BYTES)?;
-                file_work = file_work.saturating_add(bytes / 16 + 1);
-                if file_work > options.max_steps {
-                    return Err(ExpressionDiagnostic::new(
-                        "budget",
-                        "Grouped File metadata exceeds work budget",
-                    ));
-                }
-                file_bytes = file_bytes.saturating_add(bytes.saturating_mul(24));
+                check_file(bytes / 16 + 1)?;
+                file_bytes = file_bytes
+                    .saturating_add(bytes.saturating_mul(24))
+                    .saturating_add(identity_bytes);
                 if file_bytes > remaining_bytes {
                     return Err(ExpressionDiagnostic::new(
                         "budget",
                         "Grouped File metadata exceeds byte budget",
                     ));
                 }
-                admit(admission, |_| Ok(bytes.saturating_mul(24)))?;
-                crate::runtime_file(record, timezone)
+                admit(admission, |_| {
+                    Ok(bytes.saturating_mul(24).saturating_add(identity_bytes))
+                })?;
+                crate::runtime_file_checked(record, timezone, &mut check_file)
             })?;
         self.check(steps.saturating_add(file_work))?;
         // Link DTOs carry authority by exact witness, never by their displayed
@@ -115,8 +153,11 @@ impl Context<'_, '_, '_, '_> {
                     } else {
                         link.resolved_path = Some(None);
                     }
+                    if let Some(display) = link.display_value.as_deref_mut() {
+                        bind(display, ctx)?;
+                    }
                 }
-                RuntimeValue::List(values) => {
+                RuntimeValue::List(values) | RuntimeValue::TagList(values) => {
                     for value in values {
                         bind(value, ctx)?;
                     }
@@ -131,6 +172,9 @@ impl Context<'_, '_, '_, '_> {
             Ok(())
         }
         bind(&mut runtime, self)?;
+        if has_calendar_duration(&runtime, &mut |work| self.check(work))? {
+            *self.clock_sensitive = true;
+        }
         Ok((runtime, file_bytes))
     }
     fn matches(
@@ -182,6 +226,155 @@ impl Context<'_, '_, '_, '_> {
         Ok(())
     }
 }
+fn has_calendar_duration(
+    value: &RuntimeValue,
+    check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+) -> Result<bool, ExpressionDiagnostic> {
+    check(1)?;
+    match value {
+        RuntimeValue::Duration(_) => Ok(true),
+        RuntimeValue::List(values) | RuntimeValue::TagList(values) => {
+            for value in values {
+                if has_calendar_duration(value, check)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        RuntimeValue::Object(values) => {
+            for (key, value) in values {
+                check(key.len() / 16 + 1)?;
+                if has_calendar_duration(value, check)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        RuntimeValue::Link(link) => link
+            .display_value
+            .as_deref()
+            .map_or(Ok(false), |value| has_calendar_duration(value, check)),
+        _ => Ok(false),
+    }
+}
+
+/// Public String/List DTOs intentionally omit constructor ancestry. Only
+/// provenance which affects strict Object equality needs an opaque ID suffix.
+/// Only Object subtrees and actual RegExp constructors add opaque identity.
+/// Outer lists retain loose equality for their other scalar children.
+fn append_typed_identity(
+    id: String,
+    value: &RuntimeValue,
+    identities: &mut expression::StrictIdentityContext,
+    limit: usize,
+    check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+    reserve: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+) -> Result<String, ExpressionDiagnostic> {
+    fn push(
+        output: &mut String,
+        text: &str,
+        limit: usize,
+        check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+        reserve: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+    ) -> Result<(), ExpressionDiagnostic> {
+        check(text.len() / 16 + 1)?;
+        let needed = output
+            .len()
+            .checked_add(text.len())
+            .filter(|length| *length <= limit)
+            .ok_or_else(|| {
+                ExpressionDiagnostic::new("budget", "Typed group identity exceeds byte budget")
+            })?;
+        if needed > output.capacity() {
+            // Exact growth may move every retained byte. Charge that copy
+            // before the allocator can perform it, including sparse lists.
+            check(output.capacity() / 16 + 1)?;
+            reserve(needed - output.capacity())?;
+            output
+                .try_reserve_exact(needed - output.len())
+                .map_err(|_| {
+                    ExpressionDiagnostic::new("budget", "Typed group identity allocation failed")
+                })?;
+        }
+        output.push_str(text);
+        Ok(())
+    }
+    fn relevant(
+        value: &RuntimeValue,
+        identities: &mut expression::StrictIdentityContext,
+        depth: usize,
+        limit: usize,
+        check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+        reserve: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+    ) -> Result<Option<String>, ExpressionDiagnostic> {
+        check(1)?;
+        if depth > 128 {
+            return Err(ExpressionDiagnostic::new(
+                "budget",
+                "Typed group identity exceeds depth budget",
+            ));
+        }
+        match value {
+            RuntimeValue::Object(_) | RuntimeValue::Regex(_, _, _) => {
+                expression::strict_runtime_identity_key(
+                    value,
+                    identities,
+                    &mut |bytes| {
+                        reserve(bytes).map_err(|error| {
+                            RuntimeValue::Error(format!("{}\0{}", error.code, error.message))
+                        })
+                    },
+                    &mut |work| {
+                        check(work).map_err(|error| {
+                            RuntimeValue::Error(format!("{}\0{}", error.code, error.message))
+                        })
+                    },
+                )
+                .map(Some)
+                .map_err(expression::runtime_diagnostic)
+            }
+            RuntimeValue::List(values) | RuntimeValue::TagList(values) => {
+                let mut output = String::new();
+                for (index, value) in values.iter().enumerate() {
+                    if let Some(component) =
+                        relevant(value, identities, depth + 1, limit, check, reserve)?
+                    {
+                        if output.is_empty() {
+                            push(&mut output, "L", limit, check, reserve)?;
+                        }
+                        // Both decimal fields fit in bounded scratch space.
+                        reserve(64)?;
+                        let prefix = format!("{index}:{}:", component.len());
+                        push(&mut output, &prefix, limit, check, reserve)?;
+                        push(&mut output, &component, limit, check, reserve)?;
+                    }
+                }
+                Ok((!output.is_empty()).then_some(output))
+            }
+            _ => Ok(None),
+        }
+    }
+    let mut allocated = 0usize;
+    let mut capped_reserve = |bytes| {
+        allocated = allocated.saturating_add(bytes);
+        if allocated > limit {
+            return Err(ExpressionDiagnostic::new(
+                "budget",
+                "Typed group identity allocation exceeds byte budget",
+            ));
+        }
+        reserve(bytes)
+    };
+    let Some(suffix) = relevant(value, identities, 0, limit, check, &mut capped_reserve)? else {
+        return Ok(id);
+    };
+    let mut output = String::new();
+    push(&mut output, &id, limit, check, &mut capped_reserve)?;
+    push(&mut output, ":typed:", limit, check, &mut capped_reserve)?;
+    push(&mut output, &suffix, limit, check, &mut capped_reserve)?;
+    Ok(output)
+}
+
 struct RowKey {
     value: BaseValue,
     raw: BaseValue,
@@ -204,6 +397,7 @@ pub(super) struct Engine {
     rows: HashMap<crate::EntryId, RowKey>,
     slots: Option<Vec<Slot>>,
     assignments: HashMap<crate::EntryId, Option<usize>>,
+    identities: std::cell::RefCell<expression::StrictIdentityContext>,
     memory: usize,
 }
 impl Engine {
@@ -229,6 +423,7 @@ impl Engine {
             rows: HashMap::new(),
             slots: None,
             assignments: HashMap::new(),
+            identities: std::cell::RefCell::new(expression::StrictIdentityContext::default()),
             memory: 0,
         };
         let view = ctx.view;
@@ -250,9 +445,14 @@ impl Engine {
                     .saturating_mul(24)
                     .saturating_add(map_slot::<crate::EntryId, RowKey>()),
             )?;
+            let shapes = ctx.tag_shapes;
+            let shape = shapes
+                .get(&row.entry_id)
+                .and_then(|shapes| shapes.get(property));
             let (runtime, file_bytes) = ctx.runtime(
                 value,
                 crate::MAX_BASE_REQUEST_BYTES.saturating_sub(result.memory),
+                shape,
             )?;
             result.memory = result.memory.saturating_add(file_bytes);
             result.rows.insert(
@@ -311,6 +511,7 @@ impl Engine {
                 let (runtime, file_bytes) = ctx.runtime(
                     &key,
                     crate::MAX_BASE_REQUEST_BYTES.saturating_sub(result.memory),
+                    None,
                 )?;
                 result.memory = result.memory.saturating_add(file_bytes);
                 canonical_admission(source, ctx.admission)?;
@@ -479,6 +680,22 @@ impl Engine {
             .unwrap_or_else(|| &slot.expect("empty group is configured").source);
         canonical_admission(key, ctx.admission)?;
         let id = slot.map_or_else(|| group_key_id(key), |slot| slot.id.clone());
+        let id = if slot.is_none() {
+            let limit = ctx.options.max_output_bytes.min(8 * 1024 * 1024);
+            // The two synchronous callbacks share the same invocation ledger;
+            // no callback retains or reenters a mutable borrow.
+            let ledger = std::cell::RefCell::new(&mut *ctx);
+            append_typed_identity(
+                id,
+                &row.expect("automatic group has a representative").runtime,
+                &mut self.identities.borrow_mut(),
+                limit,
+                &mut |work| ledger.borrow_mut().check(work),
+                &mut |bytes| ledger.borrow_mut().reserve(bytes),
+            )?
+        } else {
+            id
+        };
         ctx.reserve(crate::preview::string_bytes(&id))?;
         ctx.value_copy(key)?;
         let view = ctx.view;
@@ -669,5 +886,185 @@ impl Engine {
             });
         }
         Ok(result.into_iter().map(|(group, _)| group).collect())
+    }
+}
+
+#[cfg(test)]
+mod runtime_identity_tests {
+    use super::*;
+    use expression::BasesLink;
+    use indexmap::IndexMap;
+
+    fn identity(
+        value: &RuntimeValue,
+        identities: &mut expression::StrictIdentityContext,
+    ) -> String {
+        let dto = expression::typed_result(value.clone()).unwrap();
+        append_typed_identity(
+            group_key_id(&dto),
+            value,
+            identities,
+            8192,
+            &mut |_| Ok(()),
+            &mut |_| Ok(()),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn strict_object_identity_distinguishes_subclasses_and_aliases_without_changing_loose_children()
+    {
+        let tagged = RuntimeValue::Object(IndexMap::from([(
+            "value".into(),
+            RuntimeValue::Tag("#A".into()),
+        )]));
+        let plain = RuntimeValue::Object(IndexMap::from([(
+            "value".into(),
+            RuntimeValue::String("#A".into()),
+        )]));
+        assert_eq!(
+            expression::typed_result(tagged.clone()).unwrap(),
+            expression::typed_result(plain.clone()).unwrap()
+        );
+        let mut identities = expression::StrictIdentityContext::default();
+        assert_ne!(
+            identity(&tagged, &mut identities),
+            identity(&plain, &mut identities)
+        );
+        for value in [
+            RuntimeValue::Tag("#A".into()),
+            RuntimeValue::TagList(vec![RuntimeValue::Tag("#A".into())]),
+        ] {
+            let dto = expression::typed_result(value.clone()).unwrap();
+            assert_eq!(identity(&value, &mut identities), group_key_id(&dto));
+        }
+
+        let aliased = |alias: &str| {
+            RuntimeValue::Object(IndexMap::from([(
+                "ref".into(),
+                RuntimeValue::Link(BasesLink {
+                    path: "People/A".into(),
+                    raw_destination: Some("People/A".into()),
+                    source_path: Some("Shared.md".into()),
+                    display: Some(alias.into()),
+                    display_value: Some(Box::new(RuntimeValue::String(alias.into()))),
+                    ..Default::default()
+                }),
+            )]))
+        };
+        let one = aliased("One");
+        let two = aliased("Two");
+        assert_eq!(
+            canonical(&expression::typed_result(one.clone()).unwrap()),
+            canonical(&expression::typed_result(two.clone()).unwrap())
+        );
+        assert_ne!(
+            identity(&one, &mut identities),
+            identity(&two, &mut identities)
+        );
+
+        // Strict identity belongs only to the Object subtree. An unrelated
+        // outer Tag versus String remains loosely equal with the same suffix.
+        let object =
+            RuntimeValue::Object(IndexMap::from([("n".into(), RuntimeValue::Number(1.0))]));
+        let tagged_outer = RuntimeValue::List(vec![RuntimeValue::Tag("#A".into()), object.clone()]);
+        let plain_outer = RuntimeValue::List(vec![RuntimeValue::String("#A".into()), object]);
+        assert_eq!(
+            identity(&tagged_outer, &mut identities),
+            identity(&plain_outer, &mut identities)
+        );
+    }
+
+    #[test]
+    fn regex_group_identity_uses_actual_tokens_in_direct_and_list_keys() {
+        let token = std::sync::Arc::new(());
+        let first = RuntimeValue::Regex("a".into(), String::new(), std::sync::Arc::clone(&token));
+        let same = RuntimeValue::Regex("a".into(), String::new(), token);
+        let other = RuntimeValue::Regex("a".into(), String::new(), std::sync::Arc::new(()));
+        let mut identities = expression::StrictIdentityContext::default();
+        assert_eq!(
+            identity(&first, &mut identities),
+            identity(&same, &mut identities)
+        );
+        assert_ne!(
+            identity(&first, &mut identities),
+            identity(&other, &mut identities)
+        );
+        assert_ne!(
+            identity(&first, &mut identities),
+            identity(&RuntimeValue::String("/a/".into()), &mut identities)
+        );
+        assert_ne!(
+            identity(&RuntimeValue::List(vec![first]), &mut identities),
+            identity(&RuntimeValue::List(vec![other]), &mut identities)
+        );
+    }
+
+    #[test]
+    fn sparse_list_identity_charges_every_retained_buffer_copy() {
+        let token = std::sync::Arc::new(());
+        let value = RuntimeValue::List(
+            (0..2000)
+                .map(|_| {
+                    RuntimeValue::Regex("a".into(), String::new(), std::sync::Arc::clone(&token))
+                })
+                .collect(),
+        );
+        let mut work = 0usize;
+        let error = append_typed_identity(
+            "base".into(),
+            &value,
+            &mut expression::StrictIdentityContext::default(),
+            8 * 1024 * 1024,
+            &mut |cost| {
+                work = work.saturating_add(cost);
+                if work > 100_000 {
+                    Err(ExpressionDiagnostic::new("budget", "copy work"))
+                } else {
+                    Ok(())
+                }
+            },
+            &mut |_| Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "budget");
+    }
+
+    #[test]
+    fn typed_group_identity_enforces_allocation_and_cancellation_errors() {
+        let value = RuntimeValue::Object(IndexMap::from([(
+            "field".into(),
+            RuntimeValue::Tag("#A".into()),
+        )]));
+        let error = append_typed_identity(
+            "base".into(),
+            &value,
+            &mut expression::StrictIdentityContext::default(),
+            4096,
+            &mut |_| Ok(()),
+            &mut |_| Err(ExpressionDiagnostic::new("budget", "reject growth")),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "budget");
+        let error = append_typed_identity(
+            "base".into(),
+            &value,
+            &mut expression::StrictIdentityContext::default(),
+            4096,
+            &mut |_| Err(ExpressionDiagnostic::new("cancelled", "stopped")),
+            &mut |_| Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "cancelled");
+        let error = append_typed_identity(
+            "base".into(),
+            &value,
+            &mut expression::StrictIdentityContext::default(),
+            4,
+            &mut |_| Ok(()),
+            &mut |_| Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "budget");
     }
 }

@@ -30,6 +30,12 @@ mod duration_dependency;
 #[path = "duration_semantics_tests.rs"]
 mod duration_semantics_tests;
 
+#[path = "expression_shape.rs"]
+mod runtime_shape;
+pub(crate) use runtime_shape::{
+    capture_runtime_shape, restore_runtime_shape, runtime_shape_restore_bytes, TagShape,
+};
+
 use crate::{BaseValue, EvaluationResult, ExpressionDiagnostic, OperationCancellation};
 #[derive(Clone, Debug, PartialEq)]
 enum Expr {
@@ -647,17 +653,6 @@ pub(crate) enum RuntimeValue {
     ErrorValue(String),
 }
 
-/// Sparse provenance extracted from actual evaluated values, never property names.
-/// It preserves internal String/List subclasses across the summary boundary while
-/// keeping the public BaseValue DTO unchanged.
-#[derive(Clone, Debug)]
-pub(crate) enum TagShape {
-    Tag,
-    TagList,
-    List(Vec<(usize, TagShape)>),
-    Object(Vec<(String, TagShape)>),
-}
-
 fn error_message(encoded: &str) -> &str {
     encoded
         .split_once('\0')
@@ -794,6 +789,7 @@ pub(crate) fn evaluate_summary(
     source: &str,
     values: &[&BaseValue],
     tag_shapes: &[Option<&TagShape>],
+    prepared_formulas: Option<Arc<PreparedFormulaExpressions>>,
     options: &crate::EvaluationOptions,
     relationships: Option<&super::graph::PreparedRelationships<'_>>,
     shared_files: Option<Arc<super::files::BasesFiles>>,
@@ -803,6 +799,7 @@ pub(crate) fn evaluate_summary(
         .map_err(|message| ExpressionDiagnostic::new("input", message))?;
     let context = BasesEvaluationContext {
         relationships,
+        preparsed_formulas: prepared_formulas,
         random_seed: options.random_seed,
         files: shared_files.unwrap_or_default(),
         now: Some(
@@ -824,6 +821,16 @@ pub(crate) fn evaluate_summary(
     for (index, value) in values.iter().enumerate() {
         let mut value = summary_runtime_value(value, 0, &mut bytes, &mut evaluator, &mut file)?;
         if let Some(Some(shape)) = tag_shapes.get(index) {
+            let restored_bytes = runtime_shape_restore_bytes(shape, &mut |work| {
+                evaluator.charge(work).map_err(runtime_diagnostic)
+            })?;
+            bytes = bytes.saturating_add(restored_bytes);
+            if bytes > 8 * 1024 * 1024 {
+                return Err(ExpressionDiagnostic::new(
+                    "budget",
+                    "Summary runtime provenance exceeds byte budget",
+                ));
+            }
             evaluator
                 .restore_tags(&mut value, shape, 0)
                 .map_err(runtime_diagnostic)?;
@@ -860,6 +867,7 @@ pub(crate) fn evaluate_summary(
 /// same typed equality and stringification as ordinary core expressions.
 pub(crate) fn group_runtime_from_base(
     value: &BaseValue,
+    tag_shape: Option<&TagShape>,
     timezone: &BasesTimezone,
     options: &crate::EvaluationOptions,
     mut file: impl FnMut(&str) -> Result<BasesFile, ExpressionDiagnostic>,
@@ -871,7 +879,22 @@ pub(crate) fn group_runtime_from_base(
         ..Default::default()
     };
     let mut evaluator = Evaluator::new(&context);
-    let value = summary_runtime_value(value, 0, &mut 0usize, &mut evaluator, &mut file)?;
+    let mut bytes = 0usize;
+    let mut value = summary_runtime_value(value, 0, &mut bytes, &mut evaluator, &mut file)?;
+    if let Some(shape) = tag_shape {
+        let restored_bytes = runtime_shape_restore_bytes(shape, &mut |work| {
+            evaluator.charge(work).map_err(runtime_diagnostic)
+        })?;
+        if bytes.saturating_add(restored_bytes) > 8 * 1024 * 1024 {
+            return Err(ExpressionDiagnostic::new(
+                "budget",
+                "Group runtime provenance exceeds byte budget",
+            ));
+        }
+        evaluator
+            .restore_tags(&mut value, shape, 0)
+            .map_err(runtime_diagnostic)?;
+    }
     Ok((
         value,
         options.max_steps.saturating_sub(evaluator.remaining_work),
@@ -1889,7 +1912,7 @@ fn canonical_function_name(name: &str) -> &str {
         .unwrap_or(name)
 }
 
-fn runtime_diagnostic(value: RuntimeValue) -> ExpressionDiagnostic {
+pub(crate) fn runtime_diagnostic(value: RuntimeValue) -> ExpressionDiagnostic {
     let RuntimeValue::Error(message) = value else {
         unreachable!()
     };
@@ -2587,121 +2610,26 @@ impl<'a> Evaluator<'a> {
     fn tag_shape(
         &mut self,
         value: &RuntimeValue,
-        depth: usize,
+        _depth: usize,
         reserve: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
     ) -> Result<Option<TagShape>, RuntimeValue> {
-        self.charge(1)?;
-        if depth > 128 {
-            return Err(RuntimeValue::Error(
-                "budget\0Tag provenance exceeds depth budget".into(),
-            ));
-        }
-        Ok(match value {
-            RuntimeValue::Tag(_) => Some(TagShape::Tag),
-            RuntimeValue::TagList(_) => Some(TagShape::TagList),
-            RuntimeValue::List(values) => {
-                let mut shapes = Vec::new();
-                for (index, value) in values.iter().enumerate() {
-                    if let Some(shape) = self.tag_shape(value, depth + 1, reserve)? {
-                        self.reserve_tag_slot(&mut shapes, reserve)?;
-                        shapes.push((index, shape));
-                    }
-                }
-                (!shapes.is_empty()).then_some(TagShape::List(shapes))
-            }
-            RuntimeValue::Object(values) => {
-                let mut shapes = Vec::new();
-                for (key, value) in values {
-                    self.charge(key.len() / 16 + 1)?;
-                    if let Some(shape) = self.tag_shape(value, depth + 1, reserve)? {
-                        self.reserve_tag_slot(&mut shapes, reserve)?;
-                        reserve(key.len()).map_err(|error| {
-                            RuntimeValue::Error(format!("{}\0{}", error.code, error.message))
-                        })?;
-                        shapes.push((key.clone(), shape));
-                    }
-                }
-                (!shapes.is_empty()).then_some(TagShape::Object(shapes))
-            }
-            _ => None,
-        })
-    }
-    fn reserve_tag_slot<T>(
-        &mut self,
-        values: &mut Vec<T>,
-        reserve: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
-    ) -> Result<(), RuntimeValue> {
-        if values.len() == values.capacity() {
-            let target = values.capacity().saturating_mul(2).max(4);
-            self.charge(values.capacity().saturating_add(1))?;
-            reserve(
-                target
-                    .saturating_sub(values.capacity())
-                    .saturating_mul(std::mem::size_of::<T>()),
-            )
-            .map_err(|error| RuntimeValue::Error(format!("{}\0{}", error.code, error.message)))?;
-            values.reserve_exact(target - values.len());
-        }
-        Ok(())
+        capture_runtime_shape(
+            value,
+            &mut |work| self.charge(work).map_err(runtime_diagnostic),
+            reserve,
+        )
+        .map_err(|error| RuntimeValue::Error(format!("{}\0{}", error.code, error.message)))
     }
     fn restore_tags(
         &mut self,
         value: &mut RuntimeValue,
         shape: &TagShape,
-        depth: usize,
+        _depth: usize,
     ) -> Result<(), RuntimeValue> {
-        self.charge(1)?;
-        if depth > 128 {
-            return Err(RuntimeValue::Error(
-                "budget\0Tag restoration exceeds depth budget".into(),
-            ));
-        }
-        match (value, shape) {
-            (value @ RuntimeValue::String(_), TagShape::Tag) => {
-                let RuntimeValue::String(text) = std::mem::replace(value, RuntimeValue::Null)
-                else {
-                    unreachable!()
-                };
-                *value = RuntimeValue::Tag(text);
-            }
-            (value @ RuntimeValue::List(_), TagShape::TagList) => {
-                let RuntimeValue::List(mut values) = std::mem::replace(value, RuntimeValue::Null)
-                else {
-                    unreachable!()
-                };
-                for item in &mut values {
-                    self.restore_tags(item, &TagShape::Tag, depth + 1)?;
-                }
-                *value = RuntimeValue::TagList(values);
-            }
-            (RuntimeValue::List(values), TagShape::List(shapes)) => {
-                for (index, shape) in shapes {
-                    let Some(value) = values.get_mut(*index) else {
-                        return Err(RuntimeValue::Error(
-                            "input\0Invalid tag provenance index".into(),
-                        ));
-                    };
-                    self.restore_tags(value, shape, depth + 1)?;
-                }
-            }
-            (RuntimeValue::Object(values), TagShape::Object(shapes)) => {
-                for (key, shape) in shapes {
-                    self.charge(key.len() / 16 + 1)?;
-                    let Some(value) = values.get_mut(key) else {
-                        return Err(RuntimeValue::Error(
-                            "input\0Invalid tag provenance key".into(),
-                        ));
-                    };
-                    self.restore_tags(value, shape, depth + 1)?;
-                }
-            }
-            _ => {
-                return Err(RuntimeValue::Error(
-                    "input\0Invalid tag provenance shape".into(),
-                ))
-            }
-        }
-        Ok(())
+        restore_runtime_shape(value, shape, &mut |work| {
+            self.charge(work).map_err(runtime_diagnostic)
+        })
+        .map_err(|error| RuntimeValue::Error(format!("{}\0{}", error.code, error.message)))
     }
     /// Pay each repeated callback capture before cloning its full value tree.
     /// Includes File metadata and Link identity/display data, unlike a rendered
@@ -3816,6 +3744,9 @@ impl<'a> Evaluator<'a> {
             (RuntimeValue::Duration(left), RuntimeValue::Duration(right)) => {
                 let elapsed = |value| duration_semantics::elapsed(value, &self.now).map_err(RuntimeValue::Error);
                 Ok(elapsed(left)? == elapsed(right)?)
+            }
+            (RuntimeValue::Object(_), RuntimeValue::Object(_)) => {
+                strict_values_equal(left, right, &mut |work| self.charge(work))
             }
             (
                 RuntimeValue::List(a) | RuntimeValue::TagList(a),
@@ -6607,6 +6538,21 @@ fn typed_value(
             *bytes = bytes.saturating_add(value.len());
             BaseValue::String { value }
         }
+        RuntimeValue::Regex(pattern, flags, _) => {
+            let maximum = pattern
+                .len()
+                .saturating_mul(6)
+                .saturating_add(flags.len() + 3);
+            if bytes.saturating_add(maximum) > 8 * 1024 * 1024 {
+                return Err(ExpressionDiagnostic::new(
+                    "budget",
+                    "RegExp result exceeds byte budget",
+                ));
+            }
+            let value = regex_string(&pattern, &flags);
+            *bytes = bytes.saturating_add(value.len());
+            BaseValue::String { value }
+        }
         RuntimeValue::Html(value) => {
             *bytes = bytes.saturating_add(value.len());
             BaseValue::Html { value }
@@ -7231,6 +7177,7 @@ mod rich_expression_tests {
             "values[0]",
             &[&icon],
             &[],
+            None,
             &crate::EvaluationOptions::default(),
             None,
             None,
@@ -7806,6 +7753,25 @@ mod tag_provenance_budget_tests {
             bytes,
             shapes.capacity() * std::mem::size_of::<(String, TagShape)>() + 3
         );
+    }
+
+    #[test]
+    fn object_callbacks_charge_large_materialized_errors_in_each_parent_scope_copy() {
+        let context = BasesEvaluationContext {
+            work_limit: Some(100_000),
+            ..Default::default()
+        };
+        let mut evaluator = Evaluator::new(&context);
+        let values = (0..1000)
+            .map(|i| (format!("field{i}"), RuntimeValue::Number(1.0)))
+            .collect();
+        let scope = BTreeMap::from([(
+            "captured".into(),
+            RuntimeValue::ErrorValue("x".repeat(1024 * 1024)),
+        )]);
+        let error =
+            evaluator.object_method(values, "map", &[Expr::Literal(Value::Null)], &scope, None);
+        assert_eq!(runtime_diagnostic(error).code, "budget");
     }
 
     #[test]
