@@ -266,3 +266,24 @@ test('direct file widget never invents a revision for an incomplete row witness'
   const dispose=mountBasePropertyWidget(element,{row:{path:'A.md',values:{},entryId:'a'},property:'file.name',value:baseExpressionValue('A'),version:1},{getDefinition:()=>undefined,commit(){},openFile:(_path,_event,target)=>{witness=target;}});
   element.querySelector('a')!.click();assert.equal(witness,undefined);dispose();dom.window.close();
 });
+
+
+test('paired relative relation aliases open explicit core fragments without interpreting literal filename hashes', () => {
+  for (const subpath of ['#^block','#Heading',undefined,'not-a-fragment']) {
+    const dom=new JSDOM('<div></div>'),element=dom.window.document.querySelector('div')!;
+    const raw=baseExpressionValue('[[../People/Ada#^block|Ada block]]');
+    const display={type:'namespace' as const,name:'Ada block',presentation:{kind:'link' as const,value:'People/Ada#Literal.md',label:baseExpressionValue('Ada block'),target:{entryId:'ada',revision:'a1'},...(subpath===undefined?{}:{subpath})}};
+    const opened:unknown[]=[];
+    const dispose=mountBasePropertyWidget(element,{row:{path:'Books/Book.md',values:{}},property:'note.author',value:raw,version:1},{getDefinition:()=>({type:'relation'}),getDisplayValue:()=>display,openFile:(path,_event,witness)=>opened.push({path,witness}),commit(){throw new Error('No edit requested');}});
+    element.querySelector('.multi-select-pill')!.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));
+    assert.deepEqual(opened,[{path:'People/Ada#Literal.md',witness:{entryId:'ada',revision:'a1',...(subpath?.startsWith('#')?{subpath}: {})}}]);
+    element.click();const input=dom.window.document.querySelector<HTMLInputElement>('[role="combobox"]')!;assert.equal(input.value,'[[../People/Ada#^block|Ada block]]');dispose();dom.window.close();
+  }
+});
+
+test('relation targets forward explicit fragments only with a complete target identity', () => {
+  for (const revision of ['r1',undefined]) {
+    const opened:unknown[]=[];const s=setup('[[/A.md]]',{type:'relation'},{getRelationTargets:()=>[{path:'A.md',entryId:'a',revision,subpath:'#^part'}],openFile:(path,_event,witness)=>opened.push({path,witness})});
+    s.element.querySelector('.multi-select-pill')!.dispatchEvent(new s.dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));assert.deepEqual(opened,[{path:'A.md',witness:revision?{entryId:'a',revision,subpath:'#^part'}:undefined}]);s.close();
+  }
+});

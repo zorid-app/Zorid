@@ -10,6 +10,8 @@ export interface BaseRelationTarget {
   readonly label?: string;
   readonly entryId?: string;
   readonly revision?: string;
+  /** Explicit core-resolved heading/block fragment; never inferred from path. */
+  readonly subpath?: string;
   readonly missing?: boolean;
   /** Rust-resolved persisted relation text, when different from a wiki link. */
   readonly value?: string;
@@ -42,7 +44,7 @@ export interface BasePropertyWidgetOptions {
   /** Targets are selected/resolved by Rust/the owning workspace, never by a TS query evaluator. */
   readonly getRelationTargets?: (property: string, presentation: BasePropertyPresentation) => readonly BaseRelationTarget[] | undefined;
   readonly loadImage?: (source: string, signal: AbortSignal, presentation: BasePropertyPresentation) => Promise<{ readonly url: string; dispose(): void } | null>;
-  readonly openFile?: (path: string, event: MouseEvent | KeyboardEvent, witness?: { readonly entryId: string; readonly revision: string }) => void;
+  readonly openFile?: (path: string, event: MouseEvent | KeyboardEvent, witness?: { readonly entryId: string; readonly revision: string; readonly subpath?: string }) => void;
   readonly readOnly?: (presentation: BasePropertyPresentation) => boolean;
   readonly isCurrent?: (presentation: BasePropertyPresentation) => boolean;
   readonly createOption?: (property: string, value: string, presentation: BasePropertyPresentation) => void | BasePropertyWidgetAcknowledgement | Promise<void | BasePropertyWidgetAcknowledgement>;
@@ -151,8 +153,8 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       }
       const rendered = baseRichPresentation(shown as BaseExpressionValue), path = own(rendered, 'value');
       if (rawKind === 'string' && typeof rawData === 'string' && own(rendered, 'kind') === 'link' && typeof path === 'string') {
-        const target = own(rendered, 'target'), entryId = own(target, 'entryId'), revision = own(target, 'revision');
-        pairedTargets.set(rawData, { path, label: labelText(own(rendered, 'label')) ?? labelText(shown), entryId: typeof entryId === 'string' ? entryId : undefined, revision: typeof revision === 'string' ? revision : undefined });
+        const target = own(rendered, 'target'), entryId = own(target, 'entryId'), revision = own(target, 'revision'), subpath = own(rendered, 'subpath');
+        pairedTargets.set(rawData, { path, label: labelText(own(rendered, 'label')) ?? labelText(shown), entryId: typeof entryId === 'string' ? entryId : undefined, revision: typeof revision === 'string' ? revision : undefined, ...(typeof subpath === 'string' && subpath.startsWith('#') ? {subpath} : {}) });
       }
     }; pair(value, displayValue);
   };
@@ -209,7 +211,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
         if ('button' in event ? event.button !== 0 && event.button !== 1 : event.isComposing) return;
         event.preventDefault(); event.stopPropagation();
         if (!current()) return;
-        options.openFile?.(target.path, event, target.entryId && target.revision ? {entryId:target.entryId,revision:target.revision} : undefined);
+        options.openFile?.(target.path, event, target.entryId && target.revision ? {entryId:target.entryId,revision:target.revision,...(typeof target.subpath === 'string' && target.subpath.startsWith('#') ? {subpath:target.subpath} : {})} : undefined);
       };
       pill.addEventListener('click', open); pill.addEventListener('auxclick', event => { if (event.button === 1) open(event); });
       pill.addEventListener('dblclick', event => { event.preventDefault(); event.stopPropagation(); editChip(index); });
