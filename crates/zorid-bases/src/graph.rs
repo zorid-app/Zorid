@@ -219,6 +219,33 @@ pub fn query_generation(
     crate::encoded_size(&result, options.max_output_bytes)?;
     Ok(result)
 }
+
+/// Ordinary Base queries with generation-verified vault property definitions.
+/// Deliberately bypasses optional prepared-answer caches: their existing proof
+/// does not include property configuration or derived relation values.
+pub fn query_generation_with_properties(
+    program: &BaseProgram,
+    generation: &Generation,
+    facts: &[FilePresentationFacts],
+    definitions: &crate::properties::PropertyDefinitions,
+    options: &QueryOptions,
+) -> Result<BaseQueryResult, ExpressionDiagnostic> {
+    preflight_generation(generation, options)?;
+    let mut remaining = options.max_steps;
+    let mut snapshot = BaseSnapshot::from_generation_checked(generation, facts, &mut |work| {
+        charge(&mut remaining, options.evaluation.cancellation.as_ref(), work)
+    })?;
+    let mut invocation = options.clone();
+    invocation.max_steps = remaining;
+    let values = crate::relations::query_property_relations(&snapshot, definitions, &invocation)?;
+    charge(&mut remaining, options.evaluation.cancellation.as_ref(), values.steps_used())?;
+    snapshot.property_values = Some(values);
+    invocation.max_steps = remaining;
+    let mut result = crate::query_base(program, &snapshot, &invocation)?;
+    result.steps_used = result.steps_used.saturating_add(options.max_steps - remaining);
+    crate::encoded_size(&result, options.max_output_bytes)?;
+    Ok(result)
+}
 pub(crate) fn preflight_generation(
     generation: &Generation,
     options: &QueryOptions,

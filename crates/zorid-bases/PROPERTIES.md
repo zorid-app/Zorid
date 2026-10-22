@@ -1,0 +1,76 @@
+# Local property definitions and relationships
+
+`Properties.yaml` is an optional normal file at the vault root. It defines value
+controls by exact property name, independently of the ordinary `type` property.
+It introduces no named note Type assignment or registry.
+
+```yaml
+properties:
+  topics:
+    type: multiselect
+    options:
+      - value: Rust
+        color: orange
+  author:
+    type: relation
+    relation:
+      multiple: false
+      targetFilter: 'type == "author"'
+  books:
+    type: reverseRelation
+    reverseRelation:
+      property: author
+  bookCount:
+    type: rollup
+    rollup:
+      relation: books
+      aggregation: count
+  averageRating:
+    type: rollup
+    rollup:
+      relation: books
+      property: rating
+      aggregation: average
+```
+
+Notes store readable selected labels (`topics: [Rust]`) and readable wiki links
+(`author: "[[Authors/Ada]]"`). Multiple relations use YAML lists. Option IDs, if
+present in settings, identify configuration entries only. Renaming option values
+requires a separate explicit migration; opening settings never rewrites notes.
+Unknown source keys remain in the retained ordered YAML AST; invalid definitions
+produce diagnostics and do not acquire guessed replacement semantics.
+
+Relations are a deliberate Zorid addition to the Obsidian file/view model, not a
+claim about shipped Obsidian features. They use the shared Rust resolver and
+capture the resolved `EntryId` and revision. Those identities guard edits in the
+current snapshot. App-managed renames must use the existing link-rewrite service.
+External moves and path reuse follow the written link's resolver semantics: an
+absent target becomes unresolved; repair can point it at another file. There is
+no hidden companion identity format or promise of an immutable database foreign
+key across arbitrary external changes. Deleting a target never cascades.
+
+`PropertyDefinitions::from_generation_source` requires the exact retained root
+file and verifies its source hash against the indexed revision. Derived reverse
+links and rollups are sealed to that same generation. The ordinary Base query
+evaluator reads the derived values before filtering, formulas, sorting, grouping
+and summaries. The generation entry point with settings bypasses optional query
+answer/preparation caching until its proof includes those settings explicitly.
+
+Target pickers receive a Rust-filtered `relationTargets` map, containing only
+Markdown notes with available metadata. No TypeScript target-filter evaluator
+is authoritative. A relation defaults to single/all notes when settings are
+omitted. Targets outside an explicit filter retain their visible link and a
+diagnostic; they do not become valid reverse edges. Missing and invalid values
+remain in source. Target-count, work, cancellation and output bounds fail
+explicitly rather than silently returning a truncated picker list.
+
+Reverse properties are read-only lists of source links. A repeated relation to
+the same target contributes one reverse edge and one item to a count. Rollups
+support count, sum, average, min, max, values and unique. Count uses distinct
+resolved targets. Numeric operations ignore missing/null related values; sum of
+an empty set is zero, while average/min/max of an empty set is null. Min/max also
+support homogeneous date values. Mixed or incompatible values and unresolved
+relation dependencies produce visible errors. Values preserves missing/null
+entries; unique preserves first occurrence order. Rollup dependency cycles are
+reported and bounded. Incomplete source coverage never masquerades as a complete
+reverse relation or rollup count.
