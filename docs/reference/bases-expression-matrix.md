@@ -27,6 +27,15 @@ Additional exact `random`, `date`, `number`, `min`, `max` expressions: parent
 Evidence `ev_1d006a595ebc4f81549ee54555dcc53e6ff5a12e6ac6cf3dc15b48b176836ad4`;
 2,388 selected bytes, 745 AST nodes, zero parse failures.
 
+Ordinary frontmatter interpretation was separately inspected with REA: parent
+Evidence `ev_e2499feaa9ea6ba1b78f7e8f3ce2f4880b9084bfbe387ee1c6ab7060a967c565`,
+451 selected bytes, 138 AST nodes, zero parse failures; exact `fromFrontMatter`
+assignment at decoded character range 2201077–2201527. Strings are interpreted as
+wikilinks, then URLs, then dates; lists/nested objects reuse that interpretation.
+This does not require a note Type or property registry. Direct exact-source
+readings of helpers `QC`/`$C` at characters 860507/860579 establish URL-constructor
+validation and the additional no-literal-space frontmatter guard.
+
 These are static syntax observations. Unknown dynamic relationships remain;
 none of these counts establishes observed reference execution. An initial
 40,400-character broad slice failed parsing and was replaced with complete
@@ -66,6 +75,7 @@ ledger. Global/member names use the reference's case-insensitive dispatch.
 | --- | --- | --- |
 | Syntax and scope | literals, lists, regex literals, unary/binary operations, named/computed access; note/file/this/formula namespaces | Existing portable parser/evaluator; bounded AST chains/depth. Unknown syntax has diagnostics. Existing accepted corpus and query/current-record tests cover the supported dialect. |
 | Global scalar | `if`, `escapeHTML`, `date`, `duration`, `list`, `max`, `min`, `number`, `now`, `today` | Implemented. This pass closes Date identity/compact date parsing, number(Date), null/empty min/max, nullable HTML escaping and invalid-duration null. `if` remains lazy. |
+| Ordinary properties | Wikilink, URL, ISO date/datetime inference recursively through lists/objects | Pure `infer_frontmatter_value` helper; lib/graph owner attaches source-witness resolution with bounded traversal. Explicit property settings may suppress automatic interpretation. Compact numeric date forms require explicit date(), preserving ordinary numeric text. |
 | Global rich/file | `file`, `link`, `html`, `image`, `icon` | Implemented typed outputs. No global JS evaluation or ambient vault callbacks. File resolution uses sealed generation namespace; existing files are hydrated from that same generation. |
 | Random | `random` | Implemented portable SplitMix64, seeded by host view-load entropy plus row identity/revision. Host preserves seed during refresh and replaces it on a new Base session. This differs intentionally from ambient `Math.random`; the output contract remains a number in [0,1). |
 | Any value | `isTruthy`, `isType`, `toString`, `isEmpty` where applicable | Implemented; rich wrappers inherit String and URL has its own type. Existing empty/truth corpus retains explicit Zorid choices. |
@@ -95,6 +105,13 @@ paths for HTML and images, approved icon rendering, ordinary safe link navigatio
 and recursive rich-label rendering. Returning HTML does not authorize scripts,
 event-handler execution, unsafe URL schemes, plugin callbacks, or an independent
 TypeScript expression evaluator.
+
+URL classification reuses already locked/cached `url` 2.5.8 with default
+features disabled. It implements WHATWG parsing without network/host lookup;
+malformed HTTP hosts and ports are not promoted to URL values by a scheme-only
+regex. IDNA uses the existing static compiled data. New WASM compilation and
+artifact sizing still require the coordinated build slot; dependency compatibility
+is source-reviewed, not a claim that the final WASM artifact has passed.
 
 `EvaluationOptions.randomSeed` is optional; omission deterministically uses zero.
 The UI supplies a cryptographically sampled 32-bit integer once per Base session.
@@ -127,6 +144,8 @@ not a timer dependency. Unknown dynamic calls still conservatively refresh.
 
 Authored focused unit tests cover inert rich payloads, recursive rich labels,
 summary round-trip/depth/bytes, nullable/typed wrappers, String inheritance,
+ordinary recursive frontmatter inference, malformed URL classification,
+AST-only contextual `this` detection,
 case-insensitive dispatch, file→link→file property preservation, missing-file
 metadata diagnostics, direct linksTo identity, deterministic row-specific seeded
 random bounds, scalar conversions and English Moment formatting/literals/offsets.
