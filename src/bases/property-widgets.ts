@@ -111,13 +111,38 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   const targetValue = (target: BaseRelationTarget) => target.value ?? `[[${target.path.replace(/\.md$/i, '')}]]`;
   const pairedTargets = new Map<string, BaseRelationTarget>();
   const pairTargets = () => {
-    pairedTargets.clear(); let remaining=10000;
-    const pair = (raw: BaseExpressionValue, shown: BaseExpressionValue, depth=0) => {
+    pairedTargets.clear(); let remaining = 10000;
+    const own = (object: unknown, key: string): unknown => object && typeof object === 'object' ? Object.getOwnPropertyDescriptor(object, key)?.value : undefined;
+    const labelText = (label: unknown, depth = 0): string | undefined => {
       if (--remaining < 0 || depth > 64) return;
-      if (raw.type === 'list' && shown.type === 'list' && raw.value.length === shown.value.length) { raw.value.forEach((item,index)=>pair(item,shown.value[index],depth+1)); return; }
-      const rendered = baseRichPresentation(shown);
-      if (raw.type === 'string' && rendered?.kind === 'link') pairedTargets.set(raw.value,{path:rendered.value,label:rendered.label ? renderText(rendered.label) : renderText(shown),entryId:rendered.target?.entryId,revision:rendered.target?.revision});
-    }; pair(value,displayValue);
+      const kind = own(label, 'type'), data = own(label, 'value');
+      if (kind === 'namespace') { const name = own(label, 'name'); return typeof name === 'string' ? name : undefined; }
+      if (kind === 'string' && typeof data === 'string') return data;
+      if (kind === 'number' && typeof data === 'number' && Number.isFinite(data) || kind === 'boolean' && typeof data === 'boolean') return String(data);
+      if (kind === 'null') return '';
+      if (kind === 'list' && Array.isArray(data)) {
+        const length = own(data, 'length');
+        if (typeof length !== 'number' || length > remaining) return;
+        const parts: string[] = [];
+        for (let index = 0; index < length; index++) { const part = labelText(own(data, String(index)), depth + 1); if (part === undefined) return; parts.push(part); }
+        return parts.join(', ');
+      }
+    };
+    const pair = (raw: unknown, shown: unknown, depth = 0) => {
+      if (--remaining < 0 || depth > 64) return;
+      const rawKind = own(raw, 'type'), rawData = own(raw, 'value'), shownData = own(shown, 'value');
+      if (rawKind === 'list' && own(shown, 'type') === 'list' && Array.isArray(rawData) && Array.isArray(shownData)) {
+        const length = own(rawData, 'length');
+        if (typeof length !== 'number' || length !== own(shownData, 'length') || length > remaining) return;
+        for (let index = 0; index < length; index++) pair(own(rawData, String(index)), own(shownData, String(index)), depth + 1);
+        return;
+      }
+      const rendered = baseRichPresentation(shown as BaseExpressionValue), path = own(rendered, 'value');
+      if (rawKind === 'string' && typeof rawData === 'string' && own(rendered, 'kind') === 'link' && typeof path === 'string') {
+        const target = own(rendered, 'target'), entryId = own(target, 'entryId'), revision = own(target, 'revision');
+        pairedTargets.set(rawData, { path, label: labelText(own(rendered, 'label')) ?? labelText(shown), entryId: typeof entryId === 'string' ? entryId : undefined, revision: typeof revision === 'string' ? revision : undefined });
+      }
+    }; pair(value, displayValue);
   };
   pairTargets();
   const targetFor = (text: string) => pairedTargets.get(text) ?? targets().find(target => targetValue(target) === text || target.path === text);
@@ -168,7 +193,12 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (option?.category) pill.dataset.category = option.category;
     if (target && !target.missing && options.openFile && !removable) {
       pill.classList.add('internal-link'); pill.setAttribute('role', 'link');
-      const open = (event: MouseEvent | KeyboardEvent) => { event.preventDefault(); event.stopPropagation(); options.openFile?.(target.path, event, target.entryId && target.revision ? {entryId:target.entryId,revision:target.revision} : undefined); };
+      const open = (event: MouseEvent | KeyboardEvent) => {
+        if ('button' in event ? event.button !== 0 && event.button !== 1 : event.isComposing) return;
+        event.preventDefault(); event.stopPropagation();
+        if (!current()) return;
+        options.openFile?.(target.path, event, target.entryId && target.revision ? {entryId:target.entryId,revision:target.revision} : undefined);
+      };
       pill.addEventListener('click', open); pill.addEventListener('auxclick', event => { if (event.button === 1) open(event); });
       pill.addEventListener('dblclick', event => { event.preventDefault(); event.stopPropagation(); editChip(index); });
       pill.addEventListener('keydown', event => { if (event.key === 'Enter') open(event); });

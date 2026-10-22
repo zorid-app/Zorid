@@ -162,3 +162,38 @@ test('stale relation choices recheck current core candidates and identity immedi
   const s=setup(null,{type:'relation'},{getRelationTargets:()=>targets});s.click();s.input().value='A';s.input().dispatchEvent(new s.dom.window.Event('input',{bubbles:true}));targets=[{path:'A.md',label:'A',entryId:'replacement',revision:'r2'}];s.key('Enter');await tick();assert.equal(s.edits.length,0);assert.equal(s.element.dataset.baseEditing,'draft');assert.match(s.element.title,/choice changed/);
   s.input().dispatchEvent(new s.dom.window.Event('input',{bubbles:true}));targets=undefined;s.key('Enter');await tick();assert.equal(s.edits.length,0);assert.match(s.element.title,/unavailable/);s.close();
 });
+
+test('relation chips admit current primary, middle and keyboard opens but reject stale and disposed retained nodes', () => {
+  for (const paired of [false, true]) {
+    const dom = new JSDOM('<div></div>'), element = dom.window.document.querySelector('div')!;
+    const raw = baseExpressionValue(['[[A|Alias]]']);
+    const link = {type:'namespace' as const,name:'Alias',presentation:{kind:'link' as const,value:'A.md',target:{entryId:'a',revision:'r1'}}};
+    let current = true; const opened: unknown[] = [];
+    const dispose = mountBasePropertyWidget(element,{row:{path:'Task.md',values:{}},property:'note.project',value:paired ? {type:'list',value:[link]} : raw,version:1},{getDefinition:()=>({type:'relation',relation:{multiple:true}}),getEditableValue:()=>raw,getRelationTargets:()=>[{path:'A.md',value:'[[A|Alias]]',entryId:'a',revision:'r1'}],isCurrent:()=>current,openFile:(path,_event,witness)=>opened.push({path,witness}),commit(){}});
+    const pill = element.querySelector<HTMLElement>('.multi-select-pill')!;
+    const click = (button=0) => pill.dispatchEvent(new dom.window.MouseEvent(button===1?'auxclick':'click',{button,bubbles:true,cancelable:true}));
+    const enter = (isComposing=false) => pill.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',isComposing,bubbles:true,cancelable:true}));
+    click(); click(1); enter(); click(2); enter(true);
+    assert.deepEqual(opened,Array.from({length:3},()=>({path:'A.md',witness:{entryId:'a',revision:'r1'}})));
+    current=false; click(); click(1); enter(); assert.equal(opened.length,3);
+    current=true; dispose(); click(); click(1); enter(); assert.equal(opened.length,3);
+    dom.window.close();
+  }
+});
+
+test('paired relation preprocessing never invokes array or rich metadata accessors', () => {
+  for (const accessor of ['forEach','index','label','target','labelIndex']) {
+    const dom = new JSDOM('<div></div>'), element = dom.window.document.querySelector('div')!;
+    let gets=0; const getter=()=>{gets++;throw new Error('Untrusted accessor invoked');};
+    const raw = baseExpressionValue(['[[A|Alias]]']);
+    if(raw.type!=='list') throw new Error('list fixture');
+    const metadata: Record<string, unknown> = {kind:'link',value:'A.md'};
+    if(accessor==='label' || accessor==='target') Object.defineProperty(metadata,accessor,{get:getter});
+    if(accessor==='labelIndex') { const labels: unknown[]=[]; Object.defineProperty(labels,0,{get:getter}); labels.length=1; metadata.label={type:'list',value:labels}; }
+    const shown: unknown[]=[{type:'namespace',name:'Alias',presentation:metadata}];
+    if(accessor==='forEach') Object.defineProperty(raw.value,'forEach',{get:getter});
+    if(accessor==='index') Object.defineProperty(shown,0,{get:getter});
+    const dispose=mountBasePropertyWidget(element,{row:{path:'Task.md',values:{}},property:'note.project',value:{type:'list',value:shown} as never,version:1},{getDefinition:()=>({type:'relation',relation:{multiple:true}}),getEditableValue:()=>raw,commit(){}});
+    assert.equal(gets,0,accessor); assert.ok(element.querySelector('.multi-select-pill')); dispose(); dom.window.close();
+  }
+});
