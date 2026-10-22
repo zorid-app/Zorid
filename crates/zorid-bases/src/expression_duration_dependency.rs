@@ -238,7 +238,14 @@ fn walk(expr: &Expr, locals: Locals, check: &mut impl FnMut(usize) -> Option<()>
                 let method = canonical_function_name(method);
                 let mut nested = locals;
                 if matches!(method, "map" | "filter" | "reduce") {
-                    nested.index = Shape::scalar(NUMBER);
+                    // Object callbacks preserve a surrounding index. Only a
+                    // proven List establishes a fresh numeric index; an unknown
+                    // receiver may dispatch either callback family.
+                    nested.index = if receiver.shape.kind == LIST {
+                        Shape::scalar(NUMBER)
+                    } else {
+                        locals.index.union(Shape::scalar(NUMBER))
+                    };
                     nested.value = if receiver.shape.kind == LIST {
                         Shape {
                             kind: receiver.shape.items,
