@@ -176,7 +176,11 @@ impl PropertyDefinitions {
             definitions: BTreeMap::new(),
             diagnostics: Vec::new(),
         };
-        result.configuration = match zorid_document::parse_yaml_mapping(source) {
+        result.configuration = match if source.trim().is_empty() {
+            Ok(PropertyValue::Object(Vec::new()))
+        } else {
+            zorid_document::parse_yaml_mapping(source)
+        } {
             Ok(value) => value,
             Err(error) => {
                 result.issue(
@@ -187,13 +191,17 @@ impl PropertyDefinitions {
                 return Ok(result);
             }
         };
-        let Some(PropertyValue::Object(entries)) = result.configuration.get("properties") else {
-            result.issue(
-                None,
-                "invalid_property_definitions",
-                "Property settings require a properties mapping",
-            );
-            return Ok(result);
+        let entries = match result.configuration.get("properties") {
+            None => return Ok(result),
+            Some(PropertyValue::Object(entries)) => entries,
+            Some(_) => {
+                result.issue(
+                    None,
+                    "invalid_property_definitions",
+                    "Property settings require a properties mapping",
+                );
+                return Ok(result);
+            }
         };
         if entries.len() > MAX_PROPERTY_DEFINITIONS {
             return Err(ExpressionDiagnostic::new(

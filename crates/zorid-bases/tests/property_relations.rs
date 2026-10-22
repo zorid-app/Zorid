@@ -146,6 +146,19 @@ fn properties_are_optional_and_preserve_unknown_settings_and_readable_options() 
 }
 
 #[test]
+fn empty_or_unconfigured_property_settings_are_valid_without_invented_definitions() {
+    for settings in ["", "{}\n", "version: 1\nfuture-setting: retained\n"] {
+        let generation = generation(settings, &[]);
+        let definitions =
+            PropertyDefinitions::from_generation_source(&generation, &id("settings"), settings)
+                .unwrap();
+        assert!(definitions.diagnostics().is_empty());
+        assert_eq!(definitions.iter().count(), 0);
+        assert_eq!(definitions.source(), Some(settings));
+    }
+}
+
+#[test]
 fn normal_queries_filter_sort_formula_and_group_using_rollups() {
     let generation = generation(
         SETTINGS,
