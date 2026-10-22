@@ -101,3 +101,60 @@ This confirms the CLI scenario still passes on the rebuilt core. It does not add
 fragment-specific UI, clipboard, browser/WASM, Electron, mobile or visual-parity
 acceptance. The paired host was again hashed only. Temporary evidence may be
 removed by the operating system; exact identities and outcomes are retained here.
+
+## Campaign 003 — rebuilt plain-link core
+
+The actual standalone campaign passed **85 commands, seven oracle checks and 30
+exports** in 2,339 ms at frozen source
+`cfe5627e10dec9cc290ff0da92fcf5ff5a5a25f2`. A new disposable vault was used.
+No Electron app or build was launched by this run, and no source or artifact was changed.
+Campaigns 001 and 002 above retain their original source and artifact identities.
+
+| Input | Campaign 003 identity |
+| --- | --- |
+| Frozen runtime source and checkout | `cfe5627e10dec9cc290ff0da92fcf5ff5a5a25f2` |
+| Build artifact capture source | `527790c50ccd7adae9facbe9d15b131a610f656f` |
+| Exact shared Rust `crates` tree | `5e010112661da69eb290d6a5edb72d4906e844a1` |
+| `Cargo.toml` object | `dae521160181b50ce45ed9c7032b25609616b1c7` |
+| `Cargo.lock` object | `413037e553a3c10bc605004a0ad3f6012f570440` |
+| CLI SHA-256 | `b656a8e3faa52da610d21cc2646cd5eaf4ff1dc43063e18a5a227af7d9c0e5bf` |
+| Paired host SHA-256, hashed only | `176fcff5a6228ba4dde53068e8703f0b53c30b9d4673020e241af6ccf57b167e` |
+| `run.mjs` SHA-256 | `af143e1aee9aee75f2085e8f78e1ae7766aed4cce1cfc7fbd27c41a73fbcce17` |
+| `fixtures.mjs` SHA-256 | `f4f2afdebe189f6e3896c5efa1d4b10ad87bc7665d2001206a4828b75ca06e7e` |
+| Full report SHA-256 | `84e6b80a3293d5d5fb2c2aee50a9dc591adff0c0560047679bf40e9133bac714` |
+| Post-run verification SHA-256 | `9e6fc8944db4f37d4dbd1b0a8275e333ef2e01fe7f7df3729aafad82d543b02b` |
+| Runtime artifact receipt SHA-256 | `674011d0c6922752f0b3d775835c58db8f7480627c95326fe0bac91109801782` |
+
+The artifact receipt is
+`/private/tmp/zorid-bases-cli-final-003-artifacts.json`. Its separate build-capture
+and runtime revisions have identical Rust tree, manifest and lockfile objects;
+the later frozen HEAD does not imply a different Rust binary source. It links to
+the completed native build log
+`/private/tmp/zorid-bases-plain-link-native-build.log`. Executable paths remain
+`/Users/ctk/Projects/Zorid/target/s1-release/release/zorid` and the adjacent
+`zorid-desktop-host`. The runner verified the supplied CLI hash and unchanged
+source closure before and after execution. The host was hashed, not executed.
+
+Report and full retained disposable fixture:
+`/private/tmp/zorid-bases-cli-actual-20261022-003/zorid-bases-cli-L02G9w/report.json`.
+The adjacent `independent-verification.json` records a separate post-run check:
+
+- All 85 child closes were observed without signal termination. There were 81
+  successful commands and the four expected rejection exits: query-before-build
+  and unknown-view exited 4; stale-note-edit and old-snapshot rejection exited 3.
+- Every command's stdout/stderr and supplied stdin, plus all 30 exports, matched
+  its recorded hash. Table, cards, list, kanban, empty and author saved views were
+  queried in each of the three phases.
+- Numeric output was rechecked against authored oracles: rating/scaled totals
+  were 14/28 initially, 16/32 after the note edit, and 16/49 after configuration
+  edits. The table retained all five book rows in each phase.
+- All ten remaining authoritative files were independently reread from disk and
+  compared byte-for-byte with expected fixture sources and explicit edits.
+  Grace's deleted path and Birch's old renamed path were absent.
+
+No process remained after the CLI campaign. As in earlier runs, these exports are
+existing `base-query` JSON and `read --raw` outputs. This run introduces no new
+CSV/TSV/Markdown export command and does not establish cell-edit UI, clipboard,
+hover, browser/WASM, Electron, mobile or visual-reference acceptance. Local
+`/private/tmp` evidence may be removed by the operating system; identities,
+outcomes and limits remain recorded here.

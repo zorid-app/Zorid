@@ -14,6 +14,10 @@ A second campaign against the final rebuilt source
 `9d086a97b9f7fb16c3dc54452c16914ae5918c18` also passed 85 commands, seven
 checks and 30 exports. Its command exits, evidence hashes and saved-view coverage
 were independently rechecked; see campaign 002 in the same acceptance record.
+Campaign 003 against source `cfe5627e10dec9cc290ff0da92fcf5ff5a5a25f2`
+also passed 85 commands, seven checks and 30 exports with the rebuilt plain-link
+core. Its separate post-run check verified numeric oracles and all ten remaining
+authoritative files byte-for-byte; see campaign 003 in the acceptance record.
 A new run still requires a matched build receipt and a coordinated runtime slot.
 
 Read-only `--help` and `base-query --help` inspection used the older existing
