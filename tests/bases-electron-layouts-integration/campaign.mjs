@@ -30,6 +30,12 @@ async function step(c, name, run) { const record = {name, status: 'running', sta
 async function visiblePaths(c, kind) { return c.ui.dom(`return [...document.querySelectorAll('${active} .bases-${kind}-${kind === 'kanban' ? 'card' : 'item'}')].map(e=>e.dataset.path);`); }
 async function noMutation(c, before, label) { assert.deepEqual(await bytes(c), before, label); }
 async function capture(c, name) { await c.screenshot(name); }
+const groupRow = label => `${panel('Group')} .bases-manual-group-row:has(input[aria-label=${JSON.stringify('Show group ' + label)}])`;
+const groupGrip = label => `${groupRow(label)} .bases-manual-group-grip`;
+async function menuOrder(c) { return c.ui.dom(`return [...document.querySelectorAll('${panel('Group')} .bases-manual-group-row')].map(e=>({name:e.querySelector('.bases-manual-group-name')?.textContent,top:e.getBoundingClientRect().top,height:e.getBoundingClientRect().height})).filter(e=>e.height>0).sort((a,b)=>a.top-b.top).map(e=>e.name);`); }
+async function boardOrder(c) { return c.ui.dom(`return [...document.querySelectorAll('${active} .bases-kanban-column')].map(e=>({name:e.querySelector('.bases-kanban-column-body')?.getAttribute('aria-label'),left:e.getBoundingClientRect().left})).sort((a,b)=>a.left-b.left).map(e=>e.name);`); }
+function orderConfiguration(c, source, viewName, order) { const expected = c.yaml.parse(source), views = expected.views.filter(view => view.name === viewName); assert.equal(views.length, 1); views[0].groupOrder = order; return expected; }
+async function savedOrder(c, original, order, label) { const expected = orderConfiguration(c, original, 'Board', order); return c.saved('Layouts.base', source => assert.deepEqual(c.yaml.parse(source), expected), label); }
 
 export async function journey(c) {
   c.evidence.layoutCases = [];
@@ -104,8 +110,57 @@ export async function journey(c) {
       await drag.escape(); await c.ui.wait(`return !document.querySelector('${active} .bases-kanban-column-drop-placeholder')&&!document.querySelector('${active} .bases-kanban-column.is-being-dragged');`, 'Actual Escape cancels native drag');
       assert.equal(await c.read('Layouts.base'), initial); assert.deepEqual(await readOrder(), ['Todo', 'Done', 'Later']);
     } finally { await drag.cleanup(); }
-    await c.ui.drag(source, target); await c.saved('Layouts.base', source => assert.deepEqual(c.yaml.parse(source).views.find(view => view.name === 'Board').groupOrder, ['Done', 'Todo', 'Later']), 'column-reorder-exact-saved-order');
+    const committed = await beginDrag(c, source);
+    try {
+      await committed.over(target); await c.ui.wait(`const a=document.querySelector(${JSON.stringify(column('Todo'))}),b=document.querySelector(${JSON.stringify(column('Done'))});return !!document.querySelector('${active} .bases-kanban-column-drop-placeholder')&&parseFloat(a.style.left)>parseFloat(b.style.left);`, 'Completed column drag previews insertion before drop');
+      assert.equal(await c.read('Layouts.base'), initial, 'Committing drag still has no durable write before drop');
+      await committed.dropAtLast();
+    } finally { await committed.cleanup(); }
+    await savedOrder(c, initial, ['Done', 'Todo', 'Later'], 'column-reorder-exact-saved-order');
     expected['Layouts.base'] = await c.read('Layouts.base'); await noMutation(c, expected, 'Only intended Base group order changed');
+  });
+
+  await step(c, 'normal-Group-menu-row-live-insertion-Escape-focus-and-durable-reorder', async () => {
+    await c.ui.button('Group', active); assert.deepEqual(await menuOrder(c), ['Done', 'Todo', 'Later']);
+    let focused;
+    for (let index = 0; index < 48; index++) { await c.ui.key('Tab'); focused = await c.ui.dom(`const e=document.activeElement;return e?.matches(${JSON.stringify(groupRow('Done'))})?{id:e.dataset.groupId,name:e.querySelector('.bases-manual-group-name')?.textContent}:null;`); if (focused) break; }
+    assert.ok(focused, 'Real Tab focus reaches the source manual group row');
+    const initial = await c.read('Layouts.base'), source = groupGrip('Done'), target = groupRow('Todo'), drag = await beginDrag(c, source);
+    try {
+      await drag.over(target); await c.ui.wait(`const rows=[...document.querySelectorAll('${panel('Group')} .bases-manual-group-row')].map(e=>({name:e.querySelector('.bases-manual-group-name')?.textContent,top:e.getBoundingClientRect().top})).sort((a,b)=>a.top-b.top);return JSON.stringify(rows.map(e=>e.name))===${JSON.stringify(JSON.stringify(['Todo', 'Done', 'Later']))};`, 'Manual menu rows visibly insert before drop');
+      assert.equal(await c.read('Layouts.base'), initial, 'Manual insertion preview has not saved'); await capture(c, 'Group-menu-live-insertion-preview');
+      await drag.escape(); await c.ui.wait(`const p=document.querySelector('${panel('Group')}'),e=document.activeElement;return !!p&&e?.matches('.bases-manual-group-row')&&e.dataset.groupId===${JSON.stringify(focused.id)};`, 'Actual Escape retains Group menu and restores the exact source row focus');
+      assert.deepEqual(await menuOrder(c), ['Done', 'Todo', 'Later']); assert.equal(await c.read('Layouts.base'), initial); await capture(c, 'Group-menu-Escape-restored-focus');
+    } finally { await drag.cleanup(); }
+    const commit = await beginDrag(c, source);
+    try { await commit.over(target); assert.deepEqual(await menuOrder(c), ['Todo', 'Done', 'Later']); assert.equal(await c.read('Layouts.base'), initial); await commit.dropAtLast(); }
+    finally { await commit.cleanup(); }
+    const saved = await savedOrder(c, initial, ['Todo', 'Done', 'Later'], 'manual-Group-menu-reorder-durable-complete-configuration');
+    assert.deepEqual(await menuOrder(c), ['Todo', 'Done', 'Later']);
+    // Restore the fixture through the same ordinary Group UI for later cases/restart.
+    await c.ui.drag(groupGrip('Todo'), groupRow('Done')); await savedOrder(c, saved, ['Done', 'Todo', 'Later'], 'manual-Group-menu-restore-durable-complete-configuration');
+    await c.ui.key('Escape'); await c.ui.wait(`return !document.querySelector('${panel('Group')}');`, 'Group menu closes normally after accepted saves');
+    expected['Layouts.base'] = await c.read('Layouts.base'); assert.deepEqual(await boardOrder(c), ['Done', 'Todo', 'Later']); await noMutation(c, expected, 'Only the selected view order changed through Group UI');
+  });
+
+  await step(c, 'failed-column-configuration-save-reconciles-and-retries-retained-source', async () => {
+    const folder = await fs.realpath(c.vault), mode = (await fs.stat(folder)).mode & 0o777, original = await c.read('Layouts.base');
+    assert.ok(folder.startsWith(await fs.realpath(c.outputDirectory) + path.sep), 'Permission fixture is strictly inside owned output');
+    const wanted = orderConfiguration(c, original, 'Board', ['Todo', 'Done', 'Later']); let retained;
+    try {
+      await fs.chmod(folder, 0o555); c.evidence.actions.push({action: 'owned-negative-column-config-permission-fixture', path: folder, mode: '0555', purpose: 'real atomic Base configuration save failure, distinct from a card property move', at: Date.now()});
+      await c.ui.drag(`${column('Done')} .bases-kanban-column-header`, `${column('Todo')} .bases-kanban-column-header`);
+      await c.ui.wait(`const text=[...document.querySelectorAll('${active} .bases-kanban-status,${active} .bases-session-status')].map(e=>e.textContent).join(' ');return /EACCES|permission denied|not permitted|read.only/i.test(text)?text:false;`, 'Failed actual column configuration save has permission feedback', 45000);
+      assert.equal(await c.read('Layouts.base'), original, 'Failed column save leaves exact durable configuration bytes unchanged');
+      await c.ui.wait(`const columns=[...document.querySelectorAll('${active} .bases-kanban-column')].map(e=>({name:e.querySelector('.bases-kanban-column-body')?.getAttribute('aria-label'),left:e.getBoundingClientRect().left})).sort((a,b)=>a.left-b.left);return JSON.stringify(columns.map(e=>e.name))===${JSON.stringify(JSON.stringify(['Done', 'Todo', 'Later']))}&&!document.querySelector('${active} .bases-kanban-column-drop-placeholder');`, 'Failed column preview reconciles to prior rendered order without an insertion placeholder');
+      const drafts = await c.ui.wait(`const values=[];for(const[key,raw]of Object.entries(localStorage)){if(!key.startsWith('zorid:draft:')||!key.endsWith(encodeURIComponent('Layouts.base')))continue;const draft=JSON.parse(raw);if(draft.base===${JSON.stringify(original)}&&typeof draft.content==='string')values.push({key,draft});}return values.length===1?values[0]:false;`, 'Failed column command retains exactly one ordinary configuration recovery draft');
+      assert.deepEqual(c.yaml.parse(drafts.draft.content), wanted, 'Retained configuration changes only Board group order'); retained = drafts.draft.content;
+      c.evidence.checks.push({name: 'failed-column-config-original-and-retained-draft', original, ...drafts}); await capture(c, 'failed-column-order-reconciled-retained-draft');
+    } finally { await fs.chmod(folder, mode); c.evidence.actions.push({action: 'restore-owned-column-config-fixture-permissions', path: folder, mode, at: Date.now()}); }
+    await c.ui.openFile('Items/Alpha.md'); await c.saved('Layouts.base', source => assert.equal(source, retained), 'normal-navigation-retries-exact-retained-column-configuration');
+    await c.ui.openFile('Layouts.base'); await c.ui.idle(); await choose(c, 'Board'); assert.deepEqual(await boardOrder(c), ['Todo', 'Done', 'Later']);
+    await c.ui.drag(`${column('Todo')} .bases-kanban-column-header`, `${column('Done')} .bases-kanban-column-header`); await savedOrder(c, retained, ['Done', 'Todo', 'Later'], 'restored-column-order-after-recovery-acknowledgement');
+    expected['Layouts.base'] = await c.read('Layouts.base'); await noMutation(c, expected, 'Column configuration failure/retry never changes note bytes');
   });
 
   await step(c, 'Kanban-rank-sorted-insertion-and-input-owned-draft', async () => {

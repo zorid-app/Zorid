@@ -29,6 +29,14 @@ Real Chromium dragstart supplies `Input.dragIntercepted` data; the campaign neve
 fabricates DataTransfer contents or calls controller/workspace APIs to make a
 positive operation happen.
 
+Live insertion can move a target element before release. Those cases use
+`dropAtLast()` to release at the last successfully acknowledged drag-over point;
+they never re-locate the moved target. The helper keeps its existing single
+release/cleanup path, so completed drops are not followed by a redundant cancel.
+Four offline protocol lifecycle tests cover relocated targets, rejected moves,
+missing preview and failed-drop cleanup; they do not establish actual native
+drag acceptance.
+
 | Case | Exact oracle |
 | --- | --- |
 | Cards/List group collapse | Visible path sequence changes from Alpha/Gamma/Beta/Delta to Beta/Delta and back; `aria-expanded`; all five original files stay byte-identical. |
@@ -36,6 +44,8 @@ positive operation happen.
 | File context actions | Exact native-host file menu labels/order; Open in new tab obeys the identity oracle; Bookmark persists and changes its action to Remove bookmark; vault bytes unchanged. |
 | All layouts file drag | Actual native payload has exactly one `text/plain` value `[[Items/Alpha]]`; List begins from its actual filename link. Cancellation writes nothing. No external receiving-app/Finder claim. |
 | Column insertion/cancellation/reorder | Visible column positions and insertion slot change before any save; actual Escape removes the drag state and preserves original config; completed drag saves exact Done/Todo/Later ordering. Cleanup `dragCancel` cannot satisfy the Escape assertion. |
+| Normal Group-menu row drag | Uses the toolbar's ordinary Group dialog and actual draggable row grip. Real Tab reaches the source row; visible row positions preview Todo/Done/Later before drop while exact Base bytes remain unchanged. Actual Escape keeps the menu open, restores Done/Todo/Later and the exact source row's keyboard focus before cleanup. A completed drag saves the complete expected parsed configuration; another normal menu drag restores the fixture for subsequent cases. No alternate columns popover or keyboard-reorder substitution. |
+| Failed column-order save | The owned vault directory is temporarily mode0555 to make a real atomic Base-configuration save fail. Exact prior Base bytes remain, the board reconciles to its prior visible order with no insertion placeholder, and normal recovery storage retains exactly the intended full configuration source. Permissions are always restored; ordinary navigation retries that exact source, reopening the board shows the saved order, then normal header dragging restores the fixture. This is a separate labeled negative fixture from the card-status failure below. |
 | Sorted insertion/draft ownership | Alt-arrow in a real number draft retains exact input/focus and does not mutate disk; Escape cancels it; moving Gamma gives exact Beta/Gamma/Delta destination ordering and changes only Gamma's status bytes. |
 | Failed move/recovery | Owned Items directory is temporarily mode0555. Actual save failure leaves original bytes and rolls visual card back; normal recovery storage retains the exact desired transformed draft. Permissions are always restored; normal UI navigation retries and commits exact intended status/body. This is an explicit negative fixture, not a positive filesystem edit or an atomicity claim. |
 | Computed-group read-only | Root/group labels are exact; all column New controls are disabled and four cards are non-draggable; no source changes. No typed/null/folder grouping claim. |
@@ -52,7 +62,8 @@ There are no runtime soft-skips or fallback controller mutations.
 ## Composition and acceptance boundaries
 
 This revision requires the reference-backed Base hover lifecycle and Workspace
-factory to be composed. All twelve authored cases fail explicitly if required
+factory and live Group-menu row insertion/cancellation implementation to be
+composed. All fourteen authored cases fail explicitly if required
 source hooks are absent; no missing preview is counted as success. The previous
 `LAYOUT-HOVER-001` missing-source entry is removed in favor of positive assertions.
 Rich property widgets and pending property-draft close guards belong to the
@@ -65,7 +76,7 @@ running this revision. A browser document URL fails the same exact Markdown
 payload oracle used by Cards/Kanban; source tests do not establish actual native
 List drag acceptance.
 
-The permission-negative case requires the normal non-root user filesystem
+The two permission-negative cases require the normal non-root user filesystem
 semantics. A failure to produce the specified error/recovery draft fails the
 case; it is not skipped or replaced with a controller stub. The menu assertion
 expects the native host's Version history capability. An unavailable capability

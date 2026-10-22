@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 export async function beginDrag(c, source) {
   const from = await c.ui.point(source);
   await c.cdp.call('Input.setInterceptDrags', {enabled: true});
-  let listener, timer, finished = false, last = from;
+  let listener, timer, finished = false, last = {...from}, lastOver;
   const intercepted = new Promise((resolve, reject) => {
     timer = setTimeout(() => reject(Error('Chromium did not intercept the actual dragstart: ' + source)), 8000);
     listener = event => { const value = JSON.parse(event.data); if (value.method === 'Input.dragIntercepted') { clearTimeout(timer); resolve(value.params.data); } };
@@ -26,10 +26,17 @@ export async function beginDrag(c, source) {
     assert.ok(Array.isArray(data.items) && data.items.length, 'The native source supplied a nonempty drag payload');
     c.evidence.actions.push({action: 'native-layout-drag-intercept', source, data, at: Date.now()});
     await c.cdp.call('Input.dispatchDragEvent', {type: 'dragEnter', ...from, data});
+    const dropAt = async point => {
+      assert.ok(!finished, 'The native drag has already finished');
+      last = {...point}; await c.cdp.call('Input.dispatchDragEvent', {type: 'drop', ...last, data}); await release();
+    };
     return {
       data,
-      async over(target) { last = await c.ui.point(target); await c.cdp.call('Input.dispatchDragEvent', {type: 'dragOver', ...last, data}); return last; },
-      async drop(target) { last = await c.ui.point(target); await c.cdp.call('Input.dispatchDragEvent', {type: 'drop', ...last, data}); await release(); },
+      async over(target) { assert.ok(!finished, 'The native drag has already finished'); const point = {...await c.ui.point(target)}; await c.cdp.call('Input.dispatchDragEvent', {type: 'dragOver', ...point, data}); last = {...point}; lastOver = {...point}; return {...point}; },
+      async drop(target) { await dropAt(await c.ui.point(target)); },
+      // Live insertion can move the target element. Drop at the last accepted
+      // pointer position, rather than locating that element again after preview.
+      async dropAtLast() { assert.ok(lastOver, 'A successful dragOver is required before dropping at its recorded point'); await dropAt(lastOver); },
       async escape() {
         // The oracle must observe actual Escape/dragend. dragCancel below is
         // cleanup only and can never satisfy a successful cancellation check.
