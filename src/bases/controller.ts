@@ -782,13 +782,13 @@ export class BaseController {
     }
     if (root) document.updateRoot(root);
     document.updateView(index, { ...patch, name: to });
-    const desired = document.toString(), adapter = this.options.vault.adapter;
+    const desired = document.toString(), adapter = this.options.vault.adapter, service = adapter.documentSemantics;
     const original = this.options.vault.entries.get(this.path);
     if (!original) throw new Error('The renamed Base file is unavailable');
     const identity = this.identities.get(this.path);
     const referenceWrite = () => {
       validateWrite();
-      if (this.identities.get(this.path) !== identity || this.options.vault.adapter !== adapter) throw new Error('The original Base reference owner changed');
+      if (this.identities.get(this.path) !== identity || this.options.vault.adapter !== adapter || adapter.documentSemantics !== service) throw new Error('The original Base reference owner changed');
     };
     const validateRenamed = async () => {
       referenceWrite();

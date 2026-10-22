@@ -36,7 +36,8 @@ async function fixture() {
     status: async () => ({ source, snapshot, coveredSource: source, current: true, rebuildRequired: false, coverageComplete: true }),
     initialize: unused, rebuild: unused, begin: unused, pump: unused, publish: unused, discard: unused,
     open: async () => { const pin = { closed: 0 }; pins.push(pin); const opening = openGate; openGate = undefined; if (opening) await opening.promise; return { pinId: String(pins.length) as DocumentPinId, snapshot, source, coverageComplete: true,
-      close: async () => { pin.closed++; if (closeFailures > 0) { closeFailures--; throw new Error('Close failed once'); } }, search: unused, backlinks: unused,
+      close: async () => { pin.closed++; if (closeFailures > 0) { closeFailures--; throw new Error('Close failed once'); } }, search: unused,
+      backlinks: async () => ({ result: { snapshot, source, coverageComplete: true, value: { snapshot, edges: [], next: null, scanComplete: true, coverageComplete: true, complete: true } }, cursor: null }),
       metadata: async () => ({ snapshot, source, coverageComplete: true, value: { entry: await definition(), metadata: null, exclusion: null } }),
       base: async input => { calls.push(input); if (fail) throw new Error('Rust unavailable'); const gate = hold; hold = undefined; const value = gate ? await gate.promise : result();
         const document = BaseDocument.parse(await adapter.read('Work.base')); const index = input.options?.viewIndex ?? 0;
