@@ -38,6 +38,19 @@ the unchanged500,000-step preview regression; duplicate admission charges were
 removed without changing that budget. Earlier wrong-rustdoc/partial runs remain
 historical evidence, not the final result.
 
+Actual015 at frozen frontend `eeb8646a` / old core5e / preserved native176 now
+terminates at180 actions/22 checks. The previously failing numeric edit and the
+following checkbox both pass independent durable-file oracles. Numeric frames
+show no new rejection and finish ready/no editor. The next topics click fails to
+open its combobox; click-time aria-disabled/admission was not captured, so a
+closed-gate explanation remains unproven. `bases_table` and `bases_e2e` own
+source reproduction and generic driver-actionability review. Preserve the exact
+journey/oracles while diagnosing. Run2527 exits1; cleanup proves exact owned
+processes[] and the production app untouched.015 evidence record is owned by
+`bases_ui_review`. Root now owns focused Cargo session45711 (`--lib --test
+preview`) to verify the composed key-copy optimization, log
+`/private/tmp/zorid-bases-g9-keymove-focused-001.log`. No app/build may overlap.
+
 Actual [Electron014](history/bases-electron-heavy-014-20261022.md) stops at178
 recorded actions/20 checks. Its passive receipt identifies a
 `configuration-commit` invalidation (epoch61→62) while stale is already true;
@@ -55,9 +68,8 @@ as root `60c1d4fd`; root new tests pass9/9 and frontend bounded closure passes34
 No015 build or app has started. The frontend lane is frozen at `eeb8646a`,
 with old Rust tree `5e010112` and preserved native
 SHA176fcff5. All owned014 processes are closed. The unrelated installed Zorid app
-is untouched. No Cargo/app/build is live at this record. The next sole heavy slot is assigned
-to `bases_ui_review` for015 build/run, conditional on the completed toolchain
-restoration's final version smoke. Root does not overlap Cargo with that slot.
+is untouched. The interim015 frontend lane does not establish new-core or complete heavy-user
+acceptance. It remains frozen independently of root Rust changes.
 
 Transport fixtures now contain127 explicit typed row oracles/16 diagnostics,
 retaining19 browser groups,14 files and125 CLI commands. Matching final native,

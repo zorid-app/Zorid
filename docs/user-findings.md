@@ -2,6 +2,16 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Electron015 advances to180 recorded actions/22 checks: numeric rating5 saves
+with the exact body/unrelated properties preserved, and checkbox done:true saves.
+The seven numeric frames show no new rejection and end ready with no draft or
+pending editor. The next topics click does not open a multiselect combobox.
+Click-time aria-disabled/admission state was not captured, so a closed gate is
+only a source hypothesis. `bases_table` and `bases_e2e` own diagnosis; do not add
+a journey sleep, weaken the picker oracle or remove write safeguards. All owned
+015 processes are closed; provenance/source/dist manifests match. Retained result:
+`/private/tmp/zorid-bases-heavy-20261022-015/result.json`.
+
 Electron014 reaches178 recorded actions/20 checks and identifies a
 configuration-commit epoch advance during the rejected numeric edit. A composed
 reproduction confirms configuration save can publish a query before its own
