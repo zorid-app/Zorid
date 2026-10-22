@@ -25,7 +25,17 @@ the G9 conversion integration. `bases_summaries` owns source/metering diagnosis
 with the conversion owner advising. Independently reviewed `67f16e52` is now
 composed as `1e9a7f25`, consuming an already-admitted String property key without
 a second rendering copy; its five new cases and unchanged preview need actual
-execution. Preserve the existing500,000 ceiling and
+execution. Root focused run45711 now terminates101: all190 library tests pass,
+but preview still ends9/10 with the same budget failure. `bases_summaries` owns
+the completed query-only A/B diagnosis with pinned tools: current comparator
+total507857 versus baseline497182, identical admission486120. The10675-step
+delta exactly matches1525 checked literal String imports. Baseline final total
+is498540. Both temporary probes are stripped and their logs/source receipts are
+retained under `/private/tmp/zorid-bases-g9-cost-*`. The next authorized source
+optimization uses lexer-safe named query properties and borrowed AST names to
+eliminate real projection-key allocations, retaining arbitrary-name quoted
+fallback and actual scan/cancellation/import guards. No product or test ceiling
+has changed. Preserve the existing500,000 ceiling and
 real work/cancellation/allocation checks. Later targets are unexecuted in this
 run. Library success is not a complete current-core pass.
 
@@ -47,9 +57,12 @@ closed-gate explanation remains unproven. `bases_table` and `bases_e2e` own
 source reproduction and generic driver-actionability review. Preserve the exact
 journey/oracles while diagnosing. Run2527 exits1; cleanup proves exact owned
 processes[] and the production app untouched.015 evidence record is owned by
-`bases_ui_review`. Root now owns focused Cargo session45711 (`--lib --test
-preview`) to verify the composed key-copy optimization, log
-`/private/tmp/zorid-bases-g9-keymove-focused-001.log`. No app/build may overlap.
+`bases_ui_review`. Root focused Cargo session45711 (`--lib --test preview`) is terminal101:
+190 library pass, preview9/10. Log:
+`/private/tmp/zorid-bases-g9-keymove-focused-001.log`. The measured-probe slot is now released. `bases_summaries` owns the
+next named-property source optimization; actual rerun remains pending. `bases_e2e` owns a generic
+CDP enabled-state actionability correction plus passive point receipts; no
+journey-specific waits or weakened picker/value assertions are authorized.
 
 Actual [Electron014](history/bases-electron-heavy-014-20261022.md) stops at178
 recorded actions/20 checks. Its passive receipt identifies a

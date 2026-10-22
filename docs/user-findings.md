@@ -21,11 +21,23 @@ Original rating1 and draft5 remain preserved. No stale/CAS guard is relaxed.
 See [014 evidence](history/bases-electron-heavy-014-20261022.md). All owned apps
 are closed; actual015 has not started.
 
+A bounded production-session reproduction confirms that topics can be visible
+and aria-disabled while the preceding checkbox acknowledgement finishes, and
+opens normally after readiness returns.015 did not capture those attributes at
+the click, so its exact cause remains unproven. The generic CDP driver's enabled
+checks omit inherited native disabled, aria-disabled ancestors and inert;
+`bases_e2e` owns standards-based actionability and passive click receipts, with
+no journey-specific wait. A separate source observation is weak visual feedback
+while a dirty property save blocks fresh edits; verify and improve this during
+UI acceptance without relaxing admission or discarding local drafts.
+
 The preceding complete Rust suite passes317 tests/20 targets, including the
 unchanged500,000-step preview, with pinned compiler and rustdoc. The newly
 composed Object/raw Link conversion, bounded clone and ICU natural sorting
 compile and pass185/185 library cases after two exact JSON integer expectations
-were corrected without production changes. The complete current run stops at the unchanged preview comparator-work budget
+were corrected without production changes. The subsequent String-key-copy
+optimization passes190/190 library cases, but its preview target still fails9/10.
+Measured A/B diagnosis is assigned. The complete current run stops at the unchanged preview comparator-work budget
 regression; diagnosis is assigned, with no budget increase authorized. Later
 targets remain unexecuted in that run. This does not
 establish matching final browser, CLI, desktop or visual acceptance. Expanded
