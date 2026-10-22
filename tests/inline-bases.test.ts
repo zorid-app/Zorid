@@ -100,9 +100,9 @@ function editor(t: TestContext, source: string, callouts = false) {
   }
   dom.window.Range.prototype.getBoundingClientRect = () => ({ x: 0, y: 0, width: 0, height: 0, top: 0, bottom: 0, left: 0, right: 0, toJSON: () => ({}) });
   dom.window.Range.prototype.getClientRects = () => Object.assign([], { item: () => null });
-  const requests: InlineBaseRequest[] = []; let destroyed = 0;
-  const render = (request: InlineBaseRequest) => {
-    requests.push(request); const node = dom.window.document.createElement('section'); node.className = 'mounted-base';
+  const requests: InlineBaseRequest[] = [],occurrences:(object|undefined)[]=[]; let destroyed = 0;
+  const render = (request: InlineBaseRequest,context?:{occurrence:object}) => {
+    requests.push(request);occurrences.push(context?.occurrence); const node = dom.window.document.createElement('section'); node.className = 'mounted-base';
     const input = dom.window.document.createElement('input'); node.append(input);
     return { dom: node, destroy() { destroyed++; } };
   };
@@ -111,7 +111,7 @@ function editor(t: TestContext, source: string, callouts = false) {
   let closed = false;
   const close = () => { if (!closed) { closed = true; view.destroy(); } };
   t.after(() => { close(); dom.window.close(); for (const [key, descriptor] of previous) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } });
-  return { dom, view, requests, close, get destroyed() { return destroyed; } };
+  return { dom, view, requests, occurrences, close, get destroyed() { return destroyed; } };
 }
 
 test('Live Edit mounts the exact fence, retains child drafts on selection elsewhere, and reveals source', t => {
@@ -152,4 +152,21 @@ test('an initial fence renders while unfocused and focusing its property input d
   ui.view.focus(); await Promise.resolve();
   assert.equal(ui.view.dom.querySelector('.mounted-base'), null);
   assert.equal(ui.view.state.doc.toString(), fenced + '\n\nAfter');
+});
+
+
+test('a configuration-only Live fence rewrite keeps its logical token but refreshes exact source guards',t=>{
+  const source='Before\n\n'+fenced+'\n\nAfter',ui=editor(t,source),from=source.indexOf('name: Table')+'name: '.length;
+  const original=ui.requests[0],occurrence=ui.occurrences[0];assert.ok(occurrence);
+  ui.view.dispatch({changes:{from,to:from+'Table'.length,insert:'Renamed'}});
+  assert.equal(ui.requests.length,2);assert.equal(ui.occurrences[1],occurrence);assert.notEqual(ui.requests[1].documentText,original.documentText);
+  assert.throws(()=>replaceInlineBaseSource(ui.requests[1].documentText,original,'views: []\n'),/containing this Base changed/);
+});
+
+test('a foreign fence shell or combined outside/configuration rewrite gets a new Live token',t=>{
+  const source='Before\n\n'+fenced+'\n\nAfter',ui=editor(t,source),first=ui.occurrences[0];
+  const changed=source.replace('name: Table','name: Renamed').replace('After','External body');
+  ui.view.dispatch({changes:{from:0,to:source.length,insert:changed}});assert.notEqual(ui.occurrences.at(-1),first);
+  const previous=ui.occurrences.at(-1),shell=changed.replace('```base','~~~~base').replace('\n```','\n~~~~');
+  ui.view.dispatch({changes:{from:0,to:changed.length,insert:shell}});assert.notEqual(ui.occurrences.at(-1),previous);
 });

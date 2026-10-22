@@ -55,7 +55,18 @@ export function liveBases(render: InlineBaseRenderer, options: RenderExclusionOp
         const from = state.doc.lineAt(node.from).from;
         const request = inlineBaseRequest(source, from, node.to);
         if (request) {
-          const retained = previous.find(span => map(span.request.from) === from && span.request.source === request.source);
+          const retained = previous.find(({request:before}) => {
+            if(map(before.from)!==from)return false;
+            if(before.source===request.source)return true;
+            // A configuration-only rewrite is still this logical fence. This
+            // token is not source authority: the session manager separately
+            // requires its own successful saved-source acknowledgement.
+            const delta=request.documentText.length-before.documentText.length;
+            return request.from===before.from&&request.contentFrom===before.contentFrom
+              &&request.contentTo===before.contentTo+delta&&request.to===before.to+delta
+              &&request.documentText.slice(0,request.contentFrom)===before.documentText.slice(0,before.contentFrom)
+              &&request.documentText.slice(request.contentTo)===before.documentText.slice(before.contentTo);
+          });
           spans.push({ request, occurrence: retained?.occurrence ?? {} });
         }
         return false;

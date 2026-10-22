@@ -150,3 +150,31 @@ test('unsupported attachment hover is explicit and never opens a text NoteBuffer
   const f=await setup(t),read=f.adapter.read.bind(f.adapter);let textReads=0;f.adapter.read=async path=>{if(path==='Unsupported.bin')textReads++;return read(path);};
   const root=await openHover(f,'Unsupported.bin');assert.match(root.textContent!,/Preview is unavailable/);assert.equal(f.workspace.buffers.has('Unsupported.bin'),false);assert.equal(textReads,0);
 });
+
+
+// The existing fixture supplies a captured saved-row witness to the hover
+// callback; these exercise Workspace publication/UI lifecycle, not native query
+// admission or reference parity.
+for(const failed of [false,true])test(`inline Reading hover ${failed?'failed save and explicit retry':'own save'} preserves its selected property until durable acknowledgement`,async t=>{
+  const f=await setup(t),source="Before\n\n```base\nfilters: 'file.name == \"A\"'\nviews:\n  - { type: table, name: Fence old, order: [ file.name, score ] }\n```\n\nAfter\n";
+  await f.adapter.write('One.md',source);await f.adapter.write('A.md','---\nscore: 1\n---\nA body\n');await f.workspace.vault.reload(['One.md','A.md']);
+  await until(()=>f.root.querySelector('.bases-session-content')?.getAttribute('aria-busy')==='false','parent query finishes saved-source refresh');
+  const root=await openHover(f);await until(()=>!!root.querySelector('[role="grid"][aria-label="Fence old"]'),'Reading inline table mounts');
+  const cell=root.querySelector<HTMLElement>('[role="gridcell"][data-path="A.md"][data-property="note.score"]')!;
+  cell.dispatchEvent(new f.dom.window.MouseEvent('pointerdown',{bubbles:true,cancelable:true,button:0}));f.dom.window.dispatchEvent(new f.dom.window.MouseEvent('pointerup',{bubbles:true,button:0}));cell.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+  const sessionRoot=root.querySelector('.bases-session')!;
+  root.querySelector<HTMLButtonElement>('[aria-label="Views"]')!.click();document.querySelector<HTMLButtonElement>('[aria-label="Configure view Fence old"]')!.click();
+  const input=document.querySelector<HTMLInputElement>('[aria-label="View name"]')!;input.focus();input.value='Fence renamed';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));
+  let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
+  const plan=f.adapter.durableWrites.planWrite.bind(f.adapter.durableWrites);let held=true;
+  f.adapter.durableWrites.planWrite=async value=>{if(value.path==='One.md'&&held){held=false;entered();await gate;}return plan(value);};
+  try{
+    f.fail(failed);input.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await started;
+    assert.equal(root.querySelector('[role="grid"][aria-label="Fence renamed"]'),null);assert.equal(root.querySelector('.bases-session'),sessionRoot);
+    assert.equal(root.querySelector<HTMLElement>('[role="gridcell"][tabindex="0"]')?.dataset.property,'note.score');release();
+    if(failed){await until(()=>!!f.workspace.buffers.get('One.md')?.error&&!!document.querySelector('.bases-toolbar-error'),'containing-note failure remains visible');assert.equal(root.querySelector('[role="grid"][aria-label="Fence renamed"]'),null);assert.equal(await f.adapter.read('One.md'),source);f.fail(false);await f.workspace.flush();}
+    await until(()=>!!root.querySelector('[role="grid"][aria-label="Fence renamed"]'),'saved Reading fence remounts');
+    const panel=document.querySelector('[role="dialog"][aria-label="View options"]');[...panel?.querySelectorAll<HTMLButtonElement>('button')??[]].find(button=>button.textContent==='Cancel')?.click();
+    assert.equal(root.querySelector('.bases-session'),sessionRoot);assert.equal(root.querySelector<HTMLElement>('[role="gridcell"][tabindex="0"]')?.dataset.property,'note.score');assert.equal(await f.adapter.read('One.md'),source.replace('name: Fence old','name: Fence renamed'));await f.workspace.flush();
+  }finally{release();f.fail(false);f.adapter.durableWrites.planWrite=plan;const panel=document.querySelector('[role="dialog"][aria-label="View options"]');[...panel?.querySelectorAll<HTMLButtonElement>('button')??[]].find(button=>button.textContent==='Cancel')?.click();}
+});

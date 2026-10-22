@@ -129,3 +129,71 @@ test('a saved rename received during async session creation rebinds the original
   manager.renameViewBinding('Work.base','Table','Books',request.targetIdentity);release();await binding.ready;
   assert.equal(opened,'Table');assert.deepEqual(renames,[['Table','Books']]);await manager.close();dom.window.close();
 });
+
+test('only an owning saved inline host can advance its exact fence cache binding',async()=>{
+  const dom=new JSDOM('<body><main></main><aside></aside></body>'),doc=dom.window.document,views:ReturnType<typeof fake>[]=[],saved:((request:import('../src/bases/inline-base.ts').InlineBaseRequest)=>boolean)[]=[];
+  const manager=new BaseEmbedSessions({recoveryHost:doc.body,create(root,target){const view=fake(root);views.push(view);assert.ok(target.onInlineSourceSaved);saved.push(target.onInlineSourceSaved);return view.session;}});
+  const old='Before\n\n```base\nviews: [{type: table, name: Old}]\n```\n\nAfter',next=old.replace('name: Old','name: New name');
+  const inline=inlineBaseRequest(old,old.indexOf('```base'),old.lastIndexOf('\n```')+4)!,fresh=inlineBaseRequest(next,next.indexOf('```base'),next.lastIndexOf('\n```')+4)!;
+  const identity={},request={sourcePath:'Source.md',targetPath:'Source.md',viewName:'',sourceIdentity:identity,targetIdentity:identity,inline,occurrence:{}};
+  const first=manager.mount(request,doc.querySelector('main')!);await first.ready;
+  const sibling=manager.mount(request,doc.querySelector('aside')!);await sibling.ready;views[1].setDirty(true);views[1].input.value='sibling draft';
+  assert.equal(saved[0](fresh),true);assert.equal(request.inline.documentText,old,'caller occurrence snapshot stays immutable');
+  first.detach();sibling.detach();
+  await manager.mount({...request,inline:fresh,occurrence:{}},doc.querySelector('main')!).ready;
+  assert.equal(views.length,2,'only acknowledged owner is reused');assert.equal(doc.querySelector('main input'),views[0].input);assert.equal(doc.querySelector('.base-embed-recovery input'),views[1].input);
+  views[1].setDirty(false);await manager.close();assert.equal(saved[0](fresh),false,'closed owner cannot acknowledge a new binding');dom.window.close();
+});
+
+test('saved inline acknowledgement rejects another fence, moved shell, outside edits and forged spans',async()=>{
+  const dom=new JSDOM('<body><main></main></body>'),doc=dom.window.document;let save!:(request:import('../src/bases/inline-base.ts').InlineBaseRequest)=>boolean;
+  const manager=new BaseEmbedSessions({recoveryHost:doc.body,create(root,target){save=target.onInlineSourceSaved!;return fake(root).session;}});
+  const block='```base\nviews: []\n```',source='Before\n\n'+block+'\n\n'+block+'\nAfter',from=source.indexOf('```base'),inline=inlineBaseRequest(source,from,from+block.length)!;
+  const identity={},request={sourcePath:'Source.md',targetPath:'Source.md',viewName:'',sourceIdentity:identity,targetIdentity:identity,inline,occurrence:{}};
+  await manager.mount(request,doc.querySelector('main')!).ready;
+  const bodyEdit=source.replace('After','Changed'),moved='Prefix\n'+source,shell=source.replace('```base','~~~~base').replace('\n```','\n~~~~');
+  for(const next of [inlineBaseRequest(source,source.lastIndexOf('```base'),source.lastIndexOf('```base')+block.length)!,inlineBaseRequest(bodyEdit,from,from+block.length)!,inlineBaseRequest(moved,from+7,from+7+block.length)!,inlineBaseRequest(shell,from,from+block.length+2)!])assert.equal(save(next),false);
+  assert.equal(save({...inline,contentFrom:inline.contentFrom+1}),false);
+  await manager.close();dom.window.close();
+});
+
+test('saved inline acknowledgement does not bypass a changed containing-file incarnation',async()=>{
+  const dom=new JSDOM('<body><main></main></body>'),doc=dom.window.document,views:ReturnType<typeof fake>[]=[];let save!:(request:import('../src/bases/inline-base.ts').InlineBaseRequest)=>boolean;
+  const manager=new BaseEmbedSessions({recoveryHost:doc.body,create(root,target){save=target.onInlineSourceSaved!;const view=fake(root);views.push(view);return view.session;}});
+  const source='```base\nviews: []\n```',inline=inlineBaseRequest(source,0,source.length)!,next=source.replace('views: []','views: [{type: table}]'),fresh=inlineBaseRequest(next,0,next.length)!,identity={};
+  const request={sourcePath:'Source.md',targetPath:'Source.md',viewName:'',sourceIdentity:identity,targetIdentity:identity,inline,occurrence:{}};
+  const first=manager.mount(request,doc.querySelector('main')!);await first.ready;assert.equal(save(fresh),true);first.detach();
+  const replacement={};await manager.mount({...request,sourceIdentity:replacement,targetIdentity:replacement,inline:fresh},doc.querySelector('main')!).ready;
+  assert.equal(views.length,2);await manager.close();dom.window.close();
+});
+
+test('own acknowledged Live replacement transfers one binding lease before old widget disposal',async()=>{
+  const dom=new JSDOM('<body><main></main><aside></aside><footer></footer></body>'),doc=dom.window.document,views:ReturnType<typeof fake>[]=[];let save!:(request:import('../src/bases/inline-base.ts').InlineBaseRequest)=>boolean;
+  const manager=new BaseEmbedSessions({recoveryHost:doc.body,create(root,target){save=target.onInlineSourceSaved!;const view=fake(root);views.push(view);return view.session;}}),old='```base\nviews: []\n```',next=old.replace('views: []','views: [{type: table}]'),inline=inlineBaseRequest(old,0,old.length)!,fresh=inlineBaseRequest(next,0,next.length)!,identity={};
+  const request={sourcePath:'Source.md',targetPath:'Source.md',viewName:'',sourceIdentity:identity,targetIdentity:identity,inline,occurrence:{}};
+  const original=manager.mount(request,doc.querySelector('main')!);await original.ready;views[0].input.value='same logical selection';assert.equal(save(fresh),true);
+  const replacement=manager.mount({...request,inline:fresh},doc.querySelector('aside')!);await replacement.ready;
+  assert.equal(views.length,1);assert.equal(doc.querySelector('aside input'),views[0].input);original.detach();assert.equal(doc.querySelector('aside input'),views[0].input,'old widget destroy cannot detach new lease');
+  const duplicate=manager.mount({...request,inline:fresh},doc.querySelector('footer')!);await duplicate.ready;assert.equal(views.length,2,'one acknowledgement cannot share two attached sessions');
+  replacement.detach();assert.equal(doc.querySelector('footer input'),views[1].input);await manager.close();dom.window.close();
+});
+
+test('an acknowledged attached inline host cannot transfer selection to another editor token',async()=>{
+  const dom=new JSDOM('<body><main></main><aside></aside></body>'),doc=dom.window.document,views:ReturnType<typeof fake>[]=[];let save!:(request:import('../src/bases/inline-base.ts').InlineBaseRequest)=>boolean;
+  const manager=new BaseEmbedSessions({recoveryHost:doc.body,create(root,target){save=target.onInlineSourceSaved!;const view=fake(root);views.push(view);return view.session;}}),old='```base\nviews: []\n```',next=old.replace('views: []','views: [{type: table}]'),inline=inlineBaseRequest(old,0,old.length)!,fresh=inlineBaseRequest(next,0,next.length)!,identity={};
+  const request={sourcePath:'Source.md',targetPath:'Source.md',viewName:'',sourceIdentity:identity,targetIdentity:identity,inline,occurrence:{}};
+  await manager.mount(request,doc.querySelector('main')!).ready;assert.equal(save(fresh),true);
+  await manager.mount({...request,inline:fresh,occurrence:{}},doc.querySelector('aside')!).ready;assert.equal(views.length,2);assert.equal(doc.querySelector('main input'),views[0].input);assert.equal(doc.querySelector('aside input'),views[1].input);
+  await manager.close();dom.window.close();
+});
+
+test('an old inline creation callback cannot acknowledge an entry already retired by cache pruning',async()=>{
+  const dom=new JSDOM('<body><main></main></body>'),doc=dom.window.document;let save!:(request:import('../src/bases/inline-base.ts').InlineBaseRequest)=>boolean,closed=0;
+  const block='```base\nviews: []\n```',inline=inlineBaseRequest(block,0,block.length)!,freshText=block.replace('views: []','views: [{type: table}]'),fresh=inlineBaseRequest(freshText,0,freshText.length)!;
+  let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
+  const manager=new BaseEmbedSessions({recoveryHost:doc.body,create(root,target){const view=fake(root);if(!save){save=target.onInlineSourceSaved!;view.session.close=async()=>{closed++;entered();await gate;};}return view.session;}});
+  try{
+    for(let i=0;i<6;i++){const identity={};const binding=manager.mount({sourcePath:'Source.md',targetPath:'Source.md',viewName:'',sourceIdentity:identity,targetIdentity:identity,inline,occurrence:{}},doc.querySelector('main')!);await binding.ready;binding.detach();}
+    await started;assert.equal(closed,1);assert.equal(save(fresh),false,'retiring owner cannot arm a new handoff');
+  }finally{release();await manager.close();dom.window.close();}
+});

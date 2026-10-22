@@ -1,4 +1,5 @@
 import type { BaseSession } from '../bases/session.ts';
+import { inlineBaseRequest } from '../bases/inline-base.ts';
 import type { InlineBaseRequest } from '../bases/inline-base.ts';
 
 export interface BaseEmbedTarget {
@@ -12,6 +13,11 @@ export interface BaseEmbedTarget {
   /** Inline configurations edit this original containing-note occurrence. */
   inline?: InlineBaseRequest;
 }
+/** Only the owning saved-source host receives this per-session acknowledgement.
+ * Rendering a fresh request cannot authorize reuse of a previous source guard. */
+export interface BaseEmbedCreationTarget extends BaseEmbedTarget {
+  readonly onInlineSourceSaved?: (next: InlineBaseRequest) => boolean;
+}
 export interface BaseEmbedBinding { readonly ready: Promise<void>; detach(): void; }
 interface Entry {
   target: BaseEmbedTarget;
@@ -19,6 +25,8 @@ interface Entry {
   ready: Promise<void>;
   session?: BaseSession;
   attached: boolean;
+  lease?: object;
+  inlineHandoff?: boolean;
   error?: unknown;
   settled: boolean;
   retiring?: Promise<void>;
@@ -37,7 +45,7 @@ export class BaseEmbedSessions {
 
   private readonly options: {
     recoveryHost: HTMLElement;
-    create(container: HTMLElement, target: BaseEmbedTarget): BaseSession | Promise<BaseSession>;
+    create(container: HTMLElement, target: BaseEmbedCreationTarget): BaseSession | Promise<BaseSession>;
   };
   constructor(options: BaseEmbedSessions['options']) {
     this.options=options;
@@ -52,7 +60,8 @@ export class BaseEmbedSessions {
 
   mount(target: BaseEmbedTarget, container: HTMLElement): BaseEmbedBinding {
     if (this.closed || this.closing) throw new Error('Embedded Bases are closing.');
-    const matches = (entry: Entry) => !entry.attached && !entry.retiring && !entry.error && entry.target.sourcePath === target.sourcePath
+    const matches = (entry: Entry) => (!entry.attached || !!entry.inlineHandoff && !!entry.lease && typeof target.occurrence === 'object' && target.occurrence !== null && entry.target.occurrence === target.occurrence)
+      && !entry.retiring && !entry.error && entry.target.sourcePath === target.sourcePath
       && entry.target.sourceIdentity === target.sourceIdentity
       && entry.target.targetPath === target.targetPath && entry.target.viewName === target.viewName
       && entry.target.targetIdentity === target.targetIdentity
@@ -74,7 +83,8 @@ export class BaseEmbedSessions {
       this.entries.add(created);
       created.ready = Promise.resolve().then(async () => {
         const openingName=created.target.viewName;
-        const session=await this.options.create(root,created.target);
+        const session=await this.options.create(root,{...created.target,
+          ...(created.target.inline?{onInlineSourceSaved:(next:InlineBaseRequest)=>this.inlineSourceSaved(created,next)}:{})});
         created.session = session;
         // A sibling may save a rename while this renderer is still opening.
         // Rebind only the original captured name, never a locally selected view.
@@ -89,6 +99,11 @@ export class BaseEmbedSessions {
       // The renderer observes ready too. Keep unmounted late failures handled.
       void created.ready.catch(() => {});
     }
+    // CodeMirror may construct a replacement before destroying its old widget.
+    // A saved own-source handoff is single-use and scoped to the same occurrence;
+    // the retiring widget's lease must not detach its new owner.
+    const lease={};entry.lease=lease;entry.inlineHandoff=false;
+    entry.target={...entry.target,occurrence:target.occurrence};
     entry.attached = true;
     this.entries.delete(entry);this.entries.add(entry);
     container.append(entry.root);
@@ -96,11 +111,30 @@ export class BaseEmbedSessions {
     let detached = false;
     return { ready: entry.ready, detach: () => {
       if (detached) return; detached = true;
+      if(entry.lease!==lease)return;
       entry.attached = false;
       if (entry.session?.hasPendingChanges()) this.recover(entry);
       else entry.root.remove();
       this.updateRecovery();this.pruneClean();
     } };
+  }
+
+  /** A successful write by this exact source host advances only its own saved
+   * fence binding. Keep its live query/selection; other sessions and external
+   * source changes still need fresh guards and cannot claim this acknowledgement. */
+  private inlineSourceSaved(entry:Entry,next:InlineBaseRequest):boolean {
+    const previous=entry.target.inline;
+    if(this.closed||!this.entries.has(entry)||entry.retiring||entry.error||!previous)return false;
+    const verified=inlineBaseRequest(next.documentText,next.from,next.to);
+    if(!verified||verified.contentFrom!==next.contentFrom||verified.contentTo!==next.contentTo||verified.source!==next.source)return false;
+    const delta=verified.documentText.length-previous.documentText.length;
+    if(verified.from!==previous.from||verified.contentFrom!==previous.contentFrom
+      ||verified.contentTo!==previous.contentTo+delta||verified.to!==previous.to+delta
+      ||verified.documentText.slice(0,verified.contentFrom)!==previous.documentText.slice(0,previous.contentFrom)
+      ||verified.documentText.slice(verified.contentTo)!==previous.documentText.slice(previous.contentTo))return false;
+    entry.inlineHandoff=verified.documentText!==previous.documentText;
+    entry.target={...entry.target,inline:verified};
+    return true;
   }
 
   /** Saved-name transition supplied by the owning controller before it rewrites

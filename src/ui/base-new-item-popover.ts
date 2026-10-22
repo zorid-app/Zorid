@@ -22,6 +22,8 @@ export interface BaseNewItemPopoverOptions {
   readonly editorOptions?: Partial<Omit<EditorOptions, 'value' | 'onChange' | 'validateChange' | 'canMutate' | 'isCurrent'>>;
   readonly properties?: Pick<PropertiesOptions, 'onPropertyDefinitionChange' | 'getRelationTargets' | 'getDisplayValue'>;
   /** The workspace owns subscriptions and the buffer's lifetime. */
+  /** Defer only body publication while an owned inline configuration saves. */
+  readonly deferSourceUpdate?: () => boolean;
   readonly subscribeBuffer?: (buffer: NoteBuffer, listener: () => void) => () => void;
   /** Embedded editors retain their own accepted writes and unaccepted drafts. */
   readonly flushEditor?: () => Promise<void>;
@@ -119,8 +121,10 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     if (buffer.path !== path && entryId && options.vault.entries.get(buffer.path)?.entryId === entryId) { const previous = titleBaseline; path = buffer.path; titleBaseline = noteName(path); if (titleText().trim() === previous && !titleProblem) { title.textContent = titleBaseline; titleDraft = titleBaseline; } }
     properties.refresh();
     try { const count = readProperties(buffer.text).length; propertiesHost.hidden = count === 0; propertiesRoot.dataset.propertyCount = String(count); root.classList.toggle('has-properties', count > 0); } catch { propertiesHost.hidden = false; }
+    if (!options.deferSourceUpdate?.()) {
     if (!editor) { preview.textContent = bodyPreview(buffer.text); preview.classList.toggle('is-empty', !preview.textContent); }
     else if (buffer.text !== bodySnapshot && !editorHost.contains(document.activeElement)) { bodySnapshot = buffer.text; editor.setValue(bodySnapshot); }
+    }
     if (buffer.error) report(buffer.error);
     position();
   }

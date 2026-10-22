@@ -135,7 +135,7 @@ test('editing the source during a delayed close leaves embedded sessions usable 
   const{workspace,adapter}=await setup(t);await openEmbed(workspace);const pane=workspace.activePane,tab=pane.tabs.find(tab=>tab.id===pane.active)!,view=cm(workspace),root=pane.element.querySelector('.bases-session')!,write=adapter.write.bind(adapter);
   let release!:()=>void,started=false;const gate=new Promise<void>(resolve=>{release=resolve;});adapter.write=async(path,text)=>{if(path==='Source.md'){started=true;await gate;}await write(path,text);};
   view.dispatch({changes:{from:view.state.doc.length,insert:' first'}});const closing=(workspace as any).closeTab(pane,tab);void closing.catch(()=>{});
-  try{await until(()=>started,'source save is pending');view.dispatch({changes:{from:view.state.doc.length,insert:' second'}});release();await assert.rejects(closing,/changed while closing/);assert.equal(root.isConnected,true);assert.equal(pane.runtime?.phase,'active');const input=startEdit(pane.element,'Still editable');key(input,'Enter');await until(()=>!input.isConnected,'retained Base still writes');await workspace.flush();assert.match(await adapter.read('One.md'),/Still editable/);}
+  try{await until(()=>started,'source save is pending');view.dispatch({changes:{from:view.state.doc.length,insert:' second'}});release();await assert.rejects(closing,/changed while closing/);assert.equal(root.isConnected,true);assert.equal(pane.runtime?.phase,'active');await until(()=>root.querySelector('[data-property="note.status"][role="gridcell"]')?.getAttribute('aria-disabled')==='false'&&root.querySelector('.bases-session-content')?.getAttribute('aria-busy')==='false','same retained Base admits edits after saved-source invalidation');const input=startEdit(pane.element,'Still editable');key(input,'Enter');await until(()=>!input.isConnected,'retained Base still writes');await workspace.flush();assert.match(await adapter.read('One.md'),/Still editable/);}
   finally{release();await closing.catch(()=>{});adapter.write=write;}
 });
 
@@ -322,3 +322,228 @@ test('Create Base retries its retained uncertain operation without allocating a 
   (workspace as any).pendingBaseCreation=undefined;
 });
 
+
+const fencedRenameConfig=`# keep this Base comment\nfilters: 'file.name == "A"'\nviews:\n  - { type: table, name: Fence old, order: [ file.name, score ] }\n`;
+const fencedRenameSource='Before\n\n```base\n'+fencedRenameConfig+'```\n\nLiteral fragment sentinel: ![[Work.base#Table]]\nAfter\n';
+const fencedRenameExpected=fencedRenameSource.replace('name: Fence old','name: Fence renamed');
+async function startFencedRename(t:TestContext){
+  const fixture=await setup(t,new MemoryAdapter({'Source.md':fencedRenameSource,'A.md':'---\nscore: 1\n---\nA body\n','Work.base':base,'Other.md':'Other'}));
+  await fixture.workspace.openNote('Source.md');const pane=fixture.workspace.activePane;
+  await until(()=>!!pane.element.querySelector('.cm-live-base [role="grid"][aria-label="Fence old"]'),'inline table mounts');
+  const cell=pane.element.querySelector<HTMLElement>('.cm-live-base [role="gridcell"][data-path="A.md"][data-property="note.score"]')!;
+  cell.dispatchEvent(new fixture.dom.window.MouseEvent('pointerdown',{bubbles:true,cancelable:true,button:0}));
+  fixture.dom.window.dispatchEvent(new fixture.dom.window.MouseEvent('pointerup',{bubbles:true,button:0}));key(cell,'Escape');
+  assert.equal(pane.element.querySelector<HTMLElement>('.cm-live-base [role="gridcell"][tabindex="0"]')?.dataset.property,'note.score');
+  const trigger=pane.element.querySelector<HTMLButtonElement>('.cm-live-base [aria-label="Views"]')!;assert.ok(trigger);trigger.click();
+  const configure=document.querySelector<HTMLButtonElement>('[aria-label="Configure view Fence old"]')!;assert.ok(configure);configure.click();
+  const input=document.querySelector<HTMLInputElement>('[aria-label="View name"]')!;assert.ok(input);input.focus();input.value='Fence renamed';input.dispatchEvent(new fixture.dom.window.Event('input',{bubbles:true}));
+  const sessionRoot=pane.element.querySelector('.cm-live-base .bases-session')!;
+  return{...fixture,pane,input,sessionRoot};
+}
+function selectedFencedCell(pane:Workspace['activePane']){
+  const cell=pane.element.querySelector<HTMLElement>('.cm-live-base [role="grid"][aria-label="Fence renamed"] [role="gridcell"][tabindex="0"]');
+  return cell&&{path:cell.dataset.path,property:cell.dataset.property};
+}
+function closeFencedRename(){const panel=document.querySelector('[role="dialog"][aria-label="View options"]');[...panel?.querySelectorAll<HTMLButtonElement>('button')??[]].find(button=>button.textContent==='Cancel')?.click();}
+
+test('own saved fenced view rename keeps logical row/property selection and remains writable',async t=>{
+  const{workspace,adapter,pane,input,sessionRoot}=await startFencedRename(t);key(input,'Enter');
+  await until(()=>!!pane.element.querySelector('[role="grid"][aria-label="Fence renamed"]'),'own saved source remounts the renamed fence');
+  closeFencedRename();await until(()=>document.querySelector('[role="dialog"][aria-label="View options"]')===null,'configuration panel closes');
+  assert.equal(pane.element.querySelector('.cm-live-base .bases-session'),sessionRoot,'own saved host retains its original session');
+  assert.deepEqual(selectedFencedCell(pane),{path:'A.md',property:'note.score'});
+  assert.equal(await adapter.read('Source.md'),fencedRenameExpected);assert.equal(await adapter.read('Work.base'),base);
+  const selected=pane.element.querySelector<HTMLElement>('.cm-live-base [role="gridcell"][data-path="A.md"][data-property="note.score"]')!;key(selected,'Enter');
+  const edit=selected.querySelector<HTMLInputElement>('input')!;assert.ok(edit);edit.value='31';key(edit,'Enter');await until(()=>!edit.isConnected,'same fenced property remains writable');await workspace.flush();
+  assert.equal(await adapter.read('A.md'),'---\nscore: 31\n---\nA body\n');assert.equal(await adapter.read('Source.md'),fencedRenameExpected);
+});
+
+test('failed fenced configuration flush does not acknowledge remount, and exact UI retry retains selection',async t=>{
+  const fixture=await startFencedRename(t),{workspace,adapter,pane,input}=fixture,write=adapter.write.bind(adapter);let fail=true;
+  adapter.write=async(path,text)=>{if(path==='Source.md'&&fail)throw new Error('fenced save unavailable');await write(path,text);};
+  try{
+    key(input,'Enter');await until(()=>!!workspace.buffers.get('Source.md')?.error,'failed containing save is retained');
+    assert.equal(await adapter.read('Source.md'),fencedRenameSource);assert.equal(cm(workspace).state.doc.toString(),fencedRenameSource);
+    assert.equal(pane.element.querySelector<HTMLElement>('.cm-live-base [role="gridcell"][tabindex="0"]')?.dataset.property,'note.score');
+    await assert.rejects(workspace.openNote('Other.md'),/fenced save unavailable/);
+    fail=false;[...document.querySelectorAll<HTMLButtonElement>('[role=dialog] button')].find(button=>button.textContent==='Retry save')!.click();
+    await until(()=>!!pane.element.querySelector('[role="grid"][aria-label="Fence renamed"]'),'exact retained rename retry is acknowledged');
+    closeFencedRename();assert.deepEqual(selectedFencedCell(pane),{path:'A.md',property:'note.score'});assert.equal(await adapter.read('Source.md'),fencedRenameExpected);
+  }finally{fail=false;adapter.write=write;closeFencedRename();}
+});
+
+test('a superseded inline host cannot acknowledge or publish peer text after its awaited durable flush',async t=>{
+  const{workspace,adapter,pane,input}=await startFencedRename(t),write=adapter.write.bind(adapter),runtime=pane.runtime;
+  let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});let hold=true;
+  adapter.write=async(path,text)=>{await write(path,text);if(path==='Source.md'&&hold){hold=false;entered();await gate;}};
+  try{
+    key(input,'Enter');await started;
+    // Negative ownership fault: the awaited host's runtime is superseded. No
+    // positive UI state is installed through this test-only retirement seam.
+    pane.runtime=undefined;release();
+    await until(()=>workspace.buffers.get('Source.md')?.savedText===fencedRenameExpected&&!!document.querySelector('.bases-toolbar-error')?.textContent,'late completion rejects its retired owner');
+    assert.equal(await adapter.read('Source.md'),fencedRenameExpected,'the already durable write is not rolled back');
+    assert.equal(cm(workspace).state.doc.toString(),fencedRenameSource,'retired completion cannot overwrite peer editor text');
+    assert.equal(pane.element.querySelector('[role="grid"][aria-label="Fence renamed"]'),null);
+    pane.runtime=runtime;input.focus();key(input,'Enter');
+    await until(()=>!!pane.element.querySelector('[role="grid"][aria-label="Fence renamed"]'),'ordinary guarded retry acknowledges the saved fence');
+    closeFencedRename();assert.deepEqual(selectedFencedCell(pane),{path:'A.md',property:'note.score'});
+  }finally{pane.runtime=runtime;release();adapter.write=write;closeFencedRename();}
+});
+
+
+test('explicit Workspace Save completes an exact failed inline configuration and settles its toolbar',async t=>{
+  const{workspace,adapter,pane,input,sessionRoot}=await startFencedRename(t),write=adapter.write.bind(adapter);let fail=true;
+  adapter.write=async(path,text)=>{if(path==='Source.md'&&fail)throw new Error('fenced save unavailable');await write(path,text);};
+  try{
+    key(input,'Enter');await until(()=>!!workspace.buffers.get('Source.md')?.error&&!!document.querySelector('.bases-toolbar-error'),'failed command retains toolbar');
+    fail=false;await workspace.flush();
+    assert.equal(document.querySelector('[role="dialog"][aria-label="View options"]'),null,'successful explicit Save acknowledges only its failed toolbar');
+    await until(()=>!!pane.element.querySelector('[role="grid"][aria-label="Fence renamed"]'),'retry query renders');
+    assert.equal(pane.element.querySelector('.cm-live-base .bases-session'),sessionRoot);
+    assert.deepEqual(selectedFencedCell(pane),{path:'A.md',property:'note.score'});
+    assert.equal(await adapter.read('Source.md'),fencedRenameExpected);await workspace.openNote('Other.md');
+  }finally{fail=false;adapter.write=write;closeFencedRename();}
+});
+
+
+async function startNestedFencedRename(t:TestContext){
+  const config='newItemTemplate: Template.md\nviews:\n  - {type: table, name: Table, order: [file.name]}\n';
+  const fixture=await setup(t,new MemoryAdapter({'Work.base':config,'Template.md':fencedRenameSource,'A.md':'---\nscore: 1\n---\nA body\n'}));
+  const{workspace,dom}=fixture;await workspace.openNote('Work.base');
+  workspace.activePane.element.querySelector<HTMLButtonElement>('.bases-session [aria-label="New"]')!.click();
+  await until(()=>!!document.querySelector('.bases-new-item-popover'),'New opens');
+  const popup=document.querySelector<HTMLElement>('.bases-new-item-popover')!;
+  popup.querySelector<HTMLElement>('.bases-new-item-body-preview')!.click();
+  await until(()=>!!popup.querySelector('[role="grid"][aria-label="Fence old"]'),'nested inline table mounts');
+  const path=[...workspace.buffers.keys()].find(path=>path!=='Template.md'&&path!=='A.md'&&path!=='Work.base')!;assert.ok(path);
+  const cell=popup.querySelector<HTMLElement>('[role="gridcell"][data-path="A.md"][data-property="note.score"]')!;
+  cell.dispatchEvent(new dom.window.MouseEvent('pointerdown',{bubbles:true,cancelable:true,button:0}));dom.window.dispatchEvent(new dom.window.MouseEvent('pointerup',{bubbles:true,button:0}));key(cell,'Escape');
+  popup.querySelector<HTMLButtonElement>('.cm-live-base [aria-label="Views"]')!.click();
+  document.querySelector<HTMLButtonElement>('[aria-label="Configure view Fence old"]')!.click();
+  const input=document.querySelector<HTMLInputElement>('[aria-label="View name"]')!;input.focus();input.value='Fence renamed';input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));
+  return{...fixture,popup,path,input,sessionRoot:popup.querySelector('.cm-live-base .bases-session')!,view:EditorView.findFromDOM(popup.querySelector('.cm-editor')!)!};
+}
+
+test('nested New inline source publication waits for durable acknowledgement including Vault modify refresh',async t=>{
+  const{workspace,adapter,popup,path,input,sessionRoot,view}=await startNestedFencedRename(t),write=adapter.write.bind(adapter);
+  let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});let held=true,observed=false;
+  adapter.write=async(target,text)=>{if(target===path&&held){held=false;entered();await gate;}await write(target,text);};
+  const stop=workspace.vault.on('modify',entry=>{if(entry.path===path){observed=true;assert.equal(view.state.doc.toString(),fencedRenameSource,'Vault refresh cannot publish before host ack');}});
+  try{
+    key(input,'Enter');await started;
+    assert.equal(view.state.doc.toString(),fencedRenameSource);assert.equal(popup.querySelector('.cm-live-base .bases-session'),sessionRoot);
+    release();await until(()=>!!popup.querySelector('[role="grid"][aria-label="Fence renamed"]'),'acknowledged nested fence remounts');closeFencedRename();
+    assert.equal(observed,true);assert.equal(popup.querySelector('.cm-live-base .bases-session'),sessionRoot);
+    assert.equal(popup.querySelector<HTMLElement>('[role="gridcell"][tabindex="0"]')?.dataset.property,'note.score');assert.equal(await adapter.read(path),fencedRenameExpected);await workspace.flush();
+  }finally{stop();release();adapter.write=write;closeFencedRename();}
+});
+
+test('nested New failed inline save retains source and explicit Workspace Save completes its own retry',async t=>{
+  const{workspace,adapter,popup,path,input,sessionRoot,view}=await startNestedFencedRename(t),write=adapter.write.bind(adapter);let fail=true;
+  adapter.write=async(target,text)=>{if(target===path&&fail)throw new Error('nested save unavailable');await write(target,text);};
+  try{
+    key(input,'Enter');await until(()=>!!workspace.buffers.get(path)?.error&&!!document.querySelector('.bases-toolbar-error'),'nested save fails');
+    assert.equal(view.state.doc.toString(),fencedRenameSource);assert.equal(await adapter.read(path),fencedRenameSource);assert.equal(popup.querySelector('.cm-live-base .bases-session'),sessionRoot);
+    fail=false;await workspace.flush();
+    assert.equal(document.querySelector('[role="dialog"][aria-label="View options"]'),null);
+    assert.equal(popup.querySelector('.cm-live-base .bases-session'),sessionRoot);assert.equal(popup.querySelector<HTMLElement>('[role="gridcell"][tabindex="0"]')?.dataset.property,'note.score');assert.equal(await adapter.read(path),fencedRenameExpected);
+  }finally{fail=false;adapter.write=write;closeFencedRename();}
+});
+
+
+test('an inline failed duplicate view retry persists the original command exactly once',async t=>{
+  const{workspace,adapter,pane,input}=await startFencedRename(t),write=adapter.write.bind(adapter);let fail=true,writes=0;
+  // Cancel the unsubmitted rename draft before choosing the independent command.
+  closeFencedRename();pane.element.querySelector<HTMLButtonElement>('.cm-live-base [aria-label="Views"]')!.click();
+  document.querySelector<HTMLButtonElement>('[aria-label="Configure view Fence old"]')!.click();
+  adapter.write=async(path,text)=>{if(path==='Source.md'){writes++;if(fail)throw new Error('duplicate save unavailable');}await write(path,text);};
+  try{
+    [...document.querySelectorAll<HTMLButtonElement>('[role=dialog] button')].find(button=>button.textContent==='Duplicate view')!.click();
+    await until(()=>!!workspace.buffers.get('Source.md')?.error&&!![...document.querySelectorAll('button')].find(button=>button.textContent==='Retry save'),'duplicate persistence fails');
+    fail=false;[...document.querySelectorAll<HTMLButtonElement>('[role=dialog] button')].find(button=>button.textContent==='Retry save')!.click();
+    await until(()=>workspace.buffers.get('Source.md')?.dirty===false&&!document.querySelector('[role="dialog"][aria-label="View options"]'),'retained duplicate closes after retry');
+    const source=await adapter.read('Source.md');assert.equal((source.match(/name: Fence old/g)??[]).length,2);assert.match(source,/name: Fence old 2/);assert.equal(writes,2,'one failed persistence plus one exact retry');await workspace.flush();
+  }finally{fail=false;adapter.write=write;closeFencedRename();}
+});
+
+test('generic inline retry acknowledgement preserves a newer configuration draft typed during the failed write',async t=>{
+  const{workspace,adapter,pane,input}=await startFencedRename(t),write=adapter.write.bind(adapter);let release!:()=>void,entered!:()=>void,fail=true;
+  const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
+  adapter.write=async(path,text)=>{if(path==='Source.md'&&fail){entered();await gate;throw new Error('newer draft save unavailable');}await write(path,text);};
+  try{
+    key(input,'Enter');await started;
+    input.value='Newer unaccepted draft';input.dispatchEvent(new window.Event('input',{bubbles:true}));release();
+    await until(()=>!!workspace.buffers.get('Source.md')?.error&&!!document.querySelector('.bases-toolbar-error'),'failed first command settles');
+    fail=false;await assert.rejects(workspace.flush(),/Finish or cancel/);
+    assert.equal(input.isConnected,true);assert.equal(input.value,'Newer unaccepted draft');assert.equal(await adapter.read('Source.md'),fencedRenameExpected,'only first accepted name is persisted');
+    closeFencedRename();await workspace.flush();
+  }finally{fail=false;release();adapter.write=write;closeFencedRename();}
+});
+
+test('foreign containing-buffer edits permanently retire an exact inline retry even after identical bytes return',async t=>{
+  let sourceHost:import('../src/bases/session.ts').BaseSessionOptions['inlineSource'];
+  const fakeBase=(_host:HTMLElement,options:any)=>{if(options.inlineSource)sourceHost=options.inlineSource;return{ready:Promise.resolve(),state:{error:null},refresh:async()=>{},flush:async()=>{},close:async()=>{},hasPendingChanges:()=>false} as any;};
+  const{workspace,adapter}=await setup(t,new MemoryAdapter({'Source.md':fencedRenameSource,'A.md':'A'}),{base:fakeBase});
+  await workspace.openNote('Source.md');await until(()=>!!sourceHost,'saved inline host exists');const write=adapter.write.bind(adapter);let fail=true;
+  adapter.write=async(path,text)=>{if(path==='Source.md'&&fail)throw new Error('held write unavailable');await write(path,text);};
+  try{
+    await assert.rejects(sourceHost!.transform(fencedRenameConfig,fencedRenameConfig.replace('Fence old','Fence renamed'),()=>{}),/held write unavailable/);
+    const retry=sourceHost!.captureSaveRetry!()!;assert.ok(retry);
+    const buffer=workspace.buffers.get('Source.md')!;buffer.update(fencedRenameExpected+'Foreign');buffer.update(fencedRenameExpected);
+    fail=false;await assert.rejects(retry(),/retained inline configuration changed/);assert.equal(sourceHost!.captureSaveRetry!(),undefined);assert.equal(await adapter.read('Source.md'),fencedRenameSource);
+    buffer.update(fencedRenameSource);await workspace.flush();
+  }finally{fail=false;adapter.write=write;}
+});
+
+
+test('an awaited inline configuration acknowledgement cannot close a replacement toolbar panel',async t=>{
+  const{workspace,adapter,pane,input}=await startFencedRename(t),write=adapter.write.bind(adapter),read=adapter.read.bind(adapter);let fail=true,intercept=true,release!:()=>void,entered!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
+  adapter.write=async(path,text)=>{if(path==='Source.md'&&fail)throw new Error('retained name unavailable');await write(path,text);};
+  try{
+    key(input,'Enter');await until(()=>!!workspace.buffers.get('Source.md')?.error&&!!document.querySelector('.bases-toolbar-error'),'accepted rename fails');fail=false;
+    adapter.read=async path=>{const source=await read(path);if(path==='Source.md'&&source===fencedRenameExpected&&intercept){intercept=false;entered();await gate;}return source;};
+    const saving=workspace.flush();const settled=saving.then(()=>({error:undefined}),error=>({error}));await started;
+    closeFencedRename();pane.element.querySelector<HTMLButtonElement>('.cm-live-base [aria-label="Views"]')!.click();
+    document.querySelector<HTMLButtonElement>('[aria-label="Configure view Fence old"]')!.click();
+    const newer=document.querySelector<HTMLInputElement>('[aria-label="View name"]')!;newer.focus();newer.value='Replacement panel draft';newer.dispatchEvent(new window.Event('input',{bubbles:true}));
+    release();const result=await settled;assert.match(String(result.error),/Finish or cancel/);assert.equal(newer.isConnected,true);assert.equal(newer.value,'Replacement panel draft');assert.equal(await adapter.read('Source.md'),fencedRenameExpected);
+    closeFencedRename();await workspace.flush();
+  }finally{fail=false;release();adapter.write=write;adapter.read=read;closeFencedRename();}
+});
+
+
+test('a superseded subscribed New host releases its clean hold without publishing into its peer editor',async t=>{
+  const{workspace,adapter,popup,path,input,view}=await startNestedFencedRename(t),write=adapter.write.bind(adapter);
+  closeFencedRename();await workspace.openNote(path);const peer=cm(workspace);
+  popup.querySelector<HTMLButtonElement>('.cm-live-base [aria-label="Views"]')!.click();document.querySelector<HTMLButtonElement>('[aria-label="Configure view Fence old"]')!.click();
+  const name=document.querySelector<HTMLInputElement>('[aria-label="View name"]')!;name.focus();name.value='Fence renamed';name.dispatchEvent(new window.Event('input',{bubbles:true}));
+  let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});let held=true;const buffer=workspace.buffers.get(path)!;
+  adapter.write=async(target,text)=>{await write(target,text);if(target===path&&held){held=false;entered();await gate;}};
+  try{
+    key(name,'Enter');await started;
+    // Negative actor retirement: remove its exact containing-buffer admission
+    // while the accepted physical write is awaiting acknowledgement.
+    workspace.buffers.delete(path);release();
+    await until(()=>buffer.savedText===fencedRenameExpected&&!!document.querySelector('.bases-toolbar-error'),'superseded nested completion rejects');
+    assert.equal(await adapter.read(path),fencedRenameExpected);assert.equal(view.state.doc.toString(),fencedRenameSource);assert.equal(peer.state.doc.toString(),fencedRenameSource,'rejected actor must not reach New subscriber peer publication');
+    workspace.buffers.set(path,buffer);name.focus();key(name,'Enter');await until(()=>!!popup.querySelector('[role="grid"][aria-label="Fence renamed"]'),'current owner can explicitly retry');closeFencedRename();await workspace.flush();
+  }finally{workspace.buffers.set(path,buffer);release();adapter.write=write;closeFencedRename();}
+});
+
+
+test('unrelated pane navigation does not retry another pane inline hold but explicit Workspace Save completes it',async t=>{
+  const{workspace,adapter,pane}=await startFencedRename(t);closeFencedRename();
+  await(workspace as any).split('right',pane);const other=workspace.activePane;assert.notEqual(other,pane);await workspace.openNote('Other.md',false,other);
+  pane.element.querySelector<HTMLButtonElement>('.cm-live-base [aria-label="Views"]')!.click();document.querySelector<HTMLButtonElement>('[aria-label="Configure view Fence old"]')!.click();
+  const input=document.querySelector<HTMLInputElement>('[aria-label="View name"]')!;input.focus();input.value='Fence renamed';input.dispatchEvent(new window.Event('input',{bubbles:true}));
+  const write=adapter.write.bind(adapter);let fail=true,writes=0;
+  adapter.write=async(path,text)=>{if(path==='Source.md'){writes++;if(fail)throw new Error('other pane save unavailable');}await write(path,text);};
+  try{
+    key(input,'Enter');await until(()=>!!workspace.buffers.get('Source.md')?.error&&!!document.querySelector('.bases-toolbar-error'),'second pane retains failed own save');const failedWrites=writes;
+    await workspace.openNote('A.md',false,other);
+    assert.equal(other.viewPath,'A.md');assert.equal(pane.viewPath,'Source.md');assert.equal(writes,failedWrites,'unrelated navigation does not retry the other source');assert.equal(await adapter.read('Source.md'),fencedRenameSource);
+    fail=false;await workspace.flush();await until(()=>!!pane.element.querySelector('[role="grid"][aria-label="Fence renamed"]'),'global Save acknowledges held source');assert.equal(await adapter.read('Source.md'),fencedRenameExpected);assert.equal(document.querySelector('[role="dialog"][aria-label="View options"]'),null);
+  }finally{fail=false;adapter.write=write;closeFencedRename();}
+});

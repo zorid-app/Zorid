@@ -59,7 +59,7 @@ export interface BaseToolbar {
 }
 type FilterNode = string | { and: FilterNode[] } | { or: FilterNode[] } | { not: FilterNode[] };
 type PanelName = 'Views' | 'View options' | 'Add view' | 'Results' | 'Property' | 'Formula' | 'New item settings' | 'Filter' | 'Sort' | 'Properties' | 'Group';
-interface Panel { rebase?(state: BaseToolbarState, expectedName?: string): boolean; flush?(): void; name: PanelName; node: HTMLElement; trigger: HTMLElement; dirty: boolean; innerDraft?: boolean; saving: boolean; failure?: object; close(restore?: boolean): void }
+interface Panel { rebase?(state: BaseToolbarState, expectedName?: string): boolean; flush?(): void; name: PanelName; node: HTMLElement; trigger: HTMLElement; dirty: boolean; innerDraft?: boolean; saving: boolean; failure?: object; acceptsSaveAcknowledgement?: () => boolean; close(restore?: boolean): void }
 /** Only a retained, exact accepted configuration may offer a persistence retry. */
 export class BaseToolbarSaveError extends Error {
   readonly retry: () => Promise<void>;
@@ -234,7 +234,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
           own.saving = false; item.disabled = false; if(autoTimer){clearTimeout(autoTimer);autoTimer=undefined;}
           error.textContent = failure instanceof Error ? failure.message : String(failure);
           if (failure instanceof BaseToolbarSaveError) {
-            own.failure = {}; own.dirty = true; retryPersistence = failure.retry;
+            own.failure = {}; own.acceptsSaveAcknowledgement = () => generation === commandGeneration; own.dirty = true; retryPersistence = failure.retry;
             retainedAttempt = {generation:commandGeneration,viewName:configuredView.name,inputs:commandInputs};
             footer.hidden = false; apply.disabled = cancel.disabled = false; apply.textContent = 'Retry save';
           } else for(const [input,disabled] of commandInputs) input.disabled=disabled;
@@ -662,7 +662,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         if(autoTimer){clearTimeout(autoTimer);autoTimer=undefined;}
         if (failure instanceof BaseToolbarSaveError) {retryPersistence = failure.retry;retainedAttempt??=attempt;}
         if (retryPersistence) {
-          own.failure ??= {};
+          own.failure ??= {}; own.acceptsSaveAcknowledgement = () => generation === submittedGeneration;
           error.textContent = `Could not save: ${failure instanceof Error ? failure.message : String(failure)}. Retry the retained file draft, or cancel without discarding it.`;
           footer.hidden = false; apply.disabled = false; apply.textContent = 'Retry save'; cancel.disabled = false;
           for (const input of node.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input,select,textarea')) input.disabled = true;
@@ -731,7 +731,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     if (!next.readOnly && !options.commands) { const node = button(doc, 'View', () => open('View options',node), 'View options'); node.className = 'bases-toolbar-action'; actions.append(node); }
     if (focusedLabel) Array.from(actions.querySelectorAll<HTMLButtonElement>('button')).find(node => node.getAttribute('aria-label') === focusedLabel)?.focus({ preventScroll: true });
   }
-  return { update, hasDraft, captureSaveAcknowledgement() { const token = panel?.failure, captured = panel; return () => { if (!destroyed && captured && captured === panel && token && captured.failure === token && !captured.saving) { captured.failure = undefined; captured.dirty = false; captured.close(false); } }; },
+  return { update, hasDraft, captureSaveAcknowledgement() { const token = panel?.failure, captured = panel; return () => { if (!destroyed && captured && captured === panel && token && captured.failure === token && !captured.saving && captured.acceptsSaveAcknowledgement?.()) { captured.failure = undefined; captured.dirty = false; captured.close(false); } }; },
     destroy() { destroyed = true; if (panel) { panel.saving = false; panel.close(false); } container.replaceChildren(); },
   };
 }

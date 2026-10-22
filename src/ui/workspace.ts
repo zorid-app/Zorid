@@ -204,11 +204,30 @@ export class Workspace {
   private baseNewItemEmbeds?:BaseEmbedSessions;
   private baseHoverEmbeds=new Set<BaseEmbedSessions>();
   private bufferSubscriptions = new NoteBufferSubscriptions();
+  // An accepted inline configuration owns publication until its exact durable
+  // source has been acknowledged by the originating embedded session.
+  private inlinePublications = new WeakMap<NoteBuffer,{owner:object;text:string;failed:boolean;valid:boolean;complete:()=>Promise<void>}>();
+  private deferInlinePublication(buffer:NoteBuffer):boolean {
+    const held=this.inlinePublications.get(buffer);
+    if(!held)return false;
+    if(buffer.text===held.text)return true;
+    held.valid=false;this.inlinePublications.delete(buffer);return false;
+  }
+  private async finishInlinePublications(buffer?:NoteBuffer):Promise<void> {
+    for(const target of buffer?[buffer]:this.buffers.values()){
+      this.deferInlinePublication(target);
+      const held=this.inlinePublications.get(target);if(held)await held.complete();
+    }
+  }
+  private async finishInlinePublicationAt(path:string|null|undefined):Promise<void> {
+    const buffer=path?this.buffers.get(path):undefined;
+    if(buffer)await this.finishInlinePublications(buffer);
+  }
   private metadataListeners=new Set<()=>void>();
   private subscribeDraftMetadata=(listener:()=>void):(()=>void)=>{this.metadataListeners.add(listener);return()=>this.metadataListeners.delete(listener);};
   private draftBufferStateChanged(buffer:NoteBuffer,vault:Vault):void {
     if(this.vault!==vault||this.buffers.get(buffer.path)!==buffer)return;
-    this.bufferSubscriptions.publish(buffer);this.renderStatus();
+    if(!this.deferInlinePublication(buffer))this.bufferSubscriptions.publish(buffer);this.renderStatus();
     if(this.rightTab==='outline'&&this.current()?.path===buffer.path)this.renderRight();
   }
   private draftMetadataChanged(buffer:NoteBuffer,vault:Vault):void {
@@ -1331,15 +1350,17 @@ export class Workspace {
     if(version===pane.renderVersion)pane.viewReady=true;this.renderStatus();
   }
 
-  private createWorkspaceBaseSession(host:HTMLElement,path:string,owner:()=>Pane,validate:()=>void,sourcePath?:string,viewName?:string,inline?:InlineBaseRequest,onSourceError?:(error:Error|null)=>void):BaseSession{
+  private createWorkspaceBaseSession(host:HTMLElement,path:string,owner:()=>Pane,validate:()=>void,sourcePath?:string,viewName?:string,inline?:InlineBaseRequest,onSourceError?:(error:Error|null)=>void,onInlineSourceSaved?:(next:InlineBaseRequest)=>boolean):BaseSession{
     const vault=this.vault,resources=this.attachments!;
     const hover=createBaseFileHover({parent:host,isMac:this.hotkeys.platform==='mac',
       isCurrent:target=>{try{validate();const entry=vault.entries.get(target.path);return entry?.type==='file'&&entry.entryId===target.entryId&&entry.revision===target.revision;}catch{return false;}},
       getBuffer:async(target,admit)=>{validate();admit();if(!isMarkdown(target.path))return undefined;const buffer=await this.baseBufferFor(target.path,()=>{validate();admit();});admit();return buffer;},
       mount:(content,context)=>this.mountBaseFileHover(content,context,owner,validate),
       onError:error=>notice(error instanceof Error?error.message:String(error))});
-    let captured=inline;
+    let captured=inline;const inlineOwner={};
+    let inlineRetry:(()=>Promise<void>)|undefined,inlineRetryAvailable=()=>false;
     const inlineSource=inline?{
+      captureSaveRetry:()=>inlineRetryAvailable()?inlineRetry:undefined,
       read:async()=>{validate();const request=captured!;const source=await vault.read(path);validate();if(source!==request.documentText)throw new Error('The containing note changed. Refresh this embedded Base.');return{source:request.source,startByte:new TextEncoder().encode(source.slice(0,request.from)).length,endByte:new TextEncoder().encode(source.slice(0,request.to)).length};},
       transform:async(expected:string,next:string,validateSelection:()=>void)=>{
         validate();validateSelection();const request=captured!;
@@ -1347,13 +1368,48 @@ export class Workspace {
         const buffer=await this.baseBufferFor(path,validate);validateSelection();
         const desired=expected===request.source?replaceInlineBaseSource(request.documentText,request,next):request.documentText;
         if(buffer.text!==request.documentText&&buffer.text!==desired)throw new Error('The containing note has an unsaved or external edit.');
-        const previous=buffer.text;
-        buffer.update(desired,{validateWrite:()=>{validate();validateSelection();}});
         const fresh=inlineBaseRequest(desired,request.from,request.to+desired.length-request.documentText.length);
         if(!fresh)throw new Error('The updated Base fence could not be retained.');
+        this.deferInlinePublication(buffer);
+        const existing=this.inlinePublications.get(buffer);
+        if(existing){
+          if(existing.owner!==inlineOwner||existing.text!==desired)throw new Error('Another embedded Base configuration owns the containing note save.');
+          await existing.complete();return;
+        }
+        const previous=buffer.text;
+        let completion:Promise<void>|undefined;
+        const held={owner:inlineOwner,text:desired,failed:false,valid:true,complete:():Promise<void>=>{
+          if(completion)return completion;
+          held.failed=false;
+          const operation=(async()=>{
+            const admit=()=>{validate();if(!held.valid||this.inlinePublications.get(buffer)!==held||this.buffers.get(path)!==buffer||buffer.text!==desired||captured!==fresh)throw new Error('The containing note changed while its Base configuration was saved.');};
+            try{
+              admit();await buffer.flush();admit();
+              if(buffer.savedText!==desired||buffer.dirty||buffer.error)throw new Error('The containing note changed while its Base configuration was saved.');
+              if(onInlineSourceSaved&& !onInlineSourceSaved(fresh))throw new Error('The saved Base session is no longer current.');
+              this.inlinePublications.delete(buffer);held.valid=false;
+              this.bufferSubscriptions.publish(buffer);
+              for(const pane of this.loadedViews())if(pane.viewPath===path){pane.editor?.setValue(desired);pane.properties?.refresh();pane.refreshPreview?.();}
+            }catch(error){
+              held.failed=true;
+              // Release an obsolete clean hold without publishing from the
+              // rejected actor. Independent validated readers can refresh later.
+              if(this.inlinePublications.get(buffer)===held&&!buffer.dirty&&!buffer.error){this.inlinePublications.delete(buffer);held.valid=false;}
+              throw error;
+            }
+          })();
+          completion=operation;void operation.finally(()=>{if(completion===operation)completion=undefined;}).catch(()=>{});return operation;
+        }};
+        inlineRetryAvailable=()=>held.failed&&held.valid&&this.inlinePublications.get(buffer)===held;
+        inlineRetry=async()=>{
+          if((!held.failed&&!completion)||!held.valid||this.inlinePublications.get(buffer)!==held)throw new Error('The retained inline configuration changed. Refresh this embedded Base.');
+          return held.complete();
+        };
+        this.inlinePublications.set(buffer,held);
+        try{buffer.update(desired,{validateWrite:()=>{validate();validateSelection();}});}
+        catch(error){if(this.inlinePublications.get(buffer)===held)this.inlinePublications.delete(buffer);held.valid=false;throw error;}
         captured=fresh;this.mapInactiveSelections(path,previous,desired);
-        await buffer.flush();
-        for(const pane of this.loadedViews())if(pane.viewPath===path){pane.editor?.setValue(desired);pane.properties?.refresh();pane.refreshPreview?.();}
+        await held.complete();
       }
     }:undefined;
     let session:BaseSession;
@@ -1407,8 +1463,8 @@ export class Workspace {
             },onError:error=>notice(error instanceof Error?error.message:String(error))});}
     catch(error){void hover.destroy().catch(()=>{});throw error;}
     let flushing:Promise<void>|undefined,closing:Promise<void>|undefined,closed=false;
-    const flush=()=>{if(closed)return Promise.resolve();if(closing)return closing;if(flushing)return flushing;const pending=Promise.resolve().then(async()=>{await hover.flush();await session.flush();});flushing=pending;const clear=()=>{if(flushing===pending)flushing=undefined;};void pending.then(clear,clear);return pending;};
-    const close=()=>{if(closed)return Promise.resolve();if(closing)return closing;const pending=Promise.resolve().then(async()=>{await flushing;await hover.close();await session.close();await hover.destroy();closed=true;});closing=pending;const clear=()=>{if(closing===pending)closing=undefined;};void pending.then(clear,clear);return pending;};
+    const flush=()=>{if(closed)return Promise.resolve();if(closing)return closing;if(flushing)return flushing;const pending=Promise.resolve().then(async()=>{await this.finishInlinePublicationAt(path);await hover.flush();await session.flush();});flushing=pending;const clear=()=>{if(flushing===pending)flushing=undefined;};void pending.then(clear,clear);return pending;};
+    const close=()=>{if(closed)return Promise.resolve();if(closing)return closing;const pending=Promise.resolve().then(async()=>{await flushing;await this.finishInlinePublicationAt(path);await hover.close();await session.close();await hover.destroy();closed=true;});closing=pending;const clear=()=>{if(closing===pending)closing=undefined;};void pending.then(clear,clear);return pending;};
     return{get ready(){return session.ready;},get state(){return session.state;},refresh:()=>session.refresh(),selectView:index=>session.selectView(index),setCurrentFile:target=>session.setCurrentFile(target),rebindViewName:(from,to)=>session.rebindViewName(from,to),flush,close,hasPendingChanges:()=>hover.hasPendingChanges()||session.hasPendingChanges()};
   }
 
@@ -1448,7 +1504,7 @@ export class Workspace {
     const recoveryCleanup=this.mountNoteRecovery(host,buffer);
     const sessions=new BaseEmbedSessions({recoveryHost:host,create:async(container,nested)=>{
       const validate=()=>{validateFile();if(disposed||!nested.sourceIdentity||this.treeEntryToken(nested.sourcePath)!==nested.sourceIdentity||!nested.targetIdentity||this.treeEntryToken(nested.targetPath)!==nested.targetIdentity)throw new Error('The preview embedded Base changed. Its draft is retained.');};
-      validate();await this.prepareBase(nested.targetPath,generation);validate();return this.createWorkspaceBaseSession(container,nested.targetPath,owner,validate,nested.sourcePath,nested.viewName||undefined,nested.inline);
+      validate();await this.prepareBase(nested.targetPath,generation);validate();return this.createWorkspaceBaseSession(container,nested.targetPath,owner,validate,nested.sourcePath,nested.viewName||undefined,nested.inline,undefined,nested.onInlineSourceSaved);
     }});this.baseHoverEmbeds.add(sessions);
     const task=(target:string,line:number,checked:boolean)=>{admit();const identity=this.treeEntryToken(target);const operation=this.changeTask(target,line,checked,()=>{validateFile();if(!identity||this.treeEntryToken(target)!==identity)throw new Error('The preview task changed.');});track(operation);return operation;};
     const embeds=new MarkdownEmbeds({vault,resources:this.attachments,bases:{sessions,identity:target=>this.treeEntryToken(target)},pdfFactory:this.viewFactories.pdf,
@@ -1462,7 +1518,7 @@ export class Workspace {
     const releasePreview=()=>{for(const child of previewChildren)embeds.releaseEmbed(child);previewChildren.clear();destroyMarkdown(preview);};
     const remember=(child:HTMLElement)=>{previewChildren.add(child);return child;};
     const render=()=>{releasePreview();renderMarkdown(preview,buffer.text,(target,kind)=>this.run(async()=>{admit();await this.followLink(path,target,owner(),kind);}), (line,checked)=>{task(path,line,checked);}, {properties:false,embed:request=>remember(embeds.render(request,path)),base:request=>remember(embeds.renderBase(request,path))});};
-    const refresh=()=>{if(disposed||!current())return;if(!updating&&snapshot!==buffer.text){snapshot=buffer.text;if(editor)editor.setValue(snapshot);else render();}properties?.refresh();onStateChange();};
+    const refresh=()=>{if(disposed||!current())return;if(!updating&&!this.deferInlinePublication(buffer)&&snapshot!==buffer.text){snapshot=buffer.text;if(editor)editor.setValue(snapshot);else render();}properties?.refresh();onStateChange();};
     const unsubscribe=this.bufferSubscriptions.subscribe(buffer,refresh);
     const openEditor=(event:MouseEvent)=>{
       if(event.button!==0||event.defaultPrevented||event.metaKey||event.ctrlKey||event.altKey||loading||editor)return;
@@ -1518,7 +1574,7 @@ export class Workspace {
     return{isCurrent:available,hasPendingChanges:()=>false,flush:async()=>{},owns:node=>host.contains(node)||[...layers].some(layer=>layer.isConnected&&layer.contains(node)),dispose:()=>{if(disposed)return;disposed=true;signal.removeEventListener('abort',release);child?.destroy();release();for(const layer of layers)layer.remove();layers.clear();}};
   }
 
-  private async flushBaseNewItem():Promise<void>{await this.baseNewItemOpening;await this.baseNewItem?.flush();}
+  private async flushBaseNewItem():Promise<void>{await this.baseNewItemOpening;await this.finishInlinePublicationAt(this.baseNewItem?.path);await this.baseNewItem?.flush();}
   private notePropertyTargets(getPath:()=>string,isCurrent:()=>boolean,onChange:()=>void):NotePropertyTargets{
     const vault=this.vault,session=createNotePropertyTargets({vault,getPath,isCurrent,onChange}),owner={vault,session};this.notePropertyQueries.add(owner);
     return{...session,destroy:()=>{session.destroy();void session.close().then(()=>this.notePropertyQueries.delete(owner),()=>{});},close:async()=>{await session.close();this.notePropertyQueries.delete(owner);}};
@@ -1545,7 +1601,7 @@ export class Workspace {
       const sessions=new BaseEmbedSessions({recoveryHost:recovery,create:async(container,target)=>{
         const validateEmbed=()=>{validateFile();if(!target.sourceIdentity||this.treeEntryToken(target.sourcePath)!==target.sourceIdentity||!target.targetIdentity||this.treeEntryToken(target.targetPath)!==target.targetIdentity)throw new Error('The embedded Base source changed. Its draft is retained.');};
         validateEmbed();await this.prepareBase(target.targetPath,generation);validateEmbed();
-        return this.createWorkspaceBaseSession(container,target.targetPath,()=>this.activePane,validateEmbed,target.sourcePath,target.viewName||undefined,target.inline);
+        return this.createWorkspaceBaseSession(container,target.targetPath,()=>this.activePane,validateEmbed,target.sourcePath,target.viewName||undefined,target.inline,undefined,target.onInlineSourceSaved);
       }});
       this.baseNewItemEmbeds=sessions;
       const embeds=new MarkdownEmbeds({vault,resources:this.attachments,bases:{sessions,identity:target=>this.treeEntryToken(target)},
@@ -1573,6 +1629,7 @@ export class Workspace {
             await vault.rename(source,destination,()=>{validateFile();validateSelection();if(!token||this.treeEntryToken(source)!==token||shared.path!==source)throw new Error('The renamed note is no longer current.');this.requireAvailableTreePath(vault,destination,source);},witness);
             await shared.relocate(destination);
           },
+          deferSourceUpdate:()=>this.deferInlinePublication(shared),
           subscribeBuffer:(target,listener)=>this.bufferSubscriptions.subscribe(target,()=>{
             if(shared.path!==observedPath){observedPath=shared.path;for(const remount of [...remounts])remount();}
             listener();
@@ -1612,7 +1669,7 @@ export class Workspace {
         if(!target.targetIdentity||this.treeEntryToken(target.targetPath)!==target.targetIdentity||vault.entries.get(target.targetPath)?.type!=='file')throw new Error('The embedded Base file changed. Your edits are retained.');
       };
       validate();await this.prepareBase(target.targetPath,generation);validate();
-      return this.createWorkspaceBaseSession(container,target.targetPath,owner,validate,target.sourcePath,target.viewName||undefined,target.inline);
+      return this.createWorkspaceBaseSession(container,target.targetPath,owner,validate,target.sourcePath,target.viewName||undefined,target.inline,undefined,target.onInlineSourceSaved);
     }});
     pane.baseEmbeds=sessions;return sessions;
   }
@@ -2952,7 +3009,7 @@ export class Workspace {
       else if(this.activePane?.pdfView){event.preventDefault();this.activePane.pdfView.showSearch();}
     }
   }
-  private async flushPane(pane:Pane):Promise<void>{await pane.properties?.flush();await pane.tasksView?.flush();await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
-  async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;if(this.hasPendingBaseCreation())throw new Error('Base creation is unconfirmed. Retry New base in its original folder before closing or switching vaults.');await this.flushBaseNewItem();await this.sidebarBase?.session.flush();for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.properties?.flush();await pane.tasksView?.flush();if(pane.tasksView?.hasPendingChanges())throw new Error('Tasks has unsaved or unconfirmed changes. Save, discard, or resolve them before closing.');await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}await this.flushBaseNewItem();for(const buffer of this.buffers.values())await buffer.flush();}
+  private async flushPane(pane:Pane):Promise<void>{await this.finishInlinePublicationAt(this.current(pane)?.path);await pane.properties?.flush();await pane.tasksView?.flush();await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
+  async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;if(this.hasPendingBaseCreation())throw new Error('Base creation is unconfirmed. Retry New base in its original folder before closing or switching vaults.');await this.finishInlinePublications();await this.flushBaseNewItem();await this.sidebarBase?.session.flush();for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.properties?.flush();await pane.tasksView?.flush();if(pane.tasksView?.hasPendingChanges())throw new Error('Tasks has unsaved or unconfirmed changes. Save, discard, or resolve them before closing.');await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}await this.flushBaseNewItem();for(const buffer of this.buffers.values())await buffer.flush();}
   async destroy():Promise<void>{let cancelTasksClose:(recover?:boolean)=>void=()=>{};const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();try{this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();await this.closeBaseNewItem();await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;cancelTasksClose=await this.prepareTasksViewsClose();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();await this.drainMetadataOpenings();await this.closeVaultMetadata(this.vault);await this.closeRetiredVaultMetadata();if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.releaseDocumentSearchOwner(this.vault);}this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();cancelTasksClose(false);}catch(error){cancelTasksClose();if(!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}}
 }

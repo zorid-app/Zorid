@@ -46,6 +46,8 @@ export interface BaseSessionOptions {
   readonly buffers?: BaseBufferHost;
   readonly readOnly?: boolean;
   readonly inlineSource?: {
+    /** Capture only the host's exact failed persistence attempt, never replay a configuration command. */
+    captureSaveRetry?(): (() => Promise<void>) | undefined;
     read(): Promise<{ source: string; startByte: number; endByte: number; witness?: { entryId: string; revision: string } }>;
     transform(expectedSource: string, nextSource: string, validate: () => void): Promise<void>;
   };
@@ -247,6 +249,11 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     catch (error) { if (configurationAttempt === attempt) configurationAttempt = undefined; configurationLifecycle--; renderStatus(controller.state); throw error; }
     const command = saving.catch(error => {
       const buffer = attempt.buffer, text = attempt.text;
+      const retryInline = options.inlineSource?.captureSaveRetry?.();
+      if (retryInline) throw new BaseToolbarSaveError(error instanceof Error ? error.message : String(error), () => track(async () => {
+        await retryInline();
+        if (!await controller.acknowledgeConfigurationRetry()) throw new Error('The retained inline configuration is no longer pending.');
+      }));
       if (controller.hasPendingViewReferences) throw new BaseToolbarSaveError(error instanceof Error ? error.message : String(error), () => track(async () => { await controller.retryViewRenameReferences(); }));
       if (buffer && (buffer.dirty || buffer.error)) throw new BaseToolbarSaveError(error instanceof Error ? error.message : String(error), () => track(async () => {
         if (controller.hasPendingViewReferences) { await controller.retryViewRenameReferences(); return; }
@@ -701,13 +708,14 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     await Promise.allSettled([...pending]);
     // Let property widgets finish handling their accepted/rejected operations.
     await Promise.resolve();
-    const acknowledgement = controller.hasPendingViewReferences || [...changedBuffers].some(buffer => buffer.path === options.basePath && (buffer.dirty || buffer.error)) ? toolbarUI.captureSaveAcknowledgement() : undefined;
+    const acknowledgesSavedDraft = controller.hasPendingViewReferences || [...changedBuffers].some(buffer => buffer.path === options.basePath && (buffer.dirty || buffer.error));
+    const acknowledgement = toolbarUI.captureSaveAcknowledgement();
     // Reference operations own their exact failed note drafts and original
     // witnesses; flushing those buffers independently would invalidate retry.
     if (controller.hasPendingViewReferences) await controller.retryViewRenameReferences();
     for (const buffer of changedBuffers) await buffer.flush();
-    await controller.acknowledgeConfigurationRetry();
-    acknowledgement?.();
+    const configurationAcknowledged = await controller.acknowledgeConfigurationRetry();
+    if (acknowledgesSavedDraft || configurationAcknowledged) acknowledgement();
     releaseCleanBuffers();
     if (creation?.status === 'uncertain') throw new Error('The new note creation is uncertain. Use New again to reconcile it before leaving this base.');
     if (activeDraft()) throw new Error('Finish or cancel the property edit before leaving this base');
