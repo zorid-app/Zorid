@@ -16,6 +16,7 @@ import {journey} from './journey.mjs';
 import {CAMPAIGN_DIRECTORIES,validateFixtureName,readFixture,writeFixture,campaignClosure} from './owned-fixtures.mjs';
 import {relayProcessOwnership,livingOwnedProcesses,discoverUnannouncedRelayProcesses} from './native-ownership.mjs';
 import {windowMode,assertNativeWindowVisible,assertRendererVisible,nativeWindowAdapterSource} from './window-visibility.mjs';
+import {admitExternalCli,assertExternalCli,createExternalCliConflicts} from '../bases-electron-safety-integration/external-cli-conflict.mjs';
 
 const arg = name => { const i=process.argv.indexOf(name); return i<0?undefined:process.argv[i+1]; };
 const required = name => { const value=arg(name); assert.ok(value,`Explicit ${name} required`); return value; };
@@ -37,6 +38,7 @@ if(campaign)assert.ok(typeof campaign.fixtureFiles==='function'&&typeof campaign
 const cuaMode=nativeSelectCuaMode(process.argv,{windowMode:requestedWindowMode,bootstrap:windowBootstrapProbe,campaignPath,minimalCampaignPath:path.join(path.dirname(harness),'bases-electron-native-select-integration/campaign.mjs'),allowedCampaignPaths:CAMPAIGN_DIRECTORIES.map(name=>path.join(path.dirname(harness),name,'campaign.mjs'))});
 const cuaNativeSelect=!!cuaMode;
 const recoveryCampaign=campaignPath===path.join(path.dirname(harness),'bases-electron-recovery-integration/campaign.mjs');
+const externalCliArtifact=await admitExternalCli({argv:process.argv.slice(2),campaignPath,safetyCampaignPath:path.join(path.dirname(harness),'bases-electron-safety-integration/campaign.mjs')});
 if(campaign?.createNativeRelay)assert.ok(recoveryCampaign,'Only the approved recovery campaign may select a test relay');
 const vaultName=campaign?.vaultName??'vault';assert.match(vaultName,/^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$/,'Owned fixture vault basename');
 const outRequested=path.resolve(required('--out'));
@@ -50,9 +52,9 @@ const evidence={kind:windowBootstrapProbe?'actual-electron-owned-window-bootstra
 const git=(...args)=>execFileSync('git',['-C',root,...args],{encoding:'utf8',maxBuffer:8*1024*1024});
 async function hash(file){const h=createHash('sha256');for await(const bytes of createReadStream(file))h.update(bytes);return h.digest('hex');}
 async function tree(directory){const result=[];async function visit(relative=''){for(const entry of(await fs.readdir(path.join(directory,relative),{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name))){const name=path.join(relative,entry.name);assert.ok(!entry.isSymbolicLink(),'No artifact symlink: '+name);if(entry.isDirectory())await visit(name);else if(entry.isFile())result.push([name,await hash(path.join(directory,name))]);}}await visit();return result;}
-async function provenance(){assert.equal(git('rev-parse','HEAD').trim(),head,'Frozen integration HEAD changed');assert.equal(git('diff','--name-only','HEAD').trim(),'','Frozen tracked source changed');const names=git('ls-files','-z','desktop','src','crates','scripts','Cargo.toml','Cargo.lock','package.json','pnpm-lock.yaml','vite.config.mjs','index.html').split('\0').filter(Boolean).sort();return{head,tracked:await Promise.all(names.map(async name=>[name,await hash(path.join(root,name))])),dist:await tree(path.join(root,'dist')),native:{file:native,sha256:await hash(native)},...(relay?{relay:{executable:relayExecutable,identity:relayIdentity,files:await Promise.all(relayFiles.map(async file=>[file,await hash(file)])),node:{file:relayIdentity.executable,sha256:await hash(await fs.realpath(relayIdentity.executable))}}}:{}),electron:{file:electron,sha256:await hash(electron)},harness:await tree(harness),campaigns:await campaignClosure(path.dirname(harness),tree),cdpHelper:await hash(path.join(harness,'../tasks-electron-integration/cdp.mjs'))};}
+async function provenance(){if(externalCliArtifact)await assertExternalCli(externalCliArtifact);assert.equal(git('rev-parse','HEAD').trim(),head,'Frozen integration HEAD changed');assert.equal(git('diff','--name-only','HEAD').trim(),'','Frozen tracked source changed');const names=git('ls-files','-z','desktop','src','crates','scripts','Cargo.toml','Cargo.lock','package.json','pnpm-lock.yaml','vite.config.mjs','index.html').split('\0').filter(Boolean).sort();return{head,tracked:await Promise.all(names.map(async name=>[name,await hash(path.join(root,name))])),dist:await tree(path.join(root,'dist')),native:{file:native,sha256:await hash(native)},...(externalCliArtifact?{externalCli:externalCliArtifact}:{}),...(relay?{relay:{executable:relayExecutable,identity:relayIdentity,files:await Promise.all(relayFiles.map(async file=>[file,await hash(file)])),node:{file:relayIdentity.executable,sha256:await hash(await fs.realpath(relayIdentity.executable))}}}:{}),electron:{file:electron,sha256:await hash(electron)},harness:await tree(harness),campaigns:await campaignClosure(path.dirname(harness),tree),cdpHelper:await hash(path.join(harness,'../tasks-electron-integration/cdp.mjs'))};}
 const processes=()=>execFileSync('ps',['-ww','-axo','pid=,ppid=,command='],{encoding:'utf8'}).split('\n').map(line=>{const m=line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);return m?{pid:Number(m[1]),parent:Number(m[2]),command:m[3]}:null;}).filter(Boolean);
-let child,cdp,browserCDP,ui,record,before,failure,relay,relayExecutable,relayIdentity,relayFiles=[];
+let child,cdp,browserCDP,ui,record,before,failure,relay,relayExecutable,relayIdentity,relayFiles=[],externalCliConflicts;
 const natives=new Map();let cuaCheckpointCount=0;
 async function nativeSelectInput(request){
   assert.ok(cuaNativeSelect&&(cuaMode!=='minimal'||cuaCheckpointCount===0)&&child&&!exited(),'Owned CUA checkpoint with single use in minimal mode');
@@ -105,7 +107,8 @@ async function diskGuard(){
   assert.ok(free>=required,'At least 1 GiB free required');
 }
 async function stop(){
-  browserCDP?.close();browserCDP=undefined;if(!child)return;
+  let externalCliCleanupFailure;try{await externalCliConflicts?.dispose();}catch(error){externalCliCleanupFailure=error;}
+  browserCDP?.close();browserCDP=undefined;if(!child){if(externalCliCleanupFailure)throw externalCliCleanupFailure;return;}
   let ownershipFailure;try{await nativeChildren();}catch(error){ownershipFailure=error;}
   if(cdp){record.events=cdp.events;cdp.close();cdp=undefined;}
   if(relay)try{await relay.dispose();}catch(error){ownershipFailure??=error;}
@@ -119,7 +122,7 @@ async function stop(){
   Object.assign(shutdown,{exitCode:child.exitCode,signal:child.signalCode,nativeChildren:[...natives.values()],leaked});
   if(relay){shutdown.relayEvents=await relay.events();evidence.relayEvents=shutdown.relayEvents;}
   evidence.runtime.push({shutdown});child=undefined;natives.clear();
-  assert.deepEqual(leaked,[],'Owned native/relay processes leaked; cleaned, acceptance fails');if(ownershipFailure)throw ownershipFailure;
+  assert.deepEqual(leaked,[],'Owned native/relay processes leaked; cleaned, acceptance fails');if(ownershipFailure)throw ownershipFailure;if(externalCliCleanupFailure)throw externalCliCleanupFailure;
 }
 async function forceShutdown(name){
   assert.ok(recoveryCampaign&&relay&&child,'Explicit recovery campaign interruption only');
@@ -171,8 +174,9 @@ try{
   for(const[file,source]of fixtures)await writeFixture(vault,file,source,{createParents:true});
   await fs.writeFile(path.join(profile,'vault.json'),JSON.stringify({path:vault}));
   evidence.fixtureManifest=await tree(vault);
+  if(externalCliArtifact){const env={...process.env,ZORID_LOCAL_DATA_DIR:path.join(sandbox,'app-data')};for(const key of ['DISPLAY','ZORID_IPC_ENDPOINT','ZORID_DESKTOP_ENDPOINT','ZORID_FIXTURE_VAULT','ZORID_FIXTURE_CLIENT_ID'])delete env[key];externalCliConflicts=await createExternalCliConflicts({artifact:externalCliArtifact,vault,outputDirectory:out,evidence,env});}
   if(windowBootstrapProbe){await launch('owned-visible-window-bootstrap');await screenshot('owned-visible-window-bootstrap');await quit('owned-window-bootstrap-normal-quit');}
-  else await (campaign?.journey??journey)({get ui(){return ui;},get cdp(){return cdp;},vault,yaml,template:campaign?(campaign.template??''):template,evidence,outputDirectory:out,...(relay?{relay:Object.freeze({arm:input=>relay.arm(input),release:token=>relay.release(token),events:()=>relay.events()}),forceShutdown}:{}),launch,quit,read,saved,frontmatter,screenshot,external,diskGuard,prepareDownloads});
+  else await (campaign?.journey??journey)({get ui(){return ui;},get cdp(){return cdp;},vault,yaml,template:campaign?(campaign.template??''):template,evidence,outputDirectory:out,...(externalCliConflicts?{externalCliConflicts}:{}),...(relay?{relay:Object.freeze({arm:input=>relay.arm(input),release:token=>relay.release(token),events:()=>relay.events()}),forceShutdown}:{}),launch,quit,read,saved,frontmatter,screenshot,external,diskGuard,prepareDownloads});
   const after=await provenance();await fs.writeFile(path.join(out,'provenance-after.json'),JSON.stringify(after,null,2));assert.deepEqual(after,before,'Exact source/artifact freeze survived journey');evidence.provenanceVerified=true;evidence.status='passed';
 }catch(error){failure=error;evidence.status='failed';evidence.failure={message:error.message,stack:error.stack};if(cdp)try{evidence.failureDOM=await ui.dom('return {body:document.body.innerText,editors:[...document.querySelectorAll("[data-base-editing]")].map(e=>e.outerHTML),alerts:[...document.querySelectorAll("[role=alert]")].map(e=>e.outerHTML)};');await screenshot('failure');}catch(diagnostic){evidence.diagnosticFailure=diagnostic.message;}}
 finally{try{await stop();}catch(error){failure??=error;evidence.status='failed';evidence.cleanupFailure=error.message;}if(before&&!evidence.provenanceVerified)try{const after=await provenance();await fs.writeFile(path.join(out,'provenance-after.json'),JSON.stringify(after,null,2));assert.deepEqual(after,before,'Source/artifact freeze after failed journey');evidence.provenanceVerified=true;}catch(error){evidence.provenanceFailure=error.message;failure??=error;evidence.status='failed';}evidence.finished=new Date().toISOString();await fs.writeFile(path.join(out,'result.json'),JSON.stringify(evidence,null,2));}

@@ -64,15 +64,25 @@ async function recoveryCopy(c, expectedDraft, expectedOriginal, file, name) {
   await c.ui.wait(`return !!document.querySelector('.pane.is-active .note-recovery[hidden]');`, 'Recovery conflict resolved');
   return copy;
 }
-async function conflictNote(c, file, marker) {
+export async function conflictNote(c, file, marker) {
   await c.ui.openFile(file); await waitNote(c, file.replace(/\.md$/, ''));
   const before = await c.read(file), draft = before + '\n' + marker + '\n', external = before + '\nExternal authority ' + marker + '\n';
-  await c.ui.type(editor, draft);
-  // Fail rather than claim an overlapping draft if the native autosave already won.
-  assert.equal(await c.read(file), before, 'Unsaved note draft precondition before external race');
-  await c.external(file, external, 'retained-buffer-conflict-' + marker);
-  await c.ui.wait(`const e=document.querySelector('.pane.is-active .note-recovery');return e&&!e.hidden&&document.querySelector(${JSON.stringify(editor)})?.textContent.includes(${JSON.stringify(marker)});`, 'Real native conflict retains typed draft', 45000);
-  assert.equal(await c.read(file), external); return {before, draft, external};
+  assert.ok(before.endsWith('\n'),'Owned conflict note has an actual terminal empty body line');
+  assert.ok(c.externalCliConflicts,'Explicit independent CLI conflict fixture required');
+  const writer=await c.externalCliConflicts.prime(file,before);
+  try{
+    // Live Edit's Select All intentionally excludes hidden frontmatter. Append
+    // through the actual body caret rather than pasting a second YAML prefix.
+    await c.ui.click(editor);await c.ui.key('ArrowDown',{modifiers:MOD.meta});
+    const caret=await c.ui.dom(`const e=document.querySelector(${JSON.stringify(editor)}),lines=e?[...e.querySelectorAll('.cm-line')]:[],last=lines.at(-1),selection=document.getSelection(),index=last?.parentNode===e?[...e.childNodes].indexOf(last):-1;return {collapsed:selection?.isCollapsed,lastText:last?.textContent,atLast:!!(last&&selection?.anchorNode&&(last.contains(selection.anchorNode)||(selection.anchorNode===e&&index>=0&&selection.anchorOffset>=index)))};`);
+    assert.equal(caret.collapsed,true);assert.equal(caret.lastText,'');assert.equal(caret.atLast,true,'Actual caret reaches the original terminal body line');
+    await c.ui.key('Enter');await c.cdp.call('Input.insertText',{text:marker+'\n'});
+    c.evidence.actions.push({action:'native-editor-input',scenario:'retained-conflict-body-append',file,key:'Enter',text:marker+'\n',beforeCaret:caret});
+    assert.equal(await c.read(file),before,'Unsaved note draft precondition before independent logical write');
+    const ordered=await writer.commit(draft,external);
+    await c.ui.wait(`const e=document.querySelector('.pane.is-active .note-recovery');return e&&!e.hidden&&document.querySelector(${JSON.stringify(editor)})?.textContent.includes(${JSON.stringify(marker)});`, 'Real native conflict retains typed draft',45000);
+    await ordered.assertConflict();assert.equal(await c.read(file),external);return{before,draft,external};
+  }finally{await writer.close();}
 }
 async function closeSplit(c) {
   await c.ui.click(`${notePane} .tab.is-active .tab-close`);
