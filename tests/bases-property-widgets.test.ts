@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
-import { mountBasePropertyWidget } from '../src/bases/property-widgets.ts';
+import { baseRelationTargetValue, mountBasePropertyWidget } from '../src/bases/property-widgets.ts';
 import type { BasePropertyWidgetEdit, BasePropertyWidgetOptions } from '../src/bases/property-widgets.ts';
 import { baseExpressionValue } from '../src/bases/expression.ts';
 import type { BasePropertyDefinition } from '../src/bases/property-definitions.ts';
@@ -48,7 +48,7 @@ test('IME Enter does not commit, and disposal releases portals/listeners while i
 
 test('relation picker uses supplied resolved targets and preserves a dangling existing link', async () => {
   const s = setup('[[Missing]]', { type: 'relation' }, { getRelationTargets: () => [{ path: 'Projects/Alpha.md', label: 'Alpha', entryId: 'alpha-1' }] });
-  assert.ok(s.element.querySelector('.is-unresolved')); s.click(); s.input().value = 'Alpha'; s.input().dispatchEvent(new s.dom.window.Event('input', { bubbles: true })); s.key('Enter'); await tick(); assert.deepEqual(s.edits.at(-1)?.value, baseExpressionValue('[[Projects/Alpha]]')); s.close();
+  assert.ok(s.element.querySelector('.is-unresolved')); s.click(); s.input().value = 'Alpha'; s.input().dispatchEvent(new s.dom.window.Event('input', { bubbles: true })); s.key('Enter'); await tick(); assert.deepEqual(s.edits.at(-1)?.value, baseExpressionValue('[[/Projects/Alpha.md]]')); s.close();
 });
 
 test('invalid number input remains a visible draft instead of converting silently', async () => {
@@ -142,7 +142,7 @@ test('relation drafts preserve same-snapshot raw aliases and unknown entries whe
   const displayed={type:'list' as const,value:[link,baseExpressionValue('unresolved literal')]};const edits:BasePropertyWidgetEdit[]=[];
   const dispose=mountBasePropertyWidget(element,{row:{path:'Task.md',values:{}},property:'note.projects',value:displayed,version:1},{getDefinition:()=>({type:'relation',relation:{multiple:true}}),getEditableValue:()=>raw,getRelationTargets:()=>[{path:'Projects/B.md',label:'B',entryId:'b',revision:'r2'}],commit:edit=>{edits.push(edit);}});
   assert.match(element.textContent!,/Alias A/);element.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));const input=dom.window.document.querySelector<HTMLInputElement>('[role="combobox"]')!;input.value='B';input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));input.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true}));await tick();
-  assert.deepEqual(edits[0].value,baseExpressionValue(['[[Projects/A|Alias A]]','unresolved literal','[[Projects/B]]']));dispose();dom.window.close();
+  assert.deepEqual(edits[0].value,baseExpressionValue(['[[Projects/A|Alias A]]','unresolved literal','[[/Projects/B.md]]']));dispose();dom.window.close();
 });
 
 test('formatted relations without raw persisted source are visibly read-only', () => {
@@ -196,4 +196,25 @@ test('paired relation preprocessing never invokes array or rich metadata accesso
     const dispose=mountBasePropertyWidget(element,{row:{path:'Task.md',values:{}},property:'note.project',value:{type:'list',value:shown} as never,version:1},{getDefinition:()=>({type:'relation',relation:{multiple:true}}),getEditableValue:()=>raw,commit(){}});
     assert.equal(gets,0,accessor); assert.ok(element.querySelector('.multi-select-pill')); dispose(); dom.window.close();
   }
+});
+
+
+test('new relation choices use rooted exact paths from nested origins, retaining existing aliases', async () => {
+  const dom=new JSDOM('<div></div>'), element=dom.window.document.querySelector('div')!;
+  const raw=baseExpressionValue(['[[Authors/Ada|existing alias]]']);
+  const displayed={type:'list' as const,value:[{type:'namespace' as const,name:'existing alias',presentation:{kind:'link' as const,value:'Books/Nested/Authors/Ada.md',target:{entryId:'relative-ada',revision:'r1'}}}]};
+  const edits: BasePropertyWidgetEdit[]=[];let opened:unknown;
+  const dispose=mountBasePropertyWidget(element,{row:{path:'Books/Nested/Book.md',values:{}},property:'note.authors',value:displayed,version:1},{getDefinition:()=>({type:'relation',relation:{multiple:true}}),getEditableValue:()=>raw,getRelationTargets:()=>[{path:'Authors/Ada.md',label:'Ada at root',entryId:'root-ada',revision:'r2'},{path:'Books/Nested/Authors/Ada.md',label:'Ada below source',entryId:'relative-ada',revision:'r1'}],openFile:(path,_event,witness)=>{opened={path,witness};},commit:edit=>{edits.push(edit);}});
+  element.querySelector('.multi-select-pill')!.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));
+  assert.deepEqual(opened,{path:'Books/Nested/Authors/Ada.md',witness:{entryId:'relative-ada',revision:'r1'}});
+  element.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));
+  const input=dom.window.document.querySelector<HTMLInputElement>('[role="combobox"]')!;input.value='Ada at root';input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));input.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true}));await tick();
+  assert.deepEqual(edits[0].value,baseExpressionValue(['[[Authors/Ada|existing alias]]','[[/Authors/Ada.md]]']));
+  dispose();dom.window.close();
+});
+
+test('new relation path formatting escapes wiki delimiters, percent, spaces and Unicode without changing core text', () => {
+  assert.equal(baseRelationTargetValue({path:'Authors/Ada #100%|[draft] 空.md'}),'[[/Authors/Ada%20%23100%25%7C%5Bdraft%5D%20%E7%A9%BA.md]]');
+  assert.equal(baseRelationTargetValue({path:'Authors/Ada.md',value:'[[Authors/Ada|Core alias]]'}),'[[Authors/Ada|Core alias]]');
+  assert.equal(baseRelationTargetValue({path:'Authors/Ada.MD'}),'[[/Authors/Ada.MD]]');
 });

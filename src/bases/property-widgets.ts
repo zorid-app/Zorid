@@ -14,6 +14,13 @@ export interface BaseRelationTarget {
   /** Rust-resolved persisted relation text, when different from a wiki link. */
   readonly value?: string;
 }
+/** New selections use a vault-rooted, percent-escaped path so the source note's
+ * folder and wiki-link delimiters cannot change the verified target identity.
+ * Keep exact file extensions and slashes readable; existing raw values are never
+ * normalized, and explicit core-provided persisted text takes precedence. */
+export function baseRelationTargetValue(target: BaseRelationTarget): string {
+  return target.value ?? `[[/${target.path.replace(/^\/+/, '').split('/').map(segment => encodeURIComponent(segment)).join('/')}]]`;
+}
 export interface BasePropertyWidgetEdit extends BasePropertyPresentation { readonly path: string; }
 /** Returned by the owner only after this editor's own successful mutation. The
  * owner verifies saved identity/value and supplies its fresh query witness. */
@@ -108,7 +115,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   const mark = (state?: string) => { if (state) element.dataset.baseEditing = state; else element.removeAttribute('data-base-editing'); };
   const optionFor = (text: string) => definition.options?.find(option => option.value === text);
   const targets = () => options.getRelationTargets?.(presentation.property, acceptedPresentation) ?? [];
-  const targetValue = (target: BaseRelationTarget) => target.value ?? `[[${target.path.replace(/\.md$/i, '')}]]`;
+  const targetValue = baseRelationTargetValue;
   const pairedTargets = new Map<string, BaseRelationTarget>();
   const pairTargets = () => {
     pairedTargets.clear(); let remaining = 10000;
