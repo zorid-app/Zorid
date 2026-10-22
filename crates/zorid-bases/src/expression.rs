@@ -3550,11 +3550,43 @@ fn loose_numeric_text(value: &str) -> Option<f64> {
         if digits.is_empty() {
             return None;
         }
-        let mut result = 0.0;
+        // Round the binary integer once, as Number(string) does. Repeated
+        // floating multiply/add can discard a low bit before a later digit
+        // crosses the halfway boundary (even for ordinary 16-digit hex).
+        let width = match radix {
+            2 => 1,
+            8 => 3,
+            16 => 4,
+            _ => unreachable!(),
+        };
+        let (mut bits, mut significand, mut guard, mut sticky) = (0usize, 0u64, false, false);
         for digit in digits.chars() {
-            result = result * (radix as f64) + digit.to_digit(radix)? as f64;
+            let digit = digit.to_digit(radix)?;
+            for shift in (0..width).rev() {
+                let bit = (digit >> shift) & 1;
+                if bits == 0 && bit == 0 {
+                    continue;
+                }
+                bits = bits.saturating_add(1);
+                if bits <= 53 {
+                    significand = (significand << 1) | u64::from(bit);
+                } else if bits == 54 {
+                    guard = bit != 0;
+                } else {
+                    sticky |= bit != 0;
+                }
+            }
         }
-        return Some(result);
+        if bits <= 53 {
+            return Some(significand as f64);
+        }
+        if bits > 1024 {
+            return Some(f64::INFINITY);
+        }
+        if guard && (sticky || significand & 1 != 0) {
+            significand += 1;
+        }
+        return Some((significand as f64) * 2.0f64.powi((bits - 53) as i32));
     }
     static DECIMAL: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"^[+-]?(?:Infinity|(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)$")
@@ -5418,6 +5450,19 @@ mod loose_link_reference_tests {
                 BaseValue::Boolean { value: expected },
                 "{source}"
             );
+        }
+    }
+    #[test]
+    fn radix_primitive_coercion_rounds_only_once() {
+        // Direct JavaScript Number(string) oracles, independently observed from
+        // the runtime used by the shipped primitive data== comparison.
+        for (source, expected) in [
+            ("0x1000000000000081", 1152921504606847200.0),
+            ("0x2000000000000101", 2305843009213694500.0),
+            ("0x20000000000001", 9007199254740992.0),
+            ("0x20000000000003", 9007199254740996.0),
+        ] {
+            assert_eq!(loose_numeric_text(source), Some(expected), "{source}");
         }
     }
     #[test]
