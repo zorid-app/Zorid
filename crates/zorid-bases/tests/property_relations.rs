@@ -848,15 +848,16 @@ formulas:
   own: 'author.asFile().name'
   nested: 'file("Books/first").properties.nested[0].author.asFile().name'
   cross: 'file("Books/first").properties.author.asFile().name'
-  external: 'file("Books/first").properties.website.isType("link")'
+  external: 'file("Books/first").properties.website.isType("url")'
   absent: 'file("Books/first").properties.author.asFile().properties.missing'
 summaries:
-  Owners: 'values.map(value.properties.author.asFile().name)'
+  Owners: 'values.filter(value.properties.author.isType("link")).map(value.properties.author.asFile().name)'
+  LinkOwners: 'values.filter(value.isType("link")).map(value.asFile().name)'
 views:
   - type: table
     name: Books
     order: [file, author, nested, published, formula.own, formula.nested, formula.cross, formula.external, formula.absent]
-    summaries: {file: Owners}
+    summaries: {file: Owners, author: LinkOwners}
 "#).unwrap();
     let result =
         zorid_bases::query_generation(&program, &generation, &[], &QueryOptions::default())
@@ -903,14 +904,22 @@ views:
         matches!(&first.edit_values["note.nested"], BaseValue::List {value} if matches!(&value[0], BaseValue::Object {value} if value.iter().any(|(key, value)| key == "author" && matches!(value, BaseValue::String {value} if value == "[[../Authors/Grace]]"))))
     );
     assert!(
-        matches!(&result.summaries["file"], BaseValue::List {value} if value.contains(&BaseValue::String {value:"Ada".into()}))
+        matches!(&result.summaries["file.file"], BaseValue::List {value} if value.contains(&BaseValue::String {value:"Ada".into()}))
+    );
+    assert_eq!(
+        result.summaries["note.author"],
+        BaseValue::List {
+            value: vec![BaseValue::String {
+                value: "Ada".into()
+            }]
+        }
     );
     let summary_only = compile_base_source("filters: 'file.inFolder(\"Books\")'\nsummaries:\n  Owners: 'values.map(value.properties.author)'\nviews:\n  - type: table\n    name: Books\n    order: [file]\n    summaries: {file: Owners}\n").unwrap();
     let summarized =
         zorid_bases::query_generation(&summary_only, &generation, &[], &QueryOptions::default())
             .unwrap();
     assert!(
-        matches!(&summarized.summaries["file"], BaseValue::List {value} if value.iter().any(|value| matches!(value, BaseValue::Link {target:Some(target), ..} if target.entry_id == id("ada"))))
+        matches!(&summarized.summaries["file.file"], BaseValue::List {value} if value.iter().any(|value| matches!(value, BaseValue::Link {target:Some(target), ..} if target.entry_id == id("ada"))))
     );
 }
 

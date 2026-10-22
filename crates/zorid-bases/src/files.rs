@@ -12,6 +12,7 @@ use super::expression::BasesFile;
 pub(crate) struct BasesFiles {
     files: Vec<BasesFile>,
     exact_path: HashMap<String, usize>,
+    exact_witness: HashMap<crate::EntryId, usize>,
 }
 
 impl FromIterator<BasesFile> for BasesFiles {
@@ -23,10 +24,20 @@ impl FromIterator<BasesFile> for BasesFiles {
 impl BasesFiles {
     pub(crate) fn new(files: Vec<BasesFile>) -> Self {
         let mut exact_path = HashMap::with_capacity(files.len());
+        let mut exact_witness = HashMap::with_capacity(files.len());
         for (position, file) in files.iter().enumerate() {
             exact_path.entry(file.path.clone()).or_insert(position);
+            if let Some(witness) = &file.witness {
+                exact_witness
+                    .entry(witness.entry_id.clone())
+                    .or_insert(position);
+            }
         }
-        Self { files, exact_path }
+        Self {
+            files,
+            exact_path,
+            exact_witness,
+        }
     }
 
     pub(crate) fn iter(&self) -> std::slice::Iter<'_, BasesFile> {
@@ -36,6 +47,13 @@ impl BasesFiles {
     /// The file at exactly this collection path.
     pub(crate) fn by_path(&self, path: &str) -> Option<&BasesFile> {
         self.at(self.exact_path.get(path).copied())
+    }
+
+    /// Exact captured identity; the revision check prevents stale Link values
+    /// from acquiring a different file's metadata after a cross-value roundtrip.
+    pub(crate) fn by_witness(&self, witness: &crate::RecordWitness) -> Option<&BasesFile> {
+        self.at(self.exact_witness.get(&witness.entry_id).copied())
+            .filter(|file| file.witness.as_ref() == Some(witness))
     }
 
     fn at(&self, position: Option<usize>) -> Option<&BasesFile> {

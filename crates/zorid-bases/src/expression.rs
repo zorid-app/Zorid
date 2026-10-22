@@ -880,6 +880,10 @@ fn summary_runtime_value(
                     })
                     .transpose()?,
                 external: *external,
+                resolved_path: target
+                    .as_ref()
+                    .and_then(|witness| evaluator.context.files.by_witness(witness))
+                    .map(|file| Some(file.path.clone())),
                 ..Default::default()
             })
         }
@@ -1225,6 +1229,7 @@ mod refresh_hint_tests {
         }
         for source in [
             "today()",
+            "TODAY()",
             "today().format('YYYY-MM-DD')",
             "if(note.ready, today(), null)",
         ] {
@@ -1242,7 +1247,6 @@ mod refresh_hint_tests {
             "formula['clock']()",
             "note['lower']()",
             "unknown()",
-            "TODAY()",
         ] {
             assert_eq!(
                 clock_dependency(source, &mut |_| Some(())),
@@ -2963,6 +2967,16 @@ impl<'a> Evaluator<'a> {
     fn file_from_link(&mut self, link: &BasesLink) -> RuntimeValue {
         if link.external {
             return RuntimeValue::Null;
+        }
+        // Witnessed links keep captured identity even after a BaseValue
+        // roundtrip has lost the original runtime-only resolution path.
+        if let Some(witness) = &link.target {
+            return match self.context.files.by_witness(witness) {
+                Some(file) => RuntimeValue::File(Box::new(file.clone())),
+                None => RuntimeValue::Error(
+                    "unavailable\0Witnessed link metadata is unavailable in this snapshot".into(),
+                ),
+            };
         }
         // A resolved edge carries immutable identity and revision. Never fabricate
         // empty properties for an existing target or re-resolve an explicitly broken edge.
