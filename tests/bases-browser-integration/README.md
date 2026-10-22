@@ -1,6 +1,20 @@
 # Actual browser/WASM Bases semantic integration
 
-Actual run003 **passed all nine semantic integration groups** on frozen
+Actual run005 **passed all nine current semantic integration groups**, including
+plain Link alias/date-filename/URL values, all-note suggestions, the temporary
+unreadable-metadata stage, exact restoration and retained healthy snapshots, on
+frozen `055e985f3534af44b8fef1daafe40e372aa127cd`. Report and screenshot:
+`/private/tmp/zorid-bases-browser-actual-20261022-005/`. The exact WASM input
+fingerprint was
+`02483212138450e2c85cce4a70d69cef769457a716af701316289e2758e048d8`.
+The normal Worker GET200, three dedicated targets and exact JS/WASM GETs were
+observed. Pre/post source and artifact proofs matched; no groups were skipped,
+no protocol events dropped, and runner/artifact/cleanup failures were absent.
+Chrome exited0, its profile was removed, Vite closed and the synthetic database
+was deleted. Rendered UI, other browsers, mobile, sync and stress acceptance
+remain separate.
+
+Earlier actual run003 **passed all nine then-current groups** on frozen
 `6808bf5ef48c099c9ebf3ad1877a12332dc0f902`. The report and screenshot are in
 `/private/tmp/zorid-bases-browser-actual-20261022-003/`. Product Worker script
 GET200, three dedicated Worker targets and exact generated JS/WASM GETs were
@@ -84,8 +98,8 @@ asserts healthy rollups, temporarily saves malformed metadata through admitted
 CAS, and checks both identity-only Link suggestions and explicit unavailable
 aggregate diagnostics. It proves the retained healthy pin stays exact, restores
 the original source through fresh CAS, and requires complete healthy rollups
-again before the remaining checks. The corrected plain Link oracles await a new
-matching actual browser run; successful run003 predates these assertions.
+again before the remaining checks. The corrected plain Link oracles passed in actual run005 above; successful
+run003 predates these assertions.
 
 Expected values are hand-authored (`7 + 3 + 5 = 15`; global limit keeps `7, 5`;
 Ada has two books with average five). Seed checks assert the public bounded,
