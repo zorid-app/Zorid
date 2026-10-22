@@ -106,29 +106,30 @@ function sameSnapshot(a: DocumentSnapshotId, b: DocumentSnapshotId): boolean {
  * the read pin before any configuration or shared-buffer write is attempted. */
 export async function prepareBaseViewReferences(input: PrepareBaseViewReferences): Promise<BaseViewReferenceOperation> {
   const adapter = input.vault.adapter, service = adapter.documentSemantics;
+  const savedBase = Object.freeze({ ...input.base }), from = input.from, to = input.to, viewNames = Object.freeze([...input.viewNames]), mutations = input.mutations;
   const check = () => { input.validate(); if (input.vault.adapter !== adapter || adapter.documentSemantics !== service) throw new Error('The Base reference owner changed'); };
   check();
   const changes: BaseViewReferenceChange[] = [];
   if (service) {
-    if (!input.base.entryId || !input.base.revision) throw new Error('Saved Base identity is unavailable for reference updates');
+    if (!savedBase.entryId || !savedBase.revision) throw new Error('Saved Base identity is unavailable for reference updates');
     await closeBaseViewReferenceQueries(service); check();
     const maintained = await catchUpDocumentIndex(service, { isCurrent: () => { try { check(); return true; } catch { return false; } } }); check();
     if (!maintained.current || !maintained.snapshot || maintained.rebuildRequired) throw new Error('Saved references are still indexing; refresh before renaming the view');
     let pin: DocumentPin | undefined;
     try {
       pin = await service.open(); check();
-      const base = await pin.metadata(input.base.entryId); check();
-      if (!sameEntry(input.base, base.value.entry) || base.value.entry.deleted || !sameSnapshot(base.snapshot, pin.snapshot) || base.source.localStoreId !== pin.source.localStoreId || base.source.watermark !== pin.source.watermark) throw new Error('The saved Base changed before its references were captured');
+      const base = await pin.metadata(savedBase.entryId); check();
+      if (!sameEntry(savedBase, base.value.entry) || base.value.entry.deleted || !sameSnapshot(base.snapshot, pin.snapshot) || base.source.localStoreId !== pin.source.localStoreId || base.source.watermark !== pin.source.watermark) throw new Error('The saved Base changed before its references were captured');
       const sources = new Map<string, { entry: DocumentEntry; links: DocumentLink[] }>();
       let cursor: Parameters<DocumentPin['backlinks']>[0]['cursor'];
       const cursors = new Set<string>();
       do {
-        const page = await pin.backlinks({ targetId: input.base.entryId, ...(cursor ? { cursor } : {}), limit: 1000 }); check();
+        const page = await pin.backlinks({ targetId: savedBase.entryId, ...(cursor ? { cursor } : {}), limit: 1000 }); check();
         if (!sameSnapshot(page.result.snapshot, pin.snapshot) || page.result.source.localStoreId !== pin.source.localStoreId || page.result.source.watermark !== pin.source.watermark || !page.result.coverageComplete
           || !sameSnapshot(page.result.value.snapshot, pin.snapshot) || !page.result.value.coverageComplete || page.result.value.next !== null || (page.cursor === null) !== page.result.value.scanComplete || (page.cursor === null && !page.result.value.complete)) throw new DocumentSemanticsError('document_invalid_response');
         for (const edge of page.result.value.edges) {
-          if (edge.target.id !== input.base.entryId || edge.target.revision !== input.base.revision || edge.target.path !== input.base.path || edge.source.deleted || edge.source.kind !== 'file') throw new DocumentSemanticsError('document_invalid_response');
-          if (!fragmentMatches(edge.link.fragment, input.from, edge.link.kind, input.viewNames)) continue;
+          if (edge.target.id !== savedBase.entryId || edge.target.revision !== savedBase.revision || edge.target.path !== savedBase.path || edge.target.deleted || edge.target.kind !== 'file' || edge.source.deleted || edge.source.kind !== 'file') throw new DocumentSemanticsError('document_invalid_response');
+          if (!fragmentMatches(edge.link.fragment, from, edge.link.kind, viewNames)) continue;
           const existing = sources.get(edge.source.id);
           if (existing && (existing.entry.revision !== edge.source.revision || existing.entry.path !== edge.source.path)) throw new DocumentSemanticsError('document_invalid_response');
           if (existing) existing.links.push(edge.link); else sources.set(edge.source.id, { entry: edge.source, links: [edge.link] });
@@ -144,7 +145,7 @@ export async function prepareBaseViewReferences(input: PrepareBaseViewReferences
         const before = await adapter.read(entry.path); check();
         const afterEntry = await observe(); check();
         if (!sameEntry(afterEntry, entry)) throw new Error(`A referencing file changed: ${entry.path}`);
-        const updated = changedSource(before, links, input.from, input.to, input.viewNames);
+        const updated = changedSource(before, links, from, to, viewNames);
         if (updated.after !== before) changes.push(Object.freeze({ path: entry.path, before, after: updated.after, references: updated.count, witness: Object.freeze({ entryId: entry.id, revision: entry.revision }) }));
       }
       const current = await service.status(); check();
@@ -162,13 +163,13 @@ export async function prepareBaseViewReferences(input: PrepareBaseViewReferences
     for (const entry of entries) {
       if (entry.type !== 'file' || !isMarkdown(entry.path)) continue;
       const before = await adapter.read(entry.path); check();
-      const links = parseMetadata(entry.path, before).links.filter(link => cache.resolveLink(entry.path, link.target, link.kind) === input.base.path);
-      const updated = changedSource(before, links.map(link => ({ fragment: link.fragment, kind: link.kind, targetRange: { utf16: [link.start, link.end], bytes: [0, 0] } })), input.from, input.to, input.viewNames);
+      const links = parseMetadata(entry.path, before).links.filter(link => cache.resolveLink(entry.path, link.target, link.kind) === savedBase.path);
+      const updated = changedSource(before, links.map(link => ({ fragment: link.fragment, kind: link.kind, targetRange: { utf16: [link.start, link.end], bytes: [0, 0] } })), from, to, viewNames);
       if (updated.after !== before) changes.push(Object.freeze({ path: entry.path, before, after: updated.after, references: updated.count }));
     }
   }
   check();
-  const plan: BaseViewReferencePlan = Object.freeze({ basePath: input.base.path, from: input.from, to: input.to, viewNames: Object.freeze([...input.viewNames]), mode: service ? 'core' : 'legacy', changes: Object.freeze(changes) });
+  const plan: BaseViewReferencePlan = Object.freeze({ basePath: savedBase.path, from, to, viewNames, mode: service ? 'core' : 'legacy', changes: Object.freeze(changes) });
   const completed = new Set<string>(); let running: Promise<BaseViewRenameReport> | undefined;
   return Object.freeze({ plan, run() {
     if (running) return running;
@@ -183,7 +184,7 @@ export async function prepareBaseViewReferences(input: PrepareBaseViewReferences
           input.validateWrite();
           if (input.vault.adapter !== adapter || adapter.documentSemantics !== service) throw new Error('The Base reference owner changed');
           await input.validateRenamed(); input.validateWrite();
-          await input.mutations.transform(change.path, source => {
+          await mutations.transform(change.path, source => {
             if (source !== change.before && source !== change.after) throw new Error(`The referencing note has an unsaved or external edit: ${change.path}`);
             return change.after;
           }, input.validateWrite, input.validateWrite, change.witness);

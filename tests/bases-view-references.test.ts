@@ -105,6 +105,14 @@ test('stale core completion retires its original pin and publishes no plan', asy
   const f = await fixture(), gate = f.hold(), pending = prepareBaseViewReferences(f.input);
   await until(() => f.events.includes('backlinks')); f.stale(); gate.resolve(); await assert.rejects(pending, /stale owner/); assert.equal(f.events.at(-1), 'close');
 });
+test('preparation retains original target and sibling names across caller mutation during an awaited core read', async () => {
+  const f = await fixture(), gate = f.hold(), pending = prepareBaseViewReferences(f.input);
+  await until(() => f.events.includes('backlinks'));
+  f.input.to = 'Unrelated'; f.input.viewNames.push('OLD VIEW'); f.input.base.entryId = 'replacement'; gate.resolve();
+  const operation = await pending;
+  assert.equal(operation.plan.to, 'New & Name'); assert.deepEqual(operation.plan.viewNames, ['Old View', 'Other']);
+  assert.equal(operation.plan.changes[0].references, 2);
+});
 test('a failed preparation close stays owned and is acknowledged before another generation opens', async () => {
   const f = await fixture(); f.failClose();
   await assert.rejects(prepareBaseViewReferences(f.input), /close failed/); assert.deepEqual(f.writes, []);
