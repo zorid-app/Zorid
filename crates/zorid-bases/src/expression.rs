@@ -636,6 +636,15 @@ impl<'a> Session<'a> {
             initial_steps: context.work_limit.unwrap_or(100_000),
         }
     }
+    pub(crate) fn charge_preparation(&mut self, work: usize) -> Result<(), ExpressionDiagnostic> {
+        self.evaluator.charge(work).map_err(|value| match value {
+            RuntimeValue::Error(message) => {
+                let (code, text) = message.split_once('\0').unwrap_or(("budget", &message));
+                ExpressionDiagnostic::new(code, text)
+            }
+            _ => unreachable!(),
+        })
+    }
     pub(crate) fn steps_used(&self) -> usize {
         self.initial_steps
             .saturating_sub(self.evaluator.remaining_work)
@@ -660,6 +669,25 @@ pub(crate) fn evaluate(
     Ok(EvaluationResult {
         value,
         steps_used: session.steps_used(),
+    })
+}
+
+/// Convert sealed derived values without reparsing dates or readable links.
+/// No bare file can be fabricated without an immutable source record.
+pub(crate) fn runtime_from_base_value(
+    value: &BaseValue,
+    timezone: &BasesTimezone,
+) -> Result<RuntimeValue, ExpressionDiagnostic> {
+    let context = BasesEvaluationContext {
+        timezone: timezone.clone(),
+        ..Default::default()
+    };
+    let mut evaluator = Evaluator::new(&context);
+    summary_runtime_value(value, 0, &mut 0usize, &mut evaluator, &mut |_| {
+        Err(ExpressionDiagnostic::new(
+            "unavailable",
+            "Derived file values require a snapshot record",
+        ))
     })
 }
 

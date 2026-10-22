@@ -1,23 +1,27 @@
 //! Portable, host-fed Bases expressions adapted from MDBASE's existing evaluator.
 //! This crate owns neither files nor a running vault. See UPSTREAM.md for scope.
 mod expression;
-pub mod types;
-pub mod tasks;
+pub mod properties;
+pub mod relations;
+pub use graph::query_generation_with_properties;
+pub use properties::PropertyDefinitions;
 pub mod calendar;
 mod files;
 mod graph;
+pub mod tasks;
+pub mod types;
 pub use graph::{query_generation, FilePresentationFacts, MetadataIssue, MAX_RELATIONSHIP_EDGES};
 mod order;
-mod program;
 mod preparation;
+mod program;
 pub use preparation::{
     query_prepared, BasePreparationCache, PreparationCacheOutcome, PreparationLookup,
-    PreparedBaseGeneration, MAX_COMPILED_PROGRAM_BYTES, MAX_COMPILED_PROGRAMS,
+    PreparedBaseGeneration, MAX_COMPILED_PROGRAMS, MAX_COMPILED_PROGRAM_BYTES,
     MAX_PREPARED_GENERATIONS, MAX_PREPARED_GENERATION_BYTES, PREPARATION_IDLE_MS,
 };
+mod preview;
 mod query;
 mod summaries;
-mod preview;
 pub use preview::{
     query_preview, BasePreviewResult, BasePreviewStatus, CommittedBasePreviewResult,
     PreviewCountsScope, MAX_PREVIEW_QUERY_OWNED_BYTES,
@@ -388,6 +392,26 @@ pub(crate) fn with_session_availability<T>(
     unavailable: Option<&std::collections::HashSet<EntryId>>,
     run: impl FnOnce(&mut expression::Session<'_>) -> Result<T, ExpressionDiagnostic>,
 ) -> Result<T, ExpressionDiagnostic> {
+    with_session_properties(
+        source,
+        record,
+        options,
+        relationships,
+        unavailable,
+        None,
+        run,
+    )
+}
+
+pub(crate) fn with_session_properties<T>(
+    source: &str,
+    record: &DetachedRecord,
+    options: &EvaluationOptions,
+    relationships: Option<&graph::PreparedRelationships<'_>>,
+    unavailable: Option<&std::collections::HashSet<EntryId>>,
+    property_values: Option<&relations::PropertyRelationValues>,
+    run: impl FnOnce(&mut expression::Session<'_>) -> Result<T, ExpressionDiagnostic>,
+) -> Result<T, ExpressionDiagnostic> {
     if options.max_steps == 0 || options.max_steps > MAX_EXPRESSION_STEPS {
         return Err(ExpressionDiagnostic::new(
             "budget",
@@ -425,6 +449,20 @@ pub(crate) fn with_session_availability<T>(
     if let (Some(graph), Some(file)) = (relationships, this_file.as_mut()) {
         graph.attach(file);
     }
+    let mut property_work = 0usize;
+    if let Some(derived) = property_values {
+        for file in std::iter::once(&mut file).chain(this_file.iter_mut()) {
+            if let Some(row) = file
+                .witness
+                .as_ref()
+                .and_then(|w| derived.rows().get(&w.entry_id))
+            {
+                property_work = property_work
+                    .saturating_add(1 + encoded_size(&row.values, 8 * 1024 * 1024)? / 16);
+            }
+            derived.attach(file, &timezone)?;
+        }
+    }
     // Preview extraction failures are not absent properties. Published callers
     // keep the existing graph-owned availability behavior by passing None.
     if let Some(unavailable) = unavailable {
@@ -459,6 +497,7 @@ pub(crate) fn with_session_availability<T>(
         ..Default::default()
     };
     let mut session = expression::Session::new(&context);
+    session.charge_preparation(property_work)?;
     run(&mut session)
 }
 

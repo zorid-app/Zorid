@@ -96,7 +96,7 @@ pub struct PropertyDefinition {
     pub rollup: Option<RollupDefinition>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PropertyDefinitionDiagnostic {
     pub property: Option<String>,

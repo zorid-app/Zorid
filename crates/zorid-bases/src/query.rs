@@ -4,7 +4,7 @@
 use crate::{
     expression, order,
     program::{self, BaseProgram, Criterion, Filter},
-    with_session_availability, BaseValue, DetachedRecord, EvaluationOptions, ExpressionDiagnostic,
+    with_session_properties, BaseValue, DetachedRecord, EvaluationOptions, ExpressionDiagnostic,
     PropertyValue,
 };
 use serde::{Deserialize, Serialize};
@@ -49,6 +49,8 @@ pub struct BaseSnapshot {
     pub(crate) records: Vec<DetachedRecord>,
     pub(crate) relationships: Option<zorid_index::ResolutionSnapshot>,
     pub(crate) metadata_issues: Vec<crate::MetadataIssue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) property_values: Option<crate::relations::PropertyRelationValues>,
 }
 impl BaseSnapshot {
     pub fn detached(snapshot_id: crate::IndexSnapshotId, records: Vec<DetachedRecord>) -> Self {
@@ -57,6 +59,7 @@ impl BaseSnapshot {
             records,
             relationships: None,
             metadata_issues: Vec::new(),
+            property_values: None,
         }
     }
     pub fn snapshot_id(&self) -> &crate::IndexSnapshotId {
@@ -187,6 +190,10 @@ pub struct BaseQueryResult {
     pub available_properties: Vec<String>,
     pub counts: QueryCounts,
     pub diagnostics: Vec<QueryDiagnostic>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relation_targets: Option<BTreeMap<String, Vec<crate::relations::RelationTarget>>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub property_definition_diagnostics: Vec<crate::properties::PropertyDefinitionDiagnostic>,
     pub steps_used: usize,
     pub relationships_available: bool,
     pub metadata_issues: Vec<crate::MetadataIssue>,
@@ -203,6 +210,7 @@ pub(crate) struct QueryRows<'a> {
     pub(crate) relationships: Option<&'a zorid_index::ResolutionSnapshot>,
     pub(crate) metadata_issues: &'a [crate::MetadataIssue],
     pub(crate) unavailable: Option<&'a HashSet<crate::EntryId>>,
+    pub(crate) property_values: Option<&'a crate::relations::PropertyRelationValues>,
 }
 impl<'a> QueryRows<'a> {
     fn published(snapshot: &'a BaseSnapshot) -> Self {
@@ -211,6 +219,7 @@ impl<'a> QueryRows<'a> {
             relationships: snapshot.relationships.as_ref(),
             metadata_issues: &snapshot.metadata_issues,
             unavailable: None,
+            property_values: snapshot.property_values.as_ref(),
         }
     }
 }
@@ -227,6 +236,11 @@ pub(crate) struct QueryRowsResult {
     pub(crate) available_properties: Vec<String>,
     pub(crate) counts: QueryCounts,
     pub(crate) diagnostics: Vec<QueryDiagnostic>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) relation_targets: Option<BTreeMap<String, Vec<crate::relations::RelationTarget>>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) property_definition_diagnostics:
+        Vec<crate::properties::PropertyDefinitionDiagnostic>,
     pub(crate) steps_used: usize,
     pub(crate) relationships_available: bool,
     pub(crate) metadata_issues: Vec<crate::MetadataIssue>,
@@ -930,6 +944,16 @@ pub(crate) fn query_base_validated(
     validated: &ValidatedInvocation,
     clock_sensitive_sort: &mut bool,
 ) -> Result<BaseQueryResult, ExpressionDiagnostic> {
+    if snapshot
+        .property_values
+        .as_ref()
+        .is_some_and(|values| values.snapshot_id() != snapshot.snapshot_id())
+    {
+        return Err(ExpressionDiagnostic::new(
+            "stale-source",
+            "Derived properties belong to another snapshot",
+        ));
+    }
     let rows = query_rows_validated(
         program,
         &QueryRows::published(snapshot),
@@ -950,6 +974,8 @@ pub(crate) fn query_base_validated(
         available_properties: rows.available_properties,
         counts: rows.counts,
         diagnostics: rows.diagnostics,
+        relation_targets: rows.relation_targets,
+        property_definition_diagnostics: rows.property_definition_diagnostics,
         steps_used: rows.steps_used,
         relationships_available: rows.relationships_available,
         metadata_issues: rows.metadata_issues,
@@ -998,6 +1024,17 @@ pub(crate) fn query_rows_validated(
         )
     })?;
     let mut available = prepared.available.clone();
+    if let Some(values) = input.property_values {
+        for name in values.property_names() {
+            let property = format!("note.{name}");
+            admit(&mut admission, |_| {
+                Ok(slots::<String>(1).saturating_add(crate::preview::string_bytes(&property)))
+            })?;
+            if !available.contains(&property) {
+                available.push(property);
+            }
+        }
+    }
     let mut counts = QueryCounts {
         scanned: input.records.len(),
         ..Default::default()
@@ -1097,12 +1134,13 @@ pub(crate) fn query_rows_validated(
                 .saturating_sub(steps_used)
                 .saturating_sub(admission_work(&admission)),
         );
-        let row = with_session_availability(
+        let row = with_session_properties(
             "",
             record,
             &invocation,
             relationships.as_ref(),
             input.unavailable,
+            input.property_values,
             |session| {
                 let filtered = (|| {
                     for filter in [program.filter.as_ref(), view.filter.as_ref()]
@@ -1440,6 +1478,17 @@ pub(crate) fn query_rows_validated(
             })
             .fold(0usize, usize::saturating_add))
     })?;
+    if let Some(values) = input.property_values {
+        for name in values.property_names() {
+            let property = format!("note.{name}");
+            admit(&mut admission, |_| {
+                Ok(slots::<String>(1).saturating_add(crate::preview::string_bytes(&property)))
+            })?;
+            if !matched_available.contains(&property) {
+                matched_available.push(property);
+            }
+        }
+    }
     let mut matched_set = matched_available.iter().cloned().collect::<HashSet<_>>();
     for row in &rows {
         if let Some(record) = by_id.get(&row.entry_id) {
@@ -1737,6 +1786,44 @@ pub(crate) fn query_rows_validated(
         &mut steps_used,
         &mut admission,
     )?;
+    let (relation_targets, property_definition_diagnostics) =
+        if let Some(values) = input.property_values {
+            // The map is sealed by the generation factory. Budget output and copies
+            // before cloning its candidate witnesses; callers cannot inject targets.
+            let bytes = crate::encoded_size(
+                &(values.relation_targets(), values.definition_diagnostics()),
+                options.max_output_bytes,
+            )?;
+            admit(&mut admission, |_| {
+                Ok(bytes.saturating_mul(8).saturating_add(256))
+            })?;
+            for issue in values.diagnostics() {
+                let record = by_id
+                    .get(&issue.witness.entry_id)
+                    .filter(|record| record.witness.as_ref() == Some(&issue.witness))
+                    .ok_or_else(|| {
+                        ExpressionDiagnostic::new(
+                            "stale-source",
+                            "Property diagnostic has no matching query revision",
+                        )
+                    })?;
+                report(
+                    &mut diagnostics,
+                    record,
+                    "property",
+                    Some(&program::property_id(&issue.property)),
+                    ExpressionDiagnostic::new(&issue.code, &issue.message),
+                    &mut admission,
+                )?;
+                steps_used = steps_used.saturating_add(1);
+            }
+            (
+                Some(values.relation_targets().clone()),
+                values.definition_diagnostics().to_vec(),
+            )
+        } else {
+            (None, Vec::new())
+        };
     let dependency =
         program
             .refresh_dependency(options.view_index)
@@ -1791,6 +1878,8 @@ pub(crate) fn query_rows_validated(
         available_properties: available,
         counts,
         diagnostics,
+        relation_targets,
+        property_definition_diagnostics,
         steps_used,
         relationships_available: relationship_available,
         metadata_issues: input.metadata_issues.to_vec(),
@@ -1900,6 +1989,9 @@ fn summarize_rows(
                     let mut file = crate::runtime_file(record, &timezone)?;
                     if let Some(graph) = relationships {
                         graph.attach(&mut file);
+                    }
+                    if let Some(derived) = input.property_values {
+                        derived.attach(&mut file, &timezone)?;
                     }
                     file.metadata_unavailable |= record.witness.as_ref().is_some_and(|witness| {
                         input

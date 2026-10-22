@@ -576,6 +576,7 @@ pub fn query_preview(
         relationships: None,
         metadata_issues: &issues,
         unavailable: Some(&unavailable_ids),
+        property_values: None,
     };
     let validated = query::validate_rows_invocation(
         program,

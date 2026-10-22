@@ -193,6 +193,7 @@ impl BaseSnapshot {
             records,
             relationships: Some(relationships),
             metadata_issues,
+            property_values: None,
         })
     }
 }
@@ -233,16 +234,26 @@ pub fn query_generation_with_properties(
     preflight_generation(generation, options)?;
     let mut remaining = options.max_steps;
     let mut snapshot = BaseSnapshot::from_generation_checked(generation, facts, &mut |work| {
-        charge(&mut remaining, options.evaluation.cancellation.as_ref(), work)
+        charge(
+            &mut remaining,
+            options.evaluation.cancellation.as_ref(),
+            work,
+        )
     })?;
     let mut invocation = options.clone();
     invocation.max_steps = remaining;
     let values = crate::relations::query_property_relations(&snapshot, definitions, &invocation)?;
-    charge(&mut remaining, options.evaluation.cancellation.as_ref(), values.steps_used())?;
+    charge(
+        &mut remaining,
+        options.evaluation.cancellation.as_ref(),
+        values.steps_used(),
+    )?;
     snapshot.property_values = Some(values);
     invocation.max_steps = remaining;
     let mut result = crate::query_base(program, &snapshot, &invocation)?;
-    result.steps_used = result.steps_used.saturating_add(options.max_steps - remaining);
+    result.steps_used = result
+        .steps_used
+        .saturating_add(options.max_steps - remaining);
     crate::encoded_size(&result, options.max_output_bytes)?;
     Ok(result)
 }

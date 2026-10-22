@@ -1521,7 +1521,14 @@ fn summary_heap(
     Some(bytes)
 }
 fn result_heap(r: &BaseQueryResult, m: &mut Maintenance<'_>) -> Option<usize> {
-    if !r.metadata_complete || !r.relationships_available || !r.diagnostics.is_empty() {
+    // Derived values intentionally bypass answers until settings/derived maps
+    // have their own exact cache key proof.
+    if !r.metadata_complete
+        || !r.relationships_available
+        || !r.diagnostics.is_empty()
+        || r.relation_targets.is_some()
+        || !r.property_definition_diagnostics.is_empty()
+    {
         return None;
     }
     costs([
@@ -1738,6 +1745,8 @@ fn copy_result(
     Ok(BaseQueryResult {
         snapshot_id: r.snapshot_id.clone(),
         view: copy_property(&r.view, o)?,
+        relation_targets: r.relation_targets.clone(),
+        property_definition_diagnostics: r.property_definition_diagnostics.clone(),
         summaries: r
             .summaries
             .iter()

@@ -8,11 +8,11 @@ use crate::{
     BaseSnapshot, BaseValue, DetachedRecord, EvaluationOptions, ExpressionDiagnostic,
     IndexSnapshotId, PropertyValue, QueryOptions, RecordWitness,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use zorid_core::{EntryId, Revision};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RelationTarget {
     pub entry_id: EntryId,
