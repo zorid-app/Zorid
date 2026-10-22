@@ -109,3 +109,27 @@
 .bases-filter-section-header[aria-expanded=true]::before { transform: rotate(90deg); }
 .bases-filter-section-content { display: flex; flex-direction: column; gap: 8px; padding: 4px 4px 8px; }
 .bases-view-actions { border-top: 1px solid var(--background-modifier-border); padding-top: 4px; }
+.bases-toolbar-combobox-button { display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; min-height: 28px; padding: 4px 8px; border-radius: 5px; border: 1px solid var(--background-modifier-border); background: var(--background-modifier-form-field,var(--background-primary)); box-shadow: none; color: var(--text-normal); font: inherit; text-align: start; cursor: pointer; }
+.bases-toolbar-combobox-button:hover { background: var(--background-modifier-hover); }
+.bases-toolbar-combobox-button:disabled { color: var(--text-faint); cursor: default; }
+.bases-toolbar-combobox-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.bases-toolbar-combobox-chevron { flex: none; color: var(--text-muted); }
+.bases-toolbar-combobox-popover { box-sizing: border-box; z-index: 1510; padding: 4px; border: 1px solid var(--background-modifier-border); border-radius: 6px; background: var(--background-secondary); box-shadow: 0 4px 14px #0004; overflow: auto; color: var(--text-normal); font: inherit; }
+.bases-toolbar-combobox-search { box-sizing: border-box; width: 100%; height: 28px; margin-bottom: 4px; border: 0; background: transparent; box-shadow: none; }
+.bases-toolbar-combobox-option { display: flex; align-items: center; min-height: 28px; padding: 4px 8px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.bases-toolbar-combobox-option.is-active { background: var(--background-modifier-hover); }
+.bases-toolbar-combobox-option.is-selected::after { content: '✓'; margin-inline-start: auto; padding-inline-start: 8px; color: var(--text-muted); }
+.bases-toolbar-combobox-option.is-disabled { color: var(--text-faint); cursor: default; }
+.bases-toolbar-combobox-empty { color: var(--text-muted); padding: 8px; }
+.bases-toolbar-rule > .bases-toolbar-combobox-button { flex: 1 1 50%; width: 0; }
+.bases-filter-condition > .bases-toolbar-combobox-button { flex: 0 1 auto; }
+.bases-layout-settings > label > .bases-toolbar-combobox-button { width: 100%; }
+.bases-manual-groups { border-top: 1px solid var(--background-modifier-border); padding-top: 4px; }
+.bases-manual-group-row { display: flex; gap: 6px; align-items: center; padding: 4px; border-radius: 4px; min-height: 28px; cursor: pointer; }
+.bases-manual-group-row:hover, .bases-manual-group-row:focus-visible { background: var(--background-modifier-hover); }
+.bases-manual-group-row.mod-hidden { color: var(--text-faint); }
+.bases-manual-group-grip { color: var(--text-faint); cursor: grab; display: flex; }
+.bases-manual-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.bases-manual-group-count { color: var(--text-muted); font-size: var(--font-ui-smaller,12px); }
+.bases-manual-group-new { display: flex; gap: 4px; min-width: 0; }
+.bases-manual-group-new input { flex: 1; min-width: 0; }

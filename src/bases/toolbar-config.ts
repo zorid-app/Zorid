@@ -5,7 +5,7 @@ import { normalizeBaseProperty } from './query.ts';
 import type { BaseQueryResult } from './query.ts';
 
 export type BaseToolbarPatch = BaseViewPatch;
-export type BaseFilterOperator = 'eq' | 'neq' | 'contains' | 'gt' | 'lt' | 'unset' | 'set';
+export type BaseFilterOperator = 'eq' | 'neq' | 'contains' | 'gt' | 'lt' | 'gte' | 'lte' | 'unset' | 'set';
 export type BaseFilterValueType = 'text' | 'number' | 'boolean';
 const allowedKeys = new Set(['filters', 'sort', 'order', 'groupBy', 'groupOrder', 'name', 'type', 'limit', 'rowHeight', 'cardSize', 'columnWidth', 'image', 'imageFit', 'imageAspectRatio', 'markers', 'indentProperties', 'separator']);
 const fail = (message: string): never => { throw new Error(message); };
@@ -112,7 +112,9 @@ export function validateToolbarPatch(result: BaseQueryResult, patch: BaseViewPat
         output.groupBy = criterion(value, known); break;
       }
       case 'groupOrder':
-        if (value !== undefined || !Object.hasOwn(output, 'groupBy')) return fail('Group order can only be reset with a grouping change');
+        if (!Object.hasOwn(output, 'groupBy')) return fail('Group order requires an accompanying grouping change');
+        if (value !== undefined && (!Array.isArray(value) || !mapping(output.groupBy))) return fail('Group order must be a list with an active grouping');
+        if (Array.isArray(value)) { const validate = (item:BaseValue):void => { if (Array.isArray(item)) { for (const child of item) validate(child); return; } if (item !== null && typeof item !== 'string' && typeof item !== 'number' && typeof item !== 'boolean') return fail('Group order values must be primitive values or lists'); }; for (const item of value) validate(item); }
         break;
       case 'filters': if (value !== undefined) validateFilter(value); break;
       case 'limit': if (value !== undefined && (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)) return fail('Limit must be a nonnegative whole number'); break;
@@ -141,7 +143,7 @@ export function propertyExpression(property: string): string {
 /** Construct only supported expression syntax, never interpolate user text as code. */
 export function buildFilterCondition(property: string, operator: BaseFilterOperator, value: string, valueType: BaseFilterValueType): string {
   const expression = propertyExpression(property);
-  if (!['eq', 'neq', 'contains', 'gt', 'lt', 'unset', 'set'].includes(operator)) return fail('Unknown filter operator');
+  if (!['eq', 'neq', 'contains', 'gt', 'lt', 'gte', 'lte', 'unset', 'set'].includes(operator)) return fail('Unknown filter operator');
   if (!['text', 'number', 'boolean'].includes(valueType) || typeof value !== 'string') return fail('Unknown filter value type');
   if (operator === 'unset' || operator === 'set') return `${expression} ${operator === 'unset' ? '==' : '!='} null`;
   let literal: string | number | boolean = value;
@@ -153,5 +155,36 @@ export function buildFilterCondition(property: string, operator: BaseFilterOpera
     literal = value === 'true';
   }
   const encoded = JSON.stringify(literal);
-  return operator === 'contains' ? `${expression}.contains(${encoded})` : `${expression} ${{ eq: '==', neq: '!=', gt: '>', lt: '<' }[operator]} ${encoded}`;
+  return operator === 'contains' ? `${expression}.contains(${encoded})` : `${expression} ${{ eq: '==', neq: '!=', gt: '>', lt: '<', gte: '>=', lte: '<=' }[operator]} ${encoded}`;
+}
+
+export interface BaseFilterCondition {
+  property: string;
+  operator: BaseFilterOperator;
+  text: string;
+  type: BaseFilterValueType;
+}
+/** Decode ordinary dotted/bare/bracketed syntax without evaluating expressions. */
+export function decodeFilterCondition(source: string): BaseFilterCondition | undefined {
+  try {
+    const expression = parseBaseExpression(source);
+    const property = (node: ReturnType<typeof parseBaseExpression>): string | undefined => {
+      if (node.kind === 'identifier') return normalizeBaseProperty(node.name);
+      if (node.kind === 'member' && node.object.kind === 'identifier' && ['note','file','formula'].includes(node.object.name) && node.key.kind === 'literal' && node.key.value.type === 'string') return `${node.object.name}.${node.key.value.value}`;
+      return undefined;
+    };
+    let target: string | undefined, operator: BaseFilterOperator | undefined, literal: ReturnType<typeof parseBaseExpression> | undefined;
+    if (expression.kind === 'binary') {
+      target = property(expression.left); operator = ({'==':'eq','!=':'neq','>':'gt','<':'lt','>=':'gte','<=':'lte'} as Record<string,BaseFilterOperator>)[expression.operator]; literal = expression.right;
+    } else if (expression.kind === 'call' && expression.callee.kind === 'member' && expression.callee.key.kind === 'literal' && expression.callee.key.value.type === 'string' && expression.callee.key.value.value === 'contains' && expression.args.length === 1) {
+      target = property(expression.callee.object); operator = 'contains'; literal = expression.args[0];
+    }
+    if (!target || !operator || !literal) return undefined;
+    if (literal.kind === 'unary' && literal.operator === '-' && literal.operand.kind === 'literal' && literal.operand.value.type === 'number') literal = {kind:'literal',value:{type:'number',value:-literal.operand.value.value}};
+    if (literal.kind !== 'literal') return undefined;
+    const value = literal.value;
+    if (value.type === 'null' && (operator === 'eq' || operator === 'neq')) return {property:target,operator:operator === 'eq' ? 'unset' : 'set',text:'',type:'text'};
+    if (value.type !== 'string' && value.type !== 'number' && value.type !== 'boolean') return undefined;
+    return {property:target,operator,text:String(value.value),type:value.type === 'string' ? 'text' : value.type};
+  } catch { return undefined; }
 }

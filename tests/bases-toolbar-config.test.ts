@@ -56,7 +56,7 @@ test('group changes preserve extensions and permit only an accompanying manual-o
   const removal = validate({ groupBy: undefined, groupOrder: undefined });
   assert.equal(Object.hasOwn(removal, 'groupBy'), true); assert.equal(removal.groupBy, undefined);
   assert.throws(() => validate({ groupOrder: undefined }), /grouping change/);
-  assert.throws(() => validate({ groupBy: undefined, groupOrder: [] }), /reset/);
+  assert.throws(() => validate({ groupBy: undefined, groupOrder: [] }), /active grouping/);
   assert.throws(() => validate({ groupBy: null }));
   assert.throws(() => validate({ groupBy: { column: 'status', direction: 'ASC' } }), /requires a property/);
   assert.throws(() => validate({ groupBy: { property: 'new', direction: 'ASC' } }));

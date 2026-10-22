@@ -88,3 +88,26 @@ test('same-name external sort changes invalidate cloned controls instead of adop
   retiredAdd.click();await new Promise(resolve=>setTimeout(resolve,270));assert.equal(f.calls.length,0);
  }finally{f.cleanup();}
 });
+
+test('actual query-backed immediate Group edits manual visibility and creates an empty group',async()=>{
+ const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
+ let document=BaseDocument.parse('views: [{type: table, name: A, groupBy: {property: status, direction: ASC}}]'),version=1;
+ const files=[{path:'One.md',properties:{status:'Todo'}},{path:'Two.md',properties:{status:'Done'}}],errors:unknown[]=[];
+ const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(){},async save(expected,patch){assert.equal(expected,version);document.updateView(0,patch);version++;refresh();},onDraftChange(){},onError(error){errors.push(error);}});
+ let current:ReturnType<typeof executeBaseQuery>;
+ function refresh(){current=executeBaseQuery(document,{version,files});toolbar.update({result:current,views:document.views,selectedIndex:0,readOnly:false,allowRename:true,label:p=>p,propertyType:()=> 'text'});}refresh();
+ const get=<T extends HTMLElement>(label:string)=>{const node=doc.querySelector<T>(`[aria-label="${label}"]`);assert.ok(node,label);return node;};const settle=()=>new Promise(resolve=>setTimeout(resolve,280));
+ try{
+  get<HTMLButtonElement>('Group').click();const direction=get<HTMLSelectElement>('Group direction');direction.value='MANUAL';direction.dispatchEvent(new dom.window.Event('change',{bubbles:true}));await settle();assert.deepEqual(document.views[0].groupOrder,[]);assert.equal(current!.rows.length,0);
+  get<HTMLInputElement>('Show group Todo').click();await settle();assert.deepEqual(document.views[0].groupOrder,['Todo']);assert.deepEqual(current!.rows.map(row=>row.path),['One.md']);
+  get<HTMLButtonElement>('Add group').click();get<HTMLInputElement>('Group name').value='Blocked';assert.equal(toolbar.hasDraft(),true);get<HTMLButtonElement>('Create group').click();await settle();assert.deepEqual(document.views[0].groupOrder,['Todo','Blocked']);assert.equal(current!.groupOptions.find(group=>group.key.type==='string'&&group.key.value==='Blocked')?.count,0);assert.equal(get<HTMLInputElement>('Show group Blocked').checked,true);assert.equal(toolbar.hasDraft(),false);assert.deepEqual(errors,[]);
+ }finally{toolbar.destroy();dom.window.close();}
+});
+
+test('nested searchable combobox keeps keyboard and Escape ownership inside the toolbar menu',()=>{
+ const f=fixture(true);try{
+  f.click('Views');f.click('Configure view Library');const combo=f.doc.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="Layout"]')!;assert.ok(combo);combo.focus();combo.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true}));assert.ok(f.doc.querySelector('[role="listbox"]'));
+  const search=f.doc.querySelector<HTMLInputElement>('[role="searchbox"]')!;assert.ok(search);search.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));assert.equal(f.doc.querySelector('[role="listbox"]'),null);assert.ok(f.doc.querySelector('[role="dialog"]'),'first Escape closes only the picker');assert.equal(f.doc.activeElement,combo);
+  combo.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));assert.equal(f.doc.querySelector('[role="dialog"]'),null,'next Escape closes the configuration menu');
+ }finally{f.cleanup();}
+});

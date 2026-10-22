@@ -2,7 +2,9 @@ import type { BaseValue, BaseViewConfig, BaseViewPatch } from './document.ts';
 import type { BaseQueryResult } from './query.ts';
 import { normalizeBaseProperty } from './query.ts';
 import { icon } from '../ui/icons.ts';
-import { buildFilterCondition, validateToolbarPatch } from './toolbar-config.ts';
+import { buildFilterCondition, decodeFilterCondition, validateToolbarPatch } from './toolbar-config.ts';
+import { createBaseCombobox } from './toolbar-combobox.ts';
+import { createBaseManualGroups } from './toolbar-groups.ts';
 import { BASE_LAYOUTS, layoutIcon, uniqueViewName, validateViewName, createLayoutSettings, propertyDisplayPatch } from './toolbar-panels.ts';
 
 export interface BaseToolbarState {
@@ -53,7 +55,7 @@ export interface BaseToolbar {
 }
 type FilterNode = string | { and: FilterNode[] } | { or: FilterNode[] } | { not: FilterNode[] };
 type PanelName = 'Views' | 'View options' | 'Add view' | 'Results' | 'Property' | 'Formula' | 'New item settings' | 'Filter' | 'Sort' | 'Properties' | 'Group';
-interface Panel { rebase?(state: BaseToolbarState, expectedName?: string): boolean; flush?(): void; name: PanelName; node: HTMLElement; trigger: HTMLElement; dirty: boolean; saving: boolean; failure?: object; close(restore?: boolean): void }
+interface Panel { rebase?(state: BaseToolbarState, expectedName?: string): boolean; flush?(): void; name: PanelName; node: HTMLElement; trigger: HTMLElement; dirty: boolean; innerDraft?: boolean; saving: boolean; failure?: object; close(restore?: boolean): void }
 /** Only a retained, exact accepted configuration may offer a persistence retry. */
 export class BaseToolbarSaveError extends Error {
   readonly retry: () => Promise<void>;
@@ -106,7 +108,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
   let deferredState: BaseToolbarState | undefined;
   let activeViewDrag: { source: HTMLElement; from: number; version: BaseQueryResult['version']; token: string } | undefined;
   const report = (error: unknown) => { try { options.onError(error); } catch { /* Error rendering cannot mutate configuration. */ } };
-  const hasDraft = () => !!panel && (panel.dirty || panel.saving || !!panel.failure);
+  const hasDraft = () => !!panel && (panel.dirty || panel.innerDraft || panel.saving || !!panel.failure);
   selector.addEventListener('change', () => {
     if (!state) return; const index = Number(selector.value), previous = state.selectedIndex;
     try {
@@ -138,6 +140,8 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     let autoTimer: ReturnType<typeof setTimeout> | undefined;
     let generation = 0;
     let afterSave: (() => void) | undefined;
+    let refreshPanel: ((result:BaseQueryResult,retainDraft:boolean)=>void) | undefined;
+    const disposers: (()=>void)[] = [];
     const auto = options.immediate === true && !['Views','Add view','New item settings','Formula'].includes(name);
     if (auto) footer.hidden = true;
     const own: Panel = { name, node, trigger, dirty: false, saving: false, failure: undefined,
@@ -145,13 +149,14 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         if (own.saving) return;
         if (autoTimer) clearTimeout(autoTimer);
         activeViewDrag = undefined;
+        for (const dispose of disposers.splice(0)) dispose();
         const focusOwned = node.contains(doc.activeElement); node.remove();
         doc.removeEventListener('pointerdown', outside, true); doc.removeEventListener('keydown', keydown, true); win?.removeEventListener('resize', place); win?.removeEventListener('scroll', place, true); observer?.disconnect();
         if (panel === own) panel = undefined; trigger.setAttribute('aria-expanded', 'false');
         if (restore && focusOwned && trigger.isConnected) trigger.focus({ preventScroll: true }); options.onDraftChange();
       },
     };
-    own.rebase = (next, expectedName = configuredView.name) => { const snapshot = configurationSnapshot(next); if (JSON.stringify(snapshot) !== JSON.stringify(configuration) || next.views[selectedIndex]?.name !== expectedName) return false; opening = next; result = next.result; version = result.version; configuredView = next.views[selectedIndex] ?? result.view; return true; };
+    own.rebase = (next, expectedName = configuredView.name) => { const snapshot = configurationSnapshot(next); if (JSON.stringify(snapshot) !== JSON.stringify(configuration) || next.views[selectedIndex]?.name !== expectedName) return false; opening = next; result = next.result; version = result.version; configuredView = next.views[selectedIndex] ?? result.view; refreshPanel?.(result,own.dirty); return true; };
     panel = own; trigger.setAttribute('aria-expanded', 'true');
     let retryPersistence: (() => Promise<void>) | undefined;
     const place = () => { if (!node.isConnected) return; const anchor = trigger.getBoundingClientRect(), bounds = node.getBoundingClientRect(); node.style.left = `${Math.max(8, Math.min(anchor.left, (win?.innerWidth ?? 800) - bounds.width - 8))}px`; node.style.top = `${Math.max(8, Math.min(anchor.bottom + 6, (win?.innerHeight ?? 600) - bounds.height - 8))}px`; };
@@ -159,7 +164,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       if (auto && own.dirty && !retryPersistence) { submit(true); return; }
       if (!hasDraft()) own.close(false);
     } };
-    const keydown = (event: KeyboardEvent) => { if (['ArrowDown','ArrowUp','Home','End'].includes(event.key) && !event.isComposing && (event.target instanceof doc.defaultView!.HTMLButtonElement || event.target === node)) { const buttons = Array.from(node.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')).filter(item => !item.closest('[hidden]')); if (buttons.length) { const index = buttons.indexOf(doc.activeElement as HTMLButtonElement); const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length; buttons[next].focus(); event.preventDefault(); event.stopPropagation(); } } if (event.key === 'Escape' && !event.isComposing && !own.saving && node.contains(event.target as Node)) { event.preventDefault(); event.stopPropagation(); if (auto && own.dirty && !retryPersistence) submit(true); else own.close(); } };
+    const keydown = (event: KeyboardEvent) => { const target = event.target as Element; if (target.closest?.('.bases-toolbar-combobox-popover,.bases-manual-group-new') || target.closest?.('[role=combobox]') && (event.key !== 'Escape' || target.closest('[role=combobox]')?.getAttribute('aria-expanded') === 'true')) return; if (['ArrowDown','ArrowUp','Home','End'].includes(event.key) && !event.isComposing && (event.target instanceof doc.defaultView!.HTMLButtonElement || event.target === node)) { const buttons = Array.from(node.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')).filter(item => !item.closest('[hidden]')); if (buttons.length) { const index = buttons.indexOf(doc.activeElement as HTMLButtonElement); const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length; buttons[next].focus(); event.preventDefault(); event.stopPropagation(); } } if (event.key === 'Escape' && !event.isComposing && !own.saving && node.contains(event.target as Node)) { event.preventDefault(); event.stopPropagation(); if (auto && own.dirty && !retryPersistence) submit(true); else own.close(); } };
     doc.addEventListener('pointerdown', outside, true); doc.addEventListener('keydown', keydown, true); win?.addEventListener('resize', place); win?.addEventListener('scroll', place, true);
     const observer = win && 'ResizeObserver' in win ? new win.ResizeObserver(place) : undefined; observer?.observe(container); observer?.observe(node);
     const changed = () => {
@@ -348,12 +353,19 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const currentProperty = propertyId(existing?.property);
       const choices = currentProperty && !availableOptions.some(([key]) => key === currentProperty) ? [[currentProperty, opening.label(currentProperty)] as const, ...availableOptions] : availableOptions;
       const property = select(doc, 'Group property', [['', 'No grouping'], ...choices], currentProperty);
-      const direction = select(doc, 'Group direction', [['ASC', 'A → Z'], ['DESC', 'Z → A']], String(existing?.direction ?? 'ASC'));
+      const direction = select(doc, 'Group direction', options.immediate ? [['ASC', 'A → Z'], ['DESC', 'Z → A'],['MANUAL','Manual']] : [['ASC', 'A → Z'], ['DESC', 'Z → A']], options.immediate && Array.isArray(result.view.groupOrder) ? 'MANUAL' : String(existing?.direction ?? 'ASC'));
       property.addEventListener('change', changed); direction.addEventListener('change', changed); const groupRow = doc.createElement('div'); groupRow.className = 'bases-toolbar-rule'; groupRow.append(property,direction); const clear = button(doc,'',() => { property.value = ''; changed(); },'Remove grouping'); clear.className = 'bases-toolbar-menu-next'; clear.append(icon('trash',16,doc)); groupRow.append(clear); fields.append(groupRow);
       const hint = doc.createElement('p'); hint.hidden = !!options.immediate; hint.textContent = 'Changing the grouping property resets manually chosen group visibility and order.'; fields.append(hint);
+      const manual = options.immediate ? createBaseManualGroups(doc,fields,{result,property:()=>property.value,valueType:()=>opening.propertyType?.(property.value),changed,draft:active=>{own.innerDraft=active;options.onDraftChange();},error:message=>{error.textContent=message;}}) : undefined;
+      if (manual) {
+        disposers.push(()=>manual.destroy()); refreshPanel=(next,retainDraft)=>manual.update(next,retainDraft);
+        direction.addEventListener('change',()=>manual.setManual(direction.value==='MANUAL'));
+        property.addEventListener('change',()=>manual.update(result,false));
+      }
       readPatch = () => {
-        const groupBy: Record<string, BaseValue> | undefined = property.value ? { ...existing, property: property.value, direction: direction.value } : undefined;
+        const groupBy: Record<string, BaseValue> | undefined = property.value ? { ...existing, property: property.value, direction: direction.value === 'MANUAL' ? existing?.direction ?? 'ASC' : direction.value } : undefined;
         if (groupBy && property.value !== propertyId(existing?.property)) delete groupBy.column;
+        if (manual) return {groupBy,groupOrder:property.value ? manual.read() : undefined};
         return property.value === propertyId(existing?.property) ? { groupBy } : { groupBy, groupOrder: undefined };
       };
     } else {
@@ -382,19 +394,10 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         const row = doc.createElement('div'); row.className = typeof value === 'string' ? 'bases-filter-condition' : 'bases-filter-group';
         if (--renderBudget < 0 || depth > 32) { row.append(doc.createTextNode('This filter exceeds the visual editor’s size or nesting limit.')); return row; }
         if (typeof value === 'string') {
-          const basic = /^((?:note|file|formula)\[("(?:[^"\\]|\\.)*")\])\s*(==|!=|>|<)\s*(.+)$/.exec(value);
-          const contains = /^((?:note|file|formula)\[("(?:[^"\\]|\\.)*")\])\.contains\((.+)\)$/.exec(value);
-          let decoded: { property: string; operator: string; text: string; type: 'text' | 'number' | 'boolean' } | undefined;
-          try {
-            const match = basic || contains;
-            if (match) {
-              const namespace = match[1].slice(0, match[1].indexOf('[')), literal = JSON.parse(basic ? match[4] : match[3]);
-              if (literal === null && basic && ['==','!='].includes(match[3]) || literal !== null && ['string', 'number', 'boolean'].includes(typeof literal)) decoded = { property: `${namespace}.${JSON.parse(match[2])}`, operator: contains ? 'contains' : literal === null ? match[3] === '==' ? 'unset' : 'set' : ({'==':'eq','!=':'neq','>':'gt','<':'lt'} as Record<string,string>)[match[3]], text: literal === null ? '' : String(literal), type: typeof literal === 'number' ? 'number' : typeof literal === 'boolean' ? 'boolean' : 'text' };
-            }
-          } catch { /* Preserve unsupported existing expressions as advanced conditions. */ }
+          const decoded = decodeFilterCondition(value);
           if (decoded) {
             const choices = propertyOptions.some(([key]) => key === decoded!.property) ? propertyOptions : [[decoded.property, decoded.property] as const, ...propertyOptions];
-            const property = select(doc, 'Filter property', choices, decoded.property), operator = select(doc, 'Condition', [['eq','Is'],['neq','Is not'],['contains','Contains'],['gt','Greater than'],['lt','Less than'],['unset','Is not set'],['set','Is set']], decoded.operator);
+            const property = select(doc, 'Filter property', choices, decoded.property), operator = select(doc, 'Condition', [['eq','Is'],['neq','Is not'],['contains','Contains'],['gt','Greater than'],['lt','Less than'],['gte','Greater than or equal'],['lte','Less than or equal'],['unset','Is not set'],['set','Is set']], decoded.operator);
             const type = select(doc, 'Value type', [['text','Text'],['number','Number'],['boolean','Checkbox']], decoded.type), input = doc.createElement('input'); input.setAttribute('aria-label', 'Filter value'); input.value = decoded.text;
             const edit = () => { changed(); input.disabled = type.disabled = operator.value === 'unset' || operator.value === 'set'; try { replace(buildFilterCondition(property.value, operator.value as 'eq', input.value, type.value as 'text')); input.setCustomValidity(''); error.textContent = ''; } catch (failure) { const message = failure instanceof Error ? failure.message : String(failure); input.setCustomValidity(message); error.textContent = message; } };
             if (options.immediate) type.hidden = true;
@@ -410,7 +413,13 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
             const expression = doc.createElement('textarea'); expression.setAttribute('aria-label', 'Filter expression'); expression.value = value; expression.rows = 2;
             expression.addEventListener('input', () => { replace(expression.value); changed(); }); row.append(expression);
           }
-          row.append(button(doc, 'Remove', () => { if (!canRestructure(row)) return; remove(); changed(); render(); }, 'Remove filter'));
+          const removeButton = button(doc, 'Remove', () => { if (!canRestructure(row)) return; remove(); changed(); render(); }, 'Remove filter');
+          if (options.immediate) { removeButton.replaceChildren(icon('trash',16,doc)); removeButton.className = 'bases-toolbar-menu-next'; }
+          const advanced = button(doc,'',() => {
+            if (!canRestructure(row)) return;
+            const expression = doc.createElement('textarea'); expression.setAttribute('aria-label','Filter expression'); expression.value = value; expression.rows = 2; expression.addEventListener('input',() => { replace(expression.value); changed(); }); row.replaceChildren(expression,removeButton); expression.focus();
+          },'Edit expression'); advanced.className = 'bases-toolbar-menu-next'; advanced.append(icon('code',16,doc));
+          if (decoded) row.append(advanced); row.append(removeButton);
         } else if (mapping(value) && Object.keys(value).length === 1 && ['and','or','not'].includes(Object.keys(value)[0]) && Array.isArray(Object.values(value)[0])) {
           const key = Object.keys(value)[0] as 'and' | 'or' | 'not', children = Object.values(value)[0] as FilterNode[];
           const mode = select(doc, 'Match', [['and','All the following are true'],['or','Any of the following are true'],['not','None of the following are true']], key);
@@ -460,6 +469,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       closeWhenSettled ||= close;
       if (autoTimer) { clearTimeout(autoTimer); autoTimer = undefined; }
       if (own.saving || destroyed || panel !== own) return;
+      if (own.innerDraft) { error.textContent = 'Finish or cancel the new group first.'; return; }
       if (!own.dirty && !own.failure) { if (close) own.close(); return; }
       if (!form.checkValidity()) { error.textContent = 'Check the invalid condition value before applying.'; return; }
       let operation: () => Promise<void>;
@@ -512,7 +522,20 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     };
     form.addEventListener('submit', event => { event.preventDefault(); submit(!auto || !!retryPersistence); });
     own.flush = () => submit(true);
-    place(); const initialFocus = fields.querySelector<HTMLElement>('input,select,textarea,button'); initialFocus?.focus({ preventScroll: true }); if (name === 'Add view' && initialFocus?.tagName === 'INPUT') (initialFocus as HTMLInputElement).select();
+    if (options.immediate && win?.MutationObserver) {
+      const enhanced = new Map<HTMLSelectElement,ReturnType<typeof createBaseCombobox>>();
+      const enhance = () => {
+        for (const [source,control] of enhanced) if (!node.contains(source)) { control.destroy(); enhanced.delete(source); }
+        for (const source of node.querySelectorAll<HTMLSelectElement>('select')) {
+          if (enhanced.has(source) || source.getAttribute('aria-label') === 'Value type') continue;
+          const label = source.getAttribute('aria-label') ?? '';
+          enhanced.set(source,createBaseCombobox(source,{owner:node,searchable:/property|Layout/.test(label)}));
+        }
+      };
+      const observer = new win.MutationObserver(enhance); observer.observe(node,{childList:true,subtree:true}); enhance();
+      disposers.push(()=>{observer.disconnect();for(const control of enhanced.values())control.destroy();enhanced.clear();});
+    }
+    place(); const initialFocus = Array.from(fields.querySelectorAll<HTMLElement>('input,select,textarea,button')).find(control=>!control.hidden&&!control.closest('[hidden]')); initialFocus?.focus({ preventScroll: true }); if (name === 'Add view' && initialFocus?.tagName === 'INPUT') (initialFocus as HTMLInputElement).select();
   }
   function update(next: BaseToolbarState) {
     if (destroyed) return;
