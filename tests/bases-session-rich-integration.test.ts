@@ -23,7 +23,7 @@ class Adapter extends MemoryAdapter {
 }
 const snapshot = { localStoreId: 'store', generationEpoch: 'epoch', generation: '1', versions: { schema: 1, extraction: 'md1', resolver: 'r1', query: 'q1' } }, source = { localStoreId: 'store', watermark: '1' };
 const summaryBase = 'views:\n  - type: table\n    name: Table\n    order: [file.name, score, projects]\n    summaries: {score: Sum}\n  - type: cards\n    name: Cards\n    summaries: {score: Sum}\n';
-async function fixture(base = summaryBase, omitRaw = false) {
+async function fixture(base = summaryBase, omitRaw = false, controlPaint = false) {
   const adapter = new Adapter({ 'Work.base': base, 'One.md': '---\nscore: 10\nprojects: ["[[Projects/A|My alias]]", "[[Unknown|Keep me]]"]\n---\nBody', 'Properties.yaml': 'properties:\n  projects:\n    type: relation\n    relation: {multiple: true}\n' });
   let dropGroups = false;
   const definition = async () => { const row = (await adapter.stat('Work.base'))!; return { id: row.entryId, revision: row.revision, path: row.path, kind: 'file' as const, deleted: false }; };
@@ -51,11 +51,18 @@ async function fixture(base = summaryBase, omitRaw = false) {
   };
   const vault = new Vault(adapter); await vault.initialize();
   const dom = new JSDOM('<main></main>', { pretendToBeVisual: true }), host = dom.window.document.querySelector('main')!, buffers = new Map<string, NoteBuffer>(), errors: unknown[] = [], opened: {path:string;witness?:{entryId:string;revision:string}}[] = [];
+  // Own only browser paint delivery. Product session/controller/table and
+  // durable buffers remain composed normally; no query or UI state is injected.
+  const frames = new Map<number, FrameRequestCallback>(); let nextFrame = 0;
+  if (controlPaint) {
+    dom.window.requestAnimationFrame = callback => { frames.set(++nextFrame, callback); return nextFrame; };
+    dom.window.cancelAnimationFrame = handle => { frames.delete(handle); };
+  }
   const session = createBaseSession(host, { vault, basePath: 'Work.base', validate() {}, openFile(path,_event,witness) {opened.push({path,witness});}, onError(error) { errors.push(error); }, getRelationTargets: () => [{ path: 'Projects/B.md', label: 'B', value: '[[Projects/B]]', entryId: 'b', revision: 'r1' }, { path: 'Projects/C.md', label: 'C', value: '[[Projects/C]]', entryId: 'c', revision: 'r1' }],
     buffers: { validate() {}, async getBuffer(path) { let buffer = buffers.get(path); if (!buffer) { buffer = new NoteBuffer(vault, path); Object.defineProperty(buffer, 'savedDurableWitness', { get: () => ({ path, entryId: path, revision: `r${adapter.revisions.get(path) ?? 1}` }) }); buffers.set(path, buffer); } await buffer.load(); return buffer; } },
   }); await session.ready; assert.ifError(session.state.error);
   const key = (element: Element, key: string, extra = {}) => element.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...extra }));
-  return { adapter, vault, dom, host, session, errors, opened, key, dropGroups() {dropGroups=true;}, async cleanup() { adapter.fail = false; for (const input of dom.window.document.querySelectorAll('.bases-property-popover input,[data-base-editing] input')) key(input, 'Escape'); const back = dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]'); back?.click(); await until(() => !session.hasPendingChanges()); await session.close(); for (const buffer of buffers.values()) await buffer.dispose(); dom.window.close(); } };
+  return { adapter, vault, dom, host, session, errors, opened, key, pendingPaint: () => frames.size, async paint() { const callbacks = [...frames.values()]; frames.clear(); for (const callback of callbacks) callback(0); await tick(); }, dropGroups() {dropGroups=true;}, async cleanup() { adapter.fail = false; for (const input of dom.window.document.querySelectorAll('.bases-property-popover input,[data-base-editing] input')) key(input, 'Escape'); const back = dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]'); back?.click(); await until(() => !session.hasPendingChanges()); await session.close(); for (const buffer of buffers.values()) await buffer.dispose(); dom.window.close(); } };
 }
 
 test('raw editing adapter accepts inert values and rejects rich values without saved source', () => {
@@ -198,4 +205,82 @@ test('returning from a vanished group summary never silently switches to the ove
     f.dropGroups(); await f.session.refresh(); f.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]')!.click(); await tick();
     assert.equal(f.dom.window.document.querySelector('[aria-label="Summarize"]'),null); assert.match(String(f.errors.at(-1)),/result group changed/);
   } finally {await f.cleanup();}
+});
+
+
+for (const origin of ['header', 'footer']) test(`${origin}-created summary returns to a usable chooser across an already queued ordinary table paint`, async () => {
+  const f = await fixture(origin === 'header' ? 'views:\n  - type: table\n    name: Table\n    order: [file.name, score, projects]\n' : summaryBase, false, true);
+  try {
+    const doc = f.dom.window.document;
+    assert.equal(f.host.querySelector<HTMLElement>('.zorid-bases-table-footer')!.hidden, origin === 'header');
+    const originalAnchor = f.host.querySelector<HTMLElement>(origin === 'header' ? '[role="columnheader"][title="note.score"]' : '[data-summary-property="note.score"]')!;
+    if (origin === 'header') {
+      originalAnchor.dispatchEvent(new f.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+      [...doc.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent === 'Summarize...')!.click();
+    } else originalAnchor.click();
+    await until(() => !!doc.querySelector('.zorid-bases-summary-add'));
+    const search = doc.querySelector<HTMLInputElement>('[aria-label="Find or create summary"]')!;
+    search.value = 'C1 lifecycle'; search.dispatchEvent(new f.dom.window.Event('input', { bubbles: true }));
+    [...doc.querySelectorAll<HTMLButtonElement>('.zorid-bases-summary-add')].find(button => button.textContent === 'Add summary: C1 lifecycle')!.click();
+    await until(() => !!doc.querySelector('[aria-label="Summary expression"]'));
+    const expression = doc.querySelector<HTMLTextAreaElement>('textarea[aria-label="Summary expression"]')!;
+    expression.focus(); expression.value = 'values.length'; expression.dispatchEvent(new f.dom.window.Event('input', { bubbles: true })); f.key(expression, 'Tab');
+    await until(async () => (BaseDocument.parse(await f.vault.read('Work.base')).getRoot('summaries') as Record<string, string>)['C1 lifecycle'] === 'values.length' && !f.session.hasPendingChanges());
+    assert.equal(originalAnchor.isConnected, false, 'The original picker anchor has been replaced by accepted configuration');
+    const beforeBack = await f.vault.read('Work.base');
+    f.host.querySelector('.zorid-bases-table')!.dispatchEvent(new f.dom.window.Event('scroll'));
+    assert.ok(f.pendingPaint() > 0, 'Ordinary table scroll queues its existing paint callback');
+    doc.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]')!.click();
+    await until(() => !doc.querySelector('.bases-summary-editor') && !!doc.querySelector('[aria-label="Summarize"]'));
+    await f.paint();
+    assert.ok(doc.querySelector('[aria-label="Summarize"]'), 'Returning from the editor survives the already queued table paint');
+    assert.equal(await f.vault.read('Work.base'), beforeBack, 'Back and paint do not write configuration');
+    await until(() => !!doc.querySelector('[data-summary-id="Sum"]'));
+    doc.querySelector<HTMLElement>('[data-summary-id="Sum"]')!.click();
+    await until(async () => (BaseDocument.parse(await f.vault.read('Work.base')).views[0].summaries as Record<string, string>)['note.score'] === 'Sum');
+    assert.equal((BaseDocument.parse(await f.vault.read('Work.base')).getRoot('summaries') as Record<string, string>)['C1 lifecycle'], 'values.length', 'The returned chooser remains actionable and preserves the custom definition');
+    assert.deepEqual(f.errors, []);
+  } finally { await f.cleanup(); }
+});
+
+
+test('a summary editor from another mounted view cannot reopen a chooser in its replacement table', async () => {
+  const f = await fixture(summaryBase.replace('type: cards', 'type: table'), false, true);
+  try {
+    const doc = f.dom.window.document;
+    f.host.querySelector<HTMLElement>('[data-summary-property="note.score"]')!.click();
+    await until(() => !!doc.querySelector('[aria-label="Edit Sum"]'));
+    doc.querySelector<HTMLButtonElement>('[aria-label="Edit Sum"]')!.click();
+    await until(() => !!doc.querySelector('[aria-label="Summary name"]') && !f.session.hasPendingChanges());
+    const before = await f.vault.read('Work.base');
+    await f.session.selectView(1);
+    assert.equal(f.session.state.result?.view.name, 'Cards');
+    doc.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]')!.click();
+    await tick(); await f.paint();
+    assert.equal(doc.querySelector('.bases-summary-editor'), null);
+    assert.equal(doc.querySelector('[aria-label="Summarize"]'), null, 'A replaced table owner cannot adopt an old editor anchor');
+    assert.equal(await f.vault.read('Work.base'), before);
+    f.host.querySelector<HTMLElement>('[data-summary-property="note.score"]')!.click();
+    await until(() => !!doc.querySelector('[aria-label="Summarize"]'));
+    assert.deepEqual(f.errors, []);
+  } finally { await f.cleanup(); }
+});
+
+
+test('a disconnected table owner cannot reopen its summary editor chooser portal', async () => {
+  const f = await fixture();
+  try {
+    const doc = f.dom.window.document;
+    f.host.querySelector<HTMLElement>('[data-summary-property="note.score"]')!.click();
+    await until(() => !!doc.querySelector('[aria-label="Edit Sum"]'));
+    doc.querySelector<HTMLButtonElement>('[aria-label="Edit Sum"]')!.click();
+    await until(() => !!doc.querySelector('[aria-label="Summary name"]') && !f.session.hasPendingChanges());
+    const before = await f.vault.read('Work.base');
+    f.host.remove();
+    doc.querySelector<HTMLButtonElement>('[aria-label="Back to summaries"]')!.click();
+    await tick();
+    assert.equal(doc.querySelector('[aria-label="Summarize"]'), null, 'Detached owners cannot leave an inert body-level picker');
+    assert.equal(await f.vault.read('Work.base'), before);
+    assert.deepEqual(f.errors, []);
+  } finally { await f.cleanup(); }
 });

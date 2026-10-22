@@ -147,6 +147,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   type ConfigurationAcknowledgement = { result: BaseQueryResult; patch: BaseViewPatch; scope: number; entryId?: string; column?: string };
   let awaitingConfigurationResult: ConfigurationAcknowledgement | undefined, resizeDrainScheduled = false;
   let configurationScope = 0, configurationEntryId = options.getConfigurationIdentity?.();
+  const summaryOrigins = new WeakMap<HTMLElement, { property: string; scope: number; overall: boolean }>();
   const hasActiveEdits = () => !destroyed && (!!editing || bulkPending || configPending || !!root.querySelector('[data-base-editing]'));
   function releaseCell(cell: HTMLElement) {
     const dispose = widgetDisposers.get(cell); widgetDisposers.delete(cell);
@@ -269,7 +270,11 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   }
   function showSummaryPicker(property: string, anchor: HTMLElement, groupIndex: number | null = null) {
     closeMenu?.(); closePicker?.();
-    if (!options.requestSummary || destroyed || hasActiveEdits()) return;
+    if (!options.requestSummary || destroyed || !root.isConnected || hasActiveEdits()) return;
+    // Only this table's actual picker anchors can authorize a later return
+    // after an accepted configuration replaces their DOM nodes.
+    if (!root.contains(anchor)) return;
+    summaryOrigins.set(anchor, { property, scope: configurationScope, overall: groupIndex === null });
     const token = revision, popup = doc.createElement('div'); popup.className = 'zorid-bases-summary-picker'; popup.setAttribute('role', 'dialog'); popup.setAttribute('aria-label', 'Summarize');
     const search = doc.createElement('input'); search.type = 'search'; search.placeholder = 'Find or create...'; search.setAttribute('aria-label', 'Find or create summary');
     const searchRow = doc.createElement('div'); searchRow.className = 'zorid-bases-summary-search'; searchRow.append(svgIcon(Search), search);
@@ -977,11 +982,16 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   }
   update(result);
   return { openSummaryPicker(property, anchor, groupIndex = null) {
-    if (destroyed || !result.properties.includes(property)) return;
+    if (destroyed || !root.isConnected || !result.properties.includes(property)) return;
+    const origin = summaryOrigins.get(anchor);
+    if (!origin || origin.property !== property || origin.scope !== configurationScope || origin.overall !== (groupIndex === null)) return;
     const scope = groupIndex === null ? 'overall' : String(groupIndex);
     const replacement = [...root.querySelectorAll<HTMLElement>('[data-summary-property]')].find(cell => cell.dataset.summaryProperty === property && cell.dataset.summaryGroup === scope);
     const headerCell = header.children[result.properties.indexOf(property)] as HTMLElement | undefined;
-    const target = anchor.isConnected && root.contains(anchor) ? anchor : replacement ?? headerCell;
+    // Overall editor returns use the current property header. Unlike footer
+    // cells, that anchor survives an already queued row paint. Query updates
+    // still invalidate its picker by revision; group anchors remain virtual.
+    const target = groupIndex === null ? headerCell : anchor.isConnected && root.contains(anchor) ? anchor : replacement ?? headerCell;
     if (target) showSummaryPicker(property, target, groupIndex);
   }, update, refreshLayout() { if (!destroyed) { dimensions(); rebuildItems(); renderRows(); } }, hasActiveEdits, hasQueuedConfiguration: () => !destroyed && !!resizeCommands.length, destroy() { if (destroyed) return; destroyed = true; resizeCommands.length = 0; awaitingConfigurationResult = undefined; revision++; stopDrag?.(); stopResize?.(); closeMenu?.(); closePicker?.(); draggedColumn = undefined; editObserver?.disconnect(); for (const cell of [...widgetDisposers.keys()]) releaseCell(cell); root.removeEventListener('click', protectRangeClick, true); root.removeEventListener('dblclick', protectRangeClick, true); root.removeEventListener('keydown', protectRangeKey, true); root.removeEventListener('paste', onPaste); root.removeEventListener('keydown', onHistory); root.removeEventListener('copy', onCopy); root.removeEventListener('pointerdown', onPointerDown); editing = undefined; if (frame !== undefined) win?.cancelAnimationFrame(frame); resize?.disconnect(); root.removeEventListener('scroll', schedule); root.remove(); status.remove(); } };
 }
