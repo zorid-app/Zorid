@@ -10,6 +10,7 @@ pub(crate) fn evaluate(
     values: &[&BaseValue],
     options: &EvaluationOptions,
     relationships: Option<&crate::graph::PreparedRelationships<'_>>,
+    shared_files: Option<std::sync::Arc<crate::files::BasesFiles>>,
     file: impl FnMut(&str) -> Result<expression::BasesFile, ExpressionDiagnostic>,
 ) -> Result<EvaluationResult, ExpressionDiagnostic> {
     // Custom definitions override built-ins by exact name, even when the list
@@ -29,7 +30,9 @@ pub(crate) fn evaluate(
             )
         });
     match source {
-        Some(source) => expression::evaluate_summary(source, values, options, relationships, file),
+        Some(source) => {
+            expression::evaluate_summary(source, values, options, relationships, shared_files, file)
+        }
         None => Ok(EvaluationResult {
             value: BaseValue::Null,
             steps_used: 0,

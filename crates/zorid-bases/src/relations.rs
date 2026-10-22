@@ -374,6 +374,25 @@ pub fn query_property_relations(
         .filter(|i| i.properties_unavailable)
         .map(|i| &i.witness.entry_id)
         .collect::<BTreeSet<_>>();
+    let target_filter_files = if definitions.iter().any(|(_, definition)| {
+        definition
+            .relation
+            .as_ref()
+            .and_then(|relation| relation.target_filter.as_ref())
+            .is_some_and(|source| crate::expression::uses_relationships(source))
+    }) {
+        Some(crate::files::hydrate(
+            &snapshot.records,
+            Some(&relationships),
+            None,
+            Some(&result),
+            &timezone,
+            &mut |work| budget.charge(work),
+            &mut |_| Ok(()),
+        )?)
+    } else {
+        None
+    };
     // Picker candidates and persisted relation validation use the same Rust
     // predicate evaluation. No frontend expression approximation is necessary.
     let mut allowed = BTreeMap::<String, BTreeSet<EntryId>>::new();
@@ -400,13 +419,14 @@ pub fn query_property_relations(
                         "Relation target filtering exhausted its work budget",
                     ));
                 }
-                let (value, used) = crate::with_session_properties(
+                let (value, used) = crate::with_session_files(
                     filter,
                     record,
                     &invocation,
                     Some(&relationships),
                     None,
                     Some(&result),
+                    target_filter_files.clone(),
                     |session| {
                         let value = session.evaluate(filter);
                         Ok((value, session.steps_used()))
@@ -458,6 +478,7 @@ pub fn query_property_relations(
         allowed.insert(name.clone(), accepted);
         result.relation_targets.insert(name.clone(), targets);
     }
+    drop(target_filter_files);
     let mut states = BTreeMap::<RelationKey, RelationState>::new();
     let mut incoming = BTreeMap::<RelationKey, Vec<EntryId>>::new();
     for record in &snapshot.records {

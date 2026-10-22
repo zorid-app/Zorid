@@ -2,7 +2,7 @@
 //! The files an Obsidian Bases evaluation can reach, with lookups built once per evaluation.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use super::expression::{
     ensure_markdown_extension, normalize_path, strip_markdown_extension, strip_subpath, BasesFile,
@@ -17,6 +17,7 @@ use super::expression::{
 #[derive(Debug, Default)]
 pub(crate) struct BasesFiles {
     files: Vec<BasesFile>,
+    exact_path: HashMap<String, usize>,
     lookup: OnceLock<FileLookup>,
 }
 
@@ -40,8 +41,14 @@ impl FromIterator<BasesFile> for BasesFiles {
 
 impl BasesFiles {
     pub(crate) fn new(files: Vec<BasesFile>) -> Self {
+        let exact_path = files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| (file.path.clone(), index))
+            .collect();
         Self {
             files,
+            exact_path,
             lookup: OnceLock::new(),
         }
     }
@@ -52,7 +59,7 @@ impl BasesFiles {
 
     /// The file at exactly this collection path.
     pub(crate) fn by_path(&self, path: &str) -> Option<&BasesFile> {
-        self.at(self.lookup().path.get(path).copied())
+        self.at(self.exact_path.get(path).copied())
     }
 
     /// The file a link target names under Obsidian's fallback rules, in their priority order.
@@ -109,4 +116,72 @@ impl BasesFiles {
             lookup
         })
     }
+}
+
+/// Build a timezone-specific immutable file context once, then share it among
+/// every row session. Admission precedes metadata/graph/overlay copies.
+pub(crate) fn hydrate(
+    records: &[crate::DetachedRecord],
+    relationships: Option<&crate::graph::PreparedRelationships<'_>>,
+    unavailable: Option<&std::collections::HashSet<crate::EntryId>>,
+    properties: Option<&crate::relations::PropertyRelationValues>,
+    timezone: &super::expression::BasesTimezone,
+    check: &mut impl FnMut(usize) -> Result<(), crate::ExpressionDiagnostic>,
+    admit: &mut impl FnMut(usize) -> Result<(), crate::ExpressionDiagnostic>,
+) -> Result<Arc<BasesFiles>, crate::ExpressionDiagnostic> {
+    const MAX_CONTEXT_BYTES: usize = crate::MAX_BASE_REQUEST_BYTES;
+    let mut bytes = std::mem::size_of::<BasesFiles>();
+    let mut files = Vec::new();
+    for record in records {
+        check(1)?;
+        let source_bytes = crate::encoded_size(record, MAX_CONTEXT_BYTES)?;
+        let overlay_bytes = record
+            .witness
+            .as_ref()
+            .and_then(|witness| {
+                properties.and_then(|properties| properties.rows().get(&witness.entry_id))
+            })
+            .map(|row| crate::encoded_size(&row.values, MAX_CONTEXT_BYTES))
+            .transpose()?
+            .unwrap_or(0);
+        let graph_bytes = relationships
+            .map(|graph| graph.attachment_bytes(record.witness.as_ref(), check))
+            .transpose()?
+            .unwrap_or(0);
+        let estimate = source_bytes
+            .saturating_add(overlay_bytes)
+            .saturating_mul(24)
+            .saturating_add(graph_bytes.saturating_mul(4))
+            .saturating_add(2048);
+        check(
+            1usize
+                .saturating_add(source_bytes / 16)
+                .saturating_add(overlay_bytes / 16)
+                .saturating_add(graph_bytes / 64),
+        )?;
+        bytes = bytes
+            .checked_add(estimate)
+            .filter(|bytes| *bytes <= MAX_CONTEXT_BYTES)
+            .ok_or_else(|| {
+                crate::ExpressionDiagnostic::new(
+                    "budget",
+                    "Shared file context exceeds its bounded memory allowance",
+                )
+            })?;
+        admit(estimate)?;
+        let mut file = crate::runtime_file(record, timezone)?;
+        if let Some(graph) = relationships {
+            graph.attach(&mut file);
+        }
+        if let Some(properties) = properties {
+            properties.attach(&mut file, timezone)?;
+        }
+        file.metadata_unavailable |= record
+            .witness
+            .as_ref()
+            .is_some_and(|witness| unavailable.is_some_and(|ids| ids.contains(&witness.entry_id)));
+        files.push(file);
+    }
+    check(files.len())?;
+    Ok(Arc::new(BasesFiles::new(files)))
 }

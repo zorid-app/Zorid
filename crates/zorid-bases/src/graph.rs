@@ -445,6 +445,51 @@ impl<'a> PreparedRelationships<'a> {
     pub(crate) fn complete(&self) -> bool {
         self.data().complete
     }
+    /// Resolve through the same immutable index namespace as parsed note links.
+    /// A default file requests an explicit vault-root-origin expression lookup.
+    pub(crate) fn resolve_target(
+        &self,
+        file: &BasesFile,
+        target: &str,
+        check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+    ) -> Result<Option<(String, RecordWitness)>, ExpressionDiagnostic> {
+        let candidates = if let Some(source) = &file.witness {
+            let origin = self
+                .data()
+                .namespace
+                .candidates_checked(&source.entry_id, "", check)?;
+            if !origin.first().is_some_and(|entry| {
+                entry.revision == source.revision && entry.path.as_str() == file.path
+            }) {
+                return Err(ExpressionDiagnostic::new(
+                    "stale-source",
+                    "File lookup source is outside the captured revision",
+                ));
+            }
+            self.data()
+                .namespace
+                .candidates_checked(&source.entry_id, target, check)?
+        } else if file.path.is_empty() {
+            self.data()
+                .namespace
+                .candidates_from_root_checked(target, check)?
+        } else {
+            return Err(ExpressionDiagnostic::new(
+                "unavailable",
+                "File lookup has no captured source witness",
+            ));
+        };
+        check(1)?;
+        Ok(candidates.first().map(|entry| {
+            (
+                entry.path.as_str().to_string(),
+                RecordWitness {
+                    entry_id: entry.id.clone(),
+                    revision: entry.revision.clone(),
+                },
+            )
+        }))
+    }
     pub(crate) fn attach(&self, file: &mut BasesFile) {
         file.metadata_unavailable = file
             .witness
@@ -459,6 +504,36 @@ impl<'a> PreparedRelationships<'a> {
             file.embeds = edges.embeds.clone();
             file.backlinks = edges.backlinks.clone();
         }
+    }
+    pub(crate) fn attachment_bytes(
+        &self,
+        witness: Option<&RecordWitness>,
+        check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+    ) -> Result<usize, ExpressionDiagnostic> {
+        let Some(edges) = witness.and_then(|witness| self.data().files.get(&witness.entry_id))
+        else {
+            return Ok(0);
+        };
+        let mut bytes = 0usize;
+        for links in [&edges.links, &edges.embeds, &edges.backlinks] {
+            for link in links {
+                check(1)?;
+                bytes = bytes
+                    .saturating_add(std::mem::size_of::<BasesLink>())
+                    .saturating_add(link.path.len())
+                    .saturating_add(link.display.as_ref().map_or(0, String::len))
+                    .saturating_add(
+                        link.resolved_path
+                            .as_ref()
+                            .and_then(Option::as_ref)
+                            .map_or(0, String::len),
+                    )
+                    .saturating_add(link.target.as_ref().map_or(0, |target| {
+                        target.entry_id.as_str().len() + target.revision.as_str().len()
+                    }));
+            }
+        }
+        Ok(bytes)
     }
     pub(crate) fn has_link(
         &self,

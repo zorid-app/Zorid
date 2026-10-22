@@ -117,6 +117,16 @@ impl PreparedNamespace {
         self.resolver_checked(check)?
             .candidates_checked(source_id, destination, check)
     }
+    /// Resolve an expression's vault-root-origin path without manufacturing a
+    /// source file or inserting a synthetic manifest identity.
+    pub fn candidates_from_root_checked<E: From<IndexError>>(
+        &self,
+        destination: &str,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Vec<&EntryState>, E> {
+        self.resolver_checked(check)?
+            .candidates_from_root_checked(destination, check)
+    }
     pub(crate) fn manifest(&self) -> &Manifest {
         &self.manifest
     }
@@ -326,6 +336,21 @@ impl<'a> Resolver<'a> {
         destination: &str,
         check: &mut impl FnMut(usize) -> Result<(), E>,
     ) -> Result<Vec<&'a EntryState>, E> {
+        self.candidates_origin_checked(Some(source_id), destination, check)
+    }
+    pub fn candidates_from_root_checked<E: From<IndexError>>(
+        &self,
+        destination: &str,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Vec<&'a EntryState>, E> {
+        self.candidates_origin_checked(None, destination, check)
+    }
+    fn candidates_origin_checked<E: From<IndexError>>(
+        &self,
+        source_id: Option<&EntryId>,
+        destination: &str,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Vec<&'a EntryState>, E> {
         check(0)?;
         // Constant-time malformed-input rejection precedes any charged decoding
         // or source lookup, preserving the existing InvalidTarget precedence.
@@ -335,15 +360,23 @@ impl<'a> Resolver<'a> {
         // Reserve bounded fragment/trim/strict-percent decoding work.
         check(destination.len())?;
         let decoded = destination_path(destination).map_err(E::from)?;
-        check(1usize.saturating_add(source_id.as_str().len()))?;
-        let source = self
-            .lookup
-            .sources
-            .get(source_id)
-            .map(|&index| &self.lookup.files[index])
-            .ok_or_else(|| E::from(IndexError::MissingSource))?;
+        let source = if let Some(source_id) = source_id {
+            check(1usize.saturating_add(source_id.as_str().len()))?;
+            Some(
+                self.lookup
+                    .sources
+                    .get(source_id)
+                    .map(|&index| &self.lookup.files[index])
+                    .ok_or_else(|| E::from(IndexError::MissingSource))?,
+            )
+        } else {
+            check(1)?;
+            None
+        };
         if decoded.is_empty() {
-            return Ok(vec![&self.manifest.entries()[source.entry_index]]);
+            return Ok(source
+                .map(|source| vec![&self.manifest.entries()[source.entry_index]])
+                .unwrap_or_default());
         }
         if external(&decoded) {
             return Ok(Vec::new());
@@ -365,8 +398,9 @@ impl<'a> Resolver<'a> {
         let Some(candidates) = candidates else {
             return Ok(Vec::new());
         };
-        check(source.directory.len())?;
-        let mut directory = source.directory.clone();
+        let source_directory = source.map_or("", |source| source.directory.as_str());
+        check(source_directory.len())?;
+        let mut directory = source_directory.to_string();
         if target.starts_with("./") || target.starts_with("../") {
             if target.starts_with("./../") {
                 target = target[2..].into();

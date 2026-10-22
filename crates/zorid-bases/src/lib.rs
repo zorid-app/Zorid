@@ -421,6 +421,29 @@ pub(crate) fn with_session_properties<T>(
     property_values: Option<&relations::PropertyRelationValues>,
     run: impl FnOnce(&mut expression::Session<'_>) -> Result<T, ExpressionDiagnostic>,
 ) -> Result<T, ExpressionDiagnostic> {
+    with_session_files(
+        source,
+        record,
+        options,
+        relationships,
+        unavailable,
+        property_values,
+        None,
+        run,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn with_session_files<T>(
+    source: &str,
+    record: &DetachedRecord,
+    options: &EvaluationOptions,
+    relationships: Option<&graph::PreparedRelationships<'_>>,
+    unavailable: Option<&std::collections::HashSet<EntryId>>,
+    property_values: Option<&relations::PropertyRelationValues>,
+    shared_files: Option<Arc<files::BasesFiles>>,
+    run: impl FnOnce(&mut expression::Session<'_>) -> Result<T, ExpressionDiagnostic>,
+) -> Result<T, ExpressionDiagnostic> {
     if options.max_steps == 0 || options.max_steps > MAX_EXPRESSION_STEPS {
         return Err(ExpressionDiagnostic::new(
             "budget",
@@ -491,7 +514,7 @@ pub(crate) fn with_session_properties<T>(
         note: file.properties.clone(),
         file: file.clone(),
         this_file,
-        files: Arc::new(files::BasesFiles::new(vec![file])),
+        files: shared_files.unwrap_or_else(|| Arc::new(files::BasesFiles::new(vec![file]))),
         formulas: Arc::new(formulas),
         now: Some(
             expression::invocation_clock(options.clock_ms)

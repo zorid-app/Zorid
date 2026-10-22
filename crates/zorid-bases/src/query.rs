@@ -4,7 +4,7 @@
 use crate::{
     expression, order,
     program::{self, BaseProgram, Criterion, Filter},
-    with_session_properties, BaseValue, DetachedRecord, EvaluationOptions, ExpressionDiagnostic,
+    with_session_files, BaseValue, DetachedRecord, EvaluationOptions, ExpressionDiagnostic,
     PropertyValue,
 };
 use serde::{Deserialize, Serialize};
@@ -582,6 +582,27 @@ fn value_expression(property: &str) -> String {
             serde_json::to_string(name).expect("string serializes")
         )
     }
+}
+
+fn needs_shared_files(program: &BaseProgram, view: &program::View, preview: bool) -> bool {
+    fn filter(value: &Filter) -> bool {
+        match value {
+            Filter::Expression(source) => expression::uses_relationships(source),
+            Filter::And(children) | Filter::Or(children) | Filter::Not(children) => {
+                children.iter().any(filter)
+            }
+        }
+    }
+    program.filter.as_ref().is_some_and(filter)
+        || view.filter.as_ref().is_some_and(filter)
+        || program
+            .formulas
+            .iter()
+            .any(|(_, source)| expression::uses_relationships(source))
+        || program.summaries.iter().any(|(name, source)| {
+            (preview || view.summaries.iter().any(|(_, selected)| selected == name))
+                && expression::uses_relationships(source)
+        })
 }
 /// Semantic group/unique identity, separate from the displayed value/witness.
 /// A resolved relationship keeps its identity across aliases, moves and target
@@ -1181,6 +1202,54 @@ pub(crate) fn query_rows_validated(
             .saturating_mul(map_slot::<&String, ()>()))
     })?;
     let ignored = options.ignore_paths.iter().collect::<HashSet<_>>();
+    let shared_files = if input.relationships.is_some()
+        && needs_shared_files(program, view, options.summary_preview_property.is_some())
+        && input
+            .records
+            .iter()
+            .any(|record| !ignored.contains(&record.path))
+    {
+        let timezone = expression::BasesTimezone::from_setting(Some(&options.evaluation.timezone))
+            .map_err(|message| ExpressionDiagnostic::new("input", message))?;
+        let mut hydration_work = 0usize;
+        let remaining = options
+            .max_steps
+            .saturating_sub(steps_used)
+            .saturating_sub(admission_work(&admission));
+        let files = crate::files::hydrate(
+            input.records,
+            relationships.as_ref(),
+            input.unavailable,
+            input.property_values,
+            &timezone,
+            &mut |work| {
+                if options
+                    .evaluation
+                    .cancellation
+                    .as_ref()
+                    .is_some_and(|c| c.is_cancelled())
+                {
+                    return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+                }
+                hydration_work = hydration_work.saturating_add(work);
+                if hydration_work > remaining {
+                    return Err(budget("Shared file context exceeds query work budget"));
+                }
+                Ok(())
+            },
+            &mut |bytes| admit(&mut admission, |_| Ok(bytes)),
+        )?;
+        steps_used = steps_used.saturating_add(hydration_work);
+        check_query_work(
+            steps_used,
+            &admission,
+            options,
+            "Shared file context exceeds query work budget",
+        )?;
+        Some(files)
+    } else {
+        None
+    };
     for record in input.records {
         if ignored.contains(&record.path) {
             continue;
@@ -1193,13 +1262,14 @@ pub(crate) fn query_rows_validated(
                 .saturating_sub(steps_used)
                 .saturating_sub(admission_work(&admission)),
         );
-        let row = with_session_properties(
+        let row = with_session_files(
             "",
             record,
             &invocation,
             relationships.as_ref(),
             input.unavailable,
             input.property_values,
+            shared_files.clone(),
             |session| {
                 let filtered = (|| {
                     for filter in [program.filter.as_ref(), view.filter.as_ref()]
@@ -1842,6 +1912,7 @@ pub(crate) fn query_rows_validated(
         input,
         options,
         relationships.as_ref(),
+        shared_files.as_ref(),
         &mut steps_used,
         &mut admission,
     )?;
@@ -1974,6 +2045,7 @@ fn summarize_rows(
     input: &QueryRows<'_>,
     options: &QueryOptions,
     relationships: Option<&crate::graph::PreparedRelationships<'_>>,
+    shared_files: Option<&std::sync::Arc<crate::files::BasesFiles>>,
     steps: &mut usize,
     admission: &mut Admission<'_>,
 ) -> Result<
@@ -2059,7 +2131,16 @@ fn summarize_rows(
                 &values,
                 &invocation,
                 relationships,
+                shared_files.cloned(),
                 |path| {
+                    if let Some(files) = shared_files {
+                        return files.by_path(path).cloned().ok_or_else(|| {
+                            ExpressionDiagnostic::new(
+                                "unavailable",
+                                "Summary file is not hydrated in the captured snapshot",
+                            )
+                        });
+                    }
                     let record = by_path.get(path).ok_or_else(|| {
                         ExpressionDiagnostic::new(
                             "unavailable",
