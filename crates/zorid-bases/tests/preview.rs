@@ -540,11 +540,12 @@ fn wiki_string_equality_in_partial_previews_is_unavailable_without_namespace_exp
     assert_eq!(result.value.progress.pending_files, 1);
     assert!(!result.value.complete);
     assert!(result.value.rows.is_empty());
+    assert_eq!(result.value.unavailable_filter_rows, 1);
     assert!(result
         .value
         .diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.code == "unavailable"));
+        .any(|diagnostic| diagnostic.phase == "filter" && diagnostic.code == "unavailable"));
     let nested=compile_base_source("filters: file.ext == 'md'\nformulas:\n  contains: '[author == \"[[Target|Alias]]\"].contains(true)'\n  equality: '[author == \"[[Target|Alias]]\"] == [true]'\nviews:\n  - type: table\n    name: Nested\n    order: [file.path,formula.contains,formula.equality]\n").unwrap();
     let nested = query_preview(
         &nested,

@@ -3059,14 +3059,20 @@ impl<'a> Evaluator<'a> {
                     subpath: link_subpath(path),
                     ..Default::default()
                 };
-                if let Some(graph) = self.context.relationships {
-                    if !graph.complete() {
-                        return Err(RuntimeValue::Error("unavailable\0Wiki String equality requires a complete captured namespace".into()));
-                    }
-                    let resolved = self.resolve_target(path)?;
-                    parsed.target = resolved.as_ref().map(|(_, witness)| witness.clone());
-                    parsed.resolved_path = Some(resolved.map(|(path, _)| path));
+                let graph = self.context.relationships.ok_or_else(|| {
+                    RuntimeValue::Error(
+                        "unavailable\0Wiki String equality requires a captured namespace".into(),
+                    )
+                })?;
+                if !graph.complete() {
+                    return Err(RuntimeValue::Error(
+                        "unavailable\0Wiki String equality requires a complete captured namespace"
+                            .into(),
+                    ));
                 }
+                let resolved = self.resolve_target(path)?;
+                parsed.target = resolved.as_ref().map(|(_, witness)| witness.clone());
+                parsed.resolved_path = Some(resolved.map(|(path, _)| path));
                 Ok(links_loosely_equal(link, &parsed) || link.path == *text)
             }
             _ => {
@@ -5476,19 +5482,11 @@ mod loose_link_reference_tests {
     fn reciprocal_primitives_and_dates_preserve_link_raw_data_rules() {
         let context = BasesEvaluationContext::default();
         for (source, expected) in [
-            ("link('Missing') == '[[Missing|Alias]]'", true),
-            ("'[[Missing|Alias]]' == link('Missing')", true),
             ("link('Missing') == 'Missing'", true),
             ("link('Missing') == '42'", false),
             ("link('Missing') == ' [[Missing]] '", false),
-            ("link('Missing') == '[[Other]]'", false),
-            ("[link('Missing')] == ['[[Missing|Alias]]']", true),
-            ("[link('Missing')].contains('[[Missing|Alias]]')", true),
-            (
-                "[link('Missing')].containsAll('Missing','[[Missing]]')",
-                true,
-            ),
-            ("[link('Missing')].containsAny('Other','[[Missing]]')", true),
+            ("[link('Missing')].containsAll('Missing','Missing')", true),
+            ("[link('Missing')].containsAny('Other','Missing')", true),
             ("link('2') == 2", true),
             ("2 == link('2')", true),
             ("link('false') == false", false),
@@ -5512,6 +5510,29 @@ mod loose_link_reference_tests {
             assert_eq!(
                 evaluate(source, &context).unwrap().value,
                 BaseValue::Boolean { value: expected },
+                "{source}"
+            );
+        }
+    }
+    #[test]
+    fn unbound_wiki_equality_is_unavailable_instead_of_an_empty_namespace() {
+        // These operands require root-origin resolution. Actual immutable
+        // generation tests cover their positive and known-unresolved cases;
+        // an unbound evaluator must not invent an empty vault namespace.
+        for source in [
+            "link('Missing') == '[[Missing|Alias]]'",
+            "'[[Missing|Alias]]' == link('Missing')",
+            "link('Missing') == '[[Other]]'",
+            "[link('Missing')] == ['[[Missing|Alias]]']",
+            "[link('Missing')].contains('[[Missing|Alias]]')",
+            "[link('Missing')].containsAll('Missing','[[Missing]]')",
+            "[link('Missing')].containsAny('Other','[[Missing]]')",
+        ] {
+            assert_eq!(
+                evaluate(source, &BasesEvaluationContext::default())
+                    .unwrap_err()
+                    .code,
+                "unavailable",
                 "{source}"
             );
         }
