@@ -9,6 +9,40 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+2026-10-22 current isolated candidate `90c7e253` composes reviewed Object/Tag
+base and call contracts (`c8be1aed`, `50d47bdd`, `f62174a7`, `8c7f8455`).
+Serialized Rust compilation succeeds. The full Bases library passes98 tests,
+including14 call-contract tests; the separate public Object/Tag target passes13.
+Logs are `/private/tmp/zorid-bases-object-call-lib-composed-001.log`,
+`zorid-bases-call-contracts-composed-002.log` and
+`zorid-bases-object-tag-composed-001.log`. The initial call-test invocation used
+a wrong filter and selected0 tests; it establishes compilation only, superseded
+by the exact14-case run. These counts overlap and do not establish full-core or
+native/WASM acceptance. Existing native/CLI/WASM binaries still represent the
+older `5e010112` closure and must be rebuilt for this changed source.
+
+Reviewed filename hover anchors and genuine visible-window mode are composed.
+Properties002 stops before campaign actions on a native CFArray bridge bug;
+`90c7e253` fixes that adapter and passes its real read-only native test with
+desktop access. Full visible-window startup remains unexecuted. Its source
+reviewer's default-sandbox probe failed due to desktop access; the escalated
+probe passes without opening/activating apps or recording window content.
+
+Configuration001 stops at initial0 rows. Independent fixture-byte checks confirm
+valid notes; the durable namespace had admitted726 of1023 fixture files, with
+no Records notes yet. The source owner is adding a bounded read-only admission
+precondition while retaining the initially observed UI and unchanged12-row
+assertion. Eventual notification refresh and full config campaign remain open.
+The UI's unqualified0 during incomplete namespace admission is a separate
+recorded UX limitation, not proof of a query/filter defect. All owned002/config001
+processes are closed; no heavy process is live at this checkpoint.
+
+Pending isolated work includes strict collection/Link identity, Duration,
+group/summary runtime provenance and rapid width-command acknowledgement.
+Independent review has caught no-op, failed-query and hidden-query queue cases;
+do not mark that resize fix accepted from its first unit tests. New semantic
+transport fixtures are being authored independently. Main remains unchanged.
+
 2026-10-22 current composed candidate `a11e0491` includes reviewed editable
 hover, exact property-popup ownership and ordinary/New property draft retention.
 Root composition passes69 focused hover/property/runner/recovery checks and the

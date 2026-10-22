@@ -2,6 +2,15 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Configuration001 initially shows0 Base results while durable admission has
+reached726/1023 files, including0 Records notes. Fixture bytes independently
+validate. A bounded read-only startup precondition is being added; the original
+empty UI remains recorded and exact12-row results still require normal refresh.
+Unqualified empty results during namespace admission are a separate UX gap;
+eventual refresh/timing are unverified. Properties002 executes0 campaign actions
+because of the test runner's native CFArray adapter; the reviewed adapter fix
+passes a real read-only desktop-access probe but still needs visible startup.
+
 Electron010 reaches166 actions/18 checks. The Summary placement fix and focused
 ArrowRight resize pass; Home reset fails to remove width91. A pending-save
 reproduction drops the second resize command. `bases_table` owns explicit
