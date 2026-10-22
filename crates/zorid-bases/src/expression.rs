@@ -18,6 +18,9 @@ mod call_contract_tests;
 #[cfg(test)]
 #[path = "expression_collection_tests.rs"]
 mod collection_tests;
+#[cfg(test)]
+#[path = "expression_title_date_tests.rs"]
+mod title_date_tests;
 #[path = "expression_signatures.rs"]
 mod call_signatures;
 #[path = "expression_format.rs"]
@@ -3471,18 +3474,31 @@ impl<'a> Evaluator<'a> {
                 RuntimeValue::Number(result)
             }
             "earliest" | "latest" => {
-                let dates = values.iter().filter_map(|value| match value {
-                    RuntimeValue::Date(value) => Some(value.millis),
-                    RuntimeValue::String(value) | RuntimeValue::Tag(value) => {
-                        parse_date(value, &self.timezone).map(|date| date.millis)
+                let mut selected: Option<i64> = None;
+                for value in values {
+                    if let Err(error) = self.charge(1) {
+                        return error;
                     }
-                    _ => None,
-                });
-                let selected = dates.reduce(if name == "earliest" {
-                    i64::min
-                } else {
-                    i64::max
-                });
+                    let millis = match value {
+                        RuntimeValue::Date(value) => Some(value.millis),
+                        value => match string_data(value) {
+                            Some(text) => {
+                                // Every String-derived value contributes its
+                                // raw data, never a display label or markup.
+                                if let Err(error) = self.charge(text.len() / 16 + 1) {
+                                    return error;
+                                }
+                                parse_date(text, &self.timezone).map(|date| date.millis)
+                            }
+                            None => None,
+                        },
+                    };
+                    if let Some(millis) = millis {
+                        selected = Some(selected.map_or(millis, |current| {
+                            if name == "earliest" {current.min(millis)} else {current.max(millis)}
+                        }));
+                    }
+                }
                 selected
                     .map(|millis| {
                         RuntimeValue::Date(DateValue {
@@ -6594,18 +6610,23 @@ fn replacement_text(
     append_text(output, &replacement[at..], check)
 }
 fn title_case(value: &str) -> String {
-    static WORD: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\p{L}+").expect("word expression"));
-    WORD.replace_all(value, |captures: &regex::Captures<'_>| {
-        let word = &captures[0];
+    // The reference's word boundary is the literal ASCII space, including empty
+    // segments. Keep the existing Unicode case policy; D5 is tracked separately.
+    // Stream tokens to avoid a Vec allocation proportional to the space count.
+    let mut output = String::with_capacity(value.len());
+    for (index, word) in value.split(' ').enumerate() {
+        if index != 0 {
+            output.push(' ');
+        }
         let mut chars = word.chars();
-        chars
-            .next()
-            .map(|first| format!("{}{}", first.to_uppercase(), chars.as_str().to_lowercase()))
-            .unwrap_or_default()
-    })
-    .to_string()
+        if let Some(first) = chars.next() {
+            output.extend(first.to_uppercase());
+            output.push_str(&chars.as_str().to_lowercase());
+        }
+    }
+    output
 }
+
 fn escape_html(value: &str) -> String {
     value
         .replace('&', "&amp;")
