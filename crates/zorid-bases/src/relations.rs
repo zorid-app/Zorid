@@ -66,6 +66,10 @@ pub struct PropertyRelationValues {
     evaluation_timezone: String,
     evaluation_random_seed: Option<u64>,
     steps_used: usize,
+    // Internal graph-construction phase, never supplied by transport callers.
+    // Only its temporary derived-field placeholders are thrown diagnostics.
+    #[serde(skip)]
+    target_filter_phase: bool,
 }
 
 impl PropertyRelationValues {
@@ -138,7 +142,7 @@ impl PropertyRelationValues {
         }
         for (name, value) in &row.values {
             check(1)?;
-            let replacement = crate::expression::runtime_from_base_value(value, timezone)?;
+            let replacement = attachment_value(value, timezone, self.target_filter_phase && self.read_only_property_names.contains(name))?;
             // Configured value projection must preserve the captured native
             // tags subclass; an arbitrary list/property/formula name is not
             // evidence that it came from frontmatter tags.
@@ -158,6 +162,25 @@ impl PropertyRelationValues {
         Ok(())
     }
 }
+
+fn attachment_value(
+    value: &BaseValue,
+    timezone: &BasesTimezone,
+    target_filter_sentinel: bool,
+) -> Result<crate::expression::RuntimeValue, ExpressionDiagnostic> {
+    if target_filter_sentinel {
+        if let BaseValue::Error { code, message } = value {
+            return Ok(crate::expression::RuntimeValue::Error(format!(
+                "{code}\0{message}"
+            )));
+        }
+    }
+    crate::expression::runtime_from_base_value(value, timezone)
+}
+
+#[cfg(test)]
+#[path = "relation_filter_sentinel_tests.rs"]
+mod relation_filter_sentinel_tests;
 
 struct Budget<'a> {
     used: usize,
@@ -413,6 +436,7 @@ pub fn query_property_relations(
         evaluation_timezone: options.evaluation.timezone.clone(),
         evaluation_random_seed: options.evaluation.random_seed,
         steps_used: 0,
+        target_filter_phase: false,
     };
     budget.keep(&result.property_names)?;
     budget.keep(&result.read_only_property_names)?;
@@ -534,6 +558,7 @@ pub fn query_property_relations(
         crate::encoded_size(&result, options.max_output_bytes)?;
         return Ok(result);
     }
+    result.target_filter_phase = true;
     let graph = snapshot.relationships.as_ref().ok_or_else(|| {
         ExpressionDiagnostic::new(
             "unavailable",
@@ -686,6 +711,7 @@ pub fn query_property_relations(
         result.relation_targets.insert(name.clone(), targets);
     }
     drop(target_filter_files);
+    result.target_filter_phase = false;
     let mut states = BTreeMap::<RelationKey, RelationState>::new();
     let mut incoming = BTreeMap::<RelationKey, Vec<EntryId>>::new();
     for record in &snapshot.records {
