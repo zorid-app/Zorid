@@ -76,7 +76,7 @@ test('header click toggles sort; context menu uses reference actions and stale m
   const f = fixture({ requestEditProperty() {}, summaryOptions: [{ id: 'Sum', label: 'Sum' }], requestSummary() {} });
   const header = f.main.querySelectorAll<HTMLElement>('[role=columnheader]')[1]; header.click(); await tick();
   assert.deepEqual(f.patches[0], { sort: [{ property: 'note.text', direction: 'ASC' }] });
-  const menu = f.menu(header); assert.deepEqual(menu.map(item => item.textContent), ['Hide column', 'Summarize', 'Group by', 'Sort A to Z', 'Sort Z to A', 'Edit property']);
+  const menu = f.menu(header); assert.deepEqual(menu.map(item => item.textContent), ['Hide column', 'Summarize...', 'Group by this property', 'Sort A → Z', 'Sort Z → A', 'Edit property...', 'Property type']);
   f.view.update({ ...f.result, version: 8 }); menu[0].click(); await tick(); assert.equal(f.patches.length, 1); f.close();
 });
 
@@ -98,4 +98,59 @@ test('rich widget drafts stay mounted across scrolling and every acquired widget
   const cell = f.cell(0, 'note.text'); cell.querySelector('button')!.click(); assert.equal(f.view.hasActiveEdits(), true);
   f.view.refreshLayout(); assert.equal(cell.isConnected, true); assert.equal(f.view.hasActiveEdits(), true);
   f.view.destroy(); assert.equal(disposed, mounted); f.dom.window.close();
+});
+
+
+test('header sort cycles ascending, descending and unsorted while retaining other criteria', async () => {
+  const f = fixture();
+  for (const [direction, expected] of [['ASC', 'DESC'], ['DESC', undefined]] as const) {
+    f.view.update({ ...f.result, version: direction, view: { ...f.result.view, sort: [{ property: 'note.text', direction }, { property: 'note.score', direction: 'DESC' }] } });
+    f.main.querySelectorAll<HTMLElement>('[role=columnheader]')[1].click(); await tick();
+    assert.deepEqual(f.patches.at(-1), { sort: [...(expected ? [{ property: 'note.text', direction: expected }] : []), { property: 'note.score', direction: 'DESC' }] });
+  }
+  f.close();
+});
+
+test('header drag drops on either side and destroy leaves retained drag callbacks inert', async () => {
+  const f = fixture(); const headers = [...f.main.querySelectorAll<HTMLElement>('[role=columnheader]')];
+  Object.defineProperty(headers[1], 'getBoundingClientRect', { value: () => ({ left: 100, width: 100 }) });
+  headers[0].dispatchEvent(new f.dom.window.MouseEvent('dragstart', { bubbles: true, cancelable: true }));
+  headers[1].dispatchEvent(new f.dom.window.MouseEvent('drop', { bubbles: true, cancelable: true, clientX: 190 })); await tick();
+  assert.deepEqual(f.patches[0], { order: ['note.text', 'file.name', 'note.score'] });
+  f.view.destroy(); headers[0].dispatchEvent(new f.dom.window.MouseEvent('dragstart', { bubbles: true, cancelable: true })); headers[1].dispatchEvent(new f.dom.window.MouseEvent('drop', { bubbles: true, cancelable: true })); await tick(); assert.equal(f.patches.length, 1); f.dom.window.close();
+});
+
+
+test('refresh invalidates an active column drag instead of reintroducing its removed property', async () => {
+  const f = fixture(); const header = f.main.querySelectorAll<HTMLElement>('[role=columnheader]')[1];
+  header.dispatchEvent(new f.dom.window.MouseEvent('dragstart', { bubbles: true, cancelable: true }));
+  f.view.update({ ...f.result, version: 8, properties: ['file.name', 'note.score'] });
+  f.main.querySelectorAll<HTMLElement>('[role=columnheader]')[1].dispatchEvent(new f.dom.window.MouseEvent('drop', { bubbles: true, cancelable: true })); await tick();
+  assert.equal(f.patches.length, 0); f.close();
+});
+
+test('derived property definitions remain read-only under clear and every clipboard format', async () => {
+  for (const type of ['rollup', 'reverseRelation']) {
+    const f = fixture({ getPropertyType: property => property === 'note.score' ? type : 'text', renderProperty() {} });
+    const cell = f.cell(0, 'note.score'); cell.focus(); assert.equal(cell.getAttribute('aria-readonly'), 'true');
+    f.key(cell, 'Delete'); f.paste(cell, { 'text/plain': '3' }); f.paste(cell, { 'obsidian/bases-cells': JSON.stringify([[{ type: 'note', data: 3 }]]) }); await tick();
+    assert.equal(f.batches.length, 0); f.close();
+  }
+});
+
+test('raw clipboard passes shared definition validation before any host write', async () => {
+  const f = fixture({ validatePropertyValue(value) { if (value.type !== 'string') throw new Error('This property requires text.'); return value; } });
+  f.cell(0, 'note.text').focus(); f.paste(f.cell(0, 'note.text'), { 'obsidian/bases-cells': JSON.stringify([[{ type: 'note', data: 7 }]]) }); await tick();
+  assert.equal(f.batches.length, 0); assert.match(f.main.textContent!, /requires text/); f.close();
+});
+
+test('summary picker searches Rust previews, applies selection and ignores stale async options', async () => {
+  const selected: string[] = []; let resolve!: (value: {id:string;label:string;preview:{type:'number';value:number}}[]) => void;
+  const f = fixture({ getSummaryOptions: async () => new Promise(done => { resolve = done; }), requestSummary: (_, id) => { selected.push(id); }, requestAddSummary() {} });
+  f.menu(f.main.querySelectorAll<HTMLElement>('[role=columnheader]')[2]).find(button => button.textContent === 'Summarize...')!.click(); await tick();
+  assert.equal(f.dom.window.document.querySelector('[aria-label="Summarize"]')!.textContent!.includes('Loading'), true);
+  resolve([{ id: 'Sum', label: 'Sum', preview: { type: 'number', value: 12345 } }, { id: 'Average', label: 'Average', preview: { type: 'number', value: 4115 } }]); await tick();
+  const input = f.dom.window.document.querySelector<HTMLInputElement>('[aria-label="Find or create summary"]')!; input.value = 'sum'; input.dispatchEvent(new f.dom.window.Event('input', { bubbles: true }));
+  const option = f.dom.window.document.querySelector<HTMLElement>('[role=option]')!; assert.match(option.textContent!, /Sum12345/); f.key(input, 'Enter'); await tick(); assert.deepEqual(selected, ['Sum']);
+  f.menu(f.main.querySelectorAll<HTMLElement>('[role=columnheader]')[2]).find(button => button.textContent === 'Summarize...')!.click(); await tick(); f.view.update({ ...f.result, version: 8 }); resolve([{ id: 'Old', label: 'Old', preview: { type: 'number', value: 1 } }]); await tick(); assert.equal(f.dom.window.document.querySelector('[aria-label="Summarize"]'), null); f.close();
 });

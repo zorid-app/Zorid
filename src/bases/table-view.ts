@@ -1,3 +1,7 @@
+import { showContextMenu } from '../platform/context-menu.ts';
+import type { ContextMenuItem } from '../platform/context-menu.ts';
+import { Text, Binary, Info, SquareCheck, Calendar, CalendarClock, List, Tags, Link, CodeXml, ListFilter, CircleDot, Star, Calculator, Trash2, Search } from 'lucide';
+import type { IconNode } from 'lucide';
 import { parseBaseTableTSV, parsePrimitiveBaseTableInput } from './table-clipboard.ts';
 import type { BaseViewPatch, BaseValue } from './document.ts';
 import type { BasePropertyPresentation } from './presentation-common.ts';
@@ -17,9 +21,12 @@ export interface BaseTableOptions {
   readonly openFile: (path: string, event: MouseEvent | KeyboardEvent) => void;
   /** Host must revalidate version/path/property and publish a new result after saving. */
   readonly editProperty?: (edit: BaseTableEdit) => Promise<void>;
+  readonly getPropertyType?: (property: string) => string | undefined;
   readonly getPropertyLabel?: (property: string) => string;
   readonly onError?: (error: unknown) => void;
   readonly editProperties?: (edits: readonly BaseTableEdit[]) => Promise<void>;
+  readonly isPropertyEditable?: (property: string, row: BaseQueryRow) => boolean;
+  readonly validatePropertyValue?: (value: BaseExpressionValue, property: string, row: BaseQueryRow) => BaseExpressionValue;
   readonly parsePropertyInput?: (raw: string, property: string, row: BaseQueryRow) => BaseExpressionValue;
   readonly renderProperty?: (element: HTMLElement, property: BasePropertyPresentation) => void | (() => void);
   readonly patchView?: (patch: BaseViewPatch) => Promise<void>;
@@ -28,7 +35,13 @@ export interface BaseTableOptions {
   readonly hoverFile?: (row: BaseQueryRow, event: MouseEvent) => void;
   readonly dragFile?: (row: BaseQueryRow, event: DragEvent) => void;
   readonly requestEditProperty?: (property: string, anchor: HTMLElement) => void;
-  readonly summaryOptions?: readonly { id: string; label: string }[];
+  readonly propertyTypes?: readonly { id: string; label: string }[];
+  readonly requestPropertyType?: (property: string, type: string) => void | Promise<void>;
+  readonly summaryOptions?: readonly { id: string; label: string; preview?: BaseExpressionValue }[];
+  readonly getSummaryOptions?: (property: string, groupIndex: number | null) => Promise<readonly { id: string; label: string; preview?: BaseExpressionValue }[]>;
+  readonly requestAddSummary?: (property: string, anchor: HTMLElement, name?: string) => void;
+  readonly requestEditSummary?: (property: string, id: string, anchor: HTMLElement) => void;
+  readonly requestHideSummary?: (property: string) => void | Promise<void>;
   readonly requestSummary?: (property: string, id: string) => void | Promise<void>;
   readonly undo?: () => void | Promise<void>;
   readonly redo?: () => void | Promise<void>;
@@ -38,6 +51,7 @@ export interface BaseTableOptions {
 }
 export interface BaseTableView { update(result: BaseQueryResult): void; refreshLayout(): void; hasActiveEdits(): boolean; destroy(): void }
 type Item = { row: BaseQueryRow; groupIndex: number; rowIndex: number; group?: never; summary?: never } | { group: number; row?: never; summary?: never } | { summary: number | null; row?: never; group?: never };
+type TableMenuEntry = { label: string; action?: () => void; disabled?: boolean; checked?: boolean; submenu?: readonly TableMenuEntry[] };
 type CellPoint = { group: number; row: number; column: number };
 type CellRange = { group: number; top: number; bottom: number; start: number; end: number };
 function cellBounds(a: CellPoint, b = a): CellRange {
@@ -100,7 +114,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   const collapsed = new Set<number>();
   const widgetDisposers = new Map<HTMLElement, () => void>();
   let bulkPending = false, configPending = false;
-  let menu: HTMLElement | undefined, closeMenu: (() => void) | undefined;
+  let closeMenu: (() => void) | undefined, closePicker: (() => void) | undefined;
   let widths = new Map<string, number>(), resizeWidths = new Map<string, number>();
   const measuredWidths = new Map<string, number>();
   let stopResize: (() => void) | undefined, draggedColumn: string | undefined;
@@ -121,14 +135,18 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     status.textContent = error instanceof Error ? error.message : String(error);
     try { options.onError?.(error); } catch { /* Reporting cannot interrupt disposal or sibling commands. */ }
   }
+  function writableProperty(row: BaseQueryRow, property: string) {
+    const kind = options.getPropertyType?.(property);
+    return !!(options.editProperty || options.editProperties) && /\.md$/i.test(row.path) && property.startsWith('note.') && !['rollup', 'reverseRelation', 'reverse-relation'].includes(kind ?? '') && (options.isPropertyEditable?.(property, row) ?? true);
+  }
   function editable(row: BaseQueryRow, property: string, value: BaseExpressionValue) {
-    return !!(options.editProperty || options.editProperties) && /\.md$/i.test(row.path) && property.startsWith('note.') && (primitiveTypes.has(value.type) || !!options.renderProperty);
+    return writableProperty(row, property) && (primitiveTypes.has(value.type) || !!options.renderProperty);
   }
   function dimensions() {
     const base = Number.parseFloat(win?.getComputedStyle(root).getPropertyValue('--bases-table-row-height') ?? '') || 30;
     const multiplier = result.view.rowHeight === 'medium' ? 2 : result.view.rowHeight === 'tall' ? 4 : result.view.rowHeight === 'extra' ? 8 : 1;
     rowHeight = Math.max(1, base) * multiplier;
-    root.style.setProperty('--zorid-base-row-height', `${rowHeight}px`);
+    root.style.setProperty('--zorid-base-row-height', `${rowHeight}px`); root.classList.toggle('is-multiline', multiplier > 1);
     const sizes = result.view.columnSize;
     widths = new Map(result.properties.map(property => {
       const size = sizes && typeof sizes === 'object' && !Array.isArray(sizes) ? (sizes as Record<string, unknown>)[property] : undefined;
@@ -155,29 +173,84 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     body.style.height = `${items.length * rowHeight}px`;
     root.setAttribute('aria-rowcount', String(items.length + 1)); root.setAttribute('aria-colcount', String(result.properties.length));
   }
-  function showMenu(event: MouseEvent, entries: { label: string; action: () => void; disabled?: boolean }[], returnFocus: HTMLElement) {
-    event.preventDefault(); event.stopPropagation(); closeMenu?.();
-    const token = revision;
-    menu = doc.createElement('div'); const ownedMenu = menu; menu.className = 'zorid-bases-table-menu context-menu'; menu.setAttribute('role', 'menu');
-    const rect = root.getBoundingClientRect();
-    menu.style.left = `${Math.max(rect.left, Math.min(event.clientX || returnFocus.getBoundingClientRect().left, (win?.innerWidth ?? 1000) - 230))}px`;
-    menu.style.top = `${Math.max(0, Math.min(event.clientY || returnFocus.getBoundingClientRect().bottom, (win?.innerHeight ?? 800) - entries.length * 30 - 12))}px`;
-    for (const entry of entries) {
-      const button = doc.createElement('button'); button.type = 'button'; button.className = 'context-menu-item'; button.textContent = entry.label; button.setAttribute('role', 'menuitem'); button.disabled = !!entry.disabled;
-      button.addEventListener('click', () => { if (destroyed || token !== revision || menu !== ownedMenu || !button.isConnected || button.disabled) return; closeMenu?.(); entry.action(); }); menu.append(button);
-    }
-    const outside = (event: Event) => { if (!menu?.contains(event.target as Node)) closeMenu?.(); };
+  function svgIcon(nodes: IconNode): SVGSVGElement {
+    const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    for (const [key, value] of Object.entries({ viewBox: '0 0 24 24', width: '16', height: '16', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.75', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', focusable: 'false', class: 'svg-icon lucide' })) svg.setAttribute(key, value);
+    for (const [name, attributes] of nodes) { const path = doc.createElementNS(svg.namespaceURI, name); for (const [key, value] of Object.entries(attributes)) if (value !== undefined) path.setAttribute(key, String(value)); svg.append(path); }
+    return svg;
+  }
+  function propertyGlyph(property: string): SVGSVGElement {
+    const value = result.rows.find(row => row.values[property]?.type !== 'null')?.values[property];
+    const kind = options.getPropertyType?.(property) ?? value?.type ?? 'text';
+    const glyphs: Record<string, IconNode> = { text: Text, string: Text, number: Binary, checkbox: SquareCheck, boolean: SquareCheck, date: Calendar, datetime: CalendarClock, 'date-time': CalendarClock, list: List, tags: Tags, multiselect: Tags, link: Link, relation: Link, select: ListFilter, status: CircleDot, rating: Star };
+    return svgIcon(property.startsWith('formula.') ? CodeXml : property === 'file.name' || property === 'file.file' ? Info : glyphs[kind] ?? Text);
+  }
+  function showMenu(event: MouseEvent, entries: readonly TableMenuEntry[], returnFocus: HTMLElement) {
+    event.preventDefault(); event.stopPropagation(); closeMenu?.(); closePicker?.();
+    const token = revision, controller = new AbortController(); closeMenu = () => controller.abort();
+    const actions = new Map<string, () => void>(); let next = 0;
+    const map = (entries: readonly TableMenuEntry[]): ContextMenuItem[] => entries.flatMap(entry => {
+      const id = String(next++); if (entry.action) actions.set(id, entry.action);
+      const icons: Record<string, string> = { 'Hide column': 'eye-off', 'Summarize...': 'calculator', 'Group by this property': 'group', 'Sort A → Z': 'arrow-down-wide-narrow', 'Sort Z → A': 'arrow-up-narrow-wide', 'Remove sort': 'eraser', 'Edit property...': 'edit', 'Edit formula...': 'code', 'Property type': 'info', Copy: 'copy', Paste: 'clipboard-paste', 'Clear selection': 'eraser', Delete: 'trash', 'Select row': 'rows-3', 'Select column': 'columns-3' };
+      const item = { label: entry.label, enabled: !entry.disabled, icon: icons[entry.label], ...(entry.submenu ? { submenu: map(entry.submenu) } : { id }), ...(entry.checked === undefined ? {} : { checked: entry.checked }) };
+      return ['Sort A → Z', 'Edit property...', 'Edit formula...', 'Property type', 'Clear selection'].includes(entry.label) ? [{ type: 'separator' } as ContextMenuItem, item] : [item];
+    });
+    const rect = returnFocus.getBoundingClientRect();
+    const current = () => !destroyed && token === revision && returnFocus.isConnected && !controller.signal.aborted && !hasActiveEdits();
+    void showContextMenu({ clientX: event.clientX || rect.left, clientY: event.clientY || rect.bottom, preventDefault() {}, stopPropagation() {} }, map(entries), { document: doc, signal: controller.signal, isCurrent: current }).then(id => {
+      if (!current() || id === null) return; closeMenu = undefined; actions.get(id)?.();
+    }).catch(report);
+  }
+  function showSummaryPicker(property: string, anchor: HTMLElement, groupIndex: number | null = null) {
+    closeMenu?.(); closePicker?.();
+    if (!options.requestSummary || destroyed || hasActiveEdits()) return;
+    const token = revision, popup = doc.createElement('div'); popup.className = 'zorid-bases-summary-picker'; popup.setAttribute('role', 'dialog'); popup.setAttribute('aria-label', 'Summarize');
+    const search = doc.createElement('input'); search.type = 'search'; search.placeholder = 'Find or create...'; search.setAttribute('aria-label', 'Find or create summary');
+    const searchRow = doc.createElement('div'); searchRow.className = 'zorid-bases-summary-search'; searchRow.append(svgIcon(Search), search);
+    const list = doc.createElement('div'); list.className = 'zorid-bases-summary-list'; list.setAttribute('role', 'listbox'); popup.append(searchRow, list);
+    const rect = anchor.getBoundingClientRect(); popup.style.left = `${Math.max(4, Math.min(rect.left, (win?.innerWidth ?? 1024) - 224))}px`; popup.style.top = `${Math.max(4, Math.min(rect.bottom + 4, (win?.innerHeight ?? 768) - 380))}px`;
+    let active = 0, disposed = false, choices: readonly { id: string; label: string; preview?: BaseExpressionValue }[] = [];
+    const current = () => !disposed && !destroyed && revision === token && anchor.isConnected;
+    const dismiss = (restoreFocus = true) => {
+      if (disposed) return; disposed = true; popup.remove(); doc.removeEventListener('pointerdown', outside, true); doc.removeEventListener('keydown', key, true); if (closePicker === close) closePicker = undefined; if (restoreFocus && anchor.isConnected) anchor.focus({ preventScroll: true });
+    };
+    const close = () => dismiss(false); closePicker = close;
+    const outside = (event: Event) => { if (!popup.contains(event.target as Node)) dismiss(false); };
+    const select = (id: string) => { if (!current()) return; dismiss(); Promise.resolve(options.requestSummary?.(property, id)).catch(report); };
+    const draw = () => {
+      if (!current()) return; list.replaceChildren(); const query = search.value.trim().toLocaleLowerCase();
+      const filtered = choices.filter(choice => choice.label.toLocaleLowerCase().includes(query));
+      const setActive = (index: number) => { active = Math.max(0, Math.min(index, filtered.length - 1)); for (const [i, row] of [...list.querySelectorAll<HTMLElement>('[role=option]')].entries()) { row.classList.toggle('is-selected', i === active); row.setAttribute('aria-selected', String(i === active)); } };
+      for (const [index, choice] of filtered.entries()) {
+        const row = doc.createElement('div'); row.className = 'zorid-bases-summary-option'; row.setAttribute('role', 'option'); row.dataset.summaryId = choice.id;
+        const label = doc.createElement('span'); label.className = 'zorid-bases-summary-label'; label.textContent = choice.label;
+        const preview = doc.createElement('span'); preview.className = 'zorid-bases-summary-preview'; preview.textContent = choice.preview ? display(choice.preview, result.shared !== undefined) : '';
+        row.append(svgIcon(choice.preview?.type === 'number' ? Binary : choice.preview?.type === 'string' ? Text : Calculator), label, preview);
+        const edit = doc.createElement('button'); edit.type = 'button'; edit.className = 'zorid-bases-summary-edit'; edit.textContent = '›'; edit.setAttribute('aria-label', `Edit ${choice.label}`); edit.disabled = !options.requestEditSummary;
+        edit.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); if (!current()) return; dismiss(); options.requestEditSummary?.(property, choice.id, anchor); }); row.append(edit);
+        row.addEventListener('pointerdown', event => event.preventDefault()); row.addEventListener('mouseenter', () => setActive(index)); row.addEventListener('click', () => select(choice.id)); list.append(row);
+      }
+      const add = doc.createElement('button'); add.type = 'button'; add.className = 'zorid-bases-summary-add'; add.textContent = query && !choices.some(choice => choice.label.toLocaleLowerCase() === query) ? `Add summary: ${search.value.trim()}` : 'Add summary'; add.prepend(svgIcon(Calculator)); add.disabled = !options.requestAddSummary;
+      add.addEventListener('click', () => { if (!current()) return; const name = search.value.trim(); dismiss(); options.requestAddSummary?.(property, anchor, name || undefined); }); list.append(add);
+      const summaries = result.view.summaries;
+      if (options.requestHideSummary && summaries && typeof summaries === 'object' && !Array.isArray(summaries) && (Object.hasOwn(summaries, property) || Object.hasOwn(summaries, property.replace(/^note\./, '')))) {
+        const hide = doc.createElement('button'); hide.type = 'button'; hide.className = 'zorid-bases-summary-add'; hide.textContent = 'Hide summary'; hide.prepend(svgIcon(Trash2)); hide.addEventListener('click', () => { if (!current()) return; dismiss(); Promise.resolve(options.requestHideSummary?.(property)).catch(report); }); list.append(hide);
+      }
+      setActive(active);
+    };
     const key = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); closeMenu?.(); }
-      else if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') {
-        event.preventDefault(); const buttons = [...menu!.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
-        const index = buttons.indexOf(doc.activeElement as HTMLButtonElement);
-        buttons[event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus();
+      if (!current() || !popup.contains(doc.activeElement)) return;
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismiss(); }
+      else if (!event.isComposing && ['ArrowUp', 'ArrowDown', 'Enter', 'ArrowRight'].includes(event.key)) {
+        const rows = [...list.querySelectorAll<HTMLElement>('[role=option]')]; event.preventDefault(); event.stopPropagation();
+        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { active = rows.length ? (active + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length : 0; draw(); }
+        else if (event.key === 'Enter') { const id = rows[active]?.dataset.summaryId; if (id) select(id); else list.querySelector<HTMLButtonElement>('.zorid-bases-summary-add:not(:disabled)')?.click(); }
+        else { const id = rows[active]?.dataset.summaryId; if (id && options.requestEditSummary) { dismiss(); options.requestEditSummary(property, id, anchor); } }
       }
     };
-    closeMenu = () => { menu?.remove(); menu = undefined; doc.removeEventListener('pointerdown', outside, true); doc.removeEventListener('keydown', key, true); closeMenu = undefined; if (returnFocus.isConnected) returnFocus.focus({ preventScroll: true }); };
-    doc.body.append(menu); doc.addEventListener('pointerdown', outside, true); doc.addEventListener('keydown', key, true);
-    menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+    search.addEventListener('input', () => { active = 0; draw(); }); doc.body.append(popup); doc.addEventListener('pointerdown', outside, true); doc.addEventListener('keydown', key, true); search.focus();
+    list.textContent = 'Loading...';
+    Promise.resolve().then(() => options.getSummaryOptions ? options.getSummaryOptions(property, groupIndex) : options.summaryOptions ?? []).then(options => { if (!current()) return; choices = [...options].sort((a, b) => a.label.localeCompare(b.label)); draw(); }).catch(error => { if (current()) { list.textContent = error instanceof Error ? error.message : String(error); report(error); } });
   }
   function selectColumn(index: number) {
     const group = selection?.point?.group ?? 0;
@@ -188,7 +261,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   function setColumnWidth(property: string, width?: number) {
     const sizes = result.view.columnSize;
     const next: Record<string, BaseValue> = { ...(sizes && typeof sizes === 'object' && !Array.isArray(sizes) ? sizes as Record<string, BaseValue> : {}) };
-    if (width === undefined) { delete next[property]; measuredWidths.delete(property); } else next[property] = Math.round(Math.max(40, Math.min(2000, width)));
+    if (width === undefined) { delete next[property]; measuredWidths.delete(property); } else next[property] = Math.round(Math.max(40, width));
     resizeWidths.clear(); void patch({ columnSize: next }); dimensions(); renderRows();
   }
   function autoWidth(property: string): number {
@@ -196,8 +269,8 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     const min = Number.parseFloat(win?.getComputedStyle(root).getPropertyValue('--bases-table-column-min-width') ?? '') || 40;
     const max = Number.parseFloat(win?.getComputedStyle(root).getPropertyValue('--bases-table-column-max-width') ?? '') || 300;
     let width = min;
-    for (const text of [options.getPropertyLabel?.(property) ?? property.replace(/^(?:note|file|formula)\./, ''), ...result.rows.map(row => display(row.values[property] ?? BASE_NULL, result.shared !== undefined))]) {
-      probe.textContent = text; width = Math.max(width, Math.min(max, probe.getBoundingClientRect().width + 32));
+    for (const [index, text] of [options.getPropertyLabel?.(property) ?? property.replace(/^(?:note|file|formula)\./, ''), ...result.rows.map(row => display(row.values[property] ?? BASE_NULL, result.shared !== undefined))].entries()) {
+      probe.textContent = text; width = Math.max(width, Math.min(max, probe.getBoundingClientRect().width + (index === 0 ? 40 : 17)));
       if (width >= max) break;
     }
     probe.remove(); measuredWidths.set(property, width); return width;
@@ -208,12 +281,13 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     const sorted = Array.isArray(result.view.sort) ? result.view.sort.find(item => item && typeof item === 'object' && !Array.isArray(item) && item.property === property) : undefined;
     showMenu(event, [
       { label: 'Hide column', disabled, action: () => { void patch({ order: result.properties.filter(item => item !== property) }); } },
-      { label: 'Summarize', disabled: !options.requestSummary || !options.summaryOptions?.length, action: () => showMenu(event, options.summaryOptions!.map(option => ({ label: option.label, action: () => { Promise.resolve(options.requestSummary?.(property, option.id)).catch(report); } })), cell) },
-      { label: 'Group by', disabled, action: () => { void patch({ groupBy: { property, direction: 'ASC' } }); } },
-      { label: 'Sort A to Z', disabled, action: () => { void patch({ sort: [{ property, direction: 'ASC' }, ...sort] }); } },
-      { label: 'Sort Z to A', disabled, action: () => { void patch({ sort: [{ property, direction: 'DESC' }, ...sort] }); } },
+      { label: 'Summarize...', disabled: !options.requestSummary || (!options.getSummaryOptions && !options.summaryOptions?.length), action: () => showSummaryPicker(property, cell) },
+      { label: 'Group by this property', disabled, action: () => { void patch({ groupBy: { property, direction: 'ASC' } }); } },
+      { label: 'Sort A → Z', disabled, action: () => { void patch({ sort: [{ property, direction: 'ASC' }, ...sort] }); } },
+      { label: 'Sort Z → A', disabled, action: () => { void patch({ sort: [{ property, direction: 'DESC' }, ...sort] }); } },
       ...(sorted ? [{ label: 'Remove sort', disabled, action: () => { void patch({ sort }); } }] : []),
-      { label: property.startsWith('formula.') ? 'Edit formula' : 'Edit property', disabled: !options.requestEditProperty || hasActiveEdits(), action: () => options.requestEditProperty?.(property, cell) },
+      { label: property.startsWith('formula.') ? 'Edit formula...' : 'Edit property...', disabled: !options.requestEditProperty || hasActiveEdits(), action: () => options.requestEditProperty?.(property, cell) },
+      ...(property.startsWith('note.') ? [{ label: 'Property type', disabled: !options.requestPropertyType || !options.propertyTypes?.length, submenu: options.propertyTypes?.map(type => ({ label: type.label, checked: options.getPropertyType?.(property) === type.id, action: () => { Promise.resolve(options.requestPropertyType?.(property, type.id)).catch(report); } })) }] : []),
     ], cell);
   }
   function renderHeader() {
@@ -223,7 +297,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       cell.setAttribute('role', 'columnheader'); cell.setAttribute('aria-colindex', String(index + 1)); cell.tabIndex = -1;
       cell.textContent = options.getPropertyLabel?.(property) ?? property.replace(/^(?:note|file|formula)\./, '');
       cell.title = property;
-      const label = doc.createElement('span'); label.className = 'zorid-bases-table-header-name'; label.textContent = cell.textContent; cell.replaceChildren(label);
+      const label = doc.createElement('span'); label.className = 'zorid-bases-table-header-name'; label.textContent = cell.textContent; cell.replaceChildren(propertyGlyph(property), label);
       const sorted = Array.isArray(result.view.sort) ? result.view.sort.find(item => item && typeof item === 'object' && !Array.isArray(item) && item.property === property) : undefined;
       if (sorted && typeof sorted === 'object' && !Array.isArray(sorted)) { const indicator = doc.createElement('span'); indicator.className = 'zorid-bases-table-sort-indicator'; indicator.setAttribute('aria-label', sorted.direction === 'DESC' ? 'Sorted descending' : 'Sorted ascending'); indicator.textContent = sorted.direction === 'DESC' ? '↓' : '↑'; cell.setAttribute('aria-sort', sorted.direction === 'DESC' ? 'descending' : 'ascending'); cell.append(indicator); }
       const token = revision, current = () => !destroyed && token === revision && header.contains(cell);
@@ -231,18 +305,18 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       const toggleSort = () => {
         const sort = Array.isArray(result.view.sort) ? result.view.sort.filter(item => item && typeof item === 'object' && !Array.isArray(item) && item.property !== property) : [];
         const previous = Array.isArray(result.view.sort) ? result.view.sort.find(item => item && typeof item === 'object' && !Array.isArray(item) && item.property === property) : undefined;
-        const direction = previous && typeof previous === 'object' && !Array.isArray(previous) && previous.direction === 'ASC' ? 'DESC' : 'ASC';
-        void patch({ sort: [{ property, direction }, ...sort] });
+        const direction = previous && typeof previous === 'object' && !Array.isArray(previous) ? previous.direction === 'ASC' ? 'DESC' : undefined : 'ASC';
+        void patch({ sort: direction ? [{ property, direction }, ...sort] : sort });
       };
       cell.addEventListener('click', event => { if (current() && !event.defaultPrevented && !(event.target as Element).closest('.zorid-bases-table-resize')) { event.preventDefault(); toggleSort(); } });
       cell.addEventListener('keydown', event => { if ((event.key === 'Enter' || event.key === ' ') && current()) { event.preventDefault(); toggleSort(); } });
       if (options.patchView) {
         cell.draggable = true;
         cell.addEventListener('dragstart', event => { if (!current() || hasActiveEdits()) { event.preventDefault(); return; } draggedColumn = property; event.dataTransfer?.setData('application/x-zorid-base-column', property); if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'; });
-        cell.addEventListener('dragover', event => { if (current() && draggedColumn && draggedColumn !== property) { event.preventDefault(); cell.classList.add('is-drop-target'); } });
-        cell.addEventListener('dragleave', () => cell.classList.remove('is-drop-target'));
-        cell.addEventListener('drop', event => { event.preventDefault(); cell.classList.remove('is-drop-target'); if (!current() || !draggedColumn || draggedColumn === property) return; const order = result.properties.filter(item => item !== draggedColumn); order.splice(order.indexOf(property), 0, draggedColumn); draggedColumn = undefined; void patch({ order }); });
-        cell.addEventListener('dragend', () => { draggedColumn = undefined; for (const cell of header.children) cell.classList.remove('is-drop-target'); });
+        cell.addEventListener('dragover', event => { if (current() && draggedColumn && draggedColumn !== property) { event.preventDefault(); const rect = cell.getBoundingClientRect(), after = win?.getComputedStyle(root).direction === 'rtl' ? event.clientX < rect.left + rect.width / 2 : event.clientX > rect.left + rect.width / 2; cell.classList.add('is-drop-target'); cell.classList.toggle('is-drop-after', after); } });
+        cell.addEventListener('dragleave', () => cell.classList.remove('is-drop-target', 'is-drop-after'));
+        cell.addEventListener('drop', event => { event.preventDefault(); const rect = cell.getBoundingClientRect(), after = win?.getComputedStyle(root).direction === 'rtl' ? event.clientX < rect.left + rect.width / 2 : event.clientX > rect.left + rect.width / 2; cell.classList.remove('is-drop-target', 'is-drop-after'); if (!current() || !draggedColumn || !result.properties.includes(draggedColumn) || draggedColumn === property) return; const order = result.properties.filter(item => item !== draggedColumn); order.splice(order.indexOf(property) + (after ? 1 : 0), 0, draggedColumn); draggedColumn = undefined; void patch({ order }); });
+        cell.addEventListener('dragend', () => { draggedColumn = undefined; for (const cell of header.children) cell.classList.remove('is-drop-target', 'is-drop-after'); });
         const handle = doc.createElement('span'); handle.className = 'zorid-bases-table-resize'; handle.setAttribute('role', 'separator'); handle.setAttribute('aria-label', `Resize ${options.getPropertyLabel?.(property) ?? property}`); handle.setAttribute('aria-orientation', 'vertical'); handle.tabIndex = 0;
         handle.addEventListener('click', event => event.stopPropagation());
         handle.addEventListener('dblclick', event => { event.preventDefault(); event.stopPropagation(); if (current()) setColumnWidth(property); });
@@ -252,7 +326,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
           event.preventDefault(); event.stopPropagation(); stopResize?.();
           const start = event.clientX, initial = widths.get(property) ?? 180;
           let changed = false;
-          const move = (next: PointerEvent) => { if (!current() || next.pointerId !== event.pointerId) return; changed = true; resizeWidths.set(property, Math.max(40, Math.min(2000, initial + next.clientX - start))); dimensions(); };
+          const move = (next: PointerEvent) => { if (!current() || next.pointerId !== event.pointerId) return; changed = true; resizeWidths.set(property, Math.max(40, initial + (next.clientX - start) * (win?.getComputedStyle(root).direction === 'rtl' ? -1 : 1))); dimensions(); };
           const finish = (next: PointerEvent) => { if (next.pointerId !== event.pointerId) return; const width = resizeWidths.get(property); stopResize?.(); if (changed && next.type !== 'pointercancel' && current()) setColumnWidth(property, width); else { resizeWidths.clear(); dimensions(); } };
           const blur = () => { stopResize?.(); resizeWidths.clear(); dimensions(); };
           stopResize = () => { win?.removeEventListener('pointermove', move); win?.removeEventListener('pointerup', finish); win?.removeEventListener('pointercancel', finish); win?.removeEventListener('blur', blur); stopResize = undefined; };
@@ -306,6 +380,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
         }
         next = { type: 'number', value: n };
       } else next = { type: 'string', value: input.value };
+      try { next = options.validatePropertyValue?.(next, property, row) ?? next; } catch (error) { input.setAttribute('aria-invalid', 'true'); report(error); return; }
       saving = true; input.disabled = true; cell.setAttribute('aria-busy', 'true');
       try {
         if (options.editProperty) await options.editProperty({ version, path: row.path, property, value: next });
@@ -331,6 +406,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     const cell = doc.createElement('div'), value = row.values[property] ?? BASE_NULL, token = revision;
     const current = () => !destroyed && token === revision && body.contains(cell);
     cell.className = 'zorid-bases-table-cell'; cell.setAttribute('role', 'gridcell'); cell.setAttribute('aria-colindex', String(index + 1));
+    cell.dataset.valueType = options.getPropertyType?.(property) ?? value.type;
     cell.dataset.path = row.path; cell.dataset.property = property; cell.dataset.group = String(point.group); cell.dataset.row = String(point.row); cell.dataset.column = String(index);
     cell.tabIndex = selection?.path === row.path && selection.property === property && (!selection.point || selection.point.group === point.group && selection.point.row === point.row) ? 0 : -1;
     cell.setAttribute('aria-readonly', String(!editable(row, property, value)));
@@ -501,9 +577,9 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       const summary = options.getSummary?.(property, null);
       if (summary) { cell.textContent = display(summary.value, result.shared !== undefined); if (summary.label) cell.title = summary.label; }
       else { const placeholder = doc.createElement('span'); placeholder.className = 'placeholder'; placeholder.textContent = 'Summarize'; cell.append(placeholder); }
-      if (options.requestSummary && options.summaryOptions?.length) {
+      if (options.requestSummary && (options.getSummaryOptions || options.summaryOptions?.length)) {
         cell.tabIndex = 0; const token = revision;
-        const open = (event: MouseEvent) => { if (destroyed || token !== revision || hasActiveEdits()) return; showMenu(event, options.summaryOptions!.map(option => ({ label: option.label, action: () => { Promise.resolve(options.requestSummary?.(property, option.id)).catch(report); } })), cell); };
+        const open = (event: MouseEvent) => { if (destroyed || token !== revision || hasActiveEdits()) return; event.preventDefault(); showSummaryPicker(property, cell); };
         cell.addEventListener('click', open); cell.addEventListener('contextmenu', open);
         cell.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(new win!.MouseEvent('click')); } });
       }
@@ -591,7 +667,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       const row = result.groups[bounds.group]?.rows[r]; if (!row) continue;
       for (let c = bounds.start; c <= bounds.end; c++) {
         const property = result.properties[c], value = row.values[property] ?? BASE_NULL;
-        if (/\.md$/i.test(row.path) && property.startsWith('note.') && value.type !== 'null') edits.push({ version: result.version, path: row.path, property, value: BASE_NULL });
+        if (writableProperty(row, property) && value.type !== 'null') edits.push({ version: result.version, path: row.path, property, value: BASE_NULL });
       }
     }
     await commitBatch(edits);
@@ -635,12 +711,12 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
         const row = group.rows[bounds.top + r];
         for (let c = 0; c < width; c++) {
           const property = result.properties[bounds.start + c], current = row.values[property] ?? BASE_NULL;
-          if (!editable(row, property, current)) continue;
+          if (!writableProperty(row, property)) continue;
           const raw = rows[r % sourceHeight][c % sourceWidth];
           const rawCell = rawRows?.[r % sourceHeight]?.[c % sourceWidth];
           if (rawCell && (rawCell.type !== 'note' || !Object.hasOwn(rawCell, 'data'))) continue;
           const value = rawCell ? baseExpressionValue(rawCell.data) : options.parsePropertyInput ? options.parsePropertyInput(raw, property, row) : parsePrimitiveBaseTableInput(raw, current);
-          edits.push({ version: result.version, path: row.path, property, value });
+          edits.push({ version: result.version, path: row.path, property, value: options.validatePropertyValue?.(value, property, row) ?? value });
         }
       }
       // Complete validation precedes the host command. The host owns CAS, undo and partial failure reporting.
@@ -704,7 +780,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   function update(next: BaseQueryResult) {
     if (destroyed || (initialized && next === result)) return;
     const cancelledDraft = !!editing;
-    initialized = true; revision++; stopDrag?.(); stopResize?.(); closeMenu?.(); resizeWidths.clear(); measuredWidths.clear(); for (const cell of [...widgetDisposers.keys()]) releaseCell(cell); for (const cell of root.querySelectorAll('[data-base-editing]')) cell.removeAttribute('data-base-editing'); range = undefined; anchor = undefined; if (selection) selection.point = undefined; editing = undefined; result = next; collapsed.clear();
+    initialized = true; revision++; stopDrag?.(); stopResize?.(); closeMenu?.(); closePicker?.(); draggedColumn = undefined; resizeWidths.clear(); measuredWidths.clear(); for (const cell of [...widgetDisposers.keys()]) releaseCell(cell); for (const cell of root.querySelectorAll('[data-base-editing]')) cell.removeAttribute('data-base-editing'); range = undefined; anchor = undefined; if (selection) selection.point = undefined; editing = undefined; result = next; collapsed.clear();
     status.textContent = cancelledDraft ? 'Results changed. The unfinished edit was cancelled.' : '';
     root.setAttribute('aria-label', result.view.name);
     if (!selection || !result.rows.some(row => row.path === selection!.path) || !result.properties.includes(selection.property)) selection = result.rows[0] && result.properties[0] ? { path: result.rows[0].path, property: result.properties[0] } : undefined;
@@ -715,5 +791,5 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     if (!result.rows.length) status.textContent += `${status.textContent ? ' ' : ''}No results`;
   }
   update(result);
-  return { update, refreshLayout() { if (!destroyed) { dimensions(); rebuildItems(); renderRows(); } }, hasActiveEdits, destroy() { if (destroyed) return; destroyed = true; revision++; stopDrag?.(); stopResize?.(); closeMenu?.(); editObserver?.disconnect(); for (const cell of [...widgetDisposers.keys()]) releaseCell(cell); root.removeEventListener('paste', onPaste); root.removeEventListener('keydown', onHistory); root.removeEventListener('copy', onCopy); root.removeEventListener('pointerdown', onPointerDown); editing = undefined; if (frame !== undefined) win?.cancelAnimationFrame(frame); resize?.disconnect(); root.removeEventListener('scroll', schedule); root.remove(); status.remove(); } };
+  return { update, refreshLayout() { if (!destroyed) { dimensions(); rebuildItems(); renderRows(); } }, hasActiveEdits, destroy() { if (destroyed) return; destroyed = true; revision++; stopDrag?.(); stopResize?.(); closeMenu?.(); closePicker?.(); draggedColumn = undefined; editObserver?.disconnect(); for (const cell of [...widgetDisposers.keys()]) releaseCell(cell); root.removeEventListener('paste', onPaste); root.removeEventListener('keydown', onHistory); root.removeEventListener('copy', onCopy); root.removeEventListener('pointerdown', onPointerDown); editing = undefined; if (frame !== undefined) win?.cancelAnimationFrame(frame); resize?.disconnect(); root.removeEventListener('scroll', schedule); root.remove(); status.remove(); } };
 }
