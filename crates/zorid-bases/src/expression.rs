@@ -21,6 +21,9 @@ mod collection_tests;
 #[cfg(test)]
 #[path = "expression_title_date_tests.rs"]
 mod title_date_tests;
+#[cfg(test)]
+#[path = "expression_relational_tests.rs"]
+mod relational_tests;
 #[path = "expression_signatures.rs"]
 mod call_signatures;
 #[path = "expression_format.rs"]
@@ -4115,6 +4118,36 @@ impl<'a> Evaluator<'a> {
         right: &RuntimeValue,
         operator: &str,
     ) -> Result<bool, String> {
+        let numeric = |left: f64, right: f64| match operator {
+            ">" => left > right,
+            "<" => left < right,
+            ">=" => left >= right,
+            _ => left <= right,
+        };
+        // Only a LEFT Date parses String-derived raw data. Failed parsing keeps
+        // the original RHS for JS numeric coercion (NaN compares false); the
+        // reversed orientation never parses the String as a Date.
+        if let RuntimeValue::Date(date) = left {
+            if let Some(text) = string_data(right) {
+                self.charge(text.len() / 16 + 1).map_err(|error| match error {
+                    RuntimeValue::Error(message) => message,
+                    _ => unreachable!("work admission returns diagnostics"),
+                })?;
+                let right = match parse_frontmatter_date(text, &self.timezone) {
+                    Some(parsed) => parsed.millis as f64,
+                    None => self.duration_relational_number(right)?,
+                };
+                return Ok(numeric(date.millis as f64, right));
+            }
+        }
+        if let RuntimeValue::Date(date) = right {
+            if string_data(left).is_some() {
+                return Ok(numeric(
+                    self.duration_relational_number(left)?,
+                    date.millis as f64,
+                ));
+            }
+        }
         // Duration comparison uses the same captured calendar anchor as fields
         // and loose equality. Only the right String is duration-coerced here,
         // matching the reference's asymmetric relational dispatch.
@@ -4126,7 +4159,7 @@ impl<'a> Evaluator<'a> {
                     None => self.duration_relational_number(right)?,
                 }
             } else { self.duration_relational_number(right)? };
-            return Ok(match operator {">" => a > b, "<" => a < b, ">=" => a >= b, _ => a <= b});
+            return Ok(numeric(a, b));
         }
         let ordering = if let (
             RuntimeValue::String(left) | RuntimeValue::Tag(left),

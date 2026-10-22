@@ -15,6 +15,9 @@
 // meaning; raw extrema strings use the hyphenated parser, while explicit date()
 // retains its compact constructor fallback. Historical browser009 had133 row
 // checks; the13 new checks below require fresh matching native/WASM acceptance.
+// G18 adds16 typed Date/String relational and existing-null-guard expectations.
+// Prior browser010/CLI007 accepted146 checks; these new cases (162 total) need
+// fresh matching native/WASM execution. No null production semantic was changed.
 export const q3ClockMs = 1706702400000; // 2024-01-31T12:00:00.000Z
 export const q3Timezone = 'UTC';
 export const q3Folders = [['q3-dir','Q3']];
@@ -245,6 +248,22 @@ const durationJanuary=single('duration-january','Q3 Duration components, null in
   ['percentYearToken','date("2024-01-21T19:04:05.067Z").format("%YYYY")',s('%2024')],
   ['percentSingleYearToken','date("2024-01-21T19:04:05.067Z").format("%Y")',s('%2024')],
   ['percentMomentNotStrftime','date("2024-01-21T19:04:05.067Z").format("%Y-%m-%d")',s('%2024-%4-%0')],
+  ['dateQuotedLess','date("2024-01-02") < "2024-01-01"',b(false)],
+  ['dateQuotedGreater','date("2024-01-02") > "2024-01-01"',b(true)],
+  ['dateQuotedAtMost','date("2024-01-02") <= "2024-01-01"',b(false)],
+  ['dateQuotedAtLeast','date("2024-01-02") >= "2024-01-01"',b(true)],
+  ['dateInvalidLess','date("2024-01-01") < "invalid"',b(false)],
+  ['dateInvalidGreater','date("2024-01-01") > "invalid"',b(false)],
+  ['dateInvalidAtMost','date("2024-01-01") <= "invalid"',b(false)],
+  ['dateInvalidAtLeast','date("2024-01-01") >= "invalid"',b(false)],
+  ['dateReverseLess','"2024-01-01" < date("2024-01-02")',b(false)],
+  ['dateReverseGreater','"2024-01-01" > date("2024-01-02")',b(false)],
+  ['dateReverseAtMost','"2024-01-01" <= date("2024-01-02")',b(false)],
+  ['dateReverseAtLeast','"2024-01-01" >= date("2024-01-02")',b(false)],
+  ['dateNumericString','date("2024-01-01") > "1"',b(true)],
+  ['dateRawLink','date("2024-01-02") > link("2024-01-01","2099-01-01")',b(true)],
+  ['dateNullRelational','date("2024-01-01") < null',nil],
+  ['nullRelational','null < 1',nil],
   ['capturedNow','now().format("YYYY-MM-DD HH:mm:ss Z")',s('2024-01-31 12:00:00 +00:00')],
   ['capturedToday','today().format("YYYY-MM-DD HH:mm:ss Z")',s('2024-01-31 00:00:00 +00:00')],
 ]);
