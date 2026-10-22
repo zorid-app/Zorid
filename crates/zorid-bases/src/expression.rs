@@ -1116,7 +1116,7 @@ pub(crate) fn matches(expression: &str, context: &BasesEvaluationContext) -> Res
 /// unrelated syntax evicts every entry in the optional process cache.
 #[derive(Default)]
 pub(crate) struct PreparedFormulaExpressions {
-    expressions: IndexMap<String, Result<Arc<Expr>, String>>,
+    expressions: IndexMap<String, (String, Result<Arc<Expr>, String>)>,
 }
 pub(crate) fn prepare_formula_expressions(
     formulas: &[(String, String)],
@@ -1133,7 +1133,7 @@ pub(crate) fn prepare_formula_expressions(
         .checked_next_power_of_two()
         .ok_or_else(|| RuntimeValue::Error("budget\0Formula map capacity overflow".into()))?;
     let bytes = slots.saturating_mul(2).saturating_mul(
-        std::mem::size_of::<(String, Result<Arc<Expr>, String>)>()
+        std::mem::size_of::<(String, String, Result<Arc<Expr>, String>)>()
             + 2 * std::mem::size_of::<usize>(),
     );
     reserve(bytes.saturating_add(
@@ -1142,7 +1142,7 @@ pub(crate) fn prepare_formula_expressions(
     let mut expressions = IndexMap::with_capacity(formulas.len());
     for (name, source) in formulas {
         check(name.len() / 16 + source.len() / 16 + 1)?;
-        reserve(name.len())?;
+        reserve(name.len().saturating_add(source.len()))?;
         let parsed = parse_cached_scoped(source, Some(name));
         let retained = match &parsed {
             Ok(ast) => ast_retained_bytes(ast, check)?,
@@ -1152,7 +1152,7 @@ pub(crate) fn prepare_formula_expressions(
             }
         };
         reserve(retained)?;
-        expressions.insert(name.clone(), parsed);
+        expressions.insert(name.clone(), (source.clone(), parsed));
     }
     Ok(Arc::new(PreparedFormulaExpressions { expressions }))
 }
@@ -3682,9 +3682,31 @@ impl<'a> Evaluator<'a> {
         if !self.formula_stack.insert(name.to_string()) {
             return RuntimeValue::Error(format!("cycle\0Circular formula reference {name}"));
         }
-        let parsed = self.context.preparsed_formulas.as_ref()
-            .and_then(|prepared| prepared.expressions.get(name)).cloned()
-            .unwrap_or_else(|| parse_cached_scoped(expression, Some(name)));
+        let parsed = if let Some(prepared) = &self.context.preparsed_formulas {
+            match prepared.expressions.get(name) {
+                Some((source, parsed)) => {
+                    // Compare exact admitted source before using the retained
+                    // AST. Formula names alone cannot authorize stale syntax.
+                    match self.charge(source.len() / 16 + expression.len() / 16 + 1) {
+                        Ok(()) if source == expression => {
+                            if let Err(message) = parsed {
+                                if let Err(error) = self.charge(message.len() / 16 + 1) {
+                                    self.formula_stack.remove(name);
+                                    return error;
+                                }
+                            }
+                            parsed.clone()
+                        }
+                        Ok(()) => Err("unavailable\0Prepared formula source does not match current definition".into()),
+                        Err(RuntimeValue::Error(message)) => Err(message),
+                        Err(_) => unreachable!(),
+                    }
+                }
+                None => Err("unavailable\0Prepared formula definition is missing".into()),
+            }
+        } else {
+            parse_cached_scoped(expression, Some(name))
+        };
         let value = parsed
             .map(|expression| self.evaluate(expression.as_ref(), &BTreeMap::new()))
             .unwrap_or_else(RuntimeValue::Error);

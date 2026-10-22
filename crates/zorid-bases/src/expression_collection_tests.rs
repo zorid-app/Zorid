@@ -393,3 +393,37 @@ fn prepared_formula_retention_is_admitted_and_keeps_more_than_cache_capacity() {
         "/a\\/b\\n\\r\\u2028\\u2029/im"
     );
 }
+
+#[test]
+fn stale_prepared_formula_definitions_are_rejected_before_executing_old_syntax() {
+    let original = vec![("answer".into(), "1".into())];
+    let prepared = prepare_formula_expressions(&original, &mut yes, &mut yes).unwrap();
+    let context = BasesEvaluationContext {
+        formulas: Arc::new(IndexMap::from_iter([
+            ("answer".into(), "2".into()),
+            ("new".into(), "3".into()),
+        ])),
+        preparsed_formulas: Some(prepared),
+        ..Default::default()
+    };
+    let mut evaluator = Evaluator::new(&context);
+    assert!(
+        matches!(evaluator.formula("answer"), RuntimeValue::Error(message) if message.starts_with("unavailable\0"))
+    );
+    assert!(
+        matches!(evaluator.formula("new"), RuntimeValue::Error(message) if message.starts_with("unavailable\0"))
+    );
+    assert!(evaluator.formula_stack.is_empty());
+    let source = format!("'{}'", "x".repeat(4096));
+    let matching = vec![("text".into(), source.clone())];
+    let prepared = prepare_formula_expressions(&matching, &mut yes, &mut yes).unwrap();
+    let context = BasesEvaluationContext {
+        formulas: Arc::new(matching.into_iter().collect()),
+        preparsed_formulas: Some(prepared),
+        work_limit: Some(10),
+        ..Default::default()
+    };
+    assert!(
+        matches!(Evaluator::new(&context).formula("text"), RuntimeValue::Error(message) if message.starts_with("budget\0"))
+    );
+}
