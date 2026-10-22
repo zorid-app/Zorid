@@ -1,6 +1,17 @@
 # Actual browser/WASM Bases semantic integration
 
-This campaign is **not yet accepted**. Actual run001 on frozen
+Actual run003 **passed all nine semantic integration groups** on frozen
+`6808bf5ef48c099c9ebf3ad1877a12332dc0f902`. The report and screenshot are in
+`/private/tmp/zorid-bases-browser-actual-20261022-003/`. Product Worker script
+GET200, three dedicated Worker targets and exact generated JS/WASM GETs were
+observed, including real restart. The complete source/artifact fingerprints
+matched before and after execution. No groups were skipped, protocol events
+were not dropped, and no runner, artifact or cleanup failures occurred. Owned
+Chrome exited0, its profile was removed, Vite closed and the synthetic database
+was deleted. This establishes this fixture's Worker/WASM/IndexedDB semantics;
+rendered UI, other browsers, mobile, sync and stress acceptance remain separate.
+
+Historical attempts: actual run001 on frozen
 `36d47701709341368d15c016ecf6578804fff00a` passed the ordinary-note group, then
 stopped on a fixture assumption that every unchanged property appears in
 `editValues`. That map carries raw overrides; otherwise editing falls back to
@@ -18,8 +29,8 @@ source. The corrected hand-authored oracle is checked against the actual UI
 `inlineBaseRequest` producer before the core read; forged source, actor and span
 rejections remain. Partial report and failure screenshot are in
 `/private/tmp/zorid-bases-browser-actual-20261022-002/`. Worker GET200, exact WASM
-GETs and clean owned-resource/database teardown were observed. Groups5–8 remain
-unaccepted until a fresh actual run.
+GETs and clean owned-resource/database teardown were observed. Groups5–8 were
+unaccepted until the successful run003 above.
 
 The fixture uses the normal `BrowserCoreRuntime`, admitted client,
 `defaultBrowserAdapter.documentSemantics`, unchanged product Worker, generated
