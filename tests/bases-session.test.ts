@@ -27,7 +27,7 @@ async function fixture() {
   await session.ready;
   return { adapter, vault, dom, host, buffers, changes, getBuffer, session, bufferHost,
     key(node: Element, key: string) { node.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })); },
-    async cleanup() { for (const input of host.querySelectorAll('input,textarea')) input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await session.close(); for (const buffer of buffers.values()) await buffer.dispose(); dom.window.close(); },
+    async cleanup() { for (const input of host.querySelectorAll('.bases-session-content input,.bases-session-content textarea')) input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await session.close(); for (const buffer of buffers.values()) await buffer.dispose(); dom.window.close(); },
   };
 }
 
@@ -55,7 +55,7 @@ test('table edit reaches shared dirty buffer and publishes actual persisted meta
     assert.ok((await f.vault.read('One.md')).endsWith('draft body\n'));
     assert.equal(f.changes[0], note + 'draft body\n');
     assert.equal(f.session.state.result?.rows[0].values['note.status'].value, 'Done');
-    assert.equal(f.host.querySelector('input'), null);
+    assert.equal(f.host.querySelector('.bases-session-content input'), null);
   } finally { await f.cleanup(); }
 });
 
@@ -70,7 +70,7 @@ test('unsubmitted table draft blocks view change/close and survives unrelated me
     await assert.rejects(f.session.close(), /Finish or cancel/);
     assert.equal(input.isConnected, true);
     f.key(input, 'Escape'); await tick();
-    assert.equal(f.host.querySelector('input'), null);
+    assert.equal(f.host.querySelector('.bases-session-content input'), null);
     await f.session.selectView(1); assert.ok(f.host.querySelector('.bases-cards-container'));
   } finally { await f.cleanup(); }
 });

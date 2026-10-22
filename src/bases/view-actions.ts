@@ -58,7 +58,14 @@ export function createBaseViewActions(controller: BaseController, options: {
   return {
     async editProperty(edit: BaseTableEdit): Promise<void> {
       current(edit.version);
-      await controller.editProperty({ ...edit, version: edit.version as number, value: baseEditValue(edit.value) });
+      await controller.editProperty({ version: edit.version as number, path: edit.path, property: edit.property, value: baseEditValue(edit.value) });
+    },
+    async editProperties(edits: readonly BaseTableEdit[]): Promise<void> {
+      if (!edits.length) return;
+      for (const edit of edits) current(edit.version);
+      const version = edits[0].version;
+      if (edits.some(edit => edit.version !== version)) throw new Error('Bulk edits must use one saved result');
+      await controller.editProperties(edits.map(edit => ({ version: version as number, path: edit.path, property: edit.property, value: baseEditValue(edit.value) })));
     },
     async requestGroupOrder(request: BaseKanbanGroupOrderRequest): Promise<void> {
       const result = current(request.version), group = result.view.groupBy;

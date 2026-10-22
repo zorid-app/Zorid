@@ -1,7 +1,7 @@
 import { BaseController, createBaseMutationHost } from './controller.ts';
 import type { BaseBufferHost, BaseControllerState } from './controller.ts';
 import { BaseDocument } from './document.ts';
-import { sharedBaseCoverage, sharedBasePreview } from './shared-query.ts';
+import { sharedBaseCoverage, sharedBasePreview, sharedBaseWitness } from './shared-query.ts';
 import { createBaseClockHost } from './clock.ts';
 import type { BaseClockHost } from './clock.ts';
 import { BaseToolbarSaveError, createBaseToolbar } from './toolbar.ts';
@@ -14,6 +14,20 @@ import { createBaseKanbanView } from './kanban-view.ts';
 import type { BaseQueryOptions, BaseQueryResult } from './query.ts';
 import type { Vault } from '../core/vault.ts';
 import type { NoteBuffer } from '../ui/note-buffer.ts';
+import { exportBaseResults } from './export.ts';
+import type { BaseExportFormat } from './export.ts';
+import { prepareBaseItemCreation } from './creation.ts';
+import type { BaseCreationOperation } from './creation.ts';
+import { baseEditValue } from './view-actions.ts';
+import type { BaseValue, BaseViewPatch } from './document.ts';
+import type { BasePresentationOptions, BasePropertyPresentation } from './presentation-common.ts';
+import { createBasePropertyRenderer } from './property-widgets.ts';
+import type { BasePropertyWidgetEdit, BasePropertyWidgetAcknowledgement } from './property-widgets.ts';
+import { baseValuesEqual } from './expression.ts';
+import type { BaseRelationTarget } from './property-widgets.ts';
+import { BASE_PROPERTY_DEFINITIONS_PATH, BASE_PROPERTY_TYPES, basePropertyName, parseBasePropertyDefinitions, updateBasePropertyDefinition, parseBasePropertyInput, inferBasePropertyDefinition, basePropertyValueDiagnostic } from './property-definitions.ts';
+import type { BasePropertyDefinition, BasePropertyDefinitions, BasePropertyType } from './property-definitions.ts';
+import { createBasePropertySettingsPanel } from './property-settings-panel.ts';
 
 /** Pane hosts notify only when their explicit visibility state changes. */
 export interface BaseSessionVisibility {
@@ -26,6 +40,16 @@ export interface BaseSessionOptions {
   /** Workspace and writable embeds must share their existing buffer registry. */
   readonly buffers?: BaseBufferHost;
   readonly readOnly?: boolean;
+  readonly inlineSource?: {
+    read(): Promise<{ source: string; startByte: number; endByte: number; witness?: { entryId: string; revision: string } }>;
+    transform(expectedSource: string, nextSource: string, validate: () => void): Promise<void>;
+  };
+  readonly contextMenu?: BasePresentationOptions['contextMenu'];
+  readonly hoverFile?: BasePresentationOptions['hoverFile'];
+  readonly dragFile?: BasePresentationOptions['dragFile'];
+  readonly getRelationTargets?: (property: string, presentation: BasePropertyPresentation) => readonly BaseRelationTarget[] | undefined;
+  readonly deleteFiles?: (rows: readonly import('./query.ts').BaseQueryRow[], result: BaseQueryResult) => Promise<void>;
+  readonly exportResults?: (text: string, format: BaseExportFormat, copy: boolean) => Promise<void>;
   readonly query?: BaseQueryOptions;
   readonly clock?: BaseClockHost;
   readonly visibility?: BaseSessionVisibility;
@@ -41,6 +65,7 @@ export interface BaseSession {
   readonly state: BaseControllerState;
   refresh(): Promise<void>;
   selectView(index: number): Promise<void>;
+  setCurrentFile(path: string): Promise<void>;
   /** Workspace preflight: retain the mounted view while settling accepted edits. */
   flush(): Promise<void>;
   hasPendingChanges(): boolean;
@@ -66,7 +91,30 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   let disposed = false, closing = false, mounted: MountedView | undefined, mountedType: string | undefined;
   let mountedResult: BaseQueryResult | undefined, deferred: BaseControllerState | undefined;
   let mountedIndex = -1, mountedMove = false, mountedWritable = false;
+  const widgetResults = new Map<string | number, BaseQueryResult>(), widgetSources = new Map<string | number, string>();
   let propertyLabels: unknown;
+  let definitions: BasePropertyDefinitions = { properties: {}, diagnostics: [] };
+  let creation: BaseCreationOperation | undefined;
+  let summaryPanel: HTMLElement | undefined;
+  let definitionEpoch = 0, definitionsRevision = 0, mountedDefinitionsRevision = -1;
+  let definitionsError: string | undefined;
+  const loadDefinitions = async () => {
+    const epoch = ++definitionEpoch;
+    let source = '';
+    try { source = options.vault.entries.get(BASE_PROPERTY_DEFINITIONS_PATH)?.type === 'file' ? await options.vault.read(BASE_PROPERTY_DEFINITIONS_PATH) : ''; }
+    catch (error) {
+      if (disposed || epoch !== definitionEpoch) return;
+      definitionsError = error instanceof Error ? error.message : String(error); definitions = { properties: {}, diagnostics: [] }; definitionsRevision++;
+      report(error); if (controller.state.result) render(controller.state); return;
+    }
+    if (disposed || epoch !== definitionEpoch) return;
+    try { definitions = parseBasePropertyDefinitions(source); definitionsError = undefined; }
+    catch (error) { definitionsError = error instanceof Error ? error.message : String(error); definitions = { properties: {}, diagnostics: [] }; report(error); }
+    if (definitions.diagnostics.length) report(new Error(definitions.diagnostics.map(item => item.message).join(' ')));
+    // Definitions affect mounted controls, even if the query result is unchanged.
+    definitionsRevision++;
+    if (controller.state.result) render(controller.state);
+  };
   let selectedIndex = options.query?.viewIndex ?? 0;
   let scheduled: ReturnType<typeof setTimeout> | undefined;
   const pending = new Set<Promise<unknown>>(), changedBuffers = new Set<NoteBuffer>();
@@ -76,8 +124,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if (!disposed) status.textContent = error instanceof Error ? error.message : String(error);
     try { options.onError?.(error); } catch { /* User error reporters do not change persistence. */ }
   };
-  const propertyDraft = () => !!mounted?.hasActiveEdits?.() || !!content.querySelector('.zorid-bases-table-input, .bases-rendered-value input:not([type="checkbox"])');
-  const activeDraft = () => propertyDraft() || toolbarUI.hasDraft();
+  const propertyDraft = () => !!mounted?.hasActiveEdits?.() || !!content.querySelector('.zorid-bases-table-input, [data-base-editing]');
+  const activeDraft = () => propertyDraft() || toolbarUI.hasDraft() || settings.hasDraft() || !!summaryPanel;
   const schedule = () => {
     if (disposed || scheduled !== undefined) return;
     scheduled = setTimeout(() => { scheduled = undefined; if (deferred && !pending.size && !activeDraft()) { deferred = undefined; render(controller.state); } }, 0);
@@ -95,7 +143,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     return promise;
   };
   let configurationAttempt: { buffer?: NoteBuffer; text?: string } | undefined;
-  const mutations = options.buffers ? createBaseMutationHost({ ...options.buffers,
+  const bufferMutations = options.buffers ? createBaseMutationHost({ ...options.buffers,
     validate() { alive(); options.buffers!.validate(); },
     onBufferChange(path, buffer, previousText) {
       changedBuffers.add(buffer);
@@ -103,6 +151,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       options.buffers!.onBufferChange?.(path, buffer, previousText);
     },
   }) : { async transform() { throw new Error('This base is read-only'); } };
+  const mutations = bufferMutations;
   const hostClock = options.clock ?? createBaseClockHost({ document: doc, window: win });
   const clock: BaseClockHost = {
     capture: zone => hostClock.capture(zone), scheduleAt: (deadline, callback) => hostClock.scheduleAt(deadline, callback),
@@ -112,14 +161,22 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       return () => { stopClock(); stopPane?.(); };
     },
   };
-  const controller = new BaseController({ vault: options.vault, basePath: options.basePath, mutations, query: options.query, clock, viewName: options.viewName,
+  const controller = new BaseController({ vault: options.vault, basePath: options.basePath, mutations, query: options.query, clock, viewName: options.viewName, ...(options.inlineSource ? { inlineSource: options.inlineSource } : {}),
     onChange(state) { render(state); options.onState?.(state); },
   });
   const actions = createBaseViewActions(controller, { validate: action, canRename: !!options.buffers?.rename,
     validateFolder(path) { if (path && options.vault.entries.get(path)?.type !== 'folder') throw new Error('The destination folder no longer exists'); },
   });
+  const settings = createBasePropertySettingsPanel(root, {
+    definitions: () => definitions,
+    properties: () => controller.state.result?.availableProperties ?? [],
+    preflight() { action(); if (options.readOnly) throw new Error('This base is read-only'); if (pending.size || propertyDraft() || toolbarUI.hasDraft() || summaryPanel) throw new Error('Finish or cancel the current edit first.'); },
+    save: (property, definition, expected) => track(() => saveDefinition(property, definition, expected)),
+    onDraftChange: schedule, onError: report,
+  });
   const toolbarUI = createBaseToolbar(toolbar, {
-    preflight() { action(); if (pending.size || propertyDraft()) throw new Error('Finish or cancel the property edit before changing the view.'); },
+    immediate: true,
+    preflight() { action(); if (pending.size || propertyDraft() || settings.hasDraft() || summaryPanel) throw new Error('Finish or cancel the current edit before changing the view.'); },
     selectView,
     save(version, patch) {
       action(); if (options.readOnly) return Promise.reject(new Error('This base is read-only'));
@@ -137,12 +194,99 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         throw error;
       }).finally(() => { if (configurationAttempt === attempt) configurationAttempt = undefined; });
     },
+    saveConfiguration(version, patch) { if (typeof version !== 'number') return Promise.reject(new Error('The base result is stale')); return track(() => controller.updateConfiguration(version, patch)); },
+    commands: {
+      updateView: (version, index, patch) => track(() => controller.updateViewAt(numericVersion(version), index, patch)),
+      editFormula: (version, originalName, name, expression) => track(() => controller.editFormula(numericVersion(version), originalName, name, expression)),
+      renameFormula: (version, from, to) => track(() => controller.renameFormula(numericVersion(version), from, to)),
+      addView: (version, type, name) => track(() => controller.addView(numericVersion(version), type, name)),
+      duplicateView: (version, index, name) => track(() => controller.duplicateView(numericVersion(version), index, name)),
+      removeView: (version, index) => track(() => controller.removeView(numericVersion(version), index)),
+      moveView: (version, from, to) => track(() => controller.moveView(numericVersion(version), from, to)),
+      setDefaultView: (version, index) => track(() => controller.setDefaultView(numericVersion(version), index)),
+      updateRoot: (version, patch) => track(() => controller.updateRoot(numericVersion(version), patch)),
+      setFormula: (version, name, expression) => track(() => controller.setFormula(numericVersion(version), name, expression)),
+    },
+    onSearch(text) { if (propertyDraft() || settings.hasDraft()) { report(new Error('Finish or cancel the property edit before searching.')); return; } void track(() => controller.setSearchTerms(text.split(/\s+/).filter(Boolean))).catch(report); },
+    onNew: () => track(() => createItem()),
+    onExport: (format, copy) => track(() => exportResults(format, copy)),
+    onPropertySettings(property) { try { settings.open(property); } catch (error) { report(error); } },
     onDraftChange: schedule,
     onError: report,
   });
+  function assertPropertyWritable(property: string, value?: import('./expression.ts').BaseExpressionValue): void {
+    const invalid = definitions.diagnostics.find(item => item.property === basePropertyName(property));
+    if (definitionsError || invalid) throw new Error(definitionsError ?? invalid!.message);
+    const definition = definitions.properties[basePropertyName(property)];
+    if (definition?.type === 'rollup' || definition?.type === 'reverseRelation') throw new Error('Derived properties cannot be edited.');
+    const diagnostic = definition && value && basePropertyValueDiagnostic(value, definition);
+    if (diagnostic) throw new Error(diagnostic);
+  }
+  function numericVersion(version: string | number): number { if (typeof version !== 'number') throw new Error('The base result is stale'); return version; }
+  async function saveDefinition(property: string, definition: BasePropertyDefinition | null, expected?: BasePropertyDefinition | null): Promise<void> {
+    action(); if (options.readOnly || !options.buffers) throw new Error('This base is read-only');
+    if (!options.vault.entries.has(BASE_PROPERTY_DEFINITIONS_PATH)) await options.vault.create(BASE_PROPERTY_DEFINITIONS_PATH, 'properties: {}\n', alive);
+    await bufferMutations.transform(BASE_PROPERTY_DEFINITIONS_PATH, source => {
+      if (expected !== undefined && JSON.stringify(parseBasePropertyDefinitions(source).properties[property] ?? null) !== JSON.stringify(expected)) throw new Error('This property definition changed while its settings were open. Reopen settings before applying.');
+      return updateBasePropertyDefinition(source, property, definition);
+    }, alive);
+    await loadDefinitions();
+  }
+  function openSummaryEditor(property: string, anchor: HTMLElement, originalName?: string, suggestedName?: string): void {
+    action(); if (options.readOnly || pending.size || activeDraft()) throw new Error('Finish or cancel the current edit first.');
+    const opening = controller.state, document = BaseDocument.parse(opening.source);
+    const configured = document.getRoot('summaries');
+    const summaries: Record<string, BaseValue> = configured && typeof configured === 'object' && !Array.isArray(configured) ? { ...(configured as Record<string, BaseValue>) } : {};
+    const panel = doc.createElement('section'); panel.className = 'bases-toolbar-popover'; panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', originalName ? 'Edit summary' : 'Add summary');
+    const heading = doc.createElement('h3'); heading.textContent = originalName ? 'Edit summary' : 'Add summary';
+    const form = doc.createElement('form'), fields = doc.createElement('fieldset'); fields.className = 'bases-toolbar-fields'; fields.style.border = '0'; fields.style.margin = '0';
+    const name = doc.createElement('input'); name.setAttribute('aria-label', 'Summary name'); name.value = originalName ?? suggestedName ?? 'Summary'; name.readOnly = !!originalName;
+    const expression = doc.createElement('textarea'); expression.setAttribute('aria-label', 'Summary expression'); expression.value = originalName && typeof summaries[originalName] === 'string' ? summaries[originalName] as string : 'values.length'; expression.rows = 4;
+    const error = doc.createElement('div'); error.className = 'bases-toolbar-error'; error.setAttribute('role', 'alert');
+    const footer = doc.createElement('div'); footer.className = 'bases-toolbar-footer'; const cancel = doc.createElement('button'), apply = doc.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Cancel'; apply.type = 'submit'; apply.textContent = 'Apply'; apply.className = 'mod-cta';
+    let saving = false; const close = () => { if (saving) return; panel.remove(); if (summaryPanel === panel) summaryPanel = undefined; anchor.focus({ preventScroll: true }); schedule(); };
+    cancel.addEventListener('click', close); panel.addEventListener('keydown', event => { if (event.key === 'Escape' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); close(); } });
+    form.addEventListener('submit', event => { event.preventDefault(); if (saving) return;
+      void track(async () => {
+        try {
+          if (!name.value.trim() || !expression.value.trim()) throw new Error('Enter a summary name and expression.');
+          if (!originalName && Object.hasOwn(summaries, name.value.trim())) throw new Error('A summary with that name already exists.');
+          saving = true; fields.disabled = apply.disabled = cancel.disabled = true;
+          const selected = controller.state.result?.view.summaries; const selection: Record<string, BaseValue> = selected && typeof selected === 'object' && !Array.isArray(selected) ? { ...(selected as Record<string, BaseValue>) } : {};
+          summaries[name.value.trim()] = expression.value; selection[property] = name.value.trim();
+          await controller.updateConfiguration(opening.version, { root: { summaries }, view: { summaries: selection } }); saving = false; close();
+        } catch (failure) { error.textContent = failure instanceof Error ? failure.message : String(failure); throw failure; }
+        finally { saving = false; fields.disabled = apply.disabled = cancel.disabled = false; }
+      }).catch(report);
+    });
+    fields.append(name, expression); footer.append(cancel, apply); form.append(fields, error, footer); panel.append(heading, form); doc.body.append(panel); summaryPanel = panel;
+    const bounds = anchor.getBoundingClientRect(); panel.style.left = `${Math.max(8, Math.min(bounds.left, (win?.innerWidth ?? 800) - 468))}px`; panel.style.top = `${Math.max(8, Math.min(bounds.bottom, (win?.innerHeight ?? 600) - panel.offsetHeight - 8))}px`; name.focus();
+  }
+  async function createItem(group?: { property: string; value: BaseValue }): Promise<void> {
+    action(); if (options.readOnly || !controller.state.result || sharedBasePreview(controller.state.result)) throw new Error('This base is read-only');
+    // Retain an uncertain operation across retries rather than choosing a new filename.
+    if (!creation || creation.status === 'committed') creation = await prepareBaseItemCreation({ vault: options.vault, document: controller.state.source, basePath: options.basePath, viewIndex: selectedIndex, group, validate: alive });
+    const operation = creation, entry = await operation.run(); alive();
+    if (operation.plan.warnings.length) status.textContent = operation.plan.warnings.join(' ');
+    await controller.refresh();
+    const event = new (win?.MouseEvent ?? MouseEvent)('click'); options.openFile(entry.path, event);
+  }
+  async function exportResults(format: BaseExportFormat, copy: boolean): Promise<void> {
+    const result = controller.state.result; if (!result) throw new Error('Wait for results before exporting.');
+    const text = exportBaseResults(result, format);
+    if (options.exportResults) return options.exportResults(text, format, copy);
+    if (copy) { if (!win?.navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable.'); await win.navigator.clipboard.writeText(text); return; }
+    if (!win?.URL?.createObjectURL) throw new Error('File export is unavailable in this window.');
+    const blob = new win.Blob([text], { type: format === 'csv' ? 'text/csv;charset=utf-8' : 'text/plain;charset=utf-8' });
+    const url = win.URL.createObjectURL(blob), link = doc.createElement('a');
+    link.href = url; link.download = `${options.basePath.split('/').pop()?.replace(/\.base$/i, '') ?? 'Base'}.${format === 'markdown' ? 'md' : format === 'paths' ? 'txt' : format}`;
+    link.click(); setTimeout(() => win.URL.revokeObjectURL(url), 0);
+  }
   function renderStatus(state: BaseControllerState): void {
     content.setAttribute('aria-busy', String(state.updating));
     if (state.error) { status.textContent = state.error.message; return; }
+    if (definitionsError) { status.textContent = `Property settings: ${definitionsError}`; return; }
+    if (definitions.diagnostics.length) { status.textContent = definitions.diagnostics.map(item => `${item.property ?? 'Property'}: ${item.message}`).join(' '); return; }
     if ([...changedBuffers].some(buffer => buffer.dirty || buffer.error)) return;
     const preview = state.result && sharedBasePreview(state.result);
     if (preview) {
@@ -166,11 +310,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     renderStatus(state);
     if (state.error) { deferred = undefined; return; }
     if (!state.result) return;
-    if (pending.size || activeDraft()) { deferred = state; return; }
-    deferred = undefined;
     const result = state.result;
     selectedIndex = controller.selectedViewIndex;
-    if (mountedResult === result) return;
     const document = BaseDocument.parse(state.source);
     const choices = document.views;
     propertyLabels = document.getRoot('properties');
@@ -179,14 +320,84 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         const config = (propertyLabels as Record<string, unknown>)[property] ?? (propertyLabels as Record<string, unknown>)[property.replace(/^note\./, '')];
         if (config && typeof config === 'object' && 'displayName' in config && typeof config.displayName === 'string') return config.displayName;
       }
-      return property.replace(/^(?:note|file|formula)\./, '');
+      return property.startsWith('file.') ? property.replace(/^file\./, 'file ') : property.replace(/^(?:note|formula)\./, '');
     };
     const writable = !options.readOnly && !sharedBasePreview(result);
-    toolbarUI.update({ result, views: choices, selectedIndex, rootFilters: document.getRoot('filters'), readOnly: !writable, allowRename: options.viewName === undefined, label: getPropertyLabel });
-    const shared = { result, getPropertyLabel,
+    toolbarUI.update({ result, views: choices, selectedIndex, rootFilters: document.getRoot('filters'), root: Object.fromEntries(['filters','formulas','properties','summaries','newItemFolder','newItemTemplate'].map(key => [key, document.getRoot(key)]).filter((entry): entry is [string, BaseValue] => entry[1] !== undefined)), readOnly: !writable, allowRename: options.viewName === undefined, propertyType: property => definitions.properties[basePropertyName(property)]?.type, label: getPropertyLabel });
+    // Toolbar rebases its own in-flight configuration without replacing row drafts.
+    if (pending.size || activeDraft()) { deferred = state; return; }
+    deferred = undefined;
+    if (mountedResult === result && mountedDefinitionsRevision === definitionsRevision) return;
+    widgetResults.set(result.version, result); widgetSources.set(result.version, state.source);
+    while (widgetResults.size > 4) { const key = [...widgetResults.keys()].find(key => key !== mountedResult?.version); if (key === undefined) break; widgetResults.delete(key); widgetSources.delete(key); }
+    const acknowledgeWidget = (original: BasePropertyPresentation, savedValue?: import('./expression.ts').BaseExpressionValue): BasePropertyWidgetAcknowledgement | undefined => {
+      const before = widgetResults.get(original.version), latest = controller.state.result;
+      if (!before?.shared || !latest?.shared || sharedBasePreview(latest) || widgetSources.get(original.version) !== controller.state.source) return;
+      const row = latest.rows.find(row => row.path === original.row.path); if (!row) return;
+      const initial = sharedBaseWitness(before, row.path), current = sharedBaseWitness(latest, row.path);
+      if (!initial || !current || initial.entryId !== current.entryId || (savedValue === undefined && initial.revision !== current.revision)) return;
+      const value = row.values[original.property] ?? { type: 'null' as const };
+      if (!baseValuesEqual(value, savedValue ?? original.value, true)) return;
+      const oldBase = sharedBaseWitness(before, options.basePath), newBase = sharedBaseWitness(latest, options.basePath);
+      if (!oldBase || !newBase || oldBase.entryId !== newBase.entryId) return;
+      widgetResults.set(latest.version, latest); widgetSources.set(latest.version, controller.state.source);
+      return { version: latest.version, row, value };
+    };
+    const shared = { result, getPropertyLabel, getPropertyType: (property: string) => definitions.properties[basePropertyName(property)]?.type,
       openFile(path: string, event: MouseEvent | KeyboardEvent) { try { action(); options.openFile(path, event); } catch (error) { report(error); } },
-      ...(writable ? { editProperty: (edit: Parameters<typeof actions.editProperty>[0]) => track(() => actions.editProperty(edit)) } : {}),
+      ...(writable ? { editProperty: (edit: Parameters<typeof actions.editProperty>[0]) => track(() => { assertPropertyWritable(edit.property, edit.value); return actions.editProperty(edit); }) } : {}),
       onError: report, onEditStateChange: schedule,
+      contextMenu: options.contextMenu, hoverFile: options.hoverFile, dragFile: options.dragFile,
+      renderProperty: createBasePropertyRenderer({ getDefinition: property => definitions.properties[basePropertyName(property)],
+        commit: (edit: BasePropertyWidgetEdit) => track(async () => { assertPropertyWritable(edit.property, edit.value); await actions.editProperty(edit); return acknowledgeWidget(edit, edit.value); }), readOnly: presentation => !writable || !!definitionsError || definitions.diagnostics.some(item => item.property === basePropertyName(presentation.property)),
+        isCurrent: presentation => !disposed && !!mountedResult && widgetResults.has(presentation.version),
+        getRelationTargets: options.getRelationTargets, openFile: options.openFile, onError: report,
+        createOption: (property, value, presentation) => track(async () => { const definition = definitions.properties[basePropertyName(property)]; if (!definition) throw new Error('Configure this property first.'); await saveDefinition(basePropertyName(property), { ...definition, options: [...definition.options ?? [], { value }] }, definition); return acknowledgeWidget(presentation); }),
+      }),
+      getSummary: (property: string, groupIndex: number | null) => {
+        const active = mountedResult ?? result;
+        const summaries = (groupIndex === null ? active : active.groups[groupIndex]) as { summaries?: Readonly<Record<string, import('./expression.ts').BaseExpressionValue>> } | undefined;
+        const value = summaries?.summaries?.[property];
+        const selection = active.view.summaries;
+        const label = selection && typeof selection === 'object' && !Array.isArray(selection) ? (selection as Record<string, BaseValue>)[property] ?? (selection as Record<string, BaseValue>)[basePropertyName(property)] : undefined;
+        return value ? { value, ...(typeof label === 'string' ? { label } : {}) } : undefined;
+      },
+      requestAddSummary: (property: string, anchor: HTMLElement, name?: string) => openSummaryEditor(property, anchor, undefined, name),
+      requestEditSummary: (property: string, id: string, anchor: HTMLElement) => openSummaryEditor(property, anchor, id),
+      requestHideSummary: (property: string) => track(() => {
+        const active = mountedResult ?? result, current = active.view.summaries;
+        const selection: Record<string, BaseValue> = current && typeof current === 'object' && !Array.isArray(current) ? { ...(current as Record<string, BaseValue>) } : {};
+        delete selection[property]; delete selection[basePropertyName(property)];
+        return controller.updateView(numericVersion(active.version), { summaries: selection });
+      }),
+      propertyTypes: BASE_PROPERTY_TYPES.map(id => ({ id, label: id === 'datetime' ? 'Date & time' : id === 'reverseRelation' ? 'Reverse relation' : id[0].toUpperCase() + id.slice(1) })),
+      requestPropertyType: (property: string, id: string) => track(() => {
+        if (!property.startsWith('note.') || !BASE_PROPERTY_TYPES.includes(id as BasePropertyType)) throw new Error('Choose a supported note property type.');
+        const bare = basePropertyName(property), previous = definitions.properties[bare];
+        return saveDefinition(bare, { ...previous, type: id as BasePropertyType }, previous ?? null);
+      }),
+      summaryOptions: [...new Set(['Average','Min','Max','Sum','Range','Median','Stddev','Earliest','Latest','Checked','Unchecked','Empty','Filled','Unique', ...Object.keys((document.getRoot('summaries') as Record<string, BaseValue>) ?? {})])].map(id => ({ id, label: id })),
+      requestSummary: (property: string, id: string) => track(() => {
+        const active = mountedResult ?? result;
+        const current = active.view.summaries;
+        const selections: Record<string, BaseValue> = current && typeof current === 'object' && !Array.isArray(current) ? { ...(current as Record<string, BaseValue>) } : {};
+        if (id) selections[property] = id; else delete selections[property];
+        return controller.updateView(numericVersion(active.version), { summaries: selections });
+      }),
+      isPropertyEditable: (property: string) => { try { assertPropertyWritable(property); return writable; } catch { return false; } },
+      validatePropertyValue: (value: import('./expression.ts').BaseExpressionValue, property: string) => { assertPropertyWritable(property, value); return value; },
+      parsePropertyInput: (raw: string, property: string, row: import('./query.ts').BaseQueryRow) => parseBasePropertyInput(raw, definitions.properties[basePropertyName(property)] ?? inferBasePropertyDefinition(row.values[property] ?? { type: 'null' }), row.values[property]),
+      ...(writable ? {
+        ...(options.deleteFiles ? { deleteFiles: (rows: readonly import('./query.ts').BaseQueryRow[]) => track(async () => {
+          const active = mountedResult ?? result;
+          if (active.version !== controller.state.version) throw new Error('The Base result is stale; refresh before deleting files.');
+          await options.deleteFiles!(rows, active);
+        }) } : {}),
+        editProperties: (edits: readonly import('./table-view.ts').BaseTableEdit[]) => track(() => { edits.forEach(edit => assertPropertyWritable(edit.property, edit.value)); return actions.editProperties(edits); }),
+        patchView: (patch: BaseViewPatch) => track(() => controller.updateView(numericVersion(mountedResult?.version ?? result.version), patch)),
+        undo: () => track(() => controller.undo()), redo: () => track(() => controller.redo()),
+        requestEditProperty: (property: string, anchor: HTMLElement) => settings.open(property, anchor),
+      } : {}),
     };
     if (sharedBasePreview(result) && !result.rows.length) {
       // A prepared subset cannot establish global absence. Keep its exact
@@ -197,23 +408,23 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       return;
     }
     const moveEnabled = writable && actions.canMove(result);
-    if (mounted && mountedType === result.view.type && mountedIndex === selectedIndex && mountedMove === moveEnabled && mountedWritable === writable) mounted.update(result);
+    if (mounted && mountedType === result.view.type && mountedIndex === selectedIndex && mountedMove === moveEnabled && mountedWritable === writable && mountedDefinitionsRevision === definitionsRevision) mounted.update(result);
     else {
       mounted?.destroy(); mounted = undefined; content.replaceChildren();
       switch (result.view.type) {
         case 'table': mounted = createBaseTableView(content, shared); break;
         case 'cards': mounted = createBaseCardsView(content, { ...shared, loadThumbnail: options.loadThumbnail }); break;
         case 'list': mounted = createBaseListView(content, shared); break;
-        case 'kanban': mounted = createBaseKanbanView(content, { result, openFile: shared.openFile, onError: report,
-          readOnly: !writable,
-          ...(moveEnabled ? { requestMove: request => track(() => actions.requestMove(request)) } : {}),
-          ...(writable ? { requestGroupOrder: request => track(() => actions.requestGroupOrder(request)) } : {}),
+        case 'kanban': mounted = createBaseKanbanView(content, { ...shared, loadThumbnail: options.loadThumbnail, onError: report, onPresentationError: report,
+          readOnly: !writable, showColumnControls: false,
+          ...(moveEnabled ? { requestMove: request => track(() => { assertPropertyWritable(request.property); return actions.requestMove(request); }) } : {}),
+          ...(writable ? { requestGroupOrder: request => track(() => actions.requestGroupOrder(request)), createItem: request => track(() => { if (request.version !== controller.state.version) throw new Error('The base result is stale'); return createItem({ property: request.property, value: baseEditValue(request.group) }); }) } : {}),
         }); break;
         default: content.textContent = `Unsupported base view: ${result.view.type}`;
       }
       mountedType = result.view.type; mountedIndex = selectedIndex; mountedMove = moveEnabled; mountedWritable = writable;
     }
-    mountedResult = result; renderStatus(state);
+    mountedResult = result; mountedDefinitionsRevision = definitionsRevision; renderStatus(state);
   }
   const observer = win?.MutationObserver ? new win.MutationObserver(schedule) : undefined;
   observer?.observe(content, { subtree: true, childList: true });
@@ -234,6 +445,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     for (const buffer of changedBuffers) await buffer.flush();
     acknowledgement?.();
     releaseCleanBuffers();
+    if (creation?.status === 'uncertain') throw new Error('The new note creation is uncertain. Use New again to reconcile it before leaving this base.');
     if (activeDraft()) throw new Error('Finish or cancel the property edit before leaving this base');
   }
   async function finish(close: boolean): Promise<void> {
@@ -243,19 +455,23 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     try {
       await settle();
       if (close) {
-        toolbarUI.destroy(); mounted?.destroy(); mounted = undefined; observer?.disconnect();
+        toolbarUI.destroy(); settings.destroy(); stopDefinitions.forEach(stop => stop()); mounted?.destroy(); mounted = undefined; observer?.disconnect();
         if (scheduled !== undefined) clearTimeout(scheduled);
         controller.dispose(); disposed = true; root.remove();
       }
     } catch (error) { report(error); throw error; }
     finally { closing = false; }
   }
+  const stopDefinitions = (['create', 'modify', 'rename', 'delete'] as const).map(event => options.vault.on(event, change => {
+    if (change.path === BASE_PROPERTY_DEFINITIONS_PATH || change.oldPath === BASE_PROPERTY_DEFINITIONS_PATH) void loadDefinitions().catch(report);
+  }));
   return {
-    ready: controller.refresh(),
+    ready: loadDefinitions().then(() => controller.refresh()),
     get state() { return controller.state; },
     refresh: () => controller.refresh(),
     selectView,
-    hasPendingChanges: () => !disposed && (!!pending.size || activeDraft() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error)),
+    setCurrentFile: path => { action(); return controller.setCurrentFilePath(path); },
+    hasPendingChanges: () => !disposed && (!!pending.size || creation?.status === 'uncertain' || activeDraft() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error)),
     flush: () => finish(false),
     close: () => finish(true),
   };

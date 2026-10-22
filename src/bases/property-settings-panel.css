@@ -1,0 +1,7 @@
+.bases-property-settings { width: 480px; }
+.bases-property-definition-fields { display:flex; flex-direction:column; gap:10px; }
+.bases-property-option-settings { display:flex; flex-direction:column; gap:6px; max-height:320px; overflow:auto; }
+.bases-property-option-row { display:flex; gap:4px; align-items:center; }
+.bases-property-option-row > input { flex:1; width:80px; }
+.bases-property-option-row > select { width:76px; }
+.bases-property-option-row > button { flex:none; padding:3px; }
