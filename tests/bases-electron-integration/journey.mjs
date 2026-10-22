@@ -179,13 +179,17 @@ export async function journey(c){
   await c.ui.button('Group',active);await c.ui.button('Remove grouping',dialog('Group'));await apply(c,'Group');await c.ui.scroll(`${active} [role="grid"]`,-10000);
   await openSummary(c);await c.ui.button('Edit CustomTotalRenamed','.zorid-bases-summary-picker');await c.ui.button('Summary actions',dialog('Edit summary'));await c.ui.button('Delete summary',dialog('Edit summary'));
   await c.saved('Library.base',source=>{const doc=c.yaml.parse(source);assert.equal(doc.summaries.CustomTotalRenamed,undefined);assert.equal(doc.views.find(v=>v.name==='Books table').summaries?.['note.rating'],undefined);assert.equal(doc.summaries.RatingTotal,'values.sum()');},'summary-more-delete-removes-definition-and-selected-reference');
-  await c.ui.wait(`return !document.querySelector(${JSON.stringify(dialog('Edit summary'))})&&!!document.querySelector('.zorid-bases-summary-picker');`,'Deleted summary returns to picker');await c.ui.click('.zorid-bases-summary-picker [role="option"][data-summary-id="RatingTotal"]');await c.ui.idle();
+  await c.ui.wait(`return !document.querySelector(${JSON.stringify(dialog('Edit summary'))})&&!!document.querySelector('.zorid-bases-summary-picker');`,'Deleted summary returns to picker');await c.ui.click('.zorid-bases-summary-picker [role="option"][data-summary-id="RatingTotal"]');
+  await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).views.find(v=>v.name==='Books table').summaries?.['note.rating'],'RatingTotal'),'selected-summary-after-delete-saved');
+  await c.ui.wait(`return document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.rating"] .summary-function-name')?.textContent==='RatingTotal';`,'Acknowledged RatingTotal selection after deletion');await c.ui.idle();
 
   // Reference resize behavior through a real separator and keyboard commands.
   const resize=`${active} [role="columnheader"][title="note.rating"] .zorid-bases-table-resize`;
   const originalWidth=await c.ui.dom(`return document.querySelector('${active} [role="columnheader"][title="note.rating"]').getBoundingClientRect().width;`);
-  await focusResize(c,resize);await c.ui.key('ArrowRight');await c.ui.idle();
-  await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).views.find(v=>v.name==='Books table').columnSize['note.rating'],Math.round(originalWidth+10)),'column-keyboard-resize-saved');
+  const resizeFocus=phase=>c.ui.dom(`const separator=document.querySelector(${JSON.stringify(resize)}),focused=document.activeElement;return {phase:${JSON.stringify(phase)},matchesSeparator:focused===separator,separatorConnected:!!separator?.isConnected,focusedTag:focused?.tagName,focusedRole:focused?.getAttribute('role'),focusedLabel:focused?.getAttribute('aria-label'),focusedProperty:focused?.closest('[role="columnheader"]')?.getAttribute('title'),summaryLabel:document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.rating"] .summary-function-name')?.textContent,busy:document.querySelector('${active} .bases-session-content')?.getAttribute('aria-busy')};`);
+  await focusResize(c,resize);c.evidence.actions.push({action:'column-resize-focus',...await resizeFocus('before-ArrowRight'),at:Date.now()});
+  await c.ui.key('ArrowRight');c.evidence.actions.push({action:'column-resize-focus',...await resizeFocus('after-ArrowRight'),at:Date.now()});await c.ui.idle();
+  await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).views.find(v=>v.name==='Books table').columnSize?.['note.rating'],Math.round(originalWidth+10),'Keyboard Rating separator resize must persist its intended width'),'column-keyboard-resize-saved');
   await focusResize(c,resize);await c.ui.key('Home');await c.ui.idle();
   await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).views.find(v=>v.name==='Books table').columnSize?.['note.rating'],undefined),'column-reset-width-saved');
 
