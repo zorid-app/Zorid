@@ -346,3 +346,80 @@ explicit subpaths with an exact target witness; group writes use rooted escaped
 destinations. This integrity policy preserves readable source links and is not
 an assertion that the reference stores an equivalent metadata field. Final core,
 native/WASM and actual interaction validation remain required.
+
+## Property control source follow-up — 2026-10-22
+
+Source commit `317741b3` records focused REA parent
+`ev_ec802595bd862b964f7741bfe77018b909420ea030d8e2abee6fdc8a2298c11f`,
+zero parse failures, against the same Obsidian 1.14.4 `app.js` hash above.
+Private provenance: `/private/tmp/zorid-bases-widget-visual-reference/provenance.json`.
+The source interval **1870476–1874976 is UTF-16 indexing**, unlike the Python
+character ranges used in some other receipts. Its raw selected slice SHA-256 is
+`d500ebe3feb9431b8b130f35027e8d8bae402da16b45b60846cc02c68147177d`.
+The prepared inert `widgets.js` has SHA-256
+`434d19f322b97442dc35969681a3516d1f0bae266c59134d445c603c45c285f0`;
+preparation adds a declaration and replaces the trailing separator with a
+terminator. The provenance field `extractedSha256` describes that prepared file,
+not the unmodified raw slice. The retained `app.css` SHA-256 is
+`39a0e1cc2afbd07c8a15374892efe9cd9ff2409bea76ea2a40fe38e7b017f67c`.
+
+Analyst source reading finds native `date`/`datetime-local` controls with ISO
+control values and a native checkbox carrying `metadata-input-checkbox`. CSS
+defines checkbox size/radius/accent/indeterminate styling and date-indicator
+positioning. Locale-dependent visible date formatting follows native browser
+control behavior; **no actual locale screenshot was captured by this receipt**.
+It does not establish exact reference table numeric alignment or visual parity.
+
+Zorid `317741b3` adds native date presentation, original checkbox drawing and
+table-scoped numeric alignment/checkbox centering. `2062ffd2` preserves nullable
+checkbox state after a rejected save and owned focus across replacement;
+`8156a410` relinquishes focus restoration after outside pointer input or window
+blur. Those follow-ups are Zorid correctness choices with focused tests, not
+newly observed reference runtime behaviors. The source commit reports 91 focused
+checks and scoped TypeScript; this ledger update did not rerun them. Final actual
+Electron screenshots and interaction checks remain required.
+
+## Frozen source verification — 2026-10-22
+
+Prepared on isolated documentation branch `codex/bases-final-evidence-docs`,
+frozen parent `9d086a97`; no app/build/test was launched for this documentation
+update. The coordinator's retained logs were read directly:
+
+| Retained log under `/private/tmp` | Observed result / scope | SHA-256 |
+| --- | --- | --- |
+| `zorid-bases-composed-focused-7.log` | Frontend671/671, zero failures/cancelled/skipped; component/adaptation scopes, not an actual Electron journey. | `8d9d2e003a6228768b201d64e068f525d2418369cf5b4d365632ba4433ab7ff0` |
+| `zorid-bases-final-core-801-check.log` | Rust192/192 across13 targets: library82, calendar6, corpus7, generation4, link-subpaths1, preview10, property/relations39, query-corpus5, refresh6, rich-query3, summaries15, task-YAML3, tasks11. All13 result records have zero failures. | `1cf32a5a19f57d4451cd6f0096c23d808c15c8bda02553535c6f613f1e27382f` |
+| `zorid-bases-final-adapters-801-check.log` | Saved ordinary-note property-target endpoints: native3 and native-compiled WASM2, all passed; not actual WASM runtime. | `887fa6ce58551a80811598a890976d074ad6b9626fb81384da94d8f5459b06c2` |
+| `zorid-bases-final-origin-801-check.log` | Saved/inline group-order origin uses verified source rather than `this`: native1 and native-compiled WASM1, passed. | `2989f3df3f9bc9f52cac0fcbb0b51448a172c8f186042b5332f9440a59d53190` |
+| `zorid-bases-final-native-801-build.log` | Release desktop-host and CLI build finished successfully; warnings remain. Build success is not runtime acceptance. | `57f99e418219fd5336449af322ac610fad4f5c1d012af9104d4f3087e5c19336` |
+| `zorid-bases-final-wasm-801-build.log` | Release WASM build finished and generated browser assets reported ready; not execution in a browser. | `d36dd112ee3f8a233c1626484e571e20dcbe4aec9e1e1482789eff0506b0f074` |
+
+The `801` log label is not a claim that the renderer remained at that commit.
+The native artifact receipt
+`/private/tmp/zorid-bases-cli-final-002-artifacts.json` records frozen source
+`9d086a97b9f7fb16c3dc54452c16914ae5918c18`, Rust `crates` tree
+`2f55bd4a7a560168d9ae55144149d31926eaa750`, Cargo.toml object
+`dae521160181b50ce45ed9c7032b25609616b1c7` and Cargo.lock object
+`413037e553a3c10bc605004a0ad3f6012f570440`. It records host SHA-256
+`0c29e8d5fd4b04b7b424303dc48ede710a2c1a1fb8658c2cfe1164e7e572a620`
+and CLI SHA-256
+`92870835203249518612db6003be262b5cc1b54530bbaf3d00900fbe5aa592ed`.
+This is an artifact identity receipt preceding a runtime campaign, not its result.
+
+The generated browser `build.json` records fingerprint
+`c4198a8e96a143869e225fe18188e31d69ec49c9ecb55f6d3b7de93673a8f5ae`,
+wasm-bindgen0.2.129, JS SHA-256
+`81c4a5c09ada24257106eaadeaafb46032ec0de7a947f7bee0d2352ed0e6a0c1`
+and WASM SHA-256
+`5e23cccfd0385652d6bf2486dbe8f7b70b073a358962e545edae5350e7561004`.
+An actual campaign must independently retain/validate those bytes and its full
+source closure. The counts above overlap other historical checks and must not be
+summed with them into an acceptance total.
+
+Source closure includes Results continuation `698e767d` and stale view-control
+invalidation `350a0dd1`, with focused toolbar tests, plus file chrome `9d086a97`.
+These address prior observations but still need final executed interaction
+evidence. At preparation time, actual final Electron006, browser/WASM002 and
+CLI002 outcomes are pending; normal web UI proof, corresponding visual comparison,
+remaining reference scenarios and main integration are also open. This section
+does not check any runtime acceptance box or claim mobile/reference parity.

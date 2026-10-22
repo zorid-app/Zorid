@@ -2,12 +2,46 @@
 
 ## Execution checkpoint — shared-core coordinator
 
-Current as of2026-10-21. Read this summary first; dated execution evidence below
+Current as of2026-10-22. Read this summary first; dated execution evidence below
 is historical where it conflicts with this checkpoint. The maintained stage
 sequence is in [roadmap.md](roadmap.md); S1 scope is in
 [plans/indexing-search.md](plans/indexing-search.md).
 
 ### Latest execution update
+
+2026-10-22 frozen final-source preparation at `9d086a97`: the retained composed
+frontend log reports **671/671 passed**, zero failed/cancelled/skipped. The final
+Rust closure reports **192/192 across 13 targets** (82 library plus 110 integration
+cases). Separate adapter checks pass native3 and native-compiled WASM2; separate
+saved/inline group-origin checks pass native1 and native-compiled WASM1. These
+sets are not an aggregate total or actual WASM execution. Full release host/CLI
+and browser WASM builds completed. Exact logs/hashes and limits are recorded in
+[the reference/evidence ledger](history/bases-pass-reference-20261021.md#frozen-source-verification--2026-10-22).
+These results supersede the earlier “grouping still implementing/two corpus
+expectations open/build pending” status for this closure. Actual final Electron006,
+browser/WASM002 and CLI002 campaigns remain pending in this prepared record;
+their outcomes must be recorded separately by the runtime owners. Normal web
+UI proof, final visual comparisons and main integration remain open.
+
+The frozen source includes native date/custom-checkbox/table numeric presentation
+`317741b3`, nullable/pending checkbox focus fixes `2062ffd2`/`8156a410`, Results
+continuation `698e767d`, view-control invalidation `350a0dd1`, and Base file chrome
+`9d086a97`. Focused static REA corroborates native property control structure and
+CSS; it does not establish a captured locale display or exact table alignment.
+All of these changes still require corresponding final actual UI evidence.
+
+Readiness disposition using the [63-ID audit](history/bases-acceptance-audit-20261022.md):
+the [named-Type inventory](history/bases-type-retirement-inventory-20261022.md)
+completes the source-scoped inventory in R2, preserving deferred Task/Calendar
+consumers; named ownership/worktrees are established for R3. The
+[host policy](history/bases-query-host-policy-20261022.md) completes Q7's policy
+inventory: service-present hosts use Rust and do not fall back after errors;
+no-service compatibility remains explicitly bounded. Actual normal-host routing
+evidence remains part of A4/A5, including the distinction between a Rust-storage
+fixture and a Rust Base query. R1 main reconciliation, R4's remaining reference
+scenarios, R5 matched captures, all functional/layout/lifecycle requirements and
+A1–A7/C1–C3 runtime/review/integration gates remain open. Source, test or build
+completion does not automatically check those goal requirements.
 
 2026-10-22 actual Electron005: matched host/renderer at `09cd214e`,106 actions
 and7 durable checks before stopping ahead of CSV export. Filter focus, view
