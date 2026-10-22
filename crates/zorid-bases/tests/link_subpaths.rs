@@ -63,7 +63,7 @@ fn resolved_relations_and_edges_keep_explicit_subpaths_while_identity_links_do_n
     let definitions =
         PropertyDefinitions::from_generation_source(&generation, &id("settings"), settings)
             .unwrap();
-    let program = compile_base_source("filters: file.extension == \"md\"\nformulas:\n  identity: file.asLink()\n  direct: link('../People/A%23B.md#Biography')\nviews:\n  - type: table\n    name: Fragments\n    order: [file.path, note.author, note.books, file.links, file.backlinks, formula.identity, formula.direct]\n").unwrap();
+    let program = compile_base_source("filters: file.ext == \"md\"\nformulas:\n  identity: file.asLink()\n  direct: link('../People/A%23B.md#Biography')\nviews:\n  - type: table\n    name: Fragments\n    order: [file.path, note.author, note.books, file.links, file.backlinks, formula.identity, formula.direct]\n").unwrap();
     let result = query_generation_with_properties(
         &program,
         &generation,
@@ -72,16 +72,28 @@ fn resolved_relations_and_edges_keep_explicit_subpaths_while_identity_links_do_n
         &QueryOptions::default(),
     )
     .unwrap();
+    assert!(
+        result.diagnostics.is_empty(),
+        "Fragment fixture query diagnostics: {:?}",
+        result.diagnostics
+    );
+    assert_eq!(
+        result.rows.len(),
+        2,
+        "Expected the two Markdown identity rows, got paths {:?}; counts: {:?}",
+        result.rows.iter().map(|row| &row.path).collect::<Vec<_>>(),
+        result.counts
+    );
     let book = result
         .rows
         .iter()
         .find(|row| row.entry_id == id("book"))
-        .unwrap();
+        .expect("Fragment fixture must return the captured Book#One.md source record");
     let author = result
         .rows
         .iter()
         .find(|row| row.entry_id == id("author"))
-        .unwrap();
+        .expect("Fragment fixture must return the captured A#B.md target record");
     assert!(
         matches!(&book.values["note.author"], BaseValue::Link {path, target: Some(target), subpath: Some(subpath), display: Some(display), ..} if path == "People/A#B.md" && target.entry_id == id("author") && subpath == "#^block-id" && display == "Boss")
     );
