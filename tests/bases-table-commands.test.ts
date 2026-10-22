@@ -243,3 +243,26 @@ test('rich widgets cannot consume shift selections, range Enter or the click aft
   f.cell(0,'note.text').focus();f.cell(1,'note.text').dispatchEvent(new f.dom.window.MouseEvent('click',{bubbles:true,cancelable:true,shiftKey:true}));assert.equal(activations,0);f.key(f.cell(0,'note.text'),'Enter');assert.equal(activations,0);
   f.key(f.cell(0,'note.text'),'Escape');f.cell(0,'note.text').dispatchEvent(new f.dom.window.MouseEvent('pointerdown',{bubbles:true,cancelable:true,button:0}));f.cell(1,'note.text').dispatchEvent(new f.dom.window.MouseEvent('pointermove',{bubbles:true,cancelable:true}));f.cell(1,'note.text').dispatchEvent(new f.dom.window.MouseEvent('pointerup',{bubbles:true,cancelable:true}));f.cell(1,'note.text').click();assert.equal(activations,0);f.close();
 });
+
+
+test('raw clipboard and scalar append preserve saved link aliases and date spelling', async () => {
+  const saved={type:'list' as const,value:[{type:'string' as const,value:'[[Projects/Alpha|An alias]]'},{type:'string' as const,value:'2026-10-22T10:00:00-04:00'}]};
+  const f=fixture({getEditableValue:(_row,property)=>property==='note.text'?saved:undefined});
+  const rows=f.result.rows.map(row=>({...row,values:{...row.values,'note.text':{type:'list' as const,value:[{type:'namespace' as const,name:'An alias',get(){throw Error('no resolver calls');}}]}}}));f.view.update({...f.result,shared:{} as NonNullable<BaseQueryResult['shared']>,version:8,rows,groups:[{key:null,rows}]});f.cell(0,'note.text').focus();
+  const formats=new Map<string,string>();const copy=new f.dom.window.Event('copy',{bubbles:true,cancelable:true});Object.defineProperty(copy,'clipboardData',{value:{setData:(type:string,text:string)=>formats.set(type,text)}});f.cell(0,'note.text').dispatchEvent(copy);
+  assert.deepEqual(JSON.parse(formats.get('obsidian/bases-cells')!),[[{type:'note',data:['[[Projects/Alpha|An alias]]','2026-10-22T10:00:00-04:00']}]]);
+  f.paste(f.cell(0,'note.text'),{'text/plain':'next'});await tick();assert.deepEqual(f.batches[0][0].value,{type:'list',value:[...saved.value,{type:'string',value:'next'}]});f.close();
+});
+
+test('unavailable formatted values never become raw clipboard data or append baselines', async () => {
+  const f=fixture();const rows=f.result.rows.map(row=>({...row,values:{...row.values,'note.text':{type:'list' as const,value:[{type:'namespace' as const,name:'Display only',get(){throw Error('no resolver calls');}}]}}}));f.view.update({...f.result,shared:{} as NonNullable<BaseQueryResult['shared']>,version:8,rows,groups:[{key:null,rows}]});f.cell(0,'note.text').focus();
+  const formats=new Map<string,string>();const copy=new f.dom.window.Event('copy',{bubbles:true,cancelable:true});Object.defineProperty(copy,'clipboardData',{value:{setData:(type:string,text:string)=>formats.set(type,text)}});f.cell(0,'note.text').dispatchEvent(copy);
+  assert.deepEqual(JSON.parse(formats.get('obsidian/bases-cells')!),[[{type:'note'}]]);assert.equal(formats.get('text/plain'),'Display only');
+  f.paste(f.cell(0,'note.text'),{'text/plain':'next'});await tick();assert.equal(f.batches.length,0);assert.match(f.main.textContent!,/raw saved property is unavailable/);f.close();
+});
+
+test('derived computed values copy as formula cells rather than fabricated saved properties', async () => {
+  const f=fixture({getPropertyType:property=>property==='note.score'?'rollup':'text',getEditableValue:()=>({type:'number',value:99})});f.cell(0,'note.score').focus();
+  const formats=new Map<string,string>();const copy=new f.dom.window.Event('copy',{bubbles:true,cancelable:true});Object.defineProperty(copy,'clipboardData',{value:{setData:(type:string,text:string)=>formats.set(type,text)}});f.cell(0,'note.score').dispatchEvent(copy);
+  assert.deepEqual(JSON.parse(formats.get('obsidian/bases-cells')!),[[{type:'formula'}]]);f.cell(0,'note.text').focus();f.paste(f.cell(0,'note.text'),{'obsidian/bases-cells':formats.get('obsidian/bases-cells')!});await tick();assert.equal(f.batches.length,0);f.close();
+});

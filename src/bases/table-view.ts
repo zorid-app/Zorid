@@ -27,6 +27,8 @@ export interface BaseTableOptions {
   readonly editProperties?: (edits: readonly BaseTableEdit[]) => Promise<void>;
   readonly isPropertyEditable?: (property: string, row: BaseQueryRow) => boolean;
   readonly validatePropertyValue?: (value: BaseExpressionValue, property: string, row: BaseQueryRow) => BaseExpressionValue;
+  /** Raw persisted property from this row's captured witness, never its formatted presentation. */
+  readonly getEditableValue?: (row: BaseQueryRow, property: string) => BaseExpressionValue | undefined;
   readonly parsePropertyInput?: (raw: string, property: string, row: BaseQueryRow) => BaseExpressionValue;
   readonly renderProperty?: (element: HTMLElement, property: BasePropertyPresentation) => void | (() => void);
   readonly patchView?: (patch: BaseViewPatch) => Promise<void>;
@@ -606,6 +608,31 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     const point = selection?.point;
     return point ? cellBounds(point) : undefined;
   }
+  function editableRaw(row: BaseQueryRow, property: string): BaseExpressionValue | undefined {
+    const value = options.getEditableValue ? options.getEditableValue(row, property) : row.values[property] ?? BASE_NULL;
+    if (value === undefined) return;
+    try { rawProperty(value); return value; } catch { return; }
+  }
+  function rawProperty(value: BaseExpressionValue): BaseValue {
+    let budget = 10000; const ancestors = new Set<object>();
+    const raw = (value: BaseExpressionValue, depth = 0): BaseValue => {
+      if (--budget < 0 || depth > 64 || ancestors.has(value)) throw new Error('The saved property is too large or cyclic.');
+      ancestors.add(value);
+      try {
+        if (value.type === 'null') return null;
+        if (value.type === 'string' && typeof value.value === 'string' || value.type === 'boolean' && typeof value.value === 'boolean') return value.value;
+        if (value.type === 'number' && Number.isFinite(value.value)) return value.value;
+        if (value.type === 'list' && Array.isArray(value.value)) return value.value.map(value => raw(value, depth + 1));
+        if (value.type === 'object' && value.value && [Object.prototype, null].includes(Object.getPrototypeOf(value.value))) return Object.fromEntries(Object.keys(value.value).map(key => {
+          const descriptor = Object.getOwnPropertyDescriptor(value.value, key)!;
+          if (!('value' in descriptor)) throw new Error('Saved properties cannot contain accessors.');
+          return [key, raw(descriptor.value, depth + 1)];
+        }));
+        throw new Error('The raw saved property is unavailable.');
+      } finally { ancestors.delete(value); }
+    };
+    return raw(value);
+  }
   function selectionClipboard(): Record<string, string> | undefined {
     const bounds = selectedBounds(), group = bounds && result.groups[bounds.group];
     if (!bounds || !group || bounds.start < 0 || bounds.end >= result.properties.length) return;
@@ -617,17 +644,11 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     if (!rows.length) return;
     const header = properties.map(property => options.getPropertyLabel?.(property) ?? property.replace(/^(?:note|file|formula)\./, ''));
     const formats = tableClipboard(header, rows);
-    const raw = (value: BaseExpressionValue, depth = 0): unknown => {
-      if (depth > 64) throw new Error('The value is too deeply nested to copy.');
-      if (value.type === 'null') return null;
-      if (value.type === 'string' || value.type === 'number' || value.type === 'boolean') return value.value;
-      if (value.type === 'list') return value.value.map(value => raw(value, depth + 1));
-      if (value.type === 'object') return Object.fromEntries(Object.entries(value.value).map(([key, value]) => [key, raw(value, depth + 1)]));
-      return display(value, result.shared !== undefined);
-    };
     formats['obsidian/bases-cells'] = JSON.stringify(group.rows.slice(bounds.top, bounds.bottom + 1).map(row => properties.map(property => {
-      const type = property.startsWith('note.') ? 'note' : property.startsWith('formula.') ? 'formula' : 'file';
-      return { type, ...(type === 'note' ? { data: raw(row.values[property] ?? BASE_NULL) } : {}) };
+      const derived = ['rollup', 'reverseRelation', 'reverse-relation'].includes(options.getPropertyType?.(property) ?? '');
+      const type = property.startsWith('note.') && !derived ? 'note' : property.startsWith('formula.') || derived ? 'formula' : 'file';
+      const saved = type === 'note' ? editableRaw(row, property) : undefined;
+      return { type, ...(saved === undefined ? {} : { data: rawProperty(saved) }) };
     })));
     return formats;
   }
@@ -727,10 +748,12 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
           if (sourceColumn >= sourceWidth) continue;
           const raw = rows[sourceRow][sourceColumn], rawCell = rawRows?.[sourceRow]?.[sourceColumn];
           if (rawCell && (rawCell.type !== 'note' || !Object.hasOwn(rawCell, 'data'))) continue;
+          const saved = plainScalar !== undefined ? editableRaw(row, property) : undefined;
+          if (plainScalar !== undefined && current.type === 'list' && saved === undefined) throw new Error('The raw saved property is unavailable; refresh before appending.');
           // Clipboard values remain raw: the reference does not coerce pasted
           // strings into numbers/booleans. Only a plain scalar appends to lists.
           const value: BaseExpressionValue = rawCell ? baseExpressionValue(rawCell.data)
-            : plainScalar !== undefined && current.type === 'list' ? { type: 'list', value: [...current.value, { type: 'string', value: plainScalar }] }
+            : plainScalar !== undefined && saved?.type === 'list' ? { type: 'list', value: [...saved.value, { type: 'string', value: plainScalar }] }
             : { type: 'string', value: raw };
           edits.push({ version: result.version, path: row.path, property, value: options.validatePropertyValue?.(value, property, row) ?? value });
         }
