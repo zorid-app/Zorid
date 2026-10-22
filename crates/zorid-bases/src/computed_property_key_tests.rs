@@ -147,3 +147,96 @@ fn cached_string_literal_keys_remain_cancellable_and_keep_the_literal_byte_cap()
         matches!(Evaluator::new(&context).evaluate(&expression, &Scope::new()), RuntimeValue::Error(error) if error.starts_with("budget\0"))
     );
 }
+
+#[test]
+fn named_keys_borrow_ast_text_but_still_charge_the_lookup_scan() {
+    let key = "k".repeat(4096);
+    let context = BasesEvaluationContext {
+        note: IndexMap::from([(key.clone(), RuntimeValue::Number(41.0))]),
+        ..Default::default()
+    };
+    let expression = Expr::Member(
+        Box::new(Expr::Identifier("note".into())),
+        Member::Named(key.clone()),
+    );
+    let mut receiver = Evaluator::new(&context);
+    receiver.evaluate(&Expr::Identifier("note".into()), &Scope::new());
+    let work =
+        context.work_limit.unwrap_or(100_000) - receiver.remaining_work + 1 + key.len() / 16 + 1;
+    let constrained = BasesEvaluationContext {
+        work_limit: Some(work),
+        ..context
+    };
+    let mut evaluator = Evaluator::new(&constrained);
+    assert!(matches!(
+        evaluator.evaluate(&expression, &Scope::new()),
+        RuntimeValue::Number(41.0)
+    ));
+    assert_eq!(evaluator.remaining_work, 0);
+    let constrained = BasesEvaluationContext {
+        work_limit: Some(work - 1),
+        ..constrained
+    };
+    assert!(
+        matches!(Evaluator::new(&constrained).evaluate(&expression, &Scope::new()), RuntimeValue::Error(error) if error.starts_with("budget\0"))
+    );
+}
+
+#[test]
+fn named_formula_keys_charge_the_scan_and_preserve_exact_case_selection() {
+    let context = BasesEvaluationContext {
+        formulas: Arc::new(IndexMap::from([
+            ("Score".into(), "17".into()),
+            ("score".into(), "23".into()),
+        ])),
+        ..Default::default()
+    };
+    for (source, expected) in [
+        ("formula.Score", 17.0),
+        ("formula.score", 23.0),
+        ("formula.SCORE", 17.0),
+    ] {
+        assert!(
+            matches!(evaluate(source, &context), RuntimeValue::Number(value) if value == expected)
+        );
+    }
+    let key = "k".repeat(4096);
+    let expression = Expr::Member(
+        Box::new(Expr::Identifier("formula".into())),
+        Member::Named(key),
+    );
+    let constrained = BasesEvaluationContext {
+        work_limit: Some(64),
+        ..context
+    };
+    assert!(
+        matches!(Evaluator::new(&constrained).evaluate(&expression, &Scope::new()), RuntimeValue::Error(error) if error.starts_with("budget\0"))
+    );
+}
+
+#[test]
+fn cached_named_keys_poll_cancellation_and_leave_string_member_semantics_intact() {
+    let cancellation = OperationCancellation::default();
+    let context = BasesEvaluationContext {
+        note: IndexMap::from([("score".into(), RuntimeValue::Number(7.0))]),
+        cancellation: Some(cancellation.clone()),
+        ..Default::default()
+    };
+    assert!(matches!(
+        evaluate("note.score", &context),
+        RuntimeValue::Number(7.0)
+    ));
+    assert!(matches!(
+        evaluate("'abc'.length", &context),
+        RuntimeValue::Number(3.0)
+    ));
+    assert!(
+        matches!(evaluate("'abc'['length']", &context), RuntimeValue::Error(error) if error.starts_with("access\0"))
+    );
+    cancellation.cancel();
+    for source in ["note.score", "formula.score"] {
+        assert!(
+            matches!(evaluate(source, &context), RuntimeValue::Error(error) if error.starts_with("cancelled\0"))
+        );
+    }
+}

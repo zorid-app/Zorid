@@ -722,12 +722,26 @@ fn value_expression(property: &str) -> String {
     let (namespace, name) = property.split_once('.').unwrap_or(("note", property));
     if namespace == "file" && name == "file" {
         "file".into()
+    } else if named_property_key(name) {
+        format!("{namespace}.{name}")
     } else {
         format!(
             "{namespace}[{}]",
             serde_json::to_string(name).expect("string serializes")
         )
     }
+}
+
+/// Use a conservative subset of lexer identifiers for generated access. Other
+/// property names retain the exact JSON-quoted computed-key representation.
+fn named_property_key(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || matches!(first, b'_' | b'$'))
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$'))
+        && !matches!(name, "true" | "false" | "null")
 }
 
 /// Runtime property access is exact-first, then Unicode case-folded in
@@ -3336,5 +3350,177 @@ mod relation_group_identity_tests {
             *display = None;
         }
         assert_eq!(canonical(&unresolved), canonical(&other_alias));
+    }
+}
+
+#[cfg(test)]
+mod projected_property_expression_tests {
+    use super::*;
+    use expression::{BasesEvaluationContext, BasesFile, RuntimeValue, Session};
+    use indexmap::IndexMap;
+    use std::sync::Arc;
+
+    #[test]
+    fn generated_named_keys_use_only_the_safe_ascii_identifier_subset() {
+        for name in ["score", "Score2", "_key", "$key", "TRUE", "if"] {
+            for namespace in ["note", "formula", "file", "this"] {
+                assert_eq!(
+                    value_expression(&format!("{namespace}.{name}")),
+                    format!("{namespace}.{name}")
+                );
+            }
+            assert_eq!(value_expression(name), format!("note.{name}"));
+        }
+        for name in [
+            "",
+            "2score",
+            "true",
+            "false",
+            "null",
+            "é",
+            "日本語",
+            "with space",
+            "a.b",
+            "a-b",
+            "a/b",
+            "a\"b",
+            "a\\b",
+            "a\nb",
+            "🙂",
+        ] {
+            for namespace in ["note", "formula", "file", "this"] {
+                assert_eq!(
+                    value_expression(&format!("{namespace}.{name}")),
+                    format!("{namespace}[{}]", serde_json::to_string(name).unwrap())
+                );
+            }
+        }
+        assert_eq!(value_expression("file.file"), "file");
+        // Every built-in projection and score hot key avoids a synthetic String literal.
+        for property in FILE_PROPERTIES.iter().copied().chain(["note.score"]) {
+            assert_eq!(
+                value_expression(property),
+                if property == "file.file" {
+                    "file"
+                } else {
+                    property
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn generated_named_and_quoted_keys_select_the_same_captured_values() {
+        let names = [
+            "score", "Score", "_key", "$key", "TRUE", "if", "", "2score", "true", "false", "null",
+            "é", "a.b", "a b", "a\"b", "a\\b", "a\nb",
+        ];
+        let properties = names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| (name.to_string(), RuntimeValue::Number(index as f64)))
+            .collect::<IndexMap<_, _>>();
+        let context = BasesEvaluationContext {
+            note: properties.clone(),
+            this_file: Some(BasesFile {
+                path: "Current.md".into(),
+                properties,
+                ..Default::default()
+            }),
+            formulas: Arc::new(
+                names
+                    .iter()
+                    .enumerate()
+                    .map(|(index, name)| (name.to_string(), index.to_string()))
+                    .collect(),
+            ),
+            file: BasesFile {
+                path: "Folder/Note.md".into(),
+                name: "Note.md".into(),
+                basename: "Note".into(),
+                extension: "md".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for namespace in ["note", "this", "formula"] {
+            for (index, name) in names.iter().enumerate() {
+                let generated = value_expression(&format!("{namespace}.{name}"));
+                let quoted = format!("{namespace}[{}]", serde_json::to_string(name).unwrap());
+                assert_eq!(
+                    Session::new(&context).evaluate(&generated).unwrap(),
+                    BaseValue::Number {
+                        value: index as f64
+                    },
+                    "{generated}"
+                );
+                assert_eq!(
+                    Session::new(&context).evaluate(&generated),
+                    Session::new(&context).evaluate(&quoted),
+                    "{generated}"
+                );
+            }
+        }
+        for property in FILE_PROPERTIES
+            .iter()
+            .copied()
+            .filter(|property| *property != "file.file")
+        {
+            let name = property.strip_prefix("file.").unwrap();
+            assert_eq!(
+                Session::new(&context).evaluate(&value_expression(property)),
+                Session::new(&context)
+                    .evaluate(&format!("file[{}]", serde_json::to_string(name).unwrap())),
+                "{property}"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_access_preserves_dependency_planning() {
+        for property in [
+            "note.score",
+            "formula.score",
+            "this.score",
+            "this.file",
+            "file.ctime",
+            "file.backlinks",
+            "file.links",
+            "file.path",
+        ] {
+            let (namespace, name) = property.split_once('.').unwrap();
+            let generated = value_expression(property);
+            let quoted = format!("{namespace}[{}]", serde_json::to_string(name).unwrap());
+            assert_eq!(
+                expression::uses_current_context(&generated),
+                expression::uses_current_context(&quoted),
+                "{property}"
+            );
+            assert_eq!(
+                expression::uses_relationships(&generated),
+                expression::uses_relationships(&quoted),
+                "{property}"
+            );
+            assert_eq!(
+                expression::uses_file_ctime(&generated),
+                expression::uses_file_ctime(&quoted),
+                "{property}"
+            );
+            assert_eq!(
+                expression::uses_backlinks(&generated),
+                expression::uses_backlinks(&quoted),
+                "{property}"
+            );
+            assert_eq!(
+                expression::clock_dependency(&generated, &mut |_| Some(())),
+                expression::clock_dependency(&quoted, &mut |_| Some(())),
+                "{property}"
+            );
+            assert_eq!(
+                expression::clock_independent(&generated, &mut |_| Some(())),
+                expression::clock_independent(&quoted, &mut |_| Some(())),
+                "{property}"
+            );
+        }
     }
 }

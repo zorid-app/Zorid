@@ -2444,7 +2444,12 @@ impl<'a> Evaluator<'a> {
         if let Expr::Identifier(namespace) = object {
             if !self.summary_only && namespace.eq_ignore_ascii_case("formula") {
                 let name = match member {
-                    Member::Named(name) => name.clone(),
+                    Member::Named(name) => {
+                        if let Err(error) = self.charge(name.len() / 16 + 1) {
+                            return error;
+                        }
+                        return self.formula(name);
+                    }
                     Member::Computed(expression) => {
                         let value = self.evaluate(expression, scope);
                         match value {
@@ -2463,7 +2468,14 @@ impl<'a> Evaluator<'a> {
         }
         let object = self.evaluate(object, scope);
         let property = match member {
-            Member::Named(value) => value.clone(),
+            Member::Named(value) => {
+                // The immutable AST already owns this key. Charge its scan,
+                // then borrow it for lookup without materializing another String.
+                if let Err(error) = self.charge(value.len() / 16 + 1) {
+                    return error;
+                }
+                return self.property(object, value);
+            }
             Member::Computed(value) => {
                 let value = self.evaluate(value, scope);
                 if matches!(value, RuntimeValue::Error(_)) {
