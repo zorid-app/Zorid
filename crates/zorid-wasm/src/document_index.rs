@@ -588,6 +588,8 @@ pub(crate) struct BaseReadOptions {
     current_entry_id: Option<EntryId>,
     #[serde(default, deserialize_with = "present_option")]
     max_steps: Option<usize>,
+    #[serde(default, deserialize_with = "present_option")]
+    inline_source: Option<zorid_document::InlineBaseSource>,
 }
 impl BaseReadOptions {
     pub(crate) fn retained_bytes(&self) -> usize {
@@ -598,6 +600,7 @@ impl BaseReadOptions {
             .saturating_add(self.ignore_paths.iter().map(String::capacity).sum::<usize>())
             .saturating_add(self.timezone.as_ref().map_or(0, String::capacity))
             .saturating_add(self.current_entry_id.as_ref().map_or(0, |id| id.heap_capacity_bytes()))
+            .saturating_add(self.inline_source.as_ref().map_or(0, |inline| inline.source.capacity()))
     }
 }
 fn present_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -1182,6 +1185,9 @@ pub(crate) fn base_query_options(
     view_name: Option<&str>,
     program: &zorid_bases::BaseProgram,
 ) -> Result<zorid_bases::QueryOptions, BaseReadError> {
+    if input.inline_source.is_some() {
+        return Err(BaseReadError::Code("index_inline_source_requires_saved"));
+    }
     let mut options = zorid_bases::QueryOptions::default();
     if let Some(index) = input.view_index {
         options.view_index = index;
@@ -1213,7 +1219,7 @@ fn evaluate_base<'a>(
     id: &EntryId,
     bytes: &[u8],
     facts: &[zorid_bases::FilePresentationFacts],
-    input: BaseReadOptions,
+    mut input: BaseReadOptions,
     view_name: Option<&str>,
     mut cache: Option<(&mut zorid_bases::BasePreparationCache, u64)>,
 ) -> Result<(BaseRead<'a>, Option<BaseOutcomes>), BaseReadError> {
@@ -1223,8 +1229,19 @@ fn evaluate_base<'a>(
     // A cached program or generation is no proof of source admission. Even a
     // warm query must recheck this exact retained definition and UTF8 first.
     record.check_text(bytes).map_err(BaseReadError::Index)?;
-    let source =
+    let saved_source =
         std::str::from_utf8(bytes).map_err(|_| BaseReadError::Code("index_source_unavailable"))?;
+    let inline = input.inline_source.take();
+    let source = if let Some(inline) = inline.as_ref() {
+        if !record.witness().entry().path.as_str().ends_with(".md")
+            || !zorid_document::verify_inline_base_source(saved_source, inline)
+            || input.current_entry_id.as_ref().is_some_and(|current| current != id)
+        {
+            return Err(BaseReadError::Code("index_inline_source_mismatch"));
+        }
+        input.current_entry_id = Some(id.clone());
+        inline.source.as_str()
+    } else { saved_source };
     // Keep the sealed lookup until answer evaluation: an Arc alone does not
     // carry the current cache owner's dependency provenance.
     let compiled = if let Some((cache, clock)) = cache.as_mut() {
@@ -1283,7 +1300,7 @@ fn base_report(
     view_name: Option<String>,
     cache: Option<(&mut zorid_bases::BasePreparationCache, u64)>,
 ) -> Result<String, JsValue> {
-    if bytes.len() > 262144 || facts_json.len() > 8 * 1024 * 1024 || options_json.len() > 65536 {
+    if bytes.len() > zorid_document::MAX_SOURCE_BYTES || facts_json.len() > 8 * 1024 * 1024 || options_json.len() > 65536 {
         return Err(error("index_input_limit"));
     }
     let id = EntryId::new(id).map_err(|_| error("index_invalid_record"))?;
@@ -2184,6 +2201,35 @@ mod tests {
         .unwrap()
     }
     #[test]
+    fn inline_base_verifies_saved_source_and_uses_containing_note_context_with_warm_cache() {
+        let yaml = "filters: file.path == this.file.path\nviews:\n  - type: table\n    name: Here\n    order: [file.path]\n";
+        let source = format!("# Café\n\n```base\n{yaml}```\n");
+        let selected = zorid_document::InlineBaseSource {
+            source: yaml.into(), start_byte: source.find("```base").unwrap(), end_byte: source.len() - 1,
+        };
+        let mut builder = WasmDocumentIndexBuilder::new(&header()).unwrap();
+        builder.add_text("a", source.as_bytes()).unwrap();
+        builder.add_text("b", b"Other\n").unwrap();
+        let generation = builder.finish().unwrap();
+        let input = || serde_json::from_value::<BaseReadOptions>(serde_json::json!({"inlineSource":selected})).unwrap();
+        let id = EntryId::new("a").unwrap();
+        let mut owner = WasmDocumentIndexPreparationCache::new();
+        for clock in [100, 101] {
+            let (result, _) = evaluate_base(&generation.generation, &id, source.as_bytes(), &[], input(), Some("Here"), Some((&mut owner.inner, clock))).unwrap();
+            assert_eq!(result.definition.id, id);
+            assert_eq!(result.result.rows.len(), 1);
+            assert_eq!(result.result.rows[0].path, "a.md");
+        }
+        let mut wrong_context = input();
+        wrong_context.current_entry_id = Some(EntryId::new("b").unwrap());
+        assert!(matches!(evaluate_base(&generation.generation, &id, source.as_bytes(), &[], wrong_context, None, None), Err(BaseReadError::Code("index_inline_source_mismatch"))));
+        let mut wrong_source = input();
+        wrong_source.inline_source.as_mut().unwrap().source = "views: []\n".into();
+        assert!(matches!(evaluate_base(&generation.generation, &id, source.as_bytes(), &[], wrong_source, None, Some((&mut owner.inner, 102))), Err(BaseReadError::Code("index_inline_source_mismatch"))));
+        let changed = source.replace("Café", "Fake");
+        assert!(matches!(evaluate_base(&generation.generation, &id, changed.as_bytes(), &[], input(), None, None), Err(BaseReadError::Index(_))));
+    }
+    #[test]
     fn preparation_cache_reuses_fresh_generations_and_reruns_current_invocation() {
         use zorid_bases::PreparationCacheOutcome::{Hit, Miss};
         let id = EntryId::new("base").unwrap();
@@ -2920,6 +2966,9 @@ mod tests {
         for raw in [
             r#"{"currentEntryId":null}"#,
             r#"{"maxSteps":null}"#,
+            r#"{"inlineSource":null}"#,
+            r#"{"inlineSource":{"source":"","startByte":0,"endByte":1,"extra":true}}"#,
+            r#"{"inlineSource":{"source":"","startByte":0,"endByte":1},"inlineSource":{"source":"","startByte":0,"endByte":1}}"#,
             r#"{"currentEntryId":"one","currentEntryId":"two"}"#,
             r#"{"maxSteps":1,"maxSteps":2}"#,
         ] {

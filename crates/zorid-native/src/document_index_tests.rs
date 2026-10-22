@@ -56,6 +56,43 @@ fn expect_code<T>(result: NativeDocumentResult<T>, code: &str) {
 }
 
 #[test]
+fn inline_base_is_bound_to_saved_fence_containing_context_and_retained_generation() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    let yaml = "filters: file.path == this.file.path\nviews:\n  - type: table\n    name: Here\n    order: [file.path]\n";
+    let source = format!("# Café\n\n```base\n{yaml}```\n");
+    let inline = InlineBaseSource {
+        source: yaml.into(),
+        start_byte: source.find("```base").unwrap(),
+        end_byte: source.len() - 1,
+    };
+    create(&mut vault, "containing", "Containing.md", &source);
+    create(&mut vault, "other", "Other.md", "# Other\n");
+    vault.initialize_document_index().unwrap();
+    build(&mut vault);
+    let old = vault.open_document_snapshot().unwrap();
+    let run = |options: &QueryOptions, selected: &InlineBaseSource| {
+        vault.query_inline_base_document(&old, &id("containing"), selected, Some("Here"), options)
+    };
+    let result = run(&QueryOptions::default(), &inline).unwrap();
+    assert_eq!(result.value.definition.id, id("containing"));
+    assert_eq!(result.value.result.rows.len(), 1);
+    assert_eq!(result.value.result.rows[0].path, "Containing.md");
+    expect_code(run(&QueryOptions { current_entry_id: Some(id("other")), ..QueryOptions::default() }, &inline), "inline_source_mismatch");
+    expect_code(run(&QueryOptions::default(), &InlineBaseSource { source: "views: []\n".into(), ..inline.clone() }), "inline_source_mismatch");
+    expect_code(run(&QueryOptions::default(), &InlineBaseSource { start_byte: inline.start_byte + 1, ..inline.clone() }), "inline_source_mismatch");
+    let old_revision = result.value.definition.revision;
+    write(&mut vault, "replace-containing", "containing", "# Fence removed\n");
+    build(&mut vault);
+    let retained = vault.query_inline_base_document(&old, &id("containing"), &inline, None, &QueryOptions::default()).unwrap();
+    assert_eq!(retained.value.definition.revision, old_revision);
+    let fresh = vault.open_document_snapshot().unwrap();
+    expect_code(vault.query_inline_base_document(&fresh, &id("containing"), &inline, None, &QueryOptions::default()), "inline_source_mismatch");
+    vault.close_document_snapshot(old);
+    vault.close_document_snapshot(fresh);
+}
+
+#[test]
 fn retained_generation_binds_metadata_search_backlinks_base_source_and_facts() {
     let dir = tempfile::tempdir().unwrap();
     let cache = tempfile::tempdir().unwrap();

@@ -2,6 +2,8 @@
 //! parsing never reads the filesystem or rewrites content.
 mod frontmatter;
 mod markdown;
+mod inline_base;
+pub use inline_base::{verify_inline_base_source, InlineBaseSource};
 mod positions;
 mod phases;
 pub use phases::{ParseFactsJob, ParseFactsJobError, ParseFactsPhase, ParseFactsResourceKind, ParseFactsStep, ParseFactsStepBudget, ParseFactsUsage};

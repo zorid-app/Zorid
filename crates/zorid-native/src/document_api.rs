@@ -8,6 +8,7 @@ use zorid_index::{Exclusion, MetadataProjection};
 pub use zorid_bases::tasks::{TaskFilter, TaskQueryOptions, TaskQueryResult};
 pub use zorid_bases::types::TaskTypeSummary;
 pub use zorid_bases::{BaseQueryResult, EvaluationOptions, OperationCancellation, QueryOptions};
+pub use zorid_document::InlineBaseSource;
 pub use zorid_index::{
     IndexSnapshotId, LiteralPage, LiteralQuery, LiteralToken, RelationshipDirection,
     RelationshipPage, RelationshipToken, ResolutionSnapshot, SourceSnapshotId,

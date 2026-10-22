@@ -169,6 +169,8 @@ struct BaseOptions {
     max_rows: usize,
     #[serde(default, deserialize_with = "current_entry_option")]
     current_entry_id: Option<EntryId>,
+    #[serde(default, deserialize_with = "inline_source_option", skip_serializing_if = "Option::is_none")]
+    inline_source: Option<zorid_native::InlineBaseSource>,
     max_steps: usize,
 }
 impl Default for BaseOptions {
@@ -181,6 +183,7 @@ impl Default for BaseOptions {
             timezone: "UTC".into(),
             max_rows: 1000,
             current_entry_id: None,
+            inline_source: None,
             max_steps: QueryOptions::default().max_steps,
         }
     }
@@ -272,6 +275,11 @@ fn current_entry_option<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<EntryId>, D::Error> {
     EntryId::deserialize(deserializer).map(Some)
+}
+fn inline_source_option<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<zorid_native::InlineBaseSource>, D::Error> {
+    zorid_native::InlineBaseSource::deserialize(deserializer).map(Some)
 }
 // Missing differs from explicit null: only omission selects the host clock.
 fn clock_option<'de, D: serde::Deserializer<'de>>(
@@ -945,6 +953,9 @@ pub(crate) fn preview_base_reply(
     pin_sequence(preview_id)?;
     let preview = sessions.clients.get(client).and_then(|c| c.previews.get(preview_id))
         .ok_or_else(|| failure("index_preview_expired"))?;
+    // Preview sources are uncommitted; inline queries require a saved containing
+    // source witness and are admitted through the committed generation endpoint.
+    if options.inline_source.is_some() { return Err(failure("inline_source_requires_saved")); }
     let options = std::mem::take(options).into_options()?;
     let reply = vault.query_base_preview(preview, id, view_name.as_deref(), options, |_| Ok(()))
         .map_err(native)?;
@@ -1332,16 +1343,20 @@ pub(crate) fn execute(
                 pin_id,
                 id,
                 view_name,
-                options,
+                mut options,
             } => {
                 if view_name.as_ref().is_some_and(|s| s.len() > 1024) {
                     return Err(failure("request_limit"));
                 }
                 let pin = pin(sessions, client, &pin_id)?;
+                let inline = options.inline_source.take();
                 let options = options.into_options()?;
-                let result = match view_name {
-                    Some(name) => vault.query_base_document_view(&pin.value, &id, &name, &options),
-                    None => vault.query_base_document(&pin.value, &id, &options),
+                let result = match inline {
+                    Some(inline) => vault.query_inline_base_document(&pin.value, &id, &inline, view_name.as_deref(), &options),
+                    None => match view_name {
+                        Some(name) => vault.query_base_document_view(&pin.value, &id, &name, &options),
+                        None => vault.query_base_document(&pin.value, &id, &options),
+                    },
                 }
                 .map_err(native)?;
                 answer("base", result)
@@ -1497,11 +1512,22 @@ mod clock_tests {
             r#"{"currentEntryId":"bad:path"}"#,
             r#"{"currentEntryId":null}"#,
             r#"{"maxSteps":null}"#,
+            r#"{"inlineSource":null}"#,
+            r#"{"inlineSource":{"source":"","startByte":0,"endByte":1,"unknown":true}}"#,
+            r#"{"inlineSource":{"source":"","startByte":0,"endByte":1},"inlineSource":{"source":"","startByte":0,"endByte":1}}"#,
             r#"{"currentEntryId":"one","currentEntryId":"two"}"#,
             r#"{"maxSteps":1,"maxSteps":2}"#,
         ] {
             assert!(serde_json::from_str::<BaseOptions>(raw).is_err(), "{raw}");
         }
+    }
+    #[test]
+    fn inline_base_options_preserve_exact_byte_selector() {
+        let options: BaseOptions = serde_json::from_str(r#"{"inlineSource":{"source":"views: []\n","startByte":9,"endByte":32}}"#).unwrap();
+        let selected = options.inline_source.as_ref().unwrap();
+        assert_eq!(selected.source, "views: []\n");
+        assert_eq!((selected.start_byte, selected.end_byte), (9, 32));
+        assert_eq!(serde_json::to_value(options).unwrap()["inlineSource"]["startByte"], 9);
     }
     #[test]
     fn native_frame_error_categories_are_safe_without_rewriting_shared_diagnostics() {

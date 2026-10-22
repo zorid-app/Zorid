@@ -335,7 +335,7 @@ impl NativeVault {
         definition: &EntryId,
         options: &QueryOptions,
     ) -> NativeDocumentResult<DocumentQueryResult<DocumentBaseResult>> {
-        self.query_base_document_inner(pin, definition, None, options)
+        self.query_base_document_inner(pin, definition, None, None, options)
     }
     /// Resolve a named view through the compiled shared Base program.
     pub fn query_base_document_view(
@@ -345,7 +345,19 @@ impl NativeVault {
         view_name: &str,
         options: &QueryOptions,
     ) -> NativeDocumentResult<DocumentQueryResult<DocumentBaseResult>> {
-        self.query_base_document_inner(pin, definition, Some(view_name), options)
+        self.query_base_document_inner(pin, definition, Some(view_name), None, options)
+    }
+    /// Query a real fenced Base in the exact retained containing Markdown file.
+    /// The selector cannot replace saved source or choose another `this` note.
+    pub fn query_inline_base_document(
+        &self,
+        pin: &DocumentQueryPin,
+        containing: &EntryId,
+        inline: &zorid_document::InlineBaseSource,
+        view_name: Option<&str>,
+        options: &QueryOptions,
+    ) -> NativeDocumentResult<DocumentQueryResult<DocumentBaseResult>> {
+        self.query_base_document_inner(pin, containing, view_name, Some(inline), options)
     }
     /// Selectors locate actual source bytes in this pin; no caller AST is trusted.
     /// Invalid YAML is diagnostic data, while missing/non-text sources fail closed.
@@ -417,6 +429,7 @@ impl NativeVault {
         pin: &DocumentQueryPin,
         definition: &EntryId,
         view_name: Option<&str>,
+        inline: Option<&zorid_document::InlineBaseSource>,
         options: &QueryOptions,
     ) -> NativeDocumentResult<DocumentQueryResult<DocumentBaseResult>> {
         let manifest = self.document_manifest(pin)?;
@@ -427,6 +440,19 @@ impl NativeVault {
             .ok_or_else(|| NativeDocumentError::SourceUnavailable(definition.clone()))?;
         let source = std::str::from_utf8(&source)
             .map_err(|_| NativeDocumentError::SourceUnavailable(definition.clone()))?;
+        let mut selected = options.clone();
+        let source = if let Some(inline) = inline {
+            if !entry.path.as_str().ends_with(".md")
+                || !zorid_document::verify_inline_base_source(source, inline)
+                || selected.current_entry_id.as_ref().is_some_and(|id| id != definition)
+            {
+                return Err(zorid_bases::ExpressionDiagnostic::new(
+                    "inline_source_mismatch", "Inline Base does not match its saved containing note",
+                ).into());
+            }
+            selected.current_entry_id = Some(definition.clone());
+            inline.source.as_str()
+        } else { source };
         // Store verified this retained projection against the pin's exact
         // record commitment above. Program/data reuse cannot authorize a pin.
         // Expiry uses process-monotonic elapsed time, never the evaluation clock.
@@ -436,7 +462,6 @@ impl NativeVault {
             .base_preparation_cache
             .borrow_mut()
             .compile_source(source, monotonic_ms)?;
-        let mut selected = options.clone();
         if let Some(name) = view_name {
             selected.view_index = program.value().view_index_by_name(name).ok_or_else(|| {
                 zorid_bases::ExpressionDiagnostic::new("view_not_found", "Base view was not found")
