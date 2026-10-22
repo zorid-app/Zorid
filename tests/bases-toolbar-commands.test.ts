@@ -277,11 +277,11 @@ test('formula retry preserves its accepted identity before applying a newer queu
  }finally{toolbar.destroy();dom.window.close();}
 });
 
-test('adding a condition preserves an existing OR group and offers root-level filter groups',async()=>{
+test('new incomplete conditions and groups preserve existing OR filters without saving',async()=>{
  const f=fixture();try{
-  const view={...f.state.views[0],filters:{or:['score > 10','score < 0']}};f.toolbar.update({...f.state,views:[view,f.state.views[1]],result:{...f.result,view}});f.click('Filter');f.click('Add filter');f.submit();await tick();const call=f.calls.pop()!;assert.equal(call[0],'configuration');assert.deepEqual((call[2] as any).view.filters,{or:['score > 10','score < 0','file["name"] == ""']});
+  const view={...f.state.views[0],filters:{or:['score > 10','score < 0']}};f.toolbar.update({...f.state,views:[view,f.state.views[1]],result:{...f.result,view}});f.click('Filter');f.click('Add filter');f.submit();await tick();assert.equal(f.calls.length,0);assert.deepEqual(view.filters,{or:['score > 10','score < 0']});
  }finally{f.cleanup();}
- const g=fixture(true);try{g.click('Filter');g.click('Add filter group');g.submit();await tick();assert.deepEqual((g.calls.pop()![2] as any).view.filters,{and:[{and:[]}]});}finally{g.cleanup();}
+ const g=fixture(true);try{g.click('Filter');g.click('Add filter group');g.submit();await tick();assert.equal(g.calls.length,0);}finally{g.cleanup();}
 });
 
 test('a synchronous host failure retains the editable toolbar draft and clears saving state',async()=>{

@@ -55,7 +55,7 @@ test('removing a focused immediate filter restores a visible control and Escape 
   const active=f.doc.activeElement as HTMLElement;
   assert.notEqual(active,f.doc.body);assert.equal(active.getAttribute('role'),'combobox');assert.equal(active.getAttribute('aria-label'),'Match');assert.equal(active.closest('[hidden],[aria-hidden=true]'),null);
   active.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));await tick();
-  assert.equal(f.doc.querySelector('[role="dialog"]'),null);assert.deepEqual(f.patches,[{filters:{and:[]}}]);assert.deepEqual(f.errors,[]);
+  assert.equal(f.doc.querySelector('[role="dialog"]'),null);assert.deepEqual(f.patches,[{filters:undefined}]);assert.deepEqual(f.errors,[]);
  }finally{f.cleanup();}
 });
 
@@ -95,6 +95,6 @@ test('invalid typed filter survives an attempted structural addition and blocks 
     assert.equal(input.isConnected, true); assert.equal(input.value, 'not a number');
     f.submit(); await tick(); assert.equal(f.patches.length, 0);
     f.click('Remove filter'); f.submit(); await tick();
-    assert.deepEqual(f.patches, [{ filters: { and: [] } }]);
+    assert.deepEqual(f.patches, [{ filters: undefined }]);
   } finally { f.cleanup(); }
 });

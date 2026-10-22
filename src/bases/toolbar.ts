@@ -3,7 +3,13 @@ import type { BaseValue, BaseViewConfig, BaseViewPatch } from './document.ts';
 import type { BaseQueryResult } from './query.ts';
 import { normalizeBaseProperty } from './query.ts';
 import { icon } from '../ui/icons.ts';
-import { buildFilterCondition, decodeFilterCondition, validateToolbarPatch } from './toolbar-config.ts';
+import { BASE_FILE_FILTER_OPERATORS, baseFileFilterOperator, validateToolbarPatch } from './toolbar-config.ts';
+import type { BaseFilterCondition, BaseFilterOperator } from './toolbar-config.ts';
+import { createBaseFilterDraft, newBaseFilterCondition, newBaseFilterGroup, readBaseFilterDraft, updateBaseFilterCondition, updateBaseFilterExpression, captureBaseFilterAcknowledgement, baseFilterCount } from './toolbar-filter.ts';
+import type { BaseFilterNode, BaseFilterDraftNode, BaseFilterDraftCondition, BaseFilterConjunction } from './toolbar-filter.ts';
+import { createBaseFilterOperand } from './toolbar-filter-operands.ts';
+import type { BaseFilterOperand, BaseFilterOperandsSnapshot } from './toolbar-filter-operands.ts';
+export type { BaseFilterOperandsSnapshot } from './toolbar-filter-operands.ts';
 import { enhanceBaseFormulaEditor } from './toolbar-formula-editor.ts';
 import { createBaseCombobox } from './toolbar-combobox.ts';
 import { createBaseManualGroups } from './toolbar-groups.ts';
@@ -48,6 +54,8 @@ export interface BaseToolbarOptions {
   onNew?(): Promise<void>;
   onExport?(format: BaseToolbarExportFormat, copy: boolean): Promise<void>;
   onPropertySettings?(property: string): void;
+  /** Read-only suggestions; their metadata status never changes filter meaning. */
+  filterOperands?(): BaseFilterOperandsSnapshot;
   onDraftChange(): void;
   onError(error: unknown): void;
 }
@@ -59,7 +67,7 @@ export interface BaseToolbar {
   captureSaveAcknowledgement(): () => void;
   destroy(): void;
 }
-type FilterNode = string | { and: FilterNode[] } | { or: FilterNode[] } | { not: FilterNode[] };
+type FilterNode = BaseFilterNode;
 type PanelName = 'Views' | 'View options' | 'Add view' | 'Results' | 'Property' | 'Formula' | 'New item settings' | 'Filter' | 'Sort' | 'Properties' | 'Group';
 interface Panel { rebase?(state: BaseToolbarState, expectedName?: string): boolean; flush?(): void; name: PanelName; node: HTMLElement; trigger: HTMLElement; dirty: boolean; innerDraft?: boolean; saving: boolean; failure?: object; acceptsSaveAcknowledgement?: () => boolean; close(restore?: boolean): void }
 /** Only a retained, exact accepted configuration may offer a persistence retry. */
@@ -199,7 +207,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       if ((auto || autoAdd) && own.dirty && !retryPersistence) { submit(true); return; }
       if (!hasDraft()) own.close(false);
     } };
-    const keydown = (event: KeyboardEvent) => { const target = event.target as Element; if (target.closest?.('.bases-toolbar-combobox-popover,.bases-manual-group-new,.bases-formula-editor') || target.closest?.('[role=combobox]') && (event.key !== 'Escape' || target.closest('[role=combobox]')?.getAttribute('aria-expanded') === 'true')) return; if (['ArrowDown','ArrowUp','Home','End'].includes(event.key) && !event.isComposing && (event.target instanceof doc.defaultView!.HTMLButtonElement || event.target === node)) { const buttons = Array.from(node.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')).filter(item => !item.closest('[hidden]')); if (buttons.length) { const index = buttons.indexOf(doc.activeElement as HTMLButtonElement); const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length; buttons[next].focus(); event.preventDefault(); event.stopPropagation(); } } if (event.key === 'Escape' && !event.isComposing && !own.saving && node.contains(event.target as Node)) { event.preventDefault(); event.stopPropagation(); if ((auto || autoAdd) && own.dirty && !retryPersistence) submit(true); else own.close(); } };
+    const keydown = (event: KeyboardEvent) => { const target = event.target as Element; if (event.defaultPrevented || target.closest?.('.bases-filter-operand')?.querySelector('[role=combobox][aria-expanded=true]') || target.closest?.('.bases-toolbar-combobox-popover,.bases-manual-group-new,.bases-formula-editor') || target.closest?.('[role=combobox]') && (event.key !== 'Escape' || target.closest('[role=combobox]')?.getAttribute('aria-expanded') === 'true')) return; if (['ArrowDown','ArrowUp','Home','End'].includes(event.key) && !event.isComposing && (event.target instanceof doc.defaultView!.HTMLButtonElement || event.target === node)) { const buttons = Array.from(node.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')).filter(item => !item.closest('[hidden]')); if (buttons.length) { const index = buttons.indexOf(doc.activeElement as HTMLButtonElement); const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length; buttons[next].focus(); event.preventDefault(); event.stopPropagation(); } } if (event.key === 'Escape' && !event.isComposing && !own.saving && node.contains(event.target as Node)) { event.preventDefault(); event.stopPropagation(); if ((auto || autoAdd) && own.dirty && !retryPersistence) submit(true); else own.close(); } };
     doc.addEventListener('pointerdown', outside, true); doc.addEventListener('keydown', keydown, true); win?.addEventListener('resize', place); win?.addEventListener('scroll', place, true);
     const observer = win && 'ResizeObserver' in win ? new win.ResizeObserver(place) : undefined; observer?.observe(container); observer?.observe(node);
     const changed = () => {
@@ -507,101 +515,139 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const initialView = result.view.filters === undefined ? undefined : structuredClone(result.view.filters) as FilterNode;
       const initialRoot = opening.rootFilters === undefined ? undefined : structuredClone(opening.rootFilters) as FilterNode;
       let savedViewFilter = JSON.stringify(initialView), savedRootFilter = JSON.stringify(initialRoot);
-      function filterSection(title: string, initial: FilterNode | undefined, expanded: boolean, enabled = true) {
-        let filter = initial, initialized = false;
-        const section = doc.createElement('section'); section.className = 'bases-filter-section';
-        const fields = doc.createElement('div'); fields.className = 'bases-filter-section-content'; fields.hidden = !expanded;
-        const disclosure = button(doc,title,() => {
-          fields.hidden = !fields.hidden; disclosure.setAttribute('aria-expanded',String(!fields.hidden));
-          if (!initialized && !fields.hidden) initialize(); place();
-        }); disclosure.className = 'bases-filter-section-header'; disclosure.disabled = !enabled; disclosure.setAttribute('aria-expanded',String(expanded));
-        section.append(disclosure,fields);
-        const initialize = () => {
-          if (initialized) return; initialized = true;
-      const tree = doc.createElement('div'); tree.className = 'bases-filter-tree'; fields.append(tree);
-      const canRestructure = (except?: HTMLElement) => {
-        const invalid = Array.from(form.querySelectorAll<HTMLInputElement>('input')).find(input => !input.validity.valid && !except?.contains(input));
-        if (!invalid) return true; error.textContent = 'Correct the invalid condition value before changing other conditions.'; invalid.focus(); return false;
+      let operandSnapshot:BaseFilterOperandsSnapshot|undefined;
+      try{operandSnapshot=options.filterOperands?.();}catch(failure){report(failure);}
+      const operandEditors=new Set<BaseFilterOperand>();
+      disposers.push(()=>{for(const editor of operandEditors)editor.destroy();operandEditors.clear();});
+      type Section={section:HTMLElement;get():FilterNode|undefined;acknowledge():()=>void};
+      let rootEditor:Section|undefined,viewEditor:Section|undefined;
+      const syncDraft=()=>{own.innerDraft=[...operandEditors].some(editor=>editor.hasDraft());};
+      const semanticChanged=()=>{
+        syncDraft();
+        if(own.innerDraft){changed();return;}
+        try{
+          const rootFilter=rootEditor?.get(),viewFilter=viewEditor?.get();
+          const different=JSON.stringify(rootFilter)!==savedRootFilter||JSON.stringify(viewFilter)!==savedViewFilter;
+          if(different||own.saving||retryPersistence){changed();return;}
+          // Local blank rows/groups and reverted edits do not enter the save
+          // coordinator at all: no version, status or query invalidation.
+          if(autoTimer){clearTimeout(autoTimer);autoTimer=undefined;}
+          own.dirty=false;own.failure=undefined;error.textContent='';footer.hidden=!!auto;options.onDraftChange();place();
+        }catch(failure){changed();error.textContent=failure instanceof Error?failure.message:String(failure);footer.hidden=false;}
       };
-      const defaultExpression = () => buildFilterCondition(properties[0] ?? 'file.name', 'eq', '', 'text');
-      let renderBudget = 1000;
-      const renderNode = (value: FilterNode, replace: (next: FilterNode) => void, remove: () => void, depth = 0): HTMLElement => {
-        const row = doc.createElement('div'); row.className = typeof value === 'string' ? 'bases-filter-condition' : 'bases-filter-group';
-        if (--renderBudget < 0 || depth > 32) { row.append(doc.createTextNode('This filter exceeds the visual editor’s size or nesting limit.')); return row; }
-        if (typeof value === 'string') {
-          const decoded = decodeFilterCondition(value);
-          if (decoded) {
-            const choices = propertyOptions.some(([key]) => key === decoded!.property) ? propertyOptions : [[decoded.property, decoded.property] as const, ...propertyOptions];
-            const property = select(doc, 'Filter property', choices, decoded.property), operator = select(doc, 'Condition', [['eq','Is'],['neq','Is not'],['contains','Contains'],['gt','Greater than'],['lt','Less than'],['gte','Greater than or equal'],['lte','Less than or equal'],['unset','Is not set'],['set','Is set']], decoded.operator);
-            const type = select(doc, 'Value type', [['text','Text'],['number','Number'],['boolean','Checkbox']], decoded.type), input = doc.createElement('input'); input.setAttribute('aria-label', 'Filter value'); input.value = decoded.text;
-            const edit = () => { changed(); input.disabled = type.disabled = operator.value === 'unset' || operator.value === 'set'; try { replace(buildFilterCondition(property.value, operator.value as 'eq', input.value, type.value as 'text')); input.setCustomValidity(''); error.textContent = ''; } catch (failure) { const message = failure instanceof Error ? failure.message : String(failure); input.setCustomValidity(message); error.textContent = message; } };
-            if (options.immediate) type.hidden = true;
-            const inferType = () => {
-              const configured = opening.propertyType?.(property.value);
-              const example = result.rows.map(row => row.values[property.value]).find(value => value && value.type !== 'null');
-              const kind = configured ?? example?.type;
-              type.value = kind === 'number' || kind === 'rating' ? 'number' : kind === 'boolean' || kind === 'checkbox' ? 'boolean' : 'text';
-              input.type = type.value === 'number' ? 'number' : 'text';
-            };
-            property.addEventListener('change', () => { if (options.immediate) inferType(); edit(); }); operator.addEventListener('change', edit); type.addEventListener('change', edit); input.addEventListener('input', edit); input.disabled = type.disabled = decoded.operator === 'unset' || decoded.operator === 'set'; row.append(property, operator, type, input);
-          } else {
-            const expression = doc.createElement('textarea'); expression.setAttribute('aria-label', 'Filter expression'); expression.value = value; expression.rows = 2;
-            expression.addEventListener('input', () => { replace(expression.value); changed(); }); row.append(expression);
+      const canRestructure=(except?:HTMLElement)=>{
+        const invalid=Array.from(form.querySelectorAll<HTMLInputElement>('input')).find(input=>!input.validity.valid&&!except?.contains(input));
+        if(!invalid)return true;error.textContent='Correct the invalid condition value before changing other conditions.';invalid.focus();return false;
+      };
+      function filterSection(title:string,initial:FilterNode|undefined,expanded:boolean,enabled=true):Section{
+        let draft=createBaseFilterDraft(initial),initialized=false;
+        const section=doc.createElement('section');section.className='bases-filter-section';
+        const content=doc.createElement('div');content.className='bases-filter-section-content';content.hidden=!expanded;
+        const disclosure=button(doc,title,()=>{if(!alive())return;content.hidden=!content.hidden;disclosure.setAttribute('aria-expanded',String(!content.hidden));if(!initialized&&!content.hidden)initialize();place();});
+        disclosure.className='bases-filter-section-header';disclosure.disabled=!enabled;disclosure.setAttribute('aria-expanded',String(expanded));
+        const flair=doc.createElement('span');flair.className='bases-filter-count';
+        const count=(source:FilterNode|undefined)=>{const n=baseFilterCount(source);flair.textContent=String(n);flair.hidden=n===0;};count(initial);disclosure.append(flair);section.append(disclosure,content);
+        const alive=()=>!destroyed&&panel===own&&section.isConnected;
+        const localEditors=new Set<BaseFilterOperand>(),validators=new Set<()=>void>(),rendered=new WeakMap<BaseFilterDraftNode,HTMLElement>();
+        let tree:HTMLElement,renderBudget=1000;
+        const release=()=>{for(const editor of localEditors){editor.destroy();operandEditors.delete(editor);}localEditors.clear();validators.clear();syncDraft();};
+        const focusNode=(value:BaseFilterDraftNode)=>{const row=rendered.get(value);if(row)focusVisible(row,'Filter property');};
+        const renderNode=(value:BaseFilterDraftNode,remove:()=>void,depth=0):HTMLElement=>{
+          const row=doc.createElement('div');row.className=value.kind==='condition'?'bases-filter-condition':'bases-filter-group';rendered.set(value,row);
+          if(--renderBudget<0||depth>32){row.append(doc.createTextNode('This filter exceeds the visual editor’s size or nesting limit.'));return row;}
+          const live=()=>alive()&&row.isConnected&&tree.contains(row);
+          if(value.kind==='condition'){
+            const removeButton=button(doc,'Remove',()=>{if(!live()||!canRestructure(row))return;remove();semanticChanged();render();focusVisible(tree,'Match');},'Remove filter');
+            if(options.immediate){removeButton.replaceChildren(icon('trash',16,doc));removeButton.className='bases-toolbar-menu-next';}
+            if(value.advanced||!value.fields){
+              const expression=doc.createElement('textarea');expression.setAttribute('aria-label','Filter expression');expression.value=value.source??'';expression.rows=2;
+              expression.addEventListener('input',()=>{if(!live())return;updateBaseFilterExpression(value,expression.value);semanticChanged();});row.append(expression,removeButton);
+            }else{
+              const fields=value.fields;
+              const choices=[['file.file',opening.label('file.file')==='file file'?'file':opening.label('file.file')] as const,...propertyOptions.filter(([key])=>key!=='file.file')];
+              if(!choices.some(([key])=>key===fields.property))choices.unshift([fields.property,fields.property]);
+              const property=select(doc,'Filter property',choices,fields.property);
+              const method=baseFileFilterOperator(fields.operator);
+              const operators=fields.property==='file.file'?BASE_FILE_FILTER_OPERATORS.map(item=>[item.id,item.label] as const):[['eq','Is'],['neq','Is not'],['contains','Contains'],['gt','Greater than'],['lt','Less than'],['gte','Greater than or equal'],['lte','Less than or equal'],['unset','Is not set'],['set','Is set']] as const;
+              const operator=select(doc,'Condition',operators,fields.operator);row.append(property,operator);
+              let input:HTMLInputElement;
+              const validate=()=>{
+                if(!input)return;
+                try{readBaseFilterDraft(value);input.setCustomValidity('');}catch(failure){input.setCustomValidity(failure instanceof Error?failure.message:String(failure));}
+              };
+              const publish=(next:BaseFilterCondition)=>{updateBaseFilterCondition(value,next);validate();semanticChanged();};
+              if(method){
+                const host=doc.createElement('div');host.className='bases-filter-operand-host';row.append(host);
+                const editor=createBaseFilterOperand(doc,host,{kind:method.kind,values:fields.values??[fields.text],snapshot:operandSnapshot,alive:live,
+                  onChange(values){publish({...value.fields!,text:values[0]??'',values});},
+                  onDraftChange(){syncDraft();input.setCustomValidity(editor.hasDraft()?'Press Enter to add the tag, or clear the unfinished tag.':'');semanticChanged();},
+                });
+                localEditors.add(editor);operandEditors.add(editor);input=host.querySelector('input')!;
+              }else{
+                const type=select(doc,'Value type',[['text','Text'],['number','Number'],['boolean','Checkbox']],fields.type);
+                if(options.immediate)type.hidden=true;
+                input=doc.createElement('input');input.setAttribute('aria-label','Filter value');input.value=fields.text;if(fields.type==='number')input.inputMode='decimal';
+                const edit=()=>{if(!live())return;input.disabled=type.disabled=operator.value==='unset'||operator.value==='set';publish({...value.fields!,text:input.value,type:type.value as BaseFilterCondition['type'],values:undefined});};
+                type.addEventListener('change',edit);input.addEventListener('input',edit);input.disabled=type.disabled=fields.operator==='unset'||fields.operator==='set';row.append(type,input);
+              }
+              validators.add(validate);
+              property.addEventListener('change',()=>{
+                if(!live())return;
+                const configured=opening.propertyType?.(property.value),example=result.rows.map(row=>row.values[property.value]).find(item=>item&&item.type!=='null');
+                const kind=configured??example?.type,type=kind==='number'||kind==='rating'?'number':kind==='boolean'||kind==='checkbox'?'boolean':'text';
+                publish({property:property.value,operator:property.value==='file.file'?'hasLink':'eq',text:'',type,values:property.value==='file.file'?[]:undefined});render();focusNode(value);
+              });
+              operator.addEventListener('change',()=>{
+                if(!live())return;
+                const next=operator.value as BaseFilterOperator;
+                publish({...value.fields!,operator:next});render();focusNode(value);
+              });
+              const advanced=button(doc,'',()=>{if(!live()||!canRestructure(row))return;value.advanced=true;render();const target=rendered.get(value);focusVisible(target??tree,'Filter expression');},'Edit expression');
+              advanced.className='bases-toolbar-menu-next';advanced.append(icon('code',16,doc));row.append(advanced,removeButton);
+            }
+          }else{
+            const mode=select(doc,'Match',[['and','All the following are true'],['or','Any of the following are true'],['not','None of the following are true']],value.conjunction);
+            mode.addEventListener('change',()=>{if(!live()||!canRestructure()){mode.value=value.conjunction;return;}value.conjunction=mode.value as BaseFilterConjunction;value.implicit=false;semanticChanged();render();});row.append(mode);
+            for(let index=0;index<value.children.length;index++){
+              const child=value.children[index];row.append(renderNode(child,()=>{value.children.splice(value.children.indexOf(child),1);if(!value.children.length)value.children.push(newBaseFilterCondition());},depth+1));if(renderBudget<0)break;
+            }
+            const append=(next:BaseFilterDraftNode)=>{if(!live()||!canRestructure())return;value.children.push(next);semanticChanged();render();focusNode(next);};
+            row.append(button(doc,'Add condition',()=>append(newBaseFilterCondition())),button(doc,'Add group',()=>append(newBaseFilterGroup())),button(doc,'Remove group',()=>{if(!live()||!canRestructure(row))return;remove();semanticChanged();render();}));
           }
-          const removeButton = button(doc, 'Remove', () => { if (!canRestructure(row)) return; remove(); changed(); render(); }, 'Remove filter');
-          if (options.immediate) { removeButton.replaceChildren(icon('trash',16,doc)); removeButton.className = 'bases-toolbar-menu-next'; }
-          const advanced = button(doc,'',() => {
-            if (!canRestructure(row)) return;
-            const expression = doc.createElement('textarea'); expression.setAttribute('aria-label','Filter expression'); expression.value = value; expression.rows = 2; expression.addEventListener('input',() => { replace(expression.value); changed(); }); row.replaceChildren(expression,removeButton); expression.focus();
-          },'Edit expression'); advanced.className = 'bases-toolbar-menu-next'; advanced.append(icon('code',16,doc));
-          if (decoded) row.append(advanced); row.append(removeButton);
-        } else if (mapping(value) && Object.keys(value).length === 1 && ['and','or','not'].includes(Object.keys(value)[0]) && Array.isArray(Object.values(value)[0])) {
-          const key = Object.keys(value)[0] as 'and' | 'or' | 'not', children = Object.values(value)[0] as FilterNode[];
-          const mode = select(doc, 'Match', [['and','All the following are true'],['or','Any of the following are true'],['not','None of the following are true']], key);
-          mode.addEventListener('change', () => { if (!canRestructure()) { mode.value = key; return; } replace({ [mode.value]: children } as FilterNode); changed(); render(); }); row.append(mode);
-          for (let index = 0; index < children.length; index++) {
-            row.append(renderNode(children[index], next => { children[index] = next; }, () => { children.splice(index, 1); }, depth + 1));
-            if (renderBudget < 0) break;
-          }
-          row.append(button(doc, 'Add condition', () => { if (!canRestructure()) return; children.push(defaultExpression()); changed(); render(); }), button(doc, 'Add group', () => { if (!canRestructure()) return; children.push({ and: [defaultExpression()] }); changed(); render(); }), button(doc, 'Remove group', () => { if (!canRestructure(row)) return; remove(); changed(); render(); }));
-        } else { row.append(doc.createTextNode('This filter is not supported by the visual editor.'), button(doc, 'Remove filter', () => { if (!canRestructure(row)) return; remove(); changed(); render(); })); }
-        return row;
-      };
-      const render = () => {
-        const focusedLabel = tree.contains(doc.activeElement) ? doc.activeElement?.getAttribute('aria-label') : undefined;
-        tree.replaceChildren(); renderBudget = 1000;
-        if (filter === undefined) { if(options.immediate){const mode=select(doc,'Match',[['and','All the following are true'],['or','Any of the following are true'],['not','None of the following are true']],'and');mode.addEventListener('change',()=>{filter=mode.value==='or'?{or:[]}:mode.value==='not'?{not:[]}:{and:[]};changed();render();});tree.append(mode);}else{const hint = doc.createElement('p'); hint.textContent = 'No filters.'; tree.append(hint);} }
-        else tree.append(renderNode(filter, next => { filter = next; }, () => { filter = undefined; }));
-        if (focusedLabel) focusVisible(tree,focusedLabel,Array.from(fields.querySelectorAll<HTMLButtonElement>('button')).find(node=>node.textContent==='Add filter'));
-        place();
-      };
-      const appendCondition = (next:FilterNode) => { if (filter === undefined) filter={and:[next]}; else if (mapping(filter)&&Object.keys(filter).length===1&&['and','or','not'].includes(Object.keys(filter)[0])&&Array.isArray(Object.values(filter)[0])) (Object.values(filter)[0] as FilterNode[]).push(next); else filter={and:[filter,next]}; };
-      const actions=doc.createElement('div');actions.className='bases-filter-actions';
-      actions.append(button(doc, 'Add filter', () => { if (!canRestructure()) return; appendCondition(defaultExpression()); changed(); render(); }));
-      if(options.immediate)actions.append(button(doc,'Add filter group',()=>{if(!canRestructure())return;appendCondition({and:[]});changed();render();}));
-      else actions.append(button(doc, 'Add expression', () => { if (!canRestructure()) return; filter = filter === undefined ? 'true' : { and: [filter, 'true'] }; changed(); render(); }));
-      fields.append(actions);
-
-          render();
+          return row;
         };
-        if (expanded) initialize();
-        return {section, get:() => filter};
+        const render=()=>{
+          const focusedLabel=tree.contains(doc.activeElement)?doc.activeElement?.getAttribute('aria-label'):undefined;
+          release();tree.replaceChildren();renderBudget=1000;tree.append(renderNode(draft,()=>{draft=newBaseFilterGroup();}));
+          if(focusedLabel)focusVisible(tree,focusedLabel);place();
+        };
+        const initialize=()=>{
+          if(initialized)return;initialized=true;tree=doc.createElement('div');tree.className='bases-filter-tree';content.append(tree);
+          const actions=doc.createElement('div');actions.className='bases-filter-actions';
+          const append=(next:BaseFilterDraftNode)=>{if(!alive()||!canRestructure())return;draft.children.push(next);semanticChanged();render();focusNode(next);};
+          actions.append(button(doc,'Add filter',()=>append(newBaseFilterCondition())));
+          if(options.immediate)actions.append(button(doc,'Add filter group',()=>append(newBaseFilterGroup())));
+          else actions.append(button(doc,'Add expression',()=>{if(!alive()||!canRestructure())return;const next:BaseFilterDraftCondition={kind:'condition',source:'true',advanced:true};if(readBaseFilterDraft(draft)===undefined)draft={kind:'group',conjunction:'and',children:[next],persistedEmpty:false,implicit:true};else draft.children.push(next);semanticChanged();render();focusNode(next);}));
+          content.append(actions);render();
+        };
+        if(expanded)initialize();
+        return {section,get:()=>readBaseFilterDraft(draft),acknowledge(){const source=readBaseFilterDraft(draft),acknowledge=captureBaseFilterAcknowledgement(draft);return ()=>{acknowledge();count(source);for(const validate of validators)validate();};}};
       }
-      const rootEditor = filterSection('All views',initialRoot,false,!!options.commands?.updateRoot);
-      const viewEditor = filterSection('This view',initialView,true);
-      fields.append(rootEditor.section,viewEditor.section);
-      readPatch = () => ({filters:viewEditor.get() as BaseValue | undefined});
-      readOperation = () => {
-        const viewFilter = viewEditor.get(), rootFilter = rootEditor.get();
-        const view = validateToolbarPatch(result, {filters:viewFilter as BaseValue | undefined});
-        const root = {filters:rootFilter as BaseValue | undefined}; validateToolbarPatch(result,{filters:root.filters});
-        const viewChanged = JSON.stringify(viewFilter) !== savedViewFilter, rootChanged = JSON.stringify(rootFilter) !== savedRootFilter;
-        const patch = {...(viewChanged ? {view} : {}), ...(rootChanged ? {root} : {})};
-        const submittedView = JSON.stringify(viewFilter), submittedRoot = JSON.stringify(rootFilter);
-        afterSave = () => { savedViewFilter = submittedView; savedRootFilter = submittedRoot; };
-        if (options.saveConfiguration) { expectedPatch = patch; return () => options.saveConfiguration!(version,patch); }
-        if (rootChanged) { if (viewChanged) throw new Error('Combined filter changes are unavailable.'); if (!options.commands?.updateRoot) throw new Error('All-view filters are unavailable.'); expectedPatch = {root}; return () => options.commands!.updateRoot!(version,root); }
-        expectedPatch = {view}; return () => options.save(version,view);
+      rootEditor=filterSection('All views',initialRoot,false,!!options.commands?.updateRoot);
+      viewEditor=filterSection('This view',initialView,true);fields.append(rootEditor.section,viewEditor.section);
+      readPatch=()=>({filters:viewEditor!.get() as BaseValue|undefined});
+      readOperation=()=>{
+        const viewFilter=viewEditor!.get(),rootFilter=rootEditor!.get();
+        const view=validateToolbarPatch(result,{filters:viewFilter as BaseValue|undefined});
+        const root={filters:rootFilter as BaseValue|undefined};validateToolbarPatch(result,{filters:root.filters});
+        const viewChanged=JSON.stringify(viewFilter)!==savedViewFilter,rootChanged=JSON.stringify(rootFilter)!==savedRootFilter;
+        const patch={...(viewChanged?{view}:{}),...(rootChanged?{root}:{})};
+        const submittedView=JSON.stringify(viewFilter),submittedRoot=JSON.stringify(rootFilter),ackView=viewEditor!.acknowledge(),ackRoot=rootEditor!.acknowledge();
+        afterSave=()=>{savedViewFilter=submittedView;savedRootFilter=submittedRoot;ackView();ackRoot();};
+        if(!viewChanged&&!rootChanged){expectedPatch={};return async()=>{};}
+        if(options.saveConfiguration){expectedPatch=patch;return ()=>options.saveConfiguration!(version,patch);}
+        if(rootChanged){if(viewChanged)throw Error('Combined filter changes are unavailable.');if(!options.commands?.updateRoot)throw Error('All-view filters are unavailable.');expectedPatch={root};return ()=>options.commands!.updateRoot!(version,root);}
+        expectedPatch={view};return ()=>options.save(version,view);
       };
     }
     let closeWhenSettled = false;
@@ -609,7 +655,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       closeWhenSettled ||= close;
       if (autoTimer) { clearTimeout(autoTimer); autoTimer = undefined; }
       if (own.saving || destroyed || panel !== own) return;
-      if (own.innerDraft) { error.textContent = 'Finish or cancel the new group first.'; return; }
+      if (own.innerDraft) { error.textContent = 'Finish or cancel the unfinished value first.'; return; }
       if (!own.dirty && !own.failure) { if (close) own.close(); return; }
       if (!form.checkValidity()) { error.textContent = 'Check the invalid condition value before applying.'; return; }
       if(!retryPersistence&&name!=='Views'&&deferredState&&deferredState.selectedIndex!==opening.selectedIndex){error.textContent='The selected view changed. Your draft is still here. Cancel and reopen the view before saving.';footer.hidden=false;options.onDraftChange();return;}

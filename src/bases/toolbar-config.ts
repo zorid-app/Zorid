@@ -5,8 +5,20 @@ import { normalizeBaseProperty } from './query.ts';
 import type { BaseQueryResult } from './query.ts';
 
 export type BaseToolbarPatch = BaseViewPatch;
-export type BaseFilterOperator = 'eq' | 'neq' | 'contains' | 'gt' | 'lt' | 'gte' | 'lte' | 'unset' | 'set';
+export type BaseFileFilterOperator = 'hasLink' | 'notHasLink' | 'inFolder' | 'notInFolder' | 'hasTag' | 'notHasTag' | 'hasProperty' | 'notHasProperty';
+export type BaseFilterOperator = 'eq' | 'neq' | 'contains' | 'gt' | 'lt' | 'gte' | 'lte' | 'unset' | 'set' | BaseFileFilterOperator;
 export type BaseFilterValueType = 'text' | 'number' | 'boolean';
+export const BASE_FILE_FILTER_OPERATORS = [
+  {id:'hasLink',label:'links to',method:'hasLink',kind:'file',inverse:false},
+  {id:'inFolder',label:'in folder',method:'inFolder',kind:'folder',inverse:false},
+  {id:'hasTag',label:'has tag',method:'hasTag',kind:'tag',inverse:false},
+  {id:'hasProperty',label:'has property',method:'hasProperty',kind:'property',inverse:false},
+  {id:'notHasLink',label:'does not link to',method:'hasLink',kind:'file',inverse:true},
+  {id:'notInFolder',label:'is not in folder',method:'inFolder',kind:'folder',inverse:true},
+  {id:'notHasTag',label:'does not have tag',method:'hasTag',kind:'tag',inverse:true},
+  {id:'notHasProperty',label:'does not have property',method:'hasProperty',kind:'property',inverse:true},
+] as const;
+export const baseFileFilterOperator = (operator:BaseFilterOperator) => BASE_FILE_FILTER_OPERATORS.find(item=>item.id===operator);
 const allowedKeys = new Set(['filters', 'sort', 'order', 'groupBy', 'groupOrder', 'name', 'type', 'limit', 'rowHeight', 'cardSize', 'columnWidth', 'image', 'imageFit', 'imageAspectRatio', 'markers', 'indentProperties', 'separator']);
 const fail = (message: string): never => { throw new Error(message); };
 const mapping = (value: unknown): value is Record<string, BaseValue> => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -141,8 +153,15 @@ export function propertyExpression(property: string): string {
 }
 
 /** Construct only supported expression syntax, never interpolate user text as code. */
-export function buildFilterCondition(property: string, operator: BaseFilterOperator, value: string, valueType: BaseFilterValueType): string {
+export function buildFilterCondition(property: string, operator: BaseFilterOperator, value: string | readonly string[], valueType: BaseFilterValueType): string {
   const expression = propertyExpression(property);
+  const method=baseFileFilterOperator(operator);
+  if(method){
+    if(propertyId(property)!=='file.file')return fail('File operators require the file property');
+    const values=typeof value==='string'?[value]:value;
+    if(!Array.isArray(values)||!values.length||values.some(item=>typeof item!=='string')||(method.method!=='hasTag'&&values.length!==1))return fail('Enter the supported file filter values');
+    return `${method.inverse?'!':''}file.${method.method}(${values.map(item=>JSON.stringify(item)).join(', ')})`;
+  }
   if (!['eq', 'neq', 'contains', 'gt', 'lt', 'gte', 'lte', 'unset', 'set'].includes(operator)) return fail('Unknown filter operator');
   if (!['text', 'number', 'boolean'].includes(valueType) || typeof value !== 'string') return fail('Unknown filter value type');
   if (operator === 'unset' || operator === 'set') return `${expression} ${operator === 'unset' ? '==' : '!='} null`;
@@ -155,7 +174,8 @@ export function buildFilterCondition(property: string, operator: BaseFilterOpera
     literal = value === 'true';
   }
   const encoded = JSON.stringify(literal);
-  return operator === 'contains' ? `${expression}.contains(${encoded})` : `${expression} ${{ eq: '==', neq: '!=', gt: '>', lt: '<', gte: '>=', lte: '<=' }[operator]} ${encoded}`;
+  const comparisons:Partial<Record<BaseFilterOperator,string>>={eq:'==',neq:'!=',gt:'>',lt:'<',gte:'>=',lte:'<='};
+  return operator === 'contains' ? `${expression}.contains(${encoded})` : `${expression} ${comparisons[operator]} ${encoded}`;
 }
 
 export interface BaseFilterCondition {
@@ -163,23 +183,36 @@ export interface BaseFilterCondition {
   operator: BaseFilterOperator;
   text: string;
   type: BaseFilterValueType;
+  /** File.hasTag accepts multiple literal tag arguments; other values remain scalar. */
+  values?: readonly string[];
 }
 /** Decode ordinary dotted/bare/bracketed syntax without evaluating expressions. */
 export function decodeFilterCondition(source: string): BaseFilterCondition | undefined {
   try {
-    const expression = parseBaseExpression(source);
+    let expression = parseBaseExpression(source);
     const property = (node: ReturnType<typeof parseBaseExpression>): string | undefined => {
       if (node.kind === 'identifier') return normalizeBaseProperty(node.name);
       if (node.kind === 'member' && node.object.kind === 'identifier' && ['note','file','formula'].includes(node.object.name) && node.key.kind === 'literal' && node.key.value.type === 'string') return `${node.object.name}.${node.key.value.value}`;
       return undefined;
     };
+    const inverse=expression.kind==='unary'&&expression.operator==='!';
+    if(inverse&&expression.kind==='unary')expression=expression.operand;
+    if(expression.kind==='call'&&expression.callee.kind==='member'&&expression.callee.key.kind==='literal'&&expression.callee.key.value.type==='string'){
+      const name=expression.callee.key.value.value;
+      const method=BASE_FILE_FILTER_OPERATORS.find(item=>item.method===name&&item.inverse===inverse);
+      if(method&&property(expression.callee.object)==='file.file'&&expression.args.length>0&&(method.method==='hasTag'||expression.args.length===1)&&expression.args.every(arg=>arg.kind==='literal'&&arg.value.type==='string')){
+        const values=expression.args.map(arg=>arg.kind==='literal'&&arg.value.type==='string'?arg.value.value:'');
+        return {property:'file.file',operator:method.id,text:values[0],type:'text',values};
+      }
+    }
+    if(inverse)return undefined;
     let target: string | undefined, operator: BaseFilterOperator | undefined, literal: ReturnType<typeof parseBaseExpression> | undefined;
     if (expression.kind === 'binary') {
       target = property(expression.left); operator = ({'==':'eq','!=':'neq','>':'gt','<':'lt','>=':'gte','<=':'lte'} as Record<string,BaseFilterOperator>)[expression.operator]; literal = expression.right;
     } else if (expression.kind === 'call' && expression.callee.kind === 'member' && expression.callee.key.kind === 'literal' && expression.callee.key.value.type === 'string' && expression.callee.key.value.value === 'contains' && expression.args.length === 1) {
       target = property(expression.callee.object); operator = 'contains'; literal = expression.args[0];
     }
-    if (!target || !operator || !literal) return undefined;
+    if (!target || !operator || !literal || target==='file.file') return undefined;
     if (literal.kind === 'unary' && literal.operator === '-' && literal.operand.kind === 'literal' && literal.operand.value.type === 'number') literal = {kind:'literal',value:{type:'number',value:-literal.operand.value.value}};
     if (literal.kind !== 'literal') return undefined;
     const value = literal.value;

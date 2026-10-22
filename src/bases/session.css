@@ -123,6 +123,18 @@
 .bases-toolbar-combobox-empty { color: var(--text-muted); padding: 8px; }
 .bases-toolbar-rule > .bases-toolbar-combobox-button { flex: 1 1 50%; width: 0; }
 .bases-filter-condition > .bases-toolbar-combobox-button { flex: 0 1 auto; }
+.bases-filter-count { margin-inline-start: 6px; padding: 0 5px; border-radius: 8px; color: var(--text-muted); background: var(--background-modifier-hover); font-size: var(--font-ui-smaller,12px); font-weight: 400; }
+.bases-filter-operand-host { flex: 1 1 130px; min-width: 0; }
+.bases-filter-operand { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.bases-filter-operand-input { flex: 1 1 90px; min-width: 50px; width: 100%; }
+.bases-filter-operand-chips { display: contents; }
+.bases-filter-operand-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 2px 5px; border-radius: 4px; background: var(--background-modifier-hover); }
+.bases-filter-operand-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bases-filter-operand-chip-remove { flex: none; border: 0; padding: 0 2px; box-shadow: none; background: transparent; color: var(--text-muted); }
+.bases-filter-operand-popover { box-sizing: border-box; z-index: 1510; overflow: auto; padding: 4px; border: 1px solid var(--background-modifier-border); border-radius: 6px; background: var(--background-secondary); box-shadow: 0 4px 14px #0004; color: var(--text-normal); font: inherit; }
+.bases-filter-operand-option { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 8px; min-height: 28px; border-radius: 4px; cursor: pointer; }
+.bases-filter-operand-option.is-active { background: var(--background-modifier-hover); }
+.bases-filter-operand-status { padding: 6px 8px; color: var(--text-muted); font-size: var(--font-ui-smaller,12px); }
 .bases-layout-settings > label > .bases-toolbar-combobox-button { width: 100%; }
 .bases-manual-groups { border-top: 1px solid var(--background-modifier-border); padding-top: 4px; }
 .bases-manual-group-row { display: flex; gap: 6px; align-items: center; padding: 4px; border-radius: 4px; min-height: 28px; cursor: pointer; }
