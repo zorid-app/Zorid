@@ -40,6 +40,14 @@ requires a separate explicit migration; opening settings never rewrites notes.
 Unknown source keys remain in the retained ordered YAML AST; invalid definitions
 produce diagnostics and do not acquire guessed replacement semantics.
 
+Configured scalar definitions override extraction guesses during reads: a text
+field containing `2026-01-01` stays text, while a date field produces a typed date.
+Incompatible values and unknown select options retain their original displayed
+value plus a diagnostic. They are never silently turned into null or coerced.
+The same interpretation feeds filters, target pickers, formulas and rollups.
+Ordinary link definitions additionally accept external URLs; relation targets
+remain note files. Missing properties are not materialized in source.
+
 Relations are a deliberate Zorid addition to the Obsidian file/view model, not a
 claim about shipped Obsidian features. They use the shared Rust resolver and
 capture the resolved `EntryId` and revision. Those identities guard edits in the
@@ -74,3 +82,20 @@ relation dependencies produce visible errors. Values preserves missing/null
 entries; unique preserves first occurrence order. Rollup dependency cycles are
 reported and bounded. Incomplete source coverage never masquerades as a complete
 reverse relation or rollup count.
+
+## Isolated implementation verification
+
+Owner: `bases_relations`, branch `codex/bases-relations`, worktree
+`.worktrees/bases-relations`. Confirmed on 2026-10-21 through owned source
+`87caf89b`, composed with summary integration `17044c7b`, `ad507231`, `fc8a8690`
+and `0597ed4c` (composed checkout `9e295153`). No main integration, actual
+Electron, WASM or visual acceptance is established by these results.
+
+All commands used `CARGO_TARGET_DIR=/private/tmp/zorid-bases-target`, offline
+Cargo, one build job and one test thread in the root coordinator's serialized
+Rust slot. Actual results: 15 property/relationship integration checks, 13 summary
+checks, 48 library checks including query/cache identity, 9 preview checks and
+6 refresh checks passed (91 total). The property checks include real generation
+settings/digest admission, scalar overrides, readable link identity, target
+filtering, reverse/rollup evaluation in ordinary queries, missing/invalid data,
+dependency cycles, dates, clock refresh, source preservation and resource bounds.
