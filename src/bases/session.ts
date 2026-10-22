@@ -18,7 +18,7 @@ import { exportBaseResults } from './export.ts';
 import type { BaseExportFormat } from './export.ts';
 import { prepareBaseItemCreation } from './creation.ts';
 import type { BaseCreationOperation } from './creation.ts';
-import { baseEditValue, baseEditablePropertyValue, baseImageSourceValue } from './view-actions.ts';
+import { baseEditablePropertyValue, baseImageSourceValue } from './view-actions.ts';
 import type { BaseValue, BaseViewPatch } from './document.ts';
 import type { BasePresentationOptions, BasePropertyPresentation } from './presentation-common.ts';
 import { createBasePropertyRenderer } from './property-widgets.ts';
@@ -484,7 +484,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         options.openFile(path, event, witness ?? captured);
       } catch (error) { report(error); }
     };
-    const shared = { result, getPropertyLabel, getPropertyType: (property: string) => definitions.properties[basePropertyName(property)]?.type,
+    const shared = { result, getEditableValue: baseEditablePropertyValue, getPropertyLabel, getPropertyType: (property: string) => definitions.properties[basePropertyName(property)]?.type,
       openFile: openResultFile,
       ...(writable ? { editProperty: (edit: Parameters<typeof actions.editProperty>[0]) => track(() => { assertPropertyWritable(edit.property, edit.value); return actions.editProperty(edit); }) } : {}),
       onError: report, onEditStateChange: schedule,
@@ -578,7 +578,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         case 'kanban': mounted = createBaseKanbanView(content, { ...shared, loadThumbnail: options.loadThumbnail, onError: report, onPresentationError: report,
           readOnly: !writable, showColumnControls: false,
           ...(moveEnabled ? { requestMove: request => track(() => { assertPropertyWritable(request.property); return actions.requestMove(request); }) } : {}),
-          ...(writable ? { requestGroupOrder: request => track(() => actions.requestGroupOrder(request)), createItem: request => track(() => { if (request.version !== controller.state.version) throw new Error('The base result is stale'); return createItem({ property: request.property, value: baseEditValue(request.group) }, (request as typeof request & { anchor?: HTMLElement }).anchor ?? content); }) } : {}),
+          ...(writable ? { requestGroupOrder: request => track(() => actions.requestGroupOrder(request)), createItem: request => track(() => { if (request.version !== controller.state.version) throw new Error('The base result is stale'); return createItem(actions.creationGroup(request), (request as typeof request & { anchor?: HTMLElement }).anchor ?? content); }) } : {}),
         }); break;
         default: content.textContent = `Unsupported base view: ${result.view.type}`;
       }

@@ -2,7 +2,7 @@ import type { BaseValue, BaseViewPatch } from './document.ts';
 import { BaseController } from './controller.ts';
 import { baseValuesEqual } from './expression.ts';
 import type { BaseExpressionValue } from './expression.ts';
-import type { BaseKanbanMoveRequest } from './kanban-view.ts';
+import type { BaseKanbanMoveRequest, BaseKanbanCreateRequest } from './kanban-view.ts';
 import type { BaseKanbanGroupOrderRequest } from './kanban-columns.ts';
 import { sharedBasePreview } from './shared-query.ts';
 import { normalizeBaseProperty } from './query.ts';
@@ -63,6 +63,16 @@ export function baseImageSourceValue(value: BaseExpressionValue, source: string)
   return find(value, 0) ?? { type: 'string', value: source };
 }
 
+/** Shared group keys are presentation. Rust supplies the exact raw assignment
+ * bound to the opaque group identity, including complete list-valued keys. */
+export function baseGroupWriteValue(group: { readonly key: BaseExpressionValue | null; readonly editKey?: BaseExpressionValue }, shared: boolean): BaseValue {
+  if (shared) {
+    if (group.editKey === undefined) throw new Error('This group has no writable saved value. Refresh before changing its membership.');
+    return baseEditValue(group.editKey);
+  }
+  return group.key === null ? null : baseEditValue(group.key);
+}
+
 /** Internal bridge between the already-existing presentation and controller contracts. */
 export function createBaseViewActions(controller: BaseController, options: {
   validate(): void;
@@ -90,6 +100,17 @@ export function createBaseViewActions(controller: BaseController, options: {
       if (edits.some(edit => edit.version !== version)) throw new Error('Bulk edits must use one saved result');
       await controller.editProperties(edits.map(edit => ({ version: version as number, path: edit.path, property: edit.property, value: baseEditValue(edit.value) })));
     },
+    creationGroup(request: BaseKanbanCreateRequest): { property: string; value: BaseValue } {
+      const result = current(request.version), grouping = result.view.groupBy;
+      if (!grouping || typeof grouping !== 'object' || Array.isArray(grouping) || !('property' in grouping) || typeof grouping.property !== 'string') throw new Error('This view has no grouping property');
+      const property = normalizeBaseProperty(grouping.property);
+      if (normalizeBaseProperty(request.property) !== property) throw new Error('The grouping property changed');
+      const group = result.shared !== undefined
+        ? typeof request.groupKeyId === 'string' && (result.groups.find(group => group.sharedKeyId === request.groupKeyId) ?? result.groupOptions.find(group => group.listed && group.sharedKeyId === request.groupKeyId))
+        : result.groups.find(group => group.key && baseValuesEqual(group.key, request.group, true)) ?? result.groupOptions.find(group => group.listed && baseValuesEqual(group.key, request.group, true));
+      if (!group) throw new Error('The new item group changed. Refresh before creating its note.');
+      return { property, value: baseGroupWriteValue(group, result.shared !== undefined && property.startsWith('note.')) };
+    },
     async requestGroupOrder(request: BaseKanbanGroupOrderRequest): Promise<void> {
       const result = current(request.version), group = result.view.groupBy;
       if (result.view.type !== 'kanban') throw new Error('This view is not a Kanban board');
@@ -106,7 +127,8 @@ export function createBaseViewActions(controller: BaseController, options: {
       const group = result.view.groupBy;
       if (!group || typeof group !== 'object' || Array.isArray(group) || !('property' in group) || typeof group.property !== 'string') return false;
       const property = normalizeBaseProperty(group.property);
-      return property.startsWith('note.') || (property === 'file.folder' && !!options.canRename);
+      const writableNote = property.startsWith('note.') && (result.shared === undefined || [...result.groups, ...result.groupOptions.filter(group => group.listed)].some(group => 'editKey' in group && group.editKey !== undefined));
+      return writableNote || (property === 'file.folder' && !!options.canRename);
     },
     async requestMove(request: BaseKanbanMoveRequest): Promise<void> {
       const result = current(request.version), group = result.view.groupBy;
@@ -114,18 +136,19 @@ export function createBaseViewActions(controller: BaseController, options: {
       const property = normalizeBaseProperty(group.property);
       if (normalizeBaseProperty(request.property) !== property) throw new Error('The grouping property changed');
       const source = result.groups.find(group => group.rows.some(row => row.path === request.path));
-      let destination: BaseExpressionValue | null | undefined;
+      let destinationGroup: { readonly key: BaseExpressionValue | null; readonly editKey?: BaseExpressionValue } | undefined;
       if (result.shared !== undefined) {
         if (typeof request.sourceKeyId !== 'string' || typeof request.destinationKeyId !== 'string'
           || source?.sharedKeyId !== request.sourceKeyId) throw new Error('The card group changed');
-        destination = result.groups.find(group => group.sharedKeyId === request.destinationKeyId)?.key
-          ?? result.groupOptions.find(group => group.listed && group.sharedKeyId === request.destinationKeyId)?.key;
+        destinationGroup = result.groups.find(group => group.sharedKeyId === request.destinationKeyId)
+          ?? result.groupOptions.find(group => group.listed && group.sharedKeyId === request.destinationKeyId);
       } else {
         if (!source?.key || !baseValuesEqual(source.key, request.source, true)) throw new Error('The card group changed');
-        destination = result.groups.find(group => group.key && baseValuesEqual(group.key, request.destination, true))?.key
-          ?? result.groupOptions.find(group => group.listed && baseValuesEqual(group.key, request.destination, true))?.key;
+        destinationGroup = result.groups.find(group => group.key && baseValuesEqual(group.key, request.destination, true))
+          ?? result.groupOptions.find(group => group.listed && baseValuesEqual(group.key, request.destination, true));
       }
-      if (!destination) throw new Error('The destination group is not present in this view');
+      const destination = destinationGroup?.key;
+      if (!destination || !destinationGroup) throw new Error('The destination group is not present in this view');
       if (property === 'file.folder') {
         if (!options.canRename || destination.type !== 'string') throw new Error('The host cannot move this file to that folder');
         const folder = destination.value === '/' ? '' : destination.value;
@@ -135,7 +158,7 @@ export function createBaseViewActions(controller: BaseController, options: {
         await controller.renameFile(request.version as number, request.path, folder ? `${folder}/${name}` : name);
       } else {
         if (!property.startsWith('note.')) throw new Error('This grouping property is read-only');
-        await controller.moveToGroup({ version: request.version as number, path: request.path, value: baseEditValue(destination) });
+        await controller.moveToGroup({ version: request.version as number, path: request.path, value: baseGroupWriteValue(destinationGroup, result.shared !== undefined) });
       }
     },
   };
