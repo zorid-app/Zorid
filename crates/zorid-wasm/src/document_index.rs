@@ -1257,7 +1257,7 @@ fn evaluate_base<'a>(
         _ => return Err(BaseReadError::Code("index_property_source_mismatch")),
     };
     let source = if let Some(inline) = inline.as_ref() {
-        if !record.witness().entry().path.as_str().ends_with(".md")
+        if !record.witness().entry().path.as_str().to_ascii_lowercase().ends_with(".md")
             || !zorid_document::verify_inline_base_source(saved_source, inline)
             || input.current_entry_id.as_ref().is_some_and(|current| current != id)
         {
@@ -2239,7 +2239,9 @@ mod tests {
         let selected = zorid_document::InlineBaseSource {
             source: yaml, start_byte: source.find("```base").unwrap(), end_byte: source.len() - 1,
         };
-        let mut builder = WasmDocumentIndexBuilder::new(&header()).unwrap();
+        let mut h: serde_json::Value = serde_json::from_str(&header()).unwrap();
+        h["entries"][0]["path"] = serde_json::json!("a.MD");
+        let mut builder = WasmDocumentIndexBuilder::new(&h.to_string()).unwrap();
         builder.add_text("a", source.as_bytes()).unwrap();
         builder.add_text("b", b"Other\n").unwrap();
         let generation = builder.finish().unwrap();
@@ -2253,7 +2255,7 @@ mod tests {
             let (result, _) = evaluate_base(&generation.generation, &id, source.as_bytes(), &[], input(), Some("Here"), Some((&mut owner.inner, clock))).unwrap();
             assert_eq!(result.definition.id, id);
             assert_eq!(result.result.rows.len(), 1);
-            assert_eq!(result.result.rows[0].path, "a.md");
+            assert_eq!(result.result.rows[0].path, "a.MD");
         }
         let mut wrong_context = input();
         wrong_context.current_entry_id = Some(EntryId::new("b").unwrap());

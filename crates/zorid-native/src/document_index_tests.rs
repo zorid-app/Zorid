@@ -66,7 +66,7 @@ fn inline_base_is_bound_to_saved_fence_containing_context_and_retained_generatio
         start_byte: source.find("```base").unwrap(),
         end_byte: source.len() - 1,
     };
-    create(&mut vault, "containing", "Containing.md", &source);
+    create(&mut vault, "containing", "Containing.MD", &source);
     create(&mut vault, "other", "Other.md", "# Other\n");
     vault.initialize_document_index().unwrap();
     build(&mut vault);
@@ -77,7 +77,7 @@ fn inline_base_is_bound_to_saved_fence_containing_context_and_retained_generatio
     let result = run(&QueryOptions::default(), &inline).unwrap();
     assert_eq!(result.value.definition.id, id("containing"));
     assert_eq!(result.value.result.rows.len(), 1);
-    assert_eq!(result.value.result.rows[0].path, "Containing.md");
+    assert_eq!(result.value.result.rows[0].path, "Containing.MD");
     expect_code(run(&QueryOptions { current_entry_id: Some(id("other")), ..QueryOptions::default() }, &inline), "inline_source_mismatch");
     expect_code(run(&QueryOptions::default(), &InlineBaseSource { source: "views: []\n".into(), ..inline.clone() }), "inline_source_mismatch");
     expect_code(run(&QueryOptions::default(), &InlineBaseSource { start_byte: inline.start_byte + 1, ..inline.clone() }), "inline_source_mismatch");

@@ -456,7 +456,7 @@ impl NativeVault {
             .map_err(|_| NativeDocumentError::SourceUnavailable(definition.clone()))?;
         let mut selected = options.clone();
         let source = if let Some(inline) = inline {
-            if !entry.path.as_str().ends_with(".md")
+            if !entry.path.as_str().to_ascii_lowercase().ends_with(".md")
                 || !zorid_document::verify_inline_base_source(source, inline)
                 || selected.current_entry_id.as_ref().is_some_and(|id| id != definition)
             {
