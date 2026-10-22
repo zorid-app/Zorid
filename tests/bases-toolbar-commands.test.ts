@@ -7,19 +7,19 @@ import {createBaseToolbar, BaseToolbarSaveError} from '../src/bases/toolbar.ts';
 import {validateToolbarPatch} from '../src/bases/toolbar-config.ts';
 import {uniqueViewName,validateViewName,propertyDisplayPatch} from '../src/bases/toolbar-panels.ts';
 const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
-function fixture(){
+function fixture(immediate=false){
  const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
  const source=BaseDocument.parse('filters: "true"\nformulas: {double: "score * 2"}\nproperties: {score: {displayName: Points, extension: keep}}\nviews:\n - {type: table, name: Library, order: [file.name, score]}\n - {type: cards, name: Covers}\n');
  const result=executeBaseQuery(source,{version:1,files:[{path:'Book.md',properties:{score:3}}]});
  const calls:unknown[][]=[],errors:unknown[]=[];
- const toolbar=createBaseToolbar(doc.querySelector('main')!,{preflight(){},async selectView(index){calls.push(['select',index]);},async save(version,patch){calls.push(['save',version,patch]);},commands:{async addView(version,type,name){calls.push(['add',version,type,name]);},async updateView(version,index,patch){calls.push(['update',version,index,patch]);},async duplicateView(version,index,name){calls.push(['duplicate',version,index,name]);},async removeView(version,index){calls.push(['remove',version,index]);},async moveView(version,from,to){calls.push(['move',version,from,to]);},async setDefaultView(version,index){calls.push(['default',version,index]);},async updateRoot(version,patch){calls.push(['root',version,patch]);}},async saveConfiguration(version,patch){calls.push(['configuration',version,patch]);},onSearch(value){calls.push(['search',value]);},async onNew(){calls.push(['new']);},async onExport(format,copy){calls.push(['export',format,copy]);},onDraftChange(){},onError(error){errors.push(error);}});
+ const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate,preflight(){},async selectView(index){calls.push(['select',index]);},async save(version,patch){calls.push(['save',version,patch]);},commands:{async addView(version,type,name){calls.push(['add',version,type,name]);},async updateView(version,index,patch){calls.push(['update',version,index,patch]);},async duplicateView(version,index,name){calls.push(['duplicate',version,index,name]);},async removeView(version,index){calls.push(['remove',version,index]);},async moveView(version,from,to){calls.push(['move',version,from,to]);},async setDefaultView(version,index){calls.push(['default',version,index]);},async updateRoot(version,patch){calls.push(['root',version,patch]);}},async saveConfiguration(version,patch){calls.push(['configuration',version,patch]);},onSearch(value){calls.push(['search',value]);},async onNew(){calls.push(['new']);},async onExport(format,copy){calls.push(['export',format,copy]);},onDraftChange(){},onError(error){errors.push(error);}});
  const root={filters:source.getRoot('filters')!,formulas:source.getRoot('formulas')!,properties:source.getRoot('properties')!};
- toolbar.update({result,views:source.views,selectedIndex:0,root,rootFilters:root.filters,readOnly:false,allowRename:true,label:property=>property});
+ const state={result,views:source.views,selectedIndex:0,root,rootFilters:root.filters,readOnly:false,allowRename:true,label:(property:string)=>property}; toolbar.update(state);
  const get=<T extends HTMLElement>(label:string)=>{const node=doc.querySelector<T>(`[aria-label="${label}"]`);assert.ok(node,label);return node;};
  const click=(label:string)=>get<HTMLButtonElement>(label).click();
  const input=(label:string,value:string,event='input')=>{const node=get<HTMLInputElement>(label);node.value=value;node.dispatchEvent(new dom.window.Event(event,{bubbles:true}));};
  const submit=()=>doc.querySelector('form')!.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));
- return{dom,doc,toolbar,result,calls,errors,get,click,input,submit,cleanup(){toolbar.destroy();dom.window.close();}};
+ return{dom,doc,toolbar,result,state,calls,errors,get,click,input,submit,cleanup(){toolbar.destroy();dom.window.close();}};
 }
 test('view menu searches, switches, creates collision-safe names and configures other views',async()=>{
  const f=fixture();try{
@@ -70,4 +70,21 @@ test('immediate mode serializes edits, rebases its own result and keeps the focu
   const name=get<HTMLInputElement>('View name');name.value='Books';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));blocked=false;release!();await tick();await tick();assert.equal(calls.length,2);assert.equal(calls[1].version,2);assert.equal(document.views[0].name,'Books');assert.equal(doc.querySelector('[role="dialog"]')?.isConnected,true);assert.equal(name.isConnected,true);assert.equal(toolbar.hasDraft(),false);
   name.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(doc.querySelector('[role="dialog"]'),null);
  }finally{toolbar.destroy();dom.window.close();}
+});
+
+test('external view reorder closes a clean configuration menu and retired actions cannot retarget',async()=>{
+ const f=fixture(true);try{
+  f.click('Views');f.click('Configure view Library');f.click('View actions');const deleteOld=f.get<HTMLButtonElement>('Delete view');
+  const views=[f.state.views[1],f.state.views[0]];f.toolbar.update({...f.state,views,result:{...f.result,version:2,view:views[0]}});
+  assert.equal(f.doc.querySelector('[role="dialog"]'),null,'external configuration invalidates the clean menu');deleteOld.click();await tick();assert.equal(f.calls.length,0,'retired action cannot select a new target');
+ }finally{f.cleanup();}
+});
+test('same-name external sort changes invalidate cloned controls instead of adopting a fresh version',async()=>{
+ const f=fixture(true);try{
+  f.click('Sort');const retiredAdd=f.get<HTMLButtonElement>('Add sort');assert.equal(f.doc.querySelector('[aria-label="Sort property"]'),null);
+  const view={...f.state.views[0],sort:[{property:'note.score',direction:'DESC'}]};const views=[view,f.state.views[1]];f.toolbar.update({...f.state,views,result:{...f.result,version:2,view}});
+  assert.equal(f.doc.querySelector('[role="dialog"]'),null,'external sort closes the obsolete editor');f.click('Sort');assert.equal(f.get<HTMLSelectElement>('Sort property').value,'note.score');assert.equal(f.get<HTMLSelectElement>('Sort direction').value,'DESC');
+  // Retained native DOM nodes cannot submit an old editor after it is retired.
+  retiredAdd.click();await new Promise(resolve=>setTimeout(resolve,270));assert.equal(f.calls.length,0);
+ }finally{f.cleanup();}
 });

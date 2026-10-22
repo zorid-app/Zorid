@@ -60,6 +60,17 @@ export class BaseToolbarSaveError extends Error {
   constructor(message: string, retry: () => Promise<void>) { super(message); this.retry = retry; }
 }
 const mapping = (value: unknown): value is Record<string, BaseValue> => !!value && typeof value === 'object' && !Array.isArray(value);
+function configurationSnapshot(state: BaseToolbarState): {views: BaseViewConfig[]; root: Record<string, BaseValue | undefined>} {
+  const root = state.root ? Object.fromEntries(Object.entries(state.root).filter(([key]) => key !== 'views')) : {filters:state.rootFilters};
+  return {views:structuredClone(state.views) as BaseViewConfig[],root};
+}
+function applyConfigurationPatch(snapshot: ReturnType<typeof configurationSnapshot>, patch: {view?:BaseViewPatch;root?:Record<string,BaseValue|undefined>}, index: number): ReturnType<typeof configurationSnapshot> {
+  const next = structuredClone(snapshot);
+  const merge = (target:Record<string,BaseValue|undefined>, values:Record<string,BaseValue|undefined>) => { for (const [key,value] of Object.entries(values)) { if (value === undefined) delete target[key]; else target[key] = structuredClone(value); } };
+  if (patch.view) merge(next.views[index] as BaseViewPatch,patch.view);
+  if (patch.root) merge(next.root,patch.root);
+  return next;
+}
 const propertyId = (value: BaseValue | undefined) => typeof value === 'string' ? normalizeBaseProperty(value) : '';
 const button = (doc: Document, text: string, action: () => void, label = text) => {
   const node = doc.createElement('button'); node.type = 'button'; node.textContent = text; node.setAttribute('aria-label', label); node.addEventListener('click', action); return node;
@@ -111,6 +122,8 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     panel?.close(false);
     let opening = state, result = opening.result;
     let version = result.version;
+    let configuration = configurationSnapshot(opening);
+    let expectedPatch: {view?:BaseViewPatch;root?:Record<string,BaseValue|undefined>} | undefined;
     const selectedIndex = targetIndex ?? opening.selectedIndex;
     let configuredView = opening.views[selectedIndex] ?? result.view;
     const node = doc.createElement('section'); node.className = 'bases-toolbar-popover'; node.dataset.panel = name; node.classList.toggle('is-immediate',!!options.immediate); node.setAttribute('role', 'dialog'); node.setAttribute('aria-label', name);
@@ -138,7 +151,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         if (restore && focusOwned && trigger.isConnected) trigger.focus({ preventScroll: true }); options.onDraftChange();
       },
     };
-    own.rebase = (next, expectedName = configuredView.name) => { if (next.views[selectedIndex]?.name !== expectedName) return false; opening = next; result = next.result; version = result.version; configuredView = next.views[selectedIndex] ?? result.view; return true; };
+    own.rebase = (next, expectedName = configuredView.name) => { const snapshot = configurationSnapshot(next); if (JSON.stringify(snapshot) !== JSON.stringify(configuration) || next.views[selectedIndex]?.name !== expectedName) return false; opening = next; result = next.result; version = result.version; configuredView = next.views[selectedIndex] ?? result.view; return true; };
     panel = own; trigger.setAttribute('aria-expanded', 'true');
     let retryPersistence: (() => Promise<void>) | undefined;
     const place = () => { if (!node.isConnected) return; const anchor = trigger.getBoundingClientRect(), bounds = node.getBoundingClientRect(); node.style.left = `${Math.max(8, Math.min(anchor.left, (win?.innerWidth ?? 800) - bounds.width - 8))}px`; node.style.top = `${Math.max(8, Math.min(anchor.bottom + 6, (win?.innerHeight ?? 600) - bounds.height - 8))}px`; };
@@ -150,6 +163,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     doc.addEventListener('pointerdown', outside, true); doc.addEventListener('keydown', keydown, true); win?.addEventListener('resize', place); win?.addEventListener('scroll', place, true);
     const observer = win && 'ResizeObserver' in win ? new win.ResizeObserver(place) : undefined; observer?.observe(container); observer?.observe(node);
     const changed = () => {
+      if (destroyed || panel !== own) return;
       generation++; own.dirty = true;
       // A failed accepted write must be retried before another semantic action.
       if (retryPersistence) return;
@@ -163,6 +177,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     let readOperation: (() => () => Promise<void>) | undefined;
     const menuAction = (text: string, action: () => Promise<void>, enabled = true) => {
       const item = button(doc, text, () => {
+        if (destroyed || panel !== own || !item.isConnected) return;
         if (own.saving || own.dirty) { error.textContent = 'Finish the current changes first.'; return; }
         try { options.preflight(); } catch (failure) { report(failure); return; }
         own.saving = true; options.onDraftChange(); item.disabled = true;
@@ -178,7 +193,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         opening.views.forEach((view, index) => {
           if (!view.name.toLowerCase().includes(search.value.toLowerCase())) return;
           const row = doc.createElement('div'); row.className = 'bases-toolbar-menu-view-row'; row.dataset.viewIndex = String(index);
-          const choose = button(doc, '', () => { own.close(false); try { options.preflight(); void options.selectView(index).catch(report); } catch (failure) { report(failure); } }, `Open view ${view.name}`);
+          const choose = button(doc, '', () => { if (destroyed || panel !== own || !row.isConnected) return; own.close(false); try { options.preflight(); void options.selectView(index).catch(report); } catch (failure) { report(failure); } }, `Open view ${view.name}`);
           choose.className = 'bases-toolbar-menu-item'; choose.append(icon(layoutIcon(view.type), 16, doc), doc.createTextNode(view.name)); choose.classList.toggle('mod-active', index === opening.selectedIndex); row.append(choose);
           if (!opening.readOnly) {
             const configure = button(doc, '', () => { own.close(false); open('View options', trigger, index); }, `Configure view ${view.name}`); configure.className = 'bases-toolbar-menu-next'; configure.append(icon('chevron-right', 14, doc)); row.append(configure);
@@ -218,7 +233,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const property = formulaName!;
       const display = doc.createElement('input'); display.value = opening.label(property); display.setAttribute('aria-label','Display name'); display.placeholder = property.slice(property.indexOf('.') + 1);
       const label = doc.createElement('label'); label.append(doc.createTextNode('Display name'),display); fields.append(label); display.addEventListener('input',changed);
-      readOperation = () => { const root = propertyDisplayPatch(opening.root,new Map([[property,display.value]])); if (!options.commands?.updateRoot) throw new Error('Property labels are unavailable.'); return () => options.commands!.updateRoot!(version,root); };
+      readOperation = () => { const root = propertyDisplayPatch(opening.root,new Map([[property,display.value]])); if (!options.commands?.updateRoot) throw new Error('Property labels are unavailable.'); expectedPatch = {root}; return () => options.commands!.updateRoot!(version,root); };
       if (property.startsWith('formula.')) menuAction('Edit formula',async () => { own.saving = false; own.close(false); open('Formula',trigger,undefined,property.slice(8)); });
       else if (property.startsWith('note.') && options.onPropertySettings) menuAction('Property type',async () => { own.saving = false; own.close(false); options.onPropertySettings!(property); });
     } else if (name === 'Formula') {
@@ -252,7 +267,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         }
         return patch;
       };
-      if (options.commands?.updateView) readOperation = () => { const patch = validateToolbarPatch({...result,view:configuredView},readPatch()); return () => options.commands!.updateView!(version,selectedIndex,patch); };
+      if (options.commands?.updateView) readOperation = () => { const patch = validateToolbarPatch({...result,view:configuredView},readPatch()); expectedPatch = {view:patch}; return () => options.commands!.updateView!(version,selectedIndex,patch); };
       if (selectedIndex !== opening.selectedIndex && !options.commands?.updateView) { nameInput.disabled = true; layout.disabled = true; for (const input of layoutFields.querySelectorAll<HTMLInputElement>('input,select')) input.disabled = true; menuAction('Open this view', () => options.selectView(selectedIndex)); }
       if (options.commands?.setDefaultView) menuAction('Set as default view', () => options.commands!.setDefaultView!(version, selectedIndex), selectedIndex !== 0);
       if (options.commands?.duplicateView) menuAction('Duplicate view', () => options.commands!.duplicateView!(version, selectedIndex, uniqueViewName(opening.views, configuredView.name)));
@@ -305,7 +320,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const updateAddProperty = () => { addProperty.hidden = !search.value.trim() || properties.some(property => property === normalizeBaseProperty(`note.${search.value.trim()}`)); addProperty.textContent = `Add property “${search.value.trim()}”`; };
       fields.append(addProperty,button(doc,'Hide all',() => { order = []; changed(); render(); }));
       search.addEventListener('input',() => { render(); updateAddProperty(); }); updateAddProperty(); render(); readPatch = () => ({ order });
-      readOperation = () => { const view = validateToolbarPatch(result, {order}); if (!displayNames.size) return () => options.save(version, view); if (!options.saveConfiguration) throw new Error('Combined property configuration is unavailable.'); const root = propertyDisplayPatch(opening.root, displayNames); return () => options.saveConfiguration!(version, {view,root}); };
+      readOperation = () => { const view = validateToolbarPatch(result, {order}); if (!displayNames.size) { expectedPatch = {view}; return () => options.save(version, view); } if (!options.saveConfiguration) throw new Error('Combined property configuration is unavailable.'); const root = propertyDisplayPatch(opening.root, displayNames); expectedPatch = {view,root}; return () => options.saveConfiguration!(version, {view,root}); };
     } else if (name === 'Sort') {
       const sort = Array.isArray(result.view.sort) ? structuredClone(result.view.sort) as BaseValue[] : [];
       const list = doc.createElement('div'); fields.append(list);
@@ -435,9 +450,9 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         const patch = {...(viewChanged ? {view} : {}), ...(rootChanged ? {root} : {})};
         const submittedView = JSON.stringify(viewFilter), submittedRoot = JSON.stringify(rootFilter);
         afterSave = () => { savedViewFilter = submittedView; savedRootFilter = submittedRoot; };
-        if (options.saveConfiguration) return () => options.saveConfiguration!(version,patch);
-        if (rootChanged) { if (viewChanged) throw new Error('Combined filter changes are unavailable.'); if (!options.commands?.updateRoot) throw new Error('All-view filters are unavailable.'); return () => options.commands!.updateRoot!(version,root); }
-        return () => options.save(version,view);
+        if (options.saveConfiguration) { expectedPatch = patch; return () => options.saveConfiguration!(version,patch); }
+        if (rootChanged) { if (viewChanged) throw new Error('Combined filter changes are unavailable.'); if (!options.commands?.updateRoot) throw new Error('All-view filters are unavailable.'); expectedPatch = {root}; return () => options.commands!.updateRoot!(version,root); }
+        expectedPatch = {view}; return () => options.save(version,view);
       };
     }
     let closeWhenSettled = false;
@@ -448,13 +463,15 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       if (!own.dirty && !own.failure) { if (close) own.close(); return; }
       if (!form.checkValidity()) { error.textContent = 'Check the invalid condition value before applying.'; return; }
       let operation: () => Promise<void>;
+      expectedPatch = undefined;
       try {
         options.preflight();
         if (retryPersistence) operation = retryPersistence;
         else if (readOperation) operation = readOperation();
-        else { const patch = validateToolbarPatch(result, readPatch()); operation = () => options.save(version, patch); }
+        else { const patch = validateToolbarPatch(result, readPatch()); expectedPatch = {view:patch}; operation = () => options.save(version, patch); }
       } catch (failure) { error.textContent = failure instanceof Error ? failure.message : String(failure); return; }
       const submittedGeneration = generation;
+      const expectedConfiguration = expectedPatch ? applyConfigurationPatch(configuration,expectedPatch,selectedIndex) : configuration;
       const expectedViewName = name === 'View options' ? form.querySelector<HTMLInputElement>('[aria-label="View name"]')?.value.trim() || configuredView.name : configuredView.name;
       own.saving = true; options.onDraftChange();
       const disabled = new Map(Array.from(node.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement>('input,button,select,textarea'), input => [input, input.disabled] as const));
@@ -467,6 +484,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         if (!auto) { own.dirty = false; own.close(); return; }
         if (deferredState) {
           const refreshed = deferredState; deferredState = undefined;
+          configuration = expectedConfiguration;
           if (!own.rebase?.(refreshed,expectedViewName)) {
             if (!own.dirty) { own.close(); update(refreshed); return; }
             own.failure = {}; footer.hidden = false; error.textContent = 'This view changed or moved while saving. Your queued changes are still here. Cancel and reopen the view before continuing.'; options.onDraftChange(); return;
