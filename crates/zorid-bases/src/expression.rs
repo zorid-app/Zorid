@@ -718,6 +718,7 @@ pub(crate) fn evaluate_summary(
     values: &[&BaseValue],
     options: &crate::EvaluationOptions,
     relationships: Option<&super::graph::PreparedRelationships<'_>>,
+    shared_files: Option<Arc<super::files::BasesFiles>>,
     mut file: impl FnMut(&str) -> Result<BasesFile, ExpressionDiagnostic>,
 ) -> Result<EvaluationResult, ExpressionDiagnostic> {
     let timezone = BasesTimezone::from_setting(Some(&options.timezone))
@@ -725,6 +726,7 @@ pub(crate) fn evaluate_summary(
     let context = BasesEvaluationContext {
         relationships,
         random_seed: options.random_seed,
+        files: shared_files.unwrap_or_default(),
         now: Some(
             invocation_clock(options.clock_ms)
                 .ok_or_else(|| {
@@ -4510,6 +4512,7 @@ mod rich_expression_tests {
             "values[0]",
             &[&icon],
             &crate::EvaluationOptions::default(),
+            None,
             None,
             |_| unreachable!(),
         )
