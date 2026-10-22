@@ -66,8 +66,10 @@ host. It does not call production stores/controllers to simulate positive edits.
   hidden native backing controls, filter sections use disclosure state, and the
   summary picker has real options/previews. Typed Bases clipboard preserves
   numbers; a separate raw plain-string paste preserves incompatibility/diagnostics.
-- Add/edit a custom summary through its real editor. Group by status and scroll
-  the virtual table to observe each group summary against independent exact oracles.
+- Add a typed custom summary and assert its immediately seeded empty definition;
+  rename its live name/reference, edit its CodeMirror expression twice, return
+  through Back and delete through More. Group by status and scroll the virtual
+  table to observe each group summary against independent exact oracles.
 
 These describe the complete **authored** journey. The early actual campaign below
 has executed only its prefix; the unexecuted suffix is not accepted. Selectors and
@@ -94,6 +96,16 @@ action logs, exact durable assertions and process cleanup outcomes. Runs002–00
 also verify source/artifact hashes after failure. All owned Electron/native
 processes exited with no leaked children. Cleanup termination is not normal
 application quit/restart acceptance. No complete heavy-user pass is claimed.
+
+Before005, the journey was statically reconciled with the current integrated
+controls: hidden initial summary footers open through header Summarize; visible
+footer/group numbers are read from their value child; custom summary editing is
+live, with no Apply; guarded table menus use the shared context menu. Resize
+expects the actual auto-measured width plus10 and reaches its keyboard separator
+through context-menu cancellation and Tab. Relation editing uses cell keyboard
+activation so its link chip remains a navigation target. Kanban keyboard moves
+assert the exact adjacent visible status rather than merely a changed value.
+These are harness/source checks, not additional runtime acceptance.
 
 ## Goal audit: concrete remaining acceptance
 

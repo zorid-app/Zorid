@@ -3,8 +3,9 @@
 This launches the normal production Electron app against a fresh disposable vault,
 with 72 books, heterogeneous properties, authors, a full literal template and four
 saved layouts. It performs UI actions through CDP hit-tested pointer input and
-keyboard input. DOM evaluation locates/reads controls, decodes the disposable cover
-image for a pixel oracle, and focuses a hit-tested keyboard resize separator.
+keyboard input. DOM evaluation locates/reads controls and decodes the disposable
+cover image for a pixel oracle. Keyboard separator focus uses actual menu
+cancellation and Tab navigation.
 Explicit synthetic typed Bases/plain ClipboardEvents go to the production paste
 handler. No production data/controller APIs mutate positive state.
 

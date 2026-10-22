@@ -35,7 +35,23 @@ async function viewAction(c,label){
 async function propertySettings(c,property){await c.ui.button('Properties',active);await c.ui.button(`Configure property ${property}`,dialog('Properties'));await c.ui.button('Property type',dialog('Property'));await c.ui.wait(`return !!document.querySelector(${JSON.stringify(dialog('Property settings'))});`,'Shared property settings');}
 async function savePropertySettings(c){await c.ui.button('Apply',dialog('Property settings'));await c.ui.wait(`return !document.querySelector(${JSON.stringify(dialog('Property settings'))});`,'Property definition saved');await c.ui.idle();}
 async function formulaEditor(c,name){await c.ui.button('Properties',active);await c.ui.button(`Configure property ${name}`,dialog('Properties'));await c.ui.button('Edit formula',dialog('Property'));}
-async function summary(c,name){await c.ui.click(`${active} .zorid-bases-table-footer [data-summary-property="note.rating"]`);await c.ui.click(`.zorid-bases-summary-picker [role="option"][data-summary-id=${JSON.stringify(name)}]`);await c.ui.idle();}
+async function openSummary(c){
+  const footer=`${active} .zorid-bases-table-footer [data-summary-property="note.rating"]`;
+  if(await c.ui.dom(`const e=document.querySelector(${JSON.stringify(footer)});return !!e?.getClientRects().length&&!e.closest('[hidden]');`))await c.ui.click(footer);
+  else{await c.ui.click(`${active} [role="columnheader"][title="note.rating"]`,{button:'right'});await c.ui.button('Summarize...','.context-menu');}
+  await c.ui.wait(`return !!document.querySelector('.zorid-bases-summary-picker');`,'Summary picker opens through visible header or footer');
+}
+async function summary(c,name){await openSummary(c);await c.ui.click(`.zorid-bases-summary-picker [role="option"][data-summary-id=${JSON.stringify(name)}]`);await c.ui.idle();}
+async function focusResize(c,selector){
+  // The separator prevents pointerdown's default focus. Cancel its header menu,
+  // which restores header focus, then Tab into the real keyboard separator.
+  await c.ui.click(`${active} [role="columnheader"][title="note.rating"]`,{button:'right'});await c.ui.key('Escape');await c.ui.key('Tab');
+  await c.ui.wait(`return document.activeElement===document.querySelector(${JSON.stringify(selector)});`,'Keyboard focus enters Rating separator');
+}
+async function backSummary(c){
+  await c.ui.button('Back to summaries',dialog('Edit summary'));await c.ui.wait(`return !document.querySelector(${JSON.stringify(dialog('Edit summary'))})&&!!document.querySelector('.zorid-bases-summary-picker');`,'Summary live editor returns to picker after acknowledgement');
+  await c.ui.key('Escape');await c.ui.wait(`return !document.querySelector('.zorid-bases-summary-picker');`,'Dismiss summary picker');await c.ui.idle();
+}
 const newPopover='.bases-new-item-popover[role="dialog"][aria-label="New item"]';
 async function closeNew(c){
   for(let i=0;i<3&&await c.ui.dom(`return !!document.querySelector(${JSON.stringify(newPopover)});`);i++){await c.ui.key('Escape');await delay(300);}
@@ -112,11 +128,11 @@ export async function journey(c){
   await c.ui.button('Results',active);await c.ui.type(input('Limit',dialog('Results')),'10');await apply(c,'Results');
   await c.ui.wait(`return document.querySelector('${active} [role="grid"]')?.getAttribute('aria-rowcount')==='11';`,'Saved result limit applied');
   await summary(c,'Sum');
-  await c.ui.wait(`return document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.rating"]')?.textContent==='30';`,'Summary uses final 10 returned rows');
+  await c.ui.wait(`return document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.rating"] .summary-function-value')?.textContent==='30';`,'Summary uses final 10 returned rows');
   await c.ui.button('Results',active);await c.ui.button('Show all results',dialog('Results'));await c.ui.idle();
-  await c.ui.wait(`return document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.rating"]')?.textContent==='213';`,'Summary includes all 72 ratings, not viewport rows');
+  await c.ui.wait(`return document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.rating"] .summary-function-value')?.textContent==='213';`,'Summary includes all 72 ratings, not viewport rows');
   await summary(c,'RatingTotal');
-  await c.ui.wait(`return document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.rating"]')?.textContent==='213';`,'Custom Rust summary agrees with independent sum');
+  await c.ui.wait(`return document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.rating"] .summary-function-value')?.textContent==='213';`,'Custom Rust summary agrees with independent sum');
   await c.screenshot('02b-search-limit-and-summaries');
 
   const downloadDirectory=await c.prepareDownloads();await c.ui.button('Results',active);await c.ui.button('Export CSV',dialog('Results'));
@@ -125,25 +141,33 @@ export async function journey(c){
   assert.ok(ratingColumn>=0);assert.equal(exported.length,73,'Export includes entire result, not mounted viewport');assert.equal(exported.filter(row=>/^Book \d{3}$/.test(row[0])).length,72);assert.equal(exported.filter(row=>row[0]==='Missing properties').length,1);assert.equal(exported.reduce((sum,row)=>sum+Number(row[ratingColumn]||0),0),213);
   c.evidence.checks.push({name:'actual-results-csv-export-full-result',headers,rowCount:exported.length,ratingSum:213,source:csvSource});
 
-  await c.ui.click(`${active} .zorid-bases-table-footer [data-summary-property="note.rating"]`);await c.ui.type('.zorid-bases-summary-picker input[aria-label="Find or create summary"]','CustomTotal');await c.ui.button('Add summary: CustomTotal','.zorid-bases-summary-picker');
-  await c.ui.type(input('Summary name',dialog('Add summary')),'CustomTotal');await c.ui.type(input('Summary expression',dialog('Add summary')),'values.sum()');await c.ui.button('Apply',dialog('Add summary'));await c.ui.idle();
-  await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).summaries.CustomTotal,'values.sum()'),'custom-summary-definition-created-through-ui');
-  await c.ui.click(`${active} .zorid-bases-table-footer [data-summary-property="note.rating"]`);await c.ui.button('Edit CustomTotal','.zorid-bases-summary-picker');await c.ui.type(input('Summary expression',dialog('Edit summary')),'values.sum() + 1');await c.ui.button('Apply',dialog('Edit summary'));await c.ui.idle();
-  await c.ui.wait(`return document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.rating"]')?.textContent==='214';`,'Edited custom summary evaluated by Rust');
+  await openSummary(c);await c.ui.type('.zorid-bases-summary-picker input[aria-label="Find or create summary"]','CustomTotal');await c.ui.button('Add summary: CustomTotal','.zorid-bases-summary-picker');
+  await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).summaries.CustomTotal,''),'typed-new-summary-immediately-seeds-empty-definition');
+  await c.ui.type(input('Summary name',dialog('Edit summary')),'CustomTotalRenamed');await c.ui.key('Enter');
+  await c.saved('Library.base',source=>{const doc=c.yaml.parse(source);assert.equal(doc.summaries.CustomTotal,undefined);assert.equal(doc.summaries.CustomTotalRenamed,'');assert.equal(doc.views.find(v=>v.name==='Books table').summaries['note.rating'],'CustomTotalRenamed');},'live-summary-name-rename-updates-selected-reference');
+  await c.ui.type(input('Summary expression',dialog('Edit summary')),'values.sum()');
+  await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).summaries.CustomTotalRenamed,'values.sum()'),'custom-summary-expression-autosaves-through-codemirror');await backSummary(c);
+  await openSummary(c);await c.ui.button('Edit CustomTotalRenamed','.zorid-bases-summary-picker');await c.ui.type(input('Summary expression',dialog('Edit summary')),'values.sum() + 1');
+  await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).summaries.CustomTotalRenamed,'values.sum() + 1'),'existing-custom-summary-expression-live-edit');await backSummary(c);
+  await c.ui.wait(`return document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.rating"] .summary-function-value')?.textContent==='214';`,'Edited custom summary evaluated by Rust');
   await c.ui.button('Group',active);await c.ui.select(`${dialog('Group')} select[aria-label="Group property"]`,'note.status');await apply(c,'Group');
   const groupSummaryValues=new Set();
   for(let i=0;i<10;i++){
-    const values=await c.ui.dom(`return [...document.querySelectorAll('${active} .zorid-bases-table-body .zorid-bases-table-summary [data-property="note.rating"]')].map(e=>Number(e.textContent));`);for(const value of values)groupSummaryValues.add(value);
+    const values=await c.ui.dom(`return [...document.querySelectorAll('${active} .zorid-bases-table-body .zorid-bases-table-summary [data-summary-property="note.rating"] .summary-function-value')].map(e=>Number(e.textContent));`);for(const value of values)groupSummaryValues.add(value);
     await c.ui.scroll(`${active} [role="grid"]`,500);
   }
   assert.deepEqual([...groupSummaryValues].sort((a,b)=>a-b),[1,71,72,73],'Each of four groups has its own Rust summary, independent of viewport');c.evidence.checks.push({name:'group-custom-summary-scope',values:[...groupSummaryValues].sort((a,b)=>a-b),overall:214});await c.screenshot('02c-group-summaries');
   await c.ui.button('Group',active);await c.ui.button('Remove grouping',dialog('Group'));await apply(c,'Group');await c.ui.scroll(`${active} [role="grid"]`,-10000);
+  await openSummary(c);await c.ui.button('Edit CustomTotalRenamed','.zorid-bases-summary-picker');await c.ui.button('Summary actions',dialog('Edit summary'));await c.ui.button('Delete summary',dialog('Edit summary'));
+  await c.saved('Library.base',source=>{const doc=c.yaml.parse(source);assert.equal(doc.summaries.CustomTotalRenamed,undefined);assert.equal(doc.views.find(v=>v.name==='Books table').summaries?.['note.rating'],undefined);assert.equal(doc.summaries.RatingTotal,'values.sum()');},'summary-more-delete-removes-definition-and-selected-reference');
+  await c.ui.wait(`return !document.querySelector(${JSON.stringify(dialog('Edit summary'))})&&!!document.querySelector('.zorid-bases-summary-picker');`,'Deleted summary returns to picker');await c.ui.click('.zorid-bases-summary-picker [role="option"][data-summary-id="RatingTotal"]');await c.ui.idle();
 
   // Reference resize behavior through a real separator and keyboard commands.
   const resize=`${active} [role="columnheader"][title="note.rating"] .zorid-bases-table-resize`;
-  await c.ui.click(resize);await c.ui.dom(`document.querySelector(${JSON.stringify(resize)}).focus();`);await c.ui.key('ArrowRight');await c.ui.idle();
-  await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).views.find(v=>v.name==='Books table').columnSize['note.rating'],190),'column-keyboard-resize-saved');
-  await c.ui.click(resize);await c.ui.dom(`document.querySelector(${JSON.stringify(resize)}).focus();`);await c.ui.key('Home');await c.ui.idle();
+  const originalWidth=await c.ui.dom(`return document.querySelector('${active} [role="columnheader"][title="note.rating"]').getBoundingClientRect().width;`);
+  await focusResize(c,resize);await c.ui.key('ArrowRight');await c.ui.idle();
+  await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).views.find(v=>v.name==='Books table').columnSize['note.rating'],Math.round(originalWidth+10)),'column-keyboard-resize-saved');
+  await focusResize(c,resize);await c.ui.key('Home');await c.ui.idle();
   await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).views.find(v=>v.name==='Books table').columnSize?.['note.rating'],undefined),'column-reset-width-saved');
 
   // Field edits must preserve body/frontmatter not touched by the command.
@@ -154,8 +178,8 @@ export async function journey(c){
   await c.ui.click(`${c.ui.cell('Book 001.md','note.done')} input[type="checkbox"]`);
   await fmSaved(c,'Book 001.md',p=>assert.equal(p.done,true),'checkbox-edit');
 
-  // Rich pickers are shared production widgets. Multiple selections commit on
-  // Enter with no search, rather than writing a comma-delimited string.
+  // Rich pickers are shared production widgets. Each selected multiselect chip
+  // writes a YAML list immediately; Enter with no search closes the picker.
   await c.ui.click(`${c.ui.cell('Book 001.md','note.topics')}.bases-metadata-value`);
   await c.ui.type('.bases-property-popover input[role="combobox"]','Writing');
   await c.ui.key('ArrowDown');await c.ui.key('Enter');
@@ -164,7 +188,9 @@ export async function journey(c){
   await c.ui.click(`${c.ui.cell('Book 001.md','note.status')}.bases-metadata-value`);
   await c.ui.type('.bases-property-popover input[role="combobox"]','Reading');await c.ui.key('ArrowDown');await c.ui.key('Enter');await c.ui.idle();
   await fmSaved(c,'Book 001.md',p=>assert.equal(p.status,'Reading'),'status-picker');
-  await c.ui.click(`${c.ui.cell('Book 001.md','note.author')}.bases-metadata-value`);
+  // Relation chips are links. Use the supported keyboard edit from cell focus
+  // so clicking the chip's middle cannot accidentally navigate to its note.
+  await c.ui.click(c.ui.cell('Book 001.md','note.author'),{button:'right'});await c.ui.key('Escape');await c.ui.key('Enter');
   await c.ui.type('.bases-property-popover input[role="combobox"]','Author Grace');await c.ui.key('ArrowDown');await c.ui.key('Enter');await c.ui.idle();
   await fmSaved(c,'Book 001.md',p=>assert.equal(p.author,'[[Author Grace]]'),'relation-picker-stores-readable-link');
 
@@ -262,7 +288,7 @@ export async function journey(c){
   await c.ui.openFile('Authors.base');await c.ui.idle();await visibleCell(c,'Author Grace Renamed.md','note.bookCount','37');
   const referringBeforeDelete=await c.read('Book 001.md');
   await c.ui.click(c.ui.cell('Author Grace Renamed.md','note.bookCount'),{button:'right'});
-  await confirmDelete(c,()=>c.ui.button('Delete','.zorid-bases-table-menu'));
+  await confirmDelete(c,()=>c.ui.button('Delete','.context-menu'));
   await until(async()=>assert.ok(!(await fs.readdir(c.vault)).includes('Author Grace Renamed.md')),30000);
   assert.equal(await c.read('Book 001.md'),referringBeforeDelete,'Deleting relation target never cascades or removes readable link');
   await c.ui.openFile('Library.base');await c.ui.idle();await choose(c,'Books table');
@@ -339,10 +365,12 @@ export async function journey(c){
   await c.ui.drag(`${active} .bases-kanban-card[data-path="Book 001.md"]`,`${active} .bases-kanban-column-body[aria-label="Reading"]`);await c.ui.idle();
   await fmSaved(c,'Book 001.md',p=>assert.equal(p.status,'Reading'),'kanban-pointer-drag-writes-original-note');
   await c.ui.wait(`return document.querySelector('${active} .bases-kanban-card[data-path="Book 001.md"]')?.getAttribute('aria-selected')==='true';`,'Dragged card remains selected');
+  const keyboardTarget=await c.ui.dom(`const columns=[...document.querySelectorAll('${active} .bases-kanban-column-body')],index=columns.findIndex(e=>e.contains(document.querySelector('${active} .bases-kanban-card[data-path="Book 001.md"]')));return index>0?columns[index-1].getAttribute('aria-label'):null;`);
+  assert.ok(keyboardTarget&&keyboardTarget!=='No value','Authored scalar group has an adjacent named status');
   await c.ui.button('Search',active);await c.ui.key('Escape');await c.ui.key('Tab');await c.ui.key('Tab');
   await c.ui.wait(`return document.activeElement?.classList.contains('bases-kanban-view');`,'Keyboard Tab enters Kanban surface from toolbar');await c.ui.key('ArrowLeft',{modifiers:MOD.alt});await c.ui.idle();
   // Exact target is determined by visible adjacent columns, not guessed status order.
-  const move=await fmSaved(c,'Book 001.md',p=>assert.notEqual(p.status,'Reading'),'kanban-keyboard-move-writes-original-note');
+  const move=await fmSaved(c,'Book 001.md',p=>assert.equal(p.status,keyboardTarget),'kanban-keyboard-move-writes-exact-adjacent-group-to-original-note');
   await c.screenshot('07-kanban-after-move');
 
   await c.ui.openFile('Library.base');await c.ui.idle();await choose(c,'Books table');
