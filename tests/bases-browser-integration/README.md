@@ -1,15 +1,18 @@
 # Actual browser/WASM Bases semantic integration
 
-Actual runs 006 and 007 stopped after eight passed groups at the old malformed-
-rollup filter diagnostic assertion. Capture 007 proves two exact author `type`
-conversion diagnostics plus 28 still-`unavailable` property diagnostics, with
-empty rows and incomplete metadata. The source correction now requires the full
-30-diagnostic multiset bound to independently read file witnesses; 20 bounded
-oracle tests pass. The corrected actual campaign remains unexecuted. See
-[006 evidence](../../docs/history/bases-browser-actual-006-20261022.md) and
-[007 capture](../../docs/history/bases-browser-actual-007-20261022.md). Their raw
-reports and cleanup/source proofs are preserved; neither run accepts the ten
-Q3 groups.
+Actual run008 **passed all nine original groups**, including the exact 30-
+diagnostic malformed-rollup oracle, restoration, retained snapshots and restart.
+The first Q3 group then stopped at an empty overall summaries map omitted by the
+Rust DTO. Its row checks ran before that failure, but the Q3 group is not accepted;
+the remaining nine Q3 groups were unexecuted. A tests-only correction defaults an
+omitted map only when the authored expectation is empty, with 13 bounded oracle
+tests; the earlier 20 malformed-rollup oracle tests remain passing. A fresh full
+19-group run is still required. See [008 evidence](../../docs/history/bases-browser-actual-008-20261022.md).
+
+Historical [006 evidence](../../docs/history/bases-browser-actual-006-20261022.md)
+and [007 capture](../../docs/history/bases-browser-actual-007-20261022.md) preserve
+the earlier stale filter-code assertion and its exact captured diagnosis. Their
+raw reports and cleanup/source proofs remain unchanged.
 
 Actual run005 **passed all nine then-current semantic integration groups**, including
 plain Link alias/date-filename/URL values, all-note suggestions, the temporary
@@ -28,8 +31,8 @@ remain separate.
 ## Authored Q3 extension — awaiting execution
 
 Source batch `64bee169` → `19ae330c`, composed at `eb6e0346`, appends **ten
-new groups to the original nine: 19 planned browser groups**. These new groups
-have **not been executed against matching generated WASM**. The historical
+new groups to the original nine: 19 planned browser groups**. The first new group
+was partially executed in run008; **no new Q3 group is accepted yet**. The historical
 run005 result above remains nine executed groups; it does not cover this extension.
 
 The shared [Q3 fixture](../fixtures/bases-q3-semantics.mjs) adds 14 inert source
