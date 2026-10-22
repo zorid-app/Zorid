@@ -58,9 +58,10 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
       } catch (reason) { return Promise.reject(reason); }
     }
     function wrap(flushToken) {
-      const methods = ['readText', 'readTextById', 'planWrite', 'prepare', 'commit', 'query', 'listUnacknowledged', 'acknowledge'];
+      const methods = ['readText', 'readTextById', 'planWrite', 'prepare', 'commit', 'query', 'listUnacknowledged', 'acknowledge',
+        ...(typeof capability.captureSavedSource === 'function' && typeof capability.releaseSavedSource === 'function' ? ['captureSavedSource', 'releaseSavedSource'] : [])];
       return Object.freeze({
-        ...Object.fromEntries(methods.map(name => [name, (...args) => invoke(async() => {const value=await capability[name](...args);if(name==='commit')service.documentRuntimeSourceHint?.();return value;}, flushToken)])),
+        ...Object.fromEntries(methods.map(name => [name, (...args) => invoke(async() => {const value=await capability[name](...args);if(name==='commit')service.documentRuntimeSourceHint?.();if(name==='captureSavedSource')live();return value;}, flushToken)])),
         checkpoints: Object.freeze({ scope,
           ...Object.fromEntries(['load', 'compareAndSwap', 'list', 'changes'].map(name => [name, (...args) => invoke(() => capability.checkpoints[name](...args), flushToken)])),
         }),
@@ -133,6 +134,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     async function drain() { while (pending.size) await Promise.allSettled([...pending]); }
     const context = Object.freeze({
       scope, durableWrites: writes, assertActive: () => allowed(),
+      ...(host.capabilities?.includes('conditional_saved_source') === true ? {conditionalSavedSourceAvailable:true} : {}),
       ...(documents?{documentCommand}:{}),
       ...(metadataRowsAvailable?{metadataRowsAvailable:true}:{}),
       ...(propertyTargetsAvailable?{propertyTargetsAvailable:true}:{}),

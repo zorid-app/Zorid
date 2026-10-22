@@ -1,6 +1,6 @@
-import {decodeDesktopNotePlan} from './desktop-note-plan.ts';
+import {decodeDesktopNotePlan,snapshotDesktopNoteWriteInput} from './desktop-note-plan.ts';
 import {decodeWorkBlockEnvelope} from '../../desktop/workblocks.cjs';
-import {createDesktopWorkBlocks,createDesktopBinaryStreams} from './desktop.ts';
+import {createDesktopWorkBlocks,createDesktopBinaryStreams,createDesktopConditionalSavedSources} from './desktop.ts';
 import {scheduleBinaryTransfer} from '../core/binary-transfer-queue.ts';
 import {createDesktopDocumentService,createDesktopDocumentRuntime} from './desktop-document-semantics.ts';
 import {createDesktopDocumentDraftTransport} from './desktop-document-drafts.ts';
@@ -114,8 +114,9 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
       trash:path=>execute({kind:'trash',path}),remove:(path,force)=>execute({kind:'delete',path,force}),
     };
     durableWrites = Object.freeze<DurableWrites>({
+      ...createDesktopConditionalSavedSources(async(method,input)=>{const value=await call(method,input);if(released)throw Object.assign(new Error('Durable desktop context released'),{code:'client_not_admitted',source:'host'});return value;},binding.conditionalSavedSourceAvailable===true),
       readText: path => call('readText',path), readTextById: id => call('readTextById',id),
-      planWrite: input => {const captured=Object.freeze({...input});return call('planWrite',captured).then(reply=>decodeDesktopNotePlan(captured,scope,reply));}, prepare: plan => call('prepare',plan),
+      planWrite: async input => {const captured=snapshotDesktopNoteWriteInput(input);if(captured.conditionalSavedSource&&binding.conditionalSavedSourceAvailable!==true)return Promise.reject(Object.assign(new Error('Conditional saved-source capture is unavailable.'),{code:'unsupported_host_capability',source:'host',commitUncertain:false}));return call('planWrite',captured).then(reply=>decodeDesktopNotePlan(captured,scope,reply));}, prepare: plan => call('prepare',plan),
       commit: ref => call('commit',ref), query: ref => call('query',ref),
       listUnacknowledged: () => call('listUnacknowledged'), acknowledge: (ref,outcome) => call('acknowledge',ref,outcome),
       checkpoints: Object.freeze<DurableWrites['checkpoints']>({scope,load: key => call('checkpoints.load',key),

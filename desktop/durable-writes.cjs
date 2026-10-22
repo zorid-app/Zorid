@@ -1,5 +1,6 @@
 'use strict';
 const { desktopCheckpoints } = require('./durable-checkpoints.cjs');
+const { captureSavedSourceWitness, captureSavedSourceId, captureSavedSourceGuard, captureSavedSourceValue } = require('./conditional-saved-source.cjs');
 // Optional shared DurableWrites capability. No startup, renderer bridge or
 // checkpoint persistence is selected here; the trusted owner supplies a service.
 const LIMIT = 8 * 1024 * 1024;
@@ -33,6 +34,8 @@ function keys(value, expected) {
 async function desktopDurableWrites(service, { clientId } = {}) {
   if (!identity(clientId)) throw failure('invalid_client_id');
   const host = service.host;
+  const conditionalSources = host.capabilities?.includes('conditional_saved_source') === true;
+  if (conditionalSources && !['captureSavedSource', 'releaseSavedSource'].every(name => typeof host[name] === 'function')) throw failure('unsupported_host_capability');
   const authority = await host.identity();
   const vaultId = authority.local_store_id;
   if (!identity(vaultId)) throw failure('invalid_authority');
@@ -89,17 +92,34 @@ async function desktopDurableWrites(service, { clientId } = {}) {
     try { parsed = JSON.parse(plan.encodedPlan); } catch { throw failure('invalid_write_plan'); }
     // This private provider owns canonical JSON. Reject duplicate/unknown fields
     // rather than parsing one request but submitting a normalized different one.
-    if (JSON.stringify(parsed) !== plan.encodedPlan || !keys(parsed, ['operation_id', 'mutation', 'content_base64'])
+    const guarded = !!parsed && typeof parsed === 'object' && Object.hasOwn(parsed, 'source_capture');
+    if (guarded && !conditionalSources) throw failure('unsupported_host_capability');
+    if (guarded) captureSavedSourceId(parsed.source_capture);
+    if (JSON.stringify(parsed) !== plan.encodedPlan || !keys(parsed, ['operation_id', 'mutation', 'content_base64', ...(guarded ? ['source_capture'] : [])])
       || !keys(parsed.mutation, ['type', 'id', 'expected']) || parsed.operation_id !== plan.operationId
       || parsed.mutation.type !== 'write' || parsed.mutation.id !== plan.entryId || !identity(parsed.mutation.expected)
       || typeof parsed.content_base64 !== 'string') throw failure('invalid_write_plan');
     const bytes = Buffer.from(parsed.content_base64, 'base64');
     if (bytes.toString('base64') !== parsed.content_base64) throw failure('invalid_write_plan');
     decode(bytes); // This capability is for text writes, not arbitrary byte mutations.
-    return Object.freeze({ operation_id: parsed.operation_id, mutation: Object.freeze(parsed.mutation), content_base64: parsed.content_base64 });
+    return Object.freeze({ native: Object.freeze({ operation_id: parsed.operation_id, mutation: Object.freeze(parsed.mutation), content_base64: parsed.content_base64 }), sourceCapture: guarded ? parsed.source_capture : undefined });
   }
   return Object.freeze({
     checkpoints: desktopCheckpoints(host, { vaultId, clientId }, active),
+    async captureSavedSource(input) {
+      active();
+      if (!conditionalSources) throw failure('unsupported_host_capability');
+      const witness = captureSavedSourceWitness(input);
+      const value = await host.captureSavedSource(clientId, witness);
+      active();
+      return captureSavedSourceValue(value, witness);
+    },
+    async releaseSavedSource(input) {
+      active();
+      if (!conditionalSources) throw failure('unsupported_host_capability');
+      const captureId = captureSavedSourceId(input);
+      await host.releaseSavedSource(clientId, captureId);
+    },
     async readText(path) {
       active();
       const row = await service.readEntry(path);
@@ -120,22 +140,28 @@ async function desktopDurableWrites(service, { clientId } = {}) {
       active();
       if (!input || !identity(input.operationId) || !identity(input.expectedEntryId) || !identity(input.expectedRevision)) throw failure('invalid_write_plan');
       const { operationId, path, expectedEntryId, expectedRevision, expectedContent, content } = input;
+      let guard;
+      if (Object.hasOwn(input, 'conditionalSavedSource')) {
+        if (!conditionalSources) throw failure('unsupported_host_capability');
+        guard = captureSavedSourceGuard(input.conditionalSavedSource);
+        if (guard.logicalWitness.entryId !== expectedEntryId || guard.logicalWitness.revision !== expectedRevision || guard.logicalWitness.path !== path) throw failure('intent_identity_mismatch');
+      }
       text(content); text(expectedContent);
       // Base64 is ASCII. Bound it before allocating the binary copy or JSON.
       const contentSize = Buffer.byteLength(content, 'utf8');
-      const overhead = JSON.stringify({ operation_id: operationId, mutation: { type: 'write', id: expectedEntryId, expected: expectedRevision }, content_base64: '' }).length;
+      const overhead = JSON.stringify({ operation_id: operationId, mutation: { type: 'write', id: expectedEntryId, expected: expectedRevision }, content_base64: '', ...(guard ? { source_capture: guard.captureId } : {}) }).length;
       if (overhead + 4 * Math.ceil(contentSize / 3) > LIMIT) throw failure('encoded_plan_too_large');
       const native = await service.planTextWrite(path, content, { operationId, entryId: expectedEntryId, expectedRevision, expectedContent });
       if (native.operation_id !== operationId || native.mutation.type !== 'write' || native.mutation.id !== expectedEntryId || native.mutation.expected !== expectedRevision) throw failure('intent_identity_mismatch');
-      const encodedPlan = JSON.stringify(native);
+      const encodedPlan = JSON.stringify({ ...native, ...(guard ? { source_capture: guard.captureId } : {}) });
       text(encodedPlan);
       return Object.freeze({ version: 1, vaultId, clientId, operationId, entryId: expectedEntryId, encodedPlan });
     },
     async prepare(plan) {
-      const native = parsePlan(plan);
+      const { native, sourceCapture } = parsePlan(plan);
       // Capture wrapper identities before awaiting host preparation.
       const operationId = plan.operationId, entryId = plan.entryId;
-      const row = await service.prepareIntent(clientId, native);
+      const row = sourceCapture === undefined ? await service.prepareIntent(clientId, native) : await service.prepareIntent(clientId, native, sourceCapture);
       try {
         const result = view(row);
         if (result.ref.operationId !== operationId || result.ref.entryId !== entryId) throw failure('outcome_unknown', true);

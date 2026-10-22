@@ -21,6 +21,10 @@ function fixture() {
     assert.deepEqual(reference, active, 'each admitted RPC carries the owned native lease');
     let result;
     switch (command.method) {
+      case 'capture_saved_source':
+        if (readGate) await readGate.promise;
+        return {result:{capture:{capture_id:'physical-capture',logical_witness:{entry_id:command.entry_id,revision:command.revision,path:command.path},byte_length:8}},bytes:Buffer.from('score: 7')};
+      case 'release_saved_source':result={released:true};break;
       case 'document_drafts':if(readGate)await readGate.promise;return {result:{state:null,transfer:null,transfer_scratch_bytes:0},bytes:new Uint8Array()};
       case 'binary':if(readGate)await readGate.promise;return {result:{binary:true},bytes:new Uint8Array(bytes)};
       case 'identity': result = { identity: { local_store_id: 'authority', realm_id: null, vault_id: null } }; break;
@@ -251,4 +255,39 @@ test('ordinary property target capability is frozen from native handshake before
   const f=fixture();f.host.capabilities=['documents','document_property_targets'];const context=await admitDesktopFixtureClient(f.service,f.options);
   assert.equal(context.propertyTargetsAvailable,true);assert.equal(typeof context.documentCommand,'function');f.host.capabilities=[];assert.equal(context.propertyTargetsAvailable,true);await context.release(()=>{});
   const broken=fixture();broken.host.capabilities=['document_property_targets'];await assert.rejects(admitDesktopFixtureClient(broken.service,broken.options),{code:'unsupported_host_capability'});
+});
+
+
+test('physical-source capability is positive only from the host handshake and remains on its exact lease', async () => {
+  const f=fixture(); f.host.capabilities=Object.freeze(['conditional_saved_source']);
+  const context=await admitDesktopFixtureClient(f.service,f.options);
+  assert.equal(context.conditionalSavedSourceAvailable,true);
+  const capture=await context.durableWrites.captureSavedSource({entryId:'entry',revision:'rev',path:'note.md'});
+  assert.equal(capture.source,'score: 7'); assert.equal(capture.logicalWitness.revision,'rev');
+  await context.durableWrites.releaseSavedSource(capture.captureId);
+  assert.ok(f.calls.includes('capture_saved_source')&&f.calls.includes('release_saved_source'));
+  await context.retire();
+  const count=f.calls.length;
+  await assert.rejects(context.durableWrites.captureSavedSource(capture.logicalWitness),{code:'client_not_admitted'});
+  assert.equal(f.calls.length,count);
+});
+
+test('older native clients retain paired rejecting methods without claiming host source support', async () => {
+  const f=fixture(),context=await admitDesktopFixtureClient(f.service,f.options);
+  assert.equal(context.conditionalSavedSourceAvailable,undefined);
+  assert.equal(typeof context.durableWrites.captureSavedSource,'function');
+  assert.equal(typeof context.durableWrites.releaseSavedSource,'function');
+  const count=f.calls.length;
+  await assert.rejects(context.durableWrites.captureSavedSource({entryId:'entry',revision:'rev',path:'note.md'}),{code:'unsupported_host_capability'});
+  assert.equal(f.calls.length,count);
+  await context.retire();
+});
+
+test('revocation during an accepted capture cannot return physical source into a different owner', async () => {
+  const f=fixture();f.host.capabilities=['conditional_saved_source'];
+  const context=await admitDesktopFixtureClient(f.service,f.options),gate=deferred();f.readGate=gate;
+  const pending=context.durableWrites.captureSavedSource({entryId:'entry',revision:'rev',path:'note.md'});
+  f.owner=false;gate.resolve();
+  await assert.rejects(pending,{code:'grant_retired'});
+  await context.retire();
 });

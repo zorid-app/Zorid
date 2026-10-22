@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {planningBridge} from './helpers/desktop-note-planning.ts';
-import {decodeDesktopNotePlan} from '../src/platform/desktop-note-plan.ts';
+import {decodeDesktopNotePlan,snapshotDesktopNoteWriteInput} from '../src/platform/desktop-note-plan.ts';
 import {DurableWritePlanningError} from '../src/core/durable-writes.ts';
 test('planWrite carries a definite rejection as plain data across the context bridge',async()=>{
   const bridge=planningBridge(async()=>({ok:false,error:{code:'revision_conflict',commitUncertain:false}}));
@@ -25,4 +25,29 @@ test('successful plan envelope preserves exact encoded bytes and binds every ide
   const reply={notePlanning:true,schemaVersion:1,ok:true,value};
   assert.equal(decodeDesktopNotePlan(input,scope,reply).encodedPlan,value.encodedPlan);
   for(const patch of [{vaultId:'other'},{clientId:'other'},{operationId:'other'},{entryId:'other'},{encodedPlan:'\ud800'}])assert.throws(()=>decodeDesktopNotePlan(input,scope,{...reply,value:{...value,...patch}}),error=>error instanceof DurableWritePlanningError&&error.commitUncertain);
+});
+
+
+test('conditional planning snapshots the exact original capture before an IPC await',()=>{
+  const guard={captureId:'original-capture',logicalWitness:{entryId:input.expectedEntryId,revision:input.expectedRevision,path:input.path}};
+  const captured=snapshotDesktopNoteWriteInput({...input,conditionalSavedSource:guard});
+  guard.captureId='changed';guard.logicalWitness.path='Other.md';
+  assert.equal(captured.conditionalSavedSource!.captureId,'original-capture');
+  assert.equal(captured.conditionalSavedSource!.logicalWitness.path,input.path);
+  assert.ok(Object.isFrozen(captured.conditionalSavedSource)&&Object.isFrozen(captured.conditionalSavedSource!.logicalWitness));
+  for(const conditionalSavedSource of [null,{captureId:'capture',logicalWitness:{entryId:'other',revision:input.expectedRevision,path:input.path}},{captureId:'capture',logicalWitness:{entryId:input.expectedEntryId,revision:input.expectedRevision,path:input.path},source:'forged'}]){
+    assert.throws(()=>snapshotDesktopNoteWriteInput({...input,conditionalSavedSource} as any),error=>error instanceof DurableWritePlanningError&&!error.commitUncertain);
+  }
+});
+
+test('conditional planning reply cannot strip or substitute the guard in the persisted opaque bytes',()=>{
+  const guarded={...input,conditionalSavedSource:{captureId:'capture',logicalWitness:{entryId:input.expectedEntryId,revision:input.expectedRevision,path:input.path}}};
+  const native={operation_id:input.operationId,mutation:{type:'write',id:input.expectedEntryId,expected:input.expectedRevision},content_base64:'bmV3',source_capture:'capture'};
+  const value={version:1,...scope,operationId:input.operationId,entryId:input.expectedEntryId,encodedPlan:JSON.stringify(native)};
+  const envelope=(encodedPlan:string)=>({notePlanning:true,schemaVersion:1,ok:true,value:{...value,encodedPlan}});
+  assert.equal(decodeDesktopNotePlan(guarded,scope,envelope(value.encodedPlan)).encodedPlan,value.encodedPlan);
+  const {source_capture,...unguarded}=native;
+  for(const invalid of [JSON.stringify(unguarded),JSON.stringify({...native,source_capture:'different'}),JSON.stringify({...native,mutation:{...native.mutation,expected:'other'}}),'{"source_capture":"wrong",'+value.encodedPlan.slice(1)]){
+    assert.throws(()=>decodeDesktopNotePlan(guarded,scope,envelope(invalid)),error=>error instanceof DurableWritePlanningError&&error.code==='invalid_planning_response'&&error.commitUncertain);
+  }
 });

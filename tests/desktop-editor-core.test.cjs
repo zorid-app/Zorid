@@ -246,3 +246,44 @@ test('requested runtime requires document commands and every runtime method befo
     f.closed.resolve();await f.manager.close();
   }
 });
+
+
+test('physical-source IPC uses a positively admitted complete pair and snapshots only bounded witness control',async()=>{
+  const calls=[],witness={entryId:'entry',revision:'rev',path:'Books/Note.md'};
+  const admission={scope:{vaultId:'store',clientId:'client'},conditionalSavedSourceAvailable:true,durableWrites:{
+    async captureSavedSource(input){calls.push(input);return{captureId:'capture',logicalWitness:input,source:'score: 7'};},
+    async releaseSavedSource(input){calls.push(input);},
+  },async retire(){}};
+  const f=fixture({admission}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  try{
+    const context=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame};
+    assert.equal(context.conditionalSavedSourceAvailable,true);
+    const value=await f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'captureSavedSource',[witness]);
+    assert.equal(value.source,'score: 7');assert.notEqual(calls[0],witness);assert.ok(Object.isFrozen(calls[0]));
+    await assert.rejects(f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'captureSavedSource',[{...witness,source:'forged'}]),{code:'invalid_saved_source'});
+    await assert.rejects(f.manager.invoke(f.broker,a,event,'/vault','foreign','captureSavedSource',[witness]),{code:'durable_scope_changed'});
+    await f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'releaseSavedSource',['capture']);
+    assert.deepEqual(calls,[witness,'capture']);
+  }finally{f.closed.resolve();await f.manager.close();}
+});
+
+test('positive physical-source admission rejects an incomplete pair instead of advertising a fake capability',async()=>{
+  const admission={scope:{vaultId:'store',clientId:'client'},conditionalSavedSourceAvailable:true,durableWrites:{async captureSavedSource(){}},async retire(){}};
+  const f=fixture({admission}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  try{await assert.rejects(f.manager.context(f.broker,a,'/vault'),{code:'unsupported_host_capability'});}
+  finally{f.closed.resolve();await f.manager.close();}
+});
+
+test('a late physical-source response is rejected after its broker generation changes',async()=>{
+  const gate=deferred(),witness={entryId:'entry',revision:'rev',path:'Note.md'};
+  const admission={scope:{vaultId:'store',clientId:'client'},conditionalSavedSourceAvailable:true,durableWrites:{
+    async captureSavedSource(input){await gate.promise;return{captureId:'capture',logicalWitness:input,source:'private old vault'};},async releaseSavedSource(){},
+  },async retire(){}};
+  const f=fixture({admission}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  try{
+    const context=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame};
+    const pending=f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'captureSavedSource',[witness]);
+    a.generation++;gate.resolve();
+    await assert.rejects(pending,{code:'durable_scope_changed'});
+  }finally{f.closed.resolve();await f.manager.close();}
+});

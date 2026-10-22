@@ -8,6 +8,7 @@ const {MAX_BINARY_FRAME}=require('./rust-vault-service.cjs');
 const {VaultService}=require('./vault-service.cjs');
 const {admitDesktopFixtureClient}=require('./client-admission.cjs');
 const {captureDocumentRuntimeRequest,captureDocumentRuntimeReply}=require('./document-semantics.cjs');
+const {captureSavedSourceWitness,captureSavedSourceId,captureSavedSourceValue}=require('./conditional-saved-source.cjs');
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 const fail=code=>Object.assign(new Error('Rust vault operation failed.'),{code});
 const runtimeUnavailable=()=>Object.assign(new Error('The desktop core does not support document indexing. Update Zorid and restart the app.'),{code:'document_runtime_unavailable'});
@@ -27,7 +28,7 @@ function createEditorCoreManager(environment=process.env, options={}){
   const documentRuntime=options.documentRuntime===true;
   if(documentRuntime&&typeof options.onDocumentRuntimeNudge!=='function')throw runtimeUnavailable();
   const contexts=new Map(), admissions=new Map(), released=new WeakMap(), services=new Set(), openings=new Map(), retirements=new Map();
-  const describe=saved=>({admissionId:saved.id,scope:saved.admission.scope,...(saved.admission.createTextReceipt?{textCreateReceiptsAvailable:true}:{}),...(saved.admission.documentCommand?{documentSemantics:true}:{}),...(saved.admission.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(saved.admission.propertyTargetsAvailable===true?{propertyTargetsAvailable:true}:{}),...(saved.admission.basePreviewAvailable===true?{basePreviewAvailable:true}:{}),...(saved.admission.draftsAvailable===true?{draftsAvailable:true}:{}),...(documentRuntime&&runtimeAvailable(saved.admission)?{documentMaintenance:true}:{}),...(saved.admission.workblockCommand?{workBlocks:true}:{}),...(saved.admission.binaryLimits?{binaryLimits:saved.admission.binaryLimits}:{})});
+  const describe=saved=>({admissionId:saved.id,scope:saved.admission.scope,...(saved.admission.createTextReceipt?{textCreateReceiptsAvailable:true}:{}),...(saved.admission.conditionalSavedSourceAvailable===true?{conditionalSavedSourceAvailable:true}:{}),...(saved.admission.documentCommand?{documentSemantics:true}:{}),...(saved.admission.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(saved.admission.propertyTargetsAvailable===true?{propertyTargetsAvailable:true}:{}),...(saved.admission.basePreviewAvailable===true?{basePreviewAvailable:true}:{}),...(saved.admission.draftsAvailable===true?{draftsAvailable:true}:{}),...(documentRuntime&&runtimeAvailable(saved.admission)?{documentMaintenance:true}:{}),...(saved.admission.workblockCommand?{workBlocks:true}:{}),...(saved.admission.binaryLimits?{binaryLimits:saved.admission.binaryLimits}:{})});
   const executable=()=>require('./host-location.cjs').resolveDesktopHost({...options,override:config.executable});
   function checked(broker,record,expectedRoot,admissionId,allowRetired=false){
     broker.assertLive(record);
@@ -110,6 +111,7 @@ function createEditorCoreManager(environment=process.env, options={}){
         catch(error){await admission.retire();throw error;}
         const saved={id:randomUUID(),admission,service,check:(allowRetired=false)=>{check();if((saved.runtimeRetired||saved.draftsRetired)&&!allowRetired)throw fail('client_not_admitted');}};contexts.set(record,saved);
         try{
+          if(admission.conditionalSavedSourceAvailable===true&&!['captureSavedSource','releaseSavedSource'].every(name=>typeof admission.durableWrites?.[name]==='function'))throw fail('unsupported_host_capability');
           if(documentRuntime&&(!runtimeAvailable(admission)||typeof admission.documentCommand!=='function'))throw runtimeUnavailable();
           if(admission.metadataRowsAvailable===true&&typeof admission.documentCommand!=='function')throw fail('unsupported_host_capability');
           if(admission.basePreviewAvailable===true&&(!documentRuntime||!runtimeAvailable(admission)||typeof options.onDocumentRuntimeNudge!=='function'||typeof admission.documentCommand!=='function'))throw fail('unsupported_host_capability');
@@ -178,6 +180,16 @@ function createEditorCoreManager(environment=process.env, options={}){
         if(args.length!==1||!(args[0] instanceof Uint8Array)||!args[0].length||args[0].byteLength>MAX_BINARY_FRAME||!saved.admission.binaryCommand)throw fail('invalid_durable_request');
         // Admission snapshots the one bounded protobuf frame synchronously.
         return saved.admission.binaryCommand(args[0]);
+      }
+      if(method==='captureSavedSource'||method==='releaseSavedSource'){
+        if(args.length!==1||saved.admission.conditionalSavedSourceAvailable!==true||typeof saved.admission.durableWrites?.[method]!=='function')throw fail('invalid_durable_request');
+        // Validate and snapshot this small control record before any clone or
+        // await; physical source text is never a caller-authored capture input.
+        const input=method==='captureSavedSource'?captureSavedSourceWitness(args[0]):captureSavedSourceId(args[0]);
+        const value=await saved.admission.durableWrites[method](input);
+        checked(broker,record,expectedRoot,admissionId);
+        if(contexts.get(record)!==saved)throw fail('durable_scope_changed');
+        return method==='captureSavedSource'?captureSavedSourceValue(value,input):undefined;
       }
       const captured=structuredClone(args);
       if(method==='createText'||method==='createTextReceipt'||method==='fileCommand'){

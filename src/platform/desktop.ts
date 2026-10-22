@@ -1,3 +1,5 @@
+import {captureSavedSourceWitness,captureSavedSourceId,captureSavedSourceValue} from '../../desktop/conditional-saved-source.cjs';
+import type {DurableWrites,ConditionalSavedSourceWitness} from '../core/durable-writes.ts';
 import {captureWorkBlockCommand,validateWorkBlockValue} from '../../desktop/workblocks.cjs';
 import type {DesktopWorkBlockRequest,WorkBlockService} from '../core/workblocks.ts';
 import {create,fromBinary,toBinary} from '@bufbuild/protobuf';
@@ -272,4 +274,27 @@ export function createDesktopWorkBlocks(invoke:(request:DesktopWorkBlockRequest)
     move:input=>command('move',input),title:input=>command('title',input),addRef:input=>command('add_ref',input),
     removeRef:input=>command('remove_ref',input),delete:input=>command('delete',input),changes:input=>command('changes',input),
   }),async release(){released=true;await Promise.allSettled([...pending]);}};
+}
+
+/** Native callers always receive a pair. Unsupported hosts reject before any
+ * transform/RPC, preserving the browser-only meaning of both methods absent.
+ * Successful proofs stay on the same admitted vault/lease-bound closure. */
+export function createDesktopConditionalSavedSources(
+  invoke:(method:'captureSavedSource'|'releaseSavedSource',input:unknown)=>Promise<unknown>,
+  available:boolean,
+):Required<Pick<DurableWrites,'captureSavedSource'|'releaseSavedSource'>> {
+  return Object.freeze({
+    async captureSavedSource(input:ConditionalSavedSourceWitness) {
+      if(!available)throw Object.assign(new Error('This desktop core does not support guarded saved-source edits.'),{code:'unsupported_host_capability',source:'host',commitUncertain:false});
+      const witness=captureSavedSourceWitness(input);
+      const value=await invoke('captureSavedSource',witness);
+      return captureSavedSourceValue(value,witness);
+    },
+    async releaseSavedSource(input:string) {
+      if(!available)throw Object.assign(new Error('This desktop core does not support guarded saved-source edits.'),{code:'unsupported_host_capability',source:'host',commitUncertain:false});
+      const captureId=captureSavedSourceId(input);
+      const value=await invoke('releaseSavedSource',captureId);
+      if(value!==undefined)throw failure('invalid_saved_source',true);
+    },
+  });
 }

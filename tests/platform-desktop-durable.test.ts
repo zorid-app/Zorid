@@ -180,3 +180,42 @@ test('positive desktop draft advertisement requires document semantics and scope
     await assert.rejects(createPlatformAdapter(),/Incomplete document draft capability/);
   }}finally{if(previous)Object.defineProperty(globalThis,'window',previous);else Reflect.deleteProperty(globalThis,'window');}
 });
+
+
+test('native renderer exposes paired unsupported wrappers instead of selecting browser logical-only policy',async()=>{
+  const previous=Object.getOwnPropertyDescriptor(globalThis,'window');let calls=0;
+  Object.defineProperty(globalThis,'window',{configurable:true,value:{zorid:{getVault:async()=>({path:'/fixture',name:'Fixture'}),getDurableContext:async()=>({admissionId:'admitted',scope:{vaultId:'authority',clientId:'client'}}),durableInvoke:async()=>{calls++;assert.fail('unsupported physical guard must not dispatch');},releaseDurableContext:async()=>{}}}});
+  try{
+    const platform=(await createPlatformAdapter())!,writes=platform.adapter.durableWrites!;
+    assert.equal(typeof writes.captureSavedSource,'function');assert.equal(typeof writes.releaseSavedSource,'function');
+    await assert.rejects(writes.captureSavedSource!({entryId:'entry',revision:'rev',path:'Note.md'}),{code:'unsupported_host_capability'});
+    await assert.rejects(writes.releaseSavedSource!('capture'),{code:'unsupported_host_capability'});
+    assert.equal(calls,0);await platform.release!();
+  }finally{if(previous)Object.defineProperty(globalThis,'window',previous);else Reflect.deleteProperty(globalThis,'window');}
+});
+
+test('physical-source renderer pair uses one admitted scope and snapshots exact witness before awaiting',async()=>{
+  const previous=Object.getOwnPropertyDescriptor(globalThis,'window'),calls:any[]=[];
+  const witness={entryId:'entry',revision:'rev',path:'Note.md'},original={...witness};let resolve!:(value:unknown)=>void;
+  Object.defineProperty(globalThis,'window',{configurable:true,value:{zorid:{getVault:async()=>({path:'/fixture',name:'Fixture'}),getDurableContext:async()=>({admissionId:'admitted',scope:{vaultId:'authority',clientId:'client'},conditionalSavedSourceAvailable:true}),durableInvoke:async(path:string,admission:string,method:string,args:unknown[])=>{assert.equal(path,'/fixture');assert.equal(admission,'admitted');calls.push({method,args});if(method==='captureSavedSource')return new Promise(yes=>{resolve=yes;});if(method==='releaseSavedSource')return;assert.fail(method);},releaseDurableContext:async()=>{}}}});
+  try{
+    const platform=(await createPlatformAdapter())!,writes=platform.adapter.durableWrites!;
+    const pending=writes.captureSavedSource!(witness);witness.path='Other.md';
+    resolve({captureId:'capture',logicalWitness:original,source:'\ufeffscore: 7\u0000🚀'});
+    const capture=await pending;
+    assert.equal(capture.source,'\ufeffscore: 7\u0000🚀');assert.deepEqual(capture.logicalWitness,original);assert.ok(Object.isFrozen(capture.logicalWitness));
+    assert.deepEqual(calls[0].args,[original]);await writes.releaseSavedSource!(capture.captureId);assert.deepEqual(calls[1],{method:'releaseSavedSource',args:['capture']});
+    await platform.release!();
+    await assert.rejects(writes.captureSavedSource!(original),{code:'client_not_admitted'});assert.equal(calls.length,2);
+  }finally{if(previous)Object.defineProperty(globalThis,'window',previous);else Reflect.deleteProperty(globalThis,'window');}
+});
+
+test('late captured physical source cannot revive a released renderer context',async()=>{
+  const previous=Object.getOwnPropertyDescriptor(globalThis,'window'),witness={entryId:'entry',revision:'rev',path:'Note.md'};let resolve!:(value:unknown)=>void;
+  Object.defineProperty(globalThis,'window',{configurable:true,value:{zorid:{getVault:async()=>({path:'/fixture',name:'Fixture'}),getDurableContext:async()=>({admissionId:'admitted',scope:{vaultId:'authority',clientId:'client'},conditionalSavedSourceAvailable:true}),durableInvoke:()=>new Promise(yes=>{resolve=yes;}),releaseDurableContext:async()=>{}}}});
+  try{
+    const platform=(await createPlatformAdapter())!,pending=platform.adapter.durableWrites!.captureSavedSource!(witness);
+    await platform.release!();resolve({captureId:'capture',logicalWitness:witness,source:'old source'});
+    await assert.rejects(pending,{code:'client_not_admitted'});
+  }finally{if(previous)Object.defineProperty(globalThis,'window',previous);else Reflect.deleteProperty(globalThis,'window');}
+});

@@ -342,13 +342,14 @@ class CoreVaultFixtureService {
     return this.planWrite(input, Buffer.from(content, 'utf8'), { ...options,
       expectedBytes: options.expectedContent === undefined ? options.expectedBytes : Buffer.from(options.expectedContent, 'utf8') });
   }
-  async prepareIntent(clientId, plan) {
+  async prepareIntent(clientId, plan, sourceCapture) {
     this.live();
     if (typeof plan?.content_base64 !== 'string' || plan.content_base64.length > 22369624) throw error('invalid_body');
     const bytes = Buffer.from(plan.content_base64, 'base64');
     if (bytes.toString('base64') !== plan.content_base64) throw error('invalid_body');
     // Preparation is durable but inert. No commit is authorized here.
-    return this.host.prepareIntent(clientId, { operation_id: plan.operation_id, mutation: plan.mutation }, bytes);
+    const request = { operation_id: plan.operation_id, mutation: plan.mutation };
+    return sourceCapture === undefined ? this.host.prepareIntent(clientId, request, bytes) : this.host.prepareIntent(clientId, request, bytes, sourceCapture);
   }
   async commitIntent(reference) {
     this.live();
