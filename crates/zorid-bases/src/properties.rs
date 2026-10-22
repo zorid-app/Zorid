@@ -351,6 +351,9 @@ fn validate_definition(name: &str, definition: &PropertyDefinition) -> Result<()
             {
                 crate::expression::validate(filter)
                     .map_err(|_| "Relation target filter is invalid")?;
+                if crate::expression::uses_current_context(filter) {
+                    return Err("Relation target filters are vault-wide; this is unavailable without a per-origin relation context".into());
+                }
             }
         }
         PropertyKind::ReverseRelation => {

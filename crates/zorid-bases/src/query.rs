@@ -2250,10 +2250,11 @@ fn summarize_rows(
         .collect::<HashMap<_, _>>();
     let timezone = expression::BasesTimezone::from_setting(Some(&options.evaluation.timezone))
         .map_err(|message| ExpressionDiagnostic::new("input", message))?;
-    let evaluate = |selected: &[&BaseRow],
-                    selections: &[(&str, &str, &str)],
-                    steps: &mut usize,
-                    admission: &mut Admission<'_>| {
+    let mut summary_files = shared_files.cloned();
+    let mut evaluate = |selected: &[&BaseRow],
+                        selections: &[(&str, &str, &str)],
+                        steps: &mut usize,
+                        admission: &mut Admission<'_>| {
         let mut result = BTreeMap::new();
         for &(key, property, name) in selections {
             if options
@@ -2277,6 +2278,89 @@ fn summarize_rows(
                 .iter()
                 .map(|row| row.values.get(property).unwrap_or(&null))
                 .collect::<Vec<_>>();
+            // File values expose complete captured properties, including nested
+            // links. Build their shared projection once for all summaries, even
+            // when the summary uses only value.properties and no global lookup.
+            fn has_file(
+                value: &BaseValue,
+                check: &mut impl FnMut() -> Result<(), ExpressionDiagnostic>,
+            ) -> Result<bool, ExpressionDiagnostic> {
+                check()?;
+                match value {
+                    BaseValue::File { .. } => Ok(true),
+                    BaseValue::List { value } => {
+                        for value in value {
+                            if has_file(value, check)? {
+                                return Ok(true);
+                            }
+                        }
+                        Ok(false)
+                    }
+                    BaseValue::Object { value } => {
+                        for value in value.values() {
+                            if has_file(value, check)? {
+                                return Ok(true);
+                            }
+                        }
+                        Ok(false)
+                    }
+                    _ => Ok(false),
+                }
+            }
+            let mut needs_files = false;
+            if summary_files.is_none() {
+                for value in &values {
+                    if has_file(value, &mut || {
+                        *steps = steps.saturating_add(1);
+                        check_query_work(
+                            *steps,
+                            admission,
+                            options,
+                            "Summary file scan exceeds query work budget",
+                        )
+                    })? {
+                        needs_files = true;
+                        break;
+                    }
+                }
+            }
+            if needs_files {
+                let mut work = 0usize;
+                let remaining = options
+                    .max_steps
+                    .saturating_sub(*steps)
+                    .saturating_sub(admission_work(admission));
+                summary_files = Some(crate::files::hydrate(
+                    input.records,
+                    relationships,
+                    input.unavailable,
+                    input.property_values,
+                    &timezone,
+                    &mut |cost| {
+                        work = work.saturating_add(cost);
+                        if options
+                            .evaluation
+                            .cancellation
+                            .as_ref()
+                            .is_some_and(|c| c.is_cancelled())
+                        {
+                            return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+                        }
+                        if work > remaining {
+                            return Err(budget("Summary file context exceeds query work budget"));
+                        }
+                        Ok(())
+                    },
+                    &mut |bytes| admit(admission, |_| Ok(bytes)),
+                )?);
+                *steps = steps.saturating_add(work);
+                check_query_work(
+                    *steps,
+                    admission,
+                    options,
+                    "Summary file context exceeds query work budget",
+                )?;
+            }
             let mut invocation = options.evaluation.clone();
             invocation.formulas.clear();
             invocation.current_record = None;
@@ -2292,9 +2376,9 @@ fn summarize_rows(
                 &values,
                 &invocation,
                 relationships,
-                shared_files.cloned(),
+                summary_files.clone(),
                 |path| {
-                    if let Some(files) = shared_files {
+                    if let Some(files) = &summary_files {
                         return files.by_path(path).cloned().ok_or_else(|| {
                             ExpressionDiagnostic::new(
                                 "unavailable",

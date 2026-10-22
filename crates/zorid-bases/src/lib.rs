@@ -344,7 +344,10 @@ fn runtime_file(
         } else {
             value
         };
-        properties.insert(key.clone(), value);
+        properties.insert(
+            key.clone(),
+            expression::infer_frontmatter_value(value, timezone),
+        );
     }
     if hints.keys().any(|name| !properties.contains_key(*name)) {
         return Err(ExpressionDiagnostic::new(
@@ -486,21 +489,48 @@ pub(crate) fn with_session_files<T>(
                 runtime_file(record, &timezone)
             }
         };
-    let mut file = captured_file(record)?;
-    if shared_files.is_none() {
-        if let Some(graph) = relationships {
-            graph.attach(&mut file);
+    let mut projection_work = 0usize;
+    let mut resolve = |file: &mut expression::BasesFile| -> Result<(), ExpressionDiagnostic> {
+        if shared_files.is_none() {
+            if let Some(graph) = relationships {
+                graph.attach(file);
+                graph.resolve_property_links(
+                    file,
+                    &mut |work| {
+                        projection_work = projection_work.saturating_add(work);
+                        if options
+                            .cancellation
+                            .as_ref()
+                            .is_some_and(|c| c.is_cancelled())
+                        {
+                            return Err(ExpressionDiagnostic::new(
+                                "cancelled",
+                                "Evaluation cancelled",
+                            ));
+                        }
+                        if projection_work > options.max_steps {
+                            return Err(ExpressionDiagnostic::new(
+                                "budget",
+                                "Property link resolution exceeds work budget",
+                            ));
+                        }
+                        Ok(())
+                    },
+                    &mut |_| Ok(()),
+                )?;
+            }
         }
-    }
+        Ok(())
+    };
+    let mut file = captured_file(record)?;
+    resolve(&mut file)?;
     let mut this_file = options
         .current_record
         .as_ref()
         .map(captured_file)
         .transpose()?;
-    if shared_files.is_none() {
-        if let (Some(graph), Some(file)) = (relationships, this_file.as_mut()) {
-            graph.attach(file);
-        }
+    if let Some(file) = this_file.as_mut() {
+        resolve(file)?;
     }
     let mut property_work = 0usize;
     if let Some(derived) = property_values {
@@ -553,7 +583,7 @@ pub(crate) fn with_session_files<T>(
         ..Default::default()
     };
     let mut session = expression::Session::new(&context);
-    session.charge_preparation(property_work)?;
+    session.charge_preparation(property_work.saturating_add(projection_work))?;
     run(&mut session)
 }
 

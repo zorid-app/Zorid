@@ -505,6 +505,89 @@ impl<'a> PreparedRelationships<'a> {
             )
         }))
     }
+    /// Infer links retain their owning note's origin even when reached through
+    /// a different row or a global file lookup. Resolution uses the same pinned
+    /// namespace as parsed body links, never the caller's current row.
+    pub(crate) fn resolve_property_links(
+        &self,
+        file: &mut BasesFile,
+        check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+        admit: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+    ) -> Result<(), ExpressionDiagnostic> {
+        use crate::expression::RuntimeValue;
+        fn visit(
+            graph: &PreparedRelationships<'_>,
+            origin: &BasesFile,
+            value: &mut RuntimeValue,
+            check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+            admit: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+            bytes: &mut usize,
+        ) -> Result<(), ExpressionDiagnostic> {
+            check(1)?;
+            match value {
+                RuntimeValue::Link(link) if link.resolved_path.is_none() => {
+                    if link.external {
+                        link.resolved_path = Some(None);
+                    } else {
+                        match graph.resolve_target(origin, &link.path, check) {
+                            Ok(Some((path, witness))) => {
+                                let added = path
+                                    .len()
+                                    .saturating_add(witness.entry_id.as_str().len())
+                                    .saturating_add(witness.revision.as_str().len())
+                                    .saturating_add(128);
+                                *bytes = bytes.saturating_add(added);
+                                if *bytes > 8 * 1024 * 1024 {
+                                    return Err(ExpressionDiagnostic::new(
+                                        "budget",
+                                        "Resolved property links exceed byte budget",
+                                    ));
+                                }
+                                check(1 + added / 16)?;
+                                admit(added)?;
+                                link.resolved_path = Some(Some(path));
+                                link.target = Some(witness);
+                            }
+                            Ok(None) => link.resolved_path = Some(None),
+                            Err(error)
+                                if matches!(
+                                    error.code.as_str(),
+                                    "budget" | "cancelled" | "stale-source"
+                                ) =>
+                            {
+                                return Err(error)
+                            }
+                            // Invalid readable target text stays an unresolved
+                            // link. It never acquires a guessed target witness.
+                            Err(_) => link.resolved_path = Some(None),
+                        }
+                    }
+                }
+                RuntimeValue::List(values) => {
+                    for value in values {
+                        visit(graph, origin, value, check, admit, bytes)?;
+                    }
+                }
+                RuntimeValue::Object(values) => {
+                    for value in values.values_mut() {
+                        visit(graph, origin, value, check, admit, bytes)?;
+                    }
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+        let origin = BasesFile {
+            path: file.path.clone(),
+            witness: file.witness.clone(),
+            ..Default::default()
+        };
+        let mut bytes = 0usize;
+        for value in file.properties.values_mut() {
+            visit(self, &origin, value, check, admit, &mut bytes)?;
+        }
+        Ok(())
+    }
     pub(crate) fn attach(&self, file: &mut BasesFile) {
         file.metadata_unavailable = file
             .witness

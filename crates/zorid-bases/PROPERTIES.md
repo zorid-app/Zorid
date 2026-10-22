@@ -108,3 +108,16 @@ checks, 48 library checks including query/cache identity, 9 preview checks and
 settings/digest admission, scalar overrides, readable link identity, target
 filtering, reverse/rollup evaluation in ordinary queries, missing/invalid data,
 dependency cycles, dates, clock refresh, source preservation and resource bounds.
+
+Ordinary frontmatter needs no definitions file: readable wiki links, URLs and date
+text become typed values recursively, including lists and objects. Inferred note
+links resolve eagerly from their owning note against the captured namespace, so
+cross-file reads preserve source-relative link meaning. Explicit text definitions
+retain raw text. Rows carry differential `editValues` from the same persisted
+revision whenever rendering changes the raw type or content; editors must use
+that source value for edits and may fall back only to unchanged primitive values.
+
+Relation target filters are vault-wide candidate predicates. `this` is rejected
+with a definition diagnostic because per-origin relation target membership has no
+contract yet. This does not change ordinary Base `this` evaluation. Derived
+reverse/rollup dependencies remain explicitly unavailable during candidate filtering.

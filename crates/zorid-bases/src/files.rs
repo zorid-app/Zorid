@@ -97,6 +97,18 @@ pub(crate) fn hydrate(
         let mut file = crate::runtime_file(record, timezone)?;
         if let Some(graph) = relationships {
             graph.attach(&mut file);
+            graph.resolve_property_links(&mut file, check, &mut |added| {
+                bytes = bytes
+                    .checked_add(added)
+                    .filter(|bytes| *bytes <= MAX_CONTEXT_BYTES)
+                    .ok_or_else(|| {
+                        crate::ExpressionDiagnostic::new(
+                            "budget",
+                            "Resolved shared properties exceed context byte budget",
+                        )
+                    })?;
+                admit(added)
+            })?;
         }
         if let Some(properties) = properties {
             properties.attach(&mut file, timezone)?;

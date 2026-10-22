@@ -49,6 +49,14 @@ fn id(value: &str) -> EntryId {
 }
 
 fn generation(settings: &str, books: &[(&str, &str)]) -> Generation {
+    generation_with_settings_file(settings, books, true)
+}
+
+fn generation_with_settings_file(
+    settings: &str,
+    books: &[(&str, &str)],
+    settings_file: bool,
+) -> Generation {
     let store = OperationId::new("properties-store").unwrap();
     let source = SourceSnapshotId::new(store.clone(), SourceWatermark::new("1").unwrap());
     let snapshot = IndexSnapshotId::new(
@@ -84,6 +92,9 @@ fn generation(settings: &str, books: &[(&str, &str)]) -> Generation {
             true,
         ),
     ];
+    if !settings_file {
+        inputs.remove(0);
+    }
     inputs.extend(
         books
             .iter()
@@ -824,4 +835,95 @@ fn raw_edit_values_preserve_aliases_and_cached_date_source() {
     assert!(next.value().rows[0]
         .edit_values
         .contains_key("note.published"));
+}
+
+#[test]
+fn ordinary_frontmatter_links_resolve_from_the_owning_note_without_definitions() {
+    let generation = generation_with_settings_file("", &[
+        ("first", "---\nauthor: '[[../Authors/Ada|A. Lovelace]]'\nnested: [{author: '[[../Authors/Grace]]'}]\nwebsite: https://example.com\npublished: 2026-01-01\n---\n"),
+        ("second", "---\ntitle: reader\n---\n"),
+    ], false);
+    let program = compile_base_source(r#"filters: 'file.inFolder("Books")'
+formulas:
+  own: 'author.asFile().name'
+  nested: 'file("Books/first").properties.nested[0].author.asFile().name'
+  cross: 'file("Books/first").properties.author.asFile().name'
+  external: 'file("Books/first").properties.website.isType("link")'
+  absent: 'file("Books/first").properties.author.asFile().properties.missing'
+summaries:
+  Owners: 'values.map(value.properties.author.asFile().name)'
+views:
+  - type: table
+    name: Books
+    order: [file, author, nested, published, formula.own, formula.nested, formula.cross, formula.external, formula.absent]
+    summaries: {file: Owners}
+"#).unwrap();
+    let result =
+        zorid_bases::query_generation(&program, &generation, &[], &QueryOptions::default())
+            .unwrap();
+    assert_eq!(result.rows.len(), 2);
+    for row in &result.rows {
+        assert_eq!(
+            row.values["formula.cross"],
+            BaseValue::String {
+                value: "Ada".into()
+            }
+        );
+        assert_eq!(
+            row.values["formula.nested"],
+            BaseValue::String {
+                value: "Grace".into()
+            }
+        );
+        assert_eq!(
+            row.values["formula.external"],
+            BaseValue::Boolean { value: true }
+        );
+        assert_eq!(row.values["formula.absent"], BaseValue::Null);
+    }
+    let first = result
+        .rows
+        .iter()
+        .find(|row| row.entry_id == id("first"))
+        .unwrap();
+    assert!(
+        matches!(&first.values["note.author"], BaseValue::Link {target:Some(target), ..} if target.entry_id == id("ada"))
+    );
+    assert_eq!(
+        first.edit_values["note.author"],
+        BaseValue::String {
+            value: "[[../Authors/Ada|A. Lovelace]]".into()
+        }
+    );
+    assert!(matches!(
+        &first.values["note.published"],
+        BaseValue::Date { .. }
+    ));
+    assert!(
+        matches!(&first.edit_values["note.nested"], BaseValue::List {value} if matches!(&value[0], BaseValue::Object {value} if matches!(&value["author"], BaseValue::String {value} if value == "[[../Authors/Grace]]")))
+    );
+    assert!(
+        matches!(&result.summaries["file"], BaseValue::List {value} if value.contains(&BaseValue::String {value:"Ada".into()}))
+    );
+    let summary_only = compile_base_source("filters: 'file.inFolder(\"Books\")'\nsummaries:\n  Owners: 'values.map(value.properties.author)'\nviews:\n  - type: table\n    name: Books\n    order: [file]\n    summaries: {file: Owners}\n").unwrap();
+    let summarized =
+        zorid_bases::query_generation(&summary_only, &generation, &[], &QueryOptions::default())
+            .unwrap();
+    assert!(
+        matches!(&summarized.summaries["file"], BaseValue::List {value} if value.iter().any(|value| matches!(value, BaseValue::Link {target:Some(target), ..} if target.entry_id == id("ada"))))
+    );
+}
+
+#[test]
+fn target_filter_this_is_diagnosed_instead_of_silent_empty_membership() {
+    let source = "properties:\n  author:\n    type: relation\n    relation:\n      targetFilter: 'type == this.type'\n";
+    let generation = generation(source, &[]);
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), source).unwrap();
+    assert!(definitions.get("author").is_none());
+    assert!(definitions
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("vault-wide")
+            && diagnostic.message.contains("this")));
 }
