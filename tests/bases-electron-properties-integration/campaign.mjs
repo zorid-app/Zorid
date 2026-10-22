@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {alpha,beta,bodies,initial,fixtureFiles} from './fixtures.mjs';
 import {applyRawEdit} from './raw-oracle.mjs';
-import {withNavigationObservation} from './navigation-observer.mjs';
+import {withNavigationObservation,propertyTargetWitness} from './navigation-observer.mjs';
 export {fixtureFiles,vaultName} from './fixtures.mjs';
 const active='.pane.is-active';
 const dialog=name=>`[role="dialog"][aria-label=${JSON.stringify(name)}]`;
@@ -20,8 +20,9 @@ async function editText(c,selector,text){
 async function openPicker(c,selector){
   // Existing relation chips navigate. Enter the widget through its neutral
   // padding, or traverse actual Tab stops when the inline value has no padding.
-  const point=await c.ui.dom(`const e=document.querySelector(${esc(selector)});if(!e)return false;e.scrollIntoView({block:'nearest',inline:'nearest'});const r=e.getBoundingClientRect();for(const [x,y]of [[r.right-3,r.y+r.height/2],[r.x+2,r.y+2]]){const h=document.elementFromPoint(x,y);if(h&&e.contains(h)&&!h.closest('a,input,button,[role="link"]'))return{x,y};}return false;`);
-  if(point){for(const type of ['mousePressed','mouseReleased'])await c.cdp.call('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point});c.evidence.actions.push({action:'pointer-property-padding',selector,point});}
+  const located=await c.ui.dom(`const e=document.querySelector(${esc(selector)});if(!e)return false;e.scrollIntoView({block:'nearest',inline:'nearest'});const r=e.getBoundingClientRect();for(const [x,y]of [[r.right-3,r.y+r.height/2],[r.x+2,r.y+2]]){const h=document.elementFromPoint(x,y);if(h&&e.contains(h)&&!h.closest('a,input,button,[role="link"]')){const observe=${propertyTargetWitness.toString()},allow=${JSON.stringify({allowedPaths:[...fixtureFiles().keys()],allowedProperties:[...new Set(Object.values(initial).flatMap(value=>Object.keys(value)).flatMap(key=>[key,'note.'+key])),'file.name']})};return{point:{x,y},observation:{at:Date.now(),target:observe(document,e,allow),hit:observe(document,h,allow),sameTarget:e===h}};}}return false;`);
+  const point=located&&located.point;
+  if(point){for(const type of ['mousePressed','mouseReleased'])await c.cdp.call('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point});c.evidence.actions.push({action:'pointer-property-padding',selector,point,observation:located.observation});}
   else {
     await c.ui.button('Views',active);await c.ui.key('Escape');let reached=false;
     for(let index=0;index<160;index++){if(await c.ui.dom(`return document.activeElement===document.querySelector(${esc(selector)});`)){reached=true;break;}await c.ui.key('Tab');}

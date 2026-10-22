@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {JSDOM} from 'jsdom';
-import {installNavigationObserver,withNavigationObservation} from './navigation-observer.mjs';
+import {installNavigationObserver,withNavigationObservation,propertyTargetWitness} from './navigation-observer.mjs';
 
 const allowedPaths=['Items/Alpha.md','Items/Beta.md','Properties.yaml'],allowedProperties=['author','note.author'];
 function fixture(){
@@ -9,6 +9,44 @@ function fixture(){
   return {dom,document:dom.window.document,close:()=>dom.window.close()};
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('Kanban, Cards and List targets expose bounded property ownership and live readiness without routing events',async()=>{
+  const f=fixture();
+  try{
+    for(const kind of ['kanban-card','cards-item','list-item']){
+      const pane=f.document.querySelector('.pane');pane.innerHTML=`<section class="bases-session" data-base-controller-version="12" data-base-controller-updating="true" data-base-controller-error="false"><div class="bases-session-content" aria-busy="true"><div class="bases-${kind}" data-path="Items/Alpha.md"><div class="bases-metadata-value private-secret-class" data-property="note.author" data-base-property-editable="true" data-base-widget-version="11" aria-disabled="true" tabindex="0">Private value</div></div></div></section>`;
+      const value=pane.querySelector('[data-property]'),observer=installNavigationObserver(f.document,{allowedPaths,allowedProperties});
+      let calls=0;value.addEventListener('click',()=>calls++);value.focus();value.click();
+      const before=propertyTargetWitness(f.document,value,{allowedPaths,allowedProperties});
+      assert.equal(before.path,'Items/Alpha.md');assert.equal(before.property,'note.author');assert.equal(before.surface,{ 'kanban-card':'kanban','cards-item':'cards','list-item':'list'}[kind]);assert.equal(before.controllerVersion,'12');assert.equal(before.widgetVersion,'11');assert.equal(before.busy,true);assert.equal(before.ariaDisabled,true);assert.equal(before.exactPropertyFocus,true);assert.equal(before.editable,true);
+      value.dataset.baseEditing='draft';value.setAttribute('aria-disabled','false');pane.querySelector('.bases-session-content').setAttribute('aria-busy','false');pane.querySelector('.bases-session').dataset.baseControllerUpdating='false';
+      const popup=f.document.createElement('div');popup.className='bases-property-popover';popup.innerHTML='<input role="combobox">';f.document.body.append(popup);popup.firstChild.focus();await settle();
+      const trace=observer.stop(),event=trace.events.find(row=>row.kind==='click');assert.equal(calls,1);assert.equal(event.target.propertyTarget.path,'Items/Alpha.md');assert.equal(event.target.propertyTarget.property,'note.author');
+      assert.equal(trace.final.readiness.controllerUpdating,false);assert.equal(trace.final.readiness.busy,false);assert.equal(trace.final.readiness.pickerHasFocus,true);assert.equal(propertyTargetWitness(f.document,value,{allowedPaths,allowedProperties}).draft,'draft');
+      const json=JSON.stringify(trace);assert.ok(!json.includes('private-secret-class'));assert.ok(!json.includes('Private value'));assert.equal(f.document.activeElement,popup.firstChild);popup.remove();
+    }
+  }finally{f.close();}
+});
+
+test('property target diagnostics redact unknown metadata and distinguish hover, draft and drag ownership',()=>{
+  const f=fixture();
+  try{
+    f.document.body.insertAdjacentHTML('beforeend','<div class="bases-kanban-card is-being-dragged" data-path="Secret/private.md"><div class="bases-metadata-value SecretClass" data-property="SecretProperty" data-base-widget-version="secret-version" data-base-editing="secret-draft"><span id="target" class="multi-select-pill">Secret text</span></div></div><div class="bases-file-hover"></div>');
+    const target=f.document.querySelector('#target'),witness=propertyTargetWitness(f.document,target,{allowedPaths,allowedProperties});
+    assert.equal(witness.path,'<redacted>');assert.equal(witness.property,'<redacted>');assert.equal(witness.widgetVersion,'<redacted>');assert.equal(witness.draft,'<redacted>');assert.equal(witness.surface,'kanban');assert.equal(witness.hoverPresent,true);assert.equal(witness.dragging,true);assert.equal(witness.pickerPresent,false);
+    const hover=f.document.querySelector('.bases-file-hover');hover.innerHTML='<div id="hover-child"></div>';assert.equal(propertyTargetWitness(f.document,hover.firstChild).surface,'hover');
+    const json=JSON.stringify(witness);for(const value of ['Secret','secret-version','secret-draft'])assert.ok(!json.includes(value));assert.deepEqual(witness.classes,['multi-select-pill']);
+  }finally{f.close();}
+});
+
+test('passive drag diagnostics retain target witness but never read drag data or prevent the event',()=>{
+  const f=fixture(),observer=installNavigationObserver(f.document,{allowedPaths,allowedProperties});
+  try{
+    const node=f.document.querySelector('#beta'),event=new f.dom.window.MouseEvent('dragstart',{bubbles:true,cancelable:true});
+    Object.defineProperty(event,'dataTransfer',{get(){throw Error('Do not inspect dragged private data');}});node.dispatchEvent(event);node.dispatchEvent(new f.dom.window.Event('dragend',{bubbles:true}));
+    const trace=observer.stop();assert.equal(event.defaultPrevented,false);assert.equal(trace.events.find(row=>row.kind==='dragstart').target.treePath,'Items/Beta.md');assert.ok(trace.events.some(row=>row.kind==='dragend'));
+  }finally{f.close();}
+});
 
 test('passive event route distinguishes actual tree targets and later navigation without changing input',async()=>{
   const f=fixture(),observer=installNavigationObserver(f.document,{allowedPaths,allowedProperties});
