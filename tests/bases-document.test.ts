@@ -228,3 +228,11 @@ test('renaming a formula cover updates Cards and Kanban property selectors', () 
   assert.equal(base.views[0].image, 'formula.newCover'); assert.equal(base.views[1].image, 'formula.newCover');
   assert.equal(base.views[1].custom, 'formula.cover');
 });
+
+test('formula rename resolves original exact-case siblings before case-insensitive fallback', () => {
+  const base = BaseDocument.parse(`formulas:\n  old: score\n  OLD: other\n  result: 'formula.old + formula.OLD + Formula.Old + FORMULA["oLd"]'\nviews:\n  - {type: cards, name: Gallery, image: formula.Old, order: [formula.old, formula.OLD, formula.Old]}\n`);
+  base.renameFormula('old', 'renamed');
+  assert.equal((base.getRoot('formulas') as Record<string, unknown>).result, '(((formula.renamed + formula.OLD) + Formula.renamed) + FORMULA["renamed"])');
+  assert.equal(base.views[0].image, 'formula.renamed');
+  assert.deepEqual(base.views[0].order, ['formula.renamed', 'formula.OLD', 'formula.renamed']);
+});

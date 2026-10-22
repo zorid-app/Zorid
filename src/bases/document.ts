@@ -30,7 +30,7 @@ export function uniqueBaseViewName(name: string, views: readonly BaseViewConfig[
   return result;
 }
 
-function renameFormulaExpression(source: string, from: string, to: string): string {
+function renameFormulaExpression(source: string, to: string, references: (name: string) => boolean): string {
   let changed = false;
   const render = (node: BaseExpression): string => {
     switch (node.kind) {
@@ -49,7 +49,7 @@ function renameFormulaExpression(source: string, from: string, to: string): stri
       case 'call': return `${render(node.callee)}(${node.args.map(render).join(', ')})`;
       case 'member': {
         let key = node.key;
-        if (node.object.kind === 'identifier' && node.object.name === 'formula' && key.kind === 'literal' && key.value.type === 'string' && key.value.value === from) {
+        if (node.object.kind === 'identifier' && node.object.name.toLowerCase() === 'formula' && key.kind === 'literal' && key.value.type === 'string' && references(key.value.value)) {
           changed = true; key = { kind: 'literal', value: { type: 'string', value: to } };
         }
         const object = render(node.object);
@@ -60,7 +60,7 @@ function renameFormulaExpression(source: string, from: string, to: string): stri
   };
   // Parse only expressions which can possibly mention the namespace. A future
   // expression syntax we cannot safely understand rejects the atomic rename.
-  if (!source.includes('formula')) return source;
+  if (!/formula/i.test(source)) return source;
   const result = render(parseBaseExpression(source));
   return changed ? result : source;
 }
@@ -326,18 +326,20 @@ export class BaseDocument {
       if (!isMap(formulas) || !formulas.has(from)) throw new BaseDocumentError(`Formula not found: ${from}`);
       if (from === to) return;
       if (formulas.has(to)) throw new BaseDocumentError('A formula with this name already exists');
+      const names = formulas.items.map(item => isScalar(item.key) ? String(item.key.value) : '');
+      const references = (name: string) => (names.includes(name) ? name : names.find(key => key.toLowerCase() === name.toLowerCase())) === from;
       const pair = formulas.items.find(item => isScalar(item.key) && item.key.value === from)!;
       if (!pair || !isScalar(pair.key)) throw new BaseDocumentError('The formula key cannot be renamed safely');
       pair.key.value = to;
       const expression = (node: unknown) => {
-        if (isScalar(node) && typeof node.value === 'string') node.value = renameFormulaExpression(node.value, from, to);
+        if (isScalar(node) && typeof node.value === 'string') node.value = renameFormulaExpression(node.value, to, references);
       };
       const expressionMap = (node: unknown) => { if (isMap(node)) for (const item of node.items) expression(item.value); };
       const filter = (node: unknown): void => {
         if (isScalar(node)) expression(node);
         else if (isMap(node)) for (const item of node.items) if (isScalar(item.key) && ['and', 'or', 'not'].includes(String(item.key.value)) && isSeq(item.value)) item.value.items.forEach(filter);
       };
-      const id = (node: unknown) => { if (isScalar(node) && node.value === `formula.${from}`) node.value = `formula.${to}`; };
+      const id = (node: unknown) => { if (isScalar(node) && typeof node.value === 'string' && node.value.startsWith('formula.') && references(node.value.slice(8))) node.value = `formula.${to}`; };
       const propertyMap = (node: unknown) => { if (isMap(node)) for (const item of node.items) id(item.key); };
       expressionMap(formulas); expressionMap(doc.get('summaries', true));
       filter(doc.get('filters', true)); propertyMap(doc.get('properties', true));
