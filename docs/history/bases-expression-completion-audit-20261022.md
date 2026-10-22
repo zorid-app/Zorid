@@ -1,5 +1,67 @@
 # Bases expression completion audit — 2026-10-22
 
+## Source update — frozen `bef128ba`, regex successor `24618348`
+
+This addendum supersedes the original gap statuses below, while preserving that
+baseline and its evidence. It records source and named tests, **not complete Q3,
+transport or rendered acceptance**. No app, build or tests were run by this
+read-only audit/update task.
+
+The inspected snapshot is `bef128ba41bdd2ec0a98f40ccd20fcfae5b0bf25`, with
+`crates` tree `513fe752302763b12c5658755f2b301a30e3bc05` and `zorid-bases`
+subtree `1ebd233d68aee98f4a940ff255e7a16aa187318f`; this `crates` tree also
+belongs to `8c2d4c35`. An independent complete-catalogue review found signature
+admission and reachable handlers for all **80 declarations**. Handler coverage
+is not an exhaustive semantic input matrix.
+
+Observed `/private/tmp/zorid-bases-q3-full-composed-003.log` reports **288 passed
+across 17 targets**: 139 library and 149 integration tests. This includes
+adjacent/deferred Tasks and Calendar tests. The native target log
+`/private/tmp/zorid-bases-q3-native-targets-001.log` passes only three property-
+target tests. `/private/tmp/zorid-bases-q3-wasm-targets-001.log` ends with a
+`js-sys` no-space compilation failure and no test result; it is not WASM proof.
+Historical Browser005 nine groups and CLI003 85 commands remain separate. The
+newly authored 19 browser groups and 125 CLI commands are awaiting matching
+runtime evidence; they are not credited as executed by this update.
+
+| Original gap | Current source-and-test evidence, within the frozen snapshot |
+| --- | --- |
+| G1 Object callbacks | Implemented exact lowercase scopes, key/value locals with outer fallback, List map output, retained Object filter output, ordered enumeration and throw propagation. The 18 passing `object_tag_expressions` tests include `object_map_returns_callback_values_in_key_order_with_exact_keys_and_typed_values`, `object_filter_retains_original_values_and_object_shape` and `object_callbacks_have_exact_arity_and_propagate_callback_errors`. |
+| G2 Tags | Private Tag/TagList hydration, hierarchy, generic wire export and query/group/summary/overlay subtype provenance implemented. Passing cases include `specialized_tag_membership_and_generic_list_membership_remain_distinct`, `nested_formula_tag_lists_survive_query_group_summary_and_picker_projection` and three `frontmatter_tags_overlay` tests. Null tag-array members produce an explicit type diagnostic; this does not reproduce a reference constructor crash. Separate File.hasTag prefix gap G15 remains. |
+| G3 Signatures | `expression_signatures.rs` covers the 80 declarations. Fourteen passing `call_contract_tests` cover required-null early return, optional-null omission, argument/error ordering, types, work/cancellation and returned Error data versus thrown errors. This is not every input combination for all 80 declarations. |
+| G4 Special calls | Lowercase lazy global/method-style if and total arity, exact lowercase callback AST scopes and mixed-case eager registry paths implemented. Passing cases include `lowercase_if_is_lazy_supports_subject_and_checks_total_arity_first`, `mixed_case_if_uses_eager_boolean_registry_and_has_no_method_registration` and `exact_lowercase_callbacks_keep_scope_but_mixed_case_uses_eager_stubs`. Regex construction is tracked separately as G10. |
+| G5 Strings/regex | Earlier enumerated membership folding, empty literal replacement, computed scalar indexes, JS replacement templates, capture-inserting split and uint32 limits implemented, with direct named cases in the 11 passing `collection_expressions` tests. D5/D6 remain. Additional title and construction gaps are G12/G10. |
+| G6 Lists | Earlier recursive flat, single-list membership, required join argument and strict uniqueness corrections implemented and tested. Tests cover constructor distinctions, exact Link labels/origin, immutable File witnesses and AST Regex identity across cache eviction and query projections. List.sort collation remains G13. |
+| G7 Numbers | Negative round-digit behavior, binary toFixed domains/ties/exponents, number string buckets and JS whitespace/prefix handling implemented. `number_round_and_fixed_use_reference_domains_binary_ties_and_exponents` and `number_strings_and_prefix_whitespace_keep_reference_buckets` pass. D2 remains; no exhaustive numeric proof. |
+| G8 Durations | Anchored simple-unit parsing and unanchored ISO parsing with mandatory T/integer components, all eight converted fields, component truth, typed division, captured-calendar comparison, JS setter overflow, month interpolation and refresh dependencies implemented. Seven `duration_semantics_tests` pass, alongside `grouping_actual_nested_durations_adds_clock_refresh_to_pure_formulas` and `runtime_duration_sort_upgrades_advice_before_positive_fractional_limit`. D1/D2 remain. |
+| G9 Inheritance/output | Partial: public ancestry, rich concatenation and returned Error versus thrown/formula-origin behavior implemented and covered by the call tests. String argument contracts are enforced, but configured-Link raw-data coercion and ordinary Object string conversion remain open below. |
+
+D1–D6 remain the existing deliberate choices listed at the end of this record.
+They do not newly approve any of the following differences. Cases below are
+source-derived expectations, not newly observed application executions.
+
+| Remaining invariant | Primary/source distinction and status |
+| --- | --- |
+| G9.1 Ordinary Object string conversion | Shipped `yK` 2199918–2201551 converts every child through its typed toString, then emits JSON with String values in JS key order. Rust `plain_string` at the frozen snapshot serializes `to_plain` raw values. Typed `{n:1,b:true,none:Null}` should produce `{"n":"1","b":"true","none":"null"}`; the ordinary path preserves number/bool/null. Nested Objects become escaped JSON Strings, Lists become comma-space text, Tags retain case/prefix, Links retain raw destination/typed display and returned Errors use `Error: message`. The checked `unique_bucket_key` already implements the recursive ordered String-valued bucket path; common toString/concatenation/join/group display do not reuse it. Fix active with `duration_review`; still open and untested here. Preserve work/byte/cancellation guards when unifying converters. |
+| G9.2 Configured-Link raw-data coercion | Shipped String-subclass methods consume original `xK.data`, independently of resolved File identity. Frozen `string_data` returns Link.path even after a configured relation projects that public path to a canonical destination; captured `raw_destination` survives separately. The existing configured-relation provenance test proves original strict identity, not ordinary String coercion. Use available captured internal raw destination for String coercion; retain the path fallback for legacy values and unchanged external URL data. This is an open seam assigned to `duration_review`, not an approved D4 canonical-coercion choice or a passing test. |
+| G10 Regex construction | Shipped `MQ`/`IQ`/`BQ` recursively constructs regex literals before lazy branch selection; malformed untaken literals invalidate the whole expression. Frozen `bef128ba` validates selected nodes only. The independently reviewed checked admission fix and query/settings boundaries are composed at successor `24618348`. `/private/tmp/zorid-bases-regex-targets-composed-001.log` passes `regex_construction` two tests and `regex_query_admission` five tests. The full run `/private/tmp/zorid-bases-regex-full-composed-001.log` passes 146 library tests, then stops at the preview target with nine passed and one budget failure in `small_prepared_subset_does_not_prepare_a_hundred_thousand_entry_namespace` (`preview.rs:476`, comparator scratch budget); later targets are unexecuted in that run. There is no full-suite pass for this successor. See [the exact reference record](bases-regex-construction-reference-20261022.md). This is source implemented/reviewed with targeted test evidence, not accepted. |
+| G11 File.inFolder normalization | Registration 2238353–2238675 uses `Fl`/`Rl` at 543851–543995. Root or empty normalizes to `/` and matches nested files; the frozen Rust trailing-slash-only comparison does not. Reference query normalization also collapses slash/backslash runs, removes leading/trailing slashes, replaces NBSP/narrow NBSP with ASCII space and applies NFC; it does not ordinary-trim, case-fold or resolve dot segments. Fix active with `bases_relations`; open and untested here. |
+| G12 String.title boundaries | Registration 2223409–2223757 splits literal ASCII spaces; frozen `title_case` capitalizes Unicode letter runs. ASCII `'hello-world'.title()` should be `Hello-world`, current `Hello-World`. Fix active with `bases_inline_core`; open and untested here. This example is separate from D5. |
+| G13 List.sort collation | `fK.sort` 2196926–2197194 uses numeric comparison for two Numbers, otherwise `BT`, bound at 1302374–1302462 to an Intl.Collator with base sensitivity and numeric sorting. Frozen `compare_sort_keys` uses lexical String comparison for non-number pairs: `['a10','a2']` remains lexical instead of `['a2','a10']`. Controller research is active; open and untested here. Locale-wide equivalence is not established by this example. |
+| G14 Date selection from rich Strings | `getDates` 2195226–2195460 accepts each `hK` String subclass's raw data as well as ordinary Strings and Dates; frozen earliest/latest accepts only String/Tag/Date. In captured UTC, `[icon('2024-01-01')].earliest()` should yield a time-bearing Date at 1704067200000, current Null. Fix active with `bases_inline_core`; open and untested here. Rendered wiki/image markup is not the raw input. |
+| G15 File.hasTag repeated prefix | Registration 2238675–2239300 wraps queries with `gK`; `vK` 2199201 adds `#` only if absent. Frozen `normalize_tag` strips all leading `#`: with file tag `#work`, query `##work` wrongly matches. Fix active with `bases_relations`; open and untested here. Whitespace/case/hierarchy rules remain distinct. |
+
+Object details are covered by the existing Object/Tag REA evidence below. The
+focused File normalizer/tag follow-up is
+`ev_adec5b213173bf4c29f475efced01626cf2cec1cebcf1e031b84e3bcb6ca1f7e`,
+private `/private/tmp/zorid-bases-file-method-reference-20261022/provenance.json`:
+five inert JS files, 547 AST nodes, zero parse failures, partial graph 150/80.
+The original artifact hash and decoded-character offset convention below apply.
+No recovered source was added to the repository. New source fixes still need
+named regressions, independent review and exact artifact/runtime association.
+
+## Historical baseline — `fb17f0d1`
+
 Owner `bases_docs_model`; source-only branch `codex/bases-expression-completion`,
 parent `fb17f0d1`. This completes a catalogue audit, **not Q3 implementation or
 parity acceptance**. No app, build, tests, source edits or goal-checkbox changes
@@ -54,7 +116,7 @@ It observes normal Worker/WASM/IndexedDB; served WASM SHA-256
 `231d9d8614c659fd1abda0e5f23c78d443e6c5a439a99e72f376c56ae64cf7e6`.
 It does not exercise every registration or establish rendered UI behavior.
 
-## Complete inventory-to-handler matrix
+## Frozen baseline inventory-to-handler matrix
 
 `S` is [expression.rs](../../crates/zorid-bases/src/expression.rs), with line
 anchors for this frozen source. `E:id` is a named case in
@@ -100,7 +162,7 @@ already documented choices below.
 | Q3.27 Null/Error/Boolean/Number/String/List/Object/RegExp/Date/Duration/File/Link/URL/Image/Icon/HTML conversions/equality | RuntimeValue; `from_json`, recursive inference, `to_plain`/`typed_value`, checked equality, `plain_string` | scalar/wrapper/frontmatter/URL/subpath/equality tests; B0/B4. Tags G2; string/duration/inherited rich edges G8/G9; nonfinite D2. Not a complete coercion matrix. |
 | Q3.28 Syntax/operators/access, note/file/this/formula, callback locals, cycles/filter errors | parser S315; evaluator/`identifier`/`binary`/`member`/`formula`; `program.rs` filters | All30 corpus cases, guards/current-entry corpus; B4 cycle/unknown, B5 this. String indexing G5; call scopes G1/G3/G4; duration/rich operators G8/G9. Complete grammar cross-product unproved. |
 
-## Real gaps and documented choices
+## Original baseline gaps and documented choices
 
 **G1 Object callbacks.** IQ2332505–2336202 accepts exactly1 argument for lowercase
 map/filter. Key is exact String; value is converted property; other identifiers
