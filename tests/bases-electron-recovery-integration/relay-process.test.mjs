@@ -55,3 +55,61 @@ const parser=new Frames();for await(const chunk of process.stdin)for(const frame
   await fs.rm(directory,{recursive:true,force:true});
  }
 });
+
+test('simulated prepared hold forwards the original checkpoint error and byte-exact CAS replay', {timeout:10000},async()=>{
+ const directory=await fs.mkdtemp(path.join(os.tmpdir(),'zorid-relay-prepared-unit-')),peer=path.join(directory,'SIMULATED-peer'),script=path.join(directory,'peer.mjs');
+ let child,relay;const chunks=[],errors=[];
+ const entry={id:'mock-entry',path:'Failures/Live.base',kind:'file',revision:'before',deleted:false};
+ const intent={token:'mock-token',client_id:'mock-client',operation_id:'mock-operation',entry_id:entry.id,state:'prepared'};
+ const negative={code:'checkpoint_storage',commit_uncertain:true};
+ try{
+  const protocol=fileURLToPath(new URL('./protocol.mjs',import.meta.url));
+  await fs.writeFile(script,`import {Frames} from ${JSON.stringify(protocol)};
+const encode=${encode.toString()};
+const entry=${JSON.stringify(entry)},intent=${JSON.stringify(intent)},negative=${JSON.stringify(negative)};
+process.stdout.write(encode({version:1,request_id:'0',ok:true,result:{SIMULATED:true}}));
+let attempts=0;const parser=new Frames();for await(const chunk of process.stdin)for(const frame of parser.push(chunk)){
+ const method=frame.header.command.method;
+ const header=method==='stat_path'?{ok:true,result:{entry}}:method==='prepare_intent'?{ok:true,result:{intent}}:attempts++===0?{ok:false,error:negative}:{ok:true,result:{checkpoint:{SIMULATED:true}}};
+ process.stdout.write(encode({version:1,request_id:frame.header.request_id,...header}));
+}parser.end();
+`);
+  await fs.writeFile(peer,`#!/bin/sh\nexec ${quote(process.execPath)} ${quote(script)} "$@"\n`,{mode:0o700});
+  relay=await createNativeRelay({native:peer,directory:path.join(directory,'control')});
+  child=spawn(relay.executable,['--vault',directory],{stdio:['pipe','pipe','pipe']});const closed=once(child,'close');
+  child.stdout.on('data',chunk=>chunks.push(chunk));child.stderr.on('data',chunk=>errors.push(chunk));
+  const initial=encode({version:1,request_id:'0',ok:true,result:{SIMULATED:true}}),stat=encode({version:1,request_id:'1',ok:true,result:{entry}});
+  await wait(()=>Buffer.concat(chunks).length===initial.length);
+  child.stdin.write(encode({version:1,request_id:'1',command:{method:'stat_path',path:entry.path}}));
+  await wait(()=>Buffer.concat(chunks).length===initial.length+stat.length);
+  const body=Buffer.from('SIMULATED exact A'),token=await relay.arm({mode:'hold',phase:'prepared',path:entry.path,entryId:entry.id,bodySha256:digest(body)});
+  child.stdin.write(encode({version:1,request_id:'2',command:{method:'prepare_intent',client_id:'mock-client',operation_id:'mock-operation',mutation:{type:'write',id:entry.id,expected:entry.revision},source_capture:'mock-capture'}},body));
+  const held=await wait(async()=>(await relay.events()).find(event=>event.kind==='held'&&event.token===token));
+  assert.equal(held.phase,'prepared');assert.equal(held.nativeState,'prepared');assert.equal(held.nativeIntentToken,intent.token);assert.equal(held.sequence,undefined);
+  assert.deepEqual(Buffer.concat(chunks),Buffer.concat([initial,stat]),'No inert reply leaked before explicit release');
+  const prepared=encode({version:1,request_id:'2',ok:true,result:{intent}});
+  await relay.release(token);await wait(()=>Buffer.concat(chunks).length===initial.length+stat.length+prepared.length);
+  assert.deepEqual(Buffer.concat(chunks),Buffer.concat([initial,stat,prepared]));
+  const command={method:'checkpoint_cas',key:'note/v1/'+entry.id,expected_revision:'mock-before',next_revision:'mock-after',has_state:true},checkpointBody=Buffer.from('SIMULATED opaque checkpoint A with original reference');
+  child.stdin.write(encode({version:1,request_id:'3',command},checkpointBody));
+  const rejected=encode({version:1,request_id:'3',ok:false,error:negative});
+  await wait(()=>Buffer.concat(chunks).length===initial.length+stat.length+prepared.length+rejected.length);
+  assert.deepEqual(Buffer.concat(chunks),Buffer.concat([initial,stat,prepared,rejected]),'Negative bytes came only from the explicitly simulated peer');
+  child.stdin.write(encode({version:1,request_id:'4',command},checkpointBody));
+  const replayed=encode({version:1,request_id:'4',ok:true,result:{checkpoint:{SIMULATED:true}}});
+  await wait(()=>Buffer.concat(chunks).length===initial.length+stat.length+prepared.length+rejected.length+replayed.length);
+  assert.deepEqual(Buffer.concat(chunks),Buffer.concat([initial,stat,prepared,rejected,replayed]),'Replayed success is also the unmodified simulated peer frame');
+  child.stdin.end();const [code,signal]=await closed;assert.equal(code,0,Buffer.concat(errors).toString());assert.equal(signal,null);
+  const events=await relay.events(),checkpointEvents=events.filter(event=>event.kind==='native-checkpoint-response');
+  assert.equal(checkpointEvents.length,2);const[failure,success]=checkpointEvents;
+  assert.equal(failure.ok,false);assert.equal(failure.errorCode,'checkpoint_storage');assert.equal(failure.commitUncertain,true);assert.equal(success.ok,true);
+  for(const row of checkpointEvents){assert.equal(row.key,command.key);assert.equal(row.commandSha256,digest(Buffer.from(JSON.stringify(command))));assert.equal(row.bodySha256,digest(checkpointBody));}
+  assert.equal(failure.responseSha256,digest(rejected));assert.equal(success.responseSha256,digest(replayed));
+  assert.notEqual(failure.requestSha256,success.requestSha256,'Transport request IDs may change while the identical CAS command/body replay');
+  assert.deepEqual(events.filter(event=>['watchdog-released','relay-failed'].includes(event.kind)),[]);
+ }finally{
+  await relay?.dispose().catch(()=>{});
+  if(child&&child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await once(child,'close');}
+  await fs.rm(directory,{recursive:true,force:true});
+ }
+});

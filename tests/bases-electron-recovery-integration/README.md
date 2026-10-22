@@ -22,8 +22,45 @@ node tests/bases-electron-recovery-integration/run.mjs \
 
 | Scenario | Interruption and independent oracle |
 | --- | --- |
+| Failed checkpoint ACK, newer B, original retry | Hold only the real inert `prepare_intent` reply for exact A bytes. Type B in the same mounted editor and let its 250ms debounce elapse while A is pending. Set only the owned disposable `.zorid/vault.lock` to mode0000 and release the unchanged prepared reply. Require a genuine `checkpoint_storage`/`commit_uncertain:true` checkpoint CAS response, visible Retry and exact disabled B draft. Restore the exact inode's original mode in `finally`, then verify whole physical/bridge source S0 before clicking Retry once. The identical checkpoint CAS command/body must succeed before the original native A token commits, followed by one automatic B continuation. Check whole B, every unrelated fixture, visible value12, normal close/quit and fresh-launch readback. No retyping, replacement editor or alternative retry path can satisfy this case. |
 | Accepted A, newer B, close | Arm exact saved Base entry/path and exact A bytes. Observe its real prepared token and committed native receipt, hold only that successful reply, type B through the mounted summary editor and request tab close. The panel retains B while disk contains A. Release the same encoded reply; exactly one A and one B write finish. Close safely, quit normally and verify exact B after restart. |
 | Lost New reply, restart | Arm the exact destination and complete template digest. Suppress the first genuine successful create reply, gracefully stop that real host before presenting EOF, and observe mounted New uncertainty/close refusal. Repeated New cannot create a second note through the fenced transport. A separately labeled forced app shutdown and restart recovers the durable requested checkpoint. The native replay must have the same command/body, operation ID, entry ID, revision and receipt sequence; only one file with exact template bytes exists. |
+
+`hold` defaults to the existing committed-receipt phase. Only the explicit
+`phase: "prepared"` variant selects a successful inert preparation, bound to the
+observed entry/path, exact body digest, client, operation and native token. It
+cannot select a rejected/error reply or fall through to a later committed reply.
+The phase changes delivery timing only: original requests, prepared replies and
+subsequent native errors are forwarded byte-for-byte. `drop` has no phase option.
+Existing accepted-write and lost-create scenarios retain their original defaults.
+
+The checkpoint fixture changes only the owned `.zorid/vault.lock` regular file
+(not its parent or public source folder). It verifies the vault is inside the
+runner output, rejects symlinked private parents, and checks lock ownership,
+link count and device/inode identity. Original permissions and that exact inode
+are verified/restored in `finally`; an unexpected replacement fails the case.
+After the prepared reply, `NoteDurableState.resume` must checkpoint `op.ref`
+before querying or committing it. Native checkpoint CAS freshly opens the vault
+lock read/write before Store CAS. Mode0000 denies that open and maps to genuine
+`checkpoint_storage` uncertainty. This is a failed checkpoint ACK, not a logical
+commit with pending public-file publication. Ordinary summary saves do not carry
+a conditional-source guard; denying public-folder access would not prove this
+boundary. The public sources, private directory, database and actor files remain
+accessible. No production guard or semantic fault API is added for the test.
+
+The expected S0/A/B are authored whole strings preserving the comment, unknown
+root sentinel and unrelated summary/view. The DOM backend node ID checks that the
+same summary panel retains B. After restoring lock permissions, whole physical
+and normal-bridge source must still equal S0 before Retry. A failed checkpoint
+frame and a successful retry must have identical command and opaque body hashes
+(same key, expected/next revision and saved state). That replay must precede A's
+successful commit with its original held token. A is prepared once, then exactly
+one B preparation and ordered A/B successful receipts are required. Additional
+checkpoint transitions are expected; a new checkpoint request cannot substitute
+for replay of the failed request. This records exact native continuation rather
+than treating one UI click as a physical-write counter.
+A's intermediate physical bytes need not be sampled between its receipt and B;
+no unobserved intermediate physical readback is claimed.
 
 The relay consumes the fault before restart. A 15 second hold watchdog records
 failure and releases the **same genuine frame**, below the production 30 second
@@ -31,8 +68,8 @@ transport timeout. Watchdog expiry, malformed framing or unowned/leaked processe
 fail acceptance. Request/response hashes, native operation/receipt identities,
 relay and native artifact hashes and exact process-tree cleanup are retained.
 
-These scenarios do **not** establish arbitrary disk failure, power-loss safety or
-successful same-mounted retry after native host death. `RustVaultService` fences
+These scenarios do **not** establish SQLite/device-write failure, arbitrary disk
+failure, power-loss safety or successful same-mounted retry after native host death. `RustVaultService` fences
 the failed transport until app restart. Holding an accepted write is distinct
 from a failed-save retry. A newer draft blocked behind a native call is not
 claimed crash-durable before its checkpoint can run.
@@ -44,7 +81,14 @@ node --test tests/bases-electron-recovery-integration/protocol.test.mjs \
   tests/bases-electron-recovery-integration/relay-process.test.mjs
 ```
 
-Those checks verify framing, arming, success selection and the watchdog. The
+Those checks verify framing, arming, committed/prepared success selection and the watchdog. The
 subprocess check uses an explicitly simulated Node peer to verify pipe forwarding
 and EOF cleanup; its invented unit receipt is not a Rust/native result. Authoring
-or passing helper checks does not complete either runtime acceptance gate.
+or passing helper checks does not complete any runtime acceptance gate. The
+prepared-hold subprocess case uses an explicitly simulated peer's negative checkpoint
+frame and successful identical CAS replay; its purpose is exact forwarding and
+request-hash correlation, never a claimed native checkpoint failure.
+
+The failed-live-save extension is **authored only**. Earlier recovery runs do not
+cover it; a new frozen actual campaign with matching
+native products is required.

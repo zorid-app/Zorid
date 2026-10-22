@@ -50,3 +50,31 @@ test('hold watchdog has a fixed deadline and wrong release tokens cannot release
  assert.equal(await waitForRelease({...options,read:async()=>{reads++;return{token:'other'};}}),false);assert.equal(clock,15000);assert.ok(reads<=1001);
  clock=0;assert.equal(await waitForRelease({...options,read:async()=>({token:clock>=30?'original':'other'})}),true);assert.equal(clock,30);
 });
+
+
+test('explicit prepared hold selects only exact genuine inert preparation and forwards no invented outcome',()=>{
+ const bytes=Buffer.from('literal 😀\r\n'),hold={...arm('hold'),phase:'prepared'};
+ const prepare={method:'prepare_intent',client_id:'client',operation_id:'operation',mutation:{type:'write',id:'entry',expected:'before'},source_capture:'capture'};
+ const intent={token:'token',client_id:'client',operation_id:'operation',entry_id:'entry',state:'prepared'};
+ for(const patch of [{bodySha256:digest(Buffer.from('wrong'))},{path:'Other.md'},{entryId:'foreign'}]){
+  const observer=new Selection();observer.request(request('1',{method:'stat_path',path:hold.path}),hold);observer.response(response('1',{entry:{id:'entry',path:hold.path}}));
+  observer.request(request('2',prepare,bytes),{...hold,...patch});assert.equal(observer.response(response('2',{intent})),null);
+ }
+ for(const state of ['commit_requested','committed','rejected']){
+  const observer=new Selection();observer.request(request('1',{method:'stat_path',path:hold.path}),hold);observer.response(response('1',{entry:{id:'entry',path:hold.path}}));
+  observer.request(request('2',prepare,bytes),hold);assert.equal(observer.response(response('2',{intent:{...intent,state}})),null,'Prepared phase cannot select '+state);
+  observer.request(request('3',{method:'commit_intent',reference:{client_id:'client',token:'token'}}),hold);assert.equal(observer.response(response('3',{intent:{...intent,state:'committed',receipt}})),null,'A prepared-only arm cannot fall through to a later committed reply');
+ }
+ const observer=new Selection();observer.request(request('1',{method:'stat_path',path:hold.path}),hold);observer.response(response('1',{entry:{id:'entry',path:hold.path}}));
+ observer.request(request('2',prepare,bytes),hold);const reply=response('2',{intent}),original=Buffer.from(reply.raw),selected=observer.response(reply);
+ assert.equal(selected.phase,'prepared');assert.equal(selected.nativeState,'prepared');assert.equal(selected.nativeIntentToken,'token');assert.equal(selected.sequence,undefined);assert.equal(selected.revision,undefined);assert.deepEqual(reply.raw,original);
+ observer.request(request('3',prepare,bytes),hold);assert.equal(observer.response(response('3',{intent})),null,'Prepared hold is consumed exactly once');
+ assert.throws(()=>validateArm({...hold,phase:'failure'}));assert.throws(()=>validateArm({...arm('drop'),phase:'prepared'}));
+});
+
+test('prepared phase cannot select a genuine negative native reply or an unobserved path',()=>{
+ const bytes=Buffer.from('literal 😀\r\n'),hold={...arm('hold'),phase:'prepared'},command={method:'prepare_intent',client_id:'client',operation_id:'operation',mutation:{type:'write',id:'entry'}};
+ const observer=new Selection();observer.request(request('1',command,bytes),hold);
+ assert.equal(observer.response(frame({version:1,request_id:'1',ok:false,error:{code:'filesystem_io',commit_uncertain:false}})),null);
+ observer.request(request('2',command,bytes),hold);assert.equal(observer.response(response('2',{intent:{token:'token',client_id:'client',operation_id:'operation',entry_id:'entry',state:'prepared'}})),null);
+});

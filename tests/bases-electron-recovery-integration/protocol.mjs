@@ -38,6 +38,7 @@ export function validateArm(arm) {
   assert.ok(typeof arm.path === 'string' && arm.path && !arm.path.startsWith('/') && !arm.path.split('/').includes('..'));
   assert.match(arm.bodySha256, /^[a-f0-9]{64}$/);
   if (arm.mode === 'hold') assert.ok(typeof arm.entryId === 'string' && arm.entryId.length > 0);
+  if (arm.phase !== undefined) assert.ok(arm.mode === 'hold' && ['prepared','committed'].includes(arm.phase), 'Only hold has an explicit prepared/committed phase');
   return arm;
 }
 
@@ -47,8 +48,9 @@ export async function waitForRelease({token,read,now=Date.now,pause=ms=>new Prom
   return true;
 }
 
-/** Single-flight observer. Arming never changes requests; only a successfully
- * committed native response can be selected for interruption. */
+/** Single-flight observer. Arming never changes requests. Default holds/drops
+ * select committed success; an explicit prepared hold selects only an inert
+ * genuine prepared reply, never a receipt or a manufactured failure. */
 export class Selection {
   pending = null; paths = new Map(); prepared = new Map(); consumed = new Set();
   request(frame, arm) {
@@ -67,17 +69,21 @@ export class Selection {
     const remember = entry => { if (entry && !entry.deleted && typeof entry.id === 'string' && typeof entry.path === 'string') this.paths.set(entry.id, entry.path); };
     remember(result?.entry);
     if (command.method === 'list_snapshot') for (const entry of result?.entries ?? []) remember(entry.state);
+    let selected;
     if (command.method === 'prepare_intent' && arm?.mode === 'hold'
       && command.mutation?.type === 'write' && command.mutation.id === arm.entryId
       && this.paths.get(arm.entryId) === arm.path && digest(pending.frame.body) === arm.bodySha256) {
       const intent = result?.intent;
       assert.ok(intent && intent.client_id === command.client_id && intent.entry_id === arm.entryId && intent.operation_id === command.operation_id && typeof intent.token === 'string');
-      this.prepared.set(intent.token, {arm, operationId:intent.operation_id, entryId:intent.entry_id, clientId:intent.client_id, bodySha256:arm.bodySha256});
+      const original = {arm, operationId:intent.operation_id, entryId:intent.entry_id, clientId:intent.client_id, bodySha256:arm.bodySha256};
+      this.prepared.set(intent.token, original);
+      if (arm.phase === 'prepared' && intent.state === 'prepared') {
+        selected = {...original, phase:'prepared', nativeState:'prepared', nativeIntentToken:intent.token};
+      }
     }
-    let selected;
     if (command.method === 'commit_intent') {
       const original = this.prepared.get(command.reference?.token), intent = result?.intent;
-      if (original && !this.consumed.has(original.arm.token) && command.reference.client_id === original.clientId
+      if (original && original.arm.phase !== 'prepared' && !this.consumed.has(original.arm.token) && command.reference.client_id === original.clientId
         && intent?.state === 'committed' && intent.token === command.reference.token && intent.operation_id === original.operationId
         && intent.receipt?.operation_id === original.operationId) {
         const entry = intent.receipt.changes?.find(change => change.after?.id === original.entryId)?.after;

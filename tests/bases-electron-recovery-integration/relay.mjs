@@ -57,10 +57,16 @@ const output = (async()=>{
       await event({kind:'native-mutation-response',method:original.command.method,requestId:frame.header.request_id,
         commandSha256:digest(Buffer.from(JSON.stringify(original.command))),bodySha256:digest(original.frame.body),
         ...(prepared?{preparedBodySha256:prepared.bodySha256}:{}),
+        ...(original.command.reference?.token?{referenceToken:original.command.reference.token}:{}),
         operationId:receipt?.operation_id,sequence:receipt?.sequence,ok:frame.header.ok,
+        ...(!frame.header.ok?{errorCode:frame.header.error?.code,commitUncertain:frame.header.error?.commit_uncertain}:{}),
         state:result?.intent?.state??(receipt?'committed':undefined),
         requestSha256:digest(original.frame.raw),responseSha256:digest(frame.raw)});
     }
+    if(original?.command.method==='checkpoint_cas')await event({kind:'native-checkpoint-response',key:original.command.key,
+      commandSha256:digest(Buffer.from(JSON.stringify(original.command))),bodySha256:digest(original.frame.body),
+      requestSha256:digest(original.frame.raw),responseSha256:digest(frame.raw),ok:frame.header.ok,
+      ...(!frame.header.ok?{errorCode:frame.header.error?.code,commitUncertain:frame.header.error?.commit_uncertain}:{})});
     if(selected){
       // Consume the fault durably before an app restart can replay the command.
       await fs.unlink(path.join(directory,'arm.json'));
