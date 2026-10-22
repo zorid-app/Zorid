@@ -66,7 +66,8 @@ import {createNotePropertyTargets} from './note-property-targets.ts';
 import type {NotePropertyTargets} from './note-property-targets.ts';
 import {inlineBaseRequest,replaceInlineBaseSource} from '../bases/inline-base.ts';
 import type {InlineBaseRequest} from '../bases/inline-base.ts';
-import {BASE_PROPERTY_DEFINITIONS_PATH,updateBasePropertyDefinition} from '../bases/property-definitions.ts';
+import {BASE_PROPERTY_DEFINITIONS_PATH} from '../bases/property-definitions.ts';
+import {createBasePropertyDefinitionSaver} from '../bases/property-definition-save.ts';
 import type {BasePropertyDefinition} from '../bases/property-definitions.ts';
 import {sharedBaseWitness} from '../bases/shared-query.ts';
 import {prepareBaseFileCreation} from '../bases/creation.ts';
@@ -149,6 +150,7 @@ export class Workspace {
   private status = el('footer', 'status-bar');
   private nativeDocumentStatus?:HTMLElement;
   private nativeRecoveryBusy=new WeakSet<NoteBuffer>();
+  private propertyDefinitionSaver=createBasePropertyDefinitionSaver();
   private treeTab: 'files' | 'search' | 'bookmarks' = 'files';
   private rightTab: 'backlinks' | 'outline' | 'tags' | 'base' = 'backlinks';
   private sidebarBase?:{path:string;session:BaseSession;host:HTMLElement;context:string;closing?:Promise<void>};
@@ -2344,10 +2346,8 @@ export class Workspace {
     const vault=this.vault,generation=this.vaultGeneration;
     const alive=()=>{validate();if(vault!==this.vault||generation!==this.vaultGeneration)throw new Error('The property vault changed.');};alive();
     if(!vault.entries.has(BASE_PROPERTY_DEFINITIONS_PATH)){await vault.create(BASE_PROPERTY_DEFINITIONS_PATH,'properties: {}\n');alive();}
-    const buffer=await this.baseBufferFor(BASE_PROPERTY_DEFINITIONS_PATH,alive),before=buffer.text;
-    const next=updateBasePropertyDefinition(before,property,definition);alive();
-    if(buffer.text!==before)throw new Error('Property settings changed before saving.');
-    buffer.update(next,{validateWrite:alive});await buffer.flush();
+    const buffer=await this.baseBufferFor(BASE_PROPERTY_DEFINITIONS_PATH,alive);alive();
+    await this.propertyDefinitionSaver.save(buffer,property,definition,undefined,alive);
     for(const pane of this.loadedViews())pane.properties?.refresh();
   }
 

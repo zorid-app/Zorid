@@ -1,4 +1,5 @@
 import { BaseController, createBaseMutationHost } from './controller.ts';
+import { createBasePropertyDefinitionSaver } from './property-definition-save.ts';
 import type { BaseBufferHost, BaseControllerState, BaseViewRenamed } from './controller.ts';
 import { BaseDocument } from './document.ts';
 import { sharedBaseCoverage, sharedBasePreview, sharedBaseWitness } from './shared-query.ts';
@@ -31,7 +32,7 @@ import { icon } from '../ui/icons.ts';
 import { enhanceBaseSummaryEditor } from './toolbar-formula-editor.ts';
 import type { BaseFormulaEditor } from './toolbar-formula-editor.ts';
 import type { BaseRelationTarget } from './property-widgets.ts';
-import { BASE_PROPERTY_DEFINITIONS_PATH, BASE_PROPERTY_TYPES, basePropertyName, parseBasePropertyDefinitions, updateBasePropertyDefinition, parseBasePropertyInput, inferBasePropertyDefinition, basePropertyValueDiagnostic } from './property-definitions.ts';
+import { BASE_PROPERTY_DEFINITIONS_PATH, BASE_PROPERTY_TYPES, basePropertyName, parseBasePropertyDefinitions, parseBasePropertyInput, inferBasePropertyDefinition, basePropertyValueDiagnostic } from './property-definitions.ts';
 import type { BasePropertyDefinition, BasePropertyDefinitions, BasePropertyType } from './property-definitions.ts';
 import { createBasePropertySettingsPanel } from './property-settings-panel.ts';
 
@@ -325,6 +326,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     },
   }) : { async transform() { throw new Error('This base is read-only'); } };
   const mutations = bufferMutations;
+  const propertyDefinitionSaver = createBasePropertyDefinitionSaver();
   const hostClock = options.clock ?? createBaseClockHost({ document: doc, window: win });
   const clock: BaseClockHost = {
     capture: zone => hostClock.capture(zone), scheduleAt: (deadline, callback) => hostClock.scheduleAt(deadline, callback),
@@ -429,11 +431,12 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   function numericVersion(version: string | number): number { if (typeof version !== 'number') throw new Error('The base result is stale'); return version; }
   async function saveDefinition(property: string, definition: BasePropertyDefinition | null, expected?: BasePropertyDefinition | null): Promise<void> {
     action(); if (options.readOnly || !options.buffers) throw new Error('This base is read-only');
-    if (!options.vault.entries.has(BASE_PROPERTY_DEFINITIONS_PATH)) await options.vault.create(BASE_PROPERTY_DEFINITIONS_PATH, 'properties: {}\n', alive);
-    await bufferMutations.transform(BASE_PROPERTY_DEFINITIONS_PATH, source => {
-      if (expected !== undefined && JSON.stringify(parseBasePropertyDefinitions(source).properties[property] ?? null) !== JSON.stringify(expected)) throw new Error('This property definition changed while its settings were open. Reopen settings before applying.');
-      return updateBasePropertyDefinition(source, property, definition);
-    }, alive);
+    const registryValidate = () => {alive(); options.buffers!.validate();}; registryValidate();
+    if (!options.vault.entries.has(BASE_PROPERTY_DEFINITIONS_PATH)) await options.vault.create(BASE_PROPERTY_DEFINITIONS_PATH, 'properties: {}\n', registryValidate);
+    const buffer = await options.buffers.getBuffer(BASE_PROPERTY_DEFINITIONS_PATH); registryValidate();
+    await propertyDefinitionSaver.save(buffer, property, definition, expected, registryValidate, previousText => {
+      changedBuffers.add(buffer); options.buffers!.onBufferChange?.(BASE_PROPERTY_DEFINITIONS_PATH, buffer, previousText);
+    });
     await loadDefinitions();
   }
   const summaryNames = ['Average', 'Min', 'Max', 'Sum', 'Range', 'Median', 'Stddev', 'Earliest', 'Latest', 'Checked', 'Unchecked', 'Empty', 'Filled', 'Unique'];
