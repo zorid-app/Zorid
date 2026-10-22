@@ -6,12 +6,12 @@ import type { BaseViewPatch } from '../src/bases/document.ts';
 import { executeBaseQuery } from '../src/bases/query.ts';
 import { createBaseToolbar } from '../src/bases/toolbar.ts';
 
-function fixture(view: Record<string, unknown> = {}) {
+function fixture(view: Record<string, unknown> = {}, immediate = false) {
   const dom = new JSDOM('<main></main><button id="external">Outside</button>', { pretendToBeVisual: true });
   const doc = dom.window.document;
   const result = executeBaseQuery(BaseDocument.parse(JSON.stringify({ views: [{ type: 'table', name: 'Table', ...view }] })), { version: 1, files: [{ path: 'A.md', properties: { score: 2 } }] });
   const patches: BaseViewPatch[] = [], errors: unknown[] = [];
-  const toolbar = createBaseToolbar(doc.querySelector('main')!, { preflight() {}, async selectView() {}, async save(_version, patch) { patches.push(patch); }, onDraftChange() {}, onError(error) { errors.push(error); } });
+  const toolbar = createBaseToolbar(doc.querySelector('main')!, { immediate, preflight() {}, async selectView() {}, async save(_version, patch) { patches.push(patch); }, onDraftChange() {}, onError(error) { errors.push(error); } });
   const state = { result, views: [result.view], selectedIndex: 0, readOnly: false, allowRename: true, label: (property: string) => property };
   toolbar.update(state);
   const get = <T extends HTMLElement>(label: string) => doc.querySelector<T>(`[aria-label="${label}"]`)!;
@@ -46,6 +46,17 @@ test('filter add group retains keyboard focus within the open dialog', () => {
     const add = f.get<HTMLButtonElement>('Add group'); add.focus(); add.click();
     assert.ok(f.doc.querySelector('[role="dialog"]')!.contains(f.doc.activeElement), 'adding a group must not drop keyboard focus to document body');
   } finally { f.cleanup(); }
+});
+
+test('removing a focused immediate filter restores a visible control and Escape closes from actual focus',async()=>{
+ const f=fixture({filters:{and:['note.score >= 4']}},true);
+ try{
+  f.click('Filter');const remove=f.get<HTMLButtonElement>('Remove filter');remove.focus();remove.click();await tick();
+  const active=f.doc.activeElement as HTMLElement;
+  assert.notEqual(active,f.doc.body);assert.equal(active.getAttribute('role'),'combobox');assert.equal(active.getAttribute('aria-label'),'Match');assert.equal(active.closest('[hidden],[aria-hidden=true]'),null);
+  active.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));await tick();
+  assert.equal(f.doc.querySelector('[role="dialog"]'),null);assert.deepEqual(f.patches,[{filters:{and:[]}}]);assert.deepEqual(f.errors,[]);
+ }finally{f.cleanup();}
 });
 
 test('background refresh does not steal focus from an external control', () => {

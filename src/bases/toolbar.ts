@@ -147,6 +147,14 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     let generation = 0;
     let afterSave: (() => void) | undefined;
     let refreshPanel: ((result:BaseQueryResult,retainDraft:boolean)=>void) | undefined;
+    let enhanceControls: (()=>void) | undefined;
+    const focusVisible = (root:HTMLElement,label:string,fallback?:HTMLElement) => {
+      // Rebuilt native selects are about to become hidden models. Enhance them
+      // before restoring focus so the visible combobox owns subsequent keys.
+      enhanceControls?.();
+      const controls=Array.from(root.querySelectorAll<HTMLElement>('input,select,textarea,button,[contenteditable=true]')).filter(control=>!control.hidden&&!control.closest('[hidden],[aria-hidden=true]')&&!(control as HTMLButtonElement).disabled);
+      (controls.find(control=>control.getAttribute('aria-label')===label)??controls[0]??fallback)?.focus();
+    };
     const disposers: (()=>void)[] = [];
     const autoAdd = options.immediate === true && name === 'Add view';
     const auto = options.immediate === true && !['Views','Add view','New item settings'].includes(name) && (name !== 'Formula' || !!formulaName);
@@ -447,7 +455,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
           const earlier = button(doc, '↑', () => { [sort[index - 1], sort[index]] = [sort[index], sort[index - 1]]; changed(); render(); }, 'Move sort earlier'); earlier.disabled = index === 0;
           const remove = button(doc, 'Remove', () => { sort.splice(index, 1); changed(); render(); }, 'Remove sort'); if (options.immediate) { remove.replaceChildren(icon('trash',16,doc)); remove.className = 'bases-toolbar-menu-next'; earlier.className = 'bases-sort-earlier'; } row.append(earlier, remove); list.append(row);
         });
-        if (focusedLabel) (Array.from(list.querySelectorAll<HTMLElement>('[aria-label]')).find(node => node.getAttribute('aria-label') === focusedLabel && !(node as HTMLButtonElement).disabled) ?? list.querySelector<HTMLElement>('select') ?? Array.from(fields.querySelectorAll<HTMLButtonElement>('button')).find(node => node.textContent === 'Add sort'))?.focus();
+        if (focusedLabel) focusVisible(list,focusedLabel,Array.from(fields.querySelectorAll<HTMLButtonElement>('button')).find(node=>node.textContent==='Add sort'));
         if (!sort.length) { const hint = doc.createElement('p'); hint.textContent = 'No explicit sort. Files use their default name order.'; list.append(hint); }
       };
       fields.append(button(doc, 'Add sort', () => { const used = new Set(sort.filter(mapping).map(value => propertyId(value.column || value.property))); const property = result.availableProperties.find(property => !used.has(property)); if (!property) { error.textContent = 'All available properties are already sorted.'; return; } sort.push({ property, direction: 'ASC' }); changed(); render(); }));
@@ -541,7 +549,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         tree.replaceChildren(); renderBudget = 1000;
         if (filter === undefined) { if(options.immediate){const mode=select(doc,'Match',[['and','All the following are true'],['or','Any of the following are true'],['not','None of the following are true']],'and');mode.addEventListener('change',()=>{filter=mode.value==='or'?{or:[]}:mode.value==='not'?{not:[]}:{and:[]};changed();render();});tree.append(mode);}else{const hint = doc.createElement('p'); hint.textContent = 'No filters.'; tree.append(hint);} }
         else tree.append(renderNode(filter, next => { filter = next; }, () => { filter = undefined; }));
-        if (focusedLabel) (Array.from(tree.querySelectorAll<HTMLElement>('[aria-label]')).find(node => node.getAttribute('aria-label') === focusedLabel) ?? tree.querySelector<HTMLElement>('input,select,textarea,button') ?? Array.from(fields.querySelectorAll<HTMLButtonElement>('button')).find(node => node.textContent === 'Add filter'))?.focus();
+        if (focusedLabel) focusVisible(tree,focusedLabel,Array.from(fields.querySelectorAll<HTMLButtonElement>('button')).find(node=>node.textContent==='Add filter'));
         place();
       };
       const appendCondition = (next:FilterNode) => { if (filter === undefined) filter={and:[next]}; else if (mapping(filter)&&Object.keys(filter).length===1&&['and','or','not'].includes(Object.keys(filter)[0])&&Array.isArray(Object.values(filter)[0])) (Object.values(filter)[0] as FilterNode[]).push(next); else filter={and:[filter,next]}; };
@@ -664,6 +672,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
           enhanced.set(source,createBaseCombobox(source,{owner:node,searchable:/property|Layout/.test(label)}));
         }
       };
+      enhanceControls=enhance;
       const observer = new win.MutationObserver(enhance); observer.observe(node,{childList:true,subtree:true}); enhance();
       disposers.push(()=>{observer.disconnect();for(const control of enhanced.values())control.destroy();enhanced.clear();for(const editor of editors.values())editor.destroy();editors.clear();});
     }
