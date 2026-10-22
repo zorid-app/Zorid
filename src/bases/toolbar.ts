@@ -142,8 +142,9 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     let afterSave: (() => void) | undefined;
     let refreshPanel: ((result:BaseQueryResult,retainDraft:boolean)=>void) | undefined;
     const disposers: (()=>void)[] = [];
+    const autoAdd = options.immediate === true && name === 'Add view';
     const auto = options.immediate === true && !['Views','Add view','New item settings','Formula'].includes(name);
-    if (auto) footer.hidden = true;
+    if (auto || autoAdd) footer.hidden = true;
     const own: Panel = { name, node, trigger, dirty: false, saving: false, failure: undefined,
       close(restore = true) {
         if (own.saving) return;
@@ -161,10 +162,10 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     let retryPersistence: (() => Promise<void>) | undefined;
     const place = () => { if (!node.isConnected) return; const anchor = trigger.getBoundingClientRect(), bounds = node.getBoundingClientRect(); node.style.left = `${Math.max(8, Math.min(anchor.left, (win?.innerWidth ?? 800) - bounds.width - 8))}px`; node.style.top = `${Math.max(8, Math.min(anchor.bottom + 6, (win?.innerHeight ?? 600) - bounds.height - 8))}px`; };
     const outside = (event: Event) => { if (!node.contains(event.target as Node) && !trigger.contains(event.target as Node)) {
-      if (auto && own.dirty && !retryPersistence) { submit(true); return; }
+      if ((auto || autoAdd) && own.dirty && !retryPersistence) { submit(true); return; }
       if (!hasDraft()) own.close(false);
     } };
-    const keydown = (event: KeyboardEvent) => { const target = event.target as Element; if (target.closest?.('.bases-toolbar-combobox-popover,.bases-manual-group-new') || target.closest?.('[role=combobox]') && (event.key !== 'Escape' || target.closest('[role=combobox]')?.getAttribute('aria-expanded') === 'true')) return; if (['ArrowDown','ArrowUp','Home','End'].includes(event.key) && !event.isComposing && (event.target instanceof doc.defaultView!.HTMLButtonElement || event.target === node)) { const buttons = Array.from(node.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')).filter(item => !item.closest('[hidden]')); if (buttons.length) { const index = buttons.indexOf(doc.activeElement as HTMLButtonElement); const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length; buttons[next].focus(); event.preventDefault(); event.stopPropagation(); } } if (event.key === 'Escape' && !event.isComposing && !own.saving && node.contains(event.target as Node)) { event.preventDefault(); event.stopPropagation(); if (auto && own.dirty && !retryPersistence) submit(true); else own.close(); } };
+    const keydown = (event: KeyboardEvent) => { const target = event.target as Element; if (target.closest?.('.bases-toolbar-combobox-popover,.bases-manual-group-new') || target.closest?.('[role=combobox]') && (event.key !== 'Escape' || target.closest('[role=combobox]')?.getAttribute('aria-expanded') === 'true')) return; if (['ArrowDown','ArrowUp','Home','End'].includes(event.key) && !event.isComposing && (event.target instanceof doc.defaultView!.HTMLButtonElement || event.target === node)) { const buttons = Array.from(node.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')).filter(item => !item.closest('[hidden]')); if (buttons.length) { const index = buttons.indexOf(doc.activeElement as HTMLButtonElement); const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length; buttons[next].focus(); event.preventDefault(); event.stopPropagation(); } } if (event.key === 'Escape' && !event.isComposing && !own.saving && node.contains(event.target as Node)) { event.preventDefault(); event.stopPropagation(); if ((auto || autoAdd) && own.dirty && !retryPersistence) submit(true); else own.close(); } };
     doc.addEventListener('pointerdown', outside, true); doc.addEventListener('keydown', keydown, true); win?.addEventListener('resize', place); win?.addEventListener('scroll', place, true);
     const observer = win && 'ResizeObserver' in win ? new win.ResizeObserver(place) : undefined; observer?.observe(container); observer?.observe(node);
     const changed = () => {
@@ -228,6 +229,11 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const input = doc.createElement('input'); input.value = uniqueViewName(opening.views); input.setAttribute('aria-label', 'View name'); input.placeholder = 'View name';
       const layout = select(doc, 'Layout', BASE_LAYOUTS.map(([key, label]) => [key, label] as const), 'table'); fields.append(input, layout); input.addEventListener('input', changed); layout.addEventListener('change', changed); apply.textContent = 'Create view'; own.dirty = true;
       readOperation = () => { const name = validateViewName(opening.views, input.value); if (!options.commands?.addView) throw new Error('View creation is unavailable.'); return () => options.commands!.addView!(version, layout.value, name); };
+      if (autoAdd) {
+        input.addEventListener('blur',event=>{ if ((event.relatedTarget as Element | null)?.closest?.('[role=combobox]')) return; if (own.dirty) submit(false); });
+        input.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();input.blur();}});
+        layout.addEventListener('change',()=>submit(false));
+      }
     } else if (name === 'Results') {
       const limit = doc.createElement('input'); limit.type = 'number'; limit.min = '0'; limit.step = '1'; limit.placeholder = 'e.g. 10'; limit.value = typeof result.view.limit === 'number' && result.view.limit > 0 ? String(result.view.limit) : ''; limit.setAttribute('aria-label', 'Limit'); const label = doc.createElement('label'); label.append(doc.createTextNode('Limit number of results'), limit); fields.append(label); limit.addEventListener('input', changed);
       if (!opening.readOnly) { const showAll = menuAction('Show all results', () => options.save(version, {limit: undefined}),typeof result.view.limit === 'number' && result.view.limit > 0); showAll.replaceChildren(icon('rotate-ccw',16,doc),doc.createTextNode('Show all')); }
@@ -499,7 +505,11 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         if (destroyed || panel !== own) return;
         own.saving = false; own.failure = undefined; retryPersistence = undefined;
         own.dirty = generation !== submittedGeneration;
-        if (!auto) { own.dirty = false; const refreshed = deferredState; deferredState = undefined; own.close(); if (refreshed) update(refreshed); return; }
+        if (!auto) {
+          own.dirty = false; const refreshed = deferredState; deferredState = undefined; own.close(); if (refreshed) update(refreshed);
+          if (autoAdd && !closeWhenSettled && refreshed) { const name = form.querySelector<HTMLInputElement>('[aria-label="View name"]')?.value.trim(); const index = refreshed.views.findIndex(view=>view.name===name); if (index>=0) open('View options',trigger,index); }
+          return;
+        }
         if (deferredState) {
           const refreshed = deferredState; deferredState = undefined;
           configuration = expectedConfiguration;
