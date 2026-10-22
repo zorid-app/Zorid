@@ -1,13 +1,19 @@
 # Actual browser/WASM Bases semantic integration
 
-Actual run008 **passed all nine original groups**, including the exact 30-
-diagnostic malformed-rollup oracle, restoration, retained snapshots and restart.
-The first Q3 group then stopped at an empty overall summaries map omitted by the
-Rust DTO. Its row checks ran before that failure, but the Q3 group is not accepted;
-the remaining nine Q3 groups were unexecuted. A tests-only correction defaults an
-omitted map only when the authored expectation is empty, with 13 bounded oracle
-tests; the earlier 20 malformed-rollup oracle tests remain passing. A fresh full
-19-group run is still required. See [008 evidence](../../docs/history/bases-browser-actual-008-20261022.md).
+Actual run009 **passed all 19 semantic integration groups**, including all 133
+Q3 typed row-value expectations and 16 exact Q3 diagnostics, on frozen
+`caec33ecb9752979922ae008ab3caffd37194669`. It used the normal admitted service,
+product Worker, matching generated WASM and real IndexedDB. Source/artifact proofs
+matched before and after; all groups ran, no events were dropped, and owned
+Chrome/profile/Vite/database cleanup succeeded. See [009 evidence](../../docs/history/bases-browser-actual-009-20261022.md).
+Rendered UI/widgets/sanitization, mobile, other-browser, sync and stress acceptance
+remain separate.
+
+[Run008](../../docs/history/bases-browser-actual-008-20261022.md) passed the nine
+original groups before a tests-only empty-summary-presence assumption stopped
+the first Q3 group. The correction accepts omission only against an authored
+empty map; 13 oracle tests preserve missing populated/null/wrong-type rejection,
+and the 20 exact malformed-rollup oracle tests remain passing.
 
 Historical [006 evidence](../../docs/history/bases-browser-actual-006-20261022.md)
 and [007 capture](../../docs/history/bases-browser-actual-007-20261022.md) preserve
@@ -28,17 +34,18 @@ Chrome exited0, its profile was removed, Vite closed and the synthetic database
 was deleted. Rendered UI, other browsers, mobile, sync and stress acceptance
 remain separate.
 
-## Authored Q3 extension — awaiting execution
+## Executed Q3 extension
 
 Source batch `64bee169` → `19ae330c`, composed at `eb6e0346`, appends **ten
-new groups to the original nine: 19 planned browser groups**. The first new group
-was partially executed in run008; **no new Q3 group is accepted yet**. The historical
-run005 result above remains nine executed groups; it does not cover this extension.
+new groups to the original nine: 19 browser groups**. All ten passed in run009.
+The historical run005 result above remains nine executed groups; it does not
+cover this extension.
 
 The shared [Q3 fixture](../fixtures/bases-q3-semantics.mjs) adds 14 inert source
 files (four Markdown notes and ten saved Bases), with 133 authored typed row-value
-oracles and 16 expected diagnostic entries. These counts describe assertions and
-fixture data, not additional executed groups. The ten appended groups cover:
+oracles and 16 expected diagnostic entries. All these assertions executed
+successfully in run009. The counts describe fixture assertions, not additional
+groups. The ten appended groups cover:
 
 1. Object callback keys, values and outer scope.
 2. Tag hierarchy versus generic String/transformed List membership.
@@ -51,7 +58,7 @@ fixture data, not additional executed groups. The ten appended groups cover:
 9. Strict Object Link-child provenance in grouping/summaries.
 10. Returned summary Error data versus formula-namespace rethrows.
 
-The source-only G9–G15 follow-up appends 35 explicit row-value expectations to
+The G9–G15 follow-up appends 35 explicit row-value expectations to
 those same groups. It retains every original Q3 expectation and adds no files,
 groups or runtime commands. It covers malformed regexes in dead branches versus
 a valid lazy branch; recursive Object display strings and unchanged typed Object
@@ -60,21 +67,22 @@ lookup; File folder normalization and repeated-tag-prefix rejection; literal-spa
 title boundaries; rich String raw-date selection; and natural, stable List sorting.
 The inert `__proto__` Object key is deliberately preserved as user data. Sort
 expectations use Zorid's pinned English base-sensitivity/numeric policy, not an
-assertion of identical ordering in every host locale. These new expectations are
-also unexecuted against matching artifacts.
+assertion of identical ordering in every host locale. These expectations passed
+against the matching run009 artifacts.
 
 The provenance group additionally distinguishes ordinary inferred Link raw public
 path `/Q3/Source` from its canonical `Q3/Source.md` target witness and `.asFile()`
 lookup. Six explicit row expectations cover raw string conversion/prefix behavior
 and canonical File lookup for both source notes. Strict Object grouping still
-requires two distinct group identities and an overall unique count of two. This
-is a source-only oracle correction, not evidence of a successful browser run.
+requires two distinct group identities and an overall unique count of two. These
+expectations also passed in run009.
 
 The runner requires the exact planned group-name list and all 19 passed results;
 no skipped or unexecuted group can produce success. Shared fixture bytes join the
 source fingerprint. Authored-data/syntax/oracle checks are source verification,
-not actual Worker/WASM, native, CLI or rendered UI acceptance. A new matched
-artifact build and coordinated runtime run remain required.
+not actual Worker/WASM, native, CLI or rendered UI acceptance. Run009 supplies
+the actual matching Worker/WASM result for this fixture; the separate
+UI/platform/stress gates above remain open.
 
 Earlier actual run003 **passed all nine then-current groups** on frozen
 `6808bf5ef48c099c9ebf3ad1877a12332dc0f902`. The report and screenshot are in
