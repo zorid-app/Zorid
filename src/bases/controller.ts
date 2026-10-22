@@ -1,5 +1,6 @@
 import { BaseDocument, uniqueBaseViewName, validateBaseViewName } from './document.ts';
 import type { BaseValue, BaseViewPatch, BaseRootPatch } from './document.ts';
+import type { BaseExpressionValue } from './expression.ts';
 import { executeBaseQuery, normalizeBaseProperty } from './query.ts';
 import type { BaseQueryOptions, BaseQueryResult } from './query.ts';
 import { SharedBaseQueryRunner, sharedBaseWitness, sharedBaseCapture, sharedBaseCoverage, sharedBasePreview } from './shared-query.ts';
@@ -8,6 +9,7 @@ import type { BaseClockCapture, BaseClockHost } from './clock.ts';
 import type { BaseSavedWitness } from './shared-query.ts';
 import { readProperties, removeProperty, setProperty } from '../core/properties.ts';
 import { isMarkdown, normalizePath } from '../core/types.ts';
+import type { VaultEntry } from '../core/types.ts';
 import type { Vault } from '../core/vault.ts';
 import type { NoteBuffer } from '../ui/note-buffer.ts';
 
@@ -155,6 +157,8 @@ export class BaseController {
   private refreshing = false;
   private requested = false;
   private sharedQueries = new SharedBaseQueryRunner();
+  private summaryQueries = new Set<SharedBaseQueryRunner>();
+  private queryEntries = new WeakMap<BaseQueryResult, { readonly definition: VaultEntry; readonly current: VaultEntry }>();
   private clock: BaseClockHost;
   private lastCapture?: BaseClockCapture;
   private cancelWake?: () => void;
@@ -259,8 +263,9 @@ export class BaseController {
           if (!definition || !current) throw new Error('The saved Base or current file is unavailable.');
           const owner = this, allowPreview = !this.current.result || !!sharedBasePreview(this.current.result);
           const effectiveQuery: BaseQueryOptions & { inlineSource?: { source: string; startByte: number; endByte: number } } = inline ? { ...this.query, inlineSource: { source, startByte: inline.startByte, endByte: inline.endByte } } : this.query;
-          result = await this.sharedQueries.query({ service, definition, current, entries: [...this.options.vault.entries.values()], query: effectiveQuery,
+          const request = { service, definition, current, entries: [...this.options.vault.entries.values()], query: effectiveQuery,
             viewIndex, viewName: this.viewName, get version() { return owner.version + 1; }, clock: this.clock, isCurrent: () => !this.disposed && epoch === this.epoch,
+            readFile: (path: string) => this.options.vault.read(path),
             ...(allowPreview ? {
               onPreview: (result: BaseQueryResult) => {
                 if (this.disposed || epoch !== this.epoch || this.current.result && !sharedBasePreview(this.current.result)) return;
@@ -271,12 +276,14 @@ export class BaseController {
                 if (!this.disposed && epoch === this.epoch) this.publish({ ...this.current, previewStatus: message, error: null, updating: true });
               },
             } : {}),
-          });
+          };
+          result = await this.sharedQueries.query(request);
           version = Number(result.version);
           if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
           const latest = await observe(this.path);
           if (!latest || latest.entryId !== definition.entryId || latest.revision !== definition.revision) throw new Error('The Base definition changed. Refresh before editing.');
           if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
+          this.queryEntries.set(result, { definition: Object.freeze({ ...definition }), current: Object.freeze({ ...current }) });
         } else {
           const files = [...this.options.vault.entries.values()].filter(entry => entry.type === 'file').map(entry => {
             const metadata = this.options.vault.metadata.get(entry.path);
@@ -345,6 +352,57 @@ export class BaseController {
     this.query = { ...this.query, currentFilePath: path };
     this.stale = true; this.clearWake(); this.epoch++; this.sharedQueries.cancel();
     return this.refresh();
+  }
+
+  /** Read-only footer advice from an independent saved-core invocation. Opening
+   * a menu never writes configuration, publishes results or cancels its query. */
+  async summaryPreviews(property: string): Promise<Readonly<Record<string, BaseExpressionValue>>> {
+    if (typeof property !== 'string' || !property.trim()) throw new Error('A summary property is required');
+    property = normalizeBaseProperty(property);
+    const version = this.current.version, source = this.current.source, epoch = this.epoch;
+    const { validate: validateResult } = this.guard(version, this.path);
+    const vault = this.options.vault, adapter = vault.adapter, service = adapter.documentSemantics;
+    if (!service) throw new Error('Summary previews are unavailable on this host');
+    const retained = this.queryEntries.get(this.current.result!);
+    if (!retained) throw new Error('Summary previews require current saved core results');
+    const saved = sharedBaseWitness(this.current.result!, this.path);
+    const validate = () => {
+      validateResult();
+      if (vault.adapter !== adapter || adapter.documentSemantics !== service || this.current.source !== source) throw new Error('This Base changed before summary previews were ready');
+    };
+    const observe = async (path: string) => adapter.stat ? await adapter.stat(path) : vault.entries.get(path);
+    validate();
+    const definition = await observe(this.path); validate();
+    if (!definition?.entryId || !definition.revision || !saved || definition.entryId !== saved.entryId || definition.revision !== saved.revision
+      || definition.entryId !== retained.definition.entryId || definition.revision !== retained.definition.revision) throw new Error('The saved Base changed; refresh before requesting summary previews');
+    const inline = this.options.inlineSource ? await this.options.inlineSource.read() : undefined;
+    validate();
+    if (inline && (inline.source !== source || inline.witness && (inline.witness.entryId !== definition.entryId || inline.witness.revision !== definition.revision))) throw new Error('The containing note changed; refresh before requesting summary previews');
+    const currentPath = this.query.currentFilePath ?? this.path;
+    const current = currentPath === this.path ? definition : await observe(currentPath); validate();
+    if (!current?.entryId || !current.revision || current.entryId !== retained.current.entryId || current.revision !== retained.current.revision || current.path !== retained.current.path) throw new Error('The current saved note changed; refresh before requesting summary previews');
+    const captured = sharedBaseCapture(this.current.result!);
+    const query: BaseQueryOptions & { summaryPreviewProperty: string; inlineSource?: { source: string; startByte: number; endByte: number } } = {
+      ...this.query, searchTerms: this.query.searchTerms && [...this.query.searchTerms], summaryPreviewProperty: property,
+      ...(captured ? { now: () => new Date(captured.clockMs), timezone: captured.timezone } : {}),
+      ...(inline ? { inlineSource: { source, startByte: inline.startByte, endByte: inline.endByte } } : {}),
+    };
+    const runner = new SharedBaseQueryRunner(); this.summaryQueries.add(runner);
+    try {
+      const request = { service, definition, current, entries: [...vault.entries.values()], query, version,
+        viewIndex: this.selectedViewIndex, viewName: this.viewName, clock: this.clock,
+        isCurrent: () => !this.disposed && epoch === this.epoch && version === this.current.version && vault.adapter === adapter,
+        readFile: async (path: string) => { validate(); const text = await vault.read(path); validate(); return text; },
+      };
+      const result = await runner.query(request); validate();
+      const latestDefinition = await observe(this.path); validate();
+      const latestCurrent = currentPath === this.path ? latestDefinition : await observe(currentPath); validate();
+      if (!latestDefinition || latestDefinition.entryId !== definition.entryId || latestDefinition.revision !== definition.revision
+        || !latestCurrent || latestCurrent.entryId !== current.entryId || latestCurrent.revision !== current.revision) throw new Error('The saved Base or current note changed; refresh before requesting summary previews');
+      const previews = (result as BaseQueryResult & { readonly summaryPreviews?: Readonly<Record<string, BaseExpressionValue>> }).summaryPreviews;
+      if (!previews) throw new Error('Summary previews are unavailable on this host');
+      return previews;
+    } finally { this.summaryQueries.delete(runner); runner.dispose(); }
   }
 
   private guard(version: number, path: string): { validate: () => void; validateWrite: () => void } {
@@ -706,6 +764,7 @@ export class BaseController {
 
   dispose(): void {
     this.disposed = true; this.clearWake(); this.epoch++; this.sharedQueries.dispose();
+    for (const runner of this.summaryQueries) runner.dispose(); this.summaryQueries.clear();
     this.undoCommands = []; this.redoCommands = []; this.pendingPropertyHistory.clear();
     // Disposal retires activity without publishing an observer after closure.
     this.current = this.settled;
