@@ -2,6 +2,23 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Latest actual safety012 on rootf10da606 FAILS44actions/6checks: after correct
+shared-body/history and genuine independent CLI B conflict, bulk clear saves A
+as `score: 7null` instead of Null. Original exact source/value oracles retained;
+no cause established. `bases_controller` diagnoses TS/source path and
+`bases_inline_core` audits retained DB/CRDT/intent evidence read-only. Matching
+native/current Rust07265 and frontend012 are proven; owned app SIGKILL cleanup
+has no leaks, source/artifact freeze verifies. Full acceptance stays blocked.
+
+Reviewed fixes now composed: split navigation e852ff26, registry physical source
+Apply29128ef6, Null displayf10da606. Combined42 focused checks and desktop build
+pass, but safety012 does not reach registry or blank-cell acceptance. Actual
+selection003 passes60actions/11checks incl caret/nonempty range and restart.
+Registry same-session clean-buffer freshness after real external reconciliation
+is separately being audited; reopening a cached form alone is not a fresh-load
+proof. No permission to weaken physical CAS or source oracles.
+
+
 Latest continuation: native safety009 on rootba6304a5/new Rust79bb passes the
 entire shared-body/conditional-history scenario, including touched-property
 external-edit rejection. Six durable checks and39 actions precede its next

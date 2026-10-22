@@ -9,6 +9,45 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest root update: isolated `f10da606` composes independently reviewed split
+navigation `e852ff26` (original14663e60), registry physical saved-source Apply
+`29128ef6` (original8c216414), and top-level Null display `f10da606`
+(originalae08febe). Independent composed seam review finds no issues; root42
+focused tests pass,0 skipped; desktop frontend012/36280 terminal0 including
+TypeScript. Receipt `/private/tmp/zorid-bases-final-fixtures-desktop-build-20261022-012-receipt.json`.
+Matching native/CLI96560 finished0, Rust tree07265b1d, native403cbeb8/CLI8e4e61e4;
+receipt `/private/tmp/zorid-bases-final-native-07265b1d/receipt.json`.
+
+Actual selection003/2985 PASSES60actions/11checks, including caret and nonempty
+selection preservation across frontmatter length changes, full source checks,
+and normal quit/restart. Frozen75270dc8/current native/frontend011; both normal
+quits exit0/nullsignal/no leaks and source/artifact freeze verified.
+Actual safety011/33817 fails44actions/7checks at top-level Null displayed as
+literalnull after correct durable partial clear. Reviewed display fix above
+preserves storage/coercion and all original blank-cell assertions.
+
+Fresh safety012/36388 FAILS44actions/6checks BEFORE that display assertion:
+A physical score is string `7null`, not Null, after shared-body/history and real
+independent CLI B conflict setup. Evidence
+`/private/tmp/zorid-bases-safety-current-20261022-012/result.json`; original
+oracles unchanged, source/artifact freeze true, owned SIGKILL cleanup/no leaks.
+This is a new observed data-integrity blocker, not a completed safety pass.
+`bases_controller` owns isolated causal diagnosis. `bases_relations` separately
+audits same-session clean registry buffer refresh after genuine external
+reconciliation; `bases_e2e` identified unsupported immediate fresh-reopen
+precondition. No authority to weaken CAS or adopt captured physical text.
+
+Private typed reference005 passed baseline, String operator catalog, prefix/
+inverse and containsAny, then failed a source YAML read on containsAll; remaining
+scenarios unexecuted. Source-reviewed typed006 manifeste813269f receives a
+once-only runtime grant to bases_ui_review after safety012 cleanup; it owns the
+sole app/heavy lane. No other app/build is authorized concurrently. Native
+option probe001 failed after nested AX selection plus Return closed the dialog;
+no native SELECT acceptance is claimed. Full safety/recovery/typed UI/heavy-user,
+visual/client refresh and main integration remain unfinished. Main remains
+`e7d655e1`; no integration or full acceptance claim.
+
+
 Latest validation update: root `4b7b0fe3` includes reviewed Store TEST-only
 corrections18b1db50 (original35c162d7), selection readiness9146037b (original
 b1e8d058), and strict public CLI envelope parser4b7b0fe3 (original68a88dcc).
