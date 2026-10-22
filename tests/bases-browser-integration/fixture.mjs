@@ -357,6 +357,14 @@ try {
     }
     equal(malformedTargets.value.currentRelationValues, relationBaseline.value.currentRelationValues, 'Unrelated unreadable metadata changed saved current raw/typed Link values');
     const incomplete = await query(host, malformedPin, 'Authors.base', 'Authors');
+    // Retain the observed payload before a diagnostic oracle can throw. This
+    // changes evidence capture only; every existing assertion stays intact.
+    report.failureCheckpoints = [{
+      groupIndex: 8, name: 'malformed-metadata-rollup',
+      authors: [ada, grace].map(author => ({path: author.path, witness: witness(author)})),
+      malformed: {path: malformedCandidate.path, witness: witness(malformedCandidate)},
+      result: incomplete.value.result,
+    }];
     assert(incomplete.value.result.metadataIssues.some(issue => issue.witness.entryId === malformedCandidate.id && issue.witness.revision === malformedCandidate.revision && issue.propertiesUnavailable), 'Malformed source must report actual unavailable metadata');
     equal(incomplete.value.result.rows, [], 'Unavailable reverse rollups must not fabricate author rows');
     for (const author of [ada, grace]) assert(incomplete.value.result.diagnostics.some(diagnostic => diagnostic.entryId === author.id && diagnostic.phase === 'filter' && diagnostic.code === 'unavailable'), 'Incomplete reverse rollup must expose an unavailable author-filter diagnostic');
