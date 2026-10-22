@@ -7,6 +7,7 @@ import {projectSharedBaseResult, sharedBaseWitness} from '../../src/bases/shared
 import {inlineBaseRequest} from '../../src/bases/inline-base.ts';
 import {files, alias, body, pioneer, settings, plainLinkNotes, plainLinkPaths, invalidMetadataSource, inlinePrelude, inlinePrefix, inlineBase, inlineNormalized, inlineNote, clockMs, timezone, groupNames} from './cases.mjs';
 import {q3Files,q3Folders,q3Groups} from '../fixtures/bases-q3-semantics.mjs';
+import {assertMalformedRollup, malformedRollupPaths} from './malformed-rollup-oracle.mjs';
 
 // Product Worker, admitted client, generated WASM and IndexedDB only. No direct
 // WASM evaluator, synthetic generation, replacement Worker, private storage write
@@ -357,18 +358,21 @@ try {
     }
     equal(malformedTargets.value.currentRelationValues, relationBaseline.value.currentRelationValues, 'Unrelated unreadable metadata changed saved current raw/typed Link values');
     const incomplete = await query(host, malformedPin, 'Authors.base', 'Authors');
+    const malformedManifest = [];
     // Retain the observed payload before a diagnostic oracle can throw. This
     // changes evidence capture only; every existing assertion stays intact.
     report.failureCheckpoints = [{
       groupIndex: 8, name: 'malformed-metadata-rollup',
       authors: [ada, grace].map(author => ({path: author.path, witness: witness(author)})),
       malformed: {path: malformedCandidate.path, witness: witness(malformedCandidate)},
-      result: incomplete.value.result,
+      manifest: malformedManifest, result: incomplete.value.result,
     }];
+    for (const path of malformedRollupPaths) malformedManifest.push({path, witness: witness(await metadata(host, path))});
     assert(incomplete.value.result.metadataIssues.some(issue => issue.witness.entryId === malformedCandidate.id && issue.witness.revision === malformedCandidate.revision && issue.propertiesUnavailable), 'Malformed source must report actual unavailable metadata');
     equal(incomplete.value.result.rows, [], 'Unavailable reverse rollups must not fabricate author rows');
-    for (const author of [ada, grace]) assert(incomplete.value.result.diagnostics.some(diagnostic => diagnostic.entryId === author.id && diagnostic.phase === 'filter' && diagnostic.code === 'unavailable'), 'Incomplete reverse rollup must expose an unavailable author-filter diagnostic');
-    assert(incomplete.value.result.diagnostics.some(diagnostic => diagnostic.property === 'note.bookCount' && diagnostic.code === 'unavailable'), 'Incomplete reverse count must expose an unavailable diagnostic');
+    assertMalformedRollup(incomplete.value.result, malformedManifest,
+      [ada, grace].map(author => ({path: author.path, witness: witness(author)})),
+      {path: malformedCandidate.path, witness: witness(malformedCandidate)});
     equal(await configured.propertyTargets({options: {clockMs, timezone, currentEntryId: currentActor.id}}), relationBaseline, 'Malformed latest metadata substituted into retained healthy frame');
     sameSemanticRead(await query(host, configured, 'Authors.base', 'Authors'), configuredAuthors, 'Malformed latest metadata substituted into retained healthy aggregate');
     await host.adapter.compareAndWrite('Invalid.md', invalidMetadataSource, validCandidateSource, witness(malformedCandidate));
