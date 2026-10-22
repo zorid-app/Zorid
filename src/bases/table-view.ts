@@ -699,6 +699,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
         if (rows.some(row => row.length !== rows[0].length)) throw new Error('Paste a rectangular table.');
       } else {
         const text = clipboard.getData('text/plain');
+        if (text.length > 8_000_000) throw new Error('The pasted table is too large.');
         // A newline is literal in a single active cell. It becomes a column only
         // when the user already selected several rows, matching Bases' reader.
         if (text.includes('\t') || (bounds.top < bounds.bottom && /[\r\n]/.test(text))) rows = parseBaseTableTSV(text);

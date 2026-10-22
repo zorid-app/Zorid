@@ -196,3 +196,9 @@ test('every clamped writable mutation validates before a batch starts', async ()
   f.cell(0,'note.text').focus();f.paste(f.cell(0,'note.text'),{'text/plain':'first\tsecond\nthird\tblocked'});await tick();
   assert.equal(f.batches.length,0);assert.match(f.main.textContent!,/last target is unavailable/);f.close();
 });
+
+
+test('plain scalar paste retains the clipboard resource bound before allocating a command', async () => {
+  const f=fixture();f.cell(0,'note.text').focus();f.paste(f.cell(0,'note.text'),{'text/plain':'x'.repeat(8_000_001)});await tick();
+  assert.equal(f.batches.length,0);assert.match(f.main.textContent!,/pasted table is too large/);f.close();
+});
