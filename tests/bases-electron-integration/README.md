@@ -38,3 +38,20 @@ not reported as passed. The scope ledger in
 `docs/history/bases-heavy-user-e2e-plan.md` distinguishes authored scenarios from
 actual runtime acceptance. This is functional end-to-end verification, not a
 performance/large-vault benchmark, OS foreground-focus test or mobile claim.
+
+Explicit supplemental campaigns can reuse this same bootstrap with
+`--campaign-module /absolute/tests/OWNED-CAMPAIGN/campaign.mjs`. The fixed owned
+directories are visual-reference, safety, config, properties and clipboard under
+tests/bases-*. A module exports `fixtureFiles(): Map<string,string|Buffer>` and
+`async journey(c)`, optionally `template` and a safe `vaultName` basename. It owns
+the complete fixture map: automatic Properties.yaml and Created injection are
+disabled. The default heavy journey has the same original fixtures and behavior.
+
+The context supplies `ui`/`cdp` getters; `vault`, `yaml`, `template`, `evidence`,
+`outputDirectory`; `launch(name)`, `quit(name)`, `read(file)`,
+`saved(file, check, name)`, `frontmatter(source)`, `screenshot(label)`,
+`external(file, source, label)`, `diskGuard()` and `prepareDownloads()`. Existing
+helper signatures are unchanged. Staged offline fixtures require an awaited
+normal quit before guarded filesystem writes and explicit fixture evidence.
+Positive user mutations still use actual UI. Every campaign module directory is
+hashed before/after the pass. The same explicit freeze/runtime grant applies.

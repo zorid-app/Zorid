@@ -6,7 +6,7 @@ import {createReadStream} from 'node:fs';
 import path from 'node:path';
 import {spawn,execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createRequire} from 'node:module';
 import {CDP,delay,until} from '../tasks-electron-integration/cdp.mjs';
 import {UI} from './ui.mjs';
@@ -20,18 +20,27 @@ const native=await fs.realpath(required('--native')),electron=await fs.realpath(
 assert.equal(arg('--ready'),'bases-native-and-frontend-frozen','Coordinator readiness gate required');
 assert.match(head,/^[0-9a-f]{40}$/);
 const harness=path.dirname(fileURLToPath(import.meta.url));
+const campaignRequested=arg('--campaign-module');
+const campaignPath=campaignRequested?await fs.realpath(campaignRequested):undefined;
+if(campaignPath){
+  const owned=['bases-visual-reference','bases-electron-safety-integration','bases-electron-config-integration','bases-electron-properties-integration','bases-electron-clipboard-integration'];
+  assert.ok(owned.some(name=>campaignPath===path.join(path.dirname(harness),name,'campaign.mjs')),'Only an explicitly owned supplemental campaign module is admitted');
+}
+const campaign=campaignPath?await import(pathToFileURL(campaignPath).href):undefined;
+if(campaign)assert.ok(typeof campaign.fixtureFiles==='function'&&typeof campaign.journey==='function','Explicit supplemental campaign exports');
+const vaultName=campaign?.vaultName??'vault';assert.match(vaultName,/^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$/,'Owned fixture vault basename');
 const outRequested=path.resolve(required('--out'));
 // Require an existing evidence parent; aliases are resolved before any writes.
 const out=path.join(await fs.realpath(path.dirname(outRequested)),path.basename(outRequested));
-for(const protectedRoot of [root,await fs.realpath(harness)])assert.ok(out!==protectedRoot&&!out.startsWith(protectedRoot+path.sep),'Evidence must be outside source/artifact roots');
+for(const protectedRoot of [root,await fs.realpath(harness),...(campaignPath?[path.dirname(campaignPath)]:[])])assert.ok(out!==protectedRoot&&!out.startsWith(protectedRoot+path.sep),'Evidence must be outside source/artifact roots');
 await fs.mkdir(out); // A fresh directory avoids overwriting retained evidence.
-const sandbox=path.join(out,'disposable'),vault=path.join(sandbox,'vault'),profile=path.join(sandbox,'profile');
+const sandbox=path.join(out,'disposable'),vault=path.join(sandbox,vaultName),profile=path.join(sandbox,'profile');
 const yaml=createRequire(path.join(root,'package.json'))('yaml');
-const evidence={kind:'actual-electron-bases-heavy-user',status:'running',started:new Date().toISOString(),head,actions:[],checks:[],screenshots:[],runtime:[],limitations:['CDP renderer input and hit testing; not OS foreground focus/keyboard parity','Synthetic TSV ClipboardEvent exercises the production event handler, not the system clipboard','Disposable prelaunch fixtures and explicit external-editor/failure fixtures are not user creation coverage','No mobile, sync, arbitrary crash/power-loss, or performance acceptance follows from this journey']};
+const evidence={kind:campaign?'actual-electron-bases-supplemental':'actual-electron-bases-heavy-user',...(campaignPath?{campaignModule:campaignPath}:{}),status:'running',started:new Date().toISOString(),head,actions:[],checks:[],screenshots:[],runtime:[],limitations:['CDP renderer input and hit testing; not OS foreground focus/keyboard parity','Synthetic TSV ClipboardEvent exercises the production event handler, not the system clipboard','Disposable prelaunch fixtures and explicit external-editor/failure fixtures are not user creation coverage','No mobile, sync, arbitrary crash/power-loss, or performance acceptance follows from this journey']};
 const git=(...args)=>execFileSync('git',['-C',root,...args],{encoding:'utf8',maxBuffer:8*1024*1024});
 async function hash(file){const h=createHash('sha256');for await(const bytes of createReadStream(file))h.update(bytes);return h.digest('hex');}
 async function tree(directory){const result=[];async function visit(relative=''){for(const entry of(await fs.readdir(path.join(directory,relative),{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name))){const name=path.join(relative,entry.name);assert.ok(!entry.isSymbolicLink(),'No artifact symlink: '+name);if(entry.isDirectory())await visit(name);else if(entry.isFile())result.push([name,await hash(path.join(directory,name))]);}}await visit();return result;}
-async function provenance(){assert.equal(git('rev-parse','HEAD').trim(),head,'Frozen integration HEAD changed');assert.equal(git('diff','--name-only','HEAD').trim(),'','Frozen tracked source changed');const names=git('ls-files','-z','desktop','src','crates','scripts','Cargo.toml','Cargo.lock','package.json','pnpm-lock.yaml','vite.config.mjs','index.html').split('\0').filter(Boolean).sort();return{head,tracked:await Promise.all(names.map(async name=>[name,await hash(path.join(root,name))])),dist:await tree(path.join(root,'dist')),native:{file:native,sha256:await hash(native)},electron:{file:electron,sha256:await hash(electron)},harness:await tree(harness),cdpHelper:await hash(path.join(harness,'../tasks-electron-integration/cdp.mjs'))};}
+async function provenance(){assert.equal(git('rev-parse','HEAD').trim(),head,'Frozen integration HEAD changed');assert.equal(git('diff','--name-only','HEAD').trim(),'','Frozen tracked source changed');const names=git('ls-files','-z','desktop','src','crates','scripts','Cargo.toml','Cargo.lock','package.json','pnpm-lock.yaml','vite.config.mjs','index.html').split('\0').filter(Boolean).sort();return{head,tracked:await Promise.all(names.map(async name=>[name,await hash(path.join(root,name))])),dist:await tree(path.join(root,'dist')),native:{file:native,sha256:await hash(native)},electron:{file:electron,sha256:await hash(electron)},harness:await tree(harness),...(campaignPath?{campaign:await tree(path.dirname(campaignPath))}:{}),cdpHelper:await hash(path.join(harness,'../tasks-electron-integration/cdp.mjs'))};}
 const processes=()=>execFileSync('ps',['-ww','-axo','pid=,ppid=,command='],{encoding:'utf8'}).split('\n').map(line=>{const m=line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);return m?{pid:Number(m[1]),parent:Number(m[2]),command:m[3]}:null;}).filter(Boolean);
 let child,cdp,browserCDP,ui,record,before,failure;
 const natives=new Map();
@@ -58,13 +67,15 @@ async function prepareDownloads(){
 }
 try{
   before=await provenance();await fs.writeFile(path.join(out,'provenance-before.json'),JSON.stringify(before,null,2));
-  await fs.mkdir(vault,{recursive:true});await fs.mkdir(profile);await fs.mkdir(path.join(sandbox,'app-data'));await fs.mkdir(path.join(vault,'Created'));
-  const fixtures=fixtureFiles();
-  fixtures.set('Properties.yaml',yaml.stringify({properties:{rating:{type:'number'},done:{type:'checkbox'},finished:{type:'date'},appointment:{type:'datetime'},priority:{type:'select',options:[{value:'Low'},{value:'Medium'},{value:'High'}]},keywords:{type:'list'},topics:{type:'multiselect',options:[{value:'Rust',color:'orange'},{value:'Design',color:'blue'},{value:'Writing',color:'green'}]},status:{type:'status',options:[{value:'To read',category:'todo'},{value:'Reading',category:'in-progress'},{value:'Finished',category:'done'}]},author:{type:'relation',relation:{multiple:false,targetFilter:'type == "author"'}},books:{type:'reverseRelation',reverseRelation:{property:'author'}},bookCount:{type:'rollup',rollup:{relation:'books',aggregation:'count'}},averageRating:{type:'rollup',rollup:{relation:'books',property:'rating',aggregation:'average'}}}}));
+  await fs.mkdir(vault,{recursive:true});await fs.mkdir(profile);await fs.mkdir(path.join(sandbox,'app-data'));if(!campaign)await fs.mkdir(path.join(vault,'Created'));
+  const fixtures=(campaign?.fixtureFiles??fixtureFiles)();
+  assert.ok(fixtures instanceof Map,'Owned fixture map');
+  for(const[file,source]of fixtures){assert.ok(typeof file==='string'&&file.length&&!path.isAbsolute(file)&&!file.split(/[\\/]/).includes('..'),'Fixture remains inside owned vault');assert.ok(typeof source==='string'||Buffer.isBuffer(source),'Fixture file is text or bytes');}
+  if(!campaign)fixtures.set('Properties.yaml',yaml.stringify({properties:{rating:{type:'number'},done:{type:'checkbox'},finished:{type:'date'},appointment:{type:'datetime'},priority:{type:'select',options:[{value:'Low'},{value:'Medium'},{value:'High'}]},keywords:{type:'list'},topics:{type:'multiselect',options:[{value:'Rust',color:'orange'},{value:'Design',color:'blue'},{value:'Writing',color:'green'}]},status:{type:'status',options:[{value:'To read',category:'todo'},{value:'Reading',category:'in-progress'},{value:'Finished',category:'done'}]},author:{type:'relation',relation:{multiple:false,targetFilter:'type == "author"'}},books:{type:'reverseRelation',reverseRelation:{property:'author'}},bookCount:{type:'rollup',rollup:{relation:'books',aggregation:'count'}},averageRating:{type:'rollup',rollup:{relation:'books',property:'rating',aggregation:'average'}}}}));
   for(const[file,source]of fixtures){await fs.mkdir(path.dirname(path.join(vault,file)),{recursive:true});await fs.writeFile(path.join(vault,file),source);}
   await fs.writeFile(path.join(profile,'vault.json'),JSON.stringify({path:vault}));
   evidence.fixtureManifest=await tree(vault);
-  await journey({get ui(){return ui;},get cdp(){return cdp;},vault,yaml,template,evidence,launch,quit,read,saved,frontmatter,screenshot,external,diskGuard,prepareDownloads});
+  await (campaign?.journey??journey)({get ui(){return ui;},get cdp(){return cdp;},vault,yaml,template:campaign?(campaign.template??''):template,evidence,outputDirectory:out,launch,quit,read,saved,frontmatter,screenshot,external,diskGuard,prepareDownloads});
   const after=await provenance();await fs.writeFile(path.join(out,'provenance-after.json'),JSON.stringify(after,null,2));assert.deepEqual(after,before,'Exact source/artifact freeze survived journey');evidence.provenanceVerified=true;evidence.status='passed';
 }catch(error){failure=error;evidence.status='failed';evidence.failure={message:error.message,stack:error.stack};if(cdp)try{evidence.failureDOM=await ui.dom('return {body:document.body.innerText,editors:[...document.querySelectorAll("[data-base-editing]")].map(e=>e.outerHTML),alerts:[...document.querySelectorAll("[role=alert]")].map(e=>e.outerHTML)};');await screenshot('failure');}catch(diagnostic){evidence.diagnosticFailure=diagnostic.message;}}
 finally{try{await stop();}catch(error){failure??=error;evidence.status='failed';evidence.cleanupFailure=error.message;}if(before&&!evidence.provenanceVerified)try{const after=await provenance();await fs.writeFile(path.join(out,'provenance-after.json'),JSON.stringify(after,null,2));assert.deepEqual(after,before,'Source/artifact freeze after failed journey');evidence.provenanceVerified=true;}catch(error){evidence.provenanceFailure=error.message;failure??=error;evidence.status='failed';}evidence.finished=new Date().toISOString();await fs.writeFile(path.join(out,'result.json'),JSON.stringify(evidence,null,2));}
