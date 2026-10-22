@@ -310,12 +310,39 @@ Coordinator-reported implementation gaps, recorded without feature acceptance:
 
 | Gap | Required closure |
 | --- | --- |
-| Rename from a named-view embed is currently disabled | Complete the reference-rewrite path and its dirty-source/identity/navigation guards before enabling rename there. Standalone rename does not close this gap, and permanent disabling is not an approved reference deviation. Verify file and fenced/nested embeds plus reopen/restart. |
-| Live group reorder preview is incomplete | Finish the pointer-drag preview/reconciliation behavior and compare actual reference/Zorid interactions. Saved final group order and Show/Hide all alone do not verify live preview, cancellation or focus preservation. |
-| Custom summary rename/delete is under work | Finish normal custom-summary naming/formula-edit/rename/delete controls, source-preserving reference updates and diagnostics. Built-in summary previews or Rust reducer tests alone do not establish that UI. |
+| Named-view embed rename awaits actual acceptance | Reference rewriting, cache rebinding and guarded retry are composed; verify file and fenced/nested embeds plus dirty/conflicted sources, reopen and restart. Standalone rename does not close this gate. |
+| Live group reorder preview awaits actual acceptance | Pointer preview/reconciliation is composed; compare actual reference/Zorid preview, cancellation, focus preservation and final saved order. Source checks and saved order alone do not verify the interaction. |
+| Custom summary CRUD awaits actual acceptance | Naming, live formula editing, rename/delete and source-preserving references are composed with save/retry guards. Exercise the complete normal workflow, diagnostics and failure continuation; reducer tests alone do not establish the UI. |
 | Complete composed runtime acceptance is pending | Run the required actual Electron heavy-user journey with matching reference/Zorid screenshots, durable readback and failure/restart cases. Report native Rust, actual browser/WASM, web and CLI evidence separately. Reference captures, isolated checks and build success do not mark this goal accepted. |
 
 The live checklist remains unchecked until the owning coordinator records exact
 reviewed/integrated source, executed scenarios and their limits. This evidence
 ledger introduces no new source ownership or authorization to resume deferred
 Tasks, Calendar, provider, sync or mobile feature work.
+
+## Explicit link subpaths and stringification — 2026-10-22
+
+Focused REA receipt
+`ev_5030c76015d1f5232c054141454ae04af381dbb91615925c6a44113972de78cf`
+uses the same shipped bundle hash above. Provenance is retained at
+`/private/tmp/zorid-bases-link-string-reference/provenance.json`: six inert
+slices,863 AST nodes, zero parse failures. Python character ranges: Link
+2210465–2211874; file.asLink2237457–2237747; global link2218446–2218916;
+resolution split778271–778447; list join2198500–2198736 and toString
+2195460–2195520. Static evidence only, without a reserved-filename runtime claim.
+
+Reference Link stringification emits its raw data once within wiki delimiters,
+with optional display text; it does not escape filename characters or append a
+separate fragment. File-identity constructors use the literal file path. Lists
+join element strings with comma-space. The reference therefore has ambiguous
+string output for literal `#` or `|` filenames; this observation does not justify
+losing Zorid's captured target identity or guessing a fragment from a filename.
+
+Zorid's additive `Link.subpath` distinguishes a real heading/block suffix from a
+literal filename character, including after a rename. Core captures it before
+percent decoding and before relation paths become canonical. File-identity and
+reverse-link constructors have no inferred subpath. UI navigation consumes only
+explicit subpaths with an exact target witness; group writes use rooted escaped
+destinations. This integrity policy preserves readable source links and is not
+an assertion that the reference stores an equivalent metadata field. Final core,
+native/WASM and actual interaction validation remain required.
