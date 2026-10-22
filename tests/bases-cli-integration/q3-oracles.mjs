@@ -76,6 +76,10 @@ export function assertQ3Result(result, group, states) {
     assert.equal(keyIds.size, result.groups.length, `${group.name}: provenance groups must retain distinct opaque key IDs`);
     assert.equal(actualMemberships.size, expectedGroups.size, `${group.name}: every authored group appears exactly once`);
   }
+  for(const issue of result.diagnostics){
+    const file=byPath.get(issue.path);assert.ok(file,`${group.name}: diagnostic has a foreign source path`);
+    assert.equal(issue.entryId,file.id,`${group.name}: exact diagnostic source identity`);
+  }
   assert.deepEqual(orderedDiagnostics(result.diagnostics), orderedDiagnostics(group.diagnostics), `${group.name}: exact diagnostic path/property/code, including duplicates`);
 }
 

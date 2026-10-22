@@ -6,6 +6,7 @@ import {setProperty, readProperties} from '../../src/core/properties.ts';
 import {projectSharedBaseResult, sharedBaseWitness} from '../../src/bases/shared-query.ts';
 import {inlineBaseRequest} from '../../src/bases/inline-base.ts';
 import {files, alias, body, pioneer, settings, plainLinkNotes, plainLinkPaths, invalidMetadataSource, inlinePrelude, inlinePrefix, inlineBase, inlineNormalized, inlineNote, clockMs, timezone, groupNames} from './cases.mjs';
+import {q3Files,q3Folders,q3Groups} from '../fixtures/bases-q3-semantics.mjs';
 
 // Product Worker, admitted client, generated WASM and IndexedDB only. No direct
 // WASM evaluator, synthetic generation, replacement Worker, private storage write
@@ -75,6 +76,61 @@ function sameSemanticRead(actual, expected, message) {
   // row/value oracle and must not obscure exact snapshot/source semantics.
   const semantic = read => {const {stepsUsed, ...result} = read.value.result; return {...read, value: {...read.value, result}};};
   equal(semantic(actual), semantic(expected), message);
+}
+function stableErrorValues(value){
+  if(Array.isArray(value))return value.map(stableErrorValues);
+  if(value&&typeof value==='object'){
+    if(value.type==='error'){
+      assert(typeof value.message==='string'&&value.message.length>0,'Typed Error lost its message');
+      return {type:'error',code:value.code};
+    }
+    return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,stableErrorValues(item)]));
+  }
+  return value;
+}
+function q3Expected(value,witnesses,parentType,key){
+  if(Array.isArray(value))return value.map(item=>q3Expected(item,witnesses));
+  if(value&&typeof value==='object'){
+    if(Object.hasOwn(value,'$fixtureWitness')){
+      assert(parentType==='link'&&key==='target','Q3 fixture witness belongs only to an expected Link target');
+      equal(Object.keys(value),['$fixtureWitness'],'Q3 witness marker shape');
+      assert(witnesses.has(value.$fixtureWitness),'Unknown Q3 fixture witness');
+      return witnesses.get(value.$fixtureWitness);
+    }
+    return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,q3Expected(item,witnesses,value.type,key)]));
+  }
+  return value;
+}
+async function assertQ3(host,selected,spec,witnesses){
+  const read=await query(host,selected,spec.basePath,spec.view,{clockMs:spec.clockMs,timezone:spec.timezone});
+  const result=read.value.result;
+  assert(result.metadataComplete===true,'Q3 metadata coverage is incomplete');
+  equal(result.rows.map(item=>item.path),spec.rows.map(item=>item.path),'Q3 exact membership/order');
+  for(const expected of spec.rows){
+    const item=row(read,expected.path),entry=await metadata(host,expected.path);
+    equal({entryId:item.entryId,revision:item.revision},witness(entry),'Q3 row identity/revision');
+    equal(item.values['file.path'],string(expected.path),'Q3 file path projection');
+    for(const[property,value]of Object.entries(expected.values))equal(stableErrorValues(item.values[property]),q3Expected(value,witnesses),'Q3 '+property);
+  }
+  equal(stableErrorValues(result.summaries),q3Expected(spec.summaries,witnesses),'Q3 exact overall summaries');
+  const issues=result.diagnostics.map(({path,property,code,entryId})=>{
+    assert(witnesses.has(path),'Q3 diagnostic has a foreign source path');
+    equal(entryId,witnesses.get(path).entryId,'Q3 diagnostic source identity');
+    return {path,property,code};
+  });
+  const sortIssues=values=>values.map(value=>JSON.stringify(canonical(value))).sort();
+  equal(sortIssues(issues),sortIssues(spec.diagnostics),'Q3 exact diagnostic multiset');
+  equal(result.propertyDefinitionDiagnostics??[],[],'Q3 property settings diagnostics');
+  if(spec.groups){
+    equal(result.groups.length,spec.groups.length,'Q3 strict group count');
+    const ids=new Map(result.rows.map(item=>[item.entryId,item.path]));
+    const groups=result.groups.map(item=>({key:stableErrorValues(item.key),paths:item.entryIds.map(id=>{assert(ids.has(id),'Q3 group contains foreign identity');return ids.get(id);}).sort(),summaries:stableErrorValues(item.summaries??{})}));
+    const sortGroups=values=>[...values].sort((a,b)=>JSON.stringify(a.paths).localeCompare(JSON.stringify(b.paths)));
+    equal(sortGroups(groups),sortGroups(q3Expected(spec.groups,witnesses)),'Q3 exact provenance group membership/key/summaries');
+    assert(result.groups.every(item=>typeof item.keyId==='string'&&item.keyId.length>0),'Q3 missing opaque group identity');
+    equal(new Set(result.groups.map(item=>item.keyId)).size,result.groups.length,'Q3 collapsed opaque group identity');
+  }
+  return {read,oracle:spec.name};
 }
 
 try {
@@ -357,6 +413,14 @@ try {
     equal((await reopened.propertyTargets({options: {clockMs}})).value.definition.id, definition.id, 'Restart changed settings identity');
     return {foreign, closed, malformedEvidence, eligibility, unresolved, noCurrentOmitted: !Object.hasOwn(unbound.value, 'currentRelationValues'), retainedCurrent: relationBaseline, reopenedSnapshot: reopened.snapshot, rows: authors.value.result.rows, exactRawSource: originalSource};
   });
+  // Q3 inputs are created only after the original nine groups finish: they
+  // cannot silently change pre-existing relation inventories or restart proofs.
+  for(const[,folder]of q3Folders)await host.adapter.mkdir(folder);
+  for(const file of q3Files)await host.adapter.createText(file.path,file.source);
+  await build(host);const q3Selected=await pin(host),q3Witnesses=new Map();
+  for(const file of q3Files)q3Witnesses.set(file.path,witness(await metadata(host,file.path)));
+  for(const[index,spec]of q3Groups.entries())await group(9+index,()=>assertQ3(host,q3Selected,spec,q3Witnesses));
+  for(const file of q3Files)equal(await host.adapter.read(file.path),file.source,'Q3 queries changed exact source '+file.path);
   report.status = 'passed';
 } catch (error) { report.status = 'failed'; report.error = {code: error.code, message: String(error.stack ?? error)}; }
 finally {

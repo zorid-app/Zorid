@@ -74,7 +74,8 @@ const evidence = {
   fixture: {vault, localData, files: []}, commands: [], checks: [], exports: [],
   unsupportedCliSurface: ['No Base-specific cell-edit command; edits use existing revision-guarded full-file write', 'No CSV/TSV/Markdown table export command; existing JSON query and exact raw-source outputs are covered'],
 };
-for (const name of ['run.mjs', 'fixtures.mjs', 'q3-oracles.mjs', '../fixtures/bases-q3-semantics.mjs']) evidence.source[name] = hash(await fs.readFile(new URL(name, import.meta.url)));
+const oracleSources=['run.mjs', 'fixtures.mjs', 'q3-oracles.mjs', '../fixtures/bases-q3-semantics.mjs'];
+for (const name of oracleSources) evidence.source[name] = hash(await fs.readFile(new URL(name, import.meta.url)));
 if (args.has('--host')) {
   const host = hostPath, sha256 = hash(await fs.readFile(host));
   assert.equal(sha256, args.get('--expected-host-sha256'));
@@ -273,6 +274,7 @@ try {
   await exec('git', ['diff', '--quiet', 'HEAD', '--', 'crates', 'Cargo.toml', 'Cargo.lock'], {cwd: repo});
   assert.equal(await git('ls-files', '--others', '--exclude-standard', '--', 'crates'), '', 'Untracked Rust source appeared during verification');
   for (const [input, identity] of Object.entries(sourceInputs)) assert.equal(await git('rev-parse', `HEAD:${input}`), identity, 'Rust source closure changed during verification');
+  for(const name of oracleSources)assert.equal(hash(await fs.readFile(new URL(name,import.meta.url))),evidence.source[name],`Oracle source changed during execution: ${name}`);
   evidence.status = 'passed';evidence.finishedAt = new Date().toISOString();evidence.elapsedMs = Date.now() - started;evidence.commandCount = sequence;
 } catch (error) {
   evidence.status = 'failed';evidence.error = {name: error.name, message: error.message, stack: error.stack};process.exitCode = 1;

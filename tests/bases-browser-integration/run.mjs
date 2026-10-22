@@ -6,6 +6,7 @@ import {readFile,writeFile,mkdir,mkdtemp,readdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
+import {groupNames} from './cases.mjs';
 
 const here=path.dirname(fileURLToPath(import.meta.url)),root=path.resolve(here,'../..');
 const arg=name=>{const i=process.argv.indexOf(name);return i<0?undefined:process.argv[i+1];};
@@ -32,7 +33,7 @@ async function sourceDigest(){
     const file=dir+'/'+entry.name;if(entry.isDirectory())await walk(file);else if(entry.isFile()&&/\.(?:ts|mjs|html)$/.test(file))files.push(file);
   }}
   await walk('src');await walk('tests/bases-browser-integration');
-  files.push('tests/browser-workblocks-worker/cleanup.mjs','desktop/workblocks.cjs','desktop/document-semantics.cjs','vite.config.mjs','package.json','pnpm-lock.yaml');
+  files.push('tests/fixtures/bases-q3-semantics.mjs','tests/browser-workblocks-worker/cleanup.mjs','desktop/workblocks.cjs','desktop/document-semantics.cjs','vite.config.mjs','package.json','pnpm-lock.yaml');
   const digest=createHash('sha256');for(const file of files)digest.update(file).update('\0').update(await readFile(path.join(root,file))).update('\0');
   return digest.digest('hex');
 }
@@ -126,7 +127,7 @@ try {
   }
   if(!evidence?.finished)throw new Error('Fixture deadline expired');
   if(evidence.status!=='passed')throw new Error('Browser fixture failed: '+JSON.stringify(evidence.error));
-  if(evidence.groups.length!==9||evidence.groups.some(group=>group.status!=='passed')||evidence.unexecutedGroups.length)throw new Error('Incomplete actual browser case execution');
+  if(JSON.stringify(evidence.plannedGroups)!==JSON.stringify(groupNames)||JSON.stringify(evidence.groups.map(group=>group.name))!==JSON.stringify(groupNames)||evidence.groups.some(group=>group.status!=='passed')||evidence.unexecutedGroups.length)throw new Error('Incomplete actual browser case execution');
   if(!cdp.workerTargets.length||!workerRequests.some(request=>request.method==='GET'&&request.statusCode===200))throw new Error('Product browser-core-worker target and completed script GET not observed');
   for(const name of ['zorid_wasm.js','zorid_wasm_bg.wasm'])if(!servedAssets.some(asset=>asset.name===name&&asset.method==='GET'))throw new Error('Browser did not fetch exact WASM asset: '+name);
   const screenshot=await cdp.call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(path.join(out,'fixture-result.png'),Buffer.from(screenshot.data,'base64'));

@@ -1,5 +1,6 @@
 // Independent, human-authored notes and expected values. No evaluator or source
 // factory is used here; the fixture persists these through the normal adapter.
+import {q3Groups} from '../fixtures/bases-q3-semantics.mjs';
 export const alias = '[[../Authors/Ada|A. Lovelace]]';
 export const body = '# Pioneer\r\nBody café 🦀. Keep the Markdown body exactly.\r\n';
 export const pioneer = [
@@ -130,4 +131,5 @@ export const groupNames = [
   'optional property settings derive relation targets, reverse relations and rollups',
   'property settings source proof rejects forged source and wrong identity',
   'retained pins, foreign clients, close and restart preserve authority boundaries',
+  ...q3Groups.map(group=>group.name),
 ];
