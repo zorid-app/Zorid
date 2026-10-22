@@ -2,6 +2,19 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Matching native/CLI artifacts now build successfully for the359-test core;
+preserved hashes/source receipts are retained. Actual CLI004's known legacy
+Delta diagnostic expectation is corrected with exact multiset checks. Fresh005
+passes eight expanded Q3 groups before an ordinary Link path expectation fails
+at command110. Independent source review confirms ordinary raw Link spelling
+is distinct from canonical witness/asFile identity. The reviewed fixture
+correction adds six explicit raw/canonical checks (133 typed oracles), retaining
+all grouping/identity and diagnostic guards; fresh006 remains required.
+Neither run is full acceptance. Native-select001 aborts before launch at its
+unchanged disk guard (0 actions/0 checks); a reviewed passive receipt now records
+failure-time space on future runs. Further owned-cache recovery is assigned;
+user data and all source/product/evidence files remain protected.
+
 Electron016 reaches244 actions/29 checks, passing the previously blocked topics
 picker and all rich-property durable oracles through plain-list editing. The
 next native property-option color select fails its keyboard readback; its

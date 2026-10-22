@@ -9,6 +9,47 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest runtime/artifact update: full current Rust closure remains359/20 passing,
+crates `958b19aca4666414e956fbb2f406558af5a18366`. Matching native/CLI build72852
+exits0 in4m22s. Preserved artifacts and build/source/linkage receipts are under
+`/private/tmp/zorid-bases-final-native-958b19ac/`: host SHA
+`8e818002330fd37dd64ca316d2b657145e4f7bb7044e66a7b0979326ba4457b0`,
+CLI SHA `39ac002915dc6a17c9fd58d477ffb5d3a3dd52b6bc37684c33224a38a6080d3c`.
+Both dynamically link only system iconv/libSystem. Reproducible static compilation
+caches were retired after terminal/byte receipts; source, products, fingerprints,
+raw fixtures and logs remain.
+
+Actual CLI004 stops102 commands/7 original checks on a known diagnostic from the
+authored Grace-deletion fixture. Reviewed oracle correction `6513e19b` (root
+`c9560248`) requires that exact Delta warning alongside the complete Q3 multiset.
+Fresh CLI005 then stops110 commands/15 checks: eight Q3 groups pass, but the
+provenance group's ordinary Link DTO path differs from its canonical-path
+expectation. Independent source review confirms ordinary inferred Link DTO path preserves
+raw spelling, with canonical identity in its witness/asFile; configured relation
+display is separate. Reviewed `90ea41e3` corrects that expectation and adds six
+explicit raw/canonical checks, bringing authored typed oracles to133 while
+retaining125 CLI commands,19 browser groups and16 Q3 diagnostics. A fresh006
+run is required; no product code or weakened diagnostic guard is involved. Both failed reports remain
+unaltered, all children closed, and artifact/source/stream hashes verify. No full
+125-command or127-oracle/16-diagnostic acceptance is claimed. Reports:
+`/private/tmp/zorid-bases-cli-actual-20261022-004/zorid-bases-cli-QAGBqc/report.json`
+and `/private/tmp/zorid-bases-cli-actual-20261022-005/zorid-bases-cli-5Set89/report.json`.
+
+Native-select001 aborts **before app launch**,0 actions/0 checks: a separate
+preflight showed1,219,813,376 free bytes, but the unchanged1GiB runner guard then
+failed. Its exact failure-time free bytes were not recorded; no SELECT evidence
+exists. Passive guard receipt correction `7cde1237` now records the sample before
+the same assertion. Exact compiler/profile cache retirements are terminal with product/protected
+file hashes unchanged. Git objects were repacked with `--keep-unreachable`: all
+38335 objects remain, with main unchanged and no ref/reflog/pruning operation.
+Free space remains roughly58MiB short of the1GiB app guard. `bases_controller`
+owns a bounded three-file lossless pure-text dependency compression probe with
+full byte/metadata checks; do not infer recovery from allocated-block estimates.
+No system/swap/snapshot/user-data changes. Prepared probe002 is frontend
+`e6891aa6`, same333 artifacts/native176; it needs a new grant and the unchanged
+guard after verified space recovery.
+Main remains `e7d655e1`.
+
 Most recent source is `8f18b965`: the reviewed borrowed-name projection fix
 passes **196 library tests and all10 preview tests**, including the unchanged
 500,000-step small-prepared-subset case. Pinned compiler/rustdoc focused run18736
