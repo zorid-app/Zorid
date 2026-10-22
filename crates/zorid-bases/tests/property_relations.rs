@@ -207,6 +207,20 @@ views:
         .available_properties
         .iter()
         .any(|name| name == "note.books"));
+    let derived = query_property_relations(
+        &BaseSnapshot::from_generation(&generation, &[]).unwrap(),
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    let targets = &derived.relation_targets()["author"];
+    assert_eq!(targets.len(), 2);
+    assert_eq!(targets[0].entry_id, id("ada"));
+    assert_eq!(targets[0].path, "Authors/Ada.md");
+    assert_eq!(targets[0].label, "Ada");
+    assert!(
+        matches!(&derived.rows()[&id("second")].values["author"], BaseValue::Link { path, display: Some(display), target: Some(target), .. } if path == "Authors/Ada.md" && display == "Ada Lovelace" && target.entry_id == id("ada"))
+    );
     match &result.rows[0].values["note.books"] {
         BaseValue::List { value } => {
             assert_eq!(value.len(), 2);
@@ -314,6 +328,95 @@ fn invalid_yaml_and_unknown_definition_kinds_are_visible_and_never_discard_sourc
         assert!(!definitions.diagnostics().is_empty());
         assert_eq!(definitions.source(), Some(settings));
     }
+}
+
+#[test]
+fn invalid_derived_references_are_rejected_before_queries() {
+    let settings = "properties:\n  broken:\n    type: reverseRelation\n    reverseRelation: {property: absent}\n  count:\n    type: rollup\n    rollup: {relation: broken, aggregation: count}\n";
+    let generation = generation(settings, &[]);
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), settings)
+            .unwrap();
+    assert!(definitions.get("broken").is_none());
+    assert!(definitions.get("count").is_none());
+    assert_eq!(definitions.diagnostics().len(), 2);
+    let values = query_property_relations(
+        &BaseSnapshot::from_generation(&generation, &[]).unwrap(),
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(values.definition_diagnostics().len(), 2);
+}
+
+#[test]
+fn rollup_cycles_are_visible_errors_and_date_minima_preserve_date_type() {
+    let settings = "properties:\n  related:\n    type: relation\n    relation: {multiple: true}\n  loop:\n    type: rollup\n    rollup: {relation: related, property: loop, aggregation: values}\n  earliest:\n    type: rollup\n    rollup: {relation: related, property: published, aggregation: min}\n";
+    let generation = generation(
+        settings,
+        &[
+            (
+                "first",
+                "---\nrelated: ['[[Books/first]]']\npublished: 2026-10-21\n---\n",
+            ),
+            (
+                "second",
+                "---\nrelated: ['[[Books/first]]', '[[Books/third]]']\n---\n",
+            ),
+            ("third", "---\npublished: 2026-01-01\n---\n"),
+        ],
+    );
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), settings)
+            .unwrap();
+    let values = query_property_relations(
+        &BaseSnapshot::from_generation(&generation, &[]).unwrap(),
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert!(
+        matches!(&values.rows()[&id("first")].values["loop"], BaseValue::Error { code, .. } if code == "rollup_cycle")
+    );
+    assert_eq!(
+        values.rows()[&id("second")].values["earliest"],
+        BaseValue::Date {
+            timestamp: 1767225600000,
+            has_time: false
+        }
+    );
+}
+
+#[test]
+fn omitted_relation_settings_default_to_single_note_target_picker() {
+    let settings = "properties:\n  related:\n    type: relation\n";
+    let generation = generation(
+        settings,
+        &[("first", "---\nrelated: '[[Authors/Ada]]'\n---\n")],
+    );
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), settings)
+            .unwrap();
+    assert!(definitions.diagnostics().is_empty());
+    let values = query_property_relations(
+        &BaseSnapshot::from_generation(&generation, &[]).unwrap(),
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(values.relation_targets()["related"].len(), 3);
+    assert!(
+        matches!(&values.rows()[&id("first")].values["related"], BaseValue::Link { target: Some(target), .. } if target.entry_id == id("ada"))
+    );
+    let mut options = QueryOptions::default();
+    options.max_rows = 2;
+    let failure = query_property_relations(
+        &BaseSnapshot::from_generation(&generation, &[]).unwrap(),
+        &definitions,
+        &options,
+    )
+    .unwrap_err();
+    assert_eq!(failure.code, "budget");
 }
 
 #[test]

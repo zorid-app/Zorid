@@ -489,7 +489,9 @@ pub fn query_property_relations(
                 }
                 valid &= accepted;
                 let link = BaseValue::Link {
-                    path,
+                    // The display projection uses the resolved path; the note
+                    // keeps its original short link and optional alias.
+                    path: target.map_or(path, |entry| entry.path.as_str().to_string()),
                     target: target.map(|entry| RecordWitness {
                         entry_id: entry.id.clone(),
                         revision: entry.revision.clone(),
