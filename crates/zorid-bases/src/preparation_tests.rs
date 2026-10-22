@@ -1708,3 +1708,45 @@ fn summary_answers_copy_overall_and_group_values_without_aliasing_cache_entries(
         crate::BaseValue::Number { value: 3.0 }
     );
 }
+
+#[test]
+fn summary_picker_property_is_part_of_answer_identity_and_previews_are_copied() {
+    let r = first();
+    let mut cache = BasePreparationCache::new();
+    let (program, prepared) = answer_inputs(&mut cache, &r, STATIC_ANSWER_BASE, 0);
+    let plain = cache
+        .query_prepared_cached(&program, &prepared, &r.options, 0)
+        .unwrap();
+    assert!(plain.value().summary_previews.is_none());
+    let mut options = r.options.clone();
+    options.summary_preview_property = Some("file.name".into());
+    let picker = cache
+        .query_prepared_cached(&program, &prepared, &options, 1)
+        .unwrap();
+    assert_eq!(picker.outcome(), PreparationCacheOutcome::Miss);
+    let mut owned = picker.into_value();
+    assert_eq!(
+        owned.summary_previews.as_ref().unwrap()["Filled"],
+        crate::BaseValue::Number { value: 3.0 }
+    );
+    owned.summary_previews.as_mut().unwrap().clear();
+    let hit = cache
+        .query_prepared_cached(&program, &prepared, &options, 2)
+        .unwrap();
+    assert_eq!(hit.outcome(), PreparationCacheOutcome::Hit);
+    assert_eq!(
+        hit.value().summary_previews.as_ref().unwrap()["Filled"],
+        crate::BaseValue::Number { value: 3.0 }
+    );
+    options.summary_preview_property = Some("missing".into());
+    let changed = cache
+        .query_prepared_cached(&program, &prepared, &options, 3)
+        .unwrap();
+    assert_ne!(changed.outcome(), PreparationCacheOutcome::Hit);
+    assert!(changed
+        .value()
+        .summary_previews
+        .as_ref()
+        .unwrap()
+        .is_empty());
+}

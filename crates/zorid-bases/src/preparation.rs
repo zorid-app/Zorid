@@ -1280,12 +1280,18 @@ fn program_bytes(p: &BaseProgram, m: &mut Maintenance<'_>) -> Option<usize> {
         vector_cost(&p.formulas, m, |(k, v), m| {
             m.bytes(k.capacity().saturating_add(v.capacity()))
         })?,
+        vector_cost(&p.summaries, m, |(key, source), m| {
+            m.bytes(key.capacity().saturating_add(source.capacity()))
+        })?,
         p.filter.as_ref().map_or(Some(0), |f| filter(f, m))?,
         vector_cost(&p.views, m, |v, m| {
             costs([
                 property_heap(&v.configuration, m)?,
                 v.filter.as_ref().map_or(Some(0), |f| filter(f, m))?,
                 vector_cost(&v.order, m, |s, m| m.bytes(s.capacity()))?,
+                vector_cost(&v.summaries, m, |(property, name), m| {
+                    m.bytes(property.capacity().saturating_add(name.capacity()))
+                })?,
                 vector_cost(&v.sort, m, |s, m| m.bytes(s.property.capacity()))?,
                 v.group
                     .as_ref()
@@ -1398,6 +1404,7 @@ fn options_exact(a: &QueryOptions, b: &QueryOptions, independent: bool) -> bool 
         && a.search_terms == b.search_terms
         && a.ignore_paths == b.ignore_paths
         && a.current_entry_id == b.current_entry_id
+        && a.summary_preview_property == b.summary_preview_property
         && a.max_steps == b.max_steps
         && a.max_scanned == b.max_scanned
         && a.max_rows == b.max_rows
@@ -1422,6 +1429,11 @@ fn options_heap(o: &QueryOptions, m: &mut Maintenance<'_>) -> Option<usize> {
             o.current_entry_id
                 .as_ref()
                 .map_or(0, |id| id.as_str().len()),
+        )?,
+        m.bytes(
+            o.summary_preview_property
+                .as_ref()
+                .map_or(0, String::capacity),
         )?,
         m.bytes(o.evaluation.timezone.capacity())?,
         vector_cost(&o.evaluation.formulas, m, |(k, v), m| {
@@ -1539,6 +1551,9 @@ fn result_heap(r: &BaseQueryResult, m: &mut Maintenance<'_>) -> Option<usize> {
         })?,
         property_heap(&r.view, m)?,
         summary_heap(&r.summaries, m)?,
+        r.summary_previews
+            .as_ref()
+            .map_or(Some(0), |values| summary_heap(values, m))?,
         vector_cost(&r.rows, m, |r, m| {
             // std's current BTreeMap uses <=16 cells per node. Charge one full
             // node per entry conservatively rather than pretending len is its
@@ -1713,6 +1728,7 @@ fn copy_options(o: &QueryOptions, independent: bool) -> Result<QueryOptions, Exp
         search_terms: copy_strings(&o.search_terms, o)?,
         ignore_paths: copy_strings(&o.ignore_paths, o)?,
         current_entry_id: o.current_entry_id.clone(),
+        summary_preview_property: o.summary_preview_property.clone(),
         max_steps: o.max_steps,
         max_scanned: o.max_scanned,
         max_rows: o.max_rows,
@@ -1745,6 +1761,16 @@ fn copy_result(
     Ok(BaseQueryResult {
         snapshot_id: r.snapshot_id.clone(),
         view: copy_property(&r.view, o)?,
+        summary_previews: r
+            .summary_previews
+            .as_ref()
+            .map(|values| {
+                values
+                    .iter()
+                    .map(|(key, value)| Ok((key.clone(), copy_value(value, o)?)))
+                    .collect::<Result<_, ExpressionDiagnostic>>()
+            })
+            .transpose()?,
         relation_targets: r.relation_targets.clone(),
         property_definition_diagnostics: r.property_definition_diagnostics.clone(),
         summaries: r

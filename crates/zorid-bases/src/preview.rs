@@ -45,6 +45,8 @@ pub struct BasePreviewResult {
     pub groups: Vec<BaseGroup>,
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub summaries: std::collections::BTreeMap<String, BaseValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary_previews: Option<std::collections::BTreeMap<String, BaseValue>>,
     pub group_options: Vec<GroupOption>,
     pub properties: Vec<String>,
     pub available_properties: Vec<String>,
@@ -338,6 +340,9 @@ pub(crate) fn options_bytes(
             .saturating_add(string_bytes(source));
         admission.estimate_fits(bytes)?;
     }
+    if let Some(property) = &options.summary_preview_property {
+        bytes = bytes.saturating_add(string_bytes(property));
+    }
     if let Some(id) = &options.current_entry_id {
         bytes = bytes.saturating_add(string_bytes(id.as_str()));
     }
@@ -616,6 +621,7 @@ pub fn query_preview(
         rows: result.rows,
         groups: result.groups,
         summaries: result.summaries,
+        summary_previews: result.summary_previews,
         group_options: result.group_options,
         properties: result.properties,
         available_properties: result.available_properties,

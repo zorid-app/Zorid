@@ -102,6 +102,9 @@ pub struct QueryOptions {
         skip_serializing_if = "Option::is_none"
     )]
     pub current_entry_id: Option<crate::EntryId>,
+    /// Ephemeral footer-picker previews for one property, never saved settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_preview_property: Option<String>,
     pub max_steps: usize,
     pub max_scanned: usize,
     pub max_rows: usize,
@@ -121,6 +124,7 @@ impl Default for QueryOptions {
             ignore_paths: Vec::new(),
             evaluation: EvaluationOptions::default(),
             current_entry_id: None,
+            summary_preview_property: None,
             max_steps: 2_000_000,
             max_scanned: 50_000,
             max_rows: 10_000,
@@ -185,6 +189,8 @@ pub struct BaseQueryResult {
     /// Aggregates after filters, group visibility, search, ordering and limit.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub summaries: BTreeMap<String, BaseValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_previews: Option<BTreeMap<String, BaseValue>>,
     pub group_options: Vec<GroupOption>,
     pub properties: Vec<String>,
     pub available_properties: Vec<String>,
@@ -231,6 +237,8 @@ pub(crate) struct QueryRowsResult {
     pub(crate) groups: Vec<BaseGroup>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) summaries: BTreeMap<String, BaseValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) summary_previews: Option<BTreeMap<String, BaseValue>>,
     pub(crate) group_options: Vec<GroupOption>,
     pub(crate) properties: Vec<String>,
     pub(crate) available_properties: Vec<String>,
@@ -907,6 +915,15 @@ pub(crate) fn validate_rows_invocation(
     if input.records.len() > options.max_scanned {
         return Err(budget("Snapshot exceeds scanned-record budget"));
     }
+    if options
+        .summary_preview_property
+        .as_ref()
+        .is_some_and(|value| value.is_empty() || value.len() > 65_536)
+    {
+        return Err(budget(
+            "Summary preview property must be nonempty and within byte budget",
+        ));
+    }
     if options.search_terms.iter().map(String::len).sum::<usize>() > 65_536 {
         return Err(budget("Search terms exceed byte budget"));
     }
@@ -1003,6 +1020,7 @@ pub(crate) fn query_base_validated(
         rows: rows.rows,
         groups: rows.groups,
         summaries: rows.summaries,
+        summary_previews: rows.summary_previews,
         group_options: rows.group_options,
         properties: rows.properties,
         available_properties: rows.available_properties,
@@ -1112,6 +1130,13 @@ pub(crate) fn query_rows_validated(
         .chain(properties.iter())
         .cloned()
         .collect::<BTreeSet<_>>();
+    if let Some(property) = &options.summary_preview_property {
+        let property = program::property_id(property);
+        admit(&mut admission, |_| {
+            Ok(map_slot::<String, ()>().saturating_add(crate::preview::string_bytes(&property)))
+        })?;
+        needed.insert(property);
+    }
     for (property, _) in &view.summaries {
         admit(&mut admission, |admission| {
             admission.charge(0)?;
@@ -1809,7 +1834,7 @@ pub(crate) fn query_rows_validated(
             summaries: BTreeMap::new(),
         });
     }
-    let summaries = summarize_rows(
+    let (summaries, summary_previews) = summarize_rows(
         program,
         view,
         &rows,
@@ -1858,14 +1883,25 @@ pub(crate) fn query_rows_validated(
         } else {
             (None, Vec::new())
         };
-    let dependency =
-        program
-            .refresh_dependency(options.view_index)
-            .join(if *clock_sensitive_sort {
-                BaseClockDependency::Instant
-            } else {
-                BaseClockDependency::None
-            });
+    let dependency = program
+        .refresh_dependency(options.view_index)
+        .join(
+            input
+                .property_values
+                .map_or(BaseClockDependency::None, |values| {
+                    values.clock_dependency()
+                }),
+        )
+        .join(if options.summary_preview_property.is_some() {
+            program.summary_preview_dependency
+        } else {
+            BaseClockDependency::None
+        })
+        .join(if *clock_sensitive_sort {
+            BaseClockDependency::Instant
+        } else {
+            BaseClockDependency::None
+        });
     admit(&mut admission, |admission| {
         admission.charge(0)?;
         Ok(crate::preview::string_bytes(&options.evaluation.timezone).saturating_add(128))
@@ -1907,6 +1943,7 @@ pub(crate) fn query_rows_validated(
         rows,
         groups,
         summaries,
+        summary_previews,
         group_options,
         properties,
         available_properties: available,
@@ -1939,9 +1976,15 @@ fn summarize_rows(
     relationships: Option<&crate::graph::PreparedRelationships<'_>>,
     steps: &mut usize,
     admission: &mut Admission<'_>,
-) -> Result<BTreeMap<String, BaseValue>, ExpressionDiagnostic> {
-    if view.summaries.is_empty() {
-        return Ok(BTreeMap::new());
+) -> Result<
+    (
+        BTreeMap<String, BaseValue>,
+        Option<BTreeMap<String, BaseValue>>,
+    ),
+    ExpressionDiagnostic,
+> {
+    if view.summaries.is_empty() && options.summary_preview_property.is_none() {
+        return Ok((BTreeMap::new(), None));
     }
     admit(admission, |_| {
         Ok(input
@@ -1974,9 +2017,12 @@ fn summarize_rows(
         .collect::<HashMap<_, _>>();
     let timezone = expression::BasesTimezone::from_setting(Some(&options.evaluation.timezone))
         .map_err(|message| ExpressionDiagnostic::new("input", message))?;
-    let evaluate = |selected: &[&BaseRow], steps: &mut usize, admission: &mut Admission<'_>| {
+    let evaluate = |selected: &[&BaseRow],
+                    selections: &[(&str, &str, &str)],
+                    steps: &mut usize,
+                    admission: &mut Admission<'_>| {
         let mut result = BTreeMap::new();
-        for (property, name) in &view.summaries {
+        for &(key, property, name) in selections {
             if options
                 .evaluation
                 .cancellation
@@ -2045,16 +2091,36 @@ fn summarize_rows(
             admit(admission, |admission| {
                 let value_bytes = crate::preview::value_bytes(&evaluated.value, admission)?;
                 Ok(map_slot::<String, BaseValue>()
-                    .saturating_add(crate::preview::string_bytes(property))
+                    .saturating_add(crate::preview::string_bytes(key))
                     .saturating_add(value_bytes))
             })?;
             crate::encoded_size(&evaluated.value, options.max_output_bytes)?;
-            result.insert(property.clone(), evaluated.value);
+            result.insert(key.to_string(), evaluated.value);
         }
         Ok::<_, ExpressionDiagnostic>(result)
     };
     let selected = rows.iter().collect::<Vec<_>>();
-    let overall = evaluate(&selected, steps, admission)?;
+    let configured = view
+        .summaries
+        .iter()
+        .map(|(property, name)| (property.as_str(), property.as_str(), name.as_str()))
+        .collect::<Vec<_>>();
+    let overall = evaluate(&selected, &configured, steps, admission)?;
+    let previews = if let Some(property) = &options.summary_preview_property {
+        let property = program::property_id(property);
+        let first = rows
+            .iter()
+            .filter_map(|row| row.values.get(&property))
+            .find(|value| !matches!(value, BaseValue::Null));
+        let names = crate::summaries::names(program, first);
+        let selections = names
+            .iter()
+            .map(|name| (name.as_str(), property.as_str(), name.as_str()))
+            .collect::<Vec<_>>();
+        Some(evaluate(&selected, &selections, steps, admission)?)
+    } else {
+        None
+    };
     for group in groups {
         admit(admission, |_| Ok(slots::<&BaseRow>(group.entry_ids.len())))?;
         *steps = steps.saturating_add(group.entry_ids.len());
@@ -2069,9 +2135,9 @@ fn summarize_rows(
             .iter()
             .map(|id| by_id[id])
             .collect::<Vec<_>>();
-        group.summaries = evaluate(&selected, steps, admission)?;
+        group.summaries = evaluate(&selected, &configured, steps, admission)?;
     }
-    Ok(overall)
+    Ok((overall, previews))
 }
 
 /// Recompute only scheduling metadata for this invocation. This does not prove

@@ -683,12 +683,26 @@ pub(crate) fn runtime_from_base_value(
         ..Default::default()
     };
     let mut evaluator = Evaluator::new(&context);
-    summary_runtime_value(value, 0, &mut 0usize, &mut evaluator, &mut |_| {
+    let mut converted = summary_runtime_value(value, 0, &mut 0usize, &mut evaluator, &mut |_| {
         Err(ExpressionDiagnostic::new(
             "unavailable",
             "Derived file values require a snapshot record",
         ))
-    })
+    })?;
+    // Derived links with a witness use canonical paths supplied by the sealed
+    // relation resolver. No raw Markdown link is granted target authority here.
+    fn mark(value: &mut RuntimeValue) {
+        match value {
+            RuntimeValue::Link(link) => {
+                link.resolved_path = Some(link.target.as_ref().map(|_| link.path.clone()));
+            }
+            RuntimeValue::List(values) => values.iter_mut().for_each(mark),
+            RuntimeValue::Object(values) => values.values_mut().for_each(mark),
+            _ => {}
+        }
+    }
+    mark(&mut converted);
+    Ok(converted)
 }
 
 /// Evaluate a summary with only `values` and list callback bindings in scope.
@@ -3862,7 +3876,7 @@ fn check_ast_depth(expression: &Expr, depth: usize) -> Result<(), String> {
     }
     Ok(())
 }
-fn typed_result(value: RuntimeValue) -> Result<BaseValue, ExpressionDiagnostic> {
+pub(crate) fn typed_result(value: RuntimeValue) -> Result<BaseValue, ExpressionDiagnostic> {
     let mut bytes = 0;
     let value = typed_value(value, 0, &mut bytes)?;
     if bytes > 8 * 1024 * 1024 {

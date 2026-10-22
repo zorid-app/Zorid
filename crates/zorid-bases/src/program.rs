@@ -8,6 +8,7 @@ pub const BASE_COMPILER_VERSION: &str = "zorid-base-yaml-expression-summaries-v3
 pub struct BaseProgram {
     pub(crate) formulas: Vec<(String, String)>,
     pub(crate) summaries: Vec<(String, String)>,
+    pub(crate) summary_preview_dependency: crate::query::BaseClockDependency,
     pub(crate) filter: Option<Filter>,
     pub(crate) views: Vec<View>,
     /// Exact decoded configuration, including unknown fields. This is not a
@@ -302,6 +303,12 @@ pub fn compile_base(configuration: PropertyValue) -> Result<BaseProgram, Express
     if let Some(filter) = &root_filter {
         common_refresh = common_refresh.join(filter_clock_dependency(filter, &mut refresh_check));
     }
+    let mut summary_preview_dependency = crate::query::BaseClockDependency::None;
+    for (_, source) in &summaries {
+        summary_preview_dependency = summary_preview_dependency.join(
+            crate::expression::clock_dependency(source, &mut refresh_check),
+        );
+    }
     let defaults = vec![PropertyValue::Object(vec![
         ("type".into(), PropertyValue::String("table".into())),
         ("name".into(), PropertyValue::String("Table".into())),
@@ -405,6 +412,7 @@ pub fn compile_base(configuration: PropertyValue) -> Result<BaseProgram, Express
     Ok(BaseProgram {
         formulas,
         summaries,
+        summary_preview_dependency,
         filter: root_filter,
         views,
         configuration,

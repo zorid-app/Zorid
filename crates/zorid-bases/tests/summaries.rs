@@ -306,3 +306,68 @@ fn absent_summaries_do_not_add_wire_keys_and_invalid_mappings_reject() {
         assert!(compile_base_source(source).is_err(), "{source}");
     }
 }
+
+#[test]
+fn footer_picker_previews_one_hidden_property_without_saving_summary_configuration() {
+    let program =
+        compile_base_source("views:\n  - type: table\n    name: T\n    order: [file.name]\n")
+            .unwrap();
+    let rows = snapshot(vec![
+        row("A.md", json!([["rating", 10]])),
+        row("B.md", json!([["rating", 20]])),
+        row("C.md", json!([])),
+    ]);
+    let mut options = QueryOptions::default();
+    options.summary_preview_property = Some("rating".into());
+    let result = query_base(&program, &rows, &options).unwrap();
+    let previews = result.summary_previews.as_ref().unwrap();
+    for (name, expected) in [
+        ("Empty", 1.0),
+        ("Filled", 2.0),
+        ("Unique", 3.0),
+        ("Average", 10.0),
+        ("Sum", 30.0),
+        ("Min", 10.0),
+        ("Max", 20.0),
+        ("Range", 10.0),
+        ("Median", 15.0),
+        ("Stddev", 5.0),
+    ] {
+        assert_eq!(number(&previews[name]), expected, "{name}");
+    }
+    assert_eq!(previews.len(), 10);
+    assert!(result.summaries.is_empty());
+    assert!(result.groups[0].summaries.is_empty());
+    assert!(program.configuration.get("summaries").is_none());
+    options.summary_preview_property = None;
+    assert!(query_base(&program, &rows, &options)
+        .unwrap()
+        .summary_previews
+        .is_none());
+}
+
+#[test]
+fn picker_previews_keep_custom_errors_and_clock_refresh_without_widening_normal_queries() {
+    let program=compile_base_source("summaries:\n  Sum: values.length\n  Broken: unknownFunction()\n  Today: today()\nviews:\n  - type: table\n    name: T\n").unwrap();
+    let rows = snapshot(vec![row("A.md", json!([["n", 100]]))]);
+    assert_eq!(
+        program.refresh_dependency(0),
+        zorid_bases::BaseClockDependency::None
+    );
+    let mut options = QueryOptions::default();
+    options.summary_preview_property = Some("n".into());
+    let result = query_base(&program, &rows, &options).unwrap();
+    let previews = result.summary_previews.unwrap();
+    assert_eq!(number(&previews["Sum"]), 1.0);
+    assert!(matches!(&previews["Broken"],BaseValue::Error{code,..} if code=="unknown-function"));
+    assert_eq!(
+        result.refresh_hint.unwrap().dependency,
+        zorid_bases::BaseClockDependency::Instant,
+        "unknown functions retain conservative instant dependence"
+    );
+    let baseline = query_base(&program, &rows, &QueryOptions::default()).unwrap();
+    assert_eq!(
+        baseline.refresh_hint.unwrap().dependency,
+        zorid_bases::BaseClockDependency::None
+    );
+}

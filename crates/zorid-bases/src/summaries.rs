@@ -60,3 +60,30 @@ fn builtin(name: &str, first: Option<&BaseValue>) -> Option<&'static str> {
         _ => None,
     }
 }
+
+/// Picker candidates follow the same class dispatch as selected summaries.
+/// Custom definitions are available for every value class and override names.
+pub(crate) fn names(program: &BaseProgram, first: Option<&BaseValue>) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Some(first) = first {
+        names.extend(["Empty", "Filled", "Unique"].map(String::from));
+        names.extend(
+            match first {
+                BaseValue::Number { .. } => {
+                    vec!["Average", "Min", "Max", "Sum", "Range", "Median", "Stddev"]
+                }
+                BaseValue::Date { .. } => vec!["Earliest", "Latest", "Range"],
+                BaseValue::Boolean { .. } => vec!["Checked", "Unchecked"],
+                _ => Vec::new(),
+            }
+            .into_iter()
+            .map(String::from),
+        );
+    }
+    for (name, _) in &program.summaries {
+        if !names.contains(name) {
+            names.push(name.clone());
+        }
+    }
+    names
+}
