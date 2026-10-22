@@ -186,7 +186,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         if (own.saving || own.dirty) { error.textContent = 'Finish the current changes first.'; return; }
         try { options.preflight(); } catch (failure) { report(failure); return; }
         own.saving = true; options.onDraftChange(); item.disabled = true;
-        void action().then(() => { if (destroyed || panel !== own) return; own.saving = false; own.close(); }, failure => { if (destroyed || panel !== own) return; own.saving = false; item.disabled = false; error.textContent = failure instanceof Error ? failure.message : String(failure); if (failure instanceof BaseToolbarSaveError) { own.failure = {}; own.dirty = true; retryPersistence = failure.retry; footer.hidden = false; apply.textContent = 'Retry save'; } report(failure); options.onDraftChange(); });
+        void action().then(() => { if (destroyed || panel !== own) return; own.saving = false; const refreshed = deferredState; deferredState = undefined; own.close(); if (refreshed) update(refreshed); }, failure => { if (destroyed || panel !== own) return; own.saving = false; item.disabled = false; error.textContent = failure instanceof Error ? failure.message : String(failure); if (failure instanceof BaseToolbarSaveError) { own.failure = {}; own.dirty = true; retryPersistence = failure.retry; footer.hidden = false; apply.textContent = 'Retry save'; } report(failure); options.onDraftChange(); });
       }); item.className = 'bases-toolbar-menu-item'; item.disabled = !enabled; fields.append(item); return item;
     };
     if (name === 'Views') {
@@ -275,7 +275,15 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       if (options.commands?.updateView) readOperation = () => { const patch = validateToolbarPatch({...result,view:configuredView},readPatch()); expectedPatch = {view:patch}; return () => options.commands!.updateView!(version,selectedIndex,patch); };
       if (selectedIndex !== opening.selectedIndex && !options.commands?.updateView) { nameInput.disabled = true; layout.disabled = true; for (const input of layoutFields.querySelectorAll<HTMLInputElement>('input,select')) input.disabled = true; menuAction('Open this view', () => options.selectView(selectedIndex)); }
       if (options.commands?.setDefaultView) menuAction('Set as default view', () => options.commands!.setDefaultView!(version, selectedIndex), selectedIndex !== 0);
-      if (options.commands?.duplicateView) menuAction('Duplicate view', () => options.commands!.duplicateView!(version, selectedIndex, uniqueViewName(opening.views, configuredView.name)));
+      if (options.commands?.duplicateView) menuAction('Duplicate view', async () => {
+        const duplicateName = uniqueViewName(opening.views, configuredView.name);
+        await options.commands!.duplicateView!(version,selectedIndex,duplicateName);
+        const refreshed = deferredState; deferredState = undefined;
+        if (!options.immediate || !refreshed) return;
+        own.saving = false; own.close(false); update(refreshed);
+        const index = refreshed.views.findIndex(view=>view.name===duplicateName);
+        if (index >= 0) { open('View options',trigger,index); const input = panel?.node.querySelector<HTMLInputElement>('[aria-label="View name"]'); input?.select(); }
+      });
       if (options.commands?.moveView) { menuAction('Move view earlier', () => options.commands!.moveView!(version, selectedIndex, selectedIndex - 1), selectedIndex > 0); menuAction('Move view later', () => options.commands!.moveView!(version, selectedIndex, selectedIndex + 1), selectedIndex < opening.views.length - 1); }
       if (options.commands?.removeView) menuAction('Delete view', () => options.commands!.removeView!(version, selectedIndex), opening.views.length > 1).classList.add('mod-destructive');
       if (options.commands?.updateRoot) menuAction('New item settings', async () => { own.saving = false; own.close(false); open('New item settings', trigger); });
@@ -491,7 +499,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         if (destroyed || panel !== own) return;
         own.saving = false; own.failure = undefined; retryPersistence = undefined;
         own.dirty = generation !== submittedGeneration;
-        if (!auto) { own.dirty = false; own.close(); return; }
+        if (!auto) { own.dirty = false; const refreshed = deferredState; deferredState = undefined; own.close(); if (refreshed) update(refreshed); return; }
         if (deferredState) {
           const refreshed = deferredState; deferredState = undefined;
           configuration = expectedConfiguration;
