@@ -5,6 +5,7 @@ import { sharedBaseCoverage, sharedBasePreview, sharedBaseWitness } from './shar
 import { createBaseClockHost } from './clock.ts';
 import type { BaseClockHost } from './clock.ts';
 import { BaseToolbarSaveError, createBaseToolbar } from './toolbar.ts';
+import type { BaseFilterOperandsSnapshot } from './toolbar.ts';
 import { createBaseViewActions } from './view-actions.ts';
 import { createBaseTableView } from './table-view.ts';
 import { baseEditAdmissionReceipt } from './edit-admission-diagnostics.ts';
@@ -33,6 +34,43 @@ import type { BaseRelationTarget } from './property-widgets.ts';
 import { BASE_PROPERTY_DEFINITIONS_PATH, BASE_PROPERTY_TYPES, basePropertyName, parseBasePropertyDefinitions, updateBasePropertyDefinition, parseBasePropertyInput, inferBasePropertyDefinition, basePropertyValueDiagnostic } from './property-definitions.ts';
 import type { BasePropertyDefinition, BasePropertyDefinitions, BasePropertyType } from './property-definitions.ts';
 import { createBasePropertySettingsPanel } from './property-settings-panel.ts';
+
+const unavailableFilterOperands = Object.freeze({ files: Object.freeze([]), folders: Object.freeze([]), tags: Object.freeze([]), properties: Object.freeze([]), metadataStatus: 'unavailable' as const });
+
+/** Suggestions are copied display facts, never a second query or metadata index. */
+export function baseSessionFilterOperands(vault: Vault, definitions: BasePropertyDefinitions, knownProperties: readonly string[], isCurrent: () => boolean): BaseFilterOperandsSnapshot {
+  if (!isCurrent()) return unavailableFilterOperands;
+  const files: string[] = [], folders = new Set(['/']), properties = new Set(Object.keys(definitions.properties)), tags = new Set<string>();
+  for (const entry of vault.entries.values()) {
+    if (entry.type === 'file') files.push(entry.path);
+    else if (entry.type === 'folder') folders.add(entry.path || '/');
+  }
+  for (const property of knownProperties) if (property.startsWith('note.') && property.length > 5) properties.add(property.slice(5));
+  const state = vault.metadataFrame, frame = state?.frame;
+  let metadataStatus: NonNullable<BaseFilterOperandsSnapshot['metadataStatus']> = state?.status ?? 'unavailable';
+  if (frame) {
+    if (!frame.coverageComplete && metadataStatus === 'current') metadataStatus = 'stale';
+    if (metadataStatus === 'current' && files.some(path => {
+      const item = frame.row(path), live = vault.entries.get(path);
+      return item?.kind !== 'file' || item.value.entry.id !== live?.entryId || item.value.entry.revision !== live?.revision;
+    })) metadataStatus = 'stale';
+    for (const [path, witnessed] of frame.entries()) {
+      if (witnessed.kind !== 'file') continue;
+      const live = vault.entries.get(path);
+      if (!live || live.type !== 'file' || live.entryId !== witnessed.id || live.revision !== witnessed.revision) {
+        if (metadataStatus === 'current') metadataStatus = 'stale';
+        continue;
+      }
+      // This cache independently rejects retired or replaced saved witnesses.
+      const note = vault.metadata.get(path);
+      if (!note) { const item = frame.row(path); if (item?.kind === 'file' && item.value.metadata) metadataStatus = 'unavailable'; continue; }
+      for (const tag of note.tags) if (tag) tags.add(tag);
+      for (const property of Object.keys(note.frontmatter)) properties.add(property);
+    }
+  } else if (metadataStatus === 'current') metadataStatus = 'unavailable';
+  if (!isCurrent() || vault.metadataFrame !== state) return unavailableFilterOperands;
+  return Object.freeze({ files: Object.freeze(files.sort()), folders: Object.freeze([...folders].sort()), tags: Object.freeze([...tags].sort()), properties: Object.freeze([...properties].sort()), metadataStatus });
+}
 
 /** Pane hosts notify only when their explicit visibility state changes. */
 export interface BaseSessionVisibility {
@@ -210,6 +248,10 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   });
   const toolbarUI = createBaseToolbar(toolbar, {
     immediate: true,
+    filterOperands: () => baseSessionFilterOperands(options.vault, definitions, controller.state.result?.availableProperties ?? [], () => {
+      if (disposed || closing) return false;
+      try { options.validate(); return true; } catch { return false; }
+    }),
     preflight() { action(); if (pending.size || propertyDraft() || settings.hasDraft() || summaryPanel) throw new Error('Finish or cancel the current edit before changing the view.'); },
     selectView,
     save(version, patch) { return saveConfigurationCommand(() => controller.updateView(numericVersion(version), patch)); },
