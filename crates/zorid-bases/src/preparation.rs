@@ -1377,6 +1377,7 @@ fn options_exact(a: &QueryOptions, b: &QueryOptions, independent: bool) -> bool 
         && a.search_terms == b.search_terms
         && a.ignore_paths == b.ignore_paths
         && a.current_entry_id == b.current_entry_id
+        && a.definition_entry_id == b.definition_entry_id
         && a.summary_preview_property == b.summary_preview_property
         && a.summary_preview_group_key_id == b.summary_preview_group_key_id
         && a.max_steps == b.max_steps
@@ -1402,6 +1403,11 @@ fn options_heap(o: &QueryOptions, m: &mut Maintenance<'_>) -> Option<usize> {
         vector_cost(&o.ignore_paths, m, |s, m| m.bytes(s.capacity()))?,
         m.bytes(
             o.current_entry_id
+                .as_ref()
+                .map_or(0, |id| id.as_str().len()),
+        )?,
+        m.bytes(
+            o.definition_entry_id
                 .as_ref()
                 .map_or(0, |id| id.as_str().len()),
         )?,
@@ -1594,6 +1600,7 @@ fn result_heap(r: &BaseQueryResult, m: &mut Maintenance<'_>) -> Option<usize> {
                 )?,
                 g.key.as_ref().map_or(Some(0), |v| value_heap(v, m))?,
                 g.edit_key.as_ref().map_or(Some(0), |v| value_heap(v, m))?,
+                g.order_key.as_ref().map_or(Some(0), |v| value_heap(v, m))?,
                 summary_heap(&g.summaries, m)?,
                 vector_cost(&g.entry_ids, m, |id, m| m.bytes(id.as_str().len()))?,
             ])
@@ -1603,6 +1610,7 @@ fn result_heap(r: &BaseQueryResult, m: &mut Maintenance<'_>) -> Option<usize> {
                 m.retained(g.key_id.capacity(), g.key_id.len())?,
                 value_heap(&g.key, m)?,
                 g.edit_key.as_ref().map_or(Some(0), |v| value_heap(v, m))?,
+                g.order_key.as_ref().map_or(Some(0), |v| value_heap(v, m))?,
             ])
         })?,
         vector_cost(&r.properties, m, |s, m| m.retained(s.capacity(), s.len()))?,
@@ -1741,6 +1749,7 @@ fn copy_options(o: &QueryOptions, independent: bool) -> Result<QueryOptions, Exp
         search_terms: copy_strings(&o.search_terms, o)?,
         ignore_paths: copy_strings(&o.ignore_paths, o)?,
         current_entry_id: o.current_entry_id.clone(),
+        definition_entry_id: o.definition_entry_id.clone(),
         summary_preview_property: o.summary_preview_property.clone(),
         summary_preview_group_key_id: o.summary_preview_group_key_id.clone(),
         max_steps: o.max_steps,
@@ -1820,6 +1829,7 @@ fn copy_result(
                 key_id: g.key_id.clone(),
                 key: g.key.as_ref().map(|v| copy_value(v, o)).transpose()?,
                 edit_key: g.edit_key.as_ref().map(|v| copy_value(v, o)).transpose()?,
+                order_key: g.order_key.as_ref().map(|v| copy_value(v, o)).transpose()?,
                 entry_ids: copy_vec(&g.entry_ids, o, |id| Ok(id.clone()))?,
             })
         })?,
@@ -1828,6 +1838,7 @@ fn copy_result(
                 key_id: g.key_id.clone(),
                 key: copy_value(&g.key, o)?,
                 edit_key: g.edit_key.as_ref().map(|v| copy_value(v, o)).transpose()?,
+                order_key: g.order_key.as_ref().map(|v| copy_value(v, o)).transpose()?,
                 count: g.count,
                 listed: g.listed,
             })

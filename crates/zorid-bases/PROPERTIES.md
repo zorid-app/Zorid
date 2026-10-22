@@ -131,3 +131,25 @@ rooted path rather than Obsidian's destination-dependent shortest link spelling.
 It preserves identity when a destination note is in another folder. Unresolved
 relative link groups expose an unavailable diagnostic instead of a writable key.
 File, formula, reverse relation and rollup groups do not gain writable note keys.
+
+Manual group ordering persists ordinary YAML values through a separate optional
+`orderKey`; it is available for serializable readonly groups without granting note
+write permission. The reducer rehydrates saved keys recursively using ordinary
+frontmatter inference and the verified Base definition as link origin, separately
+from `this`. A Rust-only `definition_entry_id` selector is supplied by the host
+from the admitted saved source and included in answer-cache identity. Unrooted
+link order keys without that origin are explicitly unavailable. Original raw
+matching remains available for explicitly configured text fields.
+
+Datetime order keys preserve milliseconds and an explicit UTC offset, including
+DST overlaps; date-only keys use the invocation timezone's calendar date. The
+reducer rehydrates generated order keys and checks identity before exposing them.
+This intentionally preserves more data than the reference's second-precision
+local datetime spelling. Lists remain whole ordered keys. Numeric/string,
+singleton-list and date-only/datetime coercion do not change existing strict group
+partitions in this pass.
+
+Reference: Obsidian 1.14.4 focused typed-group capture
+`ev_9783c03d2a914d4515990a738fb4bb7497672f9a802eea8c548195e6f596bee8`,
+recorded under `/private/tmp/zorid-bases-typed-group-reference/provenance.json`.
+The capture is static evidence; it does not establish runtime parity.

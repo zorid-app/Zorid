@@ -102,6 +102,10 @@ pub struct QueryOptions {
         skip_serializing_if = "Option::is_none"
     )]
     pub current_entry_id: Option<crate::EntryId>,
+    /// Trusted host selector for the verified saved Base/inline containing file.
+    /// It is deliberately absent from transport; callers cannot override origin.
+    #[serde(skip)]
+    pub definition_entry_id: Option<crate::EntryId>,
     /// Ephemeral footer-picker previews for one property, never saved settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary_preview_property: Option<String>,
@@ -127,6 +131,7 @@ impl Default for QueryOptions {
             ignore_paths: Vec::new(),
             evaluation: EvaluationOptions::default(),
             current_entry_id: None,
+            definition_entry_id: None,
             summary_preview_property: None,
             summary_preview_group_key_id: None,
             max_steps: 2_000_000,
@@ -170,6 +175,9 @@ pub struct BaseGroup {
     /// Absence is readonly; lists are whole-key assignments, never split items.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edit_key: Option<BaseValue>,
+    /// Persistable manual-order key, independent of note write permission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_key: Option<BaseValue>,
     pub entry_ids: Vec<crate::EntryId>,
     /// Aggregates of exactly this group's returned rows, including offscreen rows.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -182,6 +190,8 @@ pub struct GroupOption {
     pub key: BaseValue,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edit_key: Option<BaseValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_key: Option<BaseValue>,
     pub count: usize,
     pub listed: bool,
 }
@@ -715,19 +725,8 @@ fn transfer_group_edit_key(
                         "Group link target has no exact captured revision",
                     )
                 })?;
-            let mut rooted = String::from("/");
-            const HEX: &[u8; 16] = b"0123456789ABCDEF";
             check(record.path.len())?;
-            for byte in record.path.bytes() {
-                if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'.' | b'_' | b'~')
-                {
-                    rooted.push(byte as char);
-                } else {
-                    rooted.push('%');
-                    rooted.push(HEX[(byte >> 4) as usize] as char);
-                    rooted.push(HEX[(byte & 15) as usize] as char);
-                }
-            }
+            let mut rooted = encode_rooted_group_path(&record.path);
             if let Some((_, fragment)) = original_path.split_once('#') {
                 rooted.push('#');
                 rooted.push_str(fragment);
@@ -816,6 +815,256 @@ fn transfer_group_edit_key(
         _ => Ok(configured_group_edit_key(source)),
     }
 }
+fn hydrate_group_order_key(
+    source: &BaseValue,
+    property: &str,
+    origin: Option<&DetachedRecord>,
+    graph: Option<&crate::graph::PreparedRelationships<'_>>,
+    timezone: &expression::BasesTimezone,
+    check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+    admit: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+) -> Result<BaseValue, ExpressionDiagnostic> {
+    let raw = expression::runtime_from_base_value(source, timezone)?;
+    let value = expression::infer_frontmatter_value(raw, timezone);
+    fn inspect(
+        value: &expression::RuntimeValue,
+        has_origin: bool,
+        has_graph: bool,
+        check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+    ) -> Result<(), ExpressionDiagnostic> {
+        check(1)?;
+        match value {
+            expression::RuntimeValue::Link(link) if !link.external => {
+                if !has_graph {
+                    return Err(ExpressionDiagnostic::new(
+                        "unavailable",
+                        "Manual link group order requires the captured namespace",
+                    ));
+                }
+                if !has_origin && !link.path.starts_with('/') {
+                    return Err(ExpressionDiagnostic::new("unavailable", "Relative manual group-order links require a verified Base definition origin"));
+                }
+            }
+            expression::RuntimeValue::List(values) => {
+                for value in values {
+                    inspect(value, has_origin, has_graph, check)?;
+                }
+            }
+            expression::RuntimeValue::Object(values) => {
+                for value in values.values() {
+                    inspect(value, has_origin, has_graph, check)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    inspect(&value, origin.is_some(), graph.is_some(), check)?;
+    let mut file = expression::BasesFile {
+        path: origin.map_or_else(String::new, |record| record.path.clone()),
+        witness: origin.and_then(|record| record.witness.clone()),
+        ..Default::default()
+    };
+    file.properties.insert(property.to_string(), value);
+    if let Some(graph) = graph {
+        graph.resolve_property_links(&mut file, check, admit)?;
+    }
+    expression::typed_result(
+        file.properties
+            .shift_remove(property)
+            .expect("inserted group order value"),
+    )
+}
+
+fn serialize_group_order_key(
+    value: &BaseValue,
+    source: &BaseValue,
+    records: &HashMap<&crate::EntryId, &DetachedRecord>,
+    graph: Option<&crate::graph::PreparedRelationships<'_>>,
+    timezone: &expression::BasesTimezone,
+    check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+) -> Result<Option<BaseValue>, ExpressionDiagnostic> {
+    check(1)?;
+    match value {
+        BaseValue::Date {
+            timestamp,
+            has_time,
+        } => {
+            let instant = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(*timestamp)
+                .ok_or_else(|| {
+                    ExpressionDiagnostic::new(
+                        "unavailable",
+                        "Group date is outside the serializable range",
+                    )
+                })?;
+            let pattern = if *has_time {
+                "%Y-%m-%dT%H:%M:%S%.3f%:z"
+            } else {
+                "%Y-%m-%d"
+            };
+            let value = match timezone {
+                expression::BasesTimezone::Utc => instant.format(pattern).to_string(),
+                expression::BasesTimezone::Fixed(offset) => {
+                    instant.with_timezone(offset).format(pattern).to_string()
+                }
+                expression::BasesTimezone::Named(zone) => {
+                    instant.with_timezone(zone).format(pattern).to_string()
+                }
+            };
+            Ok(Some(BaseValue::String { value }))
+        }
+        BaseValue::File { path } => {
+            let encoded = encode_rooted_group_path(path);
+            let (_, witness) = graph
+                .ok_or_else(|| {
+                    ExpressionDiagnostic::new(
+                        "unavailable",
+                        "File group order requires the captured namespace",
+                    )
+                })?
+                .resolve_target(&expression::BasesFile::default(), &encoded, check)?
+                .filter(|(resolved, _)| resolved == path)
+                .ok_or_else(|| {
+                    ExpressionDiagnostic::new(
+                        "unavailable",
+                        "File group order cannot identify the exact captured path",
+                    )
+                })?;
+            transfer_group_edit_key(
+                &BaseValue::Link {
+                    path: path.clone(),
+                    target: Some(witness),
+                    display: None,
+                    display_value: None,
+                    external: false,
+                },
+                source,
+                records,
+                graph,
+                check,
+            )
+        }
+        BaseValue::List { value } => {
+            let raw = match source {
+                BaseValue::List { value: raw } if raw.len() == value.len() => Some(raw),
+                _ => None,
+            };
+            let mut result = Vec::with_capacity(value.len());
+            for (index, value) in value.iter().enumerate() {
+                let Some(value) = serialize_group_order_key(
+                    value,
+                    raw.map_or(source, |raw| &raw[index]),
+                    records,
+                    graph,
+                    timezone,
+                    check,
+                )?
+                else {
+                    return Ok(None);
+                };
+                result.push(value);
+            }
+            Ok(Some(BaseValue::List { value: result }))
+        }
+        BaseValue::Object { value } => {
+            let BaseValue::Object { value: raw } = source else {
+                return Ok(None);
+            };
+            if raw.len() != value.len() {
+                return Ok(None);
+            }
+            let mut result = Vec::with_capacity(value.len());
+            for ((key, value), (raw_key, source)) in value.iter().zip(raw) {
+                if key != raw_key {
+                    return Ok(None);
+                }
+                let Some(value) =
+                    serialize_group_order_key(value, source, records, graph, timezone, check)?
+                else {
+                    return Ok(None);
+                };
+                result.push((key.clone(), value));
+            }
+            Ok(Some(BaseValue::Object { value: result }))
+        }
+        _ => transfer_group_edit_key(value, source, records, graph, check),
+    }
+}
+
+fn manual_group_identity(
+    value: &BaseValue,
+    graph: Option<&crate::graph::PreparedRelationships<'_>>,
+    check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+) -> Result<String, ExpressionDiagnostic> {
+    fn adapt(
+        value: &BaseValue,
+        graph: Option<&crate::graph::PreparedRelationships<'_>>,
+        check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+    ) -> Result<BaseValue, ExpressionDiagnostic> {
+        check(1)?;
+        Ok(match value {
+            BaseValue::File { path } => {
+                check(path.len())?;
+                let (_, witness) = graph
+                    .ok_or_else(|| {
+                        ExpressionDiagnostic::new(
+                            "unavailable",
+                            "File group identity requires the captured namespace",
+                        )
+                    })?
+                    .resolve_target(
+                        &expression::BasesFile::default(),
+                        &encode_rooted_group_path(path),
+                        check,
+                    )?
+                    .filter(|(actual, _)| actual == path)
+                    .ok_or_else(|| {
+                        ExpressionDiagnostic::new(
+                            "unavailable",
+                            "File group identity is outside the captured namespace",
+                        )
+                    })?;
+                BaseValue::Link {
+                    path: path.clone(),
+                    target: Some(witness),
+                    display: None,
+                    display_value: None,
+                    external: false,
+                }
+            }
+            BaseValue::List { value } => BaseValue::List {
+                value: value
+                    .iter()
+                    .map(|value| adapt(value, graph, check))
+                    .collect::<Result<Vec<_>, _>>()?,
+            },
+            BaseValue::Object { value } => BaseValue::Object {
+                value: value
+                    .iter()
+                    .map(|(key, value)| Ok((key.clone(), adapt(value, graph, check)?)))
+                    .collect::<Result<Vec<_>, ExpressionDiagnostic>>()?,
+            },
+            value => value.clone(),
+        })
+    }
+    Ok(canonical(&adapt(value, graph, check)?))
+}
+
+fn encode_rooted_group_path(path: &str) -> String {
+    let mut result = String::from("/");
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'.' | b'_' | b'~') {
+            result.push(byte as char);
+        } else {
+            result.push('%');
+            result.push(HEX[(byte >> 4) as usize] as char);
+            result.push(HEX[(byte & 15) as usize] as char);
+        }
+    }
+    result
+}
+
 fn configured_group_edit_key(value: &BaseValue) -> Option<BaseValue> {
     match value {
         BaseValue::Null
@@ -1777,8 +2026,26 @@ pub(crate) fn query_rows_validated(
                 .property_values
                 .is_some_and(|values| values.is_read_only_property(name))
         });
+    let group_timezone =
+        expression::BasesTimezone::from_setting(Some(&options.evaluation.timezone))
+            .map_err(|message| ExpressionDiagnostic::new("input", message))?;
+    let definition_origin = options
+        .definition_entry_id
+        .as_ref()
+        .map(|id| {
+            by_id.get(id).copied().ok_or_else(|| {
+                ExpressionDiagnostic::new(
+                    "stale-source",
+                    "Base definition origin is outside the captured snapshot",
+                )
+            })
+        })
+        .transpose()?;
     let mut group_edit_keys = BTreeMap::<String, Option<BaseValue>>::new();
-    if writable_group_property.is_some() {
+    let mut group_order_keys = BTreeMap::<String, Option<BaseValue>>::new();
+    let mut rendered_group_keys = BTreeMap::<String, &BaseValue>::new();
+    let mut manual_group_keys = BTreeMap::<String, &BaseValue>::new();
+    if view.group.is_some() {
         for row in &rows {
             steps_used = steps_used.saturating_add(1);
             check_query_work(
@@ -1817,44 +2084,48 @@ pub(crate) fn query_rows_validated(
             admit(&mut admission, |admission| {
                 crate::preview::value_bytes(candidate, admission)
             })?;
-            let value = match transfer_group_edit_key(
-                rendered,
-                candidate,
-                &by_id,
-                relationships.as_ref(),
-                &mut |work| {
-                    steps_used = steps_used.saturating_add(work);
-                    if options
-                        .evaluation
-                        .cancellation
-                        .as_ref()
-                        .is_some_and(|token| token.is_cancelled())
-                    {
-                        return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+            let value = if writable_group_property.is_some() {
+                match transfer_group_edit_key(
+                    rendered,
+                    candidate,
+                    &by_id,
+                    relationships.as_ref(),
+                    &mut |work| {
+                        steps_used = steps_used.saturating_add(work);
+                        if options
+                            .evaluation
+                            .cancellation
+                            .as_ref()
+                            .is_some_and(|token| token.is_cancelled())
+                        {
+                            return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+                        }
+                        check_query_work(
+                            steps_used,
+                            &admission,
+                            options,
+                            "Group transfer serialization exceeds query work budget",
+                        )
+                    },
+                ) {
+                    Ok(value) => value,
+                    Err(error) if matches!(error.code.as_str(), "budget" | "cancelled") => {
+                        return Err(error)
                     }
-                    check_query_work(
-                        steps_used,
-                        &admission,
-                        options,
-                        "Group transfer serialization exceeds query work budget",
-                    )
-                },
-            ) {
-                Ok(value) => value,
-                Err(error) if matches!(error.code.as_str(), "budget" | "cancelled") => {
-                    return Err(error)
+                    Err(error) => {
+                        report(
+                            &mut diagnostics,
+                            by_id[&row.entry_id],
+                            "group",
+                            Some(property),
+                            error,
+                            &mut admission,
+                        )?;
+                        None
+                    }
                 }
-                Err(error) => {
-                    report(
-                        &mut diagnostics,
-                        by_id[&row.entry_id],
-                        "group",
-                        Some(property),
-                        error,
-                        &mut admission,
-                    )?;
-                    None
-                }
+            } else {
+                None
             };
             if let Some(value) = &value {
                 admit(&mut admission, |admission| {
@@ -1865,11 +2136,261 @@ pub(crate) fn query_rows_validated(
                 Ok(map_slot::<String, Option<BaseValue>>()
                     .saturating_add(crate::preview::string_bytes(&identity)))
             })?;
+            let mut order_work = 0usize;
+            let order_remaining = options
+                .max_steps
+                .saturating_sub(steps_used)
+                .saturating_sub(admission_work(&admission));
+            let mut check = |work: usize| {
+                order_work = order_work.saturating_add(work);
+                if options
+                    .evaluation
+                    .cancellation
+                    .as_ref()
+                    .is_some_and(|token| token.is_cancelled())
+                {
+                    return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+                }
+                if order_work > order_remaining {
+                    return Err(ExpressionDiagnostic::new(
+                        "budget",
+                        "Group order serialization exceeds query work budget",
+                    ));
+                }
+                Ok(())
+            };
+            let mut order_key = serialize_group_order_key(
+                rendered,
+                candidate,
+                &by_id,
+                relationships.as_ref(),
+                &group_timezone,
+                &mut check,
+            );
+            let original_identity =
+                match manual_group_identity(rendered, relationships.as_ref(), &mut check) {
+                    Ok(identity) => identity,
+                    Err(error) if matches!(error.code.as_str(), "budget" | "cancelled") => {
+                        return Err(error)
+                    }
+                    Err(_) => canonical(rendered),
+                };
+            if let Ok(Some(key)) = &order_key {
+                if canonical(key) != canonical(rendered) {
+                    let restored = hydrate_group_order_key(
+                        key,
+                        property,
+                        None,
+                        relationships.as_ref(),
+                        &group_timezone,
+                        &mut check,
+                        &mut |bytes| admit(&mut admission, |_| Ok(bytes)),
+                    )?;
+                    if manual_group_identity(&restored, relationships.as_ref(), &mut check)?
+                        != original_identity
+                        && canonical(key) != canonical(rendered)
+                    {
+                        order_key = Err(ExpressionDiagnostic::new(
+                            "unavailable",
+                            "Serialized manual group key does not preserve its typed identity",
+                        ));
+                    }
+                }
+            }
+            let manual_identity = if view.group_order.is_some() {
+                Some(original_identity)
+            } else {
+                None
+            };
+            steps_used = steps_used.saturating_add(order_work);
+            let order_key = match order_key {
+                Ok(value) => value,
+                Err(error) if matches!(error.code.as_str(), "budget" | "cancelled") => {
+                    return Err(error)
+                }
+                Err(error) => {
+                    if value.is_some() || writable_group_property.is_none() {
+                        report(
+                            &mut diagnostics,
+                            by_id[&row.entry_id],
+                            "group",
+                            Some(property),
+                            error,
+                            &mut admission,
+                        )?;
+                    }
+                    None
+                }
+            };
+            if let Some(key) = &order_key {
+                admit(&mut admission, |admission| {
+                    crate::preview::value_bytes(key, admission)
+                })?;
+            }
+            admit(&mut admission, |_| {
+                Ok(map_slot::<String, Option<BaseValue>>()
+                    .saturating_add(crate::preview::string_bytes(&identity))
+                    .saturating_add(map_slot::<String, &BaseValue>())
+                    .saturating_add(crate::preview::string_bytes(&identity)))
+            })?;
+            rendered_group_keys.insert(identity.clone(), rendered);
+            if let Some(manual) = manual_identity {
+                admit(&mut admission, |_| {
+                    Ok(map_slot::<String, &BaseValue>()
+                        .saturating_add(crate::preview::string_bytes(&manual)))
+                })?;
+                manual_group_keys.entry(manual).or_insert(rendered);
+            }
+            group_order_keys.insert(identity.clone(), order_key);
             group_edit_keys.insert(identity, value);
         }
     }
+    let mut configured_group_sources = BTreeMap::<String, BaseValue>::new();
+    let mut configured_edit_keys = BTreeMap::<String, Option<BaseValue>>::new();
+    let mut configured_order_keys = BTreeMap::<String, Option<BaseValue>>::new();
+    let group_order = if let Some(keys) = &view.group_order {
+        if keys.len() > options.max_groups {
+            return Err(budget("Configured groups exceed group budget"));
+        }
+        let property = &view.group.as_ref().expect("compiled group order").property;
+        let mut normalized = Vec::with_capacity(keys.len());
+        for source in keys {
+            admit(&mut admission, |admission| {
+                Ok(crate::preview::value_bytes(source, admission)?
+                    .saturating_mul(4)
+                    .saturating_add(512))
+            })?;
+            let mut hydration_work = 0usize;
+            let remaining = options
+                .max_steps
+                .saturating_sub(steps_used)
+                .saturating_sub(admission_work(&admission));
+            let mut check = |work: usize| {
+                hydration_work = hydration_work.saturating_add(work);
+                if options
+                    .evaluation
+                    .cancellation
+                    .as_ref()
+                    .is_some_and(|token| token.is_cancelled())
+                {
+                    return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+                }
+                if hydration_work > remaining {
+                    return Err(ExpressionDiagnostic::new(
+                        "budget",
+                        "Manual group order hydration exceeds query work budget",
+                    ));
+                }
+                Ok(())
+            };
+            canonical_admission(source, &mut admission)?;
+            let raw_identity = canonical(source);
+            let hydrated = if let Some(existing) = rendered_group_keys.get(&raw_identity) {
+                (*existing).clone()
+            } else {
+                hydrate_group_order_key(
+                    source,
+                    property,
+                    definition_origin,
+                    relationships.as_ref(),
+                    &group_timezone,
+                    &mut check,
+                    &mut |bytes| admit(&mut admission, |_| Ok(bytes)),
+                )?
+            };
+            let identity = manual_group_identity(&hydrated, relationships.as_ref(), &mut check)?;
+            steps_used = steps_used.saturating_add(hydration_work);
+            canonical_admission(&hydrated, &mut admission)?;
+            canonical_admission(source, &mut admission)?;
+            let key = manual_group_keys
+                .get(&identity)
+                .or_else(|| rendered_group_keys.get(&canonical(source)))
+                .map_or(&hydrated, |value| *value)
+                .clone();
+            canonical_admission(&key, &mut admission)?;
+            let identity = canonical(&key);
+            if configured_group_sources.contains_key(&identity) {
+                continue;
+            }
+            admit(&mut admission, |_| {
+                Ok(map_slot::<String, BaseValue>()
+                    .saturating_add(crate::preview::string_bytes(&identity)))
+            })?;
+            let mut serialization_work = 0usize;
+            let remaining = options
+                .max_steps
+                .saturating_sub(steps_used)
+                .saturating_sub(admission_work(&admission));
+            let mut check = |work: usize| {
+                serialization_work = serialization_work.saturating_add(work);
+                if options
+                    .evaluation
+                    .cancellation
+                    .as_ref()
+                    .is_some_and(|token| token.is_cancelled())
+                {
+                    return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+                }
+                if serialization_work > remaining {
+                    return Err(ExpressionDiagnostic::new(
+                        "budget",
+                        "Configured group serialization exceeds query work budget",
+                    ));
+                }
+                Ok(())
+            };
+            let transfer = if writable_group_property.is_some()
+                && !group_edit_keys.contains_key(&identity)
+            {
+                transfer_group_edit_key(&key, source, &by_id, relationships.as_ref(), &mut check)
+            } else {
+                Ok(None)
+            };
+            let order = if !group_order_keys.contains_key(&identity) {
+                serialize_group_order_key(
+                    &key,
+                    source,
+                    &by_id,
+                    relationships.as_ref(),
+                    &group_timezone,
+                    &mut check,
+                )
+            } else {
+                Ok(None)
+            };
+            steps_used = steps_used.saturating_add(serialization_work);
+            let mut accept = |result:Result<Option<BaseValue>,ExpressionDiagnostic>| -> Result<Option<BaseValue>,ExpressionDiagnostic> { match result {
+                Ok(value) => Ok(value),
+                Err(error) if matches!(error.code.as_str(),"budget"|"cancelled") => Err(error),
+                Err(error) => {
+                    if let Some(record) = definition_origin.or_else(|| input.records.first()) { report(&mut diagnostics,record,"group",Some(property),error,&mut admission)?; }
+                    Ok(None)
+                }
+            }};
+            let transfer = accept(transfer)?;
+            let order = accept(order)?;
+            for value in transfer.iter().chain(order.iter()) {
+                admit(&mut admission, |admission| {
+                    crate::preview::value_bytes(value, admission)
+                })?;
+            }
+            admit(&mut admission, |_| {
+                Ok(2usize.saturating_mul(
+                    map_slot::<String, Option<BaseValue>>()
+                        .saturating_add(crate::preview::string_bytes(&identity)),
+                ))
+            })?;
+            configured_edit_keys.insert(identity.clone(), transfer);
+            configured_order_keys.insert(identity.clone(), order);
+            configured_group_sources.insert(identity, source.clone());
+            normalized.push(key);
+        }
+        Some(normalized)
+    } else {
+        None
+    };
     let mut group_options = Vec::new();
-    if let Some(keys) = &view.group_order {
+    if let Some(keys) = &group_order {
         if keys.len() > options.max_groups {
             return Err(budget("Configured groups exceed group budget"));
         }
@@ -1909,6 +2430,7 @@ pub(crate) fn query_rows_validated(
                 key_id: group_key_id(key),
                 key: key.clone(),
                 edit_key: None,
+                order_key: None,
                 count: indexed
                     .get(&canonical(key))
                     .map(|(_, count)| *count)
@@ -1933,6 +2455,7 @@ pub(crate) fn query_rows_validated(
                     key_id: group_key_id(&key),
                     key,
                     edit_key: None,
+                    order_key: None,
                     count,
                     listed: false,
                 }),
@@ -1946,20 +2469,28 @@ pub(crate) fn query_rows_validated(
         }
         rows.retain(|row| listed.contains(&canonical(&group_key(row))));
     }
-    if writable_group_property.is_some() {
-        for option in &mut group_options {
-            canonical_admission(&option.key, &mut admission)?;
-            let source = match group_edit_keys.get(&canonical(&option.key)) {
-                Some(source) => source.as_ref(),
-                None => Some(&option.key),
-            };
-            if let Some(value) = source {
-                admit(&mut admission, |admission| {
-                    crate::preview::value_bytes(value, admission)
-                })?;
-            }
-            option.edit_key = source.and_then(configured_group_edit_key);
+    for option in &mut group_options {
+        canonical_admission(&option.key, &mut admission)?;
+        let identity = canonical(&option.key);
+        let edit = group_edit_keys
+            .get(&identity)
+            .or_else(|| configured_edit_keys.get(&identity))
+            .and_then(Option::as_ref);
+        let order = group_order_keys
+            .get(&identity)
+            .or_else(|| configured_order_keys.get(&identity))
+            .and_then(Option::as_ref);
+        for value in edit.into_iter().chain(order) {
+            admit(&mut admission, |admission| {
+                crate::preview::value_bytes(value, admission)
+            })?;
         }
+        option.edit_key = if writable_group_property.is_some() {
+            edit.cloned()
+        } else {
+            None
+        };
+        option.order_key = order.cloned();
     }
     counts.after_group_order = rows.len();
     let search_work = rows
@@ -2273,10 +2804,18 @@ pub(crate) fn query_rows_validated(
                     })?;
                 }
                 let edit_key = source.cloned();
+                let order_source = group_order_keys.get(&key_id).and_then(Option::as_ref);
+                if let Some(value) = order_source {
+                    admit(&mut admission, |admission| {
+                        crate::preview::value_bytes(value, admission)
+                    })?;
+                }
+                let order_key = order_source.cloned();
                 groups.push(BaseGroup {
                     key_id: Some(format!("base-key-v1:{key_id}")),
                     key: Some(key),
                     edit_key,
+                    order_key,
                     entry_ids: Vec::new(),
                     summaries: BTreeMap::new(),
                 });
@@ -2290,7 +2829,7 @@ pub(crate) fn query_rows_validated(
             })?;
             groups[index].entry_ids.push(row.entry_id.clone());
         }
-        if let Some(keys) = &view.group_order {
+        if let Some(keys) = &group_order {
             for key in keys {
                 canonical_admission(key, &mut admission)?;
                 admit(&mut admission, |_| Ok(map_slot::<String, usize>()))?;
@@ -2360,6 +2899,7 @@ pub(crate) fn query_rows_validated(
             key_id: None,
             key: None,
             edit_key: None,
+            order_key: None,
             entry_ids: rows.iter().map(|row| row.entry_id.clone()).collect(),
             summaries: BTreeMap::new(),
         });

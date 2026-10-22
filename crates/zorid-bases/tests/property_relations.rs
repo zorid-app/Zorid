@@ -1208,3 +1208,324 @@ fn unresolved_relative_group_transfers_are_explicitly_unavailable() {
         }
     );
 }
+
+fn plain_group_order_value(value: &BaseValue) -> serde_json::Value {
+    match value {
+        BaseValue::Null => serde_json::Value::Null,
+        BaseValue::Boolean { value } => serde_json::json!(value),
+        BaseValue::Number { value } => serde_json::json!(value),
+        BaseValue::String { value } => serde_json::json!(value),
+        BaseValue::List { value } => {
+            serde_json::Value::Array(value.iter().map(plain_group_order_value).collect())
+        }
+        BaseValue::Object { value } => serde_json::Value::Object(
+            value
+                .iter()
+                .map(|(key, value)| (key.clone(), plain_group_order_value(value)))
+                .collect(),
+        ),
+        _ => panic!("order key must be a plain persisted YAML value"),
+    }
+}
+
+#[test]
+fn manual_date_order_rehydrates_raw_keys_and_preserves_dst_subsecond_identity() {
+    fn source(order: Option<&str>) -> String {
+        let order = order.map_or_else(String::new, |order| format!("    groupOrder: {order}\n"));
+        format!("filters: 'published != null'\nviews:\n  - type: table\n    name: Dates\n    order: [file.name, published]\n    groupBy: {{property: published, direction: ASC}}\n{order}")
+    }
+    let notes = [
+        (
+            "first",
+            "---\npublished: '2026-11-01T01:30:00.123-04:00'\n---\n",
+        ),
+        (
+            "second",
+            "---\npublished: '2026-11-01T01:30:00.123-05:00'\n---\n",
+        ),
+    ];
+    let before = generation_with_settings_file("", &notes, false);
+    let mut options = QueryOptions::default();
+    options.evaluation.timezone = "America/Toronto".into();
+    let result = zorid_bases::query_generation(
+        &compile_base_source(&source(None)).unwrap(),
+        &before,
+        &[],
+        &options,
+    )
+    .unwrap();
+    assert_eq!(result.groups.len(), 2);
+    let keys = result
+        .groups
+        .iter()
+        .rev()
+        .map(|group| plain_group_order_value(group.order_key.as_ref().expect("date order source")))
+        .collect::<Vec<_>>();
+    assert_eq!(keys[0], serde_json::json!("2026-11-01T01:30:00.123-05:00"));
+    assert_eq!(keys[1], serde_json::json!("2026-11-01T01:30:00.123-04:00"));
+    let persisted_source = source(Some(&serde_json::to_string(&keys).unwrap()));
+    let persisted = zorid_bases::query_generation(
+        &compile_base_source(&persisted_source).unwrap(),
+        &before,
+        &[],
+        &options,
+    )
+    .unwrap();
+    assert_eq!(persisted.rows.len(), 2);
+    assert_eq!(
+        persisted
+            .groups
+            .iter()
+            .map(|group| &group.key_id)
+            .collect::<Vec<_>>(),
+        result
+            .groups
+            .iter()
+            .rev()
+            .map(|group| &group.key_id)
+            .collect::<Vec<_>>()
+    );
+    assert!(persisted
+        .group_options
+        .iter()
+        .all(|option| matches!(&option.key, BaseValue::Date { .. }) && option.order_key.is_some()));
+    let date_only = generation_with_settings_file(
+        "",
+        &[
+            ("first", "---\npublished: 2026-01-01\n---\n"),
+            ("second", "---\npublished: 2026-02-03\n---\n"),
+        ],
+        false,
+    );
+    let ordered = zorid_bases::query_generation(
+        &compile_base_source(&source(Some("['2026-02-03', '2026-01-01']"))).unwrap(),
+        &date_only,
+        &[],
+        &options,
+    )
+    .unwrap();
+    assert_eq!(ordered.groups[0].entry_ids, vec![id("second")]);
+    assert_eq!(ordered.groups[1].entry_ids, vec![id("first")]);
+    assert_eq!(
+        ordered.groups[0].order_key,
+        Some(BaseValue::String {
+            value: "2026-02-03".into()
+        })
+    );
+}
+
+#[test]
+fn manual_link_and_list_order_use_base_origin_and_persist_plain_rooted_keys() {
+    fn source(order: &str) -> String {
+        format!("filters: 'kind == \"card\"'\nviews:\n  - type: table\n    name: Cards\n    order: [file.name, author]\n    groupBy: {{property: author, direction: ASC}}\n    groupOrder: {order}\n")
+    }
+    fn records(source: &str, first: &str, second: &str) -> Generation {
+        generation_from_records(vec![
+            ("base", "Config/Library.base".into(), source.into(), false),
+            (
+                "other-base",
+                "Other/Library.base".into(),
+                source.into(),
+                false,
+            ),
+            ("ada", "Config/Ada.md".into(), "Ada\n".into(), true),
+            ("other", "Other/Ada.md".into(), "Other Ada\n".into(), true),
+            (
+                "context",
+                "Other/Context.md".into(),
+                "Context\n".into(),
+                true,
+            ),
+            ("first", "Books/first.md".into(), first.into(), true),
+            ("second", "Books/second.md".into(), second.into(), true),
+        ])
+    }
+    let first = "---\nkind: card\nauthor: '[[/Config/Ada|First Alias]]'\n---\n";
+    let second = "---\nkind: card\nauthor: '[[/Other/Ada|Second Alias]]'\n---\n";
+    let raw = source("['[[Ada|Saved Alias]]']");
+    let before = records(&raw, first, second);
+    let mut options = QueryOptions::default();
+    options.definition_entry_id = Some(id("base"));
+    options.current_entry_id = Some(id("context"));
+    let result =
+        zorid_bases::query_generation(&compile_base_source(&raw).unwrap(), &before, &[], &options)
+            .unwrap();
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0].entry_id, id("first"));
+    assert!(
+        matches!(&result.groups[0].key,Some(BaseValue::Link {target:Some(target),..}) if target.entry_id==id("ada"))
+    );
+    let mut cache = zorid_bases::BasePreparationCache::default();
+    let compiled = cache.compile_source(&raw, 0).unwrap();
+    let prepared = cache.prepare_generation(&before, &[], &options, 0).unwrap();
+    cache
+        .query_prepared_cached(&compiled, &prepared, &options, 0)
+        .unwrap();
+    let mut other_origin = options.clone();
+    other_origin.definition_entry_id = Some(id("other-base"));
+    let changed = cache
+        .query_prepared_cached(&compiled, &prepared, &other_origin, 1)
+        .unwrap();
+    assert_ne!(changed.outcome(), zorid_bases::PreparationCacheOutcome::Hit);
+    assert_eq!(changed.value().rows[0].entry_id, id("second"));
+    let raw_keys = result
+        .group_options
+        .iter()
+        .rev()
+        .map(|group| plain_group_order_value(group.order_key.as_ref().unwrap()))
+        .collect::<Vec<_>>();
+    let raw = source(&serde_json::to_string(&raw_keys).unwrap());
+    let after = records(&raw, first, second);
+    let persisted =
+        zorid_bases::query_generation(&compile_base_source(&raw).unwrap(), &after, &[], &options)
+            .unwrap();
+    assert_eq!(persisted.rows.len(), 2);
+    assert_eq!(persisted.groups[0].entry_ids, vec![id("second")]);
+    assert_eq!(persisted.groups[1].key_id, result.groups[0].key_id);
+    let first = "---\nkind: card\nauthor: ['[[/Config/Ada|A]]','[[/Other/Ada|B]]']\n---\n";
+    let second = "---\nkind: card\nauthor: ['[[/Other/Ada|B]]','[[/Config/Ada|A]]']\n---\n";
+    let raw = source("[['[[Ada]]','[[../Other/Ada]]']]");
+    let before = records(&raw, first, second);
+    let result =
+        zorid_bases::query_generation(&compile_base_source(&raw).unwrap(), &before, &[], &options)
+            .unwrap();
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0].entry_id, id("first"));
+    assert!(matches!(&result.groups[0].key,Some(BaseValue::List {value}) if value.len()==2));
+    let raw_keys = result
+        .group_options
+        .iter()
+        .rev()
+        .map(|group| plain_group_order_value(group.order_key.as_ref().unwrap()))
+        .collect::<Vec<_>>();
+    let raw = source(&serde_json::to_string(&raw_keys).unwrap());
+    let after = records(&raw, first, second);
+    let persisted =
+        zorid_bases::query_generation(&compile_base_source(&raw).unwrap(), &after, &[], &options)
+            .unwrap();
+    assert_eq!(persisted.groups.len(), 2);
+    assert_eq!(persisted.groups[0].entry_ids, vec![id("second")]);
+    assert_eq!(persisted.groups[1].key_id, result.groups[0].key_id);
+    options.definition_entry_id = None;
+    let relative = source("['[[Ada]]']");
+    assert_eq!(
+        zorid_bases::query_generation(
+            &compile_base_source(&relative).unwrap(),
+            &before,
+            &[],
+            &options
+        )
+        .unwrap_err()
+        .code,
+        "unavailable"
+    );
+    assert!(serde_json::from_str::<QueryOptions>("{\"definitionEntryId\":\"base\"}").is_err());
+}
+
+#[test]
+fn empty_typed_group_options_supply_safe_new_item_values() {
+    let options = QueryOptions::default();
+    let source="filters: 'published != null'\nviews:\n  - type: table\n    name: Dates\n    groupBy: {property: published, direction: ASC}\n    groupOrder: ['2026-12-31']\n";
+    let before =
+        generation_with_settings_file("", &[("first", "---\npublished: 2026-01-01\n---\n")], false);
+    let program = compile_base_source(source).unwrap();
+    let result = zorid_bases::query_generation(&program, &before, &[], &options).unwrap();
+    let empty = result
+        .group_options
+        .iter()
+        .find(|option| option.listed)
+        .unwrap();
+    assert_eq!(empty.count, 0);
+    assert!(matches!(&empty.key, BaseValue::Date { .. }));
+    let value = plain_group_order_value(empty.edit_key.as_ref().unwrap());
+    let created = format!(
+        "---\npublished: {}\n---\n",
+        serde_json::to_string(&value).unwrap()
+    );
+    let after = generation_with_settings_file(
+        "",
+        &[
+            ("first", "---\npublished: 2026-01-01\n---\n"),
+            ("new", &created),
+        ],
+        false,
+    );
+    let persisted = zorid_bases::query_generation(&program, &after, &[], &options).unwrap();
+    assert_eq!(
+        persisted.groups[0].key_id.as_deref(),
+        Some(empty.key_id.as_str())
+    );
+    assert_eq!(persisted.groups[0].entry_ids, vec![id("new")]);
+    let source="filters: 'file.inFolder(\"Books\")'\nviews:\n  - type: table\n    name: Authors\n    groupBy: {property: author, direction: ASC}\n    groupOrder: ['[[/Authors/Grace|New Alias]]']\n";
+    let program = compile_base_source(source).unwrap();
+    let before = generation(
+        SETTINGS,
+        &[("first", "---\nauthor: '[[/Authors/Ada]]'\n---\n")],
+    );
+    let definitions =
+        PropertyDefinitions::from_generation_source(&before, &id("settings"), SETTINGS).unwrap();
+    let result =
+        query_generation_with_properties(&program, &before, &[], &definitions, &options).unwrap();
+    let empty = result
+        .group_options
+        .iter()
+        .find(|option| option.listed)
+        .unwrap();
+    assert_eq!(empty.count, 0);
+    assert_eq!(
+        empty.edit_key,
+        Some(BaseValue::String {
+            value: "[[/Authors/Grace.md|New Alias]]".into()
+        })
+    );
+    let value = plain_group_order_value(empty.edit_key.as_ref().unwrap());
+    let created = format!(
+        "---\nauthor: {}\n---\n",
+        serde_json::to_string(&value).unwrap()
+    );
+    let after = generation(
+        SETTINGS,
+        &[
+            ("first", "---\nauthor: '[[/Authors/Ada]]'\n---\n"),
+            ("new", &created),
+        ],
+    );
+    let definitions =
+        PropertyDefinitions::from_generation_source(&after, &id("settings"), SETTINGS).unwrap();
+    let persisted =
+        query_generation_with_properties(&program, &after, &[], &definitions, &options).unwrap();
+    assert_eq!(
+        persisted.groups[0].key_id.as_deref(),
+        Some(empty.key_id.as_str())
+    );
+    assert_eq!(persisted.groups[0].entry_ids, vec![id("new")]);
+}
+
+#[test]
+fn explicit_text_group_keys_keep_their_original_raw_identity_during_manual_order() {
+    let settings = "properties:\n  code:\n    type: text\n";
+    let before = generation(
+        settings,
+        &[
+            ("first", "---\ncode: '[[../Not-a-relation]]'\n---\n"),
+            ("second", "---\ncode: '2026-01-01'\n---\n"),
+        ],
+    );
+    let definitions =
+        PropertyDefinitions::from_generation_source(&before, &id("settings"), settings).unwrap();
+    let program=compile_base_source("filters: 'code != null'\nviews:\n  - type: table\n    name: Text\n    groupBy: {property: code, direction: ASC}\n    groupOrder: ['[[../Not-a-relation]]','2026-01-01']\n").unwrap();
+    let result = query_generation_with_properties(
+        &program,
+        &before,
+        &[],
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(result.groups.len(), 2);
+    assert!(result
+        .groups
+        .iter()
+        .all(|group| matches!(&group.key, Some(BaseValue::String { .. }))));
+    assert_eq!(result.groups[0].entry_ids, vec![id("first")]);
+}

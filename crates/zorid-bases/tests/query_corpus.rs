@@ -42,6 +42,7 @@ fn accepted_query_corpus_uses_shared_transport_requests() {
             if let Some(groups) = actual[field].as_array_mut() {
                 for group in groups {
                     group.as_object_mut().unwrap().remove("editKey");
+                    group.as_object_mut().unwrap().remove("orderKey");
                 }
             }
         }
