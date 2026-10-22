@@ -5,6 +5,11 @@
 //! SHA-256 e2795bbb0adbe040d94bcec9b19465a04d55f537d5b10f9e2811e46a0b70c33a;
 //! getDates 2195226–2195460,
 //! SHA-256 8fc6402a5908b98a478f0dce0a5871c4ee8ecad55cc28a56f277381c4d0d67c6.
+//! Bounded REA parent ev_e891224000b775011206eb47939a0a10bb8bbbd5163ab5bef1c34b824505b6e1
+//! parses two inert standalone selections: 584 bytes, 196 AST nodes, zero parse
+//! failures. Only the final bundle-sequence comma is changed to semicolon for
+//! standalone syntax (initial untouched fragments had two parse failures).
+//! Graph coverage remains partial/unknown; external classes stay unresolved.
 //! Pinned source stays in private temporary reference storage. Only the observed
 //! literal-space boundary and raw String-derived date eligibility are adapted.
 use super::*;
