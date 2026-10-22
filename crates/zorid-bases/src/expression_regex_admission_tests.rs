@@ -309,7 +309,7 @@ fn parser_metadata_uses_consumed_literal_nodes_and_survives_cache_eviction() {
 }
 
 #[test]
-fn regex_free_cached_sessions_charge_constant_admission_and_check_cancellation() {
+fn regex_free_cached_sessions_preserve_evaluation_cost_and_check_cancellation() {
     let source = (0..40).map(|_| "1").collect::<Vec<_>>().join("+");
     let ast = parse_cached(&source).unwrap();
     assert!(!ast.has_regex);
@@ -323,7 +323,7 @@ fn regex_free_cached_sessions_charge_constant_admission_and_check_cancellation()
         session.evaluate(&source).unwrap(),
         typed_result(expected).unwrap()
     );
-    assert_eq!(session.steps_used(), evaluation_work + 1);
+    assert_eq!(session.steps_used(), evaluation_work);
     let cancellation = OperationCancellation::default();
     cancellation.cancel();
     let context = BasesEvaluationContext {
@@ -395,5 +395,56 @@ fn prepared_formula_reuses_checked_literal_proof_and_keeps_exact_source_guard() 
     let mut work = 1usize;
     assert!(
         matches!(prepare_formula_expressions(&[("rx".into(), source)], &mut allow, &mut |n| {work = work.checked_sub(n).ok_or_else(|| RuntimeValue::Error("budget\0fresh invocation must admit warm syntax".into()))?; Ok(())}), Err(RuntimeValue::Error(message)) if message.starts_with("budget\0"))
+    );
+}
+
+#[test]
+fn zero_cost_entry_polls_cannot_bypass_actual_cached_or_empty_root_work() {
+    let context = BasesEvaluationContext::default();
+    let mut session = Session::new(&context);
+    assert_eq!(
+        session.evaluate("42").unwrap(),
+        BaseValue::Number { value: 42.0 }
+    );
+    session.evaluator.remaining_work = 0;
+    assert_eq!(session.evaluate("42").unwrap_err().code, "budget");
+    assert_eq!(session.evaluate("").unwrap_err().code, "budget");
+    let empty = BasesEvaluationContext {
+        work_limit: Some(0),
+        ..Default::default()
+    };
+    assert!(matches!(matches("", &empty), Err(error) if error.starts_with("budget\0")));
+    let options = crate::EvaluationOptions {
+        max_steps: 0,
+        ..Default::default()
+    };
+    assert_eq!(
+        evaluate_summary("", &[], &[], None, &options, None, None, |_| panic!(
+            "no values need hydration"
+        ))
+        .unwrap_err()
+        .code,
+        "budget"
+    );
+    let cancellation = OperationCancellation::default();
+    let context = BasesEvaluationContext {
+        formulas: Arc::new(IndexMap::from_iter([("answer".into(), "1".into())])),
+        cancellation: Some(cancellation.clone()),
+        ..Default::default()
+    };
+    let mut cached = Session::new(&context);
+    assert_eq!(
+        cached.evaluate("formula.answer").unwrap(),
+        BaseValue::Number { value: 1.0 }
+    );
+    cached.evaluator.remaining_work = 0;
+    assert_eq!(
+        cached.evaluate("formula.answer").unwrap_err().code,
+        "budget"
+    );
+    cancellation.cancel();
+    assert_eq!(
+        cached.evaluate("formula.answer").unwrap_err().code,
+        "cancelled"
     );
 }

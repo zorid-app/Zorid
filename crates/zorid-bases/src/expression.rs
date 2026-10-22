@@ -749,7 +749,9 @@ impl<'a> Session<'a> {
         preserve_tags: bool,
         reserve: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
     ) -> Result<(BaseValue, Option<TagShape>), ExpressionDiagnostic> {
-        self.evaluator.charge(1).map_err(runtime_diagnostic)?;
+        // Root/node evaluation pays semantic work; this entry guard polls
+        // cancellation before the syntax-cache lookup without counting twice.
+        self.evaluator.charge(0).map_err(runtime_diagnostic)?;
         let ast = parse_cached(source).map_err(|message| {
             let (code, text) = message
                 .split_once('\0')
@@ -856,7 +858,7 @@ pub(crate) fn evaluate_summary(
     evaluator.summary_only = true;
     regex_admission::fatal_summary_inputs(values, &mut |work| evaluator.charge(work))
         .map_err(runtime_diagnostic)?;
-    evaluator.charge(1).map_err(runtime_diagnostic)?;
+    evaluator.charge(0).map_err(runtime_diagnostic)?;
     let ast = parse_cached(source)
         .map_err(|message| {
             let (code, text) = message.split_once('\0').unwrap_or(("parse", &message));
@@ -1224,7 +1226,7 @@ pub(crate) fn validate_checked(
 
 pub(crate) fn matches(expression: &str, context: &BasesEvaluationContext) -> Result<bool, String> {
     let mut evaluator = Evaluator::new(context);
-    evaluator.charge(1).map_err(|error| match error {
+    evaluator.charge(0).map_err(|error| match error {
         RuntimeValue::Error(message) => message,
         _ => unreachable!(),
     })?;
@@ -3774,7 +3776,7 @@ impl<'a> Evaluator<'a> {
     }
 
     fn formula(&mut self, name: &str) -> RuntimeValue {
-        if let Err(error) = self.charge(1) {
+        if let Err(error) = self.charge(0) {
             return error;
         }
         if self.formula_stack.len() >= 128 {
