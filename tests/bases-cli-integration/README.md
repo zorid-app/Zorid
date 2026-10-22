@@ -6,8 +6,21 @@ evaluator. It is outside the default `tests/*.test.*` glob and never builds Rust
 
 ## Current validation status
 
-**CLI007 passed all125 commands and17 checks**, including all146 current typed
-row expectations,16 exact Q3 diagnostics and10 exact legacy-context diagnostics.
+**CLI008 passed all 125 commands and 17 checks**, including all 162 current typed
+expectations, 16 exact Q3 diagnostics and 10 legacy-context diagnostics. It used
+preserved CLI SHA `fca404ed6d75ca973aa7cb120b86df4d3a08fd5d60798afc11ab8dcf21c55ce9`
+on frozen `e38e246144efeb5a194a314a3c0a22ebf39d3415`, Rust tree `dbfc9221`.
+The 16 added Date/String comparison cases passed; null cases pin the existing
+guard rather than a new behavior change. Independent proof confirms source,
+executable, four oracles, 250 streams, 29 inputs, 54 exports and 14 physical Q3
+files. All CLI children closed; no GUI/host/service was launched by this campaign.
+See [CLI008 evidence](../../docs/history/bases-cli-actual-008-20261022.md).
+This is separate from current browser/WASM, GUI, mobile, sync or stress acceptance.
+
+### Earlier verified campaigns
+
+**CLI007 passed all125 commands and17 checks**, including its then-current146
+typed row expectations,16 exact Q3 diagnostics and10 legacy-context diagnostics.
 It used preserved CLI SHA `3fdcdbdcb61ca2b158b64689bb2019ef1a26ac459402d820fe037e7e54e18bc7`
 on frozen source `2fe6e0552d3b504edea3bff042a8055e12d1ab2f`, Rust tree8074eabf.
 Post-run integrity confirms source/artifact/oracles unchanged,250 stdout/stderr
@@ -39,23 +52,23 @@ A new run still requires a matched build receipt and a coordinated runtime slot.
 
 The authored Q3 extension (`64bee169` → `19ae330c`, composed at `eb6e0346`)
 adds **40 CLI invocations**, for **125 commands under a128-command ceiling**.
-The complete plan passed in CLI006 and CLI007.
+The complete plan passed in CLI006, CLI007 and CLI008.
 Campaign 003's 85 executed commands above remain historical evidence for the
 original scenario, not acceptance of this extension.
 
 The 40 added invocations are one mkdir, 14 creates, one index build, ten saved
 Base queries and 14 exact raw reads. The shared
 [Q3 fixture](../fixtures/bases-q3-semantics.mjs) has 14 added files (four ordinary
-Markdown notes and ten Bases),146 current typed row-value oracles and16 expected diagnostic
-entries. Assertions are not CLI commands. The runner checks that the original
+Markdown notes and ten Bases), 162 current typed row-value oracles and 16 expected
+diagnostic entries. Assertions are not CLI commands. The runner checks that the original
 phase ends at 85 and that the completed new plan ends at 125.
 
 These ten query groups cover Object/Tag behavior; registered signatures and exact
 special-call spelling; strings/regex/numbers; strict collections; two explicitly
 captured Duration clocks (January 31 and February 1); Tag and Object Link provenance
 through grouped/overall summaries; and returned Error data versus formula access
-rethrows. Exact fixture-source reads follow the queries. CLI007 supplies actual
-CLI acceptance for these cases. Source/oracle checks alone do not establish
+rethrows. Exact fixture-source reads follow the queries. CLI008 supplies current
+actual CLI acceptance for these cases. Source/oracle checks alone do not establish
 CLI, native/WASM or rendered application acceptance.
 
 The G9–G15 follow-up retains all original Q3 assertions and appends
@@ -68,7 +81,9 @@ List sorting. Inert `__proto__` user data is deliberately preserved. Collation i
 the pinned English base-sensitivity/numeric policy, not universal locale parity.
 This follow-up passed in CLI006 and CLI007; earlier partial failures remain
 recorded below. The G16/G17 follow-up adds13 literal-percent and raw compact-date
-selection cases inside the same queries; CLI007 passed these too.
+selection cases inside the same queries; CLI007 passed these too. The G18
+follow-up adds 16 Date/String relational and existing null-guard expectations;
+CLI008 passed them, with no extra commands or query groups.
 
 Actual campaign 004 on frozen `f95ab6beea41999fe45eabfe9e882f7bdb1bec3c`
 stopped at command 102, the first Q3 query, after the original seven checks passed.
