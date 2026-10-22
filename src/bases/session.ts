@@ -85,6 +85,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   options.validate();
   if (!options.readOnly && !options.buffers) throw new Error('Writable Bases require the shared workspace buffer host');
   const doc = container.ownerDocument, win = doc.defaultView;
+  const requestedQuery = options.query as (BaseQueryOptions & { randomSeed?: number }) | undefined;
+  const randomSeed = requestedQuery?.randomSeed ?? (win?.crypto ?? globalThis.crypto).getRandomValues(new Uint32Array(1))[0];
+  const query = { ...options.query, randomSeed };
   const root = doc.createElement('div'), toolbar = doc.createElement('div');
   const content = doc.createElement('div'), status = doc.createElement('div');
   root.className = 'bases-session'; toolbar.className = 'bases-session-toolbar'; content.className = 'bases-session-content';
@@ -122,10 +125,11 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if (controller.state.result) render(controller.state);
   };
   let selectedIndex = options.query?.viewIndex ?? 0;
+  let notice: string | undefined;
   let scheduled: ReturnType<typeof setTimeout> | undefined;
   const pending = new Set<Promise<unknown>>(), changedBuffers = new Set<NoteBuffer>();
   const alive = () => { options.validate(); if (disposed) throw new Error('This base view is closed'); };
-  const action = () => { alive(); if (closing) throw new Error('This base view is closing'); };
+  const action = () => { alive(); if (closing) throw new Error('This base view is closing'); notice = undefined; };
   const report = (error: unknown) => {
     if (!disposed) status.textContent = error instanceof Error ? error.message : String(error);
     try { options.onError?.(error); } catch { /* User error reporters do not change persistence. */ }
@@ -167,7 +171,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       return () => { stopClock(); stopPane?.(); };
     },
   };
-  const controller = new BaseController({ vault: options.vault, basePath: options.basePath, mutations, query: options.query, clock, viewName: options.viewName, ...(options.inlineSource ? { inlineSource: options.inlineSource } : {}),
+  const controller = new BaseController({ vault: options.vault, basePath: options.basePath, mutations, query, clock, viewName: options.viewName, ...(options.inlineSource ? { inlineSource: options.inlineSource } : {}),
     onChange(state) { render(state); options.onState?.(state); },
   });
   const actions = createBaseViewActions(controller, { validate: action, canRename: !!options.buffers?.rename,
@@ -188,7 +192,16 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     saveConfiguration(version, patch) { return saveConfigurationCommand(() => controller.updateConfiguration(numericVersion(version), patch)); },
     commands: {
       updateView: (version, index, patch) => saveConfigurationCommand(() => controller.updateViewAt(numericVersion(version), index, patch)),
-      editFormula: (version, originalName, name, expression) => saveConfigurationCommand(() => controller.editFormula(numericVersion(version), originalName, name, expression)),
+      editFormula: (version, originalName, name, expression) => saveConfigurationCommand(() => {
+        if (originalName !== undefined) return controller.editFormula(numericVersion(version), originalName, name, expression);
+        const state = controller.state, document = BaseDocument.parse(state.source), view = document.views[controller.selectedViewIndex];
+        const formulas = document.getRoot('formulas');
+        if (formulas && typeof formulas === 'object' && !Array.isArray(formulas) && Object.hasOwn(formulas, name)) throw new Error('A formula with this name already exists');
+        document.setFormula(name, expression);
+        const order = Array.isArray(view.order) ? [...view.order] : [...state.result?.properties ?? []];
+        if (!order.includes(`formula.${name}`)) order.push(`formula.${name}`);
+        return controller.updateConfiguration(numericVersion(version), { root: { formulas: document.getRoot('formulas') }, view: { order } });
+      }),
       renameFormula: (version, from, to) => saveConfigurationCommand(() => controller.renameFormula(numericVersion(version), from, to)),
       addView: (version, type, name) => saveConfigurationCommand(() => controller.addView(numericVersion(version), type, name)),
       duplicateView: (version, index, name) => saveConfigurationCommand(() => controller.duplicateView(numericVersion(version), index, name)),
@@ -286,8 +299,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     // Retain an uncertain operation across retries rather than choosing a new filename.
     if (!creation || creation.status === 'committed') creation = await prepareBaseItemCreation({ vault: options.vault, document: controller.state.source, basePath: options.basePath, viewIndex: selectedIndex, group, validate: alive });
     const operation = creation, entry = await operation.run(); alive();
-    if (operation.plan.warnings.length) status.textContent = operation.plan.warnings.join(' ');
     await controller.refresh();
+    notice = [...operation.plan.warnings, ...(controller.state.result && !controller.state.result.rows.some(row => row.path === entry.path) ? ['Created note is not shown in the current results.'] : [])].join(' ') || undefined;
+    renderStatus(controller.state);
     const event = new (win?.MouseEvent ?? MouseEvent)('click');
     if (options.openCreatedFile) await options.openCreatedFile(entry.path, event, anchor ?? toolbar.querySelector<HTMLElement>('[aria-label="New"]') ?? content);
     else options.openFile(entry.path, event);
@@ -329,7 +343,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if (state.updating) { status.textContent = state.result ? 'Updating…' : 'Loading saved results…'; return; }
     const coverage = state.result && sharedBaseCoverage(state.result);
     status.textContent = coverage && !coverage.generationComplete ? 'Some saved files are unavailable in these results.'
-      : coverage && !coverage.metadataComplete ? 'Some saved properties are unavailable in these results.' : '';
+      : coverage && !coverage.metadataComplete ? 'Some saved properties are unavailable in these results.' : notice ?? '';
   }
   function render(state: BaseControllerState): void {
     if (disposed) return;
