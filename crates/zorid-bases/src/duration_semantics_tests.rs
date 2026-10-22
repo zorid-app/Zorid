@@ -120,12 +120,6 @@ fn duration_properties_are_converted_totals_using_the_captured_anchor() {
     number("duration('1M').years", FEB, "UTC", 1.0 / 12.0);
     number("duration('15d').months", JAN, "UTC", 15.0 / 31.0);
     number("duration('15d').MONTHS", JAN, "UTC", 15.0 / 31.0);
-    assert_eq!(
-        eval("duration('1M').keys().join(',')", JAN, "UTC"),
-        BaseValue::String {
-            value: "years,months,days,weeks,hours,minutes,seconds,milliseconds".into()
-        }
-    );
 }
 #[test]
 fn zero_truth_is_component_based_and_division_preserves_duration_type() {

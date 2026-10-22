@@ -79,7 +79,13 @@ calendar arithmetic, elapsed time, and fractional month differences.
   and is not equivalent. A nonzero time component marks the result as timed even
   when truncation leaves its instant unchanged.
 - Eight fields expose converted totals: years, months, days, weeks, hours,
-  minutes, seconds, milliseconds. Keys use that order. Years/months use Moment's
+  minutes, seconds, milliseconds. `CK.prototype.keys` enumerates those fields
+  internally; it does not register a callable Duration `keys()` method. The
+  shipped method registry at characters 2234846–2235095 registers `keys` only
+  for Object `yK` (extract SHA-256
+  `f1fcf13391d9da636c3b27bdf80e21fbfd7a7afcafe5ad1501df9e185d790113`).
+  Duration `CK` and Object `yK` separately extend `cK`; Duration is not an Object
+  receiver for this registration. Years/months use Moment's
   fractional month interpolation with **clamped interpolation anchors**, which
   is separate from overflowing Date addition. Days/weeks use civil differences;
   smaller units use elapsed milliseconds. Thus a DST calendar day can be 23 or
