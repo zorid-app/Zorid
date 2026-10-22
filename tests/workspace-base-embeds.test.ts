@@ -277,6 +277,28 @@ test('a newer explicit sidebar target supersedes a queued background rename remo
   finally{stop();}
 });
 
+test('a newer sidebar target joins an in-flight rename teardown and mounts after it',async t=>{
+  const{workspace}=await setup(t,new MemoryAdapter({'Work.base':base,'Other.base':base,'One.md':note}));await workspace.openNote('One.md');await (workspace as any).openBaseSidebar('Work.base');
+  const previous=(workspace as any).sidebarBase,close=previous.session.close.bind(previous.session);let calls=0,opened:Promise<void>|undefined;
+  previous.session.close=()=>{calls++;const result=close();if(calls===1){opened=(workspace as any).openBaseSidebar('Other.base');void opened!.catch(()=>{});}return result;};
+  await workspace.vault.rename('Work.base','Renamed.base');await until(()=>!!opened,'new request starts during old close');await opened;
+  assert.equal(calls,1);assert.equal((workspace as any).sidebarBase.path,'Other.base');assert.equal((workspace as any).sidebarBasePath,'Other.base');
+  assert.notEqual((workspace as any).sidebarBase,previous);assert.ok(document.querySelector('.sidebar-base-host .bases-session'));
+});
+
+test('failed shared sidebar teardown retains its draft and can retry after cancellation',async t=>{
+  const{workspace}=await setup(t,new MemoryAdapter({'Work.base':base,'Other.base':base,'One.md':note}));await workspace.openNote('One.md');await (workspace as any).openBaseSidebar('Work.base');
+  const previous=(workspace as any).sidebarBase,input=startEdit(previous.host,'Unaccepted'),close=previous.session.close.bind(previous.session);let release!:()=>void,calls=0;
+  const gate=new Promise<void>(resolve=>{release=resolve;});previous.session.close=async()=>{calls++;await gate;await close();};
+  const first=(workspace as any).openBaseSidebar('Other.base'),second=(workspace as any).openBaseSidebar('Other.base');
+  const settled=Promise.allSettled([first,second]);release();const results=await settled;
+  try{
+    assert.equal(calls,1);assert.ok(results.every(result=>result.status==='rejected'&&/Finish|cancel|edit/.test(String(result.reason))));
+    assert.equal((workspace as any).sidebarBase,previous);assert.equal(input.isConnected,true);assert.equal(input.value,'Unaccepted');
+  }finally{key(input,'Escape');}
+  await (workspace as any).openBaseSidebar('Other.base');assert.equal(calls,2);assert.equal((workspace as any).sidebarBase.path,'Other.base');assert.ok(document.querySelector('.sidebar-base-host .bases-session'));
+});
+
 test('a destination replacement during clean sidebar teardown is not adopted by the rename remount',async t=>{
   const{workspace,adapter}=await setup(t);await workspace.openNote('One.md');await (workspace as any).openBaseSidebar('Work.base');
   const previous=(workspace as any).sidebarBase,close=previous.session.close.bind(previous.session);let release!:()=>void,started!:()=>void;

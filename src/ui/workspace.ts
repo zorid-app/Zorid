@@ -145,7 +145,7 @@ export class Workspace {
   private nativeRecoveryBusy=new WeakSet<NoteBuffer>();
   private treeTab: 'files' | 'search' | 'bookmarks' = 'files';
   private rightTab: 'backlinks' | 'outline' | 'tags' | 'base' = 'backlinks';
-  private sidebarBase?:{path:string;session:BaseSession;host:HTMLElement;context:string};
+  private sidebarBase?:{path:string;session:BaseSession;host:HTMLElement;context:string;closing?:Promise<void>};
   private sidebarBaseIntent=0;
   private sidebarBasePath?:string;
   private baseNewItem?:BaseNewItemPopoverHandle;
@@ -2085,7 +2085,12 @@ export class Workspace {
     const token=this.treeEntryToken(path);
     if(!token||vault.entries.get(path)?.type!=='file')throw new Error('The selected sidebar Base is unavailable.');
     const previous=this.sidebarBase;
-    await previous?.session.close();
+    if(previous){
+      // Register before invoking close so a newer request joins this teardown,
+      // including requests made synchronously by the closing session itself.
+      const closing=previous.closing??=Promise.resolve().then(()=>previous.session.close());
+      try{await closing;}catch(error){if(previous.closing===closing)previous.closing=undefined;throw error;}
+    }
     if(vault!==this.vault||generation!==this.vaultGeneration||intent!==this.sidebarBaseIntent||this.sidebarBase!==previous)return;
     if(this.treeEntryToken(path)!==token)throw new Error('The selected sidebar Base changed while closing the previous view.');
     this.sidebarBase=undefined;
