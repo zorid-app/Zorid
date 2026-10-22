@@ -72,6 +72,15 @@ diagnostic; they do not become valid reverse edges. Missing and invalid values
 remain in source. Target-count, work, cancellation and output bounds fail
 explicitly rather than silently returning a truncated picker list.
 
+Target filters run against captured file metadata, scalar property definitions
+and ordinary stored relation values before reverse/rollup construction. Reading
+a computed reverse relation or rollup at this stage produces an explicit
+unavailable-dependency diagnostic, including through `file(...)` lookups. It
+does not silently treat a derived field as missing. A cycle-safe membership
+pipeline for predicates on those derived fields is not implemented in this
+pass. This boundary is a documented Zorid extension decision, not an Obsidian
+parity claim.
+
 Reverse properties are read-only lists of source links. A repeated relation to
 the same target contributes one reverse edge and one item to a count. Rollups
 support count, sum, average, min, max, values and unique. Count uses distinct

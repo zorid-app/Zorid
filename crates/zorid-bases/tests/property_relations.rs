@@ -657,6 +657,35 @@ fn relation_target_filters_use_the_same_shared_file_context() {
 }
 
 #[test]
+fn derived_target_filter_dependencies_report_unavailable_instead_of_false_absence() {
+    let settings = SETTINGS.replace("type == \"author\"", "bookCount > 0");
+    let generation = generation(
+        &settings,
+        &[("first", "---\nauthor: '[[Authors/Ada]]'\n---\n")],
+    );
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), &settings)
+            .unwrap();
+    let values = query_property_relations(
+        &BaseSnapshot::from_generation(&generation, &[]).unwrap(),
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert!(values.relation_targets()["author"].is_empty());
+    assert!(values.diagnostics().iter().any(|diagnostic| diagnostic.code
+        == "relation_target_filter"
+        && diagnostic
+            .message
+            .contains("cannot read derived reverse relations or rollups")));
+    // Temporary filtering sentinels never escape as ordinary computed cells.
+    assert_eq!(
+        values.rows()[&id("ada")].values["bookCount"],
+        BaseValue::Number { value: 0.0 }
+    );
+}
+
+#[test]
 fn derived_values_cannot_be_attached_to_detached_rows_or_forged_graphs() {
     let generation = generation(SETTINGS, &[]);
     let definitions =

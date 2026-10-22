@@ -334,6 +334,37 @@ pub fn query_property_relations(
                 .insert(name.clone(), value);
         }
     }
+    // Membership constraints run before reverse/rollup graph construction.
+    // Expose an explicit dependency error rather than pretending these fields
+    // are absent and silently excluding every candidate. Final values replace
+    // these temporary sentinels after membership has been resolved.
+    for record in &snapshot.records {
+        for (name, _) in definitions.iter().filter(|(_, definition)| {
+            matches!(
+                definition.kind,
+                PropertyKind::ReverseRelation | PropertyKind::Rollup
+            )
+        }) {
+            budget.charge(1)?;
+            let witness = record.witness.as_ref().ok_or_else(|| {
+                ExpressionDiagnostic::new(
+                    "unavailable",
+                    "Derived property definitions require file witnesses",
+                )
+            })?;
+            let value = error("unavailable", "Target filters cannot read derived reverse relations or rollups before relationship graph construction");
+            budget.keep(&(witness, name, &value))?;
+            result
+                .rows
+                .entry(witness.entry_id.clone())
+                .or_insert_with(|| PropertyRelationRow {
+                    witness: witness.clone(),
+                    values: BTreeMap::new(),
+                })
+                .values
+                .insert(name.clone(), value);
+        }
+    }
     let has_relations = definitions.iter().any(|(_, d)| {
         matches!(
             d.kind,
@@ -438,6 +469,17 @@ pub fn query_property_relations(
                     Ok(BaseValue::Boolean { value: false }) | Ok(BaseValue::Null) => continue,
                     Err(error) if matches!(error.code.as_str(), "budget" | "cancelled") => {
                         return Err(error)
+                    }
+                    Err(error) => {
+                        issue(
+                            &mut result.diagnostics,
+                            record,
+                            name,
+                            "relation_target_filter",
+                            &error.message,
+                            &mut budget,
+                        )?;
+                        continue;
                     }
                     _ => {
                         issue(
