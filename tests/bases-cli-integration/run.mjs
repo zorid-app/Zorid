@@ -10,6 +10,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {clockMs, folders, files, library, editedLibrary, editedCedar, expected, viewTypes} from './fixtures.mjs';
+import {q3CommandCount, runQ3Campaign} from './q3-oracles.mjs';
 
 const exec = promisify(execFile), repo = fileURLToPath(new URL('../../', import.meta.url));
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -73,7 +74,7 @@ const evidence = {
   fixture: {vault, localData, files: []}, commands: [], checks: [], exports: [],
   unsupportedCliSurface: ['No Base-specific cell-edit command; edits use existing revision-guarded full-file write', 'No CSV/TSV/Markdown table export command; existing JSON query and exact raw-source outputs are covered'],
 };
-for (const name of ['run.mjs', 'fixtures.mjs']) evidence.source[name] = hash(await fs.readFile(new URL(name, import.meta.url)));
+for (const name of ['run.mjs', 'fixtures.mjs', 'q3-oracles.mjs', '../fixtures/bases-q3-semantics.mjs']) evidence.source[name] = hash(await fs.readFile(new URL(name, import.meta.url)));
 if (args.has('--host')) {
   const host = hostPath, sha256 = hash(await fs.readFile(host));
   assert.equal(sha256, args.get('--expected-host-sha256'));
@@ -83,10 +84,15 @@ const started = Date.now(), env = {...process.env, ZORID_LOCAL_DATA_DIR: localDa
 for (const key of ['DISPLAY', 'ZORID_IPC_ENDPOINT', 'ZORID_DESKTOP_ENDPOINT']) delete env[key];
 const states = new Map(), sources = new Map(files.map(file => [file.id, {...file}]));
 let sequence = 0;
+// The original campaign is 85 commands. Q3 adds one create and exact raw export
+// per file, one mkdir per folder, one build and one saved query per group.
+const commandLimit = 128, plannedCommands = 85 + q3CommandCount;
+assert.ok(plannedCommands <= commandLimit, 'Authored Q3 command plan exceeds the bounded campaign');
+evidence.commandPlan = {original: 85, q3: q3CommandCount, total: plannedCommands, limit: commandLimit};
 
 async function invoke(label, command, input = Buffer.alloc(0)) {
   assert.ok(Date.now() - started < 5 * 60_000, 'Bounded CLI scenario exceeded five minutes');
-  assert.ok(++sequence <= 120, 'Scenario command bound exceeded');
+  assert.ok(++sequence <= commandLimit, 'Scenario command bound exceeded');
   assert.deepEqual(await artifactStat(), cliStat, 'CLI was replaced after the artifact freeze');
   const prefix = `${String(sequence).padStart(3, '0')}-${label.replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 75)}`;
   const stdoutPath = path.join(out, 'commands', `${prefix}.stdout`), stderrPath = path.join(out, 'commands', `${prefix}.stderr`);
@@ -141,10 +147,10 @@ const s = (value, message) => {assert.equal(value?.type, 'string', message);retu
 const ids = rows => rows.map(row => row.entryId);
 const sameIds = (actual, expectedIds, label) => assert.deepEqual([...actual].sort(), [...expectedIds].sort(), label);
 function near(actual, target, label) {assert.ok(Math.abs(actual - target) < 1e-9, `${label}: ${actual} != ${target}`);}
-async function query(id, view, label, expectedSnapshot) {
-  const {value, stdoutPath} = await ok(label, ['base-query', '--id', id, ...(view ? ['--view', view] : []), '--clock-ms', String(clockMs), '--timezone', 'UTC']);
+async function query(id, view, label, expectedSnapshot, context = {clockMs, timezone: 'UTC'}) {
+  const {value, stdoutPath} = await ok(label, ['base-query', '--id', id, ...(view ? ['--view', view] : []), '--clock-ms', String(context.clockMs), '--timezone', context.timezone]);
   assert.equal(value.operation, 'base_query');assert.equal(value.consistency, 'indexed_committed_snapshot');assert.equal(value.complete, true);assert.equal(value.coverageComplete, true);assert.equal(value.scanComplete, true);assert.equal(value.truncated, false);assert.equal(value.synced, false);
-  assert.equal(value.clockMs, clockMs);assert.equal(value.timezone, 'UTC');assert.equal(value.selectedView, view ?? null);assert.equal(value.value.definition.id, id);
+  assert.equal(value.clockMs, context.clockMs);assert.equal(value.timezone, context.timezone);assert.equal(value.selectedView, view ?? null);assert.equal(value.value.definition.id, id);
   assert.deepEqual(value.snapshot, expectedSnapshot);assert.deepEqual(value.value.result.snapshotId, value.snapshot);assert.equal(value.value.result.metadataComplete, true);
   assert.deepEqual(value.value.result.propertyDefinitionDiagnostics ?? [], []);
   const exportPath = path.join(out, 'exports', `${label}.json`);await fs.copyFile(stdoutPath, exportPath);
@@ -243,6 +249,26 @@ try {
     const file = sources.get(id), raw = await exactFile(id, `export-raw-${id}`), destination = path.join(out, 'exports', `${id}.raw`);await fs.copyFile(raw.stdoutPath, destination);
     evidence.exports.push({kind: 'read --raw stdout', file: path.relative(out, destination), bytes: Buffer.byteLength(file.source), sha256: hash(await fs.readFile(destination))});
   }
+  assert.equal(sequence, 85, 'Original campaign command count changed before Q3');
+  await runQ3Campaign({states, evidence, build, query,
+    async mkdir(id, folder) {
+      mutation((await ok(`q3-mkdir-${id}`, ['mkdir', folder, '--id', id, '--operation-id', `q3-mkdir-${id}`])).value, id);
+    },
+    async create(file) {
+      assert.ok(!sources.has(file.id), `Q3 fixture ID collides with existing source: ${file.id}`);
+      assert.ok(![...sources.values()].some(source => source.path === file.path), `Q3 fixture path collides: ${file.path}`);
+      const bytes = Buffer.from(file.source);await fs.writeFile(path.join(out, 'inputs', file.id), bytes);
+      mutation((await ok(`q3-create-${file.id}`, ['create', file.path, '--id', file.id, '--operation-id', `q3-create-${file.id}`, '--input', '-'], bytes)).value, file.id);
+      sources.set(file.id, {...file});
+      evidence.fixture.files.push({id: file.id, path: file.path, bytes: bytes.length, sha256: hash(bytes)});
+    },
+    async exportSource(file) {
+      const raw = await exactFile(file.id, `q3-export-raw-${file.id}`), destination = path.join(out, 'exports', `${file.id}.raw`);
+      await fs.copyFile(raw.stdoutPath, destination);
+      evidence.exports.push({kind: 'read --raw stdout', file: path.relative(out, destination), bytes: Buffer.byteLength(file.source), sha256: hash(await fs.readFile(destination))});
+    },
+  });
+  assert.equal(sequence, plannedCommands, 'Q3 command count differs from the authored bounded plan');
   assert.equal(hash(await fs.readFile(cli)), args.get('--expected-cli-sha256'), 'CLI artifact changed during the scenario');
   await exec('git', ['diff', '--quiet', 'HEAD', '--', 'crates', 'Cargo.toml', 'Cargo.lock'], {cwd: repo});
   assert.equal(await git('ls-files', '--others', '--exclude-standard', '--', 'crates'), '', 'Untracked Rust source appeared during verification');

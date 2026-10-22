@@ -1,4 +1,6 @@
 // Independent synthetic source and numeric oracles; no query evaluator lives here.
+// Imported separately: Q3 files are created only after the original campaign.
+export {q3Files} from '../fixtures/bases-q3-semantics.mjs';
 export const clockMs = Date.UTC(2026, 9, 22, 12);
 export const folders = [['books-dir', 'Books'], ['authors-dir', 'Authors']];
 
