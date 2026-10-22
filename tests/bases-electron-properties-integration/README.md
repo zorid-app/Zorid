@@ -66,8 +66,11 @@ before summaries exist; both Tables then acquire the shared summary through
 actual picker selections on `note.rating` and `note.peerCount`. An independent
 `values.length` oracle yields 2 in all four cells. `Kept counters` on the original
 Table's `note.done` yields 42, while the mirror's unrelated built-in `Checked`
-yields 1. After rename, each live label/value is checked in both views. Deletion
-is invoked from the mirror; both views must lose the two shared labels while
+yields 1. After rename, each live label/value is checked in both views. The mirror view
+rename is acknowledged by the visible panel before its normal Close menu button
+is used; a body-focused Escape after Enter cannot satisfy this step. Deletion
+is invoked from the mirror; both views must expose the actual overall footer
+cells with neither shared label nor value and the normal Summarize placeholder, while
 retaining those distinct unrelated labels/values. The whole Base oracle also
 preserves the other layouts, root filter and unknown sentinel. P7 checks that
 final state again after normal quit and fresh launch. This adds no expression

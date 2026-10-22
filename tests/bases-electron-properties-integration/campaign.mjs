@@ -99,7 +99,8 @@ async function customSummaryReferences(c,expected,durableConfig){
   const copy=structuredClone(expected.views.find(v=>v.name===originalTable));copy.name='Property table 2';expected.views.push(copy);await durableConfig('C1-normal-table-copy-before-summary-selections');
   await c.ui.wait(`return document.querySelector(${esc(dialog('View options'))})?.querySelector('input[aria-label="View name"]')?.value==='Property table 2';`,'C1 exact acknowledged duplicate configuration');
   await c.ui.type(`${dialog('View options')} input[aria-label="View name"]`,mirrorTable);await c.ui.key('Enter');copy.name=mirrorTable;await durableConfig('C1-normal-mirror-view-name');
-  await c.ui.key('Escape');await c.ui.wait(`return !document.querySelector(${esc(dialog('View options'))});`,'C1 view configuration closes');await c.ui.idle();
+  await c.ui.wait(`const panel=document.querySelector(${esc(dialog('View options'))}),name=panel?.querySelector('input[aria-label="View name"]');return name?.value===${esc(mirrorTable)}&&!name.disabled&&panel.querySelector('[role="alert"]')?.textContent==='';`,'C1 view-name save acknowledged in visible panel');
+  await c.ui.button('Close menu',dialog('View options'));await c.ui.wait(`return !document.querySelector(${esc(dialog('View options'))});`,'C1 view configuration closes through its normal button');await c.ui.idle();
 
   await chooseView(c,originalTable);await create(originalTable,'note.rating',sharedSummary,sharedExpression,2);await select(originalTable,'note.peerCount',sharedSummary,2);await create(originalTable,'note.done',keptSummary,keptExpression,42);
   await chooseView(c,mirrorTable);await select(mirrorTable,'note.rating',sharedSummary,2);await select(mirrorTable,'note.peerCount',sharedSummary,2);await select(mirrorTable,'note.done','Checked',1);
@@ -134,7 +135,7 @@ async function customSummaryReferences(c,expected,durableConfig){
 }
 async function verifySummaryDeletion(c,name){
   await chooseView(c,name);await summaryDisplay(c,'note.done',name===originalTable?keptSummary:'Checked',name===originalTable?42:1);
-  await c.ui.wait(`return ${JSON.stringify(['note.rating','note.peerCount'])}.every(property=>!document.querySelector(${esc(active+' .zorid-bases-table-footer')}+' [data-summary-property='+JSON.stringify(property)+'] .summary-function-name'));`,'C1 deleted summary absent in '+name);
+  await c.ui.wait(`return ${JSON.stringify(['note.rating','note.peerCount'])}.every(property=>{const cell=document.querySelector(${esc(active+' .zorid-bases-table-footer')}+' [data-summary-property='+JSON.stringify(property)+']');return cell?.isConnected&&cell.getClientRects().length&&!cell.closest('[hidden]')&&cell.dataset.summaryGroup==='overall'&&!cell.querySelector('.summary-function-name,.summary-function-value')&&cell.querySelector('.placeholder')?.textContent==='Summarize';});`,'C1 actual footer cells have neither deleted summary label nor value in '+name);
 }
 
 export async function journey(c){
