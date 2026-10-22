@@ -176,6 +176,8 @@ impl OperationCancellation {
 pub struct EvaluationOptions {
     /// One captured operation clock; no ambient clock is read by the engine.
     pub clock_ms: i64,
+    /// Host-captured view-load entropy; absent seeds use deterministic zero.
+    pub random_seed: Option<u64>,
     /// UTC is the default. Local aliases are deliberately rejected.
     pub timezone: String,
     pub max_steps: usize,
@@ -188,6 +190,7 @@ impl Default for EvaluationOptions {
     fn default() -> Self {
         Self {
             clock_ms: 0,
+            random_seed: None,
             timezone: "UTC".into(),
             max_steps: 100_000,
             formulas: Vec::new(),

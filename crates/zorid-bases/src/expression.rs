@@ -12,6 +12,9 @@ use chrono_tz::{GapInfo, Tz};
 use regex::{Regex, RegexBuilder};
 use serde_json::{Map, Value};
 
+#[path = "expression_format.rs"]
+mod date_format;
+
 use crate::{BaseValue, EvaluationResult, ExpressionDiagnostic, OperationCancellation};
 #[derive(Clone, Debug, PartialEq)]
 enum Expr {
@@ -3121,7 +3124,14 @@ fn parse_timezone_offset(value: &str) -> Option<FixedOffset> {
 }
 
 fn parse_date(value: &str, timezone: &BasesTimezone) -> Option<DateValue> {
-    if let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+    if let Ok(date) = NaiveDate::parse_from_str(
+        value,
+        if value.len() == 8 && value.bytes().all(|b| b.is_ascii_digit()) {
+            "%Y%m%d"
+        } else {
+            "%Y-%m-%d"
+        },
+    ) {
         let local = date.and_hms_opt(0, 0, 0)?;
         return Some(DateValue {
             millis: timezone.try_millis_from_local(local)?,
@@ -3385,46 +3395,7 @@ fn format_date(value: &DateValue, pattern: &str) -> String {
     try_format_date(value, pattern).unwrap_or_default()
 }
 fn try_format_date(value: &DateValue, pattern: &str) -> Result<String, String> {
-    if pattern.len() > 65_536 {
-        return Err("budget\0Date format exceeds byte budget".into());
-    }
-    let date = value.timezone.local_datetime(value.millis);
-    let mut format = pattern.to_string();
-    static LITERALS: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\[([^]]*)\]").expect("literal expression"));
-    let literals = &*LITERALS;
-    let mut stored = Vec::new();
-    format = literals
-        .replace_all(&format, |captures: &regex::Captures<'_>| {
-            stored.push(captures[1].to_string());
-            format!("__L{}__", stored.len() - 1)
-        })
-        .to_string();
-    for (source, target) in [
-        ("YYYY", "%Y"),
-        ("yyyy", "%Y"),
-        ("WW", "%V"),
-        ("MM", "%m"),
-        ("DD", "%d"),
-        ("dd", "%d"),
-        ("HH", "%H"),
-        ("mm", "%M"),
-        ("ss", "%S"),
-    ] {
-        format = format.replace(source, target);
-    }
-    if chrono::format::StrftimeItems::new(&format)
-        .any(|item| matches!(item, chrono::format::Item::Error))
-    {
-        return Err("unsupported\0Invalid date format".into());
-    }
-    let mut output = String::new();
-    std::fmt::write(&mut output, format_args!("{}", date.format(&format)))
-        .map_err(|_| "unsupported\0Date format requires unavailable fields".to_string())?;
-    for (index, literal) in stored.iter().enumerate() {
-        output = output.replace(&format!("__L{index}__"), literal);
-    }
-    Ok(output)
+    date_format::format(value, pattern)
 }
 
 fn date_property(value: &DateValue, property: &str) -> RuntimeValue {
