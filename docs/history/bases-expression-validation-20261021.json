@@ -1,0 +1,51 @@
+{
+  "schema": "zorid-bases-expression-validation-v1",
+  "sourceCommit": "fce7459dc5d62da54db61d3b7ce98219061218e2",
+  "sourceWorktree": "/Users/ctk/Projects/Zorid/.worktrees/types-bases-model",
+  "owner": "bases_expressions",
+  "date": "2026-10-21",
+  "sourceSha256": {
+    "crates/zorid-bases/src/expression.rs": "a170299904c773292b7cd6d084f589d80d868ccfa3fbcfeb0e42d58de3e2511d",
+    "crates/zorid-bases/src/expression_format.rs": "c6f65dc4de304e168e13bcb39d26589449879ce41b12b607b7aac596ed03554a",
+    "crates/zorid-bases/src/lib.rs": "7afaf138e4165081b1aa05e4ef31c348035700bc3cec445da2c2a05c654154fd",
+    "crates/zorid-bases/Cargo.toml": "b9707a145a12101d8edbd45e896e2e1552d2403460f1cda69a9e3480509399e9",
+    "Cargo.lock": "dc13f95846e6d3b2ce539058a9f7a27bbbd68905d41f09e1fcaad8d38f04cb73",
+    "tests/fixtures/document-semantics/bases/accepted-expressions.json": "1f0e6c2390f74f658f94198ad8739851dbcfa9cf7a5a5b410bfa992af5b6b88f"
+  },
+  "profile": "release",
+  "cargoTargetDir": "/Users/ctk/Projects/Zorid/target/s1-release",
+  "serialization": "single-job; test-threads=1; root granted slot and froze Rust source; slot released after all checks",
+  "checks": [
+    {
+      "command": "cargo test --release --offline --locked -j1 -p zorid-bases --lib rich_expression_tests -- --test-threads=1",
+      "passed": 11,
+      "failed": 0,
+      "compileElapsedSeconds": 40.64
+    },
+    {
+      "command": "cargo test --release --offline --locked -j1 -p zorid-bases --lib date_format -- --test-threads=1",
+      "passed": 2,
+      "failed": 0,
+      "compileElapsedSeconds": 0.29
+    },
+    {
+      "command": "cargo test --release --offline --locked -j1 -p zorid-bases --test corpus -- --test-threads=1",
+      "passed": 7,
+      "failed": 0,
+      "acceptedExpressionCases": 30,
+      "compileElapsedSeconds": 18.15
+    }
+  ],
+  "resourceObservations": {
+    "diskFreeKiBBefore": 2846136,
+    "diskFreeKiBAfterFirstCheck": 2791572,
+    "guardKiB": 1048576,
+    "network": "offline locked; reused cached crates; URL/IDNA/ICU pure dependencies compiled successfully"
+  },
+  "limitations": [
+    "No WASM runtime/native host binary/app UI test performed in this slot.",
+    "Relations ordinary-frontmatter lib/graph inference wiring had not yet been composed; tests establish the pure helper and existing expression/summary wrappers.",
+    "Later source changes require affected revalidation.",
+    "Existing compiler warnings include dormant inherited helpers and adjacent core/index warnings; no errors."
+  ]
+}

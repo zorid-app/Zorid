@@ -155,6 +155,16 @@ case with independently authored `random() >= 0 && random() < 1` expected true,
 seed 14. Historical `expressions.json` is preserved. Native/WASM use the same
 accepted fixture; expectations were not generated from current implementation.
 
-Current source acceptance is pending the coordinator's composed Rust slot,
-matching WASM transport run and actual app renderer/E2E pass. Do not mark the
-implementation goal complete from these authored tests or static REA evidence.
+The early composed coordinator source `fce7459d` passes 11 rich/inference/URL/
+context tests, two Moment-format tests and seven adjacent corpus test functions
+(the latter includes 30 accepted expression cases). Commands used release,
+`--offline --locked -j1`, one test thread and the root-granted serialized slot.
+Existing URL/IDNA/ICU dependencies compile successfully without network access;
+disk free stayed above the 1 GiB guard at observed boundaries. Exact source
+hashes, commands and scope are in
+[the validation record](../history/bases-expression-validation-20261021.json).
+
+That slot did not include later lib/graph ordinary-frontmatter inference wiring,
+matching WASM transport, native host binary or actual app renderer/E2E acceptance.
+Those remain with the integration coordinator. Do not mark the implementation
+goal complete from these focused tests or static REA evidence.
