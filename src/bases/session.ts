@@ -372,7 +372,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       void saveConfigurationCommand(() => { if (controller.state.source !== expectedSource) throw new Error('This Base changed while the summary was open.'); return controller.removeSummary(controller.state.version, acceptedName); }).then(() => { saving = false; accept(next); }, failure => { saving = false; fields.disabled = false; expression.disabled = false; formulaEditor?.sync(); fail(failure, next); });
     });
     retry.addEventListener('click', () => { if (!retryPersistence || !retryAccepted || saving) return; saving = true; mark(); const operation = retryPersistence, next = retryAccepted;
-      void track(operation).then(() => { saving = false; accept(next); }, failure => { saving = false; fail(failure, next); });
+      void track(operation).then(() => { saving = false; accept(next); if (dirty && doc.activeElement !== name) void save(); }, failure => { saving = false; fail(failure, next); });
     });
     const outside = (event: Event) => { if (!panel.contains(event.target as Node)) close(false); };
     doc.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', place); destroySummaryEditor = cleanup;
