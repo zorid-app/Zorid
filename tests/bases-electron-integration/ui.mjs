@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {delay, until} from '../tasks-electron-integration/cdp.mjs';
 
 // Every positive mutation is routed through visible app controls. DOM evaluation
-// locates/reads elements only; it does not call workspace/controller/store APIs.
+// locates/reads elements; it does not call workspace/controller/store APIs.
 export class UI {
   constructor(cdp, actions) { this.cdp = cdp; this.actions = actions; }
   dom(body) { return this.cdp.evaluate(`(()=>{${body}})()`); }

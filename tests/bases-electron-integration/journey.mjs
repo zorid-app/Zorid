@@ -7,8 +7,13 @@ const active='.pane.is-active .bases-session';
 const dialog=name=>`[role="dialog"][aria-label=${JSON.stringify(name)}]`;
 const input=(name,scope='body')=>`${scope} input[aria-label=${JSON.stringify(name)}],${scope} textarea[aria-label=${JSON.stringify(name)}]`;
 async function choose(c,name){await c.ui.button('Views',active);await c.ui.button(`Open view ${name}`,dialog('Views'));await c.ui.idle();}
-async function apply(c,name){await c.ui.button('Apply',dialog(name));await c.ui.wait(`return !document.querySelector(${JSON.stringify(dialog(name))});`,'Applied '+name);await c.ui.idle();}
+async function apply(c,name){
+  if(['Formula','New item settings'].includes(name))await c.ui.button('Apply',dialog(name));
+  else await c.ui.key('Escape'); // Reference immediate configuration flushes on dismissal.
+  await c.ui.wait(`return !document.querySelector(${JSON.stringify(dialog(name))});`,'Applied '+name);await c.ui.idle();
+}
 async function config(c,name){await c.ui.button('Views',active);await c.ui.button(`Configure view ${name}`,dialog('Views'));}
+async function viewAction(c,label){await c.ui.button('View actions',dialog('View options'));await c.ui.button(label);await c.ui.idle();}
 async function fmSaved(c,file,check,name){return c.saved(file,source=>check(c.frontmatter(source),source),name);}
 async function visibleCell(c,file,property,expected){return c.ui.wait(`const e=document.querySelector(${JSON.stringify(c.ui.cell(file,property))});return e&&e.textContent.includes(${JSON.stringify(expected)});`,`${file} ${property} = ${expected}`);}
 async function noAlerts(c){await c.ui.wait(`return ![...document.querySelectorAll('.pane.is-active [role="alert"]')].some(e=>e.getClientRects().length&&e.textContent.trim());`,'No visible failure after positive flow');}
@@ -34,13 +39,13 @@ export async function journey(c){
   await c.saved('Library.base',source=>{const b=c.yaml.parse(source);assert.equal(b.views[0].name,'Books table');assert.equal(b.fixtureSentinel,'keep-me');assert.match(source,/# Heavy-user fixture/);},'view-rename-preserves-unknown-fields-comments');
   await c.ui.button('Views',active);await c.ui.button('Add view',dialog('Views'));
   await c.ui.type(input('View name'),'Temporary view');await c.ui.select(`${dialog('Add view')} select[aria-label="Layout"]`,'List');await c.ui.button('Create view',dialog('Add view'));await c.ui.idle();
-  await config(c,'Temporary view');await c.ui.button('Duplicate view',dialog('View options'));await c.ui.idle();
+  await config(c,'Temporary view');await viewAction(c,'Duplicate view');
   const duplicate=await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).views.length,6),'add-and-duplicate-view');
   const copied=c.yaml.parse(duplicate).views.find(v=>v.name!=='Temporary view'&&v.name.startsWith('Temporary view')).name;
-  await config(c,copied);await c.ui.button('Move view earlier',dialog('View options'));await c.ui.idle();
-  await config(c,copied);await c.ui.button('Set as default view',dialog('View options'));await c.ui.idle();
+  await config(c,copied);await viewAction(c,'Move view earlier');
+  await config(c,copied);await viewAction(c,'Set as default view');
   await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).views[0].name,copied),'default-view-is-first-saved-view');
-  for(const name of[copied,'Temporary view']){await config(c,name);await c.ui.button('Delete view',dialog('View options'));await c.ui.idle();}
+  for(const name of[copied,'Temporary view']){await config(c,name);await viewAction(c,'Delete view');}
   await choose(c,'Books table');
 
   // View-level advanced filter composes with the fixture's Base-wide membership.
@@ -49,6 +54,36 @@ export async function journey(c){
   await c.ui.wait(`return document.querySelector('${active} [role="grid"]')?.getAttribute('aria-rowcount')==='29';`,'28 high-rating rows');
   await c.screenshot('02-view-filter');
   await c.ui.button('Filter',active);await c.ui.button('This view',dialog('Filter'));await c.ui.button('Remove filter',dialog('Filter'));await apply(c,'Filter');
+
+  // Formula UI edits the same portable Base configuration. Adding a formula does
+  // not change the notes; choosing its column makes its derived result visible.
+  await c.ui.button('Properties',active);await c.ui.button('Add formula',dialog('Properties'));
+  await c.ui.type(input('Formula name',dialog('Formula')),'tripleRating');await c.ui.type(input('Formula expression',dialog('Formula')),'note.rating * 3');await apply(c,'Formula');
+  await c.ui.button('Properties',active);await c.ui.click(`${dialog('Properties')} input[type="checkbox"][data-property="formula.tripleRating"]`);await apply(c,'Properties');
+  await visibleCell(c,'Book 001.md','formula.tripleRating','3');
+  await c.ui.button('Properties',active);await c.ui.button('Edit formula tripleRating',dialog('Properties'));await c.ui.type(input('Formula name',dialog('Formula')),'ratingTimesThree');await apply(c,'Formula');
+  await c.saved('Library.base',source=>{const formulas=c.yaml.parse(source).formulas;assert.equal(formulas.ratingTimesThree,'note.rating * 3');assert.equal(formulas.tripleRating,undefined);},'formula-create-and-rename');
+  await c.ui.button('Properties',active);await c.ui.button('Edit formula ratingTimesThree',dialog('Properties'));await c.ui.button('Remove formula',dialog('Formula'));await c.ui.idle();
+  await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).formulas.ratingTimesThree,undefined),'formula-remove');
+
+  await c.ui.button('Search',active);await c.ui.type(`${active} input[aria-label="Search base"]`,'Book 001');await c.ui.idle();
+  await c.ui.wait(`return document.querySelector('${active} [role="grid"]')?.getAttribute('aria-rowcount')==='2';`,'Search evaluated visible values returns exact file');await c.ui.key('Escape');await c.ui.idle();
+  await c.ui.button('Results',active);await c.ui.type(input('Limit',dialog('Results')),'10');await apply(c,'Results');
+  await c.ui.wait(`return document.querySelector('${active} [role="grid"]')?.getAttribute('aria-rowcount')==='11';`,'Saved result limit applied');
+  await c.ui.click(`${active} .zorid-bases-table-footer [data-summary-property="note.rating"]`);await c.ui.button('Sum','.zorid-bases-table-menu');await c.ui.idle();
+  await c.ui.wait(`return document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.rating"]')?.textContent==='30';`,'Summary uses final 10 returned rows');
+  await c.ui.button('Results',active);await c.ui.button('Show all results',dialog('Results'));await c.ui.idle();
+  await c.ui.wait(`return document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.rating"]')?.textContent==='213';`,'Summary includes all 72 ratings, not viewport rows');
+  await c.ui.click(`${active} .zorid-bases-table-footer [data-summary-property="note.rating"]`);await c.ui.button('RatingTotal','.zorid-bases-table-menu');await c.ui.idle();
+  await c.ui.wait(`return document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.rating"]')?.textContent==='213';`,'Custom Rust summary agrees with independent sum');
+  await c.screenshot('02b-search-limit-and-summaries');
+
+  // Reference resize behavior through a real separator and keyboard commands.
+  const resize=`${active} [role="columnheader"][title="note.rating"] .zorid-bases-table-resize`;
+  await c.ui.click(resize);await c.ui.dom(`document.querySelector(${JSON.stringify(resize)}).focus();`);await c.ui.key('ArrowRight');await c.ui.idle();
+  await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).views.find(v=>v.name==='Books table').columnSize['note.rating'],190),'column-keyboard-resize-saved');
+  await c.ui.click(resize);await c.ui.dom(`document.querySelector(${JSON.stringify(resize)}).focus();`);await c.ui.key('Home');await c.ui.idle();
+  await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).views.find(v=>v.name==='Books table').columnSize?.['note.rating'],undefined),'column-reset-width-saved');
 
   // Field edits must preserve body/frontmatter not touched by the command.
   const firstBefore=await c.read('Book 001.md');
@@ -60,18 +95,28 @@ export async function journey(c){
 
   // Rich pickers are shared production widgets. Multiple selections commit on
   // Enter with no search, rather than writing a comma-delimited string.
-  await c.ui.click(`${c.ui.cell('Book 001.md','note.topics')} .bases-metadata-value`);
+  await c.ui.click(`${c.ui.cell('Book 001.md','note.topics')}.bases-metadata-value`);
   await c.ui.type('.bases-property-popover input[role="combobox"]','Writing');
   await c.ui.key('ArrowDown');await c.ui.key('Enter');
   await c.ui.type('.bases-property-popover input[role="combobox"]','');await c.ui.key('Enter');await c.ui.idle();
   await fmSaved(c,'Book 001.md',p=>assert.deepEqual(p.topics,['Design','Writing']),'multiselect-stores-yaml-list');
-  await c.ui.click(`${c.ui.cell('Book 001.md','note.status')} .bases-metadata-value`);
+  await c.ui.click(`${c.ui.cell('Book 001.md','note.status')}.bases-metadata-value`);
   await c.ui.type('.bases-property-popover input[role="combobox"]','Reading');await c.ui.key('ArrowDown');await c.ui.key('Enter');await c.ui.idle();
   await fmSaved(c,'Book 001.md',p=>assert.equal(p.status,'Reading'),'status-picker');
-  await c.ui.click(`${c.ui.cell('Book 001.md','note.author')} .bases-metadata-value`);
+  await c.ui.click(`${c.ui.cell('Book 001.md','note.author')}.bases-metadata-value`);
   await c.ui.type('.bases-property-popover input[role="combobox"]','Author Grace');await c.ui.key('ArrowDown');await c.ui.key('Enter');await c.ui.idle();
   await fmSaved(c,'Book 001.md',p=>assert.equal(p.author,'[[Author Grace]]'),'relation-picker-stores-readable-link');
   await c.screenshot('03-rich-property-edits');
+
+  // Missing fields are empty presentation until explicitly edited; merely opening
+  // the Base must not add the entire visible schema to heterogeneous notes.
+  const missingBefore=await c.read('Missing properties.md');assert.equal(c.frontmatter(missingBefore).rating,undefined);
+  await c.ui.button('Search',active);await c.ui.type(`${active} input[aria-label="Search base"]`,'Missing properties');await c.ui.idle();
+  await c.ui.wait(`const e=document.querySelector(${JSON.stringify(c.ui.cell('Missing properties.md','note.rating'))});return e&&e.textContent.trim()==='';`,'Missing property shown as empty');
+  assert.equal(await c.read('Missing properties.md'),missingBefore,'Showing empty column does not write missing field');
+  await c.ui.edit('Missing properties.md','note.rating','4');
+  await fmSaved(c,'Missing properties.md',(p,source)=>{assert.equal(p.rating,4);assert.equal(p.status,undefined);assert.equal(source.slice(source.indexOf('\nA heterogeneous')),missingBefore.slice(missingBefore.indexOf('\nA heterogeneous')));},'edit-empty-cell-adds-only-selected-property');
+  await c.ui.click(`${active} input[aria-label="Search base"]`);await c.ui.key('Escape');await c.ui.idle();
 
   // Native table keyboard selection and production TSV handler. Clipboard scope
   // is explicitly synthetic and does not read or replace the system clipboard.
@@ -106,6 +151,15 @@ export async function journey(c){
   await c.screenshot('03b-reverse-relations-rollups');
   await c.ui.openFile('Library.base');await c.ui.idle();await choose(c,'Books table');
 
+  // Real missing-template failure: no blank fallback or duplicate. Repair the
+  // configuration through its ordinary UI and explicitly retry New.
+  await config(c,'Books table');await viewAction(c,'New item settings');
+  await c.ui.type(input('New item template',dialog('New item settings')),'Templates/Missing.md');await apply(c,'New item settings');
+  await c.ui.button('New',active);
+  await c.ui.wait(`return [...document.querySelectorAll('.pane.is-active [role="status"],.pane.is-active [role="alert"]')].some(e=>/template|not found|missing/i.test(e.textContent));`,'Missing template explained');
+  assert.deepEqual(await fs.readdir(path.join(c.vault,'Created')),[],'No silent blank-file fallback');await c.screenshot('03c-missing-template-failure');
+  await config(c,'Books table');await viewAction(c,'New item settings');await c.ui.type(input('New item template',dialog('New item settings')),'Templates/Book.md');await apply(c,'New item settings');
+
   // Full literal template bytes, safe collision, unchanged source template.
   const existing=new Set(await fs.readdir(path.join(c.vault,'Created')));
   await c.ui.button('New',active);
@@ -116,6 +170,12 @@ export async function journey(c){
   await until(async()=>assert.equal((await fs.readdir(path.join(c.vault,'Created'))).filter(n=>n.endsWith('.md')).length,2),30000);
   for(const name of await fs.readdir(path.join(c.vault,'Created')))assert.equal(await c.read('Created/'+name),c.template,'Collision-safe create preserves exact template');
   await c.ui.openFile('Library.base');await c.ui.idle();
+
+  await config(c,'Books table');await viewAction(c,'New item settings');await c.ui.type(input('New item template',dialog('New item settings')),'');await apply(c,'New item settings');
+  const beforeBlank=new Set(await fs.readdir(path.join(c.vault,'Created')));await c.ui.button('New',active);
+  const blank=await until(async()=>{const files=(await fs.readdir(path.join(c.vault,'Created'))).filter(n=>!beforeBlank.has(n));assert.equal(files.length,1);return 'Created/'+files[0];},30000);
+  await fmSaved(c,blank,(p,source)=>{assert.equal(p.type,'book','Safe filter equality inferred');assert.ok(!source.includes('Literal template body'));},'new-without-template-safe-filter-default');
+  await c.ui.openFile('Library.base');await c.ui.idle();await config(c,'Books table');await viewAction(c,'New item settings');await c.ui.type(input('New item template',dialog('New item settings')),'Templates/Book.md');await apply(c,'New item settings');
 
   // All renderers show shared saved data, not copied layout-owned records.
   await choose(c,'Covers');await c.ui.wait(`return [...document.querySelectorAll('${active} .bases-cards-item')].some(e=>e.dataset.path==='Book 001.md');`,'Cards shows edited book');await c.screenshot('04-cards');

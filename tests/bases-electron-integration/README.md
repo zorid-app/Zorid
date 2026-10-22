@@ -3,8 +3,10 @@
 This launches the normal production Electron app against a fresh disposable vault,
 with 72 books, heterogeneous properties, authors, a full literal template and four
 saved layouts. It performs UI actions through CDP hit-tested pointer input and
-keyboard input. DOM evaluation only locates/reads controls, except the explicitly
-labeled synthetic TSV ClipboardEvent sent to the production paste handler.
+keyboard input. DOM evaluation locates/reads controls and focuses a hit-tested
+keyboard resize separator. An explicitly labeled synthetic TSV ClipboardEvent is
+sent to the production paste handler. No production data/controller APIs mutate
+positive state.
 
 Run only after the integration coordinator freezes matching frontend/native
 artifacts and grants the runtime resource slot. The harness never builds.

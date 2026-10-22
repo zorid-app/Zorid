@@ -25,6 +25,8 @@ filters:
     - '!file.inFolder("Templates")'
 formulas:
   doubleRating: 'note.rating * 2'
+summaries:
+  RatingTotal: 'values.sum()'
 properties:
   note.rating:
     displayName: Rating

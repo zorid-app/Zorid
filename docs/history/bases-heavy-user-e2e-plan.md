@@ -16,12 +16,19 @@ host. It does not call production stores/controllers to simulate positive edits.
 - Create Base through normal command, then rename/add/duplicate/reorder/default/
   delete views. Preserve unknown configuration and comments.
 - Apply/remove advanced view filter; assert exact independently calculated count.
+- Create/rename/remove formula through its actual editor; Search, saved result
+  limit, built-in/custom summary with full-result and limited-result sum oracles;
+  real column separator keyboard resize/reset.
 - Edit number, checkbox, multiselect, status and relation using actual controls;
   check exact YAML values and preserve original body/unrelated fields.
 - Paste two rows/two columns through the production ClipboardEvent handler;
   one command undo/redo, exact durable field checks.
 - Create two notes through New with exact full literal template and collision
   handling; assert unchanged template and no expanded placeholders.
+- Missing-template failure creates no blank fallback; repair settings and retry.
+  New without template uses safe equality defaults.
+- A separate Authors Base verifies reverse relations/count/average from all
+  durable related files, without writing derived fields into source notes.
 - Switch Table/Cards/List/Kanban; move one card through actual keyboard behavior
   and assert original file changed.
 - Mount both file/named-view and fenced Base embeds; preserve containing Markdown.
@@ -35,15 +42,14 @@ controls before runtime. A failed early gate does not establish later coverage.
 
 ## Required remaining additions before full acceptance
 
-- Formula creation/edit/rename/removal, built-in/custom group and overall summaries,
-  display names, visual nested All views filters, search and result limits/export.
+- Formula validation errors, group summaries, display names, visual nested All
+  views filters, result export and custom summary definition editing.
 - Property definition option creation/rename/reorder/color/removal and unknown
   values; date/datetime/list/link editing and invalid-value diagnostics.
-- Relation reverse lookup, rollups, target rename/delete/unresolved and refresh.
-- Table resize/reorder/header menus/range clear; Kanban pointer drag, empty/null/
+- Relation target rename/delete/unresolved and refresh.
+- Table pointer resize/reorder/header menus/range clear; Kanban pointer drag, empty/null/
   list/folder groups; Cards covers/sizing, List markers/separators.
-- Full-template missing/unreadable failure and explicit recovery/retry without a
-  duplicate; New without template and create-in-group precedence.
+- Unreadable-template failure and create-in-group precedence.
 - Split/sidebar mounting and active-main-note `this` context changes; fenced
   configuration UI saves original Markdown block; close/remount pending drafts.
 - Real native interruption/failure retained recovery, report actual atomic/partial
