@@ -22,6 +22,11 @@ mod collection_tests;
 mod call_signatures;
 #[path = "expression_format.rs"]
 mod date_format;
+#[path = "expression_regex_admission.rs"]
+mod regex_admission;
+#[cfg(test)]
+#[path = "expression_regex_admission_tests.rs"]
+mod regex_admission_tests;
 #[path = "expression_duration.rs"]
 mod duration_semantics;
 #[path = "expression_duration_dependency.rs"]
@@ -721,6 +726,9 @@ impl<'a> Session<'a> {
                 .unwrap_or(("parse", message.as_str()));
             ExpressionDiagnostic::new(code, text)
         })?;
+        self.evaluator
+            .admit_literals(&ast)
+            .map_err(runtime_diagnostic)?;
         let value = self.evaluator.evaluate(ast.as_ref(), &BTreeMap::new());
         let shape = if preserve_tags {
             self.evaluator
@@ -816,6 +824,30 @@ pub(crate) fn evaluate_summary(
     };
     let mut evaluator = Evaluator::new(&context);
     evaluator.summary_only = true;
+    let ast = parse_cached(source)
+        .map_err(|message| {
+            let (code, text) = message.split_once('\0').unwrap_or(("parse", &message));
+            ExpressionDiagnostic::new(code, text)
+        })
+        .and_then(|ast| {
+            evaluator
+                .admit_literals(&ast)
+                .map_err(runtime_diagnostic)
+                .map(|()| ast)
+        });
+    let ast = match ast {
+        Ok(ast) => ast,
+        Err(error) if ["budget", "cancelled"].contains(&error.code.as_str()) => return Err(error),
+        Err(error) => {
+            return Ok(EvaluationResult {
+                value: BaseValue::Error {
+                    code: error.code,
+                    message: error.message,
+                },
+                steps_used: options.max_steps.saturating_sub(evaluator.remaining_work),
+            })
+        }
+    };
     let mut bytes = 0usize;
     let mut converted = Vec::new();
     for (index, value) in values.iter().enumerate() {
@@ -837,16 +869,8 @@ pub(crate) fn evaluate_summary(
         }
         converted.push(value);
     }
-    let value = match parse_cached(source) {
-        Ok(ast) => {
-            let scope = BTreeMap::from([("values".into(), RuntimeValue::List(converted))]);
-            typed_result(evaluator.evaluate(&ast, &scope))
-        }
-        Err(message) => {
-            let (code, text) = message.split_once('\0').unwrap_or(("parse", &message));
-            Err(ExpressionDiagnostic::new(code, text))
-        }
-    };
+    let scope = BTreeMap::from([("values".into(), RuntimeValue::List(converted))]);
+    let value = typed_result(evaluator.evaluate(&ast, &scope));
     // Semantic failures are visible cells and still consume query work. Only
     // resource/cancellation failures reject the entire bounded query.
     let value = match value {
@@ -1122,13 +1146,47 @@ fn summary_runtime_value(
     Ok(result)
 }
 
+/// Validation without a host context still has a finite construction budget.
+/// Planning helpers intentionally keep using syntax-only parse_cached instead.
 pub(crate) fn validate(expression: &str) -> Result<(), String> {
-    parse_cached(expression).map(|_| ())
+    let mut remaining = crate::MAX_EXPRESSION_STEPS;
+    validate_checked(expression, &mut |work| {
+        remaining = remaining.checked_sub(work).ok_or_else(|| {
+            RuntimeValue::Error("budget\0Regex validation exceeds work budget".into())
+        })?;
+        Ok(())
+    })
+    .map_err(|error| match error {
+        RuntimeValue::Error(message) => message,
+        _ => unreachable!(),
+    })
+}
+
+pub(crate) fn validate_checked(
+    expression: &str,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<(), RuntimeValue> {
+    // Check cancellation before even a warm optional syntax-cache lookup.
+    check(expression.len() / 16 + 1)?;
+    let ast = parse_cached(expression).map_err(|message| {
+        RuntimeValue::Error(if message.contains('\0') {
+            message
+        } else {
+            format!("parse\0{message}")
+        })
+    })?;
+    regex_admission::admit(&ast, check)
 }
 
 pub(crate) fn matches(expression: &str, context: &BasesEvaluationContext) -> Result<bool, String> {
     let ast = parse_cached(expression)?;
     let mut evaluator = Evaluator::new(context);
+    evaluator
+        .admit_literals(&ast)
+        .map_err(|error| match error {
+            RuntimeValue::Error(message) => message,
+            _ => unreachable!(),
+        })?;
     match evaluator.evaluate(ast.as_ref(), &BTreeMap::new()) {
         RuntimeValue::Error(message) => Err(message),
         value => Ok(is_truthy(&value)),
@@ -1167,6 +1225,19 @@ pub(crate) fn prepare_formula_expressions(
         check(name.len() / 16 + source.len() / 16 + 1)?;
         reserve(name.len().saturating_add(source.len()))?;
         let parsed = parse_cached_scoped(source, Some(name));
+        let parsed = match parsed {
+            Ok(ast) => match regex_admission::admit(&ast, check) {
+                Ok(()) => Ok(ast),
+                Err(RuntimeValue::Error(message))
+                    if message.starts_with("budget\0") || message.starts_with("cancelled\0") =>
+                {
+                    return Err(RuntimeValue::Error(message))
+                }
+                Err(RuntimeValue::Error(message)) => Err(message),
+                Err(_) => unreachable!(),
+            },
+            Err(message) => Err(message),
+        };
         let retained = match &parsed {
             Ok(ast) => ast_retained_bytes(ast, check)?,
             Err(message) => {
@@ -1985,6 +2056,10 @@ impl<'a> Evaluator<'a> {
             summary_only: false,
             random_state: seeded_row_state(context),
         }
+    }
+
+    fn admit_literals(&mut self, expression: &Expr) -> Result<(), RuntimeValue> {
+        regex_admission::admit(expression, &mut |work| self.charge(work))
     }
 
     fn evaluate(&mut self, expression: &Expr, scope: &Scope) -> RuntimeValue {
@@ -3635,9 +3710,13 @@ impl<'a> Evaluator<'a> {
         } else {
             parse_cached_scoped(expression, Some(name))
         };
-        let value = parsed
-            .map(|expression| self.evaluate(expression.as_ref(), &BTreeMap::new()))
-            .unwrap_or_else(RuntimeValue::Error);
+        let value = match parsed {
+            Ok(expression) => match self.admit_literals(&expression) {
+                Ok(()) => self.evaluate(expression.as_ref(), &BTreeMap::new()),
+                Err(error) => error,
+            },
+            Err(message) => RuntimeValue::Error(message),
+        };
         self.formula_stack.remove(name);
         self.formula_cache.insert(name.to_string(), value.clone());
         value
@@ -6234,9 +6313,13 @@ pub(crate) fn regex_string(pattern: &str, flags: &str) -> String {
 }
 
 fn canonical_regex_flags(flags: &str) -> Result<String, String> {
-    if flags.chars().any(|flag| !"gimsu".contains(flag))
-        || flags.chars().collect::<HashSet<_>>().len() != flags.chars().count()
+    if flags.chars().collect::<HashSet<_>>().len() != flags.chars().count()
+        || flags.chars().any(|flag| !"dgimsuvy".contains(flag))
+        || (flags.contains('u') && flags.contains('v'))
     {
+        return Err("parse\0Invalid regular expression flags".into());
+    }
+    if flags.chars().any(|flag| !"gimsu".contains(flag)) {
         return Err("unsupported\0Unsupported regular expression flags".into());
     }
     Ok("gimsu"
@@ -6254,20 +6337,42 @@ fn compile_regex(pattern: &str, flags: &str) -> Result<Regex, String> {
     if let Some(compiled) = cache.read().ok().and_then(|cache| cache.get(&key).cloned()) {
         return compiled;
     }
-    if flags.chars().any(|flag| !"gimsu".contains(flag))
-        || flags.chars().collect::<HashSet<_>>().len() != flags.chars().count()
-    {
-        return Err("unsupported\0Unsupported regular expression flags".into());
-    }
+    canonical_regex_flags(flags)?;
     let mut builder = RegexBuilder::new(pattern);
     builder.size_limit(1_048_576).dfa_size_limit(1_048_576);
     builder
         .case_insensitive(flags.contains('i'))
         .multi_line(flags.contains('m'))
         .dot_matches_new_line(flags.contains('s'));
-    let compiled = builder
-        .build()
-        .map_err(|error| format!("unsupported\0Unsupported regular expression: {error}"));
+    let compiled = builder.build().map_err(|error| match error {
+        regex::Error::CompiledTooBig(_) => {
+            "budget\0Regular expression exceeds compiled-size budget".into()
+        }
+        regex::Error::Syntax(message) => {
+            // Rust's Syntax category also includes valid JavaScript features
+            // such as lookaround/backreferences and different escape/class
+            // dialects. Only known malformed common syntax is called invalid.
+            // Read the diagnostic reason, never text inside the user pattern.
+            let reason = message
+                .lines()
+                .last()
+                .and_then(|line| line.strip_prefix("error: "));
+            if matches!(
+                reason,
+                Some(
+                    "unclosed group"
+                        | "unopened group"
+                        | "repetition operator missing expression"
+                        | "invalid repetition count range, the start must be <= the end"
+                )
+            ) {
+                format!("parse\0Invalid regular expression: {message}")
+            } else {
+                format!("unsupported\0Unsupported regular expression: {message}")
+            }
+        }
+        error => format!("unsupported\0Unsupported regular expression: {error}"),
+    });
     if let Ok(mut cache) = cache.write() {
         if cache.len() >= MAX_ENTRIES {
             cache.clear();
