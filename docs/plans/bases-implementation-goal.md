@@ -1,6 +1,6 @@
 # Bases implementation pass
 
-Updated 2026-10-21. Status: **implementation in progress; composed runtime acceptance pending**.
+Updated 2026-10-22. Status: **implementation in progress; composed runtime acceptance pending**.
 This is the current feature scope and completion checklist for this pass. Follow
 the [roadmap](../roadmap.md) for other milestones. This document supersedes older
 Types/Bases designs and combined Bases/Tasks/Calendar implementation assignments.
@@ -8,9 +8,11 @@ Types/Bases designs and combined Bases/Tasks/Calendar implementation assignments
 ## Goal and settled decisions
 
 Deliver fully usable local Bases over ordinary vault files, using the shared Rust
-core and TypeScript workspace. Match **Obsidian 1.14.4 Bases appearance and
-interaction** as the initial target, including menus, editing, keyboard behavior
-and all four built-in layouts. Approved template difference: **New copies the complete
+core and TypeScript workspace. Use **Obsidian 1.14.4 Bases appearance and
+interaction** as the starting point, including menus, editing, keyboard behavior
+and all four built-in layouts. Latest project steering prioritizes the best Zorid
+UX; document deliberate improvements and verify their behavior rather than
+treating every reference difference as a defect. Approved template difference: **New copies the complete
 configured template note, properties and body, rather than only its properties**.
 
 - Files own content and properties. Bases own saved selection/configuration;
@@ -37,13 +39,16 @@ Latest direct steering: use REA heavily throughout implementation, not just for
 initial research. Obsidian is also the logic reference: inspect its concrete
 implementation and corresponding runtime scenario before inventing behavior for
 filters, defaults, grouping, conversion, clipboard, undo or other ambiguous cases.
-Preserve agreed improvements and documented core correctness guarantees. Exact reference UI/UX is the default for existing Bases
-features; the agreed improvements below remain requirements, not parity defects.
+Preserve agreed improvements and documented core correctness guarantees. Compare
+existing Bases features against corresponding reference states and interactions;
+explain deliberate UX choices. The agreed improvements below remain requirements,
+and reference comparison must not silently remove useful capabilities or weaken
+verification.
 
 - Inspect each feature's shipped implementation with REA before building it;
   reuse retained evidence and inspect focused areas rather than repeatedly
   analyzing the entire bundle. Follow up unclear behavior with runtime scenarios.
-- Match layout, spacing, typography, sizing, icons, menu structure/order,
+- Compare layout, spacing, typography, sizing, icons, menu structure/order,
   popover placement, focus, selection, shortcuts, pointer/drag interactions,
   disabled states and empty/error states against the identified reference build.
 - Compare corresponding reference/Zorid screenshots and executed interactions
