@@ -218,3 +218,26 @@ test('new relation path formatting escapes wiki delimiters, percent, spaces and 
   assert.equal(baseRelationTargetValue({path:'Authors/Ada.md',value:'[[Authors/Ada|Core alias]]'}),'[[Authors/Ada|Core alias]]');
   assert.equal(baseRelationTargetValue({path:'Authors/Ada.MD'}),'[[/Authors/Ada.MD]]');
 });
+
+
+test('ordinary raw relation display accepts only caller-verified baseline and never replaces its edit source', async () => {
+  const dom=new JSDOM('<div></div>'), element=dom.window.document.querySelector('div')!;
+  const raw=baseExpressionValue('[[Authors/Ada|my alias]]');
+  const row={path:'Books/Note.md',values:{},entryId:'book',revision:'saved-1'};
+  const typed={type:'namespace' as const,name:'Ada display',presentation:{kind:'link' as const,value:'Authors/Ada.md',label:baseExpressionValue('Ada display'),target:{entryId:'ada',revision:'ada-1'}}};
+  let reads=0,opened:unknown;const edits:BasePropertyWidgetEdit[]=[];
+  const dispose=mountBasePropertyWidget(element,{row,property:'note.author',value:raw,version:1},{getDefinition:()=>({type:'relation'}),getDisplayValue:p=>{reads++;return p.row===row && p.version===1 && JSON.stringify(p.value)===JSON.stringify(raw)?typed:undefined;},getRelationTargets:()=>[{path:'Authors/Grace.md',label:'Grace',entryId:'grace',revision:'g1'}],openFile:(path,_event,witness)=>{opened={path,witness};},commit:edit=>{edits.push(edit);return {version:2,row,value:edit.value};}});
+  assert.equal(element.textContent,'Ada display');
+  element.querySelector('.multi-select-pill')!.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));assert.deepEqual(opened,{path:'Authors/Ada.md',witness:{entryId:'ada',revision:'ada-1'}});
+  element.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));let input=dom.window.document.querySelector<HTMLInputElement>('[role="combobox"]')!;
+  assert.equal(input.value,'[[Authors/Ada|my alias]]');input.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(edits.length,0);assert.equal(reads,1);
+  element.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));input=dom.window.document.querySelector<HTMLInputElement>('[role="combobox"]')!;input.value='Grace';input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));input.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true}));await tick();
+  assert.equal(reads,2);assert.deepEqual(edits[0].value,baseExpressionValue('[[/Authors/Grace.md]]'));assert.equal(element.textContent,'Grace');assert.doesNotMatch(element.textContent!,/Ada display/);
+  dispose();dom.window.close();
+});
+
+test('missing caller-verified relation display falls back to exact literal without a fabricated resolved link', () => {
+  let reads=0,opened=0;
+  const s=setup('[[Authors/Ada|my alias]]',{type:'relation'},{getDisplayValue:()=>{reads++;return undefined;},openFile:()=>{opened++;}});
+  assert.equal(reads,1);assert.equal(s.element.textContent,'[[Authors/Ada|my alias]]');assert.equal(s.element.querySelector('[role="link"]'),null);s.element.querySelector('.multi-select-pill')!.dispatchEvent(new s.dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));assert.equal(opened,0);assert.equal(s.edits.length,0);s.close();
+});

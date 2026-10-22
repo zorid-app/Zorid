@@ -32,6 +32,11 @@ export interface BasePropertyWidgetAcknowledgement {
 export interface BasePropertyWidgetOptions {
   /** Same-snapshot persisted source value, before link/date/rich inference. */
   readonly getEditableValue?: (presentation: BasePropertyPresentation) => BaseExpressionValue | undefined;
+  /** Optional typed display from the same saved property baseline. The owner must
+   * verify entry identity/revision and exact raw value before returning it. Called
+   * at mount and after acknowledged edits only; undefined uses presentation.value.
+   * Display values never initialize or replace the persisted editable draft. */
+  readonly getDisplayValue?: (presentation: BasePropertyPresentation) => BaseExpressionValue | undefined;
   readonly getDefinition: (property: string) => BasePropertyDefinition | undefined;
   readonly commit: (edit: BasePropertyWidgetEdit) => void | BasePropertyWidgetAcknowledgement | Promise<void | BasePropertyWidgetAcknowledgement>;
   /** Targets are selected/resolved by Rust/the owning workspace, never by a TS query evaluator. */
@@ -92,7 +97,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     const valid = keys.length <= budget.left && keys.every(key => { const item = Object.getOwnPropertyDescriptor(data,key); return !!item && 'value' in item && rawSafe(item.value,active,budget,depth+1); });
     active.delete(value); return valid;
   };
-  let value = suppliedRaw ?? presentation.value, displayValue = presentation.value;
+  let value = suppliedRaw ?? presentation.value, displayValue = options.getDisplayValue?.(presentation) ?? presentation.value;
   let definition = options.getDefinition(presentation.property) ?? inferBasePropertyDefinition(value, presentation.property);
   const type = definition.type;
   const rawUnavailable = presentation.property.startsWith('note.') && suppliedRaw === undefined && !rawSafe(presentation.value) && (!!options.getEditableValue || presentation.value.type === 'namespace' || type === 'relation' || type === 'link');
@@ -165,7 +170,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (!acknowledgement) return false;
     if (acknowledgement.row.path !== acceptedPresentation.row.path) throw new Error('A property acknowledgement cannot retarget its file.');
     acceptedPresentation = { ...acceptedPresentation, version: acknowledgement.version, row: acknowledgement.row, value: acknowledgement.value ?? next };
-    displayValue = acceptedPresentation.value; value = options.getEditableValue?.(acceptedPresentation) ?? next; pairTargets();
+    displayValue = options.getDisplayValue?.(acceptedPresentation) ?? acceptedPresentation.value; value = options.getEditableValue?.(acceptedPresentation) ?? next; pairTargets();
     return true;
   };
   const commit = async (next: BaseExpressionValue, keepOpen = false): Promise<boolean> => {
