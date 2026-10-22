@@ -2,6 +2,26 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Electron010 reaches166 actions/18 checks. The Summary placement fix and focused
+ArrowRight resize pass; Home reset fails to remove width91. A pending-save
+reproduction drops the second resize command. `bases_table` owns explicit
+acknowledged-update command serialization; reviewed source and actual rerun are
+still required. All owned010 processes are closed.
+
+Properties001 reaches34 actions/9 checks before ordinary-note filtered relation
+display fails. A bounded source probe confirms the hidden test window suppresses
+initial target queries; `bases_e2e` owns an explicit real visible-window mode.
+Keep the relation assertion unchanged and rerun; do not change product visibility
+policy to satisfy a hidden test. Safety001 stops15 actions into an exact body
+newline mismatch; its author is distinguishing caret/input setup from product
+behavior. Both apps are closed; later scenarios are unexecuted.
+
+The complete expression catalogue audit identifies real Object/Tag, signatures,
+String/List/Number, Duration and inheritance gaps. Named isolated owners are
+recorded in the roadmap checkpoint; previous194 Rust tests and Browser005's
+9 passing groups do not establish those missing semantics. Compilation, review,
+fresh artifacts and actual changed-host scenarios remain required.
+
 Electron008 passes the exact null-group summary oracle, then exposes Summary
 actions opening below the viewport and hiding Delete summary. Scoped placement
 fix/regression is owned by `bases_session`; actual full journey remains open.

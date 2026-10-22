@@ -9,6 +9,43 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+2026-10-22 current composed candidate `a11e0491` includes reviewed editable
+hover, exact property-popup ownership and ordinary/New property draft retention.
+Root composition passes69 focused hover/property/runner/recovery checks and the
+desktop build. The optional visual/properties/layouts/recovery campaigns and
+strict fixture/provenance/process guards are composed; their source readiness
+does not establish actual acceptance. Main remains unchanged.
+
+Actual Electron010 at `2f0d77a4` reaches166 actions/18 checks: summary selection,
+focused ArrowRight resize and the prior focus defect pass. Home reset then leaves
+width91 instead of removing the override. A focused pending-save reproduction
+loses the second resize command; `bases_table` owns explicit acknowledged-update
+serialization and regressions. Exact fingerprints match and owned processes are
+closed. Full desktop acceptance remains open.
+
+Properties001 at `a11e0491` reaches34 actions/9 checks, then fails ordinary-note
+filtered relation display. Source probing confirms the runner's AppKit-hidden
+window suppresses initial note-property target queries: hidden calls0, normal
+visible wake calls1. This is a test precondition mismatch, not accepted product
+failure or a passed relation scenario. `bases_e2e` owns an explicit genuinely
+visible-window mode; the expectation stays intact. Safety001 reaches15 actions
+and stops on an exact body newline mismatch, with dirty-overlap preconditions
+observed; its author is investigating caret/input versus product cause. Both
+campaigns retain evidence and all owned processes are closed.
+
+Browser005 passes all9 groups on the existing Rust closure `5e010112`, including
+malformed-metadata diagnostics, exact restoration and retained snapshots; its
+evidence record is `57f672f7`. The complete80-registration expression audit is
+`2f0d77a4` / `history/bases-expression-completion-audit-20261022.md`; it identifies
+real remaining G1–G9 gaps rather than extending the prior194-test result to them.
+Named isolated owners are `bases_summaries` (Object/Tag and actual-value shape),
+`bases_expressions` (String/List/Number and strict identity), `bases_inline_core`
+(Duration), `bases_docs_model` (signatures/special calls/ancestry) and
+`bases_relations` (derived identity propagation). These successors remain
+uncompiled/unaccepted until coherent review, serialized core checks, rebuilt
+native/WASM artifacts and matching actual host scenarios. No heavy process is
+live at this checkpoint; root retains the next runtime/build slot.
+
 2026-10-22 actual Electron009 at `cfe5627e` reaches160 actions/16 checks and
 verifies expanded Summary actions/deletion in the real app. It then stops at
 keyboard resize. Independent reproduction proves a product defect: a same-view
