@@ -27,6 +27,16 @@ verifies data/UI durability; selection persistence across sessions is not an
 acceptance claim. No mobile, dirty-body race, crash, clipboard or OS foreground/
 physical-keyboard parity follows from this focused campaign.
 
+Before each single property double-click, a read-only fixture precondition
+requires the existing grid/controller to be settled: explicit updating/error/
+busy false, matching controller/rendered/widget versions, and no retained cell
+editor. Actual selection001 reached its second click while query refresh was
+busy with a pending widget despite aria-disabled false. This readiness predicate
+does not establish a product cause or alter selection expectations; it waits for
+the next intended edit to be available. No extra click, retry, product flush or
+private controller call is used. The original pointer action still performs its
+ordinary hit/enable checks.
+
 After matching source/native/frontend artifacts are frozen and the coordinator
 grants the serialized runtime slot:
 
@@ -48,7 +58,7 @@ to the existing canonical admission/provenance list only.
 Bounded offline checks:
 
 ```sh
-node --test --test-concurrency=1 tests/bases-electron-selection-integration/selection-oracle.test.mjs tests/bases-electron-integration/owned-fixtures.test.mjs
+node --test --test-concurrency=1 tests/bases-electron-selection-integration/selection-oracle.test.mjs tests/bases-electron-selection-integration/table-readiness.test.mjs tests/bases-electron-integration/owned-fixtures.test.mjs
 node --check tests/bases-electron-selection-integration/campaign.mjs
 node --check tests/bases-electron-selection-integration/run.mjs
 ```

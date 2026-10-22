@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {MOD} from '../bases-electron-integration/ui.mjs';
 import {fixtureFiles,file,base,properties,sources,phases,prefix,word,targetLine} from './fixtures.mjs';
 import {selectionFrame,assertSelection,assertMapping} from './selection-oracle.mjs';
+import {selectionTableReady} from './table-readiness.mjs';
 export {fixtureFiles,vaultName} from './fixtures.mjs';
 const note='.pane:has(input.note-title)',basePane='.pane:has(.bases-session)',editor=note+' .cm-content[contenteditable="true"]';
 const noteTab=note+' .tab.is-active .tab-title',baseTab=basePane+' .tab.is-active .tab-title';
@@ -29,7 +30,10 @@ export async function journey(c){
     if(!phase.collapsed)for(const character of word){void character;await c.ui.key('ArrowRight',{modifiers:MOD.shift});}
     const before=await snapshot(c,phase.name+'-before');assertSelection(before,phase);
     const sourceBefore=await c.read(file);assert.equal(sourceBefore,phase.before);
-    const cell=basePane+' '+c.ui.cell(file,'note.score');await c.ui.click(cell,{count:2});
+    const cell=basePane+' '+c.ui.cell(file,'note.score');
+    const ready=await c.ui.wait(`return (${selectionTableReady.toString()})(document,${JSON.stringify(cell)});`,'Existing property table is settled and current');
+    c.evidence.actions.push({action:'selection-property-table-precondition',phase:phase.name,ready,at:Date.now()});
+    await c.ui.click(cell,{count:2});
     await c.ui.type(cell+' input:not([type="checkbox"])',phase.score);await c.ui.key('Enter');
     const sourceAfter=await c.saved(file,source=>assert.equal(source,phase.after),'exact-property-source-'+phase.name);
     // Existing active-tab selection focuses editor.focus() through the normal
