@@ -617,6 +617,107 @@ fn report(
 fn fatal(error: &ExpressionDiagnostic) -> bool {
     ["budget", "cancelled"].contains(&error.code.as_str())
 }
+// Syntax construction consumes the selected program even when the captured
+// row set is empty. Semantic parse errors keep their existing cell/filter
+// presentation; resource and cancellation failures reject the invocation.
+fn admit_selected_syntax(
+    program: &BaseProgram,
+    view: &program::View,
+    options: &QueryOptions,
+    steps: &mut usize,
+    admission: &mut Admission<'_>,
+) -> Result<(), ExpressionDiagnostic> {
+    fn work(
+        cost: usize,
+        options: &QueryOptions,
+        steps: &mut usize,
+        admission: &Admission<'_>,
+    ) -> Result<(), ExpressionDiagnostic> {
+        if options
+            .evaluation
+            .cancellation
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled())
+        {
+            return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+        }
+        *steps = steps.saturating_add(cost);
+        check_query_work(
+            *steps,
+            admission,
+            options,
+            "Selected syntax admission exceeds query work budget",
+        )
+    }
+    fn source(
+        source: &str,
+        options: &QueryOptions,
+        steps: &mut usize,
+        admission: &Admission<'_>,
+    ) -> Result<(), ExpressionDiagnostic> {
+        match expression::validate_checked(source, &mut |cost| {
+            work(cost, options, steps, admission).map_err(|error| {
+                expression::RuntimeValue::Error(format!("{}\0{}", error.code, error.message))
+            })
+        }) {
+            Ok(()) => Ok(()),
+            Err(value) => {
+                let error = expression::runtime_diagnostic(value);
+                if fatal(&error) {
+                    Err(error)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+    fn filter(
+        value: &Filter,
+        options: &QueryOptions,
+        steps: &mut usize,
+        admission: &Admission<'_>,
+    ) -> Result<(), ExpressionDiagnostic> {
+        work(1, options, steps, admission)?;
+        match value {
+            Filter::Expression(value) => source(value, options, steps, admission),
+            Filter::And(children) | Filter::Or(children) | Filter::Not(children) => {
+                for child in children {
+                    filter(child, options, steps, admission)?;
+                }
+                Ok(())
+            }
+        }
+    }
+    for selected in [program.filter.as_ref(), view.filter.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        filter(selected, options, steps, admission)?;
+    }
+    for (name, expression) in &program.summaries {
+        work(1, options, steps, admission)?;
+        let mut selected = options.summary_preview_property.is_some();
+        if !selected {
+            for (_, summary) in &view.summaries {
+                work(
+                    name.len().max(summary.len()) / 16 + 1,
+                    options,
+                    steps,
+                    admission,
+                )?;
+                if summary == name {
+                    selected = true;
+                    break;
+                }
+            }
+        }
+        if selected {
+            source(expression, options, steps, admission)?;
+        }
+    }
+    Ok(())
+}
+
 fn value_expression(property: &str) -> String {
     let (namespace, name) = property.split_once('.').unwrap_or(("note", property));
     if namespace == "file" && name == "file" {
@@ -1804,6 +1905,7 @@ pub(crate) fn query_rows_validated(
         steps_used = steps_used.saturating_add(work.get());
         Some(prepared)
     };
+    admit_selected_syntax(program, view, options, &mut steps_used, &mut admission)?;
     let mut retained_bytes = 0usize;
     admit(&mut admission, |admission| {
         admission.charge(0)?;
