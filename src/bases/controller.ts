@@ -673,7 +673,7 @@ export class BaseController {
     const expectedEpoch = this.epoch, expectedView = this.query.viewIndex, expectedName = this.viewName, selectionSerial = this.selectionSerial;
     const validateSelection = () => {
       // Even an explicit switch back to the same view retires the command.
-      if (this.selectionSerial !== selectionSerial) throw new Error('The selected base view changed before the configuration was saved');
+      if (this.selectionSerial !== selectionSerial) throw new Error('This base result is stale; the selected view changed before the configuration was saved');
       validate();
     };
     const transform = (source: string) => {

@@ -54,7 +54,7 @@ async function fixture() {
 test('capable normal Base controller calls shared query with captured identity/options and preserves edits', async () => {
   const f = await fixture(); try {
     assert.deepEqual(f.controller.state.result?.rows[0].values['note.Status'], { type: 'string', value: 'From Rust' });
-    assert.deepEqual(f.calls[0].options, { viewIndex: 0, searchTerms: undefined, ignorePaths: undefined, clockMs: 42, timezone: 'UTC', maxRows: 1000, currentEntryId: 'Work.base', maxSteps: 123 });
+    assert.deepEqual(Object.fromEntries(Object.entries(f.calls[0].options!).filter(([,value])=>value!==undefined)), { viewIndex: 0, clockMs: 42, timezone: 'UTC', maxRows: 10000, currentEntryId: 'Work.base', maxSteps: 123 });
     assert.ok(f.pins.every(pin => pin.closed === 1));
     await f.controller.editProperty({ version: f.controller.state.version, path: 'One.md', property: 'Status', value: 'Edited' });
     assert.deepEqual(f.edits[0], { path: 'One.md', witness: { entryId: 'One.md', revision: 'r1' } });

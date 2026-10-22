@@ -54,14 +54,17 @@ test('explicit named selection follows the chosen name while unbound selection r
 
 test('named selection during an in-flight refresh never publishes the previous selection',async()=>{
   const f=await fixture(),published:string[]=[];
-  const controller=new BaseController({vault:f.vault,basePath:'Work.base',viewName:'Target',mutations:createBaseMutationHost(f.host),onChange:s=>{if(!s.error)published.push(s.result!.view.name);}});
+  const controller=new BaseController({vault:f.vault,basePath:'Work.base',viewName:'Target',mutations:createBaseMutationHost(f.host),onChange:s=>{if(!s.error&&s.result)published.push(s.result.view.name);}});
   const read=f.vault.read.bind(f.vault);let release!:()=>void,started!:()=>void;
   const gate=new Promise<void>(r=>{release=r;}),ready=new Promise<void>(r=>{started=r;});let delay=true;
   try{
     await controller.refresh();published.length=0;
     f.vault.read=async path=>{if(delay&&path==='Work.base'){delay=false;started();await gate;}return read(path);};
-    const refreshing=controller.refresh();await ready;const selecting=controller.setView(0);release();await Promise.all([refreshing,selecting]);
-    assert.deepEqual(published,['First']);
+    const refreshing=controller.refresh();await ready;
+    // Refresh publishes the coherent retained view as updating before the user
+    // changes selection. Only publications after that selection can be stale.
+    const boundary=published.length,selecting=controller.setView(0);release();await Promise.all([refreshing,selecting]);
+    assert.deepEqual(published.slice(boundary),['First']);
   }finally{release?.();f.vault.read=read;controller.dispose();await f.dispose();}
 });
 
