@@ -154,12 +154,12 @@ fn rich_date_scans_charge_raw_bytes_and_observe_cancellation() {
     evaluator.remaining_work = 8;
     let values = vec![RuntimeValue::Icon("x".repeat(1024))];
     assert!(
-        matches!(evaluator.list_method(&values,"earliest",&[],&BTreeMap::new()),RuntimeValue::Error(message) if message.starts_with("budget\0"))
+        matches!(evaluator.list_method(&values,"earliest",&[],&BTreeMap::new(),false,Some(&[])),RuntimeValue::Error(message) if message.starts_with("budget\0"))
     );
     let cancellation = OperationCancellation::default();
     cancellation.cancel();
     context.cancellation = Some(cancellation);
     assert!(
-        matches!(Evaluator::new(&context).list_method(&values,"latest",&[],&BTreeMap::new()),RuntimeValue::Error(message) if message.starts_with("cancelled\0"))
+        matches!(Evaluator::new(&context).list_method(&values,"latest",&[],&BTreeMap::new(),false,Some(&[])),RuntimeValue::Error(message) if message.starts_with("cancelled\0"))
     );
 }
