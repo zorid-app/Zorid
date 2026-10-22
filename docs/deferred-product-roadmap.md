@@ -9,6 +9,28 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+2026-10-21 composed implementation checkpoint: isolated branch now includes all four layouts, configuration/creation commands, rich widgets/settings, formulas/summaries, relations/rollups and file/fenced embeds. Root owns the remaining workspace and transport composition. A 505-case bounded composed run passed504 with one obsolete Electron startup fixture; its9-case file passes after fixture correction. Subsequent rich/query/editor composition40/40 and property-target/raw-value projection19/19 pass. These test sets overlap and are not an aggregate count. Independently reviewed toolbar retry continuation now preserves newer drafts after failed saves. Native validation at corrected Rust closure `f676a5fb` passed17 focused cases: native4, host9, native-compiled WASM adapters4; this is not actual WASM runtime or final-source acceptance. Later ordinary frontmatter inference, group previews and exact raw edit-value transport are still being composed and require fresh validation. Actual full Electron heavy-user campaign, screenshot comparisons, web/CLI affected paths and main integration remain unperformed. Reference evidence/deviations: [Bases pass reference](history/bases-pass-reference-20261021.md).
+
+2026-10-21 goal activated: execute `docs/plans/bases-implementation-goal.md` until
+complete, including an actual heavy-user Electron E2E automation campaign and
+reference screenshots. Obsidian is both UI/UX and logic reference; use REA for
+ambiguous behavior, retaining approved extensions. Implementation coordinator is
+current root in `codex/types-bases-model` / `.worktrees/types-bases-model`, not a
+new main integration grant. Scoped workers: controller/document/creation and
+Vault captured-create addition (`codex/bases-controller`, nested worktree under
+coordinator); property definitions/widgets (`codex/bases-properties`); Rust
+summaries/query/expression/preparation (`codex/bases-summaries`); table/common
+presentation (`codex/bases-table`); Cards/List/Kanban (`codex/bases-layouts`);
+Markdown/live fenced embeds (`codex/bases-embeds`); Rust relation/property modules
+and graph factory (`codex/bases-relations`); toolbar/config/CSS
+(`codex/bases-toolbar`); native/WASM/host inline queries plus shared document fence
+verification (`codex/bases-inline-core`); session/view-actions/export/property
+settings UI (`codex/bases-session`); actual-user harness (`codex/bases-e2e`). Root
+owns workspace/shared-query/TS transports, build manifests, composed validation
+and branch integration. Reference worker `bases_docs_model` owns bounded REA
+reference evidence. Workers send additive contracts early; heavy builds remain
+serialized. No implementation/compiled/native/visual acceptance yet.
+
 2026-10-21 current implementation pass is defined by
 `docs/plans/bases-implementation-goal.md`. User requests a durable goal file and
 cleanup of superseded Bases designs. Named note Types are removed; rich property

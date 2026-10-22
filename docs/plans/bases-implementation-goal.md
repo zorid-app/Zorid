@@ -1,6 +1,6 @@
 # Bases implementation pass
 
-Updated 2026-10-21. Status: **planned; implementation and acceptance pending**.
+Updated 2026-10-21. Status: **implementation in progress; composed runtime acceptance pending**.
 This is the current feature scope and completion checklist for this pass. Follow
 the [roadmap](../roadmap.md) for other milestones. This document supersedes older
 Types/Bases designs and combined Bases/Tasks/Calendar implementation assignments.
@@ -34,7 +34,10 @@ configured template note, properties and body, rather than only its properties**
 ## UI fidelity and retained improvements
 
 Latest direct steering: use REA heavily throughout implementation, not just for
-initial research. Exact reference UI/UX is the default for existing Bases
+initial research. Obsidian is also the logic reference: inspect its concrete
+implementation and corresponding runtime scenario before inventing behavior for
+filters, defaults, grouping, conversion, clipboard, undo or other ambiguous cases.
+Preserve agreed improvements and documented core correctness guarantees. Exact reference UI/UX is the default for existing Bases
 features; the agreed improvements below remain requirements, not parity defects.
 
 - Inspect each feature's shipped implementation with REA before building it;
@@ -206,6 +209,16 @@ is explicit; a static method/registration is not runtime proof.
 
 ## Execution sequence and acceptance
 
+Latest explicit user requirement: run a full actual heavy-user end-to-end pass.
+Use automation against the actual Electron UI, with screenshot inspection for
+visual fidelity. Exercise a sustained composed workflow rather than isolated
+components or only service calls. Cover creation/templates, all layouts and
+rich properties/relations, bulk clipboard/undo, splits/sidebar/embeds, moves,
+external edits/conflicts, close/restart and exact durable readback. Retain the
+script, fixture definition, artifact/source identities, results and screenshots.
+Failure recovery and repeated actions belong in the same real-user journey.
+This functional campaign does not reopen deferred large-vault performance budgets.
+
 Implement in order: local contracts/reference scenarios → creation/config/view
 management → property widgets and commands → layout interaction completion →
 relations/rollups/summaries → embeds/export and composed acceptance. Independent
@@ -242,3 +255,13 @@ template/group/default conflict handling; clipboard/bulk undo atomicity; existin
 named-Type source retirement and legacy fallback support. Record decisions with
 their affected source and acceptance cases; none is permission to delay unrelated
 work or to restart broad Tasks/Calendar/plugin architecture design.
+
+## Composed acceptance checkpoint — 2026-10-21
+
+The [current reference evidence and deliberate-difference ledger](../history/bases-pass-reference-20261021.md) records the shipped-artifact REA analysis and 51 actual Obsidian capture pairs. Component/native checks are evidence for their named boundaries only; actual composed Electron, browser/WASM and CLI acceptance remains pending.
+
+- [ ] Custom summaries support live expression editing, name changes that update selections across every view, and deletion that removes matching selections without damaging unrelated settings. Preserve collision and empty-name guards.
+- [ ] Named-view embed rename updates its fragment binding and relevant references; hiding rename to preserve the old binding is an open gap.
+- [ ] Group/column dragging includes the observed live insertion/reorder preview; persisting final order alone does not close this interaction requirement.
+
+The reference ledger distinguishes the directly approved full-template improvement from deliberate safety choices requiring explicit verification: last-view deletion protection, correct per-column clipboard mapping, conditional touched-property undo, and stable resolved-target linksTo identity. These differences do not establish visual or runtime completion.
