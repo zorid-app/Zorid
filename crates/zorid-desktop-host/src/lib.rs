@@ -8,6 +8,8 @@ mod recovery;
 mod workblocks;
 mod embedded_fixture_sync;
 mod staged_import;
+#[cfg(test)]
+mod rescan_recovery_tests;
 pub use staged_import::{
     ImportProgress, TrustedImportSelection, TrustedStagedImportSource, MAX_IMPORT_RESULT_BYTES,
 };
@@ -885,19 +887,13 @@ fn execute(
         Command::Rescan => {
             empty(&body)?;
             if vault.family_status().map_err(native_fault)?.scope.is_some() {
-                let report = vault
-                    .reconcile_external(
-                        zorid_native::ScanOptions::default(),
-                        zorid_native::ExternalFileMode::Auto,
-                    )
-                    .map_err(native_fault)?;
-                let reconciliation = reconciliation_status(&report);
+                let (report, reconciliation) = reconcile_desktop_vault(vault)?;
                 let issues: Vec<_> = reconciliation
                     .issues
                     .iter()
                     .map(|issue| json!({"path":issue.path,"code":"scan_incomplete"}))
                     .collect();
-                json!({"scan_id":report.run.scan_id,"complete":report.complete,"finished":report.run.finished,
+                json!({"scan_id":report.run.scan_id,"complete":reconciliation.complete,"finished":report.run.finished,
                     "observed":report.run.observed,"imported":report.imported.len(),"missing":[],"issues":issues,
                     "reconciliation":reconciliation})
             } else {
@@ -994,6 +990,15 @@ fn initialize_desktop_vault(vault: &mut NativeVault) -> Result<ReconciliationSta
         .map_err(|_| fault("invalid_local_authority"))?;
         vault.family_enroll(&scope).map_err(native_fault)?;
     }
+    reconcile_desktop_vault(vault).map(|(_, status)| status)
+}
+
+/// Every desktop discovery pass must also retry publication of the resulting
+/// merged state. Import alone can cancel an undisplaced pending attempt while
+/// leaving both its original job and the newly merged revision unpublished.
+fn reconcile_desktop_vault(
+    vault: &mut NativeVault,
+) -> Result<(zorid_native::ExternalReconcileReport, ReconciliationStatus), Value> {
     // Shared native import policy owns bytes, family mode and safe filesystem observation.
     let report = vault
         .reconcile_external(
@@ -1015,7 +1020,7 @@ fn initialize_desktop_vault(vault: &mut NativeVault) -> Result<ReconciliationSta
         }
     }
     // Diagnostics remain transport state; product UI supplies ordinary language.
-    Ok(status)
+    Ok((report, status))
 }
 
 const RECOVERY_SNAPSHOT_INTERVAL_MS: i64 = 5 * 60 * 1_000;
