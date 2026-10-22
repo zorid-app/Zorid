@@ -47,3 +47,27 @@ export function assertMountedRenameRetention(before,after,{base,name,draft=false
     assert.deepEqual(after.input,before.input,'Draft node, text and input selection survive in place');
   }else assert.equal(after.gridName,renderedName,'Current rendered view follows the saved exact name');
 }
+
+
+const publicationNote=name=>`# C2 publication host 😀\n\nLiteral publication prelude {{title}}.\n\n\`\`\`base\n# Retained inline source sentinel\nfilters: 'note.kind == "safety" && file.name == "A"'\nviews:\n  - type: table\n    name: ${name}\n    order: [file.name, score]\n\`\`\`\n\nLiteral trailing {{date}} 🦀.\n`;
+export const hoverPublication={launcher:'C2 Hover publication.base',file:'C2 Publication/Hover target.md',from:'Hover original',to:'Hover accepted',before:publicationNote('Hover original'),after:publicationNote('Hover accepted')};
+export const newPublication={launcher:'C2 New publication.base',template:'Templates/C2 publication.md',folder:'C2 Publication/New',from:'New original',to:'New accepted',before:publicationNote('New original'),after:publicationNote('New accepted')};
+export function publicationFixtures(){return new Map([
+  [hoverPublication.launcher,`filters: 'file.path == "${hoverPublication.file}"'\nviews: [{type: table, name: Hover launcher, order: [file.name]}]\n`],
+  [hoverPublication.file,hoverPublication.before],
+  [newPublication.launcher,`filters: 'file.path == "A.md"'\nnewItemFolder: ${newPublication.folder}\nnewItemTemplate: ${newPublication.template}\nviews: [{type: table, name: New launcher, order: [file.name]}]\n`],
+  [newPublication.template,newPublication.before],[newPublication.folder+'/.keep','Owned C2 New output folder.\n'],
+]);}
+export function assertInlinePublicationFrame(before,after,{file,name,failed=false}){
+  assert.ok(before.hostId&&after.hostConnected&&after.nodeInHost,'Original note host retains its own inline node');
+  assert.equal(after.hostId,before.hostId,'Own save never replaces or transfers the hover/New host');
+  assert.ok(after.connected&&after.inEmbed);
+  assert.equal(after.binding,file,'Inline binding remains the original containing note');
+  assert.equal(after.gridName,name,'Only the acknowledged configuration may publish');
+  assertLogicalCellSelection(before,after);
+  if(failed){
+    assert.equal(after.rootId,before.rootId,'Failed source must not remount its binding root');
+    assert.equal(after.sessionId,before.sessionId,'Failed source must not remount its session');
+    assert.equal(after.propertyBlocked,true,'Pending failed configuration blocks property mutation');
+  }
+}

@@ -115,3 +115,40 @@ records passive collapsed-caret/terminal-line receipts before the Base command,
 and keeps an independently constructed exact whole-body oracle. This is an input
 recipe correction, not normalization to observed saved bytes or a product pass.
 No later execution is implied.
+
+
+## C2 Hover and New inline publication supplement
+
+Status: **authored, not executed** from `2fe6e055`. These two bounded phases
+preserve the prior eleven phases and append five named inert inputs (51 total
+prelaunch files), plus one note created through normal New during execution.
+Neither the launchers nor the literal template are product-creation evidence.
+Matching publication-hold/private-continuation fixes, Hover toolbar portal
+ownership, frozen artifacts and an explicit native grant are still required;
+source checks below do not establish that those controls work in the app.
+
+| Phase | Normal actions and strict result |
+| --- | --- |
+| `hover-inline-config-not-published-before-durable-original-retry` | Open the fixture Base, modifier-hover its real file-name link, enter the normal File preview, and click its body paragraph to open the shared live editor. Populate A.md/note.score selection and rename the nested fence through Views. The explicitly labeled negative fixture makes only the owned containing folder0555. Require real permission feedback, exact old physical source, actionable original Retry save with the requested name retained, unchanged original host/binding/session DOM and old rendered view, exact score selection, and the property grid's advertised `aria-disabled=true` admission state. Restore permissions in `finally`, click the original Retry save once, and require the independent exact new whole-note source, same host ownership and logical selection, with no new files or A mutation. Normal navigation/reopen and restart resolve the new view. |
+| `new-popup-inline-config-not-published-before-durable-original-retry` | Use ordinary Base New with the literal full template; require exactly one created note and byte-exact initial copy. Click Edit note body, select its nested score cell and perform the same real permission-failure/original-retry protocol in the New popup. The source may publish only after acknowledgement; the exact original host retains its owned inline node and logical selection. Close normally and reopen the created note; the template remains byte-identical, no duplicate note appears and restart resolves the saved view. |
+
+Weak DOM identities observe both the original surface and its nested binding;
+they do not mutate the UI or invoke application APIs. Failed publication must
+retain the actual binding/session nodes; after acknowledgement a clean inline
+remount is permitted only with the same host ownership and logical selection.
+The permission-negative source check repeats after a short bounded interval;
+there is no injected semantic result, private IPC failure or retry loop.
+The evidence records one rename UI submission and one original retry click.
+That is an accepted-intent observation, not a count of native filesystem writes.
+The retained error panel can legitimately obscure the property grid. This phase
+asserts its advertised `aria-disabled` state and exact unchanged A bytes; it does
+not claim a functional negative click/key probe through that panel or bypass
+normal pointer hit testing to manufacture one.
+
+Offline contract tests reject early publication, changed root/session on failure,
+wrong containing-note binding, detached/transferred hosts, lost selection and an
+unblocked advertised property-grid state. All previous contract checks and authored source oracles
+remain. The normal default Reading Hover has a separate rendering path; these
+new phases deliberately cover the active Hover body editor and New body editor.
+Native execution remains pending, including the clean toolbar portal ownership
+path before typing, rather than assuming a rapid input recipe will bypass it.

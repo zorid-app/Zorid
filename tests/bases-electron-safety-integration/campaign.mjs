@@ -4,11 +4,11 @@ import path from 'node:path';
 import {delay, until} from '../tasks-electron-integration/cdp.mjs';
 import {MOD} from '../bases-electron-integration/ui.mjs';
 import {fixtureFiles as originalFixtureFiles, template, vaultName, openBoundaries} from './fixtures.mjs';
-import {mountedRename, nestedRename, fencedRename, mountedRenameFixtures, nestedRenamedExternal, assertMountedRenameRetention, assertLogicalCellSelection} from './mounted-rename-contract.mjs';
+import {mountedRename, nestedRename, fencedRename, mountedRenameFixtures, nestedRenamedExternal, assertMountedRenameRetention, assertLogicalCellSelection, hoverPublication, newPublication, publicationFixtures, assertInlinePublicationFrame} from './mounted-rename-contract.mjs';
 export {template, vaultName};
 export function fixtureFiles() {
   const files=originalFixtureFiles();
-  for(const [file,source] of mountedRenameFixtures()){assert.ok(!files.has(file));files.set(file,source);}
+  for(const [file,source] of [...mountedRenameFixtures(),...publicationFixtures()]){assert.ok(!files.has(file));files.set(file,source);}
   return files;
 }
 
@@ -322,6 +322,73 @@ async function fencedMountedRename(c) {
   assert.deepEqual(await ownedVaultPaths(c),filesBefore,'Inline rename/property edit creates no hidden backing Base or extra file in any owned subfolder');
   await reopenEmbeddedNote(c,fencedRename.host,fencedScope,fencedRename.to);await c.screenshot('s-c2-fence-rename-continued-binding');
 }
+const hoverSurface=dialog('File preview');
+const inlineInSurface=(surface,file)=>`${surface} .bases-embed[data-base-source=${JSON.stringify(file)}]`;
+async function publicationFrame(c,scope,surface){
+  const frame=await embedFrame(c,scope);
+  const host=await c.ui.dom(`const host=document.querySelector(${JSON.stringify(surface)}),node=document.querySelector(${JSON.stringify(scope)})?.querySelector('.bases-session'),score=node?.querySelector('[role="gridcell"][data-path="A.md"][data-property="note.score"]'),ids=window.__zoridC2ObservedNodes;let hostId=null;if(host&&ids){if(!ids.map.has(host))ids.map.set(host,ids.next++);hostId=ids.map.get(host);}return {hostId,hostConnected:host?.isConnected??false,nodeInHost:!!(host&&node&&host.contains(node)),propertyBlocked:score?.getAttribute('aria-disabled')==='true'};`);
+  return {...frame,...host};
+}
+async function retryInlinePublication(c,{surface,file,from,to,before:original,after:desired,label}){
+  const scope=inlineInSurface(surface,file);await waitEmbedded(c,scope,from);await selectedEmbeddedScore(c,scope);
+  const before=await publicationFrame(c,scope,surface),aBefore=await c.read('A.md'),pathsBefore=await ownedVaultPaths(c);
+  assert.equal(await c.read(file),original);
+  const folder=await fs.realpath(path.dirname(owned(c,file))),vault=await fs.realpath(c.vault),output=await fs.realpath(c.outputDirectory),mode=(await fs.stat(folder)).mode&0o777;
+  assert.ok(folder.startsWith(vault+path.sep)&&vault.startsWith(output+path.sep),'Permission fixture is inside the owned disposable output vault');
+  let failed;
+  try{
+    await fs.chmod(folder,0o555);c.evidence.actions.push({action:'owned-negative-inline-host-permission-fixture',file,folder,mode:'0555',host:label,purpose:'real native atomic containing-note configuration save failure',at:Date.now()});
+    await config(c,from,scope);await c.ui.type(field('View name',dialog('View options')),to);await c.ui.key('Enter');
+    await c.ui.wait(`const p=document.querySelector(${JSON.stringify(dialog('View options'))}),input=p?.querySelector('input[aria-label="View name"]'),retry=p?[...p.querySelectorAll('button')].find(b=>b.textContent==='Retry save'):null;return input?.value===${JSON.stringify(to)}&&/EACCES|permission denied|not permitted|read.only/i.test(p?.querySelector('[role="alert"]')?.textContent??'')&&retry&&!retry.disabled&&retry.getClientRects().length;`,'Real '+label+' save failure retains exact name and actionable original retry',45000);
+    await c.saved(file,source=>assert.equal(source,original),label+'-failed-inline-source-not-durable');
+    failed=await publicationFrame(c,scope,surface);assertInlinePublicationFrame(before,failed,{file,name:from,failed:true});
+    await delay(250);assertInlinePublicationFrame(before,await publicationFrame(c,scope,surface),{file,name:from,failed:true});
+    assert.equal(await c.read(file),original);assert.equal(await c.read('A.md'),aBefore);
+    await c.screenshot(label+'-failed-source-not-published');
+  }finally{
+    await fs.chmod(folder,mode);c.evidence.actions.push({action:'restore-owned-inline-host-permissions',file,folder,mode,host:label,at:Date.now()});
+  }
+  // One normal request, one original retained retry. Never retype the name or
+  // reopen a replacement session to make a failed command look successful.
+  await c.ui.button('Retry save',dialog('View options'));
+  await c.saved(file,source=>assert.equal(source,desired),label+'-original-retry-exact-whole-note');
+  await dismiss(c,'View options');await waitEmbedded(c,scope,to);
+  const after=await publicationFrame(c,scope,surface);assertInlinePublicationFrame(before,after,{file,name:to});
+  assert.equal(await c.read('A.md'),aBefore);assert.deepEqual(await ownedVaultPaths(c),pathsBefore);
+  c.evidence.checks.push({name:label+'-one-ui-intent-original-continuation',file,requestedName:to,renameSubmissions:1,originalRetryClicks:1,before,failed,after,limitation:'Normal control intent count; not an instrumented count of physical native filesystem writes.'});
+}
+async function showPublicationHover(c,name){
+  await open(c,hoverPublication.launcher);
+  await c.cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',x:1000,y:780,modifiers:0});await delay(400);
+  const selector=`${active} ${c.ui.cell(hoverPublication.file,'file.name')} a.internal-link`,point=await c.ui.point(selector);
+  await c.cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',...point,modifiers:MOD.meta});
+  c.evidence.actions.push({action:'trusted-hover-mouse',label:'C2 normal modifier entry',selector,point,modifiers:MOD.meta,at:Date.now()});
+  await c.ui.wait(`const p=document.querySelector(${JSON.stringify(hoverSurface)});return document.querySelectorAll(${JSON.stringify(hoverSurface)}).length===1&&p?.getAttribute('aria-busy')!=='true'&&!p.inert;`,'One normal C2 file preview');
+  await waitEmbedded(c,inlineInSurface(hoverSurface,hoverPublication.file),name);
+}
+async function hoverInlinePublication(c){
+  await showPublicationHover(c,hoverPublication.from);
+  await c.ui.click(hoverSurface+' .bases-file-hover-preview p');
+  await c.ui.wait(`const e=document.querySelector(${JSON.stringify(hoverSurface+' .bases-file-hover-editor .cm-content')});return e&&e.contains(document.activeElement);`,'Normal Hover body click opens the shared live editor');
+  await retryInlinePublication(c,{surface:hoverSurface,...hoverPublication,label:'c2-hover-inline-publication'});
+  await c.ui.openFile('A.md');await c.ui.wait(`return !document.querySelector(${JSON.stringify(hoverSurface)});`,'Successful Hover inline save permits normal parent navigation');
+  await showPublicationHover(c,hoverPublication.to);await c.ui.openFile('A.md');
+  await c.ui.wait(`return !document.querySelector(${JSON.stringify(hoverSurface)});`,'Clean reopened Hover closes normally');
+}
+async function newInlinePublication(c){
+  await open(c,newPublication.launcher);const before=new Set(await fs.readdir(owned(c,newPublication.folder)));
+  await c.ui.button('New',active);
+  const file=await until(async()=>{const added=(await fs.readdir(owned(c,newPublication.folder))).filter(name=>!before.has(name)&&name.endsWith('.md'));assert.equal(added.length,1,'One normal New item, no retry duplicate');return newPublication.folder+'/'+added[0];},30000);
+  await c.saved(file,source=>assert.equal(source,newPublication.before),'c2-new-literal-full-template-copy');
+  await c.ui.wait(`return !!document.querySelector(${JSON.stringify(popover)});`,'Normal New item popup');
+  await c.ui.click(popover+' [aria-label="Edit note body"]');
+  await c.ui.wait(`return !!document.querySelector(${JSON.stringify(popover+' .cm-content[contenteditable="true"]')});`,'New body opens shared live editor');
+  await retryInlinePublication(c,{surface:popover,...newPublication,file,label:'c2-new-inline-publication'});
+  await closeNew(c);assert.equal(await c.read(newPublication.template),newPublication.before,'Original literal template is never renamed');
+  const added=(await fs.readdir(owned(c,newPublication.folder))).filter(name=>!before.has(name)&&name.endsWith('.md'));assert.deepEqual(added,[path.basename(file)]);
+  await openEmbeddedNote(c,file,`.pane.is-active .bases-embed[data-base-source=${JSON.stringify(file)}]`,newPublication.to);
+  return {file};
+}
 const columnFor = file => `${active} .bases-kanban-column:has(.bases-kanban-card[data-path=${JSON.stringify(file)}])`;
 const columnBodyFor = file => `${columnFor(file)} .bases-kanban-column-body`;
 async function moveInto(c, base, from, target, property, expected, name) {
@@ -433,22 +500,24 @@ export async function journey(c) {
     ['mounted-file-embed-rename-retains-sibling-draft-and-cell-selection', mountedFileRename],
     ['nested-mounted-embed-rename-dirty-child-retry', nestedMountedRename],
     ['fenced-mounted-rename-continued-binding-and-property-save', fencedMountedRename],
+    ['hover-inline-config-not-published-before-durable-original-retry', hoverInlinePublication],
+    ['new-popup-inline-config-not-published-before-durable-original-retry', newInlinePublication],
     ['typed-null-list-link-date-folder-new-and-moves', typedGroups],
     ['sidebar-clean-renames-hidden-outline-and-retained-dirty-control', sidebarRenames],
   ];
   c.evidence.scenarios = phases.map(([name]) => ({name, status: 'unexecuted'}));
   await c.launch('safety-shared-writes-and-recovery');
-  let named, nested;
+  let named, nested, newInline;
   for (let i = 0; i < phases.length; i++) {
     const [name, run] = phases[i], result = c.evidence.scenarios[i]; result.status = 'running'; result.started = new Date().toISOString();
-    try { const value = await run(c); if (name === 'named-fragment-dirty-reference-retry') named = value; if(name==='nested-mounted-embed-rename-dirty-child-retry')nested=value; result.status = 'passed'; }
+    try { const value = await run(c); if (name === 'named-fragment-dirty-reference-retry') named = value; if(name==='nested-mounted-embed-rename-dirty-child-retry')nested=value; if(name==='new-popup-inline-config-not-published-before-durable-original-retry')newInline=value; result.status = 'passed'; }
     catch (error) { result.status = 'failed'; result.failure = error.message; throw error; }
     finally { result.finished = new Date().toISOString(); }
   }
-  assert.ok(named && nested);
+  assert.ok(named && nested && newInline);
   const durable = new Map();
   for (const file of ['A.md', 'B.md', 'Safety.base', 'Properties.yaml', 'Named.base', 'Named host.md', 'Scalar A.md', 'List A.md', 'Date A.md', 'Link A.md', 'To/Move.md', 'Shelves/Dirty moved.base', 'Shelves/Other.base']) durable.set(file, await c.read(file));
-  for(const file of mountedRenameFixtures().keys())durable.set(file,await c.read(file));
+  for(const file of [...mountedRenameFixtures().keys(),...publicationFixtures().keys(),newInline.file])durable.set(file,await c.read(file));
   await c.quit('safety-normal-quit-with-settled-recovery');
   await c.launch('safety-restart-and-binding-readback');
   await c.ui.openFile('Named host.md'); await waitNote(c, 'Named host');
@@ -461,5 +530,7 @@ export async function journey(c) {
   await openEmbeddedNote(c,mountedRename.host,mountedScope(mountedRename.to,true),mountedRename.to);
   await openEmbeddedNote(c,nestedRename.outer,nestedScope(nestedRename.to),nestedRename.to);
   await openEmbeddedNote(c,fencedRename.host,fencedScope,fencedRename.to);
+  await showPublicationHover(c,hoverPublication.to);await c.ui.openFile('A.md');await c.ui.wait(`return !document.querySelector(${JSON.stringify(hoverSurface)});`,'Restart Hover closes normally');
+  await openEmbeddedNote(c,newInline.file,`.pane.is-active .bases-embed[data-base-source=${JSON.stringify(newInline.file)}]`,newPublication.to);
   await c.screenshot('s09-safety-restart-and-named-embeds'); await c.diskGuard(); await c.quit('safety-final-normal-quit');
 }

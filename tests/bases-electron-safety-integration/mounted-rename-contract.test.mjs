@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mountedRename,nestedRename,fencedRename,mountedRenameFixtures,nestedRenamedExternal,assertMountedRenameRetention,assertLogicalCellSelection} from './mounted-rename-contract.mjs';
+import {mountedRename,nestedRename,fencedRename,mountedRenameFixtures,nestedRenamedExternal,assertMountedRenameRetention,assertLogicalCellSelection,hoverPublication,newPublication,publicationFixtures,assertInlinePublicationFrame} from './mounted-rename-contract.mjs';
 
 test('C2 byte oracles change only exact view-name fields/fragments and keep unrelated note links',()=>{
   assert.equal(mountedRename.afterBase,mountedRename.beforeBase.replace('name: Mounted old','name: Mounted renamed'));
@@ -28,4 +28,27 @@ test('C2 clean fenced remount must preserve a populated logical row/property sel
   assertLogicalCellSelection(before,remounted);
   for(const selected of [null,{path:'A.md',property:'file.name'},{path:'B.md',property:'note.score'}])assert.throws(()=>assertLogicalCellSelection(before,{...remounted,selected}));
   assert.throws(()=>assertLogicalCellSelection({selected:null},remounted));
+});
+
+
+test('C2 hover/New inert templates preserve literal whole-note source except the exact view name',()=>{
+  const files=publicationFixtures();assert.equal(files.size,5);
+  for(const value of [hoverPublication,newPublication]){
+    assert.equal(value.after,value.before.replace('name: '+value.from,'name: '+value.to));
+    assert.ok(value.before.includes('{{title}}')&&value.after.includes('{{date}}'));
+  }
+  assert.equal(files.get(hoverPublication.file),hoverPublication.before);
+  assert.equal(files.get(newPublication.template),newPublication.before);
+  assert.ok(files.get(newPublication.launcher).includes('newItemTemplate: '+newPublication.template));
+  for(const file of mountedRenameFixtures().keys())assert.ok(!files.has(file),'New named inputs never replace earlier C2 inputs');
+});
+test('C2 failed inline source cannot publish, remount, transfer host or unblock properties',()=>{
+  const before={hostId:9,hostConnected:true,nodeInHost:true,rootId:2,sessionId:3,connected:true,inEmbed:true,binding:hoverPublication.file,gridName:hoverPublication.from,selected:{path:'A.md',property:'note.score'},propertyBlocked:false},failed={...structuredClone(before),propertyBlocked:true};
+  const options={file:hoverPublication.file,name:hoverPublication.from,failed:true};assertInlinePublicationFrame(before,failed,options);
+  for(const change of [v=>v.hostId++,v=>v.hostConnected=false,v=>v.nodeInHost=false,v=>v.rootId++,v=>v.sessionId++,v=>v.connected=false,v=>v.inEmbed=false,v=>v.binding=newPublication.template,v=>v.gridName=hoverPublication.to,v=>v.selected=null,v=>v.selected.property='file.name',v=>v.propertyBlocked=false]){
+    const broken=structuredClone(failed);change(broken);assert.throws(()=>assertInlinePublicationFrame(before,broken,options));
+  }
+  const acknowledged={...structuredClone(before),rootId:20,sessionId:30,gridName:hoverPublication.to};
+  assertInlinePublicationFrame(before,acknowledged,{file:hoverPublication.file,name:hoverPublication.to});
+  assert.throws(()=>assertInlinePublicationFrame(before,{...acknowledged,hostId:10},{file:hoverPublication.file,name:hoverPublication.to}));
 });
