@@ -185,3 +185,211 @@ fn nested_strict_and_bucket_work_are_charged_and_depth_cancellation_stays_explic
         matches!(flatten_values(&[deep], &mut yes), Err(RuntimeValue::Error(message)) if message.starts_with("budget\0"))
     );
 }
+
+#[test]
+fn regex_wrappers_belong_to_definition_nodes_and_survive_syntax_cache_eviction() {
+    let formulas = vec![("a".into(), "/a/".into()), ("b".into(), "/a/".into())];
+    let prepared = prepare_formula_expressions(&formulas, &mut yes, &mut yes).unwrap();
+    let context = BasesEvaluationContext {
+        formulas: Arc::new(formulas.into_iter().collect()),
+        preparsed_formulas: Some(prepared),
+        ..Default::default()
+    };
+    let expression = Parser::parse("[formula.a,formula.b,formula.a].unique().length").unwrap();
+    let mut first = Evaluator::new(&context);
+    assert!(matches!(
+        first.evaluate(&expression, &Scope::new()),
+        RuntimeValue::Number(2.0)
+    ));
+    let a = first.formula("a");
+    for n in 0..70 {
+        parse_cached(&format!("{n} + 1")).unwrap();
+    }
+    let mut second = Evaluator::new(&context);
+    assert!(strict(&a, &second.formula("a")));
+    assert!(!strict(&a, &second.formula("b")));
+    let callback = Parser::parse("[1,2].map(/a/).unique().length").unwrap();
+    assert!(matches!(
+        second.evaluate(&callback, &Scope::new()),
+        RuntimeValue::Number(1.0)
+    ));
+    let a = first.formula("a");
+    let b = first.formula("b");
+    assert!(first.equals_checked(&a, &a.clone()).unwrap());
+    assert!(!first.equals_checked(&a, &b).unwrap());
+    assert!(!first
+        .equals_checked(&a, &RuntimeValue::String("/a/".into()))
+        .unwrap());
+    assert!(first
+        .equals_checked(&RuntimeValue::List(vec![a.clone()]), &a)
+        .unwrap());
+}
+
+#[test]
+fn strict_identity_keys_match_constructor_equality_and_preserve_actual_label_data() {
+    fn key(value: &RuntimeValue, context: &mut StrictIdentityContext) -> String {
+        strict_runtime_identity_key(value, context, &mut yes, &mut yes).unwrap()
+    }
+    let mut context = StrictIdentityContext::default();
+    let mut a = match source_link(Some("A"), Some("")) {
+        RuntimeValue::Link(link) => link,
+        _ => unreachable!(),
+    };
+    a.display_value = Some(Box::new(RuntimeValue::String("One".into())));
+    let mut b = a.clone();
+    b.display_value = Some(Box::new(RuntimeValue::String("Two".into())));
+    assert_ne!(
+        key(&object(RuntimeValue::Link(a.clone())), &mut context),
+        key(&object(RuntimeValue::Link(b)), &mut context)
+    );
+    assert_eq!(
+        key(&RuntimeValue::Number(-0.0), &mut context),
+        key(&RuntimeValue::Number(0.0), &mut context)
+    );
+    assert_ne!(
+        key(&RuntimeValue::Tag("#a".into()), &mut context),
+        key(&RuntimeValue::String("#a".into()), &mut context)
+    );
+    let absent = RuntimeValue::Link(BasesLink {
+        display_value: None,
+        ..a.clone()
+    });
+    let null = RuntimeValue::Link(BasesLink {
+        display_value: Some(Box::new(RuntimeValue::Null)),
+        ..a.clone()
+    });
+    let zero = RuntimeValue::Link(BasesLink {
+        display_value: Some(Box::new(RuntimeValue::Number(0.0))),
+        ..a.clone()
+    });
+    assert_eq!(key(&absent, &mut context), key(&null, &mut context));
+    assert_ne!(key(&absent, &mut context), key(&zero, &mut context));
+    let mut external = a.clone();
+    external.external = true;
+    let mut other_origin = external.clone();
+    other_origin.raw_destination = None;
+    other_origin.source_path = None;
+    assert_eq!(
+        key(&RuntimeValue::Link(external), &mut context),
+        key(&RuntimeValue::Link(other_origin), &mut context)
+    );
+    let left = RuntimeValue::Object(IndexMap::from_iter([
+        ("b".into(), RuntimeValue::Number(2.0)),
+        ("a".into(), RuntimeValue::Number(1.0)),
+    ]));
+    let right = RuntimeValue::Object(IndexMap::from_iter([
+        ("a".into(), RuntimeValue::Number(1.0)),
+        ("b".into(), RuntimeValue::Number(2.0)),
+    ]));
+    assert_eq!(key(&left, &mut context), key(&right, &mut context));
+    let rx = RuntimeValue::Regex("a".into(), "".into(), Arc::new(()));
+    assert_eq!(key(&rx, &mut context), key(&rx.clone(), &mut context));
+    assert_ne!(
+        key(&rx, &mut context),
+        key(
+            &RuntimeValue::Regex("a".into(), "".into(), Arc::new(())),
+            &mut context
+        )
+    );
+    assert!(
+        matches!(strict_runtime_identity_key(&source_link(None, None), &mut context, &mut yes, &mut yes), Err(RuntimeValue::Error(message)) if message.starts_with("unavailable\0"))
+    );
+}
+
+#[test]
+fn strict_identity_admits_allocations_and_polls_registry_and_file_copy_work() {
+    let rx = RuntimeValue::Regex("a".into(), "".into(), Arc::new(()));
+    let mut context = StrictIdentityContext::default();
+    let denied = strict_runtime_identity_key(
+        &rx,
+        &mut context,
+        &mut |_| Err(RuntimeValue::Error("budget\0no allocation".into())),
+        &mut yes,
+    );
+    assert!(matches!(denied, Err(RuntimeValue::Error(message)) if message.starts_with("budget\0")));
+    assert!(context.regex_tokens.is_empty());
+    let mut reserved = 0;
+    strict_runtime_identity_key(
+        &rx,
+        &mut context,
+        &mut |bytes| {
+            reserved += bytes;
+            Ok(())
+        },
+        &mut yes,
+    )
+    .unwrap();
+    assert!(reserved >= 64 + std::mem::size_of::<Arc<()>>());
+    let before = context.regex_tokens.len();
+    assert!(
+        matches!(context.regex_ordinal(&Arc::new(()), &mut yes, &mut |_| Err(RuntimeValue::Error("cancelled\0stop".into()))), Err(RuntimeValue::Error(message)) if message.starts_with("cancelled\0"))
+    );
+    assert_eq!(context.regex_tokens.len(), before);
+    let file = RuntimeValue::File(Box::new(BasesFile {
+        path: "A.md".into(),
+        properties: IndexMap::from_iter([("large".into(), RuntimeValue::String("x".repeat(4096)))]),
+        ..Default::default()
+    }));
+    // A bucket only needs the filename. Copying a retained result needs the
+    // entire captured metadata tree and must poll it before cloning.
+    let mut bucket_work = 0;
+    assert_eq!(
+        unique_bucket_key(&file, &mut |n| {
+            bucket_work += n;
+            Ok(())
+        })
+        .unwrap(),
+        "A.md"
+    );
+    let mut copy_work = 0;
+    charged_value_bytes(&file, &mut |n| {
+        copy_work += n;
+        Ok(())
+    })
+    .unwrap();
+    assert!(copy_work > bucket_work + 200);
+    let long_keys = RuntimeValue::Object(IndexMap::from_iter(
+        (0..20).map(|n| (format!("{}{n}", "x".repeat(1000)), RuntimeValue::Null)),
+    ));
+    let mut work = 100usize;
+    assert!(
+        matches!(strict_runtime_identity_key(&long_keys, &mut context, &mut yes, &mut |n| {work = work.checked_sub(n).ok_or_else(|| RuntimeValue::Error("budget\0sort work".into()))?; Ok(())}), Err(RuntimeValue::Error(message)) if message.starts_with("budget\0"))
+    );
+}
+
+#[test]
+fn prepared_formula_retention_is_admitted_and_keeps_more_than_cache_capacity() {
+    let formulas: Vec<_> = (0..70).map(|n| (format!("rx{n}"), "/a/".into())).collect();
+    assert!(
+        matches!(prepare_formula_expressions(&formulas, &mut |_| Err(RuntimeValue::Error("budget\0no map".into())), &mut yes), Err(RuntimeValue::Error(message)) if message.starts_with("budget\0"))
+    );
+    assert!(
+        matches!(prepare_formula_expressions(&formulas, &mut yes, &mut |_| Err(RuntimeValue::Error("cancelled\0stop".into()))), Err(RuntimeValue::Error(message)) if message.starts_with("cancelled\0"))
+    );
+    let mut retained = 0usize;
+    let prepared = prepare_formula_expressions(
+        &formulas,
+        &mut |bytes| {
+            retained += bytes;
+            Ok(())
+        },
+        &mut yes,
+    )
+    .unwrap();
+    assert!(retained > 70 * std::mem::size_of::<Expr>());
+    let context = BasesEvaluationContext {
+        formulas: Arc::new(formulas.into_iter().collect()),
+        preparsed_formulas: Some(prepared),
+        ..Default::default()
+    };
+    let mut a = Evaluator::new(&context);
+    let mut b = Evaluator::new(&context);
+    assert!(strict(&a.formula("rx0"), &b.formula("rx0")));
+    assert!(strict(&a.formula("rx69"), &b.formula("rx69")));
+    assert!(!strict(&a.formula("rx0"), &b.formula("rx69")));
+    assert_eq!(regex_string("", "ig"), "/(?:)/gi");
+    assert_eq!(
+        regex_string("a/b\n\r\u{2028}\u{2029}", "mi"),
+        "/a\\/b\\n\\r\\u2028\\u2029/im"
+    );
+}

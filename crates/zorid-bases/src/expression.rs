@@ -34,7 +34,7 @@ use crate::{BaseValue, EvaluationResult, ExpressionDiagnostic, OperationCancella
 #[derive(Clone, Debug, PartialEq)]
 enum Expr {
     Literal(Value),
-    Regex(String, String),
+    Regex(String, String, Arc<()>),
     Identifier(String),
     Array(Vec<Expr>),
     Unary(String, Box<Expr>),
@@ -371,7 +371,7 @@ impl Parser {
         match token.kind {
             TokenKind::Number(value) => Ok(Expr::Literal(number_json(value))),
             TokenKind::String(value) => Ok(Expr::Literal(Value::String(value))),
-            TokenKind::Regex(pattern, flags) => Ok(Expr::Regex(pattern, flags)),
+            TokenKind::Regex(pattern, flags) => Ok(Expr::Regex(pattern, flags, Arc::new(()))),
             TokenKind::Identifier(value) if value == "true" => Ok(Expr::Literal(Value::Bool(true))),
             TokenKind::Identifier(value) if value == "false" => {
                 Ok(Expr::Literal(Value::Bool(false)))
@@ -453,6 +453,7 @@ pub(crate) struct BasesEvaluationContext<'a> {
     pub this_file: Option<BasesFile>,
     pub files: Arc<super::files::BasesFiles>,
     pub formulas: Arc<IndexMap<String, String>>,
+    pub preparsed_formulas: Option<Arc<PreparedFormulaExpressions>>,
     pub link_resolutions: Arc<BTreeMap<String, Option<String>>>,
     pub now: Option<String>,
     pub random_seed: Option<u64>,
@@ -637,7 +638,7 @@ pub(crate) enum RuntimeValue {
     Object(IndexMap<String, RuntimeValue>),
     File(Box<BasesFile>),
     Link(BasesLink),
-    Regex(String, String, u64),
+    Regex(String, String, Arc<()>),
     Html(String),
     Image(String),
     Icon(String),
@@ -1111,18 +1112,154 @@ pub(crate) fn matches(expression: &str, context: &BasesEvaluationContext) -> Res
     }
 }
 
+/// Query-owned definitions retain literal object identity across rows even if
+/// unrelated syntax evicts every entry in the optional process cache.
+#[derive(Default)]
+pub(crate) struct PreparedFormulaExpressions {
+    expressions: IndexMap<String, Result<Arc<Expr>, String>>,
+}
+pub(crate) fn prepare_formula_expressions(
+    formulas: &[(String, String)],
+    reserve: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<Arc<PreparedFormulaExpressions>, RuntimeValue> {
+    check(1)?;
+    // The admitted source/program owns the existing bounded parser/cache
+    // construction. This seam separately admits the new retained map and AST
+    // references, not a speculative per-character parser allocation bound.
+    let slots = formulas
+        .len()
+        .max(1)
+        .checked_next_power_of_two()
+        .ok_or_else(|| RuntimeValue::Error("budget\0Formula map capacity overflow".into()))?;
+    let bytes = slots.saturating_mul(2).saturating_mul(
+        std::mem::size_of::<(String, Result<Arc<Expr>, String>)>()
+            + 2 * std::mem::size_of::<usize>(),
+    );
+    reserve(bytes.saturating_add(
+        std::mem::size_of::<PreparedFormulaExpressions>() + 2 * std::mem::size_of::<usize>(),
+    ))?;
+    let mut expressions = IndexMap::with_capacity(formulas.len());
+    for (name, source) in formulas {
+        check(name.len() / 16 + source.len() / 16 + 1)?;
+        reserve(name.len())?;
+        let parsed = parse_cached_scoped(source, Some(name));
+        let retained = match &parsed {
+            Ok(ast) => ast_retained_bytes(ast, check)?,
+            Err(message) => {
+                check(message.len() / 16 + 1)?;
+                message.capacity()
+            }
+        };
+        reserve(retained)?;
+        expressions.insert(name.clone(), parsed);
+    }
+    Ok(Arc::new(PreparedFormulaExpressions { expressions }))
+}
+
+fn ast_retained_bytes(
+    expression: &Expr,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<usize, RuntimeValue> {
+    fn visit(
+        expression: &Expr,
+        depth: usize,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<usize, RuntimeValue> {
+        check(1)?;
+        if depth > 128 {
+            return Err(RuntimeValue::Error(
+                "budget\0Formula AST retention depth exceeds128".into(),
+            ));
+        }
+        let mut bytes = std::mem::size_of::<Expr>();
+        let mut text = |value: &String| -> Result<usize, RuntimeValue> {
+            check(value.len() / 16 + 1)?;
+            Ok(value.capacity())
+        };
+        match expression {
+            Expr::Literal(Value::String(value)) | Expr::Identifier(value) => {
+                bytes = bytes.saturating_add(text(value)?)
+            }
+            Expr::Regex(pattern, flags, _) => {
+                bytes = bytes
+                    .saturating_add(text(pattern)?)
+                    .saturating_add(text(flags)?)
+                    .saturating_add(2 * std::mem::size_of::<usize>())
+            }
+            Expr::Unary(operator, value) => {
+                bytes = bytes.saturating_add(text(operator)?);
+                bytes = bytes.saturating_add(visit(value, depth + 1, check)?);
+            }
+            Expr::Binary(operator, left, right) => {
+                bytes = bytes.saturating_add(text(operator)?);
+                bytes = bytes
+                    .saturating_add(visit(left, depth + 1, check)?)
+                    .saturating_add(visit(right, depth + 1, check)?);
+            }
+            Expr::Array(values) => {
+                bytes = bytes.saturating_add(
+                    (values.capacity() - values.len()).saturating_mul(std::mem::size_of::<Expr>()),
+                );
+                for value in values {
+                    bytes = bytes.saturating_add(visit(value, depth + 1, check)?);
+                }
+            }
+            Expr::Call(callee, values) => {
+                bytes = bytes
+                    .saturating_add(visit(callee, depth + 1, check)?)
+                    .saturating_add(
+                        (values.capacity() - values.len())
+                            .saturating_mul(std::mem::size_of::<Expr>()),
+                    );
+                for value in values {
+                    bytes = bytes.saturating_add(visit(value, depth + 1, check)?);
+                }
+            }
+            Expr::Member(object, member) => {
+                bytes = bytes.saturating_add(visit(object, depth + 1, check)?);
+                bytes = bytes.saturating_add(match member {
+                    Member::Named(name) => {
+                        check(name.len() / 16 + 1)?;
+                        name.capacity()
+                    }
+                    Member::Computed(value) => visit(value, depth + 1, check)?,
+                });
+            }
+            Expr::Literal(_) => {}
+        }
+        if bytes > 8 * 1024 * 1024 {
+            return Err(RuntimeValue::Error(
+                "budget\0Formula AST retention exceeds byte budget".into(),
+            ));
+        }
+        Ok(bytes)
+    }
+    Ok(visit(expression, 0, check)?.saturating_add(2 * std::mem::size_of::<usize>()))
+}
 fn parse_cached(expression: &str) -> Result<Arc<Expr>, String> {
+    parse_cached_scoped(expression, None)
+}
+fn parse_cached_scoped(expression: &str, formula: Option<&str>) -> Result<Arc<Expr>, String> {
     if expression.len() > 65_536 {
         return Err("Expression exceeds 65536 bytes".into());
     }
     if expression.trim().is_empty() {
         return Ok(Arc::new(Expr::Literal(Value::Null)));
     }
-    const MAX_ENTRIES: usize = 64; // <= 4 MiB of source keys plus bounded ASTs
-    static CACHE: OnceLock<RwLock<HashMap<String, Arc<Expr>>>> = OnceLock::new();
+    if formula.is_some_and(|name| name.len() > 65_536) {
+        return Err("Formula name exceeds 65536 bytes".into());
+    }
+    // <=8 MiB of source/name keys plus bounded ASTs. None is the direct
+    // expression namespace; each formula name owns a distinct literal wrapper.
+    // Sharing between separate queries is unobservable to their private IDs.
+    const MAX_ENTRIES: usize = 64;
+    type CacheKey = (String, Option<String>);
+    static CACHE: OnceLock<RwLock<HashMap<CacheKey, Arc<Expr>>>> = OnceLock::new();
+    let key = (expression.to_string(), formula.map(str::to_string));
     let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
     if let Ok(cache) = cache.read() {
-        if let Some(ast) = cache.get(expression) {
+        if let Some(ast) = cache.get(&key) {
             return Ok(ast.clone());
         }
     }
@@ -1131,7 +1268,7 @@ fn parse_cached(expression: &str) -> Result<Arc<Expr>, String> {
         if cache.len() >= MAX_ENTRIES {
             cache.clear();
         }
-        cache.insert(expression.to_string(), ast.clone());
+        cache.insert(key, ast.clone());
     }
     Ok(ast)
 }
@@ -1147,7 +1284,7 @@ pub(crate) fn uses_current_context(source: &str) -> bool {
     fn reads(expression: &Expr) -> bool {
         match expression {
             Expr::Identifier(name) => name.eq_ignore_ascii_case("this"),
-            Expr::Literal(_) | Expr::Regex(_, _) => false,
+            Expr::Literal(_) | Expr::Regex(_, _, _) => false,
             Expr::Array(values) => values.iter().any(reads),
             Expr::Unary(_, value) => reads(value),
             Expr::Binary(_, left, right) => reads(left) || reads(right),
@@ -1194,7 +1331,7 @@ pub(crate) fn clock_independent(source: &str, check: &mut impl FnMut(usize) -> O
     fn walk(expression: &Expr, check: &mut impl FnMut(usize) -> Option<()>) -> Option<()> {
         check(1)?;
         match expression {
-            Expr::Literal(_) | Expr::Regex(_, _) | Expr::Identifier(_) => Some(()),
+            Expr::Literal(_) | Expr::Regex(_, _, _) | Expr::Identifier(_) => Some(()),
             Expr::Array(values) => {
                 for value in values {
                     walk(value, check)?;
@@ -1249,7 +1386,7 @@ pub(crate) fn clock_dependency(
     fn walk(expression: &Expr, check: &mut impl FnMut(usize) -> Option<()>) -> Option<Dependency> {
         check(1)?;
         match expression {
-            Expr::Literal(_) | Expr::Regex(_, _) | Expr::Identifier(_) => Some(Dependency::None),
+            Expr::Literal(_) | Expr::Regex(_, _, _) | Expr::Identifier(_) => Some(Dependency::None),
             Expr::Array(children) => values(children, check),
             Expr::Unary(_, child) => walk(child, check),
             Expr::Binary(_, left, right) => Some(walk(left, check)?.join(walk(right, check)?)),
@@ -1579,7 +1716,7 @@ fn member_maybe_matches(member: &Member, expected: &[&str]) -> bool {
 
 fn expression_uses_file_ctime(expression: &Expr) -> bool {
     match expression {
-        Expr::Literal(_) | Expr::Regex(_, _) | Expr::Identifier(_) => false,
+        Expr::Literal(_) | Expr::Regex(_, _, _) | Expr::Identifier(_) => false,
         Expr::Array(values) => values.iter().any(expression_uses_file_ctime),
         Expr::Unary(_, value) => expression_uses_file_ctime(value),
         Expr::Binary(_, left, right) => {
@@ -1600,7 +1737,7 @@ fn expression_uses_file_ctime(expression: &Expr) -> bool {
 
 fn expression_uses_relationships(expression: &Expr) -> bool {
     match expression {
-        Expr::Literal(_) | Expr::Regex(_, _) | Expr::Identifier(_) => false,
+        Expr::Literal(_) | Expr::Regex(_, _, _) | Expr::Identifier(_) => false,
         Expr::Array(values) => values.iter().any(expression_uses_relationships),
         Expr::Unary(_, value) => expression_uses_relationships(value),
         Expr::Binary(_, left, right) => {
@@ -1645,7 +1782,7 @@ fn expression_uses_relationships(expression: &Expr) -> bool {
 
 fn expression_uses_backlinks(expression: &Expr) -> bool {
     match expression {
-        Expr::Literal(_) | Expr::Regex(_, _) | Expr::Identifier(_) => false,
+        Expr::Literal(_) | Expr::Regex(_, _, _) | Expr::Identifier(_) => false,
         Expr::Array(values) => values.iter().any(expression_uses_backlinks),
         Expr::Unary(_, value) => expression_uses_backlinks(value),
         Expr::Binary(_, left, right) => {
@@ -1671,7 +1808,6 @@ struct Evaluator<'a> {
     remaining_work: usize,
     summary_only: bool,
     random_state: u64,
-    next_regex_identity: u64,
 }
 
 pub(crate) const BASES_WORK_BUDGET_EXCEEDED: &str = "Obsidian Base expression work budget exceeded";
@@ -1825,7 +1961,6 @@ impl<'a> Evaluator<'a> {
             remaining_work: context.work_limit.unwrap_or(100_000),
             summary_only: false,
             random_state: seeded_row_state(context),
-            next_regex_identity: 0,
         }
     }
 
@@ -1860,13 +1995,29 @@ impl<'a> Evaluator<'a> {
         self.remaining_work = remaining;
         match expression {
             Expr::Literal(value) => from_json(value, None),
-            Expr::Regex(pattern, flags) => {
-                let Some(identity) = self.next_regex_identity.checked_add(1) else {
-                    return RuntimeValue::Error("budget\0Regex identities exhausted".into());
-                };
-                self.next_regex_identity = identity;
-                RuntimeValue::Regex(pattern.clone(), flags.clone(), identity)
-            },
+            Expr::Regex(pattern, flags, identity) => {
+                if let Err(error) = self.charge(pattern.len() / 16 + flags.len() + 1) {
+                    return error;
+                }
+                match canonical_regex_flags(flags) {
+                    Ok(flags)
+                        if pattern
+                            .len()
+                            .saturating_mul(6)
+                            .saturating_add(flags.len() + 3)
+                            <= 8 * 1024 * 1024 =>
+                    {
+                        if let Err(error) = compile_regex(pattern, &flags) {
+                            return RuntimeValue::Error(error);
+                        }
+                        RuntimeValue::Regex(pattern.clone(), flags, Arc::clone(identity))
+                    }
+                    Ok(_) => RuntimeValue::Error(
+                        "budget\0Regex string representation exceeds byte budget".into(),
+                    ),
+                    Err(error) => RuntimeValue::Error(error),
+                }
+            }
             Expr::Identifier(name) => self.identifier(name, scope),
             Expr::Array(values) => {
                 let mut result = Vec::new();
@@ -3019,7 +3170,7 @@ impl<'a> Evaluator<'a> {
             ),
             "startsWith" => RuntimeValue::Bool(value.starts_with(&plain_string(&first))),
             "title" => RuntimeValue::String(title_case(value)),
-            "trim" => RuntimeValue::String(value.trim().to_string()),
+            "trim" => RuntimeValue::String(value.trim_matches(ecmascript_whitespace).to_string()),
             _ => method_not_found("String", name),
         }
     }
@@ -3531,7 +3682,10 @@ impl<'a> Evaluator<'a> {
         if !self.formula_stack.insert(name.to_string()) {
             return RuntimeValue::Error(format!("cycle\0Circular formula reference {name}"));
         }
-        let value = parse_cached(expression)
+        let parsed = self.context.preparsed_formulas.as_ref()
+            .and_then(|prepared| prepared.expressions.get(name)).cloned()
+            .unwrap_or_else(|| parse_cached_scoped(expression, Some(name)));
+        let value = parsed
             .map(|expression| self.evaluate(expression.as_ref(), &BTreeMap::new()))
             .unwrap_or_else(RuntimeValue::Error);
         self.formula_stack.remove(name);
@@ -3660,6 +3814,8 @@ impl<'a> Evaluator<'a> {
             {
                 self.equals_prechecked(&values[0], other)
             }
+            (RuntimeValue::Regex(_, _, a), RuntimeValue::Regex(_, _, b)) => Ok(Arc::ptr_eq(a, b)),
+            (RuntimeValue::Regex(_, _, _), _) | (_, RuntimeValue::Regex(_, _, _)) => Ok(false),
             (RuntimeValue::Duration(duration), other) | (other, RuntimeValue::Duration(duration)) => {
                 let Some(other) = string_data(other).and_then(parse_duration) else { return Ok(false); };
                 let elapsed = |value| duration_semantics::elapsed(value, &self.now).map_err(RuntimeValue::Error);
@@ -3761,6 +3917,8 @@ impl<'a> Evaluator<'a> {
             (a, RuntimeValue::List(b) | RuntimeValue::TagList(b)) if b.len() == 1 => {
                 self.equals(a, &b[0])
             }
+            (RuntimeValue::Regex(_, _, a), RuntimeValue::Regex(_, _, b)) => Arc::ptr_eq(a, b),
+            (RuntimeValue::Regex(_, _, _), _) | (_, RuntimeValue::Regex(_, _, _)) => false,
             (RuntimeValue::String(a), RuntimeValue::Number(b))
             | (RuntimeValue::Number(b), RuntimeValue::String(a)) => {
                 loose_numeric_text(a) == Some(*b)
@@ -4112,7 +4270,7 @@ fn to_plain(value: &RuntimeValue) -> Value {
         ),
         RuntimeValue::File(value) => Value::String(value.path.clone()),
         RuntimeValue::Link(value) => Value::String(value.path.clone()),
-        RuntimeValue::Regex(pattern, flags, _) => Value::String(format!("/{pattern}/{flags}")),
+        RuntimeValue::Regex(pattern, flags, _) => Value::String(regex_string(pattern, flags)),
         RuntimeValue::Error(message) | RuntimeValue::ErrorValue(message) => Value::Object(
             Map::from_iter([("error".to_string(), Value::String(message.clone()))]),
         ),
@@ -4166,7 +4324,7 @@ fn plain_string(value: &RuntimeValue) -> String {
                 .map(|display| format!("[[{data}|{display}]]"))
                 .unwrap_or_else(|| format!("[[{data}]]"))
         }
-        RuntimeValue::Regex(pattern, flags, _) => format!("/{pattern}/{flags}"),
+        RuntimeValue::Regex(pattern, flags, _) => regex_string(pattern, flags),
         RuntimeValue::Image(value) => super::order::image_text(value),
         RuntimeValue::ErrorValue(message) => format!("Error: {}", error_message(message)),
         RuntimeValue::Error(message) => message.clone(),
@@ -4256,9 +4414,22 @@ fn number_json(value: f64) -> Value {
 }
 
 fn format_number(value: f64) -> String {
-    if value.fract() == 0.0 {
-        format!("{value:.0}")
+    if value == 0.0 {
+        return "0".into();
+    }
+    if value.abs() >= 1e21 || value.abs() < 1e-6 {
+        let text = format!("{value:e}");
+        text.split_once('e')
+            .map(|(mantissa, exponent)| {
+                format!(
+                    "{mantissa}e{}{exponent}",
+                    if exponent.starts_with('-') { "" } else { "+" }
+                )
+            })
+            .unwrap_or(text)
     } else {
+        // Shortest round-trip decimal, rather than expanding the exact binary
+        // integer; e.g.1000000000000000100 is not rendered as...0128.
         value.to_string()
     }
 }
@@ -4351,8 +4522,12 @@ fn parse_timezone_offset(value: &str) -> Option<FixedOffset> {
 /// Numeric conversion for primitive loose equality follows the String side's
 /// Number semantics, including empty/whitespace and unsigned radix literals.
 /// It is intentionally separate from explicit number() and parseFloat().
+fn ecmascript_whitespace(character: char) -> bool {
+    matches!(character, '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}')
+}
+
 fn loose_numeric_text(value: &str) -> Option<f64> {
-    let value=value.trim_matches(|c:char|matches!(c,'\u{0009}'..='\u{000d}'|'\u{0020}'|'\u{00a0}'|'\u{1680}'|'\u{2000}'..='\u{200a}'|'\u{2028}'|'\u{2029}'|'\u{202f}'|'\u{205f}'|'\u{3000}'|'\u{feff}'));
+    let value = value.trim_matches(ecmascript_whitespace);
     if value.is_empty() {
         return Some(0.0);
     }
@@ -5128,6 +5303,137 @@ fn string_slice(value: &str, start: isize, end: Option<isize>) -> RuntimeValue {
             .collect(),
     )
 }
+/// Size a pending deep copy while polling every traversed value/metadata item.
+/// The ordinary result guard remains separate; new collection work cannot pay
+/// for a large File clone only after silently walking all of its properties.
+fn charged_value_bytes(
+    value: &RuntimeValue,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<usize, RuntimeValue> {
+    fn add(
+        bytes: &mut usize,
+        length: usize,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<(), RuntimeValue> {
+        check(length / 16 + 1)?;
+        *bytes = bytes.saturating_add(length);
+        if *bytes > 8 * 1024 * 1024 {
+            return Err(RuntimeValue::Error(
+                "budget\0Collection copy exceeds byte budget".into(),
+            ));
+        }
+        Ok(())
+    }
+    fn link(
+        link: &BasesLink,
+        depth: usize,
+        bytes: &mut usize,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<(), RuntimeValue> {
+        add(bytes, 32, check)?;
+        add(bytes, link.path.len(), check)?;
+        for text in [
+            &link.raw_destination,
+            &link.source_path,
+            &link.subpath,
+            &link.display,
+        ] {
+            if let Some(text) = text {
+                add(bytes, text.len(), check)?;
+            }
+        }
+        if let Some(Some(path)) = &link.resolved_path {
+            add(bytes, path.len(), check)?;
+        }
+        if let Some(witness) = &link.target {
+            add(
+                bytes,
+                witness.entry_id.as_str().len() + witness.revision.as_str().len(),
+                check,
+            )?;
+        }
+        if let Some(value) = link.display_value.as_deref() {
+            visit(value, depth + 1, bytes, check)?;
+        }
+        Ok(())
+    }
+    fn visit(
+        value: &RuntimeValue,
+        depth: usize,
+        bytes: &mut usize,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<(), RuntimeValue> {
+        if depth > 128 {
+            return Err(RuntimeValue::Error(
+                "budget\0Collection copy nesting exceeds 128".into(),
+            ));
+        }
+        add(bytes, 16, check)?;
+        match value {
+            RuntimeValue::String(value)
+            | RuntimeValue::Tag(value)
+            | RuntimeValue::Html(value)
+            | RuntimeValue::Image(value)
+            | RuntimeValue::Icon(value)
+            | RuntimeValue::Error(value)
+            | RuntimeValue::ErrorValue(value) => add(bytes, value.len(), check)?,
+            RuntimeValue::Regex(pattern, flags, _) => {
+                add(bytes, pattern.len() + flags.len() + 8, check)?
+            }
+            RuntimeValue::List(values) | RuntimeValue::TagList(values) => {
+                for value in values {
+                    visit(value, depth + 1, bytes, check)?;
+                }
+            }
+            RuntimeValue::Object(values) => {
+                for (key, value) in values {
+                    add(bytes, key.len(), check)?;
+                    visit(value, depth + 1, bytes, check)?;
+                }
+            }
+            RuntimeValue::Link(value) => link(value, depth, bytes, check)?,
+            RuntimeValue::File(file) => {
+                for text in [
+                    &file.path,
+                    &file.name,
+                    &file.basename,
+                    &file.folder,
+                    &file.extension,
+                ] {
+                    add(bytes, text.len(), check)?;
+                }
+                for text in [&file.ctime, &file.mtime] {
+                    if let Some(text) = text {
+                        add(bytes, text.len(), check)?;
+                    }
+                }
+                if let Some(witness) = &file.witness {
+                    add(
+                        bytes,
+                        witness.entry_id.as_str().len() + witness.revision.as_str().len(),
+                        check,
+                    )?;
+                }
+                for tag in &file.tags {
+                    add(bytes, tag.len(), check)?;
+                }
+                for (key, value) in &file.properties {
+                    add(bytes, key.len(), check)?;
+                    visit(value, depth + 1, bytes, check)?;
+                }
+                for value in file.links.iter().chain(&file.embeds).chain(&file.backlinks) {
+                    link(value, depth + 1, bytes, check)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    let mut bytes = 0;
+    visit(value, 0, &mut bytes, check)?;
+    Ok(bytes)
+}
+
 fn flatten_values(
     values: &[RuntimeValue],
     check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
@@ -5149,8 +5455,7 @@ fn flatten_values(
             if let RuntimeValue::List(nested) | RuntimeValue::TagList(nested) = value {
                 visit(nested, depth + 1, output, bytes, check)?;
             } else {
-                let size = value_bytes(value).unwrap_or(usize::MAX);
-                check(size / 16)?;
+                let size = charged_value_bytes(value, check)?;
                 *bytes = bytes.saturating_add(size);
                 if *bytes > 8 * 1024 * 1024 || output.len() >= 100_000 {
                     return Err(RuntimeValue::Error(
@@ -5402,7 +5707,7 @@ pub(crate) fn strict_values_equal(
                     b.milliseconds,
                 ]
             }
-            (RuntimeValue::Regex(_, _, a), RuntimeValue::Regex(_, _, b)) => a == b,
+            (RuntimeValue::Regex(_, _, a), RuntimeValue::Regex(_, _, b)) => Arc::ptr_eq(a, b),
             (RuntimeValue::List(a), RuntimeValue::List(b))
             | (RuntimeValue::TagList(a), RuntimeValue::TagList(b)) => {
                 if a.len() != b.len() {
@@ -5524,15 +5829,23 @@ pub(crate) fn unique_bucket_key(
                 }
             }
             RuntimeValue::Object(values) => {
-                check(values.len())?;
+                let levels = (usize::BITS - values.len().max(1).leading_zeros()) as usize;
+                let mut max_key_bytes = 0usize;
+                for key in values.keys() {
+                    check(key.len() / 16 + 1)?;
+                    max_key_bytes = max_key_bytes.max(key.len());
+                }
+                check(
+                    values
+                        .len()
+                        .saturating_mul(max_key_bytes / 16 + 1)
+                        .saturating_mul(levels.saturating_mul(2) + 1),
+                )?;
                 let mut entries = values
                     .iter()
                     .enumerate()
                     .map(|(ordinal, (key, value))| (js_array_index(key), ordinal, key, value))
                     .collect::<Vec<_>>();
-                check(entries.len().saturating_mul(
-                    (usize::BITS - entries.len().max(1).leading_zeros()) as usize,
-                ))?;
                 entries.sort_unstable_by(|a, b| match (a.0, b.0) {
                     (Some(a), Some(b)) => a.cmp(&b),
                     (Some(_), None) => std::cmp::Ordering::Less,
@@ -5572,13 +5885,309 @@ pub(crate) fn unique_bucket_key(
             }
             RuntimeValue::Error(message) => return Err(RuntimeValue::Error(message.clone())),
             _ => {
-                check(value_bytes(value).unwrap_or(usize::MAX) / 16 + 1)?;
+                let length = match value {
+                    RuntimeValue::File(file) => file.path.len(),
+                    RuntimeValue::Link(link) => link.path.len(),
+                    RuntimeValue::Regex(pattern, flags, _) => pattern.len() + flags.len(),
+                    RuntimeValue::ErrorValue(message) => message.len(),
+                    value => string_data(value).map_or(64, str::len),
+                };
+                check(length / 16 + 1)?;
                 append_text(&mut output, &plain_string(value), check)?;
             }
         }
         Ok(output)
     }
     render(value, 0, check)
+}
+
+/// A single query's private regex encounter registry. Ordinals distinguish
+/// actual AST-owned objects only within that query; they are not persisted
+/// object identities and never contain allocation addresses or ambient state.
+#[derive(Default)]
+pub(crate) struct StrictIdentityContext {
+    regex_tokens: Vec<Arc<()>>,
+}
+impl StrictIdentityContext {
+    fn regex_ordinal(
+        &mut self,
+        token: &Arc<()>,
+        reserve: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<usize, RuntimeValue> {
+        check(1)?;
+        for (ordinal, prior) in self.regex_tokens.iter().enumerate() {
+            check(1)?;
+            if Arc::ptr_eq(prior, token) {
+                return Ok(ordinal);
+            }
+        }
+        let needed = self.regex_tokens.len().saturating_add(1);
+        if needed > 100_000
+            || needed.saturating_mul(std::mem::size_of::<Arc<()>>()) > 8 * 1024 * 1024
+        {
+            return Err(RuntimeValue::Error(
+                "budget\0Strict identity registry exceeds byte/item budget".into(),
+            ));
+        }
+        check(std::mem::size_of::<Arc<()>>() / 16 + 1)?;
+        if needed > self.regex_tokens.capacity() {
+            let capacity = needed.next_power_of_two();
+            let growth = (capacity - self.regex_tokens.capacity())
+                .saturating_mul(std::mem::size_of::<Arc<()>>());
+            reserve(growth)?;
+            self.regex_tokens
+                .try_reserve_exact(capacity - self.regex_tokens.len())
+                .map_err(|_| {
+                    RuntimeValue::Error("budget\0Strict identity registry allocation failed".into())
+                })?;
+        }
+        let ordinal = self.regex_tokens.len();
+        self.regex_tokens.push(Arc::clone(token));
+        Ok(ordinal)
+    }
+}
+
+/// Constructor-sensitive canonical components for strict Object group IDs.
+/// One context must be shared across every key in the query, including nested
+/// Regex values. File/Link origin is actual private runtime provenance only.
+pub(crate) fn strict_runtime_identity_key(
+    value: &RuntimeValue,
+    identities: &mut StrictIdentityContext,
+    reserve: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<String, RuntimeValue> {
+    fn put(
+        output: &mut String,
+        text: &str,
+        reserve: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<(), RuntimeValue> {
+        check(text.len() / 16 + 1)?;
+        let needed = output.len().saturating_add(text.len());
+        if needed > 8 * 1024 * 1024 {
+            return Err(RuntimeValue::Error(
+                "budget\0Strict identity output exceeds byte budget".into(),
+            ));
+        }
+        if needed > output.capacity() {
+            let capacity = needed.next_power_of_two().min(8 * 1024 * 1024);
+            reserve(capacity - output.capacity())?;
+            output
+                .try_reserve_exact(capacity - output.len())
+                .map_err(|_| {
+                    RuntimeValue::Error("budget\0Strict identity output allocation failed".into())
+                })?;
+        }
+        output.push_str(text);
+        Ok(())
+    }
+    fn part(
+        output: &mut String,
+        value: &str,
+        reserve: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<(), RuntimeValue> {
+        put(output, &format!("{}:", value.len()), reserve, check)?;
+        put(output, value, reserve, check)
+    }
+    fn number(
+        output: &mut String,
+        value: f64,
+        reserve: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<(), RuntimeValue> {
+        if !value.is_finite() {
+            return Err(RuntimeValue::Error(
+                "numeric-domain\0Nonfinite strict identity component".into(),
+            ));
+        }
+        put(
+            output,
+            &format!("{:016x}", if value == 0.0 { 0 } else { value.to_bits() }),
+            reserve,
+            check,
+        )
+    }
+    fn label(
+        output: &mut String,
+        link: &BasesLink,
+        depth: usize,
+        identities: &mut StrictIdentityContext,
+        reserve: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<(), RuntimeValue> {
+        match link.display_value.as_deref() {
+            Some(RuntimeValue::Null) => put(output, "A", reserve, check),
+            Some(value) => {
+                put(output, "P", reserve, check)?;
+                render(output, value, depth + 1, identities, reserve, check)
+            }
+            None => {
+                if let Some(text) = &link.display {
+                    put(output, "PS", reserve, check)?;
+                    part(output, text, reserve, check)
+                } else {
+                    put(output, "A", reserve, check)
+                }
+            }
+        }
+    }
+    fn render(
+        output: &mut String,
+        value: &RuntimeValue,
+        depth: usize,
+        identities: &mut StrictIdentityContext,
+        reserve: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<(), RuntimeValue> {
+        check(1)?;
+        if depth > 128 {
+            return Err(RuntimeValue::Error(
+                "budget\0Strict identity nesting exceeds 128".into(),
+            ));
+        }
+        match value {
+            RuntimeValue::Null => put(output, "0", reserve, check)?,
+            RuntimeValue::Bool(value) => {
+                put(output, if *value { "B1" } else { "B0" }, reserve, check)?
+            }
+            RuntimeValue::Number(value) => {
+                put(output, "N", reserve, check)?;
+                number(output, *value, reserve, check)?;
+            }
+            RuntimeValue::String(text)
+            | RuntimeValue::Tag(text)
+            | RuntimeValue::Html(text)
+            | RuntimeValue::Image(text)
+            | RuntimeValue::Icon(text) => {
+                let tag = match value {
+                    RuntimeValue::String(_) => "S",
+                    RuntimeValue::Tag(_) => "G",
+                    RuntimeValue::Html(_) => "H",
+                    RuntimeValue::Image(_) => "I",
+                    RuntimeValue::Icon(_) => "C",
+                    _ => unreachable!(),
+                };
+                put(output, tag, reserve, check)?;
+                part(output, text, reserve, check)?;
+            }
+            RuntimeValue::Date(value) => {
+                put(
+                    output,
+                    if value.date_only { "D0" } else { "D1" },
+                    reserve,
+                    check,
+                )?;
+                part(output, &value.millis.to_string(), reserve, check)?;
+            }
+            RuntimeValue::Duration(value) => {
+                put(output, "U", reserve, check)?;
+                for value in [
+                    value.years,
+                    value.months,
+                    value.weeks,
+                    value.days,
+                    value.hours,
+                    value.minutes,
+                    value.seconds,
+                    value.milliseconds,
+                ] {
+                    number(output, value, reserve, check)?;
+                }
+            }
+            RuntimeValue::List(values) | RuntimeValue::TagList(values) => {
+                put(
+                    output,
+                    if matches!(value, RuntimeValue::TagList(_)) {
+                        "T"
+                    } else {
+                        "L"
+                    },
+                    reserve,
+                    check,
+                )?;
+                part(output, &values.len().to_string(), reserve, check)?;
+                for value in values {
+                    render(output, value, depth + 1, identities, reserve, check)?;
+                }
+            }
+            RuntimeValue::Object(values) => {
+                put(output, "O", reserve, check)?;
+                part(output, &values.len().to_string(), reserve, check)?;
+                let levels = (usize::BITS - values.len().max(1).leading_zeros()) as usize;
+                let mut max_key_bytes = 0usize;
+                for key in values.keys() {
+                    check(key.len() / 16 + 1)?;
+                    max_key_bytes = max_key_bytes.max(key.len());
+                }
+                check(
+                    values
+                        .len()
+                        .saturating_mul(max_key_bytes / 16 + 1)
+                        .saturating_mul(levels.saturating_mul(2) + 1),
+                )?;
+                reserve(
+                    values
+                        .len()
+                        .saturating_mul(std::mem::size_of::<(&String, &RuntimeValue)>()),
+                )?;
+                let mut entries = values.iter().collect::<Vec<_>>();
+                entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
+                for (key, value) in entries {
+                    part(output, key, reserve, check)?;
+                    render(output, value, depth + 1, identities, reserve, check)?;
+                }
+            }
+            RuntimeValue::File(file) => {
+                let Some(witness) = &file.witness else {
+                    return Err(RuntimeValue::Error(
+                        "unavailable\0Strict File identity requires captured witness".into(),
+                    ));
+                };
+                put(output, "F", reserve, check)?;
+                part(output, witness.entry_id.as_str(), reserve, check)?;
+                part(output, witness.revision.as_str(), reserve, check)?;
+                part(output, &file.path, reserve, check)?;
+            }
+            RuntimeValue::Link(link) => {
+                if link.external {
+                    put(output, "W", reserve, check)?;
+                    part(output, &link.path, reserve, check)?;
+                } else {
+                    let (Some(raw), Some(source)) = (&link.raw_destination, &link.source_path)
+                    else {
+                        return Err(RuntimeValue::Error("unavailable\0Strict Link identity requires original destination and source".into()));
+                    };
+                    put(output, "K", reserve, check)?;
+                    part(output, raw, reserve, check)?;
+                    part(output, source, reserve, check)?;
+                }
+                label(output, link, depth, identities, reserve, check)?;
+            }
+            RuntimeValue::Regex(_, _, token) => {
+                put(output, "R", reserve, check)?;
+                part(
+                    output,
+                    &identities.regex_ordinal(token, reserve, check)?.to_string(),
+                    reserve,
+                    check,
+                )?;
+            }
+            RuntimeValue::ErrorValue(message) => {
+                put(output, "E", reserve, check)?;
+                part(output, error_message(message), reserve, check)?;
+            }
+            RuntimeValue::Error(message) => return Err(RuntimeValue::Error(message.clone())),
+        }
+        Ok(())
+    }
+    // Temporary integer/hex formatting is bounded to64 bytes at any point.
+    check(1)?;
+    reserve(64)?;
+    let mut output = String::new();
+    render(&mut output, value, 0, identities, reserve, check)?;
+    Ok(output)
 }
 
 fn unique_values(
@@ -5603,8 +6212,7 @@ fn unique_values(
             }
         }
         if !seen {
-            let size = value_bytes(value).unwrap_or(usize::MAX);
-            check(size / 16 + 1)?;
+            let size = charged_value_bytes(value, check)?;
             bytes = bytes.saturating_add(size);
             count += 1;
             if bytes > 8 * 1024 * 1024 || count > 100_000 {
@@ -5642,6 +6250,48 @@ fn unique_values(
 }
 
 /// Expressions run once per record, so each pattern is compiled once and reused.
+/// RegExp.toString for a validated runtime literal. Construction preadmits
+/// six times the source bytes plus flags/delimiters, bounding escaped output.
+/// Private runtime-shape restoration must retain that actual constructor proof.
+pub(crate) fn regex_string(pattern: &str, flags: &str) -> String {
+    let mut output = String::from("/");
+    if pattern.is_empty() {
+        output.push_str("(?:)");
+    } else {
+        let mut escaped = false;
+        for character in pattern.chars() {
+            match character {
+                '/' if !escaped => output.push_str("\\/"),
+                '\n' => output.push_str("\\n"),
+                '\r' => output.push_str("\\r"),
+                '\u{2028}' => output.push_str("\\u2028"),
+                '\u{2029}' => output.push_str("\\u2029"),
+                other => output.push(other),
+            }
+            escaped = character == '\\' && !escaped;
+        }
+    }
+    output.push('/');
+    for flag in "gimsu".chars() {
+        if flags.contains(flag) {
+            output.push(flag);
+        }
+    }
+    output
+}
+
+fn canonical_regex_flags(flags: &str) -> Result<String, String> {
+    if flags.chars().any(|flag| !"gimsu".contains(flag))
+        || flags.chars().collect::<HashSet<_>>().len() != flags.chars().count()
+    {
+        return Err("unsupported\0Unsupported regular expression flags".into());
+    }
+    Ok("gimsu"
+        .chars()
+        .filter(|flag| flags.contains(*flag))
+        .collect())
+}
+
 fn compile_regex(pattern: &str, flags: &str) -> Result<Regex, String> {
     const MAX_ENTRIES: usize = 8; // <= 8 MiB compiled regex budget plus bounded pattern keys
     type Compiled = Result<Regex, String>;
@@ -5688,8 +6338,12 @@ fn regex_replace(
     let named = regex.capture_names().any(|name| name.is_some());
     let mut output = String::new();
     let mut end = 0;
-    for captures in regex.captures_iter(value) {
+    let mut cursor = 0usize;
+    while cursor <= value.len() {
         check(1)?;
+        let Some(captures) = regex.captures_at(value, cursor) else {
+            break;
+        };
         let matched = captures.get(0).expect("full regex match");
         append_text(&mut output, &value[end..matched.start()], check)?;
         replacement_text(&mut output, replacement, value, &captures, named, check)?;
@@ -5697,6 +6351,14 @@ fn regex_replace(
         if !flags.contains('g') {
             break;
         }
+        cursor = if matched.is_empty() {
+            let Some(character) = value[matched.end()..].chars().next() else {
+                break;
+            };
+            matched.end() + character.len_utf8()
+        } else {
+            matched.end()
+        };
     }
     append_text(&mut output, &value[end..], check)?;
     Ok(output)
@@ -5848,11 +6510,11 @@ fn own_key<'a, T>(values: &'a IndexMap<String, T>, name: &str) -> Option<&'a str
 }
 fn parse_number_prefix(value: &str) -> Option<f64> {
     static PREFIX: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+        Regex::new(r"^[+-]?(?:Infinity|(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)")
             .expect("numeric prefix")
     });
     PREFIX
-        .find(value.trim_start())
+        .find(value.trim_start_matches(ecmascript_whitespace))
         .and_then(|found| found.as_str().parse().ok())
 }
 fn check_ast_depth(expression: &Expr, depth: usize) -> Result<(), String> {

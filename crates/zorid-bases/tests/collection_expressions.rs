@@ -305,3 +305,53 @@ fn collection_traversals_and_expanding_regex_templates_are_bounded_and_cancellab
         "budget"
     );
 }
+
+#[test]
+fn regex_empty_tails_and_canonical_flags_follow_native_replacement_buckets() {
+    for (source, expected) in [
+        (r#""ab".replace(/a*/g, "-")"#, "--b-"),
+        (r#""aa".replace(/a?/g, "-")"#, "---"),
+        (r#"/a/ig.toString()"#, "/a/gi"),
+        (
+            r#"[/a/ig,"gap",/a/gi].unique().join("|")"#,
+            "/a/gi|/a/gi|gap",
+        ),
+    ] {
+        assert_eq!(evaluate(source), text(expected), "{source}");
+    }
+    assert_eq!(evaluate("[1,2].map(/a/).unique().length"), number(1.0));
+    // A literal constructor is encountered even inside an eager unselected
+    // ordinary argument. Unsupported patterns are explicit diagnostics.
+    assert!(evaluate_expression(
+        "IF(false, /(/, 1)",
+        &record(),
+        &EvaluationOptions::default()
+    )
+    .is_err());
+}
+
+#[test]
+fn number_strings_and_prefix_whitespace_keep_reference_buckets() {
+    for (source, expected) in [
+        ("(-0).toString()", "0"),
+        ("(1e21).toString()", "1e+21"),
+        ("(1e-7).toString()", "1e-7"),
+        ("(1000000000000000100).toString()", "1000000000000000100"),
+        (
+            r#"[1e21,"gap","1e+21"].unique().join("|")"#,
+            "1e+21|1e+21|gap",
+        ),
+    ] {
+        assert_eq!(evaluate(source), text(expected), "{source}");
+    }
+    assert_eq!(evaluate("[0,-0].unique().length"), number(1.0));
+    assert_eq!(evaluate("number('\u{feff}2')"), number(2.0));
+    assert_eq!(evaluate("'\u{feff}2\u{feff}'.trim()"), text("2"));
+    assert_eq!(evaluate("'\u{85}2\u{85}'.trim()"), text("\u{85}2\u{85}"));
+    assert!(evaluate_expression(
+        "number('\u{85}2')",
+        &record(),
+        &EvaluationOptions::default()
+    )
+    .is_err());
+}
