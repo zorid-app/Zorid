@@ -43,8 +43,11 @@ the same assertion. Exact compiler/profile cache retirements are terminal with p
 file hashes unchanged. Git objects were repacked with `--keep-unreachable`: all
 38335 objects remain, with main unchanged and no ref/reflog/pruning operation.
 Free space remains roughly58MiB short of the1GiB app guard. `bases_controller`
-owns a bounded three-file lossless pure-text dependency compression probe with
-full byte/metadata checks; do not infer recovery from allocated-block estimates.
+completed the bounded pure-text dependency compression probe: it stopped after
+the first file because actual free space did not improve. All logical bytes and
+metadata verify; the other two candidates are untouched and no expanded pass
+ran. Receipt: `/private/tmp/zorid-node-text-compression-probe-20261022-001.json`.
+Actual space is roughly920MiB; do not infer recovery from allocated-block estimates.
 No system/swap/snapshot/user-data changes. Prepared probe002 is frontend
 `e6891aa6`, same333 artifacts/native176; it needs a new grant and the unchanged
 guard after verified space recovery.
