@@ -33,12 +33,12 @@ test('paste validates complete rectangle before one host batch and leaves file c
   f.paste(f.cell(0, 'file.name'), { 'text/plain': 'ignored\tChanged\t12\nignored\tOther\t13' }); await tick();
   assert.deepEqual(f.batches[0], [
     { version: 7, path: '0.md', property: 'note.text', value: { type: 'string', value: 'Changed' } },
-    { version: 7, path: '0.md', property: 'note.score', value: { type: 'number', value: 12 } },
+    { version: 7, path: '0.md', property: 'note.score', value: { type: 'string', value: '12' } },
     { version: 7, path: '1.md', property: 'note.text', value: { type: 'string', value: 'Other' } },
-    { version: 7, path: '1.md', property: 'note.score', value: { type: 'number', value: 13 } },
+    { version: 7, path: '1.md', property: 'note.score', value: { type: 'string', value: '13' } },
   ]);
   f.paste(f.cell(0, 'file.name'), { 'text/plain': 'ignored\tGood\t12\nignored\tBad\tinvalid' }); await tick();
-  assert.equal(f.batches.length, 1); assert.match(f.main.textContent!, /valid number/); f.close();
+  assert.equal(f.batches.length, 2); assert.deepEqual(f.batches[1].at(-1)!.value, {type:'string',value:'invalid'}); f.close();
 });
 
 test('selected rectangle broadcasts a single pasted value and clear skips file properties', async () => {
@@ -153,4 +153,46 @@ test('summary picker searches Rust previews, applies selection and ignores stale
   const input = f.dom.window.document.querySelector<HTMLInputElement>('[aria-label="Find or create summary"]')!; input.value = 'sum'; input.dispatchEvent(new f.dom.window.Event('input', { bubbles: true }));
   const option = f.dom.window.document.querySelector<HTMLElement>('[role=option]')!; assert.match(option.textContent!, /Sum12345/); f.key(input, 'Enter'); await tick(); assert.deepEqual(selected, ['Sum']);
   f.menu(f.main.querySelectorAll<HTMLElement>('[role=columnheader]')[2]).find(button => button.textContent === 'Summarize...')!.click(); await tick(); f.view.update({ ...f.result, version: 8 }); resolve([{ id: 'Old', label: 'Old', preview: { type: 'number', value: 1 } }]); await tick(); assert.equal(f.dom.window.document.querySelector('[aria-label="Summarize"]'), null); f.close();
+});
+
+
+test('oversized clipboard rectangles clamp to existing group rows and visible properties', async () => {
+  const f = fixture(); f.cell(1, 'note.score').focus();
+  f.paste(f.cell(1, 'note.score'), { 'text/plain': 'A\tunused\nB\tunused\nC\tunused' }); await tick();
+  assert.deepEqual(f.batches[0], [
+    {version:7,path:'1.md',property:'note.score',value:{type:'string',value:'A'}},
+    {version:7,path:'2.md',property:'note.score',value:{type:'string',value:'B'}},
+  ]); f.close();
+});
+
+test('plain scalar appends literally to lists while table and raw clipboard replace them', async () => {
+  const f = fixture(); const rows = f.result.rows.map(row => ({...row, values: {...row.values,'note.text':{type:'list' as const,value:[{type:'string' as const,value:'existing'}]}}}));
+  f.view.update({...f.result,version:8,rows,groups:[{key:null,rows}]}); f.cell(0,'note.text').focus();
+  f.paste(f.cell(0,'note.text'), {'text/plain':'new'}); await tick();
+  assert.deepEqual(f.batches[0][0].value,{type:'list',value:[{type:'string',value:'existing'},{type:'string',value:'new'}]});
+  f.paste(f.cell(0,'note.text'), {'obsidian/table':JSON.stringify({rows:[['replacement']]})}); await tick();
+  assert.deepEqual(f.batches[1][0].value,{type:'string',value:'replacement'});
+  f.paste(f.cell(0,'note.text'), {'obsidian/bases-cells':JSON.stringify([[{type:'note',data:['raw']} ]])}); await tick();
+  assert.deepEqual(f.batches[2][0].value,{type:'list',value:[{type:'string',value:'raw'}]}); f.close();
+});
+
+test('newline text stays scalar in one active cell and becomes a column across multiple selected rows', async () => {
+  const f=fixture();f.cell(0,'note.text').focus();f.paste(f.cell(0,'note.text'),{'text/plain':'first\nsecond'});await tick();
+  assert.deepEqual(f.batches[0],[{version:7,path:'0.md',property:'note.text',value:{type:'string',value:'first\nsecond'}}]);
+  f.key(f.cell(0,'note.text'),'Escape');f.key(f.cell(0,'note.text'),'ArrowDown',{shiftKey:true});f.paste(f.cell(1,'note.text'),{'text/plain':'first\nsecond'});await tick();
+  assert.deepEqual(f.batches[1].map(edit=>edit.value),[{type:'string',value:'first'},{type:'string',value:'second'}]);f.close();
+});
+
+test('multirow clipboard fills available source rows once while a single source row broadcasts', async () => {
+  const f=fixture();f.cell(0,'note.text').focus();f.key(f.cell(0,'note.text'),'a',{metaKey:true});
+  f.paste(f.cell(0,'note.text'),{'obsidian/table':JSON.stringify({rows:[['first'],['second']]})});await tick();
+  assert.equal(f.batches[0].length,4);assert.ok(f.batches[0].every(edit=>edit.path!=='2.md'));
+  f.paste(f.cell(0,'note.text'),{'obsidian/table':JSON.stringify({rows:[['repeat']]})});await tick();assert.equal(f.batches[1].length,6);f.close();
+});
+
+
+test('every clamped writable mutation validates before a batch starts', async () => {
+  const f=fixture({ validatePropertyValue(value) { if (value.type==='string'&&value.value==='blocked') throw new Error('The last target is unavailable.'); return value; } });
+  f.cell(0,'note.text').focus();f.paste(f.cell(0,'note.text'),{'text/plain':'first\tsecond\nthird\tblocked'});await tick();
+  assert.equal(f.batches.length,0);assert.match(f.main.textContent!,/last target is unavailable/);f.close();
 });

@@ -2,7 +2,7 @@ import { showContextMenu } from '../platform/context-menu.ts';
 import type { ContextMenuItem } from '../platform/context-menu.ts';
 import { Text, Binary, Info, SquareCheck, Calendar, CalendarClock, List, Tags, Link, CodeXml, ListFilter, CircleDot, Star, Calculator, Trash2, Search } from 'lucide';
 import type { IconNode } from 'lucide';
-import { parseBaseTableTSV, parsePrimitiveBaseTableInput } from './table-clipboard.ts';
+import { parseBaseTableTSV } from './table-clipboard.ts';
 import type { BaseViewPatch, BaseValue } from './document.ts';
 import type { BasePropertyPresentation } from './presentation-common.ts';
 import { displaySharedBaseValue } from './presentation-common.ts';
@@ -380,7 +380,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
         }
         next = { type: 'number', value: n };
       } else next = { type: 'string', value: input.value };
-      try { next = options.validatePropertyValue?.(next, property, row) ?? next; } catch (error) { input.setAttribute('aria-invalid', 'true'); report(error); return; }
+      try { if (value.type !== 'boolean' && options.parsePropertyInput) next = options.parsePropertyInput(input.value, property, row); next = options.validatePropertyValue?.(next, property, row) ?? next; } catch (error) { input.setAttribute('aria-invalid', 'true'); report(error); return; }
       saving = true; input.disabled = true; cell.setAttribute('aria-busy', 'true');
       try {
         if (options.editProperty) await options.editProperty({ version, path: row.path, property, value: next });
@@ -681,7 +681,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   function pasteValues(clipboard: Pick<DataTransfer, 'getData'>) {
     try {
       const bounds = selectedBounds(); if (!bounds || hasActiveEdits() || !options.editProperties) return;
-      let rows: string[][], rawRows: { type: string; data?: unknown }[][] | undefined;
+      let rows: string[][], plainScalar: string | undefined, rawRows: { type: string; data?: unknown }[][] | undefined;
       const cells = clipboard.getData('obsidian/bases-cells');
       if (cells) {
         if (cells.length > 8_000_000) throw new Error('The pasted table is too large.');
@@ -697,28 +697,39 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
         if (!parsed || typeof parsed !== 'object' || !('rows' in parsed) || !Array.isArray(parsed.rows) || !parsed.rows.length || parsed.rows.some(row => !Array.isArray(row) || row.some(cell => typeof cell !== 'string'))) throw new Error('Invalid table clipboard.');
         rows = parsed.rows;
         if (rows.some(row => row.length !== rows[0].length)) throw new Error('Paste a rectangular table.');
-      } else rows = parseBaseTableTSV(clipboard.getData('text/plain'));
+      } else {
+        const text = clipboard.getData('text/plain');
+        // A newline is literal in a single active cell. It becomes a column only
+        // when the user already selected several rows, matching Bases' reader.
+        if (text.includes('\t') || (bounds.top < bounds.bottom && /[\r\n]/.test(text))) rows = parseBaseTableTSV(text);
+        else { if (!text) return; plainScalar = text; rows = [[text]]; }
+      }
       if (rows.length > 100_000 || (rows[0]?.length ?? 0) > 10_000) throw new Error('The pasted table is too large.');
       const sourceHeight = rows.length, sourceWidth = rows[0]?.length ?? 0;
       if (!sourceWidth) return;
-      const selectedHeight = bounds.bottom - bounds.top + 1, selectedWidth = bounds.end - bounds.start + 1;
-      const repeat = selectedHeight % sourceHeight === 0 && selectedWidth % sourceWidth === 0;
-      const height = repeat ? selectedHeight : sourceHeight, width = repeat ? selectedWidth : sourceWidth;
-      const group = result.groups[bounds.group];
-      if (!group || bounds.top + height > group.rows.length || bounds.start + width > result.properties.length) throw new Error('The pasted table exceeds the available rows or columns.');
+      const group = result.groups[bounds.group]; if (!group) return;
+      const height = Math.max(bounds.bottom - bounds.top + 1, sourceHeight), width = Math.max(bounds.end - bounds.start + 1, sourceWidth);
+      const bottom = Math.min(group.rows.length - 1, bounds.top + height - 1), end = Math.min(result.properties.length - 1, bounds.start + width - 1);
       const edits: BaseTableEdit[] = [];
-      for (let r = 0; r < height; r++) {
-        const row = group.rows[bounds.top + r];
-        for (let c = 0; c < width; c++) {
-          const property = result.properties[bounds.start + c], current = row.values[property] ?? BASE_NULL;
+      for (let r = bounds.top; r <= bottom; r++) {
+        const row = group.rows[r], sourceRow = sourceHeight === 1 ? 0 : r - bounds.top;
+        if (sourceRow >= sourceHeight) continue;
+        for (let c = bounds.start; c <= end; c++) {
+          const property = result.properties[c], current = row.values[property] ?? BASE_NULL;
           if (!writableProperty(row, property)) continue;
-          const raw = rows[r % sourceHeight][c % sourceWidth];
-          const rawCell = rawRows?.[r % sourceHeight]?.[c % sourceWidth];
+          const sourceColumn = sourceWidth === 1 ? 0 : c - bounds.start;
+          if (sourceColumn >= sourceWidth) continue;
+          const raw = rows[sourceRow][sourceColumn], rawCell = rawRows?.[sourceRow]?.[sourceColumn];
           if (rawCell && (rawCell.type !== 'note' || !Object.hasOwn(rawCell, 'data'))) continue;
-          const value = rawCell ? baseExpressionValue(rawCell.data) : options.parsePropertyInput ? options.parsePropertyInput(raw, property, row) : parsePrimitiveBaseTableInput(raw, current);
+          // Clipboard values remain raw: the reference does not coerce pasted
+          // strings into numbers/booleans. Only a plain scalar appends to lists.
+          const value: BaseExpressionValue = rawCell ? baseExpressionValue(rawCell.data)
+            : plainScalar !== undefined && current.type === 'list' ? { type: 'list', value: [...current.value, { type: 'string', value: plainScalar }] }
+            : { type: 'string', value: raw };
           edits.push({ version: result.version, path: row.path, property, value: options.validatePropertyValue?.(value, property, row) ?? value });
         }
       }
+      range = { group: bounds.group, top: bounds.top, bottom, start: bounds.start, end }; paintRange();
       // Complete validation precedes the host command. The host owns CAS, undo and partial failure reporting.
       void commitBatch(edits);
     } catch (error) { report(error); }
