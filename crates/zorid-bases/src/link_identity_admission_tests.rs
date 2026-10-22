@@ -158,3 +158,45 @@ fn exhausted_origin_bytes_reject_before_mutating_an_inferred_link() {
     assert!(link.raw_destination.is_none());
     assert!(link.source_path.is_none());
 }
+
+#[test]
+fn ordinary_scalar_payloads_keep_their_existing_supported_size() {
+    // Mirrors the alias-expanded preparation regression: more than100k
+    // byte-work units of ordinary text, but only13 nodes in this new walk.
+    let source = record(PropertyValue::Array(vec![
+        PropertyValue::String(
+            "x".repeat(250_000)
+        );
+        11
+    ]));
+    let mut preflight_work = 0;
+    assert_eq!(
+        frontmatter_link_identity_bytes(&source, &mut |added| {
+            limited(&mut preflight_work, 64, added)
+        })
+        .unwrap(),
+        0
+    );
+    let mut binding_work = 0;
+    runtime_file_checked(&source, &timezone(), &mut |added| {
+        limited(&mut binding_work, 64, added)
+    })
+    .unwrap();
+    let result = evaluate_expression("file.path", &source, &EvaluationOptions::default()).unwrap();
+    assert!(matches!(result.value, BaseValue::String { value } if value == source.path));
+    assert!(preflight_work < 32 && binding_work < 32);
+}
+
+#[test]
+fn possible_link_payloads_still_pay_for_their_examined_source_before_copying() {
+    let source = record(PropertyValue::String(format!(
+        "[[{}]]",
+        "x".repeat(250_000)
+    )));
+    let mut work = 0;
+    let failure =
+        frontmatter_link_identity_bytes(&source, &mut |added| limited(&mut work, 64, added))
+            .unwrap_err();
+    assert_eq!(failure.code, "budget");
+    assert!(work > 250_000 / 16);
+}

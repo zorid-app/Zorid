@@ -322,10 +322,13 @@ pub(crate) fn frontmatter_link_identity_bytes(
         }
         match value {
             PropertyValue::String(value) => {
-                check(1 + value.len() / 16)?;
+                // This probe reads only the four delimiter bytes. Ordinary
+                // scalar payloads are already admitted by input preparation;
+                // charge their node, not unread contents, to this new walk.
                 if !value.starts_with("[[") || !value.ends_with("]]") {
                     return Ok(());
                 }
+                check(1 + value.len() / 16)?;
                 *bytes = bytes
                     .checked_add(value.len().saturating_add(path_bytes).saturating_add(64))
                     .filter(|bytes| *bytes <= 8 * 1024 * 1024)
