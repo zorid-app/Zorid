@@ -25,8 +25,8 @@ function raw(): DocumentBaseResult {
       'note.status': key, 'file.name': { type: 'string', value: i ? 'B' : 'A' },
       'formula.links': { type: 'list', value: [{ type: 'link', path: 'Target.md', target: { entryId: 'target', revision: 'r1' }, display: 'Target label', external: false }, { type: 'file', path: 'File.md' }] },
     } })),
-    groups: keys.map((key, i) => ({ key, keyId: ids[i], entryIds: [`entry-${i}`] })),
-    groupOptions: keys.map((key, i) => ({ key, keyId: ids[i], count: 1, listed: true })),
+    groups: keys.map((key, i) => ({ key, editKey:key, orderKey:key, keyId: ids[i], entryIds: [`entry-${i}`] })),
+    groupOptions: keys.map((key, i) => ({ key, editKey:key, orderKey:key, keyId: ids[i], count: 1, listed: true })),
     properties: ['file.name', 'note.status', 'formula.links'], availableProperties: [],
     counts: { scanned: 2, matched: 2, afterGroupOrder: 2, afterSearch: 2, returned: 2 }, diagnostics: [],
     relationshipsAvailable: true, metadataComplete: true, metadataIssues: [], stepsUsed: 20,
@@ -197,6 +197,7 @@ test('core group assignment stays typed while order keys decode into plain persi
   const assignment:DocumentBaseValue={type:'list',value:[{type:'string',value:'[[/People/Ada.md|Ada]]'}]};
   const first=source.groups[0] as {editKey?:DocumentBaseValue;orderKey?:DocumentBaseValue};first.editKey=assignment;first.orderKey=assignment;
   const option=source.groupOptions[0] as {editKey?:DocumentBaseValue;orderKey?:DocumentBaseValue};option.editKey=assignment;option.orderKey=assignment;
+  delete (source.groups[1] as {editKey?:DocumentBaseValue}).editKey;
   (source.groups[1] as {orderKey?:DocumentBaseValue}).orderKey={type:'string',value:'2026-10-22T01:30:00.123-04:00'};
   const output=project(source);
   assert.deepEqual(output.groups[0].editKey,assignment);
