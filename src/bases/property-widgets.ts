@@ -109,6 +109,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   let blurDuringComposition = false, compositionEpoch = 0;
   let finishAfterPending = false, editingIndex: number | undefined;
   let disposeRich: (() => void) | undefined;
+  let removeFocusObserver: (() => void) | undefined;
   let input: HTMLInputElement | undefined, popup: HTMLDivElement | undefined;
   let draftChanged = false;
   let draft: string[] = [], selected = 0, choices: { value: string; label: string; option?: BasePropertyOption; missing?: boolean; target?: BaseRelationTarget }[] = [];
@@ -241,7 +242,28 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (type === 'checkbox' && (!diagnostic || value.type === 'null')) {
       const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.className = 'metadata-input-checkbox'; checkbox.checked = value.type === 'boolean' && value.value; checkbox.indeterminate = value.type === 'null'; checkbox.disabled = !editable; checkbox.setAttribute('aria-label', presentation.property.replace(/^note\./, ''));
       checkbox.addEventListener('click', event => event.stopPropagation());
-      checkbox.addEventListener('change', async () => { if (pending || !current()) return; checkbox.disabled = true; const next = checkbox.checked; if (!await commit({ type: 'boolean', value: next })) { checkbox.disabled = !editable; checkbox.checked = value.type === 'boolean' && value.value; } });
+      checkbox.addEventListener('change', async () => {
+        if (pending || !current()) return;
+        // Chromium can blur a control as soon as it becomes disabled. Capture
+        // keyboard ownership first, and relinquish it if any other node focuses.
+        const ownedFocus = document.activeElement === checkbox;
+        let focusMoved = false;
+        const moved = (event: FocusEvent) => { if (event.target !== checkbox) focusMoved = true; };
+        if (ownedFocus) { document.addEventListener('focusin', moved, true); removeFocusObserver = () => document.removeEventListener('focusin', moved, true); }
+        checkbox.disabled = true; const next = checkbox.checked;
+        try {
+          if (!await commit({ type: 'boolean', value: next })) {
+            checkbox.disabled = !editable; checkbox.checked = value.type === 'boolean' && value.value; checkbox.indeterminate = value.type === 'null';
+          }
+        } finally {
+          if (ownedFocus) { document.removeEventListener('focusin', moved, true); removeFocusObserver = undefined; }
+          const active = document.activeElement;
+          if (ownedFocus && !focusMoved && current() && (active === checkbox || active === document.body || active === document.documentElement)) {
+            const replacement = element.querySelector<HTMLInputElement>('.metadata-input-checkbox');
+            if (replacement && !replacement.disabled) replacement.focus();
+          }
+        }
+      });
       element.append(checkbox);
     } else if (!diagnostic && (type === 'date' || type === 'datetime') && value.type !== 'null') {
       // Obsidian's shipped date widgets use native date controls with ISO values;
@@ -427,5 +449,5 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   const activate = (event: MouseEvent) => { if (!event.defaultPrevented && event.button === 0) begin(event); };
   const key = (event: KeyboardEvent) => { if (event.key === 'Escape' && !pending && type === 'checkbox' && element.hasAttribute('data-base-editing')) { event.preventDefault(); draw(); return; } if (!event.defaultPrevented && !event.isComposing && event.target === element && ['Enter', 'F2'].includes(event.key)) begin(event); };
   element.addEventListener('click', activate); element.addEventListener('dblclick', activate); element.addEventListener('keydown', key); draw();
-  return () => { disposed = true; disposeRich?.(); disposeRich = undefined; closePopup(); timers.forEach(clearTimeout); timers.clear(); mark(); element.removeEventListener('click', activate); element.removeEventListener('dblclick', activate); element.removeEventListener('keydown', key); };
+  return () => { disposed = true; removeFocusObserver?.(); removeFocusObserver = undefined; disposeRich?.(); disposeRich = undefined; closePopup(); timers.forEach(clearTimeout); timers.clear(); mark(); element.removeEventListener('click', activate); element.removeEventListener('dblclick', activate); element.removeEventListener('keydown', key); };
 }

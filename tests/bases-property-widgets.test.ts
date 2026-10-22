@@ -321,3 +321,23 @@ test('number widget flex alignment applies only to table cells', () => {
   const dom=new JSDOM('<style></style><div class="zorid-bases-table-cell bases-metadata-value" data-property-type="number">10</div><div class="bases-metadata-value" data-property-type="number">10</div>');dom.window.document.querySelector('style')!.textContent=css;
   const [table,card]=dom.window.document.querySelectorAll('div');assert.equal(dom.window.getComputedStyle(table).justifyContent,'flex-end');assert.notEqual(dom.window.getComputedStyle(card).justifyContent,'flex-end');dom.window.close();
 });
+
+
+test('rejected nullable checkbox toggle restores indeterminate without changing persisted null', async () => {
+  let persisted:unknown=null,writes=0;const s=setup(null,{type:'checkbox'},{commit:()=>{writes++;throw new Error('Disk rejected');}});const checkbox=s.input();
+  assert.equal(checkbox.indeterminate,true);checkbox.focus();checkbox.click();await tick();assert.equal(writes,1);assert.equal(persisted,null);assert.equal(checkbox.checked,false);assert.equal(checkbox.indeterminate,true);assert.equal(checkbox.disabled,false);assert.equal(s.dom.window.document.activeElement,checkbox);s.close();
+});
+
+test('acknowledged checkbox redraw restores owned focus even if disabling blurred the old control', async () => {
+  let release!:()=>void;const s=setup(false,{type:'checkbox'},{commit:async edit=>{await new Promise<void>(resolve=>{release=resolve;});return {version:Number(edit.version)+1,row:edit.row,value:edit.value};}});
+  let checkbox=s.input();checkbox.focus();checkbox.click();assert.equal(checkbox.disabled,true);/* JSDOM cannot blur disabled inputs; emulate Chromium's disable blur. */checkbox.disabled=false;checkbox.blur();checkbox.disabled=true;assert.equal(s.dom.window.document.activeElement,s.dom.window.document.body);release();await tick();
+  const replacement=s.input();assert.notEqual(replacement,checkbox);assert.equal(replacement.checked,true);assert.equal(s.dom.window.document.activeElement,replacement);
+  replacement.click();release();await tick();checkbox=s.input();assert.equal(checkbox.checked,false);assert.equal(s.dom.window.document.activeElement,checkbox);s.close();
+});
+
+test('settled checkbox save never steals focus after another control gained it while pending', async () => {
+  for(const blurOutside of [false,true]) {
+    let release!:()=>void;const s=setup(false,{type:'checkbox'},{commit:async edit=>{await new Promise<void>(resolve=>{release=resolve;});return {version:Number(edit.version)+1,row:edit.row,value:edit.value};}});const checkbox=s.input(),outside=s.dom.window.document.querySelector('button')!;
+    checkbox.focus();checkbox.click();outside.focus();if(blurOutside)outside.blur();release();await tick();assert.equal(s.input().checked,true);assert.equal(s.dom.window.document.activeElement,blurOutside?s.dom.window.document.body:outside);s.close();
+  }
+});
