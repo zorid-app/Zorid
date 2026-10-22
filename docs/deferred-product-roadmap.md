@@ -137,6 +137,32 @@ possible; do not mark full goal blocked from this first resource failure turn.
 Properties-only passive observer remains isolated with `bases_embeds`, review
 `bases_duration_review`; main/visual prep review owner `bases_core_review`.
 
+Further source-only progress: root `dc97b3db` integrates independently reviewed
+properties-only passive navigation tracing (10 checks pass). Original campaign
+actions/oracles remain byte-identical behind a wrapper; bounded/redacted events,
+UUID ownership, nonfatal observer diagnostics and cleanup uncertainty are explicit.
+No navigation cause or actual rerun is established. Reviewed visual23-state plan
+`af35cf39` and pinned main-reconciliation report/383-file blob manifest `deefaa9c`
+are composed. Main remains untouched; captures/runtime acceptance remain open.
+Reviewed `accb163f` aligns goal wording with latest best-Zorid-UX steering while
+preserving capability, reference comparison and correctness/verification scope.
+
+Fresh focused REA confirms a required Filter UI gap: File hasLink/inFolder/
+hasTag/hasProperty plus inverses, variadic tags, and a local initial blank row
+that does not save/change counts or membership. Rust already supports methods.
+Evidence `ev_fb9e582334192943dc316a609f2e7216fc4f4e8cda4b6e0fc8578dbd3e1be86e`:
+four derived13,402-byte files parsed, no failures; graph explicitly partial.
+Private provenance `/private/tmp/zorid-bases-filter-reference-20261022/provenance.json`.
+`bases_toolbar` now owns isolated `codex/bases-file-filter-operators` in reused
+`.worktrees/bases-toolbar` fromaccb163f: toolbar/config, new filter/draft/operand
+helpers, focused tests and narrow CSS. `bases_session` owns ONLY additive
+session.ts snapshot wiring plus tests in a separate isolated branch. Contract:
+optional `filterOperands()` readonly files/folders/tags/properties plus honest
+metadataStatus; no TS body parsing or new authority cache. New incomplete rows
+stay local; invalid edits to existing accepted clauses preserve authority/block
+unsafe save. Advanced/nested filters and stale/CAS/retry guards remain required.
+Implementation/review/runtime acceptance are pending. Full goal remains active.
+
 ### Superseded checkpoint snapshot — retained evidence
 
 ### Latest execution update
