@@ -979,6 +979,9 @@ pub(crate) fn validate_rows_invocation(
     }
 
     request_size(options)?;
+    if let Some(values) = input.property_values {
+        values.validate_context(&options.evaluation)?;
+    }
     program
         .views
         .get(options.view_index)

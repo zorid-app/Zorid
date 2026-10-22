@@ -50,6 +50,9 @@ pub struct PropertyRelationValues {
     diagnostics: Vec<PropertyRelationDiagnostic>,
     definition_diagnostics: Vec<PropertyDefinitionDiagnostic>,
     clock_dependency: BaseClockDependency,
+    evaluation_clock_ms: i64,
+    evaluation_timezone: String,
+    evaluation_random_seed: Option<u64>,
     steps_used: usize,
 }
 
@@ -80,6 +83,18 @@ impl PropertyRelationValues {
     }
     pub fn relation_targets(&self) -> &BTreeMap<String, Vec<RelationTarget>> {
         &self.relation_targets
+    }
+    pub(crate) fn validate_context(
+        &self,
+        options: &EvaluationOptions,
+    ) -> Result<(), ExpressionDiagnostic> {
+        if self.evaluation_clock_ms != options.clock_ms
+            || self.evaluation_timezone != options.timezone
+            || self.evaluation_random_seed != options.random_seed
+        {
+            return Err(ExpressionDiagnostic::new("stale-source", "Derived property values require the captured clock, timezone and random seed; prepare them again for this invocation"));
+        }
+        Ok(())
     }
     pub(crate) fn attach(
         &self,
@@ -261,6 +276,9 @@ pub fn query_property_relations(
         diagnostics: Vec::new(),
         definition_diagnostics: definitions.diagnostics().to_vec(),
         clock_dependency: BaseClockDependency::None,
+        evaluation_clock_ms: options.evaluation.clock_ms,
+        evaluation_timezone: options.evaluation.timezone.clone(),
+        evaluation_random_seed: options.evaluation.random_seed,
         steps_used: 0,
     };
     budget.keep(&result.property_names)?;

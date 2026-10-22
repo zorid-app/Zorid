@@ -686,6 +686,40 @@ fn derived_target_filter_dependencies_report_unavailable_instead_of_false_absenc
 }
 
 #[test]
+fn retained_derived_values_cannot_be_reused_under_a_different_evaluation_context() {
+    let settings = "properties:\n  published: {type: date}\n";
+    let generation = generation(settings, &[("first", "---\npublished: 2026-01-01\n---\n")]);
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), settings)
+            .unwrap();
+    let options = QueryOptions::default();
+    let snapshot = BaseSnapshot::from_generation(&generation, &[])
+        .unwrap()
+        .with_property_definitions(&definitions, &options)
+        .unwrap();
+    let program = compile_base_source("views:\n  - type: table\n    name: Notes\n").unwrap();
+    assert!(query_base(&program, &snapshot, &options).is_ok());
+    let mut changed = options.clone();
+    changed.evaluation.timezone = "America/Toronto".into();
+    assert_eq!(
+        query_base(&program, &snapshot, &changed).unwrap_err().code,
+        "stale-source"
+    );
+    changed = options.clone();
+    changed.evaluation.clock_ms = 1;
+    assert_eq!(
+        query_base(&program, &snapshot, &changed).unwrap_err().code,
+        "stale-source"
+    );
+    changed = options.clone();
+    changed.evaluation.random_seed = Some(1);
+    assert_eq!(
+        query_base(&program, &snapshot, &changed).unwrap_err().code,
+        "stale-source"
+    );
+}
+
+#[test]
 fn derived_values_cannot_be_attached_to_detached_rows_or_forged_graphs() {
     let generation = generation(SETTINGS, &[]);
     let definitions =
