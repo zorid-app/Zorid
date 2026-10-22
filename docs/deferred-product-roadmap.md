@@ -9,6 +9,36 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Most recent source is `8f18b965`: the reviewed borrowed-name projection fix
+passes **196 library tests and all10 preview tests**, including the unchanged
+500,000-step small-prepared-subset case. Pinned compiler/rustdoc focused run18736
+exits0; log `/private/tmp/zorid-bases-g9-named-key-focused-001.log`. Full current
+suite session28887 now exits0: **359 tests across20 nonempty targets**, plus the
+zero-test doctest target, all passing. Log:
+`/private/tmp/zorid-bases-g9-final-full-composed-001.log`. The complete Rust tree
+is `958b19aca4666414e956fbb2f406558af5a18366`. The exact20 passing test executables
+were retired only after terminal/hash receipts, preserving source, products and
+logs, to recover actual space:
+`/private/tmp/zorid-bases-passing359-test-executable-cleanup-20261022.json`.
+Root now holds sole heavy build session72852 for matching `zorid-desktop-host`
+and `zorid-cli`, pinned tools/offline/locked/release/j1; log
+`/private/tmp/zorid-bases-final-native-cli-build-001.log`. No app may overlap.
+Artifact/runtime acceptance remains pending even after a successful build.
+
+Actual016 advances to244 actions/29 checks: multiselect, status, rooted relation,
+date/datetime, priority and plain-list mutations all pass durable-file oracles.
+The new generic enabled-state driver (`60c7fc46`, root `8cc941cd`) preserves the
+journey and all assertions. The next native option-color select fails its
+keyboard value readback after Home/eight Down/Enter; its pointer receipt is
+enabled, but per-key value/focus/open state was not captured. Cause remains
+unproven.016 is terminal with exact owned processes[]; all333 reused015 artifact
+hashes and provenance match. `bases_ui_review` owns its independently reviewed
+evidence record; `bases_e2e` owns passive select frames and a minimal normal-UI
+native-select diagnostic campaign, with no recipe change or value injection.
+Its actual run must wait for root's Cargo slot. Main remains `e7d655e1`.
+
+Earlier composed-source and diagnostic evidence follows:
+
 2026-10-22 isolated root `60c1d4fd` composes checked Object stringification,
 captured Link raw coercion, bounded immutable clone preparation and pinned English
 ICU numeric/base-sensitive List sorting, in addition to the regex/File/title/date

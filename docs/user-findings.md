@@ -2,6 +2,23 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Electron016 reaches244 actions/29 checks, passing the previously blocked topics
+picker and all rich-property durable oracles through plain-list editing. The
+next native property-option color select fails its keyboard readback; its
+pointer was enabled, but per-key selected value/focus/open state is unrecorded.
+A minimal normal-UI diagnostic campaign and passive frames are assigned; do not
+change selection by DOM assignment or weaken the expected purple-value oracle.
+Owned processes are closed, source/artifact provenance matches, and the run does
+not establish complete heavy-user or new-core acceptance.
+
+Current core source `8f18b965` passes196 library and10 preview tests, including
+the unchanged500,000-step case. It removes actual generated key allocations
+while retaining named lookup scan/cancellation work and quoted arbitrary-name
+fallback. The complete current suite now passes359 tests across20 targets,
+plus the empty doctest target, with pinned tools and unchanged500,000-step
+preview budget. Prior failed runs below remain historical evidence. Matching
+native/CLI artifacts are building; actual final runtime acceptance is still open.
+
 Electron015 advances to180 recorded actions/22 checks: numeric rating5 saves
 with the exact body/unrelated properties preserved, and checkbox done:true saves.
 The seven numeric frames show no new rejection and end ready with no draft or
