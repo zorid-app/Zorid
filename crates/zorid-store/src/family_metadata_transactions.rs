@@ -192,6 +192,19 @@ pub(super) fn prepare_family_command(
     }
     prepare_legacy_family_command(tx, command)
 }
+/// Full-snapshot planner coverage must not accidentally exercise the targeted
+/// local dispatcher, whose validation reads only the selected causal entries.
+#[cfg(test)]
+pub(super) fn prepare_legacy_command_for_test(
+    tx: &Connection,
+    request: &MutationRequest,
+    mode: Option<FamilyCreateMode>,
+) -> Result<PreparedFamilyCommand> {
+    let command = command::FamilyCommand::new(request.clone(), mode).map_err(mapped)?;
+    command.validate().map_err(mapped)?;
+    prepare_legacy_family_command(tx, &command)
+}
+
 fn prepare_legacy_family_command(tx: &Connection, command: &command::FamilyCommand) -> Result<PreparedFamilyCommand> {
     let request = &command.request;
     let mode = command.create_mode;

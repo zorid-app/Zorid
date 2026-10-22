@@ -2206,14 +2206,17 @@ mod retained_view_tests {
         assert_eq!(jobs.last().unwrap().target, receipt.changes[0].after);
     }
     #[test]
-    fn late_unrelated_retained_content_or_history_corruption_rejects_and_rolls_back_writer() {
+    fn late_unrelated_retained_corruption_rejects_legacy_full_snapshot_writer() {
         for corrupt_history in [false, true] {
             let (_dir, mut store) = fixture();
             let request = create(TEXTS);
             let tx = store.connection.unchecked_transaction().unwrap();
-            let prepared =
-                family_commands::prepare_command(&tx, &request, Some(FamilyCreateMode::Text))
-                    .unwrap();
+            let prepared = family_metadata_transactions::prepare_legacy_command_for_test(
+                &tx,
+                &request,
+                Some(FamilyCreateMode::Text),
+            )
+            .unwrap();
             tx.commit().unwrap();
             let last = EntryId::new(format!("text_{:02}", TEXTS - 1)).unwrap();
             if corrupt_history {
@@ -2242,12 +2245,18 @@ mod retained_view_tests {
                     .unwrap();
             }
             let corrupted = database(&store.connection);
+            // The public checked read must reject corruption of its selected
+            // entry even though unrelated indexed local commands do not scan it.
+            assert!(store.family_materialization(&last).is_err());
+            // The legacy/full-snapshot planner validates all retained entries.
             // Preparation and commit each check their own current SQL state.
             let tx = store.connection.unchecked_transaction().unwrap();
-            assert!(
-                family_commands::prepare_command(&tx, &request, Some(FamilyCreateMode::Text))
-                    .is_err()
-            );
+            assert!(family_metadata_transactions::prepare_legacy_command_for_test(
+                &tx,
+                &request,
+                Some(FamilyCreateMode::Text),
+            )
+            .is_err());
             tx.rollback().unwrap();
             let tx = store
                 .connection

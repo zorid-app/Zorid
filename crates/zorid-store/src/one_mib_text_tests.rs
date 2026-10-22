@@ -121,15 +121,16 @@ fn populated_fifteen_migrates_large_text_payload_to_sixteen_without_rewriting_so
     legacy_copy(&source, &legacy, TEXT_SCHEMA_VERSION);
     let predecessor = Connection::open(&legacy).unwrap();
     assert_eq!(check_schema(&predecessor).unwrap(), TEXT_SCHEMA_VERSION);
-    let expected_sources: BTreeMap<_, _> = expected.iter().filter(|(name, _)| !graph_object(name)).map(|(name, rows)| (name.clone(), rows.clone())).collect();
-    assert_eq!(records(&predecessor), expected_sources);
+    assert!(matches!(expected.get("host_intent_sources"), Some(rows) if rows.is_empty()), "a legacy fixture cannot discard host source authority");
+    let expected_sources: BTreeMap<_, _> = expected.iter().filter(|(name, _)| !graph_object(name) && name.as_str() != "host_intent_sources").map(|(name, rows)| (name.clone(), rows.clone())).collect();
+    assert!(records(&predecessor) == expected_sources, "all predecessor table values must match the exact pre-17 source rows");
     let table_sql: String = predecessor.query_row("SELECT sql FROM sqlite_master WHERE name='immutable_payloads'", [], |row| row.get(0)).unwrap();
     assert_eq!(table_sql, immutable_payloads::SCHEMA[0].1);
     drop(predecessor);
     drop(store);
     let mut migrated = Store::open(&legacy).unwrap();
     assert_eq!(check_schema(&migrated.connection).unwrap(), SCHEMA_VERSION);
-    assert_eq!(records(&migrated.connection), expected);
+    assert!(records(&migrated.connection) == expected, "migration must preserve all exact current table values");
     family_graph::check_current(&migrated.connection).unwrap();
     storage_accounting::audit(&migrated.connection).unwrap();
     assert_eq!(migrated.read(&EntryId::new("large-fifteen").unwrap()).unwrap().unwrap().content.as_deref(), Some(text.as_bytes()));
@@ -137,7 +138,7 @@ fn populated_fifteen_migrates_large_text_payload_to_sixteen_without_rewriting_so
     assert_eq!(migrated.checkpoint_load(&checkpoint_scope, "retained-draft").unwrap(), Some(checkpoint.clone()));
     drop(migrated);
     let mut reopened = Store::open(&legacy).unwrap();
-    assert_eq!(records(&reopened.connection), expected);
+    assert!(records(&reopened.connection) == expected, "reopen must preserve all exact current table values");
     assert_eq!(reopened.checkpoint_load(&checkpoint_scope, "retained-draft").unwrap(), Some(checkpoint));
 }
 

@@ -248,7 +248,12 @@ mod tests {
             blob_index::load_metadata(&db, &scope),
             Err(StoreError::Corrupt(_))
         ));
+        // Deliberately inject a missing authority head. Schema 16 graph rows
+        // reference it, so bypass FK enforcement only for this corruption step;
+        // the checked reader, not SQLite's DELETE guard, is under test here.
+        db.pragma_update(None, "foreign_keys", false).unwrap();
         db.execute("DELETE FROM family_graph_heads", []).unwrap();
+        db.pragma_update(None, "foreign_keys", true).unwrap();
         assert!(matches!(
             blob_index::load_metadata(&db, &scope),
             Err(StoreError::Corrupt(_))

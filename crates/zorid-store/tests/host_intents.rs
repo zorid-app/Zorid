@@ -203,15 +203,28 @@ fn old_exact_receipt_is_attached_only_on_commit_authorization() {
     assert_eq!(store.list_snapshot().unwrap(), snapshot);
 }
 #[test]
-fn v4_migration_and_corrupt_owned_request_fail_closed() {
+fn unsupported_v4_marker_preserves_database_and_journal() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db");
-    Store::open(&path).unwrap();
+    let mut store = Store::open(&path).unwrap();
+    store.prepare_host_intent(&client(), &command()).unwrap();
+    drop(store);
     let db = rusqlite::Connection::open(&path).unwrap();
-    common::downgrade_v6_to_v5(&db);
-    db.execute_batch("DROP TABLE host_intents; PRAGMA user_version=4; PRAGMA journal_mode=DELETE;")
+    // This is an unsupported-version marker, not a canonical v4 schema fixture.
+    db.execute_batch("PRAGMA user_version=4; PRAGMA journal_mode=DELETE;")
         .unwrap();
     drop(db);
+    let before = std::fs::read(&path).unwrap();
+    assert!(matches!(Store::open(&path), Err(zorid_store::StoreError::UnsupportedSchema(4))));
+    assert!(std::fs::read(&path).unwrap() == before, "unsupported v4 admission must preserve exact database bytes");
+    let db = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0)).unwrap(), 4);
+    assert_eq!(db.pragma_query_value(None, "journal_mode", |r| r.get::<_, String>(0)).unwrap(), "delete");
+}
+#[test]
+fn corrupt_current_owned_request_cannot_authorize_execution() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
     let mut store = Store::open(&path).unwrap();
     let r = reference(&store.prepare_host_intent(&client(), &command()).unwrap());
     let db = rusqlite::Connection::open(&path).unwrap();
@@ -222,6 +235,8 @@ fn v4_migration_and_corrupt_owned_request_fail_closed() {
     .unwrap();
     assert!(store.request_host_commit(&r).is_err());
     assert!(store.list().unwrap().is_empty());
+    assert!(store.replay(&command()).unwrap().is_none());
+    assert_eq!(store.pending_counts().unwrap(), (0, 0));
 }
 
 #[test]

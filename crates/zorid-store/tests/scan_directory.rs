@@ -1,4 +1,3 @@
-mod common;
 use zorid_core::{EntryId, EntryKind, Mutation, MutationRequest, OperationId, VaultPath};
 use zorid_store::{DirectoryCoverage, DirectoryPhase, ScanObservation, ScanObservationKind, Store};
 fn folder() -> MutationRequest {
@@ -12,35 +11,36 @@ fn folder() -> MutationRequest {
         },
     }
 }
-const REMOVE_V3:&str="DROP TABLE host_intents; DROP TABLE entry_presentation; DROP TABLE local_changes; DROP TABLE directory_baselines; DROP TABLE directory_attempts; DROP TABLE scan_observations; DROP TABLE scan_directories; DROP TABLE scan_runs; PRAGMA user_version=2; PRAGMA journal_mode=DELETE;";
 #[test]
-fn canonical_v2_migrates_and_bad_v2_does_not_change_journal() {
+fn unsupported_v2_marker_preserves_database_and_journal() {
     for corrupt in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db");
-        let receipt = Store::open(&path).unwrap().apply(&folder()).unwrap();
+        Store::open(&path).unwrap().apply(&folder()).unwrap();
         let db = rusqlite::Connection::open(&path).unwrap();
-        common::downgrade_v6_to_v5(&db);
-        db.execute_batch(REMOVE_V3).unwrap();
+        // This tests version admission without claiming a canonical v2 layout.
+        db.execute_batch("PRAGMA user_version=2; PRAGMA journal_mode=DELETE;").unwrap();
         if corrupt {
             db.execute_batch("DROP INDEX active_projection").unwrap();
         }
         drop(db);
-        if corrupt {
-            assert!(Store::open(&path).is_err());
-            let db = rusqlite::Connection::open(&path).unwrap();
-            assert_eq!(
-                db.pragma_query_value(None, "journal_mode", |r| r.get::<_, String>(0))
-                    .unwrap(),
-                "delete"
-            );
-        } else {
-            let mut store = Store::open(&path).unwrap();
-            assert_eq!(store.apply(&folder()).unwrap(), receipt);
-            assert_eq!(store.pending_counts().unwrap(), (1, 1));
-            assert!(store.latest_scan().unwrap().is_none());
-        }
+        let before = std::fs::read(&path).unwrap();
+        assert!(matches!(Store::open(&path), Err(zorid_store::StoreError::UnsupportedSchema(2))));
+        assert!(std::fs::read(&path).unwrap() == before, "unsupported v2 admission must preserve exact database bytes");
+        let db = rusqlite::Connection::open(&path).unwrap();
+        assert_eq!(db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0)).unwrap(), 2);
+        assert_eq!(db.pragma_query_value(None, "journal_mode", |r| r.get::<_, String>(0)).unwrap(), "delete");
     }
+}
+#[test]
+fn current_directory_receipt_replay_preserves_pending_work_and_absent_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let receipt = Store::open(&path).unwrap().apply(&folder()).unwrap();
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(store.apply(&folder()).unwrap(), receipt);
+    assert_eq!(store.pending_counts().unwrap(), (1, 1));
+    assert!(store.latest_scan().unwrap().is_none());
 }
 #[test]
 fn directory_completion_retires_only_exact_create_not_child_work() {
@@ -64,6 +64,11 @@ fn directory_completion_retires_only_exact_create_not_child_work() {
             },
         })
         .unwrap();
+    let current = store.read(&id).unwrap().unwrap().state;
+    assert_ne!(current.revision, a.target.revision);
+    let pending = store.pending_projection_jobs(100).unwrap();
+    assert_eq!(pending.len(), 2);
+    let child_job = pending.into_iter().find(|job| job.target.id.as_str() == "child").unwrap();
     store.finish_directory_projection(&a.attempt_id).unwrap();
     assert_eq!(store.pending_counts().unwrap(), (2, 1));
     assert_eq!(
@@ -71,10 +76,11 @@ fn directory_completion_retires_only_exact_create_not_child_work() {
             .directory_baseline(&id)
             .unwrap()
             .unwrap()
-            .state
-            .revision,
-        store.read(&id).unwrap().unwrap().state.revision
+            .state,
+        a.target
     );
+    assert_eq!(store.read(&id).unwrap().unwrap().state, current);
+    assert_eq!(store.pending_projection_jobs(100).unwrap(), vec![child_job]);
 }
 #[test]
 fn corrupt_directory_attempt_cannot_complete_or_retire_queue() {

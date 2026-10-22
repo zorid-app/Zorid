@@ -1,6 +1,5 @@
-mod common;
 use zorid_core::{EntryId, EntryKind, Mutation, MutationRequest, OperationId, VaultPath};
-use zorid_store::{ChangeOrigin, EntryPresentation, Store};
+use zorid_store::{EntryPresentation, Store};
 fn create(name: &str, bytes: &[u8]) -> MutationRequest {
     MutationRequest {
         operation_id: OperationId::new(name.replace('.', "_")).unwrap(),
@@ -91,42 +90,27 @@ fn presentation_and_journal_failure_rolls_back_whole_commit() {
     assert!(store.read_path(&VaultPath::new("a").unwrap()).is_err());
 }
 #[test]
-fn v3_migration_has_explicit_unknown_times_and_reload_boundary() {
+fn unsupported_v3_marker_preserves_database_and_journal() {
     for corrupt in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db");
         let req = create("a", b"old");
-        let receipt = Store::open(&path).unwrap().apply_at(&req, 900).unwrap();
+        Store::open(&path).unwrap().apply_at(&req, 900).unwrap();
         let db = rusqlite::Connection::open(&path).unwrap();
-        common::downgrade_v6_to_v5(&db);
-        db.execute_batch("DROP TABLE host_intents; DROP TABLE entry_presentation; DROP TABLE local_changes; PRAGMA user_version=3; PRAGMA journal_mode=DELETE;").unwrap();
+        // Keep real current content and receipts under an obsolete marker;
+        // this does not claim to recreate a canonical v3 schema.
+        db.execute_batch("PRAGMA user_version=3; PRAGMA journal_mode=DELETE;").unwrap();
         if corrupt {
             db.execute_batch("DROP INDEX active_directory_projection")
                 .unwrap();
         }
         drop(db);
-        if corrupt {
-            assert!(Store::open(&path).is_err());
-            let db = rusqlite::Connection::open(&path).unwrap();
-            assert_eq!(
-                db.pragma_query_value(None, "journal_mode", |r| r.get::<_, String>(0))
-                    .unwrap(),
-                "delete"
-            );
-            continue;
-        }
-        let mut store = Store::open(&path).unwrap();
-        let snapshot = store.list_snapshot().unwrap();
-        assert_eq!(snapshot.entries[0].presentation.ctime_ms, 0);
-        assert_eq!(snapshot.entries[0].presentation.mtime_ms, 0);
-        assert_eq!(snapshot.entries[0].presentation.size_bytes, 3);
-        let page = store.changes_after("0", 10).unwrap();
-        assert_eq!(page.changes.len(), 1);
-        assert!(page.changes[0].requires_full_reload);
-        assert!(matches!(page.changes[0].origin, ChangeOrigin::Bootstrap));
-        assert!(page.changes[0].entries.is_empty());
-        assert_eq!(store.apply_at(&req, 1000).unwrap(), receipt);
-        assert_eq!(store.list_snapshot().unwrap(), snapshot);
+        let before = std::fs::read(&path).unwrap();
+        assert!(matches!(Store::open(&path), Err(zorid_store::StoreError::UnsupportedSchema(3))));
+        assert!(std::fs::read(&path).unwrap() == before, "unsupported v3 admission must preserve exact database bytes");
+        let db = rusqlite::Connection::open(&path).unwrap();
+        assert_eq!(db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0)).unwrap(), 3);
+        assert_eq!(db.pragma_query_value(None, "journal_mode", |r| r.get::<_, String>(0)).unwrap(), "delete");
     }
 }
 #[test]

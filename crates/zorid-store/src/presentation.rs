@@ -444,3 +444,51 @@ impl Store {
         })
     }
 }
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    #[test]
+    fn component_backfill_preserves_unknown_times_reload_boundary_and_receipt_replay() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let mut store = Store::open(&path).unwrap();
+        let request = MutationRequest {
+            operation_id: OperationId::new("create").unwrap(),
+            mutation: Mutation::Create {
+                id: EntryId::new("a").unwrap(),
+                path: VaultPath::new("a").unwrap(),
+                kind: EntryKind::File,
+                content: Some(b"old".to_vec()),
+            },
+        };
+        let receipt = store.apply_at(&request, 900).unwrap();
+        {
+            // Exercise this component's actual backfill against retained current
+            // entries and receipts. Store does not admit obsolete v3 databases.
+            let tx = store.connection.transaction_with_behavior(TransactionBehavior::Immediate).unwrap();
+            tx.execute_batch("DROP TABLE entry_presentation; DROP TABLE local_changes;").unwrap();
+            migrate(&tx).unwrap();
+            tx.commit().unwrap();
+        }
+        let snapshot = store.list_snapshot().unwrap();
+        assert_eq!(snapshot.entries.len(), 1);
+        assert_eq!(snapshot.entries[0].presentation.ctime_ms, 0);
+        assert_eq!(snapshot.entries[0].presentation.mtime_ms, 0);
+        assert_eq!(snapshot.entries[0].presentation.size_bytes, 3);
+        let page = store.changes_after("0", 10).unwrap();
+        assert_eq!(page.changes.len(), 1);
+        assert!(page.changes[0].requires_full_reload);
+        assert!(matches!(page.changes[0].origin, ChangeOrigin::Bootstrap));
+        assert!(page.changes[0].entries.is_empty());
+        assert_eq!(store.apply_at(&request, 1000).unwrap(), receipt);
+        assert_eq!(store.list_snapshot().unwrap(), snapshot);
+        drop(store);
+        let mut reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.list_snapshot().unwrap(), snapshot);
+        assert_eq!(reopened.changes_after("0", 10).unwrap(), page);
+        assert_eq!(reopened.apply_at(&request, 2000).unwrap(), receipt);
+        assert_eq!(reopened.list_snapshot().unwrap(), snapshot);
+    }
+}
