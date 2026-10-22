@@ -522,12 +522,17 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const render = () => {
         const focusedLabel = tree.contains(doc.activeElement) ? doc.activeElement?.getAttribute('aria-label') : undefined;
         tree.replaceChildren(); renderBudget = 1000;
-        if (filter === undefined) { const hint = doc.createElement('p'); hint.textContent = 'No filters.'; tree.append(hint); }
+        if (filter === undefined) { if(options.immediate){const mode=select(doc,'Match',[['and','All the following are true'],['or','Any of the following are true'],['not','None of the following are true']],'and');mode.addEventListener('change',()=>{filter=mode.value==='or'?{or:[]}:mode.value==='not'?{not:[]}:{and:[]};changed();render();});tree.append(mode);}else{const hint = doc.createElement('p'); hint.textContent = 'No filters.'; tree.append(hint);} }
         else tree.append(renderNode(filter, next => { filter = next; }, () => { filter = undefined; }));
         if (focusedLabel) (Array.from(tree.querySelectorAll<HTMLElement>('[aria-label]')).find(node => node.getAttribute('aria-label') === focusedLabel) ?? tree.querySelector<HTMLElement>('input,select,textarea,button') ?? Array.from(fields.querySelectorAll<HTMLButtonElement>('button')).find(node => node.textContent === 'Add filter'))?.focus();
         place();
       };
-      fields.append(button(doc, 'Add filter', () => { if (!canRestructure()) return; filter = filter === undefined ? { and: [defaultExpression()] } : { and: [filter, defaultExpression()] }; changed(); render(); }), button(doc, 'Add expression', () => { if (!canRestructure()) return; filter = filter === undefined ? 'true' : { and: [filter, 'true'] }; changed(); render(); }));
+      const appendCondition = (next:FilterNode) => { if (filter === undefined) filter={and:[next]}; else if (mapping(filter)&&Object.keys(filter).length===1&&['and','or','not'].includes(Object.keys(filter)[0])&&Array.isArray(Object.values(filter)[0])) (Object.values(filter)[0] as FilterNode[]).push(next); else filter={and:[filter,next]}; };
+      const actions=doc.createElement('div');actions.className='bases-filter-actions';
+      actions.append(button(doc, 'Add filter', () => { if (!canRestructure()) return; appendCondition(defaultExpression()); changed(); render(); }));
+      if(options.immediate)actions.append(button(doc,'Add filter group',()=>{if(!canRestructure())return;appendCondition({and:[]});changed();render();}));
+      else actions.append(button(doc, 'Add expression', () => { if (!canRestructure()) return; filter = filter === undefined ? 'true' : { and: [filter, 'true'] }; changed(); render(); }));
+      fields.append(actions);
 
           render();
         };

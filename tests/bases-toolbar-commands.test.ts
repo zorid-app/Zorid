@@ -176,3 +176,10 @@ test('formula retry preserves its accepted identity before applying a newer queu
   name.focus();name.value='Newest';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.blur();rejectFirst!(new BaseToolbarSaveError('disk failed',async()=>{document=BaseDocument.parse(pendingDocument!.toString());version++;refresh();}));await tick();assert.equal(name.value,'Newest');doc.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();await tick();await tick();assert.deepEqual(calls,[['Original','Accepted','score * 2'],['Accepted','Newest','score * 2']]);assert.deepEqual(document.views[0].order,['file.name','formula.Newest']);assert.equal((document.getRoot('formulas') as any).Newest,'score * 2');assert.equal(toolbar.hasDraft(),false);
  }finally{toolbar.destroy();dom.window.close();}
 });
+
+test('adding a condition preserves an existing OR group and offers root-level filter groups',async()=>{
+ const f=fixture();try{
+  const view={...f.state.views[0],filters:{or:['score > 10','score < 0']}};f.toolbar.update({...f.state,views:[view,f.state.views[1]],result:{...f.result,view}});f.click('Filter');f.click('Add filter');f.submit();await tick();const call=f.calls.pop()!;assert.equal(call[0],'configuration');assert.deepEqual((call[2] as any).view.filters,{or:['score > 10','score < 0','file["name"] == ""']});
+ }finally{f.cleanup();}
+ const g=fixture(true);try{g.click('Filter');g.click('Add filter group');g.submit();await tick();assert.deepEqual((g.calls.pop()![2] as any).view.filters,{and:[{and:[]}]});}finally{g.cleanup();}
+});
