@@ -6,7 +6,7 @@ import type { BaseQueryOptions, BaseQueryResult } from './query.ts';
 import { SharedBaseQueryRunner, sharedBaseWitness, sharedBaseCapture, sharedBaseCoverage, sharedBasePreview } from './shared-query.ts';
 import { createBaseClockHost } from './clock.ts';
 import { baseEditAdmissionVersion, recordBaseEditAdmission, withBaseEditAdmissionPhase } from './edit-admission-diagnostics.ts';
-import type { BaseEditAdmissionReason } from './edit-admission-diagnostics.ts';
+import type { BaseEditAdmissionReason, BaseEditInvalidationKind } from './edit-admission-diagnostics.ts';
 import type { BaseClockCapture, BaseClockHost } from './clock.ts';
 import type { BaseSavedWitness } from './shared-query.ts';
 import { readProperties, removeProperty, setProperty } from '../core/properties.ts';
@@ -161,6 +161,8 @@ export class BaseController {
   private pendingViewReferences?: BaseViewReferenceOperation;
   private referenceServices = new Set<NonNullable<Vault['adapter']['documentSemantics']>>();
   private epoch = 0;
+  // Paths remain private: rejection diagnostics expose only their roles.
+  private lastInvalidation: { readonly kind: BaseEditInvalidationKind; readonly paths?: readonly string[] } = { kind: 'initial' };
   private version = 0;
   private disposed = false;
   private timer?: ReturnType<typeof setTimeout>;
@@ -195,7 +197,7 @@ export class BaseController {
       }
       for (const path of options.vault.entries.keys()) if (!this.identities.has(path)) this.identities.set(path, ++this.nextIdentity);
       this.stale = true; this.clearWake();
-      this.epoch++; this.sharedQueries.cancel();
+      this.epoch++; this.lastInvalidation = { kind: `vault-${event}`, paths: event === 'ready' ? undefined : change.oldPath === undefined ? [change.path] : [change.path, change.oldPath] }; this.sharedQueries.cancel();
       this.schedule();
     }));
     this.subscriptions.push(this.clock.subscribeWake(() => this.onClockWake()));
@@ -239,7 +241,7 @@ export class BaseController {
     this.clearWake();
     if (!this.clock.isVisible()) {
       if (this.timer !== undefined) { clearTimeout(this.timer); this.timer = undefined; }
-      if (this.refreshing) { this.stale = true; this.epoch++; this.sharedQueries.cancel(); }
+      if (this.refreshing) { this.stale = true; this.epoch++; this.lastInvalidation = { kind: 'clock-hidden-refresh-abort' }; this.sharedQueries.cancel(); }
       if (this.current.updating) this.publish(this.settled);
       return;
     }
@@ -250,7 +252,8 @@ export class BaseController {
     const missed = affected && hint.nextWakeMs !== null && hint.nextWakeMs <= capture.clockMs;
     const backwards = affected && this.lastCapture !== undefined && capture.clockMs < this.lastCapture.clockMs;
     if (this.stale || zoneChanged || missed || backwards) {
-      this.stale = true; this.epoch++; this.sharedQueries.cancel(); void this.refresh();
+      const kind = this.stale ? 'clock-stale' : zoneChanged ? 'clock-timezone' : missed ? 'clock-deadline' : 'clock-backwards';
+      this.stale = true; this.epoch++; this.lastInvalidation = { kind }; this.sharedQueries.cancel(); void this.refresh();
     } else this.armWake();
   }
 
@@ -356,14 +359,14 @@ export class BaseController {
       this.viewName = view.name;
     }
     this.selectionSerial++;
-    this.query = { ...this.query, viewIndex }; this.stale = true; this.clearWake(); this.epoch++; this.sharedQueries.cancel();
+    this.query = { ...this.query, viewIndex }; this.stale = true; this.clearWake(); this.epoch++; this.lastInvalidation = { kind: 'view-selection' }; this.sharedQueries.cancel();
     return this.refresh();
   }
 
   setSearchTerms(terms: readonly string[]): Promise<void> {
     if (!Array.isArray(terms) || terms.some(term => typeof term !== 'string')) return Promise.reject(new Error('Search terms must be strings'));
     this.query = { ...this.query, searchTerms: [...terms] };
-    this.stale = true; this.clearWake(); this.epoch++; this.sharedQueries.cancel();
+    this.stale = true; this.clearWake(); this.epoch++; this.lastInvalidation = { kind: 'search-change' }; this.sharedQueries.cancel();
     return this.refresh();
   }
 
@@ -371,7 +374,7 @@ export class BaseController {
     path = normalizePath(path);
     if (this.query.currentFilePath === path) return Promise.resolve();
     this.query = { ...this.query, currentFilePath: path };
-    this.stale = true; this.clearWake(); this.epoch++; this.sharedQueries.cancel();
+    this.stale = true; this.clearWake(); this.epoch++; this.lastInvalidation = { kind: 'current-file-change' }; this.sharedQueries.cancel();
     return this.refresh();
   }
 
@@ -430,17 +433,39 @@ export class BaseController {
   private guard(version: number, path: string): { validate: () => void; validateWrite: () => void } {
     const epoch = this.epoch, identity = this.identities.get(path), base = this.identities.get(this.path);
     const selection = this.selectionSerial, configuration = this.configurationEpoch;
-    const rejection = (error: Error, reason: BaseEditAdmissionReason) => recordBaseEditAdmission(error, {
-      guard: 'controller', phase: 'controller-guard', reason,
-      submittedVersion: baseEditAdmissionVersion(version), currentVersion: this.current.version,
-      hasResult: !!this.current.result, queryError: !!this.current.error, updating: this.current.updating, disposed: this.disposed,
-      capturedEpoch: epoch, currentEpoch: this.epoch,
-      capturedTargetIdentity: identity, currentTargetIdentity: this.identities.get(path),
-      capturedBaseIdentity: base, currentBaseIdentity: this.identities.get(this.path),
-      targetIdentityMatches: !!identity && identity === this.identities.get(path), baseIdentityMatches: !!base && base === this.identities.get(this.path),
-      capturedSelection: selection, currentSelection: this.selectionSerial,
-      capturedConfigurationEpoch: configuration, currentConfigurationEpoch: this.configurationEpoch,
-    });
+    const invalidation = this.lastInvalidation.kind, stale = this.stale;
+    const targetWitness = { ...this.options.vault.entries.get(path) }, baseWitness = { ...this.options.vault.entries.get(this.path) };
+    const witnessFacts = (captured: Partial<VaultEntry>, current: VaultEntry | undefined) => {
+      const capturedEntryAvailable = typeof captured.entryId === 'string', currentEntryAvailable = typeof current?.entryId === 'string';
+      const capturedRevisionAvailable = typeof captured.revision === 'string', currentRevisionAvailable = typeof current?.revision === 'string';
+      const entryMatches = capturedEntryAvailable && currentEntryAvailable && captured.entryId === current?.entryId;
+      return { capturedEntryAvailable, currentEntryAvailable, capturedRevisionAvailable, currentRevisionAvailable, entryMatches,
+        revisionMatches: entryMatches && capturedRevisionAvailable && currentRevisionAvailable && captured.revision === current?.revision };
+    };
+    const affected = (candidate: string) => !!this.lastInvalidation.paths?.some(changed => candidate === changed || candidate.startsWith(changed + '/'));
+    const rejection = (error: Error, reason: BaseEditAdmissionReason) => {
+      const target = witnessFacts(targetWitness, this.options.vault.entries.get(path)), definition = witnessFacts(baseWitness, this.options.vault.entries.get(this.path));
+      return recordBaseEditAdmission(error, {
+        capturedInvalidationKind: invalidation, currentInvalidationKind: this.lastInvalidation.kind, capturedStale: stale, currentStale: this.stale,
+        invalidationTargetAffected: affected(path), invalidationBaseAffected: affected(this.path),
+        invalidationOtherPath: !!this.lastInvalidation.paths?.some(changed => ![path, this.path].some(candidate => candidate === changed || candidate.startsWith(changed + '/'))),
+        capturedTargetEntryAvailable: target.capturedEntryAvailable, currentTargetEntryAvailable: target.currentEntryAvailable,
+        capturedTargetRevisionAvailable: target.capturedRevisionAvailable, currentTargetRevisionAvailable: target.currentRevisionAvailable,
+        targetEntryMatches: target.entryMatches, targetRevisionMatches: target.revisionMatches,
+        capturedBaseEntryAvailable: definition.capturedEntryAvailable, currentBaseEntryAvailable: definition.currentEntryAvailable,
+        capturedBaseRevisionAvailable: definition.capturedRevisionAvailable, currentBaseRevisionAvailable: definition.currentRevisionAvailable,
+        baseEntryMatches: definition.entryMatches, baseRevisionMatches: definition.revisionMatches,
+        guard: 'controller', phase: 'controller-guard', reason,
+        submittedVersion: baseEditAdmissionVersion(version), currentVersion: this.current.version,
+        hasResult: !!this.current.result, queryError: !!this.current.error, updating: this.current.updating, disposed: this.disposed,
+        capturedEpoch: epoch, currentEpoch: this.epoch,
+        capturedTargetIdentity: identity, currentTargetIdentity: this.identities.get(path),
+        capturedBaseIdentity: base, currentBaseIdentity: this.identities.get(this.path),
+        targetIdentityMatches: !!identity && identity === this.identities.get(path), baseIdentityMatches: !!base && base === this.identities.get(this.path),
+        capturedSelection: selection, currentSelection: this.selectionSerial,
+        capturedConfigurationEpoch: configuration, currentConfigurationEpoch: this.configurationEpoch,
+      });
+    };
     const validateWrite = () => {
       if (this.disposed || !identity || this.identities.get(path) !== identity || !base || this.identities.get(this.path) !== base) {
         throw rejection(new Error('This base result is stale; refresh before editing'), this.disposed ? 'closed' : 'identity');
@@ -746,7 +771,7 @@ export class BaseController {
       this.query = { ...this.query, viewIndex: index };
       if (this.viewName !== undefined) this.viewName = selected.name;
       this.stale = true; this.clearWake();
-      this.epoch++; this.sharedQueries.cancel();
+      this.epoch++; this.lastInvalidation = { kind: 'configuration-commit' }; this.sharedQueries.cancel();
     }
     try { await committed?.(); } finally { await this.refresh(); }
   }
@@ -773,7 +798,7 @@ export class BaseController {
     if (this.selectionSerial === retry.selectionSerial) {
       this.query = { ...this.query, viewIndex: retry.index };
       if (retry.bound) this.viewName = retry.name;
-      this.stale = true; this.clearWake(); this.epoch++; this.sharedQueries.cancel();
+      this.stale = true; this.clearWake(); this.epoch++; this.lastInvalidation = { kind: 'configuration-retry-ack' }; this.sharedQueries.cancel();
     }
     this.pendingConfigurations.clear();
     try { await retry.committed?.(); } finally { await this.refresh(); } return true;
@@ -919,7 +944,7 @@ export class BaseController {
   }
 
   dispose(): void {
-    this.disposed = true; this.clearWake(); this.epoch++; this.sharedQueries.dispose();
+    this.disposed = true; this.clearWake(); this.epoch++; this.lastInvalidation = { kind: 'controller-dispose' }; this.sharedQueries.dispose();
     for (const runner of this.summaryQueries) runner.dispose(); this.summaryQueries.clear();
     this.undoCommands = []; this.redoCommands = []; this.pendingPropertyHistory.clear(); this.pendingConfigurations.clear();
     this.pendingViewReferences = undefined;

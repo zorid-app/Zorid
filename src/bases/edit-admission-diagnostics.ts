@@ -2,6 +2,8 @@
  * stay owned by the existing guards; no file data enters these records. */
 export type BaseEditAdmissionPhase = 'action-current' | 'controller-guard' | 'before-buffer' | 'after-buffer-load' | 'transform' | 'before-buffer-update' | 'durable-validation';
 export type BaseEditAdmissionReason = 'invalid-version' | 'version' | 'query-error' | 'result-unavailable' | 'epoch' | 'identity' | 'closed' | 'preview';
+export const BASE_EDIT_INVALIDATION_KINDS = ['initial', 'vault-create', 'vault-modify', 'vault-rename', 'vault-delete', 'vault-ready', 'clock-hidden-refresh-abort', 'clock-stale', 'clock-timezone', 'clock-deadline', 'clock-backwards', 'view-selection', 'search-change', 'current-file-change', 'configuration-commit', 'configuration-retry-ack', 'controller-dispose'] as const;
+export type BaseEditInvalidationKind = typeof BASE_EDIT_INVALIDATION_KINDS[number];
 export interface BaseEditAdmissionSnapshot {
   readonly guard: 'view-actions' | 'controller';
   readonly phase: BaseEditAdmissionPhase;
@@ -12,6 +14,26 @@ export interface BaseEditAdmissionSnapshot {
   readonly queryError: boolean;
   readonly updating: boolean;
   readonly disposed?: boolean;
+  readonly capturedInvalidationKind?: BaseEditInvalidationKind;
+  readonly currentInvalidationKind?: BaseEditInvalidationKind;
+  readonly capturedStale?: boolean;
+  readonly currentStale?: boolean;
+  readonly invalidationTargetAffected?: boolean;
+  readonly invalidationBaseAffected?: boolean;
+  readonly invalidationOtherPath?: boolean;
+  readonly capturedTargetEntryAvailable?: boolean;
+  readonly currentTargetEntryAvailable?: boolean;
+  readonly capturedTargetRevisionAvailable?: boolean;
+  readonly currentTargetRevisionAvailable?: boolean;
+  readonly targetEntryMatches?: boolean;
+  readonly targetRevisionMatches?: boolean;
+  readonly capturedBaseEntryAvailable?: boolean;
+  readonly currentBaseEntryAvailable?: boolean;
+  readonly capturedBaseRevisionAvailable?: boolean;
+  readonly currentBaseRevisionAvailable?: boolean;
+  readonly baseEntryMatches?: boolean;
+  readonly baseRevisionMatches?: boolean;
+
   readonly capturedEpoch?: number;
   readonly currentEpoch?: number;
   readonly capturedTargetIdentity?: number;
@@ -34,7 +56,8 @@ export function recordBaseEditAdmission<T extends Error>(error: T, snapshot: Bas
   for (const key of ['submittedVersion', 'currentVersion', 'capturedEpoch', 'currentEpoch', 'capturedTargetIdentity', 'currentTargetIdentity', 'capturedBaseIdentity', 'currentBaseIdentity', 'capturedSelection', 'currentSelection', 'capturedConfigurationEpoch', 'currentConfigurationEpoch'] as const) {
     if (Object.hasOwn(snapshot, key)) record[key] = baseEditAdmissionVersion(snapshot[key]);
   }
-  for (const key of ['hasResult', 'queryError', 'updating', 'disposed', 'targetIdentityMatches', 'baseIdentityMatches'] as const) if (typeof snapshot[key] === 'boolean') record[key] = snapshot[key];
+  for (const key of ['hasResult', 'queryError', 'updating', 'disposed', 'targetIdentityMatches', 'baseIdentityMatches', 'capturedStale', 'currentStale', 'invalidationTargetAffected', 'invalidationBaseAffected', 'invalidationOtherPath', 'capturedTargetEntryAvailable', 'currentTargetEntryAvailable', 'capturedTargetRevisionAvailable', 'currentTargetRevisionAvailable', 'targetEntryMatches', 'targetRevisionMatches', 'capturedBaseEntryAvailable', 'currentBaseEntryAvailable', 'capturedBaseRevisionAvailable', 'currentBaseRevisionAvailable', 'baseEntryMatches', 'baseRevisionMatches'] as const) if (typeof snapshot[key] === 'boolean') record[key] = snapshot[key];
+  for (const key of ['capturedInvalidationKind', 'currentInvalidationKind'] as const) if (BASE_EDIT_INVALIDATION_KINDS.some(kind => kind === snapshot[key])) record[key] = snapshot[key];
   receipts.set(error, Object.freeze(record) as BaseEditAdmissionReceipt); return error;
 }
 export function baseEditAdmissionReceipt(error: unknown): BaseEditAdmissionReceipt | undefined { return error !== null && (typeof error === 'object' || typeof error === 'function') ? receipts.get(error) : undefined; }
