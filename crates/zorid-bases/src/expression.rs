@@ -293,25 +293,48 @@ fn is_identifier_part(character: char) -> bool {
     character.is_alphanumeric() || matches!(character, '_' | '$')
 }
 
+/// Syntax-only cache payload. The parser sets has_regex while consuming actual
+/// literal nodes; neither source text nor a global successful compiler lookup
+/// can fabricate checked-construction authority.
+struct ParsedExpression {
+    root: Expr,
+    has_regex: bool,
+}
+impl std::ops::Deref for ParsedExpression {
+    type Target = Expr;
+    fn deref(&self) -> &Self::Target {
+        &self.root
+    }
+}
+
 struct Parser {
     tokens: Vec<Token>,
     index: usize,
     depth: usize,
+    has_regex: bool,
 }
 
 impl Parser {
+    #[cfg(test)]
     fn parse(source: &str) -> Result<Expr, String> {
+        Self::parse_with_metadata(source).map(|parsed| parsed.root)
+    }
+    fn parse_with_metadata(source: &str) -> Result<ParsedExpression, String> {
         let mut parser = Self {
             tokens: Lexer::tokenize(source)?,
             index: 0,
             depth: 0,
+            has_regex: false,
         };
         let expression = parser.expression(0)?;
         check_ast_depth(&expression, 0)?;
         if !matches!(parser.current().kind, TokenKind::Eof) {
             return Err(format!("Unexpected token {}", parser.current().raw));
         }
-        Ok(expression)
+        Ok(ParsedExpression {
+            root: expression,
+            has_regex: parser.has_regex,
+        })
     }
 
     fn current(&self) -> &Token {
@@ -385,7 +408,10 @@ impl Parser {
         match token.kind {
             TokenKind::Number(value) => Ok(Expr::Literal(number_json(value))),
             TokenKind::String(value) => Ok(Expr::Literal(Value::String(value))),
-            TokenKind::Regex(pattern, flags) => Ok(Expr::Regex(pattern, flags, Arc::new(()))),
+            TokenKind::Regex(pattern, flags) => {
+                self.has_regex = true;
+                Ok(Expr::Regex(pattern, flags, Arc::new(())))
+            }
             TokenKind::Identifier(value) if value == "true" => Ok(Expr::Literal(Value::Bool(true))),
             TokenKind::Identifier(value) if value == "false" => {
                 Ok(Expr::Literal(Value::Bool(false)))
@@ -723,6 +749,7 @@ impl<'a> Session<'a> {
         preserve_tags: bool,
         reserve: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
     ) -> Result<(BaseValue, Option<TagShape>), ExpressionDiagnostic> {
+        self.evaluator.charge(1).map_err(runtime_diagnostic)?;
         let ast = parse_cached(source).map_err(|message| {
             let (code, text) = message
                 .split_once('\0')
@@ -829,6 +856,7 @@ pub(crate) fn evaluate_summary(
     evaluator.summary_only = true;
     regex_admission::fatal_summary_inputs(values, &mut |work| evaluator.charge(work))
         .map_err(runtime_diagnostic)?;
+    evaluator.charge(1).map_err(runtime_diagnostic)?;
     let ast = parse_cached(source)
         .map_err(|message| {
             let (code, text) = message.split_once('\0').unwrap_or(("parse", &message));
@@ -1187,12 +1215,20 @@ pub(crate) fn validate_checked(
             format!("parse\0{message}")
         })
     })?;
-    regex_admission::admit(&ast, check)
+    if ast.has_regex {
+        regex_admission::admit(&ast.root, check)
+    } else {
+        Ok(())
+    }
 }
 
 pub(crate) fn matches(expression: &str, context: &BasesEvaluationContext) -> Result<bool, String> {
-    let ast = parse_cached(expression)?;
     let mut evaluator = Evaluator::new(context);
+    evaluator.charge(1).map_err(|error| match error {
+        RuntimeValue::Error(message) => message,
+        _ => unreachable!(),
+    })?;
+    let ast = parse_cached(expression)?;
     evaluator
         .admit_literals(&ast)
         .map_err(|error| match error {
@@ -1206,10 +1242,12 @@ pub(crate) fn matches(expression: &str, context: &BasesEvaluationContext) -> Res
 }
 
 /// Query-owned definitions retain literal object identity across rows even if
-/// unrelated syntax evicts every entry in the optional process cache.
+/// unrelated syntax evicts every entry in the optional process cache. Every
+/// successful entry is a private, checked construction proof for its exact
+/// source and retained AST; the global syntax cache carries no such proof.
 #[derive(Default)]
 pub(crate) struct PreparedFormulaExpressions {
-    expressions: IndexMap<String, (String, Result<Arc<Expr>, String>)>,
+    expressions: IndexMap<String, (String, Result<Arc<ParsedExpression>, String>)>,
 }
 pub(crate) fn prepare_formula_expressions(
     formulas: &[(String, String)],
@@ -1226,7 +1264,7 @@ pub(crate) fn prepare_formula_expressions(
         .checked_next_power_of_two()
         .ok_or_else(|| RuntimeValue::Error("budget\0Formula map capacity overflow".into()))?;
     let bytes = slots.saturating_mul(2).saturating_mul(
-        std::mem::size_of::<(String, String, Result<Arc<Expr>, String>)>()
+        std::mem::size_of::<(String, String, Result<Arc<ParsedExpression>, String>)>()
             + 2 * std::mem::size_of::<usize>(),
     );
     reserve(bytes.saturating_add(
@@ -1238,7 +1276,11 @@ pub(crate) fn prepare_formula_expressions(
         reserve(name.len().saturating_add(source.len()))?;
         let parsed = parse_cached_scoped(source, Some(name));
         let parsed = match parsed {
-            Ok(ast) => match regex_admission::admit(&ast, check) {
+            Ok(ast) => match if ast.has_regex {
+                regex_admission::admit(&ast.root, check)
+            } else {
+                Ok(())
+            } {
                 Ok(()) => Ok(ast),
                 Err(RuntimeValue::Error(message))
                     if message.starts_with("budget\0") || message.starts_with("cancelled\0") =>
@@ -1264,7 +1306,7 @@ pub(crate) fn prepare_formula_expressions(
 }
 
 fn ast_retained_bytes(
-    expression: &Expr,
+    expression: &ParsedExpression,
     check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
 ) -> Result<usize, RuntimeValue> {
     fn visit(
@@ -1341,17 +1383,25 @@ fn ast_retained_bytes(
         }
         Ok(bytes)
     }
-    Ok(visit(expression, 0, check)?.saturating_add(2 * std::mem::size_of::<usize>()))
+    Ok(visit(&expression.root, 0, check)?
+        .saturating_add(2 * std::mem::size_of::<usize>())
+        .saturating_add(std::mem::size_of::<ParsedExpression>() - std::mem::size_of::<Expr>()))
 }
-fn parse_cached(expression: &str) -> Result<Arc<Expr>, String> {
+fn parse_cached(expression: &str) -> Result<Arc<ParsedExpression>, String> {
     parse_cached_scoped(expression, None)
 }
-fn parse_cached_scoped(expression: &str, formula: Option<&str>) -> Result<Arc<Expr>, String> {
+fn parse_cached_scoped(
+    expression: &str,
+    formula: Option<&str>,
+) -> Result<Arc<ParsedExpression>, String> {
     if expression.len() > 65_536 {
         return Err("Expression exceeds 65536 bytes".into());
     }
     if expression.trim().is_empty() {
-        return Ok(Arc::new(Expr::Literal(Value::Null)));
+        return Ok(Arc::new(ParsedExpression {
+            root: Expr::Literal(Value::Null),
+            has_regex: false,
+        }));
     }
     if formula.is_some_and(|name| name.len() > 65_536) {
         return Err("Formula name exceeds 65536 bytes".into());
@@ -1361,7 +1411,7 @@ fn parse_cached_scoped(expression: &str, formula: Option<&str>) -> Result<Arc<Ex
     // Sharing between separate queries is unobservable to their private IDs.
     const MAX_ENTRIES: usize = 64;
     type CacheKey = (String, Option<String>);
-    static CACHE: OnceLock<RwLock<HashMap<CacheKey, Arc<Expr>>>> = OnceLock::new();
+    static CACHE: OnceLock<RwLock<HashMap<CacheKey, Arc<ParsedExpression>>>> = OnceLock::new();
     let key = (expression.to_string(), formula.map(str::to_string));
     let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
     if let Ok(cache) = cache.read() {
@@ -1369,7 +1419,7 @@ fn parse_cached_scoped(expression: &str, formula: Option<&str>) -> Result<Arc<Ex
             return Ok(ast.clone());
         }
     }
-    let ast = Arc::new(Parser::parse(expression)?);
+    let ast = Arc::new(Parser::parse_with_metadata(expression)?);
     if let Ok(mut cache) = cache.write() {
         if cache.len() >= MAX_ENTRIES {
             cache.clear();
@@ -2070,8 +2120,12 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    fn admit_literals(&mut self, expression: &Expr) -> Result<(), RuntimeValue> {
-        regex_admission::admit(expression, &mut |work| self.charge(work))
+    fn admit_literals(&mut self, expression: &ParsedExpression) -> Result<(), RuntimeValue> {
+        if expression.has_regex {
+            regex_admission::admit(&expression.root, &mut |work| self.charge(work))
+        } else {
+            Ok(())
+        }
     }
 
     fn evaluate(&mut self, expression: &Expr, scope: &Scope) -> RuntimeValue {
@@ -3720,6 +3774,9 @@ impl<'a> Evaluator<'a> {
     }
 
     fn formula(&mut self, name: &str) -> RuntimeValue {
+        if let Err(error) = self.charge(1) {
+            return error;
+        }
         if self.formula_stack.len() >= 128 {
             return RuntimeValue::Error("budget\0Formula depth exceeds 128".into());
         }
@@ -3759,6 +3816,12 @@ impl<'a> Evaluator<'a> {
             parse_cached_scoped(expression, Some(name))
         };
         let value = match parsed {
+            // Only this private map's constructor can produce a successful
+            // exact-source entry; it already checked every literal under the
+            // invocation budget. The global syntax cache makes no such claim.
+            Ok(expression) if self.context.preparsed_formulas.is_some() => {
+                self.evaluate(expression.as_ref(), &BTreeMap::new())
+            }
             Ok(expression) => match self.admit_literals(&expression) {
                 Ok(()) => self.evaluate(expression.as_ref(), &BTreeMap::new()),
                 Err(error) => error,

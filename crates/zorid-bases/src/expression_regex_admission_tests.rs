@@ -278,3 +278,122 @@ fn settings_syntax_boundary_leaves_literal_construction_to_checked_invocation() 
     }
     assert!(validate_syntax("if(").is_err());
 }
+
+#[test]
+fn parser_metadata_uses_consumed_literal_nodes_and_survives_cache_eviction() {
+    for source in [
+        "file.name",
+        "note.value / 2",
+        "'/(/'",
+        "if(false,'/a/ii',1)",
+        "",
+    ] {
+        assert!(!parse_cached(source).unwrap().has_regex, "{source}");
+    }
+    for source in ["if(false,/(/,1)", "false && /a/", "[1,2].map(/a/)"] {
+        assert!(parse_cached(source).unwrap().has_regex, "{source}");
+    }
+    let held = parse_cached("/held/").unwrap();
+    let Expr::Regex(_, _, identity) = &held.root else {
+        panic!("expected actual literal")
+    };
+    let token = Arc::clone(identity);
+    for n in 0..70 {
+        parse_cached(&format!("{n}+1")).unwrap();
+    }
+    assert!(held.has_regex);
+    let Expr::Regex(_, _, identity) = &held.root else {
+        unreachable!()
+    };
+    assert!(Arc::ptr_eq(identity, &token));
+}
+
+#[test]
+fn regex_free_cached_sessions_charge_constant_admission_and_check_cancellation() {
+    let source = (0..40).map(|_| "1").collect::<Vec<_>>().join("+");
+    let ast = parse_cached(&source).unwrap();
+    assert!(!ast.has_regex);
+    let context = BasesEvaluationContext::default();
+    let mut direct = Evaluator::new(&context);
+    let before = direct.remaining_work;
+    let expected = direct.evaluate(&ast, &Scope::new());
+    let evaluation_work = before - direct.remaining_work;
+    let mut session = Session::new(&context);
+    assert_eq!(
+        session.evaluate(&source).unwrap(),
+        typed_result(expected).unwrap()
+    );
+    assert_eq!(session.steps_used(), evaluation_work + 1);
+    let cancellation = OperationCancellation::default();
+    cancellation.cancel();
+    let context = BasesEvaluationContext {
+        cancellation: Some(cancellation),
+        ..Default::default()
+    };
+    assert_eq!(
+        Session::new(&context).evaluate(&source).unwrap_err().code,
+        "cancelled"
+    );
+    assert_eq!(
+        Session::new(&context).evaluate("").unwrap_err().code,
+        "cancelled"
+    );
+    let context = BasesEvaluationContext {
+        work_limit: Some(0),
+        ..Default::default()
+    };
+    assert_eq!(
+        Session::new(&context).evaluate("").unwrap_err().code,
+        "budget"
+    );
+}
+
+#[test]
+fn prepared_formula_reuses_checked_literal_proof_and_keeps_exact_source_guard() {
+    let source = format!("/{}/", "a".repeat(1024));
+    let formulas = vec![("rx".into(), source.clone())];
+    let prepared = prepare_formula_expressions(&formulas, &mut allow, &mut allow).unwrap();
+    // This permits exact-source comparison and the ordinary literal result,
+    // while a second full construction walk would exhaust the fixed budget.
+    let context = BasesEvaluationContext {
+        formulas: Arc::new(formulas.into_iter().collect()),
+        preparsed_formulas: Some(Arc::clone(&prepared)),
+        work_limit: Some(250),
+        ..Default::default()
+    };
+    assert!(matches!(
+        Evaluator::new(&context).formula("rx"),
+        RuntimeValue::Regex(_, _, _)
+    ));
+    let cancellation = OperationCancellation::default();
+    cancellation.cancel();
+    let cancelled = BasesEvaluationContext {
+        cancellation: Some(cancellation),
+        ..context.clone()
+    };
+    assert!(
+        matches!(Evaluator::new(&cancelled).formula("rx"), RuntimeValue::Error(message) if message.starts_with("cancelled\0"))
+    );
+    let changed = BasesEvaluationContext {
+        formulas: Arc::new(IndexMap::from_iter([("rx".into(), "/(/".into())])),
+        ..context.clone()
+    };
+    assert!(
+        matches!(Evaluator::new(&changed).formula("rx"), RuntimeValue::Error(message) if message.starts_with("unavailable\0"))
+    );
+    let fallback = BasesEvaluationContext {
+        formulas: Arc::new(IndexMap::from_iter([(
+            "rx".into(),
+            "if(false,/(/,1)".into(),
+        )])),
+        preparsed_formulas: None,
+        ..Default::default()
+    };
+    assert!(
+        matches!(Evaluator::new(&fallback).formula("rx"), RuntimeValue::Error(message) if message.starts_with("parse\0"))
+    );
+    let mut work = 1usize;
+    assert!(
+        matches!(prepare_formula_expressions(&[("rx".into(), source)], &mut allow, &mut |n| {work = work.checked_sub(n).ok_or_else(|| RuntimeValue::Error("budget\0fresh invocation must admit warm syntax".into()))?; Ok(())}), Err(RuntimeValue::Error(message)) if message.starts_with("budget\0"))
+    );
+}
