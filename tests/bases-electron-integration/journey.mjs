@@ -92,7 +92,8 @@ export async function journey(c){
   await c.ui.type(input('Filter expression',dialog('Filter')),'note.rating >= 4');await apply(c,'Filter');
   await c.ui.wait(`return document.querySelector('${active} [role="grid"]')?.getAttribute('aria-rowcount')==='29';`,'28 high-rating rows');
   await c.screenshot('02-view-filter');
-  await c.ui.button('Filter',active);await c.ui.button('Remove filter',dialog('Filter'));await apply(c,'Filter');
+  await c.ui.button('Filter',active);await c.ui.button('Remove filter',dialog('Filter'));
+  await c.ui.wait(`const panel=document.querySelector(${JSON.stringify(dialog('Filter'))});return panel?.contains(document.activeElement)&&document.activeElement?.getClientRects().length;`,'Removing a filter retains focus on a visible control');await apply(c,'Filter');
 
   // Formula UI edits the same portable Base configuration. Adding a formula does
   // not change the notes; choosing its column makes its derived result visible.

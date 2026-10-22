@@ -69,9 +69,31 @@ host. It does not call production stores/controllers to simulate positive edits.
 - Add/edit a custom summary through its real editor. Group by status and scroll
   the virtual table to observe each group summary against independent exact oracles.
 
-These are **authored, not executed**. Selectors and interactions are coordinated
-with implementation owners and must be reconciled to their final reference-backed
-controls before runtime. A failed early gate does not establish later coverage.
+These describe the complete **authored** journey. The early actual campaign below
+has executed only its prefix; the unexecuted suffix is not accepted. Selectors and
+interactions are coordinated with implementation owners and reconciled against
+actual controls. A failed early gate does not establish later coverage.
+
+## Actual early campaign — 2026-10-22
+
+Root granted serialized runtime slots against production source `6ca3aab8` and
+matching frontend/native artifacts. Later listed HEADs contain harness-only fixes;
+they do not represent new production behavior. Native host SHA-256:
+`ab4065732635ff03bf520779e89b555e949b112bd43f8bb85007a394d7d2d33d`.
+
+| Run / frozen HEAD | Observed result | Classification |
+| --- | --- | --- |
+| 001 / `6ca3aab8` | Initial 73-row table/formula and ordinary Create Base reached; 1 durable check/15 actions. Replacement appended to view name. | Harness omitted Cocoa `selectAll` dispatch; corrected with explicit keyboard editing command and proper CDP modifier bits. |
+| 002 / `8d32d229` | Replacement, view creation and duplication saved; 3 durable checks/31 actions. Duplicate continued into new view settings. | Harness raced that intentional continuation; now waits acknowledged dialog state and reuses the open target. |
+| 003 / `37c0c67a` | View lifecycle completed; 4 durable checks/47 actions. | Harness used legacy Add expression label; actual immediate route is Add filter → Edit expression. |
+| 004 / `d056b089` | View lifecycle and advanced filter's exact 28-row oracle reached; 4 durable checks/60 actions. Removing the filter restored73 rows but lost focus to BODY, so Escape could not close its menu. | **Production keyboard/focus defect**, reported to toolbar owner/root. Screenshot and actual activeElement evidence retained; not bypassed with outside click. |
+
+Evidence directories are `/private/tmp/zorid-bases-heavy-first-20261022-001` through
+`004`, with sibling `.log` files. Each retains screenshots, disposable files,
+action logs, exact durable assertions and process cleanup outcomes. Runs002–004
+also verify source/artifact hashes after failure. All owned Electron/native
+processes exited with no leaked children. Cleanup termination is not normal
+application quit/restart acceptance. No complete heavy-user pass is claimed.
 
 ## Goal audit: concrete remaining acceptance
 
