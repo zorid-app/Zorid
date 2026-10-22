@@ -1467,3 +1467,42 @@ fn saved_and_inline_group_order_origin_is_verified_source_not_this() {
     assert_eq!(embedded.value.result.rows[0].values["formula.context"], zorid_bases::BaseValue::String {value: "Config/Inline.md".into()});
     vault.close_document_snapshot(pin);
 }
+
+#[test]
+fn property_targets_current_values_preserve_saved_relative_aliases_and_revision() {
+    use zorid_bases::BaseValue;
+    let directory = tempfile::tempdir().unwrap();let mut vault = NativeVault::open(directory.path()).unwrap();
+    for folder in ["Notes", "People"] {
+        apply(&mut vault, &format!("folder-{folder}"), Mutation::Create {id: id(folder), path: VaultPath::new(folder).unwrap(), kind: EntryKind::Folder, content: None});
+    }
+    let settings = "properties:\n  author:\n    type: relation\n    relation: {targetFilter: 'type == \"author\"'}\n  reviewers:\n    type: relation\n    relation: {multiple: true, targetFilter: 'type == \"author\"'}\n";
+    let source = "---\nauthor: '[[../People/Ada|Boss]]'\nreviewers: ['[[../People/Ada|One]]', '[[../People/Missing|Lost]]']\n---\nUnsaved drafts are never query input.\n";
+    create(&mut vault, "settings", "Properties.yaml", settings);
+    create(&mut vault, "ada", "People/Ada.md", "---\ntype: author\n---\n");
+    create(&mut vault, "grace", "People/Grace.md", "---\ntype: author\n---\n");
+    create(&mut vault, "note", "Notes/Book.md", source);
+    vault.initialize_document_index().unwrap();build(&mut vault);let old = vault.open_document_snapshot().unwrap();
+    let options = QueryOptions {current_entry_id: Some(id("note")), ..QueryOptions::default()};
+    let read = vault.query_property_targets_document(&old, None, &options).unwrap();
+    let current = read.value.current_relation_values.unwrap();
+    assert_eq!(current.witness.entry_id, id("note"));assert_eq!(current.witness.revision, revision(&vault, "note"));
+    assert_eq!(current.edit_values["author"], BaseValue::String {value: "[[../People/Ada|Boss]]".into()});
+    assert!(matches!(&current.values["author"], BaseValue::Link {path, target: Some(target), display: Some(display), ..} if path == "People/Ada.md" && target.entry_id == id("ada") && display == "Boss"));
+    assert!(matches!(&current.values["reviewers"], BaseValue::List {value} if value.len() == 2 && matches!(&value[1], BaseValue::Link {target: None, ..})));
+    assert_eq!(read.value.relation_targets["author"].len(), 2);
+    write(&mut vault, "change-author-eligibility", "ada", "---\ntype: project\n---\n");
+    write(&mut vault, "change-saved-note", "note", &source.replace("Boss", "Chief"));build(&mut vault);
+    let retained = vault.query_property_targets_document(&old, None, &options).unwrap().value.current_relation_values.unwrap();
+    assert_eq!(retained.witness, current.witness);assert_eq!(retained.edit_values, current.edit_values);
+    let fresh = vault.open_document_snapshot().unwrap();let read = vault.query_property_targets_document(&fresh, None, &options).unwrap();
+    assert_eq!(read.value.relation_targets["author"].len(), 1);assert_eq!(read.value.relation_targets["author"][0].entry_id, id("grace"));
+    let current = read.value.current_relation_values.unwrap();
+    assert_eq!(current.witness.revision, revision(&vault, "note"));
+    assert_eq!(current.edit_values["author"], BaseValue::String {value: "[[../People/Ada|Chief]]".into()});
+    assert!(matches!(&current.values["author"], BaseValue::Link {target: Some(target), ..} if target.entry_id == id("ada")), "An existing ineligible relation remains readable without granting picker membership");
+    expect_code(vault.query_property_targets_document(&fresh, None, &QueryOptions {current_entry_id: Some(id("missing")), ..QueryOptions::default()}), "unavailable");
+    let no_current = vault.query_property_targets_document(&fresh, None, &QueryOptions::default()).unwrap();
+    assert!(serde_json::to_value(no_current.value).unwrap().get("currentRelationValues").is_none());
+    assert_eq!(vault.read(&id("note")).unwrap().unwrap().content.unwrap(), source.replace("Boss", "Chief").as_bytes());
+    vault.close_document_snapshot(old);vault.close_document_snapshot(fresh);
+}

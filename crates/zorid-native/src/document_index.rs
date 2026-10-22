@@ -392,8 +392,10 @@ impl NativeVault {
                 witness: zorid_bases::RecordWitness { entry_id: entry.state.id.clone(), revision: entry.state.revision.clone() },
                 size: Some(presentation.size_bytes), ctime_ms: i64::try_from(presentation.ctime_ms).ok(), mtime_ms: i64::try_from(presentation.mtime_ms).ok(),
             }).collect::<Vec<_>>();
-        let result = zorid_bases::query_generation_property_targets(pin.generation(), &facts, &definitions, options)?;
+        let captured = zorid_bases::query_generation_property_targets_with_current(pin.generation(), &facts, &definitions, options)?;
+        let result = captured.result;
         self.document_result(pin, DocumentPropertyTargetsResult {
+            current_relation_values: captured.current_relation_values,
             definition, relation_targets: result.relation_targets.unwrap_or_default(),
             property_definition_diagnostics: result.property_definition_diagnostics,
             refresh_hint: result.refresh_hint,

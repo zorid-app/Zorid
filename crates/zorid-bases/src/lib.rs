@@ -3,6 +3,9 @@
 mod expression;
 pub mod properties;
 pub mod relations;
+mod property_targets;
+pub use property_targets::{CurrentRelationValues, PropertyTargetsQueryResult};
+pub use graph::query_generation_property_targets_with_current;
 pub use graph::{query_generation_with_properties, query_generation_property_targets};
 pub use properties::PropertyDefinitions;
 pub mod calendar;

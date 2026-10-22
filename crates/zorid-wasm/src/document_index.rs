@@ -600,6 +600,8 @@ struct PropertyTargetReadOptions {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PropertyTargetsRead<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_relation_values: Option<zorid_bases::CurrentRelationValues>,
     definition: Option<&'a EntryState>,
     relation_targets: BTreeMap<String, Vec<zorid_bases::relations::RelationTarget>>,
     property_definition_diagnostics: Vec<zorid_bases::properties::PropertyDefinitionDiagnostic>,
@@ -1385,8 +1387,9 @@ fn property_targets_read<'a>(
     if let Some(steps) = input.max_steps { options.max_steps = steps; }
     if let Some(clock) = input.clock_ms { options.evaluation.clock_ms = clock; }
     if let Some(timezone) = input.timezone { options.evaluation.timezone = timezone; }
-    let result = zorid_bases::query_generation_property_targets(generation, facts, &definitions, &options).map_err(BaseReadError::Evaluation)?;
-    Ok(PropertyTargetsRead { definition, relation_targets: result.relation_targets.unwrap_or_default(), property_definition_diagnostics: result.property_definition_diagnostics, refresh_hint: result.refresh_hint })
+    let captured = zorid_bases::query_generation_property_targets_with_current(generation, facts, &definitions, &options).map_err(BaseReadError::Evaluation)?;
+    let result = captured.result;
+    Ok(PropertyTargetsRead { current_relation_values: captured.current_relation_values, definition, relation_targets: result.relation_targets.unwrap_or_default(), property_definition_diagnostics: result.property_definition_diagnostics, refresh_hint: result.refresh_hint })
 }
 fn base_report(
     generation: &WasmDocumentIndexGeneration,
@@ -2419,6 +2422,27 @@ mod tests {
         for raw in [r#"{"inlineSource":null}"#,r#"{"clockMs":null}"#,r#"{"maxRows":null}"#,r#"{"propertyDefinitionsSource":null}"#,r#"{"maxSteps":1,"maxSteps":2}"#] {
             assert!(serde_json::from_str::<PropertyTargetReadOptions>(raw).is_err(), "{raw}");
         }
+    }
+    #[test]
+    fn property_targets_current_values_preserve_saved_relative_aliases_and_revision() {
+        use zorid_bases::BaseValue;
+        let settings = "properties:\n  author:\n    type: relation\n    relation: {targetFilter: 'type == \"author\"'}\n  reviewers:\n    type: relation\n    relation: {multiple: true, targetFilter: 'type == \"author\"'}\n";
+        let source = "---\nauthor: '[[../People/Ada|Boss]]'\nreviewers: ['[[../People/Ada|One]]', '[[../People/Missing|Lost]]']\n---\n";
+        let records = [("settings", "Properties.yaml", settings), ("ada", "People/Ada.md", "---\ntype: author\n---\n"), ("grace", "People/Grace.md", "---\ntype: project\n---\n"), ("note", "Notes/Book.md", source), ("invalid", "Notes/Invalid.md", "---\nauthor: broken\n")];
+        let mut h: serde_json::Value = serde_json::from_str(&header()).unwrap();
+        h["entries"] = serde_json::Value::Array(records.iter().map(|(id, path, _)| serde_json::json!({"id":id,"path":path,"kind":"file","revision":"r1","deleted":false})).collect());
+        let mut builder = WasmDocumentIndexBuilder::new(&h.to_string()).unwrap();for (id, _, source) in records {builder.add_text(id, source.as_bytes()).unwrap();}let generation = builder.finish().unwrap();
+        let input = |current: Option<&str>| {let mut input = serde_json::json!({"propertyDefinitionsSource":{"id":"settings","source":settings}});if let Some(id) = current {input["currentEntryId"] = id.into();}serde_json::from_value::<PropertyTargetReadOptions>(input).unwrap()};
+        let read = property_targets_read(&generation.generation, &[], input(Some("note"))).unwrap();
+        assert_eq!(read.relation_targets["author"].len(), 1);assert_eq!(read.relation_targets["author"][0].entry_id, EntryId::new("ada").unwrap());
+        let current = read.current_relation_values.unwrap();
+        assert_eq!(current.witness.entry_id, EntryId::new("note").unwrap());assert_eq!(current.witness.revision.as_str(), "r1");
+        assert_eq!(current.edit_values["author"], BaseValue::String {value: "[[../People/Ada|Boss]]".into()});
+        assert!(matches!(&current.values["author"], BaseValue::Link {target: Some(target), display: Some(display), ..} if target.entry_id == EntryId::new("ada").unwrap() && display == "Boss"));
+        assert!(matches!(&current.values["reviewers"], BaseValue::List {value} if value.len() == 2 && matches!(&value[1], BaseValue::Link {target: None, ..})));
+        let no_current = property_targets_read(&generation.generation, &[], input(None)).unwrap();assert!(serde_json::to_value(no_current).unwrap().get("currentRelationValues").is_none());
+        assert!(matches!(property_targets_read(&generation.generation, &[], input(Some("missing"))), Err(BaseReadError::Evaluation(error)) if error.code == "unavailable"));
+        assert!(matches!(property_targets_read(&generation.generation, &[], input(Some("invalid"))), Err(BaseReadError::Evaluation(error)) if error.code == "unavailable"));
     }
     #[test]
     fn preparation_cache_reuses_fresh_generations_and_reruns_current_invocation() {

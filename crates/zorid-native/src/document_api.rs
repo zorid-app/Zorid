@@ -127,6 +127,8 @@ pub struct DocumentBaseResult {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentPropertyTargetsResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_relation_values: Option<zorid_bases::CurrentRelationValues>,
     pub definition: Option<EntryState>,
     pub relation_targets: std::collections::BTreeMap<String, Vec<zorid_bases::relations::RelationTarget>>,
     pub property_definition_diagnostics: Vec<zorid_bases::properties::PropertyDefinitionDiagnostic>,

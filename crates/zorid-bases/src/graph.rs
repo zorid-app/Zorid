@@ -231,6 +231,16 @@ pub fn query_generation_with_properties(
     definitions: &crate::properties::PropertyDefinitions,
     options: &QueryOptions,
 ) -> Result<BaseQueryResult, ExpressionDiagnostic> {
+    Ok(query_generation_with_properties_capture(program, generation, facts, definitions, options, false)?.result)
+}
+fn query_generation_with_properties_capture(
+    program: &BaseProgram,
+    generation: &Generation,
+    facts: &[FilePresentationFacts],
+    definitions: &crate::properties::PropertyDefinitions,
+    options: &QueryOptions,
+    capture_current: bool,
+) -> Result<crate::property_targets::PropertyTargetsQueryResult, ExpressionDiagnostic> {
     preflight_generation(generation, options)?;
     let mut remaining = options.max_steps;
     let mut snapshot = BaseSnapshot::from_generation_checked(generation, facts, &mut |work| {
@@ -249,13 +259,22 @@ pub fn query_generation_with_properties(
         values.steps_used(),
     )?;
     snapshot.property_values = Some(values);
+    let current_relation_values = if capture_current {
+        crate::property_targets::capture_current_relation_values(&snapshot, definitions, options, &mut |work| charge(&mut remaining, options.evaluation.cancellation.as_ref(), work))?
+    } else { None };
     invocation.max_steps = remaining;
     let mut result = crate::query_base(program, &snapshot, &invocation)?;
     result.steps_used = result
         .steps_used
         .saturating_add(options.max_steps - remaining);
-    crate::encoded_size(&result, options.max_output_bytes)?;
+    let result = crate::property_targets::PropertyTargetsQueryResult {result, current_relation_values};
+    if result.current_relation_values.is_some() { crate::encoded_size(&result, options.max_output_bytes)?; }
+    else { crate::encoded_size(&result.result, options.max_output_bytes)?; }
     Ok(result)
+}
+fn property_targets_program() -> Result<BaseProgram, ExpressionDiagnostic> {
+    crate::compile_base_source("filters: 'false'\nviews:\n  - type: table\n    name: Property targets\n    limit: 1\n    order: [file.path]\n")
+        .map_err(|_| ExpressionDiagnostic::new("internal", "Invalid internal property-target query"))
 }
 /// Candidate discovery for ordinary note-property pickers, without a saved Base.
 pub fn query_generation_property_targets(
@@ -264,11 +283,22 @@ pub fn query_generation_property_targets(
     definitions: &crate::properties::PropertyDefinitions,
     options: &QueryOptions,
 ) -> Result<BaseQueryResult, ExpressionDiagnostic> {
-    let program = crate::compile_base_source("filters: 'false'\nviews:\n  - type: table\n    name: Property targets\n    limit: 1\n    order: [file.path]\n")
-        .map_err(|_| ExpressionDiagnostic::new("internal", "Invalid internal property-target query"))?;
+    let program = property_targets_program()?;
     let mut invocation = options.clone();
     invocation.view_index = 0;
     query_generation_with_properties(&program, generation, facts, definitions, &invocation)
+}
+/// Candidate discovery plus the saved current note's revision-bound relation display values.
+pub fn query_generation_property_targets_with_current(
+    generation: &Generation,
+    facts: &[FilePresentationFacts],
+    definitions: &crate::properties::PropertyDefinitions,
+    options: &QueryOptions,
+) -> Result<crate::property_targets::PropertyTargetsQueryResult, ExpressionDiagnostic> {
+    let program = property_targets_program()?;
+    let mut invocation = options.clone();
+    invocation.view_index = 0;
+    query_generation_with_properties_capture(&program, generation, facts, definitions, &invocation, true)
 }
 pub(crate) fn preflight_generation(
     generation: &Generation,
