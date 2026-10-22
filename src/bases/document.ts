@@ -1,5 +1,7 @@
-import { Document, isMap, isSeq, parseDocument, visit } from 'yaml';
+import { Document, isMap, isScalar, isSeq, parseDocument, visit } from 'yaml';
 import type { YAMLMap, YAMLSeq } from 'yaml';
+import { parseBaseExpression } from './expression.ts';
+import type { BaseExpression } from './expression.ts';
 
 export const BUILTIN_BASE_VIEW_TYPES = ['table', 'cards', 'list', 'kanban'] as const;
 export type BuiltinBaseViewType = typeof BUILTIN_BASE_VIEW_TYPES[number];
@@ -10,6 +12,58 @@ export interface BaseViewConfig {
   readonly [key: string]: BaseValue | undefined;
 }
 export type BaseViewPatch = { [key: string]: BaseValue | undefined };
+export type BaseRootPatch = BaseViewPatch;
+
+/** Interactive names follow the reference UI; the reader accepts older/raw YAML. */
+export function validateBaseViewName(name: string, views: readonly BaseViewConfig[], except = -1): string {
+  if (typeof name !== 'string') throw new BaseDocumentError('View name must be a string');
+  name = name.trim();
+  if (!name || /[:#|^\\\r\n]|%%|\[\[|\]\]/.test(name)) throw new BaseDocumentError('The view name is empty or contains unsupported characters');
+  if (views.some((view, index) => index !== except && view.name === name)) throw new BaseDocumentError('A view with this name already exists');
+  return name;
+}
+
+export function uniqueBaseViewName(name: string, views: readonly BaseViewConfig[]): string {
+  const names = new Set(views.map(view => view.name));
+  let result = name, suffix = 2;
+  while (names.has(result)) result = `${name} ${suffix++}`;
+  return result;
+}
+
+function renameFormulaExpression(source: string, from: string, to: string): string {
+  let changed = false;
+  const render = (node: BaseExpression): string => {
+    switch (node.kind) {
+      case 'literal':
+        if (node.value.type === 'null') return 'null';
+        if (node.value.type === 'regexp') return node.value.value.toString();
+        if (node.value.type === 'string' || node.value.type === 'boolean' || node.value.type === 'number') {
+          if (node.value.type === 'number' && !Number.isFinite(node.value.value)) throw new BaseDocumentError('Cannot safely rewrite a nonfinite expression literal');
+          return JSON.stringify(node.value.value);
+        }
+        throw new BaseDocumentError('Cannot safely rewrite this expression literal');
+      case 'identifier': return node.name;
+      case 'list': return `[${node.items.map(render).join(', ')}]`;
+      case 'unary': return `(${node.operator}${render(node.operand)})`;
+      case 'binary': return `(${render(node.left)} ${node.operator} ${render(node.right)})`;
+      case 'call': return `${render(node.callee)}(${node.args.map(render).join(', ')})`;
+      case 'member': {
+        let key = node.key;
+        if (node.object.kind === 'identifier' && node.object.name === 'formula' && key.kind === 'literal' && key.value.type === 'string' && key.value.value === from) {
+          changed = true; key = { kind: 'literal', value: { type: 'string', value: to } };
+        }
+        const object = render(node.object);
+        if (!node.computed && key.kind === 'literal' && key.value.type === 'string' && /^[$_\p{L}][$_\p{L}\p{N}\p{M}]*$/u.test(key.value.value)) return `${object}.${key.value.value}`;
+        return `${object}[${render(key)}]`;
+      }
+    }
+  };
+  // Parse only expressions which can possibly mention the namespace. A future
+  // expression syntax we cannot safely understand rejects the atomic rename.
+  if (!source.includes('formula')) return source;
+  const result = render(parseBaseExpression(source));
+  return changed ? result : source;
+}
 
 export class BaseDocumentError extends Error {
   constructor(message: string) { super(message); this.name = 'BaseDocumentError'; }
@@ -217,6 +271,85 @@ export class BaseDocument {
 
   removeView(index: number): void {
     this.edit(doc => { this.viewAt(doc, index); this.viewList(doc).items.splice(index, 1); });
+  }
+
+  /** Move the original YAML node, retaining its comments and custom settings. */
+  moveView(from: number, to: number): void {
+    this.edit(doc => {
+      this.viewAt(doc, from); this.viewAt(doc, to);
+      const views = this.viewList(doc);
+      const [view] = views.items.splice(from, 1); views.items.splice(to, 0, view);
+    });
+  }
+
+  /** The first view is the default; no competing default-name field is persisted. */
+  setDefaultView(index: number): void { this.moveView(index, 0); }
+
+  /** Apply a root patch atomically so malformed settings cannot leave a prefix. */
+  updateRoot(patch: BaseRootPatch): void {
+    if (!patch || typeof patch !== 'object' || (Object.getPrototypeOf(patch) !== Object.prototype && Object.getPrototypeOf(patch) !== null)) throw new BaseDocumentError('A root patch must be a plain mapping');
+    if (Object.getOwnPropertySymbols(patch).length) throw new BaseDocumentError('Symbol keys are not supported in root patches');
+    const entries = Object.getOwnPropertyNames(patch).map(key => {
+      const descriptor = Object.getOwnPropertyDescriptor(patch, key)!;
+      if (!('value' in descriptor) || !descriptor.enumerable) throw new BaseDocumentError('Root patches must contain ordinary enumerable data properties');
+      const value = descriptor.value as BaseValue | undefined;
+      if (value !== undefined) validateInput(value);
+      return [key, value] as const;
+    });
+    this.edit(doc => {
+      for (const [key, value] of entries) {
+        if (value === undefined) doc.delete(key);
+        else doc.set(key, value !== null && typeof value === 'object' ? doc.createNode(value) : value);
+      }
+    });
+  }
+
+  setFormula(name: string, expression: string | undefined): void {
+    if (typeof name !== 'string' || !name.trim()) throw new BaseDocumentError('Formula name must be nonempty');
+    if (expression !== undefined && typeof expression !== 'string') throw new BaseDocumentError('Formula expression must be a string');
+    this.edit(doc => {
+      if (!doc.has('formulas')) {
+        if (expression === undefined) return;
+        doc.set('formulas', doc.createNode({}));
+      }
+      const formulas = doc.get('formulas', true);
+      if (!isMap(formulas)) throw new BaseDocumentError('Base formulas must be a mapping');
+      if (expression === undefined) formulas.delete(name); else formulas.set(name, expression);
+    });
+  }
+
+  /** Rename stored formula identity and its statically addressable references. */
+  renameFormula(from: string, to: string): void {
+    if (typeof from !== 'string' || typeof to !== 'string' || !to.trim()) throw new BaseDocumentError('Formula names must be nonempty strings');
+    this.edit(doc => {
+      const formulas = doc.get('formulas', true);
+      if (!isMap(formulas) || !formulas.has(from)) throw new BaseDocumentError(`Formula not found: ${from}`);
+      if (from === to) return;
+      if (formulas.has(to)) throw new BaseDocumentError('A formula with this name already exists');
+      const pair = formulas.items.find(item => isScalar(item.key) && item.key.value === from)!;
+      if (!pair || !isScalar(pair.key)) throw new BaseDocumentError('The formula key cannot be renamed safely');
+      pair.key.value = to;
+      const expression = (node: unknown) => {
+        if (isScalar(node) && typeof node.value === 'string') node.value = renameFormulaExpression(node.value, from, to);
+      };
+      const expressionMap = (node: unknown) => { if (isMap(node)) for (const item of node.items) expression(item.value); };
+      const filter = (node: unknown): void => {
+        if (isScalar(node)) expression(node);
+        else if (isMap(node)) for (const item of node.items) if (isScalar(item.key) && ['and', 'or', 'not'].includes(String(item.key.value)) && isSeq(item.value)) item.value.items.forEach(filter);
+      };
+      const id = (node: unknown) => { if (isScalar(node) && node.value === `formula.${from}`) node.value = `formula.${to}`; };
+      const propertyMap = (node: unknown) => { if (isMap(node)) for (const item of node.items) id(item.key); };
+      expressionMap(formulas); expressionMap(doc.get('summaries', true));
+      filter(doc.get('filters', true)); propertyMap(doc.get('properties', true));
+      const views = this.viewList(doc);
+      for (const view of views.items) {
+        if (!isMap(view)) throw new BaseDocumentError('Aliased view mappings cannot be edited directly');
+        filter(view.get('filters', true)); propertyMap(view.get('summaries', true));
+        const order = view.get('order', true); if (isSeq(order)) order.items.forEach(id);
+        const group = view.get('groupBy', true); if (isMap(group)) id(group.get('property', true));
+        const sort = view.get('sort', true); if (isSeq(sort)) for (const item of sort.items) if (isMap(item)) { id(item.get('property', true)); id(item.get('column', true)); }
+      }
+    });
   }
 
   setRoot(key: string, value: BaseValue | undefined): void {

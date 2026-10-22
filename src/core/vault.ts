@@ -10,6 +10,13 @@ import type { VaultAdapter, VaultChange, VaultEntry, VaultEvent } from './types.
 import type { DurableWrites, DurableWriteIntent, DurableWriteRead, DurableWriteRef } from './durable-writes.ts';
 
 export type DurableCommitReceipt = Extract<DurableWriteIntent, { state: 'committed' }>['receipt'];
+export interface VaultCreateOperation {
+  readonly path: string;
+  readonly text: string;
+  readonly status: 'ready' | 'creating' | 'uncertain' | 'committed';
+  /** Same captured destination/body/adapter on every retry; never pick another name. */
+  run(): Promise<VaultEntry>;
+}
 export type DurableWriteReconciliation =
   | { readonly status: 'current' | 'advanced'; readonly current: DurableWriteRead }
   | { readonly status: 'missing'; readonly current: null };
@@ -595,6 +602,44 @@ export class Vault {
       this.emit('create', { path, entry });
       return entry;
     });
+  }
+
+  /** Explicit caller-retained creation, separate from unrelated one-shot creates.
+   * An existing destination after an unacknowledged dispatch is not proof of
+   * success. The void adapter API cannot establish its entry identity, so that
+   * case requires host recovery rather than content matching or a second name.
+   */
+  createOperation(rawPath: string, text = '', validate?: () => void): VaultCreateOperation {
+    const path = normalizePath(rawPath), adapter = this.adapter;
+    let status: VaultCreateOperation['status'] = 'ready', inFlight: Promise<VaultEntry> | undefined;
+    let dispatched = false, acknowledged = false, published: VaultEntry | undefined;
+    const owner = this;
+    const check = () => { validate?.(); if (owner.adapter !== adapter) throw new Error('The vault adapter changed before file creation.'); };
+    return Object.freeze({ path, text, get status() { return status; }, run() {
+      if (inFlight) return inFlight;
+      if (published) { try { check(); return Promise.resolve(published); } catch (error) { return Promise.reject(error); } }
+      const result = owner.enqueue(async () => {
+        check(); status = 'creating';
+        try {
+          await owner.refresh(); check();
+          if (!acknowledged) {
+            if (dispatched && owner.entries.has(path)) throw durableFailure('create_reconciliation_required', 'Creation may already have committed. Recover its original operation before retrying; the existing file was not adopted or overwritten.');
+            owner.requireDestination(path);
+            check(); dispatched = true;
+            if (adapter.createText) await adapter.createText(path, text); else await adapter.write(path, text);
+            acknowledged = true;
+          }
+          await owner.refresh(); check();
+          const entry = owner.entries.get(path);
+          if (!entry || entry.type !== 'file') throw durableFailure('created_file_unavailable', 'The created file is no longer available; retry will not recreate it.');
+          published = Object.freeze({ ...entry }); status = 'committed';
+          owner.emit('create', { path, entry: published });
+          return published;
+        } catch (error) { status = dispatched ? 'uncertain' : 'ready'; throw error; }
+      });
+      const tracked = result.finally(() => { if (inFlight === tracked) inFlight = undefined; });
+      inFlight = tracked; return tracked;
+    } });
   }
 
   modify(rawPath: string, text: string, options: { expectedContent?: string; validate?: () => void } = {}): Promise<void> {

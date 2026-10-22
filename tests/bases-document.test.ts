@@ -192,3 +192,32 @@ test('duplicating a view renames internal anchors and preserves external aliases
   assert.throws(() => base.removeView(0), /alias|anchor/i);
   assert.equal(base.toString(), before);
 });
+
+test('view reorder/default moves original YAML nodes and preserves custom settings and comments', () => {
+  const base = BaseDocument.parse('# header\nviews:\n  - type: table\n    name: First # name comment\n    custom: "001"\n  - type: cards\n    name: Second\n');
+  base.moveView(0, 1);
+  assert.deepEqual(base.views.map(view => view.name), ['Second', 'First']);
+  assert.match(base.toString(), /name: First # name comment/); assert.match(base.toString(), /custom: "001"/);
+  base.setDefaultView(1); assert.equal(base.views[0].name, 'First');
+  const before = base.toString(); assert.throws(() => base.moveView(0, 8)); assert.equal(base.toString(), before);
+});
+
+test('atomic root patches preserve source when one key fails validation', () => {
+  const base = BaseDocument.parse(fixture);
+  assert.throws(() => base.updateRoot({ newItemFolder: 'Books', views: true })); assert.equal(base.toString(), fixture);
+  let reads = 0;
+  assert.throws(() => base.updateRoot({ get folders() { reads++; return 'bad'; } })); assert.equal(reads, 0);
+  base.updateRoot({ newItemFolder: 'Books', newItemTemplate: undefined });
+  assert.equal(base.getRoot('newItemFolder'), 'Books'); assert.equal(base.getRoot('newItemTemplate'), undefined);
+  assert.match(base.toString(), /pluginRoot:/);
+});
+
+test('formula rename rewrites typed references while preserving literal text and unknown configuration', () => {
+  const base = BaseDocument.parse(`formulas:\n  old: 'score * 2' # formula comment\n  other: 'formula.old + formula["old"] + "formula.old"'\nfilters: 'formula.old > 0'\nproperties:\n  formula.old: {displayName: Doubled}\ncustom: formula.old\nviews:\n  - type: table\n    name: Table\n    order: [file.name, formula.old]\n    sort: [{property: formula.old, direction: ASC}]\n    groupBy: {property: formula.old, direction: ASC}\n    summaries: {formula.old: Sum}\n`);
+  base.renameFormula('old', 'new name');
+  assert.equal((base.getRoot('formulas') as Record<string, unknown>)['new name'], 'score * 2');
+  assert.equal((base.getRoot('formulas') as Record<string, unknown>).other, '((formula["new name"] + formula["new name"]) + "formula.old")');
+  assert.deepEqual(base.views[0].order, ['file.name', 'formula.new name']); assert.equal(base.getRoot('custom'), 'formula.old');
+  assert.match(base.toString(), /# formula comment/);
+  const before = base.toString(); assert.throws(() => base.renameFormula('new name', 'other'), /already exists/); assert.equal(base.toString(), before);
+});
