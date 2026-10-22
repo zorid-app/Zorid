@@ -129,6 +129,14 @@ export const files = [
   {id: 'project', path: 'Other.md', source: '---\ntype: project\nrating: 99\n---\nMust not appear in the Books Base.\n'},
 ];
 
+// The original scenario deletes Grace and deliberately preserves Delta's raw
+// author link. Property diagnostics cover the complete indexed generation,
+// including when a later Q3 view selects only its own note. This is independent
+// legacy fixture context, not one of the 16 authored Q3 expression diagnostics.
+export const q3LegacyDiagnostics = [
+  {phase:'property',entryId:'delta',path:'Books/Delta.md',property:'note.author',code:'unresolved_relation'},
+];
+
 export const editedCedar = files.find(file => file.id === 'cedar').source
   .replace('rating: 4\n', 'rating: 6\n')
   .replace('status: Todo\n', 'status: Done\n')

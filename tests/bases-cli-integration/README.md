@@ -51,6 +51,22 @@ List sorting. Inert `__proto__` user data is deliberately preserved. Collation i
 the pinned English base-sensitivity/numeric policy, not universal locale parity.
 This follow-up has no actual CLI execution evidence yet.
 
+Actual campaign 004 on frozen `f95ab6beea41999fe45eabfe9e882f7bdb1bec3c`
+stopped at command 102, the first Q3 query, after the original seven checks passed.
+Its exact diagnostic assertion omitted the unresolved Delta relation deliberately
+left by the original Grace-deletion scenario. The failed evidence is retained at
+`/private/tmp/zorid-bases-cli-actual-20261022-004/zorid-bases-cli-QAGBqc/report.json`.
+No Q3 group completed, and this is not a 125-command campaign pass.
+
+The corrected CLI oracle separately declares that original fixture diagnostic:
+phase `property`, entry `delta`, path `Books/Delta.md`, property `note.author`, code
+`unresolved_relation`. It binds the authored identity/path to the normal committed
+receipt and compares the complete diagnostic multiset, including phase and entry
+identity. Missing, changed, duplicate or unknown diagnostics still fail. The 16
+Q3 expression diagnostics remain distinct from this one legacy context diagnostic
+expected in each Q3 query. Browser expectations, all 127 typed row oracles and the
+125-command plan remain unchanged. A fresh actual campaign is still required.
+
 Read-only `--help` and `base-query --help` inspection used the older existing
 October 20 CLI artifact with SHA-256
 `e48d7d949fb84a2c9d89d5995f3f33b757598eb64584bc3d4c8e20df4e649e78`.

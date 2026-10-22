@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import {q3Files, q3Folders, q3Groups} from '../fixtures/bases-q3-semantics.mjs';
+import {files,q3LegacyDiagnostics} from './fixtures.mjs';
 
 // This is an assertion layer over independently authored inert expectations.
 // No product imports, expression evaluator, source parser or expected-value
 // derivation from the queried result is permitted here.
-const diagnosticKey = issue => [issue.path ?? null, issue.property ?? null, issue.code];
+const diagnosticKey = issue => [issue.phase ?? null,issue.entryId ?? null,issue.path ?? null,issue.property ?? null,issue.code];
 const orderedDiagnostics = issues => issues.map(diagnosticKey)
   .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
 const objectPrototypeDescriptors=Object.getOwnPropertyDescriptors(Object.prototype);
@@ -39,6 +40,26 @@ function expectedWithWitnesses(value, states, parentType, key) {
   if (Array.isArray(value)) return value.map(child => expectedWithWitnesses(child, states));
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([childKey, child]) => [childKey, expectedWithWitnesses(child, states, value.type, childKey)]));
   return value;
+}
+
+function expectedDiagnostics(group,states){
+  const bound=(issue,file)=>{
+    assert.ok(file,`${group.name}: unknown authored diagnostic source`);
+    assert.equal(file.id,issue.entryId,`${group.name}: authored diagnostic identity mismatch`);
+    assert.equal(file.path,issue.path,`${group.name}: authored diagnostic path mismatch`);
+    const receipt=states.get(file.id);
+    assert.equal(receipt?.id,file.id,`${group.name}: missing committed diagnostic receipt`);
+    assert.equal(receipt.path,file.path,`${group.name}: diagnostic receipt path changed`);
+    assert.equal(typeof receipt.revision,'string',`${group.name}: missing diagnostic revision`);
+    assert.ok(receipt.revision.length>0,`${group.name}: empty diagnostic revision`);
+    return issue;
+  };
+  const q3=group.diagnostics.map(issue=>{
+    const file=q3Files.find(file=>file.path===issue.path);
+    return bound({...issue,phase:'value',entryId:file?.id},file);
+  });
+  const legacy=q3LegacyDiagnostics.map(issue=>bound(issue,files.find(file=>file.id===issue.entryId)));
+  return{q3,legacy,all:[...q3,...legacy]};
 }
 
 export function assertQ3Result(result, group, states) {
@@ -84,11 +105,7 @@ export function assertQ3Result(result, group, states) {
     assert.equal(keyIds.size, result.groups.length, `${group.name}: provenance groups must retain distinct opaque key IDs`);
     assert.equal(actualMemberships.size, expectedGroups.size, `${group.name}: every authored group appears exactly once`);
   }
-  for(const issue of result.diagnostics){
-    const file=byPath.get(issue.path);assert.ok(file,`${group.name}: diagnostic has a foreign source path`);
-    assert.equal(issue.entryId,file.id,`${group.name}: exact diagnostic source identity`);
-  }
-  assert.deepEqual(orderedDiagnostics(result.diagnostics), orderedDiagnostics(group.diagnostics), `${group.name}: exact diagnostic path/property/code, including duplicates`);
+  assert.deepEqual(orderedDiagnostics(result.diagnostics),orderedDiagnostics(expectedDiagnostics(group,states).all),`${group.name}: exact Q3 and legacy diagnostic phase/identity/path/property/code, including duplicates`);
 }
 
 export async function runQ3Campaign({mkdir, create, build, query, exportSource, states, evidence}) {
@@ -104,7 +121,8 @@ export async function runQ3Campaign({mkdir, create, build, query, exportSource, 
     evidence.checks.push({name: `Q3: ${group.name}`, snapshot,
       clockMs: group.clockMs, timezone: group.timezone,
       expectedRows: expectedWithWitnesses(group.rows, states), expectedSummaries: expectedWithWitnesses(group.summaries ?? {}, states),
-      expectedGroups: expectedWithWitnesses(group.groups, states), expectedDiagnostics: group.diagnostics});
+      expectedGroups: expectedWithWitnesses(group.groups, states), expectedDiagnostics: expectedDiagnostics(group,states).all,
+      expectedQ3Diagnostics:expectedDiagnostics(group,states).q3,expectedLegacyContextDiagnostics:expectedDiagnostics(group,states).legacy});
   }
   // Export every new authoritative input byte-for-byte after all queries. This
   // detects accidental formula materialization as well as changed note bodies.
