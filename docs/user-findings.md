@@ -10,7 +10,16 @@ The existing runtime-dependency regression reproduces the omission. All three
 are now included; that regression runs before packaging. All18 package tests
 pass; independent review approved the allowlist fix. `pnpm build:mac` builds the
 current native host and renderer, uses installed Electron and verifies the app.
-Packaged launch and Applications installation remain pending verification.
+Independent final review approved27e0e5ba; integrated as5e910fdf. Main
+`pnpm build:mac` passes (native host, TypeScript, native renderer, dependency
+preflight, local Electron packaging and354-file verification). Actual packaged
+launch opens a disposable vault note with no renderer exception; the owned app
+then exits normally. The initial smoke harness proved note opening but stalled
+awaiting a shutdown reply; corrected debugger-close handling passes exit0.
+Installed at `/Applications/Zorid.app`, verified again after copying; Desktop
+`Zorid.app` now links there. No user vault/app data was changed. Evidence:
+`.worktrees/s1-evidence/desktop-package-20261021/`. This establishes the tested
+startup/note-open path, not all app behavior or Apple signing/notarization.
 
 ## Work blocks and time entries are note-backed — 2026-10-20
 
