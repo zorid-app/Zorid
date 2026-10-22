@@ -9,6 +9,34 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Resume update, 2026-10-22: user explicitly resumed the paused implementation.
+Root isolated HEAD `307f801f` composes reviewed host rescan recovery
+(`9e46750e` → `87eab7dc`) and Date/String comparison
+(`3a312aff` → `307f801f`); both await actual Rust acceptance. Serialized
+release/offline/j1 library checks for `zorid-bases` and `zorid-desktop-host`
+are running in session47903, log
+`/private/tmp/zorid-bases-resume-core-20261022-001.log`. No other heavy build or
+owned Electron app was running at admission; free disk3982880KiB.
+Main remains untouched. Last verified products remain Rust8074/build004;
+new source is not yet represented by those products.
+
+Since the older notes below, reviewed File filter UI, saved-vault operand
+provider, immutable typed group projection and scoped harness routes were
+composed through `b3e4a300`. File UI has93/93 independent focused tests and4/4
+edge probes passing; provider6/6 and harness3/3 pass. Desktop build005 stopped
+at TS2352 in filter group projection; `1d7b1ada` fixes that with8/8 focused
+model tests, but desktop rebuild remains pending. Native safety005 established
+a physical-file publication gap after conditional Undo (core/UI score1,
+physical score9), addressed by the pending host fix above. Properties002
+still fails ordinary-note relation rendering. Private real-metadata replay
+isolates self-cancellation during same-frame stale/current notifications;
+`bases_embeds` owns the manager + focused tests on isolated
+`codex/bases-property-target-lifecycle`. `bases_toolbar` owns the next typed
+filter controls on `codex/bases-typed-filter-ui`, with `bases_session` owning
+the separately coordinated readonly descriptor seam. `bases_e2e` owns the
+single CLI fixture inventory assertion146→162. No runtime acceptance is
+implied by these assignments or source reviews.
+
 Current as of2026-10-22: isolated branch `codex/types-bases-model`, worktree
 `.worktrees/types-bases-model`; root is sole main integration owner. Main remains
 `e7d655e1`. Full [implementation goal](plans/bases-implementation-goal.md) is active,
