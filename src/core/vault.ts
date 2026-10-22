@@ -773,12 +773,18 @@ export class Vault {
             replacement = rooted ? `/${newTarget}` : relative ? relativePath(newSource, newTarget) : newTarget;
             if (!/\.md$/i.test(original)) replacement = replacement.replace(/\.md$/i, '');
             if (original.startsWith('./') && !replacement.startsWith('.')) replacement = `./${replacement}`;
+            // Decoding precedes scheme rejection in the resolver. Rooting a
+            // scheme-like filename keeps it local even after percent decoding.
+            if (/^[a-z][\w+.-]*:/i.test(replacement)) replacement = `/${replacement}`;
             // Rooted generated relations retain their escaped path form. Even
             // ordinary wiki links must escape syntax delimiters and percent so
             // a literal filename cannot become a fragment, alias or escape.
             const escaped = /%[0-9a-f]{2}/i.test(link.target);
             replacement = escaped ? replacement.split('/').map(segment => encodeURIComponent(segment).replace(/[!'()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)).join('/')
               : replacement.replace(/[%#|\[\]'"\r\n]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
+            // The resolver trims before decoding. Escape boundary whitespace
+            // after literal percent escaping so an extensionless stem survives.
+            replacement = replacement.split('/').map(segment => segment.replace(/^\s+|\s+$/g, whitespace => encodeURIComponent(whitespace))).join('/');
           }
           after = after.slice(0, link.start) + replacement + after.slice(link.end);
         }

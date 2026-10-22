@@ -106,6 +106,25 @@ test('literal percent escapes remain literal filename text after wiki target ren
   const note = vault.metadata.get('Link.md')!; assert.equal(note.links.length, 1); assert.equal(vault.metadata.resolveLink('Link.md', note.links[0].target), 'New%20Name#Part|End[].md');
 });
 
+for (const [destination, target] of [
+  ['http:New.md', '/http:New'],
+  [' New.md', '%20New'],
+  ['New .md', 'New%20'],
+  [' New .md', '%20New%20'],
+  ['\u00a0New\u00a0.md', '%C2%A0New%C2%A0'],
+]) test(`wiki rename resolves scheme-like or edge-whitespace filename ${JSON.stringify(destination)} to the same stable identity`, async () => {
+  const adapter = new IdentityAdapter({ 'Old.md': 'person', 'Nested/Book.md': '---\nauthor: "[[Old|Author]]"\n---\n![[Old#Bio|portrait]]\n' });
+  const vault = new Vault(adapter); await vault.initialize(); const id = (await adapter.stat('Old.md'))!.entryId;
+  await vault.rename('Old.md', destination);
+  const saved = await adapter.read('Nested/Book.md');
+  assert.equal(saved, `---\nauthor: "[[${target}|Author]]"\n---\n![[${target}#Bio|portrait]]\n`);
+  const metadata = mutationMetadata(vault, 'Nested/Book.md', saved);
+  for (const link of metadata.get('Nested/Book.md')!.links) {
+    const resolved = metadata.resolveLink('Nested/Book.md', link.target, link.kind);
+    assert.equal(resolved, destination); assert.equal((await adapter.stat(resolved!))!.entryId, id);
+  }
+});
+
 test('affected complex YAML links reject before namespace mutation while unrelated complex links do not block a rename', async () => {
   const source = '---\nauthor: |-\n  [[/Author.md]]\n---\nbody\n';
   const adapter = new MemoryAdapter({ 'Author.md': 'author', 'Other.md': 'other', 'Book.md': source }), vault = new Vault(adapter); await vault.initialize();
