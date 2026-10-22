@@ -2,6 +2,21 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Electron011 reaches171 actions/20 checks. Both focused width91 resize and Home
+override removal pass, verifying the prior queue failure in this interim lane.
+The next numeric edit is rejected as stale; original saved rating1 is preserved.
+Its precise native timing is not established. Passive controller/render/widget
+version markers and read-only first-edit frames are reviewed, awaiting actual012.
+Do not weaken stale guards or discard the retained draft to pass the journey.
+Full evidence: [Electron011](history/bases-electron-heavy-011-20261022.md).
+
+The composed Q3 Rust suite now passes288 tests across17 targets, plus3 focused
+native property-target tests. These do not establish actual new-core browser,
+CLI, desktop or visual acceptance. REA also confirms a remaining expression
+construction gap: malformed regex literals must diagnose even in untaken
+branches. A bounded checked-admission fix is assigned; valid-JavaScript features
+unsupported by the portable regex engine remain separately classified.
+
 Configuration001 initially shows0 Base results while durable admission has
 reached726/1023 files, including0 Records notes. Fixture bytes independently
 validate. A bounded read-only startup precondition is being added; the original

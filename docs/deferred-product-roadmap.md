@@ -9,6 +9,43 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+2026-10-22 current isolated core candidate `8c2d4c35`, Rust tree
+`513fe752302763b12c5658755f2b301a30e3bc05`, passes the complete Bases Rust
+suite: **288 tests across17 targets**, zero failures. Retained log:
+`/private/tmp/zorid-bases-q3-full-composed-003.log`. Three focused native
+property-target tests also pass in
+`/private/tmp/zorid-bases-q3-native-targets-001.log`. This supersedes the
+compile-not-ready state below; matching product native/CLI/WASM artifacts and
+actual expanded transport campaigns remain pending. No build/app is live after
+the native test exit. The unrelated installed Zorid app remains user-owned.
+
+Actual Heavy011 stops at171 actions/20 checks. ArrowRight width91 and Home
+override removal both pass; the first numeric edit is rejected by the client
+stale-result guard and original saved rating1 remains intact. Exact native
+timing is unclassified. See [the retained evidence record](history/bases-electron-heavy-011-20261022.md).
+All owned test processes are closed. Reviewed passive controller/render/widget
+version markers and seven read-only numeric-edit frames are prepared in the
+frontend lane at `5082a703`; actual012 has not built/launched. Preserve stale
+and durable-save guards while determining whether the result was stale before
+opening or advanced during editing.
+
+REA independently confirms a remaining regex construction-phase defect:
+malformed literals invalidate an expression even in untaken branches in the
+reference. `bases_expressions` owns checked AST literal admission on isolated
+branch `codex/bases-regex-admission` from `8c2d4c35`; `bases_summaries` advises
+prepare-once/query/summary seams, `bases_docs_model` records the primary evidence.
+Admission must retain cancellation/work/memory limits and distinguish malformed
+supported syntax from valid JavaScript features unsupported by the portable
+engine. No new runtime acceptance follows from this reference audit.
+
+Disk is about222MiB free after completed native tests, below the actual-run
+1GiB guard. Recovery is scoped to reproducible owned caches; preserve source,
+reports/screenshots and product artifacts. Older verified native/CLI binaries
+are cloned with hashes under `/private/tmp/zorid-bases-preserved-native-5e010112/`
+so later builds cannot silently change the frontend lane's artifact association.
+`bases_ui_review` is investigating additional safe recovery read-only; no build
+or app slot is granted. Main remains unchanged at `e7d655e1`.
+
 2026-10-22 root core integration is now `ec313e7f` before this record: reviewed
 Duration, collection/Regex identity, exact-source prepared formulas and captured
 relation provenance are composed. This frontier is **not compile-ready yet**:
