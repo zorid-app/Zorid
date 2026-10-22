@@ -50,7 +50,10 @@ async function resolvedDestination(destination) {
   }
 }
 const hostPath = args.has('--host') ? await fs.realpath(args.get('--host')) : null;
-const protectedRoots = [await fs.realpath(repo), path.dirname(cli), ...(hostPath ? [path.dirname(hostPath)] : [])];
+const commonGitDirectory = await fs.realpath(path.resolve(repo, await git('rev-parse', '--git-common-dir')));
+const canonicalSourceRoot = path.dirname(commonGitDirectory);
+const registeredWorktrees = (await git('worktree', 'list', '--porcelain', '-z')).split('\0').filter(field => field.startsWith('worktree ')).map(field => field.slice('worktree '.length));
+const protectedRoots = [...new Set([await fs.realpath(repo), canonicalSourceRoot, ...await Promise.all(registeredWorktrees.map(root => fs.realpath(root))), path.dirname(cli), ...(hostPath ? [path.dirname(hostPath)] : [])])];
 function assertFixtureParent(destination) {
   for (const root of protectedRoots) {const relative = path.relative(root, destination);assert.ok(relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative), `Fixture output must be outside protected source/artifact root: ${root}`);}
 }
