@@ -9,6 +9,34 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+2026-10-22 actual Electron009 at `cfe5627e` reaches160 actions/16 checks and
+verifies expanded Summary actions/deletion in the real app. It then stops at
+keyboard resize. Independent reproduction proves a product defect: a same-view
+summary/result refresh replaces the focused header/separator, leaving BODY
+focused and ArrowRight ineffective. Reviewed fix `857438a0` preserves the same
+surviving property/control without stealing outside focus;7 root regressions
+pass. Harness `c4f48bca` additionally waits for the exact saved/published summary
+selection and records key focus. Actual rebuilt retry remains required. All
+owned009 processes are closed and source/artifact fingerprints agree.
+
+Final-artifact CLI003 at `cfe5627e` passes85 commands/7 checks/30 exports;
+independent verification checks all10 authoritative files byte-for-byte,
+hashes, expected exits and summary oracles. Record: `98c6fda8` and
+`tests/bases-cli-integration/acceptance-20261022.md`. Browser004 passes groups0–5
+then catches an invalid fixture expectation: deliberately unreadable metadata
+correctly makes reverse aggregates unavailable. Tests-only `db0f477e` now
+separates healthy rollups from a malformed-source stage, explicitly verifies
+unavailable diagnostics/plain-link choices, restores exact valid bytes and
+rechecks retained snapshots. A complete matching browser rerun remains pending.
+
+Source-only hover helper/factory review continues, including pending mount abort,
+binary lease disposal and ordinary property-draft retention. A test-only genuine
+native stdio relay campaign is being authored by `bases_relations` to prove held
+accepted writes/newer drafts and uncertain-create restart recovery without fake
+acks. Shared runner path/provenance/relay seams remain `bases_e2e`-owned. No new
+production bridge reconnect is authorized; a fatal transport still requires
+restart and must be reported honestly. Main remains unchanged.
+
 2026-10-22 reviewed source composition and rebuild: Rust closure
 `5e010112661da69eb290d6a5edb72d4906e844a1` passes194 tests across13 core targets,
 native property-target3 and native-compiled WASM property-target2. The first
