@@ -824,6 +824,8 @@ pub(crate) fn evaluate_summary(
     };
     let mut evaluator = Evaluator::new(&context);
     evaluator.summary_only = true;
+    regex_admission::fatal_summary_inputs(values, &mut |work| evaluator.charge(work))
+        .map_err(runtime_diagnostic)?;
     let ast = parse_cached(source)
         .map_err(|message| {
             let (code, text) = message.split_once('\0').unwrap_or(("parse", &message));

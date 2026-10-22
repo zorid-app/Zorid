@@ -197,3 +197,75 @@ fn admission_does_not_replace_literal_identity_or_run_dependency_compilers() {
         "parse"
     );
 }
+
+#[test]
+fn summary_nested_fatal_inputs_precede_semantic_constructor_failures_without_file_lookup() {
+    for code in ["cancelled", "budget"] {
+        let fatal = BaseValue::Error {
+            code: code.into(),
+            message: "imported guard must remain fatal".into(),
+        };
+        let nested = BaseValue::Object {
+            value: vec![(
+                "nested".into(),
+                BaseValue::List {
+                    value: vec![BaseValue::Link {
+                        path: "Unavailable.md".into(),
+                        subpath: None,
+                        target: None,
+                        display: None,
+                        display_value: Some(Box::new(fatal)),
+                        external: false,
+                    }],
+                },
+            )],
+        };
+        let error = evaluate_summary(
+            "if(false,/(/,1)",
+            &[&nested],
+            &[],
+            None,
+            &crate::EvaluationOptions::default(),
+            None,
+            None,
+            |_| panic!("fatal preflight must not hydrate files"),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, code);
+        assert_eq!(error.message, "imported guard must remain fatal");
+    }
+    let ordinary_error = BaseValue::Error {
+        code: "unavailable".into(),
+        message: "ordinary error data".into(),
+    };
+    let result = evaluate_summary(
+        "if(false,/(/,1)",
+        &[&ordinary_error],
+        &[],
+        None,
+        &crate::EvaluationOptions::default(),
+        None,
+        None,
+        |_| panic!("semantic admission must not hydrate files"),
+    )
+    .unwrap();
+    assert!(matches!(result.value, BaseValue::Error { ref code, .. } if code == "parse"));
+    let oversized = BaseValue::String {
+        value: "x".repeat(8 * 1024 * 1024 + 1),
+    };
+    assert_eq!(
+        evaluate_summary(
+            "if(false,/(/,1)",
+            &[&oversized],
+            &[],
+            None,
+            &crate::EvaluationOptions::default(),
+            None,
+            None,
+            |_| panic!("resource preflight must not hydrate files")
+        )
+        .unwrap_err()
+        .code,
+        "budget"
+    );
+}

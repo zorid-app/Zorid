@@ -63,3 +63,93 @@ pub(super) fn admit(
     }
     visit(expression, 0, check)
 }
+
+/// Imported budget/cancellation errors are fatal even when construction fails.
+/// This checks only inert transport data; it never resolves File/Link metadata.
+pub(super) fn fatal_summary_inputs(
+    values: &[&BaseValue],
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<(), RuntimeValue> {
+    fn text(
+        value: &str,
+        bytes: &mut usize,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<(), RuntimeValue> {
+        check(value.len() / 16 + 1)?;
+        *bytes = bytes.saturating_add(value.len());
+        if *bytes > 8 * 1024 * 1024 {
+            return Err(RuntimeValue::Error(
+                "budget\0Summary inputs exceed byte budget".into(),
+            ));
+        }
+        Ok(())
+    }
+    fn visit(
+        value: &BaseValue,
+        depth: usize,
+        bytes: &mut usize,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<(), RuntimeValue> {
+        check(1)?;
+        *bytes = bytes.saturating_add(64);
+        if depth > 128 || *bytes > 8 * 1024 * 1024 {
+            return Err(RuntimeValue::Error(
+                "budget\0Summary inputs exceed depth/byte budget".into(),
+            ));
+        }
+        match value {
+            BaseValue::List { value } => {
+                for value in value {
+                    visit(value, depth + 1, bytes, check)?;
+                }
+            }
+            BaseValue::Object { value } => {
+                for (key, value) in value {
+                    text(key, bytes, check)?;
+                    visit(value, depth + 1, bytes, check)?;
+                }
+            }
+            BaseValue::Link {
+                path,
+                subpath,
+                target,
+                display,
+                display_value,
+                ..
+            } => {
+                text(path, bytes, check)?;
+                for value in [subpath, display] {
+                    if let Some(value) = value {
+                        text(value, bytes, check)?;
+                    }
+                }
+                if let Some(target) = target {
+                    text(target.entry_id.as_str(), bytes, check)?;
+                    text(target.revision.as_str(), bytes, check)?;
+                }
+                if let Some(value) = display_value {
+                    visit(value, depth + 1, bytes, check)?;
+                }
+            }
+            BaseValue::String { value }
+            | BaseValue::Html { value }
+            | BaseValue::Image { value }
+            | BaseValue::Icon { value } => text(value, bytes, check)?,
+            BaseValue::File { path } => text(path, bytes, check)?,
+            BaseValue::Error { code, message } => {
+                text(code, bytes, check)?;
+                text(message, bytes, check)?;
+                if ["budget", "cancelled"].contains(&code.as_str()) {
+                    return Err(RuntimeValue::Error(format!("{code}\0{message}")));
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    let mut bytes = 0;
+    for value in values {
+        visit(value, 0, &mut bytes, check)?;
+    }
+    Ok(())
+}
