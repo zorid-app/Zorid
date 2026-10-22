@@ -1,6 +1,6 @@
 //! Optional vault-wide value definitions, independent of named note types.
 //! The original YAML and unknown settings stay authoritative and unchanged.
-use crate::{ExpressionDiagnostic, IndexSnapshotId, PropertyValue, RecordWitness};
+use crate::{BaseValue, ExpressionDiagnostic, IndexSnapshotId, PropertyValue, RecordWitness};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use zorid_core::EntryId;
@@ -379,4 +379,66 @@ fn validate_definition(name: &str, definition: &PropertyDefinition) -> Result<()
         _ => {}
     }
     Ok(())
+}
+
+/// Read-time interpretation only. Incompatible external values are returned
+/// intact with a diagnostic, rather than silently coerced or erased.
+pub(crate) fn scalar_property_value(
+    value: &PropertyValue,
+    definition: &PropertyDefinition,
+    timezone: &crate::expression::BasesTimezone,
+) -> Result<(BaseValue, Option<&'static str>), ExpressionDiagnostic> {
+    use PropertyKind as K;
+    let raw_runtime = crate::runtime_value(value, 0, &mut 0usize)?;
+    let raw = crate::expression::typed_result(raw_runtime.clone())?;
+    if matches!(value, PropertyValue::Null) {
+        return Ok((raw, None));
+    }
+    let compatible = match definition.kind {
+        K::Text => matches!(value, PropertyValue::String(_)),
+        K::Number => matches!(value, PropertyValue::Number(_)),
+        K::Checkbox => matches!(value, PropertyValue::Bool(_)),
+        K::List => matches!(value, PropertyValue::Array(_)),
+        K::Tags | K::Multiselect => {
+            matches!(value, PropertyValue::Array(values) if values.iter().all(|value| matches!(value, PropertyValue::String(_))))
+        }
+        K::Select | K::Status => matches!(value, PropertyValue::String(_)),
+        K::Date | K::Datetime => {
+            let hint = if definition.kind == K::Date {
+                crate::PropertyType::Date
+            } else {
+                crate::PropertyType::Datetime
+            };
+            let interpreted = crate::expression::apply_property_type(raw_runtime, &hint, timezone);
+            if matches!(interpreted, crate::expression::RuntimeValue::Date(_)) {
+                return Ok((crate::expression::typed_result(interpreted)?, None));
+            }
+            false
+        }
+        _ => return Ok((raw, None)),
+    };
+    if !compatible {
+        return Ok((raw, Some("Property value is incompatible with its configured value type; source value is preserved")));
+    }
+    if matches!(definition.kind, K::Select | K::Status | K::Multiselect) {
+        let selected = match value {
+            PropertyValue::String(value) => vec![value.as_str()],
+            PropertyValue::Array(values) => {
+                values.iter().filter_map(PropertyValue::as_str).collect()
+            }
+            _ => Vec::new(),
+        };
+        if selected.iter().any(|selected| {
+            !definition
+                .options
+                .iter()
+                .any(|option| option.value == *selected)
+        }) {
+            return Ok((
+                raw,
+                Some("Property contains an unknown option; source value is preserved"),
+            ));
+        }
+    }
+    Ok((raw, None))
 }

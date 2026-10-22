@@ -287,14 +287,65 @@ pub fn query_property_relations(
             result.clock_dependency = result.clock_dependency.join(dependency);
         }
     }
+    let timezone = BasesTimezone::from_setting(Some(&options.evaluation.timezone))
+        .map_err(|message| ExpressionDiagnostic::new("input", message))?;
+    for record in &snapshot.records {
+        for (name, definition) in definitions.iter().filter(|(_, definition)| {
+            !matches!(
+                definition.kind,
+                PropertyKind::Link
+                    | PropertyKind::Relation
+                    | PropertyKind::ReverseRelation
+                    | PropertyKind::Rollup
+            )
+        }) {
+            budget.charge(1)?;
+            let Some(value) = raw(record, name) else {
+                continue;
+            };
+            let witness = record.witness.as_ref().ok_or_else(|| {
+                ExpressionDiagnostic::new(
+                    "unavailable",
+                    "Property definitions require file witnesses",
+                )
+            })?;
+            budget.keep(value)?;
+            let (value, diagnostic) =
+                crate::properties::scalar_property_value(value, definition, &timezone)?;
+            if let Some(message) = diagnostic {
+                issue(
+                    &mut result.diagnostics,
+                    record,
+                    name,
+                    "incompatible_property_value",
+                    message,
+                    &mut budget,
+                )?;
+            }
+            budget.keep(&(witness, name, &value))?;
+            result
+                .rows
+                .entry(witness.entry_id.clone())
+                .or_insert_with(|| PropertyRelationRow {
+                    witness: witness.clone(),
+                    values: BTreeMap::new(),
+                })
+                .values
+                .insert(name.clone(), value);
+        }
+    }
     let has_relations = definitions.iter().any(|(_, d)| {
         matches!(
             d.kind,
-            PropertyKind::Relation | PropertyKind::ReverseRelation | PropertyKind::Rollup
+            PropertyKind::Link
+                | PropertyKind::Relation
+                | PropertyKind::ReverseRelation
+                | PropertyKind::Rollup
         )
     });
     if !has_relations {
         result.steps_used = budget.used;
+        crate::encoded_size(&result, options.max_output_bytes)?;
         return Ok(result);
     }
     let graph = snapshot.relationships.as_ref().ok_or_else(|| {
@@ -349,11 +400,13 @@ pub fn query_property_relations(
                         "Relation target filtering exhausted its work budget",
                     ));
                 }
-                let (value, used) = crate::with_session(
+                let (value, used) = crate::with_session_properties(
                     filter,
                     record,
                     &invocation,
                     Some(&relationships),
+                    None,
+                    Some(&result),
                     |session| {
                         let value = session.evaluate(filter);
                         Ok((value, session.steps_used()))
@@ -411,7 +464,7 @@ pub fn query_property_relations(
         let witness = record.witness.as_ref().expect("sealed record");
         for (name, definition) in definitions
             .iter()
-            .filter(|(_, d)| d.kind == PropertyKind::Relation)
+            .filter(|(_, d)| matches!(d.kind, PropertyKind::Link | PropertyKind::Relation))
         {
             budget.charge(1)?;
             let settings = definition.relation.clone().unwrap_or_default();
@@ -500,17 +553,32 @@ pub fn query_property_relations(
                 // Match the existing resolver's deterministic first-candidate
                 // policy. Identity is the selected EntryId, never the raw path.
                 let target = candidates.first().copied();
-                let accepted = target.is_some_and(|target| allowed[name].contains(&target.id));
+                let external = zorid_index::is_external_destination(&path).unwrap_or(false);
+                let accepted = if definition.kind == PropertyKind::Link {
+                    target.is_some() || external
+                } else {
+                    target.is_some_and(|target| allowed[name].contains(&target.id))
+                };
                 if target.is_some() && !accepted {
                     issue(&mut result.diagnostics, record, name, "relation_target_filter", "Related file does not satisfy its target filter or its metadata is unavailable", &mut budget)?;
                 }
-                if target.is_none() {
+                if target.is_none() && !external {
                     issue(
                         &mut result.diagnostics,
                         record,
                         name,
                         "unresolved_relation",
                         "Related file cannot be resolved in this generation",
+                        &mut budget,
+                    )?;
+                }
+                if external && definition.kind == PropertyKind::Relation {
+                    issue(
+                        &mut result.diagnostics,
+                        record,
+                        name,
+                        "invalid_relation",
+                        "Relation targets must be notes; external URL is preserved",
                         &mut budget,
                     )?;
                 }
@@ -524,12 +592,12 @@ pub fn query_property_relations(
                         revision: entry.revision.clone(),
                     }),
                     display,
-                    external: false,
+                    external,
                 };
                 budget.keep(&link)?;
                 values.push(link);
-                if accepted {
-                    let target = &target.expect("accepted target").id;
+                if let Some(target) = target.filter(|_| accepted) {
+                    let target = &target.id;
                     if seen_targets.insert(target.clone()) {
                         targets.push(target.clone());
                         let reverse = incoming.entry((target.clone(), name.clone())).or_default();
@@ -604,7 +672,7 @@ pub fn query_property_relations(
         for (name, definition) in definitions.iter() {
             budget.charge(1)?;
             match definition.kind {
-                PropertyKind::Relation | PropertyKind::ReverseRelation => {
+                PropertyKind::Link | PropertyKind::Relation | PropertyKind::ReverseRelation => {
                     values.insert(
                         name.clone(),
                         states[&(witness.entry_id.clone(), name.clone())]
@@ -621,6 +689,7 @@ pub fn query_property_relations(
                         &by_id,
                         &unavailable,
                         &relationships,
+                        &result,
                         &mut BTreeSet::new(),
                         &mut budget,
                     )?;
@@ -642,13 +711,15 @@ pub fn query_property_relations(
         }
         if !values.is_empty() {
             budget.keep(&values)?;
-            result.rows.insert(
-                witness.entry_id.clone(),
-                PropertyRelationRow {
+            result
+                .rows
+                .entry(witness.entry_id.clone())
+                .or_insert_with(|| PropertyRelationRow {
                     witness: witness.clone(),
-                    values,
-                },
-            );
+                    values: BTreeMap::new(),
+                })
+                .values
+                .extend(values);
         }
     }
     result.steps_used = budget.used;
@@ -665,6 +736,7 @@ fn rollup_value(
     records: &HashMap<EntryId, &DetachedRecord>,
     unavailable: &BTreeSet<&EntryId>,
     relationships: &crate::graph::PreparedRelationships<'_>,
+    scalars: &PropertyRelationValues,
     visiting: &mut BTreeSet<RelationKey>,
     budget: &mut Budget<'_>,
 ) -> Result<BaseValue, ExpressionDiagnostic> {
@@ -717,11 +789,18 @@ fn rollup_value(
                 records,
                 unavailable,
                 relationships,
+                scalars,
                 visiting,
                 budget,
             )?
         } else if let Some(state) = states.get(&(target.clone(), property.to_string())) {
             state.value.clone()
+        } else if let Some(value) = scalars
+            .rows
+            .get(target)
+            .and_then(|row| row.values.get(property))
+        {
+            value.clone()
         } else {
             let expression = format!("note[{}]", serde_json::to_string(property).expect("string"));
             let invocation = budget.evaluation();

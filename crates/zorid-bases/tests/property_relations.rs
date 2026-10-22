@@ -487,6 +487,100 @@ fn clock_dependent_target_filters_refresh_even_when_the_base_expression_is_stati
 }
 
 #[test]
+fn scalar_definitions_override_inference_and_preserve_incompatible_external_values() {
+    let settings = "properties:\n  code: {type: text}\n  published: {type: date}\n  score: {type: number}\n  category:\n    type: select\n    options: [{value: Known}]\n  topics:\n    type: multiselect\n    options: [{value: Known}]\n";
+    let generation = generation(settings, &[
+        ("first", "---\ncode: '2026-01-01'\npublished: invalid-date\nscore: excellent\ncategory: Unknown\ntopics: [Known, Unknown]\n---\n"),
+        ("second", "---\ncode: '2026-01-01'\npublished: 2026-01-01\nscore: 4\ncategory: Known\ntopics: [Known]\n---\n"),
+    ]);
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), settings)
+            .unwrap();
+    let program = compile_base_source("filters: 'file.inFolder(\"Books\")'\nviews:\n  - type: table\n    name: Books\n    order: [file.name, code, published, score, category, topics]\n").unwrap();
+    let result = query_generation_with_properties(
+        &program,
+        &generation,
+        &[],
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    let first = result
+        .rows
+        .iter()
+        .find(|row| row.entry_id == id("first"))
+        .unwrap();
+    let second = result
+        .rows
+        .iter()
+        .find(|row| row.entry_id == id("second"))
+        .unwrap();
+    assert_eq!(
+        first.values["note.code"],
+        BaseValue::String {
+            value: "2026-01-01".into()
+        }
+    );
+    assert_eq!(
+        first.values["note.published"],
+        BaseValue::String {
+            value: "invalid-date".into()
+        }
+    );
+    assert_eq!(
+        first.values["note.score"],
+        BaseValue::String {
+            value: "excellent".into()
+        }
+    );
+    assert_eq!(
+        second.values["note.published"],
+        BaseValue::Date {
+            timestamp: 1767225600000,
+            has_time: false
+        }
+    );
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(
+                |diagnostic| diagnostic.phase == "property" && diagnostic.entry_id == id("first")
+            )
+            .count(),
+        4
+    );
+}
+
+#[test]
+fn plain_link_definitions_resolve_notes_and_preserve_external_urls() {
+    let settings = "properties:\n  reference: {type: link}\n";
+    let generation = generation(
+        settings,
+        &[
+            ("first", "---\nreference: '[[Authors/Ada|Ada]]'\n---\n"),
+            ("second", "---\nreference: https://example.org/books\n---\n"),
+        ],
+    );
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), settings)
+            .unwrap();
+    let values = query_property_relations(
+        &BaseSnapshot::from_generation(&generation, &[]).unwrap(),
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert!(
+        matches!(&values.rows()[&id("first")].values["reference"], BaseValue::Link { path, target: Some(target), external: false, .. } if path == "Authors/Ada.md" && target.entry_id == id("ada"))
+    );
+    assert!(
+        matches!(&values.rows()[&id("second")].values["reference"], BaseValue::Link { path, target: None, external: true, .. } if path == "https://example.org/books")
+    );
+    assert!(values.diagnostics().is_empty());
+}
+
+#[test]
 fn derived_values_cannot_be_attached_to_detached_rows_or_forged_graphs() {
     let generation = generation(SETTINGS, &[]);
     let definitions =
