@@ -1471,6 +1471,7 @@ fn value_heap(v: &crate::BaseValue, m: &mut Maintenance<'_>) -> Option<usize> {
         }),
         V::Link {
             path,
+            subpath,
             target,
             display,
             display_value,
@@ -1479,6 +1480,7 @@ fn value_heap(v: &crate::BaseValue, m: &mut Maintenance<'_>) -> Option<usize> {
             let own = m.retained(
                 costs([
                     path.capacity(),
+                    subpath.as_ref().map_or(0, String::capacity),
                     target.as_ref().map_or(0, |w| {
                         w.entry_id
                             .as_str()
@@ -1489,6 +1491,7 @@ fn value_heap(v: &crate::BaseValue, m: &mut Maintenance<'_>) -> Option<usize> {
                 ])?,
                 costs([
                     path.len(),
+                    subpath.as_ref().map_or(0, String::len),
                     target.as_ref().map_or(0, |w| {
                         w.entry_id
                             .as_str()
@@ -1704,12 +1707,14 @@ fn copy_value(
         },
         crate::BaseValue::Link {
             path,
+            subpath,
             target,
             display,
             display_value,
             external,
         } => crate::BaseValue::Link {
             path: path.clone(),
+            subpath: subpath.clone(),
             target: target.clone(),
             display: display.clone(),
             external: *external,

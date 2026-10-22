@@ -679,7 +679,9 @@ pub fn query_property_relations(
                     )?;
                 }
                 valid &= accepted;
+                let subpath = crate::expression::link_subpath(&path);
                 let link = BaseValue::Link {
+                    subpath,
                     // The display projection uses the resolved path; the note
                     // keeps its original short link and optional alias.
                     path: target.map_or(path, |entry| entry.path.as_str().to_string()),
@@ -743,6 +745,7 @@ pub fn query_property_relations(
                         .map(|id| {
                             let source = by_id[id];
                             BaseValue::Link {
+                                subpath: None,
                                 path: source.path.clone(),
                                 target: source.witness.clone(),
                                 display: None,

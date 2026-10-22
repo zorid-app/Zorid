@@ -472,6 +472,7 @@ pub(crate) struct BasesFile {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct BasesLink {
+    pub subpath: Option<String>,
     pub target: Option<super::RecordWitness>,
     pub path: String,
     pub display: Option<String>,
@@ -947,14 +948,16 @@ fn summary_runtime_value(
         }
         BaseValue::Link {
             path,
+            subpath,
             target,
             display,
             display_value,
             external,
         } => {
-            *bytes = bytes.saturating_add(path.len() + display.as_ref().map_or(0, String::len));
+            *bytes = bytes.saturating_add(path.len() + subpath.as_ref().map_or(0, String::len) + display.as_ref().map_or(0, String::len));
             RuntimeValue::Link(BasesLink {
                 path: path.clone(),
+                subpath: subpath.clone(),
                 target: target.clone(),
                 display: display.clone(),
                 display_value: display_value
@@ -2134,6 +2137,7 @@ impl<'a> Evaluator<'a> {
             "link" => match first {
                 RuntimeValue::Null => RuntimeValue::Null,
                 RuntimeValue::File(file) => RuntimeValue::Link(BasesLink {
+                    subpath: None,
                     path: file.path.clone(),
                     target: file.witness.clone(),
                     display: arguments.get(1).map(plain_string),
@@ -2743,6 +2747,7 @@ impl<'a> Evaluator<'a> {
                 }
             }
             "asLink" => RuntimeValue::Link(BasesLink {
+                subpath: None,
                 path: file.path.clone(),
                 display: arguments.first().map(plain_string),
                 display_value: arguments.first().cloned().map(Box::new),
@@ -2986,6 +2991,7 @@ impl<'a> Evaluator<'a> {
             }
         };
         RuntimeValue::Link(BasesLink {
+            subpath: link_subpath(&path),
             target: resolved.as_ref().map(|(_, witness)| witness.clone()),
             resolved_path: if external || self.context.relationships.is_some() {
                 Some(resolved.map(|(path, _)| path))
@@ -3179,9 +3185,18 @@ fn runtime_link_from_json(value: &Value) -> Option<BasesLink> {
         return None;
     }
     let link = object.get("value")?.as_object()?;
+    let path = link.get("path")?.as_str()?;
+    // A legacy structured Link path has no raw-destination provenance. Never
+    // guess its fragment: literal # filenames are valid identity paths.
+    let subpath = match link.get("subpath") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) if value.starts_with('#') => Some(value.clone()),
+        _ => return None,
+    };
     Some(BasesLink {
+        subpath,
         target: None,
-        path: link.get("path")?.as_str()?.to_string(),
+        path: path.to_string(),
         display: link.get("display").map(runtime_display_string),
         display_value: None,
         resolved_path: link
@@ -4008,6 +4023,11 @@ fn is_external(value: &str) -> bool {
     url::Url::parse(value).is_ok()
 }
 
+/// The destination is already semantic text. Match the shared resolver's
+/// literal-fragment-before-percent-decoding rule; `%23` is part of a filename.
+pub(crate) fn link_subpath(destination: &str) -> Option<String> {
+    destination.find('#').map(|index| destination[index..].to_owned())
+}
 pub(super) fn strip_subpath(value: &str) -> String {
     value
         .split_once('#')
@@ -4064,6 +4084,7 @@ pub(super) fn wikilink(value: &str) -> Option<BasesLink> {
     }
     let (path, display) = parse_link_text(value);
     Some(BasesLink {
+        subpath: link_subpath(&path),
         path,
         display,
         ..Default::default()
@@ -4400,9 +4421,10 @@ fn typed_value(
         }
         RuntimeValue::Link(value) => {
             *bytes = bytes
-                .saturating_add(value.path.len() + value.display.as_ref().map_or(0, String::len));
+                .saturating_add(value.path.len() + value.subpath.as_ref().map_or(0, String::len) + value.display.as_ref().map_or(0, String::len));
             BaseValue::Link {
                 path: value.path,
+                subpath: value.subpath,
                 target: value.target,
                 display: value.display,
                 display_value: value
@@ -4440,7 +4462,7 @@ fn value_bytes(value: &RuntimeValue) -> Option<usize> {
             | RuntimeValue::Error(value) => bytes = bytes.saturating_add(value.len()),
             RuntimeValue::Link(link) => {
                 bytes = bytes
-                    .saturating_add(link.path.len() + link.display.as_ref().map_or(0, String::len));
+                    .saturating_add(link.path.len() + link.subpath.as_ref().map_or(0, String::len) + link.display.as_ref().map_or(0, String::len));
                 if let Some(display) = link.display_value.as_deref() {
                     work.push(display);
                 }
@@ -4459,7 +4481,7 @@ fn value_bytes(value: &RuntimeValue) -> Option<usize> {
                 }
                 for link in file.links.iter().chain(&file.embeds).chain(&file.backlinks) {
                     bytes = bytes.saturating_add(
-                        32 + link.path.len() + link.display.as_ref().map_or(0, String::len),
+                        32 + link.path.len() + link.subpath.as_ref().map_or(0, String::len) + link.display.as_ref().map_or(0, String::len),
                     );
                     if let Some(display) = link.display_value.as_deref() {
                         work.push(display);
@@ -4582,6 +4604,7 @@ pub(crate) fn infer_frontmatter_value(
                 }
                 if !value.contains(' ') && is_external(&value) {
                     return RuntimeValue::Link(BasesLink {
+                        subpath: link_subpath(&value),
                         path: value,
                         external: true,
                         ..Default::default()
@@ -5098,3 +5121,6 @@ mod loose_group_reference_tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "link_subpath_tests.rs"]
+mod link_subpath_tests;

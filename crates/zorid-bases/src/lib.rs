@@ -89,6 +89,10 @@ pub enum BaseValue {
     },
     Link {
         path: String,
+        /// Explicit semantic fragment, including leading `#`; absent for links
+        /// created from file identity, even when the filename contains `#`.
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_link_subpath")]
+        subpath: Option<String>,
         target: Option<RecordWitness>,
         display: Option<String>,
         #[serde(default, rename = "displayValue", skip_serializing_if = "Option::is_none")]
@@ -103,6 +107,14 @@ pub enum BaseValue {
         code: String,
         message: String,
     },
+}
+
+fn deserialize_link_subpath<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    let subpath = Option::<String>::deserialize(deserializer)?;
+    if subpath.as_ref().is_some_and(|value| !value.starts_with('#')) {
+        return Err(serde::de::Error::custom("Link subpath must include its leading #"));
+    }
+    Ok(subpath)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

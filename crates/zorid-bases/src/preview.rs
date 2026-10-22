@@ -231,12 +231,14 @@ pub(crate) fn value_bytes(
             BaseValue::File { path } => bytes = bytes.saturating_add(string_bytes(path)),
             BaseValue::Link {
                 path,
+                subpath,
                 target,
                 display,
                 display_value,
                 ..
             } => {
                 bytes = bytes.saturating_add(string_bytes(path));
+                if let Some(subpath) = subpath { bytes = bytes.saturating_add(string_bytes(subpath)); }
                 if let Some(target) = target {
                     bytes = bytes.saturating_add(witness_bytes(target));
                 }
@@ -707,6 +709,7 @@ mod rich_admission_tests {
     #[test]
     fn rich_payload_and_boxed_link_labels_are_charged_recursively() {
         let value = BaseValue::Link {
+            subpath: None,
             path: "A.md".into(),
             target: None,
             display: None,
@@ -730,6 +733,7 @@ mod rich_admission_tests {
         };
         for _ in 0..130 {
             deep = BaseValue::Link {
+                subpath: None,
                 path: "A.md".into(),
                 target: None,
                 display: None,

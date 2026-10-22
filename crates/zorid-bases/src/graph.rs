@@ -396,6 +396,7 @@ impl OwnedRelationships {
                     let heap = link
                         .path
                         .capacity()
+                        .checked_add(link.subpath.as_ref().map_or(0, String::capacity))?
                         .checked_add(link.display.as_ref().map_or(0, String::capacity))?
                         .checked_add(
                             link.resolved_path
@@ -434,6 +435,7 @@ impl OwnedRelationships {
                 revision: entry.revision.clone(),
             });
             let link = BasesLink {
+                subpath: crate::expression::link_subpath(&edge.link().destination),
                 path: edge.link().destination.clone(),
                 target,
                 display: None,
@@ -454,6 +456,7 @@ impl OwnedRelationships {
                         .or_default()
                         .backlinks
                         .push(BasesLink {
+                            subpath: None,
                             path: edge.source().path.as_str().into(),
                             target: Some(RecordWitness {
                                 entry_id: edge.source().id.clone(),
