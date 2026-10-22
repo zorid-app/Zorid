@@ -58,11 +58,37 @@ visible-window runtime pass.
 
 On macOS, `node --test tests/bases-electron-integration/window-native-adapter.test.mjs`
 executes the runner's exact read-only CGWindow adapter against the existing desktop.
+It requires macOS desktop access. Use an authorized desktop-enabled tool context
+(such as `require_escalated` in the agent environment), or a desktop terminal.
+A restricted sandbox can return an inaccessible CF reference; that remains a
+test failure and is not bypassed with a fake window list or a visibility override.
 It casts the returned CFArrayRef through `ObjC.castRefToObject` before conversion,
 checks the JavaScript array length against `CFArrayGetCount`, and filters only the
 test process PID. It opens/activates no application and records no window titles
 or content. This native bridge regression complements the policy checks; actual
 owned-window activation and document visibility still require the granted run.
+
+For a minimal **harness-only** native-window/normal-quit probe, the coordinator
+may grant an explicit source/artifact association and use:
+
+```sh
+node tests/bases-electron-integration/window-probe.mjs \
+  --root /absolute/frozen/frontend --expected-head FULL_COMMIT \
+  --native /absolute/explicitly-associated/zorid-desktop-host \
+  --electron /absolute/Electron.app/Contents/MacOS/Electron \
+  --out /private/tmp/zorid-owned-window-probe-UNIQUE \
+  --ready owned-window-bootstrap-frozen
+```
+
+The wrapper opts into a genuinely visible window. This separate readiness gate
+admits one harmless note fixture, launches the normal app, verifies native/window
+and document visibility, captures one screenshot and quits normally. It runs no
+Bases campaign or CRUD journey. Evidence explicitly disclaims Bases, Rust semantic
+and matching-native product acceptance while retaining actual source/artifact
+hashes. It cannot be combined with `--campaign-module`; normal product campaigns
+continue to require `bases-native-and-frontend-frozen`. An intermediate host may
+be used only for this limited probe with the coordinator's explicit association;
+it cannot silently establish acceptance for different Rust sources.
 
 Explicit supplemental campaigns can reuse this same bootstrap with
 `--campaign-module /absolute/tests/OWNED-CAMPAIGN/campaign.mjs`. The fixed owned
