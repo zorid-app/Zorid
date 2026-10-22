@@ -485,6 +485,22 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         options.openFile(path, event, witness ?? captured);
       } catch (error) { report(error); }
     };
+    const getRelationTargets = (property: string, presentation: BasePropertyPresentation): readonly BaseRelationTarget[] | undefined => {
+      const captured = widgetResults.get(presentation.version), current = controller.state;
+      if (disposed || !captured || sharedBasePreview(captured)) return;
+      if (options.getRelationTargets) return options.getRelationTargets(property, presentation);
+      if (!captured.shared || !captured.shared.relationshipsAvailable || current.error || current.updating || current.result !== captured || current.version !== presentation.version || !captured.rows.includes(presentation.row)) return;
+      const actor = options.vault.entries.get(presentation.row.path), witness = sharedBaseWitness(captured, presentation.row.path);
+      if (!actor || !witness || actor.entryId !== witness.entryId || actor.revision !== witness.revision) return;
+      const targets = captured.relationTargets?.[basePropertyName(property)];
+      if (!targets) return;
+      // Identity checks invalidate advice; they never resolve or filter targets.
+      for (const target of targets) {
+        const entry = options.vault.entries.get(target.path);
+        if (!entry || entry.entryId !== target.entryId || entry.revision !== target.revision) return;
+      }
+      return targets;
+    };
     const shared = { result, getEditableValue: baseEditablePropertyValue, getPropertyLabel, getPropertyType: (property: string) => definitions.properties[basePropertyName(property)]?.type,
       openFile: openResultFile,
       ...(writable ? { editProperty: (edit: Parameters<typeof actions.editProperty>[0]) => track(() => { assertPropertyWritable(edit.property, edit.value); return actions.editProperty(edit); }) } : {}),
@@ -493,7 +509,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       renderProperty: createBasePropertyRenderer({ getEditableValue: presentation => baseEditablePropertyValue(presentation.row, presentation.property), getDefinition: property => definitions.properties[basePropertyName(property)],
         commit: (edit: BasePropertyWidgetEdit) => track(async () => { assertPropertyWritable(edit.property, edit.value); await actions.editProperty(edit); return acknowledgeWidget(edit, edit.value); }), readOnly: presentation => !writable || !!definitionsError || definitions.diagnostics.some(item => item.property === basePropertyName(presentation.property)),
         isCurrent: presentation => !disposed && !!mountedResult && widgetResults.has(presentation.version),
-        getRelationTargets: options.getRelationTargets,
+        getRelationTargets,
         loadImage: options.loadThumbnail ? (source, signal, presentation) => options.loadThumbnail!({ row: presentation.row, property: presentation.property, value: baseImageSourceValue(presentation.value, source), version: presentation.version, signal }) : undefined,
         openFile: openResultFile, onError: report,
         createOption: (property, value, presentation) => track(async () => { const definition = definitions.properties[basePropertyName(property)]; if (!definition) throw new Error('Configure this property first.'); await saveDefinition(basePropertyName(property), { ...definition, options: [...definition.options ?? [], { value }] }, definition); return acknowledgeWidget(presentation); }),
