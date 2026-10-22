@@ -898,6 +898,18 @@ export class Workspace {
           }}
         });return;
       }
+      if(change.path===BASE_PROPERTY_DEFINITIONS_PATH){
+        // Registry settings can own a shared buffer even without a source tab.
+        // A genuine logical modify event may refresh that buffer only while it
+        // remains clean; physical capture is never used as reload authority.
+        const buffer=this.buffers.get(change.path),generation=this.vaultGeneration,vault=this.vault,token=this.treeEntryToken(change.path);
+        const current=()=>generation===this.vaultGeneration&&vault===this.vault&&this.buffers.get(change.path)===buffer&&!!token&&this.treeEntryToken(change.path)===token&&this.bufferEntries.get(buffer!)===token;
+        if(buffer&&!buffer.dirty&&!buffer.error&&!buffer.hasRecoveryConflict)this.run(async()=>{
+          if(!current()||buffer.dirty||buffer.error||buffer.hasRecoveryConflict)return;
+          await buffer.reload();
+          if(current())this.renderStatus();
+        });
+      }
       if(!isMarkdown(change.path)){for(const pane of this.panes)if(this.current(pane)?.path===change.path)this.run(()=>this.renderPane(pane,{refresh:true}));for(const [tab,pane] of this.cachedViews)if(pane.viewPath===change.path)this.run(async()=>{await this.disposePaneViews(pane);if(this.cachedViews.get(tab)===pane)this.cachedViews.delete(tab);});return;}
       const buffer = this.buffers.get(change.path);
       if (buffer && !buffer.dirty) this.run(async () => {
