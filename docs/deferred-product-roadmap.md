@@ -9,58 +9,66 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
-2026-10-22 isolated root `c04a2dd9` before this record, Rust tree
-`5648d13caedc5b75eba763fba602c9d103de42b4`, composes reviewed regex construction
-admission, selected-query prepass, parser-owned literal facts, File folder/tag
-semantics, literal-space title casing and rich raw-text date extrema. The most
-recent executed focused closure at `70059521` passes153 library tests and7 File
-method cases, then fails the unchanged500,000-step preview test at refresh-hint
-admission. This is **not a complete current-core pass**. Log:
-`/private/tmp/zorid-bases-regex-file-title-composed-001.log`. Measured A/B evidence
-shows repeated regex-free AST admission added4,830 steps plus7 once-query steps;
-parser facts remove the walk, and reviewed `25cffc5f` additionally removes four
-duplicated entry charges while retaining cancellation and all actual evaluator,
-source and regex charges. That final fix awaits the same unchanged test rerun.
-Earlier regex construction/query targets passed2+5 separately; older `8c2d4c35`
-still has the full288/17 pass recorded below.
+2026-10-22 isolated root `60c1d4fd` composes checked Object stringification,
+captured Link raw coercion, bounded immutable clone preparation and pinned English
+ICU numeric/base-sensitive List sorting, in addition to the regex/File/title/date
+changes. ICU dependencies fetched successfully and the complete new library
+compiled. First execution passes183/185 library tests; the only failures are two
+expected JSON numeric representations (`1.0` versus the existing integer `1`
+projection). Reviewed fixture-only correction `8704d3c7` is composed as
+`e8a37c86`; rerun passes **185/185 library tests**, log
+`/private/tmp/zorid-bases-g9-composed-lib-003.log`. No production conversion or
+assertion strength changed. The full current suite terminates101 in
+`/private/tmp/zorid-bases-g9-full-composed-001.log`: library185 pass, but the
+unchanged preview budget regression fails again at comparator scratch after
+the G9 conversion integration. `bases_summaries` owns source/metering diagnosis
+with the conversion owner advising; preserve the existing500,000 ceiling and
+real work/cancellation/allocation checks. Later targets are unexecuted in this
+run. Library success is not a complete current-core pass.
 
-Actual [Electron012](history/bases-electron-heavy-012-20261022.md) and
-[Electron013](history/bases-electron-heavy-013-20261022.md) both stop at178 recorded
-actions/20 checks. 013's rejection-time receipt proves a controller **epoch**
-guard failure **before buffer loading**: epoch61→62, versions31/31, matching
-target/Base identities and unchanged selection/configuration. The triggering
-invalidation is not yet established; clock wakes also advance epoch, and cached
-identity equality does not exclude modification. Original rating1 is preserved
-and draft5 remains. All owned012/013 processes are closed. Reference cell editing
-is now documented in [the primary static audit](history/bases-cell-edit-admission-reference-20261022.md);
-it does not establish external-race atomicity or authorize weakening durable CAS.
+The preceding core at `b13a449f`, Rust tree
+`5648d13caedc5b75eba763fba602c9d103de42b4`, passes the complete suite:
+**317 tests across20 targets**, plus the empty doctest target. Both RUSTC and
+RUSTDOC were explicitly pinned in the successful final execution:
+`/private/tmp/zorid-bases-regex-file-title-full-composed-005.log`. This includes
+the unchanged500,000-step preview regression; duplicate admission charges were
+removed without changing that budget. Earlier wrong-rustdoc/partial runs remain
+historical evidence, not the final result.
 
-`bases_ui_review` now owns the sole heavy slot: frontend lane frozen at
-`7055c7643575c4c101f819e968a54caf4c34460d`, with reviewed passive causal diagnostics
-(`610412d1`, root `635d3dc4`),17 focused checks and desktop build55600 passing.
-014 is live in session6444 with the same shown-window journey and whole-JSON
-receipts. Rust remains
-old tree `5e010112`, native SHA176fcff5 from the preserved clone; this interim
-frontend lane cannot accept new-core semantics. No other Cargo/build/app may
-overlap its build/run slot. The unrelated installed Zorid app is untouched.
+Actual [Electron014](history/bases-electron-heavy-014-20261022.md) stops at178
+recorded actions/20 checks. Its passive receipt identifies a
+`configuration-commit` invalidation (epoch61→62) while stale is already true;
+versions and cached file witnesses remain equal. Those cached witnesses do not
+prove host-authoritative unchanged bytes. A composed controller reproduction
+confirms the save lifecycle can expose a current query before its configuration
+continuation finishes, admitting a cell edit that its own continuation rejects.
+Saved rating1 and draft5 remain preserved; no write guard is weakened.
 
-Remaining semantic source work: `bases_duration_review` owns checked Object
-stringification/raw Link coercion (e23af93d→94ed9dc6; resource-review carry-budget
-finding being closed); `bases_controller` supplies source-reviewed ICU numeric,
-base-sensitive stable List sorting (`dde27adc`, pinned English portable locale).
-Root owns dependency/module/lock integration; ICU is not fetched or compiled yet.
-Transport fixtures `ab31e4a3` (root `9a20a074`) now contain127 explicit typed row
-oracles/16 diagnostics, retaining19 browser groups,14 files and125 CLI commands.
-Those expanded actual campaigns, matching native/CLI/WASM builds, supported web
-smoke and complete desktop/visual/supplemental acceptance remain open.
+`bases_table` owns a full configuration-lifecycle readiness barrier plus gates
+for beginning new cell edits, preserving accepted drafts, resize queues and all
+stale/CAS checks. Independent review found a retained checkbox retry must bypass
+the new-begin gate for its own draft; the owner closed that exact regression. Reviewed commit `eeaec9d1` is composed
+as root `60c1d4fd`; root new tests pass9/9 and frontend bounded closure passes34/34.
+No015 build or app has started. The frontend lane is frozen at `eeb8646a`,
+with old Rust tree `5e010112` and preserved native
+SHA176fcff5. All owned014 processes are closed. The unrelated installed Zorid app
+is untouched. No Cargo/app/build is live. Root is recovering safe space before granting015;
+`bases_controller` owns lossless static toolchain/cache compression with exact
+byte/metadata checks.
 
-Disk recovered to about1.1GiB before014 through reproducible cache/clean completed
-worktree retirement only; receipts are under `/private/tmp/zorid-bases-*-cleanup-20261022*.json`.
-Reports/screenshots, durable fixture data, source branches and product binaries
-remain. Peak compilation still briefly exhausts space, so builds stay serialized
-and the1GiB actual-run guard is unchanged. Native-compiled WASM property-target
-attempt001 failed compiling js-sys with ENOSPC before tests; it supplies no
-passing test evidence. Main remains unchanged at `e7d655e1`.
+Transport fixtures now contain127 explicit typed row oracles/16 diagnostics,
+retaining19 browser groups,14 files and125 CLI commands. Matching final native,
+CLI and actual WASM builds, expanded runtime campaigns, supported web smoke and
+complete desktop/visual/supplemental acceptance remain open. Main remains
+unchanged at `e7d655e1`.
+
+Space recovery preserves source, evidence, fixture data and product binaries.
+Besides documented retirement of reproducible completed caches,265 static cache
+files were losslessly APFS-compressed with exact hash, logical-size, mode and
+mtime checks, reclaiming322,686,976 allocated bytes. Receipt:
+`/private/tmp/zorid-bases-lossless-cache-compression-20261022.json`. Latest free
+space is about641MiB, below the unchanged1GiB actual-run guard; further safe
+recovery is needed before desktop verification. Builds stay serialized.
 
 2026-10-22 current isolated core candidate `8c2d4c35`, Rust tree
 `513fe752302763b12c5658755f2b301a30e3bc05`, passes the complete Bases Rust

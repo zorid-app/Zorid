@@ -2,21 +2,25 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
-Electron012/013 both reach178 recorded actions/20 checks. 013's passive rejection
-receipt identifies an epoch61→62 rejection before buffer loading, with versions
-31/31, stable target/Base identities and unchanged configuration/selection. The
-trigger is unclassified; clock wakes and Vault events are separate possibilities,
-and identity equality does not exclude modification. Saved rating1 and draft5
-are preserved. Reviewed causal diagnostics are now in014's frozen frontend build;
-no save guard has been relaxed. See [013 evidence](history/bases-electron-heavy-013-20261022.md).
+Electron014 reaches178 recorded actions/20 checks and identifies a
+configuration-commit epoch advance during the rejected numeric edit. A composed
+reproduction confirms configuration save can publish a query before its own
+continuation completes. The full-lifecycle readiness barrier is reviewed and composed; the failed-checkbox retained-draft retry regression is
+closed with9/9 new root checks and34/34 frontend focused checks passing.
+Original rating1 and draft5 remain preserved. No stale/CAS guard is relaxed.
+See [014 evidence](history/bases-electron-heavy-014-20261022.md). All owned apps
+are closed; actual015 has not started.
 
-Focused source at70059521 passes153 library and7 File-method tests, but the
-unchanged500,000-step preview fails at refresh-hint admission. Repeated regex-free
-AST walks are eliminated; a separately reviewed duplicate-charge correction
-awaits rerun. Current core is not claimed fully passing. Object stringification,
-captured Link raw coercion and numeric/base-sensitive List sorting remain active
-source/review work; expanded19-group browser/125-command CLI fixtures have127
-typed row oracles but are not yet executed against matching new artifacts.
+The preceding complete Rust suite passes317 tests/20 targets, including the
+unchanged500,000-step preview, with pinned compiler and rustdoc. The newly
+composed Object/raw Link conversion, bounded clone and ICU natural sorting
+compile and pass185/185 library cases after two exact JSON integer expectations
+were corrected without production changes. The complete current run stops at the unchanged preview comparator-work budget
+regression; diagnosis is assigned, with no budget increase authorized. Later
+targets remain unexecuted in that run. This does not
+establish matching final browser, CLI, desktop or visual acceptance. Expanded
+19-group browser/125-command CLI fixtures retain127 typed row oracles and16
+diagnostics; those actual new-artifact campaigns remain pending.
 
 Electron011 reaches171 actions/20 checks. Both focused width91 resize and Home
 override removal pass, verifying the prior queue failure in this interim lane.
