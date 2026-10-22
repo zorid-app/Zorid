@@ -1,4 +1,4 @@
-import { disposePresentationResources, reportPresentationError, mountBaseProperty, propertyValue, displaySharedBaseValue, sameBasePresentationGroup, sharedBaseGroupKeyId } from './presentation-common.ts';
+import { baseRowOpenWitness, disposePresentationResources, reportPresentationError, mountBaseProperty, propertyValue, displaySharedBaseValue, sameBasePresentationGroup, sharedBaseGroupKeyId } from './presentation-common.ts';
 import type { BaseCardsViewOptions } from './cards-view.ts';
 import { baseCardsSettings } from './cards-view.ts';
 import type { BasePresentationOptions } from './presentation-common.ts';
@@ -279,7 +279,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
         if (item.contains(range.startContainer) || item.contains(range.endContainer)) return;
       }
       if (doc.activeElement !== item && item.contains(doc.activeElement)) return;
-      event.preventDefault(); select(row.path); options.openFile(row.path, event);
+      event.preventDefault(); select(row.path); options.openFile(row.path, event, baseRowOpenWitness(row));
     };
     item.addEventListener('click', activate); item.addEventListener('auxclick', activate);
     item.addEventListener('focus', () => { if (current()) select(row.path); });
@@ -506,7 +506,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     if (!selected) return;
     const group = groups.find(group => displayedRows(group).some(row => row.path === selected)); if (!group) return;
     const rows = displayedRows(group), index = rows.findIndex(row => row.path === selected);
-    if (event.key === 'Enter') { event.preventDefault(); options.openFile(selected, event); }
+    if (event.key === 'Enter') { event.preventDefault(); options.openFile(selected, event, baseRowOpenWitness(rows[index])); }
     else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
       event.preventDefault();
       const groupIndex = groups.indexOf(group), direction = event.key === 'ArrowLeft' ? -1 : 1;

@@ -9,9 +9,17 @@ export interface BasePropertyPresentation {
   readonly value: BaseExpressionValue;
   readonly version: BaseQueryResult['version'];
 }
+export interface BaseRowOpenWitness {
+  readonly entryId: string;
+  readonly revision: string;
+}
+/** Direct row opens use exact file identity; a literal # in its path is never a link subpath. */
+export function baseRowOpenWitness(row: BaseQueryRow): BaseRowOpenWitness | undefined {
+  return row.entryId && row.revision ? { entryId: row.entryId, revision: row.revision } : undefined;
+}
 export interface BasePresentationOptions {
   readonly result: BaseQueryResult;
-  readonly openFile: (path: string, event: MouseEvent | KeyboardEvent) => void;
+  readonly openFile: (path: string, event: MouseEvent | KeyboardEvent, witness?: BaseRowOpenWitness) => void;
   readonly getPropertyLabel?: (property: string) => string;
   readonly editProperty?: (edit: { version: BaseQueryResult['version']; path: string; property: string; value: BaseExpressionValue }) => void | Promise<void>;
   /** Custom widgets own their content and must return a disposer for every acquired resource.
@@ -119,7 +127,7 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
       link.textContent = display(current);
       const open = (event: MouseEvent) => {
         if (event.defaultPrevented || (event.button !== 0 && event.button !== 1) || disposed || !isCurrent()) return;
-        event.preventDefault(); options.openFile(row.path, event);
+        event.preventDefault(); options.openFile(row.path, event, baseRowOpenWitness(row));
       };
       link.addEventListener('click', open); link.addEventListener('auxclick', open);
       element.append(link);

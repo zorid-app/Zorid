@@ -1,6 +1,6 @@
 import type { BaseExpressionValue } from './expression.ts';
 import type { BaseQueryResult, BaseQueryRow } from './query.ts';
-import { createBaseVirtualSurface, createGroupUnit, disposePresentationResources, groupIdentity, mountBaseProperty, propertyValue, reportPresentationError } from './presentation-common.ts';
+import { baseRowOpenWitness, createBaseVirtualSurface, createGroupUnit, disposePresentationResources, groupIdentity, mountBaseProperty, propertyValue, reportPresentationError } from './presentation-common.ts';
 import type { BasePresentationHandle, BasePresentationOptions, VirtualUnit } from './presentation-common.ts';
 
 export interface BaseCardsViewOptions extends BasePresentationOptions {
@@ -68,12 +68,12 @@ export function createBaseCardsView(container: HTMLElement, options: BaseCardsVi
       }
       const active = document.activeElement;
       if (active !== card && active && card.contains(active)) return;
-      event.preventDefault(); options.openFile(row.path, event);
+      event.preventDefault(); options.openFile(row.path, event, baseRowOpenWitness(row));
     };
     card.addEventListener('click', activate); card.addEventListener('auxclick', activate);
     card.addEventListener('keydown', event => {
       if (current() && !event.isComposing && !event.defaultPrevented && event.target === card && event.key === 'Enter') {
-        event.preventDefault(); options.openFile(row.path, event);
+        event.preventDefault(); options.openFile(row.path, event, baseRowOpenWitness(row));
       }
     });
     if (options.contextMenu) card.addEventListener('contextmenu', event => {
