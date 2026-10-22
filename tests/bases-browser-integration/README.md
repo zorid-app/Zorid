@@ -1,13 +1,18 @@
 # Actual browser/WASM Bases semantic integration
 
-Actual run009 **passed all 19 semantic integration groups**, including all 133
-Q3 typed row-value expectations and 16 exact Q3 diagnostics, on frozen
-`caec33ecb9752979922ae008ab3caffd37194669`. It used the normal admitted service,
-product Worker, matching generated WASM and real IndexedDB. Source/artifact proofs
-matched before and after; all groups ran, no events were dropped, and owned
-Chrome/profile/Vite/database cleanup succeeded. See [009 evidence](../../docs/history/bases-browser-actual-009-20261022.md).
+Actual run010 **passed all 19 semantic integration groups**, including all 146
+current Q3 typed row-value expectations and 16 exact Q3 diagnostics, on frozen
+`c90d254b63eef0ef8571bba177b327ff04922495`. It used the normal admitted service,
+product Worker, rebuilt date-v8 WASM and real IndexedDB. Source/artifact proofs
+matched before and after; every group ran, no events were dropped, and owned
+Chrome/profile/Vite/database cleanup succeeded. See [010 evidence](../../docs/history/bases-browser-actual-010-20261022.md).
 Rendered UI/widgets/sanitization, mobile, other-browser, sync and stress acceptance
 remain separate.
+
+[Run009](../../docs/history/bases-browser-actual-009-20261022.md) passed all 19
+groups and its then-current 133 typed expectations on the earlier Rust958 module.
+It remains historical evidence; run010 covers the 13 additional date cases with
+the rebuilt Rust8074 module.
 
 [Run008](../../docs/history/bases-browser-actual-008-20261022.md) passed the nine
 original groups before a tests-only empty-summary-presence assumption stopped
@@ -37,14 +42,14 @@ remain separate.
 ## Executed Q3 extension
 
 Source batch `64bee169` → `19ae330c`, composed at `eb6e0346`, appends **ten
-new groups to the original nine: 19 browser groups**. All ten passed in run009.
+new groups to the original nine: 19 browser groups**. All ten passed in run009 and run010.
 The historical run005 result above remains nine executed groups; it does not
 cover this extension.
 
 The shared [Q3 fixture](../fixtures/bases-q3-semantics.mjs) adds 14 inert source
-files (four Markdown notes and ten saved Bases), with 133 authored typed row-value
+files (four Markdown notes and ten saved Bases), with 146 current typed row-value
 oracles and 16 expected diagnostic entries. All these assertions executed
-successfully in run009. The counts describe fixture assertions, not additional
+successfully in run010 (133 earlier expectations in run009). The counts describe fixture assertions, not additional
 groups. The ten appended groups cover:
 
 1. Object callback keys, values and outer scope.
@@ -77,11 +82,17 @@ and canonical File lookup for both source notes. Strict Object grouping still
 requires two distinct group identities and an overall unique count of two. These
 expectations also passed in run009.
 
+The G16/G17 follow-up adds 13 expectations within the same groups: literal `%`,
+`[%]`, `%YYYY`, `%Y` and Moment-token behavior after `%`; raw 8/12-digit compact
+dates are skipped by extrema, while hyphenated controls and explicit compact
+`date()` values remain eligible. All 13 passed in run010 against the rebuilt
+WASM. The group/file/diagnostic counts are unchanged.
+
 The runner requires the exact planned group-name list and all 19 passed results;
 no skipped or unexecuted group can produce success. Shared fixture bytes join the
 source fingerprint. Authored-data/syntax/oracle checks are source verification,
-not actual Worker/WASM, native, CLI or rendered UI acceptance. Run009 supplies
-the actual matching Worker/WASM result for this fixture; the separate
+not actual Worker/WASM, native, CLI or rendered UI acceptance. Run010 supplies
+the current matching Worker/WASM result for this fixture; the separate
 UI/platform/stress gates above remain open.
 
 Earlier actual run003 **passed all nine then-current groups** on frozen
