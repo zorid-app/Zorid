@@ -472,7 +472,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       if (!initial || !current || initial.entryId !== current.entryId || (savedValue === undefined && initial.revision !== current.revision)) return;
       const value = row.values[original.property] ?? { type: 'null' as const };
       const rawValue = baseEditablePropertyValue(row, original.property), expectedValue = savedValue ?? baseEditablePropertyValue(original.row, original.property);
-      if (!rawValue || !expectedValue || !baseValuesEqual(rawValue, expectedValue, true)) return;
+      // Only our exact saved shape can acknowledge an editor's next baseline.
+      if (!rawValue || !expectedValue || !baseValuesEqual(rawValue, expectedValue)) return;
       const oldBase = sharedBaseWitness(before, options.basePath), newBase = sharedBaseWitness(latest, options.basePath);
       if (!oldBase || !newBase || oldBase.entryId !== newBase.entryId) return;
       rememberWidgetResult(latest, controller.state.source);
