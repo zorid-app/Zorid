@@ -1,5 +1,104 @@
 # Bases expression completion audit — 2026-10-22
 
+## Current client evidence and remaining findings — 2026-10-22, `926f37f8`
+
+The inspected application snapshot is
+`926f37f899d813ce3614b834404037d282e2afd0`. Its `crates` tree remains
+`958b19aca4666414e956fbb2f406558af5a18366`, and its Bases subtree remains
+`a7ea02e4a9993a1d7fde41c3601036882d37f18e`, identical to the final 359-test
+core closure below. Actual CLI and browser execution now supersede the earlier
+statements that the expanded client scenarios were merely authored. The older
+counts and failed runs remain historical evidence, rather than being relabeled.
+
+| Evidence | Observed scope and identity |
+| --- | --- |
+| [Browser009](bases-browser-actual-009-20261022.md) | All **19 groups** passed on actual product Worker/WASM/IndexedDB, including the ten Q3 groups with **133 typed row expectations and 16 Q3 diagnostics**. Frozen application `caec33ecb9752979922ae008ab3caffd37194669`; matching Rust tree `958b19ac…`, WASM fingerprint `36809d020fb8c1ad52736417717d9b1418b866547f99d62cf347bfbee6250e9b`. Raw report SHA-256 `ee24aebc4ad96028addd7223ea82ce6f2ea83c0e9f4031a60f2cc750d36ad221`. |
+| [CLI006](bases-cli-actual-006-20261022.md) | All **125 commands and 17 checks** passed through the standalone CLI, including the same ten Q3 groups, **133 typed row expectations and 16 Q3 diagnostics**, plus ten exact legacy-context diagnostic entries. Frozen campaign `5796d3a5b9f75e5ac112a818d30fd34ed683cb5f`; executable build source `f95ab6beea41999fe45eabfe9e882f7bdb1bec3c`, matching Rust tree `958b19ac…`, executable SHA-256 `39ac002915dc6a17c9fd58d477ffb5d3a3dd52b6bc37684c33224a38a6080d3c`. Raw report SHA-256 `5b78c104af8bd0c36bad1558ff6acb81e5c15756b8b58542dbe9a02c48149d7b`. |
+| Rust core | The pinned final log below remains **359 passed across 20 nonempty targets**, plus zero doc tests, for the same unchanged Rust source. No Cargo run was performed by this audit. |
+
+The raw browser report is
+`/private/tmp/zorid-bases-browser-actual-20261022-009/report.json`; its separate
+`post-run-verification.json` records terminal exit 0, unchanged source/assets,
+no unexecuted groups, runner/artifact/cleanup failures or dropped CDP events,
+and confirmed owned Chrome/Vite/database cleanup. CLI evidence is retained at
+`/private/tmp/zorid-bases-cli-actual-20261022-006/zorid-bases-cli-m3XxfB/report.json`
+with a separate passing integrity receipt. Both report hashes were independently
+recomputed for this update. The CLI report's ten Q3 check records recount to
+133 expected row values, 16 Q3 diagnostics and ten separately declared legacy
+diagnostics. The shared fixture SHA-256
+`476be17dcb5d2c4ba4fd485037791f8edde51db1f31180dee65baf2e658aa944`
+is identical at both campaign commits and this inspected snapshot.
+
+### Complete registration coverage is not complete semantic parity
+
+All **80 captured first-party declarations** (16 global, 64 receiver) still
+have signature admission and reachable handlers. G1–G15's identified source
+repairs remain composed; the new actual campaigns exercise their authored
+Object/Tag, signature, String/regex/Number, collection, Duration, provenance and
+summary-Error cases through both client paths. They do not individually test
+every method, input shape or inherited dispatch combination in the catalogue.
+
+The older [expression matrix](../reference/bases-expression-matrix.md) needs
+that dated qualification: its Object row lists only `isEmpty/keys/values`,
+although current `object_method` also implements `map/filter`; Tag and TagList
+have actual subtype/membership handlers; and only **exact lowercase** `if` uses
+lazy special-call evaluation. Mixed-case `IF` uses ordinary eager dispatch.
+Those descriptions are stale, rather than evidence of missing implementations.
+The 80-declaration count does not narrow the goal's full reference expression
+scope or erase unregistered fields, operators, inference and summary semantics.
+
+Two further **concrete semantic gaps** were identified by this bounded audit.
+They are neither missing handlers nor newly approved deviations. Both remain
+open at `926f37f8` / Rust `958b19ac`; neither input boundary is asserted by the
+passing 133-value shared fixture.
+
+| ID | Captured reference contract versus current source | Required follow-up |
+| --- | --- | --- |
+| G16 Date.format literal percent | [expression_format.rs](../../crates/zorid-bases/src/expression_format.rs) rejects any unescaped `%` as unsupported. The shipped Date.format delegates to Moment, whose token fallback preserves unmatched `%` as literal text. For a 2024 Date, `format("%")` should yield `%`, `format("[%]")` also `%`, `format("%YYYY")` and `format("%Y")` yield `%2024`, and `format("[%Y]")` yields literal `%Y`. Current source rejects the first, third and fourth cases. The existing rejection test preserves an old adapter policy; D1–D6 do not establish approval for rejecting a literal character. | Remove the unsupported-percent rule without interpreting strftime directives. Add named literal/escaped/token-adjacent cases and retain byte/depth guards; validate changed Rust and matching clients. No fix or execution is credited here. |
+| G17 List date-extrema input shape | [expression.rs](../../crates/zorid-bases/src/expression.rs)'s `earliest/latest` raw String-subclass branch reuses `parse_date`, which includes global `date()`'s compact 8/12-digit extensions. The reference list helper instead uses the hyphenated date/datetime parser; only explicit global `date()` adds compact parsing. Thus `['20240101'].earliest()` and `[icon('20240101')].latest()` should return Null, while `[date('20240101')].earliest()` remains a valid Date. Current source promotes both compact raw Strings to Dates. | Separate the raw-list parser boundary from explicit date conversion, preserving all String-subclass raw data, typed Date values and captured-zone/resource rules. Add 8/12-digit raw, explicit-conversion and hyphenated controls in named Rust and actual client cases. No fix or execution is credited here. |
+
+G16 primary evidence uses the same identified Obsidian 1.14.4 ASAR/app hashes
+below. The ASAR's `lib/moment.min.js` banner identifies Moment **2.30.1**, SHA-256
+`b19e17770b1673aca44065e7dc2c393d306559871b99bfe885a0d10d4f2798cf`;
+its extracted bytes matched the ASAR integrity hash. App characters
+2236156–2236452 establish delegation. Vendor characters 4080–4348 establish the
+tokenizer's literal fallback, 4591–5104 its rendering, and 34572–34700 the format
+entry. Bounded REA parent
+`ev_ad88a95123e779d3b88dcbe0a5d6d32e60954acc02f0f6f103b46b577f773dc3`
+parsed four inert files / 357 AST nodes / zero failures; semantic graph partial
+at 200 total / 100 per-file nodes. Exact private provenance:
+`/private/tmp/zorid-bases-date-format-reference-20261022/provenance.json`.
+
+G17 primary app characters 2195226–2195459 establish list date selection,
+2203357–2203621 the hyphenated raw parser, and 2216085–2216852 the separate
+global compact-date fallback. Bounded REA parent
+`ev_310966fadf6d4076dae872628a354d75f60d4dd63ad5c86e01495d29ce6b99d0`
+parsed three inert files / 395 AST nodes / zero failures; semantic graph partial
+at 200 total / 100 per-file nodes. Exact private provenance:
+`/private/tmp/zorid-bases-date-extrema-reference-20261022/provenance.json`.
+All these ranges are decoded Python Unicode characters, end-exclusive. The
+examples above are source-derived expectations, not new reference runtime
+observations. No recovered implementation was added to the repository.
+Both original REA parent records are exported in
+`/private/tmp/zorid-bases-expression-client-audit-rea-20261022.json`, SHA-256
+`9f524bc30aa3c6e14b7ab742f3e9c7b69a6809f955217c344008fdd5528867e7`.
+
+D1–D6 remain the documented captured-time/English, finite/resource, seeded
+random, immutable-link, Unicode-scalar and bounded/stateless-regex policies.
+Pinned English collation and deterministic inconsistent-comparator handling,
+inert `__proto__` retention and safe property-key projection remain explicit
+policies, rather than permission to hide another input-shape difference.
+Unmeasured full grammar/coercion/arity/calendar/locale/Unicode cross-products
+remain uncertain or untested, not demonstrated missing features and not proof
+of equivalence. G16/G17 are positively identified exceptions to source closure.
+
+Actual matching CLI/browser semantic coverage is now established for the
+authored cases. Rendered rich values and sanitization, table/property widgets,
+complete Electron interaction/reference comparisons, mobile and other-browser
+runtime behavior, sync and stress remain separate acceptance gates. This update
+does not check the broader expression or product goal complete, and does not
+replace the requirement to implement all requested reference capabilities.
+
 ## Final core successor evidence — 2026-10-22, `8f18b965`
 
 The coordinator's pinned-tool full run completed with exit 0 at source
