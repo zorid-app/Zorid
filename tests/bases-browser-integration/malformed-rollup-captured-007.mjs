@@ -1,7 +1,7 @@
 // Offline test input from actual browser007 checkpoint; not a product input.
 // Raw report SHA-256: 4fac737ef889b338891be7ec4080ad278dca99dfc1e520b62a18ea27e73bd600.
-// Unobserved non-actor manifest revisions use an explicit offline-only marker;
-// runtime expectations always read all fourteen actual metadata witnesses.
+// The offline manifest uses explicit markers for non-actor revisions;
+// runtime expectations independently read all fourteen actual metadata witnesses.
 export const captured007 = {
   "result": {
     "rows": [],

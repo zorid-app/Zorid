@@ -76,7 +76,7 @@ Twenty bounded Node oracle tests pass: the actual captured shape is accepted;
 wrong paths/phases/properties, stale author/malformed revisions, absent metadata
 availability, fabricated rows, altered coverage and missing/extra/duplicate
 manifest identities. The offline test input retains captured diagnostic data;
-non-actor revisions not captured in 007 use an explicit offline marker. Runtime
+the offline manifest uses explicit markers for non-actor revisions. Runtime
 expectations read all 14 real metadata witnesses independently and never derive
 expected identities from result diagnostics. These are oracle tests, not a
 successful corrected Worker/WASM campaign. A fresh complete run remains required.
