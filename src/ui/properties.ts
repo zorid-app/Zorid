@@ -31,7 +31,14 @@ export interface PropertiesOptions {
   /** Optional owner identity guard for a host that reuses a panel across files. */
   isCurrent?: () => boolean;
 }
-export interface PropertiesView { refresh(): void; destroy(): void }
+export interface PropertiesView {
+  refresh(): void;
+  /** Includes accepted queued writes and unsubmitted scalar/list/name drafts. */
+  hasPendingChanges(): boolean;
+  /** Settle accepted writes; unresolved input stays mounted for correction. */
+  flush(): Promise<void>;
+  destroy(): void;
+}
 
 const types: PropertyType[] = ['text', 'list', 'number', 'checkbox', 'date', 'datetime', 'tags', 'unknown'];
 const labels: Record<PropertyType, string> = {
@@ -79,6 +86,11 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   root.append(heading, rowsContainer, globalError, addButton); container.append(root);
   const rows = new Map<string, Row>(), selectedTypes = new Map<string, PropertyType>();
   let destroyed = false, pending = Promise.resolve(), addForm: HTMLElement | undefined;
+  let pendingGeneration=0,settledGeneration=0,mutationFailure:unknown,mutationFailureOwner:Row|undefined;
+  function setPending(operation:Promise<void>):void {
+    pending=operation;const generation=++pendingGeneration;
+    const settled=()=>{settledGeneration=Math.max(settledGeneration,generation);};void operation.then(settled,settled);
+  }
   let menuSerial = 0, menuPending = false;
   let definitions: Readonly<Record<string, BasePropertyDefinition>> = {};
   let definitionLoad = 0;
@@ -103,16 +115,17 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     return property;
   }
   function commit(target: HTMLElement, operation: (source: string) => string, success?: () => void): void {
-    pending = pending.then(async () => {
+    setPending(pending.then(async () => {
       if (destroyed) return;
+      mutationFailure=undefined;mutationFailureOwner=undefined;
       error(target);
       try {
         const source = options.getSource(), next = operation(source);
         if (next !== source) await options.onChange(next);
         if (destroyed) return;
         success?.(); refresh();
-      } catch (problem) { if (!destroyed) { refresh(); report(problem, target); } }
-    });
+      } catch (problem) { mutationFailure=problem;if (!destroyed) { refresh(); report(problem, target); } }
+    }));
   }
   function typeFor(property: Property): PropertyType { return selectedTypes.get(property.key) ?? property.type; }
   function edited(row: Row): void { row.dirty = true; row.revision++; }
@@ -170,6 +183,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
         getRelationTargets: () => options.getRelationTargets?.(row.key, definition) ?? (!definition.relation?.targetFilter ? [...(options.vault?.entries.values() ?? [])].filter(entry => entry.type === 'file' && /\.md$/i.test(entry.path)).map(entry => ({ path: entry.path, label: entry.path.replace(/\.md$/i, ''), entryId: entry.entryId, revision: entry.revision })) : undefined),
         commit: edit => {
           const operation = pending.then(async () => {
+            mutationFailure=undefined;mutationFailureOwner=undefined;
             if (!live() || rows.get(row.key) !== row) throw new Error('This property editor is no longer active.');
             if (JSON.stringify(definitionFor(row.key)) !== definitionBaseline) throw new Error('This property definition changed; reopen the editor before saving. The draft is preserved.');
             const source = options.getSource(), latest = current(source, row);
@@ -180,10 +194,11 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
             if (live()) queueMicrotask(() => { if (live()) refresh(); });
             return { version: 0, row: edit.row, value: edit.value };
           });
-          pending = operation.then(() => {}, () => {}); return operation;
+          setPending(operation.then(() => {}, problem => {mutationFailure=problem;mutationFailureOwner=row;})); return operation;
         },
         ...(options.onPropertyDefinitionChange ? { createOption: (_property: string, value: string, presentation: import('../bases/presentation-common.ts').BasePropertyPresentation) => {
           const operation = pending.then(async () => {
+            mutationFailure=undefined;mutationFailureOwner=undefined;
             if (!live() || rows.get(row.key) !== row || JSON.stringify(current(options.getSource(), row).value) !== baseline) throw new Error('This property changed before the option could be created.');
             const latest = definitionFor(row.key) ?? definition;
             if (JSON.stringify(latest) !== definitionBaseline) throw new Error('This property definition changed before the option could be created.');
@@ -195,7 +210,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
             definitionBaseline = JSON.stringify(nextDefinition);
             return { version: 0, row: presentation.row, value: baseExpressionValue(current(options.getSource(), row).value) };
           });
-          pending = operation.then(() => {}, () => {}); return operation;
+          setPending(operation.then(() => {}, problem => {mutationFailure=problem;mutationFailureOwner=row;})); return operation;
         } } : {}),
         onError: problem => report(problem, row.error),
       });
@@ -265,7 +280,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
       input.addEventListener('keydown', event => {
         const key = (event as KeyboardEvent).key;
         if (key === 'Enter' && input.tagName === 'INPUT') { event.preventDefault(); save(); }
-        if (key === 'Escape') { row.dirty = false; input.blur(); row.renderedValue = undefined; renderValue(row); error(row.error); }
+        if (key === 'Escape') { row.dirty = false;mutationFailure=undefined;mutationFailureOwner=undefined; input.blur(); row.renderedValue = undefined; renderValue(row); error(row.error); }
       });
       row.value.append(input);
       if (options.openLink && typeof value === 'string') {
@@ -312,8 +327,8 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
         }
         const definition = definitionFor(row.key);
         row.selector.disabled = true;
-        const operation = pending.then(async () => { if (!live() || hasDraft(row)) throw new Error('Finish editing this property before changing its definition.'); await options.onPropertyDefinitionChange!(row.key, { ...definition, type }); await loadDefinitions(); });
-        pending = operation.catch(problem => { if (live()) report(problem, row.error); }).finally(() => { if (live()) row.selector.disabled = false; });
+        const operation = pending.then(async () => {mutationFailure=undefined;mutationFailureOwner=undefined; if (!live() || hasDraft(row)) throw new Error('Finish editing this property before changing its definition.'); await options.onPropertyDefinitionChange!(row.key, { ...definition, type }); await loadDefinitions(); });
+        setPending(operation.catch(problem => {mutationFailure=problem; if (live()) report(problem, row.error); }).finally(() => { if (live()) row.selector.disabled = false; }));
         return;
       }
       const type = row.selector.value as PropertyType;
@@ -511,15 +526,15 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
         return setProperty(source, key, null, type);
       }, () => {
         if (options.vault && options.onPropertyDefinitionChange && type !== 'unknown') {
-          const operation = pending.then(async () => { if (!live()) throw new Error('This property editor is no longer active.'); await options.onPropertyDefinitionChange!(key, { type: type as BasePropertyDefinition['type'] }); await loadDefinitions(); });
-          pending = operation.catch(problem => { if (live()) report(problem); });
+          const operation = pending.then(async () => {mutationFailure=undefined;mutationFailureOwner=undefined; if (!live()) throw new Error('This property editor is no longer active.'); await options.onPropertyDefinitionChange!(key, { type: type as BasePropertyDefinition['type'] }); await loadDefinitions(); });
+          setPending(operation.catch(problem => {mutationFailure=problem; if (live()) report(problem); }));
         } else selectedTypes.set(key, type);
         addForm?.remove(); addForm = undefined;
       });
     };
     add.addEventListener('click', create);
     name.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); create(); } });
-    cancel.addEventListener('click', () => { addForm?.remove(); addForm = undefined; addButton.focus(); });
+    cancel.addEventListener('click', () => { addForm?.remove(); addForm = undefined;mutationFailure=undefined;mutationFailureOwner=undefined; addButton.focus(); });
     addForm.append(name, selector, add, cancel); root.append(addForm); name.focus();
   });
   async function loadDefinitions(): Promise<void> {
@@ -537,10 +552,22 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     for (const event of ['create', 'modify', 'delete', 'rename', 'ready'] as const) unsubscribers.push(options.vault.on(event, change => { if (event === 'ready' || change.path === BASE_PROPERTY_DEFINITIONS_PATH || change.oldPath === BASE_PROPERTY_DEFINITIONS_PATH) void loadDefinitions(); }));
     void loadDefinitions();
   }
-  const editObserver = document.defaultView?.MutationObserver ? new document.defaultView.MutationObserver(() => { if (!destroyed) refresh(); }) : undefined;
+  const editObserver = document.defaultView?.MutationObserver ? new document.defaultView.MutationObserver(() => {
+    if(destroyed)return;
+    // A rich widget explicitly cancelling its failed draft removes its marker.
+    if(mutationFailureOwner&&!hasDraft(mutationFailureOwner)&&pendingGeneration===settledGeneration){mutationFailure=undefined;mutationFailureOwner=undefined;}
+    refresh();
+  }) : undefined;
   editObserver?.observe(rowsContainer, { subtree: true, attributes: true, attributeFilter: ['data-base-editing'] });
   refresh();
-  return { refresh, destroy() {
+  const hasPendingChanges=()=>!destroyed&&(pendingGeneration!==settledGeneration||!!mutationFailure||!!addForm||[...rows.values()].some(hasDraft));
+  const flush=async()=>{
+    if(destroyed)return;
+    for(;;){const captured=pending;await captured;await Promise.resolve();if(captured===pending)break;}
+    if(mutationFailure)throw mutationFailure;
+    if(addForm||[...rows.values()].some(hasDraft))throw new Error('Finish editing the current property before closing.');
+  };
+  return { refresh,hasPendingChanges,flush, destroy() {
     if (destroyed) return;
     destroyed = true; menuSerial++;
     document.removeEventListener('contextmenu', supersede, true); document.removeEventListener('keydown', keyboardSupersede, true);
