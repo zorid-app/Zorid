@@ -849,6 +849,11 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   resize?.observe(root);
   function update(next: BaseQueryResult) {
     if (destroyed || (initialized && next === result)) return;
+    // Query/save acknowledgements rebuild headers too. Retain the user's live
+    // keyboard target by property, rather than its previous column position.
+    const focusedHeader = initialized && next.view.name === result.view.name && next.view.type === result.view.type && header.contains(doc.activeElement) ? doc.activeElement as HTMLElement : undefined;
+    const focusedColumn = focusedHeader?.closest<HTMLElement>('[role="columnheader"]');
+    const headerFocus = focusedColumn && (focusedHeader === focusedColumn || focusedHeader?.getAttribute('role') === 'separator') ? { property: focusedColumn.title, separator: focusedHeader !== focusedColumn } : undefined;
     const cancelledDraft = !!editing;
     initialized = true; revision++; stopDrag?.(); stopResize?.(); closeMenu?.(); closePicker?.(); draggedColumn = undefined; resizeWidths.clear(); measuredWidths.clear(); for (const cell of [...widgetDisposers.keys()]) releaseCell(cell); for (const cell of root.querySelectorAll('[data-base-editing]')) cell.removeAttribute('data-base-editing'); range = undefined; anchor = undefined; if (selection) selection.point = undefined; editing = undefined; result = next; collapsed.clear();
     status.textContent = cancelledDraft ? 'Results changed. The unfinished edit was cancelled.' : '';
@@ -857,7 +862,15 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     dimensions(); rebuildItems();
     const selectedItem = items.find(item => item.row?.path === selection?.path);
     if (selection && selectedItem?.row) selection.point = { group: selectedItem.groupIndex, row: selectedItem.rowIndex, column: result.properties.indexOf(selection.property) };
+    // Disposal/host callbacks may have deliberately moved focus outside. Only
+    // replace a target that was still focused immediately before its removal.
+    const retainHeaderFocus = headerFocus && doc.activeElement === focusedHeader;
     renderHeader(); renderRows();
+    if (retainHeaderFocus && (doc.activeElement === doc.body || doc.activeElement === doc.documentElement)) {
+      const column = Array.from(header.querySelectorAll<HTMLElement>('[role="columnheader"]')).find(cell => cell.title === headerFocus.property);
+      const target = headerFocus.separator ? column?.querySelector<HTMLElement>('[role="separator"]') : column;
+      target?.focus({ preventScroll: true });
+    }
     if (!result.rows.length) status.textContent += `${status.textContent ? ' ' : ''}No results`;
   }
   update(result);
