@@ -40,7 +40,7 @@ export interface BaseTableOptions {
   readonly summaryOptions?: readonly { id: string; label: string; preview?: BaseExpressionValue }[];
   readonly getSummaryOptions?: (property: string, groupIndex: number | null) => Promise<readonly { id: string; label: string; preview?: BaseExpressionValue }[]>;
   readonly requestAddSummary?: (property: string, anchor: HTMLElement, name?: string) => void;
-  readonly requestEditSummary?: (property: string, id: string, anchor: HTMLElement) => void;
+  readonly requestEditSummary?: (property: string, id: string, anchor: HTMLElement, groupIndex?: number | null) => void;
   readonly requestHideSummary?: (property: string) => void | Promise<void>;
   readonly requestSummary?: (property: string, id: string) => void | Promise<void>;
   readonly undo?: () => void | Promise<void>;
@@ -49,7 +49,7 @@ export interface BaseTableOptions {
   readonly getSummary?: (property: string, groupIndex: number | null) => { value: BaseExpressionValue; label?: string } | undefined;
   readonly onEditStateChange?: (active: boolean) => void;
 }
-export interface BaseTableView { update(result: BaseQueryResult): void; refreshLayout(): void; hasActiveEdits(): boolean; destroy(): void }
+export interface BaseTableView { openSummaryPicker(property: string, anchor: HTMLElement, groupIndex?: number | null): void; update(result: BaseQueryResult): void; refreshLayout(): void; hasActiveEdits(): boolean; destroy(): void }
 type Item = { row: BaseQueryRow; groupIndex: number; rowIndex: number; group?: never; summary?: never } | { group: number; row?: never; summary?: never } | { summary: number | null; row?: never; group?: never };
 type TableMenuEntry = { label: string; action?: () => void; disabled?: boolean; checked?: boolean; submenu?: readonly TableMenuEntry[] };
 type CellPoint = { group: number; row: number; column: number };
@@ -114,7 +114,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   const collapsed = new Set<number>();
   const widgetDisposers = new Map<HTMLElement, () => void>();
   let bulkPending = false, configPending = false;
-  let closeMenu: (() => void) | undefined, closePicker: (() => void) | undefined;
+  let closeMenu: (() => void) | undefined, closePicker: (() => void) | undefined, pickerAnchor: HTMLElement | undefined;
   let widths = new Map<string, number>(), resizeWidths = new Map<string, number>();
   const measuredWidths = new Map<string, number>();
   let stopResize: (() => void) | undefined, draggedColumn: string | undefined;
@@ -167,7 +167,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       if (group.key !== null) items.push({ group: i });
       if (!collapsed.has(i)) {
         group.rows.forEach((row, rowIndex) => items.push({ row, groupIndex: i, rowIndex }));
-        if (group.key !== null && result.properties.some(property => options.getSummary?.(property, i))) items.push({ summary: i });
+        if (result.groups.length > 1 && group.key !== null && result.properties.some(property => options.getSummary?.(property, i))) items.push({ summary: i });
       }
     }
     body.style.height = `${items.length * rowHeight}px`;
@@ -212,9 +212,9 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     let active = 0, disposed = false, choices: readonly { id: string; label: string; preview?: BaseExpressionValue }[] = [];
     const current = () => !disposed && !destroyed && revision === token && anchor.isConnected;
     const dismiss = (restoreFocus = true) => {
-      if (disposed) return; disposed = true; popup.remove(); doc.removeEventListener('pointerdown', outside, true); doc.removeEventListener('keydown', key, true); if (closePicker === close) closePicker = undefined; if (restoreFocus && anchor.isConnected) anchor.focus({ preventScroll: true });
+      if (disposed) return; disposed = true; popup.remove(); doc.removeEventListener('pointerdown', outside, true); doc.removeEventListener('keydown', key, true); if (closePicker === close) { closePicker = undefined; pickerAnchor = undefined; } if (restoreFocus && anchor.isConnected) anchor.focus({ preventScroll: true });
     };
-    const close = () => dismiss(false); closePicker = close;
+    const close = () => dismiss(false); closePicker = close; pickerAnchor = anchor;
     const outside = (event: Event) => { if (!popup.contains(event.target as Node)) dismiss(false); };
     const select = (id: string) => { if (!current()) return; dismiss(); Promise.resolve(options.requestSummary?.(property, id)).catch(report); };
     const draw = () => {
@@ -227,7 +227,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
         const preview = doc.createElement('span'); preview.className = 'zorid-bases-summary-preview'; preview.textContent = choice.preview ? display(choice.preview, result.shared !== undefined) : '';
         row.append(svgIcon(choice.preview?.type === 'number' ? Binary : choice.preview?.type === 'string' ? Text : Calculator), label, preview);
         const edit = doc.createElement('button'); edit.type = 'button'; edit.className = 'zorid-bases-summary-edit'; edit.textContent = '›'; edit.setAttribute('aria-label', `Edit ${choice.label}`); edit.disabled = !options.requestEditSummary;
-        edit.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); if (!current()) return; dismiss(); options.requestEditSummary?.(property, choice.id, anchor); }); row.append(edit);
+        edit.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); if (!current()) return; dismiss(); options.requestEditSummary?.(property, choice.id, anchor, groupIndex); }); row.append(edit);
         row.addEventListener('pointerdown', event => event.preventDefault()); row.addEventListener('mouseenter', () => setActive(index)); row.addEventListener('click', () => select(choice.id)); list.append(row);
       }
       const add = doc.createElement('button'); add.type = 'button'; add.className = 'zorid-bases-summary-add'; add.textContent = query && !choices.some(choice => choice.label.toLocaleLowerCase() === query) ? `Add summary: ${search.value.trim()}` : 'Add summary'; add.prepend(svgIcon(Calculator)); add.disabled = !options.requestAddSummary;
@@ -245,7 +245,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
         const rows = [...list.querySelectorAll<HTMLElement>('[role=option]')]; event.preventDefault(); event.stopPropagation();
         if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { active = rows.length ? (active + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length : 0; draw(); }
         else if (event.key === 'Enter') { const id = rows[active]?.dataset.summaryId; if (id) select(id); else list.querySelector<HTMLButtonElement>('.zorid-bases-summary-add:not(:disabled)')?.click(); }
-        else { const id = rows[active]?.dataset.summaryId; if (id && options.requestEditSummary) { dismiss(); options.requestEditSummary(property, id, anchor); } }
+        else { const id = rows[active]?.dataset.summaryId; if (id && options.requestEditSummary) { dismiss(); options.requestEditSummary(property, id, anchor, groupIndex); } }
       }
     };
     search.addEventListener('input', () => { active = 0; draw(); }); doc.body.append(popup); doc.addEventListener('pointerdown', outside, true); doc.addEventListener('keydown', key, true); search.focus();
@@ -410,7 +410,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     cell.dataset.path = row.path; cell.dataset.property = property; cell.dataset.group = String(point.group); cell.dataset.row = String(point.row); cell.dataset.column = String(index);
     cell.tabIndex = selection?.path === row.path && selection.property === property && (!selection.point || selection.point.group === point.group && selection.point.row === point.row) ? 0 : -1;
     cell.setAttribute('aria-readonly', String(!editable(row, property, value)));
-    if (options.renderProperty && property.startsWith('note.')) {
+    if (options.renderProperty && property !== 'file.name' && property !== 'file.file') {
       try { const dispose = options.renderProperty(cell, { row, property, value, version: result.version }); if (dispose) widgetDisposers.set(cell, dispose); } catch (error) { report(error); cell.textContent = display(value, result.shared !== undefined); }
     } else if (property === 'file.name' || property === 'file.file') {
       const link = doc.createElement('a'); link.className = 'internal-link'; link.href = '#'; link.tabIndex = -1;
@@ -519,6 +519,8 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   }
   function renderRows() {
     if (destroyed) return;
+    // Virtualized anchor replacement must dismiss its popover rather than leave an inert dialog.
+    if (pickerAnchor && (body.contains(pickerAnchor) || footer.contains(pickerAnchor))) closePicker?.();
     // Keep an active draft mounted during scrolling. Its position stays in the virtual body.
     const activeRows = new Set<HTMLElement>();
     if (editing?.parentElement) activeRows.add(editing.parentElement);
@@ -530,6 +532,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     }
     const focused = doc.activeElement as HTMLElement | null;
     const preserveFocus = focused?.getAttribute('role') === 'gridcell' && body.contains(focused);
+    const focusedSummary = focused?.dataset.summaryProperty, focusedSummaryGroup = focused?.dataset.summaryGroup;
     const focusedGroup = focused && body.contains(focused) ? focused.dataset.groupButton : undefined;
     for (const child of Array.from(body.children)) if (!activeRows.has(child as HTMLElement)) { releaseRow(child); child.remove(); }
     const visible = Math.ceil((root.clientHeight || 600) / rowHeight);
@@ -541,7 +544,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       if (item.row) { el.style.gridTemplateColumns = template; result.properties.forEach((property, i) => el.append(renderCell(item.row!, property, i, { group: item.groupIndex, row: item.rowIndex, column: i }))); }
       else if ('summary' in item) {
         el.classList.add('zorid-bases-table-summary'); el.style.gridTemplateColumns = template;
-        for (const property of result.properties) { const cell = doc.createElement('div'); cell.className = 'zorid-bases-table-summary-cell'; cell.setAttribute('role', 'gridcell'); cell.dataset.property = property; const summary = options.getSummary?.(property, item.summary!); if (summary) { cell.textContent = display(summary.value, result.shared !== undefined); if (summary.label) cell.title = summary.label; } el.append(cell); }
+        for (const property of result.properties) el.append(createSummaryCell(property, item.summary!));
       } else {
         el.classList.add('zorid-bases-table-group'); const button = doc.createElement('button'), group = result.groups[item.group], token = revision;
         button.type = 'button'; button.dataset.groupButton = String(item.group); button.setAttribute('aria-expanded', String(!collapsed.has(item.group)));
@@ -562,29 +565,31 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       const button = Array.from(body.querySelectorAll<HTMLButtonElement>('[data-group-button]')).find(button => button.dataset.groupButton === focusedGroup);
       button?.focus({ preventScroll: true });
     }
-    if (preserveFocus && selection) for (const cell of body.querySelectorAll<HTMLElement>('[role="gridcell"]')) {
+    if (focusedSummary) for (const cell of body.querySelectorAll<HTMLElement>('[data-summary-property]')) if (cell.dataset.summaryProperty === focusedSummary && cell.dataset.summaryGroup === focusedSummaryGroup) cell.focus({ preventScroll: true });
+    if (preserveFocus && !focusedSummary && selection) for (const cell of body.querySelectorAll<HTMLElement>('[role="gridcell"]')) {
       if (cell.dataset.path === selection.path && cell.dataset.property === selection.property && (!selection.point || cell.dataset.group === String(selection.point.group) && cell.dataset.row === String(selection.point.row))) { cell.focus({ preventScroll: true }); break; }
     }
+  }
+  function createSummaryCell(property: string, groupIndex: number | null): HTMLElement {
+    const cell = doc.createElement('div'); cell.className = 'zorid-bases-table-summary-cell'; cell.setAttribute('role', 'gridcell'); cell.dataset.summaryProperty = property; cell.dataset.summaryGroup = groupIndex === null ? 'overall' : String(groupIndex);
+    const summary = options.getSummary?.(property, groupIndex);
+    if (summary) { if (summary.label) { const name = doc.createElement('span'); name.className = 'summary-function-name'; name.textContent = summary.label; cell.append(name); cell.title = summary.label; } const value = doc.createElement('span'); value.className = 'summary-function-value'; value.textContent = display(summary.value, result.shared !== undefined); cell.append(value); }
+    else { const placeholder = doc.createElement('span'); placeholder.className = 'placeholder'; placeholder.textContent = 'Summarize'; cell.append(placeholder); }
+    if (options.requestSummary && (options.getSummaryOptions || options.summaryOptions?.length)) {
+      cell.tabIndex = 0; const token = revision;
+      const open = (event: MouseEvent) => { if (destroyed || token !== revision || hasActiveEdits() || !cell.isConnected) return; event.preventDefault(); showSummaryPicker(property, cell, groupIndex); };
+      cell.addEventListener('click', open); cell.addEventListener('contextmenu', open);
+      cell.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(new win!.MouseEvent('click')); } });
+    }
+    return cell;
   }
   function renderFooter() {
     const focused = footer.contains(doc.activeElement) ? (doc.activeElement as HTMLElement).dataset.summaryProperty : undefined;
     footer.replaceChildren(); footer.style.height = `${Number.parseFloat(win?.getComputedStyle(root).getPropertyValue('--bases-table-row-height') ?? '') || 30}px`;
-    const visible = !!options.requestSummary || result.properties.some(property => options.getSummary?.(property, null));
+    const visible = result.properties.some(property => options.getSummary?.(property, null));
     footer.hidden = !visible; root.setAttribute('aria-rowcount', String(items.length + 1 + (visible ? 1 : 0))); if (!visible) return;
     footer.setAttribute('aria-rowindex', String(items.length + 2));
-    for (const property of result.properties) {
-      const cell = doc.createElement('div'); cell.className = 'zorid-bases-table-summary-cell'; cell.setAttribute('role', 'gridcell'); cell.dataset.summaryProperty = property;
-      const summary = options.getSummary?.(property, null);
-      if (summary) { cell.textContent = display(summary.value, result.shared !== undefined); if (summary.label) cell.title = summary.label; }
-      else { const placeholder = doc.createElement('span'); placeholder.className = 'placeholder'; placeholder.textContent = 'Summarize'; cell.append(placeholder); }
-      if (options.requestSummary && (options.getSummaryOptions || options.summaryOptions?.length)) {
-        cell.tabIndex = 0; const token = revision;
-        const open = (event: MouseEvent) => { if (destroyed || token !== revision || hasActiveEdits()) return; event.preventDefault(); showSummaryPicker(property, cell); };
-        cell.addEventListener('click', open); cell.addEventListener('contextmenu', open);
-        cell.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(new win!.MouseEvent('click')); } });
-      }
-      footer.append(cell);
-    }
+    for (const property of result.properties) footer.append(createSummaryCell(property, null));
     if (focused) for (const cell of footer.querySelectorAll<HTMLElement>('[data-summary-property]')) if (cell.dataset.summaryProperty === focused) cell.focus({ preventScroll: true });
   }
   function pointOf(cell: HTMLElement): CellPoint {
@@ -741,11 +746,23 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     if (!callback) return;
     event.preventDefault(); Promise.resolve().then(callback).catch(report);
   }
+  function protectRangeClick(event: MouseEvent) {
+    const target = event.target as Element | null, cell = target?.closest<HTMLElement>('[role="gridcell"][data-path]');
+    if (!cell || !body.contains(cell)) return;
+    if (suppressClick) { suppressClick = false; event.preventDefault(); event.stopImmediatePropagation(); return; }
+    // Property widgets install their own target listeners before table handlers.
+    // A selection gesture must reach table navigation without opening a widget.
+    if (event.shiftKey && !event.metaKey && !event.ctrlKey && !editing && !cell.hasAttribute('data-base-editing')) event.preventDefault();
+  }
+  function protectRangeKey(event: KeyboardEvent) {
+    const cell = event.target as HTMLElement | null;
+    if (!event.isComposing && range && cell?.getAttribute('role') === 'gridcell' && body.contains(cell) && ['Enter', 'F2'].includes(event.key)) { event.preventDefault(); event.stopImmediatePropagation(); }
+  }
   function onPointerDown(event: PointerEvent) {
     if (destroyed || hasActiveEdits() || event.defaultPrevented || event.button !== 0 || event.pointerType === 'touch') return;
     suppressClick = false;
     const target = event.target as Element, cell = target.closest<HTMLElement>('[role="gridcell"]');
-    if (!cell || !body.contains(cell) || ((!event.shiftKey || event.metaKey || event.ctrlKey) && target.closest('a,textarea,input:not([type="checkbox"]),[draggable="true"]'))) return;
+    if (!cell || !cell.dataset.path || !body.contains(cell) || ((!event.shiftKey || event.metaKey || event.ctrlKey) && target.closest('a,textarea,input:not([type="checkbox"]),[draggable="true"]'))) return;
     stopDrag?.(); suppressClick = false;
     const start = pointOf(cell), token = revision;
     if (event.shiftKey && selection?.point?.group === start.group) {
@@ -782,6 +799,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     if (active !== reportedEditState) { reportedEditState = active; try { options.onEditStateChange?.(active); } catch (error) { report(error); } }
   }) : undefined;
   editObserver?.observe(body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-base-editing'] });
+  root.addEventListener('click', protectRangeClick, true); root.addEventListener('keydown', protectRangeKey, true);
   root.addEventListener('copy', onCopy);
   root.addEventListener('paste', onPaste); root.addEventListener('keydown', onHistory);
   root.addEventListener('pointerdown', onPointerDown);
@@ -803,5 +821,12 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     if (!result.rows.length) status.textContent += `${status.textContent ? ' ' : ''}No results`;
   }
   update(result);
-  return { update, refreshLayout() { if (!destroyed) { dimensions(); rebuildItems(); renderRows(); } }, hasActiveEdits, destroy() { if (destroyed) return; destroyed = true; revision++; stopDrag?.(); stopResize?.(); closeMenu?.(); closePicker?.(); draggedColumn = undefined; editObserver?.disconnect(); for (const cell of [...widgetDisposers.keys()]) releaseCell(cell); root.removeEventListener('paste', onPaste); root.removeEventListener('keydown', onHistory); root.removeEventListener('copy', onCopy); root.removeEventListener('pointerdown', onPointerDown); editing = undefined; if (frame !== undefined) win?.cancelAnimationFrame(frame); resize?.disconnect(); root.removeEventListener('scroll', schedule); root.remove(); status.remove(); } };
+  return { openSummaryPicker(property, anchor, groupIndex = null) {
+    if (destroyed || !result.properties.includes(property)) return;
+    const scope = groupIndex === null ? 'overall' : String(groupIndex);
+    const replacement = [...root.querySelectorAll<HTMLElement>('[data-summary-property]')].find(cell => cell.dataset.summaryProperty === property && cell.dataset.summaryGroup === scope);
+    const headerCell = header.children[result.properties.indexOf(property)] as HTMLElement | undefined;
+    const target = anchor.isConnected && root.contains(anchor) ? anchor : replacement ?? headerCell;
+    if (target) showSummaryPicker(property, target, groupIndex);
+  }, update, refreshLayout() { if (!destroyed) { dimensions(); rebuildItems(); renderRows(); } }, hasActiveEdits, destroy() { if (destroyed) return; destroyed = true; revision++; stopDrag?.(); stopResize?.(); closeMenu?.(); closePicker?.(); draggedColumn = undefined; editObserver?.disconnect(); for (const cell of [...widgetDisposers.keys()]) releaseCell(cell); root.removeEventListener('click', protectRangeClick, true); root.removeEventListener('keydown', protectRangeKey, true); root.removeEventListener('paste', onPaste); root.removeEventListener('keydown', onHistory); root.removeEventListener('copy', onCopy); root.removeEventListener('pointerdown', onPointerDown); editing = undefined; if (frame !== undefined) win?.cancelAnimationFrame(frame); resize?.disconnect(); root.removeEventListener('scroll', schedule); root.remove(); status.remove(); } };
 }

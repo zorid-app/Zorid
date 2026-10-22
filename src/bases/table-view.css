@@ -65,3 +65,7 @@ textarea.zorid-bases-table-input { height: 100%; resize: none; }
 .zorid-bases-summary-add { display: flex; align-items: center; gap: 8px; width: 100%; text-align: start; padding: 7px 6px; margin-top: 4px; border-top: 1px solid var(--background-modifier-border, #ddd); }
 .zorid-bases-summary-add:disabled { opacity: .5; }
 .zorid-bases-summary-add:hover:not(:disabled) { background: var(--background-modifier-hover, #ddd); }
+
+.zorid-bases-table-summary-cell { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.zorid-bases-table-summary-cell .summary-function-name { color: var(--text-muted, #666); }
+.zorid-bases-table-summary-cell .summary-function-value { color: var(--text-normal, #222); overflow: hidden; text-overflow: ellipsis; }

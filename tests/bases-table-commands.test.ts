@@ -89,7 +89,7 @@ test('resizer keyboard persists width and double-click resets custom width', asy
 test('summary footer displays host-computed overall values without aggregating visible rows', () => {
   const f = fixture({ getSummary: (property, group) => property === 'note.score' && group === null ? { value: { type: 'number', value: 123456 }, label: 'Sum' } : undefined });
   const footer = f.main.querySelector('.zorid-bases-table-footer')!;
-  assert.equal(footer.querySelector('[data-summary-property="note.score"]')!.textContent, '123456'); assert.equal(footer.querySelector('[data-summary-property="note.score"]')!.getAttribute('title'), 'Sum'); f.close();
+  assert.equal(footer.querySelector('[data-summary-property="note.score"]')!.textContent, 'Sum123456'); assert.equal(footer.querySelector('[data-summary-property="note.score"]')!.getAttribute('title'), 'Sum'); f.close();
 });
 
 test('rich widget drafts stay mounted across scrolling and every acquired widget disposes once', async () => {
@@ -201,4 +201,45 @@ test('every clamped writable mutation validates before a batch starts', async ()
 test('plain scalar paste retains the clipboard resource bound before allocating a command', async () => {
   const f=fixture();f.cell(0,'note.text').focus();f.paste(f.cell(0,'note.text'),{'text/plain':'x'.repeat(8_000_001)});await tick();
   assert.equal(f.batches.length,0);assert.match(f.main.textContent!,/pasted table is too large/);f.close();
+});
+
+
+test('shared rich renderer presents computed values read-only and retains native file opening', async () => {
+  const seen:string[]=[], f=fixture({renderProperty(element,presentation){seen.push(presentation.property);element.textContent=`Rich ${presentation.property}`;}});
+  const rows=f.result.rows.map(row=>({...row,values:{...row.values,'formula.cover':{type:'string' as const,value:'rich output'},'file.tags':{type:'list' as const,value:[]}}}));
+  f.view.update({...f.result,version:8,rows,groups:[{key:null,rows}],properties:['file.name','note.text','formula.cover','file.tags']});
+  const formula=f.cell(0,'formula.cover');assert.equal(formula.textContent,'Rich formula.cover');assert.equal(formula.getAttribute('aria-readonly'),'true');
+  assert.ok(seen.includes('formula.cover'));assert.ok(seen.includes('file.tags'));assert.ok(!seen.includes('file.name'));assert.ok(f.cell(0,'file.name').querySelector('a'));
+  formula.focus();f.key(formula,'Delete');await tick();assert.equal(f.batches.length,0);f.close();
+});
+
+test('group summary picker preserves group scope in preview and edit callbacks', async () => {
+  const scopes:(number|null|undefined)[]=[], edits:(number|null|undefined)[]=[];
+  const f=fixture({getSummary:(property,group)=>property==='note.score'?{value:{type:'number',value:group===null?3:1},label:'Sum'}:undefined,getSummaryOptions:async(_property,group)=>{scopes.push(group);return[{id:'Range',label:'Range',preview:{type:'number',value:1}}];},requestSummary(){},requestEditSummary(_property,_id,_anchor,group){edits.push(group);}});
+  f.view.update({...f.result,version:8,groups:[{key:{type:'string',value:'A'},rows:f.result.rows.slice(0,2)},{key:{type:'string',value:'B'},rows:f.result.rows.slice(2)}]});
+  const group=f.main.querySelector<HTMLElement>('[data-summary-property="note.score"][data-summary-group="1"]')!;assert.ok(group);group.click();await tick();
+  assert.deepEqual(scopes,[1]);const input=f.dom.window.document.querySelector<HTMLInputElement>('[aria-label="Find or create summary"]')!;f.key(input,'ArrowRight');assert.deepEqual(edits,[1]);
+  assert.equal(f.dom.window.document.querySelector('[aria-label="Summarize"]'),null);f.close();
+});
+
+
+test('virtualized summary anchors close their popup and public return chooser resolves a current anchor', async () => {
+  const f=fixture({getSummaryOptions:async()=>[{id:'Sum',label:'Sum'}],getSummary:property=>property==='note.score'?{label:'Sum',value:{type:'number',value:3}}:undefined,requestSummary(){}});
+  const old=f.main.querySelector<HTMLElement>('[data-summary-property="note.score"]')!;old.click();await tick();assert.ok(f.dom.window.document.querySelector('[aria-label="Summarize"]'));
+  f.view.refreshLayout();assert.equal(f.dom.window.document.querySelector('[aria-label="Summarize"]'),null);assert.equal(old.isConnected,false);
+  f.view.openSummaryPicker('note.score',old,null);await tick();assert.ok(f.dom.window.document.querySelector('[aria-label="Summarize"]'));
+  f.view.destroy();assert.equal(f.dom.window.document.querySelector('[aria-label="Summarize"]'),null);f.dom.window.close();
+});
+
+
+test('summary footer starts hidden, then exposes selected function name and value', () => {
+  const plain=fixture({requestSummary(){},summaryOptions:[{id:'Sum',label:'Sum'}]});assert.equal(plain.main.querySelector<HTMLElement>('.zorid-bases-table-footer')!.hidden,true);plain.close();
+  const selected=fixture({getSummary:(property)=>property==='note.score'?{label:'Sum',value:{type:'number',value:3}}:undefined});assert.equal(selected.main.querySelector<HTMLElement>('.zorid-bases-table-footer')!.hidden,false);assert.match(selected.main.querySelector('[data-summary-property="note.score"]')!.textContent!,/Sum3/);selected.close();
+});
+
+test('rich widgets cannot consume shift selections, range Enter or the click after a drag', () => {
+  let activations=0;
+  const f=fixture({renderProperty(element){const click=(event:MouseEvent)=>{if(!event.defaultPrevented)activations++;};const key=(event:KeyboardEvent)=>{if(!event.defaultPrevented&&event.key==='Enter')activations++;};element.addEventListener('click',click);element.addEventListener('keydown',key);return()=>{element.removeEventListener('click',click);element.removeEventListener('keydown',key);};}});
+  f.cell(0,'note.text').focus();f.cell(1,'note.text').dispatchEvent(new f.dom.window.MouseEvent('click',{bubbles:true,cancelable:true,shiftKey:true}));assert.equal(activations,0);f.key(f.cell(0,'note.text'),'Enter');assert.equal(activations,0);
+  f.key(f.cell(0,'note.text'),'Escape');f.cell(0,'note.text').dispatchEvent(new f.dom.window.MouseEvent('pointerdown',{bubbles:true,cancelable:true,button:0}));f.cell(1,'note.text').dispatchEvent(new f.dom.window.MouseEvent('pointermove',{bubbles:true,cancelable:true}));f.cell(1,'note.text').dispatchEvent(new f.dom.window.MouseEvent('pointerup',{bubbles:true,cancelable:true}));f.cell(1,'note.text').click();assert.equal(activations,0);f.close();
 });
