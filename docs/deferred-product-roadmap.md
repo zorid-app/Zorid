@@ -9,6 +9,35 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Browser008 is **terminal1**: all9 original groups now pass, including the strict
+30-diagnostic malformed-rollup/restore case and retained-pin/restart sequence.
+First Q3 group fails only at its empty overall-summary field expectation;
+9 later Q3 groups remain unexecuted. Source contract inspection finds Rust
+intentionally omits empty summary maps (`serde skip_serializing_if`) and TS
+marks them optional; the CLI oracle already handles this empty default.
+`bases_expressions` owns a narrow undefined-only empty-map correction plus
+negative cases and preassert capture; independent review is required before009.
+Populated summaries, null/wrong types, extra values and all typed/group/diagnostic
+checks remain strict. No product semantic fix or WASM rebuild is needed.
+Report `/private/tmp/zorid-bases-browser-actual-20261022-008/report.json`, SHA
+`6a1a7f48346eae78f0b14f7d94c07d5e4f67ff1f048513f50e58ca963e7840b8`.
+Postproof preserves37574722/source/module hashes; Chrome58784 exits0, profile
+absent, Vite closes, DB deletes, cleanup/artifact failures empty. Runtime released.
+
+Reviewed C3 production fix is composed as499acedd: live existing-DOM manual
+Group preview, explicit keyboard controls, no-write cancel/focus restoration,
+external-focus relinquishment and unchanged group-property alias preservation.
+Root composed focused run1220 is terminal0,33/33 checks; log
+`/private/tmp/zorid-bases-composed-group-reorder-20261022-001.log`.
+C3 actual scenarios/helpers are d9f3f031; combined C1/C3 fixture/protocol checks
+pass10/10. These are source/contract checks, not native UI acceptance.
+C2 acceptance scenarios are composed09cb2326 (3/3 narrow contracts), with strict
+file/nested draft/selection and fenced logical-selection checks. Source inspection
+finds clean own-fence rename may remount and lose the selected property;
+`bases_inline_core` owns a scoped live-bases/base-embed-sessions fix, preserving
+foreign/stale occurrence and dirty draft safety. Native matching-artifact
+execution remains pending. Reviewed supported-web history is6fefe508.
+
 Browser007 capture-only run is **terminal1 at the unchanged old assertion**,
 8 original groups pass/10 Q3 remain unexecuted. Actual payload confirms30 exact
 diagnostics:2 author-filter `type` errors (`Cannot convert Error to number`)

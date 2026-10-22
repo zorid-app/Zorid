@@ -2,6 +2,16 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Browser008 passes all9 original groups; the first expanded Q3 group stops at an
+empty-summary map omitted by the intentionally optional DTO contract. A narrow
+undefined-only empty default is under review; populated summaries/diagnostics
+remain strict. Nine later Q3 groups are unexecuted. No product semantic change.
+C3 preview/focus ownership/alias-preservation fix is reviewed/composed and33
+focused root checks pass; actual UI remains open. C2 new strict cases expose a
+clean fenced-rename logical-selection remount gap, assigned bases_inline_core
+with dirty/stale/foreign-fence guards retained. All C1–C3 actual native campaigns
+remain unexecuted at the current full closure.
+
 Browser007 preserves the old failing assertion and captures the full malformed
 rollup payload:2 exact filter `type` conversion errors plus28 exact underlying
 property `unavailable` diagnostics, with all witness/empty-result checks intact.
