@@ -21,6 +21,8 @@ host. It does not call production stores/controllers to simulate positive edits.
   real column separator keyboard resize/reset.
 - Edit number, checkbox, multiselect, status and relation using actual controls;
   check exact YAML values and preserve original body/unrelated fields.
+- Edit native date/datetime segments with real keyboard input; select and plain
+  list widgets persist their respective scalar/list values.
 - Shared property settings: create/reorder/color option, rename label without
   rewriting values, remove a selected option and preserve/show its unknown value,
   then restore the definition through UI.
@@ -30,33 +32,74 @@ host. It does not call production stores/controllers to simulate positive edits.
   no injected application drag state or mutation calls.
 - Create two notes through New with exact full literal template and collision
   handling; assert unchanged template and no expanded placeholders.
+- New opens its hover editor. Rename the selected contenteditable title, type a
+  full literal body into the real shared CodeMirror editor, close, reopen as a
+  normal note and verify exact bytes again after actual application restart.
+- Conflicting New title retains the draft/error. Retry cannot duplicate/overwrite
+  the existing file; correct the title and explicitly retry the same note.
 - Missing-template failure creates no blank fallback; repair settings and retry.
   New without template uses safe equality defaults.
 - A separate Authors Base verifies reverse relations/count/average from all
   durable related files, without writing derived fields into source notes.
+- Rename a target through its normal note title; verify readable relation updates.
+  Delete the target through a real Base cell menu and actual confirmation; preserve
+  referring notes and show unresolved links.
 - Switch Table/Cards/List/Kanban; move one card through actual keyboard behavior
   and assert original file changed.
+- Cards cover property, fit, size and aspect ratio save through visible controls;
+  decode a deterministic 96×64 PNG. List markers, separators and indentation save.
 - Mount both file/named-view and fenced Base embeds; preserve containing Markdown.
+- Rename the fenced view through its toolbar and assert the exact original host
+  Markdown changes only at that view name.
 - Ordinary Split right: edit one shared file and assert both presentations agree.
   Palette-mounted right-sidebar Base follows two active main notes' `this` context.
 - External editor writes while a real cell draft retains its original baseline;
   verify stale rejection/draft feedback and exact authoritative external bytes.
 - Signal-free normal quit; restart same profile; verify note/config bytes and UI.
+- Actual Results CSV download uses Chromium download-directory isolation, then an
+  independent quoted/multiline CSV parser verifies all 73 initial result rows and
+  total ratings. This does **not** exercise the native Save dialog.
+- Rich formula link/icon, local image and inert sanitized HTML reach the real
+  renderer; click the formula link to open its original note.
+- Reconciled reference immediate toolbar behavior: Add view name Enter continues
+  Configure view, Formula CodeMirror autosaves, custom visible comboboxes replace
+  hidden native backing controls, filter sections use disclosure state, and the
+  summary picker has real options/previews. Typed Bases clipboard preserves
+  numbers; a separate raw plain-string paste preserves incompatibility/diagnostics.
+- Add/edit a custom summary through its real editor. Group by status and scroll
+  the virtual table to observe each group summary against independent exact oracles.
 
 These are **authored, not executed**. Selectors and interactions are coordinated
 with implementation owners and must be reconciled to their final reference-backed
 controls before runtime. A failed early gate does not establish later coverage.
 
-## Required remaining additions before full acceptance
+## Goal audit: concrete remaining acceptance
 
-- Formula validation errors, group summaries, display names, visual nested All
-  views filters, result export and custom summary definition editing.
-- Status category editing; date/datetime/list/link editing and invalid-value diagnostics.
-- Relation target rename/delete/unresolved and refresh.
+The following maps the complete goal sections to the authored desktop campaign.
+It does not convert unexecuted code into acceptance or reduce the goal.
+
+| Goal area | Authored actual journey | Concrete remaining boundary |
+| --- | --- | --- |
+| Query/config contract | Membership, view expression, formula lifecycle, typed values, search/limit, overall/custom/group summaries, unknown config/comments | Full function/null/date/regex/cycle matrix and native/WASM parity are root/core corpus gates; cancellation, partial coverage and unavailable metadata remain separately verified semantics. |
+| Creation/view/config UI | Create Base, add/duplicate/rename/default/move/delete views, search, filters, formula and summary editors, property settings | Visual nested All views conditions, multi-sort ordering, manual group order/visibility/empty groups and display-name controls still need composed scenarios. |
+| Rich definitions/relations | Scalar/select/multiselect/status/date/datetime/list edits; option label/color/order/remove/unknown; reverse relations/rollups, target rename/delete/unresolved | Tags/plain link controls, status category edits, multi-relations/target-filter rejection, external target move/copy identity witnesses and property-definition conflicts still need composed scenarios. |
+| New | Literal full template, safe defaults/no template, collision handling, missing template, hover title/body, retained conflict/retry, close/normal reopen/restart | Create-in-group precedence and unreadable-template/uncertain native I/O outcomes remain. Normal title collision recovery is not native interruption proof. |
+| Layout/editing | Four layouts, range paste/clear/undo/redo, raw/typed clipboard, header drag, resize/reset, Cards cover decode/settings, List settings, Kanban pointer/keyboard | Header/cell menu ordering/availability, pointer resize/auto-size, card modifier/middle-click, empty/null/list/folder Kanban group moves and failed/partial bulk recovery remain. |
+| Embeds/lifecycle/export | Standalone, split consistency, sidebar active-note `this`, named file embed, fenced config source save, stale external file, normal quit/restart, full CSV export | Pending drafts across close/unmount, stale embed retargets/in-flight results, native I/O interruption/recovery, theme/scaling/keyboard accessibility and native Save dialog remain. |
+| UI/logic reference | Zorid screenshot states and actual semantic assertions authored | Matching Obsidian artifact screenshots/executed reference interactions belong to the REA/reference lane; Zorid screenshots alone prove no parity. |
+
+Remaining additions must either be executed through matching integrated surfaces,
+retain explicit independent proof in their owning lane, or remain reported gaps.
+Unsupported selectors are failures, not silent skips.
+
+## Remaining scenario list
+
+- Formula validation errors, display names and visual nested All views filters.
+- Status category editing; tags/plain links and invalid-value correction.
 - Table pointer resize/header menus; Kanban empty/null/
   list/folder groups; Cards covers/sizing, List markers/separators.
 - Unreadable-template failure and create-in-group precedence.
-- Fenced configuration UI saves original Markdown block; close/remount pending drafts.
+- Close/remount pending drafts and stale embed retargets.
 - Real native interruption/failure retained recovery, report actual atomic/partial
   boundaries and repeat safe retry; this needs integration-owner fault scheduling.
 - Matched Obsidian reference screenshots/interaction evidence remains the REA/

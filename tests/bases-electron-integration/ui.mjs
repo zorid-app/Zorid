@@ -65,14 +65,30 @@ export class UI {
     }
   }
   async select(selector, value) {
-    const values = await this.wait(`const e=document.querySelector(${JSON.stringify(selector)});return e?.tagName==='SELECT'?[...e.options].map(o=>({value:o.value,label:o.textContent,disabled:o.disabled})):false;`, 'Native select options');
+    const model = await this.wait(`const e=document.querySelector(${JSON.stringify(selector)});return e?.tagName==='SELECT'?{label:e.getAttribute('aria-label'),custom:e.hidden&&e.nextElementSibling?.getAttribute('role')==='combobox',values:[...e.options].map(o=>({value:o.value,label:o.textContent,disabled:o.disabled}))}:false;`, 'Select value model');
+    const values=model.values;
     const index = values.findIndex(o => o.value === value || o.label === value);
     assert.ok(index >= 0 && !values[index].disabled, `Selectable ${value}`);
-    await this.click(selector); await this.key('Home');
-    for (let i = 0; i < index; i++) await this.key('ArrowDown');
-    await this.key('Enter');
+    if(model.custom){
+      const presented=selector.replace(/select(?=\[)/g,'button[role="combobox"]');
+      await this.click(presented);
+      const chosen=await this.wait(`const list=[...document.querySelectorAll('[role="listbox"]')].find(e=>e.getAttribute('aria-label')===${JSON.stringify(model.label)}&&e.getClientRects().length);const options=list?[...list.querySelectorAll('[role="option"]')]:[];const row=options.find(e=>e.textContent===${JSON.stringify(values[index].label)}&&e.getAttribute('aria-disabled')!=='true');if(!row)return false;row.scrollIntoView({block:'nearest'});const r=row.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;return row.contains(document.elementFromPoint(x,y))?{x,y}:false;`,'Visible custom option '+values[index].label);
+      await this.cdp.call('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...chosen});await this.cdp.call('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...chosen});
+      this.actions.push({action:'custom-option',selector,label:values[index].label,value:values[index].value,at:Date.now()});
+    }else{
+      await this.click(selector); await this.key('Home');
+      for (let i = 0; i < index; i++) await this.key('ArrowDown');
+      await this.key('Enter');
+    }
     await this.wait(`return document.querySelector(${JSON.stringify(selector)})?.value===${JSON.stringify(values[index].value)};`, 'Native select accepted keyboard input');
   }
+  async range(selector,value){
+    const model=await this.wait(`const e=document.querySelector(${JSON.stringify(selector)});return e?.type==='range'?{min:Number(e.min),max:Number(e.max),step:Number(e.step||1)}:false;`,'Visible range model');
+    const steps=Math.round((value-model.min)/model.step);assert.ok(steps>=0&&value<=model.max);
+    await this.click(selector);await this.key('Home');for(let i=0;i<steps;i++)await this.key('ArrowRight');
+    await this.wait(`return Math.abs(Number(document.querySelector(${JSON.stringify(selector)})?.value)-${value})<0.00001;`,'Range accepts actual keyboard value');
+  }
+  async scroll(selector,deltaY){const point=await this.point(selector);await this.cdp.call('Input.dispatchMouseEvent',{type:'mouseWheel',deltaX:0,deltaY,...point});await delay(100);this.actions.push({action:'wheel',selector,deltaY,at:Date.now()});}
   async openFile(file) {
     const selector = `[role="treeitem"][data-path=${JSON.stringify(file)}]`;
     // Open ancestor folders through their actual tree controls when necessary.
@@ -95,6 +111,10 @@ export class UI {
     await delay(80);
   }
   cell(file, property) { return `[role="gridcell"][data-path=${JSON.stringify(file)}][data-property=${JSON.stringify(property)}]`; }
+  async selectCell(file,property) {
+    await this.click(this.cell(file,property));await this.key('Escape');
+    await this.wait(`const e=document.activeElement;return e?.getAttribute('role')==='gridcell'&&e.dataset.path===${JSON.stringify(file)}&&e.dataset.property===${JSON.stringify(property)};`,'Real cell focus after cancelling editor');
+  }
   async edit(file, property, text) {
     const cell = this.cell(file,property); await this.click(cell,{count:2});
     await this.type(`${cell} input:not([type="checkbox"]),${cell} textarea`,text); await this.key('Enter'); await this.idle();
