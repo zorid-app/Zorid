@@ -12,7 +12,7 @@ function fixture(immediate=false){
  const source=BaseDocument.parse('filters: "true"\nformulas: {double: "score * 2"}\nproperties: {score: {displayName: Points, extension: keep}}\nviews:\n - {type: table, name: Library, order: [file.name, score]}\n - {type: cards, name: Covers}\n');
  const result=executeBaseQuery(source,{version:1,files:[{path:'Book.md',properties:{score:3}}]});
  const calls:unknown[][]=[],errors:unknown[]=[];
- const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate,preflight(){},async selectView(index){calls.push(['select',index]);},async save(version,patch){calls.push(['save',version,patch]);},commands:{async addView(version,type,name){calls.push(['add',version,type,name]);},async updateView(version,index,patch){calls.push(['update',version,index,patch]);},async duplicateView(version,index,name){calls.push(['duplicate',version,index,name]);},async removeView(version,index){calls.push(['remove',version,index]);},async moveView(version,from,to){calls.push(['move',version,from,to]);},async setDefaultView(version,index){calls.push(['default',version,index]);},async updateRoot(version,patch){calls.push(['root',version,patch]);}},async saveConfiguration(version,patch){calls.push(['configuration',version,patch]);},onSearch(value){calls.push(['search',value]);},async onNew(){calls.push(['new']);},async onExport(format,copy){calls.push(['export',format,copy]);},onDraftChange(){},onError(error){errors.push(error);}});
+ const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate,preflight(){},async selectView(index){calls.push(['select',index]);},async save(version,patch){calls.push(['save',version,patch]);},commands:{async addView(version,type,name,initial){calls.push(['add',version,type,name,initial]);},async updateView(version,index,patch){calls.push(['update',version,index,patch]);},async duplicateView(version,index,name){calls.push(['duplicate',version,index,name]);},async removeView(version,index){calls.push(['remove',version,index]);},async moveView(version,from,to){calls.push(['move',version,from,to]);},async setDefaultView(version,index){calls.push(['default',version,index]);},async updateRoot(version,patch){calls.push(['root',version,patch]);}},async saveConfiguration(version,patch){calls.push(['configuration',version,patch]);},onSearch(value){calls.push(['search',value]);},async onNew(){calls.push(['new']);},async onExport(format,copy){calls.push(['export',format,copy]);},onDraftChange(){},onError(error){errors.push(error);}});
  const root={filters:source.getRoot('filters')!,formulas:source.getRoot('formulas')!,properties:source.getRoot('properties')!};
  const state={result,views:source.views,selectedIndex:0,root,rootFilters:root.filters,readOnly:false,allowRename:true,label:(property:string)=>property}; toolbar.update(state);
  const get=<T extends HTMLElement>(label:string)=>{const node=doc.querySelector<T>(`[aria-label="${label}"]`);assert.ok(node,label);return node;};
@@ -24,7 +24,7 @@ function fixture(immediate=false){
 test('view menu searches, switches, creates collision-safe names and configures other views',async()=>{
  const f=fixture();try{
   f.click('Views');f.input('Find a view','cover');assert.equal(f.doc.querySelector('[aria-label="Open view Library"]'),null);f.click('Open view Covers');await tick();assert.deepEqual(f.calls.pop(),['select',1]);
-  f.click('Views');f.click('Add view');f.input('View name','Gallery');f.input('Layout','cards','change');f.submit();await tick();assert.deepEqual(f.calls.pop(),['add',1,'cards','Gallery']);
+  f.click('Views');f.click('Add view');f.input('View name','Gallery');f.input('Layout','cards','change');f.submit();await tick();assert.deepEqual(f.calls.pop(),['add',1,'cards','Gallery',{}]);
   f.click('Views');f.click('Configure view Covers');f.input('View name','Pictures');f.submit();await tick();assert.deepEqual(f.calls.pop(),['update',1,1,{type:'cards',name:'Pictures'}]);
  }finally{f.cleanup();}
 });
@@ -118,6 +118,50 @@ test('reference Add view commits its name on Enter and continues in the new view
  const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(index){selectedIndex=index;refresh();},async save(){},commands:{async addView(expected,type,name){assert.equal(expected,version);selectedIndex=document.addView(type,name!);version++;refresh();},async updateView(){}},onDraftChange(){},onError(error){throw error;}});
  function refresh(){const result=executeBaseQuery(document,{version,files:[]},{viewIndex:selectedIndex});toolbar.update({result,views:document.views,selectedIndex,readOnly:false,allowRename:true,label:p=>p});}refresh();
  try{doc.querySelector<HTMLButtonElement>('[aria-label="Views"]')!.click();doc.querySelector<HTMLButtonElement>('[aria-label="Add view"]')!.click();assert.equal(doc.querySelector<HTMLElement>('.bases-toolbar-footer')?.hidden,true);const name=doc.querySelector<HTMLInputElement>('[aria-label="View name"]')!;name.value='New view';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await tick();assert.equal(document.views.at(-1)?.name,'New view');assert.equal(doc.querySelector('[role="dialog"]')?.getAttribute('aria-label'),'View options');assert.equal(doc.querySelector<HTMLInputElement>('[aria-label="View name"]')?.value,'New view');assert.equal(toolbar.hasDraft(),false);}finally{toolbar.destroy();dom.window.close();}
+});
+
+test('Add view exposes every layout setting and commits its initial draft in one command',async()=>{
+ const cases=[
+  {type:'table',defaults:{'Row height':''},edits:[['Row height','tall','change']],patch:{rowHeight:'tall'}},
+  {type:'cards',defaults:{'Card size':'200','Image property':'','Image fit':'','Image aspect ratio':'1'},edits:[['Card size','320','input'],['Image property','note.score','change'],['Image fit','contain','change'],['Image aspect ratio','1.5','input']],patch:{cardSize:320,image:'note.score',imageFit:'contain',imageAspectRatio:1.5}},
+  {type:'kanban',defaults:{'Column width':'280','Image property':'','Image fit':'','Image aspect ratio':'0.5'},edits:[['Column width','360','input'],['Image aspect ratio','0.75','input']],patch:{columnWidth:360,imageAspectRatio:.75}},
+  {type:'list',defaults:{'Markers':'bullet','Property separator':', '},edits:[['Markers','number','change'],['Property separator',' • ','input']],patch:{markers:'number',separator:' • ',indentProperties:true}},
+ ] as const;
+ for(const scenario of cases){
+  const f=fixture(true);try{
+   f.click('Views');f.click('Add view');const name=f.get<HTMLInputElement>('View name');f.input('View name',`New ${scenario.type}`);
+   f.doc.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="Layout"]')!.focus();
+   f.input('Layout',scenario.type,'change');await tick();assert.equal(f.calls.length,0,'internal controls must not create a partly configured view');
+   for(const [label,value] of Object.entries(scenario.defaults))assert.equal(f.get<HTMLInputElement>(label).value,value);
+   for(const [label,value,event] of scenario.edits)f.input(label,value,event);
+   if(scenario.type==='list'){const indent=f.get<HTMLInputElement>('Indent properties');assert.equal(indent.checked,false);indent.click();assert.equal(f.get<HTMLInputElement>('Property separator').closest('label')?.hidden,true);}
+   await new Promise(resolve=>setTimeout(resolve,270));assert.equal(f.calls.length,0,'layout edits stay local until name acceptance');
+   name.focus();name.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await tick();
+   assert.deepEqual(f.calls,[['add',1,scenario.type,`New ${scenario.type}`,scenario.patch]]);assert.equal(f.toolbar.hasDraft(),false);assert.deepEqual(f.errors,[]);
+  }finally{f.cleanup();}
+ }
+});
+
+test('Add view persistence retry retains its exact atomic layout patch without an update command',async()=>{
+ const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
+ const document=BaseDocument.parse('views: [{type: table, name: A}]');let version=1,selectedIndex=0,retries=0;
+ const calls:unknown[][]=[],errors:unknown[]=[];
+ const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(){},async save(){assert.fail('creation must not issue a followup save');},commands:{
+  async addView(expected,type,name,initial){
+   calls.push([expected,type,name,initial]);assert.equal(expected,version);
+   throw new BaseToolbarSaveError('disk failed',async()=>{retries++;selectedIndex=document.addView(type,name!);document.updateView(selectedIndex,initial!);version++;refresh();});
+  },async updateView(){assert.fail('creation must not issue a followup update');},
+ },onDraftChange(){},onError(error){errors.push(error);}});
+ function refresh(){const result=executeBaseQuery(document,{version,files:[]},{viewIndex:selectedIndex});toolbar.update({result,views:document.views,selectedIndex,readOnly:false,allowRename:true,label:p=>p});}refresh();
+ const get=<T extends HTMLElement>(label:string)=>doc.querySelector<T>(`[aria-label="${label}"]`)!;
+ try{
+  get<HTMLButtonElement>('Views').click();get<HTMLButtonElement>('Add view').click();const name=get<HTMLInputElement>('View name');name.value='Gallery';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));
+  doc.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="Layout"]')!.focus();const layout=get<HTMLSelectElement>('Layout');layout.value='cards';layout.dispatchEvent(new dom.window.Event('change',{bubbles:true}));await tick();
+  const size=get<HTMLInputElement>('Card size');size.value='440';size.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.focus();name.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await tick();
+  assert.deepEqual(calls,[[1,'cards','Gallery',{cardSize:440}]]);assert.equal(name.value,'Gallery');assert.equal(size.value,'440');assert.equal(size.disabled,true);assert.equal(toolbar.hasDraft(),true);
+  const retry=doc.querySelector<HTMLButtonElement>('button[type="submit"]')!;assert.equal(retry.textContent,'Retry save');retry.click();await tick();
+  assert.equal(calls.length,1);assert.equal(retries,1);assert.deepEqual(document.views.at(-1),{type:'cards',name:'Gallery',cardSize:440});assert.equal(toolbar.hasDraft(),false);assert.equal(doc.querySelector('[role="dialog"]'),null);assert.equal(errors.length,1);
+ }finally{toolbar.destroy();dom.window.close();}
 });
 
 test('unchanged configuration can adopt a note-only refresh before saving a retained toolbar draft',async()=>{

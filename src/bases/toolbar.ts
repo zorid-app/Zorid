@@ -27,7 +27,7 @@ export type BaseToolbarExportFormat = 'csv' | 'tsv' | 'markdown' | 'paths';
 export interface BaseToolbarCommands {
   updateView?(version: BaseQueryResult['version'], index: number, patch: BaseViewPatch): Promise<void>;
   editFormula?(version: BaseQueryResult['version'], originalName: string | undefined, name: string, expression: string): Promise<void>;
-  addView?(version: BaseQueryResult['version'], type: string, name?: string): Promise<void>;
+  addView?(version: BaseQueryResult['version'], type: string, name?: string, initial?: BaseViewPatch): Promise<void>;
   duplicateView?(version: BaseQueryResult['version'], index: number, name?: string): Promise<void>;
   removeView?(version: BaseQueryResult['version'], index: number): Promise<void>;
   moveView?(version: BaseQueryResult['version'], from: number, to: number): Promise<void>;
@@ -257,12 +257,28 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       if (!opening.readOnly && options.commands?.addView) menuAction('Add view', async () => { own.saving = false; own.close(false); open('Add view', trigger); });
     } else if (name === 'Add view') {
       const input = doc.createElement('input'); input.value = uniqueViewName(opening.views); input.setAttribute('aria-label', 'View name'); input.placeholder = 'View name';
-      const layout = select(doc, 'Layout', BASE_LAYOUTS.map(([key, label]) => [key, label] as const), 'table'); fields.append(input, layout); input.addEventListener('input', changed); layout.addEventListener('change', changed); apply.textContent = 'Create view'; own.dirty = true;
-      readOperation = () => { const name = validateViewName(opening.views, input.value); if (!options.commands?.addView) throw new Error('View creation is unavailable.'); return () => options.commands!.addView!(version, layout.value, name); };
+      const layout = select(doc, 'Layout', BASE_LAYOUTS.map(([key, label]) => [key, label] as const), 'table');
+      const layoutLabel = doc.createElement('label'); layoutLabel.textContent = 'Layout'; layoutLabel.append(layout); fields.append(input, layoutLabel);
+      const layoutFields = doc.createElement('div'); layoutFields.className = 'bases-layout-settings'; fields.append(layoutFields);
+      let initial: BaseViewPatch = {};
+      let layoutPatch = createLayoutSettings(doc,layoutFields,{type:'table',name:input.value},propertyOptions,changed);
+      input.addEventListener('input', changed);
+      layout.addEventListener('change', () => {
+        initial = {...initial,...layoutPatch()};
+        layoutFields.replaceChildren();
+        layoutPatch = createLayoutSettings(doc,layoutFields,{...initial,type:layout.value,name:input.value},propertyOptions,changed);
+        changed();
+      });
+      apply.textContent = 'Create view'; own.dirty = true;
+      readOperation = () => {
+        const name = validateViewName(opening.views,input.value), type = layout.value;
+        const patch = validateToolbarPatch(result,{...initial,...layoutPatch()});
+        if (!options.commands?.addView) throw new Error('View creation is unavailable.');
+        return () => options.commands!.addView!(version,type,name,patch);
+      };
       if (autoAdd) {
-        input.addEventListener('blur',event=>{ if ((event.relatedTarget as Element | null)?.closest?.('[role=combobox]')) return; if (own.dirty) submit(false); });
+        input.addEventListener('blur',event=>{ if (event.relatedTarget && node.contains(event.relatedTarget as Node)) return; if (own.dirty) submit(false); });
         input.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();input.blur();}});
-        layout.addEventListener('change',()=>submit(false));
       }
     } else if (name === 'Results') {
       const limit = doc.createElement('input'); limit.type = 'number'; limit.min = '0'; limit.step = '1'; limit.placeholder = 'e.g. 10'; limit.value = typeof result.view.limit === 'number' && result.view.limit > 0 ? String(result.view.limit) : ''; limit.setAttribute('aria-label', 'Limit'); const label = doc.createElement('label'); label.append(doc.createTextNode('Limit number of results'), limit); fields.append(label); limit.addEventListener('input', changed);
