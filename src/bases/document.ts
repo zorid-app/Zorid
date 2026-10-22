@@ -345,6 +345,9 @@ export class BaseDocument {
       for (const view of views.items) {
         if (!isMap(view)) throw new BaseDocumentError('Aliased view mappings cannot be edited directly');
         filter(view.get('filters', true)); propertyMap(view.get('summaries', true));
+        // Cards and Kanban persist their cover's property ID separately from
+        // the visible property list.
+        id(view.get('image', true));
         const order = view.get('order', true); if (isSeq(order)) order.items.forEach(id);
         const group = view.get('groupBy', true); if (isMap(group)) id(group.get('property', true));
         const sort = view.get('sort', true); if (isSeq(sort)) for (const item of sort.items) if (isMap(item)) { id(item.get('property', true)); id(item.get('column', true)); }

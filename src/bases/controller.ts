@@ -466,7 +466,7 @@ export class BaseController {
         // A durable namespace commit may succeed before a backlink/publication
         // failure. Only stable identity, never matching text/name, proves it.
         const moved = this.options.vault.entries.get(destination);
-        if (entryId && moved?.entryId === entryId && !this.options.vault.entries.has(path)) {
+        if (entryId && moved?.entryId === entryId) {
           this.retargetHistory(path, destination, originalIdentity, entryId);
           this.recordHistory([{ kind: 'rename', from: path, to: destination, entryId, currentPath: destination, identity: this.identities.get(destination)! }]);
           throw new BaseBulkEditError([destination], path, error);
@@ -551,7 +551,17 @@ export class BaseController {
           } else {
             if (!this.options.mutations.rename) throw new Error('The host does not provide guarded file renaming');
             const target = direction === 'undo' ? entry.from : entry.to, previousIdentity = entry.identity;
-            await this.options.mutations.rename(path, target, () => validate(entry), witness);
+            try { await this.options.mutations.rename(path, target, () => validate(entry), witness); }
+            catch (error) {
+              const moved = this.options.vault.entries.get(target);
+              if (entry.entryId && moved?.entryId === entry.entryId) {
+                this.retargetHistory(path, target, previousIdentity, entry.entryId);
+                entry.currentPath = target; entry.identity = this.identities.get(target)!;
+                this.pendingHistoryDirection.delete(entry);
+                applied.push(entry); completed.push(path);
+              }
+              throw error;
+            }
             this.retargetHistory(path, target, previousIdentity, entry.entryId);
             entry.currentPath = target; entry.identity = this.identities.get(target)!;
           }

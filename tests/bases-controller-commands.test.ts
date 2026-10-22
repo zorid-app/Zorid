@@ -137,3 +137,43 @@ test('file move undo/redo uses guarded namespace operations and preserves older 
     await assert.rejects(f.controller.undo(), /already exists/); assert.equal(await f.vault.read('One.md'), 'unrelated');
   } finally { await f.stop(); }
 });
+
+test('undo records a stable-ID-proven namespace commit even if backlink completion then fails', async () => {
+  class Adapter extends MemoryAdapter {
+    ids = new Map([['Work.base', 'base'], ['One.md', 'one']]);
+    override async list() { return (await super.list()).map(entry => ({ ...entry, entryId: this.ids.get(entry.path), revision: 'revision' })); }
+    override async stat(path: string) { const entry = await super.stat(path); return entry && { ...entry, entryId: this.ids.get(path), revision: 'revision' }; }
+    override async rename(from: string, to: string) { const id = this.ids.get(from); await super.rename(from, to); this.ids.delete(from); if (id) this.ids.set(to, id); }
+  }
+  const f = await fixture(new Adapter({ 'Work.base': base, 'One.md': note }));
+  let failAfterCommit = false;
+  const controller = new BaseController({ vault: f.vault, basePath: 'Work.base', mutations: createBaseMutationHost({ getBuffer: f.getBuffer, validate() {}, async rename(from, to, validate, witness) { await f.vault.rename(from, to, validate, witness); if (failAfterCommit) throw new Error('Rename committed, but links failed'); } }) });
+  try {
+    await controller.refresh(); await controller.renameFile(controller.state.version, 'One.md', 'Renamed.md');
+    failAfterCommit = true; await assert.rejects(controller.undo(), /links failed/);
+    assert.equal(f.vault.entries.get('One.md')?.entryId, 'one'); assert.equal(controller.canUndo, false); assert.equal(controller.canRedo, true);
+    failAfterCommit = false; await controller.redo(); assert.equal(f.vault.entries.get('Renamed.md')?.entryId, 'one');
+    assert.equal(controller.canUndo, true); assert.equal(controller.canRedo, false);
+  } finally { controller.dispose(); await f.stop(); }
+});
+
+test('inline configuration transforms only its fence while containing-note properties use whole-note buffers', async () => {
+  const source = '---\nstatus: Todo\n---\nBefore\n```base\n' + base + '```\nAfter\n';
+  const vault = new Vault(new MemoryAdapter({ 'Container.md': source, 'One.md': note })); await vault.initialize();
+  const buffer = new NoteBuffer(vault, 'Container.md', { debounceMs: 60000 }); await buffer.load();
+  const mutations = createBaseMutationHost({ getBuffer() { return buffer; }, validate() {} });
+  let inlineWrites = 0;
+  const controller = new BaseController({ vault, basePath: 'Container.md', mutations, inlineSource: {
+    async read() { const full = await vault.read('Container.md'), match = /```base\n([\s\S]*?)```/.exec(full)!; return { source: match[1], startByte: new TextEncoder().encode(full.slice(0, match.index + 8)).length, endByte: new TextEncoder().encode(full.slice(0, match.index + 8 + match[1].length)).length }; },
+    async transform(expected, desired, validate) { inlineWrites++; await mutations.transform('Container.md', full => { validate(); assert.ok(full.includes('```base\n' + expected + '```')); return full.replace('```base\n' + expected + '```', '```base\n' + desired + '```'); }, validate); },
+  } });
+  try {
+    await controller.refresh(); assert.equal(controller.state.error, null);
+    await controller.editProperty({ version: controller.state.version, path: 'Container.md', property: 'status', value: 'Done' });
+    assert.equal(inlineWrites, 0); assert.equal(properties(await vault.read('Container.md')).status, 'Done');
+    await controller.updateView(controller.state.version, { name: 'Inline renamed' });
+    assert.equal(inlineWrites, 1); const saved = await vault.read('Container.md');
+    assert.ok(saved.includes('Before\n```base\n')); assert.ok(saved.endsWith('```\nAfter\n')); assert.equal(properties(saved).status, 'Done');
+    assert.match(saved, /name: Inline renamed/);
+  } finally { controller.dispose(); await buffer.dispose(); }
+});

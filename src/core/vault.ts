@@ -621,6 +621,7 @@ export class Vault {
       const result = owner.enqueue(async () => {
         check(); status = 'creating';
         try {
+          if (acknowledged) throw durableFailure('create_reconciliation_required', 'Creation was acknowledged but its original file identity could not be published. Recover the original operation before retrying; an existing replacement must not be adopted.');
           await owner.refresh(); check();
           if (!acknowledged) {
             if (dispatched && owner.entries.has(path)) throw durableFailure('create_reconciliation_required', 'Creation may already have committed. Recover its original operation before retrying; the existing file was not adopted or overwritten.');

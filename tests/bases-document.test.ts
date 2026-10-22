@@ -221,3 +221,10 @@ test('formula rename rewrites typed references while preserving literal text and
   assert.match(base.toString(), /# formula comment/);
   const before = base.toString(); assert.throws(() => base.renameFormula('new name', 'other'), /already exists/); assert.equal(base.toString(), before);
 });
+
+test('renaming a formula cover updates Cards and Kanban property selectors', () => {
+  const base = BaseDocument.parse('formulas: {cover: coverPath}\nviews:\n  - {type: cards, name: Gallery, image: formula.cover}\n  - {type: kanban, name: Board, image: formula.cover, custom: formula.cover}\n');
+  base.renameFormula('cover', 'newCover');
+  assert.equal(base.views[0].image, 'formula.newCover'); assert.equal(base.views[1].image, 'formula.newCover');
+  assert.equal(base.views[1].custom, 'formula.cover');
+});
