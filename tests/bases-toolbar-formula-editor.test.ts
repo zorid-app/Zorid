@@ -4,10 +4,10 @@ import { JSDOM } from 'jsdom';
 import { EditorView } from '@codemirror/view';
 import { undo, redo } from '@codemirror/commands';
 import { acceptCompletion, closeCompletion, completionStatus, currentCompletions, startCompletion } from '@codemirror/autocomplete';
-import { enhanceBaseFormulaEditor } from '../src/bases/toolbar-formula-editor.ts';
+import { enhanceBaseFormulaEditor, enhanceBaseSummaryEditor } from '../src/bases/toolbar-formula-editor.ts';
 import type { BaseFormulaEditorOptions } from '../src/bases/toolbar-formula-editor.ts';
 
-function fixture(options: BaseFormulaEditorOptions = {}, value = 'note.cost * 2') {
+function fixture(options: BaseFormulaEditorOptions = {}, value = 'note.cost * 2', summary = false) {
   const dom = new JSDOM('<body><textarea aria-label="Formula expression"></textarea></body>', { pretendToBeVisual: true });
   // CodeMirror uses its owner document for DOM, and browser globals for selection
   // measurement. Install only this fixture's globals and restore every descriptor.
@@ -19,9 +19,9 @@ function fixture(options: BaseFormulaEditorOptions = {}, value = 'note.cost * 2'
   }
   dom.window.Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
   dom.window.Range.prototype.getBoundingClientRect = () => new dom.window.DOMRect();
-  const textarea = dom.window.document.querySelector('textarea')!; textarea.value = value;
+  const textarea = dom.window.document.querySelector('textarea')!; textarea.value = value; if(summary)textarea.setAttribute('aria-label','Summary expression');
   const changes: string[] = []; textarea.addEventListener('input', () => changes.push(textarea.value));
-  const editor = enhanceBaseFormulaEditor(textarea, options);
+  const editor = summary ? enhanceBaseSummaryEditor(textarea,options) : enhanceBaseFormulaEditor(textarea, options);
   const content = dom.window.document.querySelector<HTMLElement>('.cm-content')!;
   const view = EditorView.findFromDOM(content)!;
   const key = (key: string) => content.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
@@ -189,4 +189,45 @@ test('owner-document-only hosts keep a native editor and cleanly restore its loc
     editor.destroy(); assert.equal(textarea.parentElement?.tagName, 'MAIN');
     assert.equal(textarea.nextElementSibling?.tagName, 'BUTTON');
   } finally { editor.destroy(); dom.window.close(); }
+});
+
+test('summary editor completes values and implemented globals without exposing note or host context',async()=>{
+ const f=fixture({propertyIds:['note.cost','file.name','formula.Total','this.score'],functionNames:['if','list','max','min','number','now','random','file','image','notImplemented']},'',true);
+ try{
+  f.editor.focus();startCompletion(f.view);await new Promise(resolve=>setTimeout(resolve,170));
+  assert.deepEqual(new Set(currentCompletions(f.view.state).map(item=>item.label)),new Set(['values','if()','list()','max()','min()','number()','now()']));
+  closeCompletion(f.view);f.view.dispatch({changes:{from:0,insert:'val'},selection:{anchor:3}});startCompletion(f.view);await new Promise(resolve=>setTimeout(resolve,170));
+  assert.equal(acceptCompletion(f.view),true);assert.equal(f.textarea.value,'values');assert.equal(f.content.getAttribute('aria-label'),'Summary expression');
+ }finally{f.cleanup();}
+});
+
+test('summary list completions preserve receivers and include length without offering scalar or host methods',async()=>{
+ const f=fixture({},'',true);
+ try{
+  f.editor.focus();
+  for(const [expression,expected] of [
+   ['values.su','values.sum()'],['values.le','values.length'],
+   ['values.filter(value > 0).su','values.filter(value > 0).sum()'],
+   ['list(2).un','list(2).unique()'],
+  ]){
+   closeCompletion(f.view);f.view.dispatch({changes:{from:0,to:f.view.state.doc.length,insert:expression},selection:{anchor:expression.length}});startCompletion(f.view);await new Promise(resolve=>setTimeout(resolve,170));
+   assert.equal(acceptCompletion(f.view),true,expression);assert.equal(f.textarea.value,expected);
+  }
+  for(const expression of ['note.','file.','formula.','this.','unknown.','values.sum().su','"values.su']){
+   closeCompletion(f.view);f.view.dispatch({changes:{from:0,to:f.view.state.doc.length,insert:expression},selection:{anchor:expression.length}});startCompletion(f.view);await new Promise(resolve=>setTimeout(resolve,80));
+   assert.deepEqual(currentCompletions(f.view.state),[],expression);
+  }
+ }finally{f.cleanup();}
+});
+
+test('summary contextual candidates are restricted to supported methods and Escape respects IME/completion ownership',async()=>{
+ let escapes=0;const f=fixture({methodNames:['sum','hasTag','hasLink','notImplemented'],onEscape:()=>escapes++},'values.',true);
+ try{
+  f.editor.focus();f.view.dispatch({selection:{anchor:f.view.state.doc.length}});startCompletion(f.view);await new Promise(resolve=>setTimeout(resolve,170));
+  assert.deepEqual(new Set(currentCompletions(f.view.state).map(item=>item.label)),new Set(['length','sum()']));
+  f.key('Escape');assert.equal(completionStatus(f.view.state),null);assert.equal(escapes,0);
+  f.content.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',keyCode:229,isComposing:true,bubbles:true,cancelable:true}));assert.equal(escapes,0,'IME Escape must not leave the summary editor');
+  f.key('Escape');assert.equal(escapes,1);f.key('Enter');assert.equal(f.textarea.value,'values.\n');assert.ok(f.content.querySelector('span'),'summary tokens share syntax highlighting');
+  f.editor.destroy();assert.equal(f.textarea.hidden,false);assert.equal(f.textarea.value,'values.\n');assert.equal(f.editor.hasFocus(),false);
+ }finally{f.cleanup();}
 });

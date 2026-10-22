@@ -6,6 +6,7 @@ import type { Completion, CompletionContext } from '@codemirror/autocomplete';
 import { HighlightStyle, StreamLanguage, syntaxHighlighting } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { parseBaseExpression } from './expression.ts';
+import type { BaseExpression } from './expression.ts';
 
 export interface BaseFormulaEditorOptions {
   propertyIds?: readonly string[];
@@ -22,6 +23,34 @@ export interface BaseFormulaEditor {
   focus(): void;
   hasFocus(): boolean;
   destroy(): void;
+}
+export type BaseSummaryEditorOptions = Pick<BaseFormulaEditorOptions, 'functionNames' | 'methodNames' | 'onEscape' | 'onDiagnostics'>;
+
+// Summary scope contains an empty list named values in the reference editor.
+// Candidates below are implemented by the shared Rust evaluator; no host or
+// note context is probed to discover completions, and drafts are never evaluated.
+const summaryFunctions = ['if','date','duration','list','max','min','number','now','today','escapeHTML'] as const;
+const summaryBaseMethods = ['isTruthy','isEmpty','toString','isType'] as const;
+const summaryListMethods = ['contains','containsAll','containsAny','filter','flat','join','map','reduce','reverse','slice','sort','unique','sum','mean'] as const;
+const listReturningMethods = new Set(['filter','flat','map','reverse','slice','sort','unique']);
+function summaryReceiverKind(expression: BaseExpression): 'list' | 'scalar' | undefined {
+  if (expression.kind === 'identifier') return expression.name.toLowerCase() === 'values' ? 'list' : undefined;
+  if (expression.kind === 'list') return 'list';
+  if (expression.kind === 'literal') return 'scalar';
+  if (expression.kind === 'call') {
+    if (expression.callee.kind === 'identifier') {
+      const name = expression.callee.name;
+      return name === 'list' ? 'list' : (summaryFunctions as readonly string[]).includes(name) ? 'scalar' : undefined;
+    }
+    const callee = expression.callee;
+    if (callee.kind === 'member' && callee.key.kind === 'literal' && callee.key.value.type === 'string') {
+      const receiver = summaryReceiverKind(callee.object), method = callee.key.value.value;
+      if (receiver === 'list' && (summaryListMethods as readonly string[]).includes(method)) return listReturningMethods.has(method) ? 'list' : 'scalar';
+      if (receiver && (summaryBaseMethods as readonly string[]).includes(method)) return 'scalar';
+    }
+  }
+  if (expression.kind === 'member' && expression.key.kind === 'literal' && expression.key.value.type === 'string' && expression.key.value.value === 'length' && summaryReceiverKind(expression.object) === 'list') return 'scalar';
+  return undefined;
 }
 
 // Original lexical presentation, independent of the expression evaluator. The
@@ -51,7 +80,7 @@ function propertyExpression(id: string): string {
   return `${match[1]}[${JSON.stringify(match[2])}]`;
 }
 
-function completions(options: BaseFormulaEditorOptions) {
+function completions(options: BaseFormulaEditorOptions, summary = false) {
   const properties: Completion[] = Array.from(new Set(options.propertyIds ?? []), id => ({ label: id, type: 'property', apply: propertyExpression(id) }));
   const callable = (names: readonly string[], type: string) => Array.from(new Set(names.map(name => name.replace(/\(\)$/u, ''))), name => snippetCompletion(`${name}(\${})`, { label: `${name}()`, type }));
   const values = [...properties, ...callable(options.functionNames ?? [], 'function')];
@@ -72,6 +101,13 @@ function completions(options: BaseFormulaEditorOptions) {
     const suffix = context.matchBefore(/[$_\p{L}\p{N}\p{M}]*$/u)!;
     const receiver = source.slice(0, suffix.from).trimEnd();
     if (receiver.endsWith('.')) {
+      if (summary) {
+        let kind: ReturnType<typeof summaryReceiverKind>;
+        try { kind = summaryReceiverKind(parseBaseExpression(receiver.slice(0,-1))); } catch { return null; }
+        if (!kind) return null;
+        const members = kind === 'list' ? [{label:'length',type:'property'},...methods] : methods.filter(method => (summaryBaseMethods as readonly string[]).includes(method.label.replace(/\(\)$/u,'')));
+        return {from:suffix.from,options:members,validFor:/^[$_\p{L}\p{N}\p{M}]*$/u};
+      }
       // Only a bare namespace uses full property IDs. For actual receivers,
       // replace the identifier after the final dot, preserving calls, bracket
       // properties, nested members and all preceding expression text.
@@ -129,6 +165,20 @@ function nativeFormulaEditor(textarea: HTMLTextAreaElement, options: BaseFormula
 
 /** Enhance a native draft model; CodeMirror owns text, selection, IME and undo. */
 export function enhanceBaseFormulaEditor(textarea: HTMLTextAreaElement, options: BaseFormulaEditorOptions = {}): BaseFormulaEditor {
+  return enhanceFormulaEditor(textarea,options);
+}
+
+/** Shared presentation with only the summary's values/list completion context. */
+export function enhanceBaseSummaryEditor(textarea: HTMLTextAreaElement, options: BaseSummaryEditorOptions = {}): BaseFormulaEditor {
+  const supported = (provided: readonly string[] | undefined, allowed: readonly string[]) => provided === undefined ? allowed : provided.filter(name => allowed.includes(name.replace(/\(\)$/u,'')));
+  return enhanceFormulaEditor(textarea,{
+    onEscape:options.onEscape,onDiagnostics:options.onDiagnostics,propertyIds:['values'],
+    functionNames:supported(options.functionNames,summaryFunctions),
+    methodNames:supported(options.methodNames,[...summaryBaseMethods,...summaryListMethods]),
+  },true);
+}
+
+function enhanceFormulaEditor(textarea: HTMLTextAreaElement, options: BaseFormulaEditorOptions, summary = false): BaseFormulaEditor {
   if (typeof document === 'undefined') return nativeFormulaEditor(textarea, options);
   const doc = textarea.ownerDocument, win = doc.defaultView;
   const original = { hidden: textarea.hidden, ariaHidden: textarea.getAttribute('aria-hidden'), tabIndex: textarea.getAttribute('tabindex') };
@@ -138,7 +188,7 @@ export function enhanceBaseFormulaEditor(textarea: HTMLTextAreaElement, options:
   error.setAttribute('role', 'status'); error.setAttribute('aria-live', 'polite');
   textarea.insertAdjacentElement('afterend', wrapper);
   textarea.hidden = true; textarea.tabIndex = -1; textarea.setAttribute('aria-hidden', 'true');
-  let destroyed = false, synchronizing = false, publishing = false, lastDiagnostic: string | undefined;
+  let destroyed = false, synchronizing = false, publishing = false, composingKey = false, lastDiagnostic: string | undefined;
   const attributes = new Compartment(), editability = new Compartment();
   const contentAttributes = () => EditorView.contentAttributes.of({
     'aria-label': textarea.getAttribute('aria-label') ?? 'Formula',
@@ -158,10 +208,11 @@ export function enhanceBaseFormulaEditor(textarea: HTMLTextAreaElement, options:
     parent: wrapper,
     state: EditorState.create({ doc: textarea.value, extensions: [
       formulaLanguage, syntaxHighlighting(formulaHighlight), EditorView.lineWrapping,
+      EditorView.domEventObservers({keydown(event) { composingKey = event.isComposing || event.keyCode === 229; }}),
       history(), keymap.of([...completionKeymap, ...defaultKeymap, ...historyKeymap,
-        { key: 'Escape', run: () => { if (!options.onEscape) return false; options.onEscape(); return true; } },
+        { key: 'Escape', run: view => { if (!options.onEscape || composingKey || view.composing) return false; options.onEscape(); return true; } },
       ]),
-      autocompletion({ override: [completions(options)], defaultKeymap: false }),
+      autocompletion({ override: [completions(options,summary)], defaultKeymap: false }),
       attributes.of(contentAttributes()), editability.of(editable()),
       EditorView.theme({
         '&': { fontSize: 'var(--font-ui-small, 13px)', backgroundColor: 'var(--background-primary)', borderRadius: 'var(--radius-s, 4px)' },
