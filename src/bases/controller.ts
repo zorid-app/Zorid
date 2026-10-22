@@ -14,6 +14,7 @@ import { isMarkdown, normalizePath } from '../core/types.ts';
 import type { VaultEntry } from '../core/types.ts';
 import type { Vault } from '../core/vault.ts';
 import type { NoteBuffer } from '../ui/note-buffer.ts';
+import type { ConditionalSavedSourceCapture, ConditionalSavedSourceWitness } from '../core/durable-writes.ts';
 import { closeBaseViewReferenceQueries, prepareBaseViewReferences } from './view-references.ts';
 import type { BaseViewReferenceOperation, BaseViewRenameReport } from './view-references.ts';
 
@@ -21,9 +22,14 @@ export interface BaseViewRenamed { readonly basePath: string; readonly index: nu
 
 export interface BaseMutationHost {
   /** Run transform once against the latest shared draft, validating after all awaits. */
-  transform(path: string, transform: (source: string) => string, validate: () => void, validateWrite?: () => void, expectedWitness?: BaseSavedWitness): Promise<void>;
+  transform(path: string, transform: (source: string) => string, validate: () => void, validateWrite?: () => void, expectedWitness?: BaseSavedWitness, conditionalSource?: BaseConditionalSavedSource): Promise<void>;
   /** Must validate inside the host's serialized rename transaction. */
   rename?(path: string, destination: string, validate: () => void, expectedWitness?: BaseSavedWitness): Promise<void>;
+}
+export interface BaseConditionalSavedSource {
+  /** Stable only for retries of this original semantic command. */
+  readonly attempt: object;
+  validate(source: string): void;
 }
 export interface BaseBufferHost {
   /** Must return the workspace's shared buffer, including existing dirty drafts. */
@@ -35,9 +41,12 @@ export interface BaseBufferHost {
 /** No private buffers or direct disk writes: use the same recovery/CAS path as typing. */
 export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHost {
   let pending: Promise<unknown> = Promise.resolve();
+  const conditional = new WeakMap<NoteBuffer, { attempt: object; capture: ConditionalSavedSourceCapture }>();
+  const conditionalAttempts = new WeakMap<object, { buffer: NoteBuffer; capture: ConditionalSavedSourceCapture }>();
   return {
-    transform(path, transform, validate, validateWrite = validate, expectedWitness) {
+    transform(path, transform, validate, validateWrite = validate, expectedWitness, sourceCondition) {
       const expected = expectedWitness && Object.freeze({ ...expectedWitness });
+      const conditionalSource = sourceCondition && Object.freeze({ attempt: sourceCondition.attempt, validate: sourceCondition.validate });
       const result = pending.then(async () => {
         withBaseEditAdmissionPhase('before-buffer', () => { options.validate(); validate(); });
         const buffer = await options.getBuffer(path);
@@ -46,24 +55,73 @@ export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHos
         if (buffer.path !== path) throw new Error('The edited file moved');
         const durableWitness = () => (buffer as NoteBuffer & { readonly savedDurableWitness?: BaseSavedWitness & { readonly path: string } }).savedDurableWitness;
         const admitted = durableWitness();
-        if (expected && (!admitted || admitted.entryId !== expected.entryId || admitted.revision !== expected.revision || admitted.path !== path)) {
+        type ConditionalBuffer = NoteBuffer & {
+          captureConditionalSavedSource?(witness: ConditionalSavedSourceWitness, validate?: () => void): Promise<ConditionalSavedSourceCapture | undefined>;
+          releaseConditionalSavedSource?(capture: ConditionalSavedSourceCapture): Promise<void>;
+          conditionalSavedSourceStatus?(capture: ConditionalSavedSourceCapture): 'unattached' | 'pending' | 'settled' | 'foreign';
+        };
+        const guarded = buffer as ConditionalBuffer;
+        const original = conditionalSource && conditionalAttempts.get(conditionalSource.attempt);
+        if (original && original.buffer !== buffer) throw new Error('The original conditional Base buffer was replaced; its save cannot be replayed');
+        let retained = conditional.get(buffer);
+        if (original && original.capture !== retained?.capture) throw new Error('The original conditional Base capture is no longer owned by this buffer');
+        if (retained && (!conditionalSource || retained.attempt !== conditionalSource.attempt)) throw new Error('Retry the original conditional Base command before editing this note');
+        const status = retained && guarded.conditionalSavedSourceStatus?.(retained.capture);
+        if (retained && (!status || status === 'foreign')) throw new Error('The original conditional Base save is no longer owned by this buffer');
+        // A committing original intent may have advanced the core revision before
+        // its buffer acknowledgement. Resume that intent, never capture it again.
+        if (expected && (!admitted || admitted.entryId !== expected.entryId || admitted.path !== path || status !== 'pending' && admitted.revision !== expected.revision)) {
           throw new Error('This saved Base result is stale or has no durable edit identity; refresh before editing');
         }
         const validateIdentity = () => {
           const current = durableWitness();
           if (expected && (!current || current.entryId !== expected.entryId || current.path !== path)) throw new Error('The edited saved file was replaced or moved');
         };
-        const source = buffer.text, next = withBaseEditAdmissionPhase('transform', () => transform(source));
-        // Transform is synchronous: no intervening editor input may be discarded.
-        withBaseEditAdmissionPhase('before-buffer-update', () => { options.validate(); validate(); });
-        if (buffer.text !== source) throw new Error('The edited buffer changed');
-        // A previous failed save may already contain this exact transformed draft.
-        // Retrying must still persist it (or report the continuing failure).
-        if (next === source && !buffer.dirty && !buffer.error) return;
-        buffer.update(next, { validateWrite: () => withBaseEditAdmissionPhase('durable-validation', () => { options.validate(); validateWrite(); validateIdentity(); }) });
-        options.onBufferChange?.(path, buffer, source);
-        // Do not replay or roll back a failed write: recovery draft owns that state.
-        await buffer.flush();
+        const forget = () => {
+          conditional.delete(buffer);
+          if (conditionalSource) conditionalAttempts.delete(conditionalSource.attempt);
+        };
+        try {
+          if (conditionalSource && !retained && admitted) {
+            if (!guarded.captureConditionalSavedSource || !guarded.releaseConditionalSavedSource || !guarded.conditionalSavedSourceStatus) throw new Error('Conditional saved-source capture is unavailable for this durable note');
+            const capture = await guarded.captureConditionalSavedSource({ ...admitted, path }, () => { options.validate(); validate(); });
+            // Explicit absence of both provider methods preserves the browser's
+            // logical CAS path. Native providers expose a pair that rejects an
+            // unsupported host; advertised capture failures never reach here.
+            if (capture) {
+              retained = { attempt: conditionalSource.attempt, capture }; conditional.set(buffer, retained);
+              conditionalAttempts.set(conditionalSource.attempt, { buffer, capture });
+              if (capture.logicalWitness.entryId !== admitted.entryId || capture.logicalWitness.revision !== admitted.revision || capture.logicalWitness.path !== path) throw new Error('The captured saved source belongs to a different note revision');
+            }
+          }
+          if (retained) {
+            options.validate(); validate(); validateIdentity();
+            conditionalSource!.validate(retained.capture.source);
+          }
+          const source = buffer.text, next = withBaseEditAdmissionPhase('transform', () => transform(source));
+          // Transform is synchronous: no intervening editor input may be discarded.
+          withBaseEditAdmissionPhase('before-buffer-update', () => { options.validate(); validate(); });
+          if (buffer.text !== source) throw new Error('The edited buffer changed');
+          // A previous failed save may already contain this exact transformed draft.
+          // Retrying must still persist it (or report the continuing failure).
+          if (next === source && !buffer.dirty && !buffer.error && (!retained || guarded.conditionalSavedSourceStatus!(retained.capture) !== 'pending')) {
+            if (retained && guarded.conditionalSavedSourceStatus!(retained.capture) === 'unattached') await guarded.releaseConditionalSavedSource!(retained.capture);
+            forget(); return;
+          }
+          const attach = retained && guarded.conditionalSavedSourceStatus!(retained.capture) === 'unattached' ? retained.capture : undefined;
+          buffer.update(next, { validateWrite: () => withBaseEditAdmissionPhase('durable-validation', () => { options.validate(); validateWrite(); validateIdentity(); }), ...(attach ? { conditionalSavedSource: attach } : {}) });
+          options.onBufferChange?.(path, buffer, source);
+          // Do not replay or roll back a failed write: recovery draft owns that state.
+          await buffer.flush();
+          if (retained && guarded.conditionalSavedSourceStatus!(retained.capture) !== 'settled') throw new Error('The original conditional Base save is still pending');
+          forget();
+        } catch (error) {
+          if (retained && guarded.conditionalSavedSourceStatus!(retained.capture) === 'unattached') {
+            try { await guarded.releaseConditionalSavedSource!(retained.capture); forget(); }
+            catch (releaseError) { throw new AggregateError([error, releaseError], `${error instanceof Error ? error.message : String(error)}. Releasing the unused saved-source capture also failed.`, { cause: error }); }
+          }
+          throw error;
+        }
       });
       pending = result.catch(() => undefined);
       return result;
@@ -157,6 +215,7 @@ export class BaseController {
   private historyBusy = false;
   private pendingPropertyHistory = new Map<string, PropertyHistoryEntry>();
   private pendingHistoryDirection = new WeakMap<BaseHistoryEntry, 'undo' | 'redo'>();
+  private historySourceAttempts = new WeakMap<PropertyHistoryEntry, Record<'undo' | 'redo', object>>();
   private pendingConfigurations = new Map<string, { readonly index: number; readonly name: string; readonly bound: boolean; readonly selectionSerial: number; readonly entryId?: string; readonly adapter: Vault['adapter']; validate(): void; committed?(): Promise<void> }>();
   private pendingViewReferences?: BaseViewReferenceOperation;
   private referenceServices = new Set<NonNullable<Vault['adapter']['documentSemantics']>>();
@@ -659,6 +718,8 @@ export class BaseController {
           if (entry.kind === 'properties') {
             const expected = direction === 'undo' ? entry.after : entry.before;
             const desired = direction === 'undo' ? entry.before : entry.after;
+            let attempts = this.historySourceAttempts.get(entry);
+            if (!attempts) { attempts = { undo: {}, redo: {} }; this.historySourceAttempts.set(entry, attempts); }
             await this.options.mutations.transform(path, text => {
               validate(entry);
               const current = propertyState(text, expected.map(state => state.requestedKey), expected);
@@ -672,7 +733,14 @@ export class BaseController {
               }
               this.pendingHistoryDirection.set(entry, direction);
               return next;
-            }, () => validate(entry), () => validate(entry), witness);
+            }, () => validate(entry), () => validate(entry), witness, {
+              attempt: attempts[direction],
+              validate: source => {
+                validate(entry);
+                const saved = propertyState(source, expected.map(state => state.requestedKey), expected);
+                if (!statesEqual(saved, expected)) throw new Error('A touched property changed after this command; its current value was preserved');
+              },
+            });
           } else {
             if (!this.options.mutations.rename) throw new Error('The host does not provide guarded file renaming');
             const target = direction === 'undo' ? entry.from : entry.to, previousIdentity = entry.identity;
