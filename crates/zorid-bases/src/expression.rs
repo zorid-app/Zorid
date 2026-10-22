@@ -15,6 +15,9 @@ use serde_json::{Map, Value};
 #[cfg(test)]
 #[path = "expression_call_tests.rs"]
 mod call_contract_tests;
+#[cfg(test)]
+#[path = "expression_collection_tests.rs"]
+mod collection_tests;
 #[path = "expression_signatures.rs"]
 mod call_signatures;
 #[path = "expression_format.rs"]
@@ -2616,6 +2619,8 @@ impl<'a> Evaluator<'a> {
     fn charge_link_copy(&mut self, link: &BasesLink, depth: usize) -> Result<(), RuntimeValue> {
         self.charge(
             (link.path.len()
+                + link.raw_destination.as_ref().map_or(0, String::len)
+                + link.source_path.as_ref().map_or(0, String::len)
                 + link.subpath.as_ref().map_or(0, String::len)
                 + link.display.as_ref().map_or(0, String::len)
                 + link
@@ -5312,6 +5317,14 @@ pub(crate) fn strict_values_equal(
                     admit(value, depth + 1, check)?;
                 }
             }
+            RuntimeValue::File(file) => check(
+                (file.path.len()
+                    + file.witness.as_ref().map_or(0, |witness| {
+                        witness.entry_id.as_str().len() + witness.revision.as_str().len()
+                    }))
+                    / 16
+                    + 1,
+            )?,
             RuntimeValue::String(value)
             | RuntimeValue::Tag(value)
             | RuntimeValue::Html(value)
@@ -6014,6 +6027,8 @@ fn value_bytes(value: &RuntimeValue) -> Option<usize> {
             RuntimeValue::Link(link) => {
                 bytes = bytes.saturating_add(
                     link.path.len()
+                        + link.raw_destination.as_ref().map_or(0, String::len)
+                        + link.source_path.as_ref().map_or(0, String::len)
                         + link.subpath.as_ref().map_or(0, String::len)
                         + link.display.as_ref().map_or(0, String::len),
                 );
@@ -6036,6 +6051,8 @@ fn value_bytes(value: &RuntimeValue) -> Option<usize> {
                 for link in file.links.iter().chain(&file.embeds).chain(&file.backlinks) {
                     bytes = bytes.saturating_add(
                         32 + link.path.len()
+                            + link.raw_destination.as_ref().map_or(0, String::len)
+                            + link.source_path.as_ref().map_or(0, String::len)
                             + link.subpath.as_ref().map_or(0, String::len)
                             + link.display.as_ref().map_or(0, String::len),
                     );
@@ -6045,6 +6062,9 @@ fn value_bytes(value: &RuntimeValue) -> Option<usize> {
                 }
             }
             RuntimeValue::List(values) | RuntimeValue::TagList(values) => work.extend(values),
+            RuntimeValue::Regex(pattern, flags, _) => {
+                bytes = bytes.saturating_add(pattern.len() + flags.len() + 8);
+            }
             RuntimeValue::Object(values) => {
                 for (key, value) in values {
                     bytes = bytes.saturating_add(key.len());
