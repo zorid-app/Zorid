@@ -75,6 +75,7 @@ function projectBaseResult(raw: DocumentBaseResult|DocumentBasePreviewResult, ve
     }
   };
   const rows = Object.freeze(result.rows.map(row => Object.freeze({ path: row.path, entryId: row.entryId, revision: row.revision,
+    ...(row.editValues?{editValues:Object.freeze(Object.fromEntries(Object.entries(row.editValues).map(([key,item])=>[key,value(item)])))}:{}),
     values: Object.freeze(Object.fromEntries(Object.entries(row.values).map(([key, item]) => [key, value(item)]))) })));
   const byId = new Map(result.rows.map((row, index) => [row.entryId, rows[index]]));
   if (byId.size !== rows.length) return invalid();

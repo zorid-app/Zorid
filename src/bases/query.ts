@@ -46,6 +46,8 @@ export interface BaseQueryRow {
   readonly path: string;
   /** Normalized property IDs. Missing properties yield a typed null. */
   readonly values: Readonly<Record<string, BaseExpressionValue>>;
+  /** Exact persisted note values when rendering inferred a different value. Same saved-row witness. */
+  readonly editValues?: Readonly<Record<string, BaseExpressionValue>>;
 }
 export interface BaseQueryGroup {
   /** Opaque Rust grouping identity; absent on legacy evaluator results. */

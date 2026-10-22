@@ -179,3 +179,15 @@ test('rich Rust presentation crosses projection with nested labels and frozen ta
   assert.ok(Object.isFrozen(link.presentation)); assert.ok(Object.isFrozen(link.presentation?.target));
   assert.equal((values.rich.value[3] as {display:string}).display,'fallback','projection leaves raw data unchanged');
 });
+
+
+test('editable raw values preserve exact persisted aliases independently from typed rendering', () => {
+  const source=raw();
+  const row=source.rows[0] as typeof source.rows[number] & {editValues: Record<string,DocumentBaseValue>};
+  row.editValues={'note.author':{type:'list',value:[{type:'string',value:'[[../People/Ada|Dr. Ada]]'}]}};
+  (row.values as Record<string,DocumentBaseValue>)['note.author']={type:'list',value:[{type:'link',path:'People/Ada.md',target:{entryId:'ada',revision:'r1'},display:'Dr. Ada',external:false}]};
+  const projected=project(source).rows[0];
+  assert.deepEqual(projected.editValues?.['note.author'],{type:'list',value:[{type:'string',value:'[[../People/Ada|Dr. Ada]]'}]});
+  assert.ok(Object.isFrozen(projected.editValues));
+  assert.notDeepEqual(projected.editValues?.['note.author'],projected.values['note.author']);
+});
