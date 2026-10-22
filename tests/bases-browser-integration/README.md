@@ -75,8 +75,17 @@ The nine independently authored groups cover:
    original actor/target witnesses and candidate list. These disposable sources
    are restored exactly through fresh admitted CAS before restart assertions.
 
-The added plain Link oracles are source-checked and await a new matching actual
-browser run; successful run003 predates those additional assertions.
+Actual run004 passed groups0–5, then correctly reported unavailable reverse
+rollups because the added malformed note made incoming-link coverage incomplete.
+Its report and failure screenshot are in
+`/private/tmp/zorid-bases-browser-actual-20261022-004/`; owned resources and the
+synthetic database were cleaned up. The fixture now starts that note valid,
+asserts healthy rollups, temporarily saves malformed metadata through admitted
+CAS, and checks both identity-only Link suggestions and explicit unavailable
+aggregate diagnostics. It proves the retained healthy pin stays exact, restores
+the original source through fresh CAS, and requires complete healthy rollups
+again before the remaining checks. The corrected plain Link oracles await a new
+matching actual browser run; successful run003 predates these assertions.
 
 Expected values are hand-authored (`7 + 3 + 5 = 15`; global limit keeps `7, 5`;
 Ada has two books with average five). Seed checks assert the public bounded,

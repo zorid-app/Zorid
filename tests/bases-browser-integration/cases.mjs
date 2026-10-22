@@ -82,8 +82,9 @@ properties:
 // Added only with optional settings, after no-registry assertions complete.
 export const plainLinkNotes = new Map([
   ['2026-01-02.md', '# A dated filename\n'],
-  ['Invalid.md', '---\nbroken: [\n---\nInvalid metadata must not hide file identity.\n'],
+  ['Invalid.md', '# Candidate with initially valid metadata\n'],
 ]);
+export const invalidMetadataSource = '---\nbroken: [\n---\nInvalid metadata must not hide file identity.\n';
 export const plainLinkPaths = [
   '2026-01-02.md', 'Authors/Ada.md', 'Authors/Grace.md',
   'Books/Compiler.md', 'Books/Foundations.md', 'Books/Pioneer.md',

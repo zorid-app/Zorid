@@ -5,7 +5,7 @@ import {catchUpDocumentIndex} from '../../src/core/document-semantics.ts';
 import {setProperty, readProperties} from '../../src/core/properties.ts';
 import {projectSharedBaseResult, sharedBaseWitness} from '../../src/bases/shared-query.ts';
 import {inlineBaseRequest} from '../../src/bases/inline-base.ts';
-import {files, alias, body, pioneer, settings, plainLinkNotes, plainLinkPaths, inlinePrelude, inlinePrefix, inlineBase, inlineNormalized, inlineNote, clockMs, timezone, groupNames} from './cases.mjs';
+import {files, alias, body, pioneer, settings, plainLinkNotes, plainLinkPaths, invalidMetadataSource, inlinePrelude, inlinePrefix, inlineBase, inlineNormalized, inlineNote, clockMs, timezone, groupNames} from './cases.mjs';
 
 // Product Worker, admitted client, generated WASM and IndexedDB only. No direct
 // WASM evaluator, synthetic generation, replacement Worker, private storage write
@@ -201,14 +201,12 @@ try {
     rejected.push(await rejects(() => afterRawEdit.base({id: entry.id, options: {...options, inlineSource: {...inlineSource, startByte: inlineSource.startByte + 1}}}), 'index_inline_source_mismatch'));
     return {read, inlineSource, rejected};
   });
-  let configured, definition, currentActor, relationBaseline, datedTarget;
+  let configured, definition, currentActor, relationBaseline, datedTarget, configuredAuthors;
   await group(6, async () => {
     for (const [path, source] of plainLinkNotes) await host.adapter.createText(path, source);
     await host.adapter.createText('Properties.yaml', settings); await build(host); configured = await pin(host); definition = await metadata(host, 'Properties.yaml');
     datedTarget = await metadata(host, '2026-01-02.md');
-    const authors = await query(host, configured, 'Authors.base', 'Authors'); noErrors(authors);
-    const invalid = await metadata(host, 'Invalid.md');
-    assert(authors.value.result.metadataIssues.some(issue => issue.witness.entryId === invalid.id && issue.witness.revision === invalid.revision && issue.propertiesUnavailable), 'Invalid candidate fixture must have actual unavailable metadata');
+    const authors = await query(host, configured, 'Authors.base', 'Authors'); noErrors(authors); configuredAuthors = authors;
     equal(authors.value.result.rows.map(row => row.path), ['Authors/Ada.md', 'Authors/Grace.md'], 'Rollup filter/order');
     for (const [path, count, average, weighted, expectedBooks] of [
       ['Authors/Ada.md', 2, 5, 10, ['Books/Foundations.md', 'Books/Pioneer.md']],
@@ -273,6 +271,38 @@ try {
     // The browser owns four pin slots. Earlier no-settings pin assertions are
     // complete; retain only the configured baseline across this next mutation.
     await closePin(host, original); await closePin(host, afterRawEdit);
+    // Unreadable source may hide incoming links, so reverse aggregates must
+    // become unavailable globally. Plain Link suggestions still depend only on
+    // file identity. Exercise those independent contracts in a temporary stage,
+    // then restore the exact saved note before all healthy aggregate oracles.
+    const validCandidateSource = plainLinkNotes.get('Invalid.md');
+    equal(await host.adapter.read('Invalid.md'), validCandidateSource, 'Initial healthy candidate source');
+    const validCandidate = await metadata(host, 'Invalid.md');
+    await host.adapter.compareAndWrite('Invalid.md', validCandidateSource, invalidMetadataSource, witness(validCandidate));
+    await build(host); const malformedPin = await pin(host);
+    const malformedCandidate = await metadata(host, 'Invalid.md');
+    const malformedTargets = await malformedPin.propertyTargets({options: {clockMs, timezone, currentEntryId: currentActor.id}});
+    for (const property of ['reference', 'published', 'website']) {
+      const candidates = malformedTargets.value.relationTargets[property];
+      equal(candidates.map(target => target.path).sort(), plainLinkPaths, 'Plain Link suggestions retain unreadable notes');
+      const candidate = candidates.find(target => target.path === 'Invalid.md');
+      equal({entryId: candidate.entryId, revision: candidate.revision}, witness(malformedCandidate), 'Unreadable plain Link candidate retains exact current identity/revision');
+    }
+    equal(malformedTargets.value.currentRelationValues, relationBaseline.value.currentRelationValues, 'Unrelated unreadable metadata changed saved current raw/typed Link values');
+    const incomplete = await query(host, malformedPin, 'Authors.base', 'Authors');
+    assert(incomplete.value.result.metadataIssues.some(issue => issue.witness.entryId === malformedCandidate.id && issue.witness.revision === malformedCandidate.revision && issue.propertiesUnavailable), 'Malformed source must report actual unavailable metadata');
+    equal(incomplete.value.result.rows, [], 'Unavailable reverse rollups must not fabricate author rows');
+    for (const author of [ada, grace]) assert(incomplete.value.result.diagnostics.some(diagnostic => diagnostic.entryId === author.id && diagnostic.phase === 'filter' && diagnostic.code === 'unavailable'), 'Incomplete reverse rollup must expose an unavailable author-filter diagnostic');
+    assert(incomplete.value.result.diagnostics.some(diagnostic => diagnostic.property === 'note.bookCount' && diagnostic.code === 'unavailable'), 'Incomplete reverse count must expose an unavailable diagnostic');
+    equal(await configured.propertyTargets({options: {clockMs, timezone, currentEntryId: currentActor.id}}), relationBaseline, 'Malformed latest metadata substituted into retained healthy frame');
+    sameSemanticRead(await query(host, configured, 'Authors.base', 'Authors'), configuredAuthors, 'Malformed latest metadata substituted into retained healthy aggregate');
+    await host.adapter.compareAndWrite('Invalid.md', invalidMetadataSource, validCandidateSource, witness(malformedCandidate));
+    await build(host); await closePin(host, malformedPin);
+    equal(await host.adapter.read('Invalid.md'), validCandidateSource, 'Exact candidate source restoration');
+    const restoredPin = await pin(host), restoredAuthors = await query(host, restoredPin, 'Authors.base', 'Authors'); noErrors(restoredAuthors);
+    equal(restoredAuthors.value.result.rows.map(item => [item.path, item.values['note.bookCount'], item.values['note.averageRating']]), [['Authors/Ada.md', number(2), number(5)], ['Authors/Grace.md', number(1), number(5)]], 'Exact source restoration recovers complete reverse rollups');
+    await closePin(host, restoredPin);
+    const malformedEvidence = {targets: malformedTargets, incomplete: incomplete.value.result, restored: restoredAuthors.value.result};
     const originalSource = await host.adapter.read('Books/Pioneer.md');
     const authorSource = await host.adapter.read('Authors/Ada.md');
     const ineligibleSource = setProperty(authorSource, 'type', 'project', 'text');
@@ -325,7 +355,7 @@ try {
     const reopened = await pin(host), authors = await query(host, reopened, 'Authors.base', 'Authors'); noErrors(authors);
     equal(row(authors, 'Authors/Ada.md').values['note.bookCount'], number(2), 'Restart lost derived index semantics');
     equal((await reopened.propertyTargets({options: {clockMs}})).value.definition.id, definition.id, 'Restart changed settings identity');
-    return {foreign, closed, eligibility, unresolved, noCurrentOmitted: !Object.hasOwn(unbound.value, 'currentRelationValues'), retainedCurrent: relationBaseline, reopenedSnapshot: reopened.snapshot, rows: authors.value.result.rows, exactRawSource: originalSource};
+    return {foreign, closed, malformedEvidence, eligibility, unresolved, noCurrentOmitted: !Object.hasOwn(unbound.value, 'currentRelationValues'), retainedCurrent: relationBaseline, reopenedSnapshot: reopened.snapshot, rows: authors.value.result.rows, exactRawSource: originalSource};
   });
   report.status = 'passed';
 } catch (error) { report.status = 'failed'; report.error = {code: error.code, message: String(error.stack ?? error)}; }
