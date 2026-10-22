@@ -612,6 +612,55 @@ fn plain_link_definitions_resolve_notes_and_preserve_external_urls() {
         matches!(&values.rows()[&id("second")].values["reference"], BaseValue::Link { path, target: None, external: true, .. } if path == "https://example.org/books")
     );
     assert!(values.diagnostics().is_empty());
+    let targets = &values.relation_targets()["reference"];
+    assert_eq!(targets.len(), 4);
+    assert!(targets.iter().any(|target| target.entry_id == id("ada")
+        && target.path == "Authors/Ada.md"
+        && target.revision.as_str() == "r1"));
+    assert!(targets.iter().any(|target| target.entry_id == id("grace")));
+    let program=compile_base_source("filters: 'file.inFolder(\"Books\")'\nviews: [{type: table, name: Links, order: [reference]}]\n").unwrap();
+    let result = query_generation_with_properties(
+        &program,
+        &generation,
+        &[],
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        result.relation_targets.as_ref().unwrap()["reference"],
+        *targets
+    );
+    for (current, expected) in [
+        ("first", "[[Authors/Ada|Ada]]"),
+        ("second", "https://example.org/books"),
+    ] {
+        let mut options = QueryOptions::default();
+        options.current_entry_id = Some(id(current));
+        let captured = zorid_bases::query_generation_property_targets_with_current(
+            &generation,
+            &[],
+            &definitions,
+            &options,
+        )
+        .unwrap();
+        assert_eq!(
+            captured.result.relation_targets.as_ref().unwrap()["reference"],
+            *targets
+        );
+        let display = captured.current_relation_values.unwrap();
+        assert_eq!(display.witness.entry_id, id(current));
+        assert_eq!(
+            display.edit_values["reference"],
+            BaseValue::String {
+                value: expected.into()
+            }
+        );
+        assert!(matches!(
+            &display.values["reference"],
+            BaseValue::Link { .. }
+        ));
+    }
 }
 
 #[test]
@@ -2080,4 +2129,58 @@ views:
     .unwrap();
     assert_eq!(grouped.groups.len(), 1);
     assert_eq!(grouped.groups[0].entry_ids.len(), 3);
+}
+
+#[test]
+fn plain_link_current_display_preserves_a_date_shaped_filename_as_link_not_date() {
+    let settings = "properties:\n  reference: {type: link}\n";
+    let generation = generation_from_records(vec![
+        ("settings", "Properties.yaml".into(), settings.into(), false),
+        ("dated", "2026-01-01.md".into(), "Dated note\n".into(), true),
+        (
+            "invalid",
+            "Invalid.md".into(),
+            "---\nbroken: [\n---\n".into(),
+            true,
+        ),
+        (
+            "book",
+            "Books/Book.md".into(),
+            "---\nreference: '2026-01-01'\n---\n".into(),
+            true,
+        ),
+    ]);
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), settings)
+            .unwrap();
+    let mut options = QueryOptions::default();
+    options.current_entry_id = Some(id("book"));
+    let captured = zorid_bases::query_generation_property_targets_with_current(
+        &generation,
+        &[],
+        &definitions,
+        &options,
+    )
+    .unwrap();
+    assert!(
+        captured.result.relation_targets.as_ref().unwrap()["reference"]
+            .iter()
+            .any(|target| target.entry_id == id("dated"))
+    );
+    assert!(
+        captured.result.relation_targets.as_ref().unwrap()["reference"]
+            .iter()
+            .any(|target| target.entry_id == id("invalid")),
+        "Plain link choices depend on file identity, not valid target metadata"
+    );
+    let current = captured.current_relation_values.unwrap();
+    assert_eq!(
+        current.edit_values["reference"],
+        BaseValue::String {
+            value: "2026-01-01".into()
+        }
+    );
+    assert!(
+        matches!(&current.values["reference"],BaseValue::Link{target:Some(target),external:false,..}if target.entry_id==id("dated"))
+    );
 }

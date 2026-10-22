@@ -1,4 +1,4 @@
-//! Saved ordinary-note relation display values, captured from the same sealed
+//! Saved ordinary-note link/relation display values, captured from the same sealed
 //! graph and derived rows as candidate discovery. No caller-supplied raw value
 //! or filename participates in resolution here.
 use crate::properties::{PropertyDefinitions, PropertyKind};
@@ -87,7 +87,7 @@ pub(crate) fn capture_current_relation_values(
     let mut bytes = crate::encoded_size(&captured.witness, options.max_output_bytes)?;
     for (name, definition) in definitions.iter() {
         charge(1)?;
-        if definition.kind != PropertyKind::Relation {
+        if !matches!(definition.kind, PropertyKind::Relation | PropertyKind::Link) {
             continue;
         }
         let mut raw = None;

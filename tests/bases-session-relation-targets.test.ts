@@ -9,7 +9,7 @@ import { NoteBuffer } from '../src/ui/note-buffer.ts';
 import { createBaseSession } from '../src/bases/session.ts';
 const tick=()=>new Promise<void>(done=>setTimeout(done,8));
 async function until(check:()=>boolean|Promise<boolean>){for(let i=0;i<120;i++){if(await check())return;await tick();}assert.ok(await check());}
-async function fixture(property='author',available=true){
+async function fixture(property='author',available=true,type:'relation'|'link'='relation'){
  class Adapter extends MemoryAdapter{
   documentSemantics?:DocumentService;revisions=new Map<string,number>();targetId='author-original';
   id(path:string){return path==='Authors/Hale.md'?this.targetId:path;}
@@ -19,7 +19,7 @@ async function fixture(property='author',available=true){
   override async write(path:string,text:string){await super.write(path,text);this.revisions.set(path,(this.revisions.get(path)??1)+1);}
  }
  const id=`note.${property}`,base=`views: [{type: table, name: Table, order: [${JSON.stringify(id)}]}]\n`;
- const adapter=new Adapter({'Work.base':base,'Books/One.md':`---\n${JSON.stringify(property)}: null\n---\nBody`,'Authors/Hale.md':'---\ntype: author\n---\nHale','Contacts/Bob.md':'---\ntype: contact\n---\nBob','Properties.yaml':`properties:\n  ${JSON.stringify(property)}:\n    type: relation\n    relation:\n      targetFilter: 'type == "author"'\n`});
+ const adapter=new Adapter({'Work.base':base,'Books/One.md':`---\n${JSON.stringify(property)}: null\n---\nBody`,'Authors/Hale.md':'---\ntype: author\n---\nHale','Contacts/Bob.md':'---\ntype: contact\n---\nBob','Properties.yaml':`properties:\n  ${JSON.stringify(property)}:\n    type: ${type}\n${type==='relation'?`    relation:\n      targetFilter: 'type == "author"'\n`:''}`});
  const snapshot={localStoreId:'store',generationEpoch:'epoch',generation:'1',versions:{schema:1,extraction:'md1',resolver:'r1',query:'q1'}},source={localStoreId:'store',watermark:'1'};
  const entry=async(path:string)=>{const row=(await adapter.stat(path))!;return{id:row.entryId,revision:row.revision,path,kind:'file' as const,deleted:false};};
  const unused=async():Promise<never>=>{throw new Error('Unexpected core effect');};
@@ -59,4 +59,20 @@ test('a refreshed or replaced core relation target invalidates the retained pick
 
 test('unavailable core relationships never expose a supplied but unauthoritative target list',async()=>{
  const f=await fixture('author',false);try{f.open();assert.equal(f.doc.querySelector('.bases-property-popover [role="option"]'),null);assert.match(f.doc.querySelector('.suggestion-empty')!.textContent!,/unavailable until the shared index is ready/);assert.equal(f.requests(),0);}finally{await f.cleanup();}
+});
+
+test('plain link session uses captured unfiltered core suggestions without making free URL edits require a relation',async()=>{
+ const f=await fixture('reference',true,'link');try{
+  const input=f.open();assert.ok(input);assert.deepEqual([...f.doc.querySelectorAll('[role="option"]')].map(choice=>choice.textContent),['Hale']);
+  input.value='Hale';input.dispatchEvent(new f.doc.defaultView!.Event('input',{bubbles:true}));f.key(input,'Enter');
+  await until(async()=>readProperties(await f.vault.read('Books/One.md'))[0].value==='[[/Authors/Hale.md]]');assert.deepEqual(f.errors,[]);
+ }finally{await f.cleanup();}
+});
+test('plain link session rejects retained suggestions after same-path target replacement',async()=>{
+ const f=await fixture('reference',true,'link');try{
+  const input=f.open(),choice=f.doc.querySelector<HTMLButtonElement>('[role="option"]')!;
+  f.adapter.targetId='replacement-author';await f.vault.modify('Authors/Hale.md','Replacement');choice.click();await tick();
+  assert.equal(f.requests(),0);assert.equal(readProperties(await f.vault.read('Books/One.md'))[0].value,null);assert.match(f.host.querySelector('[data-base-editing]')!.getAttribute('title')!,/unavailable/);
+  assert.equal(input.isConnected,true);
+ }finally{await f.cleanup();}
 });

@@ -298,7 +298,10 @@ pub fn query_property_relations(
     budget.keep(&result.property_names)?;
     budget.keep(&result.read_only_property_names)?;
     budget.keep(&result.definition_diagnostics)?;
-    for (_, definition) in definitions.iter() {
+    for (_, definition) in definitions
+        .iter()
+        .filter(|(_, definition)| definition.kind == PropertyKind::Relation)
+    {
         if let Some(filter) = definition
             .relation
             .as_ref()
@@ -438,13 +441,16 @@ pub fn query_property_relations(
         .filter(|i| i.properties_unavailable)
         .map(|i| &i.witness.entry_id)
         .collect::<BTreeSet<_>>();
-    let target_filter_files = if definitions.iter().any(|(_, definition)| {
-        definition
-            .relation
-            .as_ref()
-            .and_then(|relation| relation.target_filter.as_ref())
-            .is_some_and(|source| crate::expression::uses_relationships(source))
-    }) {
+    let target_filter_files = if definitions
+        .iter()
+        .filter(|(_, definition)| definition.kind == PropertyKind::Relation)
+        .any(|(_, definition)| {
+            definition
+                .relation
+                .as_ref()
+                .and_then(|relation| relation.target_filter.as_ref())
+                .is_some_and(|source| crate::expression::uses_relationships(source))
+        }) {
         Some(crate::files::hydrate(
             &snapshot.records,
             Some(&relationships),
@@ -462,16 +468,23 @@ pub fn query_property_relations(
     let mut allowed = BTreeMap::<String, BTreeSet<EntryId>>::new();
     for (name, definition) in definitions
         .iter()
-        .filter(|(_, d)| d.kind == PropertyKind::Relation)
+        .filter(|(_, d)| matches!(d.kind, PropertyKind::Relation | PropertyKind::Link))
     {
-        let settings = definition.relation.clone().unwrap_or_default();
+        // Plain links offer note suggestions without imposing relation filters
+        // or changing their independently editable URL/readable-text values.
+        let settings = if definition.kind == PropertyKind::Relation {
+            definition.relation.clone().unwrap_or_default()
+        } else {
+            Default::default()
+        };
         let mut targets = Vec::new();
         let mut accepted = BTreeSet::new();
         for record in &snapshot.records {
             budget.charge(1)?;
             let witness = record.witness.as_ref().expect("sealed record");
             if !record.path.to_ascii_lowercase().ends_with(".md")
-                || unavailable.contains(&witness.entry_id)
+                || (definition.kind == PropertyKind::Relation
+                    && unavailable.contains(&witness.entry_id))
             {
                 continue;
             }

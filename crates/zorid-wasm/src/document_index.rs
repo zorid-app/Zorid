@@ -2426,8 +2426,8 @@ mod tests {
     #[test]
     fn property_targets_current_values_preserve_saved_relative_aliases_and_revision() {
         use zorid_bases::BaseValue;
-        let settings = "properties:\n  author:\n    type: relation\n    relation: {targetFilter: 'type == \"author\"'}\n  reviewers:\n    type: relation\n    relation: {multiple: true, targetFilter: 'type == \"author\"'}\n";
-        let source = "---\nauthor: '[[../People/Ada|Boss]]'\nreviewers: ['[[../People/Ada|One]]', '[[../People/Missing|Lost]]']\n---\n";
+        let settings = "properties:\n  author:\n    type: relation\n    relation: {targetFilter: 'type == \"author\"'}\n  reviewers:\n    type: relation\n    relation: {multiple: true, targetFilter: 'type == \"author\"'}\n  reference: {type: link}\n";
+        let source = "---\nauthor: '[[../People/Ada|Boss]]'\nreviewers: ['[[../People/Ada|One]]', '[[../People/Missing|Lost]]']\nreference: '[[../People/Ada|Plain alias]]'\n---\n";
         let records = [("settings", "Properties.yaml", settings), ("ada", "People/Ada.md", "---\ntype: author\n---\n"), ("grace", "People/Grace.md", "---\ntype: project\n---\n"), ("note", "Notes/Book.md", source), ("invalid", "Notes/Invalid.md", "---\nauthor: broken\n")];
         let mut h: serde_json::Value = serde_json::from_str(&header()).unwrap();
         h["entries"] = serde_json::Value::Array(records.iter().map(|(id, path, _)| serde_json::json!({"id":id,"path":path,"kind":"file","revision":"r1","deleted":false})).collect());
@@ -2435,9 +2435,14 @@ mod tests {
         let input = |current: Option<&str>| {let mut input = serde_json::json!({"propertyDefinitionsSource":{"id":"settings","source":settings}});if let Some(id) = current {input["currentEntryId"] = id.into();}serde_json::from_value::<PropertyTargetReadOptions>(input).unwrap()};
         let read = property_targets_read(&generation.generation, &[], input(Some("note"))).unwrap();
         assert_eq!(read.relation_targets["author"].len(), 1);assert_eq!(read.relation_targets["author"][0].entry_id, EntryId::new("ada").unwrap());
+        assert_eq!(read.relation_targets["reference"].len(), 4);
+        assert!(read.relation_targets["reference"].iter().any(|target| target.entry_id == EntryId::new("grace").unwrap()), "Plain links have unfiltered note suggestions, including non-author notes");
+        assert!(read.relation_targets["reference"].iter().any(|target| target.entry_id == EntryId::new("invalid").unwrap()), "A plain link requires captured file identity, not valid target frontmatter");
         let current = read.current_relation_values.unwrap();
         assert_eq!(current.witness.entry_id, EntryId::new("note").unwrap());assert_eq!(current.witness.revision.as_str(), "r1");
         assert_eq!(current.edit_values["author"], BaseValue::String {value: "[[../People/Ada|Boss]]".into()});
+        assert_eq!(current.edit_values["reference"], BaseValue::String {value: "[[../People/Ada|Plain alias]]".into()});
+        assert!(matches!(&current.values["reference"], BaseValue::Link {target: Some(target), display: Some(display), ..} if target.entry_id == EntryId::new("ada").unwrap() && display == "Plain alias"));
         assert!(matches!(&current.values["author"], BaseValue::Link {target: Some(target), display: Some(display), ..} if target.entry_id == EntryId::new("ada").unwrap() && display == "Boss"));
         assert!(matches!(&current.values["reviewers"], BaseValue::List {value} if value.len() == 2 && matches!(&value[1], BaseValue::Link {target: None, ..})));
         let no_current = property_targets_read(&generation.generation, &[], input(None)).unwrap();assert!(serde_json::to_value(no_current).unwrap().get("currentRelationValues").is_none());

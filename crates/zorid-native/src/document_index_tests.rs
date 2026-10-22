@@ -1475,8 +1475,8 @@ fn property_targets_current_values_preserve_saved_relative_aliases_and_revision(
     for folder in ["Notes", "People"] {
         apply(&mut vault, &format!("folder-{folder}"), Mutation::Create {id: id(folder), path: VaultPath::new(folder).unwrap(), kind: EntryKind::Folder, content: None});
     }
-    let settings = "properties:\n  author:\n    type: relation\n    relation: {targetFilter: 'type == \"author\"'}\n  reviewers:\n    type: relation\n    relation: {multiple: true, targetFilter: 'type == \"author\"'}\n";
-    let source = "---\nauthor: '[[../People/Ada|Boss]]'\nreviewers: ['[[../People/Ada|One]]', '[[../People/Missing|Lost]]']\n---\nUnsaved drafts are never query input.\n";
+    let settings = "properties:\n  author:\n    type: relation\n    relation: {targetFilter: 'type == \"author\"'}\n  reviewers:\n    type: relation\n    relation: {multiple: true, targetFilter: 'type == \"author\"'}\n  reference: {type: link}\n";
+    let source = "---\nauthor: '[[../People/Ada|Boss]]'\nreviewers: ['[[../People/Ada|One]]', '[[../People/Missing|Lost]]']\nreference: '[[../People/Ada|Plain alias]]'\n---\nUnsaved drafts are never query input.\n";
     create(&mut vault, "settings", "Properties.yaml", settings);
     create(&mut vault, "ada", "People/Ada.md", "---\ntype: author\n---\n");
     create(&mut vault, "grace", "People/Grace.md", "---\ntype: author\n---\n");
@@ -1487,15 +1487,22 @@ fn property_targets_current_values_preserve_saved_relative_aliases_and_revision(
     let current = read.value.current_relation_values.unwrap();
     assert_eq!(current.witness.entry_id, id("note"));assert_eq!(current.witness.revision, revision(&vault, "note"));
     assert_eq!(current.edit_values["author"], BaseValue::String {value: "[[../People/Ada|Boss]]".into()});
+    assert_eq!(current.edit_values["reference"], BaseValue::String {value: "[[../People/Ada|Plain alias]]".into()});
+    assert!(matches!(&current.values["reference"], BaseValue::Link {target: Some(target), display: Some(display), ..} if target.entry_id == id("ada") && display == "Plain alias"));
     assert!(matches!(&current.values["author"], BaseValue::Link {path, target: Some(target), display: Some(display), ..} if path == "People/Ada.md" && target.entry_id == id("ada") && display == "Boss"));
     assert!(matches!(&current.values["reviewers"], BaseValue::List {value} if value.len() == 2 && matches!(&value[1], BaseValue::Link {target: None, ..})));
     assert_eq!(read.value.relation_targets["author"].len(), 2);
+    assert_eq!(read.value.relation_targets["reference"].len(), 3);
+    let original_plain_target_revision = read.value.relation_targets["reference"].iter().find(|target|target.entry_id==id("ada")).unwrap().revision.clone();
     write(&mut vault, "change-author-eligibility", "ada", "---\ntype: project\n---\n");
     write(&mut vault, "change-saved-note", "note", &source.replace("Boss", "Chief"));build(&mut vault);
     let retained = vault.query_property_targets_document(&old, None, &options).unwrap().value.current_relation_values.unwrap();
     assert_eq!(retained.witness, current.witness);assert_eq!(retained.edit_values, current.edit_values);
     let fresh = vault.open_document_snapshot().unwrap();let read = vault.query_property_targets_document(&fresh, None, &options).unwrap();
     assert_eq!(read.value.relation_targets["author"].len(), 1);assert_eq!(read.value.relation_targets["author"][0].entry_id, id("grace"));
+    assert_eq!(read.value.relation_targets["reference"].len(), 3);
+    let plain = read.value.relation_targets["reference"].iter().find(|target|target.entry_id==id("ada")).unwrap();
+    assert_eq!(plain.revision, revision(&vault,"ada"));assert_ne!(plain.revision,original_plain_target_revision);
     let current = read.value.current_relation_values.unwrap();
     assert_eq!(current.witness.revision, revision(&vault, "note"));
     assert_eq!(current.edit_values["author"], BaseValue::String {value: "[[../People/Ada|Chief]]".into()});

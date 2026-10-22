@@ -338,21 +338,23 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (input.value && options.createOption && ['select', 'multiselect', 'status'].includes(type) && !definition.options?.some(option => option.value === input!.value)) {
       const add = document.createElement('button'); add.type = 'button'; add.className = 'suggestion-item bases-property-create-option'; add.textContent = `Create “${input.value}”`; add.addEventListener('mousedown', event => event.preventDefault()); add.addEventListener('click', async () => { if (pending) return; const next = input!.value; pending = true; mark('pending'); if (input) input.disabled = true; try { const acknowledgement = await options.createOption!(presentation.property, next, acceptedPresentation); acknowledge(acknowledgement, value); const updated = options.getDefinition(presentation.property); if (updated?.type === type) definition = updated; pending = false; if (!current()) { editing = false; closePopup(); draw(); report(new Error('Option created. Reopen the property to use the refreshed definition.')); return; } mark('draft'); if (input) input.disabled = false; await choose(next); } catch (failure) { pending = false; if (input) input.disabled = false; error(failure); } }); list.append(add);
     }
-    if (!list.children.length) { const empty = document.createElement('div'); empty.className = 'suggestion-empty'; empty.textContent = type === 'relation' && definition.relation?.targetFilter && options.getRelationTargets?.(presentation.property, acceptedPresentation) === undefined ? 'Relation choices are unavailable until the shared index is ready.' : ['list', 'tags'].includes(type) ? 'Type a value and press Enter' : 'No matching options'; list.append(empty); }
+    if (!list.children.length) { const empty = document.createElement('div'); empty.className = 'suggestion-empty'; empty.textContent = type === 'relation' && definition.relation?.targetFilter && options.getRelationTargets?.(presentation.property, acceptedPresentation) === undefined ? 'Relation choices are unavailable until the shared index is ready.' : type === 'link' ? 'Type a link or URL' : ['list', 'tags'].includes(type) ? 'Type a value and press Enter' : 'No matching options'; list.append(empty); }
     popup.append(list); position();
   }
-  function validateRelationChoice(next: string): boolean {
-    if (type !== 'relation') return true;
+  function validateRelationChoice(next: string, selected = type === 'relation'): boolean {
+    // A plain link is still free text/URL input. Only selecting an offered note
+    // acquires a captured target whose identity must remain current.
+    if (type !== 'relation' && (type !== 'link' || !selected)) return true;
     try {
       const currentTargets = options.getRelationTargets?.(presentation.property, acceptedPresentation);
-      if (!currentTargets) { error(new Error('Relation choices are unavailable; wait for the shared index before choosing a note.')); return false; }
+      if (!currentTargets) { error(new Error(`${type === 'link' ? 'Link' : 'Relation'} choices are unavailable; wait for the shared index before choosing a note.`)); return false; }
       const candidate = currentTargets.find(target => targetValue(target) === next), original = choices.find(choice => choice.value === next)?.target;
-      if (!candidate || candidate.missing || (original && (original.entryId !== candidate.entryId || original.revision !== candidate.revision))) { error(new Error('This relation choice changed or is no longer available; choose from the refreshed results.')); return false; }
+      if (!candidate || candidate.missing || (original && (original.entryId !== candidate.entryId || original.revision !== candidate.revision))) { error(new Error(`This ${type === 'link' ? 'link' : 'relation'} choice changed or is no longer available; choose from the refreshed results.`)); return false; }
       return true;
     } catch (failure) { error(failure); return false; }
   }
   async function choose(next: string) {
-    if (!current() || pending || !validateRelationChoice(next)) return;
+    if (!current() || pending || !validateRelationChoice(next, true)) return;
     if (choices.find(choice => choice.value === next)?.missing || ((type === 'relation' || type === 'link') && targetFor(next)?.missing)) { error(new Error('This related note is unavailable. Choose another note.')); return; }
     if (multiple) {
       const duplicate = draft.findIndex((value, index) => value === next && index !== editingIndex);
@@ -402,7 +404,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
           if (input.value === inputText(value, definition)) { cancel(); return; }
           const choice = choices.find(choice => !choice.missing && (choice.value === input!.value || choice.label === input!.value));
           if (input.value && !choice && ['select', 'status', 'relation'].includes(type)) { error(new Error('Choose a matching option.')); return; }
-          if (input.value && !validateRelationChoice(choice?.value ?? input.value)) return;
+          if (input.value && !validateRelationChoice(choice?.value ?? input.value, !!choice)) return;
           next = input.value ? str(choice?.value ?? input.value) : BASE_NULL;
         }
       } else {

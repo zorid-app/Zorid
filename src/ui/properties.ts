@@ -167,7 +167,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
         isCurrent: () => live() && rows.get(row.key) === row,
         getDisplayValue: presentation => options.getDisplayValue?.(row.key, presentation.value),
         openFile: (path, _event, witness) => options.openLink?.(path, witness),
-        getRelationTargets: () => options.getRelationTargets?.(row.key, definition) ?? (!definition.relation?.targetFilter ? [...(options.vault?.entries.values() ?? [])].filter(entry => entry.type === 'file' && /\.md$/i.test(entry.path)).map(entry => ({ path: entry.path, label: entry.path.replace(/\.md$/i, ''), entryId: entry.entryId })) : undefined),
+        getRelationTargets: () => options.getRelationTargets?.(row.key, definition) ?? (!definition.relation?.targetFilter ? [...(options.vault?.entries.values() ?? [])].filter(entry => entry.type === 'file' && /\.md$/i.test(entry.path)).map(entry => ({ path: entry.path, label: entry.path.replace(/\.md$/i, ''), entryId: entry.entryId, revision: entry.revision })) : undefined),
         commit: edit => {
           const operation = pending.then(async () => {
             if (!live() || rows.get(row.key) !== row) throw new Error('This property editor is no longer active.');
