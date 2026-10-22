@@ -16,7 +16,21 @@ Main is unchanged `e7d655e1`; the full goal is **not complete**. Current goal:
 optional property definitions are independent of named note Types; retain the
 deferred Tasks/Calendar Type consumers and their data.
 
-Last fully validated core is Rust tree
+Current date-v8 Rust tree is
+`8074eabf01c55cf4e53f01c02a5a384197875a24`. Full run80276 is **terminal0:
+361 tests/20 nonempty targets pass**, plus empty doctests. Log
+`/private/tmp/zorid-bases-date-final-full-composed-002.log`, SHA
+`de189d3ce6f8bfc02a1dc7fe96b2682ab3adab601a2b821beb28c21be155920f`.
+First run52969 is retained:198 library cases pass, then two legacy percent-error
+expectations stop corpus at6/7; reviewed e509ef71 replaces them with exact typed
+`%1`/`%` results, preserving numeric/budget guards. No further source correction.
+Root owns sole heavy native/CLI build9637, pinned/offline/locked/release/j1,
+log `/private/tmp/zorid-bases-date-final-native-cli-build-001.log`.
+No matching date-v8 product/client acceptance yet. New shared fixtures expect
+146 typed assertions (same19 browser groups/125 CLI commands), inventory test
+updated105bf344; `bases_expressions` prepares CLI007, runtime grant still pending.
+
+Previous complete core/client closure is Rust tree
 `958b19aca4666414e956fbb2f406558af5a18366`:
 
 - Full pinned/offline Rust run: **359 tests/20 nonempty targets pass**, plus
@@ -75,21 +89,11 @@ for final current-core native acceptance. Existing source-corrected safety/confi
 properties,14-phase layouts, clipboard/recovery and23 matched visual states also
 need actual runs and review. Main integration/reconciliation remains required.
 
-Disk recovery is now **observed**, not assumed: latest measured7098920KiB
-free (~6.77GiB), above the unchanged1GiB native guard. No new user permission is
-needed for already-authorized owned verification. Root now owns sole heavy
-Rust run52969, pinned/offline/locked/release/j1:
-`/private/tmp/zorid-bases-date-final-full-composed-001.log`.
-Reviewed date fix e82ab7b2 changes current Rust tree to
-`d04aeae2066482f8d2d4c48c341a571fad641402`: Moment percent literals and raw
-compact-date extrema parsing, compiler grouping-v8, two authored Rust tests and
-13 new shared Q3 assertions (146 total, same19 browser groups/125 CLI commands).
-These corrections match two new bounded REA receipts; validation is in progress.
-Old359/core958/browser009133/CLI006133 passes remain historical proof for that
-source, not current date-v8 acceptance. After the new suite passes, rebuild
-matching native/CLI and WASM serially, then rerun the expanded client campaigns.
-The preserved host8e818002 is old958; do not use it to claim date-v8 acceptance.
-Original raw WASM is now byte-preserved beside the958 generated artifacts.
+Disk recovery is now **observed**, not assumed: measured7098920KiB free before
+builds,6678268KiB after the full Rust run, above the unchanged1GiB native guard.
+Rebuild matching native/CLI and WASM serially, then rerun expanded client campaigns.
+Preserved host8e818002 and module36809d are old958; do not use them to claim
+date-v8 acceptance. Original raw WASM is byte-preserved beside958 generated files.
 
 C2 independent review also found Hover/New source subscriptions can publish
 buffer updates before durable flush/ack; a scoped per-attempt publication hold

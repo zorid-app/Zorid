@@ -2,6 +2,16 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Date-v8 full Rust run passes361 tests/20 targets at8074eabf; matching native/CLI
+build9637 is live, no current date-v8 client acceptance yet. Expanded shared
+fixtures146 assertions are ready for fresh125-command CLI/19-group browser
+campaigns after matching artifacts. Earlier failed run stops at obsolete percent
+error expectations, corrected to exact typed outputs without product changes.
+Normal Workspace Save/navigation must complete the same validated pending inline
+save acknowledgement; passive reads must not retry or acknowledge. Owner is
+implementing this private continuation with exact per-attempt holds and strict
+nested/foreign/retry tests, preserving newer drafts and data guards.
+
 Disk recovery observed:7098920KiB free. Serialized Rust validation resumes for
 reviewed date-v8 fix e82ab7b2 (literal percent formatting and raw compact-date
 extrema distinction), Rustd04aeae2,146 authored shared assertions. Historical
