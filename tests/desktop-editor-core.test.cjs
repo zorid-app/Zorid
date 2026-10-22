@@ -30,6 +30,20 @@ function fixture({admission,options={}}={}){
   const window=()=>broker.register({webContents:{id:++id,mainFrame:{url:'https://zorid.test/'},isDestroyed:()=>false},isDestroyed:()=>false});
   return {manager,broker,window,opened,closed};
 }
+test('creation receipts are advertised only by admitted consumers and use the scoped existing IPC route',async()=>{
+  const calls=[],receipt={operation_id:'operation',sequence:'1',changes:[]};
+  const admission={scope:{vaultId:'store',clientId:'client'},async createTextReceipt(input){calls.push(input);return receipt;},async retire(){}};
+  const f=fixture({admission}),a=f.window();await f.broker.select(a,'/vault');a.persistedVaultRoot='/vault';
+  try{
+    const context=await f.manager.context(f.broker,a,'/vault'),event={sender:a.window.webContents,senderFrame:a.window.webContents.mainFrame};
+    assert.equal(context.textCreateReceiptsAvailable,true);
+    const input={operationId:'operation',entryId:'entry',path:'New.md',content:'literal'};
+    assert.deepEqual(await f.manager.invoke(f.broker,a,event,'/vault',context.admissionId,'createTextReceipt',[input]),receipt);
+    assert.deepEqual(calls,[input]);assert.notEqual(calls[0],input,'IPC arguments are detached');
+    await assert.rejects(f.manager.invoke(f.broker,a,event,'/vault','foreign','createTextReceipt',[input]),{code:'durable_scope_changed'});
+    assert.equal(calls.length,1);
+  }finally{f.closed.resolve();await f.manager.close();}
+});
 test('last-window retirement fences opens until close and preserves the rebound entry',async()=>{
   const f=fixture(),a=f.window(),b=f.window();
   await f.broker.select(a,'/vault');
