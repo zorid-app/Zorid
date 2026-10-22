@@ -164,6 +164,10 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     own.rebase = (next, expectedName = configuredView.name) => { const snapshot = configurationSnapshot(next); if (JSON.stringify(snapshot) !== JSON.stringify(configuration) || next.views[selectedIndex]?.name !== expectedName) return false; opening = next; result = next.result; version = result.version; configuredView = next.views[selectedIndex] ?? result.view; refreshPanel?.(result,own.dirty); return true; };
     panel = own; trigger.setAttribute('aria-expanded', 'true');
     let retryPersistence: (() => Promise<void>) | undefined;
+    type Control = HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement;
+    type AcceptedAttempt = {generation:number;configuration?:ReturnType<typeof configurationSnapshot>;viewName:string;inputs:Map<Control,boolean>;acknowledge?:()=>void};
+    let retainedAttempt: AcceptedAttempt | undefined;
+    const inputStates = () => new Map(Array.from(node.querySelectorAll<Control>('input,button,select,textarea'),input=>[input,input.disabled] as const));
     const place = () => { if (!node.isConnected) return; const anchor = trigger.getBoundingClientRect(), bounds = node.getBoundingClientRect(); node.style.left = `${Math.max(8, Math.min(anchor.left, (win?.innerWidth ?? 800) - bounds.width - 8))}px`; node.style.top = `${Math.max(8, Math.min(anchor.bottom + 6, (win?.innerHeight ?? 600) - bounds.height - 8))}px`; };
     const outside = (event: Event) => { if (!node.contains(event.target as Node) && !trigger.contains(event.target as Node)) {
       if ((auto || autoAdd) && own.dirty && !retryPersistence) { submit(true); return; }
@@ -190,8 +194,28 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         if (destroyed || panel !== own || !item.isConnected) return;
         if (own.saving || own.dirty) { error.textContent = 'Finish the current changes first.'; return; }
         try { options.preflight(); } catch (failure) { report(failure); return; }
-        own.saving = true; options.onDraftChange(); item.disabled = true;
-        void action().then(() => { if (destroyed || panel !== own) return; own.saving = false; const refreshed = deferredState; deferredState = undefined; own.close(); if (refreshed) update(refreshed); }, failure => { if (destroyed || panel !== own) return; own.saving = false; item.disabled = false; error.textContent = failure instanceof Error ? failure.message : String(failure); if (failure instanceof BaseToolbarSaveError) { own.failure = {}; own.dirty = true; retryPersistence = failure.retry; footer.hidden = false; apply.textContent = 'Retry save'; } report(failure); options.onDraftChange(); });
+        const commandGeneration = generation, commandInputs = inputStates();
+        own.saving = true; options.onDraftChange(); for (const input of commandInputs.keys()) input.disabled = true; item.disabled = true;
+        void action().then(() => {
+          if (destroyed || panel !== own) return;
+          own.saving = false;
+          const refreshed = deferredState; deferredState = undefined;
+          if (generation !== commandGeneration) {
+            for (const [input,disabled] of commandInputs) input.disabled = disabled;
+            own.dirty = true; own.failure = {}; footer.hidden = false; error.textContent = 'The command was saved. Your newer configuration draft is still here. Cancel and reopen the updated view before continuing.'; options.onDraftChange(); return;
+          }
+          own.close(); if (refreshed) update(refreshed);
+        }, failure => {
+          if (destroyed || panel !== own) return;
+          own.saving = false; item.disabled = false; if(autoTimer){clearTimeout(autoTimer);autoTimer=undefined;}
+          error.textContent = failure instanceof Error ? failure.message : String(failure);
+          if (failure instanceof BaseToolbarSaveError) {
+            own.failure = {}; own.dirty = true; retryPersistence = failure.retry;
+            retainedAttempt = {generation:commandGeneration,viewName:configuredView.name,inputs:commandInputs};
+            footer.hidden = false; apply.disabled = cancel.disabled = false; apply.textContent = 'Retry save';
+          } else for(const [input,disabled] of commandInputs) input.disabled=disabled;
+          report(failure); options.onDraftChange();
+        });
       }); item.className = 'bases-toolbar-menu-item'; item.disabled = !enabled; fields.append(item); return item;
     };
     if (name === 'Views') {
@@ -543,37 +567,47 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         else if (readOperation) operation = readOperation();
         else { const patch = validateToolbarPatch(result, readPatch()); expectedPatch = {view:patch}; operation = () => options.save(version, patch); }
       } catch (failure) { error.textContent = failure instanceof Error ? failure.message : String(failure); return; }
-      const submittedGeneration = generation;
-      const expectedConfiguration = expectedSnapshot ?? (expectedPatch ? applyConfigurationPatch(configuration,expectedPatch,selectedIndex) : configuration);
-      const expectedViewName = name === 'View options' ? form.querySelector<HTMLInputElement>('[aria-label="View name"]')?.value.trim() || configuredView.name : configuredView.name;
+      const retrying = !!retryPersistence && !!retainedAttempt;
+      const attempt: AcceptedAttempt = retrying ? retainedAttempt! : {
+        generation,configuration:expectedSnapshot??(expectedPatch?applyConfigurationPatch(configuration,expectedPatch,selectedIndex):configuration),
+        viewName:name==='View options'?form.querySelector<HTMLInputElement>('[aria-label="View name"]')?.value.trim()||configuredView.name:configuredView.name,
+        inputs:inputStates(),acknowledge:afterSave,
+      };
+      const submittedGeneration = attempt.generation, expectedConfiguration = attempt.configuration, expectedViewName = attempt.viewName;
       own.saving = true; options.onDraftChange();
-      const disabled = new Map(Array.from(node.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement>('input,button,select,textarea'), input => [input, input.disabled] as const));
+      const disabled = inputStates();
       if (!auto) for (const input of disabled.keys()) input.disabled = true;
       error.textContent = 'Saving…';
       void operation().then(() => {
         if (destroyed || panel !== own) return;
-        own.saving = false; own.failure = undefined; retryPersistence = undefined;
+        own.saving = false; own.failure = undefined; retryPersistence = undefined; retainedAttempt = undefined;
+        if(retrying)for(const [input,wasDisabled] of attempt.inputs) input.disabled=wasDisabled;
         own.dirty = generation !== submittedGeneration;
+        if (!expectedConfiguration && own.dirty) {
+          own.failure = {}; footer.hidden = false; error.textContent = 'The retained command is saved. Your newer configuration draft is still here. Cancel and reopen the updated view before continuing.'; options.onDraftChange(); return;
+        }
         if (!auto) {
+          if(own.dirty){footer.hidden=false;error.textContent='The retained draft is saved. Your newer changes are still here.';options.onDraftChange();return;}
           own.dirty = false; const refreshed = deferredState; deferredState = undefined; own.close(); if (refreshed) update(refreshed);
           if (autoAdd && !closeWhenSettled && refreshed) { const name = form.querySelector<HTMLInputElement>('[aria-label="View name"]')?.value.trim(); const index = refreshed.views.findIndex(view=>view.name===name); if (index>=0) open('View options',trigger,index); }
           return;
         }
         if (deferredState) {
           const refreshed = deferredState; deferredState = undefined;
-          configuration = expectedConfiguration;
+          if(expectedConfiguration)configuration = expectedConfiguration;
           if (!own.rebase?.(refreshed,expectedViewName)) {
             if (!own.dirty) { own.close(); update(refreshed); return; }
             own.failure = {}; footer.hidden = false; error.textContent = 'This view changed or moved while saving. Your queued changes are still here. Cancel and reopen the view before continuing.'; options.onDraftChange(); return;
           }
           state = refreshed;
         }
-        error.textContent = ''; footer.hidden = true; afterSave?.(); options.onDraftChange();
+        error.textContent = ''; footer.hidden = true; attempt.acknowledge?.(); options.onDraftChange();
         if (own.dirty) submit(closeWhenSettled);
         else if (closeWhenSettled) own.close();
       }, failure => {
         if (destroyed || panel !== own) return; own.saving = false; own.dirty = true;
-        if (failure instanceof BaseToolbarSaveError) retryPersistence = failure.retry;
+        if(autoTimer){clearTimeout(autoTimer);autoTimer=undefined;}
+        if (failure instanceof BaseToolbarSaveError) {retryPersistence = failure.retry;retainedAttempt??=attempt;}
         if (retryPersistence) {
           own.failure ??= {};
           error.textContent = `Could not save: ${failure instanceof Error ? failure.message : String(failure)}. Retry the retained file draft, or cancel without discarding it.`;

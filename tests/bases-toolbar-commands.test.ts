@@ -150,3 +150,16 @@ test('property and sort grip drops reorder only their live configuration panel',
   const view={...f.state.views[0],sort:[{property:'file.name',direction:'ASC'},{property:'note.score',direction:'DESC'}]};f.toolbar.update({...f.state,views:[view,f.state.views[1]],result:{...f.result,view}});f.click('Sort');source=f.doc.querySelectorAll<HTMLElement>('.bases-sort-grip')[1];target=f.doc.querySelector<HTMLElement>('.bases-toolbar-rule')!;dispatch(f,source,'dragstart');dispatch(f,target,'drop');f.submit();await tick();assert.deepEqual(f.calls.pop(),['save',1,{sort:[{property:'note.score',direction:'DESC'},{property:'file.name',direction:'ASC'}]}]);
  }finally{f.cleanup();other.cleanup();}
 });
+
+test('persistence retry settles its original generation then saves the newer queued form exactly once',async()=>{
+ const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
+ let document=BaseDocument.parse('views: [{type: table, name: A}]'),version=1;
+ const calls:unknown[][]=[];let rejectFirst:((error:unknown)=>void)|undefined,retries=0;
+ const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(){},async save(expected,patch){calls.push([expected,patch]);assert.equal(expected,version);if(calls.length===1)await new Promise<void>((_resolve,reject)=>{rejectFirst=reject;});document.updateView(0,patch);document=BaseDocument.parse(document.toString());version++;refresh();},onDraftChange(){},onError(){}});
+ function refresh(){const result=executeBaseQuery(document,{version,files:[]});toolbar.update({result,views:document.views,selectedIndex:0,readOnly:false,allowRename:true,label:p=>p});}refresh();
+ try{
+  doc.querySelector<HTMLButtonElement>('[aria-label="Results"]')!.click();const input=doc.querySelector<HTMLInputElement>('[aria-label="Limit"]')!;input.focus();input.value='10';input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,280));assert.equal(calls.length,1);
+  input.value='20';input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));rejectFirst!(new BaseToolbarSaveError('disk failed',async()=>{retries++;document.updateView(0,{limit:10});document=BaseDocument.parse(document.toString());version++;refresh();}));await tick();assert.equal(input.value,'20');assert.equal(input.disabled,true);
+  const retry=doc.querySelector<HTMLButtonElement>('button[type="submit"]')!;assert.equal(retry.textContent,'Retry save');retry.click();await tick();await tick();assert.deepEqual(calls,[[1,{limit:10}],[2,{limit:20}]]);assert.equal(retries,1);assert.equal(document.views[0].limit,20);assert.equal(toolbar.hasDraft(),false);assert.equal(doc.querySelector('[role="dialog"]'),null);
+ }finally{toolbar.destroy();dom.window.close();}
+});
