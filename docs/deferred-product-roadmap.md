@@ -9,6 +9,27 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+2026-10-22 browser/WASM003 at `6808bf5e` passes all9 semantic groups with no
+unexecuted groups, runner error, artifact mismatch or cleanup failure. The report
+retains dedicated Worker observations, completed normal Worker GET200 and exact
+WASM asset receipts; before/after source and artifact fingerprints agree. Chrome
+exited0, its profile and disposable database were removed and Vite closed. This
+is actual Worker/WASM/IndexedDB evidence, separate from rendered Base UI. Normal
+web Workspace smoke001 at the same HEAD passes5 phases: create/title rename,
+keyboard edit/durable save, new-document reload/exact source, rich Search and
+exact result open; owned Chrome exits0 through Browser.close. It uses normal
+Vite startup and does not claim production-bundle, mobile or full Bases UI parity.
+Reports: `/private/tmp/zorid-bases-browser-actual-20261022-003/report.json` and
+`/private/tmp/zorid-bases-web-ui-actual-20261022-001/report.json`.
+
+Electron007's null-group mismatch is now classified as a harness oracle error:
+the actual core result contains an explicit null summary without diagnostics;
+focused REA confirms reference all-null sum/null arithmetic/blank rendering.
+The harness must preserve blank strings rather than coerce them through Number.
+Standalone invalid `.base` source recovery and plain-link picker choices are
+confirmed source gaps, with named owners `bases_controller` and
+`bases_relations`; corresponding scoped source/regression work is in isolation.
+
 2026-10-22 actual final-artifact campaigns: CLI002 at `9d086a97` passes85
 commands,7 independent checks and30 JSON/raw exports; every child exit and
 retained evidence hash was independently rechecked. Browser/WASM002 passes
