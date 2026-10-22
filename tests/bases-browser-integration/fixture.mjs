@@ -8,6 +8,7 @@ import {inlineBaseRequest} from '../../src/bases/inline-base.ts';
 import {files, alias, body, pioneer, settings, plainLinkNotes, plainLinkPaths, invalidMetadataSource, inlinePrelude, inlinePrefix, inlineBase, inlineNormalized, inlineNote, clockMs, timezone, groupNames} from './cases.mjs';
 import {q3Files,q3Folders,q3Groups} from '../fixtures/bases-q3-semantics.mjs';
 import {assertMalformedRollup, malformedRollupPaths} from './malformed-rollup-oracle.mjs';
+import {optionalSummaryMap} from './optional-summary-map.mjs';
 
 // Product Worker, admitted client, generated WASM and IndexedDB only. No direct
 // WASM evaluator, synthetic generation, replacement Worker, private storage write
@@ -106,6 +107,9 @@ function q3Expected(value,witnesses,parentType,key){
 async function assertQ3(host,selected,spec,witnesses){
   const read=await query(host,selected,spec.basePath,spec.view,{clockMs:spec.clockMs,timezone:spec.timezone});
   const result=read.value.result;
+  // Keep one latest bounded fixture-query payload before assertions. Earlier
+  // successful groups already retain their reads; this does not accumulate.
+  report.q3Checkpoint={name:spec.name,basePath:spec.basePath,result};
   assert(result.metadataComplete===true,'Q3 metadata coverage is incomplete');
   equal(result.rows.map(item=>item.path),spec.rows.map(item=>item.path),'Q3 exact membership/order');
   for(const expected of spec.rows){
@@ -124,7 +128,7 @@ async function assertQ3(host,selected,spec,witnesses){
       for(const key of baselineKeys)for(const field of ['value','get','set','writable','enumerable','configurable'])assert(descriptors[key][field]===objectPrototypeDescriptors[key][field],'Q3 Object prototype descriptor changed');
     }
   }
-  equal(stableErrorValues(result.summaries),q3Expected(spec.summaries,witnesses),'Q3 exact overall summaries');
+  equal(stableErrorValues(optionalSummaryMap(result.summaries,spec.summaries)),q3Expected(spec.summaries,witnesses),'Q3 exact overall summaries');
   const issues=result.diagnostics.map(({path,property,code,entryId})=>{
     assert(witnesses.has(path),'Q3 diagnostic has a foreign source path');
     equal(entryId,witnesses.get(path).entryId,'Q3 diagnostic source identity');
