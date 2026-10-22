@@ -48,7 +48,12 @@ export function createBaseFileHover(options: BaseFileHoverOptions): BaseFileHove
   const win = view;
   let current: Slot | undefined, destroyed = false, intent = 0;
   const report = (slot: Slot | undefined, error: unknown) => {
-    if (slot && !slot.retired) { slot.problem = true; slot.root.classList.remove('is-loading'); slot.root.removeAttribute('aria-busy'); slot.error.textContent = error instanceof Error ? error.message : String(error); slot.error.hidden = false; }
+    if (slot && !slot.retired) {
+      slot.problem = true; slot.root.classList.remove('is-loading'); slot.root.removeAttribute('aria-busy');
+      // A failed factory may have staged controls. Expose the error, not those controls.
+      if (!slot.content) { slot.root.inert = false; slot.host.inert = true; }
+      slot.error.textContent = error instanceof Error ? error.message : String(error); slot.error.hidden = false;
+    }
     try { options.onError(error); } catch { /* Error reporting must preserve retained content. */ }
   };
   const timer = (slot: Slot, delay: number, run: () => void) => { const id = win.setTimeout(() => { slot.timers.delete(id); if (!slot.retired) run(); }, delay); slot.timers.add(id); return id; };
@@ -143,7 +148,7 @@ export function createBaseFileHover(options: BaseFileHoverOptions): BaseFileHove
         throw error;
       }
       slot.content = content;
-      slot.root.inert = false; slot.root.classList.remove('is-loading'); slot.root.removeAttribute('aria-busy');
+      slot.root.inert = false; slot.host.inert = false; slot.root.classList.remove('is-loading'); slot.root.removeAttribute('aria-busy');
       slot.host.removeAttribute('aria-label'); position(slot); reconcile(slot);
     });
     // The raw task retains ownership of any late handle and releases it exactly once.
@@ -186,7 +191,7 @@ export function createBaseFileHover(options: BaseFileHoverOptions): BaseFileHove
     if (destroyed || !options.parent.isConnected || !anchor.isConnected || !options.parent.contains(anchor) || !options.isCurrent(target)) return;
     const root = document.createElement('div'); root.inert = true; root.className = 'popover hover-popover bases-file-hover is-loading'; root.setAttribute('role', 'dialog'); root.setAttribute('aria-label', 'File preview'); root.setAttribute('aria-busy', 'true');
     Object.assign(root.style, {position: 'fixed', zIndex: 'var(--layer-popover, 1000)', boxSizing: 'border-box', width: 'min(calc(var(--popover-width, 450px) + 2px), calc(100vw - 16px))', maxHeight: 'min(var(--popover-height, 400px), calc(100vh - 16px))', overflow: 'auto', border: '1px solid var(--background-modifier-border, #ddd)', borderRadius: 'var(--radius-m, 8px)', background: 'var(--background-primary, white)', color: 'var(--text-normal, #222)', boxShadow: 'var(--shadow-l, 0 8px 24px #0004)'});
-    const host = document.createElement('div'); host.className = 'bases-file-hover-content'; host.setAttribute('aria-label', 'Loading file preview');
+    const host = document.createElement('div'); host.inert = true; host.className = 'bases-file-hover-content'; host.setAttribute('aria-label', 'Loading file preview');
     const error = document.createElement('div'); error.className = 'bases-file-hover-error'; error.setAttribute('role', 'alert'); error.hidden = true; root.append(host, error);
     const slot: Slot = {target, anchor, root, host, error, pointer: {x: event.clientX, y: event.clientY}, onTarget: true, onPopup: false, onOwned: false, shown: false, waiting: true, retired: false, admitted: false, problem: false, abort: new AbortController(), timers: new Set(), removeListeners: []}; current = slot;
     const mod = (event: MouseEvent | KeyboardEvent) => options.isMac ? event.metaKey : event.ctrlKey;

@@ -168,7 +168,8 @@ test('binary revision changes during async mount dispose the stale resource befo
     async mount() {await gate.promise; return {async flush() {}, hasPendingChanges: () => false, isCurrent: () => true, dispose() {disposed++;}};}, onError: error => errors.push(error)});
   helper.hover({path: 'paper.pdf', entryId: 'paper', revision: 'r1', values: {}}, new dom.window.MouseEvent('mouseover', {metaKey: true}), anchor); t.mock.timers.tick(300); await drain();
   revision = 'r2'; gate.resolve(); await drain(); assert.equal(disposed, 1); const root = document.querySelector<HTMLElement>('[aria-label="File preview"]')!;
-  assert.equal(root.inert, true); assert.equal(root.hasAttribute('aria-busy'), false); assert.equal(errors.length, 1);
+  assert.equal(root.inert, false); assert.equal(root.querySelector<HTMLElement>('.bases-file-hover-content')!.inert, true);
+  assert.equal(root.querySelector<HTMLElement>('[role="alert"]')!.hidden, false); assert.equal(root.hasAttribute('aria-busy'), false); assert.equal(errors.length, 1);
   await helper.close(); assert.equal(root.isConnected, false); assert.equal(disposed, 1); await helper.destroy();
 });
 test('legacy rows never invent file identity and modifier character shortcuts cancel waiting opportunity', async t => {
