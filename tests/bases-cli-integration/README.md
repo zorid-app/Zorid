@@ -4,12 +4,13 @@ This explicit scenario runs the actual `zorid` executable against a new disposab
 vault. It does not launch Electron, a desktop host, a daemon, or a JavaScript query
 evaluator. It is outside the default `tests/*.test.*` glob and never builds Rust.
 
-## Current preparation status
+## Current validation status
 
-Prepared against source `d10880ed37fcf14de761664362e1a78f249ce20c`.
-The runner and fixture modules pass syntax checks. **The scenario has not been
-executed.** A matched final CLI artifact and a root-owned verification slot are
-required before running it.
+The actual standalone CLI campaign passed all 85 commands against source
+`44d9ae46a5d705337eb60a51241d29d199f43b5c` on October 22, 2026. Seven oracle
+checks and 30 unchanged JSON/raw exports passed. See the exact artifact/source
+receipt and limits in [the acceptance record](acceptance-20261022.md).
+A new run still requires a matched build receipt and a coordinated runtime slot.
 
 Read-only `--help` and `base-query --help` inspection used the older existing
 October 20 CLI artifact with SHA-256

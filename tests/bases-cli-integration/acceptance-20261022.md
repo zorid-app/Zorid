@@ -1,0 +1,61 @@
+# Actual standalone Bases CLI acceptance — 2026-10-22
+
+The explicit actual-binary scenario passed **85 commands, seven oracle checks
+and 30 unchanged JSON/raw exports** in 2,694 ms. All 85 child exits were observed;
+no child process remained. The run used a new disposable vault, standalone CLI
+processes only, and no Electron, desktop host process, IPC service or JavaScript
+evaluator. No source or artifact was changed during the run.
+
+## Exact source and artifact receipt
+
+| Input | Identity |
+| --- | --- |
+| Source revision and checkout | `44d9ae46a5d705337eb60a51241d29d199f43b5c` |
+| Rust `crates` tree | `b6acc9cf6400b85ba8ed942440eec4f8d1489d0d` |
+| `Cargo.toml` object | `dae521160181b50ce45ed9c7032b25609616b1c7` |
+| `Cargo.lock` object | `413037e553a3c10bc605004a0ad3f6012f570440` |
+| CLI SHA-256 | `60abec53906f8a7acc80f6a50396b935377ead2181e281a2373655127ad83d2a` |
+| Paired host SHA-256, hashed only | `a79da3d5da6d1be75ad65270488be5b5737bfeeec1587136dd0327e444f0a7f9` |
+| `run.mjs` SHA-256 | `af143e1aee9aee75f2085e8f78e1ae7766aed4cce1cfc7fbd27c41a73fbcce17` |
+| `fixtures.mjs` SHA-256 | `f4f2afdebe189f6e3896c5efa1d4b10ad87bc7665d2001206a4828b75ca06e7e` |
+| Full report SHA-256 | `138f6d5ec80344cec32c7e99db52aa26d0d38d180385e700385e10a26ad53f96` |
+
+Build receipt: `/private/tmp/zorid-bases-current-relations-artifacts.json`.
+The CLI was `/Users/ctk/Projects/Zorid/target/s1-release/release/zorid`.
+The supplied build receipt associates that artifact with the source revision;
+the scenario independently checked its hash, source closure and unchanged status.
+
+Full retained report, disposable vault, command stdin/stdout/stderr and exports:
+`/private/tmp/zorid-bases-cli-actual-20261022-001/zorid-bases-cli-6Iqeu9/report.json`.
+This local temporary evidence may be removed by the operating system; the source,
+artifact hashes, outcome and scope are preserved here.
+
+## Observed checks
+
+- Every saved table, cards, list, kanban and empty view agreed with independently
+  authored membership and summary oracles. Initial ratings summed to 14 with a
+  scaled total of 28; note edits produced 16/32; saved formula/custom-summary
+  edits produced 16/49. Limited-view summaries totaled the returned rows.
+- Rust returned typed dates, exact raw edit values, formulas, relation candidates,
+  reverse relations, and count/sum/average rollups. Mixed property sets and an
+  ordinary note with missing properties remained valid.
+- Queries did not rewrite source or materialize missing/derived properties.
+  Every authoritative note, settings file and Base file matched expected raw
+  bytes before and after the edits, including CRLF, Unicode filenames, comments,
+  unknown settings, bodies and literal template-like strings.
+- Revision-guarded writes, exact operation replay and stale-write rejection
+  behaved as expected. Query snapshots remained explicitly stale until an index
+  build; old expected snapshots were rejected after publication.
+- Rename retained stable identity and reverse-relation membership. Deleting an
+  author preserved books and readable dangling source links without cascading.
+  Rebuilding changed derived snapshot identity while preserving query values.
+- Thirty exports matched original `base-query` JSON or `read --raw` bytes.
+
+## Limits
+
+The paired desktop host was hashed, not executed. This run establishes the
+standalone CLI path at the recorded source, not Electron UI, actual browser/WASM
+runtime, mobile or Obsidian visual parity. The CLI has no Base-specific cell-edit
+command or CSV/TSV/Markdown table-export command: edits used existing guarded
+full-file writes, and exports used existing JSON/raw stdout. UI source-preserving
+cell edits and clipboard formats require their separate application campaign.
