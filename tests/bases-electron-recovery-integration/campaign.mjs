@@ -42,6 +42,19 @@ async function heldWriteAndClose(c){
   assert.equal(await c.read('Recovery.base'),sourceA,'B has not been manufactured before real A reply');
   await c.screenshot('r01-held-native-ack-newer-draft-close-retained');
   await c.relay.release(token);await event(c,'released',token,3000);
+  const disposition=await until(async()=>{
+    if(await c.read('Recovery.base')===sourceB)return'automatic';
+    const state=await c.ui.dom(`const p=document.querySelector(${JSON.stringify(panel)});return p&&p.getAttribute('aria-busy')==='false'?{value:document.querySelector(${JSON.stringify(expression)})?.value,error:p.querySelector('[role="alert"]')?.textContent}:null;`);
+    assert.ok(state&&state.value==='values.sum() + 7'&&/closing/i.test(state.error),'Either B is saved or the conservative close guard retains the exact B draft');
+    return'close-guard-retry';
+  },10000);
+  if(disposition==='close-guard-retry'){
+    // Closing fences new configuration commands. If B's continuation reaches
+    // that fence, its visible exact draft must survive; explicitly submit it
+    // again after the close request is rejected, rather than pretending an
+    // automatic acknowledgement happened.
+    await delay(50);await c.ui.click(expression);await c.ui.key('Tab');
+  }
   await c.saved('Recovery.base',source=>assert.equal(source,sourceB),'held-write-continuation-saves-exact-newer-B');
   await c.ui.wait(`return !document.querySelector(${JSON.stringify(panel)});`,'Summary close settles after the newer draft is safe',10000);
   const retained=await c.ui.dom(`return !!document.querySelector(${JSON.stringify(active)});`);
@@ -55,7 +68,7 @@ async function heldWriteAndClose(c){
   assert.equal(continuations.filter(value=>value.bodySha256===digest(Buffer.from(sourceA))).length,1);
   assert.equal(continuations.filter(value=>value.bodySha256===digest(Buffer.from(sourceB))).length,1);
   assert.equal(writes.length,2,'Each exact prepared A/B write has one genuine successful commit response');
-  c.evidence.checks.push({name:'accepted-native-A-newer-B-close-retention',held:plain(held),closeRetryNeeded:retained,prepared:continuations,commits:writes});
+  c.evidence.checks.push({name:'accepted-native-A-newer-B-close-retention',held:plain(held),continuation:disposition,closeRetryNeeded:retained,prepared:continuations,commits:writes});
   await c.quit('held-write-normal-quit-after-B');
   await c.launch('held-write-restart-readback');await c.ui.openFile('Recovery.base');await c.ui.idle();
   await c.saved('Recovery.base',source=>assert.equal(source,sourceB),'newer-B-survives-normal-native-app-restart');
