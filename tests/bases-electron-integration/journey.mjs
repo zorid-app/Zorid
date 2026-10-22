@@ -14,6 +14,8 @@ async function apply(c,name){
 }
 async function config(c,name){await c.ui.button('Views',active);await c.ui.button(`Configure view ${name}`,dialog('Views'));}
 async function viewAction(c,label){await c.ui.button('View actions',dialog('View options'));await c.ui.button(label);await c.ui.idle();}
+async function propertySettings(c,property){await c.ui.button('Properties',active);await c.ui.button(`Property settings ${property}`,dialog('Properties'));await c.ui.wait(`return !!document.querySelector(${JSON.stringify(dialog('Property settings'))});`,'Shared property settings');}
+async function savePropertySettings(c){await c.ui.button('Apply',dialog('Property settings'));await c.ui.wait(`return !document.querySelector(${JSON.stringify(dialog('Property settings'))});`,'Property definition saved');await c.ui.idle();}
 async function fmSaved(c,file,check,name){return c.saved(file,source=>check(c.frontmatter(source),source),name);}
 async function visibleCell(c,file,property,expected){return c.ui.wait(`const e=document.querySelector(${JSON.stringify(c.ui.cell(file,property))});return e&&e.textContent.includes(${JSON.stringify(expected)});`,`${file} ${property} = ${expected}`);}
 async function noAlerts(c){await c.ui.wait(`return ![...document.querySelectorAll('.pane.is-active [role="alert"]')].some(e=>e.getClientRects().length&&e.textContent.trim());`,'No visible failure after positive flow');}
@@ -107,6 +109,22 @@ export async function journey(c){
   await c.ui.type('.bases-property-popover input[role="combobox"]','Author Grace');await c.ui.key('ArrowDown');await c.ui.key('Enter');await c.ui.idle();
   await fmSaved(c,'Book 001.md',p=>assert.equal(p.author,'[[Author Grace]]'),'relation-picker-stores-readable-link');
   await c.screenshot('03-rich-property-edits');
+
+  // Configure rich property options through the shared settings extension. Labels
+  // and color/order metadata live in Properties.yaml; readable stored values stay
+  // unchanged, including when a selected option is removed from the definition.
+  const beforeOptionSettings=await c.read('Book 001.md');
+  await propertySettings(c,'topics');await c.ui.button('Add option',dialog('Property settings'));
+  const optionRow=n=>`${dialog('Property settings')} .bases-property-option-row:nth-child(${n})`;
+  await c.ui.type(input('Stored option value',optionRow(4)),'Research');await c.ui.type(input('Option label',optionRow(4)),'Research');
+  await c.ui.select(`${optionRow(4)} select[aria-label="Option color"]`,'purple');await c.ui.button('Move option up',optionRow(4));
+  await c.ui.type(input('Option label',optionRow(1)),'Rust language');await savePropertySettings(c);
+  await c.saved('Properties.yaml',source=>{const p=c.yaml.parse(source).properties;assert.deepEqual(p.topics.options.map(o=>o.value),['Rust','Design','Research','Writing']);assert.equal(p.topics.options[0].label,'Rust language');assert.equal(p.topics.options[2].color,'purple');assert.equal(p.author.type,'relation');},'option-create-reorder-color-and-label-rename');
+  assert.equal(await c.read('Book 001.md'),beforeOptionSettings,'Definition labels never rewrite note values');
+  await propertySettings(c,'topics');await c.ui.button('Remove option',optionRow(2));await savePropertySettings(c);
+  assert.equal(await c.read('Book 001.md'),beforeOptionSettings,'Removing option preserves selected Markdown values');
+  await c.ui.wait(`return !!document.querySelector(${JSON.stringify(c.ui.cell('Book 001.md','note.topics')+' .is-unknown')});`,'Unrecognized selected option visibly preserved');await c.screenshot('03a-unknown-option-preserved');
+  await propertySettings(c,'topics');await c.ui.button('Add option',dialog('Property settings'));await c.ui.type(input('Stored option value',optionRow(4)),'Design');await c.ui.type(input('Option label',optionRow(4)),'Design');await c.ui.select(`${optionRow(4)} select[aria-label="Option color"]`,'blue');await savePropertySettings(c);
 
   // Missing fields are empty presentation until explicitly edited; merely opening
   // the Base must not add the entire visible schema to heterogeneous notes.

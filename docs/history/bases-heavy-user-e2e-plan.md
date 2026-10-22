@@ -21,6 +21,9 @@ host. It does not call production stores/controllers to simulate positive edits.
   real column separator keyboard resize/reset.
 - Edit number, checkbox, multiselect, status and relation using actual controls;
   check exact YAML values and preserve original body/unrelated fields.
+- Shared property settings: create/reorder/color option, rename label without
+  rewriting values, remove a selected option and preserve/show its unknown value,
+  then restore the definition through UI.
 - Paste two rows/two columns through the production ClipboardEvent handler;
   one command undo/redo, keyboard range clear/undo, exact durable field checks.
 - Actual Chromium dragstart/intercept/drop header reorder and Kanban pointer move;
@@ -48,8 +51,7 @@ controls before runtime. A failed early gate does not establish later coverage.
 
 - Formula validation errors, group summaries, display names, visual nested All
   views filters, result export and custom summary definition editing.
-- Property definition option creation/rename/reorder/color/removal and unknown
-  values; date/datetime/list/link editing and invalid-value diagnostics.
+- Status category editing; date/datetime/list/link editing and invalid-value diagnostics.
 - Relation target rename/delete/unresolved and refresh.
 - Table pointer resize/header menus; Kanban empty/null/
   list/folder groups; Cards covers/sizing, List markers/separators.
