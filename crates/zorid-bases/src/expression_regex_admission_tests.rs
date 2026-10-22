@@ -269,3 +269,12 @@ fn summary_nested_fatal_inputs_precede_semantic_constructor_failures_without_fil
         "budget"
     );
 }
+
+#[test]
+fn settings_syntax_boundary_leaves_literal_construction_to_checked_invocation() {
+    for source in ["if(false,/(/,1)", "if(false,/a{1000000}/,1)"] {
+        assert!(validate_syntax(source).is_ok());
+        assert!(validate_checked(source, &mut allow).is_err());
+    }
+    assert!(validate_syntax("if(").is_err());
+}

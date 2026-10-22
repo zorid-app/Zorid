@@ -1148,6 +1148,13 @@ fn summary_runtime_value(
     Ok(result)
 }
 
+/// Settings-definition validation checks expression grammar only. Compiling
+/// literal wrappers belongs to checked invocation admission, where cancellation
+/// and budget failures remain fatal instead of becoming configuration errors.
+pub(crate) fn validate_syntax(expression: &str) -> Result<(), String> {
+    parse_cached(expression).map(|_| ())
+}
+
 /// Validation without a host context still has a finite construction budget.
 /// Planning helpers intentionally keep using syntax-only parse_cached instead.
 pub(crate) fn validate(expression: &str) -> Result<(), String> {
