@@ -19,6 +19,7 @@ function fixture(gate?: Promise<void>, fileCover = false) {
   ]);
   const tokens = new Map([...entries.keys()].map(path => [path, Symbol(path)]));
   const acquired: string[] = [];
+  const menus: string[] = [];
   let releases = 0;
   let options: BaseSessionOptions | undefined;
   const owner = {
@@ -33,6 +34,8 @@ function fixture(gate?: Promise<void>, fileCover = false) {
       return {} as BaseSession;
     } },
     treeEntryToken(path: string) { return tokens.get(path); },
+    menuPoint() { return {x:0,y:0}; },
+    fileMenu(entry: VaultEntry) { menus.push(entry.path); },
   };
   const create = Reflect.get(Workspace.prototype, 'createWorkspaceBaseSession') as (...args: unknown[]) => unknown;
   create.call(owner, dom.window.document.querySelector('main'), 'Work.base', () => ({}), () => {});
@@ -46,7 +49,7 @@ function fixture(gate?: Promise<void>, fileCover = false) {
         target: { entryId: 'original', revision: 'original-revision' } } },
     signal: new AbortController().signal,
   });
-  return { entries, acquired, load, get releases() { return releases; }, close() { dom.window.close(); } };
+  return { entries, acquired, load, menus, context: (path:string,entryId:string,revision:string) => options!.contextMenu!({path,entryId,revision,values:{}}, {} as MouseEvent), get releases() { return releases; }, close() { dom.window.close(); } };
 }
 
 test('a witnessed thumbnail follows the original entry after rename instead of a reused path', async () => {
@@ -58,6 +61,15 @@ test('a witnessed thumbnail follows the original entry after rename instead of a
     resource!.dispose();
     assert.equal(f.releases, 1);
   } finally { f.close(); }
+});
+
+test('a stale Base row cannot offer file actions for a replacement occupying its old path',()=>{
+  const f=fixture();try{
+    assert.throws(()=>f.context('Old.png','original','original-revision'),/selected file changed/);assert.deepEqual(f.menus,[]);
+    f.context('Renamed.png','original','original-revision');assert.deepEqual(f.menus,['Renamed.png']);
+    f.entries.set('Renamed.png',entry('Renamed.png','original','new-revision'));
+    assert.throws(()=>f.context('Renamed.png','original','original-revision'),/selected file changed/);assert.deepEqual(f.menus,['Renamed.png']);
+  }finally{f.close();}
 });
 
 test('a missing or changed thumbnail witness never falls back to the old path occupant', async () => {
