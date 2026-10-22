@@ -93,6 +93,37 @@ fn inline_base_is_bound_to_saved_fence_containing_context_and_retained_generatio
 }
 
 #[test]
+fn property_definitions_use_exact_saved_root_source_in_each_retained_generation() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    let settings = "properties:\n  author:\n    type: relation\n    relation: {multiple: false, targetFilter: 'type == \"author\"'}\n  books:\n    type: reverseRelation\n    reverseRelation: {property: author}\n  bookCount:\n    type: rollup\n    rollup: {relation: books, aggregation: count}\n";
+    create(&mut vault, "settings", "Properties.yaml", settings);
+    create(&mut vault, "author", "Author.md", "---\ntype: author\n---\n");
+    create(&mut vault, "book", "Book.md", "---\nauthor: '[[Author]]'\n---\n");
+    create(&mut vault, "base", "Books.base", "filters: file.path == \"Author.md\"\nviews:\n  - type: table\n    order: [file.path, note.bookCount]\n");
+    vault.initialize_document_index().unwrap();
+    build(&mut vault);
+    let old = vault.open_document_snapshot().unwrap();
+    let options = QueryOptions::default();
+    let auto = vault.query_base_document(&old, &id("base"), &options).unwrap();
+    assert_eq!(auto.value.result.rows.len(), 1);
+    assert_eq!(auto.value.result.rows[0].values["note.bookCount"], zorid_bases::BaseValue::Number { value: 1.0 });
+    let attached = DocumentPropertyDefinitionsSource { id: id("settings"), source: settings.into() };
+    let same = vault.query_base_document_sources(&old, &id("base"), None, Some(&attached), None, &options).unwrap();
+    assert_eq!(same.value.result.rows, auto.value.result.rows);
+    expect_code(vault.query_base_document_sources(&old, &id("base"), None, Some(&DocumentPropertyDefinitionsSource { source: format!("# forged\n{settings}"), ..attached.clone() }), None, &options), "property_source_mismatch");
+    expect_code(vault.query_base_document_sources(&old, &id("base"), None, Some(&DocumentPropertyDefinitionsSource { id: id("author"), ..attached.clone() }), None, &options), "property_source_mismatch");
+    write(&mut vault, "update-settings", "settings", &format!("# changed\n{settings}"));
+    build(&mut vault);
+    assert!(vault.query_base_document_sources(&old, &id("base"), None, Some(&attached), None, &options).is_ok());
+    let fresh = vault.open_document_snapshot().unwrap();
+    expect_code(vault.query_base_document_sources(&fresh, &id("base"), None, Some(&attached), None, &options), "property_source_mismatch");
+    assert!(vault.query_base_document(&fresh, &id("base"), &options).is_ok());
+    vault.close_document_snapshot(old);
+    vault.close_document_snapshot(fresh);
+}
+
+#[test]
 fn retained_generation_binds_metadata_search_backlinks_base_source_and_facts() {
     let dir = tempfile::tempdir().unwrap();
     let cache = tempfile::tempdir().unwrap();

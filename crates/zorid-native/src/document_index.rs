@@ -335,7 +335,7 @@ impl NativeVault {
         definition: &EntryId,
         options: &QueryOptions,
     ) -> NativeDocumentResult<DocumentQueryResult<DocumentBaseResult>> {
-        self.query_base_document_inner(pin, definition, None, None, options)
+        self.query_base_document_inner(pin, definition, None, None, None, options)
     }
     /// Resolve a named view through the compiled shared Base program.
     pub fn query_base_document_view(
@@ -345,7 +345,7 @@ impl NativeVault {
         view_name: &str,
         options: &QueryOptions,
     ) -> NativeDocumentResult<DocumentQueryResult<DocumentBaseResult>> {
-        self.query_base_document_inner(pin, definition, Some(view_name), None, options)
+        self.query_base_document_inner(pin, definition, Some(view_name), None, None, options)
     }
     /// Query a real fenced Base in the exact retained containing Markdown file.
     /// The selector cannot replace saved source or choose another `this` note.
@@ -357,7 +357,20 @@ impl NativeVault {
         view_name: Option<&str>,
         options: &QueryOptions,
     ) -> NativeDocumentResult<DocumentQueryResult<DocumentBaseResult>> {
-        self.query_base_document_inner(pin, containing, view_name, Some(inline), options)
+        self.query_base_document_inner(pin, containing, view_name, Some(inline), None, options)
+    }
+    /// Cross-host wire seam. Attachments are source selectors, not definitions;
+    /// the native host always reads and checks its own retained root settings.
+    pub fn query_base_document_sources(
+        &self,
+        pin: &DocumentQueryPin,
+        definition: &EntryId,
+        inline: Option<&zorid_document::InlineBaseSource>,
+        properties: Option<&DocumentPropertyDefinitionsSource>,
+        view_name: Option<&str>,
+        options: &QueryOptions,
+    ) -> NativeDocumentResult<DocumentQueryResult<DocumentBaseResult>> {
+        self.query_base_document_inner(pin, definition, view_name, inline, properties, options)
     }
     /// Selectors locate actual source bytes in this pin; no caller AST is trusted.
     /// Invalid YAML is diagnostic data, while missing/non-text sources fail closed.
@@ -430,6 +443,7 @@ impl NativeVault {
         definition: &EntryId,
         view_name: Option<&str>,
         inline: Option<&zorid_document::InlineBaseSource>,
+        properties: Option<&DocumentPropertyDefinitionsSource>,
         options: &QueryOptions,
     ) -> NativeDocumentResult<DocumentQueryResult<DocumentBaseResult>> {
         let manifest = self.document_manifest(pin)?;
@@ -482,21 +496,44 @@ impl NativeVault {
                 mtime_ms: i64::try_from(presentation.mtime_ms).ok(),
             })
             .collect::<Vec<_>>();
-        let answer = {
+        let property_entry = manifest.entries().iter().find(|entry|
+            entry.state.kind == EntryKind::File && entry.state.path.as_str() == "Properties.yaml"
+        );
+        let definitions = if let Some(property_entry) = property_entry {
+            let id = &property_entry.state.id;
+            let projected = self.store.read_document_projection(pin, id)?;
+            let bytes = projected.content.ok_or_else(|| NativeDocumentError::SourceUnavailable(id.clone()))?;
+            let text = std::str::from_utf8(&bytes).map_err(|_| NativeDocumentError::SourceUnavailable(id.clone()))?;
+            if properties.is_some_and(|supplied| &supplied.id != id || supplied.source != text) {
+                return Err(zorid_bases::ExpressionDiagnostic::new("property_source_mismatch", "Property settings do not match the saved root file").into());
+            }
+            Some(zorid_bases::properties::PropertyDefinitions::from_generation_source(pin.generation(), id, text)?)
+        } else {
+            if properties.is_some() {
+                return Err(zorid_bases::ExpressionDiagnostic::new("property_source_mismatch", "No saved root property settings exist").into());
+            }
+            None
+        };
+        let result = if let Some(definitions) = definitions {
+            // Config-derived relation maps are generation-local. Do not reuse
+            // an answer/preparation whose sealed key lacks this source identity.
+            zorid_bases::query_generation_with_properties(program.value(), pin.generation(), &facts, &definitions, &selected)?
+        } else {
             let mut cache = self.base_preparation_cache.borrow_mut();
             let prepared =
                 cache.prepare_generation(pin.generation(), &facts, &selected, monotonic_ms)?;
             // Both sealed lookups retain their checked dependency/work identity.
             // Answer reuse still validates this invocation's context and limits.
-            cache.query_prepared_cached(&program, &prepared, &selected, monotonic_ms)?
+            let answer = cache.query_prepared_cached(&program, &prepared, &selected, monotonic_ms)?;
+            drop(cache);
+            #[cfg(test)]
+            if answer.outcome() == zorid_bases::PreparationCacheOutcome::Hit {
+                self.point("base_query_answer_hit");
+            }
+            answer.into_value()
         };
         // Release the cache borrow before hooks or the final retained-pin fence.
         // No storage transaction or pin capability is held by the pure cache.
-        #[cfg(test)]
-        if answer.outcome() == zorid_bases::PreparationCacheOutcome::Hit {
-            self.point("base_query_answer_hit");
-        }
-        let result = answer.into_value();
         #[cfg(test)]
         self.point("base_query_evaluated");
         self.document_result(

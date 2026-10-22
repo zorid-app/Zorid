@@ -1,6 +1,6 @@
 //! Native semantic results are derived from one retained, immutable generation.
 //! These APIs never make cache success a condition of saving authoritative files.
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use zorid_core::{EntryId, EntryState};
 use zorid_index::{Exclusion, MetadataProjection};
@@ -9,6 +9,14 @@ pub use zorid_bases::tasks::{TaskFilter, TaskQueryOptions, TaskQueryResult};
 pub use zorid_bases::types::TaskTypeSummary;
 pub use zorid_bases::{BaseQueryResult, EvaluationOptions, OperationCancellation, QueryOptions};
 pub use zorid_document::InlineBaseSource;
+/// Optional browser/native wire attachment; never trusted without the retained
+/// generation's source commitment and exact root property-settings path.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentPropertyDefinitionsSource {
+    pub id: EntryId,
+    pub source: String,
+}
 pub use zorid_index::{
     IndexSnapshotId, LiteralPage, LiteralQuery, LiteralToken, RelationshipDirection,
     RelationshipPage, RelationshipToken, ResolutionSnapshot, SourceSnapshotId,
@@ -111,7 +119,8 @@ pub struct DocumentMetadataResult {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentBaseResult {
-    /// Exact Base identity/revision/path whose retained bytes were compiled.
+    /// Exact saved Base file or fenced-Base containing note whose retained bytes
+    /// authorized the compiled source.
     pub definition: EntryState,
     pub result: BaseQueryResult,
 }

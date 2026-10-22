@@ -15,6 +15,10 @@ use zorid_native::{
 };
 
 pub(crate) const MAX_REQUEST_BYTES: usize = 64 * 1024;
+// Saved Base source attachments have their own encoded bound, leaving 16 KiB
+// for the existing 1 MiB outer frame's method/lease/client envelope. Other
+// document methods retain the smaller control allowance.
+pub(crate) const MAX_BASE_REQUEST_BYTES: usize = 1024 * 1024 - 16 * 1024;
 pub(crate) const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 // Independent search/backlink/Base views may retain separate lifetimes; the
 // native Store also enforces its global four-pin ceiling across all clients.
@@ -144,6 +148,15 @@ enum DocumentCommand {
     },
 }
 impl Request {
+    fn check_size(&self) -> Result<(), Value> {
+        let maximum = if matches!(self.command, DocumentCommand::Base { .. }) {
+            MAX_BASE_REQUEST_BYTES
+        } else { MAX_REQUEST_BYTES };
+        if serde_json::to_vec(self).map_err(|_| failure("invalid_request"))?.len() > maximum {
+            return Err(failure("request_limit"));
+        }
+        Ok(())
+    }
     pub(crate) fn is_preview(&self) -> bool {
         matches!(self.command,
             DocumentCommand::PreviewOpen { .. } | DocumentCommand::PreviewBase { .. }
@@ -171,6 +184,8 @@ struct BaseOptions {
     current_entry_id: Option<EntryId>,
     #[serde(default, deserialize_with = "inline_source_option", skip_serializing_if = "Option::is_none")]
     inline_source: Option<zorid_native::InlineBaseSource>,
+    #[serde(default, deserialize_with = "property_source_option", skip_serializing_if = "Option::is_none")]
+    property_definitions_source: Option<zorid_native::DocumentPropertyDefinitionsSource>,
     max_steps: usize,
 }
 impl Default for BaseOptions {
@@ -184,6 +199,7 @@ impl Default for BaseOptions {
             max_rows: 1000,
             current_entry_id: None,
             inline_source: None,
+            property_definitions_source: None,
             max_steps: QueryOptions::default().max_steps,
         }
     }
@@ -280,6 +296,11 @@ fn inline_source_option<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<zorid_native::InlineBaseSource>, D::Error> {
     zorid_native::InlineBaseSource::deserialize(deserializer).map(Some)
+}
+fn property_source_option<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<zorid_native::DocumentPropertyDefinitionsSource>, D::Error> {
+    zorid_native::DocumentPropertyDefinitionsSource::deserialize(deserializer).map(Some)
 }
 // Missing differs from explicit null: only omission selects the host clock.
 fn clock_option<'de, D: serde::Deserializer<'de>>(
@@ -956,6 +977,7 @@ pub(crate) fn preview_base_reply(
     // Preview sources are uncommitted; inline queries require a saved containing
     // source witness and are admitted through the committed generation endpoint.
     if options.inline_source.is_some() { return Err(failure("inline_source_requires_saved")); }
+    if options.property_definitions_source.is_some() { return Err(failure("property_source_requires_saved")); }
     let options = std::mem::take(options).into_options()?;
     let reply = vault.query_base_preview(preview, id, view_name.as_deref(), options, |_| Ok(()))
         .map_err(native)?;
@@ -972,13 +994,7 @@ pub(crate) fn execute(
     if request.schema_version != 1 {
         return Err(failure("unsupported_protocol"));
     }
-    if serde_json::to_vec(&request)
-        .map_err(|_| failure("invalid_request"))?
-        .len()
-        > MAX_REQUEST_BYTES
-    {
-        return Err(failure("request_limit"));
-    }
+    request.check_size()?;
     use DocumentCommand::*;
     let pin_on_error = match &request.command {
         Open { pin_id }
@@ -1350,14 +1366,11 @@ pub(crate) fn execute(
                 }
                 let pin = pin(sessions, client, &pin_id)?;
                 let inline = options.inline_source.take();
+                let properties = options.property_definitions_source.take();
                 let options = options.into_options()?;
-                let result = match inline {
-                    Some(inline) => vault.query_inline_base_document(&pin.value, &id, &inline, view_name.as_deref(), &options),
-                    None => match view_name {
-                        Some(name) => vault.query_base_document_view(&pin.value, &id, &name, &options),
-                        None => vault.query_base_document(&pin.value, &id, &options),
-                    },
-                }
+                let result = vault.query_base_document_sources(
+                    &pin.value, &id, inline.as_ref(), properties.as_ref(), view_name.as_deref(), &options,
+                )
                 .map_err(native)?;
                 answer("base", result)
             }
@@ -1513,6 +1526,9 @@ mod clock_tests {
             r#"{"currentEntryId":null}"#,
             r#"{"maxSteps":null}"#,
             r#"{"inlineSource":null}"#,
+            r#"{"propertyDefinitionsSource":null}"#,
+            r#"{"propertyDefinitionsSource":{"id":"settings","source":"","unknown":true}}"#,
+            r#"{"propertyDefinitionsSource":{"id":"settings","source":""},"propertyDefinitionsSource":{"id":"settings","source":""}}"#,
             r#"{"inlineSource":{"source":"","startByte":0,"endByte":1,"unknown":true}}"#,
             r#"{"inlineSource":{"source":"","startByte":0,"endByte":1},"inlineSource":{"source":"","startByte":0,"endByte":1}}"#,
             r#"{"currentEntryId":"one","currentEntryId":"two"}"#,
@@ -1528,6 +1544,23 @@ mod clock_tests {
         assert_eq!(selected.source, "views: []\n");
         assert_eq!((selected.start_byte, selected.end_byte), (9, 32));
         assert_eq!(serde_json::to_value(options).unwrap()["inlineSource"]["startByte"], 9);
+    }
+    #[test]
+    fn saved_base_has_bounded_attachment_allowance_without_enlarging_other_methods() {
+        let source = format!("# {}\nviews: []\n", "\\\"".repeat(40_000));
+        assert!(source.len() > MAX_REQUEST_BYTES);
+        let request = |op: &str, source: &str| serde_json::from_value::<Request>(json!({
+            "schemaVersion":1,"command":{"op":op,"pinId":"1","id":"note","options":{
+                "inlineSource":{"source":source,"startByte":0,"endByte":source.len()+16}
+            }}
+        })).unwrap();
+        assert!(request("base", &source).check_size().is_ok());
+        let large_control: Request = serde_json::from_value(json!({
+            "schemaVersion":1,"command":{"op":"search","pinId":"1","query":source,"limit":10}
+        })).unwrap();
+        assert_eq!(large_control.check_size().unwrap_err()["code"], "request_limit");
+        let over = request("base", &"\0".repeat(MAX_BASE_REQUEST_BYTES / 6 + 1));
+        assert_eq!(over.check_size().unwrap_err()["code"], "request_limit");
     }
     #[test]
     fn native_frame_error_categories_are_safe_without_rewriting_shared_diagnostics() {

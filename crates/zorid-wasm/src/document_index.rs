@@ -575,6 +575,12 @@ struct BaseRead<'a> {
     definition: &'a EntryState,
     result: zorid_bases::BaseQueryResult,
 }
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PropertyDefinitionsSource {
+    id: EntryId,
+    source: String,
+}
 #[derive(Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BaseReadOptions {
@@ -590,6 +596,8 @@ pub(crate) struct BaseReadOptions {
     max_steps: Option<usize>,
     #[serde(default, deserialize_with = "present_option")]
     inline_source: Option<zorid_document::InlineBaseSource>,
+    #[serde(default, deserialize_with = "present_option")]
+    property_definitions_source: Option<PropertyDefinitionsSource>,
 }
 impl BaseReadOptions {
     pub(crate) fn retained_bytes(&self) -> usize {
@@ -601,6 +609,7 @@ impl BaseReadOptions {
             .saturating_add(self.timezone.as_ref().map_or(0, String::capacity))
             .saturating_add(self.current_entry_id.as_ref().map_or(0, |id| id.heap_capacity_bytes()))
             .saturating_add(self.inline_source.as_ref().map_or(0, |inline| inline.source.capacity()))
+            .saturating_add(self.property_definitions_source.as_ref().map_or(0, |input| input.source.capacity().saturating_add(input.id.heap_capacity_bytes())))
     }
 }
 fn present_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -1188,6 +1197,9 @@ pub(crate) fn base_query_options(
     if input.inline_source.is_some() {
         return Err(BaseReadError::Code("index_inline_source_requires_saved"));
     }
+    if input.property_definitions_source.is_some() {
+        return Err(BaseReadError::Code("index_property_source_requires_saved"));
+    }
     let mut options = zorid_bases::QueryOptions::default();
     if let Some(index) = input.view_index {
         options.view_index = index;
@@ -1232,6 +1244,18 @@ fn evaluate_base<'a>(
     let saved_source =
         std::str::from_utf8(bytes).map_err(|_| BaseReadError::Code("index_source_unavailable"))?;
     let inline = input.inline_source.take();
+    let property_source = input.property_definitions_source.take();
+    let property_entry = generation.manifest().entries().iter().find(|entry|
+        entry.kind == zorid_core::EntryKind::File && entry.path.as_str() == "Properties.yaml"
+    );
+    let definitions = match (property_entry, property_source) {
+        (None, None) => None,
+        (Some(entry), Some(source)) if entry.id == source.id => Some(
+            zorid_bases::properties::PropertyDefinitions::from_generation_source(generation, &source.id, &source.source)
+                .map_err(BaseReadError::Evaluation)?
+        ),
+        _ => return Err(BaseReadError::Code("index_property_source_mismatch")),
+    };
     let source = if let Some(inline) = inline.as_ref() {
         if !record.witness().entry().path.as_str().ends_with(".md")
             || !zorid_document::verify_inline_base_source(saved_source, inline)
@@ -1260,7 +1284,13 @@ fn evaluate_base<'a>(
     // Current invocation options are always admitted. The shared cache decides
     // whether an exact answer can be reused, including clock dependencies.
     let options = base_query_options(input, view_name, &program)?;
-    let (result, outcomes) = if let Some((cache, clock)) = cache {
+    let (result, outcomes) = if let Some(definitions) = definitions {
+        (
+            zorid_bases::query_generation_with_properties(&program, generation, facts, &definitions, &options)
+                .map_err(BaseReadError::Evaluation)?,
+            None,
+        )
+    } else if let Some((cache, clock)) = cache {
         let prepared = cache
             .prepare_generation(generation, facts, &options, clock)
             .map_err(BaseReadError::Evaluation)?;
@@ -1300,7 +1330,7 @@ fn base_report(
     view_name: Option<String>,
     cache: Option<(&mut zorid_bases::BasePreparationCache, u64)>,
 ) -> Result<String, JsValue> {
-    if bytes.len() > zorid_document::MAX_SOURCE_BYTES || facts_json.len() > 8 * 1024 * 1024 || options_json.len() > 65536 {
+    if bytes.len() > zorid_document::MAX_SOURCE_BYTES || facts_json.len() > 8 * 1024 * 1024 || options_json.len() > 1024 * 1024 - 16 * 1024 {
         return Err(error("index_input_limit"));
     }
     let id = EntryId::new(id).map_err(|_| error("index_invalid_record"))?;
@@ -2202,16 +2232,21 @@ mod tests {
     }
     #[test]
     fn inline_base_verifies_saved_source_and_uses_containing_note_context_with_warm_cache() {
-        let yaml = "filters: file.path == this.file.path\nviews:\n  - type: table\n    name: Here\n    order: [file.path]\n";
+        // A legitimate config larger than the old 64 KiB encoded control cap,
+        // with JSON escaping overhead, remains below the 256 KiB source limit.
+        let yaml = format!("# {}\nfilters: file.path == this.file.path\nviews:\n  - type: table\n    name: Here\n    order: [file.path]\n", "\\\"".repeat(40_000));
         let source = format!("# Café\n\n```base\n{yaml}```\n");
         let selected = zorid_document::InlineBaseSource {
-            source: yaml.into(), start_byte: source.find("```base").unwrap(), end_byte: source.len() - 1,
+            source: yaml, start_byte: source.find("```base").unwrap(), end_byte: source.len() - 1,
         };
         let mut builder = WasmDocumentIndexBuilder::new(&header()).unwrap();
         builder.add_text("a", source.as_bytes()).unwrap();
         builder.add_text("b", b"Other\n").unwrap();
         let generation = builder.finish().unwrap();
         let input = || serde_json::from_value::<BaseReadOptions>(serde_json::json!({"inlineSource":selected})).unwrap();
+        let wire = serde_json::json!({"inlineSource":selected}).to_string();
+        assert!(wire.len() > 65536);
+        assert!(base_report(&generation, "a", source.as_bytes(), "[]", &wire, Some("Here".into()), None).is_ok());
         let id = EntryId::new("a").unwrap();
         let mut owner = WasmDocumentIndexPreparationCache::new();
         for clock in [100, 101] {
@@ -2228,6 +2263,34 @@ mod tests {
         assert!(matches!(evaluate_base(&generation.generation, &id, source.as_bytes(), &[], wrong_source, None, Some((&mut owner.inner, 102))), Err(BaseReadError::Code("index_inline_source_mismatch"))));
         let changed = source.replace("Café", "Fake");
         assert!(matches!(evaluate_base(&generation.generation, &id, changed.as_bytes(), &[], input(), None, None), Err(BaseReadError::Index(_))));
+    }
+    #[test]
+    fn property_settings_attachment_is_required_and_checked_against_exact_retained_source() {
+        let settings = "properties:\n  author:\n    type: relation\n    relation: {multiple: false, targetFilter: 'type == \"author\"'}\n  books:\n    type: reverseRelation\n    reverseRelation: {property: author}\n  bookCount:\n    type: rollup\n    rollup: {relation: books, aggregation: count}\n";
+        let base = "filters: file.path == \"a.md\"\nviews:\n  - type: table\n    order: [file.path, note.bookCount]\n";
+        let mut h: serde_json::Value = serde_json::from_str(&header()).unwrap();
+        h["entries"].as_array_mut().unwrap().extend([
+            serde_json::json!({"id":"settings","path":"Properties.yaml","kind":"file","revision":"r3","deleted":false}),
+            serde_json::json!({"id":"base","path":"Books.base","kind":"file","revision":"r4","deleted":false}),
+        ]);
+        let mut builder = WasmDocumentIndexBuilder::new(&h.to_string()).unwrap();
+        builder.add_text("a", b"---\ntype: author\n---\n").unwrap();
+        builder.add_text("b", b"---\nauthor: '[[a]]'\n---\n").unwrap();
+        builder.add_text("settings", settings.as_bytes()).unwrap();
+        builder.add_text("base", base.as_bytes()).unwrap();
+        let generation = builder.finish().unwrap();
+        let id = EntryId::new("base").unwrap();
+        let input = || serde_json::from_value::<BaseReadOptions>(serde_json::json!({"propertyDefinitionsSource":{"id":"settings","source":settings}})).unwrap();
+        let (read, _) = evaluate_base(&generation.generation, &id, base.as_bytes(), &[], input(), None, None).unwrap();
+        assert_eq!(read.result.rows.len(), 1);
+        assert_eq!(read.result.rows[0].values["note.bookCount"], zorid_bases::BaseValue::Number { value: 1.0 });
+        assert!(matches!(evaluate_base(&generation.generation, &id, base.as_bytes(), &[], BaseReadOptions::default(), None, None), Err(BaseReadError::Code("index_property_source_mismatch"))));
+        let mut wrong_id = input();
+        wrong_id.property_definitions_source.as_mut().unwrap().id = EntryId::new("a").unwrap();
+        assert!(matches!(evaluate_base(&generation.generation, &id, base.as_bytes(), &[], wrong_id, None, None), Err(BaseReadError::Code("index_property_source_mismatch"))));
+        let mut forged = input();
+        forged.property_definitions_source.as_mut().unwrap().source.push_str("# forged\n");
+        assert!(matches!(evaluate_base(&generation.generation, &id, base.as_bytes(), &[], forged, None, None), Err(BaseReadError::Evaluation(_))));
     }
     #[test]
     fn preparation_cache_reuses_fresh_generations_and_reruns_current_invocation() {
@@ -2967,6 +3030,9 @@ mod tests {
             r#"{"currentEntryId":null}"#,
             r#"{"maxSteps":null}"#,
             r#"{"inlineSource":null}"#,
+            r#"{"propertyDefinitionsSource":null}"#,
+            r#"{"propertyDefinitionsSource":{"id":"one","source":"","unknown":true}}"#,
+            r#"{"propertyDefinitionsSource":{"id":"one","source":""},"propertyDefinitionsSource":{"id":"one","source":""}}"#,
             r#"{"inlineSource":{"source":"","startByte":0,"endByte":1,"extra":true}}"#,
             r#"{"inlineSource":{"source":"","startByte":0,"endByte":1},"inlineSource":{"source":"","startByte":0,"endByte":1}}"#,
             r#"{"currentEntryId":"one","currentEntryId":"two"}"#,
