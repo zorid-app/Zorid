@@ -166,7 +166,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
             if (JSON.stringify(latest.value) !== baseline) throw new Error('This property changed outside the editor; the draft is preserved.');
             const next = setProperty(source, row.key, toPlain(edit.value));
             if (next !== source) await options.onChange(next);
-            baseline = JSON.stringify(toPlain(edit.value));
+            baseline = JSON.stringify(toPlain(edit.value)); error(row.error);
             if (live()) queueMicrotask(() => { if (live()) refresh(); });
           });
           pending = operation.catch(() => {}); return operation;

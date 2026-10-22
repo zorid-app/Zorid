@@ -1,4 +1,4 @@
-import { isMap, parseDocument } from 'yaml';
+import { isMap, parseDocument, visit } from 'yaml';
 import type { BaseExpressionValue } from './expression.ts';
 
 /** Ordinary visible vault file. There is no named note-Type registry. */
@@ -51,12 +51,13 @@ export function validateBasePropertyDefinition(value: unknown): asserts value is
   if (value.type === 'reverseRelation' && (!isRecord(value.reverseRelation) || !text(value.reverseRelation.property))) throw new BasePropertyDefinitionError('A reverse relation needs its forward property.');
   if (value.type === 'rollup') {
     const r = value.rollup;
-    if (!isRecord(r) || !text(r.relation) || !['count', 'sum', 'average', 'min', 'max', 'values', 'unique'].includes(r.aggregation as string) || (r.property !== undefined && !text(r.property))) throw new BasePropertyDefinitionError('Invalid rollup settings.');
+    if (!isRecord(r) || !text(r.relation) || !['count', 'sum', 'average', 'min', 'max', 'values', 'unique'].includes(r.aggregation as string) || (r.property !== undefined && !text(r.property)) || (r.aggregation !== 'count' && !text(r.property))) throw new BasePropertyDefinitionError('Invalid rollup settings.');
   }
 }
 function readDocument(source: string) {
   const document = parseDocument(source || 'properties: {}\n', { uniqueKeys: true });
   if (document.errors.length || document.warnings.length) throw new BasePropertyDefinitionError([...document.errors, ...document.warnings].map(e => e.message).join('; '));
+  visit(document, { Alias() { throw new BasePropertyDefinitionError('YAML aliases are not supported in property settings.'); } });
   if (!isMap(document.contents)) throw new BasePropertyDefinitionError('Property settings must be a YAML mapping.');
   const raw = document.toJS({ maxAliasCount: 100 });
   const active = new Set<object>();
@@ -126,6 +127,7 @@ export function basePropertyValueDiagnostic(value: BaseExpressionValue, definiti
 export function validDateText(value: string, withTime: boolean): boolean {
   if (!new RegExp(withTime ? '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}(\\.\\d{1,3})?)?$' : '^\\d{4}-\\d{2}-\\d{2}$').test(value)) return false;
   const [date] = value.split('T'); const [year, month, day] = date.split('-').map(Number);
+  if (year < 1) return false;
   const d = new Date(0); d.setUTCFullYear(year, month - 1, day); d.setUTCHours(0, 0, 0, 0);
   return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day && (!withTime || Number.isFinite(Date.parse(value)));
 }

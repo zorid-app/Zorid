@@ -36,7 +36,14 @@ function inputText(value: BaseExpressionValue, definition: BasePropertyDefinitio
   if (value.type === 'list') return value.value.map(renderText).join('\n');
   if (value.type === 'date') {
     const d = new Date(value.timestamp);
-    if (definition.type === 'date') return d.toISOString().slice(0, 10);
+    if (definition.type === 'date') {
+      if (value.presentationTimezone) {
+        const parts = new Intl.DateTimeFormat('en-US', { timeZone: value.presentationTimezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d);
+        const part = (type: string) => parts.find(part => part.type === type)?.value ?? '';
+        return `${part('year').padStart(4, '0')}-${part('month')}-${part('day')}`;
+      }
+      return d.toISOString().slice(0, 10);
+    }
     // datetime-local deliberately has no timezone conversion during editing.
     const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
     return local.toISOString().slice(0, 16);
@@ -97,7 +104,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     const option = optionFor(text), target = ['relation', 'link'].includes(type) ? targetFor(text) : undefined;
     const unknown = ['select', 'multiselect', 'status'].includes(type) && !option;
     if (unknown) { pill.classList.add('is-unknown'); pill.title = 'Unknown option. Its stored value is preserved.'; }
-    if (target?.missing || (type === 'relation' && !target)) { pill.classList.add('is-unresolved'); pill.title = 'Unresolved relation. Its stored value is preserved.'; }
+    if (target?.missing || (type === 'relation' && !target)) { pill.classList.add('is-unresolved'); pill.title = 'Unresolved relation or target outside available choices. Its stored value is preserved.'; }
     if (option?.color && /^(?:red|orange|yellow|green|cyan|blue|purple|pink|gray|grey|brown)$/.test(option.color)) pill.dataset.color = option.color;
     const label = document.createElement('span'); label.className = 'multi-select-pill-content'; label.textContent = option?.label ?? target?.label ?? text; pill.append(label);
     if (option?.category) pill.dataset.category = option.category;
@@ -260,7 +267,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     input.focus(); if (!multiple) input.select();
   }
   const activate = (event: MouseEvent) => { if (!event.defaultPrevented && event.button === 0) begin(event); };
-  const key = (event: KeyboardEvent) => { if (!event.defaultPrevented && !event.isComposing && event.target === element && ['Enter', 'F2'].includes(event.key)) begin(event); };
+  const key = (event: KeyboardEvent) => { if (event.key === 'Escape' && !pending && type === 'checkbox' && element.hasAttribute('data-base-editing')) { event.preventDefault(); draw(); return; } if (!event.defaultPrevented && !event.isComposing && event.target === element && ['Enter', 'F2'].includes(event.key)) begin(event); };
   element.addEventListener('click', activate); element.addEventListener('dblclick', activate); element.addEventListener('keydown', key); draw();
   return () => { disposed = true; closePopup(); timers.forEach(clearTimeout); timers.clear(); mark(); element.removeEventListener('click', activate); element.removeEventListener('dblclick', activate); element.removeEventListener('keydown', key); };
 }

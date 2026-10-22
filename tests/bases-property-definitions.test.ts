@@ -11,6 +11,8 @@ test('property settings are vault-wide definitions, with independent diagnostics
   assert.equal(result.diagnostics[0].property, 'broken');
   assert.throws(() => parseBasePropertyDefinitions('properties: []'), /mapping/);
   assert.throws(() => parseBasePropertyDefinitions('properties: &p\n  topics: *p'), /alias|value type/i);
+  assert.throws(() => parseBasePropertyDefinitions('shared: &a {type: text}\nproperties: {title: *a}'), /aliases/i);
+  assert.equal(parseBasePropertyDefinitions('properties: {sum: {type: rollup, rollup: {relation: project, aggregation: sum}}}').diagnostics.length, 1);
 });
 
 test('targeted definition edits preserve other properties, unfamiliar config and comments', () => {

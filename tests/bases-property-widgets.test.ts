@@ -55,3 +55,25 @@ test('invalid number input remains a visible draft instead of converting silentl
   const s = setup('excellent', { type: 'number' }); assert.ok(s.element.classList.contains('mod-error')); s.click(); s.key('Enter'); await tick(); assert.equal(s.edits.length, 0);
   s.click(); s.input().value = '0xF'; s.key('Enter'); await tick(); assert.equal(s.element.dataset.baseEditing, 'draft'); assert.equal(s.edits.length, 0); s.key('Escape'); assert.equal(s.element.textContent, 'excellent'); s.close();
 });
+
+
+test('missing/incompatible multiple values remain untouched when opened and left unchanged', async () => {
+  for (const value of [null, 42, [42]]) {
+    const s = setup(value, { type: 'multiselect', options: [{ value: 'Rust' }] }); s.click(); s.key('Enter'); await tick(); assert.equal(s.edits.length, 0); s.close();
+  }
+  const s = setup('not-a-date', { type: 'date' }); s.click(); assert.equal(s.input().type, 'text'); assert.equal(s.input().value, 'not-a-date'); s.key('Enter'); await tick(); assert.equal(s.edits.length, 0); s.close();
+});
+
+test('shared namespace links are inertly rendered without calling expression getters', () => {
+  const dom = new JSDOM('<div></div>'); const element = dom.window.document.querySelector('div')!; let opened = '';
+  const value = { type: 'namespace' as const, name: 'Alpha', sharedValue: { type: 'link', path: 'Alpha.md', display: 'Project Alpha' }, get() { throw new Error('must not evaluate'); } };
+  const dispose = mountBasePropertyWidget(element, { row: { path: 'A.md', values: {} }, property: 'formula.project', value, version: 1 }, { getDefinition: () => undefined, commit() { throw new Error('readonly'); }, openFile: path => { opened = path; } });
+  element.querySelector('a')!.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })); assert.equal(opened, 'Alpha.md'); assert.equal(element.textContent, 'Project Alpha'); dispose(); dom.window.close();
+});
+
+test('shared date-only editor honors the provided presentation timezone', () => {
+  const dom = new JSDOM('<div></div>'); const element = dom.window.document.querySelector('div')!;
+  const value = { type: 'date' as const, timestamp: Date.parse('2026-01-01T16:00:00Z'), hasTime: false, presentationTimezone: 'Asia/Tokyo' };
+  const dispose = mountBasePropertyWidget(element, { row: { path: 'A.md', values: {} }, property: 'note.date', value, version: 1 }, { getDefinition: () => ({ type: 'date' }), commit() {} });
+  element.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })); assert.equal(element.querySelector('input')!.value, '2026-01-02'); dispose(); dom.window.close();
+});
