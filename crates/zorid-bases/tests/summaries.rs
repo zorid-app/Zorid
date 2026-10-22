@@ -204,6 +204,40 @@ fn custom_summaries_override_builtins_and_run_for_empty_results_and_missing_prop
 }
 
 #[test]
+fn all_null_group_custom_sum_plus_one_stays_null_with_independent_overall_scope() {
+    let result = run(
+        json!({"summaries":{"TotalPlusOne":"values.sum() + 1"},
+        "views":[{"type":"table","name":"T","groupBy":{"property":"group","direction":"ASC"},
+            "summaries":{"n":"TotalPlusOne"}}]}),
+        vec![
+            row("Missing.md", json!([])),
+            row("Null.md", json!([["n", null], ["group", null]])),
+            row("Ten.md", json!([["n", 10], ["group", "Numbers"]])),
+            row("Twenty.md", json!([["n", 20], ["group", "Numbers"]])),
+        ],
+    );
+
+    assert_eq!(result.rows.len(), 4);
+    assert_eq!(result.groups.len(), 2);
+    let null_group = result
+        .groups
+        .iter()
+        .find(|group| matches!(group.key, BaseValue::Null))
+        .expect("missing and explicit-null properties share the empty group");
+    assert_eq!(null_group.entry_ids.len(), 2);
+    assert_eq!(null_group.summaries.get("note.n"), Some(&BaseValue::Null));
+    let numeric_group = result
+        .groups
+        .iter()
+        .find(|group| matches!(&group.key, BaseValue::String { value } if value == "Numbers"))
+        .expect("numeric rows retain their separate group");
+    assert_eq!(numeric_group.entry_ids.len(), 2);
+    assert_eq!(number(&numeric_group.summaries["note.n"]), 31.0);
+    assert_eq!(number(&result.summaries["note.n"]), 31.0);
+    assert!(result.diagnostics.is_empty());
+}
+
+#[test]
 fn summary_context_exposes_only_values_with_case_insensitive_lookup_and_callback_bindings() {
     let result = run(
         json!({"formulas":{"secret":"99"},"summaries":{
