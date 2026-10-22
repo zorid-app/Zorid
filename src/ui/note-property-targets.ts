@@ -97,7 +97,7 @@ export function createNotePropertyTargets(options: {
       if (!display || !actor || actor.kind !== 'file' || actor.deleted || !entry || entry.type !== 'file' || actor.path !== path || actor.id !== display.witness.entryId || actor.revision !== display.witness.revision || entry.entryId !== display.witness.entryId || entry.revision !== display.witness.revision) return;
       if (!Object.hasOwn(display.values, property) || !Object.hasOwn(display.editValues, property)) return;
       const baseline = display.editValues[property];
-      return isPlainPropertyValue(raw) && isPlainPropertyValue(baseline) && baseValuesEqual(raw, baseline, true) ? display.values[property] : undefined;
+      return isPlainPropertyValue(raw) && isPlainPropertyValue(baseline) && baseValuesEqual(raw, baseline) ? display.values[property] : undefined;
     },
     invalidate, destroy,
     close() {

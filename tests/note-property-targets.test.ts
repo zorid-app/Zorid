@@ -45,10 +45,18 @@ test('ordinary relation labels are shown only for the same saved actor and exact
  const response=withDisplay(),f=await setup(async()=>response);try{await tick();
   const raw={type:'string' as const,value:'[[People/Ada|Original spelling]]'};assert.equal(f.manager.getDisplayValue('author',raw),response.currentRelationValues!.values.author);
   assert.equal(f.manager.getDisplayValue('author',{type:'string',value:'[[People/Ada|Edited alias]]'}),undefined);
+  assert.equal(f.manager.getDisplayValue('author',{type:'list',value:[raw]}),undefined,'a singleton list is not the saved scalar');
   assert.equal(f.manager.getDisplayValue('author',{type:'namespace',name:'Ada',get(){throw new Error('Never called');}}),undefined);
   assert.equal(f.manager.getDisplayValue('note.author',{type:'list',value:[{type:'string',value:'[[Missing|Alias]]'}]}),response.currentRelationValues!.values['note.author']);
+  assert.equal(f.manager.getDisplayValue('note.author',{type:'string',value:'[[Missing|Alias]]'}),undefined,'a scalar is not the saved singleton list');
   assert.equal(f.manager.getDisplayValue('missing',raw),undefined);
   const actor=f.vault.entries.get('Note.md')!;f.vault.entries.set('Note.md',{...actor,entryId:'replacement'});assert.equal(f.manager.getDisplayValue('author',raw),undefined);f.vault.entries.set('Note.md',{...actor,revision:'r2'});assert.equal(f.manager.getDisplayValue('author',raw),undefined);
+ }finally{await f.manager.close();}
+});
+
+test('display baseline matching never coerces numeric, string or boolean raw properties',async()=>{
+ const response=withDisplay();(response.currentRelationValues!.editValues as Record<string,unknown>).author={type:'number',value:1};const f=await setup(async()=>response);try{await tick();
+  assert.ok(f.manager.getDisplayValue('author',{type:'number',value:1}));assert.equal(f.manager.getDisplayValue('author',{type:'string',value:'1'}),undefined);assert.equal(f.manager.getDisplayValue('author',{type:'boolean',value:true}),undefined);
  }finally{await f.manager.close();}
 });
 
