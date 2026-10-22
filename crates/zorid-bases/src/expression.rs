@@ -4460,7 +4460,7 @@ pub(crate) fn infer_frontmatter_value(
                         return RuntimeValue::Link(link);
                     }
                 }
-                if is_external(&value) {
+                if !value.contains(' ') && is_external(&value) {
                     return RuntimeValue::Link(BasesLink {
                         path: value,
                         external: true,
