@@ -9,6 +9,35 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Browser007 capture-only run is **terminal1 at the unchanged old assertion**,
+8 original groups pass/10 Q3 remain unexecuted. Actual payload confirms30 exact
+diagnostics:2 author-filter `type` errors (`Cannot convert Error to number`)
+and28 property `unavailable` errors (`Rollup relation has invalid or unresolved
+targets`) across14 known paths. Empty rows, malformed metadata witness,
+metadataComplete=false and relationshipsAvailable=true are preserved. This
+confirms the old filter-code expectation is stale under published Error data;
+`bases_expressions` owns an exact multiset oracle and negative cases, requiring
+independent review before the full008 rerun. No production semantic fix.
+Report `/private/tmp/zorid-bases-browser-actual-20261022-007/report.json`, SHA
+`4fac737ef889b338891be7ec4080ad278dca99dfc1e520b62a18ea27e73bd600`;
+post-run-verification receipt is adjacent. Frozen source955f719e/module36809d
+and asset hashes match before/after; Chrome50507 exits0, profile is absent,
+Vite closes, fixture DB deletes, cleanup/artifact failures are empty.
+
+Reviewed C1 authored scenarios are composed as1e96b884/83ed8ace: four shared
+summary references across two views/properties, exact rename/delete propagation,
+unrelated selections/configuration preservation, blank/collision no-write
+checks and restart. Actual property campaign acceptance is still pending.
+C3 production review found keyboard reorder keys could capture another focused
+control after focus leaves the Group dialog; `bases_table` must close this
+ownership gap before approval/integration. No source/UI acceptance yet.
+
+Completed supported-web cache retirement is terminal0:700 generated files from
+7 exact campaign cache roots removed, actual free-space rise57.08984375MiB;
+all271 raw storage/IDB/evidence files remain byte-identical. Receipt
+`/private/tmp/zorid-bases-web002-retry-cache-retirement-20261022-001.json`.
+No native UI grant;1GiB guard still fails and the user space request is pending.
+
 Actual normal supported-web002-retry now **passes all5 phases**, terminal0,
 frozen checkout `099d94edbbfbee7e79160872d1a62bb55e7601a5`, current Rust958b19ac
 and matching generated WASM36809d/795637. It uses the normal app's browser

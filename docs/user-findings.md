@@ -2,6 +2,15 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Browser007 preserves the old failing assertion and captures the full malformed
+rollup payload:2 exact filter `type` conversion errors plus28 exact underlying
+property `unavailable` diagnostics, with all witness/empty-result checks intact.
+The stale filter-code oracle will be corrected to an exact multiset with
+negative tests; no production semantic change. Full19-group rerun remains open.
+C3 review also found global reorder keys could affect a Group dialog after
+focus moves into another control; owner must enforce keyboard ownership before
+source approval. C1 expanded scenarios are reviewed/composed but unexecuted.
+
 Normal supported-web002-retry passes all5 phases at current099d94ed/core958b19ac:
 normal browser storage, trusted edit, reload, search and reopen, with exact
 source/artifact proof and owned cleanup. Expanded browser006 instead fails its
