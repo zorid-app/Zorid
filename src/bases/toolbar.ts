@@ -1,3 +1,4 @@
+import { BaseDocument } from './document.ts';
 import type { BaseValue, BaseViewConfig, BaseViewPatch } from './document.ts';
 import type { BaseQueryResult } from './query.ts';
 import { normalizeBaseProperty } from './query.ts';
@@ -126,10 +127,11 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     let version = result.version;
     let configuration = configurationSnapshot(opening);
     let expectedPatch: {view?:BaseViewPatch;root?:Record<string,BaseValue|undefined>} | undefined;
+    let expectedSnapshot: ReturnType<typeof configurationSnapshot> | undefined;
     const selectedIndex = targetIndex ?? opening.selectedIndex;
     let configuredView = opening.views[selectedIndex] ?? result.view;
     const node = doc.createElement('section'); node.className = 'bases-toolbar-popover'; node.dataset.panel = name; node.classList.toggle('is-immediate',!!options.immediate); node.setAttribute('role', 'dialog'); node.setAttribute('aria-label', name);
-    const heading = doc.createElement('h3'); heading.textContent = name === 'View options' ? 'Configure view' : name === 'Sort' ? 'Sort by' : name === 'Group' ? 'Group by' : name; if (['Views','Results','Properties','Filter'].includes(name)) heading.hidden = true;
+    const heading = doc.createElement('h3'); heading.textContent = name === 'View options' || name === 'Add view' ? 'Configure view' : name === 'Sort' ? 'Sort by' : name === 'Group' ? 'Group by' : name; if (['Views','Results','Properties','Filter'].includes(name)) heading.hidden = true;
     if (name === 'View options' || name === 'Add view' || name === 'Formula' || name === 'Property' || name === 'New item settings') {
       const back = button(doc, '', () => { if (hasDraft()) { if (options.immediate) panel?.flush?.(); else report(new Error('Apply or cancel the current changes first.')); return; } panel?.close(false); open(name === 'Formula' || name === 'Property' ? 'Properties' : 'Views',trigger); }, 'Back'); back.className = 'bases-toolbar-menu-next'; back.append(icon('chevron-left',16,doc)); heading.prepend(back);
     }
@@ -143,7 +145,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     let refreshPanel: ((result:BaseQueryResult,retainDraft:boolean)=>void) | undefined;
     const disposers: (()=>void)[] = [];
     const autoAdd = options.immediate === true && name === 'Add view';
-    const auto = options.immediate === true && !['Views','Add view','New item settings','Formula'].includes(name);
+    const auto = options.immediate === true && !['Views','Add view','New item settings'].includes(name) && (name !== 'Formula' || !!formulaName);
     if (auto || autoAdd) footer.hidden = true;
     const own: Panel = { name, node, trigger, dirty: false, saving: false, failure: undefined,
       close(restore = true) {
@@ -174,7 +176,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       // A failed accepted write must be retried before another semantic action.
       if (retryPersistence) return;
       own.failure = undefined; error.textContent = ''; apply.textContent = name === 'Add view' ? 'Create view' : 'Apply'; options.onDraftChange(); place();
-      if (auto && !(name === 'View options' && doc.activeElement?.getAttribute('aria-label') === 'View name')) { if (autoTimer) clearTimeout(autoTimer); autoTimer = setTimeout(() => { autoTimer = undefined; submit(false); }, 250); }
+      if (auto && !((name === 'View options' && doc.activeElement?.getAttribute('aria-label') === 'View name') || (name === 'Formula' && doc.activeElement?.getAttribute('aria-label') === 'Formula name'))) { if (autoTimer) clearTimeout(autoTimer); autoTimer = setTimeout(() => { autoTimer = undefined; submit(false); }, 250); }
     };
     const properties = [...new Set([...(Array.isArray(result.view.order) ? result.view.order.filter((value): value is string => typeof value === 'string').map(normalizeBaseProperty) : []), ...result.properties, ...result.availableProperties])];
     const propertyOptions = properties.map(property => [property, opening.label(property)] as const);
@@ -250,11 +252,33 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     } else if (name === 'Formula') {
       const names = mapping(opening.root?.formulas) ? opening.root!.formulas as Record<string, BaseValue> : {};
       const input = doc.createElement('input'); input.placeholder = 'Formula name'; input.setAttribute('aria-label', 'Formula name'); input.value = formulaName ?? '';
-      const expression = doc.createElement('textarea'); expression.setAttribute('aria-label', 'Formula expression'); expression.placeholder = 'Enter a formula…'; expression.value = formulaName && typeof names[formulaName] === 'string' ? names[formulaName] : ''; expression.rows = 5;
+      const expression = doc.createElement('textarea'); expression.setAttribute('aria-label', 'Formula expression'); expression.placeholder = 'Enter a formula…'; const initialExpression = formulaName ? names[formulaName] : undefined; expression.value = typeof initialExpression === 'string' ? initialExpression : ''; expression.rows = 5;
       fields.append(input, expression); input.addEventListener('input', changed); expression.addEventListener('input', changed);
-      // Rename and expression edit are submitted as one root patch: no partial rename.
-      readOperation = () => { const name = input.value.trim(); if (!name) throw new Error('Formula name must not be empty.'); if (name !== formulaName && Object.hasOwn(names, name)) throw new Error('A formula with that name already exists.'); if (!expression.value.trim()) throw new Error('Formula expression must not be empty.'); if (options.commands?.editFormula) return () => options.commands!.editFormula!(version,formulaName,name,expression.value); if (formulaName && formulaName !== name) throw new Error('Formula rename is unavailable.'); const formulas = {...names}; if (formulaName && formulaName !== name) delete formulas[formulaName]; formulas[name] = expression.value; if (!options.commands?.updateRoot) throw new Error('Formula editing is unavailable.'); return () => options.commands!.updateRoot!(version, {formulas}); };
-      if (formulaName && options.commands?.setFormula) menuAction('Remove formula', () => options.commands!.setFormula!(version, formulaName, undefined));
+      input.addEventListener('blur',()=>{if(auto&&own.dirty)submit(false);});
+      input.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();input.blur();}});
+      // Use the same document transformation to project the exact acknowledgement witness.
+      readOperation = () => {
+        const name = input.value.trim(), source = expression.value;
+        const currentNames = mapping(opening.root?.formulas) ? opening.root!.formulas as Record<string,BaseValue> : {};
+        if (!name) throw new Error('Formula name must not be empty.');
+        if (name !== formulaName && Object.hasOwn(currentNames,name)) throw new Error('A formula with that name already exists.');
+        if (!source.trim() && !auto) throw new Error('Formula expression must not be empty.');
+        if (options.commands?.editFormula) {
+          const projected = BaseDocument.parse(JSON.stringify({...opening.root,views:opening.views}));
+          if (formulaName && formulaName !== name) projected.renameFormula(formulaName,name);
+          projected.setFormula(name,source);
+          const keys = new Set([...Object.keys(opening.root??{}),'formulas']); keys.delete('views');
+          const root = Object.fromEntries([...keys].map(key=>[key,projected.getRoot(key)]));
+          expectedSnapshot = {views:structuredClone(projected.views) as BaseViewConfig[],root};
+          afterSave = () => { formulaName = name; };
+          return () => options.commands!.editFormula!(version,formulaName,name,source);
+        }
+        if (formulaName && formulaName !== name) throw new Error('Formula rename is unavailable.');
+        const formulas = {...currentNames,[name]:source};
+        if (!options.commands?.updateRoot) throw new Error('Formula editing is unavailable.');
+        expectedPatch = {root:{formulas}}; return () => options.commands!.updateRoot!(version,{formulas});
+      };
+      if (formulaName && options.commands?.setFormula) menuAction('Remove formula', () => options.commands!.setFormula!(version, formulaName!, undefined));
     } else if (name === 'New item settings') {
       const folder = doc.createElement('input'), template = doc.createElement('input'); folder.setAttribute('aria-label', 'New item folder'); template.setAttribute('aria-label', 'New item template'); folder.value = typeof opening.root?.newItemFolder === 'string' ? opening.root.newItemFolder : ''; template.value = typeof opening.root?.newItemTemplate === 'string' ? opening.root.newItemTemplate : '';
       for (const [text, input] of [['Folder',folder], ['Template',template]] as const) { const label = doc.createElement('label'); label.append(doc.createTextNode(text), input); fields.append(label); input.addEventListener('input', changed); }
@@ -329,7 +353,15 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         }
         if (candidates.length > 100) { const hint = doc.createElement('p'); hint.textContent = 'Showing the first 100 properties. Refine your search to find more.'; list.append(hint); }
       };
-      if (options.commands?.updateRoot) fields.append(button(doc, 'Add formula', () => { if (own.dirty) { error.textContent = 'Apply property changes before adding a formula.'; return; } own.close(false); open('Formula', trigger); }));
+      if (options.immediate && options.commands?.editFormula) menuAction('Add formula',async()=>{
+        const formulas = mapping(opening.root?.formulas) ? opening.root!.formulas as Record<string,BaseValue> : {};
+        const name = uniqueViewName(Object.keys(formulas).map(name=>({type:'formula',name})),search.value.trim()||'Untitled');
+        await options.commands!.editFormula!(version,undefined,name,'');
+        const refreshed = deferredState; deferredState = undefined; if (!refreshed) return;
+        own.saving = false; own.close(false); update(refreshed); open('Formula',trigger,undefined,name);
+        const input = panel?.node.querySelector<HTMLInputElement>('[aria-label="Formula name"]'); input?.select();
+      });
+      else if (options.commands?.updateRoot) fields.append(button(doc, 'Add formula', () => { if (own.dirty) { error.textContent = 'Apply property changes before adding a formula.'; return; } own.close(false); open('Formula', trigger); }));
       const addProperty = button(doc,'Add property',() => {
         const name = search.value.trim(); if (!name) { search.focus(); return; }
         const property = normalizeBaseProperty(name.startsWith('note.') ? name : `note.${name}`);
@@ -488,7 +520,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       if (!form.checkValidity()) { error.textContent = 'Check the invalid condition value before applying.'; return; }
       if (deferredState && own.rebase?.(deferredState)) { state = deferredState; deferredState = undefined; }
       let operation: () => Promise<void>;
-      expectedPatch = undefined;
+      expectedPatch = undefined; expectedSnapshot = undefined;
       try {
         options.preflight();
         if (retryPersistence) operation = retryPersistence;
@@ -496,7 +528,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         else { const patch = validateToolbarPatch(result, readPatch()); expectedPatch = {view:patch}; operation = () => options.save(version, patch); }
       } catch (failure) { error.textContent = failure instanceof Error ? failure.message : String(failure); return; }
       const submittedGeneration = generation;
-      const expectedConfiguration = expectedPatch ? applyConfigurationPatch(configuration,expectedPatch,selectedIndex) : configuration;
+      const expectedConfiguration = expectedSnapshot ?? (expectedPatch ? applyConfigurationPatch(configuration,expectedPatch,selectedIndex) : configuration);
       const expectedViewName = name === 'View options' ? form.querySelector<HTMLInputElement>('[aria-label="View name"]')?.value.trim() || configuredView.name : configuredView.name;
       own.saving = true; options.onDraftChange();
       const disabled = new Map(Array.from(node.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement>('input,button,select,textarea'), input => [input, input.disabled] as const));
