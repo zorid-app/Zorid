@@ -526,6 +526,7 @@ pub(crate) fn with_session_files<T>(
         timezone,
         work_limit: Some(options.max_steps),
         cancellation: options.cancellation.clone(),
+        random_seed: options.random_seed,
         ..Default::default()
     };
     let mut session = expression::Session::new(&context);
