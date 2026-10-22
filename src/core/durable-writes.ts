@@ -43,6 +43,22 @@ export type DurableWriteIntent = { readonly ref: DurableWriteRef } & (
   | { readonly state: 'rejected'; readonly acknowledged: boolean;
       readonly error: { readonly operationId: string; readonly code: string; readonly message: string; readonly details?: unknown } }
 );
+/** A logical editor baseline. Physical saved-source observations never replace it. */
+export interface ConditionalSavedSourceWitness {
+  readonly entryId: string;
+  readonly revision: string;
+  readonly path: string;
+}
+/** Provider-owned physical-source proof. Only this opaque guard enters a plan. */
+export interface ConditionalSavedSourceGuard {
+  readonly captureId: string;
+  readonly logicalWitness: ConditionalSavedSourceWitness;
+}
+export interface ConditionalSavedSourceCapture extends ConditionalSavedSourceGuard {
+  /** Physical UTF-8 source, for conditional touched-field checks only. */
+  readonly source: string;
+}
+export type ConditionalSavedSourceStatus = 'unattached' | 'pending' | 'settled' | 'foreign';
 export interface DurableWriteInput {
   readonly operationId: string;
   readonly path: string;
@@ -50,6 +66,7 @@ export interface DurableWriteInput {
   readonly expectedRevision: string;
   readonly expectedContent: string;
   readonly content: string;
+  readonly conditionalSavedSource?: ConditionalSavedSourceGuard;
 }
 /** One coherent persisted observation, never assembled from read + stat. */
 export interface DurableWriteRead {
@@ -68,6 +85,9 @@ export interface DurableWrites {
   readonly checkpoints: DurableCheckpoints;
   readText(path: string): Promise<DurableWriteRead>;
   readTextById(entryId: string): Promise<DurableWriteRead|null>;
+  /** Optional paired capability. Captures do not advance the logical baseline. */
+  captureSavedSource?(witness: ConditionalSavedSourceWitness): Promise<ConditionalSavedSourceCapture>;
+  releaseSavedSource?(captureId: string): Promise<void>;
   planWrite(input: DurableWriteInput): Promise<DurableWritePlan>;
   prepare(plan: DurableWritePlan): Promise<DurableWriteIntent>;
   commit(ref: DurableWriteRef): Promise<DurableWriteIntent>;

@@ -3,6 +3,7 @@ import { DurableNoteState } from './note-durable-state.ts';
 import type { Vault } from '../core/vault.ts';
 import { isMarkdown, normalizePath } from '../core/types.ts';
 import type { NoteMetadata } from '../core/types.ts';
+import type { ConditionalSavedSourceCapture, ConditionalSavedSourceWitness, ConditionalSavedSourceStatus } from '../core/durable-writes.ts';
 import { DocumentDraftProjection } from './document-draft-projection.ts';
 import type { DraftMetadataState } from './document-draft-projection.ts';
 
@@ -92,6 +93,17 @@ export class NoteBuffer {
     if(!this.loaded||!this.durable?.ready)return undefined;
     const base=this.durable.base;
     return Object.freeze({entryId:base.entryId,revision:base.revision,path:base.path});
+  }
+
+  /** Physical source is a separate observation for conditional history checks;
+   * it never replaces savedText or the durable logical baseline. */
+  captureConditionalSavedSource(witness:ConditionalSavedSourceWitness,validate:()=>void=()=>{}):Promise<ConditionalSavedSourceCapture|undefined>{
+    return this.enqueueResult(async()=>{this.requireLoaded();if(!this.durable)return undefined;return this.durable.captureConditionalSavedSource(witness,validate);});
+  }
+  conditionalSavedSourceStatus(capture:ConditionalSavedSourceCapture):ConditionalSavedSourceStatus{return this.durable?.conditionalSavedSourceStatus(capture)??'foreign';}
+  releaseConditionalSavedSource(capture:ConditionalSavedSourceCapture):Promise<void>{
+    if(!this.durable)return Promise.reject(new Error('Conditional saved-source release is unavailable'));
+    return this.durable.releaseConditionalSavedSource(capture);
   }
 
   private syncDurable():void {
@@ -237,16 +249,20 @@ export class NoteBuffer {
     if(this.durable&&isMarkdown(this.path))assertNoteTextChange(this.text,text);
   }
 
-  update(text: string, options: { validateWrite?: () => void } = {}): void {
+  update(text: string, options: { validateWrite?: () => void; conditionalSavedSource?:ConditionalSavedSourceCapture } = {}): void {
     this.requireLoaded();
     if(this.disposing)throw new Error('This note buffer is closing');
     this.validateTextChange(text);
+    if(options.conditionalSavedSource){
+      if(!this.durable)throw new Error('Conditional saved-source writes are unavailable');
+      this.durable.validateConditionalSavedSource(options.conditionalSavedSource);
+    }
     // Guards belong to the accepted draft, including failed writes and later retries.
     // Ordinary typing cannot discard the lifetime protection of an earlier edit.
     if (options.validateWrite) { options.validateWrite(); this.writeValidators.add(options.validateWrite); }
     const changed = text !== this.text;
     this.text = text;
-    if(this.durable){this.durable.update(text);this.dirty=this.durable.dirty;}else this.updateDirty();
+    if(this.durable){this.durable.update(text,options.conditionalSavedSource);this.dirty=this.durable.dirty;}else this.updateDirty();
     if (!this.dirty) this.writeValidators.clear();
     if(!this.durable)this.persist();
     if (changed) this.cancelTimer();
