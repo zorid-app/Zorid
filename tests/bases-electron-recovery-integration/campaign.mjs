@@ -61,7 +61,7 @@ async function heldWriteAndClose(c){
   // A close request may conservatively report the still-active continuation.
   // Retrying close only after B is durably acknowledged is an explicit UI action.
   if(retained){await c.ui.click(close);await c.ui.wait(`return !document.querySelector(${JSON.stringify(active)});`,'Clean acknowledged Base closes on retry');}
-  const events=await noFaults(c),writes=events.filter(value=>value.kind==='native-mutation-response'&&value.method==='commit_intent'&&value.ok&&[digest(Buffer.from(sourceA)),digest(Buffer.from(sourceB))].includes(value.preparedBodySha256));
+  const events=await noFaults(c),writes=events.filter(value=>value.kind==='native-mutation-response'&&value.method==='commit_intent'&&value.ok&&value.state==='committed'&&[digest(Buffer.from(sourceA)),digest(Buffer.from(sourceB))].includes(value.preparedBodySha256));
   // commit_intent has no body. Prepared-body hashes are attached by the relay's
   // successful token correlation, independently from the selected held frame.
   const continuations=events.filter(value=>value.kind==='native-prepared-write'&&value.entryId===before.entryId);

@@ -58,6 +58,7 @@ const output = (async()=>{
         commandSha256:digest(Buffer.from(JSON.stringify(original.command))),bodySha256:digest(original.frame.body),
         ...(prepared?{preparedBodySha256:prepared.bodySha256}:{}),
         operationId:receipt?.operation_id,sequence:receipt?.sequence,ok:frame.header.ok,
+        state:result?.intent?.state??(receipt?'committed':undefined),
         requestSha256:digest(original.frame.raw),responseSha256:digest(frame.raw)});
     }
     if(selected){
