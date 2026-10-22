@@ -1368,7 +1368,6 @@ export class Workspace {
         if(expected!==request.source&&next!==request.source)throw new Error('The fenced Base configuration changed.');
         const buffer=await this.baseBufferFor(path,validate);validateSelection();
         const desired=expected===request.source?replaceInlineBaseSource(request.documentText,request,next):request.documentText;
-        if(buffer.text!==request.documentText&&buffer.text!==desired)throw new Error('The containing note has an unsaved or external edit.');
         const fresh=inlineBaseRequest(desired,request.from,request.to+desired.length-request.documentText.length);
         if(!fresh)throw new Error('The updated Base fence could not be retained.');
         this.deferInlinePublication(buffer);
@@ -1377,40 +1376,62 @@ export class Workspace {
           if(existing.owner!==inlineOwner||existing.text!==desired)throw new Error('Another embedded Base configuration owns the containing note save.');
           await existing.complete();return;
         }
-        const previous=buffer.text;
-        let completion:Promise<void>|undefined;
-        const held={owner:inlineOwner,text:desired,failed:false,valid:true,complete:():Promise<void>=>{
-          if(completion)return completion;
-          held.failed=false;
-          const operation=(async()=>{
-            const admit=()=>{validate();if(!held.valid||this.inlinePublications.get(buffer)!==held||this.buffers.get(path)!==buffer||buffer.text!==desired||captured!==fresh)throw new Error('The containing note changed while its Base configuration was saved.');};
-            try{
-              admit();await buffer.flush();admit();
-              if(buffer.savedText!==desired||buffer.dirty||buffer.error)throw new Error('The containing note changed while its Base configuration was saved.');
-              if(onInlineSourceSaved&& !onInlineSourceSaved(fresh))throw new Error('The saved Base session is no longer current.');
-              this.inlinePublications.delete(buffer);held.valid=false;
-              this.bufferSubscriptions.publish(buffer);
-              for(const pane of this.loadedViews())if(pane.viewPath===path){pane.editor?.setValue(desired);pane.properties?.refresh();pane.refreshPreview?.();}
-            }catch(error){
-              held.failed=true;
-              // Release an obsolete clean hold without publishing from the
-              // rejected actor. Independent validated readers can refresh later.
-              if(this.inlinePublications.get(buffer)===held&&!buffer.dirty&&!buffer.error){this.inlinePublications.delete(buffer);held.valid=false;}
-              throw error;
-            }
-          })();
-          completion=operation;void operation.finally(()=>{if(completion===operation)completion=undefined;}).catch(()=>{});return operation;
-        }};
-        inlineRetryAvailable=()=>held.failed&&held.valid&&this.inlinePublications.get(buffer)===held;
-        inlineRetry=async()=>{
-          if((!held.failed&&!completion)||!held.valid||this.inlinePublications.get(buffer)!==held)throw new Error('The retained inline configuration changed. Refresh this embedded Base.');
-          return held.complete();
+        // The occurrence belongs to the complete latest draft, while physical
+        // CAS belongs to its ORIGINAL saved baseline. A dirty body is allowed:
+        // it is saved together with this exact fence edit, never used as proof
+        // that an unseen external physical edit can be overwritten.
+        const previous=buffer.text,savedText=buffer.savedText,witness=buffer.savedDurableWitness;
+        const admitCapture=()=>{
+          validate();validateSelection();
+          const current=buffer.savedDurableWitness;
+          if(captured!==request||this.buffers.get(path)!==buffer||buffer.path!==path||buffer.text!==request.documentText||buffer.savedText!==savedText||this.inlinePublications.has(buffer)||
+            (witness? !current||current.entryId!==witness.entryId||current.revision!==witness.revision||current.path!==witness.path:!!current))throw new Error('The containing note changed before its Base configuration could be saved.');
         };
-        this.inlinePublications.set(buffer,held);
-        try{buffer.update(desired,{validateWrite:()=>{validate();validateSelection();}});}
-        catch(error){if(this.inlinePublications.get(buffer)===held)this.inlinePublications.delete(buffer);held.valid=false;throw error;}
-        captured=fresh;this.mapInactiveSelections(path,previous,desired);
-        await held.complete();
+        admitCapture();
+        const sourceCapture=witness?await buffer.captureConditionalSavedSource(witness,admitCapture):undefined;
+        try{
+          admitCapture();
+          if(sourceCapture&&(sourceCapture.source!==savedText||sourceCapture.logicalWitness.entryId!==witness!.entryId||sourceCapture.logicalWitness.revision!==witness!.revision||sourceCapture.logicalWitness.path!==witness!.path))throw new Error('The saved containing note changed outside this editor. Refresh before editing its Base configuration.');
+          // An already durable exact source needs no new intent or publication.
+          if(desired===buffer.text&&!buffer.dirty&&!buffer.error)return;
+          let completion:Promise<void>|undefined;
+          const held={owner:inlineOwner,text:desired,failed:false,valid:true,complete:():Promise<void>=>{
+            if(completion)return completion;
+            held.failed=false;
+            const operation=(async()=>{
+              const admit=()=>{validate();if(!held.valid||this.inlinePublications.get(buffer)!==held||this.buffers.get(path)!==buffer||buffer.text!==desired||captured!==fresh)throw new Error('The containing note changed while its Base configuration was saved.');};
+              try{
+                admit();await buffer.flush();admit();
+                if(buffer.savedText!==desired||buffer.dirty||buffer.error)throw new Error('The containing note changed while its Base configuration was saved.');
+                if(onInlineSourceSaved&& !onInlineSourceSaved(fresh))throw new Error('The saved Base session is no longer current.');
+                this.inlinePublications.delete(buffer);held.valid=false;
+                this.bufferSubscriptions.publish(buffer);
+                for(const pane of this.loadedViews())if(pane.viewPath===path){pane.editor?.setValue(desired);pane.properties?.refresh();pane.refreshPreview?.();}
+              }catch(error){
+                held.failed=true;
+                // Release an obsolete clean hold without publishing from the
+                // rejected actor. Independent validated readers can refresh later.
+                if(this.inlinePublications.get(buffer)===held&&!buffer.dirty&&!buffer.error){this.inlinePublications.delete(buffer);held.valid=false;}
+                throw error;
+              }
+            })();
+            completion=operation;void operation.finally(()=>{if(completion===operation)completion=undefined;}).catch(()=>{});return operation;
+          }};
+          inlineRetryAvailable=()=>held.failed&&held.valid&&this.inlinePublications.get(buffer)===held;
+          inlineRetry=async()=>{
+            if((!held.failed&&!completion)||!held.valid||this.inlinePublications.get(buffer)!==held)throw new Error('The retained inline configuration changed. Refresh this embedded Base.');
+            return held.complete();
+          };
+          this.inlinePublications.set(buffer,held);
+          try{buffer.update(desired,{validateWrite:()=>{validate();validateSelection();},...(sourceCapture?{conditionalSavedSource:sourceCapture}:{})});}
+          catch(error){if(this.inlinePublications.get(buffer)===held)this.inlinePublications.delete(buffer);held.valid=false;throw error;}
+          captured=fresh;this.mapInactiveSelections(path,previous,desired);
+          await held.complete();
+        }finally{
+          // Accepted captures belong to the exact retained NoteBuffer intent,
+          // including uncertain replies. Only unused proofs remain ours.
+          if(sourceCapture&&buffer.conditionalSavedSourceStatus(sourceCapture)==='unattached')await buffer.releaseConditionalSavedSource(sourceCapture);
+        }
       }
     }:undefined;
     let session:BaseSession;
