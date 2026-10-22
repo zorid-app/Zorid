@@ -3561,7 +3561,8 @@ impl<'a> Evaluator<'a> {
                                 if let Err(error) = self.charge(text.len() / 16 + 1) {
                                     return error;
                                 }
-                                parse_date(text, &self.timezone).map(|date| date.millis)
+                                parse_frontmatter_date(text, &self.timezone)
+                                    .map(|date| date.millis)
                             }
                             None => None,
                         },
@@ -4845,8 +4846,9 @@ fn dates_loosely_equal(left: &DateValue, right: &DateValue) -> bool {
         left.millis == right.millis
     }
 }
-/// Frontmatter and loose Date/String equality recognize only the shipped
-/// date-shaped syntax. Explicit date() additionally accepts compact forms.
+/// Frontmatter, raw String date selection and loose Date/String equality
+/// recognize only the shipped date-shaped syntax. Explicit date() additionally
+/// accepts compact forms.
 fn parse_frontmatter_date(value: &str, timezone: &BasesTimezone) -> Option<DateValue> {
     static SHAPE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"^(?:\d{4}-\d{2}-\d{2}|\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}(?::?\d{2})?)?)$").expect("frontmatter date shape")

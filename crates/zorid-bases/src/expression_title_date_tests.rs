@@ -163,3 +163,62 @@ fn rich_date_scans_charge_raw_bytes_and_observe_cancellation() {
         matches!(Evaluator::new(&context).list_method(&values,"latest",&[],&BTreeMap::new(),false,Some(&[])),RuntimeValue::Error(message) if message.starts_with("cancelled\0"))
     );
 }
+
+#[test]
+fn date_extrema_skip_compact_raw_strings_but_keep_explicit_date_constructor_values() {
+    // getDates calls wK.parseFromString, whose hyphenated shape check is
+    // separate from global date()'s compact 8/12-digit constructor fallback.
+    // REA ev_310966fadf6d4076dae872628a354d75f60d4dd63ad5c86e01495d29ce6b99d0;
+    // retained source ranges 2195226–2195459,
+    // 2203357–2203621 and 2216085–2216852.
+    for raw in ["20240101", "202401011200"] {
+        for wrapper in [
+            None,
+            Some("html"),
+            Some("image"),
+            Some("icon"),
+            Some("link"),
+        ] {
+            let quoted = serde_json::to_string(raw).unwrap();
+            let item = wrapper.map_or_else(|| quoted.clone(), |name| format!("{name}({quoted})"));
+            for method in ["earliest", "latest"] {
+                let source = format!("[{item}].{method}()");
+                assert_eq!(value(&source), BaseValue::Null, "{source}");
+            }
+        }
+    }
+    date(
+        "['20240101', icon('202401011200'), '2024-01-02'].earliest()",
+        1704153600000,
+    );
+    date(
+        "['20241231', html('202412311200'), '2024-01-02'].latest()",
+        1704153600000,
+    );
+    date("[date('20240101')].earliest()", 1704067200000);
+    date("[date('202401011200')].latest()", 1704110400000);
+    assert_eq!(
+        value("date('20240101')"),
+        BaseValue::Date {
+            timestamp: 1704067200000,
+            has_time: false
+        }
+    );
+    let mut captured = context();
+    captured.timezone = BasesTimezone::from_setting(Some("+05:30")).unwrap();
+    assert_eq!(
+        evaluate("[date('202401011200')].latest()", &captured)
+            .unwrap()
+            .value,
+        BaseValue::Date {
+            timestamp: 1704090600000,
+            has_time: true
+        }
+    );
+    assert_eq!(
+        evaluate("[icon('202401011200')].latest()", &captured)
+            .unwrap()
+            .value,
+        BaseValue::Null
+    );
+}

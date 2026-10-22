@@ -11,6 +11,10 @@
 // G9-G15 extension: Object display strings retain inert __proto__ user keys
 // (deliberate Zorid safety choice); List.sort uses the pinned English base-
 // sensitivity/numeric policy. Neither asserts universal host-locale equivalence.
+// G16/G17 source-only follow-up: literal percent formats retain Moment token
+// meaning; raw extrema strings use the hyphenated parser, while explicit date()
+// retains its compact constructor fallback. Historical browser009 had133 row
+// checks; the13 new checks below require fresh matching native/WASM acceptance.
 export const q3ClockMs = 1706702400000; // 2024-01-31T12:00:00.000Z
 export const q3Timezone = 'UTC';
 export const q3Folders = [['q3-dir','Q3']];
@@ -214,6 +218,14 @@ const collections=single('collections','Q3 recursive flatten and strict construc
   ['imageLatest','[image("2024-01-03")].latest()',{type:'date',timestamp:1704240000000,hasTime:true}],
   ['linkEarliest','[link("2024-01-04","Not a date label")].earliest()',{type:'date',timestamp:1704326400000,hasTime:true}],
   ['linkLatest','[link("2024-01-04","Not a date label")].latest()',{type:'date',timestamp:1704326400000,hasTime:true}],
+  ['compactRawEarliest','["20240101"].earliest()',nil],
+  ['compactRawLatest','["202401011200"].latest()',nil],
+  ['compactIconEarliest','[icon("20240101")].earliest()',nil],
+  ['compactIconLatest','[icon("202401011200")].latest()',nil],
+  ['compactMixedEarliest','["20240101",icon("202401011200"),"2024-01-02"].earliest()',{type:'date',timestamp:1704153600000,hasTime:true}],
+  ['compactMixedLatest','["20241231",html("202412311200"),"2024-01-02"].latest()',{type:'date',timestamp:1704153600000,hasTime:true}],
+  ['compactTypedEarliest','[date("20240101")].earliest()',{type:'date',timestamp:1704067200000,hasTime:true}],
+  ['compactTypedLatest','[date("202401011200")].latest()',{type:'date',timestamp:1704110400000,hasTime:true}],
 ]);
 const durationJanuary=single('duration-january','Q3 Duration components, null inputs and January overflow use the captured clock',[
   ['iso','duration("P1Y2M3W4DT5H6M7S")',{type:'duration',years:1,months:2,weeks:0,days:25,hours:5,minutes:6,seconds:7,milliseconds:0}],
@@ -228,6 +240,11 @@ const durationJanuary=single('duration-january','Q3 Duration components, null in
   ['monthOverflow','(date("2024-01-31") + duration("1M")).format("YYYY-MM-DD")',s('2024-03-02')],
   ['half','duration("3h") / 2',{type:'duration',years:0,months:0,weeks:0,days:0,hours:1.5,minutes:0,seconds:0,milliseconds:0}],
   ['halfHours','(duration("3h") / 2).hours',n(1)],
+  ['percentLiteral','date("2024-01-21T19:04:05.067Z").format("%")',s('%')],
+  ['percentBracket','date("2024-01-21T19:04:05.067Z").format("[%]")',s('%')],
+  ['percentYearToken','date("2024-01-21T19:04:05.067Z").format("%YYYY")',s('%2024')],
+  ['percentSingleYearToken','date("2024-01-21T19:04:05.067Z").format("%Y")',s('%2024')],
+  ['percentMomentNotStrftime','date("2024-01-21T19:04:05.067Z").format("%Y-%m-%d")',s('%2024-%4-%0')],
   ['capturedNow','now().format("YYYY-MM-DD HH:mm:ss Z")',s('2024-01-31 12:00:00 +00:00')],
   ['capturedToday','today().format("YYYY-MM-DD HH:mm:ss Z")',s('2024-01-31 00:00:00 +00:00')],
 ]);

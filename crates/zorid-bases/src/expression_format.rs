@@ -8,8 +8,8 @@ pub(super) fn format(value: &DateValue, pattern: &str) -> Result<String, String>
     if pattern.len() > 65_536 {
         return Err("budget\0Date format exceeds byte budget".into());
     }
-    // The old adapter accepted parts of strftime accidentally. Do not pretend
-    // those are Moment tokens; keep the explicit corpus diagnostic.
+    // Unrecognized characters (including percent signs) remain literals;
+    // following letters still use Moment tokens rather than strftime.
     render(
         value,
         if pattern.is_empty() {
@@ -161,9 +161,6 @@ fn render(value: &DateValue, pattern: &str, depth: usize) -> Result<String, Stri
                 cursor += character.len_utf8();
             }
             continue;
-        }
-        if rest.starts_with('%') {
-            return Err("unsupported\0Date formatting uses Moment tokens, not strftime".into());
         }
         let token = TOKENS
             .iter()
@@ -338,6 +335,27 @@ mod tests {
         assert_eq!(text("S SS SSS SSSSSS", "UTC"), "0 06 067 067000");
     }
     #[test]
+    fn percent_is_a_moment_literal_and_does_not_change_following_token_meaning() {
+        // Obsidian delegates to the shipped Moment 2.30.1 formatter. Its
+        // tokenizer's final literal branch includes %, unlike strftime.
+        // REA ev_ad88a95123e779d3b88dcbe0a5d6d32e60954acc02f0f6f103b46b577f773dc3.
+        for (pattern, expected) in [
+            ("%", "%"),
+            ("[%]", "%"),
+            ("%YYYY", "%2024"),
+            ("%Y", "%2024"),
+            ("%Y-%m-%d", "%2024-%4-%0"),
+            ("[%YYYY]", "%YYYY"),
+            ("\\%YYYY", "%2024"),
+            ("%\\Y", "%Y"),
+            ("%L", "%01/21/2024"),
+        ] {
+            assert_eq!(text(pattern, "UTC"), expected, "{pattern}");
+        }
+        assert_eq!(text("%HH %Z", "America/Toronto"), "%14 %-05:00");
+    }
+
+    #[test]
     fn offset_tokens_use_captured_timezone_and_patterns_are_bounded() {
         assert_eq!(text("Z ZZ", "+05:30"), "+05:30 +0530");
         assert_eq!(text("[Z] \\Z", "UTC"), "Z Z");
@@ -351,8 +369,12 @@ mod tests {
         assert!(super::format(&value, &"Y".repeat(65_537))
             .unwrap_err()
             .starts_with("budget\0"));
-        assert!(super::format(&value, "%z")
+        assert_eq!(
+            super::format(&value, &"%".repeat(65_536)).unwrap().len(),
+            65_536
+        );
+        assert!(super::format(&value, &"%".repeat(65_537))
             .unwrap_err()
-            .starts_with("unsupported\0"));
+            .starts_with("budget\0"));
     }
 }
