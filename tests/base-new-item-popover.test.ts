@@ -100,3 +100,11 @@ test('the note Properties context menu remains owned by the New surface', async 
   const s = await setup(); s.handle.element.querySelector<HTMLElement>('.metadata-properties-heading')!.dispatchEvent(new s.dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:10,clientY:10}));
   const menu = s.dom.window.document.querySelector<HTMLElement>('.context-menu')!; assert.ok(menu); menu.dispatchEvent(new s.dom.window.MouseEvent('pointerdown',{bubbles:true})); await tick(); assert.ok(s.handle.element.isConnected); await s.cleanup();
 });
+
+
+test('a newer title typed during a slow rename cannot be discarded by closing', async () => {
+  let release!: () => void, started!: () => void, calls = 0; const gate = new Promise<void>(resolve=>{release=resolve;}), began = new Promise<void>(resolve=>{started=resolve;});
+  let s: Awaited<ReturnType<typeof setup>>; s = await setup(undefined, {rename:async(_path,destination,validate)=>{if(++calls===1){started();await gate;}validate();await s.buffer.rename(destination);}});
+  s.setTitle('First'); const close = s.handle.close(); await began; s.setTitle('Second'); release(); await assert.rejects(close,/title changed/i); assert.ok(s.handle.element.isConnected); assert.equal(s.title.textContent,'Second'); assert.equal(s.handle.path,'First.md');
+  await s.handle.close(); assert.equal(s.handle.path,'Second.md'); assert.equal(calls,2); await s.cleanup();
+});

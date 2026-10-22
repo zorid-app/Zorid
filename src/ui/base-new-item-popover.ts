@@ -185,6 +185,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     const invalid = [...root.querySelectorAll<HTMLElement>('.metadata-property-error')].find(node => !node.hidden && !!node.textContent?.trim());
     if (invalid || root.querySelector('[data-base-editing]')) throw new Error(invalid?.textContent ?? 'Finish editing the current property before closing.');
     await buffer.flush(); validate();
+    if (composingTitle || titleText().trim() !== titleBaseline) throw new Error('The title changed while saving; its draft is preserved.');
     if (propertyGeneration !== propertyInputGeneration) throw new Error('Property input changed while saving; finish the current edit before closing.');
     if (buffer.dirty || buffer.error) throw buffer.error ?? new Error('The new note still has pending changes.');
     propertyDraft = false; error.hidden = retry.hidden = true;
@@ -209,6 +210,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
   function contextOwner(event: MouseEvent) { ownedContextMenu = root.contains(event.target as Node) || ownedPropertyPopover(event.target as Node); }
   function outside(event: PointerEvent) { const target = event.target as Node; if (ownedContextMenu && (target as HTMLElement).closest?.('.context-menu')) return; if (!root.contains(target) && !ownedPropertyPopover(target)) void close().catch(() => {}); }
   function escape(event: KeyboardEvent) {
+    if (event.key === 'ContextMenu' || event.key === 'F10' && event.shiftKey) ownedContextMenu = root.contains(event.target as Node) || ownedPropertyPopover(event.target as Node);
     if (event.defaultPrevented || event.isComposing || composingTitle || event.key !== 'Escape' || ownedPropertyPopover(event.target as Node)) return;
     if (!root.contains(event.target as Node)) return;
     event.preventDefault(); event.stopPropagation(); void close({ restoreFocus: true }).catch(() => {});
