@@ -1,8 +1,15 @@
 # Actual browser/WASM Bases semantic integration
 
-This is a **source-only prepared campaign** until the coordinator grants a frozen
-build/browser slot and the resulting report passes. No browser or Rust build was
-launched while authoring this harness.
+This campaign is **not yet accepted**. Actual run001 on frozen
+`36d47701709341368d15c016ecf6578804fff00a` passed the ordinary-note group, then
+stopped on a fixture assumption that every unchanged property appears in
+`editValues`. That map carries raw overrides; otherwise editing falls back to
+`values`. The fixture now preserves exact raw oracles through that documented
+fallback. The partial report is
+`/private/tmp/zorid-bases-browser-actual-20261022-001/report.json`; Chrome, Vite,
+the owned profile and synthetic database were cleaned up. No other group or
+full campaign acceptance follows from that run. A fresh matching build/runtime
+grant is required for the next run.
 
 The fixture uses the normal `BrowserCoreRuntime`, admitted client,
 `defaultBrowserAdapter.documentSemantics`, unchanged product Worker, generated
@@ -48,7 +55,9 @@ Ada has two books with average five). Seed checks assert the public bounded,
 repeatable contract rather than deriving an oracle from the PRNG implementation.
 Snapshot and file witnesses come from the actual admitted host; they are checked
 against returned values, never forged by a source factory. Warm cache work counts
-may differ and are not semantic expectations.
+may differ and are not semantic expectations. Differential `editValues` are
+combined with typed `values` only for unchanged editable properties; exact
+alias/date/nested raw override assertions remain separate.
 
 The runner reuses the existing owned Chrome PID/profile/Vite cleanup helper. It
 uses the same two CommonJS aliases as normal Vite startup, without rewriting
@@ -56,8 +65,11 @@ product source. It serves the existing generated glue and WASM bytes unchanged
 and verifies both SHA-256 digests and the complete Rust input fingerprint before
 and after execution. All TypeScript/product fixture sources, the two local CJS
 boundaries and dependency/config files are fingerprinted as well. CDP passively
-records the product Worker target, exact WASM asset GETs, browser identity,
-console/protocol events, fixture screenshot and cleanup receipts. The screenshot
+records a dedicated Worker target plus its completed normal script GET URL,
+exact WASM asset GETs, browser identity, console/protocol events, fixture
+screenshot (including on failure when CDP is available) and cleanup receipts.
+The separate HTTP receipt is required because Chromium may announce its Worker
+target with an empty URL. The screenshot
 shows this semantic proof page, not product UI parity.
 
 A stale artifact or changed source rejects evidence. The runner never compiles,

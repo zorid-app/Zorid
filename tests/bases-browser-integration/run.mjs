@@ -58,7 +58,7 @@ await mkdir(out,{recursive:true});
 const assetBytes=new Map(await Promise.all(['zorid_wasm.js','zorid_wasm_bg.wasm'].map(async name=>[name,await readFile(path.join(generated,name))])));
 const profile=await mkdtemp(path.join(tmpdir(),'zorid-bases-browser-chrome-'));
 let server,chrome,cdp,stderr,childReceipt;
-const servedAssets=[];
+const servedAssets=[],workerRequests=[];
 const viteRoot=path.resolve(toolingRoot);
 const chromeDone=()=>!chrome||chrome.exitCode!==null||chrome.signalCode!==null;
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -88,6 +88,13 @@ try {
     optimizeDeps:{include:['zorid-local/workblocks.cjs','zorid-local/document-semantics.cjs'],entries:['tests/bases-browser-integration/index.html']},
     plugins:[{name:'exact-existing-wasm-assets',configureServer(server){server.middlewares.use((request,response,next)=>{
       const prefix='/target/browser-wasm/generated/';let pathname;try{pathname=new URL(request.url,'http://fixture').pathname;}catch{return next();}
+      // A dedicated-worker CDP target can be announced before its URL is known.
+      // Preserve the actual normal Vite Worker URL and completed HTTP response
+      // without intercepting, substituting or invoking its implementation.
+      if(pathname==='/src/platform/browser-core-worker.ts'){
+        const receipt={url:request.url,method:request.method,requestedAt:new Date().toISOString()};workerRequests.push(receipt);
+        response.once('finish',()=>{receipt.statusCode=response.statusCode;receipt.finishedAt=new Date().toISOString();});
+      }
       const name=pathname.startsWith(prefix)?pathname.slice(prefix.length):'',data=assetBytes.get(name);if(!data)return next();
       if(!['GET','HEAD'].includes(request.method)){response.statusCode=405;return response.end();}
       servedAssets.push({name,sha256:sha(data),method:request.method,at:new Date().toISOString()});
@@ -120,12 +127,16 @@ try {
   if(!evidence?.finished)throw new Error('Fixture deadline expired');
   if(evidence.status!=='passed')throw new Error('Browser fixture failed: '+JSON.stringify(evidence.error));
   if(evidence.groups.length!==9||evidence.groups.some(group=>group.status!=='passed')||evidence.unexecutedGroups.length)throw new Error('Incomplete actual browser case execution');
-  if(!cdp.workerTargets.some(worker=>worker.url.includes('/src/platform/browser-core-worker.ts')))throw new Error('Product browser-core-worker target not observed');
+  if(!cdp.workerTargets.length||!workerRequests.some(request=>request.method==='GET'&&request.statusCode===200))throw new Error('Product browser-core-worker target and completed script GET not observed');
   for(const name of ['zorid_wasm.js','zorid_wasm_bg.wasm'])if(!servedAssets.some(asset=>asset.name===name&&asset.method==='GET'))throw new Error('Browser did not fetch exact WASM asset: '+name);
   const screenshot=await cdp.call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(path.join(out,'fixture-result.png'),Buffer.from(screenshot.data,'base64'));
   // Recompute all source/artifact witnesses AFTER execution as well as before it.
   if(head()!==expectedHead||JSON.stringify(await artifactProof())!==JSON.stringify(provenance))throw new Error('Sources/artifacts changed during execution; evidence rejected');
-} catch(error){failure=error;console.error(String(error.stack??error));}
+} catch(error){
+  failure=error;console.error(String(error.stack??error));
+  if(cdp){try{const screenshot=await cdp.call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(path.join(out,'fixture-failure.png'),Buffer.from(screenshot.data,'base64'));}
+    catch(captureError){console.error('Failure screenshot unavailable: '+String(captureError.stack??captureError));}}
+}
 finally {
   const cleanup=await cleanupOwnedResources({chrome,childReceipt,profile,server,cdp});
   const artifactFailures=[];
@@ -134,7 +145,7 @@ finally {
     try{await writeFile(path.join(out,name),value);}catch(error){artifactFailures.push({file:name,message:String(error.stack??error)});}
   }
   if(cleanup.failures.length||artifactFailures.length)failure??=new Error('Owned cleanup/evidence failure: '+JSON.stringify({cleanup:cleanup.failures,artifactFailures}));
-  await writeFile(path.join(out,'report.json'),JSON.stringify({provenance,evidence:evidence??null,servedAssets,workerTargets:cdp?.workerTargets??[],cdpDroppedEvents:cdp?.droppedEvents??0,cleanup,artifactFailures,runnerError:failure?String(failure.stack??failure):null},null,2)+'\n');
+  await writeFile(path.join(out,'report.json'),JSON.stringify({provenance,evidence:evidence??null,servedAssets,workerRequests,workerTargets:cdp?.workerTargets??[],cdpDroppedEvents:cdp?.droppedEvents??0,cleanup,artifactFailures,runnerError:failure?String(failure.stack??failure):null},null,2)+'\n');
 }
 if(failure)process.exitCode=1;
 else console.log(`PASS browser Bases: ${evidence.groups.length} groups; ${evidence.remainingGates.length} explicitly deferred gates; ${out}`);

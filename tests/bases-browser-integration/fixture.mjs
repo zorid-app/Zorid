@@ -66,6 +66,9 @@ function row(result, path) { const found = result.value.result.rows.find(row => 
 function groupFor(result, key) { const found = result.value.result.groups.find(group => group.key?.type === 'string' && group.key.value === key); assert(found, 'Missing group: ' + key); return found; }
 function noErrors(result) { equal(result.value.result.diagnostics, [], 'Unexpected query diagnostics'); }
 function witness(entry) { return {entryId: entry.id, revision: entry.revision}; }
+// editValues contains only raw values that differ from their typed projection.
+// Unchanged scalars/lists remain directly editable through values.
+function editValue(item, property) { return item.editValues?.[property] ?? item.values[property]; }
 function sameSemanticRead(actual, expected, message) {
   // Work accounting can legitimately improve on warm cache hits. It is not a
   // row/value oracle and must not obscure exact snapshot/source semantics.
@@ -115,7 +118,8 @@ try {
     equal(projection.editValues['note.author'], string(alias), 'TypeScript presentation adapter retains raw alias');
     equal(sharedBaseWitness(projected, item.path), {entryId: item.entryId, revision: item.revision}, 'Projected edit witness');
     const raw = await host.adapter.read(item.path); equal(raw, pioneer, 'Exact initial CRLF note');
-    const topics = item.editValues['note.topics'].value.map(value => value.value);
+    equal(editValue(item, 'note.topics'), list([string('Rust'), string('Design')]), 'Exact raw initial topics');
+    const topics = editValue(item, 'note.topics').value.map(value => value.value);
     const next = setProperty(raw, 'topics', [...topics, 'Compilers'], 'list');
     assert(next.endsWith(body), 'Unrelated body/CRLF/Unicode changed');
     assert(next.includes(`author: '${alias}' # Keep this alias`), 'Alias, quote or comment changed');
@@ -126,7 +130,7 @@ try {
     await build(host); afterRawEdit = await pin(host);
     const updated = await query(host, afterRawEdit, 'Books.base', 'All');
     equal(row(updated, item.path).editValues['note.author'], string(alias), 'Reindex lost original alias');
-    equal(row(updated, item.path).editValues['note.topics'], list([string('Rust'), string('Design'), string('Compilers')]), 'Reindex raw edited list');
+    equal(editValue(row(updated, item.path), 'note.topics'), list([string('Rust'), string('Design'), string('Compilers')]), 'Reindex raw edited list');
     sameSemanticRead(await query(host, original, 'Books.base', 'All'), all, 'Old pin substituted new note revision');
     return {saved: next, rejected: rejection, updatedRow: row(updated, item.path)};
   });
