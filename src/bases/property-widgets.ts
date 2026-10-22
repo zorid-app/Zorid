@@ -246,7 +246,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       element.append(checkbox);
     } else if (presentation.property === 'file.name' || presentation.property === 'file.file') {
       const link = document.createElement('a'); link.href = '#'; link.className = 'internal-link'; link.textContent = renderText(value);
-      const open = (event: MouseEvent) => { if ((event.button === 0 || event.button === 1) && options.openFile && current()) { event.preventDefault(); event.stopPropagation(); options.openFile(presentation.row.path, event); } };
+      const open = (event: MouseEvent) => { if ((event.button === 0 || event.button === 1) && options.openFile && current()) { event.preventDefault(); event.stopPropagation(); options.openFile(presentation.row.path, event, presentation.row.entryId && presentation.row.revision ? { entryId: presentation.row.entryId, revision: presentation.row.revision } : undefined); } };
       link.addEventListener('click', open); link.addEventListener('auxclick', open); element.append(link);
     } else if (!editable && (displayValue.type === 'namespace' || displayValue.type === 'list' || displayValue.type === 'object')) {
       disposeRich = mountBaseRichValue(element, displayValue, { openFile: options.openFile, loadImage: options.loadImage ? (source, signal) => options.loadImage!(source, signal, presentation) : undefined, isCurrent: current, onError: report });

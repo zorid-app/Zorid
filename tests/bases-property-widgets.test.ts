@@ -241,3 +241,28 @@ test('missing caller-verified relation display falls back to exact literal witho
   const s=setup('[[Authors/Ada|my alias]]',{type:'relation'},{getDisplayValue:()=>{reads++;return undefined;},openFile:()=>{opened++;}});
   assert.equal(reads,1);assert.equal(s.element.textContent,'[[Authors/Ada|my alias]]');assert.equal(s.element.querySelector('[role="link"]'),null);s.element.querySelector('.multi-select-pill')!.dispatchEvent(new s.dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));assert.equal(opened,0);assert.equal(s.edits.length,0);s.close();
 });
+
+
+test('direct file widgets forward captured row identity for mouse, middle and native keyboard clicks', () => {
+  for (const property of ['file.name','file.file']) {
+    const dom=new JSDOM('<div></div>'),element=dom.window.document.querySelector('div')!;
+    const row={path:'Notes/Hash#Literal.md',values:{},entryId:'saved-note',revision:'saved-r1'};
+    let current=true;const opened:unknown[]=[];
+    const dispose=mountBasePropertyWidget(element,{row,property,value:baseExpressionValue('Hash#Literal'),version:1},{getDefinition:()=>undefined,isCurrent:()=>current,openFile:(path,event,witness)=>opened.push({path,event,witness}),commit(){throw new Error('File values are readonly');}});
+    const link=element.querySelector('a')!;
+    // Native anchors activate from Enter by dispatching a click with detail=0.
+    const events=[new dom.window.MouseEvent('click',{button:0,detail:1,bubbles:true,cancelable:true}),new dom.window.MouseEvent('auxclick',{button:1,bubbles:true,cancelable:true}),new dom.window.MouseEvent('click',{button:0,detail:0,bubbles:true,cancelable:true})];
+    for(const event of events) link.dispatchEvent(event);
+    assert.deepEqual(opened,events.map(event=>({path:'Notes/Hash#Literal.md',event,witness:{entryId:'saved-note',revision:'saved-r1'}})));
+    assert.ok(events.every(event=>event.defaultPrevented));
+    link.dispatchEvent(new dom.window.MouseEvent('auxclick',{button:2,bubbles:true,cancelable:true}));assert.equal(opened.length,3);
+    current=false;link.dispatchEvent(events[0]);assert.equal(opened.length,3);
+    current=true;dispose();link.dispatchEvent(events[2]);assert.equal(opened.length,3);dom.window.close();
+  }
+});
+
+test('direct file widget never invents a revision for an incomplete row witness', () => {
+  const dom=new JSDOM('<div></div>'),element=dom.window.document.querySelector('div')!;let witness:unknown='unopened';
+  const dispose=mountBasePropertyWidget(element,{row:{path:'A.md',values:{},entryId:'a'},property:'file.name',value:baseExpressionValue('A'),version:1},{getDefinition:()=>undefined,commit(){},openFile:(_path,_event,target)=>{witness=target;}});
+  element.querySelector('a')!.click();assert.equal(witness,undefined);dispose();dom.window.close();
+});
