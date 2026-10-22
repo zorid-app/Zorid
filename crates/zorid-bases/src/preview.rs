@@ -224,12 +224,16 @@ pub(crate) fn value_bytes(
         }
         let mut bytes = size_of::<BaseValue>();
         match value {
-            BaseValue::String { value } => bytes = bytes.saturating_add(string_bytes(value)),
+            BaseValue::String { value }
+            | BaseValue::Html { value }
+            | BaseValue::Image { value }
+            | BaseValue::Icon { value } => bytes = bytes.saturating_add(string_bytes(value)),
             BaseValue::File { path } => bytes = bytes.saturating_add(string_bytes(path)),
             BaseValue::Link {
                 path,
                 target,
                 display,
+                display_value,
                 ..
             } => {
                 bytes = bytes.saturating_add(string_bytes(path));
@@ -238,6 +242,9 @@ pub(crate) fn value_bytes(
                 }
                 if let Some(display) = display {
                     bytes = bytes.saturating_add(string_bytes(display));
+                }
+                if let Some(value) = display_value {
+                    bytes = bytes.saturating_add(visit(value, depth + 1, admission)?);
                 }
             }
             BaseValue::Error { code, message } => {
@@ -688,5 +695,50 @@ mod admission_tests {
             "cancelled"
         );
         assert_eq!(admission.work_used(), 0);
+    }
+}
+
+#[cfg(test)]
+mod rich_admission_tests {
+    use super::*;
+    #[test]
+    fn rich_payload_and_boxed_link_labels_are_charged_recursively() {
+        let value = BaseValue::Link {
+            path: "A.md".into(),
+            target: None,
+            display: None,
+            external: false,
+            display_value: Some(Box::new(BaseValue::Html {
+                value: "x".repeat(4096),
+            })),
+        };
+        let mut admission = PreviewAdmission::new(1024, &QueryOptions::default()).unwrap();
+        assert_eq!(
+            value_bytes(&value, &mut admission).unwrap_err().code,
+            "budget"
+        );
+        assert_eq!(
+            admission.work_used(),
+            2,
+            "the link and its label must both be visited"
+        );
+        let mut deep = BaseValue::Icon {
+            value: "star".into(),
+        };
+        for _ in 0..130 {
+            deep = BaseValue::Link {
+                path: "A.md".into(),
+                target: None,
+                display: None,
+                external: false,
+                display_value: Some(Box::new(deep)),
+            };
+        }
+        let mut admission =
+            PreviewAdmission::new(MAX_PREVIEW_QUERY_OWNED_BYTES, &QueryOptions::default()).unwrap();
+        assert_eq!(
+            value_bytes(&deep, &mut admission).unwrap_err().code,
+            "budget"
+        );
     }
 }

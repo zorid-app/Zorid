@@ -1,7 +1,7 @@
 //! Deterministic initial Base collation. Unicode scalar lowercase tables follow
 //! the pinned Rust toolchain; no host Intl, locale or normalization is consulted.
 use crate::BaseValue;
-use std::cmp::Ordering;
+use std::{borrow::Cow, cmp::Ordering};
 
 pub(crate) fn natural_text(left: &str, right: &str) -> Ordering {
     let left = left
@@ -48,13 +48,48 @@ pub(crate) fn natural_text(left: &str, right: &str) -> Ordering {
     }
     (left.len() - a).cmp(&(right.len() - b))
 }
+/// String representation used by the reference Image subclass. Relative vault
+/// paths use wikilink embeds; URI-like paths retain Markdown image syntax.
+pub(crate) fn image_text(value: &str) -> String {
+    if value.starts_with("./") || value.starts_with("../") || !value.contains(':') {
+        format!("![[{value}]]")
+    } else {
+        format!("![]({value})")
+    }
+}
+fn string_text(value: &BaseValue) -> Option<Cow<'_, str>> {
+    match value {
+        BaseValue::String { value } | BaseValue::Html { value } | BaseValue::Icon { value } => {
+            Some(Cow::Borrowed(value))
+        }
+        BaseValue::Image { value } => Some(Cow::Owned(image_text(value))),
+        _ => None,
+    }
+}
+fn link_text<'a>(value: &'a BaseValue, timezone: &str) -> Cow<'a, str> {
+    match value {
+        BaseValue::Link {
+            display_value: Some(value),
+            ..
+        } => Cow::Owned(crate::query::display(value, timezone)),
+        BaseValue::Link {
+            display: Some(value),
+            ..
+        } => Cow::Borrowed(value),
+        BaseValue::Link { path, .. } => Cow::Borrowed(path),
+        _ => unreachable!(),
+    }
+}
 fn rank(value: &BaseValue) -> u8 {
     match value {
         BaseValue::Boolean { .. } => 0,
         BaseValue::Number { .. } => 1,
         BaseValue::Date { .. } => 2,
         BaseValue::Duration { .. } => 3,
-        BaseValue::String { .. } => 4,
+        BaseValue::String { .. }
+        | BaseValue::Html { .. }
+        | BaseValue::Image { .. }
+        | BaseValue::Icon { .. } => 4,
         BaseValue::List { .. } => 5,
         BaseValue::Object { .. } => 6,
         BaseValue::File { .. } => 7,
@@ -66,22 +101,40 @@ fn rank(value: &BaseValue) -> u8 {
 /// Compare a pair of typed keys. Null/error placement is independent of direction;
 /// the caller adds exact vault path as the final row tie-breaker.
 pub(crate) fn compare(left: &BaseValue, right: &BaseValue, descending: bool) -> Ordering {
+    compare_with_timezone(left, right, descending, "UTC")
+}
+/// Rich link labels can contain dates; stringify them in the invocation zone.
+pub(crate) fn compare_with_timezone(
+    left: &BaseValue,
+    right: &BaseValue,
+    descending: bool,
+    timezone: &str,
+) -> Ordering {
     if matches!(left, BaseValue::Null | BaseValue::Error { .. })
         || matches!(right, BaseValue::Null | BaseValue::Error { .. })
     {
         return rank(left).cmp(&rank(right));
     }
-    let order = ascending(left, right);
+    let order = ascending(left, right, timezone);
     if descending {
         order.reverse()
     } else {
         order
     }
 }
-fn ascending(left: &BaseValue, right: &BaseValue) -> Ordering {
+fn ascending(left: &BaseValue, right: &BaseValue, timezone: &str) -> Ordering {
     let type_order = rank(left).cmp(&rank(right));
     if type_order != Ordering::Equal {
         return type_order;
+    }
+    if let (Some(left), Some(right)) = (string_text(left), string_text(right)) {
+        return natural_text(&left, &right);
+    }
+    if matches!(
+        (left, right),
+        (BaseValue::Link { .. }, BaseValue::Link { .. })
+    ) {
+        return natural_text(&link_text(left, timezone), &link_text(right, timezone));
     }
     match (left, right) {
         (BaseValue::Boolean { value: a }, BaseValue::Boolean { value: b }) => a.cmp(b),
@@ -92,14 +145,14 @@ fn ascending(left: &BaseValue, right: &BaseValue) -> Ordering {
         (BaseValue::String { value: a }, BaseValue::String { value: b }) => natural_text(a, b),
         (BaseValue::File { path: a }, BaseValue::File { path: b })
         | (BaseValue::Link { path: a, .. }, BaseValue::Link { path: b, .. }) => natural_text(a, b),
-        (BaseValue::List { value: a }, BaseValue::List { value: b }) => sequence(a, b),
+        (BaseValue::List { value: a }, BaseValue::List { value: b }) => sequence(a, b, timezone),
         (BaseValue::Object { value: a }, BaseValue::Object { value: b }) => {
             let mut a = a.iter().collect::<Vec<_>>();
             let mut b = b.iter().collect::<Vec<_>>();
             a.sort_by(|a, b| a.0.cmp(&b.0));
             b.sort_by(|a, b| a.0.cmp(&b.0));
             for (a, b) in a.iter().zip(&b) {
-                let order = a.0.cmp(&b.0).then_with(|| ascending(&a.1, &b.1));
+                let order = a.0.cmp(&b.0).then_with(|| ascending(&a.1, &b.1, timezone));
                 if order != Ordering::Equal {
                     return order;
                 }
@@ -138,9 +191,9 @@ fn ascending(left: &BaseValue, right: &BaseValue) -> Ordering {
         _ => Ordering::Equal,
     }
 }
-fn sequence(a: &[BaseValue], b: &[BaseValue]) -> Ordering {
+fn sequence(a: &[BaseValue], b: &[BaseValue], timezone: &str) -> Ordering {
     for (a, b) in a.iter().zip(b) {
-        let order = ascending(a, b);
+        let order = ascending(a, b, timezone);
         if order != Ordering::Equal {
             return order;
         }
@@ -158,6 +211,7 @@ mod tests {
             path: "m".into(),
             target: None,
             display: None,
+            display_value: None,
             external: false,
         };
         assert_eq!(compare(&a, &z, false), Ordering::Less);
@@ -185,6 +239,53 @@ mod tests {
         assert_eq!(
             compare(&BaseValue::Null, &BaseValue::Boolean { value: false }, true),
             Ordering::Greater
+        );
+    }
+}
+
+#[cfg(test)]
+mod rich_tests {
+    use super::*;
+    #[test]
+    fn rich_strings_collate_with_text_but_keep_separate_group_types() {
+        assert_eq!(
+            compare(
+                &BaseValue::Html { value: "B2".into() },
+                &BaseValue::String {
+                    value: "B10".into()
+                },
+                false
+            ),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare(
+                &BaseValue::Icon {
+                    value: "star".into()
+                },
+                &BaseValue::String {
+                    value: "STAR".into()
+                },
+                false
+            ),
+            Ordering::Equal
+        );
+        assert_eq!(image_text("cover.png"), "![[cover.png]]");
+        assert_eq!(
+            image_text("https://example.test/cover.png"),
+            "![](https://example.test/cover.png)"
+        );
+        assert_eq!(
+            compare(
+                &BaseValue::Image {
+                    value: "cover.png".into()
+                },
+                &BaseValue::String {
+                    value: "![[cover.png]]".into()
+                },
+                false
+            ),
+            Ordering::Equal
         );
     }
 }

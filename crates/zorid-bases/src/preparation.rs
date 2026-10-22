@@ -1243,34 +1243,7 @@ fn program_bytes(p: &BaseProgram, m: &mut Maintenance<'_>) -> Option<usize> {
         }
     }
     fn value(v: &crate::BaseValue, m: &mut Maintenance<'_>) -> Option<usize> {
-        match v {
-            crate::BaseValue::String { value } | crate::BaseValue::File { path: value } => {
-                m.bytes(value.capacity())
-            }
-            crate::BaseValue::List { value: v } => vector_cost(v, m, value),
-            crate::BaseValue::Object { value: v } => vector_cost(v, m, |(k, v), m| {
-                costs([m.bytes(k.capacity())?, value(v, m)?])
-            }),
-            crate::BaseValue::Link {
-                path,
-                target,
-                display,
-                ..
-            } => m.bytes(costs([
-                path.capacity(),
-                target.as_ref().map_or(0, |w| {
-                    w.entry_id
-                        .as_str()
-                        .len()
-                        .saturating_add(w.revision.as_str().len())
-                }),
-                display.as_ref().map_or(0, String::capacity),
-            ])?),
-            crate::BaseValue::Error { code, message } => {
-                m.bytes(code.capacity().saturating_add(message.capacity()))
-            }
-            _ => m.bytes(0),
-        }
+        value_heap(v, m)
     }
     costs([
         m.bytes(
@@ -1411,6 +1384,7 @@ fn options_exact(a: &QueryOptions, b: &QueryOptions, independent: bool) -> bool 
         && a.max_groups == b.max_groups
         && a.max_output_bytes == b.max_output_bytes
         && (independent || a.evaluation.clock_ms == b.evaluation.clock_ms)
+        && a.evaluation.random_seed == b.evaluation.random_seed
         && a.evaluation.timezone == b.evaluation.timezone
         && a.evaluation.max_steps == b.evaluation.max_steps
         && a.evaluation.formulas == b.evaluation.formulas
@@ -1474,7 +1448,11 @@ fn value_heap(v: &crate::BaseValue, m: &mut Maintenance<'_>) -> Option<usize> {
         {
             None
         }
-        V::String { value } | V::File { path: value } => m.retained(value.capacity(), value.len()),
+        V::String { value }
+        | V::Html { value }
+        | V::Image { value }
+        | V::Icon { value }
+        | V::File { path: value } => m.retained(value.capacity(), value.len()),
         V::List { value } => vector_cost(value, m, value_heap),
         V::Object { value } => vector_cost(value, m, |(k, v), m| {
             costs([m.retained(k.capacity(), k.len())?, value_heap(v, m)?])
@@ -1483,29 +1461,39 @@ fn value_heap(v: &crate::BaseValue, m: &mut Maintenance<'_>) -> Option<usize> {
             path,
             target,
             display,
+            display_value,
             ..
-        } => m.retained(
-            costs([
-                path.capacity(),
-                target.as_ref().map_or(0, |w| {
-                    w.entry_id
-                        .as_str()
-                        .len()
-                        .saturating_add(w.revision.as_str().len())
-                }),
-                display.as_ref().map_or(0, String::capacity),
-            ])?,
-            costs([
-                path.len(),
-                target.as_ref().map_or(0, |w| {
-                    w.entry_id
-                        .as_str()
-                        .len()
-                        .saturating_add(w.revision.as_str().len())
-                }),
-                display.as_ref().map_or(0, String::len),
-            ])?,
-        ),
+        } => {
+            let own = m.retained(
+                costs([
+                    path.capacity(),
+                    target.as_ref().map_or(0, |w| {
+                        w.entry_id
+                            .as_str()
+                            .len()
+                            .saturating_add(w.revision.as_str().len())
+                    }),
+                    display.as_ref().map_or(0, String::capacity),
+                ])?,
+                costs([
+                    path.len(),
+                    target.as_ref().map_or(0, |w| {
+                        w.entry_id
+                            .as_str()
+                            .len()
+                            .saturating_add(w.revision.as_str().len())
+                    }),
+                    display.as_ref().map_or(0, String::len),
+                ])?,
+            )?;
+            let nested = display_value.as_ref().map_or(Some(0), |value| {
+                costs([
+                    m.bytes(size_of::<crate::BaseValue>())?,
+                    value_heap(value, m)?,
+                ])
+            })?;
+            costs([own, nested])
+        }
         _ => m.bytes(0),
     }
 }
@@ -1697,6 +1685,22 @@ fn copy_value(
                 Ok((k.clone(), copy_value(v, options)?))
             })?,
         },
+        crate::BaseValue::Link {
+            path,
+            target,
+            display,
+            display_value,
+            external,
+        } => crate::BaseValue::Link {
+            path: path.clone(),
+            target: target.clone(),
+            display: display.clone(),
+            external: *external,
+            display_value: display_value
+                .as_ref()
+                .map(|value| copy_value(value, options).map(Box::new))
+                .transpose()?,
+        },
         _ => v.clone(),
     })
 }
@@ -1740,6 +1744,7 @@ fn copy_options(o: &QueryOptions, independent: bool) -> Result<QueryOptions, Exp
             } else {
                 o.evaluation.clock_ms
             },
+            random_seed: o.evaluation.random_seed,
             timezone: o.evaluation.timezone.clone(),
             max_steps: o.evaluation.max_steps,
             formulas: copy_vec(&o.evaluation.formulas, o, |v| Ok(v.clone()))?,

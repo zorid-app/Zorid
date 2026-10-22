@@ -1750,3 +1750,43 @@ fn summary_picker_property_is_part_of_answer_identity_and_previews_are_copied() 
         .unwrap()
         .is_empty());
 }
+
+#[test]
+fn rich_result_labels_are_deep_copied_and_view_seed_is_in_answer_identity() {
+    let r = first();
+    let mut cache = BasePreparationCache::new();
+    let source="formulas:\n  decorated: link(file.path, icon('star'))\n  seeded: random()\nviews:\n  - type: table\n    name: T\n    order: [formula.decorated, formula.seeded]\n";
+    let (program, prepared) = answer_inputs(&mut cache, &r, source, 0);
+    let mut options = r.options.clone();
+    options.evaluation.random_seed = Some(7);
+    let seed = cache
+        .query_prepared_cached(&program, &prepared, &options, 0)
+        .unwrap();
+    assert_eq!(seed.outcome(), PreparationCacheOutcome::Miss);
+    let expected_random = seed.value().rows[0].values["formula.seeded"].clone();
+    let mut owned = seed.into_value();
+    match owned.rows[0].values.get_mut("formula.decorated").unwrap() {
+        crate::BaseValue::Link { display_value, .. } => {
+            *display_value = Some(Box::new(crate::BaseValue::Html {
+                value: "changed".into(),
+            }))
+        }
+        value => panic!("{value:?}"),
+    }
+    let hit = cache
+        .query_prepared_cached(&program, &prepared, &options, 1)
+        .unwrap();
+    assert_eq!(hit.outcome(), PreparationCacheOutcome::Hit);
+    assert!(
+        matches!(&hit.value().rows[0].values["formula.decorated"],crate::BaseValue::Link{display_value:Some(value),..} if **value==crate::BaseValue::Icon{value:"star".into()})
+    );
+    options.evaluation.random_seed = Some(8);
+    let changed = cache
+        .query_prepared_cached(&program, &prepared, &options, 2)
+        .unwrap();
+    assert_eq!(changed.outcome(), PreparationCacheOutcome::Miss);
+    assert_ne!(
+        changed.value().rows[0].values["formula.seeded"],
+        expected_random
+    );
+}

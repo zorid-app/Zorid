@@ -359,9 +359,22 @@ fn display_copy_bytes(
         ));
     }
     let bytes = match value {
-        BaseValue::String { value } => crate::preview::string_bytes(value),
-        BaseValue::File { path } | BaseValue::Link { path, .. } => {
-            crate::preview::string_bytes(path)
+        BaseValue::String { value } | BaseValue::Html { value } | BaseValue::Icon { value } => {
+            crate::preview::string_bytes(value)
+        }
+        BaseValue::Image { value } => crate::preview::string_bytes(value).saturating_add(16),
+        BaseValue::File { path } => crate::preview::string_bytes(path),
+        BaseValue::Link {
+            path,
+            display,
+            display_value,
+            ..
+        } => {
+            if let Some(value) = display_value {
+                display_copy_bytes(value, depth + 1, admission)?.saturating_add(64)
+            } else {
+                crate::preview::string_bytes(display.as_deref().unwrap_or(path))
+            }
         }
         BaseValue::Error { message, .. } => {
             crate::preview::string_bytes(message).saturating_add(16)
@@ -418,8 +431,29 @@ fn comparator_side_scratch(
         ));
     }
     let bytes = match value {
-        BaseValue::String { value } => lowercase_scratch(value),
-        BaseValue::File { path } | BaseValue::Link { path, .. } => lowercase_scratch(path),
+        BaseValue::String { value } | BaseValue::Html { value } | BaseValue::Icon { value } => {
+            lowercase_scratch(value)
+        }
+        BaseValue::Image { value } => lowercase_scratch(value)
+            .saturating_add(crate::preview::string_bytes(value))
+            .saturating_add(1024),
+        BaseValue::File { path } => lowercase_scratch(path),
+        BaseValue::Link {
+            path,
+            display,
+            display_value,
+            ..
+        } => {
+            if let Some(value) = display_value {
+                // Rich labels stringify before collation. The display reserve
+                // covers both retained text and its lowercase scalar buffers.
+                display_copy_bytes(value, depth + 1, admission)?
+                    .saturating_mul(32)
+                    .saturating_add(1024)
+            } else {
+                lowercase_scratch(display.as_deref().unwrap_or(path))
+            }
+        }
         BaseValue::List { value } => {
             let mut maximum = 0;
             for child in value {
@@ -486,7 +520,10 @@ fn truth(value: &BaseValue) -> bool {
         BaseValue::Null | BaseValue::Error { .. } => false,
         BaseValue::Boolean { value } => *value,
         BaseValue::Number { value } => *value != 0.0 && !value.is_nan(),
-        BaseValue::String { value } => !value.is_empty(),
+        BaseValue::String { value }
+        | BaseValue::Html { value }
+        | BaseValue::Image { value }
+        | BaseValue::Icon { value } => !value.is_empty(),
         BaseValue::List { value } => !value.is_empty(),
         BaseValue::Object { value } => !value.is_empty(),
         _ => true,
@@ -661,13 +698,26 @@ pub(crate) fn canonical(value: &BaseValue) -> String {
 fn group_key_id(value: &BaseValue) -> String {
     format!("base-key-v1:{}", canonical(value))
 }
-fn display(value: &BaseValue, timezone: &str) -> String {
+pub(crate) fn display(value: &BaseValue, timezone: &str) -> String {
     match value {
         BaseValue::Null => "null".into(),
         BaseValue::Boolean { value } => value.to_string(),
         BaseValue::Number { value } => value.to_string(),
-        BaseValue::String { value } => value.clone(),
-        BaseValue::File { path } | BaseValue::Link { path, .. } => path.clone(),
+        BaseValue::String { value } | BaseValue::Html { value } | BaseValue::Icon { value } => {
+            value.clone()
+        }
+        BaseValue::Image { value } => order::image_text(value),
+        BaseValue::File { path } => path.clone(),
+        BaseValue::Link {
+            path,
+            display: label,
+            display_value,
+            ..
+        } => display_value
+            .as_ref()
+            .map(|value| display(value, timezone))
+            .or_else(|| label.clone())
+            .unwrap_or_else(|| path.clone()),
         BaseValue::List { value } => value
             .iter()
             .map(|value| display(value, timezone))
@@ -1766,7 +1816,7 @@ pub(crate) fn query_rows_validated(
                 (left, right),
                 (BaseValue::Duration { .. }, BaseValue::Duration { .. })
             ) {
-                order::compare(
+                order::compare_with_timezone(
                     scalars
                         .get(&(&a.entry_id, criterion.property.as_str()))
                         .unwrap_or(&null),
@@ -1774,9 +1824,15 @@ pub(crate) fn query_rows_validated(
                         .get(&(&b.entry_id, criterion.property.as_str()))
                         .unwrap_or(&null),
                     criterion.descending,
+                    &options.evaluation.timezone,
                 )
             } else {
-                order::compare(left, right, criterion.descending)
+                order::compare_with_timezone(
+                    left,
+                    right,
+                    criterion.descending,
+                    &options.evaluation.timezone,
+                )
             };
             if !comparison.is_eq() {
                 return comparison;
@@ -1880,10 +1936,11 @@ pub(crate) fn query_rows_validated(
                 "Comparator scratch exceeds query work budget",
             )?;
             groups.sort_by(|a, b| {
-                order::compare(
+                order::compare_with_timezone(
                     a.key.as_ref().unwrap(),
                     b.key.as_ref().unwrap(),
                     group.descending,
+                    &options.evaluation.timezone,
                 )
             });
         }
@@ -2330,6 +2387,7 @@ mod relation_group_identity_tests {
         BaseValue::Link {
             path: path.into(),
             display: Some(display.into()),
+            display_value: None,
             external: false,
             target: Some(crate::RecordWitness {
                 entry_id: crate::EntryId::new(entry).unwrap(),
@@ -2358,6 +2416,7 @@ mod relation_group_identity_tests {
             path: "Missing".into(),
             target: None,
             display: Some("Alias".into()),
+            display_value: None,
             external: false,
         };
         let mut other_alias = unresolved.clone();
