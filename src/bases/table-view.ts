@@ -16,9 +16,10 @@ export interface BaseTableEdit {
   readonly property: string;
   readonly value: BaseExpressionValue;
 }
+export interface BaseTableFileWitness { readonly entryId: string; readonly revision: string }
 export interface BaseTableOptions {
   readonly result: BaseQueryResult;
-  readonly openFile: (path: string, event: MouseEvent | KeyboardEvent) => void;
+  readonly openFile: (path: string, event: MouseEvent | KeyboardEvent, witness?: BaseTableFileWitness) => void;
   /** Host must revalidate version/path/property and publish a new result after saving. */
   readonly editProperty?: (edit: BaseTableEdit) => Promise<void>;
   readonly getPropertyType?: (property: string) => string | undefined;
@@ -33,7 +34,7 @@ export interface BaseTableOptions {
   readonly renderProperty?: (element: HTMLElement, property: BasePropertyPresentation) => void | (() => void);
   readonly patchView?: (patch: BaseViewPatch) => Promise<void>;
   readonly deleteFiles?: (rows: readonly BaseQueryRow[]) => Promise<void>;
-  readonly contextMenu?: (row: BaseQueryRow, event: MouseEvent) => void;
+  readonly contextMenu?: (row: BaseQueryRow, event: MouseEvent, witness?: BaseTableFileWitness) => void;
   readonly hoverFile?: (row: BaseQueryRow, event: MouseEvent) => void;
   readonly dragFile?: (row: BaseQueryRow, event: DragEvent) => void;
   readonly requestEditProperty?: (property: string, anchor: HTMLElement) => void;
@@ -407,6 +408,15 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   function renderCell(row: BaseQueryRow, property: string, index: number, point: CellPoint) {
     const cell = doc.createElement('div'), value = row.values[property] ?? BASE_NULL, token = revision;
     const current = () => !destroyed && token === revision && body.contains(cell);
+    const filePath = row.path;
+    // Retain the same saved target through host awaits; never re-resolve a reused path.
+    // Direct row opens have no subpath, even when the literal filename contains #.
+    const fileWitness: BaseTableFileWitness | undefined = typeof row.entryId === 'string' && typeof row.revision === 'string'
+      ? Object.freeze({ entryId: row.entryId, revision: row.revision }) : undefined;
+    const openRow = (event: MouseEvent | KeyboardEvent) => {
+      if (fileWitness) options.openFile(filePath, event, fileWitness);
+      else options.openFile(filePath, event);
+    };
     cell.className = 'zorid-bases-table-cell'; cell.setAttribute('role', 'gridcell'); cell.setAttribute('aria-colindex', String(index + 1));
     cell.dataset.valueType = options.getPropertyType?.(property) ?? value.type;
     cell.dataset.path = row.path; cell.dataset.property = property; cell.dataset.group = String(point.group); cell.dataset.row = String(point.row); cell.dataset.column = String(index);
@@ -417,8 +427,8 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     } else if (property === 'file.name' || property === 'file.file') {
       const link = doc.createElement('a'); link.className = 'internal-link'; link.href = '#'; link.tabIndex = -1;
       link.textContent = display(value, result.shared !== undefined) || row.path; link.title = row.path;
-      link.addEventListener('click', event => { event.preventDefault(); if (current() && !suppressClick && (!event.shiftKey || event.metaKey || event.ctrlKey)) options.openFile(row.path, event); });
-      link.addEventListener('auxclick', event => { if (event.button === 1) { event.preventDefault(); if (current() && !suppressClick && (!event.shiftKey || event.metaKey || event.ctrlKey)) options.openFile(row.path, event); } });
+      link.addEventListener('click', event => { event.preventDefault(); if (current() && !suppressClick && (!event.shiftKey || event.metaKey || event.ctrlKey)) openRow(event); });
+      link.addEventListener('auxclick', event => { if (event.button === 1) { event.preventDefault(); if (current() && !suppressClick && (!event.shiftKey || event.metaKey || event.ctrlKey)) openRow(event); } });
       cell.append(link);
     } else if (value.type === 'boolean') {
       const checkbox = doc.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = value.value; checkbox.disabled = !editable(row, property, value); checkbox.tabIndex = -1;
@@ -459,7 +469,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
         if (options.editProperties) { event.preventDefault(); void clearSelection(); }
       } else if (event.key === 'Enter' || event.key === 'F2') {
         event.preventDefault(); if (range) return;
-        if (property === 'file.name' || property === 'file.file') options.openFile(row.path, event);
+        if (property === 'file.name' || property === 'file.file') openRow(event);
         else if (!options.renderProperty) startEdit(cell, row, property, value);
       } else if (event.key === 'Tab') {
         event.preventDefault(); const step = event.shiftKey ? -1 : 1; let column = index + step, target = point.row;
@@ -505,7 +515,14 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       if (!current() || hasActiveEdits()) return;
       if (!range || point.group !== range.group || point.row < range.top || point.row > range.bottom || point.column < range.start || point.column > range.end) { range = undefined; cell.focus(); }
       const bounds = range ?? cellBounds(point);
-      if (!range && (property === 'file.name' || property === 'file.file')) { if (options.contextMenu) { event.preventDefault(); options.contextMenu(row, event); } return; }
+      if (!range && (property === 'file.name' || property === 'file.file')) {
+        if (options.contextMenu) {
+          event.preventDefault();
+          if (fileWitness) options.contextMenu(row, event, fileWitness);
+          else options.contextMenu(row, event);
+        }
+        return;
+      }
       showMenu(event, [
         { label: 'Copy', action: () => { void copySelection(); } },
         { label: 'Paste', disabled: !options.editProperties || !win?.navigator.clipboard?.readText, action: () => { void pasteFromClipboard(); } },
