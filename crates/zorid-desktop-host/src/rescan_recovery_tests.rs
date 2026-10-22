@@ -83,8 +83,11 @@ fn pending_undo(root: &Path) -> (NativeVault, HostIntentRef, zorid_core::CommitR
 
 #[test]
 fn family_rescan_publishes_merged_acknowledged_undo_after_cancelled_attempt() {
-    let root = tempfile::tempdir().unwrap();
-    let (mut vault, reference, receipt) = pending_undo(root.path());
+    let fixture = tempfile::tempdir().unwrap();
+    // SQLite no-follow admission requires canonical ancestors, just like the
+    // production native paths; macOS temporary paths may start with /var.
+    let root = fixture.path().canonicalize().unwrap();
+    let (mut vault, reference, receipt) = pending_undo(&root);
     let mut leases = ClientLeases::default();
     let (scan, body) = execute(&mut vault, &mut leases, None, Command::Rescan, vec![]).unwrap();
     assert!(body.is_empty());
@@ -95,14 +98,13 @@ fn family_rescan_publishes_merged_acknowledged_undo_after_cancelled_attempt() {
     assert_eq!(current.content.as_deref(), Some(MERGED));
     assert_ne!(current.state.revision, receipt.changes[0].after.revision);
     assert_eq!(
-        std::fs::read(root.path().join("A.md")).unwrap(),
+        std::fs::read(root.join("A.md")).unwrap(),
         MERGED,
         "ordinary rescan must publish the merge, not leave core-only undo state"
     );
     assert_eq!(vault.family_status().unwrap().pending_projection, "0");
     {
-        let store =
-            Store::open_existing_no_follow(root.path().join(".zorid/vault.sqlite")).unwrap();
+        let store = Store::open_existing_no_follow(root.join(".zorid/vault.sqlite")).unwrap();
         assert!(store
             .projection_attempts(true)
             .unwrap()
@@ -122,20 +124,17 @@ fn family_rescan_publishes_merged_acknowledged_undo_after_cancelled_attempt() {
         Some(receipt)
     );
     assert_eq!(vault.list_snapshot().unwrap().cursor, cursor);
-    assert_eq!(std::fs::read(root.path().join("A.md")).unwrap(), MERGED);
+    assert_eq!(std::fs::read(root.join("A.md")).unwrap(), MERGED);
 }
 
 #[test]
 fn family_rescan_reports_retained_recovery_without_overwriting_replacement_inode() {
-    let root = tempfile::tempdir().unwrap();
-    let (mut vault, _, _) = pending_undo(root.path());
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let (mut vault, _, _) = pending_undo(&root);
     let replacement = b"Unrelated replacement inode\n";
-    std::fs::write(root.path().join("replacement.tmp"), replacement).unwrap();
-    std::fs::rename(
-        root.path().join("replacement.tmp"),
-        root.path().join("A.md"),
-    )
-    .unwrap();
+    std::fs::write(root.join("replacement.tmp"), replacement).unwrap();
+    std::fs::rename(root.join("replacement.tmp"), root.join("A.md")).unwrap();
     let (scan, _) = execute(
         &mut vault,
         &mut ClientLeases::default(),
@@ -158,9 +157,6 @@ fn family_rescan_reports_retained_recovery_without_overwriting_replacement_inode
             .any(|issue| issue["code"] == "recovery_retained"),
         "{scan}"
     );
-    assert_eq!(
-        std::fs::read(root.path().join("A.md")).unwrap(),
-        replacement
-    );
+    assert_eq!(std::fs::read(root.join("A.md")).unwrap(), replacement);
     assert_ne!(vault.family_status().unwrap().pending_projection, "0");
 }
