@@ -1,5 +1,6 @@
 import type { BaseValue, BaseViewPatch } from './document.ts';
 import { BaseController } from './controller.ts';
+import { baseEditAdmissionVersion, recordBaseEditAdmission } from './edit-admission-diagnostics.ts';
 import { baseValuesEqual } from './expression.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import type { BaseKanbanMoveRequest, BaseKanbanCreateRequest } from './kanban-view.ts';
@@ -84,9 +85,10 @@ export function createBaseViewActions(controller: BaseController, options: {
   const current = (version: BaseQueryResult['version']) => {
     options.validate();
     const state = controller.state;
-    if (state.result && sharedBasePreview(state.result)) throw new Error('Indexing previews are read-only.');
+    const rejection = (error: Error, reason: 'preview' | 'invalid-version' | 'version' | 'query-error' | 'result-unavailable') => recordBaseEditAdmission(error, { guard: 'view-actions', phase: 'action-current', reason, submittedVersion: baseEditAdmissionVersion(version), currentVersion: state.version, hasResult: !!state.result, queryError: !!state.error, updating: state.updating });
+    if (state.result && sharedBasePreview(state.result)) throw rejection(new Error('Indexing previews are read-only.'), 'preview');
     if (typeof version !== 'number' || !Number.isSafeInteger(version) || version !== state.version || state.error || !state.result) {
-      throw new Error('This base result is stale; refresh before editing');
+      throw rejection(new Error('This base result is stale; refresh before editing'), typeof version !== 'number' || !Number.isSafeInteger(version) ? 'invalid-version' : version !== state.version ? 'version' : state.error ? 'query-error' : 'result-unavailable');
     }
     return state.result;
   };

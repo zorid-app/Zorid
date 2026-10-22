@@ -7,6 +7,7 @@ import type { BaseClockHost } from './clock.ts';
 import { BaseToolbarSaveError, createBaseToolbar } from './toolbar.ts';
 import { createBaseViewActions } from './view-actions.ts';
 import { createBaseTableView } from './table-view.ts';
+import { baseEditAdmissionReceipt } from './edit-admission-diagnostics.ts';
 import { createBaseCardsView } from './cards-view.ts';
 import type { BaseCardsViewOptions } from './cards-view.ts';
 import { createBaseListView } from './list-view.ts';
@@ -142,7 +143,10 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const alive = () => { options.validate(); if (disposed) throw new Error('This base view is closed'); };
   const action = () => { alive(); if (closing) throw new Error('This base view is closing'); notice = undefined; };
   const report = (error: unknown) => {
-    if (!disposed) status.textContent = error instanceof Error ? error.message : String(error);
+    if (!disposed) {
+      status.textContent = error instanceof Error ? error.message : String(error);
+      const receipt = baseEditAdmissionReceipt(error); if (receipt) root.dataset.baseLastEditRejection = JSON.stringify(receipt);
+    }
     try { options.onError?.(error); } catch { /* User error reporters do not change persistence. */ }
   };
   const propertyDraft = () => !!mounted?.hasActiveEdits?.() || !!content.querySelector('.zorid-bases-table-input, [data-base-editing]');

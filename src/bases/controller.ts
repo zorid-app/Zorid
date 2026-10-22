@@ -5,6 +5,8 @@ import { executeBaseQuery, normalizeBaseProperty } from './query.ts';
 import type { BaseQueryOptions, BaseQueryResult } from './query.ts';
 import { SharedBaseQueryRunner, sharedBaseWitness, sharedBaseCapture, sharedBaseCoverage, sharedBasePreview } from './shared-query.ts';
 import { createBaseClockHost } from './clock.ts';
+import { baseEditAdmissionVersion, recordBaseEditAdmission, withBaseEditAdmissionPhase } from './edit-admission-diagnostics.ts';
+import type { BaseEditAdmissionReason } from './edit-admission-diagnostics.ts';
 import type { BaseClockCapture, BaseClockHost } from './clock.ts';
 import type { BaseSavedWitness } from './shared-query.ts';
 import { readProperties, removeProperty, setProperty } from '../core/properties.ts';
@@ -37,10 +39,10 @@ export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHos
     transform(path, transform, validate, validateWrite = validate, expectedWitness) {
       const expected = expectedWitness && Object.freeze({ ...expectedWitness });
       const result = pending.then(async () => {
-        options.validate(); validate();
+        withBaseEditAdmissionPhase('before-buffer', () => { options.validate(); validate(); });
         const buffer = await options.getBuffer(path);
         await buffer.load();
-        options.validate(); validate();
+        withBaseEditAdmissionPhase('after-buffer-load', () => { options.validate(); validate(); });
         if (buffer.path !== path) throw new Error('The edited file moved');
         const durableWitness = () => (buffer as NoteBuffer & { readonly savedDurableWitness?: BaseSavedWitness & { readonly path: string } }).savedDurableWitness;
         const admitted = durableWitness();
@@ -51,14 +53,14 @@ export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHos
           const current = durableWitness();
           if (expected && (!current || current.entryId !== expected.entryId || current.path !== path)) throw new Error('The edited saved file was replaced or moved');
         };
-        const source = buffer.text, next = transform(source);
+        const source = buffer.text, next = withBaseEditAdmissionPhase('transform', () => transform(source));
         // Transform is synchronous: no intervening editor input may be discarded.
-        options.validate(); validate();
+        withBaseEditAdmissionPhase('before-buffer-update', () => { options.validate(); validate(); });
         if (buffer.text !== source) throw new Error('The edited buffer changed');
         // A previous failed save may already contain this exact transformed draft.
         // Retrying must still persist it (or report the continuing failure).
         if (next === source && !buffer.dirty && !buffer.error) return;
-        buffer.update(next, { validateWrite: () => { options.validate(); validateWrite(); validateIdentity(); } });
+        buffer.update(next, { validateWrite: () => withBaseEditAdmissionPhase('durable-validation', () => { options.validate(); validateWrite(); validateIdentity(); }) });
         options.onBufferChange?.(path, buffer, source);
         // Do not replay or roll back a failed write: recovery draft owns that state.
         await buffer.flush();
@@ -427,15 +429,27 @@ export class BaseController {
 
   private guard(version: number, path: string): { validate: () => void; validateWrite: () => void } {
     const epoch = this.epoch, identity = this.identities.get(path), base = this.identities.get(this.path);
+    const selection = this.selectionSerial, configuration = this.configurationEpoch;
+    const rejection = (error: Error, reason: BaseEditAdmissionReason) => recordBaseEditAdmission(error, {
+      guard: 'controller', phase: 'controller-guard', reason,
+      submittedVersion: baseEditAdmissionVersion(version), currentVersion: this.current.version,
+      hasResult: !!this.current.result, queryError: !!this.current.error, updating: this.current.updating, disposed: this.disposed,
+      capturedEpoch: epoch, currentEpoch: this.epoch,
+      capturedTargetIdentity: identity, currentTargetIdentity: this.identities.get(path),
+      capturedBaseIdentity: base, currentBaseIdentity: this.identities.get(this.path),
+      targetIdentityMatches: !!identity && identity === this.identities.get(path), baseIdentityMatches: !!base && base === this.identities.get(this.path),
+      capturedSelection: selection, currentSelection: this.selectionSerial,
+      capturedConfigurationEpoch: configuration, currentConfigurationEpoch: this.configurationEpoch,
+    });
     const validateWrite = () => {
       if (this.disposed || !identity || this.identities.get(path) !== identity || !base || this.identities.get(this.path) !== base) {
-        throw new Error('This base result is stale; refresh before editing');
+        throw rejection(new Error('This base result is stale; refresh before editing'), this.disposed ? 'closed' : 'identity');
       }
     };
     const validate = () => {
       validateWrite();
-      if (this.current.result && sharedBasePreview(this.current.result)) throw new Error('Indexing previews are read-only. Wait for saved results before editing.');
-      if (this.current.error || !this.current.result || version !== this.current.version || epoch !== this.epoch) throw new Error('This base result is stale; refresh before editing');
+      if (this.current.result && sharedBasePreview(this.current.result)) throw rejection(new Error('Indexing previews are read-only. Wait for saved results before editing.'), 'preview');
+      if (this.current.error || !this.current.result || version !== this.current.version || epoch !== this.epoch) throw rejection(new Error('This base result is stale; refresh before editing'), this.current.error ? 'query-error' : !this.current.result ? 'result-unavailable' : version !== this.current.version ? 'version' : 'epoch');
     };
     validate(); return { validate, validateWrite };
   }
