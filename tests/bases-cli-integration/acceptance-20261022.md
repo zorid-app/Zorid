@@ -59,3 +59,45 @@ runtime, mobile or Obsidian visual parity. The CLI has no Base-specific cell-edi
 command or CSV/TSV/Markdown table-export command: edits used existing guarded
 full-file writes, and exports used existing JSON/raw stdout. UI source-preserving
 cell edits and clipboard formats require their separate application campaign.
+
+## Campaign 002 — final rebuilt core
+
+A second actual standalone run passed **85 commands, seven oracle checks and 30
+exports** in 2,597 ms against the final rebuilt source below. This is a separate
+vault and run, not a relabeling of the first campaign. The CLI fixture and runner
+were unchanged; the first campaign's behavioral oracle and scope still apply.
+
+| Input | Campaign 002 identity |
+| --- | --- |
+| Source revision and checkout | `9d086a97b9f7fb16c3dc54452c16914ae5918c18` |
+| Rust `crates` tree | `2f55bd4a7a560168d9ae55144149d31926eaa750` |
+| `Cargo.toml` object | `dae521160181b50ce45ed9c7032b25609616b1c7` |
+| `Cargo.lock` object | `413037e553a3c10bc605004a0ad3f6012f570440` |
+| CLI SHA-256 | `92870835203249518612db6003be262b5cc1b54530bbaf3d00900fbe5aa592ed` |
+| Paired host SHA-256, hashed only | `0c29e8d5fd4b04b7b424303dc48ede710a2c1a1fb8658c2cfe1164e7e572a620` |
+| `run.mjs` SHA-256 | `af143e1aee9aee75f2085e8f78e1ae7766aed4cce1cfc7fbd27c41a73fbcce17` |
+| `fixtures.mjs` SHA-256 | `f4f2afdebe189f6e3896c5efa1d4b10ad87bc7665d2001206a4828b75ca06e7e` |
+| Full report SHA-256 | `de9c314c8b1da4948cde0541f22348a2a19f0c75e3cdcc27105b15115e923f5a` |
+
+The coordinator's completed build log is
+`/private/tmp/zorid-bases-final-native-801-build.log`. Captured artifact/source
+receipt: `/private/tmp/zorid-bases-cli-final-002-artifacts.json`. Executable paths
+are the same release paths as the first campaign. The runner verified source
+closure, clean Rust inputs and unchanged CLI identity before and after use.
+
+Retained report and disposable fixture:
+`/private/tmp/zorid-bases-cli-actual-20261022-002/zorid-bases-cli-HKZzzD/report.json`.
+A separate post-run check in adjacent `independent-verification.json` rehashed
+all command stdout/stderr, supplied stdin and all 30 exports. It confirmed:
+
+- All 85 child closes were observed, with no signal termination and no child
+  remaining; 81 commands succeeded.
+- The four deliberate rejections had the expected exits: query-before-build and
+  unknown-view exited 4; stale-note-edit and old-snapshot rejection exited 3.
+- Table, cards, list, kanban, empty and author views were queried in each of the
+  initial, note-edited and configuration-edited phases.
+
+This confirms the CLI scenario still passes on the rebuilt core. It does not add
+fragment-specific UI, clipboard, browser/WASM, Electron, mobile or visual-parity
+acceptance. The paired host was again hashed only. Temporary evidence may be
+removed by the operating system; exact identities and outcomes are retained here.

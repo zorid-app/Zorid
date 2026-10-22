@@ -10,6 +10,10 @@ The actual standalone CLI campaign passed all 85 commands against source
 `44d9ae46a5d705337eb60a51241d29d199f43b5c` on October 22, 2026. Seven oracle
 checks and 30 unchanged JSON/raw exports passed. See the exact artifact/source
 receipt and limits in [the acceptance record](acceptance-20261022.md).
+A second campaign against the final rebuilt source
+`9d086a97b9f7fb16c3dc54452c16914ae5918c18` also passed 85 commands, seven
+checks and 30 exports. Its command exits, evidence hashes and saved-view coverage
+were independently rechecked; see campaign 002 in the same acceptance record.
 A new run still requires a matched build receipt and a coordinated runtime slot.
 
 Read-only `--help` and `base-query --help` inspection used the older existing
