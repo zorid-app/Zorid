@@ -100,7 +100,7 @@ export function createBaseViewActions(controller: BaseController, options: {
       if (edits.some(edit => edit.version !== version)) throw new Error('Bulk edits must use one saved result');
       await controller.editProperties(edits.map(edit => ({ version: version as number, path: edit.path, property: edit.property, value: baseEditValue(edit.value) })));
     },
-    creationGroup(request: BaseKanbanCreateRequest): { property: string; value: BaseValue } {
+    creationGroup(request: BaseKanbanCreateRequest): { property: string; value: BaseValue } | undefined {
       const result = current(request.version), grouping = result.view.groupBy;
       if (!grouping || typeof grouping !== 'object' || Array.isArray(grouping) || !('property' in grouping) || typeof grouping.property !== 'string') throw new Error('This view has no grouping property');
       const property = normalizeBaseProperty(grouping.property);
@@ -109,6 +109,9 @@ export function createBaseViewActions(controller: BaseController, options: {
         ? typeof request.groupKeyId === 'string' && (result.groups.find(group => group.sharedKeyId === request.groupKeyId) ?? result.groupOptions.find(group => group.listed && group.sharedKeyId === request.groupKeyId))
         : result.groups.find(group => group.key && baseValuesEqual(group.key, request.group, true)) ?? result.groupOptions.find(group => group.listed && baseValuesEqual(group.key, request.group, true));
       if (!group) throw new Error('The new item group changed. Refresh before creating its note.');
+      // The reference's New in the empty group keeps inferred/template defaults;
+      // moving an existing card into that group still clears its property.
+      if (group.key === null || group.key.type === 'null') return undefined;
       return { property, value: baseGroupWriteValue(group, result.shared !== undefined && property.startsWith('note.')) };
     },
     async requestGroupOrder(request: BaseKanbanGroupOrderRequest): Promise<void> {

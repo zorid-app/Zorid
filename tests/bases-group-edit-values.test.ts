@@ -43,3 +43,11 @@ test('stale version, changed grouping, or missing opaque destination cannot init
   assert.equal(baseGroupWriteValue({key:raw('Legacy')},false),'Legacy');
   assert.equal(baseGroupWriteValue({key:{type:'null'},editKey:{type:'null'}},true),null);
 });
+
+
+test('New in the empty group skips assignment while existing-card moves still clear its property',async()=>{
+ const f=fixture();const group=f.result.groups[1] as unknown as {key:BaseExpressionValue;editKey:BaseExpressionValue};group.key={type:'null'};group.editKey={type:'null'};
+ assert.equal(f.actions.creationGroup({version:7,property:'projects',group:{type:'null'},groupKeyId:'destination'}),undefined);
+ await f.actions.requestMove({version:7,path:'One.md',property:'projects',source:f.source,destination:{type:'null'},sourceKeyId:'source',destinationKeyId:'destination'});
+ assert.deepEqual(f.moves,[{version:7,path:'One.md',value:null}]);
+});

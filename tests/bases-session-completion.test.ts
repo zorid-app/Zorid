@@ -91,3 +91,12 @@ test('Add formula creates its visible column in the same saved configuration bef
     assert.deepEqual(f.errors, []);
   } finally { await f.cleanup(); }
 });
+
+
+test('New in the empty Kanban group preserves inferred defaults instead of clearing its grouping property',async()=>{
+ const f=await fixture({'Work.base':'filters: note.status == "Todo"\nviews:\n  - type: kanban\n    name: Board\n    groupBy: {property: status, direction: ASC}\n    groupOrder: [null]\n','One.md':'---\nstatus: Todo\n---\nBody'});
+ try{
+  const button=f.host.querySelector<HTMLButtonElement>('.bases-kanban-column-footer button')!;assert.ok(button);button.click();
+  for(let i=0;i<60&&!f.opened.length;i++)await tick();assert.equal(f.opened.length,1);assert.match(await f.vault.read(f.opened[0]),/status: Todo/);assert.deepEqual(f.errors,[]);
+ }finally{await f.cleanup();}
+});
