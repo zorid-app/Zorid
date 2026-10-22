@@ -1,10 +1,14 @@
-import { displaySharedBaseValue, sameBasePresentationGroup, sharedBaseGroupKeyId } from './presentation-common.ts';
+import { disposePresentationResources, reportPresentationError, mountBaseProperty, propertyValue, displaySharedBaseValue, sameBasePresentationGroup, sharedBaseGroupKeyId } from './presentation-common.ts';
+import type { BaseCardsViewOptions } from './cards-view.ts';
+import { baseCardsSettings } from './cards-view.ts';
+import type { BasePresentationOptions } from './presentation-common.ts';
 import { createBaseKanbanColumns, matchesBaseGroupKey } from './kanban-columns.ts';
 import type { BaseKanbanGroupOrderRequest } from './kanban-columns.ts';
 import { icon } from '../ui/icons.ts';
 import { showContextMenu } from '../platform/context-menu.ts';
 import { baseValueToString } from './expression.ts';
 import type { BaseExpressionValue } from './expression.ts';
+import { baseEditValue } from './view-actions.ts';
 import { normalizeBaseProperty } from './query.ts';
 import type { BaseQueryGroup, BaseQueryResult, BaseQueryRow } from './query.ts';
 
@@ -18,18 +22,28 @@ export interface BaseKanbanMoveRequest {
   readonly sourceKeyId?: string;
   readonly destinationKeyId?: string;
 }
-export interface BaseKanbanViewOptions {
-  readonly result: BaseQueryResult;
-  readonly openFile: (path: string, event: MouseEvent | KeyboardEvent) => void;
+export interface BaseKanbanCreateRequest {
+  readonly version: BaseQueryResult['version'];
+  readonly property: string;
+  readonly group: BaseExpressionValue;
+  readonly groupKeyId?: string;
+}
+export interface BaseKanbanViewOptions extends Omit<BaseCardsViewOptions, 'onError'> {
   /** Host must validate version, perform a real vault transaction, and publish a new query result. */
   readonly requestMove?: (request: BaseKanbanMoveRequest) => Promise<void>;
   readonly onError?: (error: unknown, request: BaseKanbanMoveRequest) => void;
   readonly readOnly?: boolean;
+  readonly createItem?: (request: BaseKanbanCreateRequest) => Promise<void>;
+  readonly onPresentationError?: (error: unknown) => void;
+  /** The shared toolbar supplies Group in full sessions; standalone renderer hosts may expose its fallback. */
+  readonly showColumnControls?: boolean;
   readonly requestGroupOrder?: (request: BaseKanbanGroupOrderRequest) => Promise<void>;
 }
 export interface BaseKanbanView {
   update(result: BaseQueryResult): void;
   move(path: string, destination: BaseExpressionValue): Promise<boolean>;
+  hasActiveEdits(): boolean;
+  refreshLayout(): void;
   destroy(): void;
 }
 interface Pending { request: BaseKanbanMoveRequest }
@@ -50,16 +64,35 @@ function label(value: BaseExpressionValue | null, shared = false): string {
 export function createBaseKanbanView(container: HTMLElement, options: BaseKanbanViewOptions): BaseKanbanView {
   const doc = container.ownerDocument;
   const root = doc.createElement('div'), board = doc.createElement('div'), status = doc.createElement('div');
-  root.className = 'bases-kanban-view'; root.tabIndex = 0; root.setAttribute('aria-label', options.result.view.name);
+  root.className = 'bases-kanban-view bases-kanban-container'; root.tabIndex = 0; root.setAttribute('aria-label', options.result.view.name);
   board.className = 'bases-kanban-board'; status.className = 'bases-kanban-status'; status.setAttribute('role', 'status');
   root.append(board, status); container.append(root);
   let result = options.result, destroyed = false, selected: string | undefined;
+  let deferredResult: BaseQueryResult | undefined;
+  let epoch = 0;
+  const rowResources = new Map<HTMLElement, (() => void)[]>();
+  const presentation: BasePresentationOptions = { ...options, onError: options.onPresentationError,
+    ...(options.readOnly ? { editProperty: undefined } : {}) };
+  const hasActiveEdits = () => !!root.querySelector('[data-base-editing]');
+  let previousEditing = false;
+  const editStateChanged = () => {
+    const active = hasActiveEdits();
+    if (active !== previousEditing) { previousEditing = active; options.onEditStateChange?.(active); }
+    if (!active && deferredResult) { const next = deferredResult; deferredResult = undefined; update(next); }
+  };
+  const editObserver = doc.defaultView?.MutationObserver ? new doc.defaultView.MutationObserver(editStateChanged) : undefined;
+  editObserver?.observe(board, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-base-editing'] });
+  const releaseRows = (body?: HTMLElement) => {
+    for (const [item, resources] of rowResources) if (!body || body.contains(item)) {
+      disposePresentationResources(resources, presentation); rowResources.delete(item);
+    }
+  };
   const equal = (a: BaseExpressionValue | null, b: BaseExpressionValue | null) => sameBasePresentationGroup(result, a, b);
   const requestGroupIs = (group: BaseQueryGroup | undefined, request: BaseKanbanMoveRequest, side: 'source' | 'destination'): boolean =>
     !!group && (result.shared !== undefined ? typeof request[`${side}KeyId`] === 'string' && group.sharedKeyId === request[`${side}KeyId`] : equal(group.key, request[side]));
   const columns = !options.readOnly && options.requestGroupOrder ? createBaseKanbanColumns(root, { result, requestGroupOrder: options.requestGroupOrder, onError(error) { if (!destroyed) status.textContent = error instanceof Error ? error.message : String(error); } }) : undefined;
   let editColumns: HTMLButtonElement | undefined;
-  if (columns) {
+  if (columns && options.showColumnControls !== false) {
     const controls = doc.createElement('div'); controls.className = 'bases-kanban-controls';
     editColumns = doc.createElement('button'); editColumns.type = 'button'; editColumns.className = 'bases-kanban-edit-columns';
     editColumns.append(icon('stretch-horizontal', 16, doc), doc.createTextNode('Edit columns'));
@@ -69,6 +102,8 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
   }
   let drag: { path: string; version: BaseQueryResult['version'] } | undefined;
   const pending = new Map<string, Pending>();
+  let columnDrag: { group: BaseQueryGroup; version: BaseQueryResult['version'] } | undefined;
+  let groupOrderPending = false;
   const scrolls = new Map<BaseQueryGroup['key'] | string, number>();
   let rowOrder = new Map<string, number>();
   let groups: readonly BaseQueryGroup[] = [], properties: readonly string[] = [], width = 280, rowHeight = 72;
@@ -141,24 +176,68 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     item.classList.toggle('is-selected', selected === row.path);
     item.classList.toggle('is-pending', pending.has(row.path)); item.setAttribute('aria-busy', String(pending.has(row.path)));
     item.draggable = canMove(row.path) && !pending.has(row.path);
-    const title = doc.createElement('div'); title.className = 'bases-kanban-card-title';
-    title.textContent = row.path.split('/').pop()?.replace(/\.md$/, '') ?? row.path; item.append(title);
-    for (const property of properties) {
-      const value = doc.createElement('div'); value.className = 'bases-kanban-card-property';
-      value.dataset.property = property; value.textContent = label(row.values[property] ?? null, result.shared !== undefined); value.title = `${property}: ${value.textContent}`; item.append(value);
+    item.tabIndex = 0;
+    const owner = epoch, snapshot = result, resources: (() => void)[] = [];
+    rowResources.set(item, resources);
+    const current = () => !destroyed && owner === epoch && root.contains(item);
+    const settings = baseCardsSettings(snapshot);
+    if (settings.image) {
+      const cover = doc.createElement('div'); cover.className = 'bases-kanban-card-cover';
+      cover.style.height = `${width * (typeof snapshot.view.imageAspectRatio === 'number' && snapshot.view.imageAspectRatio > 0 ? settings.imageAspectRatio : .5)}px`;
+      item.append(cover);
+      if (options.loadThumbnail) {
+        const controller = new AbortController(); resources.push(() => controller.abort());
+        Promise.resolve().then(() => current() ? options.loadThumbnail!({ row, property: settings.image!,
+          value: propertyValue(row, settings.image!), version: snapshot.version, signal: controller.signal }) : null).then(resource => {
+          if (!resource) return;
+          if (!current()) { disposePresentationResources([() => resource.dispose()], presentation); return; }
+          resources.push(() => resource.dispose());
+          const image = doc.createElement('img'); image.alt = ''; image.draggable = false;
+          image.style.objectFit = settings.imageFit; image.src = resource.url; cover.append(image);
+        }).catch(error => { if (current() && !controller.signal.aborted) reportPresentationError(presentation, error); });
+      }
     }
-    item.addEventListener('click', event => { if (destroyed || !root.contains(item)) return; select(row.path); options.openFile(row.path, event); });
-    item.addEventListener('auxclick', event => { if (!destroyed && root.contains(item) && event.button === 1) { event.preventDefault(); select(row.path); options.openFile(row.path, event); } });
+    const values = doc.createElement('div'); values.className = 'bases-kanban-card-properties'; item.append(values);
+    properties.forEach((property, index) => {
+      const cell = doc.createElement('div'); cell.className = `bases-kanban-card-property${index === 0 ? ' mod-title bases-kanban-card-title' : ''}`;
+      cell.dataset.property = property;
+      const name = doc.createElement('div'); name.className = 'bases-kanban-card-label';
+      name.textContent = options.getPropertyLabel?.(property) ?? property.replace(/^(?:note|file|formula)\./, '');
+      const line = doc.createElement('div'); line.className = 'bases-kanban-card-line';
+      cell.append(name, line); values.append(cell);
+      resources.push(mountBaseProperty(line, row, property, snapshot, presentation, current));
+    });
+    const activate = (event: MouseEvent) => {
+      if (!current() || event.defaultPrevented || (event.button !== 0 && event.button !== 1)) return;
+      if ((event.target as Element | null)?.closest('a,input,textarea,select,button,[contenteditable="true"]')) return;
+      const selection = doc.defaultView?.getSelection();
+      if (selection && !selection.isCollapsed) for (let index = 0; index < selection.rangeCount; index++) {
+        const range = selection.getRangeAt(index);
+        if (item.contains(range.startContainer) || item.contains(range.endContainer)) return;
+      }
+      if (doc.activeElement !== item && item.contains(doc.activeElement)) return;
+      event.preventDefault(); select(row.path); options.openFile(row.path, event);
+    };
+    item.addEventListener('click', activate); item.addEventListener('auxclick', activate);
+    item.addEventListener('focus', () => { if (current()) select(row.path); });
+    if (options.contextMenu) item.addEventListener('contextmenu', event => {
+      if (current() && !event.defaultPrevented) { event.preventDefault(); options.contextMenu!(row, event); }
+    });
+    if (options.hoverFile) item.addEventListener('mouseenter', event => { if (current() && !drag) options.hoverFile!(row, event); });
     let ownedDrag: typeof drag;
     item.addEventListener('dragstart', event => {
-      if (destroyed || !root.contains(item) || !item.draggable || !event.dataTransfer) { event.preventDefault(); return; }
+      if (destroyed || !root.contains(item) || !item.draggable || !canMove(row.path) || hasActiveEdits() || !event.dataTransfer) { event.preventDefault(); return; }
       drag = ownedDrag = { path: row.path, version: result.version }; select(row.path);
       event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', row.path);
+      options.dragFile?.(row, event);
     });
     item.addEventListener('dragend', () => { if (ownedDrag && drag === ownedDrag) drag = undefined; ownedDrag = undefined; });
     return item;
   }
   function renderRows(body: HTMLElement, group: BaseQueryGroup, requestedTop = body.scrollTop) {
+    if (hasActiveEdits()) return;
+    const restoreFocus = body.contains(doc.activeElement) ? selected : undefined;
+    releaseRows(body);
     const rows = displayedRows(group);
     const height = body.clientHeight || Math.max(100, (root.clientHeight || 600) - headerHeight);
     const space = doc.createElement('div'); space.className = 'bases-kanban-column-space'; space.style.height = `${rows.length * rowHeight}px`;
@@ -168,9 +247,12 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     const start = Math.max(0, Math.floor(body.scrollTop / rowHeight) - 2);
     const end = Math.min(rows.length, Math.ceil((body.scrollTop + height) / rowHeight) + 2);
     for (let i = start; i < end; i++) space.append(card(rows[i], i));
+    if (restoreFocus) [...space.querySelectorAll<HTMLElement>('.bases-kanban-card')].find(item => item.dataset.path === restoreFocus)?.focus({ preventScroll: true });
   }
   function render() {
-    if (destroyed) return;
+    if (destroyed || hasActiveEdits()) return;
+    const restoreFocus = root.contains(doc.activeElement) && doc.activeElement?.closest('.bases-kanban-card') ? selected : undefined;
+    epoch++; releaseRows();
     const viewport = root.clientWidth || 900, stride = width + gap;
     root.scrollLeft = Math.min(root.scrollLeft, Math.max(0, groups.length * stride - gap - viewport));
     const start = Math.max(0, Math.floor(root.scrollLeft / stride) - 1), end = Math.min(groups.length, Math.ceil((root.scrollLeft + viewport) / stride) + 1);
@@ -180,16 +262,65 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
       const group = groups[index], column = doc.createElement('section'); column.className = 'bases-kanban-column';
       column.style.left = `${index * stride}px`; column.style.width = `${width}px`;
       const heading = doc.createElement('div'); heading.className = 'bases-kanban-column-header'; heading.textContent = label(group.key, result.shared !== undefined);
-      const count = doc.createElement('span'); count.className = 'bases-kanban-column-count'; count.textContent = String(group.rows.length); heading.append(count);
+      const count = doc.createElement('span'); count.className = 'bases-kanban-column-count'; count.textContent = String(displayedRows(group).length); heading.append(count);
       const body = doc.createElement('div'); body.className = 'bases-kanban-column-body'; body.setAttribute('role', 'listbox'); body.setAttribute('aria-label', label(group.key, result.shared !== undefined));
       column.append(heading, body); nodes.push(column);
-      if (columns && group.key && (propertyOf(result)?.startsWith('note.') || propertyOf(result) === 'file.folder')) heading.addEventListener('contextmenu', event => {
-        if (destroyed || !root.contains(heading)) return;
+      if (!options.readOnly && options.createItem && group.key) {
+        const create = async (button: HTMLButtonElement) => {
+          if (destroyed || !root.contains(button) || button.disabled) return;
+          button.disabled = true;
+          try { await options.createItem!({ version: result.version, property: propertyOf(result)!, group: group.key!,
+            ...(group.sharedKeyId ? { groupKeyId: group.sharedKeyId } : {}) }); }
+          catch (error) { if (!destroyed) { status.textContent = error instanceof Error ? error.message : String(error); reportPresentationError(presentation, error); } }
+          finally { button.disabled = false; }
+        };
+        const plus = doc.createElement('button'); plus.type = 'button'; plus.className = 'bases-kanban-column-create clickable-icon';
+        plus.setAttribute('aria-label', 'Create note'); plus.append(icon('plus', 16, doc));
+        plus.addEventListener('click', () => void create(plus)); heading.append(plus);
+        const footer = doc.createElement('div'); footer.className = 'bases-kanban-column-footer';
+        const add = doc.createElement('button'); add.type = 'button'; add.className = 'text-icon-button';
+        add.append(icon('plus', 16, doc), doc.createTextNode('New')); add.addEventListener('click', () => void create(add));
+        footer.append(add); column.append(footer);
+      }
+      if (!options.readOnly && options.requestGroupOrder && group.key) {
+        heading.draggable = !groupOrderPending;
+        let ownedColumnDrag: typeof columnDrag;
+        heading.addEventListener('dragstart', event => {
+          if (destroyed || groupOrderPending || !root.contains(heading) || (event.target as Element)?.closest('button') || !event.dataTransfer) { event.preventDefault(); return; }
+          columnDrag = ownedColumnDrag = { group, version: result.version };
+          event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', label(group.key));
+        });
+        heading.addEventListener('dragend', () => { if (columnDrag === ownedColumnDrag) columnDrag = undefined; });
+        heading.addEventListener('dragover', event => { if (!destroyed && !groupOrderPending && columnDrag && columnDrag.version === result.version) event.preventDefault(); });
+        heading.addEventListener('drop', event => {
+          const source = columnDrag; columnDrag = undefined;
+          if (destroyed || groupOrderPending || !root.contains(heading) || !source || source.version !== result.version || source.group === group) return;
+          event.preventDefault(); event.stopPropagation();
+          const reordered = [...groups], from = reordered.indexOf(source.group), to = reordered.indexOf(group);
+          if (from < 0 || to < 0) return;
+          reordered.splice(from, 1); reordered.splice(to, 0, source.group);
+          groupOrderPending = true;
+          const storedOrder = Array.isArray(result.view.groupOrder) ? result.view.groupOrder : undefined;
+          const listed = result.groupOptions.filter(option => option.listed);
+          const savedGroup = (item: BaseQueryGroup) => {
+            const ordinal = result.shared !== undefined ? listed.findIndex(option => option.sharedKeyId === item.sharedKeyId)
+              : listed.findIndex(option => item.key && matchesBaseGroupKey(option.key, item.key));
+            return storedOrder && ordinal >= 0 && ordinal < storedOrder.length ? storedOrder[ordinal] : baseEditValue(item.key!);
+          };
+          void options.requestGroupOrder!({ version: result.version, property: propertyOf(result)!,
+            order: reordered.map(savedGroup) }).catch(error => {
+            if (!destroyed) { status.textContent = error instanceof Error ? error.message : String(error); reportPresentationError(presentation, error); }
+          }).finally(() => { groupOrderPending = false; });
+        });
+      }
+      if (columns && group.key && (propertyOf(result)?.startsWith('note.') || propertyOf(result) === 'file.folder')) column.addEventListener('contextmenu', event => {
+        if (destroyed || !root.contains(heading) || event.defaultPrevented || (event.target as Element)?.closest('.bases-kanban-card,button')) return;
         event.preventDefault(); const version = result.version;
-        void showContextMenu(event, [{ id: 'hide', label: 'Hide column' }, { id: 'edit', label: 'Edit columns' }], { document: doc }).then(action => {
+        void showContextMenu(event, [...(options.createItem ? [{ id: 'new', label: 'Add item' }] : []), { id: 'hide', label: 'Hide column' }, { id: 'edit', label: 'Edit columns' }], { document: doc }).then(action => {
           if (destroyed || result.version !== version || !root.contains(heading)) return;
+          if (action === 'new') { column.querySelector<HTMLButtonElement>('.bases-kanban-column-create')?.click(); return; }
           if (action === 'hide') return columns.hide(group.key!);
-          if (action === 'edit' && editColumns) columns.open(editColumns);
+          if (action === 'edit') columns.open(editColumns ?? heading);
         }).catch(error => { if (!destroyed) status.textContent = error instanceof Error ? error.message : String(error); });
       });
       body.addEventListener('scroll', () => { if (destroyed || !root.contains(body)) return; saveScroll(group.key, body.scrollTop); renderRows(body, group); });
@@ -212,10 +343,12 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
       const body = nodes[i].querySelector<HTMLElement>('.bases-kanban-column-body');
       if (body) renderRows(body, groups[start + i], columnScroll(groups[start + i].key));
     }
+    if (restoreFocus) [...board.querySelectorAll<HTMLElement>('.bases-kanban-card')].find(item => item.dataset.path === restoreFocus)?.focus({ preventScroll: true });
   }
   function update(next: BaseQueryResult) {
     if (destroyed) return;
-    result = next; drag = undefined; columns?.update(next); if (editColumns) editColumns.disabled = !propertyOf(next); root.setAttribute('aria-label', result.view.name);
+    if (hasActiveEdits()) { deferredResult = next; return; }
+    result = next; columnDrag = undefined; drag = undefined; columns?.update(next); if (editColumns) editColumns.disabled = !propertyOf(next); root.setAttribute('aria-label', result.view.name);
     rowOrder = new Map(result.rows.map((row, index) => [row.path, index]));
     const queryGroups = result.groups.filter(group => group.key !== null);
     if (!propertyOf(result)) groups = [];
@@ -243,9 +376,11 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
       } else groups = result.groupOptions.filter(option => option.listed).map(option =>
         queryGroups.find(group => group.key && matchesBaseGroupKey(option.key, group.key)) ?? { key: option.key, rows: [] });
     } else groups = result.shared !== undefined ? queryGroups : [...queryGroups.filter(group => group.key?.type === 'null'), ...queryGroups.filter(group => group.key?.type !== 'null')];
-    properties = result.properties.filter(property => property !== 'file.name');
+    properties = result.properties;
     width = typeof result.view.columnWidth === 'number' && Number.isFinite(result.view.columnWidth) ? Math.max(200, Math.min(500, result.view.columnWidth)) : 280;
-    rowHeight = 48 + properties.length * 24 + gap;
+    const settings = baseCardsSettings(result);
+    const coverHeight = settings.image ? width * (typeof result.view.imageAspectRatio === 'number' && result.view.imageAspectRatio > 0 ? settings.imageAspectRatio : .5) : 0;
+    rowHeight = coverHeight + 16 + 24 + Math.max(0, properties.length - 1) * 50 + gap;
     for (const [path, operation] of pending) {
       if (propertyOf(result) !== operation.request.property || !requestGroupIs(locate(path), operation.request, 'source') || !groups.some(group => requestGroupIs(group, operation.request, 'destination'))) pending.delete(path);
     }
@@ -256,19 +391,34 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
   }
   const onScroll = () => render(); root.addEventListener('scroll', onScroll);
   const onKey = (event: KeyboardEvent) => {
+    if (event.isComposing || event.defaultPrevented || (event.target as Element)?.closest('input,textarea,select,button,[contenteditable="true"],[data-base-editing],a')) return;
+    if (event.key === 'Tab') return;
+    if (!selected && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+      const first = groups.flatMap(group => displayedRows(group))[0];
+      if (first) { event.preventDefault(); select(first.path); root.querySelector<HTMLElement>('.bases-kanban-card.is-selected')?.focus(); } return;
+    }
     if (event.key === 'Escape') { selected = undefined; render(); return; }
     if (!selected) return;
     const group = groups.find(group => displayedRows(group).some(row => row.path === selected)); if (!group) return;
     const rows = displayedRows(group), index = rows.findIndex(row => row.path === selected);
     if (event.key === 'Enter') { event.preventDefault(); options.openFile(selected, event); }
-    else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      const groupIndex = groups.indexOf(group), direction = event.key === 'ArrowLeft' ? -1 : 1;
+      const target = groups[groupIndex + direction];
+      if (!target) return;
+      if (event.altKey && target.key) { void move(selected, target.key); return; }
+      const row = displayedRows(target)[Math.min(index, displayedRows(target).length - 1)];
+      if (row) { selected = row.path; root.scrollLeft = Math.max(0, (groupIndex + direction) * (width + gap)); render(); root.querySelector<HTMLElement>('.bases-kanban-card.is-selected')?.focus(); }
+    }
+    else if (event.key === 'ArrowUp'  || event.key === 'ArrowDown') {
       event.preventDefault(); const row = rows[Math.max(0, Math.min(rows.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))];
-      if (row) { selected = row.path; saveScroll(group.key, Math.max(0, rows.indexOf(row) * rowHeight - rowHeight)); render(); }
+      if (row) { selected = row.path; saveScroll(group.key, Math.max(0, rows.indexOf(row) * rowHeight - rowHeight)); render(); root.querySelector<HTMLElement>('.bases-kanban-card.is-selected')?.focus(); }
     }
   };
   root.addEventListener('keydown', onKey);
   const Observer = doc.defaultView?.ResizeObserver;
   const observer = Observer ? new Observer(() => render()) : undefined; observer?.observe(root);
   update(result);
-  return { update, move, destroy() { if (destroyed) return; destroyed = true; columns?.destroy(); pending.clear(); drag = undefined; observer?.disconnect(); root.removeEventListener('scroll', onScroll); root.removeEventListener('keydown', onKey); root.remove(); } };
+  return { update, move, hasActiveEdits, refreshLayout() { render(); }, destroy() { if (destroyed) return; destroyed = true; epoch++; deferredResult = undefined; editObserver?.disconnect(); releaseRows(); columns?.destroy(); pending.clear(); drag = undefined; observer?.disconnect(); root.removeEventListener('scroll', onScroll); root.removeEventListener('keydown', onKey); root.remove(); } };
 }

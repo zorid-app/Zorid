@@ -90,7 +90,7 @@ export function createBaseCardsView(container: HTMLElement, options: BaseCardsVi
     const columns = Math.max(1, Math.floor(width / settings.cardSize));
     const cardWidth = Math.max(1, (width - (columns - 1) * 12) / columns);
     const count = snapshot.properties.length;
-    const cardHeight = (settings.image ? cardWidth * settings.imageAspectRatio : 0) + (count ? 38 + Math.max(0, count - 1) * 50 : 0);
+    const cardHeight = (settings.image ? cardWidth * settings.imageAspectRatio : 0) + (count ? 34 + Math.max(0, count - 1) * 50 : 0);
     const units: VirtualUnit[] = [];
     snapshot.groups.forEach((group, groupIndex) => {
       const key = groupIdentity(group);
