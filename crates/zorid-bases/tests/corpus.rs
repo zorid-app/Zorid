@@ -184,17 +184,18 @@ fn numeric_and_calendar_edges_cannot_panic_or_erase_types() {
             "{source}"
         );
     }
+    // Percent is a literal; following letters still use Moment token meaning.
     assert_eq!(
         evaluate_expression("date(\"2024-01-15\").format(\"%Q\")", &record, &options)
-            .unwrap_err()
-            .code,
-        "unsupported"
+            .unwrap()
+            .value,
+        BaseValue::String { value: "%1".into() }
     );
     assert_eq!(
         evaluate_expression("date(\"2024-01-15\").format(\"%z\")", &record, &options)
-            .unwrap_err()
-            .code,
-        "unsupported"
+            .unwrap()
+            .value,
+        BaseValue::String { value: "%".into() }
     );
     let huge = format!("duration(\"{} days\")", "9".repeat(400));
     assert_eq!(
