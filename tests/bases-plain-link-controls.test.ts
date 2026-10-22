@@ -21,7 +21,7 @@ function fixture(){
  return{dom,element,edits,original,open,search,key,setTargets(next:readonly BaseRelationTarget[]|undefined){targets=next;},close(){dispose();dom.window.close();}};
 }
 test('plain link selected choices reject replacement identities, revisions and unavailable advice',async()=>{
- for(const replacement of [[{path:'Targets/Grace.md',label:'Grace',entryId:'replacement',revision:'g2'}],[{path:'Targets/Grace.md',label:'Grace',entryId:'grace',revision:'g2'}],undefined] as const){
+ for(const replacement of [[{path:'Targets/Grace.md',label:'Grace',entryId:'replacement',revision:'g2'}],[{path:'Targets/Grace.md',label:'Grace',entryId:'grace',revision:'g2'}],[],[{path:'Targets/Grace.md',label:'Grace',entryId:'grace',revision:'g1',missing:true}],undefined] as const){
   const f=fixture();try{
    const input=f.open();f.search(input,'Grace');const choice=f.dom.window.document.querySelector<HTMLButtonElement>('[role="option"]')!;assert.ok(choice);
    f.setTargets(replacement);choice.click();await tick();assert.deepEqual(f.edits,[]);assert.equal(f.element.dataset.baseEditing,'draft');assert.match(f.element.title,/unavailable|choice changed/i);assert.equal(input.value,'Grace');
