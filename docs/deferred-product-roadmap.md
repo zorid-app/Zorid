@@ -9,6 +9,27 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+2026-10-22 subsequent verification: actual standalone CLI campaign001 passed85
+commands,7 independent oracle checks and30 JSON/raw exports against the matched
+`44d9ae46` Rust closure; see
+`tests/bases-cli-integration/acceptance-20261022.md` for hashes and supported
+surface limits. The saved-relation endpoint's native3 and native-compiled WASM2
+focused cases pass. Actual browser/WASM campaign001 ran the admitted Worker and
+passed its first ordinary-note semantic group, then stopped at a harness-only
+assumption that every raw value appears in differential `editValues`; corrected
+in `ef72ff8b`. Cleanup passed. This is partial evidence, not a passing campaign.
+
+The latest bounded frontend closure passes640/640 cases and TypeScript. Explicit
+core subpath consumption and identity-guarded asynchronous note opens are wired
+and independently reviewed; the Rust subpath producer remains under development.
+First-match grouping compiles and passes69 library and37 property/relation
+cases; two old query-corpus expectations require reference-aligned manual-slot
+IDs and loose grouping updates before all remaining targets can be accepted.
+All changed Rust/native/WASM artifacts require a fresh matched build and actual
+campaign reruns. The63-requirement frozen audit is
+`docs/history/bases-acceptance-audit-20261022.md`; its snapshot predates these
+new results and does not grant acceptance or main integration.
+
 2026-10-22 acceptance checkpoint: the isolated coordinator branch has all four
 layouts and the workspace/editor integration assembled. A bounded composed
 frontend run passed581/581; a separate31-case group capability/preview run and
