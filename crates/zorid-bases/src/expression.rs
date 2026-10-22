@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, LazyLock, OnceLock, RwLock};
 
 use chrono::{
-    DateTime, Datelike, FixedOffset, LocalResult, Months, NaiveDate, NaiveDateTime, TimeZone,
+    DateTime, Datelike, FixedOffset, LocalResult, NaiveDate, NaiveDateTime, TimeZone,
     Timelike, Utc,
 };
 use chrono_tz::{GapInfo, Tz};
@@ -19,6 +19,13 @@ mod call_contract_tests;
 mod call_signatures;
 #[path = "expression_format.rs"]
 mod date_format;
+#[path = "expression_duration.rs"]
+mod duration_semantics;
+#[path = "expression_duration_dependency.rs"]
+mod duration_dependency;
+#[cfg(test)]
+#[path = "duration_semantics_tests.rs"]
+mod duration_semantics_tests;
 
 use crate::{BaseValue, EvaluationResult, ExpressionDiagnostic, OperationCancellation};
 #[derive(Clone, Debug, PartialEq)]
@@ -917,6 +924,9 @@ pub(crate) fn group_values_match(
     group_comparison_work(value, check)?;
     let context = BasesEvaluationContext {
         timezone: timezone.clone(),
+        now: Some(invocation_clock(options.clock_ms)
+            .ok_or_else(|| ExpressionDiagnostic::new("input", "Invocation clock is out of range"))?
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
         relationships,
         work_limit: Some(options.max_steps),
         cancellation: options.cancellation.clone(),
@@ -1204,7 +1214,8 @@ pub(crate) fn clock_independent(source: &str, check: &mut impl FnMut(usize) -> O
     }
     parse_cached(source)
         .ok()
-        .is_some_and(|ast| walk(&ast, check).is_some())
+        .is_some_and(|ast| walk(&ast, check).is_some()
+            && duration_dependency::reads_clock(&ast, check) == Some(false))
 }
 
 /// Refresh scheduling is separate from the stricter optional-answer reuse proof
@@ -1288,7 +1299,10 @@ pub(crate) fn clock_dependency(
     }
     parse_cached(source)
         .ok()
-        .and_then(|ast| walk(&ast, check))
+        .and_then(|ast| {
+            let dependency = walk(&ast, check)?;
+            Some(if duration_dependency::reads_clock(&ast, check)? {Dependency::Instant} else {dependency})
+        })
         .unwrap_or(Dependency::Instant)
 }
 
@@ -1989,12 +2003,20 @@ impl<'a> Evaluator<'a> {
                 (RuntimeValue::Duration(value), RuntimeValue::Number(scale)) => {
                     RuntimeValue::Duration(scale_duration(value, *scale))
                 }
-                (RuntimeValue::Number(_), RuntimeValue::Duration(_)) => {
-                    RuntimeValue::Error("Invalid operator between Number and Duration".to_string())
+                (RuntimeValue::Duration(_), _) | (_, RuntimeValue::Duration(_)) => {
+                    RuntimeValue::Error("Invalid operator involving Duration".to_string())
                 }
                 _ => numeric_pair(self, &left, &right, |a, b| a * b),
             },
-            "/" => numeric_pair(self, &left, &right, |a, b| a / b),
+            "/" => match (&left, &right) {
+                (RuntimeValue::Duration(value), RuntimeValue::Number(scale)) =>
+                    RuntimeValue::Duration(scale_duration(value, 1.0 / *scale)),
+                (RuntimeValue::Duration(_), _) | (_, RuntimeValue::Duration(_)) =>
+                    RuntimeValue::Error("Invalid operator involving Duration".into()),
+                _ => numeric_pair(self, &left, &right, |a, b| a / b),
+            },
+            "%" if matches!(left, RuntimeValue::Duration(_)) || matches!(right, RuntimeValue::Duration(_)) =>
+                RuntimeValue::Error("Invalid operator involving Duration".into()),
             "%" => numeric_pair(self, &left, &right, |a, b| a % b),
             "==" => self
                 .equals_checked(&left, &right)
@@ -2045,6 +2067,9 @@ impl<'a> Evaluator<'a> {
         if let (RuntimeValue::Duration(left), RuntimeValue::Duration(right)) = (&left, &right) {
             return RuntimeValue::Duration(add_durations(left, right));
         }
+        if matches!(left, RuntimeValue::Duration(_)) || matches!(right, RuntimeValue::Duration(_)) {
+            return RuntimeValue::Error("Invalid operator involving Duration".into());
+        }
         numeric_pair(self, &left, &right, |a, b| a + b)
     }
 
@@ -2061,6 +2086,12 @@ impl<'a> Evaluator<'a> {
                     .map(RuntimeValue::Date)
                     .unwrap_or_else(RuntimeValue::Error);
             }
+        }
+        if let (RuntimeValue::Duration(left), RuntimeValue::Duration(right)) = (&left, &right) {
+            return RuntimeValue::Duration(add_durations(left, &scale_duration(right, -1.0)));
+        }
+        if matches!(left, RuntimeValue::Duration(_)) || matches!(right, RuntimeValue::Duration(_)) {
+            return RuntimeValue::Error("Invalid operator involving Duration".into());
         }
         numeric_pair(self, &left, &right, |a, b| a - b)
     }
@@ -3417,6 +3448,14 @@ impl<'a> Evaluator<'a> {
                 .cloned()
                 .unwrap_or(RuntimeValue::Null),
             RuntimeValue::Date(value) => date_property(&value, &property.to_lowercase()),
+            RuntimeValue::Duration(value) => {
+                let name = property.to_ascii_lowercase();
+                if !duration_dependency::is_unit(&name) {
+                    return member_not_found("Duration", property);
+                }
+                duration_semantics::property(&value, &name, &self.now)
+                    .map(RuntimeValue::Number).unwrap_or_else(RuntimeValue::Error)
+            }
             RuntimeValue::File(value) => {
                 if value.metadata_unavailable
                     && ["tags", "properties"]
@@ -3475,7 +3514,7 @@ impl<'a> Evaluator<'a> {
                 .parse()
                 .map_err(|_| format!("Unable to parse {value:?} as a number.")),
             RuntimeValue::Date(value) => Ok(value.millis as f64),
-            RuntimeValue::Duration(value) => Ok(duration_millis(value)),
+            RuntimeValue::Duration(value) => duration_semantics::elapsed(value, &self.now),
             RuntimeValue::Null => Ok(0.0),
             value => Err(format!("Cannot convert {} to number", value_type(value))),
         }
@@ -3565,6 +3604,10 @@ impl<'a> Evaluator<'a> {
             return self.equals_prechecked(left, &RuntimeValue::String(value.clone()));
         }
         match (left, right) {
+            (RuntimeValue::Duration(left), RuntimeValue::Duration(right)) => {
+                let elapsed = |value| duration_semantics::elapsed(value, &self.now).map_err(RuntimeValue::Error);
+                Ok(elapsed(left)? == elapsed(right)?)
+            }
             (
                 RuntimeValue::List(a) | RuntimeValue::TagList(a),
                 RuntimeValue::List(b) | RuntimeValue::TagList(b),
@@ -3583,6 +3626,11 @@ impl<'a> Evaluator<'a> {
                 if values.len() == 1 =>
             {
                 self.equals_prechecked(&values[0], other)
+            }
+            (RuntimeValue::Duration(duration), other) | (other, RuntimeValue::Duration(duration)) => {
+                let Some(other) = string_data(other).and_then(parse_duration) else { return Ok(false); };
+                let elapsed = |value| duration_semantics::elapsed(value, &self.now).map_err(RuntimeValue::Error);
+                Ok(elapsed(duration)? == elapsed(&other)?)
             }
             (RuntimeValue::Link(link), RuntimeValue::String(text))
             | (RuntimeValue::String(text), RuntimeValue::Link(link))
@@ -3710,6 +3758,27 @@ impl<'a> Evaluator<'a> {
         right: &RuntimeValue,
         operator: &str,
     ) -> Result<bool, String> {
+        // Duration comparison uses the same captured calendar anchor as fields
+        // and loose equality. Only the right String is duration-coerced here,
+        // matching the reference's asymmetric relational dispatch.
+        if matches!(left, RuntimeValue::Duration(_)) || matches!(right, RuntimeValue::Duration(_)) {
+            let numeric = |value: &RuntimeValue| -> Result<f64, String> {
+                match value {
+                    RuntimeValue::Duration(value) => duration_semantics::elapsed(value, &self.now),
+                    RuntimeValue::Date(value) => Ok(value.millis as f64),
+                    RuntimeValue::Number(value) => Ok(*value),
+                    value => Ok(loose_numeric_text(&plain_string(value)).unwrap_or(f64::NAN)),
+                }
+            };
+            let a = numeric(left)?;
+            let b = if matches!(left, RuntimeValue::Duration(_)) {
+                match string_data(right).and_then(parse_duration) {
+                    Some(value) => duration_semantics::elapsed(&value, &self.now)?,
+                    None => numeric(right)?,
+                }
+            } else {numeric(right)?};
+            return Ok(match operator {">" => a > b, "<" => a < b, ">=" => a >= b, _ => a <= b});
+        }
         let ordering = if let (
             RuntimeValue::String(left) | RuntimeValue::Tag(left),
             RuntimeValue::String(right) | RuntimeValue::Tag(right),
@@ -4077,6 +4146,8 @@ fn is_truthy(value: &RuntimeValue) -> bool {
         RuntimeValue::Link(link) if link.external => !link.path.is_empty(),
         RuntimeValue::List(value) | RuntimeValue::TagList(value) => !value.is_empty(),
         RuntimeValue::Object(value) => !value.is_empty(),
+        RuntimeValue::Duration(value) => [value.years, value.months, value.weeks, value.days,
+            value.hours, value.minutes, value.seconds, value.milliseconds].iter().any(|part| *part != 0.0),
         _ => true,
     }
 }
@@ -4572,35 +4643,7 @@ fn date_property(value: &DateValue, property: &str) -> RuntimeValue {
 }
 
 fn parse_duration(value: &str) -> Option<DurationValue> {
-    static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s*(years?|y|months?|M|weeks?|w|days?|d|hours?|h|minutes?|m|seconds?|s|milliseconds?|ms)\b").expect("duration expression")
-    });
-    let pattern = &*PATTERN;
-    let mut duration = DurationValue::default();
-    let mut matched = false;
-    for captures in pattern.captures_iter(value.trim()) {
-        matched = true;
-        let amount = captures[1].parse::<f64>().ok()?;
-        let unit = &captures[2];
-        if unit == "y" || unit.to_lowercase().starts_with("year") {
-            duration.years += amount;
-        } else if unit == "M" || unit.to_lowercase().starts_with("month") {
-            duration.months += amount;
-        } else if unit == "w" || unit.to_lowercase().starts_with("week") {
-            duration.weeks += amount;
-        } else if unit == "d" || unit.to_lowercase().starts_with("day") {
-            duration.days += amount;
-        } else if unit == "h" || unit.to_lowercase().starts_with("hour") {
-            duration.hours += amount;
-        } else if unit == "m" || unit.to_lowercase().starts_with("minute") {
-            duration.minutes += amount;
-        } else if unit == "s" || unit.to_lowercase().starts_with("second") {
-            duration.seconds += amount;
-        } else {
-            duration.milliseconds += amount;
-        }
-    }
-    matched.then_some(duration)
+    duration_semantics::parse(value)
 }
 
 fn duration_millis(value: &DurationValue) -> f64 {
@@ -4612,59 +4655,10 @@ fn duration_millis(value: &DurationValue) -> f64 {
         + value.weeks * 604_800_000.0
 }
 
-fn add_duration(
-    value: &DateValue,
-    duration: &DurationValue,
-    direction: f64,
-) -> Result<DateValue, String> {
-    let invalid = || "numeric-domain\0Date arithmetic is out of range".to_string();
-    if !duration_finite(duration) {
-        return Err(invalid());
-    }
-    let mut date = value.timezone.local_datetime(value.millis);
-    let months = ((duration.years * 12.0 + duration.months) * direction).round();
-    if !months.is_finite() || months.abs() > u32::MAX as f64 {
-        return Err(invalid());
-    }
-    if months > 0.0 {
-        date = date
-            .checked_add_months(Months::new(months as u32))
-            .ok_or_else(invalid)?;
-    } else if months < 0.0 {
-        date = date
-            .checked_sub_months(Months::new((-months) as u32))
-            .ok_or_else(invalid)?;
-    }
-    let days = (duration.weeks * 7.0 + duration.days) * direction;
-    if !days.is_finite() || days.abs() > i32::MAX as f64 {
-        return Err(invalid());
-    }
-    date = date
-        .checked_add_signed(chrono::Duration::try_days(days.trunc() as i64).ok_or_else(invalid)?)
-        .ok_or_else(invalid)?;
-    let elapsed = (days.fract() * 86_400_000.0
-        + (duration.hours * 3_600_000.0
-            + duration.minutes * 60_000.0
-            + duration.seconds * 1_000.0
-            + duration.milliseconds)
-            * direction)
-        .round();
-    if !elapsed.is_finite() || elapsed < i64::MIN as f64 || elapsed >= i64::MAX as f64 {
-        return Err(invalid());
-    }
-    let base = value.timezone.try_millis_from_local(date).ok_or_else(|| {
-        "invalid-local-time\0Calendar arithmetic produced a nonunique local time".to_string()
-    })?;
-    let millis = base.checked_add(elapsed as i64).ok_or_else(invalid)?;
-    if DateTime::<Utc>::from_timestamp_millis(millis).is_none() {
-        return Err(invalid());
-    }
-    Ok(DateValue {
-        millis,
-        date_only: value.date_only && elapsed == 0.0,
-        timezone: value.timezone.clone(),
-    })
+fn add_duration(value: &DateValue, duration: &DurationValue, direction: f64) -> Result<DateValue, String> {
+    duration_semantics::add(value, duration, direction)
 }
+
 fn duration_finite(value: &DurationValue) -> bool {
     [
         value.years,

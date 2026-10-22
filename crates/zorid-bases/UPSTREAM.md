@@ -72,3 +72,14 @@ The small corpus test uses the shared accepted expectations from
 `tests/fixtures/document-semantics/bases/expressions.json`, plus a few explicit
 resource/host guards. Accepted corrections are frozen in the accepted fixture projections. It
 is not a wholesale copy of upstream's oracle or a production-parity claim.
+
+Duration completion (2026-10-22): fractional month interpolation in
+`src/expression_duration.rs` is adapted from Moment 2.30.1's
+`src/lib/moment/diff.js` (MIT, Copyright (c) JS Foundation and other contributors).
+The complete notice is in `LICENSE-MOMENT`; no new dependency is introduced.
+Source: https://github.com/moment/moment/blob/2.30.1/src/lib/moment/diff.js .
+Duration addition uses separately implemented overflowing JavaScript calendar
+setter semantics. Every conversion uses the captured clock and timezone, retains
+finite/budget diagnostics, and preserves the existing explicit invalid-local-time
+gap/fold policy. Reference evidence and verification boundaries are recorded in
+`docs/history/bases-duration-reference-20261022.md`.
