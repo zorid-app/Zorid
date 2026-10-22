@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import { baseRelationTargetValue, mountBasePropertyWidget } from '../src/bases/property-widgets.ts';
 import type { BasePropertyWidgetEdit, BasePropertyWidgetOptions } from '../src/bases/property-widgets.ts';
@@ -286,4 +287,37 @@ test('relation targets forward explicit fragments only with a complete target id
     const opened:unknown[]=[];const s=setup('[[/A.md]]',{type:'relation'},{getRelationTargets:()=>[{path:'A.md',entryId:'a',revision,subpath:'#^part'}],openFile:(path,_event,witness)=>opened.push({path,witness})});
     s.element.querySelector('.multi-select-pill')!.dispatchEvent(new s.dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));assert.deepEqual(opened,[{path:'A.md',witness:revision?{entryId:'a',revision,subpath:'#^part'}:undefined}]);s.close();
   }
+});
+
+test('date display retains native ISO value and decorative calendar without creating a draft or changing raw data', async () => {
+  const s=setup('2026-10-22',{type:'date'});const display=s.element.querySelector<HTMLInputElement>('.bases-property-date-display')!;
+  assert.equal(display.type,'date');assert.equal(display.value,'2026-10-22');assert.equal(display.readOnly,true);assert.equal(display.tabIndex,-1);assert.equal(display.getAttribute('aria-label'),'test');assert.equal(s.element.querySelector('svg')?.getAttribute('aria-hidden'),'true');assert.equal(s.element.dataset.baseEditing,undefined);assert.notEqual(s.dom.window.document.activeElement,display);
+  display.dispatchEvent(new s.dom.window.Event('change',{bubbles:true}));await tick();assert.equal(s.edits.length,0);
+  s.element.dispatchEvent(new s.dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));const edit=s.input();assert.notEqual(edit,display);assert.equal(edit.readOnly,false);assert.equal(edit.type,'date');assert.equal(edit.value,'2026-10-22');s.key('Enter');await tick();assert.equal(s.edits.length,0);assert.equal(s.element.querySelector<HTMLInputElement>('.bases-property-date-display')?.value,'2026-10-22');s.close();
+});
+
+test('native date display preserves invalid literals and keeps offset datetime editor text exact across Enter and blur', async () => {
+  const invalid=setup('not a calendar day',{type:'date'});assert.equal(invalid.element.querySelector('.bases-property-date-display'),null);assert.equal(invalid.element.textContent,'not a calendar day');assert.match(invalid.element.title,/original value is preserved/);invalid.close();
+  const raw='2026-01-01T12:30:00-05:00';const shown={type:'date' as const,timestamp:Date.parse(raw),hasTime:true};const s=setup(raw,{type:'datetime'},{getDisplayValue:()=>shown});
+  const display=s.element.querySelector<HTMLInputElement>('.bases-property-date-display')!;assert.equal(display.type,'datetime-local');assert.ok(display.value);assert.equal(s.edits.length,0);
+  s.click();assert.equal(s.input().type,'text');assert.equal(s.input().value,raw);s.key('Enter');await tick();assert.equal(s.edits.length,0);
+  s.click();assert.equal(s.input().value,raw);s.dom.window.document.querySelector('button')!.focus();await tick();assert.equal(s.edits.length,0);assert.equal(s.element.dataset.baseEditing,undefined);s.close();
+});
+
+test('date-only native display honors supplied fixed-offset and IANA presentation timezones', () => {
+  for(const presentationTimezone of ['+09:00','Asia/Tokyo']) {
+    const dom=new JSDOM('<div></div>'),element=dom.window.document.querySelector('div')!;const value={type:'date' as const,timestamp:Date.parse('2026-01-01T16:00:00Z'),hasTime:false,presentationTimezone};
+    const dispose=mountBasePropertyWidget(element,{row:{path:'A.md',values:{}},property:'note.date',value,version:1},{getDefinition:()=>({type:'date'}),commit(){throw new Error('Must not write');}});assert.equal(element.querySelector<HTMLInputElement>('.bases-property-date-display')?.value,'2026-01-02');element.click();assert.equal(element.querySelector<HTMLInputElement>('.metadata-input')?.value,'2026-01-02');dispose();dom.window.close();
+  }
+});
+
+test('styled checkbox remains a named native control and a rejected toggle restores its saved state', async () => {
+  const s=setup(true,{type:'checkbox'},{commit:()=>{throw new Error('Save failed');}});const checkbox=s.element.querySelector<HTMLInputElement>('input')!;assert.equal(checkbox.className,'metadata-input-checkbox');assert.equal(checkbox.type,'checkbox');assert.equal(checkbox.getAttribute('aria-label'),'test');assert.equal(checkbox.checked,true);checkbox.click();await tick();assert.equal(checkbox.checked,true);assert.equal(checkbox.disabled,false);assert.match(s.element.title,/Save failed/);s.close();
+});
+
+
+test('number widget flex alignment applies only to table cells', () => {
+  const css=readFileSync(new URL('../src/bases/property-widgets.css',import.meta.url),'utf8');
+  const dom=new JSDOM('<style></style><div class="zorid-bases-table-cell bases-metadata-value" data-property-type="number">10</div><div class="bases-metadata-value" data-property-type="number">10</div>');dom.window.document.querySelector('style')!.textContent=css;
+  const [table,card]=dom.window.document.querySelectorAll('div');assert.equal(dom.window.getComputedStyle(table).justifyContent,'flex-end');assert.notEqual(dom.window.getComputedStyle(card).justifyContent,'flex-end');dom.window.close();
 });

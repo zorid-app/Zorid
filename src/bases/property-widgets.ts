@@ -1,3 +1,4 @@
+import { icon } from '../ui/icons.ts';
 import { baseRichPresentation, mountBaseRichValue } from './rich-values.ts';
 import { BASE_NULL, baseValueToString } from './expression.ts';
 import type { BaseExpressionValue } from './expression.ts';
@@ -63,11 +64,7 @@ function inputText(value: BaseExpressionValue, definition: BasePropertyDefinitio
   if (value.type === 'date') {
     const d = new Date(value.timestamp);
     if (definition.type === 'date') {
-      if (value.presentationTimezone) {
-        const parts = new Intl.DateTimeFormat('en-US', { timeZone: value.presentationTimezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d);
-        const part = (type: string) => parts.find(part => part.type === type)?.value ?? '';
-        return `${part('year').padStart(4, '0')}-${part('month')}-${part('day')}`;
-      }
+      if (value.presentationTimezone) return baseValueToString({ ...value, hasTime: false });
       return d.toISOString().slice(0, 10);
     }
     // datetime-local deliberately has no timezone conversion during editing.
@@ -242,10 +239,25 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (rawUnavailable) element.dataset.baseEditUnavailable = 'true'; else element.removeAttribute('data-base-edit-unavailable');
     element.classList.toggle('mod-error', !!diagnostic || value.type === 'error'); element.title = diagnostic ?? (value.type === 'error' ? value.error.message : '');
     if (type === 'checkbox' && (!diagnostic || value.type === 'null')) {
-      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = value.type === 'boolean' && value.value; checkbox.indeterminate = value.type === 'null'; checkbox.disabled = !editable; checkbox.setAttribute('aria-label', presentation.property.replace(/^note\./, ''));
+      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.className = 'metadata-input-checkbox'; checkbox.checked = value.type === 'boolean' && value.value; checkbox.indeterminate = value.type === 'null'; checkbox.disabled = !editable; checkbox.setAttribute('aria-label', presentation.property.replace(/^note\./, ''));
       checkbox.addEventListener('click', event => event.stopPropagation());
       checkbox.addEventListener('change', async () => { if (pending || !current()) return; checkbox.disabled = true; const next = checkbox.checked; if (!await commit({ type: 'boolean', value: next })) { checkbox.disabled = !editable; checkbox.checked = value.type === 'boolean' && value.value; } });
       element.append(checkbox);
+    } else if (!diagnostic && (type === 'date' || type === 'datetime') && value.type !== 'null') {
+      // Obsidian's shipped date widgets use native date controls with ISO values;
+      // their visible order/separators come from Chromium's locale, not a slash
+      // format string. Keep this inert display separate from the guarded draft.
+      const date = document.createElement('input'); date.className = 'bases-property-date-display';
+      date.type = type === 'date' ? 'date' : 'datetime-local'; date.readOnly = true; date.tabIndex = -1;
+      date.setAttribute('aria-label', presentation.property.replace(/^note\./, ''));
+      const source = displayValue.type === 'date' ? displayValue : value;
+      const nativeValue = inputText(source, definition);
+      date.value = type === 'datetime' ? nativeValue.replace(/(?:Z|[+-]\d{2}:\d{2})$/, '') : nativeValue;
+      if (date.value) {
+        const wrapper = document.createElement('span'); wrapper.className = 'bases-property-date';
+        const calendar = icon('calendar', 16, document); calendar.classList.add('bases-property-date-icon');
+        wrapper.append(calendar, date); element.append(wrapper);
+      } else element.textContent = renderText(value);
     } else if (presentation.property === 'file.name' || presentation.property === 'file.file') {
       const link = document.createElement('a'); link.href = '#'; link.className = 'internal-link'; link.textContent = renderText(value);
       const open = (event: MouseEvent) => { if ((event.button === 0 || event.button === 1) && options.openFile && current()) { event.preventDefault(); event.stopPropagation(); options.openFile(presentation.row.path, event, presentation.row.entryId && presentation.row.revision ? { entryId: presentation.row.entryId, revision: presentation.row.revision } : undefined); } };

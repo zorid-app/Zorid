@@ -32,3 +32,22 @@
 .bases-property-inline-editor .multi-select-container { display:flex; flex-wrap:wrap; align-items:center; gap:4px; }
 .bases-property-inline-editor .metadata-input { flex:1; min-width:24px; width:24px; }
 .bases-property-inline-editor .multi-select-pill-remove-button { border:0; background:none; box-shadow:none; padding:0; height:16px; min-width:12px; color:var(--text-muted); cursor:pointer; }
+
+/* Independently drawn controls; native inputs retain checkbox semantics and
+   native date locale rendering. Reference: Obsidian 1.14.4 metadata widgets. */
+.bases-metadata-value .metadata-input-checkbox { appearance:none; -webkit-appearance:none; box-sizing:border-box; position:relative; flex:none; width:var(--checkbox-size, 16px); height:var(--checkbox-size, 16px); margin:0; padding:0; border:1px solid var(--text-faint, #666); border-radius:var(--radius-s, 4px); background:transparent; accent-color:var(--interactive-accent); }
+.bases-metadata-value .metadata-input-checkbox:checked { border-color:var(--interactive-accent); background:var(--interactive-accent); }
+.bases-metadata-value .metadata-input-checkbox:checked::after { content:''; position:absolute; width:50%; height:25%; left:22%; top:26%; border-inline-start:2px solid var(--background-primary); border-block-end:2px solid var(--background-primary); transform:rotate(-45deg); }
+.bases-metadata-value .metadata-input-checkbox:indeterminate::after { content:''; position:absolute; left:22%; right:22%; top:calc(50% - 1px); height:2px; border-radius:1px; background:var(--text-normal); }
+.bases-metadata-value .metadata-input-checkbox:focus-visible { outline:2px solid var(--interactive-accent); outline-offset:2px; }
+.bases-metadata-value .metadata-input-checkbox:disabled { opacity:.6; }
+.bases-property-date { display:inline-flex; align-items:center; gap:6px; min-width:0; max-width:100%; }
+.bases-property-date-icon { flex:none; color:var(--text-muted); opacity:.75; pointer-events:none; }
+.bases-metadata-value .bases-property-date-display { appearance:none; border:0; border-radius:0; outline:0; box-shadow:none; margin:0; padding:0; min-width:0; width:auto; background:transparent; color:var(--text-normal); font:inherit; line-height:inherit; pointer-events:none; }
+.bases-property-date-display::-webkit-calendar-picker-indicator { display:none; }
+.bases-property-date-display::-webkit-datetime-edit { padding:0; }
+.bases-property-date-display::-webkit-datetime-edit-text { color:var(--text-muted); }
+.zorid-bases-table-cell.bases-metadata-value[data-property-type="number"] { justify-content:flex-end; text-align:end; font-variant-numeric:tabular-nums; }
+.zorid-bases-table-cell.bases-metadata-value[data-property-type="number"] .metadata-input { text-align:end; }
+.zorid-bases-table-cell.bases-metadata-value[data-property-type="checkbox"] { justify-content:center; }
+@media (forced-colors:active) { .bases-metadata-value .metadata-input-checkbox { appearance:auto; -webkit-appearance:auto; } .bases-metadata-value .metadata-input-checkbox::after { display:none; } }
