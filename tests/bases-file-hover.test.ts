@@ -160,6 +160,17 @@ test('binary mount waiting for its abort signal cannot hold destroy open', async
   helper.hover({path: 'clip.mp4', entryId: 'clip', revision: 'r1', values: {}}, new dom.window.MouseEvent('mouseover', {metaKey: true}), anchor); t.mock.timers.tick(300); await drain();
   await helper.destroy(); await drain(); assert.equal(disposed, 1); assert.equal(document.querySelector('[aria-label="File preview"]'), null);
 });
+test('binary revision changes during async mount dispose the stale resource before admitting interaction', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']}); const dom = new JSDOM('<main><a>PDF</a></main>', {pretendToBeVisual: true}); t.after(() => dom.window.close());
+  const document = dom.window.document, parent = document.querySelector('main')!, anchor = document.querySelector('a')!, gate = deferred<void>(), errors: unknown[] = [];
+  let revision = 'r1', disposed = 0;
+  const helper = createBaseFileHover({parent, isMac: true, isCurrent: target => target.revision === revision, async getBuffer() {return undefined;},
+    async mount() {await gate.promise; return {async flush() {}, hasPendingChanges: () => false, isCurrent: () => true, dispose() {disposed++;}};}, onError: error => errors.push(error)});
+  helper.hover({path: 'paper.pdf', entryId: 'paper', revision: 'r1', values: {}}, new dom.window.MouseEvent('mouseover', {metaKey: true}), anchor); t.mock.timers.tick(300); await drain();
+  revision = 'r2'; gate.resolve(); await drain(); assert.equal(disposed, 1); const root = document.querySelector<HTMLElement>('[aria-label="File preview"]')!;
+  assert.equal(root.inert, true); assert.equal(root.hasAttribute('aria-busy'), false); assert.equal(errors.length, 1);
+  await helper.close(); assert.equal(root.isConnected, false); assert.equal(disposed, 1); await helper.destroy();
+});
 test('legacy rows never invent file identity and modifier character shortcuts cancel waiting opportunity', async t => {
   const f = setup(t); f.helper.hover({path: 'Old.md', values: {}}, new f.dom.window.MouseEvent('mouseover', {metaKey: true}), f.alpha); await f.advance(300); assert.equal(f.reads.length, 0);
   f.hover(f.alpha, f.target, {metaKey: false}); f.document.dispatchEvent(new f.dom.window.KeyboardEvent('keydown', {key: 'c', metaKey: true})); await f.advance(400); assert.equal(f.reads.length, 0); await f.helper.destroy();
