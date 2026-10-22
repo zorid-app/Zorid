@@ -51,7 +51,7 @@ test('copy uses quoted TSV without headers and compatible table envelope with he
   const ui=setup({...data,rows,groups:[{key:null,rows}]});ui.cell(0,1).focus();ui.key(ui.cell(0,1),'ArrowDown',{shiftKey:true});ui.key(ui.cell(1,1),'ArrowRight',{shiftKey:true});
   const copied=ui.copy(ui.cell(1,2));assert.equal(copied.event.defaultPrevented,true);assert.equal(copied.values.get('text/plain'),'"a\tb""c"\t0\n"last\r\nline"\t1');
   assert.deepEqual(JSON.parse(copied.values.get('obsidian/table')!),{header:['text','score'],rows:[['a\tb"c','0'],['last\r\nline','1']],alignment:[null,null]});
-  assert.ok(copied.values.get('text/markdown')!.includes('text'));assert.equal(copied.values.has('obsidian/bases-cells'),false);ui.close();
+  assert.ok(copied.values.get('text/markdown')!.includes('text'));assert.deepEqual(JSON.parse(copied.values.get('obsidian/bases-cells')!), [[{type:'note',data:'a\tb"c'},{type:'note',data:0}],[{type:'note',data:'last\r\nline'},{type:'note',data:1}]]);ui.close();
 });
 
 test('native text copy and composition shortcuts are left to active editor',()=>{

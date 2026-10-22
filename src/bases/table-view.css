@@ -20,3 +20,26 @@
 
 textarea.zorid-bases-table-input { height: 100%; resize: none; }
 .zorid-bases-table-cell.is-selected { background: var(--table-selection, rgba(126, 95, 220, .18)); }
+
+.zorid-bases-table-column { position: relative; cursor: var(--cursor, default); user-select: none; }
+.zorid-bases-table-column:hover { background: var(--background-modifier-hover, #f5f5f5); }
+.zorid-bases-table-column.is-drop-target { box-shadow: inset 3px 0 var(--interactive-accent, #7f5af0); }
+.zorid-bases-table-resize { position: absolute; inset-block: 0; inset-inline-end: -3px; width: 7px; cursor: col-resize; touch-action: none; z-index: 3; }
+.zorid-bases-table-resize:hover, .zorid-bases-table-resize:focus-visible { background: var(--interactive-accent, #7f5af0); outline: none; }
+.zorid-bases-table-measure { position: fixed; visibility: hidden; white-space: pre; pointer-events: none; }
+.zorid-bases-table-menu { position: fixed; z-index: 10000; min-width: 210px; padding: 6px; border: 1px solid var(--background-modifier-border, #ddd); border-radius: var(--radius-m, 8px); background: var(--background-secondary, #f6f6f6); box-shadow: var(--shadow-s, 0 4px 16px #0003); }
+.zorid-bases-table-menu button:disabled { opacity: .45; }
+.zorid-bases-table-menu button:focus-visible { outline: none; background: var(--background-modifier-hover, #ddd); }
+.zorid-bases-table-summary { color: var(--text-muted, #666); background: var(--background-primary, #fff); }
+.zorid-bases-table-summary-cell { min-width: 0; padding: 4px 8px; border-block-end: 1px solid var(--background-modifier-border, #ddd); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zorid-bases-table-cell[data-base-editing] { overflow: visible; z-index: 1; }
+
+.zorid-bases-table-header-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zorid-bases-table-column { display: flex; align-items: center; gap: 4px; }
+.zorid-bases-table-sort-indicator { margin-inline-start: auto; flex-shrink: 0; color: var(--text-muted, #666); }
+.zorid-bases-table-footer { display: grid; position: sticky; bottom: 0; z-index: 2; background: var(--bases-table-summary-background, var(--background-primary, #fff)); }
+.zorid-bases-table-footer[hidden] { display: none; }
+.zorid-bases-table-summary-cell { text-align: end; }
+.zorid-bases-table-summary-cell .placeholder { opacity: 0; color: var(--text-faint, #aaa); }
+.zorid-bases-table-summary-cell:hover .placeholder, .zorid-bases-table-summary-cell:focus .placeholder { opacity: 1; }
+.zorid-bases-table-summary-cell:hover { background: var(--background-modifier-hover, #f5f5f5); }
