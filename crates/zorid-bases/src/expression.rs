@@ -2917,12 +2917,12 @@ impl<'a> Evaluator<'a> {
                 .link_resolved(right)
                 .is_some_and(|path| path == left.path),
             (RuntimeValue::Date(left), RuntimeValue::Date(right)) => {
-                if left.date_only || right.date_only {
-                    left.timezone.local_datetime(left.millis).date()
-                        == right.timezone.local_datetime(right.millis).date()
-                } else {
-                    left.millis == right.millis
-                }
+                dates_loosely_equal(left, right)
+            }
+            (RuntimeValue::Date(date), RuntimeValue::String(text))
+            | (RuntimeValue::String(text), RuntimeValue::Date(date)) => {
+                parse_frontmatter_date(text, &self.context.timezone)
+                    .is_some_and(|other| dates_loosely_equal(date, &other))
             }
             (RuntimeValue::Null, RuntimeValue::Null) => true,
             (RuntimeValue::Null, _) | (_, RuntimeValue::Null) => false,
@@ -3260,7 +3260,7 @@ fn plain_string(value: &RuntimeValue) -> String {
             .iter()
             .map(plain_string)
             .collect::<Vec<_>>()
-            .join(","),
+            .join(", "),
         RuntimeValue::Object(_) => serde_json::to_string(&to_plain(value)).unwrap_or_default(),
         RuntimeValue::File(value) => value.path.clone(),
         RuntimeValue::Link(value) if value.external => value.path.clone(),
@@ -3374,6 +3374,26 @@ fn parse_timezone_offset(value: &str) -> Option<FixedOffset> {
     let minutes = minutes.parse::<i32>().ok()?.checked_mul(60)?;
     let seconds = hours.checked_add(minutes)?.checked_mul(sign)?;
     FixedOffset::east_opt(seconds)
+}
+
+fn dates_loosely_equal(left: &DateValue, right: &DateValue) -> bool {
+    if left.date_only || right.date_only {
+        left.timezone.local_datetime(left.millis).date()
+            == right.timezone.local_datetime(right.millis).date()
+    } else {
+        left.millis == right.millis
+    }
+}
+/// Frontmatter and loose Date/String equality recognize only the shipped
+/// date-shaped syntax. Explicit date() additionally accepts compact forms.
+fn parse_frontmatter_date(value: &str, timezone: &BasesTimezone) -> Option<DateValue> {
+    static SHAPE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(?:\d{4}-\d{2}-\d{2}|\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}(?::?\d{2})?)?)$").expect("frontmatter date shape")
+    });
+    if value.len() > 40 || !SHAPE.is_match(value) {
+        return None;
+    }
+    parse_date(value, timezone)
 }
 
 fn parse_date(value: &str, timezone: &BasesTimezone) -> Option<DateValue> {
@@ -4569,11 +4589,8 @@ pub(crate) fn infer_frontmatter_value(
                 }
                 // Compact numeric forms belong to explicit date(), rather than
                 // reinterpreting arbitrary eight/twelve-digit property text.
-                if value.as_bytes().get(4) == Some(&b'-') && value.as_bytes().get(7) == Some(&b'-')
-                {
-                    if let Some(date) = parse_date(&value, timezone) {
-                        return RuntimeValue::Date(date);
-                    }
+                if let Some(date) = parse_frontmatter_date(&value, timezone) {
+                    return RuntimeValue::Date(date);
                 }
                 RuntimeValue::String(value)
             }
@@ -5008,5 +5025,76 @@ mod rich_expression_tests {
         ] {
             assert!(!uses_current_context(source), "{source}");
         }
+    }
+}
+
+#[cfg(test)]
+mod loose_group_reference_tests {
+    use super::*;
+    // Literal oracle cases transcribed from shipped Date.looseEquals and
+    // List.toString rules; no source artifact is embedded in the repository.
+    #[test]
+    fn date_string_loose_equality_uses_strict_shapes_and_civil_days() {
+        let context = BasesEvaluationContext::default();
+        for (source, expected) in [
+            ("date('2026-01-01') == '2026-01-01T12:00:00Z'", true),
+            ("'2026-01-01T12:00:00Z' == date('2026-01-01')", true),
+            ("date('2026-01-01T12:00:00Z') == '2026-01-01'", true),
+            (
+                "date('2026-01-01T12:00:00Z') == '2026-01-01T18:00:00Z'",
+                false,
+            ),
+            ("date('2026-01-01') == '20260101'", false),
+            ("date('2026-01-01') == '2026-1-1'", false),
+            (
+                "date('2026-01-01') == '2026-01-01T12:00:00.1234567890Z'",
+                false,
+            ),
+            ("date('2026-01-01') == 'invalid'", false),
+            ("[date('2026-01-01')] == ['2026-01-01T12:00:00Z']", true),
+            ("date('2026-01-01') == ['2026-01-01T12:00:00Z']", true),
+        ] {
+            assert_eq!(
+                evaluate(source, &context).unwrap().value,
+                BaseValue::Boolean { value: expected },
+                "{source}"
+            );
+        }
+    }
+    #[test]
+    fn list_tostring_matches_manual_group_fallback() {
+        let value = RuntimeValue::List(vec![
+            RuntimeValue::Number(1.0),
+            RuntimeValue::List(vec![RuntimeValue::Number(2.0), RuntimeValue::Number(3.0)]),
+        ]);
+        assert_eq!(stringify(&value), "1, 2, 3");
+        assert!(group_values_match(
+            &RuntimeValue::String("1, 2, 3".into()),
+            &value,
+            true,
+            &BasesTimezone::Utc,
+            &mut |_| Ok(())
+        )
+        .unwrap());
+        let mut charged = 0usize;
+        assert_eq!(
+            group_values_match(
+                &RuntimeValue::String("1, 2, 3".into()),
+                &value,
+                true,
+                &BasesTimezone::Utc,
+                &mut |work| {
+                    charged += work;
+                    if charged > 3 {
+                        Err(ExpressionDiagnostic::new("budget", "test comparison limit"))
+                    } else {
+                        Ok(())
+                    }
+                }
+            )
+            .unwrap_err()
+            .code,
+            "budget"
+        );
     }
 }
