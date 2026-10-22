@@ -89,6 +89,8 @@ interface DocumentSearchOwner {
 type Mode = 'live' | 'reading';
 interface Tab {
   id:string; path:string|null; expectedEntryId?:string; mode:Mode; kind:'note'|'graph'|'calendar'|'tasks'; subpath?:string; calendarState?:CalendarViewState;
+  /** Standalone .base source editing only; never a Markdown/embedded mode. */
+  baseSource?:boolean;
   history?:string[]; historyIndex?:number;
   viewState?:{editor?:EditorViewState;scrollTop:number;scrollLeft:number};
 }
@@ -97,7 +99,7 @@ interface Tab {
 interface Pane {
   id:string; tabs:Tab[]; active:string; element:HTMLElement;
   content?:HTMLElement; runtime?:TabViewRuntime; rebindView?:(pane:Pane)=>void;
-  viewReady?:boolean; viewMode?:Mode; viewKind?:Tab['kind']; viewSettings?:string;
+  viewReady?:boolean; viewMode?:Mode; viewKind?:Tab['kind']; viewSettings?:string; viewBaseSource?:boolean;
   viewTabId?:string; viewPath?:string|null; renderVersion:number;
   editor?:EditorHandle; imageView?:ImageView; pdfView?:PdfView; mediaView?:MediaView; canvasView?:CanvasView; baseView?:BaseSession;
   calendarView?:CalendarView; tasksView?:TasksView;
@@ -303,7 +305,7 @@ export class Workspace {
     const unsubscribe=platform.nativeEditor.subscribe(action=>{
       if(this.platform!==platform||this.vaultGeneration!==generation||this.closing||this.root.inert||this.startupFailed||this.platformReleased)return;
       const pane=this.activePane,editor=pane?.editor;
-      if(!editor||!pane.viewReady||pane.viewMode==='reading'||pane.runtime?.phase==='disposed'||!pane.content?.isConnected||this.current(pane)?.id!==pane.viewTabId)return;
+      if(!editor||!pane.viewReady||pane.viewMode==='reading'&&!pane.viewBaseSource||pane.runtime?.phase==='disposed'||!pane.content?.isConnected||this.current(pane)?.id!==pane.viewTabId)return;
       editor.nativeAction?.(action);
     },publishCurrent);
     const resume=()=>{if(document.visibilityState!=='hidden')publishCurrent();};
@@ -775,7 +777,7 @@ export class Workspace {
         this.root.classList.toggle('left-hidden', saved.leftHidden === true);
         this.collapsed = new Set(saved.collapsed || []); this.bookmarks = new Set(saved.bookmarks || []);
         for (const item of (Array.isArray(saved.panes) ? saved.panes : []).slice(0, 100)) {
-          const tabs: Tab[] = (item.tabs || []).filter((tab: Tab) => tab.kind === 'graph' || tab.kind === 'calendar' || tab.kind === 'tasks' || !tab.path || this.vault.entries.has(tab.path)).map((tab: Tab) => {const history=Array.isArray(tab.history)?tab.history.filter(path=>typeof path==='string'):[];return{...tab,history,historyIndex:Number.isInteger(tab.historyIndex)?Math.max(-1,Math.min(tab.historyIndex!,history.length-1)):history.length-1,mode:tab.mode==='reading'?'reading' as const:'live' as const,id:makeId()};});
+          const tabs: Tab[] = (item.tabs || []).filter((tab: Tab) => tab.kind === 'graph' || tab.kind === 'calendar' || tab.kind === 'tasks' || !tab.path || this.vault.entries.has(tab.path)).map((tab: Tab) => {const history=Array.isArray(tab.history)?tab.history.filter(path=>typeof path==='string'):[];return{...tab,baseSource:tab.kind==='note'&&typeof tab.path==='string'&&/\.base$/i.test(tab.path)&&tab.baseSource===true,history,historyIndex:Number.isInteger(tab.historyIndex)?Math.max(-1,Math.min(tab.historyIndex!,history.length-1)):history.length-1,mode:tab.mode==='reading'?'reading' as const:'live' as const,id:makeId()};});
           const pane = this.addPane(tabs.length ? tabs : undefined, typeof item.id === 'string' && item.id && !this.panes.some(p=>p.id===item.id) ? item.id : undefined); pane.active = pane.tabs[Math.max(0,Math.min(Number.isInteger(item.active) ? item.active : 0, pane.tabs.length - 1))].id; pane.persisted = item;
         }
         restored = this.panes.length > 0;
@@ -852,7 +854,7 @@ export class Workspace {
         // The session observes query/config events itself. Keep its active property
         // draft and cached DOM; only reconcile the shared clean config buffer.
         const buffer=this.buffers.get(change.path),generation=this.vaultGeneration;
-        if(buffer&&!buffer.dirty)this.run(async()=>{await buffer.reload();if(generation===this.vaultGeneration&&this.buffers.get(change.path)===buffer)this.renderStatus();});
+        if(buffer&&!buffer.dirty)this.run(async()=>{const previous=buffer.text;await buffer.reload();if(generation===this.vaultGeneration&&this.buffers.get(change.path)===buffer){this.mapInactiveSelections(change.path,previous,buffer.text);for(const pane of this.loadedViews())if(pane.viewPath===change.path&&pane.viewBaseSource)pane.editor?.setValue(buffer.text);this.renderStatus();}});
         return;
       }
       if(/\.canvas$/i.test(change.path)){
@@ -1014,7 +1016,7 @@ export class Workspace {
     this.capturePaneState(pane);const current=this.current(pane);
     const existing=pane.tabs.find(tab=>tab.path===path&&tab.kind==='note');
     if(existing&&!newTab) pane.active=existing.id;
-    else if(!newTab&&current){if(current.path!==path)current.viewState=undefined;if(current.kind!=='note')current.mode=this.settings.defaultMode;current.path=path;current.kind='note';}
+    else if(!newTab&&current){if(current.path!==path){current.viewState=undefined;current.baseSource=undefined;}if(current.kind!=='note')current.mode=this.settings.defaultMode;current.path=path;current.kind='note';}
     else {const tab:Tab={id:makeId(),path,mode:this.settings.defaultMode,kind:'note'};pane.tabs.push(tab);pane.active=tab.id;}
     this.current(pane).expectedEntryId=expectedEntryId;
     this.current(pane).subpath=subpath;
@@ -1103,7 +1105,7 @@ export class Workspace {
     if(options.flush!==false)await this.flushPane(pane);
     if(!current())return;
     const wanted=this.current(pane);
-    if(!options.refresh&&pane.viewReady&&pane.viewTabId===wanted?.id&&pane.viewPath===wanted.path&&pane.viewMode===wanted.mode&&pane.viewKind===wanted.kind ){
+    if(!options.refresh&&pane.viewReady&&pane.viewTabId===wanted?.id&&pane.viewPath===wanted.path&&pane.viewMode===wanted.mode&&pane.viewKind===wanted.kind&&!!pane.viewBaseSource===!!wanted.baseSource ){
       this.applyViewSettings(pane);this.renderTabBar(pane);pane.refreshPreview?.();return;
     }
     if(this.platform.nativeEditor&&pane===this.activePane)this.hideNativeEditorToolbar();
@@ -1113,7 +1115,7 @@ export class Workspace {
     this.renderTabBar(pane);
     if(await this.restoreCachedView(pane,tab)){this.renderStatus();return;}
     if(!current())return;
-    const version=++this.viewSequence;pane.renderVersion=version;pane.viewTabId=tab.id;pane.viewPath=tab.path;pane.viewMode=tab.mode;pane.viewKind=tab.kind;pane.viewSettings=this.viewSettings();
+    const version=++this.viewSequence;pane.renderVersion=version;pane.viewTabId=tab.id;pane.viewPath=tab.path;pane.viewMode=tab.mode;pane.viewKind=tab.kind;pane.viewBaseSource=!!tab.baseSource;pane.viewSettings=this.viewSettings();
     pane.history=tab.history??[];pane.historyIndex=tab.historyIndex??-1;
     const content=el('div','tab-view-content');Object.assign(content.style,{display:'flex',flexDirection:'column',flex:'1',minHeight:'0',minWidth:'0',overflow:'hidden'});pane.element.append(content);pane.content=content;
     let recoveryCleanup:(()=>void)|undefined;
@@ -1127,7 +1129,10 @@ export class Workspace {
     const forward=button('right','Navigate forward',()=>this.run(()=>this.navigate(1,pane)));forward.disabled=pane.historyIndex>=pane.history.length-1;
     toolbar.append(back,forward,el('div','breadcrumbs',tab.path?tab.path.replace(/\.(?:md|base)$/i,'').replaceAll('/',' / '):''));
     const actions=el('div','view-actions');
+    const baseSourcePath=tab.path;
+    const changeBaseSource=(source:boolean)=>{if(generation!==this.vaultGeneration||pane.runtime!==runtime||pane.renderVersion!==version||this.current(pane)!==tab||tab.path!==baseSourcePath)return Promise.resolve();return this.setBaseSource(pane,source);};
     if(tab.kind==='note'&&(!tab.path||isMarkdown(tab.path)))actions.append(this.hotkeyButton(tab.mode==='reading'?'edit':'book','toggle-reading',tab.mode==='reading'?'Switch to Live Edit':'Switch to reading view',()=>this.run(()=>this.toggleReading(pane))));
+    if(tab.kind==='note'&&tab.path&&/\.base$/i.test(tab.path))actions.append(button(tab.baseSource?'table':'edit',tab.baseSource?'Return to Base':'Edit source',()=>this.run(()=>changeBaseSource(!tab.baseSource)),'base-source-toggle'));
     actions.append(button('more','More options',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)),button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle'));toolbar.append(actions);if(!this.platform.editorOnly)content.append(toolbar);
     if(tab.kind==='tasks'){
       if(this.tasksRetiring)return;
@@ -1163,14 +1168,36 @@ export class Workspace {
         host.classList.add('base-attachment-view');Object.assign(host.style,{display:'flex',flexDirection:'column',minHeight:'0',overflow:'hidden',padding:'0'});
         try{
           await this.prepareBase(path,generation);if(version!==pane.renderVersion||!current())return;
-          const vault=this.vault,fileToken=this.treeEntryToken(path),resources=this.attachments!;
+          const vault=this.vault,fileToken=this.treeEntryToken(path),entryId=vault.entries.get(path)?.entryId,resources=this.attachments!;
           const validate=()=>{
             if(generation!==this.vaultGeneration||vault!==this.vault||pane.runtime!==runtime||runtime.phase==='disposed')throw new Error('The Base view is no longer open.');
-            if(!fileToken||this.treeEntryToken(path)!==fileToken||vault.entries.get(path)?.type!=='file')throw new Error('The Base file is no longer current.');
+            if(!fileToken||this.treeEntryToken(path)!==fileToken||vault.entries.get(path)?.type!=='file'||entryId&&vault.entries.get(path)?.entryId!==entryId)throw new Error('The Base file is no longer current.');
           };
-          const session=this.createWorkspaceBaseSession(host,path,()=>pane,validate);
-          pane.baseView=session;await session.ready;
-        }catch(error){if(version===pane.renderVersion)host.append(el('p','error-message',error instanceof Error?error.message:String(error)));}
+          if(tab.baseSource){
+            const buffer=await this.baseBufferFor(path,validate);validate();
+            if(entryId&&buffer.savedDurableWitness&&buffer.savedDurableWitness.entryId!==entryId)throw new Error('The Base source belongs to a previous file. Its recovery draft is retained.');
+            const findHost=el('div','note-find-host'),scroll=el('div','note-scroll base-source-view'),editorHost=el('div','editor-host');
+            scroll.setAttribute('role','region');scroll.setAttribute('aria-label','Base source');scroll.append(editorHost);host.append(findHost,scroll);
+            recoveryCleanup=this.mountNoteRecovery(host,buffer);
+            const factory=this.editorFactory||(await import('./editor.ts')).createEditor;validate();
+            const owns=()=>{validate();if(this.current(pane)!==tab||pane.renderVersion!==version||!pane.viewBaseSource||this.buffers.get(path)!==buffer||buffer.path!==path)throw new Error('The Base source editor changed.');};
+            const canMutate=()=>{try{owns();return runtime.phase==='active'&&!!pane.content?.isConnected;}catch{return false;}};
+            const nativeCurrent=()=>canMutate()&&this.activePane===pane&&!this.closing&&!this.root.inert&&!this.platformReleased;
+            pane.editor=factory(editorHost,{value:buffer.text,mode:'source',paths:()=>[],open:()=>{},hotkeys:this.hotkeys,findPanelHost:findHost,canMutate,
+              validateChange:next=>{owns();buffer.validateTextChange(next);},onChangeRejected:error=>notice(error instanceof Error?error.message:String(error)),
+              ...(this.platform.nativeEditor?{isCurrent:nativeCurrent,onNativeEditorState:(state:NativeEditorState)=>{if(nativeCurrent())this.sendNativeEditorState(state);}}:{}),
+              onChange:value=>{owns();this.updateMarkdownBuffer(buffer,value,owns);runtime.touch();for(const other of this.loadedViews())if(other!==pane&&other.viewPath===path&&other.viewBaseSource)other.editor?.setValue(value);this.renderStatus();}});
+            editorHost.querySelector('.cm-content')?.setAttribute('aria-label','Base source');
+            if(tab.viewState?.editor)pane.editor.restoreViewState?.(tab.viewState.editor);
+            if(Number.isFinite(tab.viewState?.scrollTop))scroll.scrollTop=Math.max(0,tab.viewState!.scrollTop);
+            if(Number.isFinite(tab.viewState?.scrollLeft))scroll.scrollLeft=Math.max(0,tab.viewState!.scrollLeft);
+          }else{
+            const recovery=el('div','base-source-recovery');recovery.hidden=true;
+            recovery.append(el('p','','Edit this Base’s source to repair the configuration.'),textButton('Edit source',()=>this.run(()=>changeBaseSource(true)),'mod-cta'));host.append(recovery);
+            const session=this.createWorkspaceBaseSession(host,path,()=>pane,validate,undefined,undefined,undefined,error=>{recovery.hidden=!error;});
+            pane.baseView=session;await session.ready;
+          }
+        }catch(error){if(version===pane.renderVersion){host.append(el('p','error-message',error instanceof Error?error.message:String(error)));if(!tab.baseSource)host.append(textButton('Edit source',()=>this.run(()=>changeBaseSource(true))));}}
       }
       else if(isImage(path))pane.imageView=createImageView(host,path,this.attachments!);
       else if(mediaKind(path)){
@@ -1294,7 +1321,7 @@ export class Workspace {
     if(version===pane.renderVersion)pane.viewReady=true;this.renderStatus();
   }
 
-  private createWorkspaceBaseSession(host:HTMLElement,path:string,owner:()=>Pane,validate:()=>void,sourcePath?:string,viewName?:string,inline?:InlineBaseRequest):BaseSession{
+  private createWorkspaceBaseSession(host:HTMLElement,path:string,owner:()=>Pane,validate:()=>void,sourcePath?:string,viewName?:string,inline?:InlineBaseRequest,onSourceError?:(error:Error|null)=>void):BaseSession{
     const vault=this.vault,resources=this.attachments!;
     let captured=inline;
     const inlineSource=inline?{
@@ -1315,6 +1342,7 @@ export class Workspace {
       }
     }:undefined;
     return (this.viewFactories.base??createBaseSession)(host,{vault,basePath:path,validate,viewName,inlineSource,query:{currentFilePath:sourcePath??path},
+            ...(onSourceError?{onState:state=>onSourceError(state.error)}:{}),
             onViewRenamed:event=>{validate();const identity=this.treeEntryToken(event.basePath);if(!identity)return;for(const sessions of new Set([this.baseNewItemEmbeds,...this.loadedViews().map(pane=>pane.baseEmbeds)].filter((sessions):sessions is BaseEmbedSessions=>!!sessions)))sessions.renameViewBinding(event.basePath,event.from,event.to,identity);},
             closeCreatedFile:()=>this.baseNewItem?.element.contains(host)?false:this.closeBaseNewItem(),
             openCreatedFile:async(target,_event,anchor)=>{
@@ -1569,7 +1597,7 @@ export class Workspace {
     const tab=source?.tabs.find(tab=>tab.id===intent.tabId),layout=this.splitLayout;
     if(!source||!target||!tab||!layout||!['center','left','right','top','bottom'].includes(intent.edge))return;
     const cached=this.cachedViews.get(tab);
-    if(cached&&(cached.viewPath!==tab.path||cached.viewMode!==tab.mode||cached.viewKind!==tab.kind)){
+    if(cached&&(cached.viewPath!==tab.path||cached.viewMode!==tab.mode||cached.viewKind!==tab.kind||!!cached.viewBaseSource!==!!tab.baseSource)){
       await this.disposePaneViews(cached);if(this.cachedViews.get(tab)===cached)this.cachedViews.delete(tab);
       if(!this.panes.includes(source)||!this.panes.includes(target)||!source.tabs.includes(tab))return;
     }
@@ -1643,7 +1671,7 @@ export class Workspace {
   }
   private viewSettings():string{return JSON.stringify([this.settings.readableWidth,this.settings.showInlineTitle,this.settings.useTab,this.settings.tabSize,this.settings.smartIndentList]);}
   private clearPaneViewFields(pane:Pane):void{
-    pane.viewTabId=undefined;pane.viewPath=undefined;pane.viewMode=undefined;pane.viewKind=undefined;pane.viewReady=false;pane.rebindView=undefined;pane.content=undefined;pane.runtime=undefined;
+    pane.viewTabId=undefined;pane.viewPath=undefined;pane.viewMode=undefined;pane.viewKind=undefined;pane.viewBaseSource=undefined;pane.viewReady=false;pane.rebindView=undefined;pane.content=undefined;pane.runtime=undefined;
     pane.editor=undefined;pane.imageView=undefined;pane.pdfView=undefined;pane.mediaView=undefined;pane.canvasView=undefined;pane.baseView=undefined;pane.calendarView=undefined;pane.tasksView=undefined;pane.canvasSource=undefined;pane.baseEmbeds=undefined;pane.embeds=undefined;pane.properties=undefined;pane.refreshPreview=undefined;pane.readingFind=undefined;pane.propertyTimer=undefined;
     pane.renderVersion=++this.viewSequence;
   }
@@ -1662,7 +1690,7 @@ export class Workspace {
     const cached=this.cachedViews.get(tab);if(!cached?.runtime||!cached.content)return false;
     const connected=cached.content.isConnected;
     cached.runtime.attach(pane.element,this.viewOwner(pane));
-    const fields=['viewTabId','viewPath','viewMode','viewKind','viewReady','viewSettings','rebindView','editor','imageView','pdfView','mediaView','canvasView','baseView','calendarView','tasksView','canvasSource','baseEmbeds','embeds','properties','refreshPreview','readingFind','propertyTimer','renderVersion','runtime','content'] as const;
+    const fields=['viewTabId','viewPath','viewMode','viewKind','viewBaseSource','viewReady','viewSettings','rebindView','editor','imageView','pdfView','mediaView','canvasView','baseView','calendarView','tasksView','canvasSource','baseEmbeds','embeds','properties','refreshPreview','readingFind','propertyTimer','renderVersion','runtime','content'] as const;
     for(const key of fields)(pane as unknown as Record<string,unknown>)[key]=cached[key];
     pane.history=tab.history??cached.history;pane.historyIndex=tab.historyIndex??cached.historyIndex;
     pane.rebindView?.(pane);this.cachedViews.delete(tab);this.applyViewSettings(pane);pane.readingFind?.refresh();
@@ -1672,7 +1700,7 @@ export class Workspace {
   }
   private async restoreCachedView(pane:Pane,tab:Tab):Promise<boolean>{
     const cached=this.cachedViews.get(tab);if(!cached)return false;
-    if(cached.viewPath!==tab.path||cached.viewMode!==tab.mode||cached.viewKind!==tab.kind){
+    if(cached.viewPath!==tab.path||cached.viewMode!==tab.mode||cached.viewKind!==tab.kind||!!cached.viewBaseSource!==!!tab.baseSource){
       await this.disposePaneViews(cached);this.cachedViews.delete(tab);return false;
     }
     return this.restoreCachedViewNow(pane,tab);
@@ -2217,7 +2245,7 @@ export class Workspace {
     if(!this.activePane)return;const tab=this.current();const buffer=tab?.path?this.buffers.get(tab.path):undefined;const text=buffer?.text||'';
     this.status.replaceChildren();
     if(tab?.kind!=='note')return;
-    if(tab?.path&&!isMarkdown(tab.path)){this.status.append(el('span','',`${this.vault.entries.get(tab.path)?.size??0} bytes`));return;}
+    if(tab?.path&&!isMarkdown(tab.path)){if(/\.base$/i.test(tab.path))this.status.append(el('span','save-state',buffer?.error?'Couldn’t save — keep this Base open':buffer?.dirty?'Saving…':''));this.status.append(el('span','',`${this.vault.entries.get(tab.path)?.size??0} bytes`));return;}
     this.status.append(el('span','save-state',buffer?.error?'Couldn’t save — keep this note open':buffer?.dirty?'Saving…':''));
     const mode=textButton(tab?.mode==='reading'?'Reading view':'Live Edit',()=>this.modeMenu(mode),'status-mode');
     this.status.append(mode,el('span','',`${text.trim()?text.trim().split(/\s+/u).length:0} words`),el('span','',`${[...text].length} characters`));
@@ -2367,6 +2395,14 @@ export class Workspace {
   }
   private async navigate(delta:number,pane:Pane):Promise<void>{const index=pane.historyIndex+delta;if(index<0||index>=pane.history.length)return;pane.historyIndex=index;this.current(pane).historyIndex=index;await this.openNote(pane.history[index],false,pane,false);}
   private async toggleReading(pane=this.activePane):Promise<void>{const tab=this.current(pane);if(tab.kind!=='note')return;if(tab.path&&!isMarkdown(tab.path))return;await this.flushPane(pane);tab.mode=tab.mode==='reading'?this.settings.defaultMode:'reading';await this.renderPane(pane);this.saveSession();}
+  private async setBaseSource(pane:Pane,source:boolean):Promise<void>{
+    const tab=this.current(pane),path=tab?.path;if(tab?.kind!=='note'||!path||!/\.base$/i.test(path)||!!tab.baseSource===source)return;
+    const generation=this.vaultGeneration,vault=this.vault,runtime=pane.runtime,token=this.treeEntryToken(path);
+    const validate=()=>{if(generation!==this.vaultGeneration||vault!==this.vault||this.current(pane)!==tab||pane.runtime!==runtime||!this.panes.includes(pane)||!token||this.treeEntryToken(path)!==token)throw new Error('The Base source request changed.');};
+    await this.baseBufferFor(path,validate);validate();await this.flushPane(pane);validate();
+    this.capturePaneState(pane);tab.baseSource=source;
+    await this.renderPane(pane,{flush:false});this.saveSession();if(this.activePane===pane)this.focusPane(pane);
+  }
   private async openPropertyLink(source:string,target:string,pane:Pane,witness?:{readonly entryId:string;readonly revision:string;readonly subpath?:string},newTab=false):Promise<void>{
     if(!witness){await this.followLink(source,target,pane);return;}
     const vault=this.vault,generation=this.vaultGeneration;
@@ -2541,6 +2577,7 @@ export class Workspace {
       action:async()=>{tab.mode=mode;pane.active=tab.id;await this.renderPane(pane);this.saveSession();},
     })):[];
     const path=tab.path;
+    if(tab.kind==='note'&&path&&/\.base$/i.test(path)){const source=!tab.baseSource;modes.push({name:source?'Edit source':'Return to Base',action:()=>this.setBaseSource(pane,source)});}
     this.menu([...(path&&isMarkdown(path)&&this.platform.recoveryHistory?[{name:'Version history',action:()=>this.showVersionHistory(path)}]:[]),{name:'Split right',action:()=>this.split('right',pane,tab)},{name:'Split down',action:()=>this.split('bottom',pane,tab)},...modes,...(path?[{name:'Rename…',action:()=>this.renameDialog(path)}]:[]),{name:'Close tab',action:()=>this.closeTab(pane,tab)}],x,y,()=>this.panes.includes(pane)&&pane.tabs.includes(tab)&&tab.path===path);
   }
   private menuPoint(event:MouseEvent):{x:number;y:number}{
