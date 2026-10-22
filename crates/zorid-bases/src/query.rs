@@ -1885,6 +1885,13 @@ pub(crate) fn query_rows_validated(
                     let Some(requested) = property.strip_prefix("note.") else {
                         continue;
                     };
+                    steps_used = steps_used.saturating_add(requested.len() + 1);
+                    check_query_work(
+                        steps_used.saturating_add(session.steps_used()),
+                        &admission,
+                        options,
+                        "Raw property name resolution exceeds query work budget",
+                    )?;
                     // Name resolution follows exact-first/casefold runtime lookup.
                     // Charge every candidate before the repeated scans or lowercase
                     // allocations, including finding the original raw source below.

@@ -152,7 +152,7 @@ impl Context<'_, '_, '_, '_> {
         self.check(1)?;
         if let Some(record) = record {
             for (name, _) in &record.properties {
-                self.check(name.len() + 1)?;
+                self.check(name.len().saturating_add(1).saturating_mul(4))?;
             }
             let properties = self.properties;
             if let Some(row) = record
@@ -161,12 +161,12 @@ impl Context<'_, '_, '_, '_> {
                 .and_then(|w| properties.and_then(|p| p.rows().get(&w.entry_id)))
             {
                 for name in row.values.keys() {
-                    self.check(name.len() + 1)?;
+                    self.check(name.len().saturating_add(1).saturating_mul(4))?;
                 }
             }
         } else if let Some(properties) = self.properties {
             for name in properties.property_names() {
-                self.check(name.len() + 1)?;
+                self.check(name.len().saturating_add(1).saturating_mul(4))?;
             }
         }
         Ok(())
@@ -227,6 +227,7 @@ impl Engine {
             ctx.check(1)?;
             let value = row.values.get(property).unwrap_or(&BaseValue::Null);
             let record = ctx.records[&row.entry_id];
+            ctx.check(property.len() + 1)?;
             ctx.property_work(Some(record))?;
             let writable = property
                 .strip_prefix("note.")
@@ -472,6 +473,7 @@ impl Engine {
         ctx.value_copy(key)?;
         let view = ctx.view;
         let property = &view.group.as_ref().expect("group selected").property;
+        ctx.check(property.len() + 1)?;
         ctx.property_work(None)?;
         let mut writable = property
             .strip_prefix("note.")
