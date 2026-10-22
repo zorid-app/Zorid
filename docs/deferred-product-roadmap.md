@@ -22,7 +22,10 @@ assertion strength changed. The full current suite terminates101 in
 `/private/tmp/zorid-bases-g9-full-composed-001.log`: library185 pass, but the
 unchanged preview budget regression fails again at comparator scratch after
 the G9 conversion integration. `bases_summaries` owns source/metering diagnosis
-with the conversion owner advising; preserve the existing500,000 ceiling and
+with the conversion owner advising. Independently reviewed `67f16e52` is now
+composed as `1e9a7f25`, consuming an already-admitted String property key without
+a second rendering copy; its five new cases and unchanged preview need actual
+execution. Preserve the existing500,000 ceiling and
 real work/cancellation/allocation checks. Later targets are unexecuted in this
 run. Library success is not a complete current-core pass.
 
@@ -52,9 +55,9 @@ as root `60c1d4fd`; root new tests pass9/9 and frontend bounded closure passes34
 No015 build or app has started. The frontend lane is frozen at `eeb8646a`,
 with old Rust tree `5e010112` and preserved native
 SHA176fcff5. All owned014 processes are closed. The unrelated installed Zorid app
-is untouched. No Cargo/app/build is live. Root is recovering safe space before granting015;
-`bases_controller` owns lossless static toolchain/cache compression with exact
-byte/metadata checks.
+is untouched. No Cargo/app/build is live at this record. The next sole heavy slot is assigned
+to `bases_ui_review` for015 build/run, conditional on the completed toolchain
+restoration's final version smoke. Root does not overlap Cargo with that slot.
 
 Transport fixtures now contain127 explicit typed row oracles/16 diagnostics,
 retaining19 browser groups,14 files and125 CLI commands. Matching final native,
@@ -63,12 +66,21 @@ complete desktop/visual/supplemental acceptance remain open. Main remains
 unchanged at `e7d655e1`.
 
 Space recovery preserves source, evidence, fixture data and product binaries.
-Besides documented retirement of reproducible completed caches,265 static cache
-files were losslessly APFS-compressed with exact hash, logical-size, mode and
-mtime checks, reclaiming322,686,976 allocated bytes. Receipt:
-`/private/tmp/zorid-bases-lossless-cache-compression-20261022.json`. Latest free
-space is about641MiB, below the unchanged1GiB actual-run guard; further safe
-recovery is needed before desktop verification. Builds stay serialized.
+The exact30 fingerprinted test executables and13 compiled examples were retired
+with hashes, process-use checks and retained source/logs/fingerprints; four clean
+completed worktrees were removed while retaining their branches. Receipts:
+`/private/tmp/zorid-bases-exact-old-test-executable-cleanup-20261022.json`,
+`/private/tmp/zorid-bases-example-vite-cache-cleanup-20261022.json`, and
+`/private/tmp/zorid-bases-completed-worktree-retirement-20261022-005.json`.
+Lossless compression preserved exact bytes/metadata but allocated-block savings
+initially did not translate to free space. Read-only evidence then proved38
+owned toolchain files have byte-identical, same-volume originals. Their owned
+copies were restored with no-fallback APFS clonefile, preserving original owned
+metadata and leaving all source originals untouched; this recovered actual free
+space to1,315,323,904 bytes. Receipt:
+`/private/tmp/zorid-toolchain-clone-restoration-20261022-001.json`. The unchanged
+1GiB actual-run guard still must pass before launch and at completion. Builds
+stay serialized; no system snapshots or user data were changed.
 
 2026-10-22 current isolated core candidate `8c2d4c35`, Rust tree
 `513fe752302763b12c5658755f2b301a30e3bc05`, passes the complete Bases Rust
