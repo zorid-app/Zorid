@@ -1,3 +1,4 @@
+import { normalizeBaseProperty } from './query.ts';
 import type { BaseValue, BaseViewConfig, BaseViewPatch } from './document.ts';
 
 /** Shipped 1.14.4 registration settings; these keys are shared with each renderer. */
@@ -54,9 +55,10 @@ export function propertyDisplayPatch(root: Readonly<Record<string, BaseValue>> |
   const existing = root?.properties;
   const properties: Record<string, BaseValue> = existing && typeof existing === 'object' && !Array.isArray(existing) ? { ...existing as Record<string, BaseValue> } : {};
   for (const [property, name] of names) {
-    const previous = properties[property], configuration: Record<string, BaseValue> = previous && typeof previous === 'object' && !Array.isArray(previous) ? { ...previous as Record<string, BaseValue> } : {};
+    const key = Object.keys(properties).find(key => normalizeBaseProperty(key) === normalizeBaseProperty(property)) ?? property;
+    const previous = properties[key], configuration: Record<string, BaseValue> = previous && typeof previous === 'object' && !Array.isArray(previous) ? { ...previous as Record<string, BaseValue> } : {};
     if (name.trim()) configuration.displayName = name.trim(); else delete configuration.displayName;
-    properties[property] = configuration;
+    properties[key] = configuration;
   }
   return { properties };
 }

@@ -91,7 +91,7 @@ export function validateToolbarPatch(result: BaseQueryResult, patch: BaseViewPat
         if (Array.isArray(result.view.order)) for (const property of result.view.order) if (typeof property === 'string') known.add(normalizeBaseProperty(property));
         const normalized = value.map(propertyId);
         if (new Set(normalized).size !== normalized.length) return fail('Property order cannot contain duplicates');
-        for (const property of normalized) if (!known.has(property)) return fail(`Unknown property: ${property}`);
+        for (const property of normalized) if (!known.has(property) && !property.startsWith('note.')) return fail(`Unknown property: ${property}`);
         output.order = normalized; break;
       }
       case 'sort': {

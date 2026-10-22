@@ -44,3 +44,30 @@ test('view names and display labels are reusable configuration with extensions r
  assert.equal(uniqueViewName([{type:'table',name:'View'},{type:'cards',name:'View 2'}]),'View 3');assert.throws(()=>validateViewName([],'x#y'));assert.throws(()=>validateViewName([{type:'table',name:'Books'}],'Books'));
  assert.deepEqual(propertyDisplayPatch({properties:{score:{displayName:'Old',extension:'keep'}}},new Map([['score','Points']])),{properties:{score:{displayName:'Points',extension:'keep'}}});
 });
+
+test('view drag owns its live toolbar and rejects another toolbar or retired source',async()=>{
+ const a=fixture(),b=fixture();
+ const transfer={types:['application/x-zorid-base-view'],payload:'',effectAllowed:'',setData(_kind:string,value:string){this.payload=value;},getData(){return this.payload;}};
+ const dispatch=(f:ReturnType<typeof fixture>,node:HTMLElement,type:string)=>{const event=new f.dom.window.Event(type,{bubbles:true,cancelable:true});Object.defineProperty(event,'dataTransfer',{value:transfer});node.dispatchEvent(event);};
+ try{
+  a.click('Views');b.click('Views');const source=a.doc.querySelector<HTMLElement>('[data-view-index="0"]')!,target=b.doc.querySelector<HTMLElement>('[data-view-index="1"]')!;
+  dispatch(a,source,'dragstart');dispatch(b,target,'drop');await tick();assert.equal(b.calls.length,0,'foreign toolbar drag cannot reorder this base');
+  a.click('Views');dispatch(a,source,'dragstart');const reopen=a.doc.querySelector<HTMLElement>('[data-view-index="1"]');assert.equal(reopen,null);a.click('Views');dispatch(a,a.doc.querySelector<HTMLElement>('[data-view-index="1"]')!,'drop');await tick();assert.equal(a.calls.length,0,'retired source cannot restart a drag');
+  const ownSource=a.doc.querySelector<HTMLElement>('[data-view-index="0"]')!,ownTarget=a.doc.querySelector<HTMLElement>('[data-view-index="1"]')!;dispatch(a,ownSource,'dragstart');dispatch(a,ownTarget,'drop');await tick();assert.deepEqual(a.calls.pop(),['move',1,0,1]);
+ }finally{a.cleanup();b.cleanup();}
+});
+
+test('immediate mode serializes edits, rebases its own result and keeps the focused menu',async()=>{
+ const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
+ let document=BaseDocument.parse('views: [{type: table, name: Library}]'),version=1;
+ const result=()=>executeBaseQuery(document,{version,files:[{path:'Book.md',properties:{score:3}}]});
+ const calls:{version:unknown;patch:unknown}[]=[];let release:undefined|(()=>void),blocked=true;
+ const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(){},async save(expected,patch){calls.push({version:expected,patch});if(blocked)await new Promise<void>(resolve=>{release=resolve;});assert.equal(expected,version,'accepted operation uses the refreshed revision');document.updateView(0,patch);version++;refresh();},onDraftChange(){},onError(error){throw error;}});
+ function refresh(){const next=result();toolbar.update({result:next,views:document.views,selectedIndex:0,readOnly:false,allowRename:true,label:p=>p});}refresh();
+ const get=<T extends HTMLElement>(label:string)=>doc.querySelector<T>(`[aria-label="${label}"]`)!;
+ try{
+  get<HTMLButtonElement>('View options').click();const layout=get<HTMLSelectElement>('Layout');layout.focus();layout.value='cards';layout.dispatchEvent(new dom.window.Event('change',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,280));assert.equal(calls.length,1);assert.equal(doc.querySelector('.bases-toolbar-footer')?.hasAttribute('hidden'),true);
+  const name=get<HTMLInputElement>('View name');name.value='Books';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));blocked=false;release!();await tick();await tick();assert.equal(calls.length,2);assert.equal(calls[1].version,2);assert.equal(document.views[0].name,'Books');assert.equal(doc.querySelector('[role="dialog"]')?.isConnected,true);assert.equal(name.isConnected,true);assert.equal(toolbar.hasDraft(),false);
+  name.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(doc.querySelector('[role="dialog"]'),null);
+ }finally{toolbar.destroy();dom.window.close();}
+});
