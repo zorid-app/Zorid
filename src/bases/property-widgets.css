@@ -27,3 +27,8 @@
 .bases-metadata-value [data-color="pink"], .bases-property-popover [data-color="pink"] { background:rgba(215,100,170,.2); }
 .bases-metadata-value [data-color="gray"], .bases-property-popover [data-color="gray"], .bases-metadata-value [data-color="grey"], .bases-property-popover [data-color="grey"] { background:rgba(128,128,128,.2); }
 .bases-metadata-value [data-color="brown"], .bases-property-popover [data-color="brown"] { background:rgba(160,110,70,.2); }
+
+.bases-property-inline-editor { min-width:0; width:100%; }
+.bases-property-inline-editor .multi-select-container { display:flex; flex-wrap:wrap; align-items:center; gap:4px; }
+.bases-property-inline-editor .metadata-input { flex:1; min-width:24px; width:24px; }
+.bases-property-inline-editor .multi-select-pill-remove-button { border:0; background:none; box-shadow:none; padding:0; height:16px; min-width:12px; color:var(--text-muted); cursor:pointer; }

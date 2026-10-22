@@ -69,10 +69,11 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   const type = definition.type;
   const editable = presentation.property.startsWith('note.') && /\.md$/i.test(presentation.row.path) && !options.readOnly?.(presentation) && type !== 'rollup' && type !== 'reverseRelation';
   const multiple = ['list', 'tags', 'multiselect'].includes(type) || (type === 'relation' && !!definition.relation?.multiple);
+  const inlineList = type === 'list' || type === 'tags';
   const picker = multiple || ['select', 'status', 'relation', 'link'].includes(type);
   let acceptedPresentation = presentation;
   let value = presentation.value, disposed = false, pending = false, editing = false, composing = false;
-  let finishAfterPending = false;
+  let finishAfterPending = false, editingIndex: number | undefined;
   let input: HTMLInputElement | undefined, popup: HTMLDivElement | undefined;
   let draftChanged = false;
   let draft: string[] = [], selected = 0, choices: { value: string; label: string; option?: BasePropertyOption; missing?: boolean }[] = [];
@@ -133,15 +134,18 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       pill.classList.add('internal-link'); pill.setAttribute('role', 'link');
       const open = (event: MouseEvent | KeyboardEvent) => { event.preventDefault(); event.stopPropagation(); options.openFile?.(target.path, event); };
       pill.addEventListener('click', open); pill.addEventListener('auxclick', event => { if (event.button === 1) open(event); });
+      pill.addEventListener('dblclick', event => { event.preventDefault(); event.stopPropagation(); editChip(index); });
       pill.addEventListener('keydown', event => { if (event.key === 'Enter') open(event); });
     }
     if (removable) {
       const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'multi-select-pill-remove-button'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${text}`);
       remove.addEventListener('mousedown', event => event.preventDefault());
       remove.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); if (!pending) { draft.splice(index, 1); draftChanged = true; renderEditor(); input?.focus(); void saveDraft(); } }); pill.append(remove);
+      pill.addEventListener('dblclick', event => { event.preventDefault(); event.stopPropagation(); editChip(index); });
       pill.addEventListener('keydown', event => {
         if (event.isComposing || pending) return;
-        if (event.key === 'Backspace' || event.key === 'Delete') { event.preventDefault(); event.stopPropagation(); draft.splice(index, 1); draftChanged = true; renderEditor(); input?.focus(); void saveDraft(); }
+        if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); editChip(index); }
+        else if (event.key === 'Backspace' || event.key === 'Delete') { event.preventDefault(); event.stopPropagation(); draft.splice(index, 1); draftChanged = true; renderEditor(); input?.focus(); void saveDraft(); }
         else if (event.key === 'Escape' || event.key === 'ArrowDown') { event.preventDefault(); input?.focus(); }
         else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); const sibling = event.key === 'ArrowLeft' ? pill.previousElementSibling : pill.nextElementSibling; (sibling as HTMLElement | null)?.focus(); }
       });
@@ -181,7 +185,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     } else element.textContent = renderText(value);
   }
   function position() {
-    if (!popup) return;
+    if (!popup || inlineList) return;
     const rect = element.getBoundingClientRect(), width = Math.max(260, Math.min(360, win?.innerWidth ?? 360));
     popup.style.left = `${Math.max(4, Math.min(rect.left, (win?.innerWidth ?? 1024) - width - 4))}px`;
     popup.style.width = `${width}px`; popup.style.top = `${Math.max(4, Math.min(rect.bottom + 4, (win?.innerHeight ?? 768) - Math.min(popup.scrollHeight || 200, 320) - 4))}px`;
@@ -198,13 +202,14 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   function renderChoices() {
     if (!popup || !input) return;
     popup.querySelector('.suggestion-container')?.remove();
+    if (inlineList) return;
     const list = document.createElement('div'); list.className = 'suggestion-container'; list.setAttribute('role', 'listbox'); list.id = `base-options-${Math.random().toString(36).slice(2)}`;
     input.setAttribute('aria-controls', list.id); input.setAttribute('aria-expanded', 'true');
     const needle = input.value.toLocaleLowerCase();
     const all = type === 'relation' || type === 'link'
       ? targets().map(target => ({ value: targetValue(target), label: target.label ?? target.path, missing: target.missing }))
       : (definition.options ?? []).map(option => ({ value: option.value, label: option.label ?? option.value, option }));
-    choices = all.filter(choice => (!multiple || !draft.includes(choice.value)) && (choice.label.toLocaleLowerCase().includes(needle) || choice.value.toLocaleLowerCase().includes(needle)));
+    choices = all.filter(choice => (!multiple || !draft.some((value, index) => value === choice.value && index !== editingIndex)) && (choice.label.toLocaleLowerCase().includes(needle) || choice.value.toLocaleLowerCase().includes(needle)));
     selected = Math.max(0, Math.min(selected, choices.length - 1));
     if (choices[selected]?.missing) selected = choices.findIndex(choice => !choice.missing);
     choices.forEach((choice, index) => {
@@ -221,8 +226,18 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   async function choose(next: string) {
     if (!current() || pending) return;
     if (choices.find(choice => choice.value === next)?.missing || ((type === 'relation' || type === 'link') && targetFor(next)?.missing)) { error(new Error('This related note is unavailable. Choose another note.')); return; }
-    if (multiple) { if (!draft.includes(next)) { draft.push(next); draftChanged = true; } if (input) input.value = ''; renderEditor(); input?.focus(); await saveDraft(); }
+    if (multiple) {
+      const duplicate = draft.findIndex((value, index) => value === next && index !== editingIndex);
+      if (duplicate >= 0) { popup?.querySelectorAll<HTMLElement>('.multi-select-pill')[duplicate]?.focus(); return; }
+      if (editingIndex !== undefined) { if (draft[editingIndex] !== next) { draft[editingIndex] = next; draftChanged = true; } editingIndex = undefined; }
+      else { draft.push(next); draftChanged = true; }
+      if (input) input.value = ''; renderEditor(); input?.focus(); await saveDraft();
+    }
     else await commit(str(next));
+  }
+  function editChip(index: number) {
+    if (pending || !current() || !input || !multiple) return;
+    editingIndex = index; input.value = draft[index]; renderChoices(); input.focus(); input.select();
   }
   async function saveDraft() {
     if (multiple && draftChanged) await commit({ type: 'list', value: draft.map(str) }, true);
@@ -241,7 +256,12 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
         if (multiple) {
           if (!draftChanged && !input.value) { cancel(); return; }
           if (input.value) {
-            if (['list', 'tags'].includes(type)) { if (!draft.includes(input.value)) draft.push(input.value); }
+            if (inlineList) {
+              const duplicate = draft.findIndex((value, index) => value === input!.value && index !== editingIndex);
+              if (duplicate >= 0) { error(new Error('This value is already in the list.')); return; }
+              if (editingIndex !== undefined) { draft[editingIndex] = input.value; editingIndex = undefined; } else draft.push(input.value);
+              draftChanged = true;
+            }
             else { error(new Error('Choose a matching option or clear the search before saving.')); return; }
           }
           next = { type: 'list', value: draft.map(str) };
@@ -276,7 +296,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     input.addEventListener('keydown', event => {
       event.stopPropagation();
       if (composing || event.isComposing || pending) return;
-      if (event.key === 'Escape') { event.preventDefault(); cancel(); }
+      if (event.key === 'Escape') { event.preventDefault(); if (editingIndex !== undefined) { const index = editingIndex; editingIndex = undefined; if (input) input.value = ''; renderChoices(); popup?.querySelectorAll<HTMLElement>('.multi-select-pill')[index]?.focus(); } else cancel(); }
       else if (picker && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); const direction = event.key === 'ArrowDown' ? 1 : -1; let next = selected + direction; while (next >= 0 && next < choices.length && choices[next].missing) next += direction; if (next >= 0 && next < choices.length) selected = next; renderChoices(); }
       else if (event.key === 'Enter') {
         event.preventDefault();
@@ -288,8 +308,8 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     });
     if (picker) {
       input.setAttribute('role', 'combobox'); input.setAttribute('aria-autocomplete', 'list');
-      popup = document.createElement('div'); popup.className = 'bases-property-popover popover';
-      document.body.append(popup); renderEditor(); document.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', position); win?.addEventListener('scroll', position, true);
+      popup = document.createElement('div'); popup.className = inlineList ? 'bases-property-inline-editor' : 'bases-property-popover popover';
+      if (inlineList) element.replaceChildren(popup); else document.body.append(popup); renderEditor(); document.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', position); win?.addEventListener('scroll', position, true);
     } else element.replaceChildren(input);
     input.focus(); if (!multiple) input.select();
   }

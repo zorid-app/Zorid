@@ -43,7 +43,7 @@ test('failed writes retain exact editable draft and recover on retry; pending wr
 test('IME Enter does not commit, and disposal releases portals/listeners while issued saves settle', async () => {
   const s = setup([], { type: 'list' }); s.click(); s.input().value = '日本語'; s.input().dispatchEvent(new s.dom.window.CompositionEvent('compositionstart', { bubbles: true })); s.key('Enter', { isComposing: true }); assert.equal(s.edits.length, 0);
   s.input().dispatchEvent(new s.dom.window.CompositionEvent('compositionend', { bubbles: true })); s.key('Enter'); s.key('Enter'); await tick(); assert.deepEqual(s.edits.at(-1)?.value, baseExpressionValue(['日本語']));
-  s.click(); assert.ok(s.dom.window.document.querySelector('.bases-property-popover')); s.dispose(); assert.equal(s.dom.window.document.querySelector('.bases-property-popover'), null); assert.equal(s.element.dataset.baseEditing, undefined); s.close();
+  s.click(); assert.ok(s.dom.window.document.querySelector('.bases-property-inline-editor')); s.dispose(); assert.equal(s.dom.window.document.querySelector('.bases-property-popover'), null); assert.equal(s.element.dataset.baseEditing, undefined); s.close();
 });
 
 test('relation picker uses supplied resolved targets and preserves a dangling existing link', async () => {
@@ -81,7 +81,7 @@ test('shared date-only editor honors the provided presentation timezone', () => 
 
 test('live chip changes rebase only through own successful acknowledgements', async () => {
   const s = setup([], { type: 'list' }); s.click(); s.input().value = 'First'; s.key('Enter'); await tick();
-  assert.deepEqual(s.edits[0].value, baseExpressionValue(['First'])); assert.equal(s.edits[0].version, 14); assert.ok(s.dom.window.document.querySelector('.bases-property-popover'));
+  assert.deepEqual(s.edits[0].value, baseExpressionValue(['First'])); assert.equal(s.edits[0].version, 14); assert.ok(s.dom.window.document.querySelector('.bases-property-inline-editor'));
   s.input().value = 'Second'; s.key('Enter'); await tick(); assert.equal(s.edits[1].version, 15); assert.deepEqual(s.edits[1].value, baseExpressionValue(['First', 'Second']));
   s.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Remove First"]')!.click(); await tick(); assert.equal(s.edits[2].version, 16); assert.deepEqual(s.edits[2].value, baseExpressionValue(['Second'])); s.key('Escape'); assert.equal(s.element.textContent, 'Second'); s.close();
 });
@@ -102,4 +102,13 @@ test('create option can acknowledge its own config-only refresh before committin
   const s = setup([], definition, { getDefinition: () => definition, createOption: (_property, value, presentation) => { definition = { ...definition, options: [{ value }] }; return { version: Number(presentation.version) + 1, row: presentation.row }; }, commit: edit => { observed.push(Number(edit.version)); return { version: Number(edit.version) + 1, row: edit.row, value: edit.value }; } });
   s.click(); s.input().value = 'New option'; s.input().dispatchEvent(new s.dom.window.Event('input', { bubbles: true })); s.dom.window.document.querySelector<HTMLButtonElement>('.bases-property-create-option')!.click(); await tick();
   assert.deepEqual(observed, [15]); assert.equal(s.dom.window.document.querySelector('.is-unknown'), null); s.close();
+});
+
+
+test('ordinary lists edit inline, and chip Enter/Escape preserve existing text without a write', async () => {
+  const s = setup(['First', 'Second'], { type: 'list' }); s.click(); assert.ok(s.element.querySelector('.bases-property-inline-editor')); assert.equal(s.dom.window.document.querySelector('.bases-property-popover'), null);
+  let pill = s.element.querySelector<HTMLElement>('.multi-select-pill')!; pill.dispatchEvent(new s.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); assert.equal(s.input().value, 'First');
+  s.input().value = 'Draft'; s.key('Escape'); assert.equal(s.edits.length, 0); assert.equal(s.input().value, '');
+  pill = s.element.querySelector<HTMLElement>('.multi-select-pill')!; pill.dispatchEvent(new s.dom.window.MouseEvent('dblclick', { bubbles: true, cancelable: true })); s.input().value = 'Updated'; s.key('Enter'); await tick();
+  assert.deepEqual(s.edits[0].value, baseExpressionValue(['Updated', 'Second'])); s.close();
 });
