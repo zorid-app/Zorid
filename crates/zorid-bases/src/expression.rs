@@ -3597,7 +3597,7 @@ impl<'a> Evaluator<'a> {
                     folder == "/"
                         || file
                             .path
-                            .strip_prefix(&folder)
+                            .strip_prefix(folder.as_str())
                             .is_some_and(|tail| tail.starts_with('/')),
                 )
             }
