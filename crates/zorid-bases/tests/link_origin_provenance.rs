@@ -14,7 +14,7 @@ use zorid_index::{
 fn id(value: &str) -> EntryId {
     EntryId::new(value).unwrap()
 }
-const SETTINGS:&str="properties:\n  ref: {type: relation}\n  members: {type: relation, relation: {multiple: true}}\n  references: {type: rollup, rollup: {relation: members, property: ref, aggregation: values}}\n  distinctReferences: {type: rollup, rollup: {relation: members, property: ref, aggregation: unique}}\n";
+const SETTINGS:&str="properties:\n  ref: {type: relation}\n  members: {type: relation, relation: {multiple: true}}\n  incoming: {type: reverseRelation, reverseRelation: {property: ref}}\n  references: {type: rollup, rollup: {relation: members, property: ref, aggregation: values}}\n  distinctReferences: {type: rollup, rollup: {relation: members, property: ref, aggregation: unique}}\n";
 fn captured(settings: Option<&str>) -> Generation {
     let store = OperationId::new("link-origin-store").unwrap();
     let source = SourceSnapshotId::new(store.clone(), SourceWatermark::new("1").unwrap());
@@ -32,9 +32,9 @@ fn captured(settings: Option<&str>) -> Generation {
     )
     .unwrap();
     let mut inputs=vec![
-        ("a","One/A.md","---\nkind: book\nref: '[[../Targets/X|Label]]'\nalternative: '[[/Targets/X.md|Label]]'\nplain: '[[../Targets/X|Label]]'\nurl: https://example.test/x\n---\n[[../Targets/X]] [[../Targets/X]]\n",true),
-        ("b","Two/B.md","---\nkind: book\nref: '[[../Targets/X|Label]]'\nplain: '[[../Targets/X|Label]]'\nurl: https://example.test/x\n---\n[[../Targets/X]]\n",true),
-        ("target","Targets/X.md","# X\n",true),
+        ("a","One/A.md","---\nkind: book\nref: '[[../Targets/X|Label]]'\nalternative: '[[/Targets/X.md|Label]]'\nplain: '[[../Targets/X|Label]]'\npayload: {refs: ['[[../Targets/X|Label]]']}\nurl: https://example.test/x\n---\n[[../Targets/X]] [[../Targets/X]]\n",true),
+        ("b","Two/B.md","---\nkind: book\nref: '[[../Targets/X|Label]]'\nplain: '[[../Targets/X|Label]]'\npayload: {refs: ['[[../Targets/X|Label]]']}\nurl: https://example.test/x\n---\n[[../Targets/X]]\n",true),
+        ("target","Targets/X.md","---\nauthored: '[[../One/A]]'\n---\n# X\n",true),
         ("body-a","One/Body.md","[[../Targets/X]] [[../Targets/X]]\n",true),
         ("body-b","Two/Body.md","[[../Targets/X]]\n",true),
         ("hub","Hub.md","---\nmembers: ['[[One/A]]', '[[Two/B]]']\n---\n# Hub\n",true),
@@ -88,16 +88,20 @@ formulas:
   sameSource: '[note.ref, file("One/A.md").properties.ref].unique().length'
   differentSource: '[note.ref, file("Two/B.md").properties.ref].unique().length'
   differentSpelling: '[note.ref, note.alternative].unique().length'
+  nestedSameSource: '[note.payload.refs[0], file("One/A.md").properties.payload.refs[0]].unique().length'
+  nestedDifferentSource: '[note.payload.refs[0], file("Two/B.md").properties.payload.refs[0]].unique().length'
   urlNotOwned: '[note.url, file("Two/B.md").properties.url].unique().length'
   bodySameSource: '[file("One/Body.md").links[0], file("One/Body.md").links[1]].unique().length'
   bodyDifferentSource: '[file("One/Body.md").links[0], file("Two/Body.md").links[0]].unique().length'
-views: [{type: table, name: Origins, order: [file.name, formula.sameSource, formula.differentSource, formula.differentSpelling, formula.urlNotOwned, formula.bodySameSource, formula.bodyDifferentSource]}]
+views: [{type: table, name: Origins, order: [file.name, formula.sameSource, formula.differentSource, formula.differentSpelling, formula.nestedSameSource, formula.nestedDifferentSource, formula.urlNotOwned, formula.bodySameSource, formula.bodyDifferentSource]}]
 "#).unwrap();
     let result = query_generation(&program, &generation, &[], &QueryOptions::default()).unwrap();
     for (property, expected) in [
         ("formula.sameSource", 1.0),
         ("formula.differentSource", 2.0),
         ("formula.differentSpelling", 2.0),
+        ("formula.nestedSameSource", 1.0),
+        ("formula.nestedDifferentSource", 2.0),
         ("formula.urlNotOwned", 1.0),
         ("formula.bodySameSource", 1.0),
         ("formula.bodyDifferentSource", 2.0),
@@ -208,4 +212,29 @@ fn retained_derived_provenance_does_not_bypass_work_or_cancellation_limits() {
         query_base(&program, &snapshot, &options).unwrap_err().code,
         "cancelled"
     );
+}
+
+#[test]
+fn reverse_relation_generated_links_keep_explicit_root_constructor_identity() {
+    let generation = captured(Some(SETTINGS));
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), SETTINGS)
+            .unwrap();
+    let program = compile_base_source(r#"filters: 'file.path == "Targets/X.md"'
+formulas:
+  sameRoot: '[note.incoming[0], file("One/A.md").asLink()].unique().length'
+  notReceivingOrigin: '[note.incoming[0], note.authored].unique().length'
+views: [{type: table, name: Reverse, order: [file.name, formula.sameRoot, formula.notReceivingOrigin]}]
+"#).unwrap();
+    let result = query_generation_with_properties(
+        &program,
+        &generation,
+        &[],
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_number(&result, "formula.sameRoot", 1.0);
+    assert_number(&result, "formula.notReceivingOrigin", 2.0);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
 }

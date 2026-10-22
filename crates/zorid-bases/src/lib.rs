@@ -37,6 +37,10 @@ pub use query::{
     BaseSnapshot, GroupOption, QueryCounts, QueryDiagnostic, QueryOptions,
 };
 
+#[cfg(test)]
+#[path = "link_identity_admission_tests.rs"]
+mod link_identity_admission_tests;
+
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::sync::{
@@ -300,21 +304,28 @@ fn runtime_value(
 /// owning path cannot bypass shared-context memory/work limits.
 pub(crate) fn frontmatter_link_identity_bytes(
     record: &DetachedRecord,
+    check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
 ) -> Result<usize, ExpressionDiagnostic> {
     fn visit(
         value: &PropertyValue,
         path_bytes: usize,
         depth: usize,
         bytes: &mut usize,
+        check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
     ) -> Result<(), ExpressionDiagnostic> {
-        if depth > 64 {
+        check(1)?;
+        if depth > 128 {
             return Err(ExpressionDiagnostic::new(
                 "budget",
                 "Frontmatter link identity exceeds depth budget",
             ));
         }
         match value {
-            PropertyValue::String(value) if value.starts_with("[[") && value.ends_with("]]") => {
+            PropertyValue::String(value) => {
+                check(1 + value.len() / 16)?;
+                if !value.starts_with("[[") || !value.ends_with("]]") {
+                    return Ok(());
+                }
                 *bytes = bytes
                     .checked_add(value.len().saturating_add(path_bytes).saturating_add(64))
                     .filter(|bytes| *bytes <= 8 * 1024 * 1024)
@@ -327,12 +338,13 @@ pub(crate) fn frontmatter_link_identity_bytes(
             }
             PropertyValue::Array(values) => {
                 for value in values {
-                    visit(value, path_bytes, depth + 1, bytes)?;
+                    visit(value, path_bytes, depth + 1, bytes, check)?;
                 }
             }
             PropertyValue::Object(values) => {
-                for (_, value) in values {
-                    visit(value, path_bytes, depth + 1, bytes)?;
+                for (key, value) in values {
+                    check(1 + key.len() / 16)?;
+                    visit(value, path_bytes, depth + 1, bytes, check)?;
                 }
             }
             _ => {}
@@ -340,8 +352,10 @@ pub(crate) fn frontmatter_link_identity_bytes(
         Ok(())
     }
     let mut bytes = 0;
-    for (_, value) in &record.properties {
-        visit(value, record.path.len(), 0, &mut bytes)?;
+    check(0)?;
+    for (key, value) in &record.properties {
+        check(1 + key.len() / 16)?;
+        visit(value, record.path.len(), 0, &mut bytes, check)?;
     }
     Ok(bytes)
 }
@@ -350,9 +364,11 @@ fn bind_frontmatter_link_identity(
     source_path: &str,
     depth: usize,
     bytes: &mut usize,
+    check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
 ) -> Result<(), ExpressionDiagnostic> {
     use expression::RuntimeValue;
-    if depth > 64 {
+    check(1)?;
+    if depth > 128 {
         return Err(ExpressionDiagnostic::new(
             "budget",
             "Frontmatter link identity exceeds depth budget",
@@ -380,6 +396,7 @@ fn bind_frontmatter_link_identity(
                         "Frontmatter link identity exceeds byte budget",
                     )
                 })?;
+            check(1 + added / 16)?;
             if link.raw_destination.is_none() {
                 link.raw_destination = Some(link.path.clone());
             }
@@ -389,17 +406,17 @@ fn bind_frontmatter_link_identity(
                 link.source_path = Some(source_path.into());
             }
             if let Some(display) = link.display_value.as_deref_mut() {
-                bind_frontmatter_link_identity(display, source_path, depth + 1, bytes)?;
+                bind_frontmatter_link_identity(display, source_path, depth + 1, bytes, check)?;
             }
         }
         RuntimeValue::List(values) => {
             for value in values {
-                bind_frontmatter_link_identity(value, source_path, depth + 1, bytes)?;
+                bind_frontmatter_link_identity(value, source_path, depth + 1, bytes, check)?;
             }
         }
         RuntimeValue::Object(values) => {
             for value in values.values_mut() {
-                bind_frontmatter_link_identity(value, source_path, depth + 1, bytes)?;
+                bind_frontmatter_link_identity(value, source_path, depth + 1, bytes, check)?;
             }
         }
         _ => {}
@@ -410,7 +427,24 @@ fn runtime_file(
     record: &DetachedRecord,
     timezone: &expression::BasesTimezone,
 ) -> Result<expression::BasesFile, ExpressionDiagnostic> {
-    frontmatter_link_identity_bytes(record)?;
+    let mut work = 0usize;
+    runtime_file_checked(record, timezone, &mut |added| {
+        work = work.saturating_add(added);
+        if work > MAX_EXPRESSION_STEPS {
+            return Err(ExpressionDiagnostic::new(
+                "budget",
+                "Frontmatter link identity exceeds work budget",
+            ));
+        }
+        Ok(())
+    })
+}
+pub(crate) fn runtime_file_checked(
+    record: &DetachedRecord,
+    timezone: &expression::BasesTimezone,
+    check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+) -> Result<expression::BasesFile, ExpressionDiagnostic> {
+    check(0)?;
     if (record.path.is_empty() && record.witness.is_some())
         || record.path.starts_with('/')
         || record.path.contains('\\')
@@ -472,7 +506,7 @@ fn runtime_file(
             value
         };
         let mut value = expression::infer_frontmatter_property(key, value, timezone);
-        bind_frontmatter_link_identity(&mut value, &record.path, 0, &mut bytes)?;
+        bind_frontmatter_link_identity(&mut value, &record.path, 0, &mut bytes, check)?;
         properties.insert(key.clone(), value);
     }
     if hints.keys().any(|name| !properties.contains_key(*name)) {
@@ -611,8 +645,27 @@ pub(crate) fn with_session_files<T>(
                     "Evaluation cancelled",
                 ));
             }
-            property_work =
-                property_work.saturating_add(1 + frontmatter_link_identity_bytes(record)? / 16);
+            let identity_bytes = frontmatter_link_identity_bytes(record, &mut |work| {
+                property_work = property_work.saturating_add(work);
+                if options
+                    .cancellation
+                    .as_ref()
+                    .is_some_and(|cancel| cancel.is_cancelled())
+                {
+                    return Err(ExpressionDiagnostic::new(
+                        "cancelled",
+                        "Evaluation cancelled",
+                    ));
+                }
+                if property_work > options.max_steps {
+                    return Err(ExpressionDiagnostic::new(
+                        "budget",
+                        "Frontmatter link identity exceeds work budget",
+                    ));
+                }
+                Ok(())
+            })?;
+            property_work = property_work.saturating_add(identity_bytes / 16);
             if property_work > options.max_steps {
                 return Err(ExpressionDiagnostic::new(
                     "budget",
@@ -621,7 +674,7 @@ pub(crate) fn with_session_files<T>(
             }
         }
     }
-    let captured_file =
+    let mut captured_file =
         |record: &DetachedRecord| -> Result<expression::BasesFile, ExpressionDiagnostic> {
             if let Some(files) = &shared_files {
                 files
@@ -635,7 +688,26 @@ pub(crate) fn with_session_files<T>(
                         )
                     })
             } else {
-                runtime_file(record, &timezone)
+                runtime_file_checked(record, &timezone, &mut |work| {
+                    property_work = property_work.saturating_add(work);
+                    if options
+                        .cancellation
+                        .as_ref()
+                        .is_some_and(|cancel| cancel.is_cancelled())
+                    {
+                        return Err(ExpressionDiagnostic::new(
+                            "cancelled",
+                            "Evaluation cancelled",
+                        ));
+                    }
+                    if property_work > options.max_steps {
+                        return Err(ExpressionDiagnostic::new(
+                            "budget",
+                            "Frontmatter link identity exceeds work budget",
+                        ));
+                    }
+                    Ok(())
+                })
             }
         };
     let mut projection_work = 0usize;

@@ -87,16 +87,17 @@ pub(crate) fn hydrate(
             .map(|row| crate::encoded_size(&row.values, MAX_CONTEXT_BYTES))
             .transpose()?
             .unwrap_or(0);
-        let provenance_bytes = crate::frontmatter_link_identity_bytes(record)?.saturating_add(
-            record
-                .witness
-                .as_ref()
-                .and_then(|witness| {
-                    properties
-                        .map(|properties| properties.attachment_shape_bytes(&witness.entry_id))
-                })
-                .unwrap_or(0),
-        );
+        let provenance_bytes = crate::frontmatter_link_identity_bytes(record, check)?
+            .saturating_add(
+                record
+                    .witness
+                    .as_ref()
+                    .and_then(|witness| {
+                        properties
+                            .map(|properties| properties.attachment_shape_bytes(&witness.entry_id))
+                    })
+                    .unwrap_or(0),
+            );
         let graph_bytes = relationships
             .map(|graph| graph.attachment_bytes(record.witness.as_ref(), check))
             .transpose()?
@@ -124,7 +125,7 @@ pub(crate) fn hydrate(
                 )
             })?;
         admit(estimate)?;
-        let mut file = crate::runtime_file(record, timezone)?;
+        let mut file = crate::runtime_file_checked(record, timezone, check)?;
         if let Some(graph) = relationships {
             graph.attach(&mut file);
             graph.resolve_property_links(&mut file, check, &mut |added| {
