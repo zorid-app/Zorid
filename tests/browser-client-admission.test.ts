@@ -261,3 +261,12 @@ test('admitted preview calls fence both reply paths and join release drain befor
   const wait=deferred(),f=previewFixture(wait.promise),context=f.admit(),pending=context.documentIndex!.previewOpen!({previewId:'1'}),closing=context.release(()=>{});
   await assert.rejects(context.documentIndex!.previewOpen!({previewId:'2'}),{code:'client_not_admitted'});assert.equal(f.releaseCount,0);wait.resolve();assert.equal(await pending,null);await closing;assert.equal(f.releaseCount,1);assert.deepEqual(f.requests,['open']);
 });
+
+test('ordinary note property target capability survives both admission layers and fences late owner replies',async()=>{
+  const f=fixture(),wait=deferred(),requests:unknown[]=[];let guard:()=>void=()=>{};
+  Object.assign(f.backend,{installAdmissionGuard(next:()=>void){guard=next;},documentIndex:{propertyTargetsAvailable:true,async propertyTargets(input:unknown){guard();requests.push(structuredClone(input));await wait.promise;guard();return {targets:'rust'};}}});
+  const context=f.admit(),index=context.documentIndex!;assert.equal(index.propertyTargetsAvailable,true);assert.equal(typeof index.propertyTargets,'function');
+  const pending=index.propertyTargets!({pinId:'note-pin',options:{currentEntryId:'entry-a',clockMs:0}});f.retire();wait.resolve();
+  await assert.rejects(pending,{code:'owner_retired'});await assert.rejects(index.propertyTargets!({pinId:'note-pin'}),{code:'owner_retired'});assert.equal(requests.length,1);
+  const broken=fixture();Object.assign(broken.backend,{documentIndex:{propertyTargetsAvailable:true}});assert.throws(()=>broken.admit(),{code:'invalid_document_response'});
+});

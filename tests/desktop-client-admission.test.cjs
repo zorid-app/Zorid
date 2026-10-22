@@ -246,3 +246,9 @@ test('draft successful flush retires readers before the internal release drain w
   const context=await admitDesktopFixtureClient(f.service,f.options),closing=context.release(async()=>{events.push('flush');});await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(events,['flush','revoke','trusted-release']);assert.ok(f.active);await assert.rejects(context.documentDrafts.invoke({op:'snapshot'}),{code:'client_not_admitted'});releaseGate.resolve();await closing;assert.equal(f.active,null);assert.equal(events.at(-1),'drop-handle');
 });
+
+test('ordinary property target capability is frozen from native handshake before any query',async()=>{
+  const f=fixture();f.host.capabilities=['documents','document_property_targets'];const context=await admitDesktopFixtureClient(f.service,f.options);
+  assert.equal(context.propertyTargetsAvailable,true);assert.equal(typeof context.documentCommand,'function');f.host.capabilities=[];assert.equal(context.propertyTargetsAvailable,true);await context.release(()=>{});
+  const broken=fixture();broken.host.capabilities=['document_property_targets'];await assert.rejects(admitDesktopFixtureClient(broken.service,broken.options),{code:'unsupported_host_capability'});
+});

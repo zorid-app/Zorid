@@ -389,3 +389,11 @@ test('preview bridge credits bound held raw replies and release waits for accept
     const rejected=assert.rejects(pending,{code:'client_not_admitted'}),closing=runtime.releaseClient();assert.equal(calls.some(call=>call.operation==='release-client'),false);worker.completeBlocked();await rejected;await closing;assert.equal(calls.at(-1).operation,'release-client');
   },20000,previewCapability,{documentMaintenance:true});
 });
+
+test('property target worker capability is explicit and forwards ordinary note requests',async()=>{
+  await runtimeFixture(async(runtime,calls)=>{
+    assert.equal(runtime.documentIndex!.propertyTargetsAvailable,true);await runtime.documentIndex!.propertyTargets!({pinId:'note-pin',options:{currentEntryId:'note',clockMs:0}});
+    assert.equal(calls.at(-1).operation,'document-index-property-targets');assert.deepEqual(calls.at(-1).payload,{pinId:'note-pin',options:{currentEntryId:'note',clockMs:0}});
+  },20000,{documentIndexAvailable:true,propertyTargetsAvailable:true});
+  await assert.rejects(runtimeFixture(async()=>assert.fail('invalid positive capability must fail closed'),20000,{propertyTargetsAvailable:true}),{code:'invalid_wasm_result'});
+});
