@@ -1,0 +1,29 @@
+/* The metadata widget vocabulary follows Obsidian 1.14.4. Select/status and
+   relation configuration are deliberate additions using that same vocabulary. */
+.bases-metadata-value { min-width:0; display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
+.bases-metadata-value:focus-visible { outline:2px solid var(--interactive-accent); outline-offset:-2px; }
+.bases-metadata-value .metadata-input { width:100%; min-width:20px; border:0; border-radius:0; box-shadow:none; padding:0; background:transparent; color:var(--text-normal); font:inherit; }
+.bases-metadata-value.mod-error { text-decoration:underline dotted var(--text-warning, #bf8d35); text-underline-offset:4px; }
+.bases-metadata-value[data-base-editing="pending"] { opacity:.65; }
+.bases-property-popover { position:fixed; z-index:var(--layer-popover, 1000); padding:6px; max-height:320px; overflow:auto; border:1px solid var(--background-modifier-border); border-radius:var(--radius-m, 8px); background:var(--background-primary); box-shadow:var(--shadow-s, 0 2px 8px #0003); color:var(--text-normal); font-size:var(--font-ui-small, 13px); }
+.bases-property-popover .multi-select-container { display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:4px; margin-bottom:4px; border-bottom:1px solid var(--background-modifier-border); }
+.bases-property-popover .metadata-input { flex:1; min-width:100px; width:100%; padding:4px 0; border:0; box-shadow:none; background:transparent; color:var(--text-normal); font:inherit; }
+.bases-metadata-value .multi-select-pill, .bases-property-popover .multi-select-pill { display:inline-flex; align-items:center; gap:4px; min-width:0; border-radius:var(--pill-radius, 12px); padding:1px 6px; background:var(--background-modifier-hover); color:var(--text-normal); font-size:inherit; line-height:1.5; }
+.bases-metadata-value .multi-select-pill-content, .bases-property-popover .multi-select-pill-content { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.bases-property-popover .multi-select-pill-remove-button { border:0; background:none; box-shadow:none; padding:0; height:16px; min-width:12px; color:var(--text-muted); cursor:pointer; }
+.bases-metadata-value .is-unknown, .bases-property-popover .is-unknown { border:1px dashed var(--background-modifier-border); }
+.bases-metadata-value .is-unresolved, .bases-property-popover .is-unresolved { color:var(--text-muted); text-decoration:underline dotted; }
+.bases-property-popover .suggestion-item { display:block; text-align:start; width:100%; border:0; box-shadow:none; padding:6px 8px; margin:0; border-radius:var(--radius-s, 4px); color:var(--text-normal); background:transparent; font:inherit; }
+.bases-property-popover .suggestion-item.is-selected, .bases-property-popover .suggestion-item:hover { background:var(--background-modifier-hover); }
+.bases-property-popover .suggestion-empty, .bases-property-popover .bases-property-error { padding:8px; color:var(--text-muted); }
+.bases-property-popover .bases-property-error { color:var(--text-error); }
+.bases-metadata-value [data-color="red"], .bases-property-popover [data-color="red"] { background:rgba(224,82,82,.2); }
+.bases-metadata-value [data-color="orange"], .bases-property-popover [data-color="orange"] { background:rgba(224,148,64,.2); }
+.bases-metadata-value [data-color="yellow"], .bases-property-popover [data-color="yellow"] { background:rgba(220,190,70,.2); }
+.bases-metadata-value [data-color="green"], .bases-property-popover [data-color="green"] { background:rgba(72,170,100,.2); }
+.bases-metadata-value [data-color="cyan"], .bases-property-popover [data-color="cyan"] { background:rgba(64,170,190,.2); }
+.bases-metadata-value [data-color="blue"], .bases-property-popover [data-color="blue"] { background:rgba(70,130,220,.2); }
+.bases-metadata-value [data-color="purple"], .bases-property-popover [data-color="purple"] { background:rgba(150,100,220,.2); }
+.bases-metadata-value [data-color="pink"], .bases-property-popover [data-color="pink"] { background:rgba(215,100,170,.2); }
+.bases-metadata-value [data-color="gray"], .bases-property-popover [data-color="gray"], .bases-metadata-value [data-color="grey"], .bases-property-popover [data-color="grey"] { background:rgba(128,128,128,.2); }
+.bases-metadata-value [data-color="brown"], .bases-property-popover [data-color="brown"] { background:rgba(160,110,70,.2); }

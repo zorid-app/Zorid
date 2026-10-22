@@ -3,9 +3,22 @@ import type { Property, PropertyType, PropertyValue } from '../core/properties.t
 import { dismissContextMenu, showContextMenu } from '../platform/context-menu.ts';
 import type { ContextMenuItem } from '../platform/context-menu.ts';
 import { clearProperties, sortProperties } from './property-menus.ts';
+import type { Vault } from '../core/vault.ts';
+import { baseExpressionValue } from '../bases/expression.ts';
+import type { BaseExpressionValue } from '../bases/expression.ts';
+import { BASE_PROPERTY_DEFINITIONS_PATH, parseBasePropertyDefinitions } from '../bases/property-definitions.ts';
+import type { BasePropertyDefinition } from '../bases/property-definitions.ts';
+import { mountBasePropertyWidget } from '../bases/property-widgets.ts';
+import type { BaseRelationTarget } from '../bases/property-widgets.ts';
 
 export interface PropertiesOptions {
   getSource: () => string;
+  /** Shared vault-wide value definitions; never a named note-Type registry. */
+  vault?: Vault;
+  path?: string;
+  onPropertyDefinitionChange?: (property: string, definition: BasePropertyDefinition) => Promise<void> | void;
+  /** Optional Rust-filtered targets. A filtered relation is never evaluated locally. */
+  getRelationTargets?: (property: string, definition: BasePropertyDefinition) => readonly BaseRelationTarget[] | undefined;
   onChange: (next: string) => Promise<void> | void;
   openLink?: (target: string) => void;
   showMenu?: typeof showContextMenu;
@@ -34,9 +47,12 @@ interface Row {
   revision: number;
   renderedType?: PropertyType;
   renderedValue?: string;
+  renderedDefinition?: string;
+  disposeWidget?: () => void;
 }
 
-/** Original functional properties editor. Type choices are local until a vault registry is available. */
+/** Property edits always apply to the latest buffer source. Shared definitions
+ * enhance controls without replacing the note or its unsaved body. */
 export function renderProperties(container: HTMLElement, options: PropertiesOptions): PropertiesView {
   const document = container.ownerDocument;
   const element = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = '') => {
@@ -45,9 +61,10 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   const button = (label: string, className = '') => {
     const node = element('button', className, label); node.type = 'button'; return node;
   };
-  const selectType = (label: string, current: PropertyType) => {
+  const selectType = (label: string, current: string) => {
     const node = element('select', 'metadata-property-type'); node.setAttribute('aria-label', label);
     for (const type of types) { const option = element('option', '', labels[type]); option.value = type; node.append(option); }
+    if (options.vault) for (const [type, label] of [['link', 'Link'], ['select', 'Select'], ['multiselect', 'Multiselect'], ['status', 'Status'], ['relation', 'Relation'], ['reverseRelation', 'Reverse relation'], ['rollup', 'Rollup']]) { const option = element('option', '', label); option.value = type; node.append(option); }
     node.value = current; return node;
   };
   const root = element('div', 'metadata-container'); root.setAttribute('aria-label', 'Properties');
@@ -59,6 +76,10 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   const rows = new Map<string, Row>(), selectedTypes = new Map<string, PropertyType>();
   let destroyed = false, pending = Promise.resolve(), addForm: HTMLElement | undefined;
   let menuSerial = 0, menuPending = false;
+  let definitions: Readonly<Record<string, BasePropertyDefinition>> = {};
+  let definitionLoad = 0;
+  const unsubscribers: (() => void)[] = [];
+  const definitionFor = (key: string) => Object.hasOwn(definitions, key) ? definitions[key] : undefined;
   const showMenu = options.showMenu ?? showContextMenu;
   const clipboard = options.writeClipboard ?? (document.defaultView?.navigator.clipboard?.writeText
     ? (text: string) => document.defaultView!.navigator.clipboard.writeText(text) : undefined);
@@ -115,14 +136,45 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
 
   function renderValue(row: Row): void {
     const type = typeFor(row.property), value = row.property.value;
-    const signature = JSON.stringify(value);
-    if (row.renderedType === type && row.renderedValue === signature) return;
+    const signature = JSON.stringify(value), definition = definitionFor(row.key), definitionSignature = JSON.stringify(definition);
+    if (row.value.hasAttribute('data-base-editing')) return;
+    if (row.renderedType === type && row.renderedValue === signature && row.renderedDefinition === definitionSignature) return;
     // Preserve selection and unsubmitted edits during background refreshes.
     const focused = row.value.contains(document.activeElement) ? document.activeElement as HTMLInputElement | HTMLTextAreaElement : null;
-    if (row.dirty || (focused && type !== 'list' && type !== 'tags')) return;
+    if (row.dirty || (focused && /^(INPUT|TEXTAREA)$/.test(focused.tagName) && type !== 'list' && type !== 'tags')) return;
     const focusLabel = focused?.getAttribute('aria-label');
     const selection = focused && 'selectionStart' in focused ? [focused.selectionStart, focused.selectionEnd] : null;
-    row.renderedType = type; row.renderedValue = signature; row.value.replaceChildren();
+    row.disposeWidget?.(); row.disposeWidget = undefined;
+    row.renderedType = type; row.renderedValue = signature; row.renderedDefinition = definitionSignature; row.value.replaceChildren();
+    if (definition) {
+      let baseline = signature;
+      const toPlain = (value: BaseExpressionValue): unknown => {
+        if (value.type === 'null') return null;
+        if (value.type === 'string' || value.type === 'number' || value.type === 'boolean') return value.value;
+        if (value.type === 'list') return value.value.map(toPlain);
+        throw new Error('This property result cannot be stored in a note.');
+      };
+      row.disposeWidget = mountBasePropertyWidget(row.value, { property: `note.${row.key}`, value: baseExpressionValue(value), row: { path: options.path ?? 'Note.md', values: {} }, version: 0 }, {
+        getDefinition: () => definition,
+        isCurrent: () => live() && rows.get(row.key) === row,
+        openFile: (path) => options.openLink?.(path),
+        getRelationTargets: () => options.getRelationTargets?.(row.key, definition) ?? (!definition.relation?.targetFilter ? [...(options.vault?.entries.values() ?? [])].filter(entry => entry.type === 'file' && /\.md$/i.test(entry.path)).map(entry => ({ path: entry.path, label: entry.path.replace(/\.md$/i, ''), entryId: entry.entryId })) : undefined),
+        commit: edit => {
+          const operation = pending.then(async () => {
+            if (!live() || rows.get(row.key) !== row) throw new Error('This property editor is no longer active.');
+            const source = options.getSource(), latest = current(source, row);
+            if (JSON.stringify(latest.value) !== baseline) throw new Error('This property changed outside the editor; the draft is preserved.');
+            const next = setProperty(source, row.key, toPlain(edit.value));
+            if (next !== source) await options.onChange(next);
+            baseline = JSON.stringify(toPlain(edit.value));
+            if (live()) queueMicrotask(() => { if (live()) refresh(); });
+          });
+          pending = operation.catch(() => {}); return operation;
+        },
+        onError: problem => report(problem, row.error),
+      });
+      return;
+    }
     const aria = `${row.key} value`;
     if (type === 'list' || type === 'tags') {
       const items = listValues(row.property);
@@ -225,6 +277,18 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
       });
     });
     row.selector.addEventListener('change', () => {
+      if (options.vault) {
+        const type = row.selector.value as BasePropertyDefinition['type'];
+        if (!options.onPropertyDefinitionChange) {
+          try { validatePropertyValue(type as PropertyType, current(options.getSource(), row).value); selectedTypes.set(row.key, type as PropertyType); row.renderedType = undefined; refresh(); } catch (problem) { report(problem, row.error); refresh(); }
+          return;
+        }
+        const definition = definitionFor(row.key);
+        row.selector.disabled = true;
+        const operation = pending.then(async () => { if (!live() || hasDraft(row)) throw new Error('Finish editing this property before changing its definition.'); await options.onPropertyDefinitionChange!(row.key, { ...definition, type }); await loadDefinitions(); });
+        pending = operation.catch(problem => { if (live()) report(problem, row.error); }).finally(() => { if (live()) row.selector.disabled = false; });
+        return;
+      }
       const type = row.selector.value as PropertyType;
       commit(row.error, source => {
         const property = current(source, row);
@@ -242,7 +306,10 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     try { properties = readProperties(options.getSource()); error(globalError); addButton.disabled = false; }
     catch (problem) { error(globalError, problem); addButton.disabled = true; return; }
     const keys = new Set(properties.map(property => property.key));
-    for (const [key, row] of rows) if (!keys.has(key)) { row.element.remove(); rows.delete(key); selectedTypes.delete(key); }
+    for (const [key, row] of rows) if (!keys.has(key)) {
+      if (hasDraft(row)) { error(row.error, new Error('This property was removed outside the editor; its draft is preserved.')); continue; }
+      row.disposeWidget?.(); row.element.remove(); rows.delete(key); selectedTypes.delete(key);
+    }
     properties.forEach((property, index) => {
       let row = rows.get(property.key);
       if (!row) { row = createRow(property); rows.set(property.key, row); }
@@ -252,7 +319,8 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
       // even after focus moves elsewhere. External keys get distinct rows.
       row.keyInput.setAttribute('aria-label', `${property.key} name`); row.selector.setAttribute('aria-label', `${property.key} type`);
       row.element.querySelector('.metadata-property-remove')?.setAttribute('aria-label', `Remove ${property.key}`);
-      row.selector.value = typeFor(property); renderValue(row);
+      row.selector.value = definitionFor(property.key)?.type ?? typeFor(property);
+      row.selector.disabled = !!definitionFor(property.key) && !options.onPropertyDefinitionChange; renderValue(row);
       // Reinsert only when order actually changed, preserving DOM focus and selection.
       if (rowsContainer.children[index] !== row.element) rowsContainer.insertBefore(row.element, rowsContainer.children[index] ?? null);
     });
@@ -260,7 +328,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
 
   type MenuEvent = Parameters<typeof showContextMenu>[0];
   function propertySignature(property: Property): string { return JSON.stringify([property.key, property.value]); }
-  function hasDraft(row: Row): boolean { return row.dirty || row.keyInput.value !== row.key; }
+  function hasDraft(row: Row): boolean { return row.dirty || row.keyInput.value !== row.key || row.value.hasAttribute('data-base-editing'); }
   function guardRow(row: Row, expected: string, revision: number, source: string): Property {
     if (!live() || rows.get(row.key) !== row || !row.element.isConnected) throw new Error('This property editor is no longer active');
     if (row.revision !== revision || hasDraft(row)) throw new Error('This property has an unsaved draft; finish editing before using this action');
@@ -414,13 +482,36 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
       commit(globalError, source => {
         if (readProperties(source).some(property => property.key === key)) throw new Error(`Property already exists: ${key}`);
         return setProperty(source, key, null, type);
-      }, () => { selectedTypes.set(key, type); addForm?.remove(); addForm = undefined; });
+      }, () => {
+        if (options.vault && options.onPropertyDefinitionChange && type !== 'unknown') {
+          const operation = pending.then(async () => { if (!live()) throw new Error('This property editor is no longer active.'); await options.onPropertyDefinitionChange!(key, { type: type as BasePropertyDefinition['type'] }); await loadDefinitions(); });
+          pending = operation.catch(problem => { if (live()) report(problem); });
+        } else selectedTypes.set(key, type);
+        addForm?.remove(); addForm = undefined;
+      });
     };
     add.addEventListener('click', create);
     name.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); create(); } });
     cancel.addEventListener('click', () => { addForm?.remove(); addForm = undefined; addButton.focus(); });
     addForm.append(name, selector, add, cancel); root.append(addForm); name.focus();
   });
+  async function loadDefinitions(): Promise<void> {
+    if (!options.vault || destroyed) return;
+    const request = ++definitionLoad;
+    try {
+      const exists = options.vault.entries.get(BASE_PROPERTY_DEFINITIONS_PATH)?.type === 'file';
+      const parsed = exists ? parseBasePropertyDefinitions(await options.vault.read(BASE_PROPERTY_DEFINITIONS_PATH)) : { properties: {}, diagnostics: [] };
+      if (destroyed || request !== definitionLoad || !(options.isCurrent?.() ?? true)) return;
+      definitions = parsed.properties; refresh();
+      if (parsed.diagnostics.length) report(new Error(parsed.diagnostics.map(item => `${item.property}: ${item.message}`).join('\n')));
+    } catch (problem) { if (!destroyed && request === definitionLoad) report(problem); }
+  }
+  if (options.vault) {
+    for (const event of ['create', 'modify', 'delete', 'rename', 'ready'] as const) unsubscribers.push(options.vault.on(event, change => { if (event === 'ready' || change.path === BASE_PROPERTY_DEFINITIONS_PATH || change.oldPath === BASE_PROPERTY_DEFINITIONS_PATH) void loadDefinitions(); }));
+    void loadDefinitions();
+  }
+  const editObserver = document.defaultView?.MutationObserver ? new document.defaultView.MutationObserver(() => { if (!destroyed) refresh(); }) : undefined;
+  editObserver?.observe(rowsContainer, { subtree: true, attributes: true, attributeFilter: ['data-base-editing'] });
   refresh();
   return { refresh, destroy() {
     if (destroyed) return;
@@ -428,6 +519,6 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     document.removeEventListener('contextmenu', supersede, true); document.removeEventListener('keydown', keyboardSupersede, true);
     root.removeEventListener('contextmenu', contextMenu); root.removeEventListener('keydown', keyboardMenu);
     if (menuPending) void (options.dismissMenu ?? dismissContextMenu)(document).catch(problem => { try { options.onError?.(problem); } catch { /* The owner is already disposed. */ } });
-    menuPending = false; rows.clear(); selectedTypes.clear(); root.remove();
+    menuPending = false; definitionLoad++; editObserver?.disconnect(); unsubscribers.forEach(unsubscribe => unsubscribe()); for (const row of rows.values()) row.disposeWidget?.(); rows.clear(); selectedTypes.clear(); root.remove();
   } };
 }
