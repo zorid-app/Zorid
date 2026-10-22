@@ -37,7 +37,7 @@ test('external changes and definition refresh preserve draft; stale property com
   const s = setup(); await tick(); const field = s.property('topics'); field.click(); const input = s.dom.window.document.querySelector<HTMLInputElement>('[role="combobox"]')!;
   input.value = 'Rust'; input.dispatchEvent(new s.dom.window.Event('input', { bubbles: true })); input.dispatchEvent(new s.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
   s.source = s.source.replace('[Legacy]', '[External]'); s.setDefinitions('properties:\n  topics:\n    type: text\n'); await tick(); assert.equal(field.dataset.baseEditing, 'draft'); assert.ok(s.dom.window.document.querySelector('.bases-property-popover'));
-  input.dispatchEvent(new s.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await tick(); assert.equal(s.writes, 0); assert.match(s.container.textContent!, /changed outside/); assert.equal(field.dataset.baseEditing, 'draft'); s.close();
+  input.dispatchEvent(new s.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await tick(); assert.equal(s.writes, 0); assert.match(s.container.textContent!, /changed outside|definition changed/); assert.equal(field.dataset.baseEditing, 'draft'); s.close();
 });
 
 test('shared value-type choice changes only definition, never coerces existing note values', async () => {
@@ -50,4 +50,12 @@ test('shared value-type choice changes only definition, never coerces existing n
 test('opening missing or incompatible list/date fields without edits never changes data', async () => {
   const s = setup('---\ntopics:\nstatus: Todo\n---\nBody'); await tick(); const field = s.property('topics'); field.click(); const input = s.dom.window.document.querySelector<HTMLInputElement>('[role="combobox"]')!;
   input.dispatchEvent(new s.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await tick(); assert.equal(s.writes, 0); assert.equal(s.values().topics, null); s.close();
+});
+
+
+test('an active ordinary-note editor cannot save through a changed property definition', async () => {
+  const s = setup('---\ntopics: [Legacy]\nstatus: Todo\n---\nBody'); await tick(); const field = s.property('status'); field.click();
+  const input = s.dom.window.document.querySelector<HTMLInputElement>('[role="combobox"]')!; input.value = 'Done'; input.dispatchEvent(new s.dom.window.Event('input', { bubbles: true }));
+  s.setDefinitions('properties:\n  status:\n    type: rollup\n    rollup: {relation: project, aggregation: count}\n  project:\n    type: relation\n'); await tick();
+  input.dispatchEvent(new s.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await tick(); assert.equal(s.writes, 0); assert.equal(s.values().status, 'Todo'); assert.equal(field.dataset.baseEditing, 'draft'); assert.match(s.container.textContent!, /definition changed/); s.close();
 });

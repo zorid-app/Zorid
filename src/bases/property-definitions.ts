@@ -3,6 +3,9 @@ import type { BaseExpressionValue } from './expression.ts';
 
 /** Ordinary visible vault file. There is no named note-Type registry. */
 export const BASE_PROPERTY_DEFINITIONS_PATH = 'Properties.yaml';
+export const MAX_BASE_PROPERTY_SETTINGS_BYTES = 256 * 1024;
+export const MAX_BASE_PROPERTY_DEFINITIONS = 1024;
+export const MAX_BASE_PROPERTY_OPTIONS = 1024;
 export const BASE_PROPERTY_TYPES = ['text', 'number', 'checkbox', 'date', 'datetime', 'list', 'tags', 'link', 'select', 'multiselect', 'status', 'relation', 'reverseRelation', 'rollup'] as const;
 export type BasePropertyType = typeof BASE_PROPERTY_TYPES[number];
 export interface BasePropertyOption {
@@ -28,13 +31,14 @@ export class BasePropertyDefinitionError extends Error {
   constructor(message: string) { super(message); this.name = 'BasePropertyDefinitionError'; }
 }
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
-const text = (v: unknown) => typeof v === 'string' && !!v.trim();
+const text = (v: unknown) => typeof v === 'string' && !!v.trim() && new TextEncoder().encode(v).length <= 512 && !/[\u0000-\u001f\u007f-\u009f]/.test(v);
 export const basePropertyName = (property: string): string => property.replace(/^note\./, '');
 
 export function validateBasePropertyDefinition(value: unknown): asserts value is BasePropertyDefinition {
   if (!isRecord(value) || !BASE_PROPERTY_TYPES.includes(value.type as BasePropertyType)) throw new BasePropertyDefinitionError('Choose a supported property value type.');
   if (value.options !== undefined) {
     if (!Array.isArray(value.options)) throw new BasePropertyDefinitionError('Property options must be a list.');
+    if (value.options.length > MAX_BASE_PROPERTY_OPTIONS) throw new BasePropertyDefinitionError('Too many property options.');
     const values = new Set<string>(), ids = new Set<string>();
     for (const option of value.options) {
       if (!isRecord(option) || !text(option.value)) throw new BasePropertyDefinitionError('Each option needs a nonempty value.');
@@ -55,6 +59,7 @@ export function validateBasePropertyDefinition(value: unknown): asserts value is
   }
 }
 function readDocument(source: string) {
+  if (new TextEncoder().encode(source).length > MAX_BASE_PROPERTY_SETTINGS_BYTES) throw new BasePropertyDefinitionError('Property settings exceed source byte budget.');
   const document = parseDocument(source || 'properties: {}\n', { uniqueKeys: true });
   if (document.errors.length || document.warnings.length) throw new BasePropertyDefinitionError([...document.errors, ...document.warnings].map(e => e.message).join('; '));
   visit(document, { Alias() { throw new BasePropertyDefinitionError('YAML aliases are not supported in property settings.'); } });
@@ -71,6 +76,7 @@ function readDocument(source: string) {
     active.delete(value);
   };
   check(raw);
+  if (isRecord(raw.properties) && Object.keys(raw.properties).length > MAX_BASE_PROPERTY_DEFINITIONS) throw new BasePropertyDefinitionError('Too many property definitions.');
   if (raw.properties !== undefined && !isRecord(raw.properties)) throw new BasePropertyDefinitionError('properties must be a mapping.');
   return { document, raw };
 }
@@ -80,14 +86,21 @@ export function parseBasePropertyDefinitions(source: string): BasePropertyDefini
   const properties: Record<string, BasePropertyDefinition> = Object.create(null);
   const diagnostics: { property?: string; message: string }[] = [];
   for (const [property, definition] of Object.entries(raw.properties ?? {})) {
-    try { validateBasePropertyDefinition(definition); properties[property] = definition; }
+    try { if (!text(property)) throw new BasePropertyDefinitionError('Property names must be nonempty bounded text.'); validateBasePropertyDefinition(definition); properties[property] = definition; }
     catch (error) { diagnostics.push({ property, message: error instanceof Error ? error.message : String(error) }); }
+  }
+  if (source.trim() && raw.properties === undefined) diagnostics.push({ message: 'Property settings require a properties mapping.' });
+  for (const type of ['reverseRelation', 'rollup'] as const) for (const [property, definition] of Object.entries(properties)) {
+    if (definition.type !== type) continue;
+    const target = type === 'reverseRelation' ? definition.reverseRelation!.property : definition.rollup!.relation;
+    const candidate = Object.hasOwn(properties, target) ? properties[target] : undefined;
+    if (candidate?.type !== 'relation' && !(type === 'rollup' && candidate?.type === 'reverseRelation')) { delete properties[property]; diagnostics.push({ property, message: 'Derived property requires a configured relation property.' }); }
   }
   return { properties, diagnostics };
 }
 /** Targeted YAML mutation preserves unrelated keys, unfamiliar definition fields and comments. */
 export function updateBasePropertyDefinition(source: string, property: string, definition: BasePropertyDefinition | null): string {
-  if (!property.trim()) throw new BasePropertyDefinitionError('Property name cannot be empty.');
+  if (!text(property)) throw new BasePropertyDefinitionError('Property name must be nonempty bounded text.');
   if (definition !== null) validateBasePropertyDefinition(definition);
   const { document } = readDocument(source);
   if (!document.has('properties')) document.set('properties', {});
@@ -99,7 +112,7 @@ export function updateBasePropertyDefinition(source: string, property: string, d
       else document.setIn(['properties', property, key], definition[key]);
     }
   }
-  return document.toString();
+  const output = document.toString(); readDocument(output); return output;
 }
 export interface BasePropertyOptionMigration { readonly property: string; readonly from: string; readonly to: string; }
 /** Renaming a stored value is explicitly a separate, identity/revision-guarded note migration.

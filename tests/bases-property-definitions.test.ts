@@ -51,3 +51,13 @@ test('date parsing rejects normalized impossible days and never shifts a date-on
   assert.equal(validDateText('2025-04-31', false), false); assert.equal(validDateText('2025-01-01T25:00', true), false);
   assert.deepEqual(parseBasePropertyInput('2025-01-01', { type: 'date' }), baseExpressionValue('2025-01-01'));
 });
+
+
+test('definition budgets, names and derived relation references match shared core validation', () => {
+  assert.throws(() => updateBasePropertyDefinition('', 'bad\nname', { type: 'text' }), /bounded text/);
+  assert.throws(() => updateBasePropertyDefinition('', 'x', { type: 'select', options: [{ value: 'x'.repeat(513) }] }), /nonempty value/);
+  assert.throws(() => updateBasePropertyDefinition('', 'x', { type: 'select', options: Array.from({length:1025}, (_,i) => ({value:String(i)})) }), /Too many/);
+  const parsed = parseBasePropertyDefinitions('properties: {invalid: {type: reverseRelation, reverseRelation: {property: missing}}, total: {type: rollup, rollup: {relation: invalid, aggregation: count}}}');
+  assert.equal(Object.keys(parsed.properties).length, 0); assert.equal(parsed.diagnostics.length, 2);
+  assert.equal(parseBasePropertyDefinitions('properties: {project: {type: relation}, related: {type: reverseRelation, reverseRelation: {property: project}}, total: {type: rollup, rollup: {relation: related, aggregation: count}}}').diagnostics.length, 0);
+});

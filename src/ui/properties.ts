@@ -147,7 +147,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     row.disposeWidget?.(); row.disposeWidget = undefined;
     row.renderedType = type; row.renderedValue = signature; row.renderedDefinition = definitionSignature; row.value.replaceChildren();
     if (definition) {
-      let baseline = signature;
+      let baseline = signature, definitionBaseline = definitionSignature;
       const toPlain = (value: BaseExpressionValue): unknown => {
         if (value.type === 'null') return null;
         if (value.type === 'string' || value.type === 'number' || value.type === 'boolean') return value.value;
@@ -162,6 +162,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
         commit: edit => {
           const operation = pending.then(async () => {
             if (!live() || rows.get(row.key) !== row) throw new Error('This property editor is no longer active.');
+            if (JSON.stringify(definitionFor(row.key)) !== definitionBaseline) throw new Error('This property definition changed; reopen the editor before saving. The draft is preserved.');
             const source = options.getSource(), latest = current(source, row);
             if (JSON.stringify(latest.value) !== baseline) throw new Error('This property changed outside the editor; the draft is preserved.');
             const next = setProperty(source, row.key, toPlain(edit.value));
@@ -176,9 +177,13 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
           const operation = pending.then(async () => {
             if (!live() || rows.get(row.key) !== row || JSON.stringify(current(options.getSource(), row).value) !== baseline) throw new Error('This property changed before the option could be created.');
             const latest = definitionFor(row.key) ?? definition;
-            await options.onPropertyDefinitionChange!(row.key, { ...latest, options: [...latest.options ?? [], { value }] });
+            if (JSON.stringify(latest) !== definitionBaseline) throw new Error('This property definition changed before the option could be created.');
+            const nextDefinition = { ...latest, options: [...latest.options ?? [], { value }] };
+            await options.onPropertyDefinitionChange!(row.key, nextDefinition);
             await loadDefinitions();
             if (!live() || JSON.stringify(current(options.getSource(), row).value) !== baseline) throw new Error('This property changed while the option was created; the draft is preserved.');
+            if (JSON.stringify(definitionFor(row.key)) !== JSON.stringify(nextDefinition)) throw new Error('Property settings changed while the option was created; the draft is preserved.');
+            definitionBaseline = JSON.stringify(nextDefinition);
             return { version: 0, row: presentation.row, value: baseExpressionValue(current(options.getSource(), row).value) };
           });
           pending = operation.then(() => {}, () => {}); return operation;
