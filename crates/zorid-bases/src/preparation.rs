@@ -1593,6 +1593,7 @@ fn result_heap(r: &BaseQueryResult, m: &mut Maintenance<'_>) -> Option<usize> {
                     g.key_id.as_ref().map_or(0, String::len),
                 )?,
                 g.key.as_ref().map_or(Some(0), |v| value_heap(v, m))?,
+                g.edit_key.as_ref().map_or(Some(0), |v| value_heap(v, m))?,
                 summary_heap(&g.summaries, m)?,
                 vector_cost(&g.entry_ids, m, |id, m| m.bytes(id.as_str().len()))?,
             ])
@@ -1601,6 +1602,7 @@ fn result_heap(r: &BaseQueryResult, m: &mut Maintenance<'_>) -> Option<usize> {
             costs([
                 m.retained(g.key_id.capacity(), g.key_id.len())?,
                 value_heap(&g.key, m)?,
+                g.edit_key.as_ref().map_or(Some(0), |v| value_heap(v, m))?,
             ])
         })?,
         vector_cost(&r.properties, m, |s, m| m.retained(s.capacity(), s.len()))?,
@@ -1817,6 +1819,7 @@ fn copy_result(
                     .collect::<Result<_, ExpressionDiagnostic>>()?,
                 key_id: g.key_id.clone(),
                 key: g.key.as_ref().map(|v| copy_value(v, o)).transpose()?,
+                edit_key: g.edit_key.as_ref().map(|v| copy_value(v, o)).transpose()?,
                 entry_ids: copy_vec(&g.entry_ids, o, |id| Ok(id.clone()))?,
             })
         })?,
@@ -1824,6 +1827,7 @@ fn copy_result(
             Ok(crate::GroupOption {
                 key_id: g.key_id.clone(),
                 key: copy_value(&g.key, o)?,
+                edit_key: g.edit_key.as_ref().map(|v| copy_value(v, o)).transpose()?,
                 count: g.count,
                 listed: g.listed,
             })

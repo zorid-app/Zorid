@@ -35,7 +35,16 @@ fn accepted_query_corpus_uses_shared_transport_requests() {
                 continue;
             }
         };
-        let actual = json!({"paths":result.rows.iter().map(|row|&row.path).collect::<Vec<_>>(),"properties":result.properties,"counts":result.counts,"groups":result.groups,"groupOptions":result.group_options});
+        let mut actual = json!({"paths":result.rows.iter().map(|row|&row.path).collect::<Vec<_>>(),"properties":result.properties,"counts":result.counts,"groups":result.groups,"groupOptions":result.group_options});
+        // This historical cross-client corpus predates additive write-source
+        // metadata. Dedicated property tests cover editKey's persisted semantics.
+        for field in ["groups", "groupOptions"] {
+            if let Some(groups) = actual[field].as_array_mut() {
+                for group in groups {
+                    group.as_object_mut().unwrap().remove("editKey");
+                }
+            }
+        }
         for (key, expected) in case.expected.as_object().unwrap() {
             match key.as_str() {
                 "values" => {

@@ -166,6 +166,10 @@ pub struct BaseGroup {
     /// Opaque presentation identity; None is only the ungrouped sentinel.
     pub key_id: Option<String>,
     pub key: Option<BaseValue>,
+    /// Writable persisted note value for this exact opaque key identity.
+    /// Absence is readonly; lists are whole-key assignments, never split items.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edit_key: Option<BaseValue>,
     pub entry_ids: Vec<crate::EntryId>,
     /// Aggregates of exactly this group's returned rows, including offscreen rows.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -176,6 +180,8 @@ pub struct BaseGroup {
 pub struct GroupOption {
     pub key_id: String,
     pub key: BaseValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edit_key: Option<BaseValue>,
     pub count: usize,
     pub listed: bool,
 }
@@ -663,6 +669,28 @@ fn raw_matches_rendered(
         }
         _ => false,
     })
+}
+
+fn configured_group_edit_key(value: &BaseValue) -> Option<BaseValue> {
+    match value {
+        BaseValue::Null
+        | BaseValue::Boolean { .. }
+        | BaseValue::Number { .. }
+        | BaseValue::String { .. } => Some(value.clone()),
+        BaseValue::List { value } => Some(BaseValue::List {
+            value: value
+                .iter()
+                .map(configured_group_edit_key)
+                .collect::<Option<Vec<_>>>()?,
+        }),
+        BaseValue::Object { value } => Some(BaseValue::Object {
+            value: value
+                .iter()
+                .map(|(key, value)| Some((key.clone(), configured_group_edit_key(value)?)))
+                .collect::<Option<Vec<_>>>()?,
+        }),
+        _ => None,
+    }
 }
 
 fn needs_shared_files(program: &BaseProgram, view: &program::View, preview: bool) -> bool {
@@ -1575,6 +1603,63 @@ pub(crate) fn query_rows_validated(
             .unwrap_or(&null)
             .clone()
     };
+    let writable_group_property = view
+        .group
+        .as_ref()
+        .and_then(|group| group.property.strip_prefix("note."))
+        .filter(|name| {
+            !input
+                .property_values
+                .is_some_and(|values| values.is_read_only_property(name))
+        });
+    let mut group_edit_keys = BTreeMap::<String, Option<BaseValue>>::new();
+    if writable_group_property.is_some() {
+        for row in &rows {
+            steps_used = steps_used.saturating_add(1);
+            check_query_work(
+                steps_used,
+                &admission,
+                options,
+                "Group source selection exceeds query work budget",
+            )?;
+            let rendered = group_value(view, row, &null);
+            canonical_admission(rendered, &mut admission)?;
+            let identity = canonical(rendered);
+            if group_edit_keys.contains_key(&identity) {
+                continue;
+            }
+            if group_edit_keys.len() >= options.max_groups {
+                return Err(budget("Group sources exceed group budget"));
+            }
+            if options
+                .evaluation
+                .cancellation
+                .as_ref()
+                .is_some_and(|token| token.is_cancelled())
+            {
+                return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+            }
+            let property = &view
+                .group
+                .as_ref()
+                .expect("group property selected")
+                .property;
+            // editValues already contains the exact pre-coercion source when
+            // rendering changed it. Absent entries can only fall back to the
+            // recursively raw-safe rendered shape, never a namespace value.
+            let source = row.edit_values.get(property);
+            let candidate = source.unwrap_or(rendered);
+            admit(&mut admission, |admission| {
+                crate::preview::value_bytes(candidate, admission)
+            })?;
+            let value = configured_group_edit_key(candidate);
+            admit(&mut admission, |_| {
+                Ok(map_slot::<String, Option<BaseValue>>()
+                    .saturating_add(crate::preview::string_bytes(&identity)))
+            })?;
+            group_edit_keys.insert(identity, value);
+        }
+    }
     let mut group_options = Vec::new();
     if let Some(keys) = &view.group_order {
         if keys.len() > options.max_groups {
@@ -1615,6 +1700,7 @@ pub(crate) fn query_rows_validated(
             group_options.push(GroupOption {
                 key_id: group_key_id(key),
                 key: key.clone(),
+                edit_key: None,
                 count: indexed
                     .get(&canonical(key))
                     .map(|(_, count)| *count)
@@ -1638,6 +1724,7 @@ pub(crate) fn query_rows_validated(
                 .map(|(_, (key, count))| GroupOption {
                     key_id: group_key_id(&key),
                     key,
+                    edit_key: None,
                     count,
                     listed: false,
                 }),
@@ -1650,6 +1737,21 @@ pub(crate) fn query_rows_validated(
             canonical_admission(group_value(view, row, &null), &mut admission)?;
         }
         rows.retain(|row| listed.contains(&canonical(&group_key(row))));
+    }
+    if writable_group_property.is_some() {
+        for option in &mut group_options {
+            canonical_admission(&option.key, &mut admission)?;
+            let source = match group_edit_keys.get(&canonical(&option.key)) {
+                Some(source) => source.as_ref(),
+                None => Some(&option.key),
+            };
+            if let Some(value) = source {
+                admit(&mut admission, |admission| {
+                    crate::preview::value_bytes(value, admission)
+                })?;
+            }
+            option.edit_key = source.and_then(configured_group_edit_key);
+        }
     }
     counts.after_group_order = rows.len();
     let search_work = rows
@@ -1976,9 +2078,17 @@ pub(crate) fn query_rows_validated(
                         .saturating_add(crate::preview::string_bytes(&key_id))
                         .saturating_add(map_slot::<String, usize>()))
                 })?;
+                let source = group_edit_keys.get(&key_id).and_then(Option::as_ref);
+                if let Some(value) = source {
+                    admit(&mut admission, |admission| {
+                        crate::preview::value_bytes(value, admission)
+                    })?;
+                }
+                let edit_key = source.cloned();
                 groups.push(BaseGroup {
                     key_id: Some(format!("base-key-v1:{key_id}")),
                     key: Some(key),
+                    edit_key,
                     entry_ids: Vec::new(),
                     summaries: BTreeMap::new(),
                 });
@@ -2061,6 +2171,7 @@ pub(crate) fn query_rows_validated(
         groups.push(BaseGroup {
             key_id: None,
             key: None,
+            edit_key: None,
             entry_ids: rows.iter().map(|row| row.entry_id.clone()).collect(),
             summaries: BTreeMap::new(),
         });

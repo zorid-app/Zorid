@@ -936,3 +936,168 @@ fn target_filter_this_is_diagnosed_instead_of_silent_empty_membership() {
         .any(|diagnostic| diagnostic.message.contains("vault-wide")
             && diagnostic.message.contains("this")));
 }
+
+#[test]
+fn typed_group_edit_keys_persist_raw_dates_and_whole_relation_lists() {
+    let source = "filters: 'published != null'\nviews:\n  - type: table\n    name: Dates\n    order: [file.name, published]\n    groupBy: {property: published, direction: ASC}\n";
+    let program = compile_base_source(source).unwrap();
+    let options = QueryOptions::default();
+    let before = generation_with_settings_file(
+        "",
+        &[
+            ("first", "---\npublished: 2026-01-01\n---\n"),
+            ("second", "---\npublished: 2026-02-03\n---\n"),
+        ],
+        false,
+    );
+    let result = zorid_bases::query_generation(&program, &before, &[], &options).unwrap();
+    let target = result
+        .groups
+        .iter()
+        .find(|group| group.entry_ids.contains(&id("first")))
+        .unwrap();
+    assert!(matches!(&target.key, Some(BaseValue::Date { .. })));
+    let Some(BaseValue::String { value: raw_date }) = &target.edit_key else {
+        panic!("date group must expose exact raw text")
+    };
+    assert_eq!(raw_date, "2026-01-01");
+    let moved = format!(
+        "---\npublished: {}\n---\n",
+        serde_json::to_string(raw_date).unwrap()
+    );
+    let after = generation_with_settings_file(
+        "",
+        &[
+            ("first", "---\npublished: 2026-01-01\n---\n"),
+            ("second", &moved),
+        ],
+        false,
+    );
+    let persisted = zorid_bases::query_generation(&program, &after, &[], &options).unwrap();
+    assert_eq!(persisted.groups.len(), 1);
+    assert_eq!(persisted.groups[0].key_id, target.key_id);
+    assert_eq!(persisted.groups[0].entry_ids.len(), 2);
+    let mut cache = zorid_bases::BasePreparationCache::default();
+    let compiled = cache.compile_source(source, 0).unwrap();
+    let prepared = cache.prepare_generation(&before, &[], &options, 0).unwrap();
+    cache
+        .query_prepared_cached(&compiled, &prepared, &options, 0)
+        .unwrap();
+    let hit = cache
+        .query_prepared_cached(&compiled, &prepared, &options, 1)
+        .unwrap();
+    assert_eq!(hit.outcome(), zorid_bases::PreparationCacheOutcome::Hit);
+    assert!(hit
+        .value()
+        .groups
+        .iter()
+        .all(|group| matches!(&group.edit_key, Some(BaseValue::String { .. }))));
+    let settings = SETTINGS.replace("multiple: false", "multiple: true");
+    let original =
+        "---\nauthor: ['[[Authors/Ada|A. Lovelace]]', '[[Authors/Grace|G. Hopper]]']\n---\n";
+    let before = generation(
+        &settings,
+        &[
+            ("first", original),
+            ("second", "---\nauthor: ['[[Authors/Grace]]']\n---\n"),
+        ],
+    );
+    let definitions =
+        PropertyDefinitions::from_generation_source(&before, &id("settings"), &settings).unwrap();
+    let program = compile_base_source("filters: 'file.inFolder(\"Books\")'\nviews:\n  - type: table\n    name: Relations\n    order: [file.name, author]\n    groupBy: {property: author, direction: ASC}\n").unwrap();
+    let result =
+        query_generation_with_properties(&program, &before, &[], &definitions, &options).unwrap();
+    let target = result
+        .groups
+        .iter()
+        .find(|group| group.entry_ids.contains(&id("first")))
+        .unwrap();
+    let Some(BaseValue::List { value }) = &target.edit_key else {
+        panic!("whole-list group must expose the whole raw list")
+    };
+    let raw = value
+        .iter()
+        .map(|value| match value {
+            BaseValue::String { value } => value.as_str(),
+            _ => panic!("raw relation list scalar"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        raw,
+        vec!["[[Authors/Ada|A. Lovelace]]", "[[Authors/Grace|G. Hopper]]"]
+    );
+    let moved = format!(
+        "---\nauthor: {}\n---\n",
+        serde_json::to_string(&raw).unwrap()
+    );
+    let after = generation(&settings, &[("first", original), ("second", &moved)]);
+    let definitions =
+        PropertyDefinitions::from_generation_source(&after, &id("settings"), &settings).unwrap();
+    let persisted =
+        query_generation_with_properties(&program, &after, &[], &definitions, &options).unwrap();
+    assert_eq!(persisted.groups.len(), 1);
+    assert_eq!(persisted.groups[0].key_id, target.key_id);
+    assert_eq!(persisted.groups[0].entry_ids.len(), 2);
+    assert_eq!(
+        persisted
+            .rows
+            .iter()
+            .find(|row| row.entry_id == id("second"))
+            .unwrap()
+            .edit_values["note.author"],
+        target.edit_key.clone().unwrap()
+    );
+}
+
+#[test]
+fn configured_empty_group_edit_keys_are_raw_and_derived_group_keys_stay_readonly() {
+    let generation = generation(
+        SETTINGS,
+        &[("first", "---\nstatus: Open\naverageRating: 3\n---\n")],
+    );
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), SETTINGS)
+            .unwrap();
+    let program = compile_base_source("filters: 'file.inFolder(\"Books\")'\nviews:\n  - type: table\n    name: Status\n    groupBy: {property: status, direction: ASC}\n    groupOrder: [Open, Empty]\n").unwrap();
+    let result = query_generation_with_properties(
+        &program,
+        &generation,
+        &[],
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(result.group_options.len(), 2);
+    let empty = result
+        .group_options
+        .iter()
+        .find(|group| {
+            group.key
+                == BaseValue::String {
+                    value: "Empty".into(),
+                }
+        })
+        .unwrap();
+    assert_eq!(empty.count, 0);
+    assert_eq!(
+        empty.edit_key,
+        Some(BaseValue::String {
+            value: "Empty".into()
+        })
+    );
+    for property in ["averageRating", "books", "file.name", "formula.constant"] {
+        let source = format!("formulas:\n  constant: 3\nviews:\n  - type: table\n    name: Readonly\n    groupBy: {{property: {property}, direction: ASC}}\n");
+        let result = query_generation_with_properties(
+            &compile_base_source(&source).unwrap(),
+            &generation,
+            &[],
+            &definitions,
+            &QueryOptions::default(),
+        )
+        .unwrap();
+        assert!(
+            result.groups.iter().all(|group| group.edit_key.is_none()),
+            "{property}"
+        );
+    }
+}

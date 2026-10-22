@@ -45,6 +45,7 @@ pub struct PropertyRelationValues {
     snapshot_id: IndexSnapshotId,
     settings_witness: Option<RecordWitness>,
     property_names: Vec<String>,
+    read_only_property_names: BTreeSet<String>,
     relation_targets: BTreeMap<String, Vec<RelationTarget>>,
     rows: BTreeMap<EntryId, PropertyRelationRow>,
     diagnostics: Vec<PropertyRelationDiagnostic>,
@@ -80,6 +81,9 @@ impl PropertyRelationValues {
     }
     pub fn property_names(&self) -> impl Iterator<Item = &str> {
         self.property_names.iter().map(String::as_str)
+    }
+    pub(crate) fn is_read_only_property(&self, name: &str) -> bool {
+        self.read_only_property_names.contains(name)
     }
     pub fn relation_targets(&self) -> &BTreeMap<String, Vec<RelationTarget>> {
         &self.relation_targets
@@ -271,6 +275,16 @@ pub fn query_property_relations(
         snapshot_id: snapshot.snapshot_id().clone(),
         settings_witness: definitions.witness().cloned(),
         property_names: definitions.iter().map(|(name, _)| name.clone()).collect(),
+        read_only_property_names: definitions
+            .iter()
+            .filter(|(_, definition)| {
+                matches!(
+                    definition.kind,
+                    PropertyKind::ReverseRelation | PropertyKind::Rollup
+                )
+            })
+            .map(|(name, _)| name.clone())
+            .collect(),
         relation_targets: BTreeMap::new(),
         rows: BTreeMap::new(),
         diagnostics: Vec::new(),
@@ -282,6 +296,7 @@ pub fn query_property_relations(
         steps_used: 0,
     };
     budget.keep(&result.property_names)?;
+    budget.keep(&result.read_only_property_names)?;
     budget.keep(&result.definition_diagnostics)?;
     for (_, definition) in definitions.iter() {
         if let Some(filter) = definition
