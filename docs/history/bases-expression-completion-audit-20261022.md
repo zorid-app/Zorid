@@ -445,3 +445,67 @@ successor needs independent source review, focused named tests, new exact Rust/
 artifact association and native/actual-WASM scenarios for changed behavior. The
 194 count, browser005 result and this complete catalogue map do not close those
 gates or the product's rendered interaction acceptance.
+
+## Date-v8 successor and matrix refresh — 2026-10-22, `fe75db9f`
+
+This additive successor supersedes the G16/G17 open status at the earlier
+`926f37f8` snapshot without changing that historical finding or its reports.
+The inspected application is `fe75db9f4704d08a6113aa1e01408e8375643089`,
+`crates` tree `8074eabf01c55cf4e53f01c02a5a384197875a24`, Bases subtree
+`5512cf589b73e015e7987faba1ab1a3bd9fcf556`, compiler
+`zorid-base-yaml-expression-grouping-v8`.
+
+| Identified repair | Current source and observed evidence |
+| --- | --- |
+| G16 literal percent | `expression_format.rs` retains `%` as a literal while subsequent letters keep Moment token meanings. The named Rust regression `percent_is_a_moment_literal_and_does_not_change_following_token_meaning` covers literal/bracket/backslash, adjacent year/localized tokens and captured-zone output. Five added shared-client expectations exercise `%`, `[%]`, `%YYYY`, `%Y` and `%Y-%m-%d`; this implements Moment behavior rather than interpreting strftime. |
+| G17 raw date extrema | `earliest/latest` now use `parse_frontmatter_date` for raw String-subclass data, keeping the hyphenated parser boundary distinct from global `date()`'s compact conversion. `date_extrema_skip_compact_raw_strings_but_keep_explicit_date_constructor_values` covers compact 8/12-digit raw and rich inputs, explicit Date conversion, hyphenated controls and guards. Eight added shared-client expectations reject compact raw values, preserve hyphenated mixed selections and retain explicitly constructed compact Dates. |
+
+The full pinned Rust log
+`/private/tmp/zorid-bases-date-final-full-composed-002.log`, SHA-256
+`de189d3ce6f8bfc02a1dc7fe96b2682ab3adab601a2b821beb28c21be155920f`,
+reports **361 passed across 20 nonempty targets**, plus empty doctests. This
+includes 198 library and 163 integration tests for the current Rust tree, with
+the unchanged preview budget and adjacent/deferred targets still represented.
+No Cargo run was performed by this documentation task.
+
+[CLI007](bases-cli-actual-007-20261022.md) passed all **125 commands / 17 checks**
+at frozen application/build source `2fe6e0552d3b504edea3bff042a8055e12d1ab2f`,
+using the same Rust tree and executable SHA-256
+`3fdcdbdcb61ca2b158b64689bb2019ef1a26ac459402d820fe037e7e54e18bc7`.
+Its report SHA-256 is
+`05a419626dfe203a67a2ee2b941423568068f8375c5decc1767424c533f54f0c`.
+[Browser010](bases-browser-actual-010-20261022.md) passed all **19 groups** at
+`c90d254b63eef0ef8571bba177b327ff04922495`, same Rust tree and matching rebuilt
+WASM fingerprint
+`6041e8e6354b0a60e7482af8910470d3df24fd33ed47c651a68b6c286abe10ee`;
+its report SHA-256 is
+`3ec6f382d2909d35f577e7c8ee4a9c99713c0f1063263c45c0587151639f62f1`.
+
+Both actual campaigns execute all **146 current Q3 typed row expectations and
+16 Q3 diagnostics** across the ten shared Q3 groups; CLI also checks ten exact
+legacy-context diagnostic entries. This includes all 13 newly authored date
+cases. The raw reports and separate integrity receipts remain at the paths in
+the linked histories. This update independently recomputed both report hashes,
+recounted the CLI check records, and confirmed identical Rust/Bases Git trees
+at both campaign commits and the inspected snapshot. Shared fixture SHA-256
+`95011a1f33180ecb891613d0159c492a8ce3f895eaec53a6568b3e53b202c059`
+replaces the earlier 133-value fixture; earlier CLI006/Browser009 passes and
+failed campaigns retain their original source and count boundaries.
+
+The [family matrix](../reference/bases-expression-matrix.md) now explicitly
+lists Object `map/filter`, Tag/TagList hydration and membership, Duration fields,
+List numeric/date reducers and exact-lowercase lazy/callback special calls.
+All 80 captured declarations still have handlers; the matrix includes inherited
+availability and fields without narrowing the full feature goal to that count.
+The G1–G17 cases identified in this audit now have source repairs and the named
+Rust/current-client evidence described here and above. That does not prove every
+input combination or turn uncertain semantics into an approved difference.
+D1–D6, pinned collation, inert Object-key and bounded resource policies remain;
+no unsupported exception or new semantic waiver is introduced by this refresh.
+
+These observations accept the authored core/standalone CLI/actual browser
+semantic scenarios. Complete native GUI, rendered rich values/HTML safety,
+property widgets, reference screenshot/interaction comparisons, mobile and
+other-browser behavior, sync and stress remain separate gates. Neither document
+checks the full expression or product implementation goal complete. This task
+changed documentation only and launched no app, build or product test.

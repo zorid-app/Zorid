@@ -5,6 +5,15 @@ Owner: `bases_expressions`; branch `codex/bases-expressions`; isolated worktree
 cross-platform acceptance record. This matrix covers built-in expression
 capabilities, not community plugins, arbitrary JavaScript, or whole-app parity.
 
+Source refresh: 2026-10-22, application `fe75db9f`, Rust crates tree
+`8074eabf01c55cf4e53f01c02a5a384197875a24`, compiler
+`zorid-base-yaml-expression-grouping-v8`. The
+[completion audit](../history/bases-expression-completion-audit-20261022.md)
+maps all 80 captured declarations (16 global, 64 receiver) to handlers and
+preserves the dated source repairs, client evidence and remaining boundaries.
+This family inventory includes inherited methods and unregistered fields;
+80 registrations are not a smaller definition of the implementation goal.
+
 ## Reference authority
 
 Official inventory: [Obsidian Bases functions](https://obsidian.md/help/bases/functions)
@@ -63,31 +72,38 @@ Direct static readings also establish case-insensitive built-in lookup in the
 registry, String inheritance for rich/Link/URL values, case-insensitive
 `String.contains`, UTF-16 splitting in String.reverse, and Moment delegation for
 Date.format. Those additional readings are exact-file evidence, not additional
-REA runtime observations.
+REA runtime observations. Exact-lowercase special calls are distinct from
+ordinary case-insensitive registry lookup, as described below.
 
 ## Capability inventory
 
 “Implemented” describes source, not completion of native/WASM/app acceptance.
 Focused test status is recorded in the verification section and the integration
-ledger. Global/member names use the reference's case-insensitive dispatch.
+ledger. Ordinary global/member lookup is case-insensitive. Exact lowercase `if`
+has lazy special-call semantics; mixed-case `IF` uses ordinary eager evaluation.
+Only exact lowercase List `map/filter/reduce` and Object `map/filter` introduce
+their callback scopes; mixed-case forms use ordinary registration bodies.
 
 | Family | Built-ins and values | Implementation / acceptance coverage |
 | --- | --- | --- |
-| Syntax and scope | literals, lists, regex literals, unary/binary operations, named/computed access; note/file/this/formula namespaces | Existing portable parser/evaluator; bounded AST chains/depth. Unknown syntax has diagnostics. Existing accepted corpus and query/current-record tests cover the supported dialect. |
-| Global scalar | `if`, `escapeHTML`, `date`, `duration`, `list`, `max`, `min`, `number`, `now`, `today` | Implemented. This pass closes Date identity/compact date parsing, number(Date), null/empty min/max, nullable HTML escaping and invalid-duration null. `if` remains lazy. |
+| Syntax and scope | literals, lists, regex literals, unary/binary operations, named/computed access; note/file/this/formula namespaces | Portable parser/evaluator with bounded AST chains/depth. Regex literal construction is admitted for the complete expression, including untaken branches. Unknown syntax has diagnostics. Existing accepted corpus and query/current-record tests cover authored cases. |
+| Call contracts | required/optional/variadic arguments, arity, null/type validation, special calls | All 80 declarations have signature admission and handlers. Exact lowercase `if` supports the lazy global/member-subject form; lowercase collection callbacks use their special scopes. Ordinary registration is eager, including mixed-case spellings. Returned summary Error data remains distinct from a thrown formula-namespace error. |
+| Global scalar | `if`, `escapeHTML`, `date`, `duration`, `list`, `max`, `min`, `number`, `now`, `today` | Implemented Date identity/compact conversion, number(Date), null/empty min/max, nullable HTML escaping and invalid-duration null. Only exact lowercase `if` is lazy. Explicit compact `date()` conversion does not broaden raw property or List date inference. |
 | Ordinary properties | Wikilink, URL, ISO date/datetime inference recursively through lists/objects | Pure `infer_frontmatter_value` helper; lib/graph owner attaches source-witness resolution with bounded traversal. Explicit property settings may suppress automatic interpretation. Compact numeric date forms require explicit date(), preserving ordinary numeric text. |
 | Global rich/file | `file`, `link`, `html`, `image`, `icon` | Implemented typed outputs. No global JS evaluation or ambient vault callbacks. File resolution uses sealed generation namespace; existing files are hydrated from that same generation. |
 | Random | `random` | Implemented portable SplitMix64, seeded by host view-load entropy plus row identity/revision. Host preserves seed during refresh and replaces it on a new Base session. This differs intentionally from ambient `Math.random`; the output contract remains a number in [0,1). |
-| Any value | `isTruthy`, `isType`, `toString`, `isEmpty` where applicable | Implemented; rich wrappers inherit String and URL has its own type. Existing empty/truth corpus retains explicit Zorid choices. |
+| Any value | `isTruthy`, `isType`, `toString`, `isEmpty` where registered | Implemented registered ancestry, including Any and inherited String/List behavior. Tags expose String and TagLists expose List; Icon exposes String. Checked recursive text conversion preserves Object child strings and rich/Link raw-data distinctions. |
 | Date fields | year/month/day/hour/minute/second/millisecond | Existing typed date values, explicit UTC/fixed/IANA timezone, no ambient clock. |
+| Duration | years/months/weeks/days/hours/minutes/seconds/milliseconds, truthiness, arithmetic/comparison | Implemented simple-unit and ISO construction, fields, zero falseyness and captured-calendar arithmetic/comparison. Simple-unit parsing is anchored; ISO parsing is unanchored with mandatory T/integer components. Calendar month overflow and explicit invocation clocks have named Rust/client cases. |
 | Date methods | `date`, `format`, `time`, `relative`, `isEmpty` | Implemented. Formatter now uses a bounded Moment token scanner instead of replacement into strftime. Relative text remains English. |
-| Date formatting | calendar years, month names/numbers, ordinals, quarters, weekdays, ordinal day, locale/ISO week/year, 12/24-hour time, fractions, offsets, Unix timestamps, English long/localized formats, bracket/backslash literals | Implemented in `expression_format.rs`; expansion/bytes bounded. Captured timezone drives offsets including DST. Era/locale language customization is not claimed. |
-| String | length, `contains`, `containsAll`, `containsAny`, `endsWith`, `isEmpty`, `lower`, `replace`, `repeat`, `reverse`, `slice`, `split`, `startsWith`, `title`, `trim` | Implemented, including regex replacement and split. Unicode scalar behavior is deliberately preserved; see limits below. |
+| Date formatting | calendar years, month names/numbers, ordinals, quarters, weekdays, ordinal day, locale/ISO week/year, 12/24-hour time, fractions, offsets, Unix timestamps, English long/localized formats, bracket/backslash/percent literals | Implemented in `expression_format.rs`; expansion/bytes bounded. `%` remains literal and following letters retain Moment token semantics. Captured timezone drives offsets including DST. Era/locale language customization is not claimed. |
+| String | length/indexing, `contains`, `containsAll`, `containsAny`, `endsWith`, `isEmpty`, `lower`, `replace`, `repeat`, `reverse`, `slice`, `split`, `startsWith`, `title`, `trim` | Implemented regex replacement/split, case-insensitive membership, empty literal replacement and literal-space title boundaries. Unicode scalar behavior is deliberately preserved; see limits below. |
 | Number | `abs`, `ceil`, `floor`, `isEmpty`, `round`, `toFixed` | Existing bounded implementation, nonfinite results diagnose instead of crossing the transport as NaN/infinity. |
-| List | length/indexing, `contains`, `containsAll`, `containsAny`, `filter`, `flat`, `isEmpty`, `join`, `map`, `reduce`, `reverse`, `slice`, `sort`, `unique` | Existing list evaluator with callback value/index/acc scopes. Numeric/date reducers also support summaries. |
+| List | length/indexing, `contains`, `containsAll`, `containsAny`, `filter`, `flat`, `isEmpty`, `join`, `map`, `reduce`, `reverse`, `slice`, `sort`, `unique`; `earliest`, `latest`, `median`, `mean`, `max`, `min`, `sum`, `stddev` | Implemented lowercase callback value/index/acc scopes, recursive flat, single-List Any/All expansion, required join separator and constructor-sensitive uniqueness. Numeric/date reducers also support summaries. Raw date extrema accept hyphenated String-subclass data; compact inputs require explicit `date()` conversion. Sort uses pinned English primary/numeric collation, with two actual Numbers compared numerically; see UPSTREAM.md for the mixed-comparison policy. |
+| Tag / TagList | Tag `matches`; inherited String methods; TagList hierarchy-aware `contains/containsAny/containsAll` and inherited List methods | Implemented tag-property/file.tags hydration and lowercase slash-boundary hierarchy matching. Other ordinary `#text` properties remain Strings. Generic List transforms lose TagList membership while retaining Tag elements; public transport remains String/List with internal provenance retained for subsequent evaluation. |
 | Link | `asFile`, `linksTo`, inherited String functions | Implemented. `linksTo(file)` follows the shipped direct target-identity comparison, rather than interpreting the prose description as a second-hop graph traversal. Missing targets remain null/false; missing metadata is unavailable. |
-| File | name/basename/path/folder/ext/size/properties/tags/links/embeds/backlinks/ctime/mtime; `asLink`, `hasLink`, `hasProperty`, `hasTag`, `inFolder` | Existing metadata and graph APIs plus same-generation cross-file hydration. No empty placeholder files for unresolved or unavailable records. Property unavailability does not masquerade as absent fields. |
-| Object | `isEmpty`, `keys`, `values` | Existing ordered own-property values, including nested source collisions; exact spelling wins over case-insensitive fallback. Object literals are not part of the supported expression dialect. |
+| File | file/name/basename/fullname/path/folder/ext/size/properties/tags/links/embeds/backlinks/ctime/mtime; `asLink`, `hasLink`, `hasProperty`, `hasTag`, `inFolder` | Metadata/graph APIs and same-generation cross-file hydration. Folder queries use the captured separator/space/NFC normalization; tag queries retain literal repeated prefixes. No placeholder files for unresolved/unavailable records. Property unavailability does not masquerade as absence. |
+| Object | `isEmpty`, `keys`, `values`, `map`, `filter` | Ordered own-property values; exact spelling wins over case-insensitive fallback. Lowercase callbacks expose key/value with outer-scope fallback: map returns a List in JS own-key order; filter retains an Object's original keys. Recursive toString converts child values to strings, distinct from typed JSON; inert `__proto__` retention is a documented safety difference. Object literals are not part of the expression dialect. |
 | Regex | `matches`, String.replace/split | Existing bounded Rust regex implementation, no JS runtime. Unsupported features diagnose explicitly. |
 | Formulas | named/computed references, per-row caching, lazy branches, cycles | Existing evaluator; rich outputs retain their type through formulas and summaries. |
 | Summaries | `values` scoped typed expressions, file/link/rich round-trip | Summary expressions receive the same prepared immutable file map. No aggregate depends on mounted DOM rows. Summary owner maintains built-in/custom reducer inventory separately. |
@@ -109,9 +125,9 @@ TypeScript expression evaluator.
 URL classification reuses already locked/cached `url` 2.5.8 with default
 features disabled. It implements WHATWG parsing without network/host lookup;
 malformed HTTP hosts and ports are not promoted to URL values by a scheme-only
-regex. IDNA uses the existing static compiled data. New WASM compilation and
-artifact sizing still require the coordinated build slot; dependency compatibility
-is source-reviewed, not a claim that the final WASM artifact has passed.
+regex. IDNA uses the existing static compiled data. The matching date-v8 WASM
+artifact and actual client coverage are recorded below; new compilation still
+requires coordinated resource use, and does not establish all input parity.
 
 `EvaluationOptions.randomSeed` is optional; omission deterministically uses zero.
 The UI supplies a cryptographically sampled 32-bit integer once per Base session.
@@ -141,6 +157,32 @@ not a timer dependency. Unknown dynamic calls still conservatively refresh.
   deliberate deviations must be reported separately from full reference parity.
 
 ## Verification record
+
+### Current date-v8 source and client evidence — 2026-10-22
+
+The inspected application is `fe75db9f4704d08a6113aa1e01408e8375643089`, Rust
+crates tree `8074eabf01c55cf4e53f01c02a5a384197875a24`. The full pinned Rust
+run passed **361 tests across 20 nonempty targets**, plus empty doctests
+(`/private/tmp/zorid-bases-date-final-full-composed-002.log`).
+[CLI007](../history/bases-cli-actual-007-20261022.md) passed all **125 commands /
+17 checks**, and [Browser010](../history/bases-browser-actual-010-20261022.md)
+passed all **19 groups** through the actual product Worker/WASM/IndexedDB path.
+Both execute the shared **146 typed Q3 row expectations / 16 Q3 diagnostics**;
+CLI additionally verifies ten exact legacy-context diagnostic entries.
+
+The 13 date-v8 additions cover five literal-percent/token formatting expectations
+and eight raw compact-date extrema/explicit-conversion controls. They close the
+identified G16/G17 cases alongside the earlier G1–G15 repairs, without claiming
+the full cross-product of coercion, locale, calendar, regex or Unicode inputs.
+The matching WASM fingerprint is
+`6041e8e6354b0a60e7482af8910470d3df24fd33ed47c651a68b6c286abe10ee`;
+exact source/artifact/report identities and original failed campaigns remain in
+those linked histories and the completion audit. This documentation refresh ran
+no build, product test or app. Rendered widgets/HTML safety, complete native UI,
+mobile, visual reference comparisons, other browsers, sync and stress retain
+their separate acceptance gates; the complete implementation goal is unchanged.
+
+### Historical early verification
 
 Authored focused unit tests cover inert rich payloads, recursive rich labels,
 summary round-trip/depth/bytes, nullable/typed wrappers, String inheritance,
