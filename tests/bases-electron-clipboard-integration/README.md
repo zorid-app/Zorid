@@ -22,13 +22,16 @@ are entirely campaign-owned, including Properties.yaml; no real vault is used.
 The normal production renderer receives hit-tested pointer input and trusted
 Chromium editing commands through Input.dispatchKeyEvent. The campaign never
 constructs a ClipboardEvent, calls a product controller, or installs clipboard
-contents through an OS write helper. AppKit writes are used only to restore the
-clipboard captured before the campaign.
+contents through an OS write helper. A capture listener blocks unexpected clipboard
+formats before production paste to prevent private contents entering failure DOM
+evidence; matching trusted events proceed unchanged. Evidence contains expected
+fixture payloads only, never unmatched actual clipboard bytes. AppKit writes are
+used only to restore the clipboard captured before the campaign.
 
 | Requirement | Authored route and oracle | Actual evidence needed |
 | --- | --- | --- |
 | Table copy | Copy editing command; independent pbpaste exact TSV assertion | Real macOS clipboard change and expected bytes |
-| Custom MIME | Read-only trusted paste listener; generated obsidian/bases-cells typed values | Browser paste types/data and durable numeric values; no fallback if absent |
+| Custom MIME | Trusted paste observer with unexpected-content privacy gate; generated obsidian/bases-cells typed values | Browser paste types/data and durable numeric values; no fallback if absent |
 | Offset/mixed/clipped paste | Native paste command into ordinary cells; independent note frontmatter checks | Correct distinct source columns, offset placement, read-only skipping, clipping |
 | List append | Native plain text copied from a real metadata input | Preserved raw wiki alias plus appended scalar |
 | Row/column/range selection | Actual keyboard selection and OS copy | Exact TSV for row, column, current group and rectangle |
@@ -48,7 +51,8 @@ bytes privately in memory and restores/verifies those bytes in finally. Prior
 contents never enter argv, evidence, screenshots, action logs, error messages or
 files. Unavailable promised representations, malformed snapshots and a 64 MiB
 preservation limit stop before clipboard mutation. Only an acknowledged fixture
-clipboard may be returned by readPlainText. A restoration failure fails the run;
+clipboard with the same change count may be returned by readPlainText. Native type
+labels are allowlisted before evidence; unknown labels are reduced to a count. A restoration failure fails the run;
 there is no claim of survival through forced process termination or machine loss.
 Both this campaign and the configuration/export campaign reuse clipboard.mjs and
 must run serially under the root coordinator's runtime grant.
@@ -57,7 +61,7 @@ Offline helper tests inject a fake pasteboard transport and touch no native app 
 clipboard:
 
 ```sh
-node --test tests/bases-electron-clipboard-integration/clipboard.test.mjs
+node --test tests/bases-electron-clipboard-integration/*.test.mjs
 ```
 
 Passing syntax, fixture parsing or those preservation tests establishes harness
