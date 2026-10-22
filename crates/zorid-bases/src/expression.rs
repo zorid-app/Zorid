@@ -648,13 +648,11 @@ fn error_message(encoded: &str) -> &str {
         .split_once('\0')
         .map_or(encoded, |(_, message)| message)
 }
-fn returned_error(code: &str, message: &str) -> RuntimeValue {
-    let encoded = format!("{code}\0{message}");
+fn returned_error(code: &str, message: &str) -> Result<RuntimeValue, ExpressionDiagnostic> {
     if ["budget", "cancelled"].contains(&code) {
-        RuntimeValue::Error(encoded)
-    } else {
-        RuntimeValue::ErrorValue(encoded)
+        return Err(ExpressionDiagnostic::new(code, message));
     }
+    Ok(RuntimeValue::ErrorValue(format!("{code}\0{message}")))
 }
 
 pub(crate) struct Session<'a> {
@@ -1070,7 +1068,7 @@ fn summary_runtime_value(
         }
         BaseValue::Error { code, message } => {
             *bytes = bytes.saturating_add(code.len() + message.len());
-            returned_error(code, message)
+            returned_error(code, message)?
         }
     };
     let allocated = value_bytes(&result).unwrap_or(usize::MAX);
@@ -1846,6 +1844,9 @@ impl<'a> Evaluator<'a> {
                 let mut bytes = 0usize;
                 for value in values {
                     let value = self.evaluate(value, scope);
+                    if matches!(value, RuntimeValue::Error(_)) {
+                        return value;
+                    }
                     bytes = bytes.saturating_add(value_bytes(&value).unwrap_or(usize::MAX));
                     if bytes > 8 * 1024 * 1024 {
                         return RuntimeValue::Error("budget\0List exceeds byte budget".into());
@@ -3490,7 +3491,8 @@ impl<'a> Evaluator<'a> {
             | RuntimeValue::Tag(value)
             | RuntimeValue::Html(value)
             | RuntimeValue::Image(value)
-            | RuntimeValue::Icon(value) => self.charge(value.len() / 16)?,
+            | RuntimeValue::Icon(value)
+            | RuntimeValue::ErrorValue(value) => self.charge(value.len() / 16)?,
             RuntimeValue::Link(link) => self.charge(
                 link.path.len().saturating_add(
                     link.resolved_path

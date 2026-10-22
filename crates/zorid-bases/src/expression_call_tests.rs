@@ -213,6 +213,7 @@ fn returned_error_data_is_accepted_by_any_but_thrown_errors_abort() {
             string_value("Error: retained problem"),
         ),
         ("IF(false, problem, 4)", number_value(4.0)),
+        ("IF(false, [problem], 4)", number_value(4.0)),
         ("if(problem, unknown(), 4)", number_value(4.0)),
     ] {
         assert_eq!(
@@ -222,6 +223,8 @@ fn returned_error_data_is_accepted_by_any_but_thrown_errors_abort() {
         );
     }
     code("IF(false, unknown(), 4)", "unknown-function");
+    code("IF(false, [unknown()], 4)", "unknown-function");
+    code("IF(false, ['x'.repeat(10000000)], 4)", "budget");
     code("unknown().isType('Error')", "unknown-function");
     code("unknown().toString()", "unknown-function");
 }
@@ -247,5 +250,43 @@ fn null_validation_and_any_do_not_swallow_preexisting_cancellation_or_argument_b
     assert_eq!(
         evaluate("max(null, unknown())", &context).unwrap_err().code,
         "cancelled"
+    );
+}
+
+#[test]
+fn summary_import_rejects_nested_fatal_diagnostics_before_any_consumes_the_list() {
+    for code in ["budget", "cancelled"] {
+        let failure = BaseValue::Error {
+            code: code.into(),
+            message: "retained fatal".into(),
+        };
+        let nested = BaseValue::List {
+            value: vec![failure.clone()],
+        };
+        for value in [&failure, &nested] {
+            let result = evaluate_summary(
+                "values.isTruthy()",
+                &[value],
+                &[None],
+                &crate::EvaluationOptions::default(),
+                None,
+                None,
+                |_| panic!("no file lookup"),
+            );
+            assert_eq!(result.unwrap_err().code, code);
+        }
+    }
+}
+
+#[test]
+fn returned_error_comparisons_pay_for_message_bytes_on_every_pair() {
+    let context = BasesEvaluationContext {
+        work_limit: Some(100),
+        ..Default::default()
+    };
+    let mut evaluator = Evaluator::new(&context);
+    let error = RuntimeValue::ErrorValue(format!("type\0{}", "x".repeat(8192)));
+    assert!(
+        matches!(evaluator.equals_checked(&error, &error), Err(RuntimeValue::Error(message)) if message.starts_with("budget\0"))
     );
 }
