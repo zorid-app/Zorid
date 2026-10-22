@@ -134,3 +134,31 @@ test('renewed focus or Escape cancels a deferred composing-blur finish without l
   input.dispatchEvent(new s.dom.window.FocusEvent('focus')); await tick(); assert.equal(s.edits.length,0); assert.equal(input.value,'draft'); assert.equal(s.element.dataset.baseEditing,'draft');
   input.dispatchEvent(new s.dom.window.CompositionEvent('compositionstart')); input.dispatchEvent(new s.dom.window.FocusEvent('blur')); input.dispatchEvent(new s.dom.window.CompositionEvent('compositionend')); s.key('Escape'); await tick(); assert.equal(s.edits.length,0); assert.equal(s.element.textContent,'before'); s.close();
 });
+
+
+test('relation drafts preserve same-snapshot raw aliases and unknown entries when adding or removing links', async () => {
+  const dom=new JSDOM('<div></div>',{pretendToBeVisual:true}),element=dom.window.document.querySelector('div')!;const raw=baseExpressionValue(['[[Projects/A|Alias A]]','unresolved literal']);
+  const link={type:'namespace' as const,name:'Alias A',presentation:{kind:'link' as const,value:'Projects/A.md',label:baseExpressionValue('Alias A'),target:{entryId:'a',revision:'r1'}},get(){throw new Error('getter');}};
+  const displayed={type:'list' as const,value:[link,baseExpressionValue('unresolved literal')]};const edits:BasePropertyWidgetEdit[]=[];
+  const dispose=mountBasePropertyWidget(element,{row:{path:'Task.md',values:{}},property:'note.projects',value:displayed,version:1},{getDefinition:()=>({type:'relation',relation:{multiple:true}}),getEditableValue:()=>raw,getRelationTargets:()=>[{path:'Projects/B.md',label:'B',entryId:'b',revision:'r2'}],commit:edit=>{edits.push(edit);}});
+  assert.match(element.textContent!,/Alias A/);element.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));const input=dom.window.document.querySelector<HTMLInputElement>('[role="combobox"]')!;input.value='B';input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));input.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true}));await tick();
+  assert.deepEqual(edits[0].value,baseExpressionValue(['[[Projects/A|Alias A]]','unresolved literal','[[Projects/B]]']));dispose();dom.window.close();
+});
+
+test('formatted relations without raw persisted source are visibly read-only', () => {
+  const dom=new JSDOM('<div></div>'),element=dom.window.document.querySelector('div')!;const link={type:'namespace' as const,name:'Alias',presentation:{kind:'link' as const,value:'A.md'},get(){throw new Error('getter');}};let edits=0;
+  const dispose=mountBasePropertyWidget(element,{row:{path:'Task.md',values:{}},property:'note.project',value:link,version:1},{getDefinition:()=>({type:'relation'}),getEditableValue:()=>undefined,commit(){edits++;}});
+  assert.equal(element.dataset.baseEditUnavailable,'true');assert.match(element.title,/Saved property text/);element.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));assert.equal(dom.window.document.querySelector('input'),null);assert.equal(edits,0);dispose();dom.window.close();
+});
+
+test('inferred date inputs use exact raw offset spelling supplied by the same row snapshot', async () => {
+  const dom=new JSDOM('<div></div>'),element=dom.window.document.querySelector('div')!;const raw=baseExpressionValue('2026-01-01T12:30:00-05:00');let edits=0;
+  const dispose=mountBasePropertyWidget(element,{row:{path:'A.md',values:{}},property:'note.when',value:{type:'date',timestamp:Date.parse('2026-01-01T17:30:00Z'),hasTime:true},version:1},{getDefinition:()=>({type:'datetime'}),getEditableValue:()=>raw,commit(){edits++;}});element.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));const input=element.querySelector('input')!;assert.equal(input.type,'text');assert.equal(input.value,'2026-01-01T12:30:00-05:00');input.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true}));await tick();assert.equal(edits,0);dispose();dom.window.close();
+});
+
+
+test('stale relation choices recheck current core candidates and identity immediately before commit', async () => {
+  let targets:readonly {path:string;label:string;entryId:string;revision:string}[]|undefined=[{path:'A.md',label:'A',entryId:'old',revision:'r1'}];
+  const s=setup(null,{type:'relation'},{getRelationTargets:()=>targets});s.click();s.input().value='A';s.input().dispatchEvent(new s.dom.window.Event('input',{bubbles:true}));targets=[{path:'A.md',label:'A',entryId:'replacement',revision:'r2'}];s.key('Enter');await tick();assert.equal(s.edits.length,0);assert.equal(s.element.dataset.baseEditing,'draft');assert.match(s.element.title,/choice changed/);
+  s.input().dispatchEvent(new s.dom.window.Event('input',{bubbles:true}));targets=undefined;s.key('Enter');await tick();assert.equal(s.edits.length,0);assert.match(s.element.title,/unavailable/);s.close();
+});

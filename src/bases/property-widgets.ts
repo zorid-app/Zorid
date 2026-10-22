@@ -1,4 +1,4 @@
-import { mountBaseRichValue } from './rich-values.ts';
+import { baseRichPresentation, mountBaseRichValue } from './rich-values.ts';
 import { BASE_NULL, baseValueToString } from './expression.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import type { BasePropertyPresentation, BasePresentationOptions } from './presentation-common.ts';
@@ -9,6 +9,7 @@ export interface BaseRelationTarget {
   readonly path: string;
   readonly label?: string;
   readonly entryId?: string;
+  readonly revision?: string;
   readonly missing?: boolean;
   /** Rust-resolved persisted relation text, when different from a wiki link. */
   readonly value?: string;
@@ -22,6 +23,8 @@ export interface BasePropertyWidgetAcknowledgement {
   readonly value?: BaseExpressionValue;
 }
 export interface BasePropertyWidgetOptions {
+  /** Same-snapshot persisted source value, before link/date/rich inference. */
+  readonly getEditableValue?: (presentation: BasePropertyPresentation) => BaseExpressionValue | undefined;
   readonly getDefinition: (property: string) => BasePropertyDefinition | undefined;
   readonly commit: (edit: BasePropertyWidgetEdit) => void | BasePropertyWidgetAcknowledgement | Promise<void | BasePropertyWidgetAcknowledgement>;
   /** Targets are selected/resolved by Rust/the owning workspace, never by a TS query evaluator. */
@@ -67,20 +70,37 @@ export function createBasePropertyRenderer(options: BasePropertyWidgetOptions): 
  * exact draft; disposal releases listeners/UI but never cancels an issued write. */
 export function mountBasePropertyWidget(element: HTMLElement, presentation: BasePropertyPresentation, options: BasePropertyWidgetOptions): () => void {
   const document = element.ownerDocument, win = document.defaultView;
-  let definition = options.getDefinition(presentation.property) ?? inferBasePropertyDefinition(presentation.value, presentation.property);
+  const suppliedRaw = options.getEditableValue?.(presentation);
+  const rawSafe = (value: BaseExpressionValue, active = new Set<object>(), budget = {left:10000}, depth = 0): boolean => {
+    if (--budget.left < 0 || depth > 64 || !value || typeof value !== 'object' || active.has(value)) return false;
+    const kind = Object.getOwnPropertyDescriptor(value, 'type')?.value;
+    if (kind === 'null') return true;
+    const data = Object.getOwnPropertyDescriptor(value, 'value')?.value;
+    if (kind === 'string') return typeof data === 'string';
+    if (kind === 'number') return typeof data === 'number' && Number.isFinite(data);
+    if (kind === 'boolean') return typeof data === 'boolean';
+    if ((kind !== 'list' || !Array.isArray(data)) && (kind !== 'object' || !data || typeof data !== 'object')) return false;
+    active.add(value);
+    const keys = kind === 'list' ? Array.from({length:Math.min(data.length,10001)},(_,index)=>String(index)) : Object.keys(data);
+    const valid = keys.length <= budget.left && keys.every(key => { const item = Object.getOwnPropertyDescriptor(data,key); return !!item && 'value' in item && rawSafe(item.value,active,budget,depth+1); });
+    active.delete(value); return valid;
+  };
+  let value = suppliedRaw ?? presentation.value, displayValue = presentation.value;
+  let definition = options.getDefinition(presentation.property) ?? inferBasePropertyDefinition(value, presentation.property);
   const type = definition.type;
-  const editable = presentation.property.startsWith('note.') && /\.md$/i.test(presentation.row.path) && !options.readOnly?.(presentation) && type !== 'rollup' && type !== 'reverseRelation';
+  const rawUnavailable = presentation.property.startsWith('note.') && suppliedRaw === undefined && !rawSafe(presentation.value) && (!!options.getEditableValue || presentation.value.type === 'namespace' || type === 'relation' || type === 'link');
+  const editable = presentation.property.startsWith('note.') && /\.md$/i.test(presentation.row.path) && !rawUnavailable && !options.readOnly?.(presentation) && type !== 'rollup' && type !== 'reverseRelation';
   const multiple = ['list', 'tags', 'multiselect'].includes(type) || (type === 'relation' && !!definition.relation?.multiple);
   const inlineList = type === 'list' || type === 'tags';
   const picker = multiple || ['select', 'status', 'relation', 'link'].includes(type);
   let acceptedPresentation = presentation;
-  let value = presentation.value, disposed = false, pending = false, editing = false, composing = false;
+  let disposed = false, pending = false, editing = false, composing = false;
   let blurDuringComposition = false, compositionEpoch = 0;
   let finishAfterPending = false, editingIndex: number | undefined;
   let disposeRich: (() => void) | undefined;
   let input: HTMLInputElement | undefined, popup: HTMLDivElement | undefined;
   let draftChanged = false;
-  let draft: string[] = [], selected = 0, choices: { value: string; label: string; option?: BasePropertyOption; missing?: boolean }[] = [];
+  let draft: string[] = [], selected = 0, choices: { value: string; label: string; option?: BasePropertyOption; missing?: boolean; target?: BaseRelationTarget }[] = [];
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const later = (fn: () => void) => { const timer = setTimeout(() => { timers.delete(timer); if (!disposed) fn(); }, 0); timers.add(timer); };
   const current = () => !disposed && (options.isCurrent?.(acceptedPresentation) ?? true);
@@ -89,7 +109,18 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   const optionFor = (text: string) => definition.options?.find(option => option.value === text);
   const targets = () => options.getRelationTargets?.(presentation.property, acceptedPresentation) ?? [];
   const targetValue = (target: BaseRelationTarget) => target.value ?? `[[${target.path.replace(/\.md$/i, '')}]]`;
-  const targetFor = (text: string) => targets().find(target => targetValue(target) === text || target.path === text);
+  const pairedTargets = new Map<string, BaseRelationTarget>();
+  const pairTargets = () => {
+    pairedTargets.clear(); let remaining=10000;
+    const pair = (raw: BaseExpressionValue, shown: BaseExpressionValue, depth=0) => {
+      if (--remaining < 0 || depth > 64) return;
+      if (raw.type === 'list' && shown.type === 'list' && raw.value.length === shown.value.length) { raw.value.forEach((item,index)=>pair(item,shown.value[index],depth+1)); return; }
+      const rendered = baseRichPresentation(shown);
+      if (raw.type === 'string' && rendered?.kind === 'link') pairedTargets.set(raw.value,{path:rendered.value,label:rendered.label ? renderText(rendered.label) : renderText(shown),entryId:rendered.target?.entryId,revision:rendered.target?.revision});
+    }; pair(value,displayValue);
+  };
+  pairTargets();
+  const targetFor = (text: string) => pairedTargets.get(text) ?? targets().find(target => targetValue(target) === text || target.path === text);
   const closePopup = () => { popup?.remove(); popup = undefined; document.removeEventListener('pointerdown', outside, true); win?.removeEventListener('resize', position); win?.removeEventListener('scroll', position, true); };
   const error = (failure: unknown) => {
     if (disposed) return;
@@ -102,6 +133,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (!acknowledgement) return false;
     if (acknowledgement.row.path !== acceptedPresentation.row.path) throw new Error('A property acknowledgement cannot retarget its file.');
     acceptedPresentation = { ...acceptedPresentation, version: acknowledgement.version, row: acknowledgement.row, value: acknowledgement.value ?? next };
+    displayValue = acceptedPresentation.value; value = options.getEditableValue?.(acceptedPresentation) ?? next; pairTargets();
     return true;
   };
   const commit = async (next: BaseExpressionValue, keepOpen = false): Promise<boolean> => {
@@ -110,7 +142,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     try {
       const acknowledgement = await options.commit({ ...acceptedPresentation, path: acceptedPresentation.row.path, value: next });
       const rebased = acknowledge(acknowledgement, next);
-      value = next; accepted = true;
+      value = next; if (!acknowledgement) displayValue = next; pairTargets(); accepted = true;
       if (!disposed) {
         element.classList.remove('mod-error');
         if (keepOpen && rebased && current()) { draftChanged = false; mark('draft'); input?.removeAttribute('aria-invalid'); }
@@ -127,7 +159,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   };
   function chip(text: string, removable = false, index = -1): HTMLElement {
     const pill = document.createElement('span'); pill.className = 'multi-select-pill'; pill.tabIndex = 0;
-    const option = optionFor(text), target = ['relation', 'link'].includes(type) ? targetFor(text) : undefined;
+    const option = optionFor(text), target = pairedTargets.get(text) ?? (['relation', 'link'].includes(type) ? targetFor(text) : undefined);
     const unknown = ['select', 'multiselect', 'status'].includes(type) && !option;
     if (unknown) { pill.classList.add('is-unknown'); pill.title = 'Unknown option. Its stored value is preserved.'; }
     if (target?.missing || (type === 'relation' && !target)) { pill.classList.add('is-unresolved'); pill.title = 'Unresolved relation or target outside available choices. Its stored value is preserved.'; }
@@ -136,7 +168,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (option?.category) pill.dataset.category = option.category;
     if (target && !target.missing && options.openFile && !removable) {
       pill.classList.add('internal-link'); pill.setAttribute('role', 'link');
-      const open = (event: MouseEvent | KeyboardEvent) => { event.preventDefault(); event.stopPropagation(); options.openFile?.(target.path, event); };
+      const open = (event: MouseEvent | KeyboardEvent) => { event.preventDefault(); event.stopPropagation(); options.openFile?.(target.path, event, target.entryId && target.revision ? {entryId:target.entryId,revision:target.revision} : undefined); };
       pill.addEventListener('click', open); pill.addEventListener('auxclick', event => { if (event.button === 1) open(event); });
       pill.addEventListener('dblclick', event => { event.preventDefault(); event.stopPropagation(); editChip(index); });
       pill.addEventListener('keydown', event => { if (event.key === 'Enter') open(event); });
@@ -162,7 +194,8 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     input = undefined; mark(); element.replaceChildren();
     element.classList.add('bases-metadata-value', 'metadata-property-value'); element.dataset.propertyType = type;
     if (editable) element.tabIndex = 0;
-    const diagnostic = presentation.property.startsWith('note.') ? basePropertyValueDiagnostic(value, definition) : undefined;
+    const diagnostic = rawUnavailable ? 'Saved property text is unavailable; refresh before editing.' : presentation.property.startsWith('note.') ? basePropertyValueDiagnostic(value, definition) : undefined;
+    if (rawUnavailable) element.dataset.baseEditUnavailable = 'true'; else element.removeAttribute('data-base-edit-unavailable');
     element.classList.toggle('mod-error', !!diagnostic || value.type === 'error'); element.title = diagnostic ?? (value.type === 'error' ? value.error.message : '');
     if (type === 'checkbox' && (!diagnostic || value.type === 'null')) {
       const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = value.type === 'boolean' && value.value; checkbox.indeterminate = value.type === 'null'; checkbox.disabled = !editable; checkbox.setAttribute('aria-label', presentation.property.replace(/^note\./, ''));
@@ -173,12 +206,14 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       const link = document.createElement('a'); link.href = '#'; link.className = 'internal-link'; link.textContent = renderText(value);
       const open = (event: MouseEvent) => { if ((event.button === 0 || event.button === 1) && options.openFile && current()) { event.preventDefault(); event.stopPropagation(); options.openFile(presentation.row.path, event); } };
       link.addEventListener('click', open); link.addEventListener('auxclick', open); element.append(link);
-    } else if (!editable && (value.type === 'namespace' || value.type === 'list' || value.type === 'object')) {
-      disposeRich = mountBaseRichValue(element, value, { openFile: options.openFile, loadImage: options.loadImage ? (source, signal) => options.loadImage!(source, signal, presentation) : undefined, isCurrent: current, onError: report });
+    } else if (!editable && (displayValue.type === 'namespace' || displayValue.type === 'list' || displayValue.type === 'object')) {
+      disposeRich = mountBaseRichValue(element, displayValue, { openFile: options.openFile, loadImage: options.loadImage ? (source, signal) => options.loadImage!(source, signal, presentation) : undefined, isCurrent: current, onError: report });
     } else if (!diagnostic && picker && value.type !== 'null') {
       const values = value.type === 'list' ? value.value.map(renderText) : [renderText(value)];
       for (const text of values) element.append(chip(text));
-    } else element.textContent = renderText(value);
+    } else if (!diagnostic && displayValue.type === 'namespace') {
+      disposeRich = mountBaseRichValue(element, displayValue, { openFile: options.openFile, loadImage: options.loadImage ? (source, signal) => options.loadImage!(source, signal, presentation) : undefined, isCurrent: current, onError: report });
+    } else element.textContent = renderText(displayValue);
   }
   function position() {
     if (!popup || inlineList) return;
@@ -204,7 +239,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     input.setAttribute('aria-controls', list.id); input.setAttribute('aria-expanded', 'true');
     const needle = input.value.toLocaleLowerCase();
     const all = type === 'relation' || type === 'link'
-      ? targets().map(target => ({ value: targetValue(target), label: target.label ?? target.path, missing: target.missing }))
+      ? targets().map(target => ({ value: targetValue(target), label: target.label ?? target.path, missing: target.missing, target }))
       : (definition.options ?? []).map(option => ({ value: option.value, label: option.label ?? option.value, option }));
     choices = all.filter(choice => (!multiple || !draft.some((value, index) => value === choice.value && index !== editingIndex)) && (choice.label.toLocaleLowerCase().includes(needle) || choice.value.toLocaleLowerCase().includes(needle)));
     selected = Math.max(0, Math.min(selected, choices.length - 1));
@@ -220,8 +255,18 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (!list.children.length) { const empty = document.createElement('div'); empty.className = 'suggestion-empty'; empty.textContent = type === 'relation' && definition.relation?.targetFilter && options.getRelationTargets?.(presentation.property, acceptedPresentation) === undefined ? 'Relation choices are unavailable until the shared index is ready.' : ['list', 'tags'].includes(type) ? 'Type a value and press Enter' : 'No matching options'; list.append(empty); }
     popup.append(list); position();
   }
+  function validateRelationChoice(next: string): boolean {
+    if (type !== 'relation') return true;
+    try {
+      const currentTargets = options.getRelationTargets?.(presentation.property, acceptedPresentation);
+      if (!currentTargets) { error(new Error('Relation choices are unavailable; wait for the shared index before choosing a note.')); return false; }
+      const candidate = currentTargets.find(target => targetValue(target) === next), original = choices.find(choice => choice.value === next)?.target;
+      if (!candidate || candidate.missing || (original && (original.entryId !== candidate.entryId || original.revision !== candidate.revision))) { error(new Error('This relation choice changed or is no longer available; choose from the refreshed results.')); return false; }
+      return true;
+    } catch (failure) { error(failure); return false; }
+  }
   async function choose(next: string) {
-    if (!current() || pending) return;
+    if (!current() || pending || !validateRelationChoice(next)) return;
     if (choices.find(choice => choice.value === next)?.missing || ((type === 'relation' || type === 'link') && targetFor(next)?.missing)) { error(new Error('This related note is unavailable. Choose another note.')); return; }
     if (multiple) {
       const duplicate = draft.findIndex((value, index) => value === next && index !== editingIndex);
@@ -271,6 +316,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
           if (input.value === inputText(value, definition)) { cancel(); return; }
           const choice = choices.find(choice => !choice.missing && (choice.value === input!.value || choice.label === input!.value));
           if (input.value && !choice && ['select', 'status', 'relation'].includes(type)) { error(new Error('Choose a matching option.')); return; }
+          if (input.value && !validateRelationChoice(choice?.value ?? input.value)) return;
           next = input.value ? str(choice?.value ?? input.value) : BASE_NULL;
         }
       } else {
