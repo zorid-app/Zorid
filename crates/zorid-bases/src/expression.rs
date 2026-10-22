@@ -12,6 +12,11 @@ use chrono_tz::{GapInfo, Tz};
 use regex::{Regex, RegexBuilder};
 use serde_json::{Map, Value};
 
+#[cfg(test)]
+#[path = "expression_call_tests.rs"]
+mod call_contract_tests;
+#[path = "expression_signatures.rs"]
+mod call_signatures;
 #[path = "expression_format.rs"]
 mod date_format;
 
@@ -623,6 +628,8 @@ pub(crate) enum RuntimeValue {
     Image(String),
     Icon(String),
     Error(String),
+    /// An already materialized Error value; unlike Error, this is not a thrown failure.
+    ErrorValue(String),
 }
 
 /// Sparse provenance extracted from actual evaluated values, never property names.
@@ -634,6 +641,20 @@ pub(crate) enum TagShape {
     TagList,
     List(Vec<(usize, TagShape)>),
     Object(Vec<(String, TagShape)>),
+}
+
+fn error_message(encoded: &str) -> &str {
+    encoded
+        .split_once('\0')
+        .map_or(encoded, |(_, message)| message)
+}
+fn returned_error(code: &str, message: &str) -> RuntimeValue {
+    let encoded = format!("{code}\0{message}");
+    if ["budget", "cancelled"].contains(&code) {
+        RuntimeValue::Error(encoded)
+    } else {
+        RuntimeValue::ErrorValue(encoded)
+    }
 }
 
 pub(crate) struct Session<'a> {
@@ -854,7 +875,8 @@ fn group_comparison_work(
         | RuntimeValue::Html(value)
         | RuntimeValue::Image(value)
         | RuntimeValue::Icon(value)
-        | RuntimeValue::Error(value) => check(value.len() / 16)?,
+        | RuntimeValue::Error(value)
+        | RuntimeValue::ErrorValue(value) => check(value.len() / 16)?,
         RuntimeValue::Link(link) => check(
             link.path
                 .len()
@@ -1048,7 +1070,7 @@ fn summary_runtime_value(
         }
         BaseValue::Error { code, message } => {
             *bytes = bytes.saturating_add(code.len() + message.len());
-            RuntimeValue::Error(format!("{code}\0{message}"))
+            returned_error(code, message)
         }
     };
     let allocated = value_bytes(&result).unwrap_or(usize::MAX);
@@ -1955,10 +1977,7 @@ impl<'a> Evaluator<'a> {
             if !matches!(operator, "==" | "!=" | "+") {
                 return RuntimeValue::Null;
             }
-            if operator == "+"
-                && !matches!(left, RuntimeValue::String(_) | RuntimeValue::Tag(_))
-                && !matches!(right, RuntimeValue::String(_) | RuntimeValue::Tag(_))
-            {
+            if operator == "+" && string_data(&left).is_none() && string_data(&right).is_none() {
                 return RuntimeValue::Null;
             }
         }
@@ -2007,9 +2026,7 @@ impl<'a> Evaluator<'a> {
                     .unwrap_or_else(RuntimeValue::Error);
             }
         }
-        if matches!(left, RuntimeValue::String(_) | RuntimeValue::Tag(_))
-            || matches!(right, RuntimeValue::String(_) | RuntimeValue::Tag(_))
-        {
+        if string_data(&left).is_some() || string_data(&right).is_some() {
             return RuntimeValue::String(format!(
                 "{}{}",
                 if matches!(left, RuntimeValue::Null) {
@@ -2082,41 +2099,104 @@ impl<'a> Evaluator<'a> {
         self.property(object, &property)
     }
 
+    fn lazy_if(
+        &mut self,
+        subject: Option<&Expr>,
+        arguments: &[Expr],
+        scope: &Scope,
+    ) -> RuntimeValue {
+        let supplied = arguments.len() + usize::from(subject.is_some());
+        if !(2..=3).contains(&supplied) {
+            return call_signatures::arity_error(
+                "if",
+                if supplied < 2 {
+                    "not enough"
+                } else {
+                    "too many"
+                },
+            );
+        }
+        let (condition, results) = if let Some(subject) = subject {
+            (subject, arguments)
+        } else {
+            (&arguments[0], &arguments[1..])
+        };
+        let condition = self.evaluate(condition, scope);
+        if matches!(condition, RuntimeValue::Error(_)) {
+            return condition;
+        }
+        let selected = if is_truthy(&condition) {
+            results.first()
+        } else {
+            results.get(1)
+        };
+        selected
+            .map(|expression| self.evaluate(expression, scope))
+            .unwrap_or(RuntimeValue::Null)
+    }
+
     fn call(&mut self, callee: &Expr, arguments: &[Expr], scope: &Scope) -> RuntimeValue {
         match callee {
-            Expr::Identifier(name) if name.eq_ignore_ascii_case("if") => {
-                let condition = arguments
-                    .first()
-                    .map(|value| self.evaluate(value, scope))
-                    .unwrap_or(RuntimeValue::Null);
-                if matches!(condition, RuntimeValue::Error(_)) {
-                    return condition;
-                }
-                if is_truthy(&condition) {
-                    arguments
-                        .get(1)
-                        .map(|value| self.evaluate(value, scope))
-                        .unwrap_or(RuntimeValue::Null)
-                } else {
-                    arguments
-                        .get(2)
-                        .map(|value| self.evaluate(value, scope))
-                        .unwrap_or(RuntimeValue::Null)
-                }
+            Expr::Identifier(name) if name == "if" => self.lazy_if(None, arguments, scope),
+            Expr::Member(subject, Member::Named(name)) if name == "if" => {
+                self.lazy_if(Some(subject), arguments, scope)
             }
             Expr::Identifier(name) => {
-                let arguments = match self.evaluate_arguments(arguments, scope) {
-                    Ok(values) => values,
-                    Err(error) => return error,
+                let Some(signature) = call_signatures::global(name) else {
+                    return RuntimeValue::Error(format!(
+                        "unknown-function\0Cannot find function \"{name}\""
+                    ));
                 };
-                self.global(name, &arguments)
+                match self.registered_arguments(signature, name, arguments, scope) {
+                    Ok(Some(values)) => self.global(name, &values),
+                    Ok(None) => RuntimeValue::Null,
+                    Err(error) => error,
+                }
             }
             Expr::Member(object, Member::Named(method)) => {
                 let receiver = self.evaluate(object, scope);
+                if matches!(receiver, RuntimeValue::Error(_)) {
+                    return receiver;
+                }
                 self.method(receiver, method, arguments, scope)
             }
             _ => RuntimeValue::Error("Expression is not callable".to_string()),
         }
+    }
+
+    /// Evaluate each argument once and validate it immediately. A required null
+    /// returns before later expressions; ordinary excess arguments are evaluated
+    /// before their arity error, and missing arguments are checked at the end.
+    fn registered_arguments(
+        &mut self,
+        signature: call_signatures::Signature,
+        name: &str,
+        arguments: &[Expr],
+        scope: &Scope,
+    ) -> Result<Option<Vec<RuntimeValue>>, RuntimeValue> {
+        let mut values = Vec::new();
+        let mut bytes = 0usize;
+        for (index, argument) in arguments.iter().enumerate() {
+            let value = self.evaluate(argument, scope);
+            if matches!(value, RuntimeValue::Error(_)) {
+                return Err(value);
+            }
+            bytes = bytes.saturating_add(value_bytes(&value).unwrap_or(usize::MAX));
+            if bytes > 8 * 1024 * 1024 {
+                return Err(RuntimeValue::Error(
+                    "budget\0Arguments exceed byte budget".into(),
+                ));
+            }
+            match signature.argument(name, index, value)? {
+                call_signatures::Argument::Value(value) => values.push(value),
+                // Every registered optional slot is trailing. Omission therefore
+                // preserves indices and the existing bodies' optional defaults.
+                call_signatures::Argument::Omitted => {}
+                call_signatures::Argument::Null => return Ok(None),
+            }
+        }
+        signature.finish(name, arguments.len())?;
+        Ok(Some(values))
     }
 
     fn charge(&mut self, work: usize) -> Result<(), RuntimeValue> {
@@ -2134,33 +2214,17 @@ impl<'a> Evaluator<'a> {
         Ok(())
     }
 
-    fn evaluate_arguments(
-        &mut self,
-        arguments: &[Expr],
-        scope: &Scope,
-    ) -> Result<Vec<RuntimeValue>, RuntimeValue> {
-        let mut values = Vec::new();
-        let mut bytes = 0usize;
-        for argument in arguments {
-            let value = self.evaluate(argument, scope);
-            if matches!(value, RuntimeValue::Error(_)) {
-                return Err(value);
-            }
-            bytes = bytes.saturating_add(value_bytes(&value).unwrap_or(usize::MAX));
-            if bytes > 8 * 1024 * 1024 {
-                return Err(RuntimeValue::Error(
-                    "budget\0Arguments exceed byte budget".into(),
-                ));
-            }
-            values.push(value);
-        }
-        Ok(values)
-    }
-
     fn global(&mut self, name: &str, arguments: &[RuntimeValue]) -> RuntimeValue {
         let name = canonical_function_name(name);
         let first = arguments.first().cloned().unwrap_or(RuntimeValue::Null);
         match name {
+            "if" => {
+                if matches!(first, RuntimeValue::Bool(true)) {
+                    arguments.get(1).cloned().unwrap_or(RuntimeValue::Null)
+                } else {
+                    arguments.get(2).cloned().unwrap_or(RuntimeValue::Null)
+                }
+            }
             "random" => {
                 // SplitMix64: portable, bounded and driven only by the host's
                 // view-load seed. This deliberately replaces ambient Math.random.
@@ -2433,7 +2497,8 @@ impl<'a> Evaluator<'a> {
             | RuntimeValue::Html(value)
             | RuntimeValue::Image(value)
             | RuntimeValue::Icon(value)
-            | RuntimeValue::Error(value) => self.charge(value.len() / 16 + 1)?,
+            | RuntimeValue::Error(value)
+            | RuntimeValue::ErrorValue(value) => self.charge(value.len() / 16 + 1)?,
             RuntimeValue::Regex(pattern, flags) => {
                 self.charge((pattern.len() + flags.len()) / 16 + 1)?
             }
@@ -2508,30 +2573,12 @@ impl<'a> Evaluator<'a> {
         &mut self,
         receiver: RuntimeValue,
         name: &str,
-        arguments: &[Expr],
+        arguments: &[RuntimeValue],
         scope: &Scope,
     ) -> RuntimeValue {
-        if matches!(&receiver, RuntimeValue::Object(_)) && name == "reduce" {
-            return method_not_found("Object", name);
-        }
-        let expected = if name == "reduce" { 2 } else { 1 };
-        if arguments.len() != expected {
-            return arity_error(name, expected);
-        }
-        let arguments = match self.evaluate_arguments(arguments, scope) {
-            Ok(values) => values,
-            Err(error) => return error,
-        };
-        if name == "filter" {
-            match arguments[0] {
-                RuntimeValue::Null => return RuntimeValue::Null,
-                RuntimeValue::Bool(_) => {}
-                _ => return RuntimeValue::Error("type\0filter expects a Boolean".into()),
-            }
-        }
         match receiver {
             RuntimeValue::Object(values) if name == "map" => {
-                self.object_method(values, "map", &[], scope, Some(&arguments))
+                self.object_method(values, "map", &[], scope, Some(arguments))
             }
             receiver => receiver,
         }
@@ -2719,148 +2766,100 @@ impl<'a> Evaluator<'a> {
     fn method(
         &mut self,
         receiver: RuntimeValue,
-        name: &str,
+        raw_name: &str,
         arguments: &[Expr],
         scope: &Scope,
     ) -> RuntimeValue {
-        let callback = matches!(name, "map" | "filter" | "reduce");
-        let name = canonical_function_name(name);
+        if matches!(receiver, RuntimeValue::Error(_)) {
+            return receiver;
+        }
+        let Some(signature) = call_signatures::method(&receiver, raw_name) else {
+            return if matches!(receiver, RuntimeValue::Null) {
+                RuntimeValue::Null
+            } else {
+                method_not_found(value_type(&receiver), raw_name)
+            };
+        };
+        let callback_arity = call_signatures::special_callback_arity(&receiver, raw_name);
+        if let Some(expected) = callback_arity {
+            if arguments.len() != expected {
+                return arity_error(raw_name, expected);
+            }
+        }
+        let name = canonical_function_name(raw_name);
         let work = match &receiver {
             RuntimeValue::List(values) | RuntimeValue::TagList(values) => values.len(),
             RuntimeValue::Object(values) => values.len(),
             RuntimeValue::File(file) if name == "hasLink" => file.links.len(),
-            RuntimeValue::String(value) => value.len() / 256,
-            _ => 0,
+            value => string_data(value).map_or(0, |data| data.len() / 256),
         };
         if let Err(error) = self.charge(work) {
             return error;
         }
-        if name == "isTruthy" {
-            return RuntimeValue::Bool(is_truthy(&receiver));
-        }
-        if name == "isEmpty" {
-            return RuntimeValue::Bool(is_empty(&receiver));
-        }
-        if name == "toString" {
-            return RuntimeValue::String(stringify(&receiver));
-        }
-        if name == "isType" {
-            let values = match self.evaluate_arguments(arguments, scope) {
-                Ok(values) => values,
+        let validated = if callback_arity.is_some() {
+            None
+        } else {
+            match self.registered_arguments(signature, raw_name, arguments, scope) {
+                Ok(Some(values)) => Some(values),
+                Ok(None) => return RuntimeValue::Null,
                 Err(error) => return error,
-            };
-            let expected = values.first().map(plain_string).unwrap_or_default();
-            return RuntimeValue::Bool(
-                value_type(&receiver).eq_ignore_ascii_case(&expected)
-                    || expected.eq_ignore_ascii_case("string")
-                        && matches!(
-                            &receiver,
-                            RuntimeValue::Link(_)
-                                | RuntimeValue::Html(_)
-                                | RuntimeValue::Image(_)
-                                | RuntimeValue::Icon(_)
-                        ),
-            );
+            }
+        };
+        let values = validated.as_deref().unwrap_or(&[]);
+        match name {
+            "isTruthy" => return RuntimeValue::Bool(is_truthy(&receiver)),
+            "isEmpty" => return RuntimeValue::Bool(is_empty(&receiver)),
+            "toString" => return RuntimeValue::String(stringify(&receiver)),
+            "isType" => {
+                return RuntimeValue::Bool(call_signatures::is_type(
+                    &receiver,
+                    &plain_string(&values[0]),
+                ))
+            }
+            _ => {}
         }
-        if let RuntimeValue::Error(_) = receiver {
-            return receiver;
-        }
-        if !callback
+        if callback_arity.is_none()
             && ["map", "filter", "reduce"].contains(&name)
             && matches!(
                 &receiver,
                 RuntimeValue::List(_) | RuntimeValue::TagList(_) | RuntimeValue::Object(_)
             )
         {
-            return self.ordinary_collection_callback(receiver, name, arguments, scope);
+            return self.ordinary_collection_callback(receiver, name, values, scope);
         }
         match receiver {
-            // As in Obsidian, a method on a missing value is missing rather than an error.
             RuntimeValue::Null => RuntimeValue::Null,
-            RuntimeValue::Tag(value) => {
-                if name == "matches" {
-                    if arguments.len() != 1 {
-                        return arity_error("matches", 1);
-                    }
-                    let values = match self.evaluate_arguments(arguments, scope) {
-                        Ok(values) => values,
-                        Err(error) => return error,
-                    };
-                    if matches!(values[0], RuntimeValue::Null) {
-                        return RuntimeValue::Null;
-                    }
-                    let Some(query) = string_data(&values[0]) else {
-                        return RuntimeValue::Error("type\0Tag.matches expects a String".into());
-                    };
-                    if let Err(error) = self.charge((value.len() + query.len()) / 16 + 1) {
-                        return error;
-                    }
-                    return RuntimeValue::Bool(tag_matches(&value, query));
+            RuntimeValue::Tag(value) if name == "matches" => {
+                let query = string_data(&values[0]).expect("String signature validated");
+                if let Err(error) = self.charge((value.len() + query.len()) / 16 + 1) {
+                    return error;
                 }
-                let values = match self.evaluate_arguments(arguments, scope) {
-                    Ok(values) => values,
-                    Err(error) => return error,
-                };
-                self.string_method(&value, name, &values)
+                RuntimeValue::Bool(tag_matches(&value, query))
             }
-            RuntimeValue::String(value) => {
-                let values = match self.evaluate_arguments(arguments, scope) {
-                    Ok(values) => values,
-                    Err(error) => return error,
-                };
-                self.string_method(&value, name, &values)
+            RuntimeValue::Tag(value)
+            | RuntimeValue::String(value)
+            | RuntimeValue::Html(value)
+            | RuntimeValue::Image(value)
+            | RuntimeValue::Icon(value) => self.string_method(&value, name, values),
+            RuntimeValue::Number(value) => self.number_method(value, name, values),
+            RuntimeValue::Date(value) => self.date_method(&value, name, values),
+            RuntimeValue::List(items) => {
+                self.list_method(&items, name, arguments, scope, false, validated.as_deref())
             }
-            RuntimeValue::Html(value) | RuntimeValue::Image(value) | RuntimeValue::Icon(value) => {
-                let values = match self.evaluate_arguments(arguments, scope) {
-                    Ok(values) => values,
-                    Err(error) => return error,
-                };
-                self.string_method(&value, name, &values)
+            RuntimeValue::TagList(items) => {
+                self.list_method(&items, name, arguments, scope, true, validated.as_deref())
             }
-            RuntimeValue::Number(value) => {
-                let values = match self.evaluate_arguments(arguments, scope) {
-                    Ok(values) => values,
-                    Err(error) => return error,
-                };
-                self.number_method(value, name, &values)
+            RuntimeValue::Object(object) => {
+                self.object_method(object, name, arguments, scope, validated.as_deref())
             }
-            RuntimeValue::Date(value) => {
-                let values = match self.evaluate_arguments(arguments, scope) {
-                    Ok(values) => values,
-                    Err(error) => return error,
-                };
-                self.date_method(&value, name, &values)
-            }
-            RuntimeValue::List(values) => self.list_method(&values, name, arguments, scope, false),
-            RuntimeValue::TagList(values) => {
-                self.list_method(&values, name, arguments, scope, true)
-            }
-            RuntimeValue::Object(value) => self.object_method(value, name, arguments, scope, None),
             RuntimeValue::Regex(pattern, flags) if name == "matches" => {
-                let values = match self.evaluate_arguments(arguments, scope) {
-                    Ok(values) => values,
-                    Err(error) => return error,
-                };
-                let candidate = values.first().map(plain_string).unwrap_or_default();
-                match regex_is_match(&pattern, &flags, &candidate) {
+                match regex_is_match(&pattern, &flags, &plain_string(&values[0])) {
                     Ok(matches) => RuntimeValue::Bool(matches),
                     Err(error) => RuntimeValue::Error(error),
                 }
             }
-            RuntimeValue::File(file) => {
-                let values = match self.evaluate_arguments(arguments, scope) {
-                    Ok(values) => values,
-                    Err(error) => return error,
-                };
-                self.file_method(&file, name, &values)
-            }
-            RuntimeValue::Link(link) => {
-                let values = match self.evaluate_arguments(arguments, scope) {
-                    Ok(values) => values,
-                    Err(error) => return error,
-                };
-                self.link_method(&link, name, &values)
-            }
+            RuntimeValue::File(file) => self.file_method(&file, name, values),
+            RuntimeValue::Link(link) => self.link_method(&link, name, values),
             value => method_not_found(value_type(&value), name),
         }
     }
@@ -3015,19 +3014,13 @@ impl<'a> Evaluator<'a> {
         arguments: &[Expr],
         scope: &Scope,
         tag_list: bool,
+        validated: Option<&[RuntimeValue]>,
     ) -> RuntimeValue {
-        let eager = if ["map", "filter", "reduce"].contains(&name) {
-            Vec::new()
-        } else {
-            match self.evaluate_arguments(arguments, scope) {
-                Ok(values) => values,
-                Err(error) => return error,
-            }
-        };
+        let eager = validated.unwrap_or(&[]);
         let eager = if ["containsAll", "containsAny"].contains(&name) && eager.len() == 1 {
-            match eager.into_iter().next().unwrap() {
-                RuntimeValue::List(values) | RuntimeValue::TagList(values) => values,
-                value => vec![value],
+            match &eager[0] {
+                RuntimeValue::List(values) | RuntimeValue::TagList(values) => values.as_slice(),
+                _ => eager,
             }
         } else {
             eager
@@ -3053,7 +3046,7 @@ impl<'a> Evaluator<'a> {
                     .unwrap_or_else(|error| error)
             }
             "containsAll" | "containsAny" => {
-                for needle in &eager {
+                for needle in eager {
                     if let Err(error) = self.comparison_preflight(needle) {
                         return error;
                     }
@@ -3064,7 +3057,7 @@ impl<'a> Evaluator<'a> {
                     }
                 }
                 let all = name == "containsAll";
-                for needle in &eager {
+                for needle in eager {
                     match self.membership_checked(values, needle, tag_list) {
                         Ok(found) if found != all => return RuntimeValue::Bool(!all),
                         Ok(_) => {}
@@ -3640,6 +3633,10 @@ impl<'a> Evaluator<'a> {
 
     fn equals(&self, left: &RuntimeValue, right: &RuntimeValue) -> bool {
         match (left, right) {
+            (RuntimeValue::ErrorValue(left), RuntimeValue::ErrorValue(right)) => {
+                error_message(left) == error_message(right)
+            }
+            (RuntimeValue::ErrorValue(_), _) | (_, RuntimeValue::ErrorValue(_)) => false,
             (RuntimeValue::Link(left), RuntimeValue::Link(right)) => {
                 links_loosely_equal(left, right)
             }
@@ -4000,10 +3997,9 @@ fn to_plain(value: &RuntimeValue) -> Value {
         RuntimeValue::File(value) => Value::String(value.path.clone()),
         RuntimeValue::Link(value) => Value::String(value.path.clone()),
         RuntimeValue::Regex(pattern, flags) => Value::String(format!("/{pattern}/{flags}")),
-        RuntimeValue::Error(message) => Value::Object(Map::from_iter([(
-            "error".to_string(),
-            Value::String(message.clone()),
-        )])),
+        RuntimeValue::Error(message) | RuntimeValue::ErrorValue(message) => Value::Object(
+            Map::from_iter([("error".to_string(), Value::String(message.clone()))]),
+        ),
     }
 }
 
@@ -4056,6 +4052,7 @@ fn plain_string(value: &RuntimeValue) -> String {
         }
         RuntimeValue::Regex(pattern, flags) => format!("/{pattern}/{flags}"),
         RuntimeValue::Image(value) => super::order::image_text(value),
+        RuntimeValue::ErrorValue(message) => format!("Error: {}", error_message(message)),
         RuntimeValue::Error(message) => message.clone(),
     }
 }
@@ -4066,7 +4063,7 @@ fn stringify(value: &RuntimeValue) -> String {
 
 fn is_truthy(value: &RuntimeValue) -> bool {
     match value {
-        RuntimeValue::Null | RuntimeValue::Error(_) => false,
+        RuntimeValue::Null | RuntimeValue::Error(_) | RuntimeValue::ErrorValue(_) => false,
         RuntimeValue::Bool(value) => *value,
         RuntimeValue::Number(value) => *value != 0.0 && !value.is_nan(),
         RuntimeValue::String(value)
@@ -4114,7 +4111,7 @@ fn value_type(value: &RuntimeValue) -> &'static str {
         RuntimeValue::Html(_) => "HTML",
         RuntimeValue::Image(_) => "Image",
         RuntimeValue::Icon(_) => "Icon",
-        RuntimeValue::Error(_) => "Error",
+        RuntimeValue::Error(_) | RuntimeValue::ErrorValue(_) => "Error",
     }
 }
 
@@ -5295,6 +5292,16 @@ fn typed_value(
                 external: value.external,
             }
         }
+        RuntimeValue::ErrorValue(encoded) => {
+            let (code, message) = encoded
+                .split_once('\0')
+                .unwrap_or(("error", encoded.as_str()));
+            *bytes = bytes.saturating_add(code.len() + message.len());
+            BaseValue::Error {
+                code: code.to_owned(),
+                message: message.to_owned(),
+            }
+        }
         RuntimeValue::Error(message) => {
             let (code, message) = message
                 .split_once('\0')
@@ -5321,7 +5328,8 @@ fn value_bytes(value: &RuntimeValue) -> Option<usize> {
             | RuntimeValue::Html(value)
             | RuntimeValue::Image(value)
             | RuntimeValue::Icon(value)
-            | RuntimeValue::Error(value) => bytes = bytes.saturating_add(value.len()),
+            | RuntimeValue::Error(value)
+            | RuntimeValue::ErrorValue(value) => bytes = bytes.saturating_add(value.len()),
             RuntimeValue::Link(link) => {
                 bytes = bytes.saturating_add(
                     link.path.len()
@@ -5694,7 +5702,7 @@ mod rich_expression_tests {
         for source in [
             "link('https://example.test').isType('url')",
             "link('https://example.test').isType('string')",
-            "icon('book').isType('icon')",
+            "icon('book').isType('icon') == false",
             "icon('book').isType('string')",
             "html('').isEmpty()",
             "image('').isEmpty()",
@@ -5728,7 +5736,7 @@ mod rich_expression_tests {
     #[test]
     fn built_in_dispatch_is_case_insensitive_and_string_subclasses_convert() {
         for source in [
-            "IF(true, 2, unknown()) == 2",
+            "IF(true, 2, 3) == 2",
             "DATE('2024-01-01').FORMAT('YYYY') == '2024'",
             "'Hello'.CONTAINS('ell')",
             "ICON('BOOK').LOWER() == 'book'",
@@ -5885,10 +5893,7 @@ mod rich_expression_tests {
         for source in ["max()", "min()", "max(null,null)"] {
             assert_eq!(eval(source).unwrap(), BaseValue::Null, "{source}");
         }
-        assert_eq!(
-            eval("max(null,2,4)").unwrap(),
-            BaseValue::Number { value: 4.0 }
-        );
+        assert_eq!(eval("max(null,2,4)").unwrap(), BaseValue::Null);
         assert_eq!(eval("min('3',4)").unwrap_err().code, "type");
     }
     #[test]
