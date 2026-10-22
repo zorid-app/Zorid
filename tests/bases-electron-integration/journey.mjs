@@ -17,8 +17,21 @@ async function apply(c,name){
   }
   await c.ui.wait(`return !document.querySelector(${JSON.stringify(dialog(name))});`,'Applied '+name);await c.ui.idle();
 }
-async function config(c,name){await c.ui.button('Views',active);await c.ui.button(`Configure view ${name}`,dialog('Views'));}
-async function viewAction(c,label){await c.ui.button('View actions',dialog('View options'));await c.ui.button(label);await c.ui.idle();}
+async function config(c,name){
+  const configured=await c.ui.dom(`return document.querySelector(${JSON.stringify(dialog('View options'))})?.querySelector('input[aria-label="View name"]')?.value??null;`);
+  if(configured===name)return;
+  if(configured!==null)await apply(c,'View options');
+  if(!await c.ui.dom(`return !!document.querySelector(${JSON.stringify(dialog('Views'))});`))await c.ui.button('Views',active);
+  await c.ui.button(`Configure view ${name}`,dialog('Views'));
+}
+async function viewAction(c,label){
+  const before=await c.ui.dom(`return document.querySelector(${JSON.stringify(dialog('View options'))})?.querySelector('input[aria-label="View name"]')?.value;`);
+  await c.ui.button('View actions',dialog('View options'));await c.ui.button(label);
+  if(label==='Duplicate view')await c.ui.wait(`const value=document.querySelector(${JSON.stringify(dialog('View options'))})?.querySelector('input[aria-label="View name"]')?.value;return value&&value!==${JSON.stringify(before)};`,'Duplicate opens Configure view for its acknowledged copy');
+  else if(label==='New item settings')await c.ui.wait(`return !!document.querySelector(${JSON.stringify(dialog('New item settings'))});`,'Creation settings continuation opened');
+  else await c.ui.wait(`return !document.querySelector(${JSON.stringify(dialog('View options'))});`,'Acknowledged view action closes its menu');
+  await c.ui.idle();
+}
 async function propertySettings(c,property){await c.ui.button('Properties',active);await c.ui.button(`Configure property ${property}`,dialog('Properties'));await c.ui.button('Property type',dialog('Property'));await c.ui.wait(`return !!document.querySelector(${JSON.stringify(dialog('Property settings'))});`,'Shared property settings');}
 async function savePropertySettings(c){await c.ui.button('Apply',dialog('Property settings'));await c.ui.wait(`return !document.querySelector(${JSON.stringify(dialog('Property settings'))});`,'Property definition saved');await c.ui.idle();}
 async function formulaEditor(c,name){await c.ui.button('Properties',active);await c.ui.button(`Configure property ${name}`,dialog('Properties'));await c.ui.button('Edit formula',dialog('Property'));}
