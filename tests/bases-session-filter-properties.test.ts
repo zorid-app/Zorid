@@ -112,6 +112,19 @@ test('same-frame phases cannot revalidate changed saved witnesses, new coverage 
  }finally{await h.vault.closeMetadataProjection();}
 });
 
+test('a provider constructed inside the real stale phase acquires current categories when that same frame settles',async()=>{
+ const h=harness([file('A.md',[property('title','text','A')])]);
+ try {await h.vault.initialize();let provider:ReturnType<typeof baseSessionFilterPropertyProvider>|undefined;
+  const phases:{status:string;title:string|undefined;state:string|undefined}[]=[];
+  const stop=h.vault.onMetadata(next=>{
+   provider??=baseSessionFilterPropertyProvider(h.vault,{properties:{state:{type:'select',options:[{value:'open'}]}},diagnostics:[]},['note.title','note.state'],()=>true);
+   phases.push({status:next.status,title:provider('note.title')?.kind,state:provider('note.state')?.kind});
+  });
+  try{h.wake();}finally{stop();}
+  assert.deepEqual(phases,[{status:'stale',title:'unknown',state:'string'},{status:'current',title:'string',state:'string'}]);assert.equal(provider?.('note.title')?.kind,'string');assert.equal(h.adapter.reads,0);
+ }finally{await h.vault.closeMetadataProjection();}
+});
+
 test('unavailable delivery and immediate metadata retirement invalidate a captured provider',async()=>{
  const h=harness([file('A.md',[property('title','text','A')])]);
  try {await h.vault.initialize();const frame=h.vault.metadataFrame?.frame,provider=baseSessionFilterPropertyProvider(h.vault,empty,['note.title'],()=>true);assert.equal(provider('note.title')?.kind,'string');
@@ -120,4 +133,13 @@ test('unavailable delivery and immediate metadata retirement invalidate a captur
  const retired=harness([file('A.md',[property('title','text','A')])]);let release:(()=>void)|undefined,close:Promise<void>|undefined;
  try {await retired.vault.initialize();const provider=baseSessionFilterPropertyProvider(retired.vault,empty,['note.title'],()=>true);assert.equal(provider('note.title')?.kind,'string');release=retired.holdClose();close=retired.vault.closeMetadataProjection();assert.deepEqual(provider('note.title'),{kind:'unknown',metadataStatus:'unavailable'},'retirement blocks cache admission before close-pin acknowledgement');release();await close;
  }finally{release?.();await(close??retired.vault.closeMetadataProjection());}assert.equal(retired.pins.size,0);
+});
+
+test('an excluded-only frame retires declared controls immediately while pin-close acknowledgement is pending',async()=>{
+ const excluded:DocumentMetadataRowsItem={kind:'file',value:{entry:{id:'cover',revision:'r1',path:'covers/a.png',kind:'file',deleted:false},metadata:null,exclusion:'binary'}};
+ const h=harness([excluded]);let release:(()=>void)|undefined,close:Promise<void>|undefined;
+ try {await h.vault.initialize();assert.equal(h.vault.metadataFrame?.status,'current');assert.equal(h.vault.metadataFrame?.frame?.row('covers/a.png')?.kind,'file');assert.deepEqual([...h.vault.metadata.entries()],[],'there is no admitted note to act as a retirement sentinel');assert.equal(h.vault.isMetadataRetired,false);
+  const provider=baseSessionFilterPropertyProvider(h.vault,{properties:{state:{type:'select',options:[{value:'open'}]}},diagnostics:[]},['note.state'],()=>true);assert.equal(provider('note.state')?.kind,'string');
+  const retained=h.vault.metadataFrame;release=h.holdClose();close=h.vault.closeMetadataProjection();assert.equal(h.vault.isMetadataRetired,true);assert.equal(h.vault.metadataFrame,retained,'the historical snapshot getter retains its existing close-ACK contract');assert.ok(h.pins.size>0);assert.deepEqual(provider('note.state'),{kind:'unknown',metadataStatus:'unavailable'});assert.equal(h.adapter.reads,0);release();await close;
+ }finally{release?.();await(close??h.vault.closeMetadataProjection());}assert.equal(h.pins.size,0);
 });

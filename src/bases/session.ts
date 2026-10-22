@@ -147,12 +147,10 @@ export function baseSessionFilterProperties(vault: Vault, definitions: BasePrope
  * Retain the advisory snapshot across those phases, never across new witnesses. */
 export function baseSessionFilterPropertyProvider(vault: Vault, definitions: BasePropertyDefinitions, knownProperties: readonly string[], isCurrent: () => boolean): (property: string) => BaseFilterPropertyDescriptor | undefined {
   const captured = vault.metadataFrame, frame = captured?.frame;
-  let validated = captured, properties: Readonly<Record<string, BaseFilterPropertyDescriptor>> | undefined, admissionPath: string | undefined;
+  let validated = captured, properties: Readonly<Record<string, BaseFilterPropertyDescriptor>> | undefined, propertiesStatus = captured?.status;
   return property => {
     const current = vault.metadataFrame;
-    if (!isCurrent() || current?.frame !== frame || current?.status === 'unavailable' && captured?.status !== 'unavailable') return unavailableFilterProperty;
-    // Cache admission closes immediately on retirement, before pin-close ACK.
-    if (admissionPath !== undefined && !vault.metadata.get(admissionPath)) return unavailableFilterProperty;
+    if (!isCurrent() || vault.isMetadataRetired || current?.frame !== frame || current?.status === 'unavailable' && captured?.status !== 'unavailable') return unavailableFilterProperty;
     if (frame && current !== validated) {
       for (const entry of vault.entries.values()) {
         if (entry.type !== 'file') continue;
@@ -170,9 +168,9 @@ export function baseSessionFilterPropertyProvider(vault: Vault, definitions: Bas
     // A first lookup during the transient stale phase must not permanently
     // cache an incomplete category before the same-frame current delivery.
     if (!properties && captured?.status === 'current' && current?.status !== 'current') return unavailableFilterProperty;
-    if (!properties) {
+    if (!properties || propertiesStatus !== 'current' && current?.status === 'current') {
       properties = baseSessionFilterProperties(vault, definitions, knownProperties, isCurrent);
-      for (const [path] of frame?.entries() ?? []) if (vault.metadata.get(path)) { admissionPath = path; break; }
+      propertiesStatus = current?.status;
     }
     return properties[property];
   };

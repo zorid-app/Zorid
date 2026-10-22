@@ -112,6 +112,8 @@ export class Vault {
 
   /** Undefined is legacy; pending/null on a capable provider is not empty facts. */
   get metadataFrame(): CommittedMetadataState | undefined { return this.metadataProjection?.state; }
+  /** Retirement starts before asynchronous metadata pin-close acknowledgements. */
+  get isMetadataRetired(): boolean { return this.metadataRetired; }
   onMetadata(callback: (state: CommittedMetadataState) => void): () => void {
     if (this.metadataRetired) return () => {};
     this.metadataListeners.add(callback);
