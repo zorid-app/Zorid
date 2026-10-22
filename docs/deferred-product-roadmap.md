@@ -9,6 +9,33 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+2026-10-22 root core integration is now `ec313e7f` before this record: reviewed
+Duration, collection/Regex identity, exact-source prepared formulas and captured
+relation provenance are composed. This frontier is **not compile-ready yet**:
+`bases_summaries` is rebasing its owned checked runtime-shape/query/grouping and
+prepare-once plumbing onto that exact closure. No native/WASM artifact is claimed
+to match it. Before this later composition, the full Bases library passed105
+tests, and24 composed resize-queue/UI cases passed. Broader public tests then
+found one real relation target-filter sentinel regression (39/40 in that target),
+now source-fixed/reviewed in the composed batch; rerun remains required.
+
+Actual visibility bootstrap002 at `2cb72057` passes2 checks with normal quit,
+exact owned-process cleanup and unchanged fingerprints. It intentionally uses
+the older verified native artifact and establishes **harness visibility only**,
+not new-core/Bases acceptance. Native activation results remain diagnostics;
+actual owned onscreen/unhidden window and visible document are required.
+
+To continue UI verification independently, `bases_ui_review` owns
+`.worktrees/bases-frontend-validation`, branch `codex/bases-frontend-validation`,
+frozen `f567857b582ba06ea8eb4af773a0defd7ea4714d`. Its Rust tree remains exactly
+`5e010112661da69eb290d6a5edb72d4906e844a1`, matching native SHA `176fcff5…`;
+it composes the reviewed new resize queue and visible-window/hover UI. Desktop
+build and120 focused UI tests pass. Actual Heavy011 is running in that lane with
+`--show-window`, evidence `/private/tmp/zorid-bases-heavy-20261022-011/`.
+Root may compose source in its separate core worktree, but no additional app or
+heavy build may overlap this slot. This interim lane cannot accept new Q3
+semantics or replace the eventual final integrated native/WASM/CLI/UI reruns.
+
 2026-10-22 current isolated candidate `90c7e253` composes reviewed Object/Tag
 base and call contracts (`c8be1aed`, `50d47bdd`, `f62174a7`, `8c7f8455`).
 Serialized Rust compilation succeeds. The full Bases library passes98 tests,
