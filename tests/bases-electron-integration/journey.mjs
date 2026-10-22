@@ -5,6 +5,7 @@ import {until,delay} from '../tasks-electron-integration/cdp.mjs';
 import {parseCSV} from './csv.mjs';
 import {assertScopedGroupSummaries} from './summary-oracle.mjs';
 import {MOD} from './ui.mjs';
+import {numericEditFrame} from './numeric-edit-diagnostics.mjs';
 
 const active='.pane.is-active .bases-session';
 const dialog=name=>`[role="dialog"][aria-label=${JSON.stringify(name)}]`;
@@ -195,7 +196,17 @@ export async function journey(c){
 
   // Field edits must preserve body/frontmatter not touched by the command.
   const firstBefore=await c.read('Book 001.md');
-  await c.ui.edit('Book 001.md','note.rating','5');
+  const numericCell=c.ui.cell('Book 001.md','note.rating');
+  const numericFrame=async phase=>c.evidence.actions.push({action:'first-numeric-edit-frame',phase,...await c.ui.dom(`return (${numericEditFrame.toString()})(document,${JSON.stringify(numericCell)});`),at:Date.now()});
+  // Keep UI.edit's exact input/idle sequence; these reads add no semantic wait,
+  // refresh, admission check, retry, or product API call.
+  await numericFrame('before-click');
+  await c.ui.click(numericCell,{count:2});
+  await numericFrame('after-click');await numericFrame('before-type');
+  await c.ui.type(`${numericCell} input:not([type="checkbox"]),${numericCell} textarea`,'5');
+  await numericFrame('after-type');await numericFrame('before-Enter');
+  await c.ui.key('Enter');
+  await numericFrame('after-Enter');await c.ui.idle();await numericFrame('after-idle');
   await fmSaved(c,'Book 001.md',(p,source)=>{assert.equal(p.rating,5);assert.equal(p.untouched,'preserve 0');assert.equal(source.slice(source.indexOf('\n# ')),firstBefore.slice(firstBefore.indexOf('\n# ')));},'table-numeric-edit-preserves-body-and-unrelated-properties');
   await visibleCell(c,'Book 001.md','formula.doubleRating','10');
   await c.ui.click(`${c.ui.cell('Book 001.md','note.done')} input[type="checkbox"]`);
