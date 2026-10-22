@@ -22,9 +22,9 @@ function setup(t: TestContext, changes: Partial<Pick<BaseFileHoverOptions, 'isMa
     async getBuffer(captured, validate) { reads.push(captured); await loadGate?.promise; validate(); return buffer(captured); },
     async mount(host, context) {
       mounts.push(context.target); contentContext = context;
-      const rendered = document.createElement('p'); rendered.className = 'rendered-markdown'; rendered.textContent = context.buffer.text;
+      const rendered = document.createElement('p'); rendered.className = 'rendered-markdown'; rendered.textContent = context.buffer!.text;
       const edit = document.createElement('button'); edit.textContent = 'Edit body'; host.append(rendered, edit);
-      edit.onclick = () => { const input = document.createElement('input'); input.setAttribute('aria-label', 'Preview body'); input.value = context.buffer.text; input.oninput = () => { dirty = true; context.onStateChange(); }; host.replaceChildren(input); input.focus(); };
+      edit.onclick = () => { const input = document.createElement('input'); input.setAttribute('aria-label', 'Preview body'); input.value = context.buffer!.text; input.oninput = () => { dirty = true; context.onStateChange(); }; host.replaceChildren(input); input.focus(); };
       await mountGate?.promise;
       const content: BaseFileHoverContent = {async flush() { flushes++; context.validate(); if (saveFails) throw Error('Disk full'); if (dirty) { saved++; dirty = false; registry.set(context.target.path, {...context.target, revision: 'r2'}); } },
         hasPendingChanges: () => dirty, isCurrent: () => registry.get(context.target.path)?.entryId === context.target.entryId,
@@ -59,7 +59,20 @@ test('default plain hover waits for a modifier pressed after entry; key release 
   assert.ok(f.document.querySelector('[aria-label="File preview"]')); await f.helper.destroy();
 });
 test('Ctrl elsewhere and the optional source modifier setting do not fork hover behavior', async t => {
-  const f = setup(t, {isMac: false}); f.helper.hover({...f.target, values: {}}, new f.dom.window.MouseEvent('mouseover', {ctrlKey: true}), f.alpha); await f.advance(300); assert.equal(f.mounts.length, 1); await f.helper.destroy();
+  const f = setup(t, {isMac: false}); f.hover(); await f.advance(300); assert.equal(f.mounts.length, 0);
+  f.document.dispatchEvent(new f.dom.window.KeyboardEvent('keydown', {key: 'Control', ctrlKey: true})); await f.advance(300); assert.equal(f.mounts.length, 1); await f.helper.destroy();
+});
+test('a source setting may permit ordinary hover without changing its timers', async t => {
+  const f = setup(t, {requiresModifier: () => false}); f.hover(f.alpha, f.target, {metaKey: false}); await f.advance(299); assert.equal(f.mounts.length, 0); await f.advance(1); assert.equal(f.mounts.length, 1); await f.helper.destroy();
+});
+test('reference geometry uses below-left alignment with a10px gap and fits the viewport', async t => {
+  const f = setup(t); Object.defineProperties(f.dom.window, {innerWidth: {value: 1024, configurable: true}, innerHeight: {value: 800, configurable: true}});
+  f.alpha.getBoundingClientRect = () => ({x: 352, y: 154.516, left: 352, top: 154.516, right: 410, bottom: 171.579, width: 58, height: 17.063, toJSON() {}});
+  f.hover(); await f.advance(300); const popup = f.document.querySelector<HTMLElement>('[aria-label="File preview"]')!;
+  Object.defineProperties(popup, {offsetWidth: {get: () => 452}, offsetHeight: {get: () => 260.352}});
+  f.dom.window.dispatchEvent(new f.dom.window.Event('resize')); assert.equal(popup.style.left, '352px'); assert.equal(popup.style.top, '181.579px');
+  f.alpha.getBoundingClientRect = () => ({x: 950, y: 700, left: 950, top: 700, right: 1000, bottom: 720, width: 50, height: 20, toJSON() {}});
+  f.dom.window.dispatchEvent(new f.dom.window.Event('resize')); assert.equal(popup.style.left, '564px'); assert.equal(popup.style.top, '429.648px'); await f.helper.destroy();
 });
 test('fast leave cancels immediately and a late read cannot mount a recycled target', async t => {
   const f = setup(t); const gate = deferred<void>(); f.loadGate = gate; f.hover(); await f.advance(200); assert.equal(f.reads.length, 1);
@@ -91,8 +104,61 @@ test('concurrent close coalesces; failed flush and nested disposal pin the exact
   f.saveFails = false; f.disposalFails = true; await assert.rejects(f.helper.close(), /Nested editor/); assert.ok(input.isConnected); assert.equal(f.disposed, 0);
   f.disposalFails = false; await f.helper.close(); assert.equal(input.isConnected, false); assert.equal(f.disposed, 1); await f.helper.destroy();
 });
-test('clean parent detach closes and disposes; a failed dirty detach keeps its recovery surface', async t => {
+test('clean parent detach closes and disposes', async t => {
   const f = setup(t); f.hover(); await f.advance(300); f.parent.remove(); await drain(); assert.equal(f.document.querySelector('[aria-label="File preview"]'), null); assert.equal(f.disposed, 1); await f.helper.destroy();
+});
+test('pending inert mount cancels immediately and disposes its late handle exactly once', async t => {
+  const f = setup(t), gate = deferred<void>(); f.mountGate = gate; f.hover(); await f.advance(300);
+  const popup = f.document.querySelector<HTMLElement>('[aria-label="File preview"]')!;
+  assert.equal(popup.inert, true); assert.equal(f.contentContext!.signal.aborted, false);
+  let closed = false; const close = f.helper.close().then(() => {closed = true;}); await drain();
+  assert.equal(closed, true); assert.equal(f.contentContext!.signal.aborted, true); assert.equal(popup.isConnected, false); assert.equal(f.disposed, 0);
+  gate.resolve(); await drain(); assert.equal(f.disposed, 1); assert.equal(f.errors.length, 0); await close; await f.helper.destroy(); assert.equal(f.disposed, 1);
+});
+test('detaching a parent cancels a pending mount without waiting for late factory completion', async t => {
+  const f = setup(t), gate = deferred<void>(); f.mountGate = gate; f.hover(); await f.advance(300); f.parent.remove(); await drain();
+  assert.equal(f.contentContext!.signal.aborted, true); assert.equal(f.document.querySelector('[aria-label="File preview"]'), null);
+  gate.resolve(); await drain(); assert.equal(f.disposed, 1); await f.helper.destroy();
+});
+test('navigation flush cancels a pre-editor mount instead of waiting for unbounded loading', async t => {
+  const f = setup(t), gate = deferred<void>(); f.mountGate = gate; f.hover(); await f.advance(300);
+  await f.helper.flush(); assert.equal(f.contentContext!.signal.aborted, true); assert.equal(f.document.querySelector('[aria-label="File preview"]'), null);
+  gate.resolve(); await drain(); assert.equal(f.disposed, 1); await f.helper.destroy();
+});
+test('dirty detach retains the recovery surface until reattachment permits a successful flush', async t => {
+  const f = setup(t); f.hover(); await f.advance(300); f.document.querySelector<HTMLButtonElement>('.bases-file-hover button')!.click();
+  const input = f.document.querySelector<HTMLInputElement>('input')!; input.value = 'kept'; input.dispatchEvent(new f.dom.window.Event('input'));
+  f.parent.remove(); await drain(); assert.ok(input.isConnected); assert.equal(input.value, 'kept'); assert.equal(f.helper.hasPendingChanges(), true); assert.equal(f.disposed, 0);
+  f.document.body.append(f.parent); await f.helper.close(); assert.equal(f.saved, 1); assert.equal(f.disposed, 1); await f.helper.destroy();
+});
+test('a preview-owned floating picker retains hover without taking keyboard focus', async t => {
+  const f = setup(t); f.hover(); await f.advance(300); const picker = f.document.createElement('div'); picker.id = 'owned-picker'; f.document.body.append(picker);
+  f.leave(); picker.dispatchEvent(new f.dom.window.MouseEvent('mouseover', {bubbles: true, relatedTarget: f.alpha})); await f.advance(700);
+  assert.ok(f.document.querySelector('[aria-label="File preview"]')); assert.equal(f.document.activeElement, f.document.body);
+  picker.dispatchEvent(new f.dom.window.MouseEvent('mouseout', {bubbles: true, relatedTarget: f.document.body})); await f.advance(300);
+  assert.equal(f.document.querySelector('[aria-label="File preview"]'), null); await f.helper.destroy();
+});
+test('binary resources receive no buffer, bind exact revision, and release late aborted mounts', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']}); const dom = new JSDOM('<main><a>Cover</a></main>', {pretendToBeVisual: true}); t.after(() => dom.window.close());
+  const document = dom.window.document, parent = document.querySelector('main')!, anchor = document.querySelector('a')!;
+  const target = {path: 'Cover#literal.png', entryId: 'cover', revision: 'r1'}, errors: unknown[] = [];
+  let revision = 'r1', disposed = 0, context!: Parameters<BaseFileHoverOptions['mount']>[1], calls = 0;
+  const gate = deferred<void>();
+  const helper = createBaseFileHover({parent, isMac: true, isCurrent: captured => captured.revision === revision,
+    async getBuffer() {return undefined;}, async mount(host, next) { calls++; context = next; assert.equal(next.buffer, undefined); host.append(document.createElement('img')); await gate.promise;
+      return {async flush() {next.validate();}, hasPendingChanges: () => false, isCurrent: () => true, dispose() {disposed++;}};
+    }, onError: error => errors.push(error)});
+  helper.hover({...target, values: {}}, new dom.window.MouseEvent('mouseover', {metaKey: true}), anchor); t.mock.timers.tick(300); await drain(); assert.equal(calls, 1);
+  revision = 'r2'; assert.throws(() => context.validate(), /changed/);
+  await helper.close(); assert.equal(context.signal.aborted, true); gate.resolve(); await drain(); assert.equal(disposed, 1); assert.equal(errors.length, 0); await helper.destroy();
+});
+test('binary mount waiting for its abort signal cannot hold destroy open', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']}); const dom = new JSDOM('<main><a>Video</a></main>', {pretendToBeVisual: true}); t.after(() => dom.window.close());
+  const document = dom.window.document, parent = document.querySelector('main')!, anchor = document.querySelector('a')!; let disposed = 0;
+  const helper = createBaseFileHover({parent, isMac: true, isCurrent: () => true, async getBuffer() {return undefined;},
+    async mount(_host, context) {await new Promise<void>(resolve => context.signal.addEventListener('abort', () => resolve(), {once: true})); return {async flush() {}, hasPendingChanges: () => false, isCurrent: () => true, dispose() {disposed++;}};}, onError(error) {throw error;}});
+  helper.hover({path: 'clip.mp4', entryId: 'clip', revision: 'r1', values: {}}, new dom.window.MouseEvent('mouseover', {metaKey: true}), anchor); t.mock.timers.tick(300); await drain();
+  await helper.destroy(); await drain(); assert.equal(disposed, 1); assert.equal(document.querySelector('[aria-label="File preview"]'), null);
 });
 test('legacy rows never invent file identity and modifier character shortcuts cancel waiting opportunity', async t => {
   const f = setup(t); f.helper.hover({path: 'Old.md', values: {}}, new f.dom.window.MouseEvent('mouseover', {metaKey: true}), f.alpha); await f.advance(300); assert.equal(f.reads.length, 0);

@@ -34,7 +34,7 @@ export interface BaseFileHover {
 }
 interface Slot {
   target: BaseFileHoverTarget; anchor: HTMLElement; root: HTMLElement; host: HTMLElement; error: HTMLElement;
-  pointer: {x: number; y: number}; onTarget: boolean; onPopup: boolean; shown: boolean; waiting: boolean; retired: boolean;
+  pointer: {x: number; y: number}; onTarget: boolean; onPopup: boolean; onOwned: boolean; shown: boolean; waiting: boolean; retired: boolean;
   admitted: boolean; problem: boolean; abort: AbortController; resize?: ResizeObserver; buffer?: NoteBuffer; content?: BaseFileHoverContent;
   loading?: Promise<void>; mounting?: Promise<void>; closing?: Promise<void>; flushing?: Promise<void>;
   timers: Set<number>; showTimer?: number; preloadTimer?: number; hideTimer?: number; opportunityTimer?: number; pollTimer?: number;
@@ -48,14 +48,14 @@ export function createBaseFileHover(options: BaseFileHoverOptions): BaseFileHove
   const win = view;
   let current: Slot | undefined, destroyed = false, intent = 0;
   const report = (slot: Slot | undefined, error: unknown) => {
-    if (slot && !slot.retired) { slot.problem = true; slot.error.textContent = error instanceof Error ? error.message : String(error); slot.error.hidden = false; }
+    if (slot && !slot.retired) { slot.problem = true; slot.root.classList.remove('is-loading'); slot.root.removeAttribute('aria-busy'); slot.error.textContent = error instanceof Error ? error.message : String(error); slot.error.hidden = false; }
     try { options.onError(error); } catch { /* Error reporting must preserve retained content. */ }
   };
   const timer = (slot: Slot, delay: number, run: () => void) => { const id = win.setTimeout(() => { slot.timers.delete(id); if (!slot.retired) run(); }, delay); slot.timers.add(id); return id; };
   const clear = (slot: Slot, id: number | undefined) => { if (id !== undefined) { win.clearTimeout(id); slot.timers.delete(id); } };
   const owns = (slot: Slot, node: Node | null) => !!node && (slot.root.contains(node) || !!slot.content?.owns?.(node));
   const pending = (slot: Slot) => !!slot.mounting || !!slot.closing || !!slot.flushing || !!slot.content?.hasPendingChanges() || !!slot.content && slot.problem;
-  const retained = (slot: Slot) => slot.onTarget || slot.onPopup || owns(slot, document.activeElement) || !!slot.content?.hasPendingChanges();
+  const retained = (slot: Slot) => slot.onTarget || slot.onPopup || slot.onOwned || owns(slot, document.activeElement) || !!slot.content?.hasPendingChanges();
   const live = (slot: Slot) => !destroyed && !slot.retired && current === slot;
   const admission = (slot: Slot) => {
     if (!live(slot) || !options.parent.isConnected || !slot.anchor.isConnected || !options.parent.contains(slot.anchor) || !options.isCurrent(slot.target)) throw new Error('The file preview target changed before opening.');
@@ -66,7 +66,7 @@ export function createBaseFileHover(options: BaseFileHoverOptions): BaseFileHove
   const position = (slot: Slot) => {
     if (!slot.shown || slot.retired) return;
     const r = slot.anchor.getBoundingClientRect(), gap = 10, margin = 8;
-    const width = Math.min(slot.root.offsetWidth || 450, Math.max(0, win.innerWidth - margin * 2));
+    const width = Math.min(slot.root.offsetWidth || 452, Math.max(0, win.innerWidth - margin * 2));
     const height = Math.min(slot.root.offsetHeight || 200, Math.max(0, win.innerHeight - margin * 2));
     const tall = r.height > 300, top = tall ? slot.pointer.y + gap : r.bottom + gap, above = tall ? slot.pointer.y - gap : r.top - gap;
     const rtl = win.getComputedStyle(slot.anchor).direction === 'rtl';
@@ -98,6 +98,9 @@ export function createBaseFileHover(options: BaseFileHoverOptions): BaseFileHove
     const operation = Promise.resolve().then(async () => {
       const inert = slot.root.inert;
       try {
+        // No interaction is admitted until the factory returns its lifecycle handle.
+        // Cancel that stage without waiting for a factory which ignores its signal.
+        if (slot.mounting && !slot.content) slot.abort.abort();
         await slot.mounting;
         if (slot.content) {
           if (slot.content.hasPendingChanges() || options.parent.isConnected && slot.content.isCurrent()) await flushSlot(slot);
@@ -124,16 +127,32 @@ export function createBaseFileHover(options: BaseFileHoverOptions): BaseFileHove
   }
   function mount(slot: Slot) {
     if (!live(slot) || !slot.shown || !slot.admitted || slot.content || slot.mounting) return;
-    const operation = Promise.resolve().then(async () => {
+    const raw = Promise.resolve().then(async () => {
       admission(slot);
+      if (slot.abort.signal.aborted) return;
       const content = await options.mount(slot.host, {target: slot.target, buffer: slot.buffer, signal: slot.abort.signal, validate: () => validate(slot), onStateChange: () => { if (live(slot)) { position(slot); reconcile(slot); } }});
+      if (!live(slot) || slot.abort.signal.aborted) {
+        try { await content.dispose(); } catch (error) { report(undefined, error); }
+        return;
+      }
+      try {
+        admission(slot);
+        if (slot.buffer && slot.buffer.savedDurableWitness?.revision !== slot.target.revision || !content.isCurrent()) throw new Error('The file preview revision changed before opening.');
+      } catch (error) {
+        try { await content.dispose(); } catch (cleanupError) { slot.content = content; report(slot, cleanupError); }
+        throw error;
+      }
       slot.content = content;
-      if (!live(slot)) { await content.dispose(); return; }
-      validate(slot); slot.root.classList.remove('is-loading'); slot.root.removeAttribute('aria-busy');
+      slot.root.inert = false; slot.root.classList.remove('is-loading'); slot.root.removeAttribute('aria-busy');
       slot.host.removeAttribute('aria-label'); position(slot); reconcile(slot);
     });
+    // The raw task retains ownership of any late handle and releases it exactly once.
+    // Race only its completion; swallowing rejection here keeps clean teardown usable.
+    let removeAbort = () => {};
+    const aborted = new Promise<void>(resolve => { const done = () => resolve(); slot.abort.signal.addEventListener('abort', done, {once: true}); removeAbort = () => slot.abort.signal.removeEventListener('abort', done); if (slot.abort.signal.aborted) resolve(); });
+    const operation = Promise.race([raw.catch(error => { if (live(slot) && !slot.abort.signal.aborted) report(slot, error); }), aborted]);
     slot.mounting = operation;
-    void operation.catch(error => { if (live(slot)) report(slot, error); }).finally(() => { if (slot.mounting === operation) slot.mounting = undefined; });
+    void operation.finally(() => { removeAbort(); if (slot.mounting === operation) slot.mounting = undefined; });
   }
   function preload(slot: Slot) {
     if (slot.loading || slot.retired) return;
@@ -165,11 +184,11 @@ export function createBaseFileHover(options: BaseFileHoverOptions): BaseFileHove
   }
   function start(target: BaseFileHoverTarget, anchor: HTMLElement, event: MouseEvent) {
     if (destroyed || !options.parent.isConnected || !anchor.isConnected || !options.parent.contains(anchor) || !options.isCurrent(target)) return;
-    const root = document.createElement('div'); root.className = 'popover hover-popover bases-file-hover is-loading'; root.setAttribute('role', 'dialog'); root.setAttribute('aria-label', 'File preview'); root.setAttribute('aria-busy', 'true');
-    Object.assign(root.style, {position: 'fixed', zIndex: 'var(--layer-popover, 1000)', boxSizing: 'border-box', width: 'min(var(--popover-width, 450px), calc(100vw - 16px))', maxHeight: 'min(var(--popover-height, 400px), calc(100vh - 16px))', overflow: 'auto', border: '1px solid var(--background-modifier-border, #ddd)', borderRadius: 'var(--radius-m, 8px)', background: 'var(--background-primary, white)', color: 'var(--text-normal, #222)', boxShadow: 'var(--shadow-l, 0 8px 24px #0004)'});
+    const root = document.createElement('div'); root.inert = true; root.className = 'popover hover-popover bases-file-hover is-loading'; root.setAttribute('role', 'dialog'); root.setAttribute('aria-label', 'File preview'); root.setAttribute('aria-busy', 'true');
+    Object.assign(root.style, {position: 'fixed', zIndex: 'var(--layer-popover, 1000)', boxSizing: 'border-box', width: 'min(calc(var(--popover-width, 450px) + 2px), calc(100vw - 16px))', maxHeight: 'min(var(--popover-height, 400px), calc(100vh - 16px))', overflow: 'auto', border: '1px solid var(--background-modifier-border, #ddd)', borderRadius: 'var(--radius-m, 8px)', background: 'var(--background-primary, white)', color: 'var(--text-normal, #222)', boxShadow: 'var(--shadow-l, 0 8px 24px #0004)'});
     const host = document.createElement('div'); host.className = 'bases-file-hover-content'; host.setAttribute('aria-label', 'Loading file preview');
     const error = document.createElement('div'); error.className = 'bases-file-hover-error'; error.setAttribute('role', 'alert'); error.hidden = true; root.append(host, error);
-    const slot: Slot = {target, anchor, root, host, error, pointer: {x: event.clientX, y: event.clientY}, onTarget: true, onPopup: false, shown: false, waiting: true, retired: false, admitted: false, problem: false, abort: new AbortController(), timers: new Set(), removeListeners: []}; current = slot;
+    const slot: Slot = {target, anchor, root, host, error, pointer: {x: event.clientX, y: event.clientY}, onTarget: true, onPopup: false, onOwned: false, shown: false, waiting: true, retired: false, admitted: false, problem: false, abort: new AbortController(), timers: new Set(), removeListeners: []}; current = slot;
     const mod = (event: MouseEvent | KeyboardEvent) => options.isMac ? event.metaKey : event.ctrlKey;
     const contains = (element: HTMLElement, event: Event) => { const related = (event as MouseEvent).relatedTarget as Node | null; return !!related && element.contains(related); };
     listen(slot, anchor, 'mouseover', event => { if (!contains(anchor, event)) { slot.onTarget = true; reconcile(slot); } });
@@ -177,13 +196,15 @@ export function createBaseFileHover(options: BaseFileHoverOptions): BaseFileHove
     listen(slot, root, 'mouseover', event => { if (!contains(root, event)) { slot.onPopup = true; reconcile(slot); } });
     listen(slot, root, 'mouseout', event => { if (!contains(root, event)) { slot.onPopup = false; reconcile(slot); } });
     listen(slot, root, 'focusin', () => reconcile(slot)); listen(slot, root, 'focusout', () => { queueMicrotask(() => reconcile(slot)); });
+    listen(slot, document, 'mouseover', event => { slot.onOwned = !slot.root.contains(event.target as Node) && owns(slot, event.target as Node); reconcile(slot); });
+    listen(slot, document, 'mouseout', event => { slot.onOwned = !slot.root.contains((event as MouseEvent).relatedTarget as Node) && owns(slot, (event as MouseEvent).relatedTarget as Node); reconcile(slot); });
     listen(slot, document, 'keydown', event => {
       if (!slot.waiting) return; const key = event as KeyboardEvent;
       if (key.isComposing) return;
       if (key.key.startsWith('Arrow') || key.key.length === 1) retire(slot); else if (mod(key)) arm(slot);
     });
     listen(slot, document, 'mousemove', () => { if (slot.waiting) { clear(slot, slot.opportunityTimer); slot.opportunityTimer = timer(slot, 2000, () => retire(slot)); } });
-    listen(slot, document, 'mouseleave', () => { slot.onTarget = false; reconcile(slot); });
+    listen(slot, document, 'mouseleave', () => { slot.onTarget = false; slot.onPopup = false; slot.onOwned = false; reconcile(slot); });
     const outside = (event: Event) => { if (!live(slot) || owns(slot, event.target as Node)) return; if (!slot.shown) retire(slot); else timer(slot, 5, () => { if (!retained(slot)) void closeSlot(slot).catch(() => {}); }); };
     listen(slot, document, 'pointerdown', outside, true); listen(slot, document, 'contextmenu', outside, true);
     listen(slot, win, 'resize', () => position(slot)); listen(slot, win, 'scroll', () => position(slot), true);
@@ -204,7 +225,7 @@ export function createBaseFileHover(options: BaseFileHoverOptions): BaseFileHove
       else void closeSlot(previous).then(() => { if (!destroyed && serial === intent) start(target, anchor, event); }).catch(() => {});
     },
     hasPendingChanges() { return !!current && pending(current); },
-    async flush() { if (!current) return; if (!current.shown) { retire(current); return; } await flushSlot(current); },
+    async flush() { if (!current) return; if (!current.content) { await closeSlot(current); return; } await flushSlot(current); },
     close() { intent++; return current ? closeSlot(current) : Promise.resolve(); },
     async destroy() { intent++; if (current) await closeSlot(current); destroyed = true; observer.disconnect(); },
   };
