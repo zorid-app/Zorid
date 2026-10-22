@@ -83,7 +83,8 @@ test('header click toggles sort; context menu uses reference actions and stale m
 test('resizer keyboard persists width and double-click resets custom width', async () => {
   const f = fixture(); const resize = f.main.querySelectorAll<HTMLElement>('[role=separator]')[2];
   f.key(resize, 'ArrowRight'); await tick(); assert.deepEqual(f.patches[0], { columnSize: { 'note.score': 180 } });
-  resize.dispatchEvent(new f.dom.window.MouseEvent('dblclick', { bubbles: true, cancelable: true })); await tick(); assert.deepEqual(f.patches[1], { columnSize: {} }); f.close();
+  f.view.update({ ...f.result, version: 8, view: { ...f.result.view, columnSize: { 'note.score': 180 } } });
+  f.main.querySelectorAll<HTMLElement>('[role=separator]')[2].dispatchEvent(new f.dom.window.MouseEvent('dblclick', { bubbles: true, cancelable: true })); await tick(); assert.deepEqual(f.patches[1], { columnSize: {} }); f.close();
 });
 
 test('summary footer displays host-computed overall values without aggregating visible rows', () => {

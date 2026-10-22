@@ -86,6 +86,7 @@ interface MountedView {
   update(result: BaseQueryResult): void;
   destroy(): void;
   hasActiveEdits?(): boolean;
+  hasQueuedConfiguration?(): boolean;
   openSummaryPicker?(property: string, anchor: HTMLElement, groupIndex?: number | null): void;
 }
 
@@ -587,6 +588,13 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         }) } : {}),
         editProperties: (edits: readonly import('./table-view.ts').BaseTableEdit[]) => track(() => { edits.forEach(edit => assertPropertyWritable(edit.property)); return actions.editProperties(edits); }),
         patchView: (patch: BaseViewPatch) => track(() => controller.updateView(numericVersion(mountedResult?.version ?? result.version), patch)),
+        onConfigurationSettled: () => {
+          if (disposed) return;
+          const state = controller.state; if (!closing) render(state);
+          if (!state.error && !state.updating && mountedResult === state.result && state.result) return { result: state.result, entryId: options.vault.entries.get(options.basePath)?.entryId };
+        },
+        getConfigurationIdentity: () => disposed ? undefined : options.vault.entries.get(options.basePath)?.entryId,
+        isConfigurationClosing: () => disposed || closing,
         undo: () => track(() => controller.undo()), redo: () => track(() => controller.redo()),
         requestEditProperty: (property: string, anchor: HTMLElement) => settings.open(property, anchor),
       } : {}),
@@ -652,6 +660,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   observer?.observe(content, { subtree: true, childList: true });
   async function selectView(index: number): Promise<void> {
     action();
+    if (mounted?.hasQueuedConfiguration?.()) throw new Error('Wait for the queued column width changes before switching views');
     if (pending.size || activeDraft()) throw new Error('Finish or cancel the property edit before switching views');
     const views = BaseDocument.parse(controller.state.source).views;
     if (!Number.isInteger(index) || index < 0 || index >= views.length) throw new Error('The selected base view does not exist');
@@ -677,9 +686,11 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   async function finish(close: boolean): Promise<void> {
     if (disposed) return;
     if (closing) throw new Error('This base view is already finishing edits');
+    if (mounted?.hasQueuedConfiguration?.()) throw new Error('Wait for the queued column width changes before leaving this base');
     closing = true;
     try {
       await settle();
+      if (mounted?.hasQueuedConfiguration?.()) throw new Error('Wait for the queued column width changes before leaving this base');
       if (close) {
         toolbarUI.destroy(); settings.destroy(); destroySummaryEditor?.(); stopDefinitions.forEach(stop => stop()); mounted?.destroy(); mounted = undefined; observer?.disconnect();
         if (scheduled !== undefined) clearTimeout(scheduled);
@@ -698,7 +709,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     selectView,
     setCurrentFile: path => { action(); return controller.setCurrentFilePath(path); },
     rebindViewName: (from, to) => { alive(); return controller.rebindViewName(from, to); },
-    hasPendingChanges: () => !disposed && (!!pending.size || controller.hasPendingViewReferences || creation?.status === 'uncertain' || activeDraft() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error)),
+    hasPendingChanges: () => !disposed && (!!pending.size || !!mounted?.hasQueuedConfiguration?.() || controller.hasPendingViewReferences || creation?.status === 'uncertain' || activeDraft() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error)),
     flush: () => finish(false),
     close: () => finish(true),
   };

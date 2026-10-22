@@ -17,6 +17,7 @@ export interface BaseTableEdit {
   readonly value: BaseExpressionValue;
 }
 export interface BaseTableFileWitness { readonly entryId: string; readonly revision: string }
+export interface BaseTableConfigurationAcknowledgement { readonly result: BaseQueryResult; readonly entryId?: string }
 export interface BaseTableOptions {
   readonly result: BaseQueryResult;
   readonly openFile: (path: string, event: MouseEvent | KeyboardEvent, witness?: BaseTableFileWitness) => void;
@@ -33,6 +34,15 @@ export interface BaseTableOptions {
   readonly parsePropertyInput?: (raw: string, property: string, row: BaseQueryRow) => BaseExpressionValue;
   readonly renderProperty?: (element: HTMLElement, property: BasePropertyPresentation) => void | (() => void);
   readonly patchView?: (patch: BaseViewPatch) => Promise<void>;
+  /** Publish the acknowledged result through update after a configuration save.
+   * Hosts may do so synchronously here; queued resize intents otherwise wait for
+   * their next update. Return the published result and Base entry identity to
+   * acknowledge a successful no-op save that reused the same result object. */
+  readonly onConfigurationSettled?: () => BaseTableConfigurationAcknowledgement | void;
+  /** Stable host-owned Base entry identity; undefined permits direct resizing
+   * but rejects additional pending input. Omitted legacy hosts use view scope. */
+  readonly getConfigurationIdentity?: () => string | undefined;
+  readonly isConfigurationClosing?: () => boolean;
   readonly deleteFiles?: (rows: readonly BaseQueryRow[]) => Promise<void>;
   readonly contextMenu?: (row: BaseQueryRow, event: MouseEvent, witness?: BaseTableFileWitness) => void;
   readonly hoverFile?: (row: BaseQueryRow, event: MouseEvent) => void;
@@ -52,7 +62,7 @@ export interface BaseTableOptions {
   readonly getSummary?: (property: string, groupIndex: number | null) => { value: BaseExpressionValue; label?: string } | undefined;
   readonly onEditStateChange?: (active: boolean) => void;
 }
-export interface BaseTableView { openSummaryPicker(property: string, anchor: HTMLElement, groupIndex?: number | null): void; update(result: BaseQueryResult): void; refreshLayout(): void; hasActiveEdits(): boolean; destroy(): void }
+export interface BaseTableView { openSummaryPicker(property: string, anchor: HTMLElement, groupIndex?: number | null): void; update(result: BaseQueryResult): void; refreshLayout(): void; hasActiveEdits(): boolean; hasQueuedConfiguration(): boolean; destroy(): void }
 type Item = { row: BaseQueryRow; groupIndex: number; rowIndex: number; group?: never; summary?: never } | { group: number; row?: never; summary?: never } | { summary: number | null; row?: never; group?: never };
 type TableMenuEntry = { label: string; action?: () => void; disabled?: boolean; checked?: boolean; submenu?: readonly TableMenuEntry[] };
 type CellPoint = { group: number; row: number; column: number };
@@ -89,6 +99,15 @@ function tableClipboard(header: string[], rows: string[][]): Record<string, stri
   };
 }
 const primitiveTypes = new Set(['null', 'string', 'number', 'boolean']);
+function sameConfigurationValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object' || Array.isArray(left) !== Array.isArray(right)) return false;
+  const a = Object.keys(left), b = Object.keys(right);
+  return a.length === b.length && a.every(key => Object.hasOwn(right, key) && sameConfigurationValue((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]));
+}
+function publishedConfigurationMatches(view: BaseQueryResult['view'], patch: BaseViewPatch): boolean {
+  return Object.entries(patch).every(([key, expected]) => sameConfigurationValue(key === 'columnSize' ? view[key] ?? {} : view[key], key === 'columnSize' ? expected ?? {} : expected));
+}
 function display(value: BaseExpressionValue, shared = false): string {
   if (value.type === 'null') return '';
   if (value.type === 'namespace') return value.name;
@@ -121,17 +140,59 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   let widths = new Map<string, number>(), resizeWidths = new Map<string, number>();
   const measuredWidths = new Map<string, number>();
   let stopResize: (() => void) | undefined, draggedColumn: string | undefined;
+  type ResizeIntent = { property: string; viewName: string; viewType: string; scope: number; entryId?: string; queued: boolean; retired?: boolean; change: { delta: number } | { width: number | undefined } };
+  const resizeCommands: ResizeIntent[] = [];
+  type ConfigurationAcknowledgement = { result: BaseQueryResult; patch: BaseViewPatch; scope: number; entryId?: string; column?: string };
+  let awaitingConfigurationResult: ConfigurationAcknowledgement | undefined, resizeDrainScheduled = false;
+  let configurationScope = 0, configurationEntryId = options.getConfigurationIdentity?.();
   const hasActiveEdits = () => !destroyed && (!!editing || bulkPending || configPending || !!root.querySelector('[data-base-editing]'));
   function releaseCell(cell: HTMLElement) {
     const dispose = widgetDisposers.get(cell); widgetDisposers.delete(cell);
     try { dispose?.(); } catch (error) { report(error); }
   }
   function releaseRow(row: Element) { for (const cell of row.querySelectorAll<HTMLElement>('[role=gridcell]')) releaseCell(cell); }
-  async function patch(patch: BaseViewPatch) {
+  function matchesConfigurationAcknowledgement(next: BaseQueryResult, acknowledgement: ConfigurationAcknowledgement, published?: BaseTableConfigurationAcknowledgement) {
+    const matches = acknowledgement.column
+      ? sameConfigurationValue((next.view.columnSize as Record<string, unknown> | undefined)?.[acknowledgement.column], (acknowledgement.patch.columnSize as Record<string, unknown> | undefined)?.[acknowledgement.column])
+      : publishedConfigurationMatches(next.view, acknowledgement.patch);
+    return acknowledgement.scope === configurationScope && next.view.name === acknowledgement.result.view.name && next.view.type === acknowledgement.result.view.type
+      && (!options.getConfigurationIdentity || acknowledgement.entryId === (published ? published.entryId : options.getConfigurationIdentity())) && matches;
+  }
+  function reconcileConfigurationAcknowledgement(next: BaseQueryResult): boolean {
+    const acknowledgement = awaitingConfigurationResult;
+    if (!acknowledgement) return false;
+    if (acknowledgement.scope !== configurationScope) { awaitingConfigurationResult = undefined; return false; }
+    if (next === acknowledgement.result || next.version === acknowledgement.result.version) return false;
+    awaitingConfigurationResult = undefined;
+    if (matchesConfigurationAcknowledgement(next, acknowledgement)) return false;
+    if (resizeCommands.every(command => command.retired || command.scope !== configurationScope)) return false;
+    const cancelled = !!resizeCommands.length; resizeCommands.length = 0; return cancelled;
+  }
+  function reportConfigurationConflict() { report(new Error('The column width changed while saving. Queued column width changes were cancelled. Resize again from the current view.')); }
+  async function patch(patch: BaseViewPatch, column?: string) {
     if (!options.patchView || destroyed || hasActiveEdits()) return;
+    const submittedResult = result, acknowledgement: ConfigurationAcknowledgement = { result, patch: structuredClone(patch), column, scope: configurationScope, entryId: options.getConfigurationIdentity?.() };
     configPending = true;
-    try { await options.patchView(patch); } catch (error) { if (!destroyed) report(error); }
-    finally { configPending = false; if (!destroyed) { try { options.onEditStateChange?.(hasActiveEdits()); } catch (error) { report(error); } } }
+    let saved = false;
+    try { await options.patchView(patch); saved = true; }
+    catch (error) {
+      const hadQueuedWidths = !!resizeCommands.length; resizeCommands.length = 0; awaitingConfigurationResult = undefined;
+      if (!destroyed) report(hadQueuedWidths ? new Error(`${error instanceof Error ? error.message : String(error)} Queued column width changes were cancelled.`) : error);
+    }
+    finally {
+      configPending = false;
+      if (!destroyed) {
+        if (saved) awaitingConfigurationResult = acknowledgement.scope === configurationScope && (result === submittedResult || !matchesConfigurationAcknowledgement(result, acknowledgement)) ? acknowledgement : undefined;
+        const conflict = saved && reconcileConfigurationAcknowledgement(result);
+        try { options.onEditStateChange?.(hasActiveEdits()); } catch (error) { report(error); }
+        if (saved) try {
+          const published = options.onConfigurationSettled?.();
+          if (published?.result === result && matchesConfigurationAcknowledgement(result, acknowledgement, published) && (result !== submittedResult || matchesConfigurationAcknowledgement(submittedResult, acknowledgement, published))) awaitingConfigurationResult = undefined;
+        } catch (error) { resizeCommands.length = 0; report(error); }
+        if (conflict) reportConfigurationConflict();
+        scheduleResizeCommands();
+      }
+    }
   }
 
   function report(error: unknown) {
@@ -261,11 +322,37 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     range = { group, top: 0, bottom: result.groups[group].rows.length - 1, start: index, end: index };
     focusCell(result.groups[group].rows[0].path, result.properties[index], { group, row: 0, column: index }); paintRange();
   }
-  function setColumnWidth(property: string, width?: number) {
+  function resizeBlocked() { return destroyed || !!editing || bulkPending || !!root.querySelector('[data-base-editing]'); }
+  function scheduleResizeCommands() {
+    if (resizeDrainScheduled || destroyed || !resizeCommands.length) return;
+    resizeDrainScheduled = true;
+    queueMicrotask(() => { resizeDrainScheduled = false; drainResizeCommands(); });
+  }
+  function drainResizeCommands() {
+    if (!options.patchView || configPending || resizeBlocked()) return;
+    const command = resizeCommands[0]; if (!command) return;
+    const changedEntry = options.getConfigurationIdentity && ((command.queued && !command.entryId) || command.entryId !== options.getConfigurationIdentity());
+    if (command.retired || command.scope !== configurationScope || command.viewName !== result.view.name || command.viewType !== result.view.type || !result.properties.includes(command.property) || changedEntry) {
+      resizeCommands.shift(); report(new Error('The queued column width change was cancelled because its view or column changed.')); scheduleResizeCommands(); return;
+    }
+    if (awaitingConfigurationResult) return;
+    resizeCommands.shift();
+    const { property, change } = command;
+    const width = 'delta' in change ? (widths.get(property) ?? 180) + change.delta : change.width;
     const sizes = result.view.columnSize;
     const next: Record<string, BaseValue> = { ...(sizes && typeof sizes === 'object' && !Array.isArray(sizes) ? sizes as Record<string, BaseValue> : {}) };
     if (width === undefined) { delete next[property]; measuredWidths.delete(property); } else next[property] = Math.round(Math.max(40, width));
-    resizeWidths.clear(); void patch({ columnSize: next }); dimensions(); renderRows();
+    resizeWidths.clear(); void patch({ columnSize: next }, property); dimensions(); renderRows();
+  }
+  function setColumnWidth(property: string, change: ResizeIntent['change']) {
+    if (!options.patchView || resizeBlocked() || !result.properties.includes(property)) return;
+    if (options.isConfigurationClosing?.()) { report(new Error('This Base view is finishing edits. The column width change was not accepted.')); return; }
+    const entryId = options.getConfigurationIdentity?.();
+    const queued = configPending || !!awaitingConfigurationResult || !!resizeCommands.length;
+    if (options.getConfigurationIdentity && queued && !entryId) { report(new Error('Wait for the current column width save, then retry. A stable Base identity is unavailable for queued changes.')); return; }
+    if (resizeCommands.length >= 1024) { report(new Error('Too many pending column width changes. Wait for the current save.')); return; }
+    resizeCommands.push({ property, change, viewName: result.view.name, viewType: result.view.type, scope: configurationScope, entryId, queued });
+    drainResizeCommands();
   }
   function autoWidth(property: string): number {
     const probe = doc.createElement('span'); probe.className = 'zorid-bases-table-measure'; probe.style.font = win?.getComputedStyle(root).font ?? ''; doc.body.append(probe);
@@ -322,15 +409,15 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
         cell.addEventListener('dragend', () => { draggedColumn = undefined; for (const cell of header.children) cell.classList.remove('is-drop-target', 'is-drop-after'); });
         const handle = doc.createElement('span'); handle.className = 'zorid-bases-table-resize'; handle.setAttribute('role', 'separator'); handle.setAttribute('aria-label', `Resize ${options.getPropertyLabel?.(property) ?? property}`); handle.setAttribute('aria-orientation', 'vertical'); handle.tabIndex = 0;
         handle.addEventListener('click', event => event.stopPropagation());
-        handle.addEventListener('dblclick', event => { event.preventDefault(); event.stopPropagation(); if (current()) setColumnWidth(property); });
-        handle.addEventListener('keydown', event => { if (!current() || !['ArrowLeft', 'ArrowRight', 'Home'].includes(event.key)) return; event.preventDefault(); event.stopPropagation(); setColumnWidth(property, event.key === 'Home' ? undefined : (widths.get(property) ?? 180) + (event.key === 'ArrowLeft' ? -10 : 10)); });
+        handle.addEventListener('dblclick', event => { event.preventDefault(); event.stopPropagation(); if (current()) setColumnWidth(property, { width: undefined }); });
+        handle.addEventListener('keydown', event => { if (!current() || event.isComposing || !['ArrowLeft', 'ArrowRight', 'Home'].includes(event.key)) return; event.preventDefault(); event.stopPropagation(); setColumnWidth(property, event.key === 'Home' ? { width: undefined } : { delta: event.key === 'ArrowLeft' ? -10 : 10 }); });
         handle.addEventListener('pointerdown', event => {
-          if (!current() || event.button !== 0 || hasActiveEdits()) return;
+          if (!current() || event.button !== 0 || resizeBlocked()) return;
           event.preventDefault(); event.stopPropagation(); stopResize?.();
           const start = event.clientX, initial = widths.get(property) ?? 180;
           let changed = false;
           const move = (next: PointerEvent) => { if (!current() || next.pointerId !== event.pointerId) return; changed = true; resizeWidths.set(property, Math.max(40, initial + (next.clientX - start) * (win?.getComputedStyle(root).direction === 'rtl' ? -1 : 1))); dimensions(); };
-          const finish = (next: PointerEvent) => { if (next.pointerId !== event.pointerId) return; const width = resizeWidths.get(property); stopResize?.(); if (changed && next.type !== 'pointercancel' && current()) setColumnWidth(property, width); else { resizeWidths.clear(); dimensions(); } };
+          const finish = (next: PointerEvent) => { if (next.pointerId !== event.pointerId) return; const width = resizeWidths.get(property); stopResize?.(); if (changed && next.type !== 'pointercancel' && current()) setColumnWidth(property, { width }); else { resizeWidths.clear(); dimensions(); } };
           const blur = () => { stopResize?.(); resizeWidths.clear(); dimensions(); };
           stopResize = () => { win?.removeEventListener('pointermove', move); win?.removeEventListener('pointerup', finish); win?.removeEventListener('pointercancel', finish); win?.removeEventListener('blur', blur); stopResize = undefined; };
           win?.addEventListener('pointermove', move); win?.addEventListener('pointerup', finish); win?.addEventListener('pointercancel', finish); win?.addEventListener('blur', blur);
@@ -837,6 +924,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     if (destroyed) return;
     const active = hasActiveEdits();
     if (active !== reportedEditState) { reportedEditState = active; try { options.onEditStateChange?.(active); } catch (error) { report(error); } }
+    if (!active) scheduleResizeCommands();
   }) : undefined;
   editObserver?.observe(body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-base-editing'] });
   root.addEventListener('click', protectRangeClick, true); root.addEventListener('keydown', protectRangeKey, true);
@@ -849,6 +937,11 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   resize?.observe(root);
   function update(next: BaseQueryResult) {
     if (destroyed || (initialized && next === result)) return;
+    const entryId = options.getConfigurationIdentity?.();
+    if (initialized && (next.view.name !== result.view.name || next.view.type !== result.view.type || entryId !== configurationEntryId)) configurationScope++;
+    configurationEntryId = entryId;
+    for (const command of resizeCommands) if (!next.properties.includes(command.property)) command.retired = true;
+    const configurationConflict = reconcileConfigurationAcknowledgement(next);
     // Query/save acknowledgements rebuild headers too. Retain the user's live
     // keyboard target by property, rather than its previous column position.
     const focusedHeader = initialized && next.view.name === result.view.name && next.view.type === result.view.type && header.contains(doc.activeElement) ? doc.activeElement as HTMLElement : undefined;
@@ -872,6 +965,8 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       target?.focus({ preventScroll: true });
     }
     if (!result.rows.length) status.textContent += `${status.textContent ? ' ' : ''}No results`;
+    if (configurationConflict) reportConfigurationConflict();
+    scheduleResizeCommands();
   }
   update(result);
   return { openSummaryPicker(property, anchor, groupIndex = null) {
@@ -881,5 +976,5 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     const headerCell = header.children[result.properties.indexOf(property)] as HTMLElement | undefined;
     const target = anchor.isConnected && root.contains(anchor) ? anchor : replacement ?? headerCell;
     if (target) showSummaryPicker(property, target, groupIndex);
-  }, update, refreshLayout() { if (!destroyed) { dimensions(); rebuildItems(); renderRows(); } }, hasActiveEdits, destroy() { if (destroyed) return; destroyed = true; revision++; stopDrag?.(); stopResize?.(); closeMenu?.(); closePicker?.(); draggedColumn = undefined; editObserver?.disconnect(); for (const cell of [...widgetDisposers.keys()]) releaseCell(cell); root.removeEventListener('click', protectRangeClick, true); root.removeEventListener('keydown', protectRangeKey, true); root.removeEventListener('paste', onPaste); root.removeEventListener('keydown', onHistory); root.removeEventListener('copy', onCopy); root.removeEventListener('pointerdown', onPointerDown); editing = undefined; if (frame !== undefined) win?.cancelAnimationFrame(frame); resize?.disconnect(); root.removeEventListener('scroll', schedule); root.remove(); status.remove(); } };
+  }, update, refreshLayout() { if (!destroyed) { dimensions(); rebuildItems(); renderRows(); } }, hasActiveEdits, hasQueuedConfiguration: () => !destroyed && !!resizeCommands.length, destroy() { if (destroyed) return; destroyed = true; resizeCommands.length = 0; awaitingConfigurationResult = undefined; revision++; stopDrag?.(); stopResize?.(); closeMenu?.(); closePicker?.(); draggedColumn = undefined; editObserver?.disconnect(); for (const cell of [...widgetDisposers.keys()]) releaseCell(cell); root.removeEventListener('click', protectRangeClick, true); root.removeEventListener('keydown', protectRangeKey, true); root.removeEventListener('paste', onPaste); root.removeEventListener('keydown', onHistory); root.removeEventListener('copy', onCopy); root.removeEventListener('pointerdown', onPointerDown); editing = undefined; if (frame !== undefined) win?.cancelAnimationFrame(frame); resize?.disconnect(); root.removeEventListener('scroll', schedule); root.remove(); status.remove(); } };
 }
