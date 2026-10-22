@@ -575,25 +575,59 @@ fn value_expression(property: &str) -> String {
         )
     }
 }
-fn canonical(value: &BaseValue) -> String {
-    fn normalized(value: &BaseValue) -> BaseValue {
-        match value {
-            BaseValue::Number { value } if *value == 0.0 => BaseValue::Number { value: 0.0 },
-            BaseValue::Object { value } => {
-                let mut entries = value
-                    .iter()
-                    .map(|(key, value)| (key.clone(), normalized(value)))
-                    .collect::<Vec<_>>();
-                entries.sort_by(|a, b| a.0.cmp(&b.0));
-                BaseValue::Object { value: entries }
+/// Semantic group/unique identity, separate from the displayed value/witness.
+/// A resolved relationship keeps its identity across aliases, moves and target
+/// revisions. Unresolved destinations retain their readable path for repair.
+pub(crate) fn canonical(value: &BaseValue) -> String {
+    struct Canonical<'a>(&'a BaseValue);
+    impl Serialize for Canonical<'_> {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            use serde::ser::SerializeStruct;
+            match self.0 {
+                BaseValue::Link {
+                    target: Some(target),
+                    ..
+                } => {
+                    let mut record = serializer.serialize_struct("LinkIdentity", 2)?;
+                    record.serialize_field("type", "link")?;
+                    record.serialize_field("entryId", &target.entry_id)?;
+                    record.end()
+                }
+                BaseValue::Link { path, external, .. } => {
+                    let mut record = serializer.serialize_struct("LinkIdentity", 3)?;
+                    record.serialize_field("type", "link")?;
+                    record.serialize_field("path", path)?;
+                    record.serialize_field("external", external)?;
+                    record.end()
+                }
+                BaseValue::Number { value } if *value == 0.0 => {
+                    BaseValue::Number { value: 0.0 }.serialize(serializer)
+                }
+                BaseValue::List { value } => {
+                    let mut record = serializer.serialize_struct("List", 2)?;
+                    record.serialize_field("type", "list")?;
+                    record.serialize_field(
+                        "value",
+                        &value.iter().map(Canonical).collect::<Vec<_>>(),
+                    )?;
+                    record.end()
+                }
+                BaseValue::Object { value } => {
+                    let mut entries = value
+                        .iter()
+                        .map(|(key, value)| (key, Canonical(value)))
+                        .collect::<Vec<_>>();
+                    entries.sort_by(|a, b| a.0.cmp(b.0));
+                    let mut record = serializer.serialize_struct("Object", 2)?;
+                    record.serialize_field("type", "object")?;
+                    record.serialize_field("value", &entries)?;
+                    record.end()
+                }
+                value => value.serialize(serializer),
             }
-            BaseValue::List { value } => BaseValue::List {
-                value: value.iter().map(normalized).collect(),
-            },
-            _ => value.clone(),
         }
     }
-    serde_json::to_string(&normalized(value)).expect("finite typed value serializes")
+    serde_json::to_string(&Canonical(value)).expect("finite typed value serializes")
 }
 fn group_key_id(value: &BaseValue) -> String {
     format!("base-key-v1:{}", canonical(value))
@@ -2139,5 +2173,50 @@ mod group_identity_tests {
             value: vec![reversed],
         };
         assert_eq!(group_key_id(&first), group_key_id(&reversed));
+    }
+}
+
+#[cfg(test)]
+mod relation_group_identity_tests {
+    use super::*;
+    fn link(entry: &str, revision: &str, path: &str, display: &str) -> BaseValue {
+        BaseValue::Link {
+            path: path.into(),
+            display: Some(display.into()),
+            external: false,
+            target: Some(crate::RecordWitness {
+                entry_id: crate::EntryId::new(entry).unwrap(),
+                revision: crate::Revision::new(revision).unwrap(),
+            }),
+        }
+    }
+    #[test]
+    fn canonical_relations_ignore_alias_path_and_revision_but_preserve_target_identity() {
+        let original = link("author-a", "r1", "Authors/A.md", "A");
+        let renamed = link("author-a", "r2", "People/Ada.md", "Ada");
+        assert_eq!(canonical(&original), canonical(&renamed));
+        assert_ne!(
+            canonical(&original),
+            canonical(&link("author-b", "r1", "Authors/A.md", "A"))
+        );
+        assert_eq!(
+            canonical(&BaseValue::List {
+                value: vec![original]
+            }),
+            canonical(&BaseValue::List {
+                value: vec![renamed]
+            })
+        );
+        let unresolved = BaseValue::Link {
+            path: "Missing".into(),
+            target: None,
+            display: Some("Alias".into()),
+            external: false,
+        };
+        let mut other_alias = unresolved.clone();
+        if let BaseValue::Link { display, .. } = &mut other_alias {
+            *display = None;
+        }
+        assert_eq!(canonical(&unresolved), canonical(&other_alias));
     }
 }
