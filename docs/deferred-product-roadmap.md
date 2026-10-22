@@ -9,6 +9,32 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest validation update: root `4b7b0fe3` includes reviewed Store TEST-only
+corrections18b1db50 (original35c162d7), selection readiness9146037b (original
+b1e8d058), and strict public CLI envelope parser4b7b0fe3 (original68a88dcc).
+Store run4429 PASSES269 tests across all5 requested targets,0 failures and2
+pre-existing ignored cases: all four failed targets from full62319 plus the
+guard regressions. Receipt
+`/private/tmp/zorid-bases-store-corrected-validation-20261022-001-receipt.json`,
+Rust tree07265b1d344e89cd84c2fae143c4c4ab8678c2ca. Other full62319 targets had
+already passed. Do not relabel the historical62319 exit101 as a passing run.
+Current matching native/CLI rebuild96560 is active, log
+`/private/tmp/zorid-bases-final-fixtures-native-cli-build-20261022-001.log`;
+no owned app is running and no other heavy lane is granted.
+
+Actual safety010/1162 still stops39actions/6checks. Its independent CLI writer
+really commits successfully, but the helper incorrectly reads commit from the
+root of the public version1 response instead of result.commit. New strict
+parser is independently32/32 passing and replays the retained actual stdout;
+core/source/checkpoint/intent/cleanup checks remain unchanged. Actual010 stays
+failed; main app required SIGKILL cleanup, no leaked children, freeze verified.
+Properties009 passing evidence is now recorded in
+[its factual history](history/bases-native-properties-009-20261022.md).
+Private reference005 is source-approved at manifest5c4d406f: owned popup uses
+one Shift+Enter, owned closed suggestion state uses one ordinary Tab blur.
+No reference005 runtime grant/execution yet; both literal routes retain all13
+source/member oracles and prior evidence/profile/vault/catalog guards.
+
 Latest acceptance update: root `9f7b1b69` composes reviewed standalone config
 guardffcf4d8c (originalf81d305e), inline guard18e5d170 (originald5f36d6b),
 picker-actionability cd841779 (original8aaf3cac), and selection campaign9f7b1b69
