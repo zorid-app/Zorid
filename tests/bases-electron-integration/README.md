@@ -56,6 +56,14 @@ Offline evidence-policy checks:
 They reject activation-only or wrong-window evidence but do not replace a native
 visible-window runtime pass.
 
+On macOS, `node --test tests/bases-electron-integration/window-native-adapter.test.mjs`
+executes the runner's exact read-only CGWindow adapter against the existing desktop.
+It casts the returned CFArrayRef through `ObjC.castRefToObject` before conversion,
+checks the JavaScript array length against `CFArrayGetCount`, and filters only the
+test process PID. It opens/activates no application and records no window titles
+or content. This native bridge regression complements the policy checks; actual
+owned-window activation and document visibility still require the granted run.
+
 Explicit supplemental campaigns can reuse this same bootstrap with
 `--campaign-module /absolute/tests/OWNED-CAMPAIGN/campaign.mjs`. The fixed owned
 directories are visual-reference, safety, config, properties, clipboard, layouts and recovery under

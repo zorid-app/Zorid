@@ -14,7 +14,7 @@ import {fixtureFiles,template} from './fixtures.mjs';
 import {journey} from './journey.mjs';
 import {CAMPAIGN_DIRECTORIES,validateFixtureName,readFixture,writeFixture,campaignClosure} from './owned-fixtures.mjs';
 import {relayProcessOwnership,livingOwnedProcesses,discoverUnannouncedRelayProcesses} from './native-ownership.mjs';
-import {windowMode,assertNativeWindowVisible,assertRendererVisible} from './window-visibility.mjs';
+import {windowMode,assertNativeWindowVisible,assertRendererVisible,nativeWindowAdapterSource} from './window-visibility.mjs';
 
 const arg = name => { const i=process.argv.indexOf(name); return i<0?undefined:process.argv[i+1]; };
 const required = name => { const value=arg(name); assert.ok(value,`Explicit ${name} required`); return value; };
@@ -62,16 +62,15 @@ function appKit(action){
   assert.ok(['hide','show','terminate'].includes(action));assert.ok(child&&!exited());
   const owned=processes().find(row=>row.pid===child.pid);
   assert.ok(owned?.command.startsWith(electron+' ')&&owned.command.includes(path.join(root,'desktop/main.cjs'))&&owned.command.includes('--user-data-dir='+profile),'Exact owned app guard');
-  const script=`ObjC.import('AppKit');function run(a){
+  const script=`ObjC.import('AppKit');${action==='show'?nativeWindowAdapterSource:''}function run(a){
     const p=Number(a[0]),app=$.NSRunningApplication.runningApplicationWithProcessIdentifier(p);
     if(Number(app.processIdentifier)!==p||ObjC.unwrap(app.executableURL.path)!==a[1])throw Error('Owned app identity changed');
     let accepted;
     if(a[2]==='show'){
-      ObjC.import('CoreGraphics');
-      const windows=()=>{const all=ObjC.deepUnwrap($.CGWindowListCopyWindowInfo(1,0))||[];return all.filter(w=>Number(w.kCGWindowOwnerPID)===p&&Number(w.kCGWindowLayer)===0).map(w=>({windowNumber:Number(w.kCGWindowNumber),ownerPID:Number(w.kCGWindowOwnerPID),layer:Number(w.kCGWindowLayer),onscreen:Boolean(w.kCGWindowIsOnscreen),bounds:{x:Number(w.kCGWindowBounds.X),y:Number(w.kCGWindowBounds.Y),width:Number(w.kCGWindowBounds.Width),height:Number(w.kCGWindowBounds.Height)}}));};
       const unhidden=Boolean(app.unhide),activated=Boolean(app.activateWithOptions(3));accepted=unhidden&&activated;
-      const end=Date.now()+3000;while((Boolean(app.isHidden)||!Boolean(app.isActive)||!windows().length)&&Date.now()<end)$.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.02));
-      return JSON.stringify({pid:p,accepted,hidden:Boolean(app.isHidden),active:Boolean(app.isActive),windows:windows()});
+      let observed=readOwnedNativeWindows(p);
+      const end=Date.now()+3000;while((Boolean(app.isHidden)||!Boolean(app.isActive)||!observed.windows.length)&&Date.now()<end){$.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.02));observed=readOwnedNativeWindows(p);}
+      return JSON.stringify({pid:p,accepted,hidden:Boolean(app.isHidden),active:Boolean(app.isActive),...observed});
     }
     accepted=Boolean(a[2]==='hide'?app.hide:app.terminate);
     if(a[2]==='hide'){const end=Date.now()+1000;while(!Boolean(app.isHidden)&&Date.now()<end)$.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.02));}
