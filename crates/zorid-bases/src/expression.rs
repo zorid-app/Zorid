@@ -1394,7 +1394,7 @@ fn expression_uses_file_ctime(expression: &Expr) -> bool {
             expression_uses_file_ctime(left) || expression_uses_file_ctime(right)
         }
         Expr::Member(object, member) => {
-            let ctime_member = matches!(object.as_ref(), Expr::Identifier(namespace) if namespace == "file")
+            let ctime_member = matches!(object.as_ref(), Expr::Identifier(namespace) if namespace.eq_ignore_ascii_case("file"))
                 && member_maybe_matches(member, &["ctime"]);
             ctime_member
                 || expression_uses_file_ctime(object)
@@ -4673,6 +4673,7 @@ mod rich_expression_tests {
         assert!(uses_relationships(
             "LINK('Note').ASFILE().properties.rating"
         ));
+        assert!(uses_file_ctime("FILE.CTIME"));
     }
 
     #[test]
