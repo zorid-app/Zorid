@@ -39,3 +39,8 @@ test('an own-save result refresh preserves an in-progress new group widget and i
   f.get<HTMLButtonElement>('Add group').click();const input=f.get<HTMLInputElement>('Group name');input.value='42';f.groups.update({...f.result,version:2},false);assert.equal(input.isConnected,true);assert.equal(input.value,'42');assert.throws(()=>f.groups.read(),/Finish or cancel/);f.get<HTMLButtonElement>('Create group').click();assert.deepEqual(f.groups.read(),[1,'1',42]);
  }finally{f.cleanup();}
 });
+
+
+test('other manual group actions cannot destroy a pending new-group input',()=>{
+ const f=fixture(true);try{f.get<HTMLButtonElement>('Add group').click();const input=f.get<HTMLInputElement>('Group name');input.value='42';f.doc.querySelector<HTMLInputElement>('[data-group-id] input')!.click();f.get<HTMLButtonElement>('Hide all groups').click();assert.equal(input.isConnected,true);assert.equal(input.value,'42');assert.throws(()=>f.groups.read(),/Finish or cancel/);f.get<HTMLButtonElement>('Create group').click();assert.deepEqual(f.groups.read(),[1,'1',42]);}finally{f.cleanup();}
+});

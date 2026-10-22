@@ -52,6 +52,7 @@ export function createBaseManualGroups(doc:Document,parent:HTMLElement,options:{
  }
  const attempt=(change:()=>void)=>{
   if(retired||!node.isConnected)return;
+  if(enteringGroup){options.error('Finish or cancel the new group first.');return;}
   const oldRows=rows.map(row=>({...row})),oldTail=tail;
   try{change();read();options.error('');options.changed();render();}catch(error){rows=oldRows;tail=oldTail;options.error(error instanceof Error?error.message:String(error));render();}
  };
@@ -81,7 +82,7 @@ export function createBaseManualGroups(doc:Document,parent:HTMLElement,options:{
   const add=doc.createElement('button');add.type='button';add.className='bases-toolbar-menu-item';add.setAttribute('aria-label','Add group');add.append(icon('plus',16,doc),doc.createTextNode('Add group'));
   add.addEventListener('click',()=>{
    if(retired||!add.isConnected)return;
-   enteringGroup=true;options.draft?.(true);
+   enteringGroup=true;options.draft?.(true);for(const check of node.querySelectorAll<HTMLInputElement>('input[type=checkbox]'))check.disabled=true;toggleAll.disabled=true;
    const editor=doc.createElement('div');editor.className='bases-manual-group-new';
    const input=doc.createElement('input');input.setAttribute('aria-label','Group name');input.placeholder='Group name';
    const commit=doc.createElement('button');commit.type='button';commit.textContent='Add';commit.setAttribute('aria-label','Create group');
@@ -91,7 +92,7 @@ export function createBaseManualGroups(doc:Document,parent:HTMLElement,options:{
     if(type==='checkbox'||type==='boolean'){if(!['true','false'].includes(input.value)){options.error('Enter true or false for this group.');return;}value=input.value==='true';}
     enteringGroup=false;options.draft?.(false);attempt(()=>{const key=baseExpressionValue(value),existing=rows.find(row=>baseValuesEqual(row.key,key,true));if(existing)existing.checked=true;else rows.push({identity:`new:${JSON.stringify(value)}`,key,count:0,checked:true,stored:value});});
    };
-   commit.addEventListener('click',create);input.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();event.stopPropagation();create();}if(event.key==='Escape'&&!event.isComposing){event.preventDefault();event.stopPropagation();enteringGroup=false;options.draft?.(false);editor.remove();add.hidden=false;add.focus();}});editor.append(input,commit);add.after(editor);add.hidden=true;input.focus();
+   commit.addEventListener('click',create);input.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();event.stopPropagation();create();}if(event.key==='Escape'&&!event.isComposing){event.preventDefault();event.stopPropagation();enteringGroup=false;options.draft?.(false);for(const check of node.querySelectorAll<HTMLInputElement>('input[type=checkbox]'))check.disabled=false;toggleAll.disabled=false;editor.remove();add.hidden=false;add.focus();}});editor.append(input,commit);add.after(editor);add.hidden=true;input.focus();
   });
   const any=rows.some(row=>row.checked),toggleAll=doc.createElement('button');toggleAll.type='button';toggleAll.className='bases-toolbar-menu-item';toggleAll.setAttribute('aria-label',any?'Hide all groups':'Show all groups');toggleAll.append(icon(any?'eye-off':'eye',16,doc),doc.createTextNode(any?'Hide all':'Show all'));
   toggleAll.addEventListener('click',()=>attempt(()=>{rows.forEach(row=>{row.checked=!any;});}));node.append(add,toggleAll);
