@@ -11,7 +11,7 @@ function setup(value: unknown, definition: BasePropertyDefinition, rest: Partial
   const element = dom.window.document.querySelector('div')!; const edits: BasePropertyWidgetEdit[] = [];
   const row = { path: 'A.md', values: { 'note.test': baseExpressionValue(value) }, entryId: 'stable-A' };
   const dispose = mountBasePropertyWidget(element, { row, property: 'note.test', value: baseExpressionValue(value), version: 14 }, {
-    getDefinition: () => definition, commit: edit => { edits.push(edit); }, ...rest,
+    getDefinition: () => definition, commit: edit => { edits.push(edit); return { version: typeof edit.version === 'number' ? edit.version + 1 : edit.version, row: edit.row, value: edit.value }; }, ...rest,
   });
   const click = () => element.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
   const input = () => dom.window.document.querySelector<HTMLInputElement>('input')!;
@@ -76,4 +76,30 @@ test('shared date-only editor honors the provided presentation timezone', () => 
   const value = { type: 'date' as const, timestamp: Date.parse('2026-01-01T16:00:00Z'), hasTime: false, presentationTimezone: 'Asia/Tokyo' };
   const dispose = mountBasePropertyWidget(element, { row: { path: 'A.md', values: {} }, property: 'note.date', value, version: 1 }, { getDefinition: () => ({ type: 'date' }), commit() {} });
   element.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })); assert.equal(element.querySelector('input')!.value, '2026-01-02'); dispose(); dom.window.close();
+});
+
+
+test('live chip changes rebase only through own successful acknowledgements', async () => {
+  const s = setup([], { type: 'list' }); s.click(); s.input().value = 'First'; s.key('Enter'); await tick();
+  assert.deepEqual(s.edits[0].value, baseExpressionValue(['First'])); assert.equal(s.edits[0].version, 14); assert.ok(s.dom.window.document.querySelector('.bases-property-popover'));
+  s.input().value = 'Second'; s.key('Enter'); await tick(); assert.equal(s.edits[1].version, 15); assert.deepEqual(s.edits[1].value, baseExpressionValue(['First', 'Second']));
+  s.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Remove First"]')!.click(); await tick(); assert.equal(s.edits[2].version, 16); assert.deepEqual(s.edits[2].value, baseExpressionValue(['Second'])); s.key('Escape'); assert.equal(s.element.textContent, 'Second'); s.close();
+});
+
+test('successful live chip edit without rebase acknowledgement closes instead of reusing stale version', async () => {
+  let count = 0; const s = setup([], { type: 'list' }, { commit: () => { count++; } }); s.click(); s.input().value = 'First'; s.key('Enter'); await tick();
+  assert.equal(count, 1); assert.equal(s.dom.window.document.querySelector('.bases-property-popover'), null); assert.equal(s.element.dataset.baseEditing, undefined); s.close();
+});
+
+test('disabled missing relation choices cannot be selected by Enter or exact-match blur', async () => {
+  const s = setup(null, { type: 'relation' }, { getRelationTargets: () => [{ path: 'Missing.md', label: 'Missing', missing: true }] });
+  s.click(); s.input().value = 'Missing'; s.input().dispatchEvent(new s.dom.window.Event('input', { bubbles: true })); assert.equal(s.dom.window.document.querySelector<HTMLButtonElement>('[role="option"]')!.disabled, true);
+  s.key('Enter'); await tick(); assert.equal(s.edits.length, 0); assert.equal(s.element.dataset.baseEditing, 'draft'); s.close();
+});
+
+test('create option can acknowledge its own config-only refresh before committing selection', async () => {
+  let definition: BasePropertyDefinition = { type: 'multiselect', options: [] }; const observed: number[] = [];
+  const s = setup([], definition, { getDefinition: () => definition, createOption: (_property, value, presentation) => { definition = { ...definition, options: [{ value }] }; return { version: Number(presentation.version) + 1, row: presentation.row }; }, commit: edit => { observed.push(Number(edit.version)); return { version: Number(edit.version) + 1, row: edit.row, value: edit.value }; } });
+  s.click(); s.input().value = 'New option'; s.input().dispatchEvent(new s.dom.window.Event('input', { bubbles: true })); s.dom.window.document.querySelector<HTMLButtonElement>('.bases-property-create-option')!.click(); await tick();
+  assert.deepEqual(observed, [15]); assert.equal(s.dom.window.document.querySelector('.is-unknown'), null); s.close();
 });

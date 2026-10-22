@@ -13,15 +13,22 @@ export interface BaseRelationTarget {
   readonly value?: string;
 }
 export interface BasePropertyWidgetEdit extends BasePropertyPresentation { readonly path: string; }
+/** Returned by the owner only after this editor's own successful mutation. The
+ * owner verifies saved identity/value and supplies its fresh query witness. */
+export interface BasePropertyWidgetAcknowledgement {
+  readonly version: BasePropertyPresentation['version'];
+  readonly row: BasePropertyPresentation['row'];
+  readonly value?: BaseExpressionValue;
+}
 export interface BasePropertyWidgetOptions {
   readonly getDefinition: (property: string) => BasePropertyDefinition | undefined;
-  readonly commit: (edit: BasePropertyWidgetEdit) => void | Promise<void>;
+  readonly commit: (edit: BasePropertyWidgetEdit) => void | BasePropertyWidgetAcknowledgement | Promise<void | BasePropertyWidgetAcknowledgement>;
   /** Targets are selected/resolved by Rust/the owning workspace, never by a TS query evaluator. */
   readonly getRelationTargets?: (property: string, presentation: BasePropertyPresentation) => readonly BaseRelationTarget[] | undefined;
   readonly openFile?: (path: string, event: MouseEvent | KeyboardEvent) => void;
   readonly readOnly?: (presentation: BasePropertyPresentation) => boolean;
   readonly isCurrent?: (presentation: BasePropertyPresentation) => boolean;
-  readonly createOption?: (property: string, value: string) => void | Promise<void>;
+  readonly createOption?: (property: string, value: string, presentation: BasePropertyPresentation) => void | BasePropertyWidgetAcknowledgement | Promise<void | BasePropertyWidgetAcknowledgement>;
   readonly onError?: (error: unknown) => void;
 }
 const str = (value: string): BaseExpressionValue => ({ type: 'string', value });
@@ -58,46 +65,60 @@ export function createBasePropertyRenderer(options: BasePropertyWidgetOptions): 
  * exact draft; disposal releases listeners/UI but never cancels an issued write. */
 export function mountBasePropertyWidget(element: HTMLElement, presentation: BasePropertyPresentation, options: BasePropertyWidgetOptions): () => void {
   const document = element.ownerDocument, win = document.defaultView;
-  const definition = options.getDefinition(presentation.property) ?? inferBasePropertyDefinition(presentation.value);
+  let definition = options.getDefinition(presentation.property) ?? inferBasePropertyDefinition(presentation.value);
   const type = definition.type;
   const editable = presentation.property.startsWith('note.') && /\.md$/i.test(presentation.row.path) && !options.readOnly?.(presentation) && type !== 'rollup' && type !== 'reverseRelation';
   const multiple = ['list', 'tags', 'multiselect'].includes(type) || (type === 'relation' && !!definition.relation?.multiple);
   const picker = multiple || ['select', 'status', 'relation', 'link'].includes(type);
+  let acceptedPresentation = presentation;
   let value = presentation.value, disposed = false, pending = false, editing = false, composing = false;
+  let finishAfterPending = false;
   let input: HTMLInputElement | undefined, popup: HTMLDivElement | undefined;
   let draftChanged = false;
   let draft: string[] = [], selected = 0, choices: { value: string; label: string; option?: BasePropertyOption; missing?: boolean }[] = [];
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const later = (fn: () => void) => { const timer = setTimeout(() => { timers.delete(timer); if (!disposed) fn(); }, 0); timers.add(timer); };
-  const current = () => !disposed && (options.isCurrent?.(presentation) ?? true);
+  const current = () => !disposed && (options.isCurrent?.(acceptedPresentation) ?? true);
   const report = (error: unknown) => { try { options.onError?.(error); } catch { /* report failures cannot discard the draft */ } };
   const mark = (state?: string) => { if (state) element.dataset.baseEditing = state; else element.removeAttribute('data-base-editing'); };
   const optionFor = (text: string) => definition.options?.find(option => option.value === text);
-  const targets = () => options.getRelationTargets?.(presentation.property, presentation) ?? [];
+  const targets = () => options.getRelationTargets?.(presentation.property, acceptedPresentation) ?? [];
   const targetValue = (target: BaseRelationTarget) => target.value ?? `[[${target.path.replace(/\.md$/i, '')}]]`;
   const targetFor = (text: string) => targets().find(target => targetValue(target) === text || target.path === text);
   const closePopup = () => { popup?.remove(); popup = undefined; document.removeEventListener('pointerdown', outside, true); win?.removeEventListener('resize', position); win?.removeEventListener('scroll', position, true); };
   const error = (failure: unknown) => {
-    if (!current()) return;
+    if (disposed) return;
     mark('draft'); element.classList.add('mod-error'); input?.setAttribute('aria-invalid', 'true');
     const message = failure instanceof Error ? failure.message : String(failure);
     element.title = message; if (popup) { let el = popup.querySelector<HTMLElement>('.bases-property-error'); if (!el) { el = document.createElement('div'); el.className = 'bases-property-error'; el.setAttribute('role', 'alert'); popup.append(el); } el.textContent = message; }
     report(failure);
   };
+  const acknowledge = (acknowledgement: BasePropertyWidgetAcknowledgement | void, next: BaseExpressionValue): boolean => {
+    if (!acknowledgement) return false;
+    if (acknowledgement.row.path !== acceptedPresentation.row.path) throw new Error('A property acknowledgement cannot retarget its file.');
+    acceptedPresentation = { ...acceptedPresentation, version: acknowledgement.version, row: acknowledgement.row, value: acknowledgement.value ?? next };
+    return true;
+  };
   const commit = async (next: BaseExpressionValue, keepOpen = false): Promise<boolean> => {
     if (!editable || !current() || pending) return false;
-    pending = true; mark('pending'); if (input) input.disabled = true;
+    pending = true; let accepted = false; mark('pending'); if (input) input.disabled = true;
     try {
-      await options.commit({ ...presentation, path: presentation.row.path, value: next });
-      value = next;
-      if (current()) {
+      const acknowledgement = await options.commit({ ...acceptedPresentation, path: acceptedPresentation.row.path, value: next });
+      const rebased = acknowledge(acknowledgement, next);
+      value = next; accepted = true;
+      if (!disposed) {
         element.classList.remove('mod-error');
-        if (keepOpen) { mark('draft'); input?.removeAttribute('aria-invalid'); }
+        if (keepOpen && rebased && current()) { draftChanged = false; mark('draft'); input?.removeAttribute('aria-invalid'); }
         else { editing = false; closePopup(); draw(); }
       }
       return true;
     } catch (failure) { error(failure); return false; }
-    finally { pending = false; if (current() && input) input.disabled = false; }
+    finally {
+      pending = false;
+      if (!disposed && accepted && finishAfterPending && editing) { editing = false; closePopup(); draw(); }
+      if (!disposed && input) { input.disabled = false; if (keepOpen && editing && !finishAfterPending) input.focus(); }
+      finishAfterPending = false;
+    }
   };
   function chip(text: string, removable = false, index = -1): HTMLElement {
     const pill = document.createElement('span'); pill.className = 'multi-select-pill'; pill.tabIndex = 0;
@@ -117,10 +138,10 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (removable) {
       const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'multi-select-pill-remove-button'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${text}`);
       remove.addEventListener('mousedown', event => event.preventDefault());
-      remove.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); if (!pending) { draft.splice(index, 1); draftChanged = true; renderEditor(); input?.focus(); } }); pill.append(remove);
+      remove.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); if (!pending) { draft.splice(index, 1); draftChanged = true; renderEditor(); input?.focus(); void saveDraft(); } }); pill.append(remove);
       pill.addEventListener('keydown', event => {
         if (event.isComposing || pending) return;
-        if (event.key === 'Backspace' || event.key === 'Delete') { event.preventDefault(); event.stopPropagation(); draft.splice(index, 1); draftChanged = true; renderEditor(); input?.focus(); }
+        if (event.key === 'Backspace' || event.key === 'Delete') { event.preventDefault(); event.stopPropagation(); draft.splice(index, 1); draftChanged = true; renderEditor(); input?.focus(); void saveDraft(); }
         else if (event.key === 'Escape' || event.key === 'ArrowDown') { event.preventDefault(); input?.focus(); }
         else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); const sibling = event.key === 'ArrowLeft' ? pill.previousElementSibling : pill.nextElementSibling; (sibling as HTMLElement | null)?.focus(); }
       });
@@ -166,8 +187,9 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     popup.style.width = `${width}px`; popup.style.top = `${Math.max(4, Math.min(rect.bottom + 4, (win?.innerHeight ?? 768) - Math.min(popup.scrollHeight || 200, 320) - 4))}px`;
   }
   function outside(event: PointerEvent) {
-    if (!editing || pending || composing || element.contains(event.target as Node) || popup?.contains(event.target as Node)) return;
-    void finish();
+    if (!editing || element.contains(event.target as Node) || popup?.contains(event.target as Node)) return;
+    if (pending) { finishAfterPending = true; return; }
+    if (!composing) void finish();
   }
   function cancel() {
     if (pending) return;
@@ -184,21 +206,26 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       : (definition.options ?? []).map(option => ({ value: option.value, label: option.label ?? option.value, option }));
     choices = all.filter(choice => (!multiple || !draft.includes(choice.value)) && (choice.label.toLocaleLowerCase().includes(needle) || choice.value.toLocaleLowerCase().includes(needle)));
     selected = Math.max(0, Math.min(selected, choices.length - 1));
+    if (choices[selected]?.missing) selected = choices.findIndex(choice => !choice.missing);
     choices.forEach((choice, index) => {
       const row = document.createElement('button'); row.type = 'button'; row.className = `suggestion-item${index === selected ? ' is-selected' : ''}`; row.id = `${list.id}-${index}`; row.setAttribute('role', 'option'); row.setAttribute('aria-selected', String(index === selected)); row.textContent = choice.label; row.disabled = !!choice.missing;
       row.addEventListener('mousedown', event => event.preventDefault()); row.addEventListener('click', () => { void choose(choice.value); }); list.append(row);
     });
-    if (choices[selected]) input.setAttribute('aria-activedescendant', `${list.id}-${selected}`); else input.removeAttribute('aria-activedescendant');
+    if (choices[selected] && !choices[selected].missing) input.setAttribute('aria-activedescendant', `${list.id}-${selected}`); else input.removeAttribute('aria-activedescendant');
     if (input.value && options.createOption && ['select', 'multiselect', 'status'].includes(type) && !definition.options?.some(option => option.value === input!.value)) {
-      const add = document.createElement('button'); add.type = 'button'; add.className = 'suggestion-item bases-property-create-option'; add.textContent = `Create “${input.value}”`; add.addEventListener('mousedown', event => event.preventDefault()); add.addEventListener('click', async () => { if (pending) return; const next = input!.value; pending = true; mark('pending'); try { await options.createOption!(presentation.property, next); pending = false; mark('draft'); await choose(next); } catch (failure) { pending = false; error(failure); } }); list.append(add);
+      const add = document.createElement('button'); add.type = 'button'; add.className = 'suggestion-item bases-property-create-option'; add.textContent = `Create “${input.value}”`; add.addEventListener('mousedown', event => event.preventDefault()); add.addEventListener('click', async () => { if (pending) return; const next = input!.value; pending = true; mark('pending'); if (input) input.disabled = true; try { const acknowledgement = await options.createOption!(presentation.property, next, acceptedPresentation); acknowledge(acknowledgement, value); const updated = options.getDefinition(presentation.property); if (updated?.type === type) definition = updated; pending = false; if (!current()) { editing = false; closePopup(); draw(); report(new Error('Option created. Reopen the property to use the refreshed definition.')); return; } mark('draft'); if (input) input.disabled = false; await choose(next); } catch (failure) { pending = false; if (input) input.disabled = false; error(failure); } }); list.append(add);
     }
-    if (!list.children.length) { const empty = document.createElement('div'); empty.className = 'suggestion-empty'; empty.textContent = type === 'relation' && definition.relation?.targetFilter && options.getRelationTargets?.(presentation.property, presentation) === undefined ? 'Relation choices are unavailable until the shared index is ready.' : ['list', 'tags'].includes(type) ? 'Type a value and press Enter' : 'No matching options'; list.append(empty); }
+    if (!list.children.length) { const empty = document.createElement('div'); empty.className = 'suggestion-empty'; empty.textContent = type === 'relation' && definition.relation?.targetFilter && options.getRelationTargets?.(presentation.property, acceptedPresentation) === undefined ? 'Relation choices are unavailable until the shared index is ready.' : ['list', 'tags'].includes(type) ? 'Type a value and press Enter' : 'No matching options'; list.append(empty); }
     popup.append(list); position();
   }
   async function choose(next: string) {
     if (!current() || pending) return;
-    if (multiple) { if (!draft.includes(next)) { draft.push(next); draftChanged = true; } if (input) input.value = ''; renderEditor(); input?.focus(); }
+    if (choices.find(choice => choice.value === next)?.missing || ((type === 'relation' || type === 'link') && targetFor(next)?.missing)) { error(new Error('This related note is unavailable. Choose another note.')); return; }
+    if (multiple) { if (!draft.includes(next)) { draft.push(next); draftChanged = true; } if (input) input.value = ''; renderEditor(); input?.focus(); await saveDraft(); }
     else await commit(str(next));
+  }
+  async function saveDraft() {
+    if (multiple && draftChanged) await commit({ type: 'list', value: draft.map(str) }, true);
   }
   function renderEditor() {
     if (!popup || !input) return;
@@ -220,7 +247,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
           next = { type: 'list', value: draft.map(str) };
         } else {
           if (input.value === inputText(value, definition)) { cancel(); return; }
-          const choice = choices.find(choice => choice.value === input!.value || choice.label === input!.value);
+          const choice = choices.find(choice => !choice.missing && (choice.value === input!.value || choice.label === input!.value));
           if (input.value && !choice && ['select', 'status', 'relation'].includes(type)) { error(new Error('Choose a matching option.')); return; }
           next = input.value ? str(choice?.value ?? input.value) : BASE_NULL;
         }
@@ -250,10 +277,10 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       event.stopPropagation();
       if (composing || event.isComposing || pending) return;
       if (event.key === 'Escape') { event.preventDefault(); cancel(); }
-      else if (picker && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); selected = Math.max(0, Math.min(choices.length - 1, selected + (event.key === 'ArrowDown' ? 1 : -1))); renderChoices(); }
+      else if (picker && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); const direction = event.key === 'ArrowDown' ? 1 : -1; let next = selected + direction; while (next >= 0 && next < choices.length && choices[next].missing) next += direction; if (next >= 0 && next < choices.length) selected = next; renderChoices(); }
       else if (event.key === 'Enter') {
         event.preventDefault();
-        if (picker && choices[selected] && input?.value) void choose(choices[selected].value);
+        if (picker && choices[selected] && !choices[selected].missing && input?.value) void choose(choices[selected].value);
         else if (multiple && input?.value && ['list', 'tags'].includes(type)) void choose(input.value);
         else void finish();
       } else if (multiple && (event.key === 'Backspace' || event.key === 'ArrowLeft') && !input?.value && draft.length) { event.preventDefault(); popup?.querySelectorAll<HTMLElement>('.multi-select-pill')[draft.length - 1]?.focus(); }

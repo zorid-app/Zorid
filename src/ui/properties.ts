@@ -155,7 +155,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
         throw new Error('This property result cannot be stored in a note.');
       };
       row.disposeWidget = mountBasePropertyWidget(row.value, { property: `note.${row.key}`, value: baseExpressionValue(value), row: { path: options.path ?? 'Note.md', values: {} }, version: 0 }, {
-        getDefinition: () => definition,
+        getDefinition: () => definitionFor(row.key) ?? definition,
         isCurrent: () => live() && rows.get(row.key) === row,
         openFile: (path) => options.openLink?.(path),
         getRelationTargets: () => options.getRelationTargets?.(row.key, definition) ?? (!definition.relation?.targetFilter ? [...(options.vault?.entries.values() ?? [])].filter(entry => entry.type === 'file' && /\.md$/i.test(entry.path)).map(entry => ({ path: entry.path, label: entry.path.replace(/\.md$/i, ''), entryId: entry.entryId })) : undefined),
@@ -168,9 +168,21 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
             if (next !== source) await options.onChange(next);
             baseline = JSON.stringify(toPlain(edit.value)); error(row.error);
             if (live()) queueMicrotask(() => { if (live()) refresh(); });
+            return { version: 0, row: edit.row, value: edit.value };
           });
-          pending = operation.catch(() => {}); return operation;
+          pending = operation.then(() => {}, () => {}); return operation;
         },
+        ...(options.onPropertyDefinitionChange ? { createOption: (_property: string, value: string, presentation: import('../bases/presentation-common.ts').BasePropertyPresentation) => {
+          const operation = pending.then(async () => {
+            if (!live() || rows.get(row.key) !== row || JSON.stringify(current(options.getSource(), row).value) !== baseline) throw new Error('This property changed before the option could be created.');
+            const latest = definitionFor(row.key) ?? definition;
+            await options.onPropertyDefinitionChange!(row.key, { ...latest, options: [...latest.options ?? [], { value }] });
+            await loadDefinitions();
+            if (!live() || JSON.stringify(current(options.getSource(), row).value) !== baseline) throw new Error('This property changed while the option was created; the draft is preserved.');
+            return { version: 0, row: presentation.row, value: baseExpressionValue(current(options.getSource(), row).value) };
+          });
+          pending = operation.then(() => {}, () => {}); return operation;
+        } } : {}),
         onError: problem => report(problem, row.error),
       });
       return;
