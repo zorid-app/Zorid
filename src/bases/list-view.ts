@@ -38,12 +38,12 @@ export function createBaseListView(container: HTMLElement, options: BaseListView
       if (options.dragFile && (property === 'file.name' || property === 'file.file')) {
         value.draggable = true;
         value.addEventListener('dragstart', event => {
-          if (!current()) { event.preventDefault(); return; }
+          if (!current() || !value.isConnected || !container.contains(value)) { event.preventDefault(); return; }
           if (event.defaultPrevented || (event.target as Element | null)?.closest('input,textarea,select,button,[contenteditable="true"]')) return;
           const selection = document.defaultView?.getSelection();
           if (selection && !selection.isCollapsed) for (let index = 0; index < selection.rangeCount; index++) {
             const range = selection.getRangeAt(index);
-            if (value.contains(range.startContainer) || value.contains(range.endContainer)) return;
+            if (range.intersectsNode(value)) return;
           }
           options.dragFile!(row, event);
         });

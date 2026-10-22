@@ -44,3 +44,17 @@ test('drag hook leaves modifier and middle-click file opening ownership unchange
   assert.deepEqual(opened, [modified, middle].map(event => ({path: 'Items/Alpha.md', event, witness: {entryId: 'alpha', revision: 'r1'}})));
   view.destroy(); dom.window.close();
 });
+
+test('an enclosing list-row text selection owns dragging its filename', () => {
+  const {dom, container, result, drag} = setup(); let calls = 0;
+  const view = createBaseListView(container, {result, openFile() {}, dragFile() {calls++;}});
+  const range = dom.window.document.createRange(); range.selectNodeContents(container.querySelector('.bases-list-item-properties')!); dom.window.getSelection()!.addRange(range);
+  assert.equal(drag(container.querySelector('a')!).event.defaultPrevented, false); assert.equal(calls, 0);
+  view.destroy(); dom.window.close();
+});
+test('disconnecting a file property directly invalidates its retained native drag source', () => {
+  const {dom, container, result, drag} = setup(); let calls = 0;
+  const view = createBaseListView(container, {result, openFile() {}, dragFile() {calls++;}});
+  const value = container.querySelector('[data-property="file.name"]')!, link = value.querySelector('a')!; value.remove();
+  assert.equal(drag(link).event.defaultPrevented, true); assert.equal(calls, 0); view.destroy(); dom.window.close();
+});
