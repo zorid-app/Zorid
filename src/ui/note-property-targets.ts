@@ -1,4 +1,5 @@
 import type { Vault } from '../core/vault.ts';
+import type { CommittedMetadataState } from '../core/committed-metadata-frame.ts';
 import { createBaseClockHost } from '../bases/clock.ts';
 import type { BaseClockHost } from '../bases/clock.ts';
 import { closePropertyTargetQueries, isPlainPropertyValue, queryPropertyTargets } from '../bases/property-targets.ts';
@@ -67,10 +68,23 @@ export function createNotePropertyTargets(options: {
   }
   if (service?.propertyTargetsAvailable) {
     for (const event of ['create', 'modify', 'delete', 'rename', 'ready'] as const) stops.push(vault.on(event, invalidate));
-    let metadataSignature = '';
+    const metadataWitness = (state: CommittedMetadataState | undefined) => JSON.stringify([state?.frame?.source, state?.frame?.snapshot, state?.frame?.coverageComplete]);
+    let metadataState = vault.metadataFrame, metadataNotification = 0;
+    const metadataSignature = (state: CommittedMetadataState | undefined) => `${state?.status}:${metadataWitness(state)}`;
     stops.push(vault.onMetadata(state => {
-      const signature = JSON.stringify([state.status, state.frame?.source, state.frame?.snapshot]);
-      if (signature !== metadataSignature) { metadataSignature = signature; invalidate(); }
+      const notification = ++metadataNotification;
+      const apply = () => {
+        if (disposed || notification !== metadataNotification) return;
+        if (metadataSignature(state) !== metadataSignature(metadataState)) { metadataState = state; invalidate(); }
+      };
+      // A current runtime phase update makes the committed projection publish
+      // stale/current synchronously for the same sealed frame. Cancelling here
+      // would abort this manager's own freshness demand and repeat indefinitely.
+      // Defer only that possible transient: persistent stale still invalidates,
+      // while a changed witness, coverage or unavailable state acts immediately.
+      if (state.status === 'stale' && metadataState?.status === 'current' && state.frame
+        && metadataWitness(state) === metadataWitness(metadataState)) queueMicrotask(apply);
+      else apply();
     }));
     if (service.maintenance) {
       let runtimeSignature = '';
