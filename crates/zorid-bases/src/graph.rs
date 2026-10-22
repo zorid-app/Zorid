@@ -397,6 +397,8 @@ impl OwnedRelationships {
                         .path
                         .capacity()
                         .checked_add(link.subpath.as_ref().map_or(0, String::capacity))?
+                        .checked_add(link.raw_destination.as_ref().map_or(0, String::capacity))?
+                        .checked_add(link.source_path.as_ref().map_or(0, String::capacity))?
                         .checked_add(link.display.as_ref().map_or(0, String::capacity))?
                         .checked_add(
                             link.resolved_path
@@ -428,21 +430,48 @@ impl OwnedRelationships {
     ) -> Result<Self, ExpressionDiagnostic> {
         let mut files: HashMap<EntryId, FileRelations> = HashMap::new();
         let mut incoming = HashSet::new();
+        let mut identity_bytes = 0usize;
+        fn admit_identity(
+            bytes: usize,
+            total: &mut usize,
+            check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+        ) -> Result<(), ExpressionDiagnostic> {
+            check(1 + bytes / 16)?;
+            *total = total
+                .checked_add(bytes)
+                .filter(|total| *total <= 8 * 1024 * 1024)
+                .ok_or_else(|| {
+                    ExpressionDiagnostic::new(
+                        "budget",
+                        "Captured body-link identity exceeds byte budget",
+                    )
+                })?;
+            Ok(())
+        }
         for edge in graph.edges() {
             check(1)?;
+            let external=zorid_index::is_external_destination(&edge.link().destination).map_err(index_error)?;
+            let bytes = if external{0}else{edge
+                .link()
+                .destination
+                .len()
+                .saturating_add(edge.source().path.as_str().len())
+                .saturating_mul(if edge.link().embed { 2 } else { 1 })};
+            admit_identity(bytes, &mut identity_bytes, check)?;
             let target = edge.target().map(|entry| RecordWitness {
                 entry_id: entry.id.clone(),
                 revision: entry.revision.clone(),
             });
             let link = BasesLink {
+                raw_destination: (!external).then(||edge.link().destination.clone()),
+                source_path: (!external).then(||edge.source().path.as_str().into()),
                 subpath: crate::expression::link_subpath(&edge.link().destination),
                 path: edge.link().destination.clone(),
                 target,
                 display: None,
                 display_value: None,
                 resolved_path: Some(edge.target().map(|e| e.path.as_str().into())),
-                external: zorid_index::is_external_destination(&edge.link().destination)
-                    .map_err(index_error)?,
+                external,
             };
             let outgoing = files.entry(edge.source().id.clone()).or_default();
             outgoing.links.push(link.clone());
@@ -451,11 +480,18 @@ impl OwnedRelationships {
             }
             if let Some(target) = edge.target() {
                 if incoming.insert((target.id.clone(), edge.source().id.clone())) {
+                    admit_identity(
+                        edge.source().path.as_str().len(),
+                        &mut identity_bytes,
+                        check,
+                    )?;
                     files
                         .entry(target.id.clone())
                         .or_default()
                         .backlinks
                         .push(BasesLink {
+                            raw_destination: Some(edge.source().path.as_str().into()),
+                            source_path: Some(String::new()),
                             subpath: None,
                             path: edge.source().path.as_str().into(),
                             target: Some(RecordWitness {
@@ -652,6 +688,8 @@ impl<'a> PreparedRelationships<'a> {
                 bytes = bytes
                     .saturating_add(std::mem::size_of::<BasesLink>())
                     .saturating_add(link.path.len())
+                    .saturating_add(link.raw_destination.as_ref().map_or(0, String::len))
+                    .saturating_add(link.source_path.as_ref().map_or(0, String::len))
                     .saturating_add(link.display.as_ref().map_or(0, String::len))
                     .saturating_add(
                         link.resolved_path

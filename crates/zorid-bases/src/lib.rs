@@ -295,10 +295,122 @@ fn runtime_value(
         }
     })
 }
+/// Conservative admission for source identity copied into inferred links.
+/// Count possible captured wiki strings before parsing, so short links under a long
+/// owning path cannot bypass shared-context memory/work limits.
+pub(crate) fn frontmatter_link_identity_bytes(
+    record: &DetachedRecord,
+) -> Result<usize, ExpressionDiagnostic> {
+    fn visit(
+        value: &PropertyValue,
+        path_bytes: usize,
+        depth: usize,
+        bytes: &mut usize,
+    ) -> Result<(), ExpressionDiagnostic> {
+        if depth > 64 {
+            return Err(ExpressionDiagnostic::new(
+                "budget",
+                "Frontmatter link identity exceeds depth budget",
+            ));
+        }
+        match value {
+            PropertyValue::String(value) if value.starts_with("[[") && value.ends_with("]]") => {
+                *bytes = bytes
+                    .checked_add(value.len().saturating_add(path_bytes).saturating_add(64))
+                    .filter(|bytes| *bytes <= 8 * 1024 * 1024)
+                    .ok_or_else(|| {
+                        ExpressionDiagnostic::new(
+                            "budget",
+                            "Frontmatter link identity exceeds byte budget",
+                        )
+                    })?;
+            }
+            PropertyValue::Array(values) => {
+                for value in values {
+                    visit(value, path_bytes, depth + 1, bytes)?;
+                }
+            }
+            PropertyValue::Object(values) => {
+                for (_, value) in values {
+                    visit(value, path_bytes, depth + 1, bytes)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    let mut bytes = 0;
+    for (_, value) in &record.properties {
+        visit(value, record.path.len(), 0, &mut bytes)?;
+    }
+    Ok(bytes)
+}
+fn bind_frontmatter_link_identity(
+    value: &mut expression::RuntimeValue,
+    source_path: &str,
+    depth: usize,
+    bytes: &mut usize,
+) -> Result<(), ExpressionDiagnostic> {
+    use expression::RuntimeValue;
+    if depth > 64 {
+        return Err(ExpressionDiagnostic::new(
+            "budget",
+            "Frontmatter link identity exceeds depth budget",
+        ));
+    }
+    match value {
+        RuntimeValue::Link(link) if !link.external => {
+            let added = link
+                .raw_destination
+                .is_none()
+                .then_some(link.path.len())
+                .unwrap_or(0)
+                .saturating_add(
+                    link.source_path
+                        .is_none()
+                        .then_some(source_path.len())
+                        .unwrap_or(0),
+                );
+            *bytes = bytes
+                .checked_add(added)
+                .filter(|bytes| *bytes <= 8 * 1024 * 1024)
+                .ok_or_else(|| {
+                    ExpressionDiagnostic::new(
+                        "budget",
+                        "Frontmatter link identity exceeds byte budget",
+                    )
+                })?;
+            if link.raw_destination.is_none() {
+                link.raw_destination = Some(link.path.clone());
+            }
+            // An absent detached note path is unknown context, not an explicit
+            // ROOT constructor. Only actual files supply frontmatter origin.
+            if link.source_path.is_none() && !source_path.is_empty() {
+                link.source_path = Some(source_path.into());
+            }
+            if let Some(display) = link.display_value.as_deref_mut() {
+                bind_frontmatter_link_identity(display, source_path, depth + 1, bytes)?;
+            }
+        }
+        RuntimeValue::List(values) => {
+            for value in values {
+                bind_frontmatter_link_identity(value, source_path, depth + 1, bytes)?;
+            }
+        }
+        RuntimeValue::Object(values) => {
+            for value in values.values_mut() {
+                bind_frontmatter_link_identity(value, source_path, depth + 1, bytes)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
 fn runtime_file(
     record: &DetachedRecord,
     timezone: &expression::BasesTimezone,
 ) -> Result<expression::BasesFile, ExpressionDiagnostic> {
+    frontmatter_link_identity_bytes(record)?;
     if (record.path.is_empty() && record.witness.is_some())
         || record.path.starts_with('/')
         || record.path.contains('\\')
@@ -359,10 +471,9 @@ fn runtime_file(
         } else {
             value
         };
-        properties.insert(
-            key.clone(),
-            expression::infer_frontmatter_property(key, value, timezone),
-        );
+        let mut value = expression::infer_frontmatter_property(key, value, timezone);
+        bind_frontmatter_link_identity(&mut value, &record.path, 0, &mut bytes)?;
+        properties.insert(key.clone(), value);
     }
     if hints.keys().any(|name| !properties.contains_key(*name)) {
         return Err(ExpressionDiagnostic::new(
@@ -487,6 +598,29 @@ pub(crate) fn with_session_files<T>(
     }
     let timezone = expression::BasesTimezone::from_setting(Some(&options.timezone))
         .map_err(|message| ExpressionDiagnostic::new("input", message))?;
+    let mut property_work = 0usize;
+    if shared_files.is_none() {
+        for record in std::iter::once(record).chain(options.current_record.iter()) {
+            if options
+                .cancellation
+                .as_ref()
+                .is_some_and(|cancel| cancel.is_cancelled())
+            {
+                return Err(ExpressionDiagnostic::new(
+                    "cancelled",
+                    "Evaluation cancelled",
+                ));
+            }
+            property_work =
+                property_work.saturating_add(1 + frontmatter_link_identity_bytes(record)? / 16);
+            if property_work > options.max_steps {
+                return Err(ExpressionDiagnostic::new(
+                    "budget",
+                    "Frontmatter link identity exceeds work budget",
+                ));
+            }
+        }
+    }
     let captured_file =
         |record: &DetachedRecord| -> Result<expression::BasesFile, ExpressionDiagnostic> {
             if let Some(files) = &shared_files {
@@ -547,7 +681,6 @@ pub(crate) fn with_session_files<T>(
     if let Some(file) = this_file.as_mut() {
         resolve(file)?;
     }
-    let mut property_work = 0usize;
     if let Some(derived) = property_values {
         for file in std::iter::once(&mut file).chain(this_file.iter_mut()) {
             if let Some(row) = file
@@ -556,10 +689,34 @@ pub(crate) fn with_session_files<T>(
                 .and_then(|w| derived.rows().get(&w.entry_id))
             {
                 property_work = property_work
-                    .saturating_add(1 + encoded_size(&row.values, 8 * 1024 * 1024)? / 16);
+                    .saturating_add(1 + encoded_size(&row.values, 8 * 1024 * 1024)? / 16)
+                    .saturating_add(
+                        file.witness.as_ref().map_or(0, |witness| {
+                            derived.attachment_shape_bytes(&witness.entry_id)
+                        }) / 16,
+                    );
             }
             if shared_files.is_none() {
-                derived.attach(file, &timezone)?;
+                derived.attach(file, &timezone, &mut |work| {
+                    property_work = property_work.saturating_add(work);
+                    if options
+                        .cancellation
+                        .as_ref()
+                        .is_some_and(|cancel| cancel.is_cancelled())
+                    {
+                        return Err(ExpressionDiagnostic::new(
+                            "cancelled",
+                            "Evaluation cancelled",
+                        ));
+                    }
+                    if property_work > options.max_steps {
+                        return Err(ExpressionDiagnostic::new(
+                            "budget",
+                            "Derived runtime provenance exceeds work budget",
+                        ));
+                    }
+                    Ok(())
+                })?;
             }
         }
     }

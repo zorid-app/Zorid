@@ -87,6 +87,16 @@ pub(crate) fn hydrate(
             .map(|row| crate::encoded_size(&row.values, MAX_CONTEXT_BYTES))
             .transpose()?
             .unwrap_or(0);
+        let provenance_bytes = crate::frontmatter_link_identity_bytes(record)?.saturating_add(
+            record
+                .witness
+                .as_ref()
+                .and_then(|witness| {
+                    properties
+                        .map(|properties| properties.attachment_shape_bytes(&witness.entry_id))
+                })
+                .unwrap_or(0),
+        );
         let graph_bytes = relationships
             .map(|graph| graph.attachment_bytes(record.witness.as_ref(), check))
             .transpose()?
@@ -94,12 +104,14 @@ pub(crate) fn hydrate(
         let estimate = source_bytes
             .saturating_add(overlay_bytes)
             .saturating_mul(24)
+            .saturating_add(provenance_bytes.saturating_mul(4))
             .saturating_add(graph_bytes.saturating_mul(4))
             .saturating_add(2048);
         check(
             1usize
                 .saturating_add(source_bytes / 16)
                 .saturating_add(overlay_bytes / 16)
+                .saturating_add(provenance_bytes / 16)
                 .saturating_add(graph_bytes / 64),
         )?;
         bytes = bytes
@@ -129,7 +141,7 @@ pub(crate) fn hydrate(
             })?;
         }
         if let Some(properties) = properties {
-            properties.attach(&mut file, timezone)?;
+            properties.attach(&mut file, timezone, check)?;
         }
         file.metadata_unavailable |= record
             .witness

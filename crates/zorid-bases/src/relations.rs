@@ -9,6 +9,7 @@ use crate::{
     ExpressionDiagnostic, IndexSnapshotId, PropertyValue, QueryOptions, RecordWitness,
 };
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use zorid_core::{EntryId, Revision};
 
@@ -37,6 +38,14 @@ pub struct PropertyRelationRow {
     pub values: BTreeMap<String, BaseValue>,
 }
 
+/// Runtime-only evidence captured before display projection. This sealed map is
+/// never reconstructed from serialized cells or caller-authored metadata.
+#[derive(Clone, Debug)]
+struct CapturedShape {
+    shape: crate::expression::TagShape,
+    bytes: usize,
+}
+
 /// Produced only from a real graph plus generation-verified settings. Its map
 /// participates in ordinary query evaluation, never a second frontend evaluator.
 #[derive(Clone, Debug, Serialize)]
@@ -48,6 +57,8 @@ pub struct PropertyRelationValues {
     read_only_property_names: BTreeSet<String>,
     relation_targets: BTreeMap<String, Vec<RelationTarget>>,
     rows: BTreeMap<EntryId, PropertyRelationRow>,
+    #[serde(skip)]
+    runtime_shapes: BTreeMap<EntryId, BTreeMap<String, CapturedShape>>,
     diagnostics: Vec<PropertyRelationDiagnostic>,
     definition_diagnostics: Vec<PropertyDefinitionDiagnostic>,
     clock_dependency: BaseClockDependency,
@@ -88,6 +99,13 @@ impl PropertyRelationValues {
     pub fn relation_targets(&self) -> &BTreeMap<String, Vec<RelationTarget>> {
         &self.relation_targets
     }
+    pub(crate) fn attachment_shape_bytes(&self, entry: &EntryId) -> usize {
+        self.runtime_shapes.get(entry).map_or(0, |properties| {
+            properties
+                .values()
+                .fold(0usize, |bytes, shape| bytes.saturating_add(shape.bytes))
+        })
+    }
     pub(crate) fn validate_context(
         &self,
         options: &EvaluationOptions,
@@ -104,6 +122,7 @@ impl PropertyRelationValues {
         &self,
         file: &mut BasesFile,
         timezone: &BasesTimezone,
+        check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
     ) -> Result<(), ExpressionDiagnostic> {
         let Some(witness) = file.witness.as_ref() else {
             return Ok(());
@@ -118,14 +137,22 @@ impl PropertyRelationValues {
             ));
         }
         for (name, value) in &row.values {
+            check(1)?;
             let replacement = crate::expression::runtime_from_base_value(value, timezone)?;
             // Configured value projection must preserve the captured native
             // tags subclass; an arbitrary list/property/formula name is not
             // evidence that it came from frontmatter tags.
-            let replacement = crate::expression::preserve_frontmatter_tag_list(
+            let mut replacement = crate::expression::preserve_frontmatter_tag_list(
                 file.properties.get(name),
                 replacement,
             );
+            if let Some(shape) = self
+                .runtime_shapes
+                .get(&witness.entry_id)
+                .and_then(|shapes| shapes.get(name))
+            {
+                crate::expression::restore_runtime_shape(&mut replacement, &shape.shape, check)?;
+            }
             file.properties.insert(name.clone(), replacement);
         }
         Ok(())
@@ -139,6 +166,20 @@ struct Budget<'a> {
     output_bytes: usize,
 }
 impl Budget<'_> {
+    fn reserve(&mut self, bytes: usize) -> Result<(), ExpressionDiagnostic> {
+        self.charge(1 + bytes / 16)?;
+        self.output_bytes = self
+            .output_bytes
+            .checked_add(bytes)
+            .filter(|bytes| *bytes <= self.options.max_output_bytes.min(8 * 1024 * 1024))
+            .ok_or_else(|| {
+                ExpressionDiagnostic::new(
+                    "budget",
+                    "Property runtime provenance exceeds byte budget",
+                )
+            })?;
+        Ok(())
+    }
     fn charge(&mut self, work: usize) -> Result<(), ExpressionDiagnostic> {
         if self
             .options
@@ -185,10 +226,82 @@ impl Budget<'_> {
 #[derive(Clone, Debug)]
 struct RelationState {
     value: BaseValue,
+    shape: Option<CapturedShape>,
     targets: Vec<EntryId>,
     valid: bool,
 }
 type RelationKey = (EntryId, String);
+
+fn copy_shape(
+    shape: Option<&CapturedShape>,
+    budget: &mut Budget<'_>,
+) -> Result<Option<CapturedShape>, ExpressionDiagnostic> {
+    shape
+        .map(|shape| {
+            budget.reserve(shape.bytes)?;
+            Ok(shape.clone())
+        })
+        .transpose()
+}
+fn list_shape(
+    shapes: Vec<Option<CapturedShape>>,
+    budget: &mut Budget<'_>,
+) -> Result<Option<CapturedShape>, ExpressionDiagnostic> {
+    budget.charge(shapes.len())?;
+    let count = shapes.iter().filter(|shape| shape.is_some()).count();
+    if count == 0 {
+        return Ok(None);
+    }
+    let slots = count.saturating_mul(std::mem::size_of::<(usize, crate::expression::TagShape)>());
+    budget.reserve(slots)?;
+    let mut indexed = Vec::with_capacity(count);
+    let mut bytes = slots;
+    for (index, shape) in shapes.into_iter().enumerate() {
+        if let Some(shape) = shape {
+            bytes = bytes.saturating_add(shape.bytes);
+            indexed.push((index, shape.shape));
+        }
+    }
+    Ok(Some(CapturedShape {
+        shape: crate::expression::TagShape::List(indexed),
+        bytes,
+    }))
+}
+fn link_shape(
+    value: &BaseValue,
+    raw_destination: &str,
+    source_path: &str,
+    timezone: &BasesTimezone,
+    budget: &mut Budget<'_>,
+) -> Result<Option<CapturedShape>, ExpressionDiagnostic> {
+    // Admit temporary materialization and its actual source strings before any
+    // cloning. Public DTO fields do not supply the source identity.
+    let temporary = crate::encoded_size(value, 8 * 1024 * 1024)?
+        .saturating_mul(8)
+        .saturating_add(raw_destination.len())
+        .saturating_add(source_path.len())
+        .saturating_add(256);
+    budget.reserve(temporary)?;
+    let mut runtime = crate::expression::runtime_from_base_value(value, timezone)?;
+    if let crate::expression::RuntimeValue::Link(link) = &mut runtime {
+        if !link.external {
+        link.raw_destination = Some(raw_destination.into());
+        link.source_path = Some(source_path.into());
+        }
+    }
+    let mut bytes = 0usize;
+    let budget = RefCell::new(budget);
+    let shape = crate::expression::capture_runtime_shape(
+        &runtime,
+        &mut |work| budget.borrow_mut().charge(work),
+        &mut |added| {
+            budget.borrow_mut().reserve(added)?;
+            bytes = bytes.saturating_add(added);
+            Ok(())
+        },
+    )?;
+    Ok(shape.map(|shape| CapturedShape { shape, bytes }))
+}
 
 fn error(code: &str, message: impl Into<String>) -> BaseValue {
     BaseValue::Error {
@@ -292,6 +405,7 @@ pub fn query_property_relations(
             .collect(),
         relation_targets: BTreeMap::new(),
         rows: BTreeMap::new(),
+        runtime_shapes: BTreeMap::new(),
         diagnostics: Vec::new(),
         definition_diagnostics: definitions.diagnostics().to_vec(),
         clock_dependency: BaseClockDependency::None,
@@ -591,6 +705,7 @@ pub fn query_property_relations(
                             "unavailable",
                             "Relation metadata is unavailable for this revision",
                         ),
+                        shape: None,
                         targets: Vec::new(),
                         valid: false,
                     },
@@ -622,6 +737,7 @@ pub fn query_property_relations(
                             "relation_cardinality",
                             "Single relation contains multiple values",
                         ),
+                        shape: None,
                         targets: Vec::new(),
                         valid: false,
                     },
@@ -629,6 +745,12 @@ pub fn query_property_relations(
                 continue;
             }
             let mut values = Vec::new();
+            budget.reserve(
+                raw_values
+                    .len()
+                    .saturating_mul(std::mem::size_of::<Option<CapturedShape>>()),
+            )?;
+            let mut shapes = Vec::with_capacity(raw_values.len());
             let mut targets = Vec::new();
             let mut seen_targets = BTreeSet::new();
             let mut valid = true;
@@ -651,6 +773,7 @@ pub fn query_property_relations(
                             &mut budget,
                         )?;
                         values.push(error("invalid_relation", message));
+                        shapes.push(None);
                         continue;
                     }
                 };
@@ -702,7 +825,8 @@ pub fn query_property_relations(
                     subpath,
                     // The display projection uses the resolved path; the note
                     // keeps its original short link and optional alias.
-                    path: target.map_or(path, |entry| entry.path.as_str().to_string()),
+                    path: target
+                        .map_or_else(|| path.clone(), |entry| entry.path.as_str().to_string()),
                     target: target.map(|entry| RecordWitness {
                         entry_id: entry.id.clone(),
                         revision: entry.revision.clone(),
@@ -712,6 +836,13 @@ pub fn query_property_relations(
                     external,
                 };
                 budget.keep(&link)?;
+                shapes.push(link_shape(
+                    &link,
+                    &path,
+                    &record.path,
+                    &timezone,
+                    &mut budget,
+                )?);
                 values.push(link);
                 if let Some(target) = target.filter(|_| accepted) {
                     let target = &target.id;
@@ -722,16 +853,23 @@ pub fn query_property_relations(
                     }
                 }
             }
-            let value = if settings.multiple {
-                BaseValue::List { value: values }
+            let (value, shape) = if settings.multiple {
+                (
+                    BaseValue::List { value: values },
+                    list_shape(shapes, &mut budget)?,
+                )
             } else {
-                values.into_iter().next().unwrap_or(BaseValue::Null)
+                (
+                    values.into_iter().next().unwrap_or(BaseValue::Null),
+                    shapes.into_iter().next().flatten(),
+                )
             };
             budget.keep(&value)?;
             states.insert(
                 key,
                 RelationState {
                     value,
+                    shape,
                     targets,
                     valid,
                 },
@@ -775,10 +913,30 @@ pub fn query_property_relations(
                 }
             };
             budget.keep(&value)?;
+            let shape = if let BaseValue::List { value: links } = &value {
+                budget.reserve(
+                    links
+                        .len()
+                        .saturating_mul(std::mem::size_of::<Option<CapturedShape>>()),
+                )?;
+                let mut shapes = Vec::with_capacity(links.len());
+                for link in links {
+                    let BaseValue::Link { path, .. } = link else {
+                        unreachable!()
+                    };
+                    // Reverse values are generated File.asLink identities,
+                    // whose origin is explicitly root, not the receiving note.
+                    shapes.push(link_shape(link, path, "", &timezone, &mut budget)?);
+                }
+                list_shape(shapes, &mut budget)?
+            } else {
+                None
+            };
             states.insert(
                 (witness.entry_id.clone(), name.clone()),
                 RelationState {
                     value,
+                    shape,
                     targets,
                     valid: graph.complete() && unavailable.is_empty(),
                 },
@@ -788,10 +946,20 @@ pub fn query_property_relations(
     for record in &snapshot.records {
         let witness = record.witness.as_ref().expect("sealed record");
         let mut values = BTreeMap::new();
+        let mut shapes = BTreeMap::new();
         for (name, definition) in definitions.iter() {
             budget.charge(1)?;
             match definition.kind {
                 PropertyKind::Link | PropertyKind::Relation | PropertyKind::ReverseRelation => {
+                    if let Some(shape) = copy_shape(
+                        states[&(witness.entry_id.clone(), name.clone())]
+                            .shape
+                            .as_ref(),
+                        &mut budget,
+                    )? {
+                        budget.reserve(name.len().saturating_add(128))?;
+                        shapes.insert(name.clone(), shape);
+                    }
                     values.insert(
                         name.clone(),
                         states[&(witness.entry_id.clone(), name.clone())]
@@ -800,7 +968,7 @@ pub fn query_property_relations(
                     );
                 }
                 PropertyKind::Rollup => {
-                    let value = rollup_value(
+                    let (value, shape) = rollup_value(
                         &witness.entry_id,
                         name,
                         definitions,
@@ -823,6 +991,10 @@ pub fn query_property_relations(
                         )?;
                     }
                     budget.keep(&value)?;
+                    if let Some(shape) = shape {
+                        budget.reserve(name.len().saturating_add(128))?;
+                        shapes.insert(name.clone(), shape);
+                    }
                     values.insert(name.clone(), value);
                 }
                 _ => {}
@@ -839,6 +1011,12 @@ pub fn query_property_relations(
                 })
                 .values
                 .extend(values);
+        }
+        if !shapes.is_empty() {
+            budget.reserve(witness.entry_id.as_str().len().saturating_add(128))?;
+            result
+                .runtime_shapes
+                .insert(witness.entry_id.clone(), shapes);
         }
     }
     result.steps_used = budget.used;
@@ -858,13 +1036,16 @@ fn rollup_value(
     scalars: &PropertyRelationValues,
     visiting: &mut BTreeSet<RelationKey>,
     budget: &mut Budget<'_>,
-) -> Result<BaseValue, ExpressionDiagnostic> {
+) -> Result<(BaseValue, Option<CapturedShape>), ExpressionDiagnostic> {
     budget.charge(1)?;
     let key = (entry.clone(), name.to_string());
     if visiting.len() >= 64 || !visiting.insert(key.clone()) {
-        return Ok(error(
-            "rollup_cycle",
-            "Rollup dependency contains a cycle or exceeds depth 64",
+        return Ok((
+            error(
+                "rollup_cycle",
+                "Rollup dependency contains a cycle or exceeds depth 64",
+            ),
+            None,
         ));
     }
     let definition = definitions
@@ -874,26 +1055,38 @@ fn rollup_value(
     let state = &states[&(entry.clone(), definition.relation.clone())];
     if !state.valid {
         visiting.remove(&key);
-        return Ok(error(
-            "unavailable",
-            "Rollup relation has invalid or unresolved targets",
+        return Ok((
+            error(
+                "unavailable",
+                "Rollup relation has invalid or unresolved targets",
+            ),
+            None,
         ));
     }
     if definition.aggregation == RollupAggregation::Count {
         visiting.remove(&key);
-        return Ok(BaseValue::Number {
-            value: state.targets.len() as f64,
-        });
+        return Ok((
+            BaseValue::Number {
+                value: state.targets.len() as f64,
+            },
+            None,
+        ));
     }
     let property = definition.property.as_deref().expect("validated property");
-    let mut values = Vec::new();
+    budget.reserve(
+        state
+            .targets
+            .len()
+            .saturating_mul(std::mem::size_of::<(BaseValue, Option<CapturedShape>)>()),
+    )?;
+    let mut values = Vec::with_capacity(state.targets.len());
     for target in &state.targets {
         budget.charge(1)?;
         if unavailable.contains(target) {
             visiting.remove(&key);
-            return Ok(error(
-                "unavailable",
-                "Related property metadata is unavailable",
+            return Ok((
+                error("unavailable", "Related property metadata is unavailable"),
+                None,
             ));
         }
         let value = if definitions
@@ -913,43 +1106,118 @@ fn rollup_value(
                 budget,
             )?
         } else if let Some(state) = states.get(&(target.clone(), property.to_string())) {
-            state.value.clone()
-        } else if let Some(value) = scalars
-            .rows
-            .get(target)
-            .and_then(|row| row.values.get(property))
-        {
-            value.clone()
+            budget.keep(&state.value)?;
+            (
+                state.value.clone(),
+                copy_shape(state.shape.as_ref(), budget)?,
+            )
         } else {
             let expression = format!("note[{}]", serde_json::to_string(property).expect("string"));
             let invocation = budget.evaluation();
-            let (value, used) = crate::with_session(
+            let mut retained = 0usize;
+            let budget_cell = RefCell::new(&mut *budget);
+            let (value, used) = crate::with_session_files(
                 &expression,
                 records[target],
                 &invocation,
                 Some(relationships),
+                None,
+                Some(scalars),
+                None,
                 |session| {
-                    let value = session.evaluate(&expression);
+                    let value = session.evaluate_with_tag_shape(&expression, |bytes| {
+                        budget_cell.borrow_mut().reserve(bytes)?;
+                        retained = retained.saturating_add(bytes);
+                        Ok(())
+                    });
                     Ok((value, session.steps_used()))
                 },
             )?;
+            drop(budget_cell);
             budget.charge(used)?;
             match value {
-                Ok(value) => value,
+                Ok((value, shape)) => (
+                    value,
+                    shape.map(|shape| CapturedShape {
+                        shape,
+                        bytes: retained,
+                    }),
+                ),
                 Err(error) if matches!(error.code.as_str(), "budget" | "cancelled") => {
                     return Err(error)
                 }
-                Err(error) => BaseValue::Error {
-                    code: error.code,
-                    message: error.message,
-                },
+                Err(error) => (
+                    BaseValue::Error {
+                        code: error.code,
+                        message: error.message,
+                    },
+                    None,
+                ),
             }
         };
-        budget.keep(&value)?;
+        budget.keep(&value.0)?;
         values.push(value);
     }
     visiting.remove(&key);
-    aggregate(&definition.aggregation, values, budget)
+    aggregate_shaped(&definition.aggregation, values, budget)
+}
+
+fn aggregate_shaped(
+    aggregation: &RollupAggregation,
+    values: Vec<(BaseValue, Option<CapturedShape>)>,
+    budget: &mut Budget<'_>,
+) -> Result<(BaseValue, Option<CapturedShape>), ExpressionDiagnostic> {
+    if let Some((value, _)) = values
+        .iter()
+        .find(|(value, _)| matches!(value, BaseValue::Error { .. }))
+    {
+        budget.keep(value)?;
+        return Ok((value.clone(), None));
+    }
+    if matches!(
+        aggregation,
+        RollupAggregation::Values | RollupAggregation::Unique
+    ) {
+        budget.reserve(
+            values.len().saturating_mul(
+                std::mem::size_of::<Option<CapturedShape>>()
+                    .saturating_add(std::mem::size_of::<BaseValue>()),
+            ),
+        )?;
+        let mut result = Vec::with_capacity(values.len());
+        let mut shapes = Vec::with_capacity(values.len());
+        let mut seen = BTreeSet::new();
+        for (value, shape) in values {
+            budget.charge(1)?;
+            if *aggregation == RollupAggregation::Unique {
+                // This configured rollup extension keeps its established target
+                // canonical dedup policy; preserve the actual selected first
+                // value's provenance rather than changing List.unique rules.
+                let key = crate::query::canonical(&value);
+                budget.charge(1 + key.len() / 64)?;
+                if !seen.insert(key) {
+                    continue;
+                }
+            }
+            result.push(value);
+            shapes.push(shape);
+        }
+        return Ok((
+            BaseValue::List { value: result },
+            list_shape(shapes, budget)?,
+        ));
+    }
+    budget.reserve(
+        values
+            .len()
+            .saturating_mul(std::mem::size_of::<BaseValue>()),
+    )?;
+    aggregate(
+        aggregation,
+        values.into_iter().map(|(value, _)| value).collect(),
+        budget,
+    )
+    .map(|value| (value, None))
 }
 
 fn aggregate(
