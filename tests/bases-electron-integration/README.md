@@ -41,7 +41,7 @@ performance/large-vault benchmark, OS foreground-focus test or mobile claim.
 
 Explicit supplemental campaigns can reuse this same bootstrap with
 `--campaign-module /absolute/tests/OWNED-CAMPAIGN/campaign.mjs`. The fixed owned
-directories are visual-reference, safety, config, properties, clipboard and layouts under
+directories are visual-reference, safety, config, properties, clipboard, layouts and recovery under
 tests/bases-*. A module exports `fixtureFiles(): Map<string,string|Buffer>` and
 `async journey(c)`, optionally `template` and a safe `vaultName` basename. It owns
 the complete fixture map: automatic Properties.yaml and Created injection are
@@ -60,3 +60,23 @@ Initial fixture writes, normal readback and external-editor writes share a stric
 vault-relative path guard that rejects absolute names, traversal, backslashes,
 NULs and existing symlinks. Bounded offline guard checks run with
 `node --test tests/bases-electron-integration/owned-fixtures.test.mjs`.
+
+Only the explicitly admitted recovery campaign may additionally export
+`createNativeRelay({ native, directory })`. The native path remains the exact
+matched genuine host. The factory returns its generated regular executable,
+`directory`, immutable `provenanceFiles`, exact `processIdentity` executable/argv
+prefix, and `arm`, `release`, `events`, `dispose` controls. The runner hashes the
+genuine host, generated wrapper, helper sources and Node executable separately.
+The normal application still receives only its existing host-executable option.
+
+Recovery context adds a frozen `relay` facade with `arm`, `release`, `events` and
+an explicit `forceShutdown(name)` negative interruption. It never satisfies a
+normal quit assertion. Startup validates the actual app→relay→genuine-host PID,
+parent and exact-command chain. Cleanup retains both PID/command identities even
+after reparenting, waits for closure, and reports/kills leftovers as failures.
+Lifecycle evidence and genuine response/receipt hashes remain with the campaign.
+The recovery module owns selection/hold/drop of real frames; this bootstrap does
+not manufacture acknowledgements. No relay is created for any default/other run.
+
+Bounded ownership checks require no application or native host:
+`node --test tests/bases-electron-integration/native-ownership.test.mjs`.
