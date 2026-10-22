@@ -9,6 +9,43 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest acceptance update: root `9f7b1b69` composes reviewed standalone config
+guardffcf4d8c (originalf81d305e), inline guard18e5d170 (originald5f36d6b),
+picker-actionability cd841779 (original8aaf3cac), and selection campaign9f7b1b69
+(original25227afb). Composed TypeScript11690 passes;34 focused Node2106 pass.
+Frontend010/76384 passes on this exact root,333files; receipt
+`/private/tmp/zorid-bases-conditional-desktop-build-20261022-010-receipt.json`.
+Actual properties009/75682 PASSES188actions/65checks, all4layouts, C1 shared
+summaries/four-reference rename/delete and two normal quit/restart passes.
+Report SHA6dca1f17c8331d5d73f73cd3a0ef6a602aa2a1702aed52a1a9c0cc4882b61898;
+both app lifecycles exit0/nullsignal/no leaks; source/artifact freeze verifies.
+This is bounded rich-property acceptance, not full heavy/reference/main acceptance.
+
+Full Rust62319 is terminal101:1164 passed,7 failed,2 pre-existing ignored cases,
+50nonemptytargets. All Bases/native259/host87 pass. Four Store targets fail;
+source audit attributes obsolete v2/3/4 fixtures/revision expectations/corrupt-FK
+injection/fullsnapshot-test routing to pre17 code, and the oneMiB snapshot has
+only the new empty host_intent_sources table difference. Test-only reconciliation
+is isolated with bases_inline_core, independently reviewed before Cargo; no
+runtime migration policy or planner changes authorized. Full raw receipt
+`/private/tmp/zorid-bases-conditional-composed-rust-20261022-003-receipt.json`.
+All30 new guard cases pass within this run. This is NOT a full-suite pass.
+
+Actual selection001/18791 fails45actions/3checks after its first caret mapping
+and exact physical source pass. Its second ordinary double-click fires while
+the Base query is updating; no input opens. Source/artifact freeze and owned
+SIGTERM exit0/no leaks verify. bases_e2e owns test-only readiness correction;
+nonempty range preservation remains unexecuted. Reference004 verifies baseline
+and exact14-item String operator catalog, then Enter chooses existing alpha-one
+instead of intended literalalpha; private005 uses shipped Shift+Enter literal
+behavior and awaits independent source review/runtime grant. All prior reference
+owned apps/profile/vault/catalog restoration pass; no owned app remains running.
+
+Reviewed real CLI conflict fixture original476d8b32 is composed next: unchanged
+strict core/source/intent/checkpoint checks, accurate retained external conflict
+classification (reload OR planning), normal body append instead of duplicate
+frontmatter input. Actual safety run must explicitly pass matching CLI path/hash.
+
 Latest resource/resume update: observed free5898764KiB after the user status
 request; no additional cleanup is attributed to this session. Native/CLI
 build76433 ended101 at ENOSPC in clap_derive; fresh serialized build19034 is
