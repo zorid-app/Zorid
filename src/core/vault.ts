@@ -735,13 +735,18 @@ export class Vault {
       // temporary mutation-local parser is deliberately separate from metadata
       // publication. All existing post-move identity/read/CAS fences remain.
       let renameMetadata = this.metadata, renameContents = this.contents;
-      if (updateLinks && this.metadataProjection) {
+      const unsafeReferences: { source: string; target: string }[] = [];
+      if (updateLinks) {
         renameMetadata = new MetadataCache(); renameContents = new Map();
         renameMetadata.setFiles(this.filePaths());
         const candidates = [...this.entries.values()].filter(entry => entry.type === 'file' && this.indexableMarkdown(this.adapter, entry));
         for (const [path, content] of await mapConcurrent(candidates, async entry => [entry.path, await this.adapter.read(entry.path)] as const)) {
-          renameContents.set(path, content); renameMetadata.index(path, content);
+          renameContents.set(path, content); renameMetadata.index(path, content, { frontmatterLinks: true, onUnsafeFrontmatterLink: target => unsafeReferences.push({ source: path, target }) });
         }
+      }
+      for (const reference of unsafeReferences) {
+        const target = renameMetadata.resolveLink(reference.source, reference.target);
+        if (target && (moved(target) !== target || moved(reference.source) !== reference.source)) throw new Error(`A frontmatter wiki link in ${reference.source} uses complex YAML formatting and could not be safely updated. The rename was not applied.`);
       }
       for (const [source, note] of updateLinks ? renameMetadata.entries() : []) {
         const before = renameContents.get(source)!;
@@ -762,7 +767,18 @@ export class Vault {
             // Spaces must be encoded in bare Markdown destinations. Angle-wrapped targets accept spaces.
             if (before[link.start - 1] !== '<') replacement = encodeURI(replacement).replace(/#/g, '%23').replace(/\(/g, '%28').replace(/\)/g, '%29');
           } else {
-            replacement = /\.md$/i.test(link.target) ? newTarget : newTarget.replace(/\.md$/i, '');
+            let original = link.target;
+            try { original = decodeURIComponent(original); } catch { /* Preserve literal malformed percent spelling as a filename. */ }
+            const rooted = original.startsWith('/'), relative = original.startsWith('./') || original.startsWith('../');
+            replacement = rooted ? `/${newTarget}` : relative ? relativePath(newSource, newTarget) : newTarget;
+            if (!/\.md$/i.test(original)) replacement = replacement.replace(/\.md$/i, '');
+            if (original.startsWith('./') && !replacement.startsWith('.')) replacement = `./${replacement}`;
+            // Rooted generated relations retain their escaped path form. Even
+            // ordinary wiki links must escape syntax delimiters and percent so
+            // a literal filename cannot become a fragment, alias or escape.
+            const escaped = /%[0-9a-f]{2}/i.test(link.target);
+            replacement = escaped ? replacement.split('/').map(segment => encodeURIComponent(segment).replace(/[!'()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)).join('/')
+              : replacement.replace(/[%#|\[\]'"\r\n]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
           }
           after = after.slice(0, link.start) + replacement + after.slice(link.end);
         }

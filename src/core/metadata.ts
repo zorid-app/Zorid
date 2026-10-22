@@ -3,6 +3,65 @@ import { readProperties } from './properties.ts';
 import type { Backlink, NoteLink, NoteMetadata } from './types.ts';
 import type { DocumentParseFacts } from './document-draft-facts.ts';
 import type { DocumentMetadataRowsItem } from './document-semantics.ts';
+import { isScalar, parseDocument, visit } from 'yaml';
+
+export interface MetadataParseOptions {
+  readonly frontmatterLinks?: boolean;
+  /** Mutation-local callers can diagnose only an affected unsafe reference. */
+  readonly onUnsafeFrontmatterLink?: (target: string) => void;
+}
+
+/** Map decoded scalar boundaries back to the original YAML token. Mutations
+ * must never treat a decoded string offset as a raw source position. */
+function scalarOffsets(raw: string, value: string): readonly number[] | undefined {
+  const quote = raw[0], quoted = quote === '"' || quote === "'";
+  if (/\r|\n/.test(raw)) return undefined;
+  let decoded = '', offset = quoted ? 1 : 0;
+  const end = quoted ? raw.length - 1 : raw.length, offsets: number[] = [offset];
+  if (quoted && raw[end] !== quote) return undefined;
+  const escapes: Readonly<Record<string, string>> = { '0': '\0', a: '\x07', b: '\b', t: '\t', n: '\n', v: '\v', f: '\f', r: '\r', e: '\x1b', ' ': ' ', '"': '"', '/': '/', '\\': '\\', N: '\x85', _: '\xa0', L: '\u2028', P: '\u2029' };
+  while (offset < end) {
+    const start = offset; let character = raw[offset++];
+    if (quote === "'" && character === "'" && raw[offset] === "'") offset++;
+    else if (quote === '"' && character === '\\') {
+      const code = raw[offset++];
+      if (Object.hasOwn(escapes, code)) character = escapes[code];
+      else {
+        const count = code === 'x' ? 2 : code === 'u' ? 4 : code === 'U' ? 8 : 0;
+        if (!count || offset + count > end || !/^[0-9a-f]+$/i.test(raw.slice(offset, offset + count))) return undefined;
+        const point = Number.parseInt(raw.slice(offset, offset + count), 16); if (point > 0x10ffff) return undefined;
+        character = String.fromCodePoint(point); offset += count;
+      }
+    }
+    decoded += character;
+    for (let part = 1; part <= character.length; part++) offsets.push(part === character.length ? offset : start);
+  }
+  return decoded === value ? offsets : undefined;
+}
+
+/** Whole wiki-link property values only. Aliases refer to their original scalar
+ * node, so rewriting an anchored definition updates every alias without editing
+ * arbitrary prose, comments, mapping keys or YAML alias tokens. */
+function frontmatterLinks(source: string, yamlStart: number, yamlEnd: number, onUnsafe?: (target: string) => void): NoteLink[] {
+  const yaml = source.slice(yamlStart, yamlEnd), links: NoteLink[] = [];
+  const doc = parseDocument(yaml, { version: '1.2', schema: 'core', stringKeys: true, uniqueKeys: true, resolveKnownTags: false, logLevel: 'silent' });
+  if (doc.errors.length || doc.warnings.length) return links;
+  visit(doc, { Scalar(key, node) {
+    if (key === 'key' || !isScalar(node) || typeof node.value !== 'string' || !node.range) return;
+    const match = /^(\s*)(!?)\[\[([^\]\r\n]+)\]\]\s*$/.exec(node.value);
+    if (!match) return;
+    const destination = match[3].split('|')[0], hash = destination.indexOf('#');
+    const target = hash < 0 ? destination : destination.slice(0, hash), start = match[1].length + match[2].length + 2;
+    const raw = yaml.slice(node.range[0], node.range[1]), offsets = scalarOffsets(raw, node.value);
+    if (!offsets) {
+      if (onUnsafe) { onUnsafe(target); return; }
+      throw new Error('A frontmatter wiki link uses a complex YAML scalar whose source cannot be safely rewritten');
+    }
+    links.push({ target, fragment: hash < 0 ? '' : destination.slice(hash), kind: 'wiki', embed: !!match[2],
+      start: yamlStart + node.range[0] + offsets[start], end: yamlStart + node.range[0] + offsets[start + target.length] });
+  } });
+  return links;
+}
 
 function asStrings(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String);
@@ -10,7 +69,7 @@ function asStrings(value: unknown): string[] {
 }
 
 /** Metadata indexes valid YAML; malformed frontmatter remains untouched in the note. */
-export function parseMetadata(path: string, source: string): NoteMetadata {
+export function parseMetadata(path: string, source: string, options: MetadataParseOptions = {}): NoteMetadata {
   const metadata: NoteMetadata = { path, frontmatter: {}, tags: [], aliases: [], headings: [], links: [] };
   const opening = source.match(/^\uFEFF?---[ \t]*(?:#[^\r\n]*)?\r?\n/);
   const rest = opening ? source.slice(opening[0].length) : '';
@@ -21,6 +80,7 @@ export function parseMetadata(path: string, source: string): NoteMetadata {
     catch { /* Invalid YAML must not prevent opening or saving the Markdown body. */ }
     metadata.aliases = asStrings(metadata.frontmatter.aliases ?? metadata.frontmatter.alias);
     metadata.tags = asStrings(metadata.frontmatter.tags ?? metadata.frontmatter.tag).map(tag => tag.replace(/^#/, ''));
+    if (options.frontmatterLinks && closing) metadata.links.push(...frontmatterLinks(source, opening![0].length, opening![0].length + closing.index, options.onUnsafeFrontmatterLink));
   }
 
   // Keep every character offset stable while excluding code, comments, and YAML.
@@ -99,8 +159,8 @@ export class MetadataCache {
     this.files.clear(); this.names.clear();
     for (const path of paths) this.addFile(path);
   }
-  index(path: string, content: string): NoteMetadata {
-    const note = parseMetadata(path, content);
+  index(path: string, content: string, options?: MetadataParseOptions): NoteMetadata {
+    const note = parseMetadata(path, content, options);
     this.notes.set(path, note);
     this.addFile(path);
     return note;
