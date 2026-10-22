@@ -6,7 +6,7 @@ import {createDocumentService} from '../src/core/document-semantics.ts';
 import type {DocumentEntry, DocumentMetadata, DocumentMetadataRowsItem, DocumentProperty, DocumentService, DocumentSnapshotId, DocumentTransport} from '../src/core/document-semantics.ts';
 import type {DocumentRuntimeUpdate} from '../src/core/document-runtime.ts';
 import type {VaultEntry} from '../src/core/types.ts';
-import {baseSessionFilterProperties} from '../src/bases/session.ts';
+import {baseSessionFilterProperties,baseSessionFilterPropertyProvider} from '../src/bases/session.ts';
 import type {BasePropertyDefinitions} from '../src/bases/property-definitions.ts';
 
 const empty:BasePropertyDefinitions={properties:{},diagnostics:[]};
@@ -21,14 +21,14 @@ async function until(check:()=>boolean){for(let i=0;i<100&&!check();i++)await ne
 function harness(rows:DocumentMetadataRowsItem[],pending=false) {
  type Generation={snapshot:DocumentSnapshotId;source:{localStoreId:string;watermark:string};rows:DocumentMetadataRowsItem[];coverage:boolean};
  let generation:Generation={snapshot:{localStoreId:'store',generationEpoch:'epoch',generation:'1',versions},source:{localStoreId:'store',watermark:'1'},rows,coverage:true};
- let listener:((update:DocumentRuntimeUpdate|null)=>void)|undefined,notReady=pending,release:(()=>void)|undefined,closeGate:Promise<void>|undefined;
+ let listener:((update:DocumentRuntimeUpdate|null)=>void)|undefined,notReady=pending,failRead=false,release:(()=>void)|undefined,closeGate:Promise<void>|undefined;
  const pins=new Map<string,Generation>();let next=0;
  const update=():DocumentRuntimeUpdate=>({lifetime:'life',revision:generation.snapshot.generation,source:generation.source,published:generation.snapshot,freshness:'current',phase:'idle',progress:null,coverageComplete:generation.coverage,hasForegroundDemand:false,error:null});
  const unused=async():Promise<never>=>{throw Error('Filter types must not read bodies, evaluate queries or request maintenance');};
  const transport:DocumentTransport={metadataRowsAvailable:true,status:unused,initialize:unused,rebuild:unused,begin:unused,pump:unused,publish:unused,discard:unused,metadata:unused,search:unused,backlinks:unused,base:unused,
   open:async()=>{if(notReady)throw {code:'not_ready'};const pinId=`p${++next}`;pins.set(pinId,generation);return {pinId,snapshot:generation.snapshot,source:generation.source,coverageComplete:generation.coverage};},
   closePin:async pinId=>{await closeGate;pins.delete(pinId);},
-  metadataRows:async input=>{const g=pins.get(input.pinId)!;return {result:{snapshot:g.snapshot,source:g.source,coverageComplete:g.coverage,value:{snapshot:g.snapshot,next:null,scanComplete:true,coverageComplete:g.coverage,complete:g.coverage,mode:'reset',from:null,rows:g.rows,removedEntryIds:[]}},cursor:null};},
+  metadataRows:async input=>{if(failRead)throw {code:'invalid_response'};const g=pins.get(input.pinId)!;return {result:{snapshot:g.snapshot,source:g.source,coverageComplete:g.coverage,value:{snapshot:g.snapshot,next:null,scanComplete:true,coverageComplete:g.coverage,complete:g.coverage,mode:'reset',from:null,rows:g.rows,removedEntryIds:[]}},cursor:null};},
  };
  const service:DocumentService={...createDocumentService(transport),maintenance:{observeAndSubscribe:async callback=>{listener=callback;return {snapshot:update(),unsubscribe(){listener=undefined;}};},requestFreshness:()=>{throw Error('No metadata pump from a filter control');}}};
  class Adapter extends MemoryAdapter {
@@ -41,7 +41,7 @@ function harness(rows:DocumentMetadataRowsItem[],pending=false) {
  const adapter=new Adapter(Object.fromEntries(rows.map(row=>[member(row).path,'---\nnotCaptured: true\n---\n# Never parse this body']))),vault=new Vault(adapter);
  return {vault,adapter,pins,snapshot:(definitions=empty,known:string[]=[],current=()=>true)=>baseSessionFilterProperties(vault,definitions,known,current),
   set(rows:DocumentMetadataRowsItem[],coverage=true){const n=String(Number(generation.snapshot.generation)+1);generation={snapshot:{...generation.snapshot,generation:n},source:{...generation.source,watermark:n},rows,coverage};},
-  wake(){notReady=false;listener?.(update());},holdClose(){closeGate=new Promise<void>(done=>{release=done;});return()=>release?.();},
+  wake(){notReady=false;listener?.(update());},failRead(){failRead=true;},holdClose(){closeGate=new Promise<void>(done=>{release=done;});return()=>release?.();},
  };
 }
 
@@ -85,4 +85,39 @@ test('pending, retirement and owner loss cannot leak captured categories from an
   assert.equal(Object.keys(h.snapshot(empty,['note.score'],()=>false)).length,0);let checks=0;assert.equal(Object.keys(h.snapshot(empty,['note.score'],()=>++checks===1)).length,0,'ownership is checked again after collection');
   release=h.holdClose();close=h.vault.closeMetadataProjection();const retired=h.snapshot(empty,['note.score']);assert.deepEqual(retired['note.score'],{kind:'unknown',metadataStatus:'unavailable'});release();await close;assert.deepEqual(h.snapshot(empty,['note.score'])['note.score'],{kind:'unknown',metadataStatus:'unavailable'});
  }finally{release?.();await(close??h.vault.closeMetadataProjection());}assert.equal(h.pins.size,0);
+});
+
+test('a real same-frame metadata hint retains captured filter families through stale/current wrappers',async()=>{
+ const h=harness([file('A.md',[property('title','text','A')])]);
+ try {await h.vault.initialize();const before=h.vault.metadataFrame!,provider=baseSessionFilterPropertyProvider(h.vault,{properties:{state:{type:'select',options:[{value:'open',label:'Open'}]}},diagnostics:[]},['note.title','note.state'],()=>true);
+  const title=provider('note.title'),state=provider('note.state');assert.equal(title?.kind,'string');assert.equal(state?.kind,'string');
+  const cold=baseSessionFilterPropertyProvider(h.vault,empty,['note.title'],()=>true),coldKinds:(string|undefined)[]=[];
+  const phases:{status:string;frame:unknown;title:unknown;state:unknown}[]=[];
+  const stop=h.vault.onMetadata(next=>{phases.push({status:next.status,frame:next.frame,title:provider('note.title'),state:provider('note.state')});coldKinds.push(cold('note.title')?.kind);});
+  try {h.wake();}finally{stop();}
+  assert.deepEqual(phases.map(phase=>phase.status),['stale','current'],'exercise real projection hint publication, not a fabricated state wrapper');
+  assert.notEqual(h.vault.metadataFrame,before);assert.equal(h.vault.metadataFrame?.frame,before.frame);
+  for(const phase of phases){assert.equal(phase.frame,before.frame);assert.equal(phase.title,title);assert.equal(phase.state,state);}
+  assert.deepEqual(coldKinds,['unknown','string'],'a first lookup during the transient phase cannot poison the later current category');
+  assert.equal(provider('note.title'),title);assert.equal(h.adapter.reads,0);
+ }finally{await h.vault.closeMetadataProjection();}assert.equal(h.pins.size,0);
+});
+
+test('same-frame phases cannot revalidate changed saved witnesses, new coverage or a lost session owner',async()=>{
+ const h=harness([file('A.md',[property('title','text','A')],'a'),file('B.md',[property('title','text','B')],'b')]);let current=true;
+ try {await h.vault.initialize();const provider=baseSessionFilterPropertyProvider(h.vault,empty,['note.title'],()=>current);assert.equal(provider('note.title')?.kind,'string');
+  h.vault.entries.get('B.md')!.revision='r2';h.wake();assert.deepEqual(provider('note.title'),{kind:'unknown',metadataStatus:'unavailable'},'a second note changed despite identical retained metadata frame');
+  h.set([file('A.md',[property('title','text','A')],'a'),file('B.md',[property('title','text','B')],'b','r2')],false);h.wake();await until(()=>h.vault.metadataFrame?.frame?.snapshot.generation==='2');assert.deepEqual(provider('note.title'),{kind:'unknown',metadataStatus:'unavailable'},'a new frame/coverage never borrows the opening category');
+  const latest=baseSessionFilterPropertyProvider(h.vault,{properties:{title:{type:'text'}},diagnostics:[]},['note.title'],()=>current);assert.equal(latest('note.title')?.kind,'string');current=false;assert.deepEqual(latest('note.title'),{kind:'unknown',metadataStatus:'unavailable'});assert.equal(h.adapter.reads,0);
+ }finally{await h.vault.closeMetadataProjection();}
+});
+
+test('unavailable delivery and immediate metadata retirement invalidate a captured provider',async()=>{
+ const h=harness([file('A.md',[property('title','text','A')])]);
+ try {await h.vault.initialize();const frame=h.vault.metadataFrame?.frame,provider=baseSessionFilterPropertyProvider(h.vault,empty,['note.title'],()=>true);assert.equal(provider('note.title')?.kind,'string');
+  h.failRead();h.set([file('A.md',[property('title','text','A')])]);h.wake();await until(()=>h.vault.metadataFrame?.status==='unavailable');assert.equal(h.vault.metadataFrame?.frame,frame);assert.deepEqual(provider('note.title'),{kind:'unknown',metadataStatus:'unavailable'});
+ }finally{await h.vault.closeMetadataProjection();}
+ const retired=harness([file('A.md',[property('title','text','A')])]);let release:(()=>void)|undefined,close:Promise<void>|undefined;
+ try {await retired.vault.initialize();const provider=baseSessionFilterPropertyProvider(retired.vault,empty,['note.title'],()=>true);assert.equal(provider('note.title')?.kind,'string');release=retired.holdClose();close=retired.vault.closeMetadataProjection();assert.deepEqual(provider('note.title'),{kind:'unknown',metadataStatus:'unavailable'},'retirement blocks cache admission before close-pin acknowledgement');release();await close;
+ }finally{release?.();await(close??retired.vault.closeMetadataProjection());}assert.equal(retired.pins.size,0);
 });

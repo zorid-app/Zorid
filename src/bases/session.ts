@@ -143,6 +143,41 @@ export function baseSessionFilterProperties(vault: Vault, definitions: BasePrope
   return Object.freeze(result);
 }
 
+/** Status wrappers may change during a hint without replacing saved facts.
+ * Retain the advisory snapshot across those phases, never across new witnesses. */
+export function baseSessionFilterPropertyProvider(vault: Vault, definitions: BasePropertyDefinitions, knownProperties: readonly string[], isCurrent: () => boolean): (property: string) => BaseFilterPropertyDescriptor | undefined {
+  const captured = vault.metadataFrame, frame = captured?.frame;
+  let validated = captured, properties: Readonly<Record<string, BaseFilterPropertyDescriptor>> | undefined, admissionPath: string | undefined;
+  return property => {
+    const current = vault.metadataFrame;
+    if (!isCurrent() || current?.frame !== frame || current?.status === 'unavailable' && captured?.status !== 'unavailable') return unavailableFilterProperty;
+    // Cache admission closes immediately on retirement, before pin-close ACK.
+    if (admissionPath !== undefined && !vault.metadata.get(admissionPath)) return unavailableFilterProperty;
+    if (frame && current !== validated) {
+      for (const entry of vault.entries.values()) {
+        if (entry.type !== 'file') continue;
+        const row = frame.row(entry.path);
+        if (row?.kind !== 'file' || row.value.entry.id !== entry.entryId || row.value.entry.revision !== entry.revision) return unavailableFilterProperty;
+      }
+      for (const [path, witnessed] of frame.entries()) {
+        if (witnessed.kind !== 'file') continue;
+        const live = vault.entries.get(path), row = frame.row(path);
+        if (!live || live.entryId !== witnessed.id || live.revision !== witnessed.revision || row?.kind === 'file' && row.value.metadata && !vault.metadata.get(path)) return unavailableFilterProperty;
+      }
+      if (!isCurrent() || vault.metadataFrame !== current) return unavailableFilterProperty;
+      validated = current;
+    }
+    // A first lookup during the transient stale phase must not permanently
+    // cache an incomplete category before the same-frame current delivery.
+    if (!properties && captured?.status === 'current' && current?.status !== 'current') return unavailableFilterProperty;
+    if (!properties) {
+      properties = baseSessionFilterProperties(vault, definitions, knownProperties, isCurrent);
+      for (const [path] of frame?.entries() ?? []) if (vault.metadata.get(path)) { admissionPath = path; break; }
+    }
+    return properties[property];
+  };
+}
+
 /** Pane hosts notify only when their explicit visibility state changes. */
 export interface BaseSessionVisibility {
   isVisible(): boolean;
@@ -627,14 +662,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       return property.startsWith('file.') ? property.replace(/^file\./, 'file ') : property.replace(/^(?:note|formula)\./, '');
     };
     const writable = !options.readOnly && !sharedBasePreview(result);
-    const filterFrame = options.vault.metadataFrame, filterDefinitions = definitions;
-    let filterProperties: Readonly<Record<string, BaseFilterPropertyDescriptor>> | undefined;
+    const filterProperty = baseSessionFilterPropertyProvider(options.vault, definitions, result.availableProperties, () => filterOwnerCurrent() && !definitionsError);
     toolbarUI.update({ result, views: choices, selectedIndex, rootFilters: document.getRoot('filters'), root: Object.fromEntries(['filters','formulas','properties','summaries','newItemFolder','newItemTemplate'].map(key => [key, document.getRoot(key)]).filter((entry): entry is [string, BaseValue] => entry[1] !== undefined)), readOnly: !writable, allowRename: true, propertyType: property => definitions.properties[basePropertyName(property)]?.type,
-      filterProperty: property => {
-        if (!filterOwnerCurrent() || definitionsError || options.vault.metadataFrame !== filterFrame) return unavailableFilterProperty;
-        filterProperties ??= baseSessionFilterProperties(options.vault, filterDefinitions, result.availableProperties, filterOwnerCurrent);
-        return filterProperties[property];
-      }, label: getPropertyLabel });
+      filterProperty, label: getPropertyLabel });
     // Toolbar rebases its own in-flight configuration without replacing row drafts.
     if (pending.size || activeDraft()) { deferred = state; return; }
     deferred = undefined;
