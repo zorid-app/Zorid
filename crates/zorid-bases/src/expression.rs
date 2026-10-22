@@ -7606,7 +7606,7 @@ mod checked_comparison_admission_tests {
         )
     }
     #[test]
-    fn object_fallbacks_charge_wide_deep_and_repeated_work_before_plain_clones() {
+    fn strict_objects_charge_wide_deep_and_repeated_comparisons() {
         let wide = object(128);
         let context = BasesEvaluationContext {
             work_limit: Some(32),
@@ -7623,13 +7623,22 @@ mod checked_comparison_admission_tests {
             matches!(Evaluator::new(&context).equals_checked(&deep,&deep),Err(RuntimeValue::Error(message))if message.starts_with("budget\0"))
         );
         let small = object(1);
+        // Objects now compare constructor-strict children instead of copying
+        // plain JSON values. Keep a fixed narrow ceiling for one comparison,
+        // then test repetition without coupling to its exact traversal charge.
+        let mut probe = Evaluator::new(&context);
+        let before = probe.remaining_work;
+        assert!(probe.equals_checked(&small, &small).unwrap());
+        let comparison_work = before - probe.remaining_work;
+        assert!((1..=32).contains(&comparison_work));
         let context = BasesEvaluationContext {
-            work_limit: Some(40),
+            work_limit: Some(comparison_work * 2),
             ..Default::default()
         };
         let mut evaluator = Evaluator::new(&context);
         assert!(evaluator.equals_checked(&small, &small).unwrap());
         assert!(evaluator.equals_checked(&small, &small).unwrap());
+        assert_eq!(evaluator.remaining_work, 0);
         assert!(
             matches!(evaluator.equals_checked(&small,&small),Err(RuntimeValue::Error(message))if message.starts_with("budget\0"))
         );
