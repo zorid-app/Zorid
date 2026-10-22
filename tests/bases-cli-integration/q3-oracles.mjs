@@ -7,6 +7,7 @@ import {q3Files, q3Folders, q3Groups} from '../fixtures/bases-q3-semantics.mjs';
 const diagnosticKey = issue => [issue.path ?? null, issue.property ?? null, issue.code];
 const orderedDiagnostics = issues => issues.map(diagnosticKey)
   .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+const objectPrototypeDescriptors=Object.getOwnPropertyDescriptors(Object.prototype);
 
 export const q3CommandCount = q3Folders.length + 2 * q3Files.length + q3Groups.length + 1;
 
@@ -52,6 +53,13 @@ export function assertQ3Result(result, group, states) {
     assert.equal(actual.revision, states.get(file.id)?.revision, `${group.name}: exact committed row revision`);
     for (const [property, value] of Object.entries(expected.values)) {
       assert.deepEqual(stableTypedValue(actual.values[property]), expectedWithWitnesses(value, states), `${group.name}: ${expected.path} ${property}`);
+    }
+    for(const property of group.ownKeyStringProperties??[]){
+      const parsed=JSON.parse(actual.values[property].value);
+      assert.ok(Object.hasOwn(parsed,'__proto__'),`${group.name}: Object display lost its inert own key`);
+      assert.equal(parsed.__proto__,'inert',`${group.name}: inert own-key data changed`);
+      assert.equal(Object.getPrototypeOf(parsed),Object.prototype,`${group.name}: parsed Object display changed its prototype`);
+      assert.deepEqual(Object.getOwnPropertyDescriptors(Object.prototype),objectPrototypeDescriptors,`${group.name}: Object prototype was mutated`);
     }
   }
   assert.deepEqual(stableTypedValue(result.summaries ?? {}), expectedWithWitnesses(group.summaries ?? {}, states), `${group.name}: exact summaries`);

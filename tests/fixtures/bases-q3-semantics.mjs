@@ -8,6 +8,9 @@
 // G3/G4 contracts cc860fad; G5/G6/G7 collection-owner reviewed literals;
 // G8 captured-calendar contracts a2593c5c and 259fc27e. Unicode scalar indexing,
 // stateless bounded regex and explicit clock/zone remain documented choices.
+// G9-G15 extension: Object display strings retain inert __proto__ user keys
+// (deliberate Zorid safety choice); List.sort uses the pinned English base-
+// sensitivity/numeric policy. Neither asserts universal host-locale equivalence.
 export const q3ClockMs = 1706702400000; // 2024-01-31T12:00:00.000Z
 export const q3Timezone = 'UTC';
 export const q3Folders = [['q3-dir','Q3']];
@@ -22,12 +25,24 @@ kind: tagged
 bucket: A
 index: 37
 acc: outer
+author: '[[../Authors/Ada|Ada]]'
 obj:
   Zebra: 3
   '10': ten
   '2': two
   '01': leading
   apple: 7
+displayObject:
+  z: 5
+  '2': two
+  '1': 1
+  '01': leading
+  n: 1
+  b: true
+  none: null
+  nested: {x: 1}
+  items: [1, null, true]
+  __proto__: inert
 tags: [Work/Project, Personal]
 plain: ['#Work/Project', '#Personal']
 config:
@@ -96,7 +111,15 @@ const objects=single('objects','Q3 Object callbacks preserve exact keys, typed v
   ['mixedCaseFilter','obj.FILTER(false).keys()',list([s('2'),s('10'),s('Zebra'),s('01'),s('apple')])],
   ['mapArity','obj.map(value,key)',error('arity')],
   ['callbackThrown','obj.filter(number("bad"))',error('type')],
+  ['objectString','displayObject.toString()',s('{"1":"1","2":"two","z":"5","01":"leading","n":"1","b":"true","none":"null","nested":"{\\"x\\":\\"1\\"}","items":"1, null, true","__proto__":"inert"}')],
+  ['objectConcat','displayObject + ""',s('{"1":"1","2":"two","z":"5","01":"leading","n":"1","b":"true","none":"null","nested":"{\\"x\\":\\"1\\"}","items":"1, null, true","__proto__":"inert"}')],
+  ['objectJoin','[displayObject].join("|")',s('{"1":"1","2":"two","z":"5","01":"leading","n":"1","b":"true","none":"null","nested":"{\\"x\\":\\"1\\"}","items":"1, null, true","__proto__":"inert"}')],
+  ['typedObjectUnchanged','displayObject',object([
+    ['z',n(5)],['2',s('two')],['1',n(1)],['01',s('leading')],['n',n(1)],['b',b(true)],['none',nil],
+    ['nested',object([['x',n(1)]])],['items',list([n(1),nil,b(true)])],['__proto__',s('inert')],
+  ])],
 ]);
+objects.ownKeyStringProperties=['formula.objectString','formula.objectConcat','formula.objectJoin'];
 const tags=single('tags','Q3 Tag hierarchy differs from generic String and transformed List membership',[
   ['rawTags','tags',list([s('#Work/Project'),s('#Personal')])],
   ['hierarchy','tags.contains("WORK")',b(true)],
@@ -115,6 +138,15 @@ const tags=single('tags','Q3 Tag hierarchy differs from generic String and trans
   ['nestedTags','config.TaGs.contains("work")',b(true)],
   ['publicAncestry','tags[0].isType("String") && tags.isType("List")',b(true)],
   ['plainMatches','plain[0].matches("work")',error('unknown-function')],
+  ['emptyFolder','file.inFolder("")',b(true)],
+  ['rootFolder','file.inFolder("/")',b(true)],
+  ['normalizedFolder','file.inFolder("///Q3\\\\\\\\")',b(true)],
+  ['folderCase','file.inFolder("q3")',b(false)],
+  ['folderNoTrim','file.inFolder(" Q3")',b(false)],
+  ['tagRepeatedPrefix','file.hasTag("##Work")',b(false)],
+  ['tagCase','file.hasTag("#WORK")',b(true)],
+  ['tagHierarchy','file.hasTag("work")',b(true)],
+  ['tagNotPartialSegment','file.hasTag("work/pro")',b(false)],
 ]);
 const calls=single('calls','Q3 registered calls validate exact arity, null, type and special-case spelling',[
   ['requiredNull','"abc".startsWith(null)',nil],
@@ -135,6 +167,13 @@ const calls=single('calls','Q3 registered calls validate exact arity, null, type
   ['argumentBeforeArity','"x".toString(unknown())',error('unknown-function')],
   ['ancestry','null.isType("Any") && image("a").isType("String")',b(true)],
   ['richConcat','image("a") + icon("b")',s('![[a]]b')],
+  ['relationRawString','author.startsWith("../")',b(true)],
+  ['relationRawDisplay','author.toString()',s('[[../Authors/Ada|Ada]]')],
+  ['relationTarget','author.asFile().path',s('Authors/Ada.md')],
+  ['deadMalformedRegex','if(false,/(/,7)',error('parse')],
+  ['deadRepeatedFlag','if(true,7,/a/ii)',error('parse')],
+  ['deadAndRegex','false && /(/',error('parse')],
+  ['deadValidRegex','if(false,/a/,7)',n(7)],
 ]);
 const strings=single('strings','Q3 strings, regex templates and finite numeric conversions preserve exact results',[
   ['foldAny','"Compiler".containsAny("PILE","zzz")',b(true)],
@@ -150,6 +189,9 @@ const strings=single('strings','Q3 strings, regex templates and finite numeric c
   ['fixedTie','(1.25).toFixed(1)',s('1.3')],
   ['fixedBinary','(1.005).toFixed(2)',s('1.00')],
   ['numberPrefix','number("  -12.5xyz")',n(-12.5)],
+  ['titlePunctuation','"HELLO-WORLD".title()',s('Hello-world')],
+  ['titleSpacesAndTab','"  hELLO  WORLD\\tNEXT ".title()',s('  Hello  World\tnext ')],
+  ['titleLeadingPunctuation','".hELLO !wORLD".title()',s('.hello !world')],
 ]);
 const collections=single('collections','Q3 recursive flatten and strict constructor-aware uniqueness survive transport',[
   ['flat','[1,[2,[3]],[[4]]].flat()',list([n(1),n(2),n(3),n(4)])],
@@ -160,6 +202,18 @@ const collections=single('collections','Q3 recursive flatten and strict construc
   ['tagListUnique','[tags,plain].unique().length',n(2)],
   ['nestedProvenance','[config,config].unique().length',n(1)],
   ['regexIdentity','[/x/,/x/].unique().length',n(2)],
+  ['sortNatural','["a10","a2"].sort()',list([s('a2'),s('a10')])],
+  ['sortBaseStable','["é","E","e","É"].sort()',list([s('é'),s('E'),s('e'),s('É')])],
+  ['sortMixedNumbers','[10,"2",2,"10"].sort()',list([s('2'),n(2),n(10),s('10')])],
+  ['sortRawRichKeys','[icon("a10"),html("a2"),image("A2")].sort()',list([{type:'html',value:'a2'},{type:'image',value:'A2'},{type:'icon',value:'a10'}])],
+  ['iconEarliest','[icon("2024-01-01")].earliest()',{type:'date',timestamp:1704067200000,hasTime:true}],
+  ['iconLatest','[icon("2024-01-01")].latest()',{type:'date',timestamp:1704067200000,hasTime:true}],
+  ['htmlEarliest','[html("2024-01-02")].earliest()',{type:'date',timestamp:1704153600000,hasTime:true}],
+  ['htmlLatest','[html("2024-01-02")].latest()',{type:'date',timestamp:1704153600000,hasTime:true}],
+  ['imageEarliest','[image("2024-01-03")].earliest()',{type:'date',timestamp:1704240000000,hasTime:true}],
+  ['imageLatest','[image("2024-01-03")].latest()',{type:'date',timestamp:1704240000000,hasTime:true}],
+  ['linkEarliest','[link("2024-01-04","Not a date label")].earliest()',{type:'date',timestamp:1704326400000,hasTime:true}],
+  ['linkLatest','[link("2024-01-04","Not a date label")].latest()',{type:'date',timestamp:1704326400000,hasTime:true}],
 ]);
 const durationJanuary=single('duration-january','Q3 Duration components, null inputs and January overflow use the captured clock',[
   ['iso','duration("P1Y2M3W4DT5H6M7S")',{type:'duration',years:1,months:2,weeks:0,days:25,hours:5,minutes:6,seconds:7,milliseconds:0}],

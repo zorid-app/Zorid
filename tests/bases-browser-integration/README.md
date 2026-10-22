@@ -22,8 +22,8 @@ have **not been executed against matching generated WASM**. The historical
 run005 result above remains nine executed groups; it does not cover this extension.
 
 The shared [Q3 fixture](../fixtures/bases-q3-semantics.mjs) adds 14 inert source
-files (four Markdown notes and ten saved Bases), with 92 authored typed row-value
-oracles and 13 expected diagnostic entries. These counts describe assertions and
+files (four Markdown notes and ten saved Bases), with 127 authored typed row-value
+oracles and 16 expected diagnostic entries. These counts describe assertions and
 fixture data, not additional executed groups. The ten appended groups cover:
 
 1. Object callback keys, values and outer scope.
@@ -36,6 +36,18 @@ fixture data, not additional executed groups. The ten appended groups cover:
 8. Nested TagList provenance in overall/grouped summaries.
 9. Strict Object Link-child provenance in grouping/summaries.
 10. Returned summary Error data versus formula-namespace rethrows.
+
+The source-only G9–G15 follow-up appends 35 explicit row-value expectations to
+those same groups. It retains every original Q3 expectation and adds no files,
+groups or runtime commands. It covers malformed regexes in dead branches versus
+a valid lazy branch; recursive Object display strings and unchanged typed Object
+transport; configured relation raw-string coercion alongside canonical file
+lookup; File folder normalization and repeated-tag-prefix rejection; literal-space
+title boundaries; rich String raw-date selection; and natural, stable List sorting.
+The inert `__proto__` Object key is deliberately preserved as user data. Sort
+expectations use Zorid's pinned English base-sensitivity/numeric policy, not an
+assertion of identical ordering in every host locale. These new expectations are
+also unexecuted against matching artifacts.
 
 The runner requires the exact planned group-name list and all 19 passed results;
 no skipped or unexecuted group can produce success. Shared fixture bytes join the

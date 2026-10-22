@@ -17,6 +17,7 @@ const report = {status: 'running', groups: [], plannedGroups: groupNames, cleanu
 ]};
 window.basesBrowserEvidence = report;
 const hosts = new Set(), names = new Set();
+const objectPrototypeDescriptors=Object.getOwnPropertyDescriptors(Object.prototype);
 const bytes = text => new TextEncoder().encode(text).length;
 const typed = (type, value) => ({type, value});
 const number = value => typed('number', value);
@@ -111,6 +112,16 @@ async function assertQ3(host,selected,spec,witnesses){
     equal({entryId:item.entryId,revision:item.revision},witness(entry),'Q3 row identity/revision');
     equal(item.values['file.path'],string(expected.path),'Q3 file path projection');
     for(const[property,value]of Object.entries(expected.values))equal(stableErrorValues(item.values[property]),q3Expected(value,witnesses),'Q3 '+property);
+    for(const property of spec.ownKeyStringProperties??[]){
+      const parsed=JSON.parse(item.values[property].value);
+      assert(Object.hasOwn(parsed,'__proto__'),'Q3 Object display lost its inert own __proto__ key');
+      equal(parsed.__proto__,'inert','Q3 inert own-key data changed');
+      assert(Object.getPrototypeOf(parsed)===Object.prototype,'Q3 parsed Object display changed its prototype');
+      const descriptors=Object.getOwnPropertyDescriptors(Object.prototype);
+      const keys=Reflect.ownKeys(descriptors),baselineKeys=Reflect.ownKeys(objectPrototypeDescriptors);
+      assert(keys.length===baselineKeys.length&&keys.every((key,index)=>key===baselineKeys[index]),'Q3 Object prototype own keys changed');
+      for(const key of baselineKeys)for(const field of ['value','get','set','writable','enumerable','configurable'])assert(descriptors[key][field]===objectPrototypeDescriptors[key][field],'Q3 Object prototype descriptor changed');
+    }
   }
   equal(stableErrorValues(result.summaries),q3Expected(spec.summaries,witnesses),'Q3 exact overall summaries');
   const issues=result.diagnostics.map(({path,property,code,entryId})=>{

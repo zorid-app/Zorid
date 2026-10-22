@@ -29,7 +29,7 @@ original scenario, not acceptance of this extension.
 The 40 added invocations are one mkdir, 14 creates, one index build, ten saved
 Base queries and 14 exact raw reads. The shared
 [Q3 fixture](../fixtures/bases-q3-semantics.mjs) has 14 added files (four ordinary
-Markdown notes and ten Bases), 92 typed row-value oracles and 13 expected diagnostic
+Markdown notes and ten Bases), 127 typed row-value oracles and 16 expected diagnostic
 entries. Assertions are not CLI commands. The runner checks that the original
 phase ends at 85 and that the completed new plan ends at 125.
 
@@ -40,6 +40,16 @@ through grouped/overall summaries; and returned Error data versus formula access
 rethrows. Exact fixture-source reads follow the queries. Source/oracle checks do
 not establish actual CLI, native/WASM or rendered application acceptance; a new
 matched build receipt and coordinated run are still required.
+
+The source-only G9–G15 follow-up retains all original Q3 assertions and appends
+35 explicit row-value expectations inside the same ten queries. The file count,
+125-command plan and 128-command ceiling are unchanged. New cases cover dead-branch
+regex construction; recursive Object display strings with unchanged typed JSON;
+configured relation raw-string coercion; normalized File folder/tag methods;
+literal-space title boundaries; rich String raw-date selection; and stable natural
+List sorting. Inert `__proto__` user data is deliberately preserved. Collation is
+the pinned English base-sensitivity/numeric policy, not universal locale parity.
+This follow-up has no actual CLI execution evidence yet.
 
 Read-only `--help` and `base-query --help` inspection used the older existing
 October 20 CLI artifact with SHA-256
