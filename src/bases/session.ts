@@ -435,6 +435,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     link.click(); setTimeout(() => win.URL.revokeObjectURL(url), 0);
   }
   function renderStatus(state: BaseControllerState): void {
+    root.dataset.baseControllerVersion = String(state.version);
+    root.dataset.baseControllerUpdating = String(!!state.updating);
+    root.dataset.baseControllerError = String(!!state.error);
     content.setAttribute('aria-busy', String(state.updating));
     if (state.error) { status.textContent = state.error.message; return; }
     if (definitionsError) { status.textContent = `Property settings: ${definitionsError}`; return; }

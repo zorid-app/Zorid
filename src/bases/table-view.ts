@@ -950,6 +950,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     const cancelledDraft = !!editing;
     initialized = true; revision++; stopDrag?.(); stopResize?.(); closeMenu?.(); closePicker?.(); draggedColumn = undefined; resizeWidths.clear(); measuredWidths.clear(); for (const cell of [...widgetDisposers.keys()]) releaseCell(cell); for (const cell of root.querySelectorAll('[data-base-editing]')) cell.removeAttribute('data-base-editing'); range = undefined; anchor = undefined; if (selection) selection.point = undefined; editing = undefined; result = next; collapsed.clear();
     status.textContent = cancelledDraft ? 'Results changed. The unfinished edit was cancelled.' : '';
+    root.dataset.baseRenderedVersion = String(result.version);
     root.setAttribute('aria-label', result.view.name);
     if (!selection || !result.rows.some(row => row.path === selection!.path) || !result.properties.includes(selection.property)) selection = result.rows[0] && result.properties[0] ? { path: result.rows[0].path, property: result.properties[0] } : undefined;
     dimensions(); rebuildItems();

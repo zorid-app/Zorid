@@ -111,6 +111,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   const inlineList = type === 'list' || type === 'tags';
   const picker = multiple || ['select', 'status', 'relation', 'link'].includes(type);
   let acceptedPresentation = presentation;
+  element.dataset.baseWidgetVersion = String(acceptedPresentation.version);
   let disposed = false, pending = false, editing = false, composing = false;
   let blurDuringComposition = false, compositionEpoch = 0;
   let finishAfterPending = false, editingIndex: number | undefined;
@@ -176,6 +177,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (!acknowledgement) return false;
     if (acknowledgement.row.path !== acceptedPresentation.row.path) throw new Error('A property acknowledgement cannot retarget its file.');
     acceptedPresentation = { ...acceptedPresentation, version: acknowledgement.version, row: acknowledgement.row, value: acknowledgement.value ?? next };
+    if (!disposed) element.dataset.baseWidgetVersion = String(acceptedPresentation.version);
     displayValue = options.getDisplayValue?.(acceptedPresentation) ?? acceptedPresentation.value; value = options.getEditableValue?.(acceptedPresentation) ?? next; pairTargets();
     return true;
   };
@@ -466,5 +468,5 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   const activate = (event: MouseEvent) => { if (!event.defaultPrevented && event.button === 0) begin(event); };
   const key = (event: KeyboardEvent) => { if (event.key === 'Escape' && !pending && type === 'checkbox' && element.hasAttribute('data-base-editing')) { event.preventDefault(); draw(); return; } if (!event.defaultPrevented && !event.isComposing && event.target === element && ['Enter', 'F2'].includes(event.key)) begin(event); };
   element.addEventListener('click', activate); element.addEventListener('dblclick', activate); element.addEventListener('keydown', key); draw();
-  return () => { disposed = true; removeFocusObserver?.(); removeFocusObserver = undefined; disposeRich?.(); disposeRich = undefined; closePopup(); timers.forEach(clearTimeout); timers.clear(); mark(); element.removeEventListener('click', activate); element.removeEventListener('dblclick', activate); element.removeEventListener('keydown', key); };
+  return () => { disposed = true; delete element.dataset.baseWidgetVersion; removeFocusObserver?.(); removeFocusObserver = undefined; disposeRich?.(); disposeRich = undefined; closePopup(); timers.forEach(clearTimeout); timers.clear(); mark(); element.removeEventListener('click', activate); element.removeEventListener('dblclick', activate); element.removeEventListener('keydown', key); };
 }
