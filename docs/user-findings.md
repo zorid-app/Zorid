@@ -1,5 +1,32 @@
 # User findings queue
 
+## Disposable Desktop vault recovery reset — 2026-10-21
+
+User explicitly confirms `/Users/ctk/Desktop/Zorid` is **always disposable**.
+This is standing permission to reset its test notes/state without asking again;
+it does not extend to unrelated vaults. The installed app showed incomplete
+availability despite complete filesystem scans. Read-only inspection found66
+pending legacy projection jobs, an unproven namespace attempt and36 completed
+publication attempts without current provenance; logical note bodies also
+differed from physical files. Root reproduced incomplete recovery on a separate
+consistent SQLite backup/copy; copying changes physical identities, so its exact
+issue count does not establish the original vault's diagnostic count.
+
+After stopping the two exact Zorid processes and confirming their host exited,
+root removed only this disposable vault's `.zorid` directory. Ordinary physical
+notes/folders remain; an owned smoke note was added. Actual installed-app test
+opens the reset vault, types into the editor, verifies Markdown publication,
+asserts `retryReconciliation(...).complete === true` and a hidden banner, then
+exits0. Evidence: `/private/tmp/zorid-packaged-smoke-tcABZl/`. An initial status
+probe used a nonexistent vault id; corrected to the documented path argument.
+
+Legacy migration remains unresolved: old physical proofs are deliberately not
+invented or cleared automatically. Separately, the startup banner conflates
+current publication blocks with completed-artifact maintenance failures; that
+classification issue remains open. Resetting disposable test data is not proof
+of repairing either legacy migration or every recovery path. No source fix or
+rebuild was needed for this reset.
+
 ## Packaged macOS startup and one-command build — 2026-10-21
 
 Root owns `codex/desktop-package-runtime-fix` in
