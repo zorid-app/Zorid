@@ -66,7 +66,11 @@ const output = (async()=>{
       const details={...selected}; delete details.arm;
       await event({kind:selected.arm.mode==='hold'?'held':'dropped',token:selected.arm.token,path:selected.arm.path,...details});
       if(selected.arm.mode==='drop'){
-        dropped=true;await stopChild();
+        // The output iterator is paused in this callback; drain EOF explicitly
+        // so ChildProcess.close cannot wait on this same iterator advancing.
+        dropped=true;child.stdout.resume();await stopChild();
+        assert.equal(child.exitCode,0,'Dropped reply follows clean real-host shutdown');
+        assert.equal(child.signalCode,null,'A killed native child is not clean reply-loss evidence');
         await event({kind:'drop-child-closed',exitCode:child.exitCode,signal:child.signalCode});
         // No native reply bytes have reached main. EOF is an actual transport
         // loss, never a manufactured negative acknowledgement.
