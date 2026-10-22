@@ -953,6 +953,25 @@ fn parse_cached(expression: &str) -> Result<Arc<Expr>, String> {
 /// the parsed syntax tree rather than searching source text, so string
 /// literals and similarly named frontmatter fields do not create false
 /// dependencies.
+/// Whether a filter actually reads the contextual `this` binding. A property
+/// named `this` and text containing the word do not require an ambient record.
+pub(crate) fn uses_current_context(source: &str) -> bool {
+    fn reads(expression: &Expr) -> bool {
+        match expression {
+            Expr::Identifier(name) => name.eq_ignore_ascii_case("this"),
+            Expr::Literal(_) | Expr::Regex(_, _) => false,
+            Expr::Array(values) => values.iter().any(reads),
+            Expr::Unary(_, value) => reads(value),
+            Expr::Binary(_, left, right) => reads(left) || reads(right),
+            Expr::Member(object, member) => {
+                reads(object) || matches!(member, Member::Computed(key) if reads(key))
+            }
+            Expr::Call(callee, arguments) => reads(callee) || arguments.iter().any(reads),
+        }
+    }
+    parse_cached(source).is_ok_and(|expression| reads(&expression))
+}
+
 pub(crate) fn uses_relationships(expression: &str) -> bool {
     parse_cached(expression)
         .map(|expression| expression_uses_relationships(expression.as_ref()))
@@ -3282,6 +3301,24 @@ fn parse_date(value: &str, timezone: &BasesTimezone) -> Option<DateValue> {
         });
     }
     for format in [
+        "%Y-%m-%d %H:%M:%S%.f%#z",
+        "%Y-%m-%dT%H:%M:%S%.f%#z",
+        "%Y-%m-%d %H:%M%#z",
+        "%Y-%m-%dT%H:%M%#z",
+    ] {
+        if let Ok(date) = DateTime::parse_from_str(value, format) {
+            return Some(DateValue {
+                millis: date.timestamp_millis(),
+                date_only: false,
+                timezone: timezone.clone(),
+            });
+        }
+    }
+    for format in [
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M",
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%dT%H:%M:%S",
         "%Y%m%d%H%M",
@@ -4403,6 +4440,61 @@ pub(crate) fn display_date(
     })
 }
 
+/// Pure interpretation of bounded raw frontmatter values. Resolution is a
+/// separate checked stage using the owning file's immutable source witness.
+/// Explicit property definitions may opt out before calling this helper.
+pub(crate) fn infer_frontmatter_value(
+    value: RuntimeValue,
+    timezone: &BasesTimezone,
+) -> RuntimeValue {
+    fn infer(value: RuntimeValue, timezone: &BasesTimezone, depth: usize) -> RuntimeValue {
+        if depth > 128 {
+            return RuntimeValue::Error(
+                "budget\0Frontmatter inference exceeds depth budget".into(),
+            );
+        }
+        match value {
+            RuntimeValue::String(value) => {
+                if value.starts_with("[[") && value.ends_with("]]") {
+                    if let Some(link) = wikilink(&value) {
+                        return RuntimeValue::Link(link);
+                    }
+                }
+                if is_external(&value) {
+                    return RuntimeValue::Link(BasesLink {
+                        path: value,
+                        external: true,
+                        ..Default::default()
+                    });
+                }
+                // Compact numeric forms belong to explicit date(), rather than
+                // reinterpreting arbitrary eight/twelve-digit property text.
+                if value.as_bytes().get(4) == Some(&b'-') && value.as_bytes().get(7) == Some(&b'-')
+                {
+                    if let Some(date) = parse_date(&value, timezone) {
+                        return RuntimeValue::Date(date);
+                    }
+                }
+                RuntimeValue::String(value)
+            }
+            RuntimeValue::List(values) => RuntimeValue::List(
+                values
+                    .into_iter()
+                    .map(|value| infer(value, timezone, depth + 1))
+                    .collect(),
+            ),
+            RuntimeValue::Object(values) => RuntimeValue::Object(
+                values
+                    .into_iter()
+                    .map(|(key, value)| (key, infer(value, timezone, depth + 1)))
+                    .collect(),
+            ),
+            value => value,
+        }
+    }
+    infer(value, timezone, 0)
+}
+
 pub(crate) fn apply_property_type(
     value: RuntimeValue,
     hint: &crate::PropertyType,
@@ -4717,5 +4809,66 @@ mod rich_expression_tests {
             BaseValue::Number { value: 4.0 }
         );
         assert_eq!(eval("min('3',4)").unwrap_err().code, "type");
+    }
+    #[test]
+    fn ordinary_frontmatter_infers_links_urls_dates_recursively_without_a_registry() {
+        let input = RuntimeValue::Object(IndexMap::from([
+            (
+                "author".into(),
+                RuntimeValue::String("[[Authors/Ada|Ada]]".into()),
+            ),
+            (
+                "mixed".into(),
+                RuntimeValue::List(vec![
+                    RuntimeValue::String("https://example.test".into()),
+                    RuntimeValue::String("2024-01-21 14:30".into()),
+                    RuntimeValue::String("20240121".into()),
+                ]),
+            ),
+        ]));
+        let RuntimeValue::Object(values) = infer_frontmatter_value(input, &BasesTimezone::Utc)
+        else {
+            panic!("object")
+        };
+        let RuntimeValue::Link(link) = &values["author"] else {
+            panic!("link")
+        };
+        assert_eq!(link.path, "Authors/Ada");
+        assert_eq!(link.display.as_deref(), Some("Ada"));
+        assert_eq!(link.resolved_path, None);
+        assert!(link.target.is_none());
+        let RuntimeValue::List(mixed) = &values["mixed"] else {
+            panic!("list")
+        };
+        assert!(matches!(&mixed[0],RuntimeValue::Link(link) if link.external));
+        assert!(matches!(&mixed[1], RuntimeValue::Date(_)));
+        assert!(matches!(&mixed[2],RuntimeValue::String(value) if value=="20240121"));
+        for source in ["[[Authors/Ada]] ", " [[Authors/Ada]]", "2024-99-99"] {
+            assert!(matches!(
+                infer_frontmatter_value(RuntimeValue::String(source.into()), &BasesTimezone::Utc),
+                RuntimeValue::String(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn current_context_detection_uses_ast_reads_not_substring_matching() {
+        for source in [
+            "this.file.path == file.path",
+            "THIS.author == 'Ada'",
+            "note[this.field]",
+            "[1].map(this.author)",
+        ] {
+            assert!(uses_current_context(source), "{source}");
+        }
+        for source in [
+            "note.this == 'this'",
+            "note['this'] == 'this'",
+            "'this.file'",
+            "/this/.matches('text')",
+            "file.path == 'this.md'",
+        ] {
+            assert!(!uses_current_context(source), "{source}");
+        }
     }
 }
