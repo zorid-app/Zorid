@@ -141,7 +141,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
       ...(documentRuntime?{documentRuntime}:{}),
       ...(host.capabilities?.includes('workblocks')?{workblockCommand}:{}),
       ...(host.capabilities?.includes('binary_streams')?{binaryCommand,binaryLimits:host.binaryLimits}:{}),
-      ...(creates?{createText:input=>invoke(async()=>{const value=await creates.create(input);service.documentRuntimeSourceHint?.();return value;},null),fileCommand:input=>invoke(async()=>{const value=await creates.execute(input);service.documentRuntimeSourceHint?.();return value;},null)}:{}),
+      ...(creates?{createText:input=>invoke(async()=>{const value=await creates.create(input);service.documentRuntimeSourceHint?.();return value;},null),createTextReceipt:input=>invoke(async()=>{const value=await creates.createReceipt(input);service.documentRuntimeSourceHint?.();return value;},null),fileCommand:input=>invoke(async()=>{const value=await creates.execute(input);service.documentRuntimeSourceHint?.();return value;},null)}:{}),
       async retire() {
         // Window has gone away. Drain accepted calls and drop ownership only;
         // leave every checkpoint/intent intact for the same slot on restart.

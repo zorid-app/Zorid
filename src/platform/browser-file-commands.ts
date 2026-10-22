@@ -376,13 +376,8 @@ export function createBrowserFileCommands(backend: BrowserFileCommandBackend, as
             head = await persist(head, state);
         }
     }
-    return Object.freeze({
-        execute(input: BrowserFileCommandInput): Promise<void> { let request: Request; try {
-            request = capture(input);
-        }
-        catch (error) {
-            return Promise.reject(error);
-        } return serial(async () => { const key = prefix + request.operationId; let head = await checkpoints.load(key), state: State; if (head?.encodedState) {
+    async function executeRequest(request: Request): Promise<void> {
+        const key = prefix + request.operationId; let head = await checkpoints.load(key), state: State; if (head?.encodedState) {
             state = await decode(head);
             if (state.signature !== await signature(request))
                 throw failure('idempotency_conflict');
@@ -394,7 +389,29 @@ export function createBrowserFileCommands(backend: BrowserFileCommandBackend, as
             for (const step of state.steps)
                 family(step, request);
             head = await persist(head, state);
-        } await finish(head!, state); }); },
+        } await finish(head!, state);
+    }
+    return Object.freeze({
+        execute(input: BrowserFileCommandInput): Promise<void> {
+            let request: Request;
+            try { request = capture(input); } catch (error) { return Promise.reject(error); }
+            return serial(() => executeRequest(request));
+        },
+        createTextReceipt(input: Extract<BrowserFileCommandInput, { kind: 'createText' }>): Promise<unknown> {
+            let request: Request;
+            try { request = capture(input); if (request.kind !== 'createText' || request.expectedBody !== undefined || request.expectedEntryId !== undefined || request.expectedRevision !== undefined) throw failure('invalid_file_request'); }
+            catch (error) { return Promise.reject(error); }
+            return serial(async () => {
+                await executeRequest(request);
+                const head = await checkpoints.load(prefix + request.operationId);
+                if (!head?.encodedState) throw failure('invalid_file_checkpoint');
+                const state = await decode(head);
+                if (state.signature !== await signature(request) || state.status !== 'committed' || state.outcome?.status !== 'committed') throw failure('invalid_file_checkpoint');
+                // decode and finish have already bound the exact retained intent
+                // and committed outcome. Return its original Rust receipt.
+                return JSON.parse(state.outcome.receipt) as unknown;
+            });
+        },
         recover(): Promise<boolean> { return serial(async () => { let cursor: string | undefined, changed = false; for (let pageCount = 0; pageCount < 100; pageCount++) {
             const page = await checkpoints.list({ limit: 100, cursor });
             for (const item of page.items) {

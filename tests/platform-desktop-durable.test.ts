@@ -2,6 +2,28 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createPlatformAdapter } from '../src/platform/index.ts';
 
+test('captured desktop creation retains original command identity and validates its original receipt after lost ACK', async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const calls: any[] = []; let lose = true;
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { zorid: {
+    getVault: async () => ({ path: '/fixture', name: 'Fixture' }),
+    getDurableContext: async () => ({ admissionId: 'admitted', scope: { vaultId: 'authority', clientId: 'client' }, textCreateReceiptsAvailable: true }),
+    releaseDurableContext: async () => {},
+    durableInvoke: async (_path: string, _admission: string, method: string, args: any[]) => {
+      assert.equal(method, 'createTextReceipt'); const request = structuredClone(args[0]); calls.push(request);
+      if (lose) throw Object.assign(new Error('lost ACK'), { code: 'host_timeout', commitUncertain: true });
+      return { operation_id: request.operationId, sequence: '7', changes: [{ before: null, after: { id: request.entryId, path: request.path, kind: 'file', revision: 'created-revision', deleted: false } }] };
+    },
+  } } });
+  try {
+    const { adapter } = (await createPlatformAdapter())!, captured = adapter.captureTextCreate!('New.md', 'literal');
+    await assert.rejects(captured.run(), /lost ACK/); lose = false;
+    const receipt = await captured.run(); assert.deepEqual(calls[0], calls[1]);
+    assert.equal(receipt.entryId, captured.entryId); assert.equal(receipt.operationId, captured.operationId); assert.equal(receipt.revision, 'created-revision');
+    await captured.run(); assert.equal(calls.length, 2);
+  } finally { if (previous) Object.defineProperty(globalThis, 'window', previous); else Reflect.deleteProperty(globalThis, 'window'); }
+});
+
 for (const lateOutcome of ['success', 'terminal rejection']) {
   test(`late duplicate ${lateOutcome} preserves a newer uncertain operation ID`, async () => {
     const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');

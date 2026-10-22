@@ -6,7 +6,7 @@ import { MetadataCache } from './metadata.ts';
 import {CommittedMetadataProjection} from './committed-metadata-frame.ts';
 import type {CommittedMetadataFrame, CommittedMetadataState} from './committed-metadata-frame.ts';
 import { isMarkdown, normalizePath, parentPath } from './types.ts';
-import type { VaultAdapter, VaultChange, VaultEntry, VaultEvent } from './types.ts';
+import type { VaultAdapter, VaultChange, VaultEntry, VaultEvent, TextCreateReceipt } from './types.ts';
 import type { DurableWrites, DurableWriteIntent, DurableWriteRead, DurableWriteRef } from './durable-writes.ts';
 
 export type DurableCommitReceipt = Extract<DurableWriteIntent, { state: 'committed' }>['receipt'];
@@ -605,14 +605,17 @@ export class Vault {
   }
 
   /** Explicit caller-retained creation, separate from unrelated one-shot creates.
-   * An existing destination after an unacknowledged dispatch is not proof of
-   * success. The void adapter API cannot establish its entry identity, so that
-   * case requires host recovery rather than content matching or a second name.
+   * Receipt-capable hosts can replay the same original command even after an
+   * uncertain commit occupies the destination. Legacy void adapters require
+   * recovery rather than matching content or selecting a second filename.
    */
   createOperation(rawPath: string, text = '', validate?: () => void): VaultCreateOperation {
     const path = normalizePath(rawPath), adapter = this.adapter;
+    const captured = adapter.captureTextCreate?.(path, text);
+    if (captured && (captured.path !== path || captured.text !== text || !captured.operationId || !captured.entryId || typeof captured.run !== 'function')) throw durableFailure('invalid_create_request', 'The captured creation does not match its original destination and text');
     let status: VaultCreateOperation['status'] = 'ready', inFlight: Promise<VaultEntry> | undefined;
     let dispatched = false, acknowledged = false, published: VaultEntry | undefined;
+    let receipt: TextCreateReceipt | undefined;
     const owner = this;
     const check = () => { validate?.(); if (owner.adapter !== adapter) throw new Error('The vault adapter changed before file creation.'); };
     return Object.freeze({ path, text, get status() { return status; }, run() {
@@ -621,9 +624,15 @@ export class Vault {
       const result = owner.enqueue(async () => {
         check(); status = 'creating';
         try {
-          if (acknowledged) throw durableFailure('create_reconciliation_required', 'Creation was acknowledged but its original file identity could not be published. Recover the original operation before retrying; an existing replacement must not be adopted.');
-          await owner.refresh(); check();
-          if (!acknowledged) {
+          if (captured) {
+            if (!dispatched) { await owner.refresh(); check(); owner.requireDestination(path); }
+            check(); dispatched = true;
+            receipt = await captured.run(); check();
+            if (receipt.operationId !== captured.operationId || receipt.entryId !== captured.entryId || receipt.path !== path || typeof receipt.revision !== 'string' || !receipt.revision) throw durableFailure('invalid_create_receipt', 'Creation receipt does not match the original captured command');
+            acknowledged = true;
+          } else {
+            if (acknowledged) throw durableFailure('create_reconciliation_required', 'Creation was acknowledged but its original file identity could not be published. Recover the original operation before retrying; an existing replacement must not be adopted.');
+            await owner.refresh(); check();
             if (dispatched && owner.entries.has(path)) throw durableFailure('create_reconciliation_required', 'Creation may already have committed. Recover its original operation before retrying; the existing file was not adopted or overwritten.');
             owner.requireDestination(path);
             check(); dispatched = true;
@@ -633,6 +642,7 @@ export class Vault {
           await owner.refresh(); check();
           const entry = owner.entries.get(path);
           if (!entry || entry.type !== 'file') throw durableFailure('created_file_unavailable', 'The created file is no longer available; retry will not recreate it.');
+          if (receipt && (entry.entryId !== receipt.entryId || entry.revision !== receipt.revision)) throw durableFailure('created_file_changed', 'The originally created file was changed, moved or replaced before publication; the current destination was preserved.');
           published = Object.freeze({ ...entry }); status = 'committed';
           owner.emit('create', { path, entry: published });
           return published;

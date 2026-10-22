@@ -1,6 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {defaultBrowserAdapter} from '../src/platform/browser-default.ts';
+
+test('captured normal browser creation retains original request through receipt uncertainty', async()=>{
+  const calls:any[]=[];let lose=true,active=true;
+  const context={durableWrites:{},recoverCommands:async()=>false,fileCommand:async()=>{},assertActive(){if(!active)throw new Error('retired');},async createTextReceipt(request:any){
+    calls.push(structuredClone(request));if(lose)throw new BrowserVaultError('outcome_unknown','lost receipt');
+    return {operation_id:request.operationId,sequence:'1',changes:[{before:null,after:{id:request.entryId,path:request.path,kind:'file',revision:'created-revision',deleted:false}}]};
+  }} as unknown as BrowserClientContext;
+  const adapter=defaultBrowserAdapter({} as BrowserCoreRuntime,context),captured=adapter.captureTextCreate!('New.md','literal');
+  await assert.rejects(captured.run(),{code:'outcome_unknown'});lose=false;
+  const receipt=await captured.run();assert.deepEqual(calls[0],calls[1]);assert.equal(receipt.entryId,captured.entryId);
+  active=false;await assert.rejects(captured.run(),/retired/);assert.equal(calls.length,2);
+});
 import {BrowserVaultError} from '../src/core/browser-vault.ts';
 import type {BrowserCoreRuntime} from '../src/platform/browser-core-runtime.ts';
 import type {BrowserClientContext} from '../src/platform/browser-client-admission.ts';

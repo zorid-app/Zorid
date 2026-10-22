@@ -23,7 +23,7 @@ function fixture(){
     async fileCommand(client,family,bytes){
       assert.equal(client,'client');
       const id=family.request.operation_id,mutation=family.request.mutation;
-      assert.ok([...heads.values()].some(head=>{const state=JSON.parse(head.encodedState);return state.commands?.some(step=>step.family.request.operation_id===id)||state.request?.operationId===id;}),'exact command must be durable before mutation');
+      assert.ok([...heads.values()].some(head=>{const state=JSON.parse(head.encodedState);return state.commands?.some(step=>step.family.request.operation_id===id)||state.request?.operationId===id||state.state==='committed'&&state.operationId===id;}),'exact command must be durable before mutation or retained for committed receipt replay');
       const serialized=JSON.stringify({family,bytes:Buffer.from(bytes).toString('base64')});calls.push({id,serialized});
       const stored=receipts.get(id);if(stored){assert.equal(stored.serialized,serialized);return stored.result;}
       beforeApply?.();beforeApply=undefined;
@@ -45,7 +45,7 @@ function fixture(){
           for(const path of [...entries.keys()])if(path===old||path.startsWith(old+'/'))entries.delete(path);
         }
       }
-      const result={commit:{operation_id:id,sequence:String(receipts.size+1)},projection:{state:'pending'}};
+      const result={commit:{operation_id:id,sequence:String(receipts.size+1),...(mutation.type==='create'?{changes:[{before:null,after:structuredClone(find(mutation.id).entry)}]}:{})},projection:{state:'pending'}};
       receipts.set(id,{serialized,result});
       if(loseAt===calls.length){loseAt=0;throw Object.assign(new Error('lost'),{code:'host_timeout',commitUncertain:true});}
       return result;
@@ -55,6 +55,17 @@ function fixture(){
 }
 const request={operationId:'operation',entryId:'entry',path:'New note.md',content:'Hello 🌱\n'};
 const input=(kind,path,more={})=>({kind,path,operationId:`op-${kind}-${path.replace(/[^A-Za-z0-9_-]/g,'-')}`,entryId:`id-${kind}-${path.replace(/[^A-Za-z0-9_-]/g,'-')}`,...more});
+test('receipt consumer replays original committed identity across lost ACK and same-path replacement',async()=>{
+  const f=fixture();f.loseAt(1);const first=desktopTextCreates(f.service,f.checkpoints);
+  await assert.rejects(first.createReceipt(request),{code:'host_timeout'});
+  const original=structuredClone(f.entries.get(request.path).entry);
+  f.put('replacement',request.path,'file',Buffer.from(request.content));
+  const receipt=await desktopTextCreates(f.service,f.checkpoints).createReceipt(request);
+  assert.equal(receipt.operation_id,request.operationId);assert.deepEqual(receipt.changes[0],{before:null,after:original});
+  assert.equal(f.entries.get(request.path).entry.id,'replacement');assert.equal(f.receipts.size,1);
+  assert.ok(f.calls.every(call=>call.serialized===f.calls[0].serialized));
+  await assert.rejects(first.createReceipt({...request,content:'changed'}),{code:'idempotency_conflict'});
+});
 test('text create checkpoints before mutation and recovery reuses exact request after lost commit reply',async()=>{
   const f=fixture();f.loseAt(1);const consumer=desktopTextCreates(f.service,f.checkpoints);
   const mutable={...request};const pending=consumer.create(mutable);mutable.content='later';

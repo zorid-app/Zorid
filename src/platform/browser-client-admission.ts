@@ -26,6 +26,7 @@ export interface BrowserClientContext extends BrowserFlushContext {
   readonly binaryStreams?:BinaryStreams;
   readonly workBlocks?:WorkBlockService;
   fileCommand?(input:BrowserFileCommandInput):Promise<void>;
+  createTextReceipt?(input:Extract<BrowserFileCommandInput,{kind:'createText'}>):Promise<unknown>;
   recoverCommands?():Promise<boolean>;
   release(flushGate: (context: BrowserFlushContext) => void | Promise<void>): Promise<void>;
 }
@@ -194,7 +195,7 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
   admittedRuntimes.add(runtime);
   async function drain() { while (pending.size) await Promise.allSettled([...pending]); }
   return Object.freeze({ scope, durableWrites, ...(documentIndex?{documentIndex}:{}), assertActive: () => allowed(),
-    ...(commands?{fileCommand:(input:BrowserFileCommandInput)=>invoke(()=>commands.execute(input))}:{}),
+    ...(commands?{fileCommand:(input:BrowserFileCommandInput)=>invoke(()=>commands.execute(input)),createTextReceipt:(input:Extract<BrowserFileCommandInput,{kind:'createText'}>)=>invoke(()=>commands.createTextReceipt(input))}:{}),
     ...(binaryStreams?{binaryStreams}:{}),
     get workBlocks(){return admittedWorkBlocks();},
     ...(commands||binary?{recoverCommands:()=>invoke(async()=>{const files=commands?await commands.recover():false;const stages=binary&&binaryStreams?await scheduleBinaryTransfer(binaryStreams,()=>binary.recover()):false;return files||stages;})}:{}),

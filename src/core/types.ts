@@ -16,6 +16,21 @@ export interface VaultEntry {
 }
 
 export type RenameExpectedIdentity = Readonly<{entryId:string;revision:string}>;
+export interface TextCreateReceipt {
+  readonly operationId: string;
+  readonly entryId: string;
+  readonly revision: string;
+  readonly path: string;
+  readonly sequence: string;
+}
+/** A captured command owns one original request across uncertain replies. */
+export interface CapturedTextCreate {
+  readonly operationId: string;
+  readonly entryId: string;
+  readonly path: string;
+  readonly text: string;
+  run(): Promise<TextCreateReceipt>;
+}
 
 /** Paths are relative to the vault. Implementations must enforce the vault boundary. */
 export interface VaultAdapter {
@@ -34,6 +49,9 @@ export interface VaultAdapter {
   write(path: string, content: string): Promise<void>;
   /** Explicit create, never overwrite; optional durable native creation consumer. */
   createText?(path: string, content: string): Promise<void>;
+  /** Optional receipt-backed creation. Capture is inert; run replays only this
+   * original command, including after its destination becomes occupied. */
+  captureTextCreate?(path: string, content: string): CapturedTextCreate;
   /** Compare and write in one shared host queue; reject mismatches without writing. */
   compareAndWrite?(path: string, expectedContent: string, content: string, expectedIdentity?: {entryId:string;revision:string}): Promise<void>;
   /** Binary APIs preserve every byte; implementations must not retain mutable caller buffers. */

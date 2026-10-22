@@ -7,6 +7,7 @@ import type { Checkpoint } from '../src/core/durable-checkpoints.ts';
 import { BrowserVaultError } from '../src/core/browser-vault.ts';
 import { Vault } from '../src/core/vault.ts';
 import { defaultBrowserAdapter } from '../src/platform/browser-default.ts';
+import { decodeTextCreateReceipt } from '../src/core/text-create.ts';
 import type { BrowserCoreRuntime } from '../src/platform/browser-core-runtime.ts';
 import type { BrowserClientContext } from '../src/platform/browser-client-admission.ts';
 // Phase-aware transport fake; Rust and IndexedDB behavior are covered by their own fixtures.
@@ -30,7 +31,7 @@ function fixture() {
             row.status = 'rejected';
             row.error = { code: 'revision_conflict', message: 'stale', source: 'rust' };
             throw new BrowserVaultError('revision_conflict', 'stale', undefined, 'rust');
-        } const m = JSON.parse(row.request_json).mutation; row.status = 'committed'; row.receipt = JSON.stringify({ operation_id: id, sequence: String(++sequence), changes: [] }); if (m.type === 'create')
+        } const m = JSON.parse(row.request_json).mutation; row.status = 'committed'; row.receipt = JSON.stringify({ operation_id: id, sequence: String(++sequence), changes: m.type === 'create' ? [{ before: null, after: { id: m.id, path: m.path, kind: m.kind, revision: 'revision-' + sequence, deleted: false } }] : [] }); if (m.type === 'create')
             files.set(m.path, { entry: { id: m.id, path: m.path, kind: m.kind, revision: 'revision-' + sequence, deleted: false }, presentation: { id: m.id, ctime_ms: 1, mtime_ms: 1, size_bytes: m.content?.length ?? 0 }, ...(m.content ? { bytes: Uint8Array.from(m.content) } : {}) }); if (commitFailure) {
             commitFailure = false;
             throw new BrowserVaultError('outcome_unknown', 'lost response');
@@ -44,6 +45,17 @@ function fixture() {
     return { backend, heads, rows, files, events, consumer: () => createBrowserFileCommands(backend), failCheckpoint(n: number) { checkpointFailure = n; }, loseAck() { ackFailure = true; }, loseCommit() { commitFailure = true; }, reject() { rejection = true; } };
 }
 const create: BrowserFileCommandInput = { kind: 'createText', operationId: 'operation', entryId: 'entry', path: 'Note.md', content: 'draft' };
+test('receipt API retains original committed file identity after lost ACK and a same-path replacement', async () => {
+    const f = fixture(); f.loseCommit(); f.loseAck();
+    await assert.rejects(f.consumer().createTextReceipt(create as Extract<BrowserFileCommandInput,{kind:'createText'}>), { code: 'outcome_unknown' });
+    const original = structuredClone(f.files.get('Note.md')!.entry);
+    f.files.set('Note.md', { ...existing(), entry: { ...existing().entry, id: 'replacement', revision: 'replacement-revision' } });
+    const raw = await f.consumer().createTextReceipt(create as Extract<BrowserFileCommandInput,{kind:'createText'}>);
+    const receipt = decodeTextCreateReceipt(raw, create);
+    assert.equal(receipt.entryId, original.id); assert.equal(receipt.revision, original.revision); assert.equal(f.rows.size, 1);
+    assert.equal(f.files.get('Note.md')!.entry.id, 'replacement');
+    await assert.rejects(f.consumer().createTextReceipt({ ...create, content: 'changed' } as Extract<BrowserFileCommandInput,{kind:'createText'}>), { code: 'idempotency_conflict' });
+});
 function existing(path = 'Note.md', kind: 'file' | 'folder' = 'file'): BrowserVaultRead { return { entry: { id: 'old-entry', path, kind, revision: 'old-revision', deleted: false }, presentation: { id: 'old-entry', ctime_ms: 1, mtime_ms: 1, size_bytes: 3 }, ...(kind === 'file' ? { bytes: new TextEncoder().encode('old') } : {}) }; }
 test('checkpoint precedes preparation and terminal checkpoint precedes exact ACK; identical retry retains IDs', async () => {
     const f = fixture(), c = f.consumer();

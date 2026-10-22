@@ -15,6 +15,8 @@ import type { BinaryTarget, BinaryStageRef, BinaryReadRef } from '../core/binary
 import { vaultPath } from './path.ts';
 import {createDocumentService} from '../core/document-semantics.ts';
 import type {DocumentSemanticsCapability} from '../core/document-semantics.ts';
+import {decodeTextCreateReceipt} from '../core/text-create.ts';
+import type {TextCreateReceipt} from '../core/types.ts';
 
 export const DEFAULT_BROWSER_DATABASE='zorid-core-vault:default-v1';
 /** Normal browser commands retain the exact request after uncertain transport.
@@ -116,6 +118,30 @@ export function defaultBrowserAdapter(runtime:BrowserCoreRuntime,consumer:Browse
   }
   return {
     durableWrites:consumer.durableWrites,durableNamespace:true,...(consumer.documentIndex?{documentSemantics:createDocumentService(consumer.documentIndex)}:{}),...(streams?{binaryStreams:streams}:{}),
+    ...(consumer.createTextReceipt?{captureTextCreate(rawPath:string,text:string){
+      const path=vaultPath(rawPath);
+      if(typeof text!=='string')throw new BrowserVaultError('invalid_text','Text creation requires a string');
+      const request=Object.freeze({kind:'createText' as const,path,content:text,operationId:crypto.randomUUID(),entryId:crypto.randomUUID()});
+      const key=`createText:${path}`,owned={signature:JSON.stringify({kind:'createText',path,content:text}),request};
+      let receipt:TextCreateReceipt|undefined,inFlight:Promise<TextCreateReceipt>|undefined;
+      return Object.freeze({path,text,operationId:request.operationId,entryId:request.entryId,run(){
+        try{consumer.assertActive();}catch(error){return Promise.reject(error);}
+        if(receipt)return Promise.resolve(receipt);
+        if(inFlight)return inFlight;
+        const prior=pending.get(key);
+        if(prior&&prior!==owned)return Promise.reject(new BrowserVaultError('command_pending','A different creation is still pending for this path'));
+        pending.set(key,owned);
+        const result=consumer.createTextReceipt!(request).then(raw=>{
+          consumer.assertActive();const committed=decodeTextCreateReceipt(raw,request);receipt=committed;
+          if(pending.get(key)===owned)pending.delete(key);
+          return committed;
+        },error=>{
+          if(error instanceof BrowserVaultError&&['invalid_request','not_found','revision_conflict','idempotency_conflict','invalid_path','invalid_text'].includes(error.code)&&pending.get(key)===owned)pending.delete(key);
+          throw error;
+        });
+        const tracked=result.finally(()=>{if(inFlight===tracked)inFlight=undefined;});inFlight=tracked;return tracked;
+      }});
+    }}:{}),
     list:()=>facade.list(),stat:path=>facade.stat(path),read:path=>facade.read(path),readBinary:path=>facade.readBinary(path),subscribe:listener=>facade.subscribe(listener),
     createText:(path,content)=>execute({kind:'createText',path,content}),
     write:(path,content)=>execute({kind:'writeText',path,content}),

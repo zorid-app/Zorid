@@ -6,6 +6,9 @@ import {createDesktopDocumentService,createDesktopDocumentRuntime} from './deskt
 import {createDesktopDocumentDraftTransport} from './desktop-document-drafts.ts';
 import type {DocumentService} from '../core/document-semantics.ts';
 import type { DurableWrites } from '../core/durable-writes.ts';
+import { decodeTextCreateReceipt } from '../core/text-create.ts';
+import { normalizePath } from '../core/types.ts';
+import type { TextCreateReceipt } from '../core/types.ts';
 import type { VaultAdapter } from '../core/types';
 import type { DesktopBridge, DesktopVault, DesktopReconciliation } from './bridge';
 
@@ -80,6 +83,29 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
     };
     createText=(path,content)=>execute({kind:'createText',path,content});
     commands={durableNamespace:true,
+      ...(binding.textCreateReceiptsAvailable === true ? { captureTextCreate(rawPath:string,content:string) {
+        const path=normalizePath(rawPath);
+        if(typeof content!=='string')throw new Error('Text creation requires a string');
+        const request=Object.freeze({kind:'createText',path,content,operationId:crypto.randomUUID(),entryId:crypto.randomUUID()}),key=`createText:${path}`;
+        let receipt:TextCreateReceipt|undefined,inFlight:Promise<TextCreateReceipt>|undefined;
+        return Object.freeze({path,text:content,operationId:request.operationId,entryId:request.entryId,run(){
+          if(released)return Promise.reject(Object.assign(new Error('Durable desktop context released'),{code:'client_not_admitted',source:'host'}));
+          if(receipt)return Promise.resolve(receipt);
+          if(inFlight)return inFlight;
+          const prior=pending.get(key);
+          if(prior&&prior!==request)return Promise.reject(new Error('A different file operation is still pending for this path'));
+          pending.set(key,request);
+          const result=call<unknown>('createTextReceipt',request).then(raw=>{
+            const committed=decodeTextCreateReceipt(raw,request);receipt=committed;
+            if(pending.get(key)===request)pending.delete(key);
+            return committed;
+          },error=>{
+            if(error&&typeof error==='object'&&'code'in error&&['invalid_request','not_found','revision_conflict','idempotency_conflict'].includes(String(error.code))&&(!('commitUncertain'in error)||!error.commitUncertain)&&pending.get(key)===request)pending.delete(key);
+            throw error;
+          });
+          const tracked=result.finally(()=>{if(inFlight===tracked)inFlight=undefined;});inFlight=tracked;return tracked;
+        }});
+      }} : {}),
       write:(path,content)=>execute({kind:'writeText',path,content}),
       compareAndWrite:(path,expectedContent,content,expectedIdentity)=>execute({kind:'writeText',path,expectedContent,content,...(expectedIdentity?{expectedEntryId:expectedIdentity.entryId,expectedRevision:expectedIdentity.revision}:{})}),
       createBinary:(path,data)=>execute({kind:'createBinary',path,data}),

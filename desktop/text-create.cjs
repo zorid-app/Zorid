@@ -124,6 +124,24 @@ function desktopTextCreates(service,checkpoints){
   }
   return Object.freeze({
     create:input=>execute({...input,kind:'createText'}),execute,
+    async createReceipt(input){
+      // The durable consumer validates/signs the exact original request before
+      // replay. A terminal checkpoint drops payloads, so fetch the original
+      // Rust CommitResult by replaying its already-committed operation identity.
+      const request=capture({...input,kind:'createText'});
+      if(request.expected_base64!==undefined||request.expectedEntryId!==undefined||request.expectedRevision!==undefined)throw failure('invalid_file_request');
+      await execute({kind:'createText',operationId:request.operationId,entryId:request.entryId,path:request.path,content:Buffer.from(request.body_base64,'base64').toString('utf8')});
+      return serial(async()=>{
+        const head=await checkpoints.load(prefix+request.operationId);
+        if(!head?.encodedState)throw failure('invalid_file_checkpoint');
+        const state=decode(head);
+        if(state.state!=='committed'||state.signature!==signature(request))throw failure('invalid_file_checkpoint');
+        const step=command(request.operationId,{type:'create',id:request.entryId,path:request.path,kind:'file'},'text',request.body_base64);
+        const result=await service.host.fileCommand(checkpoints.scope.clientId,step.family,Buffer.from(step.body_base64,'base64'));
+        if(result.commit.operation_id!==request.operationId)throw failure('invalid_file_receipt');
+        return result.commit;
+      });
+    },
     recover(){return serial(async()=>{
       let cursor;
       for(let pageCount=0;pageCount<100;pageCount++){
