@@ -1041,14 +1041,25 @@ fn answer_dynamic_key_preserves_numeric_bits_and_view_context() {
     b.evaluation.current_record.as_mut().unwrap().properties[0].1 =
         PropertyValue::Number(serde_json::Number::from(0));
     assert!(!options_exact(&a, &b, true));
-    // Exercise the real answer path too: detached canonical equality preserves
-    // existing Number equality, while an exact answer key must not merge signs.
+    // Exercise the real answer path without string conversion: JavaScript prints
+    // both signs as "0", and f64 PartialEq also considers them equal. The answer
+    // key must still preserve the numeric bits in the current-record context.
+    fn assert_signed_bits(result: &BaseQueryResult, expected: f64) {
+        assert!(result.diagnostics.is_empty());
+        assert!(!result.rows.is_empty());
+        for row in &result.rows {
+            let Some(crate::BaseValue::Number { value }) = row.values.get("formula.signed") else {
+                panic!("expected a numeric signed formula for {}", row.path);
+            };
+            assert_eq!(value.to_bits(), expected.to_bits(), "{}", row.path);
+        }
+    }
     let mut numeric = first();
     if let GenerationSource::Text { request, .. } = &mut numeric.sources[0] {
         request.source = "---\nsigned: -0.0\n---\n".into();
     }
     let mut cache = BasePreparationCache::new();
-    let source = "formulas:\n  signed: 'this.signed + \"\"'\nviews:\n  - type: table\n    name: Table\n    order: [formula.signed]\n";
+    let source = "formulas:\n  signed: 'this.signed'\nviews:\n  - type: table\n    name: Table\n    order: [formula.signed]\n";
     let (program, prepared) = answer_inputs(&mut cache, &numeric, source, 0);
     let mut negative = numeric.options.clone();
     negative.evaluation.current_record = Some(
@@ -1065,6 +1076,12 @@ fn answer_dynamic_key_preserves_numeric_bits_and_view_context() {
         .query_prepared_cached(&program, &prepared, &negative, 0)
         .unwrap();
     assert_eq!(seed.outcome(), PreparationCacheOutcome::Miss);
+    assert_signed_bits(seed.value(), -0.0);
+    let negative_hit = cache
+        .query_prepared_cached(&program, &prepared, &negative, 1)
+        .unwrap();
+    assert_eq!(negative_hit.outcome(), PreparationCacheOutcome::Hit);
+    assert_signed_bits(negative_hit.value(), -0.0);
     let mut positive = negative.clone();
     positive
         .evaluation
@@ -1074,12 +1091,23 @@ fn answer_dynamic_key_preserves_numeric_bits_and_view_context() {
         .properties[0]
         .1 = PropertyValue::Number(serde_json::Number::from_f64(0.0).unwrap());
     let expected = semantics(query_prepared(program.value(), &prepared, &positive).unwrap());
-    assert_ne!(semantics(seed.into_value()), expected);
+    assert_signed_bits(&expected, 0.0);
     let changed = cache
-        .query_prepared_cached(&program, &prepared, &positive, 1)
+        .query_prepared_cached(&program, &prepared, &positive, 2)
         .unwrap();
     assert_eq!(changed.outcome(), PreparationCacheOutcome::Miss);
+    assert_signed_bits(changed.value(), 0.0);
     assert_eq!(semantics(changed.into_value()), expected);
+    let positive_hit = cache
+        .query_prepared_cached(&program, &prepared, &positive, 3)
+        .unwrap();
+    assert_eq!(positive_hit.outcome(), PreparationCacheOutcome::Hit);
+    assert_signed_bits(positive_hit.value(), 0.0);
+    let negative_again = cache
+        .query_prepared_cached(&program, &prepared, &negative, 4)
+        .unwrap();
+    assert_eq!(negative_again.outcome(), PreparationCacheOutcome::Hit);
+    assert_signed_bits(negative_again.value(), -0.0);
     let r = first();
     let source = "views:\n  - type: table\n    name: Names\n    order: [file.name]\n  - type: table\n    name: Paths\n    order: [file.path]\n";
     let mut cache = BasePreparationCache::new();
