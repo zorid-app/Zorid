@@ -24,7 +24,7 @@ test('toolbar accepts only its staged keys and produces detached data', () => {
   ((patch.sort as any)[0].extension.tags as string[]).push('later');
   assert.deepEqual((output.sort as any)[0].extension.tags, ['keep']);
   assert.equal(patch.name, '  Renamed  ');
-  for (const key of ['columnSize', 'limit', 'pluginOption', '__proto__']) assert.throws(() => validate(Object.fromEntries([[key, 1]])), /Unsupported/);
+  for (const key of ['columnSize', 'pluginOption', '__proto__']) assert.throws(() => validate(Object.fromEntries([[key, 1]])), /Unsupported/);
 });
 
 test('toolbar requires a nonblank name and a supported built-in type', () => {

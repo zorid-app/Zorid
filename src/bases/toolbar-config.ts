@@ -7,7 +7,7 @@ import type { BaseQueryResult } from './query.ts';
 export type BaseToolbarPatch = BaseViewPatch;
 export type BaseFilterOperator = 'eq' | 'neq' | 'contains' | 'gt' | 'lt' | 'unset' | 'set';
 export type BaseFilterValueType = 'text' | 'number' | 'boolean';
-const allowedKeys = new Set(['filters', 'sort', 'order', 'groupBy', 'groupOrder', 'name', 'type']);
+const allowedKeys = new Set(['filters', 'sort', 'order', 'groupBy', 'groupOrder', 'name', 'type', 'limit', 'rowHeight', 'cardSize', 'columnWidth', 'image', 'imageFit', 'imageAspectRatio', 'markers', 'indentProperties', 'separator']);
 const fail = (message: string): never => { throw new Error(message); };
 const mapping = (value: unknown): value is Record<string, BaseValue> => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -115,6 +115,18 @@ export function validateToolbarPatch(result: BaseQueryResult, patch: BaseViewPat
         if (value !== undefined || !Object.hasOwn(output, 'groupBy')) return fail('Group order can only be reset with a grouping change');
         break;
       case 'filters': if (value !== undefined) validateFilter(value); break;
+      case 'limit': if (value !== undefined && (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)) return fail('Limit must be a nonnegative whole number'); break;
+      case 'rowHeight': if (value !== undefined && !['', 'short', 'medium', 'tall', 'extra'].includes(String(value))) return fail('Unknown row height'); break;
+      case 'imageFit': if (value !== undefined && value !== '' && value !== 'cover' && value !== 'contain') return fail('Unknown image fit'); break;
+      case 'markers': if (value !== undefined && !['bullet', 'number', 'none'].includes(String(value))) return fail('Unknown list marker'); break;
+      case 'indentProperties': if (value !== undefined && typeof value !== 'boolean') return fail('Indent properties must be a checkbox'); break;
+      case 'separator': if (value !== undefined && typeof value !== 'string') return fail('Property separator must be text'); break;
+      case 'image': if (value !== undefined && (typeof value !== 'string' || !value)) return fail('Image property must be a property name'); break;
+      case 'cardSize': case 'columnWidth': case 'imageAspectRatio': {
+        const [min,max] = key === 'cardSize' ? [50,800] : key === 'columnWidth' ? [200,500] : [.25,2.5];
+        if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max)) return fail(`${key} must be between ${min} and ${max}`);
+        break;
+      }
     }
   }
   return output;

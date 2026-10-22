@@ -41,3 +41,44 @@
 .bases-toolbar-error { padding: 0 12px 8px; color: var(--text-error); overflow-wrap: anywhere; }
 .bases-toolbar-error:empty { display: none; }
 .bases-toolbar-hint, .bases-toolbar-fields p { color: var(--text-muted); margin: 0; line-height: 1.45; }
+/* Desktop Bases toolbar: observed 1.14.4 order and compact text-icon controls. */
+.bases-session-toolbar { column-gap: 4px; row-gap: 4px; padding: 4px 0; min-height: 36px; flex-wrap: wrap; border-bottom: 0; }
+.bases-toolbar-view { flex: 0 1 auto; max-width: 40%; }
+.bases-toolbar-view > .bases-toolbar-action { color: var(--text-normal); min-width: 0; max-width: 100%; }
+.bases-toolbar-count { margin-inline-end: auto; font-size: var(--font-ui-smaller, 12px); overflow: hidden; text-overflow: ellipsis; }
+.bases-toolbar-count > .svg-icon { display: none; }
+.bases-toolbar-actions { flex-wrap: nowrap; gap: 0; }
+.bases-toolbar-action { gap: 6px; padding: 4px 6px; height: 28px; flex-shrink: 0; }
+.bases-toolbar-action .svg-icon { flex: none; }
+.bases-toolbar-new { color: var(--text-normal); }
+.bases-toolbar-popover { width: 300px; min-width: 220px; border-radius: 6px; padding: 4px; background: var(--background-secondary); box-shadow: 0 2px 8px #0003; }
+.bases-toolbar-popover[data-panel="Filter"] { width: 560px; }
+.bases-toolbar-popover h3 { display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-weight: 500; }
+.bases-toolbar-fields { gap: 8px; padding: 4px 8px 8px; }
+.bases-toolbar-fields input:not([type=checkbox]):not([type=range]), .bases-toolbar-fields select { height: 28px; }
+.bases-toolbar-fields input[type=search] { width: 100%; background: transparent; box-shadow: none; }
+.bases-toolbar-menu-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; min-height: 30px; background: transparent; box-shadow: none; border: 0; border-radius: 4px; text-align: start; color: var(--text-normal); width: 100%; font: inherit; cursor: pointer; }
+.bases-toolbar-menu-item:hover, .bases-toolbar-menu-item:focus-visible, .bases-toolbar-menu-item.mod-active { background: var(--background-modifier-hover); }
+.bases-toolbar-menu-item:disabled { color: var(--text-faint); cursor: default; }
+.bases-toolbar-menu-item.mod-destructive { color: var(--text-error); }
+.bases-toolbar-menu-view-row { display: flex; min-width: 0; align-items: center; border-radius: 4px; }
+.bases-toolbar-menu-view-row > .bases-toolbar-menu-item { flex: 1; min-width: 0; }
+.bases-toolbar-menu-view-row[draggable=true] > .bases-toolbar-menu-item > .svg-icon { cursor: grab; }
+.bases-toolbar-menu-next { border: 0; padding: 5px; background: transparent; box-shadow: none; color: var(--text-muted); }
+.bases-toolbar-menu-next:hover, .bases-toolbar-menu-next:focus-visible { background: var(--background-modifier-hover); color: var(--text-normal); }
+.bases-layout-settings { display: flex; flex-direction: column; gap: 8px; }
+.bases-layout-settings .input-row { justify-content: space-between; gap: 12px; }
+.bases-layout-settings .input-row > span { display: flex; flex: 1; min-width: 0; align-items: center; gap: 6px; }
+.bases-layout-settings input[type=range] { width: 100%; }
+.bases-layout-settings output { color: var(--text-muted); min-width: 28px; text-align: end; }
+.bases-search-row { display: flex; flex-basis: 100%; align-items: center; gap: 8px; padding: 4px 8px; width: 100%; }
+.bases-search-row[hidden], .bases-toolbar-popover [hidden], .bases-toolbar-view > select[hidden] { display: none !important; }
+.bases-search-row input { flex: 1; min-width: 0; font: inherit; height: 28px; }
+.bases-search-row button { background: transparent; box-shadow: none; color: var(--text-muted); border: 0; }
+.bases-search-row .document-search-count { font-size: var(--font-ui-smaller, 12px); color: var(--text-muted); }
+.bases-filter-scopes { display: flex; gap: 4px; padding-bottom: 8px; border-bottom: 1px solid var(--background-modifier-border); }
+.bases-filter-scopes button { border: 0; box-shadow: none; background: transparent; color: var(--text-muted); padding: 4px 8px; }
+.bases-filter-scopes [aria-selected=true] { color: var(--text-normal); background: var(--background-modifier-hover); border-radius: 4px; }
+.bases-toolbar-property-row > input:not([type=checkbox]) { width: 100%; }
+@container bases-pane (width < 700px) { .bases-toolbar-label { display: none; } }
+@container bases-pane (width < 360px) { .bases-toolbar-view { flex: 1 1 auto; max-width: 70%; } .bases-toolbar-actions { flex-basis: 100%; justify-content: flex-start; } }
