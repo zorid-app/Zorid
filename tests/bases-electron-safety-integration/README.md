@@ -57,10 +57,34 @@ quit, using the same guarded runner lifecycle as the main journey.
 | `sidebar-explicit-newer-selection` | Open a different Base normally and use the ordinary sidebar command, then switch main note. | New sidebar title/static row stays current; old context-bound sidebar never revives. This sequential case does not establish an in-flight teardown race. |
 | `safety-restart-exact-*` | Signal-free quit/restart; reopen named host and read saved note/config/registry/group files. | Named view binds correctly, all captured durable bytes and recovery copy survive exactly. |
 
-The source-authoring check is `node --check` for all three modules plus offline
-fixture YAML parsing. Those checks establish syntax/fixture structure only.
+The three C2 additions append eight explicitly labeled inert fixture files to
+`fixtureFiles()` without replacing the original inputs. These inputs are not
+product-creation evidence. All rename/property mutations use the already-mounted
+production controls. The DOM observer assigns weak node identities only; it
+never mutates product state, DOM attributes, selection or source.
+
+| C2 phase | Required result |
+| --- | --- |
+| `mounted-file-embed-rename-retains-sibling-draft-and-cell-selection` | Open two spelling variants of one named file embed; select the origin's score cell and retain an invalid number draft plus a nonempty input selection in its sibling. Rename through the origin's visible Views → Configure view input. Exact independent Base/host bytes change only the matching name/fragments; Other/aliases/comments survive. Both original session DOM nodes remain in their own embeds, origin logical cell selection and sibling input node/value/selection remain exact, and A's source stays unchanged. Cancel the invalid draft normally, close/reopen the host and resolve the new binding. |
+| `nested-mounted-embed-rename-dirty-child-retry` | Create a real retained child-note conflict, then open the outer Markdown embed and rename from its nested Base. Base/clean reference save while dirty child external bytes and outer bytes stay exact. Before retry the old-fragment wrapper retains its original session and logical selection with the saved new binding; the old rendered table remains deferred while the failed toolbar command is retained. Save the exact original draft through global recovery UI, Retry save, and require only the child fragments to change. The same nested session/selection continues in the new-fragment wrapper, the late recovery copy remains untouched, and close/reopen resolves the new binding. |
+| `fenced-mounted-rename-continued-binding-and-property-save` | Populate a score-cell selection, then rename the inline view through its mounted Views controls. Only the exact containing note's name field changes; unrelated ordinary wiki/Markdown note fragments stay byte-identical. Before navigation, edit A's score through that still-mounted logical inline view and require the independently constructed full saved source. No extra backing file appears. Close/reopen resolves the renamed fence. A clean fence may remount when its source span changes; its populated logical row/property selection must survive without requiring DOM identity. No preexisting dirty cell editor is created in this fence case. |
+| C2 normal restart | After signal-free quit/restart, reopen mounted file, nested outer and fenced host, resolve every saved exact named binding, and require all eight durable fixture sources plus the exact nested recovery draft copy. |
+
+The source-authoring checks are `node --check` for runner/campaign/contracts plus
+`node --test tests/bases-electron-safety-integration/mounted-rename-contract.test.mjs`
+and offline fixture YAML parsing. The narrow contract tests reject recreated
+sessions, disconnected/reparented roots, wrong binding, lost input node/text/
+selection and changed logical cell selection, including after a clean fence remount; they do not execute the product. Those checks establish syntax/fixture structure only.
 Unavailable controls, failed preconditions and assertion mismatches fail the
 campaign; there are no silent skips or conditional acceptance branches.
+
+Source inspection at the authored baseline indicates a possible production gap:
+Live Edit creates a new inline occurrence when fenced configuration text changes,
+and its embed cache keys the full original source; a new table defaults to its
+first property. The strict populated score-selection assertion is retained and
+may expose that loss. It is not waived or marked passed by these offline checks.
+C2 runtime acceptance is pending the scoped inline selection-restoration fix,
+matching artifacts and an explicit native runtime grant.
 
 ## Boundaries still open
 

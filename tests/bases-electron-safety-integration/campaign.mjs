@@ -3,8 +3,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {delay, until} from '../tasks-electron-integration/cdp.mjs';
 import {MOD} from '../bases-electron-integration/ui.mjs';
-import {fixtureFiles, template, vaultName, openBoundaries} from './fixtures.mjs';
-export {fixtureFiles, template, vaultName};
+import {fixtureFiles as originalFixtureFiles, template, vaultName, openBoundaries} from './fixtures.mjs';
+import {mountedRename, nestedRename, fencedRename, mountedRenameFixtures, nestedRenamedExternal, assertMountedRenameRetention, assertLogicalCellSelection} from './mounted-rename-contract.mjs';
+export {template, vaultName};
+export function fixtureFiles() {
+  const files=originalFixtureFiles();
+  for(const [file,source] of mountedRenameFixtures()){assert.ok(!files.has(file));files.set(file,source);}
+  return files;
+}
 
 const active = '.pane.is-active .bases-session';
 const dialog = name => `[role="dialog"][aria-label=${JSON.stringify(name)}]`;
@@ -20,7 +26,7 @@ function restoredProperties(c, source, before) { assert.deepEqual(c.frontmatter(
 async function message(c, pattern, scope = 'body') {
   return c.ui.wait(`return [...document.querySelectorAll(${JSON.stringify(scope + ' [role="alert"],' + scope + ' [role="status"]')})].some(e=>e.getClientRects().length&&${pattern}.test(e.textContent));`, 'Visible recovery: ' + pattern);
 }
-async function config(c, name) { await c.ui.button('Views', active); await c.ui.button('Configure view ' + name, dialog('Views')); }
+async function config(c, name, scope = active) { await c.ui.button('Views', scope); await c.ui.button('Configure view ' + name, dialog('Views')); }
 async function dismiss(c, name) {
   for (let i = 0; i < 3 && await c.ui.dom(`return !!document.querySelector(${JSON.stringify(dialog(name))});`); i++) { await c.ui.key('Escape'); await delay(300); }
   await c.ui.wait(`return !document.querySelector(${JSON.stringify(dialog(name))});`, 'Dismissed ' + name);
@@ -219,6 +225,103 @@ async function namedReferenceRetry(c) {
   await c.ui.wait(`return document.querySelector('.pane.is-active .bases-embed .bases-session [role="grid"]')?.getAttribute('aria-label')==='Renamed view';`, 'Renamed file embed resolves its exact binding');
   return {renamedHost, copy, draft: conflict.draft};
 }
+// This isolated observer stores only weak DOM identities. It never writes DOM,
+// source, selection, events, application objects or product state.
+const embedScope = target => `.pane.is-active .bases-embed[data-embed-target=${JSON.stringify(target)}]`;
+const mountedScope = (name,rooted=false) => embedScope(`${rooted?'/':''}${mountedRename.base}#${name}`);
+const nestedScope = name => `.pane.is-active .markdown-embed[data-embed-target="C2 Nested child"] .bases-embed[data-embed-target=${JSON.stringify(nestedRename.base+'#'+name)}]`;
+const fencedScope = `.pane.is-active .bases-embed[data-base-source=${JSON.stringify(fencedRename.host)}]`;
+async function embedFrame(c,scope) {
+  return c.ui.dom(`const host=document.querySelector(${JSON.stringify(scope)}),root=host?.querySelector('.base-embed-session'),session=root?.querySelector('.bases-session'),grid=session?.querySelector('[role="grid"]'),cell=session?.querySelector('[role="gridcell"][tabindex="0"]'),input=session?.querySelector('[data-base-editing] input:not([type="checkbox"])');
+    const ids=window.__zoridC2ObservedNodes??(window.__zoridC2ObservedNodes={map:new WeakMap(),next:1});const id=node=>{if(!node)return null;if(!ids.map.has(node))ids.map.set(node,ids.next++);return ids.map.get(node);};
+    return {rootId:id(root),sessionId:id(session),connected:session?.isConnected??false,inEmbed:!!(host&&root&&session&&host.contains(root)&&root.contains(session)),binding:root?.getAttribute('aria-label')??null,gridName:grid?.getAttribute('aria-label')??null,selected:cell?{path:cell.dataset.path,property:cell.dataset.property}:null,input:input?{id:id(input),connected:input.isConnected,value:input.value,start:input.selectionStart,end:input.selectionEnd,direction:input.selectionDirection}:null};`);
+}
+async function waitEmbedded(c,scope,name) {
+  await c.ui.wait(`const host=document.querySelector(${JSON.stringify(scope)}),content=host?.querySelector('.bases-session-content');return host?.querySelector('[role="grid"]')?.getAttribute('aria-label')===${JSON.stringify(name)}&&content?.getAttribute('aria-busy')!=='true';`,'Mounted exact Base view '+name,45000);
+}
+async function openEmbeddedNote(c,file,scope,name) { await c.ui.openFile(file);await waitNote(c,file.replace(/\.md$/,''));await waitEmbedded(c,scope,name); }
+async function reopenEmbeddedNote(c,file,scope,name) {
+  await c.ui.click('.pane.is-active .tab.is-active .tab-close');
+  await openEmbeddedNote(c,file,scope,name);
+}
+async function selectedEmbeddedScore(c,scope) {
+  await c.ui.click(scope+' '+c.ui.cell('A.md','note.score'));await c.ui.key('Escape');
+  await c.ui.wait(`const e=document.activeElement;return e?.matches(${JSON.stringify(scope+' '+c.ui.cell('A.md','note.score'))});`,'Actual embedded score cell focus');
+  const frame=await embedFrame(c,scope);assert.deepEqual(frame.selected,{path:'A.md',property:'note.score'});return frame;
+}
+async function mountedFileRename(c) {
+  const oldOrigin=mountedScope(mountedRename.from,true),oldSibling=mountedScope(mountedRename.from),newOrigin=mountedScope(mountedRename.to,true),newSibling=mountedScope(mountedRename.to);
+  await openEmbeddedNote(c,mountedRename.host,oldOrigin,mountedRename.from);await waitEmbedded(c,oldSibling,mountedRename.from);
+  const origin=await selectedEmbeddedScore(c,oldOrigin),aBefore=await c.read('A.md');
+  const input=oldSibling+' '+c.ui.cell('A.md','note.score')+' input:not([type="checkbox"])';
+  await c.ui.click(oldSibling+' '+c.ui.cell('A.md','note.score'),{count:2});await c.ui.type(input,mountedRename.draft);
+  await c.ui.key('Home');for(let i=0;i<3;i++)await c.ui.key('ArrowRight',{modifiers:MOD.shift});
+  const sibling=await embedFrame(c,oldSibling);assert.equal(sibling.input?.value,mountedRename.draft);assert.equal(sibling.input.start,0);assert.equal(sibling.input.end,3);
+  await config(c,mountedRename.from,oldOrigin);await c.ui.type(field('View name',dialog('View options')),mountedRename.to);await c.ui.key('Enter');
+  await c.saved(mountedRename.base,source=>assert.equal(source,mountedRename.afterBase),'c2-mounted-base-only-name-changed');
+  await c.saved(mountedRename.host,source=>assert.equal(source,mountedRename.afterHost),'c2-mounted-host-only-exact-fragments-changed');
+  await waitEmbedded(c,newOrigin,mountedRename.to);
+  const afterOrigin=await embedFrame(c,newOrigin),afterSibling=await embedFrame(c,newSibling);
+  assertMountedRenameRetention(origin,afterOrigin,{base:mountedRename.base,name:mountedRename.to});
+  assertMountedRenameRetention(sibling,afterSibling,{base:mountedRename.base,name:mountedRename.to,draft:true});
+  assert.equal(await c.read('A.md'),aBefore,'Rename never saves or discards the sibling invalid property draft');
+  c.evidence.actions.push({action:'passive-mounted-rename-retention',origin,afterOrigin,sibling,afterSibling});
+  await dismiss(c,'View options');await c.ui.click(newSibling+' '+c.ui.cell('A.md','note.score')+' input');await c.ui.key('Escape');
+  await waitEmbedded(c,newSibling,mountedRename.to);assert.equal(await c.read('A.md'),aBefore);
+  await reopenEmbeddedNote(c,mountedRename.host,newOrigin,mountedRename.to);
+  await c.ui.wait(`return !!document.querySelector(${JSON.stringify(embedScope(mountedRename.base+'#Other')+' .bases-list-container')});`,'Unrelated named view still mounted');
+  await c.screenshot('s-c2-mounted-file-rename-draft-selection');
+}
+async function nestedMountedRename(c) {
+  const conflict=await conflictNote(c,nestedRename.child,'C2 retained nested child draft 😀'),old=nestedScope(nestedRename.from),fresh=nestedScope(nestedRename.to);
+  await openEmbeddedNote(c,nestedRename.outer,old,nestedRename.from);const before=await selectedEmbeddedScore(c,old);
+  await config(c,nestedRename.from,old);await c.ui.type(field('View name',dialog('View options')),nestedRename.to);await c.ui.key('Enter');
+  await c.saved(nestedRename.base,source=>assert.equal(source,nestedRename.afterBase),'c2-nested-base-name-ack-before-dirty-host-retry');
+  await c.saved(nestedRename.clean,source=>assert.equal(source,nestedRename.cleanAfter),'c2-nested-independent-clean-reference');
+  await c.ui.wait(`return [...document.querySelectorAll(${JSON.stringify(dialog('View options')+' button')})].some(e=>e.textContent==='Retry save'&&e.getClientRects().length);`,'Nested dirty host retains rename retry');
+  assert.equal(await c.read(nestedRename.child),conflict.external);assert.equal(await c.read(nestedRename.outer),nestedRename.outerSource);
+  // Before the dirty child can be rewritten, its original wrapper still names
+  // the old fragment while its already-mounted session follows the saved name.
+  const pending=await embedFrame(c,old);assertMountedRenameRetention(before,pending,{base:nestedRename.base,name:nestedRename.to,renderedName:nestedRename.from});
+  const names=new Set(await fs.readdir(c.vault));await c.ui.button('Save recovery copy','.native-document-notice');
+  const copy=await until(async()=>{const added=(await fs.readdir(c.vault)).filter(name=>!names.has(name)&&name.endsWith('.md'));assert.equal(added.length,1);return added[0];},30000);
+  await c.saved(copy,source=>assert.equal(source,conflict.draft),'c2-nested-recovery-copy-exact-original-draft');
+  await c.ui.button('Retry save',dialog('View options'));
+  const renamed=nestedRenamedExternal(conflict.external);
+  await c.saved(nestedRename.child,source=>assert.equal(source,renamed),'c2-nested-retry-only-child-fragments-and-external-body');
+  await waitEmbedded(c,fresh,nestedRename.to);const after=await embedFrame(c,fresh);
+  assertMountedRenameRetention(before,after,{base:nestedRename.base,name:nestedRename.to});
+  assert.equal(await c.read(copy),conflict.draft);assert.equal(await c.read(nestedRename.outer),nestedRename.outerSource);
+  c.evidence.actions.push({action:'passive-nested-rename-retention',before,pending,after});
+  await dismiss(c,'View options');await reopenEmbeddedNote(c,nestedRename.outer,fresh,nestedRename.to);
+  await c.screenshot('s-c2-nested-rename-retry');return {copy,draft:conflict.draft,renamed};
+}
+async function ownedVaultPaths(c) {
+  const paths=[];
+  const visit=async directory=>{for(const entry of await fs.readdir(path.join(c.vault,directory),{withFileTypes:true})){
+    const relative=directory?directory+'/'+entry.name:entry.name;
+    assert.ok(!entry.isSymbolicLink(),'Owned fixture paths cannot alias outside the vault');
+    if(entry.isDirectory())await visit(relative);else{assert.ok(entry.isFile());paths.push(relative);}
+  }};
+  await visit('');return paths.sort();
+}
+async function fencedMountedRename(c) {
+  await openEmbeddedNote(c,fencedRename.host,fencedScope,fencedRename.from);const filesBefore=await ownedVaultPaths(c),selectionBefore=await selectedEmbeddedScore(c,fencedScope);
+  await config(c,fencedRename.from,fencedScope);await c.ui.type(field('View name',dialog('View options')),fencedRename.to);await c.ui.key('Enter');
+  await c.saved(fencedRename.host,source=>assert.equal(source,fencedRename.afterHost),'c2-fence-exact-containing-note-only-name-change');
+  await dismiss(c,'View options');await waitEmbedded(c,fencedScope,fencedRename.to);
+  const selectionAfter=await embedFrame(c,fencedScope);assertLogicalCellSelection(selectionBefore,selectionAfter);
+  c.evidence.actions.push({action:'passive-fenced-logical-selection-retention',selectionBefore,selectionAfter});
+  // A clean inline fence may remount after its source span changes. Exercise it
+  // before navigation: continuing binding/function, not clean DOM identity.
+  const before=await c.read('A.md'),cell=fencedScope+' '+c.ui.cell('A.md','note.score');
+  assert.match(before,/^score: [^\n]+$/m);const expected=before.replace(/^score: [^\n]+$/m,'score: 31');assert.notEqual(before,expected);
+  await c.ui.click(cell,{count:2});await c.ui.type(cell+' input','31');await c.ui.key('Enter');
+  await c.saved('A.md',source=>assert.equal(source,expected),'c2-fence-renamed-still-mounted-normal-property-save');
+  await c.saved(fencedRename.sentinel,source=>assert.equal(source,fencedRename.sentinelSource),'c2-fence-no-vault-wide-note-fragment-rewrite');
+  assert.deepEqual(await ownedVaultPaths(c),filesBefore,'Inline rename/property edit creates no hidden backing Base or extra file in any owned subfolder');
+  await reopenEmbeddedNote(c,fencedRename.host,fencedScope,fencedRename.to);await c.screenshot('s-c2-fence-rename-continued-binding');
+}
 const columnFor = file => `${active} .bases-kanban-column:has(.bases-kanban-card[data-path=${JSON.stringify(file)}])`;
 const columnBodyFor = file => `${columnFor(file)} .bases-kanban-column-body`;
 async function moveInto(c, base, from, target, property, expected, name) {
@@ -327,21 +430,25 @@ export async function journey(c) {
     ['live-summary-stale-cas-and-newer-input', summaryCAS],
     ['actor-path-reuse-and-unapplied-draft-close', pathReuseAndClose],
     ['named-fragment-dirty-reference-retry', namedReferenceRetry],
+    ['mounted-file-embed-rename-retains-sibling-draft-and-cell-selection', mountedFileRename],
+    ['nested-mounted-embed-rename-dirty-child-retry', nestedMountedRename],
+    ['fenced-mounted-rename-continued-binding-and-property-save', fencedMountedRename],
     ['typed-null-list-link-date-folder-new-and-moves', typedGroups],
     ['sidebar-clean-renames-hidden-outline-and-retained-dirty-control', sidebarRenames],
   ];
   c.evidence.scenarios = phases.map(([name]) => ({name, status: 'unexecuted'}));
   await c.launch('safety-shared-writes-and-recovery');
-  let named;
+  let named, nested;
   for (let i = 0; i < phases.length; i++) {
     const [name, run] = phases[i], result = c.evidence.scenarios[i]; result.status = 'running'; result.started = new Date().toISOString();
-    try { const value = await run(c); if (name === 'named-fragment-dirty-reference-retry') named = value; result.status = 'passed'; }
+    try { const value = await run(c); if (name === 'named-fragment-dirty-reference-retry') named = value; if(name==='nested-mounted-embed-rename-dirty-child-retry')nested=value; result.status = 'passed'; }
     catch (error) { result.status = 'failed'; result.failure = error.message; throw error; }
     finally { result.finished = new Date().toISOString(); }
   }
-  assert.ok(named);
+  assert.ok(named && nested);
   const durable = new Map();
   for (const file of ['A.md', 'B.md', 'Safety.base', 'Properties.yaml', 'Named.base', 'Named host.md', 'Scalar A.md', 'List A.md', 'Date A.md', 'Link A.md', 'To/Move.md', 'Shelves/Dirty moved.base', 'Shelves/Other.base']) durable.set(file, await c.read(file));
+  for(const file of mountedRenameFixtures().keys())durable.set(file,await c.read(file));
   await c.quit('safety-normal-quit-with-settled-recovery');
   await c.launch('safety-restart-and-binding-readback');
   await c.ui.openFile('Named host.md'); await waitNote(c, 'Named host');
@@ -349,5 +456,10 @@ export async function journey(c) {
   for (const [file, expected] of durable) await c.saved(file, source => assert.equal(source, expected), 'safety-restart-exact-' + file);
   await c.saved(named.copy, source => assert.equal(source, named.draft), 'safety-restart-recovery-copy-exact');
   assert.equal(await c.read('Named host.md'), named.renamedHost);
+  await c.saved(nested.copy,source=>assert.equal(source,nested.draft),'c2-restart-nested-recovery-copy-exact');
+  assert.equal(await c.read(nestedRename.child),nested.renamed);
+  await openEmbeddedNote(c,mountedRename.host,mountedScope(mountedRename.to,true),mountedRename.to);
+  await openEmbeddedNote(c,nestedRename.outer,nestedScope(nestedRename.to),nestedRename.to);
+  await openEmbeddedNote(c,fencedRename.host,fencedScope,fencedRename.to);
   await c.screenshot('s09-safety-restart-and-named-embeds'); await c.diskGuard(); await c.quit('safety-final-normal-quit');
 }
