@@ -25,7 +25,13 @@ export interface BaseKanbanColumns {
   hide(key: BaseExpressionValue): Promise<boolean>;
   destroy(): void;
 }
-interface Row { key: BaseExpressionValue; sharedKeyId?: string; checked: boolean; count: number; stored?: BaseValue }
+interface Row { key: BaseExpressionValue; sharedKeyId?: string; checked: boolean; count: number; stored?: BaseValue; orderKey?: BaseValue }
+// Rust owns typed grouping serialization. editKey separately controls note
+// assignment and must never be used to construct configuration order values.
+const coreOrderKey = (group: object): {orderKey?:BaseValue} => {
+  const descriptor=Object.getOwnPropertyDescriptor(group,'orderKey');
+  return descriptor&&'value' in descriptor&&descriptor.value!==undefined?{orderKey:descriptor.value as BaseValue}:{};
+};
 function text(key: BaseExpressionValue, shared = false): string {
   if (key.type === 'null') return 'No value';
   try { return shared ? displaySharedBaseValue(key) : baseValueToString(key); } catch { return key.type; }
@@ -71,10 +77,12 @@ export function createBaseKanbanColumns(container: HTMLElement, options: BaseKan
         const actual = result.groups.find(group => group.sharedKeyId === option.sharedKeyId);
         const index = option.listed ? ordinal++ : undefined;
         return { key: actual?.key ?? option.key, sharedKeyId: option.sharedKeyId, count: option.count, listed: option.listed,
+          ...coreOrderKey(Object.hasOwn(option,'orderKey')?option:actual??option),
           ...(order && index !== undefined ? { stored: order[index] } : {}) };
       }) : result.groups.filter(group => group.key !== null).map(group => {
         if (typeof group.sharedKeyId !== 'string') throw new Error('Shared group identity is unavailable.');
-        return { key: group.key!, sharedKeyId: group.sharedKeyId, count: group.rows.length, listed: true };
+        const index=order?ordinal++:undefined;
+        return { key: group.key!, sharedKeyId: group.sharedKeyId, count: group.rows.length, listed: true,...coreOrderKey(group),...(order&&index!==undefined?{stored:order[index]}:{}) };
       });
       if (order && ordinal !== order.length) throw new Error('Shared group order does not match its saved configuration.');
       rows = candidates.map(group => ({ ...group, checked: order ? group.listed : true }));
@@ -92,7 +100,13 @@ export function createBaseKanbanColumns(container: HTMLElement, options: BaseKan
     tail = order?.filter(value => !rows.some(row => matches(value, row.key))) ?? [];
     selected = Math.min(selected, Math.max(0, rows.length - 1));
   }
-  const stored = (row: Row): BaseValue => Object.hasOwn(row, 'stored') ? row.stored! : baseEditValue(row.key);
+  const canStore = (row:Row) => result.shared===undefined||Object.hasOwn(row,'stored')||Object.hasOwn(row,'orderKey');
+  const stored = (row: Row): BaseValue => {
+    if(Object.hasOwn(row,'stored'))return row.stored!;
+    if(result.shared===undefined)return baseEditValue(row.key);
+    if(Object.hasOwn(row,'orderKey'))return row.orderKey!;
+    throw new Error('This group has no safe configuration key. Refresh before changing its order.');
+  };
   const orderOf = () => rows.filter(row => row.checked).map(stored).concat(tail);
   async function save(order: readonly BaseValue[] | undefined, direction?: 'ASC' | 'DESC'): Promise<boolean> {
     const property = propertyOf(result);
@@ -143,26 +157,28 @@ export function createBaseKanbanColumns(container: HTMLElement, options: BaseKan
     if (manual) {
       const list = doc.createElement('div'); list.className = 'bases-columns-list'; list.setAttribute('role', 'list');
       rows.forEach((row, index) => {
+        const writable=canStore(row);
         const line = doc.createElement('div'); line.className = `bases-columns-row${row.checked ? '' : ' mod-hidden'}`;
         line.tabIndex = index === selected ? 0 : -1; line.setAttribute('role', 'listitem'); line.dataset.index = String(index);
-        const grip = doc.createElement('span'); grip.className = 'bases-columns-grip'; grip.append(icon('grip-vertical', 16, doc)); grip.draggable = !pending; grip.setAttribute('aria-label', 'Drag to reorder');
-        const check = doc.createElement('input'); check.type = 'checkbox'; check.checked = row.checked; check.disabled = pending; check.tabIndex = -1; check.setAttribute('aria-label', `Show ${text(row.key, result.shared !== undefined)}`);
+        line.setAttribute('aria-disabled',String(!writable));if(!writable)line.title='This group has no safe configuration key. Refresh before changing its order.';
+        const grip = doc.createElement('span'); grip.className = 'bases-columns-grip'; grip.append(icon('grip-vertical', 16, doc)); grip.draggable = !pending&&writable; grip.setAttribute('aria-label', 'Drag to reorder');
+        const check = doc.createElement('input'); check.type = 'checkbox'; check.checked = row.checked; check.disabled = pending||!writable; check.tabIndex = -1; check.setAttribute('aria-label', `Show ${text(row.key, result.shared !== undefined)}`);
         const name = doc.createElement('span'); name.className = 'bases-columns-name'; name.textContent = text(row.key, result.shared !== undefined);
         const count = doc.createElement('span'); count.className = 'bases-columns-count'; count.textContent = String(row.count);
         line.append(grip, check, name, count); list.append(line);
-        line.addEventListener('click', event => { if (disposed || pending || popover !== element || !element.contains(line) || (event.target as Element).closest('.bases-columns-grip')) return; selected = index; attempt(() => { row.checked = !row.checked; }); });
+        line.addEventListener('click', event => { if (disposed || pending || !writable || popover !== element || !element.contains(line) || (event.target as Element).closest('.bases-columns-grip')) return; selected = index; attempt(() => { row.checked = !row.checked; }); });
         line.addEventListener('keydown', event => {
           if (disposed || pending || popover !== element || !element.contains(line)) return;
-          if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); selected = index; attempt(() => { row.checked = !row.checked; }); }
+          if (event.key === ' ' || event.key === 'Enter') { if(!writable)return;event.preventDefault(); selected = index; attempt(() => { row.checked = !row.checked; }); }
           else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
             event.preventDefault(); const next = Math.max(0, Math.min(rows.length - 1, index + (event.key === 'ArrowUp' ? -1 : 1)));
-            if (event.altKey && row.checked) attempt(() => { rows.splice(index, 1); rows.splice(next, 0, row); selected = next; });
+            if (event.altKey && row.checked&&writable) attempt(() => { rows.splice(index, 1); rows.splice(next, 0, row); selected = next; });
             else { selected = next; draw(); popover?.querySelector<HTMLElement>(`.bases-columns-row[data-index="${next}"]`)?.focus(); }
           }
         });
         let ownedDrag: typeof rowDrag;
         grip.addEventListener('dragstart', event => {
-          if (disposed || pending || popover !== element || !element.contains(line) || !event.dataTransfer) { event.preventDefault(); return; }
+          if (disposed || pending || !writable || popover !== element || !element.contains(line) || !event.dataTransfer) { event.preventDefault(); return; }
           rowDrag = ownedDrag = { row, token: operation }; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', text(row.key, result.shared !== undefined));
         });
         grip.addEventListener('dragend', () => { if (rowDrag === ownedDrag) rowDrag = undefined; });
@@ -170,14 +186,16 @@ export function createBaseKanbanColumns(container: HTMLElement, options: BaseKan
         line.addEventListener('drop', event => {
           if (disposed || pending || popover !== element || !element.contains(line)) return;
           const source = rowDrag; rowDrag = undefined;
-          if (!source || source.token !== operation) return;
+          if (!source || !canStore(source.row) || source.token !== operation) return;
           event.preventDefault(); attempt(() => { const from = rows.indexOf(source.row); if (from < 0) return; rows.splice(from, 1); rows.splice(index, 0, source.row); selected = index; });
         });
       });
       element.append(list);
       const any = rows.some(row => row.checked), toggle = doc.createElement('button'); toggle.type = 'button'; toggle.className = 'bases-columns-toggle'; toggle.disabled = pending;
       toggle.append(icon(any ? 'eye-off' : 'eye', 16, doc), doc.createTextNode(any ? 'Hide all' : 'Show all'));
-      toggle.addEventListener('click', () => { if (popover !== element || !element.contains(toggle)) return; attempt(() => { rows.forEach(row => { row.checked = !any; }); }); }); element.append(toggle);
+      toggle.disabled=pending||!rows.some(canStore);
+      toggle.addEventListener('click', () => { if (popover !== element || !element.contains(toggle)) return; attempt(() => { rows.forEach(row => { if(canStore(row))row.checked = !any; }); }); }); element.append(toggle);
+      if(rows.some(row=>!canStore(row))){const warning=doc.createElement('div');warning.className='bases-columns-error';warning.setAttribute('role','status');warning.textContent='Some groups have no safe configuration key and cannot be selected or reordered. Refresh to try again.';element.append(warning);}
     }
     if (errorMessage) { const error = doc.createElement('div'); error.className = 'bases-columns-error'; error.setAttribute('role', 'alert'); error.textContent = errorMessage; element.append(error); }
     position();
@@ -218,7 +236,10 @@ export function createBaseKanbanColumns(container: HTMLElement, options: BaseKan
       if (disposed || pending) return false;
       const id = result.shared !== undefined ? sharedBaseGroupKeyId(result, key) : undefined;
       if (result.shared !== undefined && typeof id !== 'string') return false;
-      readRows(); rows.forEach(row => { if (result.shared !== undefined ? row.sharedKeyId === id : same(row.key, key)) row.checked = false; });
+      readRows();
+      const targets=rows.filter(row=>result.shared!==undefined?row.sharedKeyId===id:same(row.key,key));
+      if(targets.some(row=>!canStore(row)))return false;
+      targets.forEach(row=>{row.checked=false;});
       try { return await save(orderOf()); } catch (error) { report(error); return false; }
     },
     destroy() { if (disposed) return; disposed = true; close(); doc.removeEventListener('pointerdown', outside); doc.removeEventListener('keydown', key); win?.removeEventListener('resize', position); },

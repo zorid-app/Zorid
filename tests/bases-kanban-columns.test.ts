@@ -7,6 +7,9 @@ import { baseExpressionValue as value } from '../src/bases/expression.ts';
 import { createBaseKanbanColumns } from '../src/bases/kanban-columns.ts';
 import type { BaseKanbanGroupOrderRequest } from '../src/bases/kanban-columns.ts';
 import { createBaseKanbanView } from '../src/bases/kanban-view.ts';
+import type { BaseQueryResult } from '../src/bases/query.ts';
+import type { BaseExpressionValue } from '../src/bases/expression.ts';
+import type { BaseValue } from '../src/bases/document.ts';
 
 const source = 'pluginRoot: { keep: yes }\nviews:\n - type: kanban\n   name: Board\n   pluginView: { keep: true }\n   groupBy: { property: status, direction: ASC, extra: preserve }\n   groupOrder: [Todo, Done]\n';
 const files = [{ path: 'Alpha.md', properties: { status: 'In progress' } }, { path: 'Beta.md', properties: { status: 'Done' } }];
@@ -167,4 +170,46 @@ test('save acknowledgement preserves counts for configured string labels of type
   [...doc.querySelectorAll<HTMLElement>('.bases-columns-row')].find(row => row.querySelector('.bases-columns-name')!.textContent === 'Other')!.click(); await settle();
   const list = [...doc.querySelectorAll('.bases-columns-row')].find(row => row.querySelector('.bases-columns-name')!.textContent === 'A, B')!;
   assert.equal(list.querySelector('.bases-columns-count')!.textContent, '1'); handle.destroy();
+});
+
+function sharedSetup(entries:readonly {key:BaseExpressionValue;orderKey?:BaseValue;editKey?:BaseValue;listed?:boolean}[],order:readonly BaseValue[]=[],optionsOnly=false){
+ const dom=new JSDOM('<main></main><button>Group</button>'),doc=dom.window.document;
+ const baseline=executeBaseQuery(BaseDocument.parse('views: [{type: kanban,name: Board,groupBy: {property: formula.project,direction: ASC},groupOrder: []}]'),{version:7,files:[]});
+ const result={...baseline,shared:{} as any,view:{...baseline.view,groupOrder:order},groups:optionsOnly?[]:entries.map((entry,index)=>({...entry,sharedKeyId:`opaque:${index}`,rows:[]})),groupOptions:entries.map((entry,index)=>({...entry,sharedKeyId:`opaque:${index}`,count:0,listed:entry.listed??false}))} as BaseQueryResult;
+ const requests:BaseKanbanGroupOrderRequest[]=[];
+ const handle=createBaseKanbanColumns(doc.querySelector('main')!,{result,async requestGroupOrder(request){requests.push(request);}});handle.open(doc.querySelector('button')!);
+ return {dom,doc,result,handle,requests,row(index:number){return doc.querySelectorAll<HTMLElement>('.bases-columns-row')[index];},cleanup(){handle.destroy();dom.window.close();}};
+}
+
+test('shared columns persist core date, wiki, whole-list, object and null order keys without note assignment',async()=>{
+ let accesses=0;const link:BaseExpressionValue={type:'namespace',name:'Alias',get(){accesses++;throw Error('must remain inert');}},date:BaseExpressionValue={type:'date',timestamp:Date.UTC(2026,9,22),hasTime:true};
+ const keys=[link,date,{type:'list',value:[link,date]} as BaseExpressionValue,{type:'object',value:{project:link}} as BaseExpressionValue,value(null)];
+ const raw:BaseValue[]=['[[/Projects/A%23B.md|Alias]]','2026-10-22T00:00:00+00:00',['[[/Projects/A%23B.md|Alias]]','2026-10-22T00:00:00+00:00'],{project:'[[/Projects/A%23B.md|Alias]]'},null];
+ for(let index=0;index<keys.length;index++){
+  const f=sharedSetup([{key:keys[index],orderKey:raw[index],editKey:'WRONG note assignment'}]);try{f.row(0).click();await settle();assert.deepEqual(f.requests,[{version:7,property:'formula.project',order:[raw[index]]}]);}finally{f.cleanup();}
+ }
+ assert.equal(accesses,0);
+});
+
+test('shared saved raw ordinals take precedence over canonical orderKey and displayed labels',async()=>{
+ const key:BaseExpressionValue={type:'namespace',name:'Same display',get(){throw Error('must remain inert');}};
+ const f=sharedSetup([{key,listed:true,orderKey:'[[/Canonical.md]]'},{key,orderKey:['[[/Other.md]]',null]}],['old alias spelling']);
+ try{f.row(1).click();await settle();assert.deepEqual(f.requests[0].order,['old alias spelling',['[[/Other.md]]',null]]);}finally{f.cleanup();}
+});
+
+test('shared unavailable order keys are readonly even when editKey exists and Show all skips them',async()=>{
+ const unknown:BaseExpressionValue={type:'namespace',name:'Unavailable',get(){throw Error('must remain inert');}};
+ const f=sharedSetup([{key:unknown,editKey:'not an ordering key'},{key:value('Ready'),orderKey:'ready raw'}]);
+ try{
+  const line=f.row(0);assert.equal(line.getAttribute('aria-disabled'),'true');assert.equal(line.querySelector<HTMLInputElement>('input')!.disabled,true);assert.equal(line.querySelector<HTMLElement>('.bases-columns-grip')!.draggable,false);assert.match(f.doc.querySelector('[role="status"]')!.textContent!,/no safe configuration key/);
+  line.click();line.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true}));await settle();assert.equal(f.requests.length,0);
+  f.doc.querySelector<HTMLButtonElement>('.bases-columns-toggle')!.click();await settle();assert.deepEqual(f.requests[0].order,['ready raw']);assert.equal(await f.handle.hide(unknown),false);assert.equal(f.requests.length,1);
+ }finally{f.cleanup();}
+});
+
+test('shared actual group orderKey is used when option metadata is absent',async()=>{
+ const f=sharedSetup([{key:value('First'),orderKey:'first raw'},{key:value('Ready'),orderKey:'raw group key'}]);
+ try{
+  f.handle.update({...f.result,view:{...f.result.view,groupOrder:undefined},groupOptions:[]});assert.equal(await f.handle.hide(f.result.groups[0].key!),true);assert.deepEqual(f.requests[0].order,['raw group key']);
+ }finally{f.cleanup();}
 });

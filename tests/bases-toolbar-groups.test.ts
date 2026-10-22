@@ -5,6 +5,9 @@ import {BaseDocument} from '../src/bases/document.ts';
 import {executeBaseQuery} from '../src/bases/query.ts';
 import {createBaseManualGroups} from '../src/bases/toolbar-groups.ts';
 import {decodeFilterCondition,buildFilterCondition} from '../src/bases/toolbar-config.ts';
+import type {BaseQueryResult} from '../src/bases/query.ts';
+import type {BaseExpressionValue} from '../src/bases/expression.ts';
+import type {BaseValue} from '../src/bases/document.ts';
 function fixture(shared=false){
  const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
  let result=executeBaseQuery(BaseDocument.parse('views: [{type: table, name: A, groupBy: {property: status, direction: ASC},groupOrder: [1,"1"]}]'),{version:1,files:[{path:'One.md',properties:{status:1}},{path:'Two.md',properties:{status:'1'}}]});
@@ -43,4 +46,48 @@ test('an own-save result refresh preserves an in-progress new group widget and i
 
 test('other manual group actions cannot destroy a pending new-group input',()=>{
  const f=fixture(true);try{f.get<HTMLButtonElement>('Add group').click();const input=f.get<HTMLInputElement>('Group name');input.value='42';f.doc.querySelector<HTMLInputElement>('[data-group-id] input')!.click();f.get<HTMLButtonElement>('Hide all groups').click();assert.equal(input.isConnected,true);assert.equal(input.value,'42');assert.throws(()=>f.groups.read(),/Finish or cancel/);f.get<HTMLButtonElement>('Create group').click();assert.deepEqual(f.groups.read(),[1,'1',42]);}finally{f.cleanup();}
+});
+
+function sharedFixture(entries:readonly {key:BaseExpressionValue;orderKey?:BaseValue;editKey?:BaseValue;listed?:boolean}[],order:readonly BaseValue[]=[]){
+ const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
+ const baseline=executeBaseQuery(BaseDocument.parse('views: [{type: table,name: A,groupBy: {property: formula.project,direction: ASC},groupOrder: []}]'),{version:3,files:[]});
+ const result={...baseline,shared:{} as any,view:{...baseline.view,groupOrder:order},groups:entries.map((entry,index)=>({...entry,sharedKeyId:`opaque:${index}`,rows:[]})),groupOptions:entries.map((entry,index)=>({...entry,sharedKeyId:`opaque:${index}`,count:0,listed:entry.listed??false}))} as BaseQueryResult;
+ const errors:string[]=[];let changes=0;
+ const groups=createBaseManualGroups(doc,doc.querySelector('main')!,{result,property:()=> 'formula.project',changed(){changes++;},error(message){errors.push(message);}});
+ return{dom,doc,result,groups,errors,changes:()=>changes,row(index:number){return doc.querySelectorAll<HTMLElement>('[data-group-id]')[index];},cleanup(){groups.destroy();dom.window.close();}};
+}
+
+test('manual toolbar groups use core ordering keys for readonly wiki/date/whole-list/object/null groups',()=>{
+ let accesses=0;const link:BaseExpressionValue={type:'namespace',name:'Alias',get(){accesses++;throw Error('must remain inert');}},date:BaseExpressionValue={type:'date',timestamp:Date.UTC(2026,9,22),hasTime:true};
+ const keys=[link,date,{type:'list',value:[link,date]} as BaseExpressionValue,{type:'object',value:{project:link}} as BaseExpressionValue,{type:'null'} as BaseExpressionValue];
+ const raw:BaseValue[]=['[[/A%23B.md|Alias]]','2026-10-22T00:00:00+00:00',['[[/A%23B.md|Alias]]','2026-10-22T00:00:00+00:00'],{project:'[[/A%23B.md|Alias]]'},null];
+ for(let index=0;index<keys.length;index++){
+  const f=sharedFixture([{key:keys[index],orderKey:raw[index],editKey:'WRONG note assignment'}]);try{f.row(0).querySelector<HTMLInputElement>('input')!.click();assert.deepEqual(f.groups.read(),[raw[index]]);assert.equal(f.changes(),1);}finally{f.cleanup();}
+ }
+ assert.equal(accesses,0);
+});
+
+test('manual toolbar groups retain exact raw ordinals across automatic order and result refresh',()=>{
+ const key:BaseExpressionValue={type:'namespace',name:'Same label',get(){throw Error('must remain inert');}};
+ const f=sharedFixture([{key,listed:true,orderKey:'[[/Canonical.md]]'},{key,orderKey:['[[/Other.md]]',null]}],['original alias spelling']);
+ try{
+  f.row(1).querySelector<HTMLInputElement>('input')!.click();assert.deepEqual(f.groups.read(),['original alias spelling',['[[/Other.md]]',null]]);
+  f.groups.setManual(false);assert.equal(f.groups.read(),undefined);
+  f.groups.update({...f.result,version:4,view:{...f.result.view,groupOrder:undefined},groupOptions:f.result.groupOptions.map(group=>({...group,listed:false}))},false);
+  f.groups.setManual(true);assert.deepEqual(f.groups.read(),['original alias spelling',['[[/Other.md]]',null]]);
+  f.row(1).dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'ArrowUp',altKey:true,bubbles:true}));assert.deepEqual(f.groups.read(),[['[[/Other.md]]',null],'original alias spelling']);
+ }finally{f.cleanup();}
+});
+
+test('missing core orderKey stays readonly through Show all, keyboard, drag and canceled Add group',()=>{
+ const unknown:BaseExpressionValue={type:'namespace',name:'Unavailable',get(){throw Error('must remain inert');}};
+ const f=sharedFixture([{key:unknown,editKey:'not an order key'},{key:{type:'string',value:'Ready'},orderKey:'ready raw'}]);
+ try{
+  const readonly=()=>f.row(0).querySelector<HTMLInputElement>('input')!;
+  assert.equal(readonly().disabled,true);assert.equal(f.row(0).getAttribute('aria-disabled'),'true');assert.equal(f.row(0).querySelector<HTMLElement>('.bases-manual-group-grip')!.draggable,false);assert.match(f.doc.querySelector('[role="status"]')!.textContent!,/no safe configuration key/);
+  f.row(0).click();f.row(0).dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true}));assert.equal(f.changes(),0);
+  f.doc.querySelector<HTMLButtonElement>('[aria-label="Show all groups"]')!.click();assert.deepEqual(f.groups.read(),['ready raw']);
+  f.doc.querySelector<HTMLButtonElement>('[aria-label="Add group"]')!.click();const input=f.doc.querySelector<HTMLInputElement>('[aria-label="Group name"]')!;input.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(readonly().disabled,true);
+  assert.deepEqual(f.groups.read(),['ready raw']);
+ }finally{f.cleanup();}
 });
