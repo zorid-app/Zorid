@@ -88,3 +88,15 @@ test('invalid property drafts prevent dismissal and remain editable until correc
 test('initial expanded-body factory failure retains a managed surface and shared note', async () => {
   const s = await setup(undefined, {bodyExpanded:true,editorFactory:()=>{throw new Error('Editor unavailable');}}); assert.ok(s.handle.element.isConnected); assert.match(s.handle.element.textContent!, /Editor unavailable/); await s.handle.close(); await s.cleanup();
 });
+
+
+test('a late editor starts from the latest shared source and cleanup survives a throwing child', async () => {
+  let release!: (editor: EditorHandle) => void, displayed = ''; const gate = new Promise<EditorHandle>(resolve => { release = resolve; });
+  const s = await setup(undefined, {editorFactory:()=>gate}); const loading = s.handle.expandBody(); s.buffer.update(s.buffer.text+'\nNewer while loading');
+  release({getValue:()=>displayed,setValue:next=>{displayed=next;},focus(){},destroy(){throw new Error('child disposal');},insert(){}}); await loading; assert.ok(displayed.endsWith('Newer while loading')); await s.handle.close(); assert.equal(s.handle.element.isConnected,false); assert.equal(s.closed,1); assert.ok(s.errors.some(error=>String(error).includes('child disposal'))); await s.cleanup();
+});
+
+test('the note Properties context menu remains owned by the New surface', async () => {
+  const s = await setup(); s.handle.element.querySelector<HTMLElement>('.metadata-properties-heading')!.dispatchEvent(new s.dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:10,clientY:10}));
+  const menu = s.dom.window.document.querySelector<HTMLElement>('.context-menu')!; assert.ok(menu); menu.dispatchEvent(new s.dom.window.MouseEvent('pointerdown',{bubbles:true})); await tick(); assert.ok(s.handle.element.isConnected); await s.cleanup();
+});

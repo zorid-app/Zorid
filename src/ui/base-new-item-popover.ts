@@ -73,6 +73,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
   let closed = false, expanded = false, composingTitle = false, titleBaseline = noteName(path), titleSerial = Promise.resolve();
   let titleDraft = titleBaseline, bodySnapshot = buffer.text, editor: EditorHandle | undefined, loading: Promise<void> | undefined, closing: Promise<void> | undefined;
   let titleAttempt: { requested: string; promise: Promise<void> } | undefined;
+  let ownedContextMenu = false;
   let titleProblem = false, propertyDraft = false, propertyInputGeneration = 0;
   const writes = new Set<Promise<unknown>>(), unsubscribers: (() => void)[] = [];
   const live = () => !closed && root.isConnected;
@@ -136,7 +137,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
         open: options.editorOptions?.open ?? ((target, _kind, event) => { void Promise.resolve(options.openFile(target, event ?? new (win?.MouseEvent ?? MouseEvent)('click'))).catch(report); }),
       });
       if (!live()) { handle.destroy(); return; }
-      editor = handle; editor.focus(); position();
+      editor = handle; if (buffer.text !== bodySnapshot) { bodySnapshot = buffer.text; editor.setValue(bodySnapshot); } editor.focus(); position();
     })().catch(failure => { if (live()) { expanded = false; root.classList.remove('is-body-expanded'); preview.hidden = false; editorHost.hidden = true; report(failure); } throw failure; }).finally(() => { loading = undefined; });
     return loading;
   }
@@ -192,8 +193,10 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
   function ownedPropertyPopover(target: Node) { return !!root.querySelector('[data-base-editing]') && !!(target as HTMLElement).closest?.('.bases-property-popover'); }
   function remove(restoreFocus: boolean) {
     if (closed) return;
-    closed = true; properties.destroy(); editor?.destroy(); editor = undefined; unsubscribers.forEach(stop => stop());
-    document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', escape, true); win?.removeEventListener('resize', position); win?.removeEventListener('scroll', position, true); observer?.disconnect(); root.remove();
+    closed = true;
+    const release = (operation: () => void) => { try { operation(); } catch (failure) { try { options.onError(failure); } catch {} } };
+    release(() => properties.destroy()); release(() => editor?.destroy()); editor = undefined; unsubscribers.forEach(stop => release(stop));
+    document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', escape, true); document.removeEventListener('contextmenu', contextOwner, true); win?.removeEventListener('resize', position); win?.removeEventListener('scroll', position, true); observer?.disconnect(); root.remove();
     if (restoreFocus && options.anchor.isConnected) options.anchor.focus({ preventScroll: true });
     try { options.onClose?.(); } catch (failure) { try { options.onError(failure); } catch {} }
   }
@@ -203,7 +206,8 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     closing = flush().then(() => remove(!!closeOptions.restoreFocus)).catch(failure => { report(failure); throw failure; }).finally(() => { closing = undefined; });
     return closing;
   }
-  function outside(event: PointerEvent) { const target = event.target as Node; if (!root.contains(target) && !ownedPropertyPopover(target)) void close().catch(() => {}); }
+  function contextOwner(event: MouseEvent) { ownedContextMenu = root.contains(event.target as Node) || ownedPropertyPopover(event.target as Node); }
+  function outside(event: PointerEvent) { const target = event.target as Node; if (ownedContextMenu && (target as HTMLElement).closest?.('.context-menu')) return; if (!root.contains(target) && !ownedPropertyPopover(target)) void close().catch(() => {}); }
   function escape(event: KeyboardEvent) {
     if (event.defaultPrevented || event.isComposing || composingTitle || event.key !== 'Escape' || ownedPropertyPopover(event.target as Node)) return;
     if (!root.contains(event.target as Node)) return;
@@ -215,10 +219,11 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
   title.addEventListener('beforeinput', event => { if ((event as InputEvent).inputType === 'insertParagraph' || (event as InputEvent).inputType === 'insertLineBreak') event.preventDefault(); });
   title.addEventListener('blur', () => { if (!closed && !composingTitle) void saveTitle().catch(() => {}); });
   title.addEventListener('keydown', event => { if (event.isComposing || composingTitle) return; if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); void saveTitle().then(expandBody).catch(report); } });
+  editorHost.addEventListener('focusout', () => { queueMicrotask(refresh); });
   preview.addEventListener('click', () => { void expandBody().catch(() => {}); }); preview.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void expandBody().catch(() => {}); } });
   open.addEventListener('mousedown', event => event.preventDefault()); open.addEventListener('click', event => { void close().then(() => options.openFile(path, event)).catch(report); });
   retry.addEventListener('click', () => { void flush().catch(report); });
-  document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', escape, true); win?.addEventListener('resize', position); win?.addEventListener('scroll', position, true);
+  document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', escape, true); document.addEventListener('contextmenu', contextOwner, true); win?.addEventListener('resize', position); win?.addEventListener('scroll', position, true);
   const observer = win?.ResizeObserver ? new win.ResizeObserver(position) : undefined; observer?.observe(root);
   for (const event of ['modify', 'rename', 'delete'] as const) unsubscribers.push(options.vault.on(event, change => { if (change.path === path || change.oldPath === path) refresh(); }));
   if (options.subscribeBuffer) unsubscribers.push(options.subscribeBuffer(buffer, refresh));
