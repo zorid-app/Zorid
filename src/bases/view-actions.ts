@@ -77,6 +77,8 @@ export function baseGroupWriteValue(group: { readonly key: BaseExpressionValue |
 export function createBaseViewActions(controller: BaseController, options: {
   validate(): void;
   canRename?: boolean;
+  /** Known property controls shape assignments; values still come from core. */
+  isGroupListProperty?(property: string): boolean;
   validateFolder?(path: string): void;
 }) {
   const current = (version: BaseQueryResult['version']) => {
@@ -88,6 +90,7 @@ export function createBaseViewActions(controller: BaseController, options: {
     }
     return state.result;
   };
+  const shapeGroupValue = (property: string, value: BaseValue): BaseValue => property.startsWith('note.') && value !== null && !Array.isArray(value) && options.isGroupListProperty?.(property) ? [value] : value;
   return {
     async editProperty(edit: BaseTableEdit): Promise<void> {
       current(edit.version);
@@ -112,7 +115,7 @@ export function createBaseViewActions(controller: BaseController, options: {
       // The reference's New in the empty group keeps inferred/template defaults;
       // moving an existing card into that group still clears its property.
       if (group.key === null || group.key.type === 'null') return undefined;
-      return { property, value: baseGroupWriteValue(group, result.shared !== undefined && property.startsWith('note.')) };
+      return { property, value: shapeGroupValue(property, baseGroupWriteValue(group, result.shared !== undefined && property.startsWith('note.'))) };
     },
     async requestGroupOrder(request: BaseKanbanGroupOrderRequest): Promise<void> {
       const result = current(request.version), group = result.view.groupBy;
@@ -161,7 +164,7 @@ export function createBaseViewActions(controller: BaseController, options: {
         await controller.renameFile(request.version as number, request.path, folder ? `${folder}/${name}` : name);
       } else {
         if (!property.startsWith('note.')) throw new Error('This grouping property is read-only');
-        await controller.moveToGroup({ version: request.version as number, path: request.path, value: baseGroupWriteValue(destinationGroup, result.shared !== undefined) });
+        await controller.moveToGroup({ version: request.version as number, path: request.path, value: shapeGroupValue(property, baseGroupWriteValue(destinationGroup, result.shared !== undefined)) });
       }
     },
   };

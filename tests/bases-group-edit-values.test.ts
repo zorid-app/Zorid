@@ -6,7 +6,7 @@ import type { BaseQueryResult } from '../src/bases/query.ts';
 import type { BaseExpressionValue } from '../src/bases/expression.ts';
 const raw = (value: string): BaseExpressionValue => ({type:'string',value});
 const link = (name: string): BaseExpressionValue => ({type:'namespace',name,get(){return {type:'null'};}});
-function fixture() {
+function fixture(isGroupListProperty?: (property:string)=>boolean) {
   const source = {type:'list' as const,value:[link('A')]}, destination = {type:'list' as const,value:[link('Shown B'),link('Shown C')]};
   const editKey = {type:'list' as const,value:[raw('[[/Projects/B.md|Alias B]]'),raw('[[/Projects/C.md]]')]};
   const moves: unknown[] = [];
@@ -15,7 +15,7 @@ function fixture() {
     groupOptions:[],shared:{},
   } as unknown as BaseQueryResult;
   const controller = {state:{version:7,result,error:null},async moveToGroup(edit:unknown){moves.push(edit);}} as unknown as BaseController;
-  return {result,moves,actions:createBaseViewActions(controller,{validate(){}}),source,destination};
+  return {result,moves,actions:createBaseViewActions(controller,{validate(){},isGroupListProperty}),source,destination};
 }
 
 test('shared Kanban moves and New consume the exact core whole-list edit key identified by opaque destination', async()=>{
@@ -50,4 +50,13 @@ test('New in the empty group skips assignment while existing-card moves still cl
  assert.equal(f.actions.creationGroup({version:7,property:'projects',group:{type:'null'},groupKeyId:'destination'}),undefined);
  await f.actions.requestMove({version:7,path:'One.md',property:'projects',source:f.source,destination:{type:'null'},sourceKeyId:'source',destinationKeyId:'destination'});
  assert.deepEqual(f.moves,[{version:7,path:'One.md',value:null}]);
+});
+
+
+test('declared multiple controls wrap core-approved scalar assignments for empty-column New and moves',async()=>{
+ const seen:string[]=[];const f=fixture(property=>{seen.push(property);return true;});const destination=f.result.groups[1] as unknown as {editKey:BaseExpressionValue};destination.editKey=raw('[[/Projects/B.md|Alias B]]');
+ assert.deepEqual(f.actions.creationGroup({version:7,property:'projects',group:f.destination,groupKeyId:'destination'}),{property:'note.projects',value:['[[/Projects/B.md|Alias B]]']});
+ await f.actions.requestMove({version:7,path:'One.md',property:'projects',source:f.source,destination:f.destination,sourceKeyId:'source',destinationKeyId:'destination'});
+ assert.deepEqual(f.moves,[{version:7,path:'One.md',value:['[[/Projects/B.md|Alias B]]']}]);assert.deepEqual(seen,['note.projects','note.projects']);
+ destination.editKey={type:'null'};await f.actions.requestMove({version:7,path:'One.md',property:'projects',source:f.source,destination:{type:'null'},sourceKeyId:'source',destinationKeyId:'destination'});assert.deepEqual(f.moves[1],{version:7,path:'One.md',value:null});
 });
