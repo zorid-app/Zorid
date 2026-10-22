@@ -119,3 +119,9 @@ test('reference Add view commits its name on Enter and continues in the new view
  function refresh(){const result=executeBaseQuery(document,{version,files:[]},{viewIndex:selectedIndex});toolbar.update({result,views:document.views,selectedIndex,readOnly:false,allowRename:true,label:p=>p});}refresh();
  try{doc.querySelector<HTMLButtonElement>('[aria-label="Views"]')!.click();doc.querySelector<HTMLButtonElement>('[aria-label="Add view"]')!.click();assert.equal(doc.querySelector<HTMLElement>('.bases-toolbar-footer')?.hidden,true);const name=doc.querySelector<HTMLInputElement>('[aria-label="View name"]')!;name.value='New view';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await tick();assert.equal(document.views.at(-1)?.name,'New view');assert.equal(doc.querySelector('[role="dialog"]')?.getAttribute('aria-label'),'View options');assert.equal(doc.querySelector<HTMLInputElement>('[aria-label="View name"]')?.value,'New view');assert.equal(toolbar.hasDraft(),false);}finally{toolbar.destroy();dom.window.close();}
 });
+
+test('unchanged configuration can adopt a note-only refresh before saving a retained toolbar draft',async()=>{
+ const f=fixture(true);try{
+  f.click('Views');f.click('Configure view Library');const name=f.get<HTMLInputElement>('View name');name.value='Books';name.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));f.toolbar.update({...f.state,result:{...f.result,version:2}});assert.equal(name.isConnected,true);name.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));await tick();assert.deepEqual(f.calls.pop(),['update',2,0,{type:'table',name:'Books'}]);
+ }finally{f.cleanup();}
+});

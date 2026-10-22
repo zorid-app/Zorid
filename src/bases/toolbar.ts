@@ -486,6 +486,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       if (own.innerDraft) { error.textContent = 'Finish or cancel the new group first.'; return; }
       if (!own.dirty && !own.failure) { if (close) own.close(); return; }
       if (!form.checkValidity()) { error.textContent = 'Check the invalid condition value before applying.'; return; }
+      if (deferredState && own.rebase?.(deferredState)) { state = deferredState; deferredState = undefined; }
       let operation: () => Promise<void>;
       expectedPatch = undefined;
       try {
