@@ -56,6 +56,17 @@ import { createMediaView, mediaKind } from './media-view.ts';
 import type { MediaView } from './media-view.ts';
 import {createBaseSession, type BaseSession} from '../bases/session.ts';
 import {BaseEmbedSessions} from './base-embed-sessions.ts';
+import {openBaseNewItemPopover} from './base-new-item-popover.ts';
+import type {BaseNewItemPopoverHandle} from './base-new-item-popover.ts';
+import {createNotePropertyTargets} from './note-property-targets.ts';
+import type {NotePropertyTargets} from './note-property-targets.ts';
+import {inlineBaseRequest,replaceInlineBaseSource} from '../bases/inline-base.ts';
+import type {InlineBaseRequest} from '../bases/inline-base.ts';
+import {BASE_PROPERTY_DEFINITIONS_PATH,updateBasePropertyDefinition} from '../bases/property-definitions.ts';
+import type {BasePropertyDefinition} from '../bases/property-definitions.ts';
+import {sharedBaseWitness} from '../bases/shared-query.ts';
+import {prepareBaseFileCreation} from '../bases/creation.ts';
+import type {BaseCreationOperation} from '../bases/creation.ts';
 import { CanvasDocument } from '../canvas/document.ts';
 import { createCanvasView } from '../canvas/view.ts';
 import type { CanvasView } from '../canvas/view.ts';
@@ -133,7 +144,14 @@ export class Workspace {
   private nativeDocumentStatus?:HTMLElement;
   private nativeRecoveryBusy=new WeakSet<NoteBuffer>();
   private treeTab: 'files' | 'search' | 'bookmarks' = 'files';
-  private rightTab: 'backlinks' | 'outline' | 'tags' = 'backlinks';
+  private rightTab: 'backlinks' | 'outline' | 'tags' | 'base' = 'backlinks';
+  private sidebarBase?:{path:string;session:BaseSession;host:HTMLElement;context:string};
+  private sidebarBaseIntent=0;
+  private sidebarBasePath?:string;
+  private baseNewItem?:BaseNewItemPopoverHandle;
+  private baseNewItemOpening?:Promise<void>;
+  private notePropertyQueries=new Set<{vault:Vault;session:NotePropertyTargets}>();
+  private pendingBaseCreation?:{vault:Vault;generation:number;folder:string;preparing:Promise<BaseCreationOperation>;operation?:BaseCreationOperation};
   private collapsed = new Set<string>();
   private bookmarks = new Set<string>();
   private treeRows: FileTreeDragRow[] = [];
@@ -159,7 +177,7 @@ export class Workspace {
   private keyListener = (event: KeyboardEvent) => this.onKey(event);
   private unloadListener = (event: BeforeUnloadEvent) => {
     try{this.saveSession();}catch{/* Storage failure must not bypass the dirty-document unload guard. */}
-    if ([...this.buffers.values()].some(buffer => buffer.dirty) || [...this.panes,...this.cachedViews.values()].some(pane => pane.tasksView?.hasPendingChanges() || pane.calendarView?.hasPendingChanges() || pane.canvasView?.hasPendingChanges() || pane.baseView?.hasPendingChanges() || pane.baseEmbeds?.hasPendingChanges())) { event.preventDefault(); event.returnValue = ''; }
+    if (this.hasPendingBaseCreation() || this.baseNewItemOpening || this.baseNewItem?.hasPendingChanges() || this.sidebarBase?.session.hasPendingChanges() || [...this.buffers.values()].some(buffer => buffer.dirty) || [...this.panes,...this.cachedViews.values()].some(pane => pane.tasksView?.hasPendingChanges() || pane.calendarView?.hasPendingChanges() || pane.canvasView?.hasPendingChanges() || pane.baseView?.hasPendingChanges() || pane.baseEmbeds?.hasPendingChanges())) { event.preventDefault(); event.returnValue = ''; }
   };
   private menuSerial = 0;
   private inputContextListener=(event:MouseEvent)=>{
@@ -176,6 +194,7 @@ export class Workspace {
   private vaultRequest = 0;
   private vaultTransition: Promise<void> = Promise.resolve();
   private canvasMarkdownEmbeds = new Set<MarkdownEmbeds>();
+  private baseNewItemEmbeds?:BaseEmbedSessions;
   private bufferSubscriptions = new NoteBufferSubscriptions();
   private metadataListeners=new Set<()=>void>();
   private subscribeDraftMetadata=(listener:()=>void):(()=>void)=>{this.metadataListeners.add(listener);return()=>this.metadataListeners.delete(listener);};
@@ -456,7 +475,7 @@ export class Workspace {
     let cancelTasksClose:(recover?:boolean)=>void=()=>{};
     try{
     this.vaultRequest++;await this.vaultTransition;
-    if(!this.platformDrained){await this.flush();cancelTasksClose=await this.prepareTasksViewsClose();await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.platformDrained=true;}
+    if(!this.platformDrained){await this.flush();await this.closeBaseNewItem();await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;cancelTasksClose=await this.prepareTasksViewsClose();await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.platformDrained=true;}
     this.clearDocumentBacklinks();
     await this.closeDocumentSearchPins().catch(()=>{});
     await this.drainMetadataOpenings();
@@ -680,6 +699,7 @@ export class Workspace {
 
   private async closeVaultMetadata(vault:Vault|undefined):Promise<void>{
     if(!vault)return;
+    for(const query of [...this.notePropertyQueries])if(query.vault===vault){await query.session.close();this.notePropertyQueries.delete(query);}
     if(this.metadataSubscription?.vault===vault){this.metadataSubscription.stop();this.metadataSubscription=undefined;}
     this.retiredMetadataVaults.add(vault);
     // A failed close retains this exact retired owner for a later retry.
@@ -718,6 +738,8 @@ export class Workspace {
     try{
     this.menuSerial++; await dismissContextMenu(this.root.ownerDocument);
     if(!this.platformReleased)await this.flush();
+    await this.closeBaseNewItem();
+    await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;
     cancelTasksClose=await this.prepareTasksViewsClose();
     this.saveSession();
     for (const dispose of this.disposers) dispose(); this.disposers = [];
@@ -739,7 +761,7 @@ export class Workspace {
     this.attachments=new AttachmentResources(this.vault);
     this.attachmentImporter=new AttachmentImporter(this.vault);
     this.splitLayout?.destroy(); this.splitLayout=undefined; this.restoringLayout=true;
-    this.panes = []; this.autoRevealFiles=false; this.collapsed.clear(); this.bookmarks.clear(); this.sessionState = {};
+    this.panes = []; this.autoRevealFiles=false; this.collapsed.clear(); this.bookmarks.clear(); this.sessionState = {};this.rightTab='backlinks';this.sidebarBasePath=undefined;
     this.buildShell();
     if(!platform.editorOnly)this.mountFileTreeDrag();
     let restored = false;
@@ -747,6 +769,8 @@ export class Workspace {
       const saved = JSON.parse(localStorage.getItem(this.sessionKey()) || 'null');
       if (saved && !platform.editorOnly) {
         this.sessionState = saved;this.autoRevealFiles=saved.autoRevealFiles===true;
+        if(['backlinks','outline','tags'].includes(saved.rightTab))this.rightTab=saved.rightTab;
+        if(typeof saved.sidebarBasePath==='string'&&/\.base$/i.test(saved.sidebarBasePath)&&next.entries.get(saved.sidebarBasePath)?.type==='file')this.sidebarBasePath=saved.sidebarBasePath;
         this.root.classList.toggle('right-hidden', saved.rightHidden !== false);
         this.root.classList.toggle('left-hidden', saved.leftHidden === true);
         this.collapsed = new Set(saved.collapsed || []); this.bookmarks = new Set(saved.bookmarks || []);
@@ -762,6 +786,7 @@ export class Workspace {
     this.activate(this.panes.find(pane=>pane.id===this.sessionState.activePaneId)??this.panes[0]);
     this.restoringLayout=false;
     for (const pane of this.panes) await this.renderPane(pane,{flush:false});
+    if(!platform.editorOnly&&this.sessionState.rightTab==='base'&&this.sidebarBasePath)await this.openBaseSidebar(this.sidebarBasePath,{reveal:false,persist:false});
     this.subscribeVaultMetadata(next);
     if(!platform.editorOnly)this.tabDocking=createTabDocking({root:this.root,getPanes:()=>this.dockPanes(),dock:intent=>this.dockTab(intent),enabled:()=>!matchMedia('(max-width: 700px)').matches,onError:error=>notice(error instanceof Error?error.message:String(error))});
     this.disposers.push(this.vault.on('create', change => { this.invalidateTreeTokens(change.path); this.renderSidebar(); }), this.vault.on('delete', change => {
@@ -795,6 +820,7 @@ export class Workspace {
       const movedBuffers=new Set([...this.buffers].filter(([path,buffer])=>this.bufferEntries.has(buffer)&&this.bufferEntries.get(buffer)===this.entryTokens.get(path)).map(([,buffer])=>buffer));
       this.invalidateTreeTokens(oldPath); this.invalidateTreeTokens(change.path);
       const relocate=(path:string)=>path===oldPath||path.startsWith(oldPath+'/')?change.path+path.slice(oldPath.length):path;
+      if(this.sidebarBasePath)this.sidebarBasePath=relocate(this.sidebarBasePath);
       this.bookmarks=new Set([...this.bookmarks].map(relocate));
       this.collapsed=new Set([...this.collapsed].map(relocate));
       this.treeSelection=new Set([...this.treeSelection].map(relocate));
@@ -915,7 +941,8 @@ export class Workspace {
     this.splitLayout=new SplitLayout(this.paneContainer,{onChange:()=>this.saveSession()});
     this.right = el('aside','right-sidebar'); this.right.setAttribute('aria-label','Right sidebar');
     const rightTabs = el('div','right-tabs');
-    for (const [type,glyph,label] of [['backlinks','link','Backlinks'],['outline','list','Outline'],['tags','tag','Tags']] as const) rightTabs.append(button(glyph,label,()=>{this.rightTab=type;this.renderRight();}));
+    for (const [type,glyph,label] of [['backlinks','link','Backlinks'],['outline','list','Outline'],['tags','tag','Tags']] as const) rightTabs.append(button(glyph,label,()=>{this.run(async()=>{await this.sidebarBase?.session.flush();this.rightTab=type;this.renderRight();});}));
+    rightTabs.append(button('table','Bases',()=>this.run(async()=>{await this.sidebarBase?.session.flush();if(this.sidebarBase){this.rightTab='base';this.renderRight();this.saveSession();}else{const path=this.sidebarBasePath??this.current()?.path;if(path&&/\.base$/i.test(path))await this.openBaseSidebar(path);else notice('Open a Base first.');}})));
     rightTabs.append(button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle')); this.rightContent=el('div','right-content'); this.right.append(rightTabs,this.rightContent);
     this.status = el('footer','status-bar'); this.status.setAttribute('aria-live','polite');
     if(this.platform.editorOnly){
@@ -933,7 +960,7 @@ export class Workspace {
         const generation=this.vaultGeneration,serial=++this.menuSerial;
         return buildFileListBackgroundMenu({hasVault:!!this.vault,
           isValid:()=>this.initialized&&generation===this.vaultGeneration&&serial===this.menuSerial,
-          actions:{newNote:()=>this.newNote(''),newFolder:()=>this.newFolder(''),newCanvas:()=>this.newCanvas('')},
+          actions:{newNote:()=>this.newNote(''),newFolder:()=>this.newFolder(''),newCanvas:()=>this.newCanvas(''),newBase:()=>this.newBase('')},
         });
       },
       clearSelection:()=>{this.treeSelection.clear();this.treeSelectionAnchor=undefined;this.paintTreeSelection();const focused=surface.ownerDocument.activeElement;if(focused instanceof HTMLElement&&surface.contains(focused)&&focused.matches('[role="treeitem"]'))focused.blur();},
@@ -1195,11 +1222,13 @@ export class Workspace {
       recoveryCleanup=this.mountNoteRecovery(content,buffer);
       {
         const host=el('div','properties-host');scroll.append(host);
-        pane.properties=renderProperties(host,{isCurrent:()=>pane.viewPath===path&&pane.renderVersion===version&&this.buffers.get(path)===buffer,onError:error=>notice(error instanceof Error?error.message:String(error)),getSource:()=>buffer.text,onChange:async next=>{
+        const targets=this.notePropertyTargets(()=>path,()=>generation===this.vaultGeneration&&pane.viewPath===path&&pane.renderVersion===version&&this.buffers.get(path)===buffer,()=>pane.properties?.refresh());
+        const properties=renderProperties(host,{vault:this.vault,path,getRelationTargets:property=>targets.get(property),onPropertyDefinitionChange:(property,definition)=>this.changePropertyDefinition(property,definition,()=>{if(generation!==this.vaultGeneration||pane.viewPath!==path||pane.renderVersion!==version)throw new Error('The property panel changed.');}),isCurrent:()=>pane.viewPath===path&&pane.renderVersion===version&&this.buffers.get(path)===buffer,onError:error=>notice(error instanceof Error?error.message:String(error)),getSource:()=>buffer.text,onChange:async next=>{
           this.updateMarkdownBuffer(buffer,next);runtime.touch();
           for(const other of this.loadedViews()){if(this.current(other)?.path===path){other.editor?.setValue(next);other.refreshPreview?.();if(other!==pane)other.properties?.refresh();}}
           await buffer.flush();
         },openLink:target=>this.run(()=>this.followLink(path,target,pane))});
+        pane.properties={refresh:()=>properties.refresh(),destroy:()=>{targets.destroy();properties.destroy();}};
       }
       const baseSessions=this.embeddedBases(()=>pane,()=>{if(generation!==this.vaultGeneration||pane.runtime!==runtime||runtime.phase==='disposed')throw new Error('The source note is closed.');});
       const createEmbeds=()=>new MarkdownEmbeds({bases:{sessions:baseSessions,identity:target=>this.treeEntryToken(target)},vault:this.vault,resources:this.attachments,pdfFactory:this.viewFactories.pdf,generatePdfLink:(target,fragment,alias)=>generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase!=='disposed'?pdfMarkdownLink(this.vault,target,fragment,alias,this.settings):null,contextMenu:(event,request,source)=>{const target=this.vault.metadata.resolveLink(source,request.target,request.kind);const entry=target?this.vault.entries.get(target):undefined;if(entry){const point=this.menuPoint(event);event.preventDefault();event.stopPropagation();this.fileMenu(entry,point.x,point.y);}},open:(source,target,kind)=>this.run(()=>this.followLink(source,target,pane,kind)),read:async target=>{const loaded=this.buffers.get(target);if(loaded){await loaded.load();if(loaded.dirty)return loaded.text;}return this.vault.cachedRead(target);},taskChange:(target,line,checked)=>this.changeTask(target,line,checked)});
@@ -1214,7 +1243,7 @@ export class Workspace {
           const embeds=createEmbeds();
           pane.embeds=embeds;
           try{
-            renderMarkdown(preview,buffer.text,(target,kind)=>this.run(()=>this.followLink(path,target,pane,kind)),(line,checked)=>this.run(()=>this.changeTask(path,line,checked)),{embed:request=>embeds.render(request,path),properties:false});
+            renderMarkdown(preview,buffer.text,(target,kind)=>this.run(()=>this.followLink(path,target,pane,kind)),(line,checked)=>this.run(()=>this.changeTask(path,line,checked)),{embed:request=>embeds.render(request,path),base:request=>embeds.renderBase(request,path),properties:false});
           }catch(error){pane.readingFind?.close();destroyMarkdown(preview);embeds.destroy();if(pane.embeds===embeds)pane.embeds=undefined;throw error;}
           pane.readingFind?.refresh();
         };
@@ -1239,6 +1268,7 @@ export class Workspace {
           isUnresolved:(target,kind)=>generation!==this.vaultGeneration||!this.vault.metadata.resolveLink(path,target,kind),
           listOptions:{useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList},
           renderEmbed:(request,context)=>{const dom=embeds.render(request,path,[],undefined,context);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
+          renderBase:(request,context)=>{const dom=embeds.renderBase(request,path,context);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
           transfers:{autoConvertHtml:()=>this.settings.autoConvertHtml,importFile:file=>this.importAttachment(file,path,generation),nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
           onChange:value=>{this.updateMarkdownBuffer(buffer,value);runtime.touch();this.renderStatus();for(const other of this.loadedViews()){if(this.current(other)?.path===path){if(other!==pane)other.editor?.setValue(value);clearTimeout(other.propertyTimer);const properties=other.properties,preview=other.refreshPreview;other.propertyTimer=setTimeout(()=>{properties?.refresh();preview?.();},150);}}},open:(target,kind)=>{if(generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path)this.run(()=>this.followLink(path,target,pane,kind));}});
       }
@@ -1253,9 +1283,36 @@ export class Workspace {
     if(version===pane.renderVersion)pane.viewReady=true;this.renderStatus();
   }
 
-  private createWorkspaceBaseSession(host:HTMLElement,path:string,owner:()=>Pane,validate:()=>void,sourcePath?:string,viewName?:string):BaseSession{
+  private createWorkspaceBaseSession(host:HTMLElement,path:string,owner:()=>Pane,validate:()=>void,sourcePath?:string,viewName?:string,inline?:InlineBaseRequest):BaseSession{
     const vault=this.vault,resources=this.attachments!;
-    return (this.viewFactories.base??createBaseSession)(host,{vault,basePath:path,validate,viewName,query:{currentFilePath:sourcePath??path},
+    let captured=inline;
+    const inlineSource=inline?{
+      read:async()=>{validate();const request=captured!;const source=await vault.read(path);validate();if(source!==request.documentText)throw new Error('The containing note changed. Refresh this embedded Base.');return{source:request.source,startByte:new TextEncoder().encode(source.slice(0,request.from)).length,endByte:new TextEncoder().encode(source.slice(0,request.to)).length};},
+      transform:async(expected:string,next:string,validateSelection:()=>void)=>{
+        validate();validateSelection();const request=captured!;
+        if(expected!==request.source&&next!==request.source)throw new Error('The fenced Base configuration changed.');
+        const buffer=await this.baseBufferFor(path,validate);validateSelection();
+        const desired=expected===request.source?replaceInlineBaseSource(request.documentText,request,next):request.documentText;
+        if(buffer.text!==request.documentText&&buffer.text!==desired)throw new Error('The containing note has an unsaved or external edit.');
+        const previous=buffer.text;
+        buffer.update(desired,{validateWrite:()=>{validate();validateSelection();}});
+        const fresh=inlineBaseRequest(desired,request.from,request.to+desired.length-request.documentText.length);
+        if(!fresh)throw new Error('The updated Base fence could not be retained.');
+        captured=fresh;this.mapInactiveSelections(path,previous,desired);
+        await buffer.flush();
+        for(const pane of this.loadedViews())if(pane.viewPath===path){pane.editor?.setValue(desired);pane.properties?.refresh();pane.refreshPreview?.();}
+      }
+    }:undefined;
+    return (this.viewFactories.base??createBaseSession)(host,{vault,basePath:path,validate,viewName,inlineSource,query:{currentFilePath:sourcePath??path},
+            onViewRenamed:event=>{validate();const identity=this.treeEntryToken(event.basePath);if(!identity)return;for(const sessions of new Set([this.baseNewItemEmbeds,...this.loadedViews().map(pane=>pane.baseEmbeds)].filter((sessions):sessions is BaseEmbedSessions=>!!sessions)))sessions.renameViewBinding(event.basePath,event.from,event.to,identity);},
+            closeCreatedFile:()=>this.baseNewItem?.element.contains(host)?false:this.closeBaseNewItem(),
+            openCreatedFile:async(target,_event,anchor)=>{
+              validate();
+              // A nested Base's own New operation is still tracked by its
+              // session. Release that operation before draining its parent.
+              if(this.baseNewItem?.element.contains(host)){this.run(async()=>{await this.closeBaseNewItem();await this.openBaseNewItem(target,this.root);});return;}
+              await this.openBaseNewItem(target,anchor??host);
+            },
             buffers:{getBuffer:target=>this.baseBufferFor(target,validate),validate,
               onBufferChange:(target,buffer,previous)=>{
                 this.mapInactiveSelections(target,previous,buffer.text);
@@ -1269,16 +1326,111 @@ export class Workspace {
                 for(const buffer of this.buffers.values())await buffer.flush();
                 await vault.rename(source,destination,()=>{validate();validateResult();if(!token||this.treeEntryToken(source)!==token)throw new Error('The moved file is no longer current.');this.requireAvailableTreePath(vault,destination,source);},expectedWitness);
               }},
-            openFile:(target,event)=>this.run(()=>{validate();return this.openNote(target,('button'in event&&event.button===1)||event.metaKey||event.ctrlKey,owner());}),
+            contextMenu:(row,event)=>{validate();const entry=vault.entries.get(row.path);if(entry){const point=this.menuPoint(event);this.fileMenu(entry,point.x,point.y);}},
+            dragFile:(row,event)=>{validate();event.dataTransfer?.setData('text/plain',`[[${row.path.replace(/\.md$/i,'')}]]`);},
+            deleteFiles:async(rows,result)=>{validate();const expected=rows.map(row=>({path:row.path,witness:sharedBaseWitness(result,row.path)}));if(!window.confirm(`Move ${rows.length} ${rows.length===1?'file':'files'} to trash?`))return;for(const item of expected){validate();const entry=vault.entries.get(item.path);if(!entry||item.witness&&(entry.entryId!==item.witness.entryId||entry.revision!==item.witness.revision))throw new Error('A selected file changed. Refresh before deleting.');}for(const item of expected){await this.buffers.get(item.path)?.flush();validate();const current=vault.entries.get(item.path);if(item.witness&&(current?.entryId!==item.witness.entryId||current?.revision!==item.witness.revision))throw new Error('A selected file changed before deletion.');await vault.trash(item.path);}},
+            openFile:(target,event,witness)=>this.run(()=>{
+              validate();
+              if(/^[a-z][\w+.-]*:/i.test(target)||target.startsWith('//')){if(/^(?:https?:\/\/|mailto:|tel:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');return;}
+              let path=target;
+              if(witness){const entry=[...vault.entries.values()].find(entry=>entry.entryId===witness.entryId);if(!entry||entry.type!=='file'||entry.revision!==witness.revision)throw new Error('The linked file changed. Refresh before opening.');path=entry.path;}
+              return this.openNote(path,('button'in event&&event.button===1)||event.metaKey||event.ctrlKey,owner(),true,target.includes('#')?target.slice(target.indexOf('#')):'');
+            }),
             loadThumbnail:async request=>{
               validate();if(request.signal.aborted)return null;
-              const raw=request.property==='file.file'?request.row.path:request.value.type==='string'?request.value.value:'';
+              const raw=request.property==='file.file'?request.row.path:request.value.type==='string'?request.value.value:request.value.type==='namespace'?request.value.presentation?.value??'':'';
+              if(/^https?:\/\//i.test(raw)){try{const url=new URL(raw);if(url.hostname)return{url:url.href,dispose(){}};}catch{return null;}}
               const wiki=/^!?\[\[([^\r\n]*?)\]\]$/.exec(raw),link=wiki?wiki[1].split('|')[0]:raw;
-              const target=vault.entries.has(raw)?raw:vault.metadata.resolveLink(request.row.path,link,'wiki');
+              const witness=(request.value.type==='namespace'?request.value.presentation?.target:undefined)??(request.property==='file.file'&&request.row.entryId&&request.row.revision?{entryId:request.row.entryId,revision:request.row.revision}:undefined);
+              const witnessed=witness?[...vault.entries.values()].find(entry=>entry.entryId===witness.entryId&&entry.revision===witness.revision&&entry.type==='file'):undefined;
+              if(witness&&!witnessed)return null;
+              const target=witnessed?.path??(vault.entries.has(raw)?raw:vault.metadata.resolveLink(request.row.path,link,'wiki'));
               if(!target||!isImage(target))return null;
               const token=this.treeEntryToken(target),lease=await resources.acquire(target);
-              try{validate();if(request.signal.aborted||!token||this.treeEntryToken(target)!==token){lease.release();return null;}return{url:lease.url,dispose:()=>lease.release()};}catch(error){lease.release();throw error;}
+              try{validate();if(request.signal.aborted||!token||this.treeEntryToken(target)!==token||witness&&(vault.entries.get(target)?.entryId!==witness.entryId||vault.entries.get(target)?.revision!==witness.revision)){lease.release();return null;}return{url:lease.url,dispose:()=>lease.release()};}catch(error){lease.release();throw error;}
             },onError:error=>notice(error instanceof Error?error.message:String(error))});
+  }
+
+  private async flushBaseNewItem():Promise<void>{await this.baseNewItemOpening;await this.baseNewItem?.flush();}
+  private notePropertyTargets(getPath:()=>string,isCurrent:()=>boolean,onChange:()=>void):NotePropertyTargets{
+    const vault=this.vault,session=createNotePropertyTargets({vault,getPath,isCurrent,onChange}),owner={vault,session};this.notePropertyQueries.add(owner);
+    return{...session,destroy:()=>{session.destroy();void session.close().then(()=>this.notePropertyQueries.delete(owner),()=>{});},close:async()=>{await session.close();this.notePropertyQueries.delete(owner);}};
+  }
+  private async closeBaseNewItem():Promise<boolean>{
+    await this.baseNewItemOpening;
+    const current=this.baseNewItem;if(!current)return false;
+    await current.close();return true;
+  }
+  private openBaseNewItem(path:string,anchor:HTMLElement):Promise<void>{
+    if(this.baseNewItemOpening)return this.baseNewItemOpening.then(()=>this.openBaseNewItem(path,anchor));
+    const vault=this.vault,generation=this.vaultGeneration;
+    const opening=Promise.resolve().then(async()=>{
+      await this.baseNewItem?.close();
+      let disposed=false,buffer:NoteBuffer|undefined;
+      const validate=()=>{
+        if(disposed||vault!==this.vault||generation!==this.vaultGeneration||this.platformReleased||this.platformDrained)throw new Error('The new-item vault is no longer available.');
+        if(buffer&&(this.buffers.get(buffer.path)!==buffer||vault.entries.get(buffer.path)?.type!=='file'))throw new Error('The new-item note changed. Its draft is retained.');
+      };
+      buffer=await this.baseBufferFor(path,validate);validate();
+      const shared=buffer,entryId=shared.savedDurableWitness?.entryId??vault.entries.get(path)?.entryId;
+      const validateFile=()=>{validate();const token=this.treeEntryToken(shared.path);if(!token||this.bufferEntries.get(shared)!==token||entryId&&vault.entries.get(shared.path)?.entryId!==entryId)throw new Error('The new-item note was replaced. Its draft is retained.');};
+      const recovery=el('div','bases-new-item-embed-recovery');
+      const sessions=new BaseEmbedSessions({recoveryHost:recovery,create:async(container,target)=>{
+        const validateEmbed=()=>{validateFile();if(!target.sourceIdentity||this.treeEntryToken(target.sourcePath)!==target.sourceIdentity||!target.targetIdentity||this.treeEntryToken(target.targetPath)!==target.targetIdentity)throw new Error('The embedded Base source changed. Its draft is retained.');};
+        validateEmbed();await this.prepareBase(target.targetPath,generation);validateEmbed();
+        return this.createWorkspaceBaseSession(container,target.targetPath,()=>this.activePane,validateEmbed,target.sourcePath,target.viewName||undefined,target.inline);
+      }});
+      this.baseNewItemEmbeds=sessions;
+      const embeds=new MarkdownEmbeds({vault,resources:this.attachments,bases:{sessions,identity:target=>this.treeEntryToken(target)},
+        open:(source,target,kind)=>this.run(async()=>{validateFile();await this.followLink(source,target,this.activePane,kind);}),
+        read:async target=>{validateFile();const loaded=this.buffers.get(target);if(loaded){await loaded.load();validateFile();if(loaded.dirty)return loaded.text;}return vault.cachedRead(target);},
+        taskChange:(target,line,checked)=>this.changeTask(target,line,checked,validateFile),
+        pdfFactory:this.viewFactories.pdf,generatePdfLink:(target,fragment,alias)=>{validateFile();return pdfMarkdownLink(vault,target,fragment,alias,this.settings);},
+        contextMenu:(event,request,source)=>{validateFile();const target=vault.metadata.resolveLink(source,request.target,request.kind),entry=target?vault.entries.get(target):undefined;if(entry){const point=this.menuPoint(event);event.preventDefault();event.stopPropagation();this.fileMenu(entry,point.x,point.y);}},
+      });
+      this.canvasMarkdownEmbeds.add(embeds);
+      let popup:BaseNewItemPopoverHandle|undefined,observedPath=shared.path;
+      const targets=this.notePropertyTargets(()=>shared.path,()=>{try{validateFile();return true;}catch{return false;}},()=>popup?.refresh());
+      const remounts=new Set<()=>void>();
+      const renderChild=(create:()=>HTMLElement)=>{
+        const host=el('div','bases-new-item-editor-embed');let node:HTMLElement|undefined,closed=false;
+        const mount=()=>{if(closed)return;if(node)embeds.releaseEmbed(node);node=create();host.replaceChildren(node);};
+        mount();remounts.add(mount);
+        return{dom:host,destroy:()=>{if(closed)return;closed=true;remounts.delete(mount);if(node)embeds.releaseEmbed(node);}};
+      };
+      const cleanup=()=>{disposed=true;if(this.baseNewItemEmbeds===sessions)this.baseNewItemEmbeds=undefined;targets.destroy();embeds.destroy();this.canvasMarkdownEmbeds.delete(embeds);remounts.clear();if(this.baseNewItem===popup)this.baseNewItem=undefined;};
+      try{
+        popup=await openBaseNewItemPopover({anchor,vault,path,getBuffer:async target=>{validateFile();if(target!==shared.path)throw new Error('The new note moved before opening.');return shared;},validate:validateFile,
+          rename:async(source,destination,validateSelection,witness)=>{
+            validateFile();validateSelection();await sessions.flush();const token=this.treeEntryToken(source);await shared.flush();
+            await vault.rename(source,destination,()=>{validateFile();validateSelection();if(!token||this.treeEntryToken(source)!==token||shared.path!==source)throw new Error('The renamed note is no longer current.');this.requireAvailableTreePath(vault,destination,source);},witness);
+            await shared.relocate(destination);
+          },
+          subscribeBuffer:(target,listener)=>this.bufferSubscriptions.subscribe(target,()=>{
+            if(shared.path!==observedPath){observedPath=shared.path;for(const remount of [...remounts])remount();}
+            listener();
+            for(const pane of this.loadedViews())if(pane.viewPath===shared.path){pane.editor?.setValue(shared.text);pane.properties?.refresh();pane.refreshPreview?.();}
+          }),
+          properties:{getRelationTargets:property=>targets.get(property),onPropertyDefinitionChange:(property,definition)=>this.changePropertyDefinition(property,definition,validateFile)},
+          flushEditor:()=>sessions.flush(),hasPendingEditorChanges:()=>sessions.hasPendingChanges(),closeEditor:async()=>{await sessions.close();await targets.close();},
+          openFile:async(target,event)=>{validateFile();const resolved=vault.entries.has(target)?target:vault.metadata.resolveLink(shared.path,target,'wiki');if(!resolved)throw new Error('The linked note is unavailable.');await this.openNote(resolved,('button'in event&&event.button===1)||event.metaKey||event.ctrlKey,this.activePane);},
+          editorFactory:(parent,options)=>this.editorFactory?this.editorFactory(parent,options):import('./editor.ts').then(module=>module.createEditor(parent,options)),
+          editorOptions:{hotkeys:this.hotkeys,subscribeMetadata:this.subscribeDraftMetadata,paths:()=>{validateFile();return[...vault.entries.keys()];},
+            listOptions:{useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList},
+            open:(target,kind='wiki')=>this.run(async()=>{validateFile();await this.followLink(shared.path,target,this.activePane,kind);}),
+            isUnresolved:(target,kind)=>!vault.metadata.resolveLink(shared.path,target,kind),
+            wiki:{sourcePath:()=>shared.path,metadata:target=>{validateFile();const metadata=this.buffers.get(target)?.getMetadata()??vault.metadata.get(target);return{aliases:metadata?.aliases,headings:metadata?.headings,mtime:vault.entries.get(target)?.mtime};},resolvePath:(target,source)=>vault.metadata.resolveLink(source,target)},
+            renderEmbed:(request,context)=>renderChild(()=>{validateFile();return embeds.render(request,shared.path,[],undefined,context);}),
+            renderBase:(request,context)=>renderChild(()=>{validateFile();return embeds.renderBase(request,shared.path,context);}),
+            transfers:{autoConvertHtml:()=>this.settings.autoConvertHtml,importFile:async file=>{validateFile();const result=await this.importAttachment(file,shared.path,generation);validateFile();return result;},nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
+          },onError:error=>notice(error instanceof Error?error.message:String(error)),onClose:cleanup,
+        });
+        validateFile();popup.element.append(recovery);this.baseNewItem=popup;
+      }catch(error){if(popup?.element.isConnected){this.baseNewItem=popup;throw error;}cleanup();await sessions.close();throw error;}
+    });
+    this.baseNewItemOpening=opening;
+    const clear=()=>{if(this.baseNewItemOpening===opening)this.baseNewItemOpening=undefined;};void opening.then(clear,clear);
+    return opening;
   }
 
   private embeddedBases(owner:()=>Pane,validateOwner:()=>void):BaseEmbedSessions{
@@ -1293,7 +1445,7 @@ export class Workspace {
         if(!target.targetIdentity||this.treeEntryToken(target.targetPath)!==target.targetIdentity||vault.entries.get(target.targetPath)?.type!=='file')throw new Error('The embedded Base file changed. Your edits are retained.');
       };
       validate();await this.prepareBase(target.targetPath,generation);validate();
-      return this.createWorkspaceBaseSession(container,target.targetPath,owner,validate,target.sourcePath,target.viewName||undefined);
+      return this.createWorkspaceBaseSession(container,target.targetPath,owner,validate,target.sourcePath,target.viewName||undefined,target.inline);
     }});
     pane.baseEmbeds=sessions;return sessions;
   }
@@ -1917,9 +2069,34 @@ export class Workspace {
     }
   }
 
+  private async openBaseSidebar(path:string,options:{reveal?:boolean;persist?:boolean}={}):Promise<void>{
+    const vault=this.vault,generation=this.vaultGeneration,intent=++this.sidebarBaseIntent;
+    await this.sidebarBase?.session.close();this.sidebarBase=undefined;
+    await this.prepareBase(path,generation);
+    if(vault!==this.vault||generation!==this.vaultGeneration||intent!==this.sidebarBaseIntent)return;
+    const token=this.treeEntryToken(path),host=el('div','sidebar-base-host');
+    const validate=()=>{if(vault!==this.vault||generation!==this.vaultGeneration||!token||this.treeEntryToken(path)!==token||intent!==this.sidebarBaseIntent)throw new Error('The sidebar Base changed.');};
+    const context=this.current()?.path??path;
+    const session=this.createWorkspaceBaseSession(host,path,()=>this.activePane,validate,context);
+    this.sidebarBase={path,session,host,context};this.sidebarBasePath=path;this.rightTab='base';if(options.reveal!==false)this.root.classList.remove('right-hidden');this.renderRight();await session.ready;if(options.persist!==false)this.saveSession();
+  }
+
+  private async changePropertyDefinition(property:string,definition:BasePropertyDefinition,validate:()=>void):Promise<void>{
+    const vault=this.vault,generation=this.vaultGeneration;
+    const alive=()=>{validate();if(vault!==this.vault||generation!==this.vaultGeneration)throw new Error('The property vault changed.');};alive();
+    if(!vault.entries.has(BASE_PROPERTY_DEFINITIONS_PATH)){await vault.create(BASE_PROPERTY_DEFINITIONS_PATH,'properties: {}\n');alive();}
+    const buffer=await this.baseBufferFor(BASE_PROPERTY_DEFINITIONS_PATH,alive),before=buffer.text;
+    const next=updateBasePropertyDefinition(before,property,definition);alive();
+    if(buffer.text!==before)throw new Error('Property settings changed before saving.');
+    buffer.update(next,{validateWrite:alive});await buffer.flush();
+    for(const pane of this.loadedViews())pane.properties?.refresh();
+  }
+
   private renderRight():void{
     this.clearDocumentBacklinks();
-    if(!this.vault||!this.activePane)return;this.rightContent.replaceChildren();delete this.rightContent.dataset.metadataStatus;const path=this.current()?.path;
+    if(!this.vault||!this.activePane)return;
+    if(this.rightTab==='base'&&this.sidebarBase){const saved=this.sidebarBase;if(!this.rightContent.contains(saved.host))this.rightContent.replaceChildren(saved.host);const context=this.current()?.path??saved.path;if(context!==saved.context){saved.context=context;void saved.session.setCurrentFile(context).catch(error=>notice(error instanceof Error?error.message:String(error)));}return;}
+    this.rightContent.replaceChildren();delete this.rightContent.dataset.metadataStatus;const path=this.current()?.path;
     if(this.rightTab==='backlinks'){
       if(this.vault.adapter.documentSemantics){
         if(!this.root.classList.contains('right-hidden'))void this.renderSharedBacklinks(path);
@@ -2031,6 +2208,24 @@ export class Workspace {
     await this.openNote(path,false,pane,true,'',activation);if(generation!==this.vaultGeneration||this.activePane!==pane||this.current(pane)?.path!==path||this.navigationIntent.get(pane)!==intent+1)return;
     const title=pane.element.querySelector<HTMLInputElement>('.note-title');
     if(title&&!title.hidden){title.focus();title.select();}else pane.editor?.focus();
+  }
+  private hasPendingBaseCreation():boolean{return !!this.pendingBaseCreation&&this.pendingBaseCreation.operation?.status!=='committed';}
+  private async newBase(folder=''):Promise<void>{
+    const vault=this.vault,generation=this.vaultGeneration,pane=this.activePane,version=pane.renderVersion,activation=this.paneActivationRevision;
+    const intent=(this.navigationIntent.get(pane)??0)+1;this.navigationIntent.set(pane,intent);
+    let retained=this.pendingBaseCreation;
+    if(retained&&(retained.vault!==vault||retained.generation!==generation)){this.pendingBaseCreation=undefined;retained=undefined;}
+    if(retained&&retained.operation?.status!=='committed'&&retained.folder!==folder)throw new Error('Retry the unfinished Base creation in its original folder before creating another Base.');
+    if(!retained||retained.operation?.status==='committed'){
+      const preparing=prepareBaseFileCreation({vault,folder,validate:()=>{if(vault!==this.vault||generation!==this.vaultGeneration)throw new Error('The Base vault changed.');}});
+      retained={vault,generation,folder,preparing};this.pendingBaseCreation=retained;
+    }
+    let operation:BaseCreationOperation;
+    try{operation=await retained.preparing;retained.operation=operation;}
+    catch(error){if(this.pendingBaseCreation===retained)this.pendingBaseCreation=undefined;throw error;}
+    const path=operation.path;await operation.run();
+    if(vault!==this.vault||generation!==this.vaultGeneration||!this.panes.includes(pane)||pane.renderVersion!==version||this.navigationIntent.get(pane)!==intent||activation!==this.paneActivationRevision)return;
+    await this.openNote(path,false,pane,true,'',activation);
   }
   private async newCanvas(folder=''):Promise<void>{
     let index=0,path='';do{path=`${folder?folder+'/':''}Untitled${index?' '+index:''}.canvas`;index++;}while(this.vault.entries.has(path));
@@ -2181,7 +2376,7 @@ export class Workspace {
     }]:[];
     return [...WORKSPACE_HOTKEY_COMMANDS.filter(command=>command.id!=='new-window'||workspaceWindowBridge(window.zorid)).map(command=>({
       id:command.id,name:command.name,shortcut:this.hotkeys.label(command.id),action:()=>this.executeHotkey(command.id),
-    })),...history];
+    })),{id:'new-base',name:'Bases: Create new base',action:()=>this.newBase()},...(path&&/\.base$/i.test(path)?[{id:'base-sidebar',name:'Bases: Open in right sidebar',action:()=>this.openBaseSidebar(path)}]:[]),...history];
   }
   private syncNativeHotkeys():void{
     void window.zorid?.setMenuHotkeys?.(['new-window','close-tab'].map(id=>({id:id as 'new-window'|'close-tab',shortcut:this.hotkeys.label(id)}))).catch(error=>notice(error instanceof Error?error.message:String(error)));
@@ -2295,7 +2490,7 @@ export class Workspace {
     if(!current)return;
     const token=this.treeEntryToken(path),type=current.type,revision=current.revision,folder=type==='folder';
     this.menu([
-      ...(folder?[{name:'New note',action:()=>this.newNote(path)},{name:'New folder',action:()=>this.newFolder(path)}]:[{name:'Open in new tab',action:()=>this.openNote(path,true)},{name:this.bookmarks.has(path)?'Remove bookmark':'Bookmark',action:()=>{if(this.bookmarks.has(path))this.bookmarks.delete(path);else this.bookmarks.add(path);this.saveSession();this.renderSidebar();}}]),
+      ...(folder?[{name:'New note',action:()=>this.newNote(path)},{name:'New folder',action:()=>this.newFolder(path)},{name:'New base',action:()=>this.newBase(path)}]:[{name:'Open in new tab',action:()=>this.openNote(path,true)},{name:this.bookmarks.has(path)?'Remove bookmark':'Bookmark',action:()=>{if(this.bookmarks.has(path))this.bookmarks.delete(path);else this.bookmarks.add(path);this.saveSession();this.renderSidebar();}}]),
       ...(!folder&&isMarkdown(path)&&current.entryId&&this.platform.recoveryHistory?[{name:'Version history',action:()=>this.showVersionHistory(path)}]:[]),
       {name:'Rename…',action:()=>inlineRename?this.beginTreeRename(path):this.renameDialog(path)}, {name:'Move to trash',action:()=>this.deletePath(path)},
     ],x,y,()=>{
@@ -2521,7 +2716,7 @@ export class Workspace {
   }
   private applySettings():void{const theme=this.settings.theme==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):this.settings.theme;document.documentElement.dataset.theme=theme;document.documentElement.style.setProperty('--font-text-size',`${this.settings.fontSize}px`);}
   private saveSettings():void{localStorage.setItem('zorid:settings',JSON.stringify(this.settings));this.applySettings();}
-  private saveSession():void{if(!this.platform||this.restoringLayout)return;this.panes.forEach(pane=>this.capturePaneState(pane));localStorage.setItem(this.sessionKey(),JSON.stringify({...this.sessionState,rightHidden:this.root.classList.contains('right-hidden'),leftHidden:this.root.classList.contains('left-hidden'),autoRevealFiles:this.autoRevealFiles,layout:this.splitLayout?.serialize(),activePaneId:this.activePane?.id,panes:this.panes.map(p=>({...p.persisted,id:p.id,tabs:p.tabs,active:p.tabs.findIndex(t=>t.id===p.active)})),collapsed:[...this.collapsed],bookmarks:[...this.bookmarks]}));}
+  private saveSession():void{if(!this.platform||this.restoringLayout)return;this.panes.forEach(pane=>this.capturePaneState(pane));localStorage.setItem(this.sessionKey(),JSON.stringify({...this.sessionState,rightTab:this.rightTab,sidebarBasePath:this.sidebarBasePath,rightHidden:this.root.classList.contains('right-hidden'),leftHidden:this.root.classList.contains('left-hidden'),autoRevealFiles:this.autoRevealFiles,layout:this.splitLayout?.serialize(),activePaneId:this.activePane?.id,panes:this.panes.map(p=>({...p.persisted,id:p.id,tabs:p.tabs,active:p.tabs.findIndex(t=>t.id===p.active)})),collapsed:[...this.collapsed],bookmarks:[...this.bookmarks]}));}
   private help():void{const{content}=modal('Help');content.append(el('h2','','Get started'),el('p','',`Link to another note with [[note name]]. Customize workspace shortcuts in Settings → Hotkeys. Create note: ${this.hotkeys.label('new-note')||'not assigned'}. Find file: ${this.hotkeys.label('quick-switcher')||'not assigned'}. Command palette: ${this.hotkeys.label('command-palette')||'not assigned'}.`));
   }
   private hotkeySurfaceBlocked(): boolean {
@@ -2551,6 +2746,6 @@ export class Workspace {
     }
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.tasksView?.flush();await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
-  async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.tasksView?.flush();if(pane.tasksView?.hasPendingChanges())throw new Error('Tasks has unsaved or unconfirmed changes. Save, discard, or resolve them before closing.');await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{let cancelTasksClose:(recover?:boolean)=>void=()=>{};const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();try{this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();cancelTasksClose=await this.prepareTasksViewsClose();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();await this.drainMetadataOpenings();await this.closeVaultMetadata(this.vault);await this.closeRetiredVaultMetadata();if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.releaseDocumentSearchOwner(this.vault);}this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();cancelTasksClose(false);}catch(error){cancelTasksClose();if(!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}}
+  async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;if(this.hasPendingBaseCreation())throw new Error('Base creation is unconfirmed. Retry New base in its original folder before closing or switching vaults.');await this.flushBaseNewItem();await this.sidebarBase?.session.flush();for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.tasksView?.flush();if(pane.tasksView?.hasPendingChanges())throw new Error('Tasks has unsaved or unconfirmed changes. Save, discard, or resolve them before closing.');await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}await this.flushBaseNewItem();for(const buffer of this.buffers.values())await buffer.flush();}
+  async destroy():Promise<void>{let cancelTasksClose:(recover?:boolean)=>void=()=>{};const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();try{this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();await this.closeBaseNewItem();await this.sidebarBase?.session.close();this.sidebarBase=undefined;this.sidebarBaseIntent++;cancelTasksClose=await this.prepareTasksViewsClose();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();await this.drainMetadataOpenings();await this.closeVaultMetadata(this.vault);await this.closeRetiredVaultMetadata();if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.releaseDocumentSearchOwner(this.vault);}this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();cancelTasksClose(false);}catch(error){cancelTasksClose();if(!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}}
 }

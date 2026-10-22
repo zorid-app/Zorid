@@ -23,6 +23,7 @@ interface Entry {
   settled: boolean;
   retiring?: Promise<void>;
 }
+type RenameAwareSession = BaseSession & { rebindViewName?(from: string, to: string): void };
 
 /** A tab owns these sessions. Synchronous Markdown widget disposal only unmounts
  * a binding; it never closes a writable query or abandons its property draft. */
@@ -68,11 +69,16 @@ export class BaseEmbedSessions {
       // Existing Bases virtual views require a bounded scroll viewport.
       Object.assign(root.style,{display:'block',height:'var(--bases-embed-height, 320px)',minHeight:'160px',overflow:'hidden'});
       root.setAttribute('aria-label', `${target.targetPath}${target.viewName ? ` — ${target.viewName}` : ''}`);
-      entry = { target, root, attached: true, settled:false, ready: Promise.resolve() };
+      entry = { target: { ...target }, root, attached: true, settled:false, ready: Promise.resolve() };
       const created = entry;
       this.entries.add(created);
-      created.ready = Promise.resolve().then(() => this.options.create(root, target)).then(async session => {
+      created.ready = Promise.resolve().then(async () => {
+        const openingName=created.target.viewName;
+        const session=await this.options.create(root,created.target);
         created.session = session;
+        // A sibling may save a rename while this renderer is still opening.
+        // Rebind only the original captured name, never a locally selected view.
+        if(openingName!==created.target.viewName)(session as RenameAwareSession).rebindViewName?.(openingName,created.target.viewName);
         await session.ready;
       }).catch(error => {
         created.error = error;
@@ -95,6 +101,24 @@ export class BaseEmbedSessions {
       else entry.root.remove();
       this.updateRecovery();this.pruneClean();
     } };
+  }
+
+  /** Saved-name transition supplied by the owning controller before it rewrites
+   * Markdown fragments. Reuse the same session/draft when that exact occurrence
+   * remounts; a replaced Base incarnation and unrelated external source edits
+   * retain their ordinary identity guards and cannot reclaim this binding. */
+  renameViewBinding(basePath:string,from:string,to:string,targetIdentity:unknown):number {
+    if(this.closed||targetIdentity===undefined||targetIdentity===null||from===to)return 0;
+    let changed=0;
+    for(const entry of this.entries){
+      const target=entry.target;
+      if(entry.retiring||entry.error||target.inline||target.targetPath!==basePath||target.targetIdentity!==targetIdentity||target.viewName!==from)continue;
+      (entry.session as RenameAwareSession|undefined)?.rebindViewName?.(from,to);
+      entry.target={...target,viewName:to};
+      entry.root.setAttribute('aria-label',`${basePath}${to?` — ${to}`:''}`);
+      changed++;
+    }
+    return changed;
   }
 
   hasPendingChanges(): boolean { return [...this.entries].some(entry => entry.session?.hasPendingChanges()); }

@@ -95,3 +95,37 @@ test('changed containing source cannot reclaim an inline session with a retained
   assert.equal(views.length,2);assert.equal(doc.querySelector('.base-embed-recovery input'),views[0].input);
   views[0].setDirty(false);await manager.close();dom.window.close();
 });
+
+test('saved named-view rebinding reclaims the same pending DOM after source-fragment rewrite',async()=>{
+  const dom=new JSDOM('<body><main></main></body>'),doc=dom.window.document,views:ReturnType<typeof fake>[]=[],renames:[string,string][]=[];
+  const manager=new BaseEmbedSessions({recoveryHost:doc.body,create(root){const view=fake(root);views.push(view);Object.assign(view.session,{rebindViewName:(from:string,to:string)=>renames.push([from,to])});return view.session;}}),request=target(),host=doc.querySelector('main')!;
+  const first=manager.mount(request,host);await first.ready;views[0].setDirty(true);views[0].input.value='retained rename draft';
+  assert.equal(manager.renameViewBinding('Work.base','Table','Renamed',request.targetIdentity),1);assert.deepEqual(renames,[['Table','Renamed']]);assert.equal(request.viewName,'Table','caller snapshot stays immutable');
+  first.detach();assert.equal(doc.querySelector('.base-embed-recovery input'),views[0].input);
+  const next=manager.mount({...request,viewName:'Renamed'},host);await next.ready;
+  assert.equal(views.length,1);assert.equal(host.querySelector('input'),views[0].input);assert.equal(views[0].input.value,'retained rename draft');assert.match(host.querySelector('[aria-label]')!.getAttribute('aria-label')!,/Renamed/);
+  views[0].setDirty(false);await manager.close();dom.window.close();
+});
+
+test('rename cache transition cannot rebind replaced files, different names or inline sources',async()=>{
+  const dom=new JSDOM('<body><main></main></body>'),doc=dom.window.document,views:ReturnType<typeof fake>[]=[],host=doc.querySelector('main')!;
+  const manager=new BaseEmbedSessions({recoveryHost:doc.body,create(root){const view=fake(root);views.push(view);return view.session;}}),request=target();
+  const old=manager.mount(request,host);await old.ready;views[0].setDirty(true);old.detach();
+  const replacement={...request,targetIdentity:Symbol('replacement')};const newer=manager.mount(replacement,host);await newer.ready;newer.detach();
+  assert.equal(manager.renameViewBinding('Work.base','Table','Changed',replacement.targetIdentity),1);
+  assert.equal(manager.renameViewBinding('Other.base','Table','Changed',request.targetIdentity),0);assert.equal(manager.renameViewBinding('Work.base','Cards','Changed',request.targetIdentity),0);
+  const unchanged=manager.mount(request,host);await unchanged.ready;assert.equal(views.length,2);assert.equal(host.querySelector('input'),views[0].input);
+  const block='```base\nviews: []\n```',inline={...request,inline:inlineBaseRequest(block,0,block.length)!};const inlineBinding=manager.mount(inline,host);await inlineBinding.ready;inlineBinding.detach();
+  assert.equal(manager.renameViewBinding('Work.base','Table','New',Symbol('unrelated')),0);
+  assert.equal(manager.renameViewBinding('Work.base','Table','New',request.targetIdentity),1,'only named file embed transitions');
+  await manager.mount(inline,host).ready;assert.equal(views.length,3,'inline occurrence retains its original binding');views[0].setDirty(false);await manager.close();dom.window.close();
+});
+
+test('a saved rename received during async session creation rebinds the original name exactly once',async()=>{
+  const dom=new JSDOM('<body><main></main></body>'),doc=dom.window.document;let release!:()=>void,started!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),entered=new Promise<void>(resolve=>{started=resolve;});
+  const renames:[string,string][]=[],request=target();let opened='';
+  const manager=new BaseEmbedSessions({recoveryHost:doc.body,async create(root,target){opened=target.viewName;started();await gate;const view=fake(root);Object.assign(view.session,{rebindViewName:(from:string,to:string)=>renames.push([from,to])});return view.session;}});
+  const binding=manager.mount(request,doc.querySelector('main')!);await entered;
+  manager.renameViewBinding('Work.base','Table','Books',request.targetIdentity);release();await binding.ready;
+  assert.equal(opened,'Table');assert.deepEqual(renames,[['Table','Books']]);await manager.close();dom.window.close();
+});

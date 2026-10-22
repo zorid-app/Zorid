@@ -44,6 +44,9 @@ export interface BaseQueryDiagnostic {
 }
 export interface BaseQueryRow {
   readonly path: string;
+  /** Optional captured identity for display/open resources; mutation admission remains separate. */
+  readonly entryId?: string;
+  readonly revision?: string;
   /** Normalized property IDs. Missing properties yield a typed null. */
   readonly values: Readonly<Record<string, BaseExpressionValue>>;
   /** Exact persisted note values when rendering inferred a different value. Same saved-row witness. */

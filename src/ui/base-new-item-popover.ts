@@ -23,6 +23,11 @@ export interface BaseNewItemPopoverOptions {
   readonly properties?: Pick<PropertiesOptions, 'onPropertyDefinitionChange' | 'getRelationTargets'>;
   /** The workspace owns subscriptions and the buffer's lifetime. */
   readonly subscribeBuffer?: (buffer: NoteBuffer, listener: () => void) => () => void;
+  /** Embedded editors retain their own accepted writes and unaccepted drafts. */
+  readonly flushEditor?: () => Promise<void>;
+  readonly hasPendingEditorChanges?: () => boolean;
+  /** Failure keeps this surface mounted, just like a failed note save. */
+  readonly closeEditor?: () => Promise<void>;
   readonly propertiesExpanded?: boolean;
   readonly bodyExpanded?: boolean;
   /** Production defaults to the normal editor's lazy import. */
@@ -173,6 +178,12 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     return attempt.promise;
   }
   async function flush() {
+    // A retired file with no local/nested draft has nothing to persist. Keep
+    // pending buffers, in-flight actions and unaccepted inputs on the normal
+    // validation path so retirement cannot become an implicit discard action.
+    if(!hasPendingChanges()&&buffer.text===buffer.savedText){
+      try{validate();}catch{return;}
+    }
     validate();
     const focused = document.activeElement as HTMLElement | null;
     if (focused && (root.contains(focused) || ownedPropertyPopover(focused))) focused.blur();
@@ -182,6 +193,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     const propertyGeneration = propertyInputGeneration;
     await (currentTitleAttempt?.requested === titleText() ? currentTitleAttempt.promise : saveTitle());
     while (writes.size) await Promise.all([...writes]);
+    await options.flushEditor?.();
     const invalid = [...root.querySelectorAll<HTMLElement>('.metadata-property-error')].find(node => !node.hidden && !!node.textContent?.trim());
     if (invalid || root.querySelector('[data-base-editing]')) throw new Error(invalid?.textContent ?? 'Finish editing the current property before closing.');
     await buffer.flush(); validate();
@@ -190,21 +202,28 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     if (buffer.dirty || buffer.error) throw buffer.error ?? new Error('The new note still has pending changes.');
     propertyDraft = false; error.hidden = retry.hidden = true;
   }
-  function hasPendingChanges() { return !closed && (composingTitle || titleProblem || propertyDraft || titleText().trim() !== titleBaseline || !!writes.size || !!loading || buffer.dirty || !!buffer.error || !!root.querySelector('[data-base-editing]') || [...root.querySelectorAll<HTMLElement>('.metadata-property-error')].some(node => !node.hidden && !!node.textContent?.trim())); }
+  function hasPendingChanges() { return !closed && (composingTitle || titleProblem || propertyDraft || titleText().trim() !== titleBaseline || !!writes.size || !!loading || buffer.dirty || !!buffer.error || !!options.hasPendingEditorChanges?.() || !!root.querySelector('[data-base-editing]') || [...root.querySelectorAll<HTMLElement>('.metadata-property-error')].some(node => !node.hidden && !!node.textContent?.trim())); }
   function ownedPropertyPopover(target: Node) { return !!root.querySelector('[data-base-editing]') && !!(target as HTMLElement).closest?.('.bases-property-popover'); }
   function remove(restoreFocus: boolean) {
     if (closed) return;
     closed = true;
     const release = (operation: () => void) => { try { operation(); } catch (failure) { try { options.onError(failure); } catch {} } };
     release(() => properties.destroy()); release(() => editor?.destroy()); editor = undefined; unsubscribers.forEach(stop => release(stop));
-    document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', escape, true); document.removeEventListener('contextmenu', contextOwner, true); win?.removeEventListener('resize', position); win?.removeEventListener('scroll', position, true); observer?.disconnect(); root.remove();
+    document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', escape); document.removeEventListener('contextmenu', contextOwner, true); win?.removeEventListener('resize', position); win?.removeEventListener('scroll', position, true); observer?.disconnect(); root.remove();
     if (restoreFocus && options.anchor.isConnected) options.anchor.focus({ preventScroll: true });
     try { options.onClose?.(); } catch (failure) { try { options.onError(failure); } catch {} }
   }
   async function close(closeOptions: { restoreFocus?: boolean } = {}): Promise<void> {
     if (closed) return;
     if (closing) return closing;
-    closing = flush().then(() => remove(!!closeOptions.restoreFocus)).catch(failure => { report(failure); throw failure; }).finally(() => { closing = undefined; });
+    const wasInert=root.inert;
+    closing = flush().then(async () => {
+      const closingText=buffer.text,closingSavedText=buffer.savedText,closingPath=buffer.path;
+      root.inert=true;
+      await options.closeEditor?.();
+      if(buffer.text!==closingText||buffer.savedText!==closingSavedText||buffer.path!==closingPath||buffer.dirty||buffer.error||composingTitle||propertyDraft||writes.size||titleText().trim()!==titleBaseline||options.hasPendingEditorChanges?.()||root.querySelector('[data-base-editing]')||[...root.querySelectorAll<HTMLElement>('.metadata-property-error')].some(node=>!node.hidden&&!!node.textContent?.trim()))throw new Error('The new note changed while closing. Its draft is preserved.');
+      remove(!!closeOptions.restoreFocus);
+    }).catch(failure => { report(failure); throw failure; }).finally(() => { if(!closed)root.inert=wasInert;closing = undefined; });
     return closing;
   }
   function contextOwner(event: MouseEvent) { ownedContextMenu = root.contains(event.target as Node) || ownedPropertyPopover(event.target as Node); }
@@ -219,13 +238,13 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
   title.addEventListener('input', () => { titleDraft = titleText(); });
   title.addEventListener('compositionstart', () => { composingTitle = true; }); title.addEventListener('compositionend', () => { composingTitle = false; titleDraft = titleText(); });
   title.addEventListener('beforeinput', event => { if ((event as InputEvent).inputType === 'insertParagraph' || (event as InputEvent).inputType === 'insertLineBreak') event.preventDefault(); });
-  title.addEventListener('blur', () => { if (!closed && !composingTitle) void saveTitle().catch(() => {}); });
+  title.addEventListener('blur', () => { if (!closed && !composingTitle && (titleProblem || titleText().trim() !== titleBaseline)) void saveTitle().catch(() => {}); });
   title.addEventListener('keydown', event => { if (event.isComposing || composingTitle) return; if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); void saveTitle().then(expandBody).catch(report); } });
   editorHost.addEventListener('focusout', () => { queueMicrotask(refresh); });
   preview.addEventListener('click', () => { void expandBody().catch(() => {}); }); preview.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void expandBody().catch(() => {}); } });
   open.addEventListener('mousedown', event => event.preventDefault()); open.addEventListener('click', event => { void close().then(() => options.openFile(path, event)).catch(report); });
   retry.addEventListener('click', () => { void flush().catch(report); });
-  document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', escape, true); document.addEventListener('contextmenu', contextOwner, true); win?.addEventListener('resize', position); win?.addEventListener('scroll', position, true);
+  document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', escape); document.addEventListener('contextmenu', contextOwner, true); win?.addEventListener('resize', position); win?.addEventListener('scroll', position, true);
   const observer = win?.ResizeObserver ? new win.ResizeObserver(position) : undefined; observer?.observe(root);
   for (const event of ['modify', 'rename', 'delete'] as const) unsubscribers.push(options.vault.on(event, change => { if (change.path === path || change.oldPath === path) refresh(); }));
   if (options.subscribeBuffer) unsubscribers.push(options.subscribeBuffer(buffer, refresh));

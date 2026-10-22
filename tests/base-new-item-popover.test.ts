@@ -57,6 +57,62 @@ test('failed buffer flush retains body draft and does not dispose shared buffer'
   reject = false; await s.handle.close(); assert.match(await s.vault.read('Untitled.md'), /Unsaved/); assert.equal(s.destroyedEditor, 1); s.buffer.update(s.buffer.text + '\nStill shared'); await s.buffer.flush(); await s.cleanup();
 });
 
+test('a clean externally retired note can flush and close its popup without recreating the file', async () => {
+  let childCloses=0;const s=await setup(undefined,{closeEditor:async()=>{childCloses++;}});
+  await s.vault.trash('Untitled.md');assert.equal(s.handle.hasPendingChanges(),false);
+  await s.handle.flush();await s.handle.close();assert.equal(childCloses,1);assert.equal(s.closed,1);assert.equal(s.handle.element.isConnected,false);
+  assert.equal(s.vault.entries.has('Untitled.md'),false);await s.cleanup();
+});
+
+test('external retirement never discards a title, body or nested editor draft', async () => {
+  for(const draft of ['title','body','nested'] as const){
+    let nested=false;const s=await setup(undefined,{hasPendingEditorChanges:()=>nested});
+    if(draft==='title')s.setTitle('Retained title');else if(draft==='body')s.buffer.update(s.buffer.text+'\nRetained body');else nested=true;
+    await s.vault.trash('Untitled.md');await assert.rejects(s.handle.close(),/identity|available|changed/);assert.ok(s.handle.element.isConnected);assert.equal(s.closed,0);
+    // Restore the same fixture path solely for teardown; the failure assertions
+    // above establish that no implicit recreation/discard happened.
+    nested=false;await s.vault.create('Untitled.md',s.buffer.savedText);s.setTitle('Untitled');
+    s.buffer.update(s.buffer.savedText);
+    await s.cleanup();
+  }
+});
+
+test('nested Base drafts participate in popup save, unload accounting and close retry', async () => {
+  let pending=true,closed=0;
+  const s=await setup(undefined,{hasPendingEditorChanges:()=>pending,flushEditor:async()=>{if(pending)throw new Error('Finish nested Base property edit');},closeEditor:async()=>{closed++;}});
+  assert.equal(s.handle.hasPendingChanges(),true);
+  await assert.rejects(s.handle.close(),/nested Base/);assert.ok(s.handle.element.isConnected);assert.equal(closed,0);
+  pending=false;await s.handle.close();assert.equal(closed,1);assert.equal(s.closed,1);await s.cleanup();
+});
+
+test('embedded-session close failures retain the popup and shared buffer for retry', async () => {
+  let reject=true;
+  const s=await setup(undefined,{closeEditor:async()=>{if(reject)throw new Error('Nested Base close failed');}});
+  await assert.rejects(s.handle.close(),/Nested Base close failed/);assert.ok(s.handle.element.isConnected);
+  s.buffer.update(s.buffer.text+'\nRetained after child failure');reject=false;await s.handle.close();
+  assert.match(await s.vault.read('Untitled.md'),/Retained after child failure/);await s.cleanup();
+});
+
+test('Escape cancels a descendant rich property draft before popup dismissal can blur-save it', async () => {
+  const s=await setup('---\ncount: 2\n---\nBody');await s.vault.create('Properties.yaml','properties:\n  count: {type: number}\n');await tick();
+  s.handle.element.querySelector<HTMLElement>('.metadata-properties-heading')!.click();
+  const value=s.handle.element.querySelector<HTMLElement>('[data-property-key="count"] .metadata-property-value')!;value.click();
+  const input=value.querySelector<HTMLInputElement>('input')!;assert.ok(input);input.value='3';input.dispatchEvent(new s.dom.window.Event('input',{bubbles:true}));
+  input.dispatchEvent(new s.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));await tick();
+  assert.ok(s.handle.element.isConnected);assert.match(s.buffer.text,/count: 2/);assert.equal(value.hasAttribute('data-base-editing'),false);await s.cleanup();
+});
+
+test('a rich property portal opened during delayed child close retains its exact unaccepted draft', async () => {
+  let release!:()=>void,started!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),entered=new Promise<void>(resolve=>{started=resolve;});
+  const s=await setup('---\ntopics: []\n---\nBody',{closeEditor:async()=>{started();await gate;}});
+  await s.vault.create('Properties.yaml','properties:\n  topics: {type: multiselect, options: [{value: Rust}]}\n');await tick();s.handle.element.querySelector<HTMLElement>('.metadata-properties-heading')!.click();
+  const closing=s.handle.close();await entered;
+  const value=s.handle.element.querySelector<HTMLElement>('[data-property-key="topics"] .metadata-property-value')!;value.click();
+  const input=s.dom.window.document.querySelector<HTMLInputElement>('.bases-property-popover input')!;assert.ok(input);input.value='Rust';input.dispatchEvent(new s.dom.window.Event('input',{bubbles:true}));
+  release();await assert.rejects(closing,/changed while closing/);assert.ok(s.handle.element.isConnected);assert.equal(input.value,'Rust');
+  input.dispatchEvent(new s.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));await s.handle.close();await s.cleanup();
+});
+
 test('outside dismissal preserves sibling focus and flushes note; Escape respects title composition', async () => {
   const s = await setup(); s.title.dispatchEvent(new s.dom.window.CompositionEvent('compositionstart', { bubbles: true })); s.title.dispatchEvent(new s.dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await tick(); assert.ok(s.handle.element.isConnected);
   s.title.dispatchEvent(new s.dom.window.CompositionEvent('compositionend', { bubbles: true })); const sibling = s.dom.window.document.querySelector<HTMLButtonElement>('#sibling')!; sibling.focus(); sibling.dispatchEvent(new s.dom.window.MouseEvent('pointerdown', { bubbles: true })); await tick(); assert.equal(s.handle.element.isConnected, false); assert.equal(s.dom.window.document.activeElement, sibling); await s.cleanup();

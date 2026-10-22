@@ -1,0 +1,100 @@
+import type { Vault } from '../core/vault.ts';
+import { createBaseClockHost } from '../bases/clock.ts';
+import type { BaseClockHost } from '../bases/clock.ts';
+import { closePropertyTargetQueries, queryPropertyTargets } from '../bases/property-targets.ts';
+import type { PropertyTarget, PropertyTargetsResult } from '../bases/property-targets.ts';
+
+export interface NotePropertyTargets {
+  get(property: string): readonly PropertyTarget[] | undefined;
+  invalidate(): void;
+  destroy(): void;
+  /** Joins cancelled reads and retries any unacknowledged pin close. */
+  close(): Promise<void>;
+}
+
+/** One ordinary note's saved relation choices. Rust owns every target filter;
+ * this host only invalidates stale results and schedules explicit core wakes. */
+export function createNotePropertyTargets(options: {
+  vault: Vault;
+  getPath(): string;
+  isCurrent(): boolean;
+  onChange(): void;
+  clock?: BaseClockHost;
+  /** Lifecycle test seam; production always uses the sealed shared-core query. */
+  query?: typeof queryPropertyTargets;
+}): NotePropertyTargets {
+  const { vault } = options, service = vault.adapter.documentSemantics;
+  const clock = options.clock ?? createBaseClockHost();
+  let disposed = false, serial = 0, result: PropertyTargetsResult | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined, abort: AbortController | undefined;
+  let wake: (() => void) | undefined, pending: Promise<void> = Promise.resolve(), closing: Promise<void> | undefined;
+  const stops: (() => void)[] = [];
+  const current = () => { try { return !disposed && options.isCurrent() && vault.adapter.documentSemantics === service; } catch { return false; } };
+  const notify = () => { if (current()) { try { options.onChange(); } catch { /* A renderer cannot strand the query queue. */ } } };
+  function invalidate() {
+    if (!current()) return;
+    serial++; abort?.abort(); wake?.(); wake = undefined;
+    if (result) { result = undefined; notify(); }
+    if (!service?.propertyTargetsAvailable || !clock.isVisible() || timer !== undefined) return;
+    timer = setTimeout(() => { timer = undefined; run(); }, 30);
+  }
+  function run() {
+    if (!current() || !service?.propertyTargetsAvailable) return;
+    const entry = vault.entries.get(options.getPath());
+    if (!entry?.entryId || !entry.revision || entry.type !== 'file' || !vault.entries.has('Properties.yaml')) return;
+    const captured = ++serial, controller = new AbortController(); abort?.abort(); abort = controller;
+    // Join the previous request's cancellation/close before opening another pin.
+    pending = pending.then(async () => {
+      const live = () => current() && serial === captured && !controller.signal.aborted && options.getPath() === entry.path
+        && vault.entries.get(entry.path)?.entryId === entry.entryId && vault.entries.get(entry.path)?.revision === entry.revision;
+      if (!live()) return;
+      try {
+        const next = await (options.query ?? queryPropertyTargets)({ service, vault, current: { ...entry }, readFile: path => vault.read(path), isCurrent: live, signal: controller.signal, clock });
+        if (!live()) return;
+        result = next.coverageComplete ? next : undefined; notify();
+        const deadline = next.refreshHint?.nextWakeMs;
+        if (deadline != null) wake = clock.scheduleAt(deadline, invalidate);
+      } catch {
+        // Unavailable, stale or incomplete choices stay unavailable. An existing
+        // picker draft survives; no local evaluator supplies replacement rows.
+        if (live()) { result = undefined; notify(); }
+      }
+    });
+  }
+  if (service?.propertyTargetsAvailable) {
+    for (const event of ['create', 'modify', 'delete', 'rename', 'ready'] as const) stops.push(vault.on(event, invalidate));
+    let metadataSignature = '';
+    stops.push(vault.onMetadata(state => {
+      const signature = JSON.stringify([state.status, state.frame?.source, state.frame?.snapshot]);
+      if (signature !== metadataSignature) { metadataSignature = signature; invalidate(); }
+    }));
+    if (service.maintenance) {
+      let runtimeSignature = '';
+      void service.maintenance.observeAndSubscribe(update => {
+        const signature = JSON.stringify([update?.source, update?.published, update?.freshness]);
+        if (signature !== runtimeSignature) { runtimeSignature = signature; invalidate(); }
+      }).then(subscription => { if (disposed) subscription.unsubscribe(); else stops.push(subscription.unsubscribe); }, () => {});
+    }
+    stops.push(clock.subscribeWake(() => { if (!result || result.refreshHint?.dependency !== 'none' || clock.capture().timezone !== result.timezone) invalidate(); }));
+    invalidate();
+  }
+  function destroy() {
+    if (disposed) return;
+    disposed = true; serial++; abort?.abort(); wake?.(); wake = undefined;
+    if (timer !== undefined) clearTimeout(timer); timer = undefined;
+    for (const stop of stops.splice(0)) stop();
+    result = undefined;
+  }
+  return {
+    get(property) { return current() && !result?.diagnostics.some(issue => !issue.property || issue.property === property || issue.property === `note.${property}`) ? result?.relationTargets[property] ?? result?.relationTargets[`note.${property}`] : undefined; },
+    invalidate, destroy,
+    close() {
+      destroy();
+      if (closing) return closing;
+      const task = pending.then(async () => { if (service) await closePropertyTargetQueries(service); });
+      closing = task;
+      void task.then(() => {}, () => { if (closing === task) closing = undefined; });
+      return task;
+    },
+  };
+}

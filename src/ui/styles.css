@@ -1,3 +1,6 @@
+@import './base-new-item-popover.css';
+@import '../bases/rich-values.css';
+
 /* Original workspace styling. The visual reference is the default desktop
    workspace; no packaged application styles or assets are included. */
 :root {
@@ -413,3 +416,6 @@ button.search-snippet { white-space: normal; overflow-wrap: anywhere; }
 .image-lightbox-error { position: absolute; left: 20%; right: 20%; top: 45%; color: #eee; text-align: center; }
 
 .attachment-view.pdf-attachment-view, .attachment-view.canvas-attachment-view { display: flex; align-items: stretch; justify-content: stretch; padding: 0; overflow: hidden; }
+
+.sidebar-base-host { display:flex; flex:1; min-height:240px; height:100%; min-width:0; }
+.right-content:has(> .sidebar-base-host) { display:flex; flex-direction:column; padding:0; overflow:hidden; }

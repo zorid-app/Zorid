@@ -188,3 +188,71 @@ test('Markdown view fragments decode URL spelling while wiki percent names remai
   assert.deepEqual([...workspace.activePane.element.querySelectorAll<HTMLSelectElement>('.bases-session select')].map(select=>select.selectedOptions[0].textContent),['My View','My%20View']);
 });
 
+test('normal Base New opens a selected popup title and saves full template, title, body and properties through shared buffers',async t=>{
+  const template='---\nstatus: Todo\ncustom: Keep\n---\n# Full copied body\nLiteral {{date}}\n';
+  const config='newItemFolder: Books\nnewItemTemplate: Templates/Book.md\nviews:\n  - {type: table, name: Table, order: [file.name, status]}\n';
+  const{workspace,adapter,dom}=await setup(t,new MemoryAdapter({'Work.base':config,'Templates/Book.md':template,'Books/Existing.md':'Existing'}));
+  await workspace.openNote('Work.base');await until(()=>!!workspace.activePane.element.querySelector('.bases-session [aria-label="New"]'),'New available');
+  workspace.activePane.element.querySelector<HTMLButtonElement>('.bases-session [aria-label="New"]')!.click();
+  await until(()=>!!document.querySelector('.bases-new-item-popover'),'new note popup opens');
+  const popup=document.querySelector<HTMLElement>('.bases-new-item-popover')!,title=popup.querySelector<HTMLElement>('.inline-title')!;
+  assert.equal(popup.style.width,'452px');assert.equal(document.activeElement,title);assert.equal(dom.window.getSelection()?.toString(),title.textContent);
+  const created=[...workspace.buffers].find(([path])=>path.startsWith('Books/')&&path!=='Books/Existing.md')!;
+  assert.ok(created);assert.equal(created[1].text,template);assert.equal(await adapter.read(created[0]),template);
+  title.textContent='New book';title.dispatchEvent(new dom.window.Event('input',{bubbles:true}));key(title,'Enter');
+  await until(()=>workspace.buffers.has('Books/New book.md')&&!!popup.querySelector('.cm-editor'),'title rename and body expand');
+  const body=EditorView.findFromDOM(popup.querySelector('.cm-editor')!)!;body.dispatch({changes:{from:body.state.doc.length,insert:'\nWritten in popup'}});
+  popup.querySelector<HTMLElement>('.metadata-properties-heading')!.click();const status=popup.querySelector<HTMLInputElement>('[aria-label="status value"]')!;
+  status.value='Done';status.dispatchEvent(new dom.window.Event('input',{bubbles:true}));status.dispatchEvent(new dom.window.Event('change',{bubbles:true}));
+  await workspace.flush();const saved=await adapter.read('Books/New book.md');assert.match(saved,/status: Done/);assert.match(saved,/custom: Keep/);assert.match(saved,/Literal \{\{date\}\}/);assert.ok(saved.endsWith('Written in popup'));
+  assert.equal(await adapter.read('Templates/Book.md'),template);assert.equal(workspace.activePane.viewPath,'Work.base');
+});
+
+test('workspace unload guards popup-only title drafts and failed shutdown retains its body for retry',async t=>{
+  const config='views:\n  - {type: table, name: Table, order: [file.name]}\n';
+  const{workspace,adapter,dom}=await setup(t,new MemoryAdapter({'Work.base':config}));await workspace.openNote('Work.base');
+  workspace.activePane.element.querySelector<HTMLButtonElement>('.bases-session [aria-label="New"]')!.click();await until(()=>!!document.querySelector('.bases-new-item-popover'),'popup opens');
+  const popup=document.querySelector<HTMLElement>('.bases-new-item-popover')!,title=popup.querySelector<HTMLElement>('.inline-title')!;
+  title.textContent='Retained';title.dispatchEvent(new dom.window.Event('input',{bubbles:true}));
+  const unload=new dom.window.Event('beforeunload',{cancelable:true});dom.window.dispatchEvent(unload);assert.equal(unload.defaultPrevented,true);
+  key(title,'Enter');await until(()=>workspace.buffers.has('Retained.md')&&!!popup.querySelector('.cm-editor'),'renamed popup editor');
+  const body=EditorView.findFromDOM(popup.querySelector('.cm-editor')!)!;body.dispatch({changes:{from:body.state.doc.length,insert:'Keep failed popup body'}});
+  const write=adapter.write.bind(adapter);adapter.write=async(path,source)=>{if(path==='Retained.md')throw new Error('Popup disk failure');await write(path,source);};
+  await assert.rejects(workspace.destroy(),/Popup disk failure/);assert.ok(popup.isConnected);assert.match(workspace.buffers.get('Retained.md')!.text,/Keep failed popup body/);
+  adapter.write=write;await workspace.flush();assert.match(await adapter.read('Retained.md'),/Keep failed popup body/);
+});
+
+test('an embedded Base property draft inside New blocks workspace shutdown until it is committed',async t=>{
+  const config='newItemTemplate: Template.md\nfilters: \'file.name == "One"\'\nviews:\n  - {type: table, name: Table, order: [file.name, status]}\n';
+  const{workspace,adapter,dom}=await setup(t,new MemoryAdapter({'Work.base':config,'One.md':note,'Template.md':'---\nstatus: Todo\n---\nIntro\n\n![[Work.base#Table]]\n\nEnd'}));
+  await workspace.openNote('Work.base');workspace.activePane.element.querySelector<HTMLButtonElement>('.bases-session [aria-label="New"]')!.click();
+  await until(()=>!!document.querySelector('.bases-new-item-popover'),'popup opens');const popup=document.querySelector<HTMLElement>('.bases-new-item-popover')!;
+  popup.querySelector<HTMLElement>('.bases-new-item-body-preview')!.click();await until(()=>!!popup.querySelector('.zorid-bases-table'),'nested Base mounts through popup editor services');
+  const input=startEdit(popup,'Done');
+  const unload=new dom.window.Event('beforeunload',{cancelable:true});dom.window.dispatchEvent(unload);assert.equal(unload.defaultPrevented,true);
+  await assert.rejects(workspace.destroy(),/Finish|cancel|edit/);assert.ok(popup.isConnected);assert.equal(input.value,'Done');
+  key(input,'Enter');await until(()=>!input.isConnected,'nested edit settles');await workspace.flush();assert.match(await adapter.read('One.md'),/status: Done/);
+});
+
+test('sidebar-only property drafts guard unload and sidebar file/visibility survive vault reopen',async t=>{
+  const{workspace,adapter,dom}=await setup(t);await workspace.openNote('One.md');await (workspace as any).openBaseSidebar('Work.base');
+  const sidebar=document.querySelector<HTMLElement>('.sidebar-base-host')!;const input=startEdit(sidebar,'Done');
+  const unload=new dom.window.Event('beforeunload',{cancelable:true});dom.window.dispatchEvent(unload);assert.equal(unload.defaultPrevented,true);
+  key(input,'Escape');await workspace.flush();workspace.root.classList.add('right-hidden');
+  await workspace.openVault({adapter,id:'test:docking',label:'Test'});
+  assert.ok(document.querySelector('.sidebar-base-host .bases-session'));assert.equal(workspace.root.classList.contains('right-hidden'),true);
+  assert.equal((workspace as any).sidebarBase.path,'Work.base');assert.equal((workspace as any).sidebarBase.context,'One.md');
+});
+
+test('Create Base retries its retained uncertain operation without allocating a second filename',async t=>{
+  const{workspace,adapter,dom}=await setup(t,new MemoryAdapter({}));const write=adapter.write.bind(adapter);let writes=0;
+  adapter.write=async(path,source)=>{await write(path,source);if(path==='Untitled.base'&&++writes===1)throw new Error('Creation acknowledgement lost');};
+  await assert.rejects((workspace as any).newBase(),/acknowledgement lost/);
+  await assert.rejects((workspace as any).newBase(),/already have committed|Recover its original operation/);
+  assert.deepEqual((await adapter.list()).filter(entry=>entry.path.endsWith('.base')).map(entry=>entry.path),['Untitled.base']);assert.equal(writes,1);
+  const unload=new dom.window.Event('beforeunload',{cancelable:true});dom.window.dispatchEvent(unload);assert.equal(unload.defaultPrevented,true);
+  await assert.rejects(workspace.flush(),/creation is unconfirmed/);
+  // This legacy disposable fixture has no receipt API. Retire only its test handle after proving both guards.
+  (workspace as any).pendingBaseCreation=undefined;
+});
+
