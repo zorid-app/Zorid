@@ -1422,3 +1422,48 @@ fn metadata_rows_cancelled_or_rebuilt_final_fence_does_not_advance_checkpoint() 
     );
     assert!(cursor == original);
 }
+
+#[test]
+fn saved_and_inline_group_order_origin_is_verified_source_not_this() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(directory.path()).unwrap();
+    let yaml = "filters: file.path == \"Book.md\"\nformulas:\n  context: this.file.path\nviews:\n  - type: table\n    name: Authors\n    order: [file.path, note.author, formula.context]\n    groupBy: {property: author, direction: ASC}\n    groupOrder: ['[[Ada]]']\n";
+    let inline_source = format!("```base\n{yaml}```\n");
+    for (name, path, kind, content) in [
+        ("config", "Config", EntryKind::Folder, None),
+        ("other", "Other", EntryKind::Folder, None),
+        ("ada", "Config/Ada.md", EntryKind::File, Some("# Ada\n")),
+        ("wrong-ada", "Other/Ada.md", EntryKind::File, Some("# Other Ada\n")),
+        ("context", "Other/Context.md", EntryKind::File, Some("# Context\n")),
+        ("book", "Book.md", EntryKind::File, Some("---\nauthor: '[[Config/Ada]]'\n---\n")),
+        ("base", "Config/Library.base", EntryKind::File, Some(yaml)),
+        ("inline", "Config/Inline.md", EntryKind::File, Some(inline_source.as_str())),
+    ] {
+        vault.apply(&MutationRequest {
+            operation_id: OperationId::new(format!("create-{name}")).unwrap(),
+            mutation: Mutation::Create {id: EntryId::new(name).unwrap(), path: VaultPath::new(path).unwrap(), kind, content: content.map(|text| text.as_bytes().to_vec())},
+        }).unwrap();
+    }
+    vault.initialize_document_index().unwrap();
+    let stage = vault.begin_document_index().unwrap();
+    let mut ready = false;
+    for _ in 0..100 {if vault.pump_document_index(&stage).unwrap().ready {ready = true;break;}}
+    assert!(ready);vault.publish_document_index(&stage).unwrap();
+    let pin = vault.open_document_snapshot().unwrap();
+    let options = QueryOptions {
+        current_entry_id: Some(EntryId::new("context").unwrap()),
+        // Public native callers cannot impersonate the saved configuration origin.
+        definition_entry_id: Some(EntryId::new("wrong-ada").unwrap()),
+        ..QueryOptions::default()
+    };
+    let saved = vault.query_base_document(&pin, &EntryId::new("base").unwrap(), &options).unwrap();
+    assert_eq!(saved.value.result.rows.len(), 1);
+    assert_eq!(saved.value.result.rows[0].values["formula.context"], zorid_bases::BaseValue::String {value: "Other/Context.md".into()});
+    assert_eq!(saved.value.result.rows[0].entry_id, EntryId::new("book").unwrap());
+    let inline = zorid_document::InlineBaseSource {source: yaml.into(), start_byte: 0, end_byte: inline_source.len() - 1};
+    let mut inline_options = options;inline_options.current_entry_id = None;
+    let embedded = vault.query_inline_base_document(&pin, &EntryId::new("inline").unwrap(), &inline, None, &inline_options).unwrap();
+    assert_eq!(embedded.value.result.rows.len(), 1);
+    assert_eq!(embedded.value.result.rows[0].values["formula.context"], zorid_bases::BaseValue::String {value: "Config/Inline.md".into()});
+    vault.close_document_snapshot(pin);
+}

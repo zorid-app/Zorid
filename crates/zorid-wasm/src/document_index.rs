@@ -1312,7 +1312,10 @@ fn evaluate_base<'a>(
     };
     // Current invocation options are always admitted. The shared cache decides
     // whether an exact answer can be reused, including clock dependencies.
-    let options = base_query_options(input, view_name, &program)?;
+    let mut options = base_query_options(input, view_name, &program)?;
+    // record.check_text and inline fence admission above establish this origin;
+    // caller-selected `this` remains a separate expression context.
+    options.definition_entry_id = Some(record.witness().entry().id.clone());
     let (result, outcomes) = if let Some(definitions) = definitions {
         (
             zorid_bases::query_generation_with_properties(&program, generation, facts, &definitions, &options)
@@ -2338,6 +2341,36 @@ mod tests {
         assert!(matches!(evaluate_base(&generation.generation, &id, source.as_bytes(), &[], wrong_source, None, Some((&mut owner.inner, 102))), Err(BaseReadError::Code("index_inline_source_mismatch"))));
         let changed = source.replace("Café", "Fake");
         assert!(matches!(evaluate_base(&generation.generation, &id, changed.as_bytes(), &[], input(), None, None), Err(BaseReadError::Index(_))));
+    }
+    #[test]
+    fn saved_and_inline_group_order_origin_is_verified_source_not_this() {
+        let yaml = "filters: file.path == \"Book.md\"\nformulas:\n  context: this.file.path\nviews:\n  - type: table\n    name: Authors\n    order: [file.path, note.author, formula.context]\n    groupBy: {property: author, direction: ASC}\n    groupOrder: ['[[Ada]]']\n";
+        let inline_source = format!("```base\n{yaml}```\n");
+        let records = [
+            ("ada", "Config/Ada.md", "# Ada\n"),
+            ("wrong-ada", "Other/Ada.md", "# Other Ada\n"),
+            ("context", "Other/Context.md", "# Context\n"),
+            ("book", "Book.md", "---\nauthor: '[[Config/Ada]]'\n---\n"),
+            ("base", "Config/Library.base", yaml),
+            ("inline", "Config/Inline.md", inline_source.as_str()),
+        ];
+        let mut h: serde_json::Value = serde_json::from_str(&header()).unwrap();
+        h["entries"] = serde_json::Value::Array(records.iter().map(|(id, path, _)| serde_json::json!({"id":id,"path":path,"kind":"file","revision":"r1","deleted":false})).collect());
+        let mut builder = WasmDocumentIndexBuilder::new(&h.to_string()).unwrap();
+        for (id, _, source) in records {builder.add_text(id, source.as_bytes()).unwrap();}
+        let generation = builder.finish().unwrap();
+        // The internal origin is deliberately absent from the public option DTO.
+        assert!(serde_json::from_value::<BaseReadOptions>(serde_json::json!({"definitionEntryId":"wrong-ada"})).is_err());
+        let input = serde_json::from_value::<BaseReadOptions>(serde_json::json!({"currentEntryId":"context"})).unwrap();
+        let (saved, _) = evaluate_base(&generation.generation, &EntryId::new("base").unwrap(), yaml.as_bytes(), &[], input, None, None).unwrap();
+        assert_eq!(saved.result.rows.len(), 1);
+        assert_eq!(saved.result.rows[0].entry_id, EntryId::new("book").unwrap());
+        assert_eq!(saved.result.rows[0].values["formula.context"], zorid_bases::BaseValue::String {value: "Other/Context.md".into()});
+        let inline = zorid_document::InlineBaseSource {source: yaml.into(), start_byte: 0, end_byte: inline_source.len() - 1};
+        let input = serde_json::from_value::<BaseReadOptions>(serde_json::json!({"inlineSource":inline})).unwrap();
+        let (embedded, _) = evaluate_base(&generation.generation, &EntryId::new("inline").unwrap(), inline_source.as_bytes(), &[], input, None, None).unwrap();
+        assert_eq!(embedded.result.rows.len(), 1);
+        assert_eq!(embedded.result.rows[0].values["formula.context"], zorid_bases::BaseValue::String {value: "Config/Inline.md".into()});
     }
     #[test]
     fn property_settings_attachment_is_required_and_checked_against_exact_retained_source() {

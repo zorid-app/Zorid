@@ -519,6 +519,9 @@ impl NativeVault {
             selected.current_entry_id = Some(definition.clone());
             inline.source.as_str()
         } else { source };
+        // The saved configuration origin is independent of caller-selected `this`.
+        // Only this verified retained source may assign the trusted internal field.
+        selected.definition_entry_id = Some(entry.id.clone());
         // Store verified this retained projection against the pin's exact
         // record commitment above. Program/data reuse cannot authorize a pin.
         // Expiry uses process-monotonic elapsed time, never the evaluation clock.
