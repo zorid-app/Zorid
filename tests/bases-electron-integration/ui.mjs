@@ -24,6 +24,20 @@ function pointerTarget(element, {allowDisabled = false, requireEnabled = true} =
       busy:attr(session.querySelector('.bases-session-content'),'aria-busy'),ariaDisabled:attr(cell,'aria-disabled'),editing:attr(cell,'data-base-editing')}} : {})}};
 }
 
+// Native SELECT diagnostics are passive snapshots. Browser :open support is
+// optional and says nothing by itself about a macOS-owned menu or OS key routing.
+function nativeSelectFrame(document, selector) {
+  const matches = [...document.querySelectorAll(selector)], element = matches[0], focused = document.activeElement;
+  let open = null;
+  if (element) try { open = element.matches(':open'); } catch { /* Unsupported selector. */ }
+  return {matches:matches.length,tag:element?.tagName??null,connected:element?.isConnected??false,
+    value:element?.value??null,selectedIndex:element?.selectedIndex??null,
+    options:element?.tagName==='SELECT'?[...element.options].map(option=>({value:option.value,label:option.textContent,selected:option.selected,disabled:option.disabled})):[],
+    nativeDisabled:element?.matches(':disabled')??null,ariaDisabled:!!element?.closest('[aria-disabled="true"]'),inert:!!element?.closest('[inert]'),
+    open,focus:{isSelect:focused===element,tag:focused?.tagName??null,role:focused?.getAttribute('role')??null,label:focused?.getAttribute('aria-label')??null},
+    document:{visibilityState:document.visibilityState,hidden:document.hidden,hasFocus:document.hasFocus()}};
+}
+
 // Every positive mutation is routed through visible app controls. DOM evaluation
 // locates/reads elements; it does not call workspace/controller/store APIs.
 export class UI {
@@ -108,9 +122,22 @@ export class UI {
       await this.cdp.call('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...chosen});await this.cdp.call('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...chosen});
       this.actions.push({action:'custom-option',selector,label:values[index].label,value:values[index].value,at:Date.now()});
     }else{
-      await this.click(selector); await this.key('Home');
-      for (let i = 0; i < index; i++) await this.key('ArrowDown');
-      await this.key('Enter');
+      const frame=async phase=>this.actions.push({action:'native-select-frame',selector,phase,expectedValue:values[index].value,...await this.dom(`return (${nativeSelectFrame.toString()})(document,${JSON.stringify(selector)});`),at:Date.now()});
+      const key=async(key,phase)=>{await frame('before-'+phase);await this.key(key);await frame('after-'+phase);};
+      await frame('before-click');await this.click(selector);await frame('after-click');
+      // Preserve the existing platform recipe while observing each key. These
+      // CDP reads add round trips, not sleeps, semantic waits, retries or writes.
+      await key('Home','Home');
+      for (let i = 0; i < index; i++) await key('ArrowDown','ArrowDown-'+(i+1));
+      await key('Enter','Enter');
+      try{
+        await this.wait(`return document.querySelector(${JSON.stringify(selector)})?.value===${JSON.stringify(values[index].value)};`, 'Native select accepted keyboard input');
+        await frame('readback-succeeded');
+      }catch(error){
+        try{await frame('readback-failed');}catch(diagnostic){this.actions.push({action:'native-select-diagnostic-error',selector,message:diagnostic.message,at:Date.now()});}
+        throw error;
+      }
+      return;
     }
     await this.wait(`return document.querySelector(${JSON.stringify(selector)})?.value===${JSON.stringify(values[index].value)};`, 'Native select accepted keyboard input');
   }
