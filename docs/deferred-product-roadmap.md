@@ -89,6 +89,25 @@ and failed traces retained under `/private/tmp/zorid-bases-safety-current-202610
 Visible003 app cleanup requires SIGKILL, no leaked owned processes; freeze verified.
 All owned apps are now closed. These are partial failed runs, not safety acceptance.
 
+Visible safety003 followup: controller reproduced a product focus bug in the
+real Table+property widget composition. Widget click prevents default and opens
+its input; the sibling cell listener nevertheless focuses the cell, so Escape
+cannot cancel its editor and text readback remains empty. `bases_controller`
+owns a minimal `table-view.ts` defaultPrevented guard and regression, independent
+review `bases_inline_core`; no source correction composed yet. Preserve range
+capture and existing widget actions; do not weaken cell-value assertions.
+
+Visible properties-current001 on same build003 (docs-only source `0f81c1e5`)
+passes34 actions /10 durable checks through text/tags/plain links/status and
+picker-created select/multiselect options, then fails ordinary-note relation
+readback: last Alpha tree click is followed by Properties.yaml viewer rather
+than Alpha. Native closes SIGTERM exit0, no leaked owned processes; freeze
+verified. `bases_embeds` owns causal investigation, no confirmed cause/fix yet.
+Do not mark remaining property/layout/relation/restart scenarios passed.
+Optional CUA native input checkpoint remains isolated with `bases_e2e`, review
+`bases_core_review`; it must preserve normal default campaign behavior and
+strict selected-value/save/file oracles. No owned app is currently running.
+
 ### Superseded checkpoint snapshot — retained evidence
 
 ### Latest execution update
