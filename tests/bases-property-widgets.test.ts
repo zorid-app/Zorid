@@ -112,3 +112,8 @@ test('ordinary lists edit inline, and chip Enter/Escape preserve existing text w
   pill = s.element.querySelector<HTMLElement>('.multi-select-pill')!; pill.dispatchEvent(new s.dom.window.MouseEvent('dblclick', { bubbles: true, cancelable: true })); s.input().value = 'Updated'; s.key('Enter'); await tick();
   assert.deepEqual(s.edits[0].value, baseExpressionValue(['Updated', 'Second'])); s.close();
 });
+
+
+test('offset datetime editing preserves its original literal value on open and close', async () => {
+  const s = setup('2026-01-01T12:30:00-05:00', {type:'datetime'}); s.click(); assert.equal(s.input().type, 'text'); assert.equal(s.input().value, '2026-01-01T12:30:00-05:00'); s.key('Enter'); await tick(); assert.equal(s.edits.length, 0); s.close();
+});

@@ -65,7 +65,7 @@ export function createBasePropertyRenderer(options: BasePropertyWidgetOptions): 
  * exact draft; disposal releases listeners/UI but never cancels an issued write. */
 export function mountBasePropertyWidget(element: HTMLElement, presentation: BasePropertyPresentation, options: BasePropertyWidgetOptions): () => void {
   const document = element.ownerDocument, win = document.defaultView;
-  let definition = options.getDefinition(presentation.property) ?? inferBasePropertyDefinition(presentation.value);
+  let definition = options.getDefinition(presentation.property) ?? inferBasePropertyDefinition(presentation.value, presentation.property);
   const type = definition.type;
   const editable = presentation.property.startsWith('note.') && /\.md$/i.test(presentation.row.path) && !options.readOnly?.(presentation) && type !== 'rollup' && type !== 'reverseRelation';
   const multiple = ['list', 'tags', 'multiselect'].includes(type) || (type === 'relation' && !!definition.relation?.multiple);
@@ -140,12 +140,12 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (removable) {
       const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'multi-select-pill-remove-button'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${text}`);
       remove.addEventListener('mousedown', event => event.preventDefault());
-      remove.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); if (!pending) { draft.splice(index, 1); draftChanged = true; renderEditor(); input?.focus(); void saveDraft(); } }); pill.append(remove);
+      remove.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); if (!pending) { removeChip(index); } }); pill.append(remove);
       pill.addEventListener('dblclick', event => { event.preventDefault(); event.stopPropagation(); editChip(index); });
       pill.addEventListener('keydown', event => {
         if (event.isComposing || pending) return;
         if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); editChip(index); }
-        else if (event.key === 'Backspace' || event.key === 'Delete') { event.preventDefault(); event.stopPropagation(); draft.splice(index, 1); draftChanged = true; renderEditor(); input?.focus(); void saveDraft(); }
+        else if (event.key === 'Backspace' || event.key === 'Delete') { event.preventDefault(); event.stopPropagation(); removeChip(index); }
         else if (event.key === 'Escape' || event.key === 'ArrowDown') { event.preventDefault(); input?.focus(); }
         else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); const sibling = event.key === 'ArrowLeft' ? pill.previousElementSibling : pill.nextElementSibling; (sibling as HTMLElement | null)?.focus(); }
       });
@@ -235,6 +235,11 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     }
     else await commit(str(next));
   }
+  function removeChip(index: number) {
+    if (editingIndex === index) { editingIndex = undefined; if (input) input.value = ''; }
+    else if (editingIndex !== undefined && editingIndex > index) editingIndex--;
+    draft.splice(index, 1); draftChanged = true; renderEditor(); input?.focus(); void saveDraft();
+  }
   function editChip(index: number) {
     if (pending || !current() || !input || !multiple) return;
     editingIndex = index; input.value = draft[index]; renderChoices(); input.focus(); input.select();
@@ -285,7 +290,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     event.preventDefault(); event.stopPropagation(); editing = true; draftChanged = false; mark('draft');
     draft = value.type === 'list' ? value.value.map(renderText) : value.type === 'null' ? [] : [renderText(value)];
     input = document.createElement('input'); input.className = 'metadata-input metadata-input-text'; input.setAttribute('aria-label', presentation.property.replace(/^note\./, '')); input.placeholder = 'Empty';
-    input.type = basePropertyValueDiagnostic(value, definition) ? 'text' : type === 'date' ? 'date' : type === 'datetime' ? 'datetime-local' : 'text';
+    input.type = basePropertyValueDiagnostic(value, definition) || (type === 'datetime' && value.type === 'string' && /(?:Z|[+-]\d{2}:\d{2})$/.test(value.value)) ? 'text' : type === 'date' ? 'date' : type === 'datetime' ? 'datetime-local' : 'text';
     if (type === 'date' || type === 'datetime') input.max = type === 'date' ? '9999-12-31' : '9999-12-31T23:59:59';
     if (type === 'number') input.inputMode = 'decimal';
     input.value = multiple ? '' : inputText(value, definition);

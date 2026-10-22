@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBasePropertyDefinitions, updateBasePropertyDefinition, renameBasePropertyOption, parseBasePropertyInput, basePropertyValueDiagnostic, validDateText } from '../src/bases/property-definitions.ts';
+import { parseBasePropertyDefinitions, updateBasePropertyDefinition, renameBasePropertyOption, parseBasePropertyInput, basePropertyValueDiagnostic, validDateText, inferBasePropertyDefinition } from '../src/bases/property-definitions.ts';
 import { baseExpressionValue } from '../src/bases/expression.ts';
 
 test('property settings are vault-wide definitions, with independent diagnostics and unfamiliar values retained', () => {
@@ -60,4 +60,13 @@ test('definition budgets, names and derived relation references match shared cor
   const parsed = parseBasePropertyDefinitions('properties: {invalid: {type: reverseRelation, reverseRelation: {property: missing}}, total: {type: rollup, rollup: {relation: invalid, aggregation: count}}}');
   assert.equal(Object.keys(parsed.properties).length, 0); assert.equal(parsed.diagnostics.length, 2);
   assert.equal(parseBasePropertyDefinitions('properties: {project: {type: relation}, related: {type: reverseRelation, reverseRelation: {property: project}}, total: {type: rollup, rollup: {relation: related, aggregation: count}}}').diagnostics.length, 0);
+});
+
+
+test('ISO datetime offsets and nanosecond text remain readable without timezone normalization', () => {
+  for (const value of ['2026-01-01T12:30:00-05:00', '2026-01-01T17:30:00.123456789Z']) {
+    assert.equal(validDateText(value, true), true); assert.deepEqual(parseBasePropertyInput(value, {type:'datetime'}), baseExpressionValue(value)); assert.equal(inferBasePropertyDefinition(baseExpressionValue(value)).type, 'datetime');
+  }
+  assert.equal(validDateText('2026-01-01T24:00:00Z', true), false); assert.equal(validDateText('2026-01-01T17:30:00+00:99', true), false);
+  assert.equal(inferBasePropertyDefinition(baseExpressionValue('2026-01-01')).type, 'date'); assert.equal(inferBasePropertyDefinition(baseExpressionValue([]), 'note.tags').type, 'tags');
 });

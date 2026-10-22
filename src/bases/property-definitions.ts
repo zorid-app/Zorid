@@ -124,7 +124,9 @@ export function renameBasePropertyOption(source: string, property: string, from:
   if (from !== to && definition.options.some(option => option.value === to)) throw new BasePropertyDefinitionError('Option value already exists.');
   return { source: updateBasePropertyDefinition(source, property, { ...definition, options: definition.options.map(option => option.value === from ? { ...option, value: to } : option) }), migration: { property, from, to } };
 }
-export function inferBasePropertyDefinition(value: BaseExpressionValue): BasePropertyDefinition {
+export function inferBasePropertyDefinition(value: BaseExpressionValue, property?: string): BasePropertyDefinition {
+  if (property && basePropertyName(property).toLowerCase() === 'tags' && (value.type === 'list' || value.type === 'string' || value.type === 'null')) return { type: 'tags' };
+  if (value.type === 'string') { if (validDateText(value.value, false)) return { type: 'date' }; if (validDateText(value.value, true)) return { type: 'datetime' }; }
   return { type: value.type === 'number' ? 'number' : value.type === 'boolean' ? 'checkbox' : value.type === 'date' ? value.hasTime ? 'datetime' : 'date' : value.type === 'list' ? 'list' : 'text' };
 }
 export function basePropertyValueDiagnostic(value: BaseExpressionValue, definition: BasePropertyDefinition): string | undefined {
@@ -138,7 +140,11 @@ export function basePropertyValueDiagnostic(value: BaseExpressionValue, definiti
   if ((t === 'date' || t === 'datetime') && value.type !== 'date' && (value.type !== 'string' || !validDateText(value.value, t === 'datetime'))) return 'Expected a valid date; the original value is preserved.';
 }
 export function validDateText(value: string, withTime: boolean): boolean {
-  if (!new RegExp(withTime ? '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}(\\.\\d{1,3})?)?$' : '^\\d{4}-\\d{2}-\\d{2}$').test(value)) return false;
+  if (!new RegExp(withTime ? '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}(\\.\\d{1,9})?)?(Z|[+-]\\d{2}:\\d{2})?$' : '^\\d{4}-\\d{2}-\\d{2}$').test(value)) return false;
+  if (withTime) {
+    const time = /T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d{1,9})?(?:Z|([+-])(\d{2}):(\d{2}))?$/.exec(value);
+    if (!time || Number(time[1]) > 23 || Number(time[2]) > 59 || Number(time[3] ?? 0) > 59 || Number(time[5] ?? 0) > 23 || Number(time[6] ?? 0) > 59) return false;
+  }
   const [date] = value.split('T'); const [year, month, day] = date.split('-').map(Number);
   if (year < 1) return false;
   const d = new Date(0); d.setUTCFullYear(year, month - 1, day); d.setUTCHours(0, 0, 0, 0);
