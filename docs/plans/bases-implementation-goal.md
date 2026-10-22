@@ -59,10 +59,10 @@ features; the agreed improvements below remain requirements, not parity defects.
 
 - [ ] Reconcile this scope with current main, retained branches and actual source;
   [Bases status](../bases-status.md) is historical evidence, not a current audit.
-- [ ] Inventory old named-Type consumers. Remove Type requirements from generic
+- [x] Inventory old named-Type consumers. Remove Type requirements from generic
   Bases/property flows; preserve existing user files. Record deferred Task/Calendar
   dependencies without silently rewriting those features or deleting their data.
-- [ ] Establish named ownership for Rust queries/contracts, property commands,
+- [x] Establish named ownership for Rust queries/contracts, property commands,
   TypeScript configuration/UI, and workspace/editor/bridge integration. Use
   isolated worktrees and the existing sole-main-integration protocol.
 - [ ] Build a feature/scenario matrix from [reference inventory](../reference/bases-reference.md),
@@ -73,6 +73,17 @@ features; the agreed improvements below remain requirements, not parity defects.
 - [ ] Capture toolbar, popovers, menus, table geometry, all layouts, selection,
   drag/drop, focus and keyboard behavior in matching reference fixtures. Record
   each deliberate Zorid extension separately from reference parity.
+
+2026-10-22 source/readiness record: the
+[retirement inventory](../history/bases-type-retirement-inventory-20261022.md)
+documents generic Bases' independence from named note Types and the retained
+deferred Task/Calendar consumers; no user Type files or task data were deleted.
+Named ownership/worktrees and the sole-main-integration protocol are recorded in
+the [checkpoint](../deferred-product-roadmap.md). These two checked readiness
+items establish inventory/ownership, **not runtime feature acceptance**. The
+[host-policy audit](../history/bases-query-host-policy-20261022.md) also records
+Q7's source selection/failure boundary, while its actual supported-host proof
+and the remaining functional/visual/runtime gates stay open.
 
 Completion: every required capability below has an owner, baseline observation,
 implementation status and named acceptance scenario. Unobserved reference behavior
