@@ -2,6 +2,15 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Disk recovery observed:7098920KiB free. Serialized Rust validation resumes for
+reviewed date-v8 fix e82ab7b2 (literal percent formatting and raw compact-date
+extrema distinction), Rustd04aeae2,146 authored shared assertions. Historical
+359/133-client passes remain source958 only; new validation/builds/runs required.
+C2 review found early nested Hover/New text publication before durable ack and
+generic retry continuation gaps; scoped owner is correcting these with strict
+nested save/failure/retry tests. Existing close-reject input assertion fails on
+both baseline and candidate; no causal product regression claimed yet.
+
 Actual browser009 now **passes all19 groups/133 typed assertions/16 Q3
 diagnostics**, with exact current Rust/WASM, unchanged source/module postproof,
 no skipped groups and confirmed owned cleanup. This closes the expanded core

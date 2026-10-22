@@ -16,7 +16,7 @@ Main is unchanged `e7d655e1`; the full goal is **not complete**. Current goal:
 optional property definitions are independent of named note Types; retain the
 deferred Tasks/Calendar Type consumers and their data.
 
-Verified current core is Rust tree
+Last fully validated core is Rust tree
 `958b19aca4666414e956fbb2f406558af5a18366`:
 
 - Full pinned/offline Rust run: **359 tests/20 nonempty targets pass**, plus
@@ -70,18 +70,39 @@ Latest heavy Electron016 reaches244 actions/29 checks on **old Rust5e010112 /
 host176fcff5**, not the current359-test core. Rich-property durable edits pass,
 then native color SELECT readback fails. Passive diagnostic probe001 aborts
 before launch at its disk guard; prepared002 remains unlaunched. A fresh current
-frontend build paired explicitly with preserved host8e818002 is required for
-final current-core native acceptance. Existing source-corrected safety/config/
+frontend build paired with a newly rebuilt matching date-v8 host is required
+for final current-core native acceptance. Existing source-corrected safety/config/
 properties,14-phase layouts, clipboard/recovery and23 matched visual states also
 need actual runs and review. Main integration/reconciliation remains required.
 
-Disk is still the native blocker: latest actual249108KiB free, below the
-unchanged1GiB runner guard. User request to free2–3GB remains unanswered; no
-recovery is assumed. Completed compiler/generated-profile caches were retired
-with exact protected-file receipts; source/products/raw storage/evidence remain.
-No browser/Cargo/native test app is live after009. Source-only isolated work and
-bounded focused checks may continue. Keep the user's production PID47540 and
-unrelated applications/data untouched.
+Disk recovery is now **observed**, not assumed: latest measured7098920KiB
+free (~6.77GiB), above the unchanged1GiB native guard. No new user permission is
+needed for already-authorized owned verification. Root now owns sole heavy
+Rust run52969, pinned/offline/locked/release/j1:
+`/private/tmp/zorid-bases-date-final-full-composed-001.log`.
+Reviewed date fix e82ab7b2 changes current Rust tree to
+`d04aeae2066482f8d2d4c48c341a571fad641402`: Moment percent literals and raw
+compact-date extrema parsing, compiler grouping-v8, two authored Rust tests and
+13 new shared Q3 assertions (146 total, same19 browser groups/125 CLI commands).
+These corrections match two new bounded REA receipts; validation is in progress.
+Old359/core958/browser009133/CLI006133 passes remain historical proof for that
+source, not current date-v8 acceptance. After the new suite passes, rebuild
+matching native/CLI and WASM serially, then rerun the expanded client campaigns.
+The preserved host8e818002 is old958; do not use it to claim date-v8 acceptance.
+Original raw WASM is now byte-preserved beside the958 generated artifacts.
+
+C2 independent review also found Hover/New source subscriptions can publish
+buffer updates before durable flush/ack; a scoped per-attempt publication hold
+and exact generic-retry continuation are required before approval. Named
+ownership expands to minimal `src/ui/base-new-item-popover.ts` body/editor defer
+hook plus Workspace relevant subscriptions/retry hook; no NoteBuffer edits or
+generic Vault suppression. Preserve status/controls, release on foreign text,
+and never let an old attempt release a newer hold. Existing delayed-close input
+test fails identically on immutable499 baseline and candidate; source causality
+is not established, and its normal readiness/ack test must be diagnosed without
+weakening admission. `bases_controller` is independent reviewer; Node checks
+are bounded/serialized while root Cargo compiles. No native/browser test app is
+live. Keep production PID47540 and unrelated applications/data untouched.
 
 ### Earlier execution updates — historical where superseded
 
