@@ -15,17 +15,17 @@ const notes={
 };
 const tick=()=>new Promise<void>(resolve=>setTimeout(resolve,2));
 async function until(check:()=>boolean,reason:string){for(let i=0;i<250&&!check();i++)await tick();assert.ok(check(),reason);}
-async function fixture(options:{readOnly?:boolean;viewName?:string;source?:string}={}){
+async function fixture(options:{readOnly?:boolean;viewName?:string;source?:string;files?:Record<string,string>}={}){
  class Adapter extends MemoryAdapter{
-  fail=false;writes:{path:string;text:string}[]=[];
-  override async write(path:string,text:string){if(this.fail&&path==='Work.base')throw new Error('Toolbar disk unavailable');await super.write(path,text);this.writes.push({path,text});}
+  fail=false;failPaths=new Set<string>();writes:{path:string;text:string}[]=[];
+  override async write(path:string,text:string){if(this.fail&&path==='Work.base'||this.failPaths.has(path))throw new Error('Toolbar disk unavailable');await super.write(path,text);this.writes.push({path,text});}
  }
- const initial=options.source??source,adapter=new Adapter({'Work.base':initial,...notes}),vault=new Vault(adapter);await vault.initialize();
+ const initial=options.source??source,adapter=new Adapter({'Work.base':initial,...notes,...options.files}),vault=new Vault(adapter);await vault.initialize();
  const dom=new JSDOM('<main></main><button id="outside">Outside control</button>',{pretendToBeVisual:true,url:'https://zorid.test/'}),doc=dom.window.document,host=doc.querySelector('main')!;
- const buffers=new Map<string,NoteBuffer>(),errors:unknown[]=[],publications:string[]=[];
+ const buffers=new Map<string,NoteBuffer>(),errors:unknown[]=[],publications:string[]=[],renamed:{basePath:string;index:number;from:string;to:string}[]=[];
  const getBuffer=async(path:string)=>{let buffer=buffers.get(path);if(!buffer){buffer=new NoteBuffer(vault,path,{debounceMs:60000,storage:dom.window.localStorage});buffers.set(path,buffer);}await buffer.load();return buffer;};
  const session=createBaseSession(host,{vault,basePath:'Work.base',readOnly:options.readOnly,viewName:options.viewName,
-  buffers:options.readOnly?undefined:{getBuffer,validate(){},onBufferChange(path){publications.push(path);}},validate(){},openFile(){},onError:error=>errors.push(error)});
+  buffers:options.readOnly?undefined:{getBuffer,validate(){},onBufferChange(path){publications.push(path);}},validate(){},openFile(){},onViewRenamed:event=>renamed.push(event),onError:error=>errors.push(error)});
  await session.ready;assert.equal(session.state.error,null);
  const dialog=()=>doc.querySelector<HTMLElement>('[role="dialog"]');
  const control=<T extends HTMLElement>(label:string,scope:ParentNode=doc)=>{const node=scope.querySelector<T>(`[aria-label="${label}"]`);assert.ok(node,`control ${label}`);return node;};
@@ -38,8 +38,8 @@ async function fixture(options:{readOnly?:boolean;viewName?:string;source?:strin
  const disk=async()=>BaseDocument.parse(await vault.read('Work.base'));
  const paths=()=>session.state.result!.rows.map(row=>row.path);
  const unchangedNotes=async()=>{for(const[path,text]of Object.entries(notes))assert.equal(await adapter.read(path),text,path);};
- return{adapter,vault,dom,doc,host,buffers,errors,publications,getBuffer,session,dialog,control,click,change,key,submit,applied,configure,disk,paths,unchangedNotes,initial,
-  async cleanup(){adapter.fail=false;const cancel=dialog()?.querySelector<HTMLButtonElement>('[aria-label="Cancel"]');cancel?.click();for(const input of host.querySelectorAll('.bases-session-content input,.bases-session-content textarea'))key(input,'Escape');await session.close();for(const buffer of buffers.values())await buffer.dispose();dom.window.close();}};
+ return{adapter,vault,dom,doc,host,buffers,errors,publications,renamed,getBuffer,session,dialog,control,click,change,key,submit,applied,configure,disk,paths,unchangedNotes,initial,
+  async cleanup(){adapter.fail=false;adapter.failPaths.clear();const cancel=dialog()?.querySelector<HTMLButtonElement>('[aria-label="Cancel"]');cancel?.click();for(const input of host.querySelectorAll('.bases-session-content input,.bases-session-content textarea'))key(input,'Escape');await session.close();for(const buffer of buffers.values())await buffer.dispose();dom.window.close();}};
 }
 
 test('actual session switches all existing views without writing configuration or notes',async()=>{
@@ -122,10 +122,27 @@ test('readonly sessions retain view switching while exposing no toolbar mutation
  }finally{await f.cleanup();}
 });
 
-test('named-view embeds omit rename but can persist layout without breaking their binding',async()=>{
- const f=await fixture({viewName:'Table'});try{
-  f.configure();assert.equal(f.dialog()!.querySelector('[aria-label="View name"]'),null);f.change('Layout','list');await f.applied();
-  assert.equal(f.session.state.result!.view.name,'Table');assert.equal(f.session.state.result!.view.type,'list');assert.equal((await f.disk()).views[0].name,'Table');await f.unchangedNotes();
+test('named-view embeds rename saved references and retain their selected binding',async()=>{
+ const before='![[Work.base#Table]]\n[Open](Work.base#Table)\n';
+ const f=await fixture({viewName:'Table',files:{'Links.md':before}});try{
+  f.configure();f.change('View name','Current tasks','input');f.change('Layout','list');await f.applied();
+  assert.equal(f.session.state.result!.view.name,'Current tasks');assert.equal(f.session.state.result!.view.type,'list');
+  assert.equal((await f.disk()).views[0].name,'Current tasks');assert.deepEqual(f.renamed,[{basePath:'Work.base',index:0,from:'Table',to:'Current tasks'}]);
+  assert.match(await f.vault.read('Links.md'),/Work.base#Current tasks/);assert.doesNotMatch(await f.vault.read('Links.md'),/#Table/);await f.unchangedNotes();
+ }finally{await f.cleanup();}
+});
+
+test('partial named-view reference failure retries the original retained note before generic flushing',async()=>{
+ const f=await fixture({viewName:'Table',files:{'Links.md':'![[Work.base#Table]]\n'}});try{
+  f.adapter.failPaths.add('Links.md');f.configure();f.change('View name','Saved name','input');
+  f.doc.getElementById('outside')!.dispatchEvent(new f.dom.window.MouseEvent('pointerdown',{bubbles:true}));
+  await until(()=>!!f.dialog()?.textContent?.includes('Retry save'),'failed reference offers retained retry');
+  assert.equal((await f.disk()).views[0].name,'Saved name');assert.equal(f.session.state.result!.view.name,'Saved name');assert.equal(f.renamed.length,1);
+  assert.match(await f.vault.read('Links.md'),/#Table/);assert.match((await f.getBuffer('Links.md')).text,/#Saved name/);assert.equal(f.session.hasPendingChanges(),true);
+  f.adapter.failPaths.clear();await f.session.flush();
+  assert.equal(f.dialog(),null);assert.match(await f.vault.read('Links.md'),/#Saved name/);assert.equal(f.renamed.length,1);
+  assert.equal(f.adapter.writes.filter(write=>write.path==='Work.base').length,1);assert.equal(f.adapter.writes.filter(write=>write.path==='Links.md').length,1);
+  assert.equal(f.session.hasPendingChanges(),false);await f.unchangedNotes();
  }finally{await f.cleanup();}
 });
 

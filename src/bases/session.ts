@@ -1,5 +1,5 @@
 import { BaseController, createBaseMutationHost } from './controller.ts';
-import type { BaseBufferHost, BaseControllerState } from './controller.ts';
+import type { BaseBufferHost, BaseControllerState, BaseViewRenamed } from './controller.ts';
 import { BaseDocument } from './document.ts';
 import { sharedBaseCoverage, sharedBasePreview, sharedBaseWitness } from './shared-query.ts';
 import { createBaseClockHost } from './clock.ts';
@@ -55,6 +55,8 @@ export interface BaseSessionOptions {
   readonly clock?: BaseClockHost;
   readonly visibility?: BaseSessionVisibility;
   readonly viewName?: string;
+  /** Rebind an existing named embed after its new name is durably saved. */
+  readonly onViewRenamed?: (event: BaseViewRenamed) => void;
   readonly closeCreatedFile?: () => boolean | Promise<boolean>;
   readonly openCreatedFile?: (path: string, event: MouseEvent | KeyboardEvent, anchor?: HTMLElement) => void | Promise<void>;
   readonly openFile: (path: string, event: MouseEvent | KeyboardEvent, witness?: { readonly entryId: string; readonly revision: string }) => void;
@@ -175,6 +177,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     },
   };
   const controller = new BaseController({ vault: options.vault, basePath: options.basePath, mutations, query, clock, viewName: options.viewName, ...(options.inlineSource ? { inlineSource: options.inlineSource } : {}),
+    onViewRenamed: options.onViewRenamed,
     onChange(state) { render(state); options.onState?.(state); },
   });
   const actions = createBaseViewActions(controller, { validate: action, canRename: !!options.buffers?.rename,
@@ -226,7 +229,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const attempt: { buffer?: NoteBuffer; text?: string } = {}; configurationAttempt = attempt;
     return track(operation).catch(error => {
       const buffer = attempt.buffer, text = attempt.text;
+      if (controller.hasPendingViewReferences) throw new BaseToolbarSaveError(error instanceof Error ? error.message : String(error), () => track(async () => { await controller.retryViewRenameReferences(); }));
       if (buffer && (buffer.dirty || buffer.error)) throw new BaseToolbarSaveError(error instanceof Error ? error.message : String(error), () => track(async () => {
+        if (controller.hasPendingViewReferences) { await controller.retryViewRenameReferences(); return; }
         if (buffer.path !== options.basePath || buffer.text !== text) throw new Error('The retained configuration changed. Save or resolve that draft before retrying.');
         await buffer.flush(); if (!await controller.acknowledgeConfigurationRetry()) await controller.refresh();
       }));
@@ -437,7 +442,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       return property.startsWith('file.') ? property.replace(/^file\./, 'file ') : property.replace(/^(?:note|formula)\./, '');
     };
     const writable = !options.readOnly && !sharedBasePreview(result);
-    toolbarUI.update({ result, views: choices, selectedIndex, rootFilters: document.getRoot('filters'), root: Object.fromEntries(['filters','formulas','properties','summaries','newItemFolder','newItemTemplate'].map(key => [key, document.getRoot(key)]).filter((entry): entry is [string, BaseValue] => entry[1] !== undefined)), readOnly: !writable, allowRename: options.viewName === undefined, propertyType: property => definitions.properties[basePropertyName(property)]?.type, label: getPropertyLabel });
+    toolbarUI.update({ result, views: choices, selectedIndex, rootFilters: document.getRoot('filters'), root: Object.fromEntries(['filters','formulas','properties','summaries','newItemFolder','newItemTemplate'].map(key => [key, document.getRoot(key)]).filter((entry): entry is [string, BaseValue] => entry[1] !== undefined)), readOnly: !writable, allowRename: true, propertyType: property => definitions.properties[basePropertyName(property)]?.type, label: getPropertyLabel });
     // Toolbar rebases its own in-flight configuration without replacing row drafts.
     if (pending.size || activeDraft()) { deferred = state; return; }
     deferred = undefined;
@@ -585,7 +590,10 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     await Promise.allSettled([...pending]);
     // Let property widgets finish handling their accepted/rejected operations.
     await Promise.resolve();
-    const acknowledgement = [...changedBuffers].some(buffer => buffer.path === options.basePath && (buffer.dirty || buffer.error)) ? toolbarUI.captureSaveAcknowledgement() : undefined;
+    const acknowledgement = controller.hasPendingViewReferences || [...changedBuffers].some(buffer => buffer.path === options.basePath && (buffer.dirty || buffer.error)) ? toolbarUI.captureSaveAcknowledgement() : undefined;
+    // Reference operations own their exact failed note drafts and original
+    // witnesses; flushing those buffers independently would invalidate retry.
+    if (controller.hasPendingViewReferences) await controller.retryViewRenameReferences();
     for (const buffer of changedBuffers) await buffer.flush();
     await controller.acknowledgeConfigurationRetry();
     acknowledgement?.();
@@ -616,7 +624,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     refresh: () => controller.refresh(),
     selectView,
     setCurrentFile: path => { action(); return controller.setCurrentFilePath(path); },
-    hasPendingChanges: () => !disposed && (!!pending.size || creation?.status === 'uncertain' || activeDraft() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error)),
+    hasPendingChanges: () => !disposed && (!!pending.size || controller.hasPendingViewReferences || creation?.status === 'uncertain' || activeDraft() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error)),
     flush: () => finish(false),
     close: () => finish(true),
   };
