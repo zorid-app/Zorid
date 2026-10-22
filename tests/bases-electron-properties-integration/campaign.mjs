@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import {alpha,beta,bodies,initial} from './fixtures.mjs';
+import {alpha,beta,bodies,initial,fixtureFiles} from './fixtures.mjs';
+import {applyRawEdit} from './raw-oracle.mjs';
 export {fixtureFiles,vaultName} from './fixtures.mjs';
 const active='.pane.is-active';
 const dialog=name=>`[role="dialog"][aria-label=${JSON.stringify(name)}]`;
 const esc=value=>JSON.stringify(value);
 function property(layout,file,name){
-  if(layout==='table')return `[role="gridcell"][data-path=${esc(file)}][data-property=${esc('note.'+name)}]`;
+  if(layout==='table')return `${active} [role="gridcell"][data-path=${esc(file)}][data-property=${esc('note.'+name)}]`;
   const host={cards:'.bases-cards-item',list:'.bases-list-item',kanban:'.bases-kanban-card'}[layout];
   return `${active} ${host}[data-path=${esc(file)}] .bases-metadata-value[data-property=${esc('note.'+name)}]`;
 }
@@ -37,36 +38,39 @@ async function addTag(c,selector,text){
   await c.ui.click(selector);await c.ui.type(`${selector} .bases-property-inline-editor input`,text);await c.ui.key('Enter');
   await c.ui.wait(`return !document.querySelector('[data-base-editing="pending"]');`,'Tag chip saved immediately');await c.ui.key('Escape');await c.ui.idle();
 }
-async function readOnlyAttempt(c,layout,file,name){
-  const selector=property(layout,file,name),before=await c.read(file);
+async function readOnlyAttempt(c,layout,file,name,expectedSource){
+  const selector=property(layout,file,name);assert.equal(await c.read(file),expectedSource,'Independent raw source before derived attempt');
   // Click the actual property's empty padding, avoiding a derived link's valid
   // navigation action; all coordinates are read from the live rendered node.
-  const point=await c.ui.wait(`const e=document.querySelector(${esc(selector)});if(!e)return false;e.scrollIntoView({block:'nearest',inline:'nearest'});const r=e.getBoundingClientRect(),x=r.right-5,y=r.y+r.height/2,h=document.elementFromPoint(x,y);return h&&e.contains(h)&&!h.closest('a,input,button,[role="link"]')?{x,y}:false;`,'Derived property padding hit target');
+  const point=await c.ui.wait(`const e=document.querySelector(${esc(selector)});if(!e)return false;e.scrollIntoView({block:'nearest',inline:'nearest'});const r=e.getBoundingClientRect(),x=r.right-5,y=r.y+r.height/2,h=document.elementFromPoint(x,y);return h===e?{x,y}:false;`,'Derived property own padding hit target');
   for(const type of ['mousePressed','mouseReleased'])await c.cdp.call('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point});
-  c.evidence.actions.push({action:'pointer-readonly-property-padding',layout,file,name,point});await c.ui.key('Enter');
+  c.evidence.actions.push({action:'pointer-readonly-property-padding',layout,file,name,point});
+  await c.ui.wait(`const e=document.querySelector(${esc(selector)});return e&&e.isConnected&&e.getClientRects().length&&document.activeElement===e&&e.dataset.path===${esc(file)}&&e.dataset.property===${esc('note.'+name)};`,'Exact current derived cell focused before Enter');
+  c.evidence.checks.push({name:'P6-exact-focused-derived-cell-'+name,file,property:'note.'+name,activePane:true});await c.ui.key('Enter');
   await c.ui.wait(`const e=document.querySelector(${esc(selector)});return e&&!e.hasAttribute('data-base-editing')&&!e.querySelector('input.metadata-input,textarea,[contenteditable="true"]');`,'Derived property has no editable input');
-  await c.ui.key('Escape');await c.ui.idle();assert.equal(await c.read(file),before,'Derived edit attempt must not change note');c.evidence.checks.push({name:`derived-readonly-${layout}-${name}`,file,unchanged:true});
+  await c.ui.key('Escape');await c.ui.idle();assert.equal(await c.read(file),expectedSource,'Derived edit attempt preserves independently expected full source');c.evidence.checks.push({name:`derived-readonly-${layout}-${name}`,file,unchanged:true});
 }
 function body(source){const match=/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.exec(source);assert.ok(match);return source.slice(match[0].length);}
 
 export async function journey(c){
-  const expected=structuredClone(initial),snapshots=new Map();
-  async function saved(file,name){return c.saved(file,source=>{assert.deepEqual(c.frontmatter(source),expected[file]);assert.equal(body(source),bodies[file]);},name);}
+  const expected=structuredClone(initial),expectedRaw=fixtureFiles();
+  const rawStep=(name,file=alpha)=>expectedRaw.set(file,applyRawEdit(expectedRaw.get(file),name));
+  async function saved(file,name){return c.saved(file,source=>{assert.deepEqual(c.frontmatter(source),expected[file]);assert.equal(body(source),bodies[file]);assert.equal(source,expectedRaw.get(file),'Independent raw source (quotes/comments/full body): '+file);},name);}
   await c.launch('supplemental-properties-authoring');await c.ui.openFile('Properties.base');await c.ui.idle();
   await c.ui.wait(`return document.querySelector('${active} [role="grid"]')?.getAttribute('aria-rowcount')==='3';`,'Exactly two ordinary source rows');
   await c.screenshot('properties-01-table');
 
   // P1: ordinary text, inline tags and a plain-link selection via real controls.
-  await editText(c,property('table',alpha,'blurb'),'Table text 🌱');expected[alpha].blurb='Table text 🌱';await saved(alpha,'P1-table-text-exact-yaml-body');
-  await addTag(c,property('table',alpha,'tags'),'table-tag');expected[alpha].tags.push('table-tag');await saved(alpha,'P1-table-tags-readable-list');
-  await pick(c,property('table',alpha,'reference'),'Grace');expected[alpha].reference='[[/Targets/Grace.md]]';await saved(alpha,'P1-plain-link-exact-rooted-choice');
+  await editText(c,property('table',alpha,'blurb'),'Table text 🌱');expected[alpha].blurb='Table text 🌱';rawStep('tableText');await saved(alpha,'P1-table-text-exact-yaml-body');
+  await addTag(c,property('table',alpha,'tags'),'table-tag');expected[alpha].tags.push('table-tag');rawStep('tableTag');await saved(alpha,'P1-table-tags-readable-list');
+  await pick(c,property('table',alpha,'reference'),'Grace');expected[alpha].reference='[[/Targets/Grace.md]]';rawStep('tableLink');await saved(alpha,'P1-plain-link-exact-rooted-choice');
 
   // P2: status category/color and picker-created options, not settings APIs.
   await c.ui.wait(`return document.querySelector(${esc(property('table',alpha,'status'))}+' [data-category="todo"][data-color="gray"]')?.textContent==='Planned';`,'Configured todo category and color visible');
-  await pick(c,property('table',alpha,'status'),'Working');expected[alpha].status='Working';await saved(alpha,'P2-status-readable-value');
+  await pick(c,property('table',alpha,'status'),'Working');expected[alpha].status='Working';rawStep('tableStatus');await saved(alpha,'P2-status-readable-value');
   await c.ui.wait(`return document.querySelector(${esc(property('table',alpha,'status'))}+' [data-category="in-progress"][data-color="orange"]')?.textContent==='Working';`,'Selected status category and color retained');
-  await pick(c,property('table',alpha,'priority'),'Picker priority',{create:true});expected[alpha].priority='Picker priority';await saved(alpha,'P2-select-create-option-and-select');
-  await pick(c,property('table',alpha,'topics'),'Picker topic',{create:true,multiple:true});expected[alpha].topics.push('Picker topic');await saved(alpha,'P2-multiselect-create-preserves-unknown');
+  await pick(c,property('table',alpha,'priority'),'Picker priority',{create:true});expected[alpha].priority='Picker priority';rawStep('tablePriority');rawStep('priorityOption','Properties.yaml');await c.saved('Properties.yaml',source=>assert.equal(source,expectedRaw.get('Properties.yaml')),'P2-created-select-option-independent-raw-registry');await saved(alpha,'P2-select-create-option-and-select');
+  await pick(c,property('table',alpha,'topics'),'Picker topic',{create:true,multiple:true});expected[alpha].topics.push('Picker topic');rawStep('tableTopics');rawStep('topicOption','Properties.yaml');await c.saved('Properties.yaml',source=>assert.equal(source,expectedRaw.get('Properties.yaml')),'P2-created-multiselect-option-independent-raw-registry');await saved(alpha,'P2-multiselect-create-preserves-unknown');
   await c.saved('Properties.yaml',source=>{const p=c.yaml.parse(source).properties;assert.ok(p.priority.options.some(o=>o.value==='Picker priority'));assert.ok(p.topics.options.some(o=>o.value==='Picker topic'));assert.equal(p.status.options.find(o=>o.value==='Working').category,'in-progress');},'P2-picker-options-durable-shared-registry');
 
   // P3: normal note panel consumes typed display but preserves its raw alias.
@@ -78,34 +82,34 @@ export async function journey(c){
   await c.ui.openFile('Properties.base');await c.ui.idle();await view(c,'table');
 
   // P4: add and remove a new relation while alias and unresolved text survive.
-  await pick(c,property('table',alpha,'peers'),'Alpha',{multiple:true});expected[alpha].peers.push('[[/Items/Alpha.md]]');await saved(alpha,'P4-relation-add-preserves-alias-and-unresolved');
-  await openPicker(c,property('table',alpha,'peers'));await c.ui.button('Remove [[/Items/Alpha.md]]','.bases-property-popover');await c.ui.wait(`return !document.querySelector('[data-base-editing="pending"]');`,'Relation removal saved');await c.ui.key('Escape');await c.ui.idle();expected[alpha].peers.pop();await saved(alpha,'P4-relation-remove-preserves-originals');
+  await pick(c,property('table',alpha,'peers'),'Alpha',{multiple:true});expected[alpha].peers.push('[[/Items/Alpha.md]]');rawStep('addPeer');await saved(alpha,'P4-relation-add-preserves-alias-and-unresolved');
+  await openPicker(c,property('table',alpha,'peers'));await c.ui.button('Remove [[/Items/Alpha.md]]','.bases-property-popover');await c.ui.wait(`return !document.querySelector('[data-base-editing="pending"]');`,'Relation removal saved');await c.ui.key('Escape');await c.ui.idle();expected[alpha].peers.pop();rawStep('removePeer');await saved(alpha,'P4-relation-remove-preserves-originals');
 
   // P5: real edits in every alternative layout; each is checked against disk.
-  await view(c,'cards');await editText(c,property('cards',alpha,'blurb'),'Cards text 🌱');expected[alpha].blurb='Cards text 🌱';await saved(alpha,'P5-cards-text-edit');await addTag(c,property('cards',alpha,'tags'),'cards-tag');expected[alpha].tags.push('cards-tag');await saved(alpha,'P5-cards-tags-edit');await c.screenshot('properties-03-cards');
-  await view(c,'list');await visible(c,property('list',alpha,'blurb'),'Cards text 🌱');await pick(c,property('list',alpha,'priority'),'High');expected[alpha].priority='High';await saved(alpha,'P5-list-select-edit');await pick(c,property('list',alpha,'reference'),'Ada');expected[alpha].reference='[[/Targets/Ada.md]]';await saved(alpha,'P5-list-plain-link-edit');await c.screenshot('properties-04-list');
-  await view(c,'kanban');await visible(c,property('kanban',alpha,'priority'),'High');await pick(c,property('kanban',alpha,'status'),'Complete');expected[alpha].status='Complete';await saved(alpha,'P5-kanban-status-moves-row');await pick(c,property('kanban',alpha,'topics'),'Rust',{multiple:true});expected[alpha].topics.push('Rust');await saved(alpha,'P5-kanban-multiselect-edit');await c.screenshot('properties-05-kanban');
+  await view(c,'cards');await editText(c,property('cards',alpha,'blurb'),'Cards text 🌱');expected[alpha].blurb='Cards text 🌱';rawStep('cardsText');await saved(alpha,'P5-cards-text-edit');await addTag(c,property('cards',alpha,'tags'),'cards-tag');expected[alpha].tags.push('cards-tag');rawStep('cardsTag');await saved(alpha,'P5-cards-tags-edit');await c.screenshot('properties-03-cards');
+  await view(c,'list');await visible(c,property('list',alpha,'blurb'),'Cards text 🌱');await pick(c,property('list',alpha,'priority'),'High');expected[alpha].priority='High';rawStep('listPriority');await saved(alpha,'P5-list-select-edit');await pick(c,property('list',alpha,'reference'),'Ada');expected[alpha].reference='[[/Targets/Ada.md]]';rawStep('listLink');await saved(alpha,'P5-list-plain-link-edit');await c.screenshot('properties-04-list');
+  await view(c,'kanban');await visible(c,property('kanban',alpha,'priority'),'High');await pick(c,property('kanban',alpha,'status'),'Complete');expected[alpha].status='Complete';rawStep('boardStatus');await saved(alpha,'P5-kanban-status-moves-row');
+  const membership=await c.ui.wait(`const rows=[...document.querySelectorAll('${active} .bases-kanban-card')].filter(e=>e.dataset.path===${esc(alpha)});if(rows.length!==1)return false;const body=rows[0].closest('.bases-kanban-column-body[role="listbox"]');return body?.getAttribute('aria-label')==='Complete'?{file:rows[0].dataset.path,column:body.getAttribute('aria-label'),matchingMountedRows:rows.length}:false;`,'Saved status publishes Alpha in actual Complete Kanban column');c.evidence.checks.push({name:'P5-kanban-actual-column-membership-after-status-save',...membership});await pick(c,property('kanban',alpha,'topics'),'Rust',{multiple:true});expected[alpha].topics.push('Rust');rawStep('boardTopics');await saved(alpha,'P5-kanban-multiselect-edit');await c.screenshot('properties-05-kanban');
 
   // P6: derived fields have values, but no edit inputs or durable note writes.
   for(const layout of ['table','cards','list','kanban']){
-    await view(c,layout);await visible(c,property(layout,beta,'peerCount'),'1');
+    await view(c,layout);await c.ui.wait(`return document.querySelector(${esc(property(layout,beta,'peerCount'))})?.textContent.trim()==='1';`,'Exact derived count 1 in '+layout);
     for(const name of ['peerCount','incoming']){
       const selector=property(layout,beta,name);
       await c.ui.wait(`const e=document.querySelector(${esc(selector)});return e&&!e.hasAttribute('data-base-editing')&&!e.querySelector('input.metadata-input,textarea,[contenteditable="true"]');`,'Derived readonly presentation '+layout+' '+name);
     }
     c.evidence.checks.push({name:'P6-derived-readonly-control-presentation-'+layout,properties:['peerCount','incoming'],interaction:layout==='table'?'padding-pointer-and-Enter-below':'inspection-only; normal card/list values may navigate their file'});
-    if(layout==='table'){await readOnlyAttempt(c,layout,beta,'peerCount');await readOnlyAttempt(c,layout,beta,'incoming');}
+    if(layout==='table'){await readOnlyAttempt(c,layout,beta,'peerCount',expectedRaw.get(beta));await readOnlyAttempt(c,layout,beta,'incoming',expectedRaw.get(beta));}
   }
   await view(c,'table');await visible(c,property('table',alpha,'blurb'),'Cards text 🌱');await visible(c,property('table',alpha,'priority'),'High');await visible(c,property('table',alpha,'status'),'Complete');
-  for(const file of [alpha,beta]){await saved(file,'P7-final-exact-properties-'+file);snapshots.set(file,await c.read(file));}
-  snapshots.set('Properties.yaml',await c.read('Properties.yaml'));
-  const base=await c.read('Properties.base');assert.equal(c.yaml.parse(base).fixtureSentinel,'preserve-property-campaign');assert.match(base,/# Supplemental property interaction fixture/);
+  for(const file of [alpha,beta])await saved(file,'P7-final-exact-properties-'+file);
+  for(const [file,source]of expectedRaw)await c.saved(file,current=>assert.equal(current,source),'P7-independent-full-source-oracle-'+file);
   await c.quit('P7-normal-quit-after-property-edits');
   // Offline oracles run after normal process termination, never by an in-app hook.
-  for(const [file,source]of snapshots)assert.equal(await c.read(file),source,'Exact bytes after normal quit: '+file);
-  c.evidence.checks.push({name:'P7-offline-note-and-registry-byte-oracle',files:[...snapshots.keys()]});
+  for(const [file,source]of expectedRaw)assert.equal(await c.read(file),source,'Exact bytes after normal quit: '+file);
+  c.evidence.checks.push({name:'P7-offline-note-and-registry-byte-oracle',files:[...expectedRaw.keys()]});
   await c.launch('supplemental-properties-restart');await c.ui.openFile('Properties.base');await c.ui.idle();await view(c,'table');
   await visible(c,property('table',alpha,'blurb'),'Cards text 🌱');await visible(c,property('table',alpha,'topics'),'Picker topic');await visible(c,property('table',alpha,'status'),'Complete');
-  for(const [file,source]of snapshots)await c.saved(file,current=>assert.equal(current,source),'P7-restart-exact-bytes-'+file);
+  for(const [file,source]of expectedRaw)await c.saved(file,current=>assert.equal(current,source),'P7-restart-exact-bytes-'+file);
   await c.screenshot('properties-06-restart');await c.quit('P7-normal-quit-after-restart');
 }
