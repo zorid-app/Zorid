@@ -76,9 +76,15 @@ async function closeSplit(c) {
 async function sharedBodyAndHistory(c) {
   await open(c, 'Safety.base'); await c.ui.command('Split right');
   await c.ui.openFile('A.md'); await waitNote(c, 'A');
-  const before = await c.read('A.md'), appended = '\nShared body draft 😀\n';
-  await c.ui.click(editor); await c.ui.key('End', {modifiers: MOD.meta}); await c.cdp.call('Input.insertText', {text: appended});
-  c.evidence.actions.push({action: 'native-editor-input', scenario: 'shared-body-before-property-save', text: appended});
+  const before = await c.read('A.md'), marker = 'Shared body draft 😀', appended = '\n' + marker;
+  await c.ui.click(editor); await c.ui.key('ArrowDown', {modifiers: MOD.meta});
+  const beforeCaret = await c.ui.dom(`const host=document.querySelector(${JSON.stringify(editor)}),lines=host?[...host.querySelectorAll('.cm-line')]:[],last=lines.at(-1),selection=document.getSelection(),lastIndex=last?.parentNode===host?[...host.childNodes].indexOf(last):-1;return {collapsed:selection?.isCollapsed,lastText:last?.textContent,lineCount:lines.length,atLast:!!(last&&selection?.anchorNode&&(last.contains(selection.anchorNode)||(selection.anchorNode===host&&lastIndex>=0&&selection.anchorOffset>=lastIndex)))};`);
+  assert.equal(beforeCaret.collapsed, true); assert.equal(beforeCaret.lastText, ''); assert.equal(beforeCaret.atLast, true, 'Actual keyboard caret is at the original terminal empty line');
+  await c.ui.key('Enter'); await c.cdp.call('Input.insertText', {text: marker});
+  const afterCaret = await c.ui.dom(`const host=document.querySelector(${JSON.stringify(editor)}),lines=host?[...host.querySelectorAll('.cm-line')]:[],last=lines.at(-1),selection=document.getSelection();let prefix=null;if(last&&selection?.anchorNode&&(last.contains(selection.anchorNode)||selection.anchorNode===host)){const range=document.createRange();range.selectNodeContents(last);range.setEnd(selection.anchorNode,selection.anchorOffset);prefix=range.toString();}return {collapsed:selection?.isCollapsed,lineCount:lines.length,tail:lines.slice(-3).map(line=>line.textContent),prefix};`);
+  assert.equal(afterCaret.collapsed, true); assert.equal(afterCaret.lineCount, beforeCaret.lineCount + 1);
+  assert.deepEqual(afterCaret.tail, ['Body A sentinel', '', marker], 'Actual Enter preserves the intended blank line before the marker'); assert.equal(afterCaret.prefix, marker, 'Native caret follows the entire single-line marker');
+  c.evidence.actions.push({action: 'native-editor-input', scenario: 'shared-body-before-property-save', key: 'Enter', text: marker, beforeCaret, afterCaret});
   assert.equal(await c.read('A.md'), before, 'Shared-buffer body is still unsaved when Base editing starts');
   // Hit the other pane's production cell without navigating/closing the note.
   const cell = `${basePane} ${c.ui.cell('A.md', 'note.score')}`;

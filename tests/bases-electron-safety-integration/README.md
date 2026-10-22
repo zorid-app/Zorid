@@ -34,7 +34,7 @@ quit, using the same guarded runner lifecycle as the main journey.
 
 | Name | Actual actions | Required result |
 | --- | --- | --- |
-| `shared-dirty-body-and-property-commit` | Split Base, open A in ordinary editor, append body text, edit score from the other pane. | Disk still contains original bytes immediately before the Base property commit, proving actual overlap; then exact appended body, unrelated fields and score9 save together. If native autosave wins the precondition, fail rather than call it dirty-buffer coverage. |
+| `shared-dirty-body-and-property-commit` | Split Base, open A in ordinary editor, use Cmd+ArrowDown with passive native caret proof at the final empty line, press actual Enter and type a single-line marker, then edit score from the other pane. | Passive terminal-line/caret receipts must show the independently intended blank line and marker before any Base mutation. Disk still contains original bytes immediately before the Base property commit, proving actual overlap; then the independently constructed whole body (original + LF + marker), unrelated fields and score9 save together. If native autosave wins the precondition, fail rather than call it dirty-buffer coverage. |
 | `editor-undo-owns-body-only` / redo | Undo/redo in ordinary CodeMirror after the Base edit. | Only appended body reverses; Base score9 survives; redo restores exact previously saved bytes. |
 | `base-undo-preserves-unrelated-external-content` | External writer changes an unrelated field/body; Base undo/redo. | Score alone reverses/restores; external body and unrelated value survive exactly. |
 | `conditional-undo-touched-property` | External writer changes score; invoke Base undo. | Visible touched-property rejection and exact external bytes unchanged. |
@@ -78,3 +78,16 @@ campaign; there are no silent skips or conditional acceptance branches.
   Obsidian screenshot acceptance. Those remain independent required scenarios.
 - No mobile, sync, crash/power-loss, large-vault/performance or main integration
   acceptance follows from this campaign.
+
+## Safety001 execution correction
+
+Actual frozen `a11e0491` safety001 stopped at its first body oracle (15 actions,
+zero completed durable checks); all later phases remained unexecuted. Its
+multiline CDP `Input.insertText` recipe expected a blank line that was absent
+from saved source, but did not capture the native caret or pre-Base terminal DOM,
+so that receipt cannot attribute the difference to insertion or property saving.
+The source setup now uses real Cmd+ArrowDown and Enter plus single-line insertion,
+records passive collapsed-caret/terminal-line receipts before the Base command,
+and keeps an independently constructed exact whole-body oracle. This is an input
+recipe correction, not normalization to observed saved bytes or a product pass.
+No later execution is implied.
