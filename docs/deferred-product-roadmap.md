@@ -9,6 +9,18 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Named C2 seam ownership: `bases_inline_core` may edit
+`src/ui/base-embed-sessions.ts` and the minimal inline-host forwarding/callback
+in `src/ui/workspace.ts`, plus focused tests. `src/editor/live-bases.ts` is the
+actual renderer path; prefer no edit if exact own-save acknowledgement suffices.
+The optional manager callback must run only after successful durable flush and
+before peer editor text publication, validating host identity/incarnation,
+original fence position/shell and byte-identical surrounding content. It may
+advance only that retained entry's exact inline request, preserving the existing
+session/selection across its own clean remount. Foreign/stale/external edits,
+failed flush and retry remain guarded; no generic source-key relaxation or DOM
+selection replay. No other worker owns this Workspace seam.
+
 Browser008 is **terminal1**: all9 original groups now pass, including the strict
 30-diagnostic malformed-rollup/restore case and retained-pin/restart sequence.
 First Q3 group fails only at its empty overall-summary field expectation;
