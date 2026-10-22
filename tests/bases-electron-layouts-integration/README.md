@@ -34,7 +34,7 @@ positive operation happen.
 | Cards/List group collapse | Visible path sequence changes from Alpha/Gamma/Beta/Delta to Beta/Delta and back; `aria-expanded`; all five original files stay byte-identical. |
 | All layouts modifier/middle opening | Exactly one new active tab in the same pane; original tab IDs/order and Base tab survive; exact note title; no vault bytes change. |
 | File context actions | Exact native-host file menu labels/order; Open in new tab obeys the identity oracle; Bookmark persists and changes its action to Remove bookmark; vault bytes unchanged. |
-| Cards/Kanban file drag | Actual native payload has exactly one `text/plain` value `[[Items/Alpha]]`; cancellation writes nothing. No external receiving-app/Finder claim. |
+| All layouts file drag | Actual native payload has exactly one `text/plain` value `[[Items/Alpha]]`; List begins from its actual filename link. Cancellation writes nothing. No external receiving-app/Finder claim. |
 | Column insertion/cancellation/reorder | Visible column positions and insertion slot change before any save; actual Escape removes the drag state and preserves original config; completed drag saves exact Done/Todo/Later ordering. Cleanup `dragCancel` cannot satisfy the Escape assertion. |
 | Sorted insertion/draft ownership | Alt-arrow in a real number draft retains exact input/focus and does not mutate disk; Escape cancels it; moving Gamma gives exact Beta/Gamma/Delta destination ordering and changes only Gamma's status bytes. |
 | Failed move/recovery | Owned Items directory is temporarily mode0555. Actual save failure leaves original bytes and rolls visual card back; normal recovery storage retains the exact desired transformed draft. Permissions are always restored; normal UI navigation retries and commits exact intended status/body. This is an explicit negative fixture, not a positive filesystem edit or an atomicity claim. |
@@ -52,15 +52,15 @@ There are no runtime soft-skips or fallback controller mutations.
   layout hover callback. Reference modifier/delay research and a named lifecycle
   owner must land before positive hover-preview acceptance can be added. Absence
   of a preview is never counted as success.
-- `LAYOUT-LIST-DRAG-001`: List does not route file dragging through the shared
-  Workspace callback. Its ordinary anchor's browser document URL is not accepted
-  as a correct Markdown file-drag payload. This campaign does not disguise that
-  source gap as a passing arbitrary-payload observation.
-
-Both remain in `result.json.layoutScope.unresolved` even if all nine authored
+This remains in `result.json.layoutScope.unresolved` even if all nine authored
 cases pass. Rich property widgets belong to the properties campaign; typed/null/
 folder moves belong to the session campaign. Full Obsidian screenshot comparison,
 OS foreground behavior, mobile, sync and performance remain separate acceptance.
+
+The List file-drag source hook (`bfba7c3f` plus `d42520a1`) must be composed before
+running this revision. A browser document URL fails the same exact Markdown
+payload oracle used by Cards/Kanban; source tests do not establish actual native
+List drag acceptance.
 
 The permission-negative case requires the normal non-root user filesystem
 semantics. A failure to produce the specified error/recovery draft fails the

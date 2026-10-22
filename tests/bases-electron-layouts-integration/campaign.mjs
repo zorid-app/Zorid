@@ -34,7 +34,6 @@ export async function journey(c) {
   c.evidence.layoutCases = [];
   c.evidence.layoutScope = {unresolved: [
     {id: 'LAYOUT-HOVER-001', state: 'source hook absent at authoring baseline', reason: 'No positive hover acceptance is claimed until the reference-backed lifecycle helper is integrated.'},
-    {id: 'LAYOUT-LIST-DRAG-001', state: 'source hook absent at authoring baseline', reason: 'List file-link browser drag is not counted as a correct Markdown file-drag payload.'},
   ]};
   c.evidence.limitations.push('Source-authored supplemental campaign; its executed case list and retained result determine actual acceptance.', 'Native drag payloads are captured from Chromium; no receiving external application or OS Finder drag is exercised.', 'Formula-derived groups test per-column read-only behavior; typed/null/folder grouping belongs to the separate session campaign.', 'Matched Obsidian screenshot parity, rich property edits and hover acceptance are outside these case assertions.');
   const expected = await bytes(c);
@@ -85,9 +84,10 @@ export async function journey(c) {
     await noMutation(c, expected, 'Context opening/bookmarking does not modify vault files');
   });
 
-  await step(c, 'Cards-and-Kanban-native-file-drag-payload', async () => {
-    for (const [name, kind] of [['Grouped cards', 'cards'], ['Board', 'kanban']]) {
-      await choose(c, name); const drag = await beginDrag(c, row(kind, 'Alpha'));
+  await step(c, 'all-layouts-native-file-drag-payload', async () => {
+    for (const [name, kind] of [['Grouped cards', 'cards'], ['Grouped list', 'list'], ['Board', 'kanban']]) {
+      await choose(c, name); const source = kind === 'list' ? `${row(kind, 'Alpha')} [data-property="file.name"] a.internal-link` : row(kind, 'Alpha');
+      const drag = await beginDrag(c, source);
       try { assertWikiPayload(drag.data, '[[Items/Alpha]]'); await capture(c, kind + '-native-file-drag'); }
       finally { await drag.cleanup(); }
     }
