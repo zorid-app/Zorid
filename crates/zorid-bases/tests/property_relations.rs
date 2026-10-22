@@ -900,7 +900,7 @@ views:
         BaseValue::Date { .. }
     ));
     assert!(
-        matches!(&first.edit_values["note.nested"], BaseValue::List {value} if matches!(&value[0], BaseValue::Object {value} if matches!(&value["author"], BaseValue::String {value} if value == "[[../Authors/Grace]]")))
+        matches!(&first.edit_values["note.nested"], BaseValue::List {value} if matches!(&value[0], BaseValue::Object {value} if value.iter().any(|(key, value)| key == "author" && matches!(value, BaseValue::String {value} if value == "[[../Authors/Grace]]"))))
     );
     assert!(
         matches!(&result.summaries["file"], BaseValue::List {value} if value.contains(&BaseValue::String {value:"Ada".into()}))

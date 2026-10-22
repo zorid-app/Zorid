@@ -2297,7 +2297,7 @@ fn summarize_rows(
                         Ok(false)
                     }
                     BaseValue::Object { value } => {
-                        for value in value.values() {
+                        for (_, value) in value {
                             if has_file(value, check)? {
                                 return Ok(true);
                             }
@@ -2347,7 +2347,10 @@ fn summarize_rows(
                             return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
                         }
                         if work > remaining {
-                            return Err(budget("Summary file context exceeds query work budget"));
+                            return Err(ExpressionDiagnostic::new(
+                                "budget",
+                                "Summary file context exceeds query work budget",
+                            ));
                         }
                         Ok(())
                     },
