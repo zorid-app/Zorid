@@ -11,7 +11,8 @@ import { createBaseCardsView } from './cards-view.ts';
 import type { BaseCardsViewOptions } from './cards-view.ts';
 import { createBaseListView } from './list-view.ts';
 import { createBaseKanbanView } from './kanban-view.ts';
-import type { BaseQueryOptions, BaseQueryResult } from './query.ts';
+import { normalizeBaseProperty } from './query.ts';
+import type { BaseQueryOptions, BaseQueryResult, BaseQueryGroup } from './query.ts';
 import type { Vault } from '../core/vault.ts';
 import type { NoteBuffer } from '../ui/note-buffer.ts';
 import { exportBaseResults } from './export.ts';
@@ -577,6 +578,17 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         case 'list': mounted = createBaseListView(content, shared); break;
         case 'kanban': mounted = createBaseKanbanView(content, { ...shared, loadThumbnail: options.loadThumbnail, onError: report, onPresentationError: report,
           readOnly: !writable, showColumnControls: false,
+          isGroupWritable: (group: BaseQueryGroup) => {
+            const active = mountedResult ?? result, grouping = active.view.groupBy;
+            if (!grouping || typeof grouping !== 'object' || Array.isArray(grouping) || !('property' in grouping) || typeof grouping.property !== 'string') return false;
+            const property = normalizeBaseProperty(grouping.property);
+            if (property === 'file.folder') return group.key?.type === 'string';
+            if (!property.startsWith('note.')) return false;
+            try { assertPropertyWritable(property); } catch { return false; }
+            if (active.shared === undefined) return true;
+            const saved = typeof group.sharedKeyId === 'string' && (active.groups.find(candidate => candidate.sharedKeyId === group.sharedKeyId) ?? active.groupOptions.find(candidate => candidate.listed && candidate.sharedKeyId === group.sharedKeyId));
+            return !!saved && 'editKey' in saved && saved.editKey !== undefined;
+          },
           ...(moveEnabled ? { requestMove: request => track(() => { assertPropertyWritable(request.property); return actions.requestMove(request); }) } : {}),
           ...(writable ? { requestGroupOrder: request => track(() => actions.requestGroupOrder(request)), createItem: request => track(() => { if (request.version !== controller.state.version) throw new Error('The base result is stale'); return createItem(actions.creationGroup(request), (request as typeof request & { anchor?: HTMLElement }).anchor ?? content); }) } : {}),
         }); break;
