@@ -213,3 +213,8 @@ test('shared actual group orderKey is used when option metadata is absent',async
   f.handle.update({...f.result,view:{...f.result.view,groupOrder:undefined},groupOptions:[]});assert.equal(await f.handle.hide(f.result.groups[0].key!),true);assert.deepEqual(f.requests[0].order,['raw group key']);
  }finally{f.cleanup();}
 });
+
+test('shared option without an order key can use its exact opaque actual group metadata',async()=>{
+ const f=sharedSetup([{key:value('Ready'),orderKey:'raw actual group'}]);
+ try{f.handle.update({...f.result,groupOptions:f.result.groupOptions.map(group=>({...group,orderKey:undefined}))});f.row(0).click();await settle();assert.deepEqual(f.requests[0].order,['raw actual group']);}finally{f.cleanup();}
+});

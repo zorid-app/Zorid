@@ -77,7 +77,7 @@ export function createBaseKanbanColumns(container: HTMLElement, options: BaseKan
         const actual = result.groups.find(group => group.sharedKeyId === option.sharedKeyId);
         const index = option.listed ? ordinal++ : undefined;
         return { key: actual?.key ?? option.key, sharedKeyId: option.sharedKeyId, count: option.count, listed: option.listed,
-          ...coreOrderKey(Object.hasOwn(option,'orderKey')?option:actual??option),
+          ...coreOrderKey(actual??option),...coreOrderKey(option),
           ...(order && index !== undefined ? { stored: order[index] } : {}) };
       }) : result.groups.filter(group => group.key !== null).map(group => {
         if (typeof group.sharedKeyId !== 'string') throw new Error('Shared group identity is unavailable.');

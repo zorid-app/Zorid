@@ -52,9 +52,9 @@ function sharedFixture(entries:readonly {key:BaseExpressionValue;orderKey?:BaseV
  const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
  const baseline=executeBaseQuery(BaseDocument.parse('views: [{type: table,name: A,groupBy: {property: formula.project,direction: ASC},groupOrder: []}]'),{version:3,files:[]});
  const result={...baseline,shared:{} as any,view:{...baseline.view,groupOrder:order},groups:entries.map((entry,index)=>({...entry,sharedKeyId:`opaque:${index}`,rows:[]})),groupOptions:entries.map((entry,index)=>({...entry,sharedKeyId:`opaque:${index}`,count:0,listed:entry.listed??false}))} as BaseQueryResult;
- const errors:string[]=[];let changes=0;
- const groups=createBaseManualGroups(doc,doc.querySelector('main')!,{result,property:()=> 'formula.project',changed(){changes++;},error(message){errors.push(message);}});
- return{dom,doc,result,groups,errors,changes:()=>changes,row(index:number){return doc.querySelectorAll<HTMLElement>('[data-group-id]')[index];},cleanup(){groups.destroy();dom.window.close();}};
+ const errors:string[]=[];let changes=0,property='formula.project';
+ const groups=createBaseManualGroups(doc,doc.querySelector('main')!,{result,property:()=>property,changed(){changes++;},error(message){errors.push(message);}});
+ return{dom,doc,result,groups,errors,changes:()=>changes,setProperty(next:string){property=next;},row(index:number){return doc.querySelectorAll<HTMLElement>('[data-group-id]')[index];},cleanup(){groups.destroy();dom.window.close();}};
 }
 
 test('manual toolbar groups use core ordering keys for readonly wiki/date/whole-list/object/null groups',()=>{
@@ -89,5 +89,14 @@ test('missing core orderKey stays readonly through Show all, keyboard, drag and 
   f.doc.querySelector<HTMLButtonElement>('[aria-label="Show all groups"]')!.click();assert.deepEqual(f.groups.read(),['ready raw']);
   f.doc.querySelector<HTMLButtonElement>('[aria-label="Add group"]')!.click();const input=f.doc.querySelector<HTMLInputElement>('[aria-label="Group name"]')!;input.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(readonly().disabled,true);
   assert.deepEqual(f.groups.read(),['ready raw']);
+ }finally{f.cleanup();}
+});
+
+test('changing the grouping property retires its remembered typed manual order',()=>{
+ const key:BaseExpressionValue={type:'namespace',name:'Old project',get(){throw Error('must remain inert');}};
+ const f=sharedFixture([{key,listed:true,orderKey:'[[/Old.md]]'}],['old alias']);
+ try{
+  f.groups.setManual(false);f.setProperty('formula.other');f.groups.update(f.result,false);f.groups.setManual(true);assert.deepEqual(f.groups.read(),[]);
+  f.groups.setManual(false);f.groups.update({...f.result,version:4,view:{...f.result.view,groupBy:{property:'formula.other',direction:'ASC'},groupOrder:undefined}},false);f.groups.setManual(true);assert.deepEqual(f.groups.read(),[]);
  }finally{f.cleanup();}
 });
