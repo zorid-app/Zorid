@@ -115,6 +115,9 @@ async function exports1005(c){
     await c.ui.button('Results',active);await c.ui.button('Copy',dialog('Results'));
     await until(()=>clipboard.recordOwnedClipboard(expectedTSV()),20000);const plain=await clipboard.readPlainText();
     c.evidence.checks.push({name:'actual-system-clipboard-tsv-1005-complete-ordered-rows',...assertLargeTSV(plain),sha256:createHash('sha256').update(plain).digest('hex')});
+    // Native clipboard receipt can precede the toolbar's async command
+    // continuation. Observe that continuation before reopening this toggle.
+    await c.ui.wait(`return !document.querySelector(${JSON.stringify(dialog('Results'))});`,'Acknowledged Copy closes Results before the CSV menu is reopened');
   }finally{await clipboard.restore();}
   const directory=await c.prepareDownloads();await c.ui.button('Results',active);await c.ui.button('Export CSV',dialog('Results'));
   const source=await until(async()=>{const names=(await fs.readdir(directory)).filter(file=>file.endsWith('.csv'));assert.equal(names.length,1);return fs.readFile(path.join(directory,names[0]),'utf8');},30000);
