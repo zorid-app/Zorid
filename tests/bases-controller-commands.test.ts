@@ -57,6 +57,23 @@ test('one atomic configuration edit changes root and view and refuses unrelated 
   } finally { await f.stop(); }
 });
 
+test('summary edit and removal each persist one guarded configuration transaction across all views', async () => {
+  class Adapter extends MemoryAdapter { writes = 0; override async write(path: string, text: string) { if (path === 'Work.base') this.writes++; return super.write(path, text); } }
+  const source = base.replace('filters:', 'summaries: {Total: values.sum()}\nfilters:').replace('pluginView: {keep: true}', 'pluginView: {keep: true}\n    summaries: {score: Total}').replace('name: Second', 'name: Second\n    summaries: {score: Total}');
+  const adapter = new Adapter({ 'Work.base': source, 'One.md': note }), f = await fixture(adapter);
+  try {
+    const version = f.controller.state.version;
+    await f.controller.editSummary(version, 'Total', 'Grand total', 'values.sum().round(2)');
+    assert.equal(adapter.writes, 1);
+    const parsed = BaseDocument.parse(await f.vault.read('Work.base'));
+    assert.deepEqual(parsed.getRoot('summaries'), { 'Grand total': 'values.sum().round(2)' });
+    assert.deepEqual(parsed.views.map(view => view.summaries), [{ score: 'Grand total' }, { score: 'Grand total' }]);
+    await assert.rejects(f.controller.removeSummary(version, 'Grand total'), /stale/); assert.equal(adapter.writes, 1);
+    await f.controller.removeSummary(f.controller.state.version, 'Grand total'); assert.equal(adapter.writes, 2);
+    assert.deepEqual(BaseDocument.parse(await f.vault.read('Work.base')).views.map(view => view.summaries), [{}, {}]);
+  } finally { await f.stop(); }
+});
+
 test('host-flushed failed add-view retry acknowledges original saved selection without replay', async () => {
   class Adapter extends MemoryAdapter { fail = false; override async write(path: string, text: string) { if (this.fail && path === 'Work.base') throw new Error('disk full'); return super.write(path, text); } }
   const adapter = new Adapter({ 'Work.base': base, 'One.md': note }), f = await fixture(adapter, 'First');

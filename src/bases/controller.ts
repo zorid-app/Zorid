@@ -803,6 +803,14 @@ export class BaseController {
     });
   }
 
+  async editSummary(version: number, originalName: string | undefined, name: string, expression: string): Promise<void> {
+    await this.changeConfiguration(version, document => { document.editSummary(originalName, name, expression); return this.selectedViewIndex; });
+  }
+
+  async removeSummary(version: number, name: string): Promise<void> {
+    await this.changeConfiguration(version, document => { document.removeSummary(name); return this.selectedViewIndex; });
+  }
+
   dispose(): void {
     this.disposed = true; this.clearWake(); this.epoch++; this.sharedQueries.dispose();
     for (const runner of this.summaryQueries) runner.dispose(); this.summaryQueries.clear();

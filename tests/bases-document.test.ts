@@ -246,3 +246,33 @@ test('formula rename resolves original exact-case siblings before case-insensiti
   assert.equal(base.views[0].image, 'formula.renamed');
   assert.deepEqual(base.views[0].order, ['formula.renamed', 'formula.OLD', 'formula.renamed']);
 });
+
+test('summary rename updates all view selections and preserves property keys, literals and custom configuration', () => {
+  const base = BaseDocument.parse('# keep\nsummaries:\n  Total: "values.sum()" # total comment\n  Other: values.length\ncustom: Total\nviews:\n  - type: table\n    name: First\n    summaries: {score: Total, Total: Other}\n    custom: Total\n  - type: table\n    name: Second\n    summaries: {rating: Total, score: Other}\n');
+  base.editSummary('Total', 'Grand total', 'values.sum().round(2)');
+  assert.deepEqual(base.getRoot('summaries'), { 'Grand total': 'values.sum().round(2)', Other: 'values.length' });
+  assert.deepEqual(base.views.map(view => view.summaries), [{ score: 'Grand total', Total: 'Other' }, { rating: 'Grand total', score: 'Other' }]);
+  assert.equal(base.getRoot('custom'), 'Total'); assert.equal(base.views[0].custom, 'Total');
+  assert.match(base.toString(), /# total comment/); assert.match(base.toString(), /# keep/);
+  const before = base.toString();
+  assert.throws(() => base.editSummary('Grand total', 'Other', 'new'), /already exists/);
+  assert.throws(() => base.editSummary(undefined, 'Other', 'new'), /already exists/);
+  assert.throws(() => base.editSummary('Grand total', ' ', 'new'), /nonempty/); assert.equal(base.toString(), before);
+});
+
+test('summary draft rename and deletion work before a root definition exists', () => {
+  const base = BaseDocument.parse('views:\n  - {type: table, name: First, summaries: {score: new summary}}\n  - {type: table, name: Second, summaries: {rating: new summary, other: Sum}}\n');
+  base.editSummary('new summary', 'Count books', '');
+  assert.deepEqual(base.getRoot('summaries'), { 'Count books': '' });
+  assert.deepEqual(base.views[1].summaries, { rating: 'Count books', other: 'Sum' });
+  base.removeSummary('Count books'); assert.deepEqual(base.getRoot('summaries'), {});
+  assert.deepEqual(base.views[0].summaries, {}); assert.deepEqual(base.views[1].summaries, { other: 'Sum' });
+  base.updateView(0, { summaries: { score: 'never defined' } }); base.removeSummary('never defined'); assert.deepEqual(base.views[0].summaries, {});
+});
+
+test('malformed summary selections fail an entire rename or deletion without publishing root edits', () => {
+  const source = 'summaries: {Total: values.sum()}\nviews:\n  - {type: table, name: First, summaries: {score: Total}}\n  - {type: table, name: Second, summaries: invalid}\n';
+  const base = BaseDocument.parse(source);
+  assert.throws(() => base.editSummary('Total', 'Renamed', 'values.length'), /editable mapping/); assert.equal(base.toString(), source);
+  assert.throws(() => base.removeSummary('Total'), /editable mapping/); assert.equal(base.toString(), source);
+});

@@ -328,6 +328,49 @@ export class BaseDocument {
     });
   }
 
+  /** Summary names are referenced by view values, not property keys. A new
+   * summary may already be selected before its first definition is persisted. */
+  editSummary(originalName: string | undefined, name: string, expression: string): void {
+    if (typeof name !== 'string' || !name.trim()) throw new BaseDocumentError('Summary name must be nonempty');
+    if (originalName !== undefined && (typeof originalName !== 'string' || !originalName.trim())) throw new BaseDocumentError('Original summary name must be nonempty');
+    if (typeof expression !== 'string') throw new BaseDocumentError('Summary expression must be a string');
+    this.edit(doc => {
+      if (!doc.has('summaries')) doc.set('summaries', doc.createNode({}));
+      const summaries = doc.get('summaries', true);
+      if (!isMap(summaries)) throw new BaseDocumentError('Base summaries must be a mapping');
+      if (originalName !== name && summaries.has(name)) throw new BaseDocumentError('A summary with this name already exists');
+      if (originalName !== undefined && originalName !== name) {
+        const pair = summaries.items.find(item => isScalar(item.key) && item.key.value === originalName);
+        if (pair && isScalar(pair.key)) pair.key.value = name;
+        for (let index = 0; index < this.viewList(doc).items.length; index++) {
+          const selections = this.viewAt(doc, index).get('summaries', true);
+          if (selections === undefined) continue;
+          if (!isMap(selections)) throw new BaseDocumentError('View summaries must be an editable mapping');
+          for (const selection of selections.items) if (isScalar(selection.value) && selection.value.value === originalName) selection.value.value = name;
+        }
+      }
+      summaries.set(name, expression);
+    });
+  }
+
+  /** Remove matching selections across every view even for an undefined draft. */
+  removeSummary(name: string): void {
+    if (typeof name !== 'string' || !name.trim()) throw new BaseDocumentError('Summary name must be nonempty');
+    this.edit(doc => {
+      const summaries = doc.get('summaries', true);
+      if (summaries !== undefined) {
+        if (!isMap(summaries)) throw new BaseDocumentError('Base summaries must be a mapping');
+        summaries.delete(name);
+      }
+      for (let index = 0; index < this.viewList(doc).items.length; index++) {
+        const selections = this.viewAt(doc, index).get('summaries', true);
+        if (selections === undefined) continue;
+        if (!isMap(selections)) throw new BaseDocumentError('View summaries must be an editable mapping');
+        selections.items = selections.items.filter(selection => !isScalar(selection.value) || selection.value.value !== name);
+      }
+    });
+  }
+
   /** Rename stored formula identity and its statically addressable references. */
   renameFormula(from: string, to: string): void {
     if (typeof from !== 'string' || typeof to !== 'string' || !to.trim()) throw new BaseDocumentError('Formula names must be nonempty strings');
