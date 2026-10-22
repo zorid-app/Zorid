@@ -3,7 +3,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {delay} from '../tasks-electron-integration/cdp.mjs';
 import {MOD} from '../bases-electron-integration/ui.mjs';
-import {fixtureFiles, names} from './fixtures.mjs';
+import {fixtureFiles, names, hoverTextFiles} from './fixtures.mjs';
+import {hoverJourney} from './hover.mjs';
 import {beginDrag, assertWikiPayload} from './drag.mjs';
 export {fixtureFiles};
 export const vaultName = 'LayoutInteractions';
@@ -11,7 +12,7 @@ const active = '.pane.is-active .bases-session';
 const panel = name => `[role="dialog"][aria-label=${JSON.stringify(name)}]`;
 const row = (kind, name) => `${active} .bases-${kind}-${kind === 'cards' ? 'item' : kind === 'list' ? 'item' : 'card'}[data-path=${JSON.stringify('Items/' + name + '.md')}]`;
 const column = label => `${active} .bases-kanban-column:has(.bases-kanban-column-body[aria-label=${JSON.stringify(label)}])`;
-const files = ['Layouts.base', ...names.map(name => `Items/${name}.md`)];
+const files = ['Layouts.base', ...names.map(name => `Items/${name}.md`), ...hoverTextFiles.keys()];
 const selectedView = c => c.ui.dom(`return document.querySelector('${active} button[aria-label="Views"]')?.textContent;`);
 async function choose(c, name) { await c.ui.button('Views', active); await c.ui.button('Open view ' + name, panel('Views')); await c.ui.wait(`return document.querySelector('${active} button[aria-label="Views"]')?.textContent===${JSON.stringify(name)};`, 'Actual selected layout ' + name); await c.ui.idle(); }
 async function bytes(c) { return Object.fromEntries(await Promise.all(files.map(async file => [file, await c.read(file)]))); }
@@ -32,10 +33,8 @@ async function capture(c, name) { await c.screenshot(name); }
 
 export async function journey(c) {
   c.evidence.layoutCases = [];
-  c.evidence.layoutScope = {unresolved: [
-    {id: 'LAYOUT-HOVER-001', state: 'source hook absent at authoring baseline', reason: 'No positive hover acceptance is claimed until the reference-backed lifecycle helper is integrated.'},
-  ]};
-  c.evidence.limitations.push('Source-authored supplemental campaign; its executed case list and retained result determine actual acceptance.', 'Native drag payloads are captured from Chromium; no receiving external application or OS Finder drag is exercised.', 'Formula-derived groups test per-column read-only behavior; typed/null/folder grouping belongs to the separate session campaign.', 'Matched Obsidian screenshot parity, rich property edits and hover acceptance are outside these case assertions.');
+  c.evidence.layoutScope = {unresolved: []};
+  c.evidence.limitations.push('Source-authored supplemental campaign; its executed case list and retained result determine actual acceptance.', 'Native drag payloads are captured from Chromium; no receiving external application or OS Finder drag is exercised.', 'Formula-derived groups test per-column read-only behavior; typed/null/folder grouping belongs to the separate session campaign.', 'Matched Obsidian font/height pixel parity and rich property edits are outside these case assertions.', 'Hover physical-key-after-entry and physical key-release behavior are Zorid-only checks: the corresponding reference protocol phase did not reach a terminal assertion.');
   const expected = await bytes(c);
   await c.launch('supplemental-layout-interactions');
   await c.cdp.call('Emulation.setDeviceMetricsOverride', {width: 1360, height: 900, deviceScaleFactor: 1, mobile: false});
@@ -168,6 +167,8 @@ export async function journey(c) {
     assert.ok(ax.nodes.some(node => !node.ignored && node.role?.value === 'link' && node.name?.value === 'Alpha'), 'File link has the exact accessible label');
     c.evidence.checks.push({name: 'real-keyboard-focus-and-AX-link-label', focused, ax}); await noMutation(c, expected, 'Appearance and traversal leave vault bytes unchanged');
   });
+
+  await hoverJourney(c, expected, step); await noMutation(c, expected, 'Hover changes only its explicitly edited target note');
 
   await c.quit('supplemental-layouts-normal-quit');
   await c.launch('supplemental-layouts-restart'); await c.ui.openFile('Layouts.base'); await c.ui.idle(); await choose(c, 'Board');

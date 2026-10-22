@@ -40,22 +40,25 @@ positive operation happen.
 | Failed move/recovery | Owned Items directory is temporarily mode0555. Actual save failure leaves original bytes and rolls visual card back; normal recovery storage retains the exact desired transformed draft. Permissions are always restored; normal UI navigation retries and commits exact intended status/body. This is an explicit negative fixture, not a positive filesystem edit or an atomicity claim. |
 | Computed-group read-only | Root/group labels are exact; all column New controls are disabled and four cards are non-draggable; no source changes. No typed/null/folder grouping claim. |
 | Theme/scale/keyboard | Exact light1180×820DPR1 and dark960×740DPR2 environment; four positive-sized cards stay inside container bounds; Base tab identity remains; actual Tab reaches Alpha's file link and Chromium AX reports role link/name Alpha. Screenshots are observations, not pixel-parity approval. |
+| Reference-fixture hover | Exact authored `Hover.base`/`HoverCases/HoverTarget.md` from owned reference002 at1024×800DPR2dark; ordinary hover waits750ms with zero popups; trusted modifier-bearing mouse entry opens exactly one popup, default452px width/left alignment/10px gap, no autofocus; modifier-flag removal and pointer entry retain it; collapsed Properties/Open link controls and rendered text are present. Clicking its paragraph enters a focused editable body. Literal source replacement, normal navigation flush and exact file readback prove the durable edit; the normal note editor shows the same change. Clean outside click and parent navigation dismiss. No font or popup-height pixel oracle. |
+| Zorid key hover | Actual Meta keyDown after ordinary entry opens one popup; keyUp alone retains it. This separately labeled Zorid check makes no reference runtime-parity claim because reference002's physical-key phase timed out before a terminal observation. |
+| Binary image hover | Separate MediaHover Base opens an actual decoded1×1 PNG using a blob resource URL, with no editable text surface or preview error. Normal navigation dismisses it and exact original PNG bytes remain. This observes the loaded resource, not every bridge read or memory lease counter. |
 
 After these cases, a normal signal-free app quit/restart rechecks exact note/Base
 bytes and durable column order. The result's `layoutCases` marks each case passed
 only after its assertions finish; failures throw and later cases are unexecuted.
 There are no runtime soft-skips or fallback controller mutations.
 
-## Explicit unresolved source coverage
+## Composition and acceptance boundaries
 
-- `LAYOUT-HOVER-001`: the authoring baseline's Workspace does not supply the
-  layout hover callback. Reference modifier/delay research and a named lifecycle
-  owner must land before positive hover-preview acceptance can be added. Absence
-  of a preview is never counted as success.
-This remains in `result.json.layoutScope.unresolved` even if all nine authored
-cases pass. Rich property widgets belong to the properties campaign; typed/null/
-folder moves belong to the session campaign. Full Obsidian screenshot comparison,
-OS foreground behavior, mobile, sync and performance remain separate acceptance.
+This revision requires the reference-backed Base hover lifecycle and Workspace
+factory to be composed. All twelve authored cases fail explicitly if required
+source hooks are absent; no missing preview is counted as success. The previous
+`LAYOUT-HOVER-001` missing-source entry is removed in favor of positive assertions.
+Rich property widgets and pending property-draft close guards belong to the
+properties campaign; typed/null/folder moves belong to the session campaign.
+Full Obsidian screenshot comparison, OS foreground behavior, mobile, sync and
+performance remain separate acceptance.
 
 The List file-drag source hook (`bfba7c3f` plus `d42520a1`) must be composed before
 running this revision. A browser document URL fails the same exact Markdown
