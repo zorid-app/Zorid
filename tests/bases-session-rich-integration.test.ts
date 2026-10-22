@@ -122,3 +122,36 @@ test('view keyboard shortcuts wrap and preserve active property drafts', async (
     assert.equal(f.session.state.result?.view.name, 'Table'); assert.equal(input.value, '21'); assert.match(String(f.errors.at(-1)), /Finish or cancel/); f.key(input, 'Escape');
   } finally { await f.cleanup(); }
 });
+
+test('Add summary selects a unique empty draft, saves on name blur, and Escape returns to its chooser', async () => {
+  const f = await fixture(`summaries: {new summary: values.length}\n${summaryBase}`);
+  try {
+    f.host.querySelector<HTMLButtonElement>('[data-summary-property="note.score"]')!.click(); await until(() => !!f.dom.window.document.querySelector('.zorid-bases-summary-add'));
+    [...f.dom.window.document.querySelectorAll<HTMLButtonElement>('.zorid-bases-summary-add')].find(button => button.textContent === 'Add summary')!.click();
+    await until(() => !!f.dom.window.document.querySelector('[aria-label="Summary name"]'));
+    const configured = BaseDocument.parse(await f.vault.read('Work.base'));
+    assert.deepEqual(configured.views[0].summaries, { 'note.score': 'new summary 2' });
+    assert.deepEqual(configured.getRoot('summaries'), { 'new summary': 'values.length' }, 'untouched new draft has no root expression yet');
+    const name = f.dom.window.document.querySelector<HTMLInputElement>('[aria-label="Summary name"]')!;
+    assert.equal(name.value, 'new summary 2'); name.value = 'Discarded'; name.dispatchEvent(new f.dom.window.Event('input', { bubbles: true })); f.key(name, 'Escape'); await tick();
+    assert.equal(name.value, 'new summary 2'); assert.equal(f.dom.window.document.querySelector('[aria-label="Summary name"]'), name);
+    f.key(f.dom.window.document.querySelector('[aria-label="Summary expression"]')!, 'Escape');
+    await until(() => !!f.dom.window.document.querySelector('[aria-label="Summarize"]'));
+    assert.deepEqual(BaseDocument.parse(await f.vault.read('Work.base')).getRoot('summaries'), { 'new summary': 'values.length' }); assert.deepEqual(f.errors, []);
+  } finally { await f.cleanup(); }
+});
+
+test('a summary draft rejects an intervening configuration change and can discard its retained edits', async () => {
+  const f = await fixture();
+  try {
+    f.host.querySelector<HTMLButtonElement>('[data-summary-property="note.score"]')!.click(); await until(() => !!f.dom.window.document.querySelector('[aria-label="Edit Sum"]'));
+    f.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Edit Sum"]')!.click(); await until(() => !!f.dom.window.document.querySelector('[aria-label="Summary name"]'));
+    const expression = f.dom.window.document.querySelector<HTMLTextAreaElement>('[aria-label="Summary expression"]')!; expression.focus(); expression.value = 'values.length'; expression.dispatchEvent(new f.dom.window.Event('input', { bubbles: true }));
+    const external = BaseDocument.parse(await f.vault.read('Work.base')); external.updateRoot({ externalSetting: 'kept' }); await f.vault.modify('Work.base', external.toString()); await f.session.refresh();
+    await until(() => !!f.dom.window.document.querySelector('.bases-summary-editor [role="alert"]')?.textContent);
+    assert.match(f.dom.window.document.querySelector('.bases-summary-editor [role="alert"]')!.textContent!, /Base changed/); assert.equal(expression.value, 'values.length');
+    assert.equal((BaseDocument.parse(await f.vault.read('Work.base')).getRoot('summaries') as Record<string, string>).Sum, 'values.sum().round(2)');
+    [...f.dom.window.document.querySelectorAll<HTMLButtonElement>('.bases-summary-editor button')].find(button => button.textContent === 'Cancel changes')!.click(); await until(() => !f.dom.window.document.querySelector('[aria-label="Summary expression"]'));
+    assert.equal(BaseDocument.parse(await f.vault.read('Work.base')).getRoot('externalSetting'), 'kept');
+  } finally { await f.cleanup(); }
+});
