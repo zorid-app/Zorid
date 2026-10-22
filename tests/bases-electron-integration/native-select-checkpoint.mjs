@@ -5,6 +5,27 @@ import path from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 
+export function nativeSelectCuaMode(args,{windowMode,bootstrap,campaignPath,minimalCampaignPath,allowedCampaignPaths}){
+  const minimal=args.includes('--cua-native-select-checkpoint'),journey=args.includes('--cua-native-selects');
+  assert.ok(!(minimal&&journey),'CUA input modes are mutually exclusive');
+  if(!minimal&&!journey)return undefined;
+  assert.equal(windowMode,'visible','CUA checkpoint requires the shown owned window');
+  assert.equal(bootstrap,false,'CUA input mode cannot run the window bootstrap probe');
+  if(minimal)assert.equal(campaignPath,minimalCampaignPath,'CUA takeover is restricted to the minimal native SELECT probe');
+  else assert.ok(!campaignPath||allowedCampaignPaths.includes(campaignPath),'CUA selects require the default journey or a canonical owned campaign');
+  return minimal?'minimal':'journey';
+}
+
+export function nativeSelectCuaRequest(frame){
+  assert.equal(typeof frame.selector,'string');assert.equal(typeof frame.expectedValue,'string');
+  const options=frame.options.filter(option=>option.value===frame.expectedValue);
+  assert.equal(options.length,1,'Exact uniquely identified requested native option');assert.equal(options[0].disabled,false);
+  const {tag,matches,connected,open,focus,nativeDisabled,ariaDisabled,inert,document,value,selectedIndex}=frame;
+  return {tag,matches,connected,open,focus,nativeDisabled,ariaDisabled,inert,document,value,selectedIndex,
+    selectorSHA256:sha256(frame.selector),expectedValue:frame.expectedValue,
+    expectedOption:{value:frame.expectedValue,label:options[0].label,index:frame.options.indexOf(options[0])}};
+}
+
 export function assertSingleCuaProcess(rows,executable,pid){
   const matches=rows.filter(row=>row.command===executable||row.command.startsWith(executable+' '));
   assert.deepEqual(matches.map(row=>row.pid),[pid],'CUA executable identifies only the owned Electron main process');

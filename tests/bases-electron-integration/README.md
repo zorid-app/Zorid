@@ -56,6 +56,35 @@ still CDP automation and establishes neither OS foreground nor physical keyboard
 parity. No production activation or query policy is changed.
 The default hidden proof and cleanup behavior remain unchanged.
 
+An explicitly granted run may add `--show-window --cua-native-selects` to use
+CUA for native HTML SELECT controls. This mode is source-authored and must not be
+enabled for the full journey until the separate direct native-option probe passes.
+It is admitted only for the default heavy journey or an existing canonical owned
+campaign, and is mutually exclusive with the window bootstrap and the minimal
+probe's `--cua-native-select-checkpoint` flag. With neither flag, CDP input stays
+unchanged. Custom comboboxes continue through the existing CDP pointer branch.
+
+Each native select invocation writes a fresh numbered
+`native-select-cua-NNNN-UUID/ready.json` under the evidence directory and emits
+`CUA_NATIVE_SELECT_READY`. Its nonce binds the current exact owned app PID,
+executable/profile, one freshly observed native window and actual visible
+renderer to the requested option's value, visible label and index. The request
+exposes a selector SHA256 instead of the raw selector. Existing private action
+frames retain their ordinary diagnostic selector. The coordinator verifies the
+exact app/vault/control in CUA, opens the native menu if needed and clicks the
+actually visible requested option. Do not infer success from index arithmetic.
+
+After input, write only the ready receipt's advertised
+`{"token":"EXACT_FRESH_NONCE","action":"continue"}` to its `continueFile`.
+Every call has its own five-minute deadline; old tokens cannot release a later
+call. The signal supplies no selected value or product state. The existing exact
+DOM value readback, Apply actions, independent full-file assertions, restart and
+normal cleanup remain mandatory. No input fallback, skip, value assignment or
+synthetic DOM event is added. Record the CUA interactions separately; report a
+successful run as mixed CDP/CUA execution without claiming hardware-keyboard or
+default-CDP native-menu acceptance. The current heavy journey has two native
+color selections; its other five select calls use custom comboboxes.
+
 Offline evidence-policy checks:
 `node --test tests/bases-electron-integration/window-visibility.test.mjs`.
 They reject activation-only or wrong-window evidence but do not replace a native

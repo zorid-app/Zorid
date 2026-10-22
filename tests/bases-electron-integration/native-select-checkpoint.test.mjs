@@ -8,7 +8,26 @@ import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {JSDOM} from 'jsdom';
 import {UI} from './ui.mjs';
-import {waitForNativeSelectCua,assertSingleCuaProcess} from './native-select-checkpoint.mjs';
+import {waitForNativeSelectCua,assertSingleCuaProcess,nativeSelectCuaMode,nativeSelectCuaRequest} from './native-select-checkpoint.mjs';
+
+test('generalized CUA mode admits only explicit visible default or canonical campaign and preserves minimal restrictions',()=>{
+  const minimalCampaignPath='/owned/minimal/campaign.mjs',campaignPath='/owned/config/campaign.mjs';
+  const policy={windowMode:'visible',bootstrap:false,minimalCampaignPath,allowedCampaignPaths:[minimalCampaignPath,campaignPath]};
+  assert.equal(nativeSelectCuaMode([],policy),undefined);
+  assert.equal(nativeSelectCuaMode(['--cua-native-selects'],policy),'journey');
+  assert.equal(nativeSelectCuaMode(['--cua-native-selects'],{...policy,campaignPath}),'journey');
+  assert.equal(nativeSelectCuaMode(['--cua-native-select-checkpoint'],{...policy,campaignPath:minimalCampaignPath}),'minimal');
+  for(const [args,patch]of [[['--cua-native-selects'],{windowMode:'hidden'}],[['--cua-native-selects'],{bootstrap:true}],[['--cua-native-selects'],{campaignPath:'/unowned/campaign.mjs'}],[['--cua-native-select-checkpoint'],{campaignPath}],[['--cua-native-selects','--cua-native-select-checkpoint'],{}]])assert.throws(()=>nativeSelectCuaMode(args,{...policy,...patch}));
+});
+test('generalized ready request hashes selector and preserves the uniquely requested label/value independently of selected value',()=>{
+  const frame={selector:'select[data-path="Private fixture.md"]',expectedValue:'purple',value:'',selectedIndex:0,tag:'SELECT',matches:1,connected:true,open:true,focus:{isSelect:true,label:'Option color'},nativeDisabled:false,ariaDisabled:false,inert:false,options:[{value:'',label:'Default',disabled:false},{value:'purple',label:'Purple',disabled:false}],unrelatedPrivateData:'omit'};
+  const request=nativeSelectCuaRequest(frame);
+  assert.equal(request.selector,undefined);assert.equal(request.options,undefined);assert.equal(request.unrelatedPrivateData,undefined);assert.match(request.selectorSHA256,/^[a-f0-9]{64}$/);
+  assert.deepEqual(request.expectedOption,{value:'purple',label:'Purple',index:1});assert.equal(request.value,'');assert.equal(request.selectedIndex,0);
+  assert.throws(()=>nativeSelectCuaRequest({...frame,options:[]}),/uniquely/);
+  assert.throws(()=>nativeSelectCuaRequest({...frame,options:[frame.options[1],frame.options[1]]}),/uniquely/);
+  assert.throws(()=>nativeSelectCuaRequest({...frame,options:[{...frame.options[1],disabled:true}]}));
+});
 
 test('CUA process identity rejects a second bare executable and ignores Helper executables',()=>{
   const executable='/Applications/Electron.app/Contents/MacOS/Electron',owned={pid:12,command:executable+' main.cjs --user-data-dir=/owned'};
@@ -27,6 +46,13 @@ test('fresh nonce only resumes control flow and records immutable ready/continua
   assert.equal(f.evidence.actions.length,2);assert.equal(f.evidence.actions[0].request.expectedValue,'purple');assert.equal(f.evidence.actions[0].identity.pid,process.pid);assert.match(f.evidence.actions[0].readySHA256,/^[a-f0-9]{64}$/);assert.equal(f.evidence.actions[1].action,'native-select-cua-continued');
   assert.equal(JSON.parse(await fs.readFile(ready.readyFile,'utf8')).token,ready.token);
   assert.equal((await fs.stat(f.directory)).mode&0o777,0o700);
+});
+test('successive checkpoints retain separate files and fresh nonces; a previous continuation cannot release the next',async t=>{
+  const f=await fixture(t),receipts=[];
+  for(const number of [1,2])await waitForNativeSelectCua({...f,directory:f.directory+'-'+number,onReady(ready){receipts.push(ready);writeFileSync(ready.continueFile,JSON.stringify({token:ready.token,action:'continue'}));}});
+  assert.notEqual(receipts[0].token,receipts[1].token);assert.notEqual(receipts[0].continueFile,receipts[1].continueFile);
+  for(const ready of receipts)assert.equal(JSON.parse(await fs.readFile(ready.readyFile,'utf8')).token,ready.token);
+  await assert.rejects(waitForNativeSelectCua({...f,directory:f.directory+'-3',onReady(ready){writeFileSync(ready.continueFile,JSON.stringify({token:receipts[0].token,action:'continue'}));}}),/Fresh checkpoint nonce/);
 });
 for(const kind of ['stale nonce','product field','symlink','changed ready'])test(`checkpoint rejects ${kind} without accepting product data`,async t=>{
   const f=await fixture(t);

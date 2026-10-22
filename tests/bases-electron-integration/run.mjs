@@ -5,12 +5,12 @@ import fs from 'node:fs/promises';
 import {createReadStream} from 'node:fs';
 import path from 'node:path';
 import {spawn,execFileSync} from 'node:child_process';
-import {createHash} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createRequire} from 'node:module';
 import {CDP,delay,until} from '../tasks-electron-integration/cdp.mjs';
 import {UI} from './ui.mjs';
-import {waitForNativeSelectCua,assertSingleCuaProcess} from './native-select-checkpoint.mjs';
+import {waitForNativeSelectCua,assertSingleCuaProcess,nativeSelectCuaMode,nativeSelectCuaRequest} from './native-select-checkpoint.mjs';
 import {fixtureFiles,template} from './fixtures.mjs';
 import {journey} from './journey.mjs';
 import {CAMPAIGN_DIRECTORIES,validateFixtureName,readFixture,writeFixture,campaignClosure} from './owned-fixtures.mjs';
@@ -34,8 +34,8 @@ if(campaignPath){
 }
 const campaign=campaignPath?await import(pathToFileURL(campaignPath).href):undefined;
 if(campaign)assert.ok(typeof campaign.fixtureFiles==='function'&&typeof campaign.journey==='function','Explicit supplemental campaign exports');
-const cuaNativeSelect=process.argv.includes('--cua-native-select-checkpoint');
-if(cuaNativeSelect){assert.equal(requestedWindowMode,'visible','CUA checkpoint requires the shown owned window');assert.equal(campaignPath,path.join(path.dirname(harness),'bases-electron-native-select-integration/campaign.mjs'),'CUA takeover is restricted to the minimal native SELECT probe');assert.equal(windowBootstrapProbe,false);}
+const cuaMode=nativeSelectCuaMode(process.argv,{windowMode:requestedWindowMode,bootstrap:windowBootstrapProbe,campaignPath,minimalCampaignPath:path.join(path.dirname(harness),'bases-electron-native-select-integration/campaign.mjs'),allowedCampaignPaths:CAMPAIGN_DIRECTORIES.map(name=>path.join(path.dirname(harness),name,'campaign.mjs'))});
+const cuaNativeSelect=!!cuaMode;
 const recoveryCampaign=campaignPath===path.join(path.dirname(harness),'bases-electron-recovery-integration/campaign.mjs');
 if(campaign?.createNativeRelay)assert.ok(recoveryCampaign,'Only the approved recovery campaign may select a test relay');
 const vaultName=campaign?.vaultName??'vault';assert.match(vaultName,/^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$/,'Owned fixture vault basename');
@@ -46,16 +46,17 @@ for(const protectedRoot of [root,await fs.realpath(harness),...(campaignPath?[pa
 await fs.mkdir(out); // A fresh directory avoids overwriting retained evidence.
 const sandbox=path.join(out,'disposable'),vault=path.join(sandbox,vaultName),profile=path.join(sandbox,'profile');
 const yaml=createRequire(path.join(root,'package.json'))('yaml');
-const evidence={kind:windowBootstrapProbe?'actual-electron-owned-window-bootstrap-probe':campaign?'actual-electron-bases-supplemental':'actual-electron-bases-heavy-user',...(windowBootstrapProbe?{scope:'Harness window activation/visibility and normal quit only. No Bases, Rust semantic, or matching native product acceptance.'}:{}),...(campaignPath?{campaignModule:campaignPath}:{}),status:'running',started:new Date().toISOString(),head,...(cuaNativeSelect?{nativeSelectInputMode:'cua-owned-checkpoint'}:{}),windowMode:requestedWindowMode,actions:[],checks:[],screenshots:[],runtime:[],limitations:[requestedWindowMode==='visible'?'Owned native window is shown; activation and focus outcomes are recorded. User interaction can affect this run; OS foreground and physical keyboard parity are not established.':'CDP renderer input and hit testing; not OS foreground focus/keyboard parity','Synthetic TSV ClipboardEvent exercises the production event handler, not the system clipboard','Disposable prelaunch fixtures and explicit external-editor/failure fixtures are not user creation coverage','No mobile, sync, arbitrary crash/power-loss, or performance acceptance follows from this journey']};
+const evidence={kind:windowBootstrapProbe?'actual-electron-owned-window-bootstrap-probe':campaign?'actual-electron-bases-supplemental':'actual-electron-bases-heavy-user',...(windowBootstrapProbe?{scope:'Harness window activation/visibility and normal quit only. No Bases, Rust semantic, or matching native product acceptance.'}:{}),...(campaignPath?{campaignModule:campaignPath}:{}),status:'running',started:new Date().toISOString(),head,...(cuaNativeSelect?{nativeSelectInputMode:cuaMode==='minimal'?'cua-owned-checkpoint':'cua-owned-checkpoints'}:{}),windowMode:requestedWindowMode,actions:[],checks:[],screenshots:[],runtime:[],limitations:[requestedWindowMode==='visible'?'Owned native window is shown; activation and focus outcomes are recorded. User interaction can affect this run; OS foreground and physical keyboard parity are not established.':'CDP renderer input and hit testing; not OS foreground focus/keyboard parity','Synthetic TSV ClipboardEvent exercises the production event handler, not the system clipboard','Disposable prelaunch fixtures and explicit external-editor/failure fixtures are not user creation coverage','No mobile, sync, arbitrary crash/power-loss, or performance acceptance follows from this journey']};
 const git=(...args)=>execFileSync('git',['-C',root,...args],{encoding:'utf8',maxBuffer:8*1024*1024});
 async function hash(file){const h=createHash('sha256');for await(const bytes of createReadStream(file))h.update(bytes);return h.digest('hex');}
 async function tree(directory){const result=[];async function visit(relative=''){for(const entry of(await fs.readdir(path.join(directory,relative),{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name))){const name=path.join(relative,entry.name);assert.ok(!entry.isSymbolicLink(),'No artifact symlink: '+name);if(entry.isDirectory())await visit(name);else if(entry.isFile())result.push([name,await hash(path.join(directory,name))]);}}await visit();return result;}
 async function provenance(){assert.equal(git('rev-parse','HEAD').trim(),head,'Frozen integration HEAD changed');assert.equal(git('diff','--name-only','HEAD').trim(),'','Frozen tracked source changed');const names=git('ls-files','-z','desktop','src','crates','scripts','Cargo.toml','Cargo.lock','package.json','pnpm-lock.yaml','vite.config.mjs','index.html').split('\0').filter(Boolean).sort();return{head,tracked:await Promise.all(names.map(async name=>[name,await hash(path.join(root,name))])),dist:await tree(path.join(root,'dist')),native:{file:native,sha256:await hash(native)},...(relay?{relay:{executable:relayExecutable,identity:relayIdentity,files:await Promise.all(relayFiles.map(async file=>[file,await hash(file)])),node:{file:relayIdentity.executable,sha256:await hash(await fs.realpath(relayIdentity.executable))}}}:{}),electron:{file:electron,sha256:await hash(electron)},harness:await tree(harness),campaigns:await campaignClosure(path.dirname(harness),tree),cdpHelper:await hash(path.join(harness,'../tasks-electron-integration/cdp.mjs'))};}
 const processes=()=>execFileSync('ps',['-ww','-axo','pid=,ppid=,command='],{encoding:'utf8'}).split('\n').map(line=>{const m=line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);return m?{pid:Number(m[1]),parent:Number(m[2]),command:m[3]}:null;}).filter(Boolean);
 let child,cdp,browserCDP,ui,record,before,failure,relay,relayExecutable,relayIdentity,relayFiles=[];
-const natives=new Map();let cuaCheckpointUsed=false;
+const natives=new Map();let cuaCheckpointCount=0;
 async function nativeSelectInput(request){
-  assert.ok(cuaNativeSelect&&!cuaCheckpointUsed&&child&&!exited(),'Single owned minimal-probe CUA checkpoint');cuaCheckpointUsed=true;
+  assert.ok(cuaNativeSelect&&(cuaMode!=='minimal'||cuaCheckpointCount===0)&&child&&!exited(),'Owned CUA checkpoint with single use in minimal mode');
+  const checkpointNumber=++cuaCheckpointCount;
   const owned=assertSingleCuaProcess(processes(),electron,child.pid);
   assert.ok(owned?.command.startsWith(electron+' ')&&owned.command.includes(path.join(root,'desktop/main.cjs'))&&(owned.command.includes('--user-data-dir='+profile+' ')||owned.command.endsWith('--user-data-dir='+profile)),'Exact owned Electron command and profile');
   assert.equal(record.visibility?.mode,'visible');
@@ -63,7 +64,8 @@ async function nativeSelectInput(request){
   const document=assertRendererVisible(await ui.dom('return {visibilityState:document.visibilityState,hidden:document.hidden,hasFocus:document.hasFocus()};'));
   const identity={pid:child.pid,executable:electron,command:owned.command,profile,root,visibility:{native,document},windowIds:native.windows.filter(window=>window.ownerPID===child.pid&&window.layer===0&&window.onscreen).map(window=>window.windowNumber)};
   assert.equal(identity.windowIds.length,1,'CUA checkpoint identifies exactly one owned main window');
-  await waitForNativeSelectCua({directory:path.join(out,'native-select-cua'),identity,request,evidence,isAlive:()=>!exited(),onReady:ready=>console.log(JSON.stringify({kind:'CUA_NATIVE_SELECT_READY',...ready}))});
+  const directory=path.join(out,cuaMode==='minimal'?'native-select-cua':`native-select-cua-${String(checkpointNumber).padStart(4,'0')}-${randomUUID()}`);
+  await waitForNativeSelectCua({directory,identity,request:cuaMode==='minimal'?request:{...nativeSelectCuaRequest(request),checkpointNumber},evidence,isAlive:()=>!exited(),onReady:ready=>console.log(JSON.stringify({kind:'CUA_NATIVE_SELECT_READY',checkpointNumber,...ready}))});
 }
 
 const exited=()=>!child||child.exitCode!==null||child.signalCode!==null;

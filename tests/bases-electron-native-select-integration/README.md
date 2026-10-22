@@ -61,3 +61,8 @@ registry and unchanged-note/Base oracles. Continuing cannot satisfy those checks
 If native CUA is unavailable, let the bounded probe fail; there is no automatic
 fallback to another input channel. This mode alone does not establish the full
 heavy journey, hardware keyboard parity, or a product fix.
+
+The separate generalized `--cua-native-selects` mode is documented in the common
+runner README. It does not change this flag's single-use minimal-probe admission
+or ready-file location. Full-journey use awaits a successful direct CUA selection
+of the visible Purple option; the failed Home/eight-Down recipe is not that proof.
