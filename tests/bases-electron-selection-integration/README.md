@@ -37,6 +37,17 @@ the next intended edit to be available. No extra click, retry, product flush or
 private controller call is used. The original pointer action still performs its
 ordinary hit/enable checks.
 
+Setup also observes completion of the one Split right action before the one
+sidebar note-open click: exactly two current mounted Base grids and the cloned
+tab active with a different public DOM tab ID. Note readiness first awaits the
+expected title and matching Reading or Live Edit surface. Reading receives one
+normal mode switch, then its mounted Live Edit surface is awaited. Actual002
+stopped before any caret/range phase after its note click followed Split Enter
+by eight milliseconds; retained DOM showed two Bases. The async setup ordering
+and a possible product navigation race remain distinct: these test preconditions
+do not prove or repair a product cause. No note-open retry or additional click
+is added, and all mapping actions/oracles after setup remain unchanged.
+
 After matching source/native/frontend artifacts are frozen and the coordinator
 grants the serialized runtime slot:
 
@@ -58,7 +69,7 @@ to the existing canonical admission/provenance list only.
 Bounded offline checks:
 
 ```sh
-node --test --test-concurrency=1 tests/bases-electron-selection-integration/selection-oracle.test.mjs tests/bases-electron-selection-integration/table-readiness.test.mjs tests/bases-electron-integration/owned-fixtures.test.mjs
+node --test --test-concurrency=1 tests/bases-electron-selection-integration/selection-oracle.test.mjs tests/bases-electron-selection-integration/table-readiness.test.mjs tests/bases-electron-selection-integration/setup-readiness.test.mjs tests/bases-electron-integration/owned-fixtures.test.mjs
 node --check tests/bases-electron-selection-integration/campaign.mjs
 node --check tests/bases-electron-selection-integration/run.mjs
 ```

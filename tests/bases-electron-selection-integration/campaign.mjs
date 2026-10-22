@@ -3,6 +3,7 @@ import {MOD} from '../bases-electron-integration/ui.mjs';
 import {fixtureFiles,file,base,properties,sources,phases,prefix,word,targetLine} from './fixtures.mjs';
 import {selectionFrame,assertSelection,assertMapping} from './selection-oracle.mjs';
 import {selectionTableReady} from './table-readiness.mjs';
+import {selectionSplitReady,waitSelectionNoteLive} from './setup-readiness.mjs';
 export {fixtureFiles,vaultName} from './fixtures.mjs';
 const note='.pane:has(input.note-title)',basePane='.pane:has(.bases-session)',editor=note+' .cm-content[contenteditable="true"]';
 const noteTab=note+' .tab.is-active .tab-title',baseTab=basePane+' .tab.is-active .tab-title';
@@ -11,16 +12,18 @@ async function snapshot(c,label){
   c.evidence.actions.push({action:'passive-dom-editor-selection',label,frame,at:Date.now()});return frame;
 }
 async function noteReady(c){
-  const live=note+' button[data-hotkey-name="Switch to Live Edit"]';
-  if(await c.ui.dom(`return !!document.querySelector(${JSON.stringify(live)});`))await c.ui.click(live);
-  await c.ui.wait(`return document.querySelector(${JSON.stringify(note+' input.note-title')})?.value==='Selection note'&&!!document.querySelector(${JSON.stringify(editor)});`,'Ordinary Live Edit note is mounted');
+  await waitSelectionNoteLive(c);
 }
 export async function journey(c){
   c.evidence.kind='actual-electron-bases-mapped-editor-selection';
   c.evidence.limitations.push('DOM-visible caret/range mapping across an ordinary Base property edit and existing-tab focus restoration only; no private EditorView state, DOM Selection assignment, mobile or OS keyboard parity. Restart verifies source/UI durability, not restoration of selection across sessions.');
   await c.launch('mapped-selection');await c.ui.openFile('Selection.base');
   await c.ui.wait(`return document.querySelector('.pane.is-active [role="grid"]')?.getAttribute('aria-rowcount')==='2';`,'One independently authored selection note');
-  await c.ui.command('Split right');await c.ui.openFile(file);await noteReady(c);
+  const originalTabId=await c.ui.dom(`return document.querySelector('.pane.is-active .tab.is-active')?.getAttribute('data-tab-id');`);assert.ok(originalTabId);
+  await c.ui.command('Split right');
+  const split=await c.ui.wait(`return (${selectionSplitReady.toString()})(document,${JSON.stringify(originalTabId)});`,'Two mounted Bases and newly active split tab');
+  c.evidence.actions.push({action:'selection-split-mounted',split,at:Date.now()});
+  await c.ui.openFile(file);await noteReady(c);
   await c.ui.wait(`return document.querySelectorAll('.pane').length===2&&document.querySelectorAll(${JSON.stringify(note)}).length===1&&document.querySelectorAll(${JSON.stringify(basePane)}).length===1;`,'One Base pane and one ordinary editor');
   // The only body click is initial setup, before either mapping capture. Actual
   // keyboard navigation establishes the fixture word without assigning a range.
