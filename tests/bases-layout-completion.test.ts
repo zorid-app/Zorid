@@ -211,3 +211,73 @@ test('column context menu uses a current renderer witness and cannot dispatch af
   assert.match(hide.textContent!, /Hide column/); view.update({ ...result, version: 2 }); hide.click(); await tick(); assert.equal(writes, 0);
   view.destroy(); dom.window.close();
 });
+
+test('horizontal scrolling during a column drag mounts distant destinations without replacing the grabbed node or aliases', async () => {
+  const { dom, container, result } = fixture(); const orders: unknown[] = [];
+  const keys = [value(2), value('2'), ...Array.from({ length: 6 }, (_, i) => value(`Column-${i + 2}`))];
+  const groupKeys = keys.map((key, i) => ({ key, sharedKeyId: `identity-${i}`, rows: [result.rows[i % 2]] }));
+  const source: BaseQueryResult = { ...result, shared: {} as NonNullable<BaseQueryResult['shared']>,
+    view: { ...result.view, groupOrder: [2, '2', 'alias-two', ...Array.from({ length: 6 }, (_, i) => `Column-${i + 2}`)] },
+    groups: groupKeys, groupOptions: groupKeys.flatMap((group, i) => [
+      { key: group.key, sharedKeyId: group.sharedKeyId, count: 1, listed: true },
+      ...(i === 1 ? [{ key: group.key, sharedKeyId: group.sharedKeyId, count: 1, listed: true }] : []),
+    ]) };
+  const view = createBaseKanbanView(container, { result: source, openFile() {}, requestGroupOrder: async request => { orders.push(request.order); } });
+  const root = container.querySelector<HTMLElement>('.bases-kanban-view')!;
+  Object.defineProperty(root, 'clientWidth', { value: 600 }); view.refreshLayout();
+  const original = container.querySelector<HTMLElement>('.bases-kanban-column')!, heading = original.querySelector<HTMLElement>('.bases-kanban-column-header')!;
+  const lastColumn = () => [...container.querySelectorAll<HTMLElement>('.bases-kanban-column')].find(column => column.querySelector('.bases-kanban-column-header')!.textContent!.startsWith('Column-7'));
+  assert.equal(lastColumn(), undefined); heading.dispatchEvent(columnDragEvent(dom, 'dragstart'));
+  root.scrollLeft = 900; root.dispatchEvent(new dom.window.Event('scroll')); assert.ok(container.contains(heading));
+  root.scrollLeft = 1900; root.dispatchEvent(new dom.window.Event('scroll'));
+  assert.equal(container.querySelector('.is-being-dragged'), original); assert.ok(container.contains(heading));
+  assert.ok(lastColumn(), 'newly visible far column is mounted during the native drag');
+  assert.ok(container.querySelectorAll('.bases-kanban-column').length <= 6, 'only viewport plus grabbed column stay mounted');
+  lastColumn()!.dispatchEvent(columnDragEvent(dom, 'dragover')); assert.equal(orders.length, 0);
+  lastColumn()!.dispatchEvent(columnDragEvent(dom, 'drop')); heading.dispatchEvent(columnDragEvent(dom, 'dragend')); await tick();
+  assert.deepEqual(orders, [['2', 'alias-two', 'Column-2', 'Column-3', 'Column-4', 'Column-5', 'Column-6', 'Column-7', 2]]);
+  assert.deepEqual(source.view.groupOrder, [2, '2', 'alias-two', 'Column-2', 'Column-3', 'Column-4', 'Column-5', 'Column-6', 'Column-7']);
+  view.destroy(); dom.window.close();
+});
+
+test('column-drag viewport refresh leaves an active widget draft and grabbed node untouched', () => {
+  const { dom, container, result } = fixture(); let disposals = 0;
+  const groups = Array.from({ length: 8 }, (_, i) => ({ key: value(`Column-${i}`), rows: [result.rows[i % 2]] }));
+  const view = createBaseKanbanView(container, { result: { ...result, groups }, openFile() {}, requestGroupOrder: async () => {}, renderProperty(element) {
+    element.textContent = 'value'; return () => disposals++;
+  } });
+  const root = container.querySelector<HTMLElement>('.bases-kanban-view')!, heading = container.querySelector<HTMLElement>('.bases-kanban-column-header')!;
+  heading.dispatchEvent(columnDragEvent(dom, 'dragstart'));
+  const editor = container.querySelector<HTMLElement>('.bases-kanban-card-line')!; editor.dataset.baseEditing = 'draft'; const before = disposals;
+  root.scrollLeft = 1800; root.dispatchEvent(new dom.window.Event('scroll'));
+  assert.ok(container.contains(editor)); assert.ok(container.contains(heading)); assert.equal(disposals, before);
+  editor.removeAttribute('data-base-editing'); root.dispatchEvent(new dom.window.Event('scroll'));
+  assert.ok(container.contains(heading)); assert.ok([...container.querySelectorAll('.bases-kanban-column-header')].some(item => item.textContent!.startsWith('Column-7')));
+  heading.dispatchEvent(columnDragEvent(dom, 'dragend')); view.destroy(); dom.window.close();
+});
+
+test('a grabbed card also reaches a newly mounted distant column after horizontal scrolling', async () => {
+  const { dom, container, result } = fixture(); const moves: unknown[] = [];
+  const groups = Array.from({ length: 8 }, (_, i) => ({ key: value(`Column-${i}`), rows: i === 0 ? [result.rows[0]] : [] }));
+  const view = createBaseKanbanView(container, { result: { ...result, groups }, openFile() {}, requestMove: async request => { moves.push(request.destination); } });
+  const root = container.querySelector<HTMLElement>('.bases-kanban-view')!, grabbed = container.querySelector<HTMLElement>('.bases-kanban-card')!;
+  grabbed.dispatchEvent(columnDragEvent(dom, 'dragstart')); root.scrollLeft = 1800; root.dispatchEvent(new dom.window.Event('scroll'));
+  assert.ok(container.contains(grabbed)); assert.equal(container.querySelector('.is-being-dragged'), grabbed);
+  const target = [...container.querySelectorAll('.bases-kanban-column')].find(column => column.querySelector('.bases-kanban-column-header')!.textContent!.startsWith('Column-7'))!;
+  assert.ok(target); target.dispatchEvent(columnDragEvent(dom, 'dragover')); assert.ok(target.querySelector('.bases-kanban-card-drop-placeholder'));
+  target.dispatchEvent(columnDragEvent(dom, 'drop')); await tick(); assert.deepEqual(moves, [value('Column-7')]);
+  view.destroy(); dom.window.close();
+});
+
+test('vertical source-column scrolling pins the grabbed card while mounting later rows', () => {
+  const { dom, container, result } = fixture();
+  const rows = Array.from({ length: 30 }, (_, i) => ({ path: `Card-${i}.md`, values: { 'file.name': value(`Card-${i}`) } }));
+  const view = createBaseKanbanView(container, { result: { ...result, properties: ['file.name'], rows, groups: [{ key: value('Todo'), rows }, { key: value('Done'), rows: [] }] }, openFile() {}, requestMove: async () => {} });
+  const grabbed = container.querySelector<HTMLElement>('[data-path="Card-0.md"]')!, body = grabbed.closest<HTMLElement>('.bases-kanban-column-body')!;
+  grabbed.dispatchEvent(columnDragEvent(dom, 'dragstart')); body.scrollTop = 500; body.dispatchEvent(new dom.window.Event('scroll'));
+  assert.ok(container.contains(grabbed)); assert.ok(body.querySelector('[data-path="Card-24.md"]'));
+  assert.equal(container.querySelectorAll('[data-path="Card-0.md"]').length, 1);
+  grabbed.dispatchEvent(columnDragEvent(dom, 'dragend'));
+  assert.equal(container.querySelector('[data-path="Card-0.md"]'), null, 'normal virtualization resumes after cancel');
+  view.destroy(); dom.window.close();
+});
