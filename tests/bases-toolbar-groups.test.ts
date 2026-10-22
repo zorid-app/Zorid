@@ -33,3 +33,9 @@ test('visual filter decoding accepts bare/dotted/bracketed syntax without evalua
  for(const source of ['score >= -2','note.score >= -2','note["score"] >= -2'])assert.deepEqual(decodeFilterCondition(source),{property:'note.score',operator:'gte',text:'-2',type:'number'});
  assert.deepEqual(decodeFilterCondition('file.ext == "md"'),{property:'file.ext',operator:'eq',text:'md',type:'text'});assert.deepEqual(decodeFilterCondition('tags.contains("book")'),{property:'note.tags',operator:'contains',text:'book',type:'text'});assert.equal(decodeFilterCondition('score + 2 > 10'),undefined);assert.equal(decodeFilterCondition('danger()'),undefined);assert.equal(buildFilterCondition('score','lte','20','number'),'note["score"] <= 20');
 });
+
+test('an own-save result refresh preserves an in-progress new group widget and its draft guard',()=>{
+ const f=fixture(true);try{
+  f.get<HTMLButtonElement>('Add group').click();const input=f.get<HTMLInputElement>('Group name');input.value='42';f.groups.update({...f.result,version:2},false);assert.equal(input.isConnected,true);assert.equal(input.value,'42');assert.throws(()=>f.groups.read(),/Finish or cancel/);f.get<HTMLButtonElement>('Create group').click();assert.deepEqual(f.groups.read(),[1,'1',42]);
+ }finally{f.cleanup();}
+});
