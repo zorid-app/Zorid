@@ -1,3 +1,4 @@
+import { mountBaseRichValue } from './rich-values.ts';
 import { BASE_NULL, baseValueToString } from './expression.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import type { BasePropertyPresentation, BasePresentationOptions } from './presentation-common.ts';
@@ -25,7 +26,8 @@ export interface BasePropertyWidgetOptions {
   readonly commit: (edit: BasePropertyWidgetEdit) => void | BasePropertyWidgetAcknowledgement | Promise<void | BasePropertyWidgetAcknowledgement>;
   /** Targets are selected/resolved by Rust/the owning workspace, never by a TS query evaluator. */
   readonly getRelationTargets?: (property: string, presentation: BasePropertyPresentation) => readonly BaseRelationTarget[] | undefined;
-  readonly openFile?: (path: string, event: MouseEvent | KeyboardEvent) => void;
+  readonly loadImage?: (source: string, signal: AbortSignal, presentation: BasePropertyPresentation) => Promise<{ readonly url: string; dispose(): void } | null>;
+  readonly openFile?: (path: string, event: MouseEvent | KeyboardEvent, witness?: { readonly entryId: string; readonly revision: string }) => void;
   readonly readOnly?: (presentation: BasePropertyPresentation) => boolean;
   readonly isCurrent?: (presentation: BasePropertyPresentation) => boolean;
   readonly createOption?: (property: string, value: string, presentation: BasePropertyPresentation) => void | BasePropertyWidgetAcknowledgement | Promise<void | BasePropertyWidgetAcknowledgement>;
@@ -75,6 +77,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   let value = presentation.value, disposed = false, pending = false, editing = false, composing = false;
   let blurDuringComposition = false, compositionEpoch = 0;
   let finishAfterPending = false, editingIndex: number | undefined;
+  let disposeRich: (() => void) | undefined;
   let input: HTMLInputElement | undefined, popup: HTMLDivElement | undefined;
   let draftChanged = false;
   let draft: string[] = [], selected = 0, choices: { value: string; label: string; option?: BasePropertyOption; missing?: boolean }[] = [];
@@ -153,21 +156,13 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     }
     return pill;
   }
-  function appendReadOnly(parent: HTMLElement, item: BaseExpressionValue): void {
-    if (item.type === 'list') { item.value.forEach((child, index) => { if (index) parent.append(document.createTextNode(', ')); appendReadOnly(parent, child); }); return; }
-    const raw = item.type === 'namespace' ? Object.getOwnPropertyDescriptor(item, 'sharedValue')?.value : undefined;
-    if (raw && (raw.type === 'file' || raw.type === 'link') && typeof raw.path === 'string' && options.openFile) {
-      const link = document.createElement('a'); link.href = '#'; link.className = 'internal-link'; link.textContent = typeof raw.display === 'string' ? raw.display : item.type === 'namespace' ? item.name : raw.path;
-      const open = (event: MouseEvent) => { if (!current() || (event.button !== 0 && event.button !== 1)) return; event.preventDefault(); event.stopPropagation(); options.openFile?.(raw.path, event); };
-      link.addEventListener('click', open); link.addEventListener('auxclick', open); parent.append(link);
-    } else parent.append(document.createTextNode(renderText(item)));
-  }
   function draw() {
     if (disposed) return;
+    disposeRich?.(); disposeRich = undefined;
     input = undefined; mark(); element.replaceChildren();
     element.classList.add('bases-metadata-value', 'metadata-property-value'); element.dataset.propertyType = type;
     if (editable) element.tabIndex = 0;
-    const diagnostic = basePropertyValueDiagnostic(value, definition);
+    const diagnostic = presentation.property.startsWith('note.') ? basePropertyValueDiagnostic(value, definition) : undefined;
     element.classList.toggle('mod-error', !!diagnostic || value.type === 'error'); element.title = diagnostic ?? (value.type === 'error' ? value.error.message : '');
     if (type === 'checkbox' && (!diagnostic || value.type === 'null')) {
       const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = value.type === 'boolean' && value.value; checkbox.indeterminate = value.type === 'null'; checkbox.disabled = !editable; checkbox.setAttribute('aria-label', presentation.property.replace(/^note\./, ''));
@@ -178,8 +173,8 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       const link = document.createElement('a'); link.href = '#'; link.className = 'internal-link'; link.textContent = renderText(value);
       const open = (event: MouseEvent) => { if ((event.button === 0 || event.button === 1) && options.openFile && current()) { event.preventDefault(); event.stopPropagation(); options.openFile(presentation.row.path, event); } };
       link.addEventListener('click', open); link.addEventListener('auxclick', open); element.append(link);
-    } else if (!editable && (value.type === 'namespace' || value.type === 'list')) {
-      appendReadOnly(element, value);
+    } else if (!editable && (value.type === 'namespace' || value.type === 'list' || value.type === 'object')) {
+      disposeRich = mountBaseRichValue(element, value, { openFile: options.openFile, loadImage: options.loadImage ? (source, signal) => options.loadImage!(source, signal, presentation) : undefined, isCurrent: current, onError: report });
     } else if (!diagnostic && picker && value.type !== 'null') {
       const values = value.type === 'list' ? value.value.map(renderText) : [renderText(value)];
       for (const text of values) element.append(chip(text));
@@ -330,5 +325,5 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   const activate = (event: MouseEvent) => { if (!event.defaultPrevented && event.button === 0) begin(event); };
   const key = (event: KeyboardEvent) => { if (event.key === 'Escape' && !pending && type === 'checkbox' && element.hasAttribute('data-base-editing')) { event.preventDefault(); draw(); return; } if (!event.defaultPrevented && !event.isComposing && event.target === element && ['Enter', 'F2'].includes(event.key)) begin(event); };
   element.addEventListener('click', activate); element.addEventListener('dblclick', activate); element.addEventListener('keydown', key); draw();
-  return () => { disposed = true; closePopup(); timers.forEach(clearTimeout); timers.clear(); mark(); element.removeEventListener('click', activate); element.removeEventListener('dblclick', activate); element.removeEventListener('keydown', key); };
+  return () => { disposed = true; disposeRich?.(); disposeRich = undefined; closePopup(); timers.forEach(clearTimeout); timers.clear(); mark(); element.removeEventListener('click', activate); element.removeEventListener('dblclick', activate); element.removeEventListener('keydown', key); };
 }

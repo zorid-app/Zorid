@@ -1,0 +1,7 @@
+.bases-rich-value { min-width:0; max-width:100%; overflow-wrap:anywhere; }
+.bases-rich-value img { width:auto; max-width:100%; max-height:100%; vertical-align:middle; }
+.bases-rich-value .bases-rich-icon { flex:none; vertical-align:middle; width:var(--icon-size, 16px); height:var(--icon-size, 16px); color:currentColor; }
+.bases-rich-value .internal-link, .bases-rich-value .external-link { cursor:pointer; }
+.bases-rich-value .unsupported-link { color:var(--text-muted); cursor:default; }
+.bases-rich-value .is-unavailable { color:var(--text-muted); }
+.bases-rich-error { color:var(--text-error); }
