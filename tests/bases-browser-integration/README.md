@@ -59,6 +59,10 @@ The nine independently authored groups cover:
    context, rejecting forged source, invalid spans and wrong contextual identity.
 7. Optional property settings: filtered relation target choices, reverse
    relations, counts, averages and formulas/filtering over derived values.
+   Configured plain Link properties offer every Markdown note, including a note
+   with invalid metadata, while filtered relations keep their own candidates.
+   Existing aliases, a date-shaped filename and a manual external URL retain
+   exact raw baselines and typed saved-target identities/revisions.
    Current-note relation frames must carry the exact actor revision, raw alias
    baseline and typed resolved target, while no-current requests omit the field.
 8. Exact saved settings source/witness proof for Base reads and ordinary-note
@@ -70,6 +74,9 @@ The nine independently authored groups cover:
    edit to an unresolved alias remains raw and unresolved; the old pin keeps its
    original actor/target witnesses and candidate list. These disposable sources
    are restored exactly through fresh admitted CAS before restart assertions.
+
+The added plain Link oracles are source-checked and await a new matching actual
+browser run; successful run003 predates those additional assertions.
 
 Expected values are hand-authored (`7 + 3 + 5 = 15`; global limit keeps `7, 5`;
 Ada has two books with average five). Seed checks assert the public bounded,

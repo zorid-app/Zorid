@@ -5,7 +5,7 @@ import {catchUpDocumentIndex} from '../../src/core/document-semantics.ts';
 import {setProperty, readProperties} from '../../src/core/properties.ts';
 import {projectSharedBaseResult, sharedBaseWitness} from '../../src/bases/shared-query.ts';
 import {inlineBaseRequest} from '../../src/bases/inline-base.ts';
-import {files, alias, body, pioneer, settings, inlinePrelude, inlinePrefix, inlineBase, inlineNormalized, inlineNote, clockMs, timezone, groupNames} from './cases.mjs';
+import {files, alias, body, pioneer, settings, plainLinkNotes, plainLinkPaths, inlinePrelude, inlinePrefix, inlineBase, inlineNormalized, inlineNote, clockMs, timezone, groupNames} from './cases.mjs';
 
 // Product Worker, admitted client, generated WASM and IndexedDB only. No direct
 // WASM evaluator, synthetic generation, replacement Worker, private storage write
@@ -201,10 +201,14 @@ try {
     rejected.push(await rejects(() => afterRawEdit.base({id: entry.id, options: {...options, inlineSource: {...inlineSource, startByte: inlineSource.startByte + 1}}}), 'index_inline_source_mismatch'));
     return {read, inlineSource, rejected};
   });
-  let configured, definition, currentActor, relationBaseline;
+  let configured, definition, currentActor, relationBaseline, datedTarget;
   await group(6, async () => {
+    for (const [path, source] of plainLinkNotes) await host.adapter.createText(path, source);
     await host.adapter.createText('Properties.yaml', settings); await build(host); configured = await pin(host); definition = await metadata(host, 'Properties.yaml');
+    datedTarget = await metadata(host, '2026-01-02.md');
     const authors = await query(host, configured, 'Authors.base', 'Authors'); noErrors(authors);
+    const invalid = await metadata(host, 'Invalid.md');
+    assert(authors.value.result.metadataIssues.some(issue => issue.witness.entryId === invalid.id && issue.witness.revision === invalid.revision && issue.propertiesUnavailable), 'Invalid candidate fixture must have actual unavailable metadata');
     equal(authors.value.result.rows.map(row => row.path), ['Authors/Ada.md', 'Authors/Grace.md'], 'Rollup filter/order');
     for (const [path, count, average, weighted, expectedBooks] of [
       ['Authors/Ada.md', 2, 5, 10, ['Books/Foundations.md', 'Books/Pioneer.md']],
@@ -223,6 +227,11 @@ try {
     equal(targets.value.relationTargets.author.map(target => target.path).sort(), ['Authors/Ada.md', 'Authors/Grace.md'], 'Target filter candidates');
     equal(targets.value.relationTargets.author.find(target => target.path === 'Authors/Ada.md').entryId, ada.id, 'Target identity');
     equal(targets.value.propertyDefinitionDiagnostics, [], 'Property settings diagnostics');
+    for (const property of ['reference', 'published', 'website']) {
+      const candidates = targets.value.relationTargets[property];
+      equal(candidates.map(target => target.path).sort(), plainLinkPaths, 'Plain Link candidates include every note regardless of metadata or relation filter');
+      for (const target of candidates) equal({entryId: target.entryId, revision: target.revision}, witness(await metadata(host, target.path)), 'Plain Link choice exact saved identity/revision');
+    }
     assert(!Object.hasOwn(targets.value, 'currentRelationValues'), 'No-current request must omit saved relation values');
     currentActor = await metadata(host, 'Books/Pioneer.md');
     relationBaseline = await configured.propertyTargets({options: {clockMs, timezone, currentEntryId: currentActor.id}});
@@ -236,6 +245,12 @@ try {
     equal(current.values.author.path, 'Authors/Ada.md', 'Current relation canonical display path');
     equal(current.values.author.target, witness(ada), 'Current relation resolved target witness');
     equal(current.values.author.display, 'A. Lovelace', 'Current relation display alias');
+    equal(current.editValues.reference, string(alias), 'Plain Link raw alias baseline');
+    equal(current.values.reference, {type: 'link', path: 'Authors/Ada.md', target: witness(ada), display: 'A. Lovelace', external: false}, 'Plain Link typed alias target');
+    equal(current.editValues.published, string('2026-01-02'), 'Date-shaped Link raw filename must stay text');
+    equal(current.values.published, {type: 'link', path: '2026-01-02.md', target: witness(datedTarget), display: null, external: false}, 'Configured Link overrides automatic date inference with real note target');
+    equal(current.editValues.website, string('https://example.test'), 'Manual URL raw baseline');
+    equal(current.values.website, {type: 'link', path: 'https://example.test', target: null, display: null, external: true}, 'Manual URL remains an external Link without note target');
     sameSemanticRead(await query(host, original, 'Books.base', 'All'), all, 'New property registry substituted into old pin');
     return {authors: authors.value.result, targets, currentRelationValues: relationBaseline};
   });
@@ -271,6 +286,12 @@ try {
     equal(eligibility.value.relationTargets.author.map(target => target.path), ['Authors/Grace.md'], 'Ineligible existing target remained a picker candidate');
     equal(eligibility.value.currentRelationValues.editValues.author, string(alias), 'Eligibility change rewrote saved alias');
     equal(eligibility.value.currentRelationValues.values.author.target, witness(ineligibleAuthor), 'Existing ineligible relation lost its actual current target witness');
+    for (const property of ['reference', 'published', 'website']) equal(eligibility.value.relationTargets[property].map(target => target.path).sort(), plainLinkPaths, 'Plain Link suggestions must remain unfiltered after relation target eligibility changes');
+    equal(eligibility.value.currentRelationValues.editValues.reference, string(alias), 'Plain Link alias changed with unrelated target metadata');
+    equal(eligibility.value.currentRelationValues.values.reference.target, witness(ineligibleAuthor), 'Plain Link current display must use actual target revision even when filtered relation rejects it');
+    equal(eligibility.value.relationTargets.reference.find(target => target.path === 'Authors/Ada.md').revision, ineligibleAuthor.revision, 'Plain Link candidate must carry current target revision');
+    equal(eligibility.value.currentRelationValues.values.published, relationBaseline.value.currentRelationValues.values.published, 'Date-shaped Link changed with unrelated target metadata');
+    equal(eligibility.value.currentRelationValues.values.website, relationBaseline.value.currentRelationValues.values.website, 'Manual URL changed with unrelated target metadata');
     equal(await configured.propertyTargets({options: {clockMs, timezone, currentEntryId: currentActor.id}}), relationBaseline, 'Retained relation frame substituted target eligibility/revision');
     await closePin(host, eligibilityPin);
     const unresolvedAlias = '[[../Authors/Missing|Lost alias]]';
@@ -285,6 +306,8 @@ try {
     const lost = unresolved.value.currentRelationValues.values.author;
     assert(lost.type === 'link' && lost.target === null && lost.display === 'Lost alias', 'Unresolved relation must remain a typed unresolved link');
     equal(await host.adapter.read('Books/Pioneer.md'), unresolvedSource, 'Read-only relation discovery mutated unresolved source');
+    equal(unresolved.value.currentRelationValues.editValues.reference, string(alias), 'Changing filtered relation damaged independent plain Link raw alias');
+    equal(unresolved.value.currentRelationValues.values.reference.target, witness(ineligibleAuthor), 'Plain Link resolution must survive unresolved filtered relation');
     equal(await configured.propertyTargets({options: {clockMs, timezone, currentEntryId: currentActor.id}}), relationBaseline, 'Retained relation frame substituted modified current note');
     const unbound = await unresolvedPin.propertyTargets({options: {clockMs, timezone}});
     assert(!Object.hasOwn(unbound.value, 'currentRelationValues'), 'No-current request returned another actor frame');

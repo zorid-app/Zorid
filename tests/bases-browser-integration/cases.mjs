@@ -3,7 +3,7 @@
 export const alias = '[[../Authors/Ada|A. Lovelace]]';
 export const body = '# Pioneer\r\nBody café 🦀. Keep the Markdown body exactly.\r\n';
 export const pioneer = [
-  '---', 'type: book', `author: '${alias}' # Keep this alias`,
+  '---', 'type: book', `author: '${alias}' # Keep this alias`, `reference: '${alias}'`,
   'references:', '  - author: "[[../Authors/Grace|Grace H.]]"',
   'rating: 7', 'category: A', 'topics: [Rust, Design]',
   'published: 2026-01-02', 'website: https://example.test', '---',
@@ -55,6 +55,9 @@ views:
 export const settings = `version: 1
 futureSetting: retained
 properties:
+  reference: {type: link}
+  published: {type: link}
+  website: {type: link}
   author:
     type: relation
     relation:
@@ -76,7 +79,17 @@ properties:
       - {value: Design, color: blue}
       - {value: Compilers, color: purple}
 `;
-export const authorsBase = `filters: 'type == "author" && bookCount >= 1'
+// Added only with optional settings, after no-registry assertions complete.
+export const plainLinkNotes = new Map([
+  ['2026-01-02.md', '# A dated filename\n'],
+  ['Invalid.md', '---\nbroken: [\n---\nInvalid metadata must not hide file identity.\n'],
+]);
+export const plainLinkPaths = [
+  '2026-01-02.md', 'Authors/Ada.md', 'Authors/Grace.md',
+  'Books/Compiler.md', 'Books/Foundations.md', 'Books/Pioneer.md',
+  'Inline host.md', 'Invalid.md', 'Not a book.md',
+];
+export const authorsBase = `filters: 'file.inFolder("Authors") && type == "author" && bookCount >= 1'
 formulas:
   weighted: averageRating * bookCount
 views:
