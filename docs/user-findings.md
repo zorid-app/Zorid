@@ -7,7 +7,9 @@ all10 expanded groups,133 typed values and exact16 Q3+10 legacy diagnostics.
 Source/binary/stream/input/export/physical-source hashes reverify; all children
 close. The359-test core and matching native/CLI build stay verified. This does
 not accept browser/WASM, complete desktop, visual, recovery or mobile behavior.
-Matching WASM is building with one offline compiler job. Native probe002 remains
+Matching WASM now builds successfully with pinned offline tools and one job;
+its preserved module hashes match Rust tree958b19ac. Actual expanded browser
+acceptance remains pending. Native probe002 remains
 unlaunched below the unchanged1GiB guard; the user has been asked for additional
 space while safe independent work continues.
 

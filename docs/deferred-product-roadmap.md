@@ -24,13 +24,24 @@ This accepts the expanded standalone CLI campaign, not Browser/WASM/UI/mobile
 or complete expression/platform equivalence. `bases_embeds` owns a reviewed
 evidence-only history record.
 
-Root owns sole heavy **WASM build99325**, pinned offline tools/release/j1,
-log `/private/tmp/zorid-bases-final-wasm-build-001.log`. It regenerates the actual
-module and source fingerprint; no old generated module is accepted for this
-closure. No app/browser/CLI/Cargo may overlap. UI probe002 remains frozen and
-unlaunched because the unchanged1GiB native runner guard is not met. A request
-to free2–3GB has been sent asynchronously to the user; no reply or disk recovery
-is assumed. Source/normal-tool verification continues where safe.
+Matching WASM build99325 is now **terminal0** (3m01s), using pinned offline
+release tools and one compiler job. The current generated module fingerprint is
+`36809d020fb8c1ad52736417717d9b1418b866547f99d62cf347bfbee6250e9b`;
+WASM SHA `79563768b5c7c5795bba32daecd67c048e2b882882784251f84c84c59bd6dd37`.
+All five generated files and the raw product have preservation/hash receipts at
+`/private/tmp/zorid-bases-final-wasm-958b19ac/receipt.json`; source Rust tree
+remains `958b19aca4666414e956fbb2f406558af5a18366`. This proves the matching build,
+not browser acceptance. `bases_controller` owns bounded completed WASM compiler
+cache retirement with all source/products/evidence protected; `bases_expressions`
+prepares the expanded actual19-group browser campaign, with no runtime grant yet.
+The independently reviewed [CLI006 evidence](history/bases-cli-actual-006-20261022.md)
+is composed as `98bceba7`.
+
+UI probe002 remains frozen and unlaunched because the unchanged1GiB native runner
+guard is not met. Latest measured free space is268748KiB. A request to free2–3GB
+has been sent asynchronously to the user; no reply or disk recovery is assumed.
+Main remains unchanged; complete desktop, visual, recovery, supported-web and
+matching browser acceptance remain open.
 
 Earlier artifact/runtime evidence follows:
 
