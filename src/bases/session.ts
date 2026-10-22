@@ -203,7 +203,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         return controller.updateConfiguration(numericVersion(version), { root: { formulas: document.getRoot('formulas') }, view: { order } });
       }),
       renameFormula: (version, from, to) => saveConfigurationCommand(() => controller.renameFormula(numericVersion(version), from, to)),
-      addView: (version, type, name) => saveConfigurationCommand(() => controller.addView(numericVersion(version), type, name)),
+      addView: (version, type, name, patch?: BaseViewPatch) => saveConfigurationCommand(() => controller.addView(numericVersion(version), type, name, patch)),
       duplicateView: (version, index, name) => saveConfigurationCommand(() => controller.duplicateView(numericVersion(version), index, name)),
       removeView: (version, index) => saveConfigurationCommand(() => controller.removeView(numericVersion(version), index)),
       moveView: (version, from, to) => saveConfigurationCommand(() => controller.moveView(numericVersion(version), from, to)),
@@ -225,7 +225,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       const buffer = attempt.buffer, text = attempt.text;
       if (buffer && (buffer.dirty || buffer.error)) throw new BaseToolbarSaveError(error instanceof Error ? error.message : String(error), () => track(async () => {
         if (buffer.path !== options.basePath || buffer.text !== text) throw new Error('The retained configuration changed. Save or resolve that draft before retrying.');
-        await buffer.flush(); await controller.refresh();
+        await buffer.flush(); if (!await controller.acknowledgeConfigurationRetry()) await controller.refresh();
       }));
       throw error;
     }).finally(() => { if (configurationAttempt === attempt) configurationAttempt = undefined; });
@@ -421,10 +421,12 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       }); },
       } : {}),
       getSummaryOptions: async (property: string, groupIndex: number | null) => {
-        const previews = await controller.summaryPreviews(property);
+        const active = mountedResult ?? result, group = groupIndex === null ? undefined : active.groups[groupIndex];
+        if (groupIndex !== null && !group) throw new Error('This result group changed; reopen its summary picker.');
+        const previews = await controller.summaryPreviews(property, group?.sharedKeyId ?? undefined);
         const custom = BaseDocument.parse(controller.state.source).getRoot('summaries');
         const order = [...new Set(['Empty', 'Filled', 'Unique', 'Average', 'Min', 'Max', 'Sum', 'Range', 'Median', 'Stddev', 'Earliest', 'Latest', 'Checked', 'Unchecked', ...Object.keys(custom && typeof custom === 'object' && !Array.isArray(custom) ? custom : {})])];
-        return order.filter(id => Object.hasOwn(previews, id)).map(id => ({ id, label: id, ...(groupIndex === null ? { preview: previews[id] } : {}) }));
+        return order.filter(id => Object.hasOwn(previews, id)).map(id => ({ id, label: id, preview: previews[id] }));
       },
       summaryOptions: [...new Set(['Average','Min','Max','Sum','Range','Median','Stddev','Earliest','Latest','Checked','Unchecked','Empty','Filled','Unique', ...Object.keys((document.getRoot('summaries') as Record<string, BaseValue>) ?? {})])].map(id => ({ id, label: id })),
       ...(writable ? { requestSummary: (property: string, id: string) => track(() => {
@@ -497,6 +499,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     await Promise.resolve();
     const acknowledgement = [...changedBuffers].some(buffer => buffer.path === options.basePath && (buffer.dirty || buffer.error)) ? toolbarUI.captureSaveAcknowledgement() : undefined;
     for (const buffer of changedBuffers) await buffer.flush();
+    await controller.acknowledgeConfigurationRetry();
     acknowledgement?.();
     releaseCleanBuffers();
     if (creation?.status === 'uncertain') throw new Error('The new note creation is uncertain. Use New again to reconcile it before leaving this base.');

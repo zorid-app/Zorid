@@ -5,6 +5,7 @@ import { MemoryAdapter, Vault } from '../src/core/index.ts';
 import { NoteBuffer } from '../src/ui/note-buffer.ts';
 import { createBaseSession } from '../src/bases/session.ts';
 import type { BaseSessionOptions } from '../src/bases/session.ts';
+import { BaseDocument } from '../src/bases/document.ts';
 
 const tick = () => new Promise<void>(resolve => setTimeout(resolve, 8));
 async function fixture(files: Record<string, string>, overrides: Partial<BaseSessionOptions> = {}) {
@@ -69,5 +70,24 @@ test('invalid shared property settings leave results visible and values read-onl
     assert.ok(cell); f.key(cell, 'Enter'); assert.equal(cell.querySelector('input'), null);
     assert.match(f.host.querySelector('.bases-session-status')!.textContent!, /properties must be a mapping/);
     assert.match(await f.vault.read('One.md'), /Todo/);
+  } finally { await f.cleanup(); }
+});
+
+test('Add formula creates its visible column in the same saved configuration before editing', async () => {
+  const f = await fixture({ 'Work.base': base, 'One.md': '---\nstatus: Todo\n---\nBody' });
+  try {
+    f.host.querySelector<HTMLButtonElement>('[aria-label="Properties"]')!.click();
+    f.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Add formula"]')!.click();
+    for (let i = 0; i < 50 && !f.dom.window.document.querySelector('[aria-label="Formula expression"]'); i++) await tick();
+    const configured = BaseDocument.parse(await f.vault.read('Work.base'));
+    assert.deepEqual(configured.getRoot('formulas'), { Untitled: '' });
+    assert.ok((configured.views[0].order as readonly string[]).includes('formula.Untitled'));
+    assert.ok(f.session.state.result?.properties.includes('formula.Untitled'));
+    const expression = f.dom.window.document.querySelector<HTMLTextAreaElement>('[aria-label="Formula expression"]')!; assert.ok(expression);
+    expression.focus(); expression.value = '2 + 3'; expression.dispatchEvent(new f.dom.window.Event('input', { bubbles: true }));
+    for (let i = 0; i < 70 && f.session.state.result?.rows[0].values['formula.Untitled']?.type !== 'number'; i++) await tick();
+    assert.deepEqual(f.session.state.result?.rows[0].values['formula.Untitled'], { type: 'number', value: 5 });
+    assert.equal(await f.vault.read('One.md'), '---\nstatus: Todo\n---\nBody');
+    assert.deepEqual(f.errors, []);
   } finally { await f.cleanup(); }
 });
