@@ -18,12 +18,13 @@ import { exportBaseResults } from './export.ts';
 import type { BaseExportFormat } from './export.ts';
 import { prepareBaseItemCreation } from './creation.ts';
 import type { BaseCreationOperation } from './creation.ts';
-import { baseEditValue } from './view-actions.ts';
+import { baseEditValue, baseEditablePropertyValue } from './view-actions.ts';
 import type { BaseValue, BaseViewPatch } from './document.ts';
 import type { BasePresentationOptions, BasePropertyPresentation } from './presentation-common.ts';
 import { createBasePropertyRenderer } from './property-widgets.ts';
 import type { BasePropertyWidgetEdit, BasePropertyWidgetAcknowledgement } from './property-widgets.ts';
 import { baseValuesEqual } from './expression.ts';
+import { icon } from '../ui/icons.ts';
 import type { BaseRelationTarget } from './property-widgets.ts';
 import { BASE_PROPERTY_DEFINITIONS_PATH, BASE_PROPERTY_TYPES, basePropertyName, parseBasePropertyDefinitions, updateBasePropertyDefinition, parseBasePropertyInput, inferBasePropertyDefinition, basePropertyValueDiagnostic } from './property-definitions.ts';
 import type { BasePropertyDefinition, BasePropertyDefinitions, BasePropertyType } from './property-definitions.ts';
@@ -56,7 +57,7 @@ export interface BaseSessionOptions {
   readonly viewName?: string;
   readonly closeCreatedFile?: () => boolean | Promise<boolean>;
   readonly openCreatedFile?: (path: string, event: MouseEvent | KeyboardEvent, anchor?: HTMLElement) => void | Promise<void>;
-  readonly openFile: (path: string, event: MouseEvent | KeyboardEvent) => void;
+  readonly openFile: (path: string, event: MouseEvent | KeyboardEvent, witness?: { readonly entryId: string; readonly revision: string }) => void;
   readonly validate: () => void;
   readonly loadThumbnail?: BaseCardsViewOptions['loadThumbnail'];
   readonly onState?: (state: BaseControllerState) => void;
@@ -78,6 +79,7 @@ interface MountedView {
   update(result: BaseQueryResult): void;
   destroy(): void;
   hasActiveEdits?(): boolean;
+  openSummaryPicker?(property: string, anchor: HTMLElement, groupIndex?: number | null): void;
 }
 
 /** Compose existing Bases modules for a workspace pane or an embedded base. */
@@ -105,6 +107,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   let definitions: BasePropertyDefinitions = { properties: {}, diagnostics: [] };
   let creation: BaseCreationOperation | undefined;
   let summaryPanel: HTMLElement | undefined;
+  let summaryDraft = false, destroySummaryEditor: (() => void) | undefined;
   let definitionEpoch = 0, definitionsRevision = 0, mountedDefinitionsRevision = -1;
   let definitionsError: string | undefined;
   const loadDefinitions = async () => {
@@ -135,7 +138,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     try { options.onError?.(error); } catch { /* User error reporters do not change persistence. */ }
   };
   const propertyDraft = () => !!mounted?.hasActiveEdits?.() || !!content.querySelector('.zorid-bases-table-input, [data-base-editing]');
-  const activeDraft = () => propertyDraft() || toolbarUI.hasDraft() || settings.hasDraft() || !!summaryPanel;
+  const activeDraft = () => propertyDraft() || toolbarUI.hasDraft() || settings.hasDraft() || summaryDraft;
   const schedule = () => {
     if (disposed || scheduled !== undefined) return;
     scheduled = setTimeout(() => { scheduled = undefined; if (deferred && !pending.size && !activeDraft()) { deferred = undefined; render(controller.state); } }, 0);
@@ -248,49 +251,119 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     }, alive);
     await loadDefinitions();
   }
-  function editSummary(property: string, id: string, anchor: HTMLElement): void {
+  const summaryNames = ['Average', 'Min', 'Max', 'Sum', 'Range', 'Median', 'Stddev', 'Earliest', 'Latest', 'Checked', 'Unchecked', 'Empty', 'Filled', 'Unique'];
+  function summaryScope(anchor: HTMLElement, index?: number | null): number | null {
+    if (index !== undefined) return index;
+    const value = anchor.dataset.summaryGroup;
+    return value !== undefined && value !== 'overall' && Number.isSafeInteger(Number(value)) ? Number(value) : null;
+  }
+  function addSummary(property: string, anchor: HTMLElement, suggested?: string): void {
+    action(); if (options.readOnly || pending.size || activeDraft()) throw new Error('Finish or cancel the current edit first.');
+    const state = controller.state, document = BaseDocument.parse(state.source), configured = document.getRoot('summaries');
+    const summaries: Record<string, BaseValue> = configured && typeof configured === 'object' && !Array.isArray(configured) ? { ...(configured as Record<string, BaseValue>) } : {};
+    const used = new Set([...summaryNames, ...Object.keys(summaries)]), base = suggested?.trim() || 'new summary';
+    let name = base; for (let suffix = 2; used.has(name); suffix++) name = `${base} ${suffix}`;
+    const raw = state.result?.view.summaries, selection: Record<string, BaseValue> = raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as Record<string, BaseValue>) } : {};
+    delete selection[basePropertyName(property)]; selection[property] = name;
+    // The reference creates a root definition immediately only for a typed name.
+    const root = suggested?.trim() ? { summaries: { ...summaries, [name]: '' } } : undefined;
+    void saveConfigurationCommand(() => controller.updateConfiguration(state.version, { ...(root ? { root } : {}), view: { summaries: selection } }))
+      .then(() => openSummaryEditor(property, anchor, name, summaryScope(anchor))).catch(report);
+  }
+  function editSummary(property: string, id: string, anchor: HTMLElement, groupIndex?: number | null): void {
     const document = BaseDocument.parse(controller.state.source), raw = document.getRoot('summaries');
     const summaries: Record<string, BaseValue> = raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as Record<string, BaseValue>) } : {};
-    if (Object.hasOwn(summaries, id)) { openSummaryEditor(property, anchor, id); return; }
-    const active = controller.state.result;
-    const first = active?.rows.map(row => row.values[property]).find(value => value && value.type !== 'null');
+    const scope = summaryScope(anchor, groupIndex);
+    if (Object.hasOwn(summaries, id)) { openSummaryEditor(property, anchor, id, scope); return; }
+    const active = controller.state.result, rows = scope === null ? active?.rows : active?.groups[scope]?.rows;
+    const first = rows?.map(row => row.values[property]).find(value => value && value.type !== 'null');
     const definition = definitions.properties[basePropertyName(property)] ?? (first ? inferBasePropertyDefinition(first) : undefined);
     const dateRange = definition?.type === 'date' || definition?.type === 'datetime' || first?.type === 'date';
     // Functional expression definitions observed in the shipped reference registry.
     const builtins: Record<string, string> = { Average: 'values.mean().round(2)', Min: 'values.min()', Max: 'values.max()', Sum: 'values.sum().round(2)', Range: dateRange ? '(values.latest() - values.earliest())' : 'values.max() - values.min()', Median: 'values.median()', Stddev: 'values.stddev().round(2)', Earliest: 'values.earliest()', Latest: 'values.latest()', Checked: 'values.filter(value == true).length', Unchecked: 'values.filter(value == false).length', Empty: 'values.filter(value.isType("null")).length', Filled: 'values.filter(!value.isType("null")).length', Unique: 'values.unique().length' };
     const expression = builtins[id]; if (!expression) throw new Error('This summary is no longer available.');
     summaries[id] = expression;
-    void track(() => controller.updateRoot(controller.state.version, { summaries })).then(() => openSummaryEditor(property, anchor, id)).catch(report);
+    void saveConfigurationCommand(() => controller.updateRoot(controller.state.version, { summaries })).then(() => openSummaryEditor(property, anchor, id, scope)).catch(report);
   }
-  function openSummaryEditor(property: string, anchor: HTMLElement, originalName?: string, suggestedName?: string): void {
+  function openSummaryEditor(property: string, anchor: HTMLElement, initialName: string, groupIndex: number | null = null): void {
     action(); if (options.readOnly || pending.size || activeDraft()) throw new Error('Finish or cancel the current edit first.');
-    const opening = controller.state, document = BaseDocument.parse(opening.source);
-    const configured = document.getRoot('summaries');
-    const summaries: Record<string, BaseValue> = configured && typeof configured === 'object' && !Array.isArray(configured) ? { ...(configured as Record<string, BaseValue>) } : {};
-    const panel = doc.createElement('section'); panel.className = 'bases-toolbar-popover'; panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', originalName ? 'Edit summary' : 'Add summary');
-    const heading = doc.createElement('h3'); heading.textContent = originalName ? 'Edit summary' : 'Add summary';
-    const form = doc.createElement('form'), fields = doc.createElement('fieldset'); fields.className = 'bases-toolbar-fields'; fields.style.border = '0'; fields.style.margin = '0';
-    const name = doc.createElement('input'); name.setAttribute('aria-label', 'Summary name'); name.value = originalName ?? suggestedName ?? 'Summary'; name.readOnly = !!originalName;
-    const expression = doc.createElement('textarea'); expression.setAttribute('aria-label', 'Summary expression'); expression.value = originalName && typeof summaries[originalName] === 'string' ? summaries[originalName] as string : 'values.length'; expression.rows = 4;
+    destroySummaryEditor?.();
+    let expectedSource = controller.state.source, acceptedName = initialName;
+    const configured = BaseDocument.parse(expectedSource).getRoot('summaries');
+    let acceptedExpression = configured && typeof configured === 'object' && !Array.isArray(configured) && typeof (configured as Record<string, BaseValue>)[initialName] === 'string' ? (configured as Record<string, BaseValue>)[initialName] as string : '';
+    const groupKey = groupIndex === null ? undefined : controller.state.result?.groups[groupIndex]?.sharedKeyId;
+    const panel = doc.createElement('section'); panel.className = 'bases-toolbar-popover bases-summary-editor'; panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Edit summary');
+    const heading = doc.createElement('h3'), title = doc.createElement('span'); title.textContent = `Edit property ${acceptedName}`;
+    const more = doc.createElement('button'); more.type = 'button'; more.className = 'bases-toolbar-menu-next'; more.setAttribute('aria-label', 'Summary actions'); more.append(icon('ellipsis-vertical', 16, doc));
+    const back = doc.createElement('button'); back.type = 'button'; back.className = 'bases-toolbar-menu-next'; back.setAttribute('aria-label', 'Back to summaries'); back.append(icon('chevron-left', 16, doc)); heading.append(back, title, more);
+    const fields = doc.createElement('fieldset'); fields.className = 'bases-toolbar-fields'; fields.style.border = '0'; fields.style.margin = '0';
+    const nameLabel = doc.createElement('label'); nameLabel.textContent = 'Summary name';
+    const name = doc.createElement('input'); name.setAttribute('aria-label', 'Summary name'); name.value = acceptedName; nameLabel.append(name);
+    const expressionLabel = doc.createElement('label'); expressionLabel.textContent = 'Formula';
+    const expression = doc.createElement('textarea'); expression.setAttribute('aria-label', 'Summary expression'); expression.placeholder = 'values.reduce( ... )'; expression.value = acceptedExpression; expression.rows = 4;
+    const help = doc.createElement('span'); help.textContent = '?'; help.title = 'Use values to calculate over the values in this result group.'; expressionLabel.append(help); fields.append(nameLabel, expressionLabel, expression);
+    const menu = doc.createElement('div'); menu.className = 'bases-summary-actions'; menu.hidden = true; menu.setAttribute('role', 'menu');
+    const remove = doc.createElement('button'); remove.type = 'button'; remove.className = 'bases-toolbar-menu-item mod-warning'; remove.textContent = 'Delete summary'; remove.setAttribute('role', 'menuitem'); menu.append(remove);
     const error = doc.createElement('div'); error.className = 'bases-toolbar-error'; error.setAttribute('role', 'alert');
-    const footer = doc.createElement('div'); footer.className = 'bases-toolbar-footer'; const cancel = doc.createElement('button'), apply = doc.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Cancel'; apply.type = 'submit'; apply.textContent = 'Apply'; apply.className = 'mod-cta';
-    let saving = false; const close = () => { if (saving) return; panel.remove(); if (summaryPanel === panel) summaryPanel = undefined; anchor.focus({ preventScroll: true }); schedule(); };
-    cancel.addEventListener('click', close); panel.addEventListener('keydown', event => { if (event.key === 'Escape' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); close(); } });
-    form.addEventListener('submit', event => { event.preventDefault(); if (saving) return;
-      void track(async () => {
-        try {
-          if (!name.value.trim() || !expression.value.trim()) throw new Error('Enter a summary name and expression.');
-          if (!originalName && Object.hasOwn(summaries, name.value.trim())) throw new Error('A summary with that name already exists.');
-          saving = true; fields.disabled = apply.disabled = cancel.disabled = true;
-          const selected = controller.state.result?.view.summaries; const selection: Record<string, BaseValue> = selected && typeof selected === 'object' && !Array.isArray(selected) ? { ...(selected as Record<string, BaseValue>) } : {};
-          summaries[name.value.trim()] = expression.value; selection[property] = name.value.trim();
-          await controller.updateConfiguration(opening.version, { root: { summaries }, view: { summaries: selection } }); saving = false; close();
-        } catch (failure) { error.textContent = failure instanceof Error ? failure.message : String(failure); throw failure; }
-        finally { saving = false; fields.disabled = apply.disabled = cancel.disabled = false; }
-      }).catch(report);
+    const retry = doc.createElement('button'); retry.type = 'button'; retry.textContent = 'Retry save'; retry.hidden = true;
+    const cancelChanges = doc.createElement('button'); cancelChanges.type = 'button'; cancelChanges.textContent = 'Cancel changes'; cancelChanges.hidden = true;
+    panel.append(heading, fields, menu, error, retry, cancelChanges); doc.body.append(panel); summaryPanel = panel;
+    let dirty = false, saving = false, destroyed = false, generation = 0, closeRequest: boolean | undefined, retryPersistence: (() => Promise<void>) | undefined;
+    let retryAccepted: { name: string; expression: string; deleted?: boolean } | undefined, timer: ReturnType<typeof setTimeout> | undefined;
+    const mark = () => { summaryDraft = dirty || saving || !!retryPersistence; panel.setAttribute('aria-busy', String(saving)); schedule(); };
+    const updateDirty = () => { dirty = name.value.trim() !== acceptedName || expression.value !== acceptedExpression; mark(); };
+    const place = () => { const bounds = anchor.getBoundingClientRect(); panel.style.left = `${Math.max(8, Math.min(bounds.left, (win?.innerWidth ?? 800) - 468))}px`; panel.style.top = `${Math.max(8, Math.min(bounds.bottom, (win?.innerHeight ?? 600) - panel.offsetHeight - 8))}px`; };
+    const cleanup = () => { if (destroyed) return; destroyed = true; if (timer) clearTimeout(timer); doc.removeEventListener('pointerdown', outside, true); win?.removeEventListener('resize', place); panel.remove(); if (summaryPanel === panel) { summaryPanel = undefined; summaryDraft = false; destroySummaryEditor = undefined; } };
+    const close = (chooser: boolean) => {
+      if (saving) { closeRequest = closeRequest === true || chooser; return; }
+      if (dirty || retryPersistence) { closeRequest = closeRequest === true || chooser; void save(); return; }
+      cleanup(); render(controller.state);
+      if (chooser) {
+        const currentGroups = controller.state.result?.groups ?? [];
+        const index = groupKey === undefined ? groupIndex : currentGroups.findIndex(group => group.sharedKeyId === groupKey);
+        mounted?.openSummaryPicker?.(property, anchor, index !== null && index < 0 ? null : index);
+      } else if (anchor.isConnected) anchor.focus({ preventScroll: true });
+      schedule();
+    };
+    const accept = (next: { name: string; expression: string; deleted?: boolean }) => {
+      acceptedName = next.name; acceptedExpression = next.expression; expectedSource = controller.state.source;
+      title.textContent = `Edit property ${acceptedName}`; retryPersistence = undefined; retryAccepted = undefined; retry.hidden = true; cancelChanges.hidden = true; fields.disabled = false; error.textContent = '';
+      updateDirty(); if (next.deleted) { dirty = false; mark(); close(true); } else if (closeRequest !== undefined && !dirty) close(closeRequest);
+    };
+    const fail = (failure: unknown, next: { name: string; expression: string; deleted?: boolean }) => {
+      error.textContent = failure instanceof Error ? failure.message : String(failure); dirty = true;
+      if (failure instanceof BaseToolbarSaveError) { retryPersistence = failure.retry; retryAccepted = next; retry.hidden = false; fields.disabled = true; } else cancelChanges.hidden = false;
+      mark();
+    };
+    async function save(): Promise<void> {
+      if (destroyed || retryPersistence) return; if (saving) return; if (!dirty) { if (closeRequest !== undefined) close(closeRequest); return; }
+      if (timer) { clearTimeout(timer); timer = undefined; }
+      const next = { name: name.value.trim(), expression: expression.value }, submitted = generation;
+      if (!next.name) { error.textContent = 'Summary name must not be empty.'; return; }
+      if (controller.state.source !== expectedSource) { error.textContent = 'This Base changed while the summary was open. Reopen its editor before saving.'; cancelChanges.hidden = false; return; }
+      saving = true; mark();
+      try { await saveConfigurationCommand(() => controller.editSummary(controller.state.version, acceptedName, next.name, next.expression)); if (!destroyed) { saving = false; accept(next); if (generation !== submitted && dirty && doc.activeElement !== name) void save(); } }
+      catch (failure) { if (!destroyed) { saving = false; fail(failure, next); } }
+      finally { saving = false; if (!destroyed) mark(); }
+    }
+    name.addEventListener('input', () => { generation++; updateDirty(); });
+    name.addEventListener('blur', () => { void save(); });
+    name.addEventListener('keydown', event => { if (event.isComposing) return; if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); name.value = acceptedName; updateDirty(); name.blur(); } else if (event.key === 'Enter') { event.preventDefault(); name.blur(); } });
+    expression.addEventListener('input', () => { generation++; updateDirty(); if (timer) clearTimeout(timer); timer = setTimeout(() => { timer = undefined; void save(); }, 250); });
+    expression.addEventListener('keydown', event => { if (event.isComposing) return; if (event.key === 'Tab') { void save(); } });
+    cancelChanges.addEventListener('click', () => { if (saving || retryPersistence) return; name.value = acceptedName; expression.value = acceptedExpression; dirty = false; mark(); close(true); });
+    back.addEventListener('click', () => close(true));
+    panel.addEventListener('keydown', event => { if (event.key === 'Escape' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); close(true); } });
+    more.addEventListener('click', () => { menu.hidden = !menu.hidden; more.setAttribute('aria-expanded', String(!menu.hidden)); });
+    remove.addEventListener('click', () => { if (saving || retryPersistence) return; if (timer) clearTimeout(timer); menu.hidden = true;
+      const next = { name: acceptedName, expression: acceptedExpression, deleted: true }; saving = true; fields.disabled = true; mark();
+      void saveConfigurationCommand(() => { if (controller.state.source !== expectedSource) throw new Error('This Base changed while the summary was open.'); return controller.removeSummary(controller.state.version, acceptedName); }).then(() => { saving = false; accept(next); }, failure => { saving = false; fields.disabled = false; fail(failure, next); });
     });
-    fields.append(name, expression); footer.append(cancel, apply); form.append(fields, error, footer); panel.append(heading, form); doc.body.append(panel); summaryPanel = panel;
-    const bounds = anchor.getBoundingClientRect(); panel.style.left = `${Math.max(8, Math.min(bounds.left, (win?.innerWidth ?? 800) - 468))}px`; panel.style.top = `${Math.max(8, Math.min(bounds.bottom, (win?.innerHeight ?? 600) - panel.offsetHeight - 8))}px`; name.focus();
+    retry.addEventListener('click', () => { if (!retryPersistence || !retryAccepted || saving) return; saving = true; mark(); const operation = retryPersistence, next = retryAccepted;
+      void track(operation).then(() => { saving = false; accept(next); }, failure => { saving = false; fail(failure, next); });
+    });
+    const outside = (event: Event) => { if (!panel.contains(event.target as Node)) close(false); };
+    doc.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', place); destroySummaryEditor = cleanup; place(); name.focus(); name.select(); mark();
   }
   async function createItem(group?: { property: string; value: BaseValue }, anchor?: HTMLElement): Promise<void> {
     action(); if (options.readOnly || !controller.state.result || sharedBasePreview(controller.state.result)) throw new Error('This base is read-only');
@@ -377,21 +450,24 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       const initial = sharedBaseWitness(before, row.path), current = sharedBaseWitness(latest, row.path);
       if (!initial || !current || initial.entryId !== current.entryId || (savedValue === undefined && initial.revision !== current.revision)) return;
       const value = row.values[original.property] ?? { type: 'null' as const };
-      if (!baseValuesEqual(value, savedValue ?? original.value, true)) return;
+      const rawValue = baseEditablePropertyValue(row, original.property), expectedValue = savedValue ?? baseEditablePropertyValue(original.row, original.property);
+      if (!rawValue || !expectedValue || !baseValuesEqual(rawValue, expectedValue, true)) return;
       const oldBase = sharedBaseWitness(before, options.basePath), newBase = sharedBaseWitness(latest, options.basePath);
       if (!oldBase || !newBase || oldBase.entryId !== newBase.entryId) return;
       rememberWidgetResult(latest, controller.state.source);
       return { version: latest.version, row, value };
     };
     const shared = { result, getPropertyLabel, getPropertyType: (property: string) => definitions.properties[basePropertyName(property)]?.type,
-      openFile(path: string, event: MouseEvent | KeyboardEvent) { try { action(); options.openFile(path, event); } catch (error) { report(error); } },
+      openFile(path: string, event: MouseEvent | KeyboardEvent, witness?: { readonly entryId: string; readonly revision: string }) { try { action(); options.openFile(path, event, witness); } catch (error) { report(error); } },
       ...(writable ? { editProperty: (edit: Parameters<typeof actions.editProperty>[0]) => track(() => { assertPropertyWritable(edit.property, edit.value); return actions.editProperty(edit); }) } : {}),
       onError: report, onEditStateChange: schedule,
       contextMenu: options.contextMenu, hoverFile: options.hoverFile, dragFile: options.dragFile,
-      renderProperty: createBasePropertyRenderer({ getDefinition: property => definitions.properties[basePropertyName(property)],
+      renderProperty: createBasePropertyRenderer({ getEditableValue: presentation => baseEditablePropertyValue(presentation.row, presentation.property), getDefinition: property => definitions.properties[basePropertyName(property)],
         commit: (edit: BasePropertyWidgetEdit) => track(async () => { assertPropertyWritable(edit.property, edit.value); await actions.editProperty(edit); return acknowledgeWidget(edit, edit.value); }), readOnly: presentation => !writable || !!definitionsError || definitions.diagnostics.some(item => item.property === basePropertyName(presentation.property)),
         isCurrent: presentation => !disposed && !!mountedResult && widgetResults.has(presentation.version),
-        getRelationTargets: options.getRelationTargets, openFile: options.openFile, onError: report,
+        getRelationTargets: options.getRelationTargets,
+        loadImage: options.loadThumbnail ? (source, signal, presentation) => options.loadThumbnail!({ row: presentation.row, property: presentation.property, value: { type: 'string', value: source }, version: presentation.version, signal }) : undefined,
+        openFile: (path, event, witness) => { try { action(); options.openFile(path, event, witness); } catch (error) { report(error); } }, onError: report,
         createOption: (property, value, presentation) => track(async () => { const definition = definitions.properties[basePropertyName(property)]; if (!definition) throw new Error('Configure this property first.'); await saveDefinition(basePropertyName(property), { ...definition, options: [...definition.options ?? [], { value }] }, definition); return acknowledgeWidget(presentation); }),
       }),
       getSummary: (property: string, groupIndex: number | null) => {
@@ -403,8 +479,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         return value ? { value, ...(typeof label === 'string' ? { label } : {}) } : undefined;
       },
       ...(writable ? {
-      requestAddSummary: (property: string, anchor: HTMLElement, name?: string) => openSummaryEditor(property, anchor, undefined, name),
-      requestEditSummary: (property: string, id: string, anchor: HTMLElement) => editSummary(property, id, anchor),
+      requestAddSummary: (property: string, anchor: HTMLElement, name?: string) => addSummary(property, anchor, name),
+      requestEditSummary: (property: string, id: string, anchor: HTMLElement, groupIndex?: number | null) => editSummary(property, id, anchor, groupIndex),
       requestHideSummary: (property: string) => track(() => {
         const active = mountedResult ?? result, current = active.view.summaries;
         const selection: Record<string, BaseValue> = current && typeof current === 'object' && !Array.isArray(current) ? { ...(current as Record<string, BaseValue>) } : {};
@@ -433,6 +509,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         const active = mountedResult ?? result;
         const current = active.view.summaries;
         const selections: Record<string, BaseValue> = current && typeof current === 'object' && !Array.isArray(current) ? { ...(current as Record<string, BaseValue>) } : {};
+        delete selections[basePropertyName(property)];
         if (id) selections[property] = id; else delete selections[property];
         return controller.updateView(numericVersion(active.version), { summaries: selections });
       }),
@@ -482,6 +559,17 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     }
     mountedResult = result; mountedDefinitionsRevision = definitionsRevision; renderStatus(state);
   }
+  const switchViewKey = (event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.isComposing || !event.shiftKey || !(event.metaKey || event.ctrlKey) || event.altKey || !['PageUp', 'PageDown'].includes(event.key)) return;
+    event.preventDefault(); event.stopPropagation();
+    try {
+      const views = BaseDocument.parse(controller.state.source).views;
+      if (!views.length) throw new Error('This Base has no views.');
+      const index = (selectedIndex + (event.key === 'PageUp' ? views.length - 1 : 1)) % views.length;
+      void selectView(index).then(() => { if (!disposed) { root.tabIndex = -1; root.focus({ preventScroll: true }); } }).catch(report);
+    } catch (error) { report(error); }
+  };
+  root.addEventListener('keydown', switchViewKey, true);
   const observer = win?.MutationObserver ? new win.MutationObserver(schedule) : undefined;
   observer?.observe(content, { subtree: true, childList: true });
   async function selectView(index: number): Promise<void> {
@@ -512,9 +600,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     try {
       await settle();
       if (close) {
-        toolbarUI.destroy(); settings.destroy(); stopDefinitions.forEach(stop => stop()); mounted?.destroy(); mounted = undefined; observer?.disconnect();
+        toolbarUI.destroy(); settings.destroy(); destroySummaryEditor?.(); stopDefinitions.forEach(stop => stop()); mounted?.destroy(); mounted = undefined; observer?.disconnect();
         if (scheduled !== undefined) clearTimeout(scheduled);
-        controller.dispose(); disposed = true; root.remove();
+        root.removeEventListener('keydown', switchViewKey, true); controller.dispose(); disposed = true; root.remove();
       }
     } catch (error) { report(error); throw error; }
     finally { closing = false; }

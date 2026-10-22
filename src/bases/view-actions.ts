@@ -6,7 +6,7 @@ import type { BaseKanbanMoveRequest } from './kanban-view.ts';
 import type { BaseKanbanGroupOrderRequest } from './kanban-columns.ts';
 import { sharedBasePreview } from './shared-query.ts';
 import { normalizeBaseProperty } from './query.ts';
-import type { BaseQueryResult } from './query.ts';
+import type { BaseQueryResult, BaseQueryRow } from './query.ts';
 import type { BaseTableEdit } from './table-view.ts';
 
 /** Convert existing presentation values explicitly; never save a display string. */
@@ -38,6 +38,13 @@ export function baseEditValue(value: BaseExpressionValue): BaseValue {
     } finally { ancestors.delete(value); }
   };
   return convert(value, 0);
+}
+
+/** Editing uses persisted source from the same row witness. Rich presentation
+ * values cannot be converted back into their original spelling or wiki aliases. */
+export function baseEditablePropertyValue(row: BaseQueryRow, property: string): BaseExpressionValue | undefined {
+  const value = row.editValues && Object.hasOwn(row.editValues, property) ? row.editValues[property] : row.values[property] ?? { type: 'null' as const };
+  try { baseEditValue(value); return value; } catch { return undefined; }
 }
 
 /** Internal bridge between the already-existing presentation and controller contracts. */
