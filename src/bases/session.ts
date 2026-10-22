@@ -305,7 +305,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const groupKey = groupIndex === null ? undefined : controller.state.result?.groups[groupIndex]?.sharedKeyId;
     const panel = doc.createElement('section'); panel.className = 'bases-toolbar-popover bases-summary-editor'; panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Edit summary');
     const heading = doc.createElement('h3'), title = doc.createElement('span'); title.textContent = `Edit property ${acceptedName}`;
-    const more = doc.createElement('button'); more.type = 'button'; more.className = 'bases-toolbar-menu-next'; more.setAttribute('aria-label', 'Summary actions'); more.append(icon('ellipsis-vertical', 16, doc));
+    const more = doc.createElement('button'); more.type = 'button'; more.className = 'bases-toolbar-menu-next'; more.setAttribute('aria-label', 'Summary actions'); more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false'); more.append(icon('ellipsis-vertical', 16, doc));
     const back = doc.createElement('button'); back.type = 'button'; back.className = 'bases-toolbar-menu-next'; back.setAttribute('aria-label', 'Back to summaries'); back.append(icon('chevron-left', 16, doc)); heading.append(back, title, more);
     const fields = doc.createElement('fieldset'); fields.className = 'bases-toolbar-fields'; fields.style.border = '0'; fields.style.margin = '0';
     const nameLabel = doc.createElement('label'); nameLabel.textContent = 'Summary name';
@@ -325,8 +325,17 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     let formulaEditor: BaseFormulaEditor | undefined;
     const mark = () => { summaryDraft = dirty || saving || !!retryPersistence; panel.setAttribute('aria-busy', String(saving)); schedule(); };
     const updateDirty = () => { dirty = name.value.trim() !== acceptedName || expression.value !== acceptedExpression; mark(); };
-    const place = () => { const bounds = anchor.getBoundingClientRect(); panel.style.left = `${Math.max(8, Math.min(bounds.left, (win?.innerWidth ?? 800) - 468))}px`; panel.style.top = `${Math.max(8, Math.min(bounds.bottom, (win?.innerHeight ?? 600) - panel.offsetHeight - 8))}px`; };
-    const cleanup = () => { if (destroyed) return; destroyed = true; if (timer) clearTimeout(timer); doc.removeEventListener('pointerdown', outside, true); win?.removeEventListener('resize', place); formulaEditor?.destroy(); panel.remove(); if (summaryPanel === panel) { summaryPanel = undefined; summaryDraft = false; destroySummaryEditor = undefined; } };
+    let anchorBounds = anchor.getBoundingClientRect();
+    const place = () => {
+      if (destroyed || !panel.isConnected) return;
+      if (anchor.isConnected) anchorBounds = anchor.getBoundingClientRect();
+      const bounds = panel.getBoundingClientRect();
+      panel.style.left = `${Math.max(8, Math.min(anchorBounds.left, (win?.innerWidth ?? 800) - bounds.width - 8))}px`;
+      panel.style.top = `${Math.max(8, Math.min(anchorBounds.bottom, (win?.innerHeight ?? 600) - bounds.height - 8))}px`;
+    };
+    const scroll = (event: Event) => { const target = event.target; if (target && 'nodeType' in target && panel.contains(target as Node)) return; place(); };
+    const resize = win?.ResizeObserver ? new win.ResizeObserver(place) : undefined;
+    const cleanup = () => { if (destroyed) return; destroyed = true; if (timer) clearTimeout(timer); doc.removeEventListener('pointerdown', outside, true); win?.removeEventListener('resize', place); win?.removeEventListener('scroll', scroll, true); resize?.disconnect(); formulaEditor?.destroy(); panel.remove(); if (summaryPanel === panel) { summaryPanel = undefined; summaryDraft = false; destroySummaryEditor = undefined; } };
     const close = (chooser: boolean) => {
       if (destroyed) return;
       if (saving) { closeRequest = closeRequest === true || chooser; return; }
@@ -372,8 +381,15 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     cancelChanges.addEventListener('click', () => { if (saving || retryPersistence) return; name.value = acceptedName; expression.value = acceptedExpression; dirty = false; mark(); close(true); });
     back.addEventListener('click', () => close(true));
     panel.addEventListener('keydown', event => { if (!event.defaultPrevented && event.key === 'Escape' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); close(true); } });
-    more.addEventListener('click', () => { menu.hidden = !menu.hidden; more.setAttribute('aria-expanded', String(!menu.hidden)); });
-    remove.addEventListener('click', () => { if (saving || retryPersistence) return; if (timer) clearTimeout(timer); menu.hidden = true;
+    const toggleActions = (open: boolean) => {
+      menu.hidden = !open; more.setAttribute('aria-expanded', String(open));
+      place(); // Revealing actions changes the measured height near the viewport bottom.
+      (open ? remove : more).focus({ preventScroll: true });
+      if (open) remove.scrollIntoView?.({ block: 'nearest' });
+    };
+    more.addEventListener('click', () => toggleActions(menu.hidden));
+    menu.addEventListener('keydown', event => { if (event.key === 'Escape' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); toggleActions(false); } });
+    remove.addEventListener('click', () => { if (saving || retryPersistence) return; if (timer) clearTimeout(timer); toggleActions(false);
       const projected = BaseDocument.parse(expectedSource); projected.removeSummary(acceptedName);
       const next: SummaryAttempt = { name: acceptedName, expression: acceptedExpression, deleted: true, source: projected.toString() }; saving = true; fields.disabled = true; expression.disabled = true; formulaEditor?.sync(); mark();
       void saveConfigurationCommand(() => { if (controller.state.source !== expectedSource) throw new Error('This Base changed while the summary was open.'); return controller.removeSummary(controller.state.version, acceptedName); }).then(() => { saving = false; accept(next); }, failure => { saving = false; fields.disabled = false; expression.disabled = false; formulaEditor?.sync(); fail(failure, next); });
@@ -382,7 +398,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       void track(operation).then(() => { saving = false; if (accept(next) && dirty && doc.activeElement !== name) void save(); }, failure => { saving = false; fail(failure, next); });
     });
     const outside = (event: Event) => { if (!panel.contains(event.target as Node)) close(false); };
-    doc.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', place); destroySummaryEditor = cleanup;
+    doc.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', place); win?.addEventListener('scroll', scroll, true); resize?.observe(panel); destroySummaryEditor = cleanup;
     try { formulaEditor = enhanceBaseSummaryEditor(expression, { onEscape: () => close(true) }); } catch (failure) { cleanup(); throw failure; }
     place(); name.focus(); name.select(); mark();
   }
