@@ -1,5 +1,19 @@
 # User findings queue
 
+## Bases actual acceptance findings — 2026-10-22
+
+Implementation is assembled in the isolated Bases coordinator branch; final
+acceptance remains open. Actual Electron campaign004 exposed loss of focus after
+removing a focused filter, which prevented Escape from closing the menu. Fixed
+in `76be6d1b` with a regression using the actual focused element; full runtime
+rerun is pending. Subsequent source audit found rooted relation links would lose
+escaping on rename and frontmatter links were absent from the mutation-local
+rename index. Controller owner is implementing exact-span safe rewriting;
+verification must include actual target rename and all durable relation values.
+REA grouping evidence also requires bounded first-match hydrated comparison;
+Rust owner is implementing that behavior. These findings are not complete based
+on source changes or focused tests alone.
+
 ## Continuous REA-based Bases UI/UX matching — 2026-10-21
 
 User reiterates exact Obsidian UI/UX during implementation and heavy REA use,

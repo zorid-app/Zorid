@@ -9,6 +9,29 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+2026-10-22 acceptance checkpoint: the isolated coordinator branch has all four
+layouts and the workspace/editor integration assembled. A bounded composed
+frontend run passed581/581; a separate31-case group capability/preview run and
+31-case desktop transport run pass (overlapping scopes, not a combined total).
+Corrected core closure `f9a4ad80` passes67 library and32 property/relation cases.
+The additive ordinary-note relation-display endpoint `5e837fcb` is source-reviewed;
+native and native-compiled WASM checks are running, not yet accepted. Actual
+Electron campaigns001–004 executed against earlier frozen builds;004 found a
+real filter focus/Escape bug, fixed in `76be6d1b`, awaiting a full rerun. Earlier
+campaign failures also corrected automation assumptions about native select-all,
+duplicate-view continuation and the filter editor. The complete heavy-user
+journey has not passed. Matching native/renderer builds, actual WASM/browser and
+CLI campaigns, screenshot comparison and main integration remain open.
+
+REA reference coverage includes51 runtime capture pairs and focused shipped-code
+evidence. Latest grouping evidence requires first-match comparison of hydrated
+keys, with different chooser and displayed-result pipelines; the Rust owner is
+implementing that behavior in isolation. Further source audit found that target
+rename must preserve rooted escaped relation links and include saved frontmatter
+references; controller owner is fixing this before the next frozen run. Ordinary
+note typed relation labels are being connected through exact saved-revision/raw
+baselines. No reference, native/mobile, or final-source acceptance is implied.
+
 2026-10-21 composed implementation checkpoint: isolated branch now includes all four layouts, configuration/creation commands, rich widgets/settings, formulas/summaries, relations/rollups and file/fenced embeds. Root owns the remaining workspace and transport composition. A 505-case bounded composed run passed504 with one obsolete Electron startup fixture; its9-case file passes after fixture correction. Subsequent rich/query/editor composition40/40 and property-target/raw-value projection19/19 pass. These test sets overlap and are not an aggregate count. Independently reviewed toolbar retry continuation now preserves newer drafts after failed saves. Native validation at corrected Rust closure `f676a5fb` passed17 focused cases: native4, host9, native-compiled WASM adapters4; this is not actual WASM runtime or final-source acceptance. Later ordinary frontmatter inference, group previews and exact raw edit-value transport are still being composed and require fresh validation. Actual full Electron heavy-user campaign, screenshot comparisons, web/CLI affected paths and main integration remain unperformed. Reference evidence/deviations: [Bases pass reference](history/bases-pass-reference-20261021.md).
 
 2026-10-21 goal activated: execute `docs/plans/bases-implementation-goal.md` until
