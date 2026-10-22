@@ -20,6 +20,8 @@ export function baseRowOpenWitness(row: BaseQueryRow): BaseRowOpenWitness | unde
 export interface BasePresentationOptions {
   readonly result: BaseQueryResult;
   readonly openFile: (path: string, event: MouseEvent | KeyboardEvent, witness?: BaseRowOpenWitness) => void;
+  /** New interactions only; existing drafts retain their original guards. */
+  readonly canBeginPropertyEdit?: () => boolean;
   readonly getPropertyLabel?: (property: string) => string;
   readonly editProperty?: (edit: { version: BaseQueryResult['version']; path: string; property: string; value: BaseExpressionValue }) => void | Promise<void>;
   /** Custom widgets own their content and must return a disposer for every acquired resource.
@@ -118,6 +120,7 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
     finally { pending = false; }
   };
   const draw = (current: BaseExpressionValue) => {
+    if (editable) { element.dataset.basePropertyEditable = 'true'; element.setAttribute('aria-disabled', String(options.canBeginPropertyEdit?.() === false)); }
     element.removeAttribute('data-base-editing');
     element.replaceChildren();
     if (property === 'file.name' || property === 'file.file') {
@@ -133,10 +136,11 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
       element.append(link);
     } else if (current.type === 'boolean') {
       const input = element.ownerDocument.createElement('input');
-      input.type = 'checkbox'; input.checked = current.value; input.disabled = !editable;
+      input.type = 'checkbox'; input.checked = current.value; input.disabled = !editable || options.canBeginPropertyEdit?.() === false;
       input.setAttribute('aria-label', options.getPropertyLabel?.(property) ?? property.replace(/^note\./, ''));
       input.addEventListener('change', async () => {
         if (pending || disposed || !isCurrent()) return;
+        if (options.canBeginPropertyEdit?.() === false) { input.checked = value.type === 'boolean' && value.value; return; }
         const next = input.checked; input.disabled = true; element.dataset.baseEditing = 'pending';
         const accepted = await commit({ type: 'boolean', value: next });
         if (!disposed && isCurrent()) {
@@ -154,7 +158,7 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
   };
   draw(value);
   const beginEdit = (event: MouseEvent) => {
-    if (!editable || disposed || pending || !isCurrent() || (value.type !== 'string' && value.type !== 'number' && value.type !== 'null')) return;
+    if (!editable || disposed || pending || options.canBeginPropertyEdit?.() === false || !isCurrent() || (value.type !== 'string' && value.type !== 'number' && value.type !== 'null')) return;
     if (element.querySelector('input')) return;
     event.preventDefault(); event.stopPropagation();
     const input = element.ownerDocument.createElement('input');
@@ -208,7 +212,7 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
   };
   element.addEventListener('click', beginEdit);
   element.addEventListener('dblclick', beginEdit);
-  return () => { disposed = true; element.removeEventListener('click', beginEdit); element.removeEventListener('dblclick', beginEdit); };
+  return () => { disposed = true; delete element.dataset.basePropertyEditable; element.removeAttribute('aria-disabled'); element.removeEventListener('click', beginEdit); element.removeEventListener('dblclick', beginEdit); };
 }
 
 export interface VirtualUnit {

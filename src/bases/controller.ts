@@ -206,6 +206,12 @@ export class BaseController {
 
   get state(): BaseControllerState { return this.current; }
   get basePath(): string { return this.path; }
+  /** Admission for a new property interaction only. Existing drafts/writes keep
+   * their captured guards. A coherent publish precedes refresh's final flag reset. */
+  get canBeginPropertyEdit(): boolean {
+    return !this.disposed && this.current === this.settled && !this.stale && !this.requested
+      && !this.current.updating && !this.current.error && !!this.current.result && !sharedBasePreview(this.current.result);
+  }
   /** Host-wide saved-name notification. Passive embeds retain their drafts and
    * exact original binding; the host chooses when to refresh/render them. */
   rebindViewName(from: string, to: string): boolean {

@@ -47,6 +47,8 @@ export interface BasePropertyWidgetOptions {
   readonly loadImage?: (source: string, signal: AbortSignal, presentation: BasePropertyPresentation) => Promise<{ readonly url: string; dispose(): void } | null>;
   readonly openFile?: (path: string, event: MouseEvent | KeyboardEvent, witness?: { readonly entryId: string; readonly revision: string; readonly subpath?: string }) => void;
   readonly readOnly?: (presentation: BasePropertyPresentation) => boolean;
+  /** Live gate for new interactions; never revokes an existing draft or write. */
+  readonly canBegin?: () => boolean;
   readonly isCurrent?: (presentation: BasePropertyPresentation) => boolean;
   readonly createOption?: (property: string, value: string, presentation: BasePropertyPresentation) => void | BasePropertyWidgetAcknowledgement | Promise<void | BasePropertyWidgetAcknowledgement>;
   readonly onError?: (error: unknown) => void;
@@ -243,15 +245,17 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     disposeRich?.(); disposeRich = undefined;
     input = undefined; mark(); element.replaceChildren();
     element.classList.add('bases-metadata-value', 'metadata-property-value'); element.dataset.propertyType = type;
-    if (editable) element.tabIndex = 0;
+    if (editable) { element.tabIndex = 0; element.dataset.basePropertyEditable = 'true'; element.setAttribute('aria-disabled', String(options.canBegin?.() === false)); }
     const diagnostic = rawUnavailable ? 'Saved property text is unavailable; refresh before editing.' : presentation.property.startsWith('note.') ? basePropertyValueDiagnostic(value, definition) : undefined;
     if (rawUnavailable) element.dataset.baseEditUnavailable = 'true'; else element.removeAttribute('data-base-edit-unavailable');
     element.classList.toggle('mod-error', !!diagnostic || value.type === 'error'); element.title = diagnostic ?? (value.type === 'error' ? value.error.message : '');
     if (type === 'checkbox' && (!diagnostic || value.type === 'null')) {
-      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.className = 'metadata-input-checkbox'; checkbox.checked = value.type === 'boolean' && value.value; checkbox.indeterminate = value.type === 'null'; checkbox.disabled = !editable; checkbox.setAttribute('aria-label', presentation.property.replace(/^note\./, ''));
-      checkbox.addEventListener('click', event => event.stopPropagation());
+      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.className = 'metadata-input-checkbox'; checkbox.checked = value.type === 'boolean' && value.value; checkbox.indeterminate = value.type === 'null'; checkbox.disabled = !editable || options.canBegin?.() === false; checkbox.setAttribute('aria-label', presentation.property.replace(/^note\./, ''));
+      const canBeginCheckbox = () => editable && (element.dataset.baseEditing === 'draft' || options.canBegin?.() !== false);
+      checkbox.addEventListener('click', event => { event.stopPropagation(); if (!canBeginCheckbox()) event.preventDefault(); });
       checkbox.addEventListener('change', async () => {
         if (pending || !current()) return;
+        if (!canBeginCheckbox()) { checkbox.checked = value.type === 'boolean' && value.value; checkbox.indeterminate = value.type === 'null'; return; }
         // Chromium can blur a control as soon as it becomes disabled. Capture
         // keyboard ownership first, and relinquish it if any other node focuses.
         const ownedFocus = document.activeElement === checkbox;
@@ -424,7 +428,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     } catch (failure) { error(failure); }
   }
   function begin(event: MouseEvent | KeyboardEvent) {
-    if (!editable || !current() || pending || editing) return;
+    if (!editable || !current() || pending || editing || options.canBegin?.() === false) return;
     if ((event.target as HTMLElement).closest('a,button,input,[role="link"]')) return;
     event.preventDefault(); event.stopPropagation(); editing = true; draftChanged = false; mark('draft');
     draft = value.type === 'list' ? value.value.map(renderText) : value.type === 'null' ? [] : [renderText(value)];
@@ -468,5 +472,5 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   const activate = (event: MouseEvent) => { if (!event.defaultPrevented && event.button === 0) begin(event); };
   const key = (event: KeyboardEvent) => { if (event.key === 'Escape' && !pending && type === 'checkbox' && element.hasAttribute('data-base-editing')) { event.preventDefault(); draw(); return; } if (!event.defaultPrevented && !event.isComposing && event.target === element && ['Enter', 'F2'].includes(event.key)) begin(event); };
   element.addEventListener('click', activate); element.addEventListener('dblclick', activate); element.addEventListener('keydown', key); draw();
-  return () => { disposed = true; delete element.dataset.baseWidgetVersion; removeFocusObserver?.(); removeFocusObserver = undefined; disposeRich?.(); disposeRich = undefined; closePopup(); timers.forEach(clearTimeout); timers.clear(); mark(); element.removeEventListener('click', activate); element.removeEventListener('dblclick', activate); element.removeEventListener('keydown', key); };
+  return () => { disposed = true; delete element.dataset.baseWidgetVersion; delete element.dataset.basePropertyEditable; element.removeAttribute('aria-disabled'); removeFocusObserver?.(); removeFocusObserver = undefined; disposeRich?.(); disposeRich = undefined; closePopup(); timers.forEach(clearTimeout); timers.clear(); mark(); element.removeEventListener('click', activate); element.removeEventListener('dblclick', activate); element.removeEventListener('keydown', key); };
 }

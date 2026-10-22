@@ -140,6 +140,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   let notice: string | undefined;
   let scheduled: ReturnType<typeof setTimeout> | undefined;
   const pending = new Set<Promise<unknown>>(), changedBuffers = new Set<NoteBuffer>();
+  let configurationLifecycle = 0;
+  const canBeginPropertyEdit = () => !disposed && !closing && !configurationLifecycle && !pending.size && !mounted?.hasQueuedConfiguration?.() && !mounted?.hasActiveEdits?.() && controller.canBeginPropertyEdit;
   const alive = () => { options.validate(); if (disposed) throw new Error('This base view is closed'); };
   const action = () => { alive(); if (closing) throw new Error('This base view is closing'); notice = undefined; };
   const report = (error: unknown) => {
@@ -158,11 +160,11 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const releaseCleanBuffers = () => { for (const buffer of changedBuffers) if (!buffer.dirty && !buffer.error) changedBuffers.delete(buffer); };
   const track = <T>(operation: () => Promise<T>): Promise<T> => {
     action();
-    const promise = operation(); pending.add(promise);
+    const promise = operation(); pending.add(promise); renderStatus(controller.state);
     const settled = () => {
       pending.delete(promise);
       releaseCleanBuffers();
-      schedule();
+      renderStatus(controller.state); schedule();
     };
     void promise.then(settled, error => { settled(); report(error); });
     return promise;
@@ -182,7 +184,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     capture: zone => hostClock.capture(zone), scheduleAt: (deadline, callback) => hostClock.scheduleAt(deadline, callback),
     isVisible: () => hostClock.isVisible() && (options.visibility?.isVisible() ?? true),
     subscribeWake(callback) {
-      const stopClock = hostClock.subscribeWake(callback), stopPane = options.visibility?.subscribe(callback);
+      const wake = () => { callback(); renderStatus(controller.state); };
+      const stopClock = hostClock.subscribeWake(wake), stopPane = options.visibility?.subscribe(wake);
       return () => { stopClock(); stopPane?.(); };
     },
   };
@@ -238,7 +241,11 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   function saveConfigurationCommand(operation: () => Promise<void>): Promise<void> {
     action(); if (options.readOnly) return Promise.reject(new Error('This base is read-only'));
     const attempt: { buffer?: NoteBuffer; text?: string } = {}; configurationAttempt = attempt;
-    return track(operation).catch(error => {
+    configurationLifecycle++; renderStatus(controller.state);
+    let saving: Promise<void>;
+    try { saving = track(operation); }
+    catch (error) { if (configurationAttempt === attempt) configurationAttempt = undefined; configurationLifecycle--; renderStatus(controller.state); throw error; }
+    const command = saving.catch(error => {
       const buffer = attempt.buffer, text = attempt.text;
       if (controller.hasPendingViewReferences) throw new BaseToolbarSaveError(error instanceof Error ? error.message : String(error), () => track(async () => { await controller.retryViewRenameReferences(); }));
       if (buffer && (buffer.dirty || buffer.error)) throw new BaseToolbarSaveError(error instanceof Error ? error.message : String(error), () => track(async () => {
@@ -247,7 +254,13 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         await buffer.flush(); if (!await controller.acknowledgeConfigurationRetry()) await controller.refresh();
       }));
       throw error;
-    }).finally(() => { if (configurationAttempt === attempt) configurationAttempt = undefined; });
+    }).finally(() => { if (configurationAttempt === attempt) configurationAttempt = undefined; configurationLifecycle--; renderStatus(controller.state); schedule(); });
+    // Retain the complete configuration continuation without reporting its UI
+    // recovery wrapper twice. The original operation/error stays owned by track.
+    pending.add(command);
+    const settled = () => { pending.delete(command); releaseCleanBuffers(); renderStatus(controller.state); schedule(); };
+    void command.then(settled, settled);
+    return command;
   }
   function assertPropertyWritable(property: string, value?: import('./expression.ts').BaseExpressionValue): void {
     const invalid = definitions.diagnostics.find(item => item.property === basePropertyName(property));
@@ -439,10 +452,18 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     link.click(); setTimeout(() => win.URL.revokeObjectURL(url), 0);
   }
   function renderStatus(state: BaseControllerState): void {
+    if (disposed) return;
     root.dataset.baseControllerVersion = String(state.version);
     root.dataset.baseControllerUpdating = String(!!state.updating);
     root.dataset.baseControllerError = String(!!state.error);
-    content.setAttribute('aria-busy', String(state.updating));
+    const configurationBusy = !!configurationLifecycle || !!mounted?.hasQueuedConfiguration?.();
+    const admissionBusy = configurationBusy || !!pending.size || (!state.error && !controller.canBeginPropertyEdit);
+    content.setAttribute('aria-busy', String(admissionBusy));
+    for (const element of content.querySelectorAll<HTMLElement>('[data-base-property-editable], [role="gridcell"][aria-readonly="false"]')) {
+      if (element.hasAttribute('data-base-editing') || element.querySelector('[data-base-editing]')) continue;
+      element.setAttribute('aria-disabled', String(!canBeginPropertyEdit()));
+      for (const checkbox of element.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) checkbox.disabled = !canBeginPropertyEdit();
+    }
     if (state.error) { status.textContent = state.error.message; return; }
     if (definitionsError) { status.textContent = `Property settings: ${definitionsError}`; return; }
     if (definitions.diagnostics.length) { status.textContent = definitions.diagnostics.map(item => `${item.property ?? 'Property'}: ${item.message}`).join(' '); return; }
@@ -458,7 +479,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       return;
     }
     if (state.previewStatus) { status.textContent = state.previewStatus; return; }
-    if (state.updating) { status.textContent = state.result ? 'Updating…' : 'Loading saved results…'; return; }
+    if (configurationBusy) { status.textContent = 'Saving view…'; return; }
+    if (state.updating || !controller.canBeginPropertyEdit) { status.textContent = state.result ? 'Updating…' : 'Loading saved results…'; return; }
     const coverage = state.result && sharedBaseCoverage(state.result);
     status.textContent = coverage && !coverage.generationComplete ? 'Some saved files are unavailable in these results.'
       : coverage && !coverage.metadataComplete ? 'Some saved properties are unavailable in these results.' : notice ?? '';
@@ -527,12 +549,12 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       }
       return targets;
     };
-    const shared = { result, getEditableValue: baseEditablePropertyValue, getPropertyLabel, getPropertyType: (property: string) => definitions.properties[basePropertyName(property)]?.type,
+    const shared = { result, canBeginPropertyEdit, getEditableValue: baseEditablePropertyValue, getPropertyLabel, getPropertyType: (property: string) => definitions.properties[basePropertyName(property)]?.type,
       openFile: openResultFile,
       ...(writable ? { editProperty: (edit: Parameters<typeof actions.editProperty>[0]) => track(() => { assertPropertyWritable(edit.property, edit.value); return actions.editProperty(edit); }) } : {}),
-      onError: report, onEditStateChange: schedule,
+      onError: report, onEditStateChange: () => { renderStatus(controller.state); schedule(); },
       contextMenu: options.contextMenu, hoverFile: options.hoverFile, dragFile: options.dragFile,
-      renderProperty: createBasePropertyRenderer({ getEditableValue: presentation => baseEditablePropertyValue(presentation.row, presentation.property), getDefinition: property => definitions.properties[basePropertyName(property)],
+      renderProperty: createBasePropertyRenderer({ canBegin: canBeginPropertyEdit, getEditableValue: presentation => baseEditablePropertyValue(presentation.row, presentation.property), getDefinition: property => definitions.properties[basePropertyName(property)],
         commit: (edit: BasePropertyWidgetEdit) => track(async () => { assertPropertyWritable(edit.property, edit.value); await actions.editProperty(edit); return acknowledgeWidget(edit, edit.value); }), readOnly: presentation => !writable || !!definitionsError || definitions.diagnostics.some(item => item.property === basePropertyName(presentation.property)),
         isCurrent: presentation => !disposed && !!mountedResult && widgetResults.has(presentation.version),
         getRelationTargets,
@@ -575,7 +597,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         return order.filter(id => Object.hasOwn(previews, id)).map(id => ({ id, label: id, preview: previews[id] }));
       },
       summaryOptions: [...new Set(['Average','Min','Max','Sum','Range','Median','Stddev','Earliest','Latest','Checked','Unchecked','Empty','Filled','Unique', ...Object.keys((document.getRoot('summaries') as Record<string, BaseValue>) ?? {})])].map(id => ({ id, label: id })),
-      ...(writable ? { requestSummary: (property: string, id: string) => track(() => {
+      ...(writable ? { requestSummary: (property: string, id: string) => saveConfigurationCommand(() => {
         const active = renderingResult ?? mountedResult ?? result;
         const current = active.view.summaries;
         const selections: Record<string, BaseValue> = current && typeof current === 'object' && !Array.isArray(current) ? { ...(current as Record<string, BaseValue>) } : {};
@@ -594,7 +616,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
           await options.deleteFiles!(rows, active);
         }) } : {}),
         editProperties: (edits: readonly import('./table-view.ts').BaseTableEdit[]) => track(() => { edits.forEach(edit => assertPropertyWritable(edit.property)); return actions.editProperties(edits); }),
-        patchView: (patch: BaseViewPatch) => track(() => controller.updateView(numericVersion(mountedResult?.version ?? result.version), patch)),
+        patchView: (patch: BaseViewPatch) => saveConfigurationCommand(() => controller.updateView(numericVersion(mountedResult?.version ?? result.version), patch)),
         onConfigurationSettled: () => {
           if (disposed) return;
           const state = controller.state; if (!closing) render(state);
@@ -704,9 +726,10 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         root.removeEventListener('keydown', switchViewKey, true); controller.dispose(); disposed = true; root.remove();
       }
     } catch (error) { report(error); throw error; }
-    finally { closing = false; }
+    finally { closing = false; renderStatus(controller.state); }
   }
-  const stopDefinitions = (['create', 'modify', 'rename', 'delete'] as const).map(event => options.vault.on(event, change => {
+  const stopDefinitions = (['create', 'modify', 'rename', 'delete', 'ready'] as const).map(event => options.vault.on(event, change => {
+    renderStatus(controller.state);
     if (change.path === BASE_PROPERTY_DEFINITIONS_PATH || change.oldPath === BASE_PROPERTY_DEFINITIONS_PATH) void loadDefinitions().catch(report);
   }));
   return {

@@ -23,6 +23,8 @@ export interface BaseTableOptions {
   readonly openFile: (path: string, event: MouseEvent | KeyboardEvent, witness?: BaseTableFileWitness) => void;
   /** Host must revalidate version/path/property and publish a new result after saving. */
   readonly editProperty?: (edit: BaseTableEdit) => Promise<void>;
+  /** Live admission for new cell/bulk edits; header resize has its own queue. */
+  readonly canBeginPropertyEdit?: () => boolean;
   readonly getPropertyType?: (property: string) => string | undefined;
   readonly getPropertyLabel?: (property: string) => string;
   readonly onError?: (error: unknown) => void;
@@ -440,8 +442,9 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       if (cell.dataset.path === path && cell.dataset.property === property && (!point || cell.dataset.group === String(point.group) && cell.dataset.row === String(point.row))) { cell.focus(); break; }
     }
   }
+  const propertyAdmissionBlocked = () => configPending || !!resizeCommands.length || !!awaitingConfigurationResult || options.canBeginPropertyEdit?.() === false;
   function startEdit(cell: HTMLElement, row: BaseQueryRow, property: string, value: BaseExpressionValue, toggle = false) {
-    if (destroyed || editing || range || !editable(row, property, value)) return;
+    if (destroyed || editing || range || propertyAdmissionBlocked() || !editable(row, property, value)) return;
     const token = revision, version = result.version;
     const multiline = value.type === 'string' && /[\r\n]/.test(value.value);
     editing = cell; cell.dataset.baseEditing = 'draft'; options.onEditStateChange?.(true); const input = multiline ? doc.createElement('textarea') : doc.createElement('input');
@@ -509,6 +512,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     cell.dataset.path = row.path; cell.dataset.property = property; cell.dataset.group = String(point.group); cell.dataset.row = String(point.row); cell.dataset.column = String(index);
     cell.tabIndex = selection?.path === row.path && selection.property === property && (!selection.point || selection.point.group === point.group && selection.point.row === point.row) ? 0 : -1;
     cell.setAttribute('aria-readonly', String(!editable(row, property, value)));
+    if (editable(row, property, value)) cell.setAttribute('aria-disabled', String(propertyAdmissionBlocked()));
     if (options.renderProperty && property !== 'file.name' && property !== 'file.file') {
       try { const dispose = options.renderProperty(cell, { row, property, value, version: result.version }); if (dispose) widgetDisposers.set(cell, dispose); } catch (error) { report(error); cell.textContent = display(value, result.shared !== undefined); }
     } else if (property === 'file.name' || property === 'file.file') {
@@ -518,7 +522,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       link.addEventListener('auxclick', event => { if (event.button === 1) { event.preventDefault(); if (current() && !suppressClick && (!event.shiftKey || event.metaKey || event.ctrlKey)) openRow(event); } });
       cell.append(link);
     } else if (value.type === 'boolean') {
-      const checkbox = doc.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = value.value; checkbox.disabled = !editable(row, property, value); checkbox.tabIndex = -1;
+      const checkbox = doc.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = value.value; checkbox.disabled = !editable(row, property, value) || propertyAdmissionBlocked(); checkbox.tabIndex = -1;
       checkbox.setAttribute('aria-label', property);
       checkbox.addEventListener('click', event => { event.preventDefault(); if (current()) startEdit(cell, row, property, value, true); });
       cell.append(checkbox);
@@ -771,7 +775,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     const token = revision, bounds = selectedBounds(); if (!bounds || !win?.navigator.clipboard?.readText) return;
     try {
       const text = await win.navigator.clipboard.readText();
-      if (destroyed || token !== revision || hasActiveEdits()) return;
+      if (destroyed || token !== revision || hasActiveEdits() || propertyAdmissionBlocked()) return;
       // Keep the original selection: focus changes while clipboard permission is pending must not retarget a paste.
       if (JSON.stringify(selectedBounds()) !== JSON.stringify(bounds)) return;
       pasteValues({ getData: type => type === 'text/plain' ? text : '' });
@@ -784,14 +788,14 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     event.preventDefault();
   }
   async function commitBatch(edits: readonly BaseTableEdit[]) {
-    if (!edits.length || !options.editProperties || hasActiveEdits()) return;
+    if (!edits.length || !options.editProperties || hasActiveEdits() || propertyAdmissionBlocked()) return;
     const token = revision; bulkPending = true; root.setAttribute('aria-busy', 'true'); options.onEditStateChange?.(true);
     try { await options.editProperties(edits); if (!destroyed && token === revision) status.textContent = ''; }
     catch (error) { if (!destroyed && token === revision) report(error); }
     finally { bulkPending = false; root.removeAttribute('aria-busy'); if (!destroyed) options.onEditStateChange?.(hasActiveEdits()); }
   }
   async function clearSelection() {
-    const bounds = selectedBounds(); if (!bounds || hasActiveEdits() || !options.editProperties) return;
+    const bounds = selectedBounds(); if (!bounds || hasActiveEdits() || propertyAdmissionBlocked() || !options.editProperties) return;
     const edits: BaseTableEdit[] = [];
     for (let r = bounds.top; r <= bounds.bottom; r++) {
       const row = result.groups[bounds.group]?.rows[r]; if (!row) continue;
@@ -803,14 +807,14 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     await commitBatch(edits);
   }
   function onPaste(event: ClipboardEvent) {
-    if (destroyed || event.defaultPrevented || !event.clipboardData || !options.editProperties || hasActiveEdits() || textOwnsClipboard(event)) return;
+    if (destroyed || event.defaultPrevented || !event.clipboardData || !options.editProperties || hasActiveEdits() || propertyAdmissionBlocked() || textOwnsClipboard(event)) return;
     const bounds = selectedBounds(); if (!bounds) return;
     event.preventDefault();
     pasteValues(event.clipboardData);
   }
   function pasteValues(clipboard: Pick<DataTransfer, 'getData'>) {
     try {
-      const bounds = selectedBounds(); if (!bounds || hasActiveEdits() || !options.editProperties) return;
+      const bounds = selectedBounds(); if (!bounds || hasActiveEdits() || propertyAdmissionBlocked() || !options.editProperties) return;
       let rows: string[][], plainScalar: string | undefined, rawRows: { type: string; data?: unknown }[][] | undefined;
       const cells = clipboard.getData('obsidian/bases-cells');
       if (cells) {
@@ -876,6 +880,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   function protectRangeClick(event: MouseEvent) {
     const target = event.target as Element | null, cell = target?.closest<HTMLElement>('[role="gridcell"][data-path]');
     if (!cell || !body.contains(cell)) return;
+    if (propertyAdmissionBlocked() && cell.dataset.property?.startsWith('note.') && !cell.hasAttribute('data-base-editing') && !cell.querySelector('[data-base-editing]') && !target?.closest('a,[role=link]')) { event.preventDefault(); event.stopImmediatePropagation(); return; }
     if (suppressClick) { suppressClick = false; event.preventDefault(); event.stopImmediatePropagation(); return; }
     // Property widgets install their own target listeners before table handlers.
     // A selection gesture must reach table navigation without opening a widget.
@@ -883,6 +888,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   }
   function protectRangeKey(event: KeyboardEvent) {
     const cell = event.target as HTMLElement | null;
+    if (!event.isComposing && propertyAdmissionBlocked() && cell?.getAttribute('role') === 'gridcell' && body.contains(cell) && ['Enter', 'F2', 'Delete', 'Backspace'].includes(event.key)) { event.preventDefault(); event.stopImmediatePropagation(); return; }
     if (!event.isComposing && range && cell?.getAttribute('role') === 'gridcell' && body.contains(cell) && ['Enter', 'F2'].includes(event.key)) { event.preventDefault(); event.stopImmediatePropagation(); }
   }
   function onPointerDown(event: PointerEvent) {
@@ -927,7 +933,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     if (!active) scheduleResizeCommands();
   }) : undefined;
   editObserver?.observe(body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-base-editing'] });
-  root.addEventListener('click', protectRangeClick, true); root.addEventListener('keydown', protectRangeKey, true);
+  root.addEventListener('click', protectRangeClick, true); root.addEventListener('dblclick', protectRangeClick, true); root.addEventListener('keydown', protectRangeKey, true);
   root.addEventListener('copy', onCopy);
   root.addEventListener('paste', onPaste); root.addEventListener('keydown', onHistory);
   root.addEventListener('pointerdown', onPointerDown);
@@ -977,5 +983,5 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     const headerCell = header.children[result.properties.indexOf(property)] as HTMLElement | undefined;
     const target = anchor.isConnected && root.contains(anchor) ? anchor : replacement ?? headerCell;
     if (target) showSummaryPicker(property, target, groupIndex);
-  }, update, refreshLayout() { if (!destroyed) { dimensions(); rebuildItems(); renderRows(); } }, hasActiveEdits, hasQueuedConfiguration: () => !destroyed && !!resizeCommands.length, destroy() { if (destroyed) return; destroyed = true; resizeCommands.length = 0; awaitingConfigurationResult = undefined; revision++; stopDrag?.(); stopResize?.(); closeMenu?.(); closePicker?.(); draggedColumn = undefined; editObserver?.disconnect(); for (const cell of [...widgetDisposers.keys()]) releaseCell(cell); root.removeEventListener('click', protectRangeClick, true); root.removeEventListener('keydown', protectRangeKey, true); root.removeEventListener('paste', onPaste); root.removeEventListener('keydown', onHistory); root.removeEventListener('copy', onCopy); root.removeEventListener('pointerdown', onPointerDown); editing = undefined; if (frame !== undefined) win?.cancelAnimationFrame(frame); resize?.disconnect(); root.removeEventListener('scroll', schedule); root.remove(); status.remove(); } };
+  }, update, refreshLayout() { if (!destroyed) { dimensions(); rebuildItems(); renderRows(); } }, hasActiveEdits, hasQueuedConfiguration: () => !destroyed && !!resizeCommands.length, destroy() { if (destroyed) return; destroyed = true; resizeCommands.length = 0; awaitingConfigurationResult = undefined; revision++; stopDrag?.(); stopResize?.(); closeMenu?.(); closePicker?.(); draggedColumn = undefined; editObserver?.disconnect(); for (const cell of [...widgetDisposers.keys()]) releaseCell(cell); root.removeEventListener('click', protectRangeClick, true); root.removeEventListener('dblclick', protectRangeClick, true); root.removeEventListener('keydown', protectRangeKey, true); root.removeEventListener('paste', onPaste); root.removeEventListener('keydown', onHistory); root.removeEventListener('copy', onCopy); root.removeEventListener('pointerdown', onPointerDown); editing = undefined; if (frame !== undefined) win?.cancelAnimationFrame(frame); resize?.disconnect(); root.removeEventListener('scroll', schedule); root.remove(); status.remove(); } };
 }
