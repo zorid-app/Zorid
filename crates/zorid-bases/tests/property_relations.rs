@@ -1508,24 +1508,44 @@ fn empty_typed_group_options_supply_safe_new_item_values() {
 #[test]
 fn explicit_text_group_keys_keep_their_original_raw_identity_during_manual_order() {
     let settings = "properties:\n  code:\n    type: text\n";
-    let before = generation(
-        settings,
-        &[
-            ("first", "---\ncode: '[[../Not-a-relation]]'\n---\n"),
-            ("second", "---\ncode: '2026-01-01'\n---\n"),
-        ],
-    );
+    let source="filters: 'code != null'\nviews:\n  - type: table\n    name: Text\n    groupBy: {property: code, direction: ASC}\n    groupOrder: ['[[../Not-a-relation]]','2026-01-01']\n";
+    let before = generation_from_records(vec![
+        ("settings", "Properties.yaml".into(), settings.into(), false),
+        ("base", "Config/Text.base".into(), source.into(), false),
+        (
+            "first",
+            "Books/first.md".into(),
+            "---\ncode: '[[../Not-a-relation]]'\n---\n".into(),
+            true,
+        ),
+        (
+            "second",
+            "Books/second.md".into(),
+            "---\ncode: '2026-01-01'\n---\n".into(),
+            true,
+        ),
+    ]);
     let definitions =
         PropertyDefinitions::from_generation_source(&before, &id("settings"), settings).unwrap();
-    let program=compile_base_source("filters: 'code != null'\nviews:\n  - type: table\n    name: Text\n    groupBy: {property: code, direction: ASC}\n    groupOrder: ['[[../Not-a-relation]]','2026-01-01']\n").unwrap();
-    let result = query_generation_with_properties(
-        &program,
-        &before,
-        &[],
-        &definitions,
-        &QueryOptions::default(),
-    )
-    .unwrap();
+    let program = compile_base_source(source).unwrap();
+    // Manual keys use frontmatter hydration even for an explicitly Text note
+    // property. A relative wiki-shaped key still needs the verified Base origin.
+    assert_eq!(
+        query_generation_with_properties(
+            &program,
+            &before,
+            &[],
+            &definitions,
+            &QueryOptions::default()
+        )
+        .unwrap_err()
+        .code,
+        "unavailable"
+    );
+    let mut options = QueryOptions::default();
+    options.definition_entry_id = Some(id("base"));
+    let result =
+        query_generation_with_properties(&program, &before, &[], &definitions, &options).unwrap();
     assert_eq!(result.groups.len(), 2);
     assert!(result
         .groups
