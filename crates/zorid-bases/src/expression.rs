@@ -437,6 +437,7 @@ pub(crate) struct BasesEvaluationContext<'a> {
     pub formulas: Arc<IndexMap<String, String>>,
     pub link_resolutions: Arc<BTreeMap<String, Option<String>>>,
     pub now: Option<String>,
+    pub random_seed: Option<u64>,
     pub timezone: BasesTimezone,
     /// Optional semantic work ceiling used by bounded hosted execution. One
     /// unit is charged for every AST node evaluation, including nested list
@@ -471,6 +472,7 @@ pub(crate) struct BasesLink {
     pub target: Option<super::RecordWitness>,
     pub path: String,
     pub display: Option<String>,
+    pub display_value: Option<Box<RuntimeValue>>,
     pub resolved_path: Option<Option<String>>,
     pub external: bool,
 }
@@ -695,6 +697,9 @@ pub(crate) fn runtime_from_base_value(
         match value {
             RuntimeValue::Link(link) => {
                 link.resolved_path = Some(link.target.as_ref().map(|_| link.path.clone()));
+                if let Some(display) = link.display_value.as_deref_mut() {
+                    mark(display);
+                }
             }
             RuntimeValue::List(values) => values.iter_mut().for_each(mark),
             RuntimeValue::Object(values) => values.values_mut().for_each(mark),
@@ -719,6 +724,7 @@ pub(crate) fn evaluate_summary(
         .map_err(|message| ExpressionDiagnostic::new("input", message))?;
     let context = BasesEvaluationContext {
         relationships,
+        random_seed: options.random_seed,
         now: Some(
             invocation_clock(options.clock_ms)
                 .ok_or_else(|| {
@@ -853,6 +859,7 @@ fn summary_runtime_value(
             path,
             target,
             display,
+            display_value,
             external,
         } => {
             *bytes = bytes.saturating_add(path.len() + display.as_ref().map_or(0, String::len));
@@ -860,9 +867,28 @@ fn summary_runtime_value(
                 path: path.clone(),
                 target: target.clone(),
                 display: display.clone(),
+                display_value: display_value
+                    .as_deref()
+                    .map(|value| {
+                        summary_runtime_value(value, depth + 1, bytes, evaluator, file)
+                            .map(Box::new)
+                    })
+                    .transpose()?,
                 external: *external,
                 ..Default::default()
             })
+        }
+        BaseValue::Html { value } => {
+            *bytes = bytes.saturating_add(value.len());
+            RuntimeValue::Html(value.clone())
+        }
+        BaseValue::Image { value } => {
+            *bytes = bytes.saturating_add(value.len());
+            RuntimeValue::Image(value.clone())
+        }
+        BaseValue::Icon { value } => {
+            *bytes = bytes.saturating_add(value.len());
+            RuntimeValue::Icon(value.clone())
         }
         BaseValue::Error { code, message } => {
             *bytes = bytes.saturating_add(code.len() + message.len());
@@ -1027,7 +1053,9 @@ pub(crate) fn clock_dependency(
                         "now" => Dependency::Instant,
                         "today" => Dependency::Day,
                         "if" | "escapeHTML" | "date" | "duration" | "list" | "max" | "min"
-                        | "number" => Dependency::None,
+                        | "number" | "file" | "link" | "html" | "image" | "icon" | "random" => {
+                            Dependency::None
+                        }
                         _ => Dependency::Instant,
                     },
                     Expr::Member(receiver, Member::Named(method)) => {
@@ -1042,9 +1070,8 @@ pub(crate) fn clock_dependency(
                             | "format" | "time" | "filter" | "flat" | "join" | "map" | "reduce"
                             | "sort" | "unique" | "sum" | "mean" | "min" | "max" | "median"
                             | "stddev" | "earliest" | "latest" | "keys" | "values" | "matches"
-                            | "hasLink" | "asLink" | "hasProperty" | "hasTag" | "inFolder" => {
-                                Dependency::None
-                            }
+                            | "hasLink" | "asLink" | "asFile" | "linksTo" | "hasProperty"
+                            | "hasTag" | "inFolder" => Dependency::None,
                             _ => Dependency::Instant,
                         };
                         own.join(walk(receiver, check)?)
@@ -1369,6 +1396,7 @@ fn expression_uses_relationships(expression: &Expr) -> bool {
                     "hasLink",
                     "asFile",
                     "asLink",
+                    "linksTo",
                 ],
             );
             relationship_member
@@ -1377,9 +1405,9 @@ fn expression_uses_relationships(expression: &Expr) -> bool {
         }
         Expr::Call(callee, arguments) => {
             let relationship_call = match callee.as_ref() {
-                Expr::Identifier(name) => name == "file",
+                Expr::Identifier(name) => matches!(name.as_str(), "file" | "link" | "image"),
                 Expr::Member(_, Member::Named(name)) => {
-                    matches!(name.as_str(), "hasLink" | "asFile" | "asLink")
+                    matches!(name.as_str(), "hasLink" | "asFile" | "asLink" | "linksTo")
                 }
                 _ => false,
             };
@@ -1417,12 +1445,28 @@ struct Evaluator<'a> {
     formula_stack: HashSet<String>,
     remaining_work: usize,
     summary_only: bool,
+    random_state: u64,
 }
 
 pub(crate) const BASES_WORK_BUDGET_EXCEEDED: &str = "Obsidian Base expression work budget exceeded";
 pub(crate) const BASES_OPERATION_CANCELLED: &str = "Obsidian Base expression evaluation cancelled";
 
 type Scope = BTreeMap<String, RuntimeValue>;
+
+fn seeded_row_state(context: &BasesEvaluationContext<'_>) -> u64 {
+    let mut state = context.random_seed.unwrap_or(0) ^ 0xcbf29ce484222325;
+    let identity = context
+        .file
+        .witness
+        .as_ref()
+        .map(|w| format!("{:?}", w))
+        .unwrap_or_else(|| context.file.path.clone());
+    for byte in identity.bytes() {
+        state ^= u64::from(byte);
+        state = state.wrapping_mul(0x100000001b3);
+    }
+    state
+}
 
 impl<'a> Evaluator<'a> {
     fn new(context: &'a BasesEvaluationContext<'a>) -> Self {
@@ -1439,6 +1483,7 @@ impl<'a> Evaluator<'a> {
             formula_stack: HashSet::new(),
             remaining_work: context.work_limit.unwrap_or(100_000),
             summary_only: false,
+            random_state: seeded_row_state(context),
         }
     }
 
@@ -1804,49 +1849,96 @@ impl<'a> Evaluator<'a> {
     fn global(&mut self, name: &str, arguments: &[RuntimeValue]) -> RuntimeValue {
         let first = arguments.first().cloned().unwrap_or(RuntimeValue::Null);
         match name {
-            "random" | "file" | "link" | "html" | "image" | "icon" => RuntimeValue::Error(format!(
-                "unknown-function\0Unsupported host function {name}"
-            )),
+            "random" => {
+                // SplitMix64: portable, bounded and driven only by the host's
+                // view-load seed. This deliberately replaces ambient Math.random.
+                self.random_state = self.random_state.wrapping_add(0x9e3779b97f4a7c15);
+                let mut bits = self.random_state;
+                bits = (bits ^ (bits >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+                bits = (bits ^ (bits >> 27)).wrapping_mul(0x94d049bb133111eb);
+                bits ^= bits >> 31;
+                RuntimeValue::Number((bits >> 11) as f64 / 9_007_199_254_740_992.0)
+            }
             "escapeHTML" => RuntimeValue::String(escape_html(&plain_string(&first))),
-            "date" => parse_date(&plain_string(&first), &self.timezone)
-                .map(RuntimeValue::Date)
-                .unwrap_or(RuntimeValue::Null),
+            "date" => match first {
+                RuntimeValue::Null | RuntimeValue::Date(_) => first,
+                RuntimeValue::String(value) => parse_date(&value, &self.timezone)
+                    .map(RuntimeValue::Date)
+                    .unwrap_or(RuntimeValue::Null),
+                _ => RuntimeValue::Error("type\0date() requires text or Date".into()),
+            },
             "duration" => parse_duration(&plain_string(&first))
                 .map(RuntimeValue::Duration)
                 .unwrap_or_else(|| RuntimeValue::Error("Invalid duration".to_string())),
 
-            "html" => RuntimeValue::Html(plain_string(&first)),
-            "image" => RuntimeValue::Image(match first {
-                RuntimeValue::File(file) => file.path,
-                RuntimeValue::Link(link) => link.path,
-                value => plain_string(&value),
-            }),
-            "icon" => RuntimeValue::Icon(plain_string(&first)),
-            "link" => RuntimeValue::Link(
-                self.make_link(&plain_string(&first), arguments.get(1).map(plain_string)),
-            ),
+            "file" => match &first {
+                RuntimeValue::Null => RuntimeValue::Null,
+                RuntimeValue::File(_) => first,
+                RuntimeValue::Link(link) if !link.external => self.file_from_link(link),
+                RuntimeValue::String(target) => self.file_from_target(target),
+                _ => RuntimeValue::Error("type\0file() requires text, Link or File".into()),
+            },
+            "html" | "icon" => match first {
+                RuntimeValue::Null => RuntimeValue::Null,
+                RuntimeValue::String(value) if name == "html" => RuntimeValue::Html(value),
+                RuntimeValue::String(value) => RuntimeValue::Icon(value),
+                _ => RuntimeValue::Error(format!("type\0{name}() requires text")),
+            },
+            "image" => match first {
+                RuntimeValue::Null => RuntimeValue::Null,
+                RuntimeValue::File(file) => RuntimeValue::Image(file.path),
+                RuntimeValue::Link(link) if link.external => RuntimeValue::Image(link.path),
+                RuntimeValue::Link(link) => match self.file_from_link(&link) {
+                    RuntimeValue::File(file) => RuntimeValue::Image(file.path),
+                    value => value,
+                },
+                RuntimeValue::String(value) => RuntimeValue::Image(value),
+                _ => RuntimeValue::Error("type\0image() requires text, Link, URL or File".into()),
+            },
+            "link" => match first {
+                RuntimeValue::Null => RuntimeValue::Null,
+                RuntimeValue::File(file) => RuntimeValue::Link(BasesLink {
+                    path: file.path.clone(),
+                    target: file.witness.clone(),
+                    display: arguments.get(1).map(plain_string),
+                    display_value: arguments.get(1).cloned().map(Box::new),
+                    resolved_path: Some(Some(file.path.clone())),
+                    external: false,
+                }),
+                RuntimeValue::String(value) => self.make_link(&value, arguments.get(1).cloned()),
+                RuntimeValue::Link(link) if link.external => RuntimeValue::Link(BasesLink {
+                    display: arguments.get(1).map(plain_string),
+                    display_value: arguments.get(1).cloned().map(Box::new),
+                    ..link
+                }),
+                _ => RuntimeValue::Error("type\0link() requires text, URL or File".into()),
+            },
             "list" => match first {
                 RuntimeValue::List(_) | RuntimeValue::Null => first,
                 value => RuntimeValue::List(vec![value]),
             },
             "max" | "min" => {
-                let numbers = arguments
-                    .iter()
-                    .map(|value| self.number(value))
-                    .collect::<Result<Vec<_>, _>>();
-                match numbers {
-                    Ok(values) => RuntimeValue::Number(
-                        values
-                            .into_iter()
-                            .reduce(if name == "max" { f64::max } else { f64::min })
-                            .unwrap_or(if name == "max" {
-                                f64::NEG_INFINITY
-                            } else {
-                                f64::INFINITY
-                            }),
-                    ),
-                    Err(error) => RuntimeValue::Error(error),
+                let mut selected: Option<f64> = None;
+                for value in arguments {
+                    match value {
+                        RuntimeValue::Null => {}
+                        RuntimeValue::Number(value) => {
+                            selected = Some(selected.map_or(*value, |current| {
+                                if name == "max" {
+                                    current.max(*value)
+                                } else {
+                                    current.min(*value)
+                                }
+                            }))
+                        }
+                        _ => {
+                            return RuntimeValue::Error(format!("type\0{name}() requires numbers"))
+                        }
+                    }
                 }
+                selected
+                    .map(RuntimeValue::Number)
+                    .unwrap_or(RuntimeValue::Null)
             }
             "now" => RuntimeValue::Date(self.now.clone()),
             "number" => match first {
@@ -1855,6 +1947,7 @@ impl<'a> Evaluator<'a> {
                     .unwrap_or_else(|| RuntimeValue::Error("type\0Invalid number".into())),
                 RuntimeValue::Bool(value) => RuntimeValue::Number(if value { 1.0 } else { 0.0 }),
                 RuntimeValue::Number(value) => RuntimeValue::Number(value),
+                RuntimeValue::Date(value) => RuntimeValue::Number(value.millis as f64),
                 RuntimeValue::Null => RuntimeValue::Null,
                 _ => RuntimeValue::Error("type\0Cannot convert value to number".into()),
             },
@@ -1900,7 +1993,17 @@ impl<'a> Evaluator<'a> {
                 Err(error) => return error,
             };
             let expected = values.first().map(plain_string).unwrap_or_default();
-            return RuntimeValue::Bool(value_type(&receiver).eq_ignore_ascii_case(&expected));
+            return RuntimeValue::Bool(
+                value_type(&receiver).eq_ignore_ascii_case(&expected)
+                    || expected.eq_ignore_ascii_case("string")
+                        && matches!(
+                            &receiver,
+                            RuntimeValue::Link(_)
+                                | RuntimeValue::Html(_)
+                                | RuntimeValue::Image(_)
+                                | RuntimeValue::Icon(_)
+                        ),
+            );
         }
         if let RuntimeValue::Error(_) = receiver {
             return receiver;
@@ -1909,6 +2012,13 @@ impl<'a> Evaluator<'a> {
             // As in Obsidian, a method on a missing value is missing rather than an error.
             RuntimeValue::Null => RuntimeValue::Null,
             RuntimeValue::String(value) => {
+                let values = match self.evaluate_arguments(arguments, scope) {
+                    Ok(values) => values,
+                    Err(error) => return error,
+                };
+                self.string_method(&value, name, &values)
+            }
+            RuntimeValue::Html(value) | RuntimeValue::Image(value) | RuntimeValue::Icon(value) => {
                 let values = match self.evaluate_arguments(arguments, scope) {
                     Ok(values) => values,
                     Err(error) => return error,
@@ -2399,6 +2509,7 @@ impl<'a> Evaluator<'a> {
             "asLink" => RuntimeValue::Link(BasesLink {
                 path: file.path.clone(),
                 display: arguments.first().map(plain_string),
+                display_value: arguments.first().cloned().map(Box::new),
                 resolved_path: Some(Some(file.path.clone())),
                 external: false,
                 target: file.witness.clone(),
@@ -2442,11 +2553,25 @@ impl<'a> Evaluator<'a> {
         arguments: &[RuntimeValue],
     ) -> RuntimeValue {
         match name {
-            "asFile" => {
-                RuntimeValue::Error("unsupported\0Link file coercion is not exposed".into())
-            }
-            "linksTo" => {
-                RuntimeValue::Error("unsupported\0Link file coercion is not exposed".into())
+            "asFile" if !link.external => self.file_from_link(link),
+            "linksTo" if !link.external => {
+                let Some(target) = arguments.first() else {
+                    return RuntimeValue::Error("type\0linksTo() requires a File".into());
+                };
+                match target {
+                    RuntimeValue::Null => RuntimeValue::Null,
+                    RuntimeValue::File(target) => match self.file_from_link(link) {
+                        RuntimeValue::File(file) => {
+                            RuntimeValue::Bool(match (&file.witness, &target.witness) {
+                                (Some(a), Some(b)) => a.entry_id == b.entry_id,
+                                _ => file.path == target.path,
+                            })
+                        }
+                        RuntimeValue::Null => RuntimeValue::Bool(false),
+                        value => value,
+                    },
+                    _ => RuntimeValue::Error("type\0linksTo() requires a File".into()),
+                }
             }
             // Obsidian applies string functions to a link's path, e.g. `link.replace(...)`.
             _ => self.string_method(&link.path, name, arguments),
@@ -2456,8 +2581,16 @@ impl<'a> Evaluator<'a> {
     fn property(&self, object: RuntimeValue, property: &str) -> RuntimeValue {
         match object {
             RuntimeValue::Null => RuntimeValue::Null,
-            RuntimeValue::String(value) if property == "length" => {
+            RuntimeValue::String(value)
+            | RuntimeValue::Html(value)
+            | RuntimeValue::Image(value)
+            | RuntimeValue::Icon(value)
+                if property == "length" =>
+            {
                 RuntimeValue::Number(value.chars().count() as f64)
+            }
+            RuntimeValue::Link(value) if property == "length" => {
+                RuntimeValue::Number(value.path.chars().count() as f64)
             }
             RuntimeValue::List(values) if property == "length" => {
                 RuntimeValue::Number(values.len() as f64)
@@ -2473,7 +2606,11 @@ impl<'a> Evaluator<'a> {
                 .unwrap_or(RuntimeValue::Null),
             RuntimeValue::Date(value) => date_property(&value, property),
             RuntimeValue::File(value) => {
-                if value.metadata_unavailable && property.eq_ignore_ascii_case("tags") {
+                if value.metadata_unavailable
+                    && ["tags", "properties"]
+                        .iter()
+                        .any(|name| property.eq_ignore_ascii_case(name))
+                {
                     return RuntimeValue::Error(
                         "unavailable\0Property metadata is unavailable for this revision".into(),
                     );
@@ -2601,57 +2738,93 @@ impl<'a> Evaluator<'a> {
         })
     }
 
-    fn make_link(&self, target: &str, display: Option<String>) -> BasesLink {
-        let (target, parsed_display) = parse_link_text(target);
-        BasesLink {
-            target: None,
-            resolved_path: Some(self.resolve_link(&target)),
-            external: is_external(&target),
-            path: target,
-            display: display.or(parsed_display),
+    fn make_link(&mut self, target: &str, display: Option<RuntimeValue>) -> RuntimeValue {
+        let (path, parsed_display) = parse_link_text(target);
+        let external = is_external(&path);
+        let resolved = if external {
+            None
+        } else {
+            match self.resolve_target(&path) {
+                Ok(value) => value,
+                Err(error) => return error,
+            }
+        };
+        RuntimeValue::Link(BasesLink {
+            target: resolved.as_ref().map(|(_, witness)| witness.clone()),
+            resolved_path: Some(resolved.map(|(path, _)| path)),
+            external,
+            path,
+            display: display.as_ref().map(plain_string).or(parsed_display),
+            display_value: display.map(Box::new),
+        })
+    }
+
+    fn resolve_target(
+        &mut self,
+        target: &str,
+    ) -> Result<Option<(String, super::RecordWitness)>, RuntimeValue> {
+        let Some(graph) = self.context.relationships else {
+            return Err(RuntimeValue::Error(
+                "unavailable\0File resolution requires immutable generation metadata".into(),
+            ));
+        };
+        let mut check = |work: usize| {
+            if self
+                .context
+                .cancellation
+                .as_ref()
+                .is_some_and(|c| c.stop_reason().is_some())
+            {
+                return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+            }
+            self.remaining_work = self.remaining_work.checked_sub(work).ok_or_else(|| {
+                ExpressionDiagnostic::new("budget", "File resolver exceeds work budget")
+            })?;
+            Ok(())
+        };
+        graph
+            .resolve_target(&BasesFile::default(), target, &mut check)
+            .map_err(|error| RuntimeValue::Error(format!("{}\0{}", error.code, error.message)))
+    }
+
+    fn file_from_target(&mut self, target: &str) -> RuntimeValue {
+        let (target, _) = parse_link_text(target);
+        match self.resolve_target(&target) {
+            Ok(None) => RuntimeValue::Null,
+            Err(error) => error,
+            Ok(Some((path, witness))) => self.hydrated_file(&path, Some(&witness)),
+        }
+    }
+
+    fn hydrated_file(&self, path: &str, witness: Option<&super::RecordWitness>) -> RuntimeValue {
+        match self.context.files.by_path(path) {
+            Some(file)
+                if witness.is_none_or(|expected| file.witness.as_ref() == Some(expected)) =>
+            {
+                RuntimeValue::File(Box::new(file.clone()))
+            }
+            _ => RuntimeValue::Error(
+                "unavailable\0Resolved file metadata is unavailable for this generation".into(),
+            ),
+        }
+    }
+
+    fn file_from_link(&mut self, link: &BasesLink) -> RuntimeValue {
+        if link.external {
+            return RuntimeValue::Null;
+        }
+        // A resolved edge carries immutable identity and revision. Never fabricate
+        // empty properties for an existing target or re-resolve an explicitly broken edge.
+        match &link.resolved_path {
+            Some(Some(path)) => self.hydrated_file(path, link.target.as_ref()),
+            Some(None) => RuntimeValue::Null,
+            None => self.file_from_target(&link.path),
         }
     }
 
     fn resolve_link(&self, _target: &str) -> Option<String> {
-        // Active relationship target resolution occurs only in has_link through
-        // the index resolver. Detached/inherited helpers never use name fallback.
+        // Legacy equality helpers never resolve raw text through ambient state.
         None
-    }
-
-    fn find_file(&self, target: &str) -> Option<&BasesFile> {
-        self.context.files.find(target)
-    }
-
-    fn file_from_target(&self, target: &str) -> RuntimeValue {
-        let resolved = self.resolve_link(target);
-        match resolved {
-            None => RuntimeValue::Null,
-            Some(path) => self
-                .context
-                .files
-                .by_path(&path)
-                .cloned()
-                .map(|file| RuntimeValue::File(Box::new(file)))
-                .unwrap_or_else(|| RuntimeValue::File(Box::new(file_defaults(&path)))),
-        }
-    }
-
-    fn file_from_link(&self, link: &BasesLink) -> RuntimeValue {
-        match link
-            .resolved_path
-            .clone()
-            .flatten()
-            .or_else(|| self.resolve_link(&link.path))
-        {
-            None => RuntimeValue::Null,
-            Some(path) => self
-                .context
-                .files
-                .by_path(&path)
-                .cloned()
-                .map(|file| RuntimeValue::File(Box::new(file)))
-                .unwrap_or_else(|| RuntimeValue::File(Box::new(file_defaults(&path)))),
-        }
     }
 
     fn link_resolved(&self, link: &BasesLink) -> Option<String> {
@@ -2760,6 +2933,7 @@ fn runtime_link_from_json(value: &Value) -> Option<BasesLink> {
         target: None,
         path: link.get("path")?.as_str()?.to_string(),
         display: link.get("display").map(runtime_display_string),
+        display_value: None,
         resolved_path: link
             .get("resolvedPath")
             .map(|value| value.as_str().map(String::from)),
@@ -2889,6 +3063,7 @@ fn value_type(value: &RuntimeValue) -> &'static str {
         RuntimeValue::List(_) => "List",
         RuntimeValue::Object(_) => "Object",
         RuntimeValue::File(_) => "File",
+        RuntimeValue::Link(value) if value.external => "URL",
         RuntimeValue::Link(_) => "Link",
         RuntimeValue::Regex(_, _) => "RegExp",
         RuntimeValue::Html(_) => "HTML",
@@ -3913,6 +4088,18 @@ fn typed_value(
             *bytes = bytes.saturating_add(value.len());
             BaseValue::String { value }
         }
+        RuntimeValue::Html(value) => {
+            *bytes = bytes.saturating_add(value.len());
+            BaseValue::Html { value }
+        }
+        RuntimeValue::Image(value) => {
+            *bytes = bytes.saturating_add(value.len());
+            BaseValue::Image { value }
+        }
+        RuntimeValue::Icon(value) => {
+            *bytes = bytes.saturating_add(value.len());
+            BaseValue::Icon { value }
+        }
         RuntimeValue::List(values) => BaseValue::List {
             value: values
                 .into_iter()
@@ -3942,7 +4129,10 @@ fn typed_value(
             seconds: value.seconds,
             milliseconds: value.milliseconds,
         },
-        RuntimeValue::File(value) => BaseValue::File { path: value.path },
+        RuntimeValue::File(value) => {
+            *bytes = bytes.saturating_add(value.path.len());
+            BaseValue::File { path: value.path }
+        }
         RuntimeValue::Link(value) => {
             *bytes = bytes
                 .saturating_add(value.path.len() + value.display.as_ref().map_or(0, String::len));
@@ -3950,6 +4140,10 @@ fn typed_value(
                 path: value.path,
                 target: value.target,
                 display: value.display,
+                display_value: value
+                    .display_value
+                    .map(|value| typed_value(*value, depth + 1, bytes).map(Box::new))
+                    .transpose()?,
                 external: value.external,
             }
         }
@@ -3979,6 +4173,34 @@ fn value_bytes(value: &RuntimeValue) -> Option<usize> {
             | RuntimeValue::Image(value)
             | RuntimeValue::Icon(value)
             | RuntimeValue::Error(value) => bytes = bytes.saturating_add(value.len()),
+            RuntimeValue::Link(link) => {
+                bytes = bytes
+                    .saturating_add(link.path.len() + link.display.as_ref().map_or(0, String::len));
+                if let Some(display) = link.display_value.as_deref() {
+                    work.push(display);
+                }
+            }
+            RuntimeValue::File(file) => {
+                bytes = bytes.saturating_add(
+                    file.path.len()
+                        + file.name.len()
+                        + file.basename.len()
+                        + file.folder.len()
+                        + file.tags.iter().map(String::len).sum::<usize>(),
+                );
+                for (key, value) in &file.properties {
+                    bytes = bytes.saturating_add(key.len());
+                    work.push(value);
+                }
+                for link in file.links.iter().chain(&file.embeds).chain(&file.backlinks) {
+                    bytes = bytes.saturating_add(
+                        32 + link.path.len() + link.display.as_ref().map_or(0, String::len),
+                    );
+                    if let Some(display) = link.display_value.as_deref() {
+                        work.push(display);
+                    }
+                }
+            }
             RuntimeValue::List(values) => work.extend(values),
             RuntimeValue::Object(values) => {
                 for (key, value) in values {
@@ -4091,5 +4313,252 @@ pub(crate) fn apply_property_type(
         }
     } else {
         value
+    }
+}
+
+#[cfg(test)]
+mod rich_expression_tests {
+    use super::*;
+
+    fn eval(source: &str) -> Result<BaseValue, ExpressionDiagnostic> {
+        evaluate(source, &BasesEvaluationContext::default()).map(|result| result.value)
+    }
+
+    #[test]
+    fn rich_outputs_retain_type_inert_payload_and_recursive_display() {
+        for (source, expected) in [
+            (
+                "html('<b>Read</b><script>never execute</script>')",
+                BaseValue::Html {
+                    value: "<b>Read</b><script>never execute</script>".into(),
+                },
+            ),
+            (
+                "image('https://example.test/cover.png')",
+                BaseValue::Image {
+                    value: "https://example.test/cover.png".into(),
+                },
+            ),
+            (
+                "icon('book-open')",
+                BaseValue::Icon {
+                    value: "book-open".into(),
+                },
+            ),
+        ] {
+            assert_eq!(eval(source).unwrap(), expected);
+            assert_eq!(
+                runtime_from_base_value(&expected, &BasesTimezone::Utc)
+                    .and_then(typed_result)
+                    .unwrap(),
+                expected
+            );
+        }
+        let value = eval("link('https://example.test', icon('book'))").unwrap();
+        let BaseValue::Link {
+            external,
+            display_value,
+            ..
+        } = &value
+        else {
+            panic!("expected URL")
+        };
+        assert!(*external);
+        assert_eq!(
+            display_value.as_deref(),
+            Some(&BaseValue::Icon {
+                value: "book".into()
+            })
+        );
+        let round_trip = runtime_from_base_value(&value, &BasesTimezone::Utc)
+            .and_then(typed_result)
+            .unwrap();
+        assert_eq!(round_trip, value);
+    }
+
+    #[test]
+    fn wrappers_follow_reference_null_and_string_inheritance() {
+        for source in [
+            "html(null)",
+            "image(null)",
+            "icon(null)",
+            "file(null)",
+            "link(null)",
+        ] {
+            assert_eq!(eval(source).unwrap(), BaseValue::Null, "{source}");
+        }
+        for source in [
+            "html(3)",
+            "icon(false)",
+            "image([1])",
+            "file(5)",
+            "link([1])",
+        ] {
+            assert_eq!(eval(source).unwrap_err().code, "type", "{source}");
+        }
+        for source in [
+            "link('https://example.test').isType('url')",
+            "link('https://example.test').isType('string')",
+            "icon('book').isType('icon')",
+            "icon('book').isType('string')",
+        ]
+        .into_iter()
+        {
+            assert_eq!(
+                eval(source).unwrap(),
+                BaseValue::Boolean { value: true },
+                "{source}"
+            );
+        }
+        assert_eq!(
+            eval("icon('Book').lower()").unwrap(),
+            BaseValue::String {
+                value: "book".into()
+            }
+        );
+        assert_eq!(
+            eval("image('cover.png').length").unwrap(),
+            BaseValue::Number { value: 9.0 }
+        );
+        assert_eq!(
+            eval("html('abc').upper()").unwrap_err().code,
+            "unknown-function"
+        );
+    }
+
+    #[test]
+    fn file_round_trip_never_fabricates_metadata_for_missing_target() {
+        let mut file = file_defaults("Books/Dune.md");
+        file.properties
+            .insert("rating".into(), RuntimeValue::Number(5.0));
+        let context = BasesEvaluationContext {
+            file: file.clone(),
+            files: Arc::new(super::super::files::BasesFiles::new(vec![file])),
+            ..Default::default()
+        };
+        assert_eq!(
+            evaluate("file.asLink().asFile().properties.rating", &context)
+                .unwrap()
+                .value,
+            BaseValue::Number { value: 5.0 }
+        );
+        assert_eq!(
+            evaluate("file.asLink().linksTo(file)", &context)
+                .unwrap()
+                .value,
+            BaseValue::Boolean { value: true }
+        );
+        assert_eq!(
+            evaluate("file.asLink().linksTo('Books/Dune.md')", &context)
+                .unwrap_err()
+                .code,
+            "type"
+        );
+        let missing = BasesEvaluationContext {
+            files: Arc::default(),
+            ..context
+        };
+        assert_eq!(
+            evaluate("file.asLink().asFile()", &missing)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert_eq!(eval("file('Dune')").unwrap_err().code, "unavailable");
+    }
+
+    #[test]
+    fn random_is_bounded_seeded_row_specific_and_not_clock_dependent() {
+        let evaluate_seed = |seed, path: &str| {
+            evaluate(
+                "[random(),random()]",
+                &BasesEvaluationContext {
+                    random_seed: Some(seed),
+                    file: file_defaults(path),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .value
+        };
+        let values = evaluate_seed(14, "A.md");
+        assert_eq!(values, evaluate_seed(14, "A.md"));
+        assert_ne!(values, evaluate_seed(15, "A.md"));
+        assert_ne!(values, evaluate_seed(14, "B.md"));
+        let BaseValue::List { value } = values else {
+            panic!("expected list")
+        };
+        assert_ne!(value[0], value[1]);
+        for value in value {
+            let BaseValue::Number { value } = value else {
+                panic!("expected number")
+            };
+            assert!((0.0..1.0).contains(&value));
+        }
+        assert_eq!(
+            clock_dependency("random()", &mut |_| Some(())),
+            crate::query::BaseClockDependency::None
+        );
+    }
+
+    #[test]
+    fn rich_summary_preserves_value_types_and_enforces_depth_and_bytes() {
+        let icon = BaseValue::Icon {
+            value: "book".into(),
+        };
+        let result = evaluate_summary(
+            "values[0]",
+            &[&icon],
+            &crate::EvaluationOptions::default(),
+            None,
+            |_| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(result.value, icon);
+        let oversized = BaseValue::Html {
+            value: "a".repeat(8 * 1024 * 1024),
+        };
+        assert_eq!(
+            runtime_from_base_value(&oversized, &BasesTimezone::Utc)
+                .unwrap_err()
+                .code,
+            "budget"
+        );
+        let mut nested = BaseValue::Icon {
+            value: "book".into(),
+        };
+        for _ in 0..130 {
+            nested = BaseValue::List {
+                value: vec![nested],
+            };
+        }
+        assert_eq!(
+            runtime_from_base_value(&nested, &BasesTimezone::Utc)
+                .unwrap_err()
+                .code,
+            "budget"
+        );
+    }
+
+    #[test]
+    fn reference_scalar_conversions_and_missing_aggregates_are_typed() {
+        assert_eq!(
+            eval("number(date('1970-01-02'))").unwrap(),
+            BaseValue::Number {
+                value: 86_400_000.0
+            }
+        );
+        assert_eq!(
+            eval("date(date('2025-01-01')) == date('2025-01-01')").unwrap(),
+            BaseValue::Boolean { value: true }
+        );
+        for source in ["max()", "min()", "max(null,null)"] {
+            assert_eq!(eval(source).unwrap(), BaseValue::Null, "{source}");
+        }
+        assert_eq!(
+            eval("max(null,2,4)").unwrap(),
+            BaseValue::Number { value: 4.0 }
+        );
+        assert_eq!(eval("min('3',4)").unwrap_err().code, "type");
     }
 }

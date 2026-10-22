@@ -88,8 +88,14 @@ pub enum BaseValue {
         path: String,
         target: Option<RecordWitness>,
         display: Option<String>,
+        #[serde(default, rename = "displayValue", skip_serializing_if = "Option::is_none")]
+        display_value: Option<Box<BaseValue>>,
         external: bool,
     },
+    /// Inert rich outputs. Hosts must sanitize HTML and resolve image resources.
+    Html { value: String },
+    Image { value: String },
+    Icon { value: String },
     Error {
         code: String,
         message: String,
