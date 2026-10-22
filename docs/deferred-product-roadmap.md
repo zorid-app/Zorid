@@ -9,6 +9,66 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Current as of2026-10-22: isolated branch `codex/types-bases-model`, worktree
+`.worktrees/types-bases-model`; root is sole main integration owner. Main remains
+`e7d655e1`. Full [implementation goal](plans/bases-implementation-goal.md) is active,
+not complete. Ordinary files/properties replace mandatory named note Types;
+deferred Tasks/Calendar Type consumers and their data remain intact.
+
+Current Rust tree `8074eabf01c55cf4e53f01c02a5a384197875a24` has **361 tests /
+20 nonempty targets passing**, including the unchanged500,000-step preview.
+Full log `/private/tmp/zorid-bases-date-final-full-composed-002.log`, SHA
+`de189d3ce6f8bfc02a1dc7fe96b2682ab3adab601a2b821beb28c21be155920f`.
+Matching native/CLI build9637 and WASM build48653 both completed successfully.
+Preserved product receipts:
+`/private/tmp/zorid-bases-final-native-8074eabf/receipt.json` and
+`/private/tmp/zorid-bases-final-wasm-8074eabf/receipt.json`.
+Native host SHA6e04fb5f, CLI3fdcdbdc, generated WASM8f9d8d63;
+WASM build fingerprint6041e8e6. Older958 and5e products are historical evidence.
+
+Current-core standalone [CLI007](history/bases-cli-actual-007-20261022.md)
+passes125 commands/17 checks/146 typed assertions, exact16 Q3 plus10 legacy
+warnings. Actual [browser010](history/bases-browser-actual-010-20261022.md)
+passes all19 groups/146 typed assertions/16 Q3 diagnostics with no unexecuted
+groups and verified source/assets/cleanup. Normal supported-web
+[003](history/bases-web-ui-actual-003-20261022.md) passes5 actual note UI phases:
+create, trusted edit/durable save, reload identity/source, search and reopen.
+These are scoped client acceptance, not full rendered Bases/native parity.
+
+Reviewed C2 own-save publication/selection fix is composed at `f7e3bf4a`;
+independent full scoped Node tests89/89 pass. Exact host/fence/lease handoff,
+per-attempt durable-publication holds, and exact retained generic-save retry
+preserve dirty/foreign/stale guards. C2 native campaign now13 phases including
+Hover/New failure/retry; C1 multi-view references and C3 live group preview/
+cancel/focus/failure scenarios are also authored, actual native acceptance pending.
+
+Expanded Hover portal followup is isolated with `bases_inline_core`, independent
+review owner `bases_controller`: exact toolbar/session/manager ownership chain,
+connected owned-node revalidation, stable New origin host with original geometry
+anchor, and exact New editor portal outside/Escape handling. Source/tests frozen
+for final review; not integrated or native-verified yet. No broad portal exemptions.
+
+Root desktop build002 passes (TypeScript plus native Vite bundle), log
+`/private/tmp/zorid-bases-date-c2-desktop-build-002.log`. Reviewed `36b170d7`
+fixes a readonly group alias assignment immutably;33 focused checks pass.
+This build consumed that exact source diff before its commit; subsequent
+`68ff762c` is a history-only record. Root next owns a frozen native color-select
+probe with this frontend and host6e04fb5f. No other owner may build or mutate
+this worktree during the runtime freeze. Latest measured free disk2158260KiB,
+above the unchanged1GiB guard; recheck at each launch.
+
+Latest prior heavy Electron016 reached244 actions/29 checks on OLD Rust5e010112 /
+host176fcff5, then native color SELECT failed expected purple readback. Rich
+property durable edits passed there; current-core full native behavior remains
+unproven. Complete fresh heavy run, safety13, properties/C1, config, layouts14,
+actual clipboard/IME/recovery,23 matched visual states and main reconciliation/
+integration are still required. Do not infer native completion from Node/client
+passes. Production app47540 and unrelated user vaults/apps remain untouched.
+
+### Superseded checkpoint snapshot — retained evidence
+
+### Latest execution update
+
 Current Bases branch/worktree: `codex/types-bases-model`,
 `.worktrees/types-bases-model`; root remains sole main integration owner.
 Main is unchanged `e7d655e1`; the full goal is **not complete**. Current goal:
