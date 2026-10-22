@@ -55,6 +55,7 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
   if(metadataProvider?.basePreviewAvailable===true&&![metadataProvider.previewOpen,metadataProvider.previewBase,metadataProvider.previewClose].every(method=>typeof method==='function'))throw new DocumentPreviewError();
   if(metadataProvider?.draftsAvailable===true&&(!metadataProvider.drafts||typeof metadataProvider.drafts.invoke!=='function'||typeof metadataProvider.drafts.subscribe!=='function'||metadataProvider.drafts.scope?.localStoreId!==scope.vaultId||metadataProvider.drafts.scope?.clientId!==scope.clientId))throw new DocumentDraftError('document_runtime_unavailable');
   if(metadataProvider?.metadataRowsAvailable===true&&typeof metadataProvider.metadataRows!=='function')throw failure('invalid_document_response');
+  if(metadataProvider?.propertyTargetsAvailable===true&&typeof metadataProvider.propertyTargets!=='function')throw failure('invalid_document_response');
   // Every underlying RPC rechecks the captured owner after provider awaits.
   function dispatch<T>(action: () => T): T {
     if (phase !== 'active' && phase !== 'flushing') throw failure('client_not_admitted');
@@ -85,6 +86,7 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
       metadata:(input:Parameters<NonNullable<typeof runtime.documentIndex>['metadata']>[0])=>dispatch(()=>runtime.documentIndex!.metadata(input)),
       tasks:(input:Parameters<NonNullable<typeof runtime.documentIndex>['tasks']>[0])=>dispatch(()=>runtime.documentIndex!.tasks(input)),
       base:(input:Parameters<NonNullable<typeof runtime.documentIndex>['base']>[0])=>dispatch(()=>runtime.documentIndex!.base(input)),
+      ...(metadataProvider?.propertyTargetsAvailable===true&&metadataProvider.propertyTargets?{propertyTargetsAvailable:true,propertyTargets:(input:Parameters<NonNullable<BrowserDocumentIndexProvider['propertyTargets']>>[0])=>dispatch(()=>metadataProvider.propertyTargets!(input))}:{}),
       resolve:(input:Parameters<NonNullable<typeof runtime.documentIndex>['resolve']>[0])=>dispatch(()=>runtime.documentIndex!.resolve(input)),
       backlinks:(input:Parameters<NonNullable<typeof runtime.documentIndex>['backlinks']>[0])=>dispatch(()=>runtime.documentIndex!.backlinks(input)),
       rebuild:()=>dispatch(()=>runtime.documentIndex!.rebuild()),
@@ -164,6 +166,7 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
     open:()=>invoke(()=>backend.documentIndex!.open()),closePin:id=>invoke(()=>backend.documentIndex!.closePin(id)),
     tasks:input=>invoke(()=>backend.documentIndex!.tasks(input)),
     metadata:input=>invoke(()=>backend.documentIndex!.metadata(input)),base:input=>invoke(()=>backend.documentIndex!.base(input)),
+    ...(backend.documentIndex.propertyTargetsAvailable===true&&backend.documentIndex.propertyTargets?{propertyTargetsAvailable:true,propertyTargets:(input:Parameters<NonNullable<BrowserDocumentIndexProvider['propertyTargets']>>[0])=>invoke(()=>backend.documentIndex!.propertyTargets!(input))}:{}),
     search:input=>invoke(()=>backend.documentIndex!.search(input)),resolve:input=>invoke(()=>backend.documentIndex!.resolve(input)),
     richStart:input=>invoke(()=>backend.documentIndex!.richStart(input)),
     richPrepare:input=>invoke(()=>backend.documentIndex!.richPrepare(input)),

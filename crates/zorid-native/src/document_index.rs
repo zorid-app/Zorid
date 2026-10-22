@@ -372,6 +372,58 @@ impl NativeVault {
     ) -> NativeDocumentResult<DocumentQueryResult<DocumentBaseResult>> {
         self.query_base_document_inner(pin, definition, view_name, inline, properties, options)
     }
+    /// Candidate choices for ordinary note property editors use the same sealed
+    /// definitions/resolver/target filters as Bases, without opening a Base file.
+    pub fn query_property_targets_document(
+        &self,
+        pin: &DocumentQueryPin,
+        properties: Option<&DocumentPropertyDefinitionsSource>,
+        options: &QueryOptions,
+    ) -> NativeDocumentResult<DocumentQueryResult<DocumentPropertyTargetsResult>> {
+        let manifest = self.document_manifest(pin)?;
+        let (definition, definitions) = self.read_base_property_definitions(pin, properties)?;
+        let definitions = match definitions {
+            Some(definitions) => definitions,
+            None => zorid_bases::properties::PropertyDefinitions::absent(pin.generation())?,
+        };
+        let facts = manifest.entries().iter().zip(manifest.presentations())
+            .filter(|(entry, _)| entry.state.kind == EntryKind::File)
+            .map(|(entry, presentation)| zorid_bases::FilePresentationFacts {
+                witness: zorid_bases::RecordWitness { entry_id: entry.state.id.clone(), revision: entry.state.revision.clone() },
+                size: Some(presentation.size_bytes), ctime_ms: i64::try_from(presentation.ctime_ms).ok(), mtime_ms: i64::try_from(presentation.mtime_ms).ok(),
+            }).collect::<Vec<_>>();
+        let result = zorid_bases::query_generation_property_targets(pin.generation(), &facts, &definitions, options)?;
+        self.document_result(pin, DocumentPropertyTargetsResult {
+            definition, relation_targets: result.relation_targets.unwrap_or_default(),
+            property_definition_diagnostics: result.property_definition_diagnostics,
+            refresh_hint: result.refresh_hint,
+        })
+    }
+    fn read_base_property_definitions(
+        &self,
+        pin: &DocumentQueryPin,
+        properties: Option<&DocumentPropertyDefinitionsSource>,
+    ) -> NativeDocumentResult<(Option<zorid_core::EntryState>, Option<zorid_bases::properties::PropertyDefinitions>)> {
+        let manifest = self.document_manifest(pin)?;
+        let property_entry = manifest.entries().iter().find(|entry|
+            entry.state.kind == EntryKind::File && entry.state.path.as_str() == "Properties.yaml"
+        );
+        if let Some(property_entry) = property_entry {
+            let id = &property_entry.state.id;
+            let projected = self.store.read_document_projection(pin, id)?;
+            let bytes = projected.content.ok_or_else(|| NativeDocumentError::SourceUnavailable(id.clone()))?;
+            let text = std::str::from_utf8(&bytes).map_err(|_| NativeDocumentError::SourceUnavailable(id.clone()))?;
+            if properties.is_some_and(|supplied| &supplied.id != id || supplied.source != text) {
+                return Err(zorid_bases::ExpressionDiagnostic::new("property_source_mismatch", "Property settings do not match the saved root file").into());
+            }
+            Ok((Some(projected.witness.entry().clone()), Some(zorid_bases::properties::PropertyDefinitions::from_generation_source(pin.generation(), id, text)?)))
+        } else {
+            if properties.is_some() {
+                return Err(zorid_bases::ExpressionDiagnostic::new("property_source_mismatch", "No saved root property settings exist").into());
+            }
+            Ok((None, None))
+        }
+    }
     /// Selectors locate actual source bytes in this pin; no caller AST is trusted.
     /// Invalid YAML is diagnostic data, while missing/non-text sources fail closed.
     pub fn query_task_documents(
@@ -496,24 +548,7 @@ impl NativeVault {
                 mtime_ms: i64::try_from(presentation.mtime_ms).ok(),
             })
             .collect::<Vec<_>>();
-        let property_entry = manifest.entries().iter().find(|entry|
-            entry.state.kind == EntryKind::File && entry.state.path.as_str() == "Properties.yaml"
-        );
-        let definitions = if let Some(property_entry) = property_entry {
-            let id = &property_entry.state.id;
-            let projected = self.store.read_document_projection(pin, id)?;
-            let bytes = projected.content.ok_or_else(|| NativeDocumentError::SourceUnavailable(id.clone()))?;
-            let text = std::str::from_utf8(&bytes).map_err(|_| NativeDocumentError::SourceUnavailable(id.clone()))?;
-            if properties.is_some_and(|supplied| &supplied.id != id || supplied.source != text) {
-                return Err(zorid_bases::ExpressionDiagnostic::new("property_source_mismatch", "Property settings do not match the saved root file").into());
-            }
-            Some(zorid_bases::properties::PropertyDefinitions::from_generation_source(pin.generation(), id, text)?)
-        } else {
-            if properties.is_some() {
-                return Err(zorid_bases::ExpressionDiagnostic::new("property_source_mismatch", "No saved root property settings exist").into());
-            }
-            None
-        };
+        let (_, definitions) = self.read_base_property_definitions(pin, properties)?;
         let result = if let Some(definitions) = definitions {
             // Config-derived relation maps are generation-local. Do not reuse
             // an answer/preparation whose sealed key lacks this source identity.

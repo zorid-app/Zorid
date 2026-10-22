@@ -128,7 +128,7 @@ test('shared codec runs without Buffer with identical UTF-8 limits and owner val
   const base=request('base',{pinId:'1',id:'base',options:{searchTerms:['你'.repeat(1365)],ignorePaths:['😀'.repeat(1024)],timezone:'你'.repeat(42),clockMs:0}});
   assert.equal(JSON.stringify(portable.captureDocumentRequest(base)),JSON.stringify(captureDocumentRequest(base)));
   assert.throws(()=>portable.captureDocumentRequest(request('base',{pinId:'1',id:'base',options:{timezone:'你'.repeat(43)}})),{code:'invalid_document_request'});
-  assert.throws(()=>portable.captureDocumentRequest(request('base',{pinId:'1',id:'base',options:{searchTerms:Array(17).fill('😀'.repeat(1024))}})),{code:'request_limit'});
+  assert.throws(()=>portable.captureDocumentRequest(request('base',{pinId:'1',id:'base',options:{searchTerms:Array(256).fill('😀'.repeat(1024))}})),{code:'request_limit'});
   const controller=portable.createDesktopDocumentSemantics({async documentCommand(_client,input){const op=input.command.op;const value=op==='open'?{pinId:'1',snapshot,source,coverageComplete:true}:op==='close'?true:metadata();return portable.decodeDocumentReply(input,...wire(op,value));}},'client','store');
   await controller.invoke(request('open',{pinId:'1'}));
   const result=await controller.invoke(request('metadata',{pinId:'1',id:'note'}));
@@ -368,4 +368,28 @@ for(const outcome of ['success','rejection'])for(const retired of ['destination-
   if(outcome==='success')finish(metadataRowsReply({mode:'delta',from:snapshot,cursor:'late'}));else fail({code:'cancelled'});
   await assert.rejects(pending,{code:retired==='forget'?'client_not_admitted':'snapshot_expired'});
   if(closing){finishClose(true);await closing;}
+});
+
+test('saved Base transports rich source selectors and previews beyond64KiB without enlarging other commands',()=>{
+  const yaml=`# ${'\\"'.repeat(40000)}\nviews: []\n`;
+  const input=request('base',{pinId:'1',id:'note',options:{inlineSource:{source:yaml,startByte:4,endByte:yaml.length+20},propertyDefinitionsSource:{id:'settings',source:'properties: {}\n'},summaryPreviewProperty:'note.rating',randomSeed:9007199254740991}});
+  const captured=captureDocumentRequest(input);assert.ok(Buffer.byteLength(JSON.stringify(captured))>65536);
+  input.command.options.inlineSource.source='changed';input.command.options.propertyDefinitionsSource.source='changed';
+  assert.equal(captured.command.options.inlineSource.source,yaml);assert.equal(captured.command.options.propertyDefinitionsSource.source,'properties: {}\n');
+  assert.equal(captured.command.options.summaryPreviewProperty,'note.rating');assert.equal(captured.command.options.randomSeed,9007199254740991);
+  for(const options of [{inlineSource:null},{propertyDefinitionsSource:null},{randomSeed:null},{randomSeed:-1},{randomSeed:9007199254740992},{summaryPreviewProperty:null},{inlineSource:{source:'x',startByte:0,endByte:1,unknown:true}}])assert.throws(()=>captureDocumentRequest(request('base',{pinId:'1',id:'note',options})),{code:'invalid_document_request'});
+  assert.throws(()=>captureDocumentRequest(request('preview_base',{previewId:'1',id:'note',options:{inlineSource:{source:'x',startByte:0,endByte:1}}})),{code:'invalid_document_request'});
+});
+
+test('property target transport admits only the scoped method and retained pin identity',async()=>{
+  const value={snapshot,source,coverageComplete:true,value:{definition:{...entry,id:'settings',path:'Properties.yaml'},relationTargets:{author:[{entryId:'author',revision:'r1',path:'Author.md',label:'Author'}]},propertyDefinitionDiagnostics:[],refreshHint:null}};
+  let calls=0;
+  const host={async documentCommand(_client,input){calls++;const op=input.command.op;return decodeDocumentReply(input,...wire(op,op==='open'?{pinId:'1',snapshot,source,coverageComplete:true}:op==='close'?true:value));}};
+  const old=createDesktopDocumentSemantics(host,'client','store');await old.invoke(request('open',{pinId:'1'}));
+  await assert.rejects(old.invoke(request('property_targets',{pinId:'1'})),{code:'unsupported_host_capability'});const before=calls;
+  const admitted=createDesktopDocumentSemantics(host,'client','store',{propertyTargetsAvailable:true});await admitted.invoke(request('open',{pinId:'1'}));
+  assert.deepEqual(await admitted.invoke(request('property_targets',{pinId:'1',options:{currentEntryId:'note',clockMs:0}})),value);
+  assert.equal(calls,before+2);await admitted.invoke(request('close',{pinId:'1'}));
+  await assert.rejects(admitted.invoke(request('property_targets',{pinId:'1'})),{code:'snapshot_expired'});
+  for(const options of [{inlineSource:{source:'x',startByte:0,endByte:1}},{summaryPreviewProperty:'rating'},{randomSeed:1},{propertyDefinitionsSource:null}])assert.throws(()=>captureDocumentRequest(request('property_targets',{pinId:'1',options})),{code:'invalid_document_request'});
 });

@@ -124,6 +124,14 @@ pub struct DocumentBaseResult {
     pub definition: EntryState,
     pub result: BaseQueryResult,
 }
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentPropertyTargetsResult {
+    pub definition: Option<EntryState>,
+    pub relation_targets: std::collections::BTreeMap<String, Vec<zorid_bases::relations::RelationTarget>>,
+    pub property_definition_diagnostics: Vec<zorid_bases::properties::PropertyDefinitionDiagnostic>,
+    pub refresh_hint: Option<zorid_bases::BaseRefreshHint>,
+}
 
 /// Definitions and task capabilities compiled from actual retained YAML bytes.
 #[derive(Debug, Serialize)]

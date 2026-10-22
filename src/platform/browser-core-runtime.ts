@@ -123,7 +123,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       // this named client's pending intents, using Rust
       // receipt lookup, before this Promise exposes a ready adapter.
       const clientId = options.clientId;
-      const opened = await runtime.call<{recovery:string[];authorityId:string;binaryLimits?:BinaryStreamLimits;documentIndexAvailable?:boolean;metadataRowsAvailable?:boolean;documentMaintenance?:boolean;draftsAvailable?:boolean;basePreviewAvailable?:boolean;workBlocks?:boolean}>('open', {...options, wasmModuleUrl:moduleUrl.href});
+      const opened = await runtime.call<{recovery:string[];authorityId:string;binaryLimits?:BinaryStreamLimits;documentIndexAvailable?:boolean;metadataRowsAvailable?:boolean;propertyTargetsAvailable?:boolean;documentMaintenance?:boolean;draftsAvailable?:boolean;basePreviewAvailable?:boolean;workBlocks?:boolean}>('open', {...options, wasmModuleUrl:moduleUrl.href});
       if (typeof opened.authorityId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(opened.authorityId)) throw new BrowserVaultError('storage_corrupt','Worker returned no valid local storage authority');
       runtime.authorityScope = Object.freeze({vaultId:opened.authorityId,clientId});
       const pageOptions=(input:CheckpointListOptions)=>{
@@ -147,6 +147,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       if(opened.basePreviewAvailable!==undefined&&typeof opened.basePreviewAvailable!=='boolean'||opened.basePreviewAvailable===true&&(options.documentMaintenance!==true||opened.documentMaintenance!==true||opened.documentIndexAvailable!==true))throw new DocumentPreviewError();
       const drafts=opened.draftsAvailable===true?runtime.createDocumentDraftTransport():undefined;
       const maintenance=opened.documentMaintenance===true?runtime.createDocumentMaintenanceTransport():undefined;
+      if(opened.propertyTargetsAvailable!==undefined&&typeof opened.propertyTargetsAvailable!=='boolean'||opened.propertyTargetsAvailable===true&&opened.documentIndexAvailable!==true)throw new BrowserVaultError('invalid_wasm_result','Invalid property target capability');
       if(opened.metadataRowsAvailable!==undefined&&typeof opened.metadataRowsAvailable!=='boolean'||opened.metadataRowsAvailable===true&&opened.documentIndexAvailable!==true)throw new BrowserVaultError('invalid_wasm_result','Invalid metadata page capability');
       if(opened.documentIndexAvailable)runtime.indexProvider=Object.freeze<BrowserDocumentIndexProvider>({
         ...(maintenance?{maintenance}:{}),
@@ -164,6 +165,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
         richClose:input=>runtime.call('document-index-rich-close',structuredClone(input)),
         tasks:async input=>runtime.call('document-index-tasks',captureBrowserTaskQuery(input)),
         metadata:input=>runtime.call('document-index-metadata',structuredClone(input)),base:input=>runtime.call('document-index-base',structuredClone(input)),
+        ...(opened.propertyTargetsAvailable===true?{propertyTargetsAvailable:true,propertyTargets:(input:Parameters<NonNullable<BrowserDocumentIndex['propertyTargets']>>[0])=>runtime.call('document-index-property-targets',structuredClone(input))}:{}),
         resolve:input=>runtime.call('document-index-resolve',structuredClone(input)),
         backlinks:input=>runtime.call('document-index-backlinks',structuredClone(input)),rebuild:()=>runtime.call('document-index-rebuild'),
       });

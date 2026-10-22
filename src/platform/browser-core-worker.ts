@@ -155,7 +155,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
         if(['previewOpen','previewBase','previewClose'].some(name=>typeof (index as unknown as Record<string,unknown>)[name]!=='function'))throw new BrowserVaultError('index_unavailable','Invalid prepared preview capability');
         previewEnabled=true;
       }
-      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{}),documentIndexAvailable:!!index,...(index?.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(documentChannel?{documentMaintenance:true}:{}),...(draftsEnabled?{draftsAvailable:true}:{}),...(previewEnabled?{basePreviewAvailable:true}:{}),...(workBlocks?.ready?{workBlocks:true}:{})};
+      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{}),documentIndexAvailable:!!index,...(index?.metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),...(index?.propertyTargetsAvailable===true?{propertyTargetsAvailable:true}:{}),...(documentChannel?{documentMaintenance:true}:{}),...(draftsEnabled?{draftsAvailable:true}:{}),...(previewEnabled?{basePreviewAvailable:true}:{}),...(workBlocks?.ready?{workBlocks:true}:{})};
     } catch (error) {
       try{documentRuntime?.retire();await documentRuntime?.drain();}catch{/* Preserve the original opening failure after accepted work settles. */}
       documentChannel=undefined;documentRuntime=undefined;
@@ -211,6 +211,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
         return index.metadataRows(payload);
       case 'document-index-tasks':return index.tasks(payload);
       case 'document-index-base':return index.base(payload);
+      case 'document-index-property-targets':if(index.propertyTargetsAvailable!==true||typeof index.propertyTargets!=='function')throw new BrowserVaultError('index_unavailable','Property targets are unavailable');return index.propertyTargets(payload);
       case 'document-index-resolve':return index.resolve(payload);
       case 'document-index-backlinks':return index.backlinks(payload);
       case 'document-index-rebuild':return index.rebuild();

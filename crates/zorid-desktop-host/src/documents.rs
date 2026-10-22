@@ -146,10 +146,15 @@ enum DocumentCommand {
         #[serde(default)]
         options: BaseOptions,
     },
+    PropertyTargets {
+        pin_id: OperationId,
+        #[serde(default)]
+        options: PropertyTargetOptions,
+    },
 }
 impl Request {
     fn check_size(&self) -> Result<(), Value> {
-        let maximum = if matches!(self.command, DocumentCommand::Base { .. }) {
+        let maximum = if matches!(self.command, DocumentCommand::Base { .. } | DocumentCommand::PropertyTargets { .. }) {
             MAX_BASE_REQUEST_BYTES
         } else { MAX_REQUEST_BYTES };
         if serde_json::to_vec(self).map_err(|_| failure("invalid_request"))?.len() > maximum {
@@ -164,6 +169,34 @@ impl Request {
     }
     pub(crate) fn is_preview_base(&self) -> bool {
         matches!(self.command, DocumentCommand::PreviewBase { .. })
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+struct PropertyTargetOptions {
+    #[serde(default, deserialize_with = "property_source_option", skip_serializing_if = "Option::is_none")]
+    property_definitions_source: Option<zorid_native::DocumentPropertyDefinitionsSource>,
+    #[serde(default, deserialize_with = "current_entry_option", skip_serializing_if = "Option::is_none")]
+    current_entry_id: Option<EntryId>,
+    #[serde(default, deserialize_with = "clock_option", skip_serializing_if = "Option::is_none")]
+    clock_ms: Option<i64>,
+    timezone: String,
+    max_rows: usize,
+    max_steps: usize,
+}
+impl Default for PropertyTargetOptions {
+    fn default() -> Self {
+        Self { property_definitions_source: None, current_entry_id: None, clock_ms: None, timezone: "UTC".into(), max_rows: 10_000, max_steps: QueryOptions::default().max_steps }
+    }
+}
+impl PropertyTargetOptions {
+    fn into_options(mut self) -> Result<(Option<zorid_native::DocumentPropertyDefinitionsSource>, QueryOptions), Value> {
+        let properties = self.property_definitions_source.take();
+        let options = BaseOptions {
+            current_entry_id: self.current_entry_id, clock_ms: self.clock_ms, timezone: self.timezone,
+            max_rows: self.max_rows, max_steps: self.max_steps, ..BaseOptions::default()
+        }.into_options()?;
+        Ok((properties, options))
     }
 }
 #[derive(Deserialize, Serialize)]
@@ -187,6 +220,10 @@ struct BaseOptions {
     #[serde(default, deserialize_with = "property_source_option", skip_serializing_if = "Option::is_none")]
     property_definitions_source: Option<zorid_native::DocumentPropertyDefinitionsSource>,
     max_steps: usize,
+    #[serde(default, deserialize_with = "text_option", skip_serializing_if = "Option::is_none")]
+    summary_preview_property: Option<String>,
+    #[serde(default, deserialize_with = "random_seed_option", skip_serializing_if = "Option::is_none")]
+    random_seed: Option<u64>,
 }
 impl Default for BaseOptions {
     fn default() -> Self {
@@ -201,6 +238,8 @@ impl Default for BaseOptions {
             inline_source: None,
             property_definitions_source: None,
             max_steps: QueryOptions::default().max_steps,
+            summary_preview_property: None,
+            random_seed: None,
         }
     }
 }
@@ -217,6 +256,8 @@ impl BaseOptions {
             || self.view_index > 1000
             || self.max_steps == 0
             || self.max_steps > QueryOptions::default().max_steps
+            || self.random_seed.is_some_and(|value| value > 9_007_199_254_740_991)
+            || self.summary_preview_property.as_ref().is_some_and(|value| value.is_empty() || value.len() > 65536)
         {
             return Err(failure("invalid_budget"));
         }
@@ -234,6 +275,8 @@ impl BaseOptions {
         options.max_rows = self.max_rows;
         options.max_steps = self.max_steps;
         options.current_entry_id = self.current_entry_id;
+        options.summary_preview_property = self.summary_preview_property;
+        options.evaluation.random_seed = self.random_seed;
         Ok(options)
     }
 }
@@ -301,6 +344,12 @@ fn property_source_option<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<zorid_native::DocumentPropertyDefinitionsSource>, D::Error> {
     zorid_native::DocumentPropertyDefinitionsSource::deserialize(deserializer).map(Some)
+}
+fn text_option<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
+}
+fn random_seed_option<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<u64>, D::Error> {
+    u64::deserialize(deserializer).map(Some)
 }
 // Missing differs from explicit null: only omission selects the host clock.
 fn clock_option<'de, D: serde::Deserializer<'de>>(
@@ -1007,6 +1056,7 @@ pub(crate) fn execute(
         | RichClose { pin_id, .. }
         | Backlinks { pin_id, .. }
         | Base { pin_id, .. }
+        | PropertyTargets { pin_id, .. }
         | Tasks { pin_id, .. } => Some(pin_id.clone()),
         _ => None,
     };
@@ -1374,6 +1424,11 @@ pub(crate) fn execute(
                 .map_err(native)?;
                 answer("base", result)
             }
+            PropertyTargets { pin_id, options } => {
+                let pin = pin(sessions, client, &pin_id)?;
+                let (properties, options) = options.into_options()?;
+                answer("property_targets", vault.query_property_targets_document(&pin.value, properties.as_ref(), &options).map_err(native)?)
+            }
         }
     })();
     if result
@@ -1544,6 +1599,16 @@ mod clock_tests {
         assert_eq!(selected.source, "views: []\n");
         assert_eq!((selected.start_byte, selected.end_byte), (9, 32));
         assert_eq!(serde_json::to_value(options).unwrap()["inlineSource"]["startByte"], 9);
+    }
+    #[test]
+    fn property_target_options_and_base_preview_random_fields_are_strict_and_bounded() {
+        let read: PropertyTargetOptions = serde_json::from_str(r#"{"clockMs":0,"currentEntryId":"note"}"#).unwrap();
+        let (source, options) = read.into_options().unwrap();assert!(source.is_none());assert_eq!(options.max_rows, 10_000);
+        let base: BaseOptions = serde_json::from_str(r#"{"clockMs":0,"summaryPreviewProperty":"note.rating","randomSeed":0}"#).unwrap();
+        let options=base.into_options().unwrap();assert_eq!(options.summary_preview_property.as_deref(),Some("note.rating"));assert_eq!(options.evaluation.random_seed,Some(0));
+        for raw in [r#"{"summaryPreviewProperty":null}"#,r#"{"randomSeed":null}"#,r#"{"randomSeed":-1}"#,r#"{"randomSeed":1,"randomSeed":2}"#] {assert!(serde_json::from_str::<BaseOptions>(raw).is_err(),"{raw}");}
+        assert!(serde_json::from_str::<BaseOptions>(r#"{"clockMs":0,"randomSeed":9007199254740992}"#).unwrap().into_options().is_err());
+        for raw in [r#"{"inlineSource":null}"#,r#"{"summaryPreviewProperty":"rating"}"#,r#"{"randomSeed":1}"#,r#"{"propertyDefinitionsSource":null}"#,r#"{"clockMs":null}"#] {assert!(serde_json::from_str::<PropertyTargetOptions>(raw).is_err(),"{raw}");}
     }
     #[test]
     fn saved_base_has_bounded_attachment_allowance_without_enlarging_other_methods() {

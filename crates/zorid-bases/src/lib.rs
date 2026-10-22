@@ -3,7 +3,7 @@
 mod expression;
 pub mod properties;
 pub mod relations;
-pub use graph::query_generation_with_properties;
+pub use graph::{query_generation_with_properties, query_generation_property_targets};
 pub use properties::PropertyDefinitions;
 pub mod calendar;
 mod files;

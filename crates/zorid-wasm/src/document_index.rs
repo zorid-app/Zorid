@@ -581,6 +581,30 @@ struct PropertyDefinitionsSource {
     id: EntryId,
     source: String,
 }
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+struct PropertyTargetReadOptions {
+    #[serde(default, deserialize_with = "present_option")]
+    property_definitions_source: Option<PropertyDefinitionsSource>,
+    #[serde(default, deserialize_with = "present_option")]
+    current_entry_id: Option<EntryId>,
+    #[serde(default, deserialize_with = "present_option")]
+    clock_ms: Option<i64>,
+    #[serde(default, deserialize_with = "present_option")]
+    timezone: Option<String>,
+    #[serde(default, deserialize_with = "present_option")]
+    max_rows: Option<usize>,
+    #[serde(default, deserialize_with = "present_option")]
+    max_steps: Option<usize>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PropertyTargetsRead<'a> {
+    definition: Option<&'a EntryState>,
+    relation_targets: BTreeMap<String, Vec<zorid_bases::relations::RelationTarget>>,
+    property_definition_diagnostics: Vec<zorid_bases::properties::PropertyDefinitionDiagnostic>,
+    refresh_hint: Option<zorid_bases::BaseRefreshHint>,
+}
 #[derive(Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BaseReadOptions {
@@ -598,6 +622,10 @@ pub(crate) struct BaseReadOptions {
     inline_source: Option<zorid_document::InlineBaseSource>,
     #[serde(default, deserialize_with = "present_option")]
     property_definitions_source: Option<PropertyDefinitionsSource>,
+    #[serde(default, deserialize_with = "present_option")]
+    summary_preview_property: Option<String>,
+    #[serde(default, deserialize_with = "present_option")]
+    random_seed: Option<u64>,
 }
 impl BaseReadOptions {
     pub(crate) fn retained_bytes(&self) -> usize {
@@ -610,6 +638,7 @@ impl BaseReadOptions {
             .saturating_add(self.current_entry_id.as_ref().map_or(0, |id| id.heap_capacity_bytes()))
             .saturating_add(self.inline_source.as_ref().map_or(0, |inline| inline.source.capacity()))
             .saturating_add(self.property_definitions_source.as_ref().map_or(0, |input| input.source.capacity().saturating_add(input.id.heap_capacity_bytes())))
+            .saturating_add(self.summary_preview_property.as_ref().map_or(0, String::capacity))
     }
 }
 fn present_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -1200,6 +1229,9 @@ pub(crate) fn base_query_options(
     if input.property_definitions_source.is_some() {
         return Err(BaseReadError::Code("index_property_source_requires_saved"));
     }
+    if input.random_seed.is_some_and(|value| value > 9_007_199_254_740_991)
+        || input.summary_preview_property.as_ref().is_some_and(|value| value.is_empty() || value.len() > 65536)
+    { return Err(BaseReadError::Code("index_invalid_budget")); }
     let mut options = zorid_bases::QueryOptions::default();
     if let Some(index) = input.view_index {
         options.view_index = index;
@@ -1210,6 +1242,8 @@ pub(crate) fn base_query_options(
             .ok_or(BaseReadError::Code("index_view_not_found"))?;
     }
     options.current_entry_id = input.current_entry_id;
+    options.summary_preview_property = input.summary_preview_property;
+    options.evaluation.random_seed = input.random_seed;
     if let Some(steps) = input.max_steps {
         options.max_steps = steps;
     }
@@ -1245,17 +1279,7 @@ fn evaluate_base<'a>(
         std::str::from_utf8(bytes).map_err(|_| BaseReadError::Code("index_source_unavailable"))?;
     let inline = input.inline_source.take();
     let property_source = input.property_definitions_source.take();
-    let property_entry = generation.manifest().entries().iter().find(|entry|
-        entry.kind == zorid_core::EntryKind::File && entry.path.as_str() == "Properties.yaml"
-    );
-    let definitions = match (property_entry, property_source) {
-        (None, None) => None,
-        (Some(entry), Some(source)) if entry.id == source.id => Some(
-            zorid_bases::properties::PropertyDefinitions::from_generation_source(generation, &source.id, &source.source)
-                .map_err(BaseReadError::Evaluation)?
-        ),
-        _ => return Err(BaseReadError::Code("index_property_source_mismatch")),
-    };
+    let (_, definitions) = read_property_definitions(generation, property_source)?;
     let source = if let Some(inline) = inline.as_ref() {
         if !record.witness().entry().path.as_str().to_ascii_lowercase().ends_with(".md")
             || !zorid_document::verify_inline_base_source(saved_source, inline)
@@ -1320,6 +1344,41 @@ fn evaluate_base<'a>(
         },
         outcomes,
     ))
+}
+fn read_property_definitions(
+    generation: &Generation,
+    supplied: Option<PropertyDefinitionsSource>,
+) -> Result<(Option<&EntryState>, Option<zorid_bases::properties::PropertyDefinitions>), BaseReadError> {
+    let entry = generation.manifest().entries().iter().find(|entry|
+        entry.kind == zorid_core::EntryKind::File && entry.path.as_str() == "Properties.yaml"
+    );
+    match (entry, supplied) {
+        (None, None) => Ok((None, None)),
+        (Some(entry), Some(source)) if entry.id == source.id => Ok((Some(entry), Some(
+            zorid_bases::properties::PropertyDefinitions::from_generation_source(generation, &source.id, &source.source)
+                .map_err(BaseReadError::Evaluation)?
+        ))),
+        _ => Err(BaseReadError::Code("index_property_source_mismatch")),
+    }
+}
+fn property_targets_read<'a>(
+    generation: &'a Generation,
+    facts: &[zorid_bases::FilePresentationFacts],
+    input: PropertyTargetReadOptions,
+) -> Result<PropertyTargetsRead<'a>, BaseReadError> {
+    let (definition, definitions) = read_property_definitions(generation, input.property_definitions_source)?;
+    let definitions = match definitions {
+        Some(definitions) => definitions,
+        None => zorid_bases::properties::PropertyDefinitions::absent(generation).map_err(BaseReadError::Evaluation)?,
+    };
+    let mut options = zorid_bases::QueryOptions::default();
+    options.current_entry_id = input.current_entry_id;
+    options.max_rows = input.max_rows.unwrap_or(10_000);
+    if let Some(steps) = input.max_steps { options.max_steps = steps; }
+    if let Some(clock) = input.clock_ms { options.evaluation.clock_ms = clock; }
+    if let Some(timezone) = input.timezone { options.evaluation.timezone = timezone; }
+    let result = zorid_bases::query_generation_property_targets(generation, facts, &definitions, &options).map_err(BaseReadError::Evaluation)?;
+    Ok(PropertyTargetsRead { definition, relation_targets: result.relation_targets.unwrap_or_default(), property_definition_diagnostics: result.property_definition_diagnostics, refresh_hint: result.refresh_hint })
 }
 fn base_report(
     generation: &WasmDocumentIndexGeneration,
@@ -1577,6 +1636,15 @@ impl WasmDocumentIndexGeneration {
         view_name: Option<String>,
     ) -> Result<String, JsValue> {
         base_report(self, id, bytes, facts_json, options_json, view_name, None)
+    }
+    #[wasm_bindgen(js_name=propertyTargetsJson)]
+    pub fn property_targets_json(&self, facts_json: &str, options_json: &str) -> Result<String, JsValue> {
+        if facts_json.len() > 8 * 1024 * 1024 || options_json.len() > 1024 * 1024 - 16 * 1024 {
+            return Err(error("index_input_limit"));
+        }
+        let facts: Vec<zorid_bases::FilePresentationFacts> = decode(facts_json)?;
+        let input: PropertyTargetReadOptions = decode(options_json)?;
+        self.report(property_targets_read(&self.generation, &facts, input).map_err(BaseReadError::js)?)
     }
     #[wasm_bindgen(js_name=resolveJson)]
     pub fn resolve_json(&self, source_id: &str, destination: &str) -> Result<String, JsValue> {
@@ -2293,6 +2361,26 @@ mod tests {
         let mut forged = input();
         forged.property_definitions_source.as_mut().unwrap().source.push_str("# forged\n");
         assert!(matches!(evaluate_base(&generation.generation, &id, base.as_bytes(), &[], forged, None, None), Err(BaseReadError::Evaluation(_))));
+    }
+    #[test]
+    fn ordinary_note_property_targets_use_sealed_settings_without_base_source() {
+        let settings = "properties:\n  author:\n    type: relation\n    relation: {targetFilter: 'type == \"author\"'}\n";
+        let mut h: serde_json::Value = serde_json::from_str(&header()).unwrap();
+        h["entries"].as_array_mut().unwrap().push(serde_json::json!({"id":"settings","path":"Properties.yaml","kind":"file","revision":"r3","deleted":false}));
+        let mut builder = WasmDocumentIndexBuilder::new(&h.to_string()).unwrap();
+        for id in ["a", "b"] { builder.add_text(id, b"---\ntype: author\n---\n").unwrap(); }
+        builder.add_text("settings", settings.as_bytes()).unwrap();let generation = builder.finish().unwrap();
+        let input = || serde_json::from_value::<PropertyTargetReadOptions>(serde_json::json!({"propertyDefinitionsSource":{"id":"settings","source":settings}})).unwrap();
+        let read = property_targets_read(&generation.generation, &[], input()).unwrap();
+        assert_eq!(read.definition.unwrap().id, EntryId::new("settings").unwrap());
+        assert_eq!(read.relation_targets["author"].len(), 2);
+        assert_eq!(read.relation_targets["author"][0].entry_id, EntryId::new("a").unwrap());
+        assert!(matches!(property_targets_read(&generation.generation, &[], PropertyTargetReadOptions::default()), Err(BaseReadError::Code("index_property_source_mismatch"))));
+        let mut forged=input();forged.property_definitions_source.as_mut().unwrap().source.push_str("# forged\n");
+        assert!(matches!(property_targets_read(&generation.generation, &[], forged), Err(BaseReadError::Evaluation(_))));
+        for raw in [r#"{"inlineSource":null}"#,r#"{"clockMs":null}"#,r#"{"maxRows":null}"#,r#"{"propertyDefinitionsSource":null}"#,r#"{"maxSteps":1,"maxSteps":2}"#] {
+            assert!(serde_json::from_str::<PropertyTargetReadOptions>(raw).is_err(), "{raw}");
+        }
     }
     #[test]
     fn preparation_cache_reuses_fresh_generations_and_reruns_current_invocation() {
@@ -3032,6 +3120,10 @@ mod tests {
             r#"{"currentEntryId":null}"#,
             r#"{"maxSteps":null}"#,
             r#"{"inlineSource":null}"#,
+            r#"{"summaryPreviewProperty":null}"#,
+            r#"{"randomSeed":null}"#,
+            r#"{"randomSeed":-1}"#,
+            r#"{"randomSeed":1,"randomSeed":2}"#,
             r#"{"propertyDefinitionsSource":null}"#,
             r#"{"propertyDefinitionsSource":{"id":"one","source":"","unknown":true}}"#,
             r#"{"propertyDefinitionsSource":{"id":"one","source":""},"propertyDefinitionsSource":{"id":"one","source":""}}"#,
@@ -3045,6 +3137,10 @@ mod tests {
                 "{raw}"
             );
         }
+        let program=zorid_bases::compile_base_source("views:\n  - type: table\n").unwrap();
+        let options=base_query_options(serde_json::from_str(r#"{"summaryPreviewProperty":"note.rating","randomSeed":0}"#).unwrap(),None,&program).unwrap();
+        assert_eq!(options.summary_preview_property.as_deref(),Some("note.rating"));assert_eq!(options.evaluation.random_seed,Some(0));
+        assert!(base_query_options(serde_json::from_str(r#"{"randomSeed":9007199254740992}"#).unwrap(),None,&program).is_err());
     }
     #[test]
     fn cache_transport_rebinds_identity_free_facts_and_preserves_legacy_rows() {

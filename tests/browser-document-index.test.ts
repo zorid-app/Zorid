@@ -13,7 +13,7 @@ const range=(globalThis as any).IDBKeyRange;
 (globalThis as any).IDBKeyRange={bound:(lower:string,upper:string)=>({lower,upper})};
 /** Transaction/opaque-WASM doubles test host storage and transport only. No JS
  * parser, resolver or query evaluator stands in for Rust corpus parity. */
-function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:number;evictions?:number;pauseCacheBindOnce?:boolean;richRead?:boolean;richCompile?:boolean;richInvalidPage?:boolean;metadataRows?:boolean;metadataDelta?:boolean;preview?:boolean}={}){
+function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:number;evictions?:number;pauseCacheBindOnce?:boolean;richRead?:boolean;richCompile?:boolean;richInvalidPage?:boolean;metadataRows?:boolean;metadataDelta?:boolean;propertyTargets?:boolean;preview?:boolean}={}){
   const records=new Map<string,Map<string,any>>(['control','metadata','presentation','content','sync_materialization_refs',...(options.preview?['sync_state']:[])].map(n=>[n,new Map()]));
   const seed=(store:string,key:string,value:any)=>records.get(store)!.set(key,clone(value));
   seed('control','local-store-id',{key:'local-store-id',value:authority});seed('control','sequence',{key:'sequence',value:'0'});
@@ -44,6 +44,7 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
     function schedule(){if(scheduled)return;scheduled=true;queueMicrotask(()=>{scheduled=false;if(aborted||completed||pending)return;if(failCommit&&mode==='readwrite'){failCommit=false;tx.abort();return;}completed=true;for(const n of writes)records.set(n,local.get(n)!);if(mode==='readwrite')afterCommit?.();tx.oncomplete?.();});}schedule();return tx;
   }};
   let textExtractions=0,reuses=0,cacheBinds=0,pauseCacheBindOnce=!!options.pauseCacheBindOnce;const taskCalls:{sources:{id:string;source:string}[];options:any;snapshot:unknown}[]= [];
+  const propertyTargetCalls:{facts:any[];options:any}[]=[];
   const baseCalls:{id:string;text:string;facts:any[];options:any;viewName?:string|null}[]=[];
   const preparationCalls:{monotonicMs:number;generation:unknown}[]=[],preparationStats={created:0,freed:0,cleared:0};let afterBase:(()=>void)|undefined;
   class MockBuilder {
@@ -68,6 +69,7 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
       metadataJson:(id:string)=>JSON.stringify({fixture:'opaque-metadata-transport',id,snapshot:header.nextIndex}),
       tasksJson:(sources:string,options:string)=>{const captured=JSON.parse(sources);for(const source of captured)assert.deepEqual(sha(new TextEncoder().encode(source.source)),rows.get(source.id).digest);taskCalls.push({sources:captured,options:JSON.parse(options),snapshot:header.nextIndex});return JSON.stringify({fixture:'opaque-tasks-transport',snapshot:header.nextIndex});},
       baseJson:(id:string,bytes:Uint8Array,facts:string,options:string,viewName?:string|null)=>{assert.deepEqual(sha(bytes),rows.get(id).digest);baseCalls.push({id,text:new TextDecoder().decode(bytes),facts:JSON.parse(facts),options:JSON.parse(options),viewName});return JSON.stringify({fixture:'opaque-base-transport',snapshot:header.nextIndex});},
+      ...(options.propertyTargets?{propertyTargetsJson:(facts:string,raw:string)=>{const selected=JSON.parse(raw),source=selected.propertyDefinitionsSource;if(source)assert.deepEqual(sha(new TextEncoder().encode(source.source)),rows.get(source.id).digest);propertyTargetCalls.push({facts:JSON.parse(facts),options:selected});return JSON.stringify({fixture:'opaque-property-targets',snapshot:header.nextIndex});}}:{}),
       resolveJson:()=>'{"fixture":"opaque-rust-transport"}',backlinksJson:()=>'{"fixture":"opaque-rust-transport"}',
       openLiteral(query:string,token:string){if(query==='fixture-page')assert.ok(token===''||token==='1');let position=0;const observed:string[]=[];const files=header.entries.filter(e=>e.kind==='file'&&rows.get(e.id)?.digest);return {
         free(){},nextReadJson:()=>JSON.stringify(files[position]??null),accept(bytes:Uint8Array){assert.deepEqual(sha(bytes),rows.get(files[position]!.id).digest);observed.push(new TextDecoder().decode(bytes));position++;},finishJson:()=>JSON.stringify({fixture:'projection-transport',observed,snapshot:header.nextIndex,...(query==='fixture-page'?{next:'1'}:{})}),
@@ -133,7 +135,7 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
   class MockPreviewQuery {readonly capture:any;readonly input:any;constructor(capture:any,input:any){this.capture=capture;this.input=input;previewStats.queries++;}descriptorJson(){const definition=this.capture.header.entries.find((entry:any)=>entry.id===this.input.id);if(!definition||!this.capture.rows.has(definition.id))throw JSON.stringify({code:'index_source_unavailable'});return JSON.stringify({definition,sourceBytes:this.capture.rows.get(definition.id).textBytes});}prepareBase(bytes:Uint8Array){assert.equal(this.capture.alive,true);assert.deepEqual(sha(bytes),this.capture.rows.get(this.input.id).digest);return new MockPreviewReply();}cancel(){}free(){previewStats.queryFreed++;}}
   class MockPreviewReply {constructor(){previewStats.replies++;}encodedLength(){return 1;}writeInto(bytes:Uint8Array){bytes[0]=17;}free(){previewStats.replyFreed++;}}
   const policy={formatVersion:1,maxRows:options.cacheRows??100000,maxBytes:options.cacheBytes??64*1024*1024,maxRowBytes:options.cacheRowBytes??1024*1024,maxEvictionsPerWrite:options.evictions??32};
-  const wasm={documentParseCachePolicyJson:()=>JSON.stringify(policy),documentParseCacheAdmissionJson:(input:string)=>{const {usage,replacedPayloadBytes:replaced,incomingPayloadBytes:incoming,evictedRows:evicted}=JSON.parse(input),rows=usage.rows-(replaced===null?0:1)+1,bytes=usage.bytes-(replaced??0)+incoming;return JSON.stringify(incoming>policy.maxRowBytes?'skipOversized':rows<=policy.maxRows&&bytes<=policy.maxBytes?'write':evicted===policy.maxEvictionsPerWrite?'skipEvictionLimit':'evictOldest');},documentIndexVersionsJson:()=>'{"schema":1,"extraction":"fixture","resolver":"fixture","query":"fixture"}',WasmDocumentIndexBuilder:MockBuilder,WasmDocumentIndexPreparationCache:MockPreparationCache,WasmDocumentRichSearchOwner:MockRichOwner} as unknown as BrowserDocumentIndexWasm;
+  const wasm={...(options.propertyTargets?{WasmDocumentIndexGeneration:{prototype:{propertyTargetsJson(){}}}}:{}),documentParseCachePolicyJson:()=>JSON.stringify(policy),documentParseCacheAdmissionJson:(input:string)=>{const {usage,replacedPayloadBytes:replaced,incomingPayloadBytes:incoming,evictedRows:evicted}=JSON.parse(input),rows=usage.rows-(replaced===null?0:1)+1,bytes=usage.bytes-(replaced??0)+incoming;return JSON.stringify(incoming>policy.maxRowBytes?'skipOversized':rows<=policy.maxRows&&bytes<=policy.maxBytes?'write':evicted===policy.maxEvictionsPerWrite?'skipEvictionLimit':'evictOldest');},documentIndexVersionsJson:()=>'{"schema":1,"extraction":"fixture","resolver":"fixture","query":"fixture"}',WasmDocumentIndexBuilder:MockBuilder,WasmDocumentIndexPreparationCache:MockPreparationCache,WasmDocumentRichSearchOwner:MockRichOwner} as unknown as BrowserDocumentIndexWasm;
   // This double exposes reservation inputs/outputs for transaction assertions.
   // Arithmetic and actual WASM wire semantics have independent Rust gates.
   const allocationCalls:any[]=[];wasm.documentIndexAllocateJson=(input:string)=>{const clock=JSON.parse(input);allocationCalls.push(clone(clock));if(clock.allocated==='18446744073709551615')throw JSON.stringify({code:'index_rebuild_required'});return JSON.stringify({localStoreId:clock.localStoreId,generationEpoch:clock.generationEpoch,generation:String(BigInt(clock.allocated)+1n),versions:JSON.parse(wasm.documentIndexVersionsJson())});};
@@ -156,7 +158,7 @@ function fixture(options:{cacheRows?:number;cacheBytes?:number;cacheRowBytes?:nu
   const source=()=>clone(new Map([...records].filter(([n])=>n!=='control').map(([n,m])=>[n,m])));
   const build=async(index:ReturnType<typeof open>)=>{let stage=await index.begin();do{stage=await index.pump(stage.stageId);}while(!stage.ready);return index.publish(stage.stageId);};
   const descriptor=(snapshot:{generationEpoch:string;generation:string})=>records.get('control')!.get('document-index:v1/catalog').value.generations.find((g:any)=>g.snapshot.generationEpoch===snapshot.generationEpoch&&g.snapshot.generation===snapshot.generation);
-  return {records,calls,transactions,file,open,backend,wasm,build,source,seed,descriptor,allocationCalls,previewStats,afterPreviewCapture(action:()=>void){afterPreviewCapture=action;},previewResource(value:boolean){previewResource=value;},metadataStats,metadataInvalid(value:boolean){metadataInvalid=value;},metadataThrow(){metadataThrow=true;},afterMetadataPage(action?:()=>void){afterMetadataPage=action;},richCalls,richStats,afterRichCommit(action:()=>void){afterRichCommit=action;},baseCalls,taskCalls,preparationCalls,preparationStats,afterBase(action:()=>void){afterBase=action;},stats:()=>({textExtractions,reuses,cacheBinds}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},cacheUnavailable(){cacheReadUnavailable=true;},deny(){denied=true;},allow(){denied=false;},fatal(){fatal=true;},afterCommit(action?:()=>void){afterCommit=action;},afterRead(action:(store:string,key:any)=>void){afterRead=action;}};
+  return {records,calls,transactions,file,open,backend,wasm,build,source,seed,descriptor,allocationCalls,previewStats,afterPreviewCapture(action:()=>void){afterPreviewCapture=action;},previewResource(value:boolean){previewResource=value;},metadataStats,metadataInvalid(value:boolean){metadataInvalid=value;},metadataThrow(){metadataThrow=true;},afterMetadataPage(action?:()=>void){afterMetadataPage=action;},richCalls,richStats,afterRichCommit(action:()=>void){afterRichCommit=action;},baseCalls,propertyTargetCalls,taskCalls,preparationCalls,preparationStats,afterBase(action:()=>void){afterBase=action;},stats:()=>({textExtractions,reuses,cacheBinds}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},cacheUnavailable(){cacheReadUnavailable=true;},deny(){denied=true;},allow(){denied=false;},fatal(){fatal=true;},afterCommit(action?:()=>void){afterCommit=action;},afterRead(action:(store:string,key:any)=>void){afterRead=action;}};
 }
 
 test('strict derived publication retains source bytes and uses no aggregate control scan',async()=>{
@@ -580,7 +582,7 @@ test('maintenance rejects a foreign captured snapshot before source IO and prese
   const reads=f.calls.filter(row=>row.store==='content').length;await assert.rejects(maintenance.step(script.select({kind:'pump',snapshot:{...stage.snapshot,localStoreId:'foreign'}})),{code:'index_stage_expired'});assert.equal(f.calls.filter(row=>row.store==='content').length,reads);assert.deepEqual(f.source(),source);await maintenance.step(script.select({kind:'recoverStage'}));assert.deepEqual(script.completions.at(-1).stage.snapshot,stage.snapshot);await index.close();
 });
 
-async function metadataFixture(options:{metadataDelta?:boolean;preview?:boolean}={},count=3){
+async function metadataFixture(options:{metadataDelta?:boolean;propertyTargets?:boolean;preview?:boolean}={},count=3){
   const f=fixture({metadataRows:true,...options});for(let n=0;n<count;n++)f.file('entry-'+n,'opaque source '+n,{path:`Note ${n}.txt`});
   const index=f.open();await f.build(index);const pin=await index.open();return {...f,index,pin};
 }
@@ -929,4 +931,29 @@ test('new partial preview rejects unrelated same-sequence '+changed+' tamper',as
   assert.equal(f.previewStats.captures,0);assert.equal(f.previewStats.queries,0);
   assert.equal(f.descriptor(stage.snapshot).rows,32);assert.deepEqual(f.source(),authority);
   await index.discard(stage.stageId);await index.close();
+});
+
+test('ordinary note property targets attach exact saved settings from the retained generation without a Base',async()=>{
+  const f=fixture({propertyTargets:true}),settings='properties:\n  author:\n    type: relation\n';
+  f.file('settings',settings,{path:'Properties.yaml'});f.file('author','---\ntype: author\n---\n');
+  const index=f.open();assert.equal(index.propertyTargetsAvailable,true);await f.build(index);const pin=await index.open();
+  await index.propertyTargets!({pinId:pin.pinId,options:{currentEntryId:'author',clockMs:0}});
+  assert.equal(f.propertyTargetCalls.length,1);assert.deepEqual(f.propertyTargetCalls[0].options.propertyDefinitionsSource,{id:'settings',source:settings});
+  assert.equal(f.propertyTargetCalls[0].options.maxRows,10000);assert.equal(f.propertyTargetCalls[0].options.currentEntryId,'author');
+  f.file('settings','properties: {}\n',{path:'Properties.yaml',revision:'r2'});f.sequence('1');
+  await index.propertyTargets!({pinId:pin.pinId,options:{clockMs:0}});assert.equal(f.propertyTargetCalls[1].options.propertyDefinitionsSource.source,settings);
+  await assert.rejects(index.propertyTargets!({pinId:pin.pinId,options:{propertyDefinitionsSource:{id:'settings',source:'properties: {}\n'}}}),{code:'index_property_source_mismatch'});
+  await index.closePin(pin.pinId);await assert.rejects(index.propertyTargets!({pinId:pin.pinId}),{code:'index_snapshot_expired'});
+  await index.close();
+});
+
+test('Base transport captures inline source summary preview and safe seeded randomness beyond64KiB',async()=>{
+  const f=fixture(),source=`# ${'\\"'.repeat(40000)}\nviews: []\n`,note=`# Note\n\n\`\`\`base\n${source}\`\`\`\n`;
+  f.file('note',note);const index=f.open();await f.build(index);const pin=await index.open();
+  const inline={source,startByte:8,endByte:note.length-1};
+  const input={pinId:pin.pinId,id:'note',options:{inlineSource:inline,summaryPreviewProperty:'note.rating',randomSeed:9007199254740991,clockMs:0}};
+  const pending=index.base(input);inline.source='changed';await pending;
+  assert.equal(f.baseCalls[0].options.inlineSource.source,source);assert.equal(f.baseCalls[0].options.summaryPreviewProperty,'note.rating');assert.equal(f.baseCalls[0].options.randomSeed,9007199254740991);
+  for(const options of [{inlineSource:null},{propertyDefinitionsSource:null},{randomSeed:null},{randomSeed:-1},{randomSeed:9007199254740992},{summaryPreviewProperty:null}])await assert.rejects(index.base({pinId:pin.pinId,id:'note',options:options as any}),{code:'index_invalid_request'});
+  await index.closePin(pin.pinId);await index.close();
 });

@@ -49,8 +49,9 @@ export function createDesktopDocumentRuntime(options:{
 /** One instance per admitted desktop context. The invocation closure must retain
  * that admission and its normal release guard; it is not an unrestricted IPC. */
 export interface DesktopDocumentBinding {readonly service:DocumentService;release():Promise<void>}
-export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequest)=>Promise<unknown>,maintenance?:DocumentRuntimeTransport,capabilities:{readonly metadataRowsAvailable?:boolean;readonly draftsAvailable?:boolean;readonly drafts?:DocumentDraftTransport;readonly basePreviewAvailable?:boolean}={}):DesktopDocumentBinding{
+export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequest)=>Promise<unknown>,maintenance?:DocumentRuntimeTransport,capabilities:{readonly metadataRowsAvailable?:boolean;readonly propertyTargetsAvailable?:boolean;readonly draftsAvailable?:boolean;readonly drafts?:DocumentDraftTransport;readonly basePreviewAvailable?:boolean}={}):DesktopDocumentBinding{
   const metadataRowsAvailable=capabilities.metadataRowsAvailable===true;
+  const propertyTargetsAvailable=capabilities.propertyTargetsAvailable===true;
   const basePreviewAvailable=capabilities.basePreviewAvailable===true;
   if(basePreviewAvailable&&(!maintenance||typeof invoke!=='function'))throw new DocumentSemanticsError('unsupported_host_capability');
   if(metadataRowsAvailable&&typeof invoke!=='function')throw new DocumentSemanticsError('invalid_document_response');
@@ -157,6 +158,7 @@ export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequ
     backlinks:({targetId,...input})=>command('backlinks',{...input,id:targetId,limit:input.limit??100}),
     tasks:input=>command('tasks',input),
     base:input=>command('base',input),
+    ...(propertyTargetsAvailable?{propertyTargets:(input:Parameters<NonNullable<DocumentTransport['propertyTargets']>>[0])=>command('property_targets',input)}:{}),
   };
   return {service:createDocumentService(transport),release(){
     if(phase==='released')return Promise.resolve();if(releasing)return releasing;phase='releasing';

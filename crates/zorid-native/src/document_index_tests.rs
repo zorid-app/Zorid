@@ -124,6 +124,45 @@ fn property_definitions_use_exact_saved_root_source_in_each_retained_generation(
 }
 
 #[test]
+fn property_targets_need_no_base_file_and_retain_settings_and_candidate_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    let settings = "properties:\n  author:\n    type: relation\n    relation: {targetFilter: 'type == \"author\"'}\n";
+    create(&mut vault, "settings", "Properties.yaml", settings);
+    create(&mut vault, "first", "First.md", "---\ntype: author\n---\n");
+    create(&mut vault, "second", "Second.md", "---\ntype: author\n---\n");
+    create(&mut vault, "other", "Other.md", "---\ntype: book\n---\n");
+    vault.initialize_document_index().unwrap();build(&mut vault);
+    let old = vault.open_document_snapshot().unwrap();
+    let options = QueryOptions::default();
+    let read = vault.query_property_targets_document(&old, None, &options).unwrap();
+    assert_eq!(read.value.definition.as_ref().unwrap().id, id("settings"));
+    assert_eq!(read.value.relation_targets["author"].len(), 2, "internal row limit must not limit candidate count");
+    assert_eq!(read.value.relation_targets["author"][0].entry_id, id("first"));
+    assert_eq!(read.value.relation_targets["author"][0].revision, revision(&vault, "first"));
+    let attached = DocumentPropertyDefinitionsSource { id: id("settings"), source: settings.into() };
+    expect_code(vault.query_property_targets_document(&old, Some(&DocumentPropertyDefinitionsSource { source: format!("# forged\n{settings}"), ..attached.clone() }), &options), "property_source_mismatch");
+    write(&mut vault, "change-picker-settings", "settings", &settings.replace("author\"", "book\""));build(&mut vault);
+    assert_eq!(vault.query_property_targets_document(&old, Some(&attached), &options).unwrap().value.relation_targets["author"].len(), 2);
+    let fresh = vault.open_document_snapshot().unwrap();
+    let current = vault.query_property_targets_document(&fresh, None, &options).unwrap();
+    assert_eq!(current.value.relation_targets["author"].len(), 1);
+    assert_eq!(current.value.relation_targets["author"][0].entry_id, id("other"));
+    expect_code(vault.query_property_targets_document(&fresh, Some(&attached), &options), "property_source_mismatch");
+    vault.close_document_snapshot(old);vault.close_document_snapshot(fresh);
+}
+
+#[test]
+fn property_targets_without_saved_definitions_are_an_explicit_empty_result() {
+    let dir = tempfile::tempdir().unwrap();let mut vault = NativeVault::open(dir.path()).unwrap();
+    create(&mut vault, "note", "Note.md", "# Ordinary note\n");
+    vault.initialize_document_index().unwrap();build(&mut vault);let pin = vault.open_document_snapshot().unwrap();
+    let result = vault.query_property_targets_document(&pin, None, &QueryOptions::default()).unwrap();
+    assert!(result.value.definition.is_none());assert!(result.value.relation_targets.is_empty());assert!(result.coverage_complete);
+    vault.close_document_snapshot(pin);
+}
+
+#[test]
 fn retained_generation_binds_metadata_search_backlinks_base_source_and_facts() {
     let dir = tempfile::tempdir().unwrap();
     let cache = tempfile::tempdir().unwrap();

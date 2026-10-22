@@ -257,6 +257,19 @@ pub fn query_generation_with_properties(
     crate::encoded_size(&result, options.max_output_bytes)?;
     Ok(result)
 }
+/// Candidate discovery for ordinary note-property pickers, without a saved Base.
+pub fn query_generation_property_targets(
+    generation: &Generation,
+    facts: &[FilePresentationFacts],
+    definitions: &crate::properties::PropertyDefinitions,
+    options: &QueryOptions,
+) -> Result<BaseQueryResult, ExpressionDiagnostic> {
+    let program = crate::compile_base_source("filters: 'false'\nviews:\n  - type: table\n    limit: 1\n    order: [file.path]\n")
+        .map_err(|_| ExpressionDiagnostic::new("internal", "Invalid internal property-target query"))?;
+    let mut invocation = options.clone();
+    invocation.view_index = 0;
+    query_generation_with_properties(&program, generation, facts, definitions, &invocation)
+}
 pub(crate) fn preflight_generation(
     generation: &Generation,
     options: &QueryOptions,

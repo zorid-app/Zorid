@@ -1,7 +1,7 @@
 'use strict';
 // Transport validation only. Markdown, URL resolution and Base evaluation stay
 // in Rust; native pins/cursors are represented only by owner-bound locators.
-const MAX_DOCUMENT_REQUEST=64*1024,MAX_DOCUMENT_RESPONSE=16*1024*1024;
+const MAX_DOCUMENT_REQUEST=64*1024,MAX_BASE_REQUEST=1024*1024-16*1024,MAX_DOCUMENT_RESPONSE=16*1024*1024;
 const MAX_RICH_PAGE=1024*1024,MAX_RICH_RESPONSE=2*1024*1024;
 const utf8=new TextEncoder(),byteLength=value=>utf8.encode(value).byteLength;
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
@@ -117,7 +117,7 @@ function captureDocumentRequest(input){
   if(!keys(input,['schemaVersion','command'])||input.schemaVersion!==1||!object(input.command)||typeof input.command.op!=='string')throw fail('invalid_document_request');
   const command=input.command,op=command.op;
   if(previewOp(op))previewRequestBound(input);
-  const fields={preview_open:['previewId'],preview_base:['previewId','id','viewName','options'],preview_close:['previewId'],status:[],initialize:[],rebuild:[],begin:[],stages:[],resume:['snapshot'],pump:['snapshot'],publish:['snapshot'],discard:['snapshot'],open:['pinId'],close:['pinId'],metadata:['pinId','id'],metadata_rows:['pinId','baseline','cursor','limit'],search:['pinId','query','cursor','limit'],backlinks:['pinId','id','cursor','limit'],base:['pinId','id','viewName','options'],tasks:['pinId','typeIds','options'],rich_start:['pinId','spec'],rich_prepare:['pinId','queryId'],rich_page:['pinId','queryId','cursor'],rich_close:['pinId','queryId']}[op];
+  const fields={preview_open:['previewId'],preview_base:['previewId','id','viewName','options'],preview_close:['previewId'],status:[],initialize:[],rebuild:[],begin:[],stages:[],resume:['snapshot'],pump:['snapshot'],publish:['snapshot'],discard:['snapshot'],open:['pinId'],close:['pinId'],metadata:['pinId','id'],metadata_rows:['pinId','baseline','cursor','limit'],search:['pinId','query','cursor','limit'],backlinks:['pinId','id','cursor','limit'],base:['pinId','id','viewName','options'],property_targets:['pinId','options'],tasks:['pinId','typeIds','options'],rich_start:['pinId','spec'],rich_prepare:['pinId','queryId'],rich_page:['pinId','queryId','cursor'],rich_close:['pinId','queryId']}[op];
   if(!fields||!keys(command,['op',...fields],['op',...fields.filter(key=>!['viewName','options',...(op==='metadata_rows'?['baseline','limit']:[]),...(op==='rich_page'?[]:['cursor'])].includes(key))]))throw fail('invalid_document_request');
   const captured={op};
   for(const key of fields){
@@ -142,12 +142,15 @@ function captureDocumentRequest(input){
     else if(key==='limit'){if(op==='metadata_rows'&&value===undefined)continue;if(!integer(value,op==='metadata_rows'?32:1000)||value===0)throw fail('invalid_budget');captured[key]=value;}
     else if(key==='viewName'){if(value!==undefined&&value!==null&&(typeof value!=='string'||previewOp(op)&&!scalar(value)||byteLength(value)>(previewOp(op)?MAX_DOCUMENT_REQUEST:1024)))throw fail('invalid_document_request');captured[key]=value??null;}
     else if(key==='options'){
-      if((op==='tasks'||previewOp(op))&&value===null)throw fail('invalid_document_request');
-      const options=value??{},allowed=op==='tasks'?['filter','clockMs','timezone','showDone','maxRows']:['viewIndex','searchTerms','ignorePaths','clockMs','timezone','maxRows','currentEntryId','maxSteps'];
+      if((op==='tasks'||op==='property_targets'||op==='base'||previewOp(op))&&value===null)throw fail('invalid_document_request');
+      const options=value??{},allowed=op==='tasks'?['filter','clockMs','timezone','showDone','maxRows']:op==='property_targets'?['propertyDefinitionsSource','currentEntryId','clockMs','timezone','maxRows','maxSteps']:['viewIndex','searchTerms','ignorePaths','clockMs','timezone','maxRows','currentEntryId','maxSteps','inlineSource','propertyDefinitionsSource','summaryPreviewProperty','randomSeed'];
       if(!keys(options,allowed,[]))throw fail('invalid_document_request');
       captured.options={};
       for(const key of Object.keys(options)){
         const value=options[key];
+        if(key==='inlineSource'){if(op!=='base'||!keys(value,['source','startByte','endByte'])||!scalar(value.source)||byteLength(value.source)>262144||!integer(value.startByte,16*1024*1024)||!integer(value.endByte,16*1024*1024)||value.startByte>=value.endByte)throw fail('invalid_document_request');captured.options[key]={...value};continue;}
+        if(key==='propertyDefinitionsSource'){if(previewOp(op)||!keys(value,['id','source'])||!id(value.id)||!scalar(value.source)||byteLength(value.source)>262144)throw fail('invalid_document_request');captured.options[key]={...value};continue;}
+        if(key==='summaryPreviewProperty'&&(!scalar(value)||!value.length||byteLength(value)>65536)||key==='randomSeed'&&!integer(value))throw fail('invalid_document_request');
         if(key==='filter'&&!['all','today','unscheduled'].includes(value)||key==='showDone'&&typeof value!=='boolean'||key==='currentEntryId'&&!id(value)||key==='maxSteps'&&(!integer(value,2000000)||value===0)||key==='viewIndex'&&!integer(value,previewOp(op)?0xffffffff:1000)||key==='maxRows'&&(!integer(value,10000)||!previewOp(op)&&value===0)||key==='clockMs'&&(!Number.isSafeInteger(value)||previewOp(op)&&(value< -62167219200000||value>253402300799999))||['searchTerms','ignorePaths'].includes(key)&&!(previewOp(op)?Array.isArray(value)&&value.length<=1000&&value.every(scalar):strings(value))||key==='timezone'&&(typeof value!=='string'||previewOp(op)&&!scalar(value)||byteLength(value)>128))throw fail('invalid_document_request');
         captured.options[key]=Array.isArray(value)?[...value]:value;
       }
@@ -155,7 +158,7 @@ function captureDocumentRequest(input){
   }
   const result={schemaVersion:1,command:captured};
   if(op==='metadata_rows'&&captured.cursor!==null&&captured.baseline!==undefined)throw fail('invalid_document_request');
-  if(byteLength(JSON.stringify(result))>MAX_DOCUMENT_REQUEST)throw fail('request_limit');
+  if(byteLength(JSON.stringify(result))>(['base','property_targets'].includes(op)?MAX_BASE_REQUEST:MAX_DOCUMENT_REQUEST))throw fail('request_limit');
   return result;
 }
 function envelope(value){return keys(value,['snapshot','source','coverageComplete','value'])&&snapshot(value.snapshot)&&source(value.source)&&value.snapshot.localStoreId===value.source.localStoreId&&typeof value.coverageComplete==='boolean';}
@@ -254,14 +257,16 @@ function decodeDocumentReply(request,marker,bytes){
     if(valid)valid=op==='search'?inner.hits.every(hit=>entry(hit.entry)&&integer(hit.line)&&object(hit.range)&&typeof hit.snippet==='string'&&typeof hit.snippetTruncated==='boolean'):
       inner.edges.every(edge=>entry(edge.source)&&entry(edge.target)&&edge.target.id===command.id&&integer(edge.linkIndex)&&object(edge.link));
   }else if(op==='tasks')valid=taskRead(value,command);
+  else if(op==='property_targets')valid=envelope(value)&&keys(value.value,['definition','relationTargets','propertyDefinitionDiagnostics','refreshHint'])&&(value.value.definition===null||entry(value.value.definition)&&value.value.definition.path==='Properties.yaml')&&object(value.value.relationTargets)&&Object.values(value.value.relationTargets).every(targets=>Array.isArray(targets)&&targets.length<=10000&&targets.every(target=>keys(target,['entryId','revision','path','label'])&&id(target.entryId)&&id(target.revision)&&scalar(target.path)&&scalar(target.label)))&&Array.isArray(value.value.propertyDefinitionDiagnostics);
   else if(op==='base')valid=envelope(value)&&keys(value.value,['definition','result'])&&entry(value.value.definition)&&value.value.definition.id===command.id&&object(value.value.result)&&same(value.value.result.snapshotId,value.snapshot)&&Array.isArray(value.value.result.rows);
   if(!valid)throw fail('invalid_document_response');
   return value;
 }
 function validDocumentReply(command,marker,bytes){try{decodeDocumentReply(command.request,marker,bytes);return true;}catch{return false;}}
-function createDesktopDocumentSemantics(host,clientId,localStoreId,{metadataRowsAvailable=false,basePreviewAvailable=false}={}){
+function createDesktopDocumentSemantics(host,clientId,localStoreId,{metadataRowsAvailable=false,basePreviewAvailable=false,propertyTargetsAvailable=false}={}){
   if(!id(clientId)||!id(localStoreId))throw fail('client_scope_mismatch');
   if(metadataRowsAvailable===true&&typeof host.documentCommand!=='function')throw fail('unsupported_host_capability');
+  if(propertyTargetsAvailable===true&&typeof host.documentCommand!=='function')throw fail('unsupported_host_capability');
   if(basePreviewAvailable===true&&typeof host.documentCommand!=='function')throw fail('unsupported_host_capability');
   const pins=new Map(),pendingPins=new Map(),previews=new Map();const slotCount=()=>pins.size+[...pendingPins.keys()].filter(key=>!pins.has(key)).length+previews.size;let retired=false,previewHighwater=0n,previewCalls=0,previewPressure;
   // A separate maintenance publication can retire native captures without
@@ -336,11 +341,13 @@ function createDesktopDocumentSemantics(host,clientId,localStoreId,{metadataRows
   }
   return Object.freeze({
     ...(metadataRowsAvailable===true?{metadataRowsAvailable:true}:{}),
+    ...(propertyTargetsAvailable===true?{propertyTargetsAvailable:true}:{}),
     ...(basePreviewAvailable===true?{basePreviewAvailable:true}:{}),
     async invoke(input){
       const request=captureDocumentRequest(input),command=request.command,op=command.op;
       if(retired)throw fail('client_not_admitted');
       if(previewOp(op))return invokePreview(request);
+      if(op==='property_targets'&&propertyTargetsAvailable!==true)throw fail('unsupported_host_capability');
       let pendingPin;
       if(op==='open'&&!pins.has(command.pinId)){
         pendingPin=pendingPins.get(command.pinId);
@@ -352,6 +359,7 @@ function createDesktopDocumentSemantics(host,clientId,localStoreId,{metadataRows
       const settlePendingPin=()=>{if(pendingPin&&pendingPins.get(command.pinId)===pendingPin&&--pendingPin.calls===0)pendingPins.delete(command.pinId);};
       const selected=pins.get(command.pinId);
       if(command.pinId&&!['open','close'].includes(op)&&!pins.has(command.pinId))throw fail('snapshot_expired');
+      if(op==='property_targets'&&selected.closing)throw fail('snapshot_expired');
       let metadataProfile,baseline;
       if(op==='metadata_rows'){
         if(metadataRowsAvailable!==true)throw fail('unsupported_host_capability');
@@ -384,6 +392,7 @@ function createDesktopDocumentSemantics(host,clientId,localStoreId,{metadataRows
       }
       settlePendingPin();
       if(retired)throw fail('client_not_admitted');
+      if(op==='property_targets'&&(pins.get(command.pinId)!==selected||selected.closing))throw fail('snapshot_expired');
       if(op==='metadata_rows'&&(pins.get(command.pinId)!==selected||selected.closing||baseline&&(pins.get(baseline.pinId)!==baseline.actual||baseline.actual.closing)))throw fail('snapshot_expired');
       if(richOp(op)&&(pins.get(command.pinId)!==selected||op!=='rich_start'&&selected.queries.get(command.queryId)!==query))throw fail('search_expired');
       if(richOp(op)&&op!=='rich_close'&&(selected.closing||query?.closing))throw fail('search_expired');
@@ -397,7 +406,7 @@ function createDesktopDocumentSemantics(host,clientId,localStoreId,{metadataRows
       else if(op==='rich_start'){if(!keys(value,['queryId'])||!opaque(value.queryId)||selected.queries.has(value.queryId)||selected.queries.size>=4)throw fail('invalid_document_response');selected.queries.set(value.queryId,{closing:false,cursors:new Set()});}
       else if(op==='rich_prepare'){if(value.state==='ready'){if(!opaque(value.cursor))throw fail('invalid_document_response');query.cursors.add(value.cursor);if(query.cursors.size>8)query.cursors.delete(query.cursors.values().next().value);}}
       else if(op==='rich_close')selected.queries.delete(command.queryId);
-      if(['metadata','metadata_rows','base','tasks','search','backlinks','rich_page'].includes(op)){
+      if(['metadata','metadata_rows','base','property_targets','tasks','search','backlinks','rich_page'].includes(op)){
         const envelope=['search','backlinks','rich_page','metadata_rows'].includes(op)?value.result:value;
         const selected=pins.get(command.pinId);
         if(!selected||!same(envelope.snapshot,selected.snapshot)||!sameSource(envelope.source,selected.source)||envelope.coverageComplete!==selected.coverageComplete)throw fail('invalid_document_response');

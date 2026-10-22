@@ -45,7 +45,7 @@ export interface BrowserIndexSource {localStoreId:string;watermark:string}
 export interface BrowserIndexSnapshot {localStoreId:string;generationEpoch:string;generation:string;versions:unknown}
 export interface BrowserIndexHeader {source:{localStoreId:string;watermark:string};entries:EntryState[];expectedIndex:BrowserIndexSnapshot|null;nextIndex:BrowserIndexSnapshot}
 interface Builder extends Free, Partial<PreviewBuilder> {headerJson():string;pendingJson():string;beginPump():void;addText(id:string,bytes:Uint8Array):void;cacheKeyJson(id:string,bytes:Uint8Array):string;addCachedText(id:string,key:string,payload:string):string;extractText(id:string,bytes:Uint8Array):string;addBinary(id:string):void;addUnreadable(id:string):void;addPersisted(id:string,row:string):void;rowJson(id:string):string;ready():boolean;finish():Generation}
-interface Generation extends Free {headerJson():string;snapshotJson():string;rowJson(id:string):string;coverageComplete():boolean;metadataJson(id:string):string;tasksJson(sources:string,options:string):string;baseJson(id:string,bytes:Uint8Array,facts:string,options:string,viewName?:string|null):string;resolveJson(id:string,destination:string):string;backlinksJson(id:string,token:string,limit:number):string;openLiteral(query:string,token:string,limit:number):LiteralPage}
+interface Generation extends Free {headerJson():string;snapshotJson():string;rowJson(id:string):string;coverageComplete():boolean;metadataJson(id:string):string;tasksJson(sources:string,options:string):string;baseJson(id:string,bytes:Uint8Array,facts:string,options:string,viewName?:string|null):string;propertyTargetsJson?(facts:string,options:string):string;resolveJson(id:string,destination:string):string;backlinksJson(id:string,token:string,limit:number):string;openLiteral(query:string,token:string,limit:number):LiteralPage}
 interface PreparationCache extends Free {clear():void;baseJson(generation:Generation,id:string,bytes:Uint8Array,facts:string,options:string,monotonicMs:number,viewName?:string|null):string}
 interface LiteralPage extends Free {nextReadJson():string;accept(bytes:Uint8Array):void;finishJson():string}
 interface RichPrepared extends Free {}
@@ -53,7 +53,7 @@ interface RichDrive extends Free {nextActionJson():string;accept(bytes:Uint8Arra
 interface RichOwner extends Free {clear():void;startQuery(generation:Generation,spec:string,facts:string):string;prepareJson(query:string):string;openDrive(query:string,cursor:string):RichDrive;commitJson(prepared:RichPrepared):string;closeQuery(query:string):void}
 interface MetadataScan extends Free {fork():MetadataScan;sameCheckpoint(other:MetadataScan):boolean;isNextCheckpointOf(other:MetadataScan):boolean;usesBaseline():boolean;pageJson(nextOpaqueCursor:string):string;retire():void}
 interface MetadataScanConstructor {new(destination:Generation,limit:number):MetadataScan;readonly prototype:MetadataScan;withBaseline(destination:Generation,baseline:Generation,limit:number):MetadataScan}
-export interface BrowserDocumentIndexWasm extends BrowserDocumentRuntimeWasm,PreviewWasm {documentIndexAllocateJson(input:string):string;documentIndexVersionsJson():string;documentParseCachePolicyJson():string;documentParseCacheAdmissionJson(input:string):string;WasmDocumentIndexBuilder:new(input:string)=>Builder;WasmDocumentIndexPreparationCache:new()=>PreparationCache;WasmDocumentRichSearchOwner:new(nonce:string)=>RichOwner;WasmDocumentMetadataRowsScan?:MetadataScanConstructor}
+export interface BrowserDocumentIndexWasm extends BrowserDocumentRuntimeWasm,PreviewWasm {WasmDocumentIndexGeneration?:{prototype:{propertyTargetsJson?:unknown}};documentIndexAllocateJson(input:string):string;documentIndexVersionsJson():string;documentParseCachePolicyJson():string;documentParseCacheAdmissionJson(input:string):string;WasmDocumentIndexBuilder:new(input:string)=>Builder;WasmDocumentIndexPreparationCache:new()=>PreparationCache;WasmDocumentRichSearchOwner:new(nonce:string)=>RichOwner;WasmDocumentMetadataRowsScan?:MetadataScanConstructor}
 export interface BrowserDocumentIndexHost {
   db:IDBDatabase;authorityId:string;clientId:string;wasm:BrowserDocumentIndexWasm;assertActive():void;
   readPublication(tx:IDBTransaction,done:(value:StreamingPublication)=>void,abort:(error:unknown)=>void):void;
@@ -71,7 +71,9 @@ export interface BrowserDocumentIndex extends Pick<DocumentTransport,'metadataRo
   backlinks(input:{pinId:string;targetId:string;cursor?:string;limit?:number}):Promise<unknown>;
   metadata(input:{pinId:string;id:string}):Promise<unknown>;
   tasks(input:{pinId:string;typeIds:string[];options?:DocumentTaskOptions}):Promise<unknown>;
-  base(input:{pinId:string;id:string;viewName?:string|null;options?:{viewIndex?:number;searchTerms?:string[];ignorePaths?:string[];clockMs?:number;timezone?:string;maxRows?:number;currentEntryId?:string;maxSteps?:number}}):Promise<unknown>;
+  readonly propertyTargetsAvailable?:boolean;
+  propertyTargets?(input:{pinId:string;options?:{propertyDefinitionsSource?:{id:string;source:string};currentEntryId?:string;clockMs?:number;timezone?:string;maxRows?:number;maxSteps?:number}}):Promise<unknown>;
+  base(input:{pinId:string;id:string;viewName?:string|null;options?:{viewIndex?:number;searchTerms?:string[];ignorePaths?:string[];clockMs?:number;timezone?:string;maxRows?:number;currentEntryId?:string;maxSteps?:number;inlineSource?:{source:string;startByte:number;endByte:number};propertyDefinitionsSource?:{id:string;source:string};summaryPreviewProperty?:string;randomSeed?:number}}):Promise<unknown>;
   richStart(input:{pinId:string;spec:SearchSpec}):Promise<unknown>;
   richPrepare(input:{pinId:string;queryId:string}):Promise<unknown>;
   richPage(input:{pinId:string;queryId:string;cursor:string}):Promise<unknown>;
@@ -94,19 +96,22 @@ const hex=(bytes:Uint8Array)=>Array.from(bytes).map(n=>n.toString(16).padStart(2
 const byteDigest=async(bytes:Uint8Array):Promise<string>=>hex(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes as Uint8Array<ArrayBuffer>)));
 const digest=(value:string):Promise<string>=>byteDigest(new TextEncoder().encode(value));
 function pageLimit(value:unknown):number{if(value===undefined)return 100;if(typeof value!=='number'||!Number.isInteger(value)||value<1||value>1000)throw fail('index_invalid_budget');return value;}
-function baseOptions(input:unknown):string {
+function baseOptions(input:unknown,targets=false):string {
   if(input===undefined)input={};if(!input||typeof input!=='object'||Array.isArray(input))throw fail('index_invalid_request');
-  const value=input as Record<string,unknown>,allowed=new Set(['viewIndex','searchTerms','ignorePaths','clockMs','timezone','maxRows','currentEntryId','maxSteps']);
+  const value=input as Record<string,unknown>,allowed=new Set(targets?['propertyDefinitionsSource','currentEntryId','clockMs','timezone','maxRows','maxSteps']:['viewIndex','searchTerms','ignorePaths','clockMs','timezone','maxRows','currentEntryId','maxSteps','inlineSource','propertyDefinitionsSource','summaryPreviewProperty','randomSeed']);
   if(Object.keys(value).some(key=>!allowed.has(key)))throw fail('index_invalid_request');
   const result:Record<string,unknown>={};
-  for(const key of ['viewIndex','maxRows','clockMs','maxSteps'])if(value[key]!==undefined){const n=value[key];if(typeof n!=='number'||!Number.isSafeInteger(n)||(key!=='clockMs'&&n<0))throw fail('index_invalid_request');result[key]=n;}
+  for(const key of ['viewIndex','maxRows','clockMs','maxSteps','randomSeed'])if(value[key]!==undefined){const n=value[key];if(typeof n!=='number'||!Number.isSafeInteger(n)||(key!=='clockMs'&&n<0))throw fail('index_invalid_request');result[key]=n;}
   if(value.maxSteps!==undefined&&(Number(value.maxSteps)<1||Number(value.maxSteps)>2000000))throw fail('index_invalid_request');
   if(value.currentEntryId!==undefined){if(!validId(value.currentEntryId))throw fail('index_invalid_request');result.currentEntryId=value.currentEntryId;}
   const clock=value.clockMs===undefined?Date.now():value.clockMs;if(typeof clock!=='number'||!Number.isSafeInteger(clock))throw fail('index_invalid_request');result.clockMs=clock;
-  result.maxRows=value.maxRows===undefined?1000:value.maxRows;
+  result.maxRows=value.maxRows===undefined?(targets?10000:1000):value.maxRows;
   if(value.timezone!==undefined)result.timezone=inputText(value.timezone,256);
   for(const key of ['searchTerms','ignorePaths'])if(value[key]!==undefined){const array=value[key];if(!Array.isArray(array)||array.length>1000)throw fail('index_input_limit');result[key]=array.map(item=>inputText(item,4096));}
-  const raw=JSON.stringify(result);if(size(raw)>65536)throw fail('index_input_limit');return raw;
+  if(value.summaryPreviewProperty!==undefined)result.summaryPreviewProperty=inputText(value.summaryPreviewProperty,65536);
+  if(value.inlineSource!==undefined){const inline=value.inlineSource as Record<string,unknown>;if(!inline||typeof inline!=='object'||Array.isArray(inline)||Object.keys(inline).length!==3||!['source','startByte','endByte'].every(key=>Object.hasOwn(inline,key))||!Number.isSafeInteger(inline.startByte)||!Number.isSafeInteger(inline.endByte)||Number(inline.startByte)<0||Number(inline.endByte)>LIMITS.text||Number(inline.endByte)<=Number(inline.startByte))throw fail('index_invalid_request');result.inlineSource={source:inputText(inline.source,262144),startByte:inline.startByte,endByte:inline.endByte};}
+  if(value.propertyDefinitionsSource!==undefined){const source=value.propertyDefinitionsSource as Record<string,unknown>;if(!source||typeof source!=='object'||Array.isArray(source)||Object.keys(source).length!==2||!Object.hasOwn(source,'id')||!Object.hasOwn(source,'source')||!validId(source.id))throw fail('index_invalid_request');result.propertyDefinitionsSource={id:source.id,source:inputText(source.source,262144)};}
+  const raw=JSON.stringify(result);if(size(raw)>1024*1024-16*1024)throw fail('index_input_limit');return raw;
 }
 function taskOptions(input:unknown):string {
   if(input===undefined)input={};if(!input||typeof input!=='object'||Array.isArray(input))throw fail('index_invalid_request');
@@ -165,6 +170,7 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
   type Pin=ReturnType<typeof pins.get> & {};
   interface MetadataBinding {pinId:string;pin:Pin;baseline?:{pinId:string;pin:Pin};requested?:NonNullable<Parameters<NonNullable<DocumentTransport['metadataRows']>>[0]['baseline']>;limit:number;initial:boolean;scan:MetadataScan}
   const metadataCursors=new Map<string,Map<string,MetadataBinding>>(),metadataBusy=new Set<string>();
+  const propertyTargetsAvailable=typeof host.wasm.WasmDocumentIndexGeneration?.prototype.propertyTargetsJson==='function';
   const Preview=host.wasm.WasmDocumentPreviewOwner;
   const previewParts:[unknown,readonly string[]][]=[
     [Preview,['clear','retireStage','free']],[host.wasm.WasmDocumentPreview,['descriptorJson','sameCapture','beginBase','free']],
@@ -449,7 +455,28 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
     if(slots.size===LIMITS.metadataCursors){const oldest=slots.entries().next().value!;slots.delete(oldest[0]);oldest[1].scan.free();}
     slots.set(cursor,binding);
   }
+  function baseFacts(pin:Pin):string {
+    const files=pin.header.entries.filter(e=>e.kind==='file');if(files.length>LIMITS.baseRecords)throw fail('index_input_limit');
+    const presentations=new Map<string,BrowserVaultPresentation>();for(const row of pin.capture.publication.presentation){if(presentations.has(row.id))throw fail('index_rebuild_required');presentations.set(row.id,row);}
+    const facts=[];let factsBytes=2;for(const e of files){const presentation=presentations.get(e.id);if(!presentation)throw fail('index_rebuild_required');
+      const fact={witness:{entryId:e.id,revision:e.revision},size:presentation.size_bytes,ctimeMs:presentation.ctime_ms,mtimeMs:presentation.mtime_ms};factsBytes+=size(JSON.stringify(fact))+(facts.length?1:0);if(factsBytes>LIMITS.baseFacts)throw fail('index_input_limit');facts.push(fact);}
+    return JSON.stringify(facts);
+  }
+  async function savedPropertyOptions(pin:Pin,raw:string):Promise<string> {
+    const options=JSON.parse(raw) as Record<string,unknown>,entry=pin.header.entries.find(e=>e.kind==='file'&&e.path==='Properties.yaml');
+    if(entry){const row=await readRow(pin.generation,entry);if(!row.projection||row.projection.byteLength>262144)throw fail('index_source_unavailable');
+      let source:string;try{source=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(row.projection);}catch{throw fail('index_source_unavailable');}
+      const expected={id:entry.id,source};if(options.propertyDefinitionsSource!==undefined&&!equal(options.propertyDefinitionsSource,expected))throw fail('index_property_source_mismatch');options.propertyDefinitionsSource=expected;}
+    const captured=JSON.stringify(options);if(size(captured)>1024*1024-16*1024)throw fail('index_input_limit');return captured;
+  }
   const api:BrowserDocumentIndex={
+    ...(propertyTargetsAvailable?{propertyTargetsAvailable:true,async propertyTargets(input:NonNullable<Parameters<NonNullable<BrowserDocumentIndex['propertyTargets']>>[0]>){
+      const pinId=inputText(input.pinId,128),captured=baseOptions(input.options,true),g=await assertPin(pinId);active();
+      const pin=pins.get(pinId);if(!pin||pin.value!==g||typeof g.propertyTargetsJson!=='function')throw fail('index_unavailable');
+      const admitted=()=>{active();if(pins.get(pinId)!==pin)throw fail('index_snapshot_expired');};
+      const facts=baseFacts(pin),options=await savedPropertyOptions(pin,captured);await assertPin(pinId);admitted();
+      const result=json<unknown>(rust(()=>g.propertyTargetsJson!(facts,options)));await assertPin(pinId);admitted();return result;
+    }}:{}),
     initialize(){active();return recover();},
     async discard(stageId){active();if(!validId(stageId))throw fail('index_stage_expired');
       const result=await run<{publishedPruned?:true;published?:{header:string;digest:string;snapshot:BrowserIndexSnapshot}}>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{const stage=c.generations.find(g=>g.id===stageId);
@@ -724,15 +751,12 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
     async base(input){
       // Capture caller-owned selectors before any await. Admission remains per
       // invocation; neither the pure-data cache nor an old result admits a pin.
-      const pinId=inputText(input.pinId,128),id=inputText(input.id,128),options=baseOptions(input.options),viewName=input.viewName==null?undefined:inputText(input.viewName,1024);
+      const pinId=inputText(input.pinId,128),id=inputText(input.id,128),captured=baseOptions(input.options),viewName=input.viewName==null?undefined:inputText(input.viewName,1024);
       const g=await assertPin(pinId);active();const pin=pins.get(pinId);if(!pin||pin.value!==g)throw fail('index_snapshot_expired');
       const admitted=()=>{active();if(pins.get(pinId)!==pin)throw fail('index_snapshot_expired');};
       const entry=pin.header.entries.find(e=>e.id===id&&e.kind==='file');if(!entry)throw fail('index_missing_source');
-      const files=pin.header.entries.filter(e=>e.kind==='file');if(files.length>LIMITS.baseRecords)throw fail('index_input_limit');
-      const presentations=new Map<string,BrowserVaultPresentation>();for(const row of pin.capture.publication.presentation){if(presentations.has(row.id))throw fail('index_rebuild_required');presentations.set(row.id,row);}
-      const facts=[];let factsBytes=2;for(const e of files){const presentation=presentations.get(e.id);if(!presentation)throw fail('index_rebuild_required');
-        const fact={witness:{entryId:e.id,revision:e.revision},size:presentation.size_bytes,ctimeMs:presentation.ctime_ms,mtimeMs:presentation.mtime_ms};factsBytes+=size(JSON.stringify(fact))+(facts.length?1:0);if(factsBytes>LIMITS.baseFacts)throw fail('index_input_limit');facts.push(fact);}
-      const row=await readRow(pin.generation,entry);if(!row.projection)throw fail('index_source_unavailable');const factsJson=JSON.stringify(facts);
+      const factsJson=baseFacts(pin),options=await savedPropertyOptions(pin,captured);
+      const row=await readRow(pin.generation,entry);if(!row.projection)throw fail('index_source_unavailable');
       await assertPin(pinId);
       // No await after acquiring this owner handle: close/rebuild cannot free it
       // during use. Rust rechecks retained bytes/UTF8 before lookup and after eval.
