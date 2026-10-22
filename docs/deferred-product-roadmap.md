@@ -163,6 +163,25 @@ stay local; invalid edits to existing accepted clauses preserve authority/block
 unsafe save. Advanced/nested filters and stale/CAS/retry guards remain required.
 Implementation/review/runtime acceptance are pending. Full goal remains active.
 
+User reports clearing disk space. Root observes1779772KiB and starts direct
+Purple CUA probe002 on `ac58c039`/build004/host6e04. Ready proof owns Electron22766 /
+window5452; first CUA AX observation already lacks Property settings and shows
+Book topic Writing rather than fixture Design. Root sends NO input, records
+this observation and signals control-flow continuation only. Strict run fails
+18actions/1visibilitycheck; no Purple/Apply/durable acceptance. Freeze verified;
+normal SIGTERM exit0, no leaked owned processes. Raw owned files independently
+show Writing and saved Research option withoutcolor; those changes are not
+represented by recorded campaign inputs. Cause remains unproven; asynchronous
+user question asks whether they interacted with the test window, answer pending.
+Preserve this trace; do not attribute changes to an app or driver without proof.
+
+Free disk later730544KiB, below unchanged1GiB launch guard; do not repeatedly
+relaunch. `cc6c7168` integrates independently reviewed optional per-native-select
+CUA checkpoints (29 focused checks pass), default UI journeys/oracles unchanged.
+Full heavy requires just2 native color handoffs; generalized runtime remains
+gated on a successful direct visible Purple probe. Other select controls in
+current campaigns use custom widgets. Source-only File filter work continues.
+
 ### Superseded checkpoint snapshot — retained evidence
 
 ### Latest execution update
