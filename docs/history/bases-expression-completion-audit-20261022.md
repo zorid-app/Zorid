@@ -1,6 +1,62 @@
 # Bases expression completion audit — 2026-10-22
 
-## Source update — frozen `bef128ba`, regex successor `24618348`
+## Successor evidence — 2026-10-22, `60c1d4fd`
+
+This dated update supersedes the source-status entries in the historical
+sections below, preserving their findings and earlier outcomes. It records
+implementation and observed Rust tests; **product artifacts, transport/runtime
+coverage and rendered acceptance remain pending**. This documentation task ran
+no app, build or product test and changed no goal checkboxes.
+
+The inspected source is `60c1d4fdaa68f99ab99d6919bcfe4344b76a11dd`, `crates`
+tree `9a001d4731229c973c2b7bd8f1db7bd82c61d08e`, `zorid-bases` subtree
+`0105d914730523cc7d37a34b606ed5056131559e`. The bounded 80-declaration inventory
+and prior source review remain the catalogue basis; the statuses below do not
+claim exhaustive input, JavaScript-engine or platform equivalence.
+
+Observed `/private/tmp/zorid-bases-g9-composed-lib-003.log` reports **185/185
+library tests passed** on the composed source. The preceding
+`/private/tmp/zorid-bases-regex-file-title-full-composed-005.log` reports **317
+passed across 20 nonempty targets** (154 library plus 163 integration tests),
+plus a zero-test doc-test target. That earlier full pass includes regex, File,
+title and rich-date changes, but predates the final G9/ICU closure; it is not a
+317-test full pass for `60c1d4fd`. The current full run
+`/private/tmp/zorid-bases-g9-full-composed-001.log` terminates unsuccessfully:
+185 library tests pass, but preview ends with nine passed and one failure in
+`small_prepared_subset_does_not_prepare_a_hundred_thousand_entry_namespace`
+(`preview.rs:476`, comparator scratch exceeds query work budget). Later targets
+are unexecuted in that run. The failure is under diagnosis; **there is no complete
+current-core pass**, and the preceding 317-test pass remains baseline evidence.
+
+| Identified invariant | Successor source and named evidence; acceptance boundary |
+| --- | --- |
+| G9.1 Object conversion | Independently reviewed `d4cc14a0` and checked-allocation successor `da1078de` route ordinary Object text through recursive typed child strings in JS own-key order while retaining typed JSON projection separately. The 14 passing `object_stringification_tests` include `object_to_string_uses_child_strings_without_changing_typed_json`, `recursive_children_use_their_actual_typed_string_representation`, `concatenation_join_sort_and_computed_access_share_checked_strings` and `groups_and_summary_values_use_the_same_reference_object_text`. `__proto__` remains inert user data rather than copying the reference temporary object's legacy setter omission; that bounded safety difference is documented in the converter. Runtime/UI acceptance remains open. |
+| G9.2 Link raw data | Reviewed `7a47a17a` makes inherited String methods and length use available captured internal raw destination, retaining the canonical File lookup path, legacy fallback and unchanged external URL data. `captured_internal_link_string_methods_read_original_data_without_mutating_lookup_path` passes; `common_link_text_keeps_legacy_display_while_unique_requires_origin` pins the distinct presentation/strict-origin boundary. Source repaired and library-tested, not new transport proof. |
+| G9 resource admission | Reviewed `fb07f283` adds immutable admitted clone plans and fresh bounded containers; `da1078de` budgets shared text conversion against caller scratch/headroom. Six clone tests and the 14 stringification tests pass within the 185 library tests, including `whole_plan_headroom_is_checked_before_the_first_materialization_copy`, `planning_and_materialization_each_check_work_inside_wide_inputs`, `recursive_key_scratch_is_bounded_by_the_callers_remaining_headroom` and `output_clone_admission_counts_real_enum_slots_in_nested_vectors`. This is guard evidence, not measured all-allocation or performance acceptance. |
+| G10 Regex construction | The checked whole-expression literal admission, zero-row/query/summary/settings boundaries and subsequent admission-poll corrections are composed. The preceding 317-test run passes `regex_construction` two tests and `regex_query_admission` five tests; current library cases also pass. The historical failed preview record is retained; the current full-run budget failure above remains a blocker under diagnosis, without attribution to a specific admission change here. D6 unsupported-valid-JS diagnostics remain separate from malformed-literal construction failures. |
+| G11 / G15 File methods | Reviewed `05a23b34` / `a9d1e09d` implement query-only folder separator/space/NFC normalization, root/empty membership and literal repeated tag prefixes. All seven `file_method_reference` cases pass in the preceding full run, including `root_folder_queries_include_root_and_nested_files`, `folder_queries_apply_only_the_shipped_separator_space_and_nfc_normalizers` and `tag_query_whitespace_and_repeated_hashes_are_literal_without_changing_other_tag_methods`. No broad filesystem-normalization or new write authority is implied. |
+| G12 / G14 Title and date extrema | Reviewed `cff1239a` / `e5e1eb4d` use literal-space title boundaries and all parseable String-subclass raw payloads for earliest/latest. Four current library tests pass, including `title_only_splits_literal_spaces_and_preserves_empty_segments`, `date_extrema_accept_all_parseable_rich_string_raw_payloads` and `rich_date_scans_charge_raw_bytes_and_observe_cancellation`. Captured-zone and D5 scalar-string policies remain. |
+| G13 Concrete List.sort | Reviewed `dbd9c37c` with pinned dependencies `834853e5` adds ICU4X English, primary/base-sensitive numeric collation for non-Number pairs, retaining numeric comparison only for two actual Numbers. Eleven library cases pass, including `natural_digits_are_not_lexical_or_decimal_number_parsing`, `base_sensitive_ties_preserve_input_order`, `only_two_actual_numbers_take_numeric_branch`, `complete_comparison_input_is_charged_before_icu` and `cancellation_at_each_checkpoint_never_publishes_partial_order`. English/data pinning and deterministic handling of inconsistent mixed comparisons are documented choices, not universal ambient-locale or JS-engine sort-permutation parity. See [UPSTREAM.md](../../crates/zorid-bases/UPSTREAM.md). |
+
+The final fixture-only correction `e8a37c86` changes two typed-JSON expectations
+from `1.0` to `1`, matching the existing integer projection; it changes no
+product implementation; numeric value/type intent is unchanged. It does not relax work,
+cancellation, ordering or value-type assertions.
+
+G1–G8's enumerated repairs and named evidence remain recorded below. The specific
+G9/G10–G15 source gaps identified by this audit now have composed implementations
+and the test evidence above; this does not close the broader Q3 acceptance gate.
+D1–D6 remain intentional limits. The pinned collation and safe-key handling above
+are explicit source policies, not permission to hide another semantic gap.
+
+Current authored acceptance fixtures contain **127 typed-value oracles and 16
+expected diagnostics**. They still require matching artifacts and actual runtime
+execution; authored assertions are not executed test results. Historical
+Browser005 nine groups and CLI003 85 commands remain valid only for their older
+closures. No native/actual-WASM/CLI expression-closure or rendered parity claim
+is added here.
+
+## Historical source update — frozen `bef128ba`, regex successor `24618348`
 
 This addendum supersedes the original gap statuses below, while preserving that
 baseline and its evidence. It records source and named tests, **not complete Q3,
