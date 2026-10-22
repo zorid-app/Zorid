@@ -118,10 +118,15 @@ impl PropertyRelationValues {
             ));
         }
         for (name, value) in &row.values {
-            file.properties.insert(
-                name.clone(),
-                crate::expression::runtime_from_base_value(value, timezone)?,
+            let replacement = crate::expression::runtime_from_base_value(value, timezone)?;
+            // Configured value projection must preserve the captured native
+            // tags subclass; an arbitrary list/property/formula name is not
+            // evidence that it came from frontmatter tags.
+            let replacement = crate::expression::preserve_frontmatter_tag_list(
+                file.properties.get(name),
+                replacement,
             );
+            file.properties.insert(name.clone(), replacement);
         }
         Ok(())
     }
