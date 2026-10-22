@@ -9,6 +9,37 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+2026-10-22 reviewed source composition and rebuild: Rust closure
+`5e010112661da69eb290d6a5edb72d4906e844a1` passes194 tests across13 core targets,
+native property-target3 and native-compiled WASM property-target2. The first
+compiled new null-summary regression exposed optional-key pattern errors;
+tests-only `76f5a682` corrects them, and the complete rerun passes. Release host,
+CLI and actual WASM builds succeed; private receipt
+`/private/tmp/zorid-bases-plain-link-artifacts.json` records hashes and source
+association. Root logs are `zorid-bases-core-plain-link-check-2.log`,
+`zorid-bases-native-plain-link-check.log`,
+`zorid-bases-wasm-adapter-plain-link-check.log` and
+`zorid-bases-plain-link-{native,wasm}-build.log` under private tmp.
+
+Standalone Base source recovery `233f074e`/`fd1a67c5` is composed after review of
+durable-conflict retention, inactive-tab targeting and close rollback;43 root
+source/embed cases pass. Summary geometry `a40a4341` passes8 composed cases;
+List file-drag `45b4aa77`/`3fb3b4c5` passes6 dedicated cases. The separate root
+plain-link/sidebar/widget composition passes90 cases. These overlapping scopes
+are not an aggregate frontend total or actual UI acceptance. Base hover helper
+and workspace factory remain isolated/unaccepted; independent review found and
+is resolving pending-mount cancellation. Supplemental safety/config/clipboard
+sources and browser plain-link oracles are composed, but runner path/provenance
+hardening and actual campaign execution remain pending. Native renderer rebuild
+and new browser/CLI/Electron campaigns follow this closure; main is unchanged.
+
+Reference hover002 has now observed a modifier-bearing trusted mouse popup,
+rendered content, editable body, unmodified-mouse retention and outside-click
+dismissal. A later physical-Meta phase reaches a DOM-evaluation deadline without
+a final capture; do not claim that sequence passed. Exact owned-process cleanup
+and fixture/config/catalog restoration were confirmed. The reference owner is
+preparing its precise evidence addendum; no test app remains running.
+
 2026-10-22 actual Electron008 at `e1817cb0` reaches154 actions/15 checks. The
 corrected custom-summary oracle passes all4 independently scoped groups, exact
 member paths/counts, explicit blank/null and overall214. It then exposes a real
