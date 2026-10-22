@@ -13,7 +13,7 @@ fn temporary_derived_filter_placeholders_keep_the_original_thrown_diagnostic() {
 
 #[test]
 fn published_error_values_are_data_even_when_their_code_is_unavailable() {
-    for code in ["unavailable", "budget", "numeric-domain"] {
+    for code in ["unavailable", "type", "numeric-domain"] {
         let data = error(code, "An ordinary returned error value");
         let value = attachment_value(&data, &BasesTimezone::Utc, false).unwrap();
         assert!(
@@ -109,4 +109,18 @@ fn published_values_clear_the_candidate_phase_and_replace_all_temporary_sentinel
     let mut file = crate::runtime_file(record, &BasesTimezone::Utc).unwrap();
     values.attach(&mut file, &BasesTimezone::Utc).unwrap();
     assert!(matches!(file.properties["count"], RuntimeValue::Number(value) if value == 0.0));
+}
+
+#[test]
+fn guard_errors_keep_their_existing_fatal_import_contract() {
+    for code in ["budget", "cancelled"] {
+        let failure = attachment_value(
+            &error(code, "Original guard diagnostic"),
+            &BasesTimezone::Utc,
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(failure.code, code);
+        assert_eq!(failure.message, "Original guard diagnostic");
+    }
 }
