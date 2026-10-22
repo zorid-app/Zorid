@@ -1058,7 +1058,7 @@ export class Workspace {
     const strip=el('div','tab-strip');bar.append(strip);
     for(const item of pane.tabs){
       const node=el('div',`tab${item.id===tab.id?' is-active':''}`);node.role='tab';node.tabIndex=item.id===tab.id?0:-1;node.setAttribute('aria-selected',String(item.id===tab.id));node.draggable=true;node.dataset.tabId=item.id;
-      node.append(icon(item.kind==='tasks'?'list':item.kind==='calendar'?'calendar':item.kind==='graph'?'graph':'file',15),el('span','tab-title',item.kind==='tasks'?'Tasks':item.kind==='calendar'?'Calendar':item.kind==='graph'?'Graph view':item.path?nameOf(item.path):'New tab'));
+      node.append(icon(item.kind==='tasks'?'list':item.kind==='calendar'?'calendar':item.kind==='graph'?'graph':item.path&&/\.base$/i.test(item.path)?'table':'file',15),el('span','tab-title',item.kind==='tasks'?'Tasks':item.kind==='calendar'?'Calendar':item.kind==='graph'?'Graph view':item.path?nameOf(item.path).replace(/\.base$/i,''):'New tab'));
       const close=button('close','Close tab',event=>{event.stopPropagation();this.run(()=>this.closeTab(pane,item));},'tab-close');node.append(close);
       const select=()=>this.run(()=>this.selectTab(pane,item));node.onclick=select;
       node.oncontextmenu=event=>{event.preventDefault();event.stopPropagation();this.tabMenu(pane,item,event.clientX,event.clientY);};
@@ -1114,7 +1114,7 @@ export class Workspace {
     const toolbar=el('div','pane-toolbar');
     const back=button('left','Navigate back',()=>this.run(()=>this.navigate(-1,pane)));back.disabled=pane.historyIndex<=0;
     const forward=button('right','Navigate forward',()=>this.run(()=>this.navigate(1,pane)));forward.disabled=pane.historyIndex>=pane.history.length-1;
-    toolbar.append(back,forward,el('div','breadcrumbs',tab.path?tab.path.replace(/\.md$/,'').replaceAll('/',' / '):''));
+    toolbar.append(back,forward,el('div','breadcrumbs',tab.path?tab.path.replace(/\.(?:md|base)$/i,'').replaceAll('/',' / '):''));
     const actions=el('div','view-actions');
     if(tab.kind==='note'&&(!tab.path||isMarkdown(tab.path)))actions.append(this.hotkeyButton(tab.mode==='reading'?'edit':'book','toggle-reading',tab.mode==='reading'?'Switch to Live Edit':'Switch to reading view',()=>this.run(()=>this.toggleReading(pane))));
     actions.append(button('more','More options',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)),button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle'));toolbar.append(actions);if(!this.platform.editorOnly)content.append(toolbar);
