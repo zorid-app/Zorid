@@ -19,8 +19,11 @@ export interface PropertiesOptions {
   onPropertyDefinitionChange?: (property: string, definition: BasePropertyDefinition) => Promise<void> | void;
   /** Optional Rust-filtered targets. A filtered relation is never evaluated locally. */
   getRelationTargets?: (property: string, definition: BasePropertyDefinition) => readonly BaseRelationTarget[] | undefined;
+  /** Core-derived display only after the owner verifies the saved actor and raw
+   * property baseline. Undefined keeps the exact raw property display. */
+  getDisplayValue?: (property: string, raw: BaseExpressionValue) => BaseExpressionValue | undefined;
   onChange: (next: string) => Promise<void> | void;
-  openLink?: (target: string) => void;
+  openLink?: (target: string, witness?: { readonly entryId: string; readonly revision: string }) => void;
   showMenu?: typeof showContextMenu;
   dismissMenu?: typeof dismissContextMenu;
   writeClipboard?: (text: string) => Promise<void> | void;
@@ -48,6 +51,7 @@ interface Row {
   renderedType?: PropertyType;
   renderedValue?: string;
   renderedDefinition?: string;
+  renderedDisplay?: string;
   disposeWidget?: () => void;
 }
 
@@ -138,14 +142,18 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     const type = typeFor(row.property), value = row.property.value;
     const signature = JSON.stringify(value), definition = definitionFor(row.key), definitionSignature = JSON.stringify(definition);
     if (row.value.hasAttribute('data-base-editing')) return;
-    if (row.renderedType === type && row.renderedValue === signature && row.renderedDefinition === definitionSignature) return;
+    const rawValue = baseExpressionValue(value);
+    const displaySignature = definition ? JSON.stringify(options.getDisplayValue?.(row.key, rawValue)) : undefined;
+    if (row.renderedType === type && row.renderedValue === signature && row.renderedDefinition === definitionSignature && row.renderedDisplay === displaySignature) return;
     // Preserve selection and unsubmitted edits during background refreshes.
     const focused = row.value.contains(document.activeElement) ? document.activeElement as HTMLInputElement | HTMLTextAreaElement : null;
     if (row.dirty || (focused && /^(INPUT|TEXTAREA)$/.test(focused.tagName) && type !== 'list' && type !== 'tags')) return;
     const focusLabel = focused?.getAttribute('aria-label');
+    const focusable = '.multi-select-pill, a, button, input, textarea, select';
+    const focusedIndex = focused ? [...row.value.querySelectorAll(focusable)].indexOf(focused) : -1;
     const selection = focused && 'selectionStart' in focused ? [focused.selectionStart, focused.selectionEnd] : null;
     row.disposeWidget?.(); row.disposeWidget = undefined;
-    row.renderedType = type; row.renderedValue = signature; row.renderedDefinition = definitionSignature; row.value.replaceChildren();
+    row.renderedType = type; row.renderedValue = signature; row.renderedDefinition = definitionSignature; row.renderedDisplay = displaySignature; row.value.replaceChildren();
     if (definition) {
       let baseline = signature, definitionBaseline = definitionSignature;
       const toPlain = (value: BaseExpressionValue): unknown => {
@@ -154,10 +162,11 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
         if (value.type === 'list') return value.value.map(toPlain);
         throw new Error('This property result cannot be stored in a note.');
       };
-      row.disposeWidget = mountBasePropertyWidget(row.value, { property: `note.${row.key}`, value: baseExpressionValue(value), row: { path: options.path ?? 'Note.md', values: {} }, version: 0 }, {
+      row.disposeWidget = mountBasePropertyWidget(row.value, { property: `note.${row.key}`, value: rawValue, row: { path: options.path ?? 'Note.md', values: {} }, version: 0 }, {
         getDefinition: () => definitionFor(row.key) ?? definition,
         isCurrent: () => live() && rows.get(row.key) === row,
-        openFile: (path) => options.openLink?.(path),
+        getDisplayValue: presentation => options.getDisplayValue?.(row.key, presentation.value),
+        openFile: (path, _event, witness) => options.openLink?.(path, witness),
         getRelationTargets: () => options.getRelationTargets?.(row.key, definition) ?? (!definition.relation?.targetFilter ? [...(options.vault?.entries.values() ?? [])].filter(entry => entry.type === 'file' && /\.md$/i.test(entry.path)).map(entry => ({ path: entry.path, label: entry.path.replace(/\.md$/i, ''), entryId: entry.entryId })) : undefined),
         commit: edit => {
           const operation = pending.then(async () => {
@@ -190,6 +199,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
         } } : {}),
         onError: problem => report(problem, row.error),
       });
+      if (focusedIndex >= 0) row.value.querySelectorAll<HTMLElement>(focusable)[focusedIndex]?.focus();
       return;
     }
     const aria = `${row.key} value`;
