@@ -2519,6 +2519,16 @@ impl<'a> Evaluator<'a> {
                     .unwrap_or_else(|error| error)
             }
             "containsAll" | "containsAny" => {
+                for needle in &eager {
+                    if let Err(error) = self.comparison_preflight(needle) {
+                        return error;
+                    }
+                }
+                for value in values {
+                    if let Err(error) = self.comparison_preflight(value) {
+                        return error;
+                    }
+                }
                 let all = name == "containsAll";
                 for needle in &eager {
                     match self.contains_checked(values, needle) {
@@ -2937,13 +2947,56 @@ impl<'a> Evaluator<'a> {
         }
     }
 
+    fn comparison_preflight(&mut self, value: &RuntimeValue) -> Result<(), RuntimeValue> {
+        self.charge(1)?;
+        match value {
+            RuntimeValue::Error(message) => {
+                self.charge(message.len() / 16)?;
+                return Err(RuntimeValue::Error(message.clone()));
+            }
+            RuntimeValue::String(value)
+            | RuntimeValue::Html(value)
+            | RuntimeValue::Image(value)
+            | RuntimeValue::Icon(value) => self.charge(value.len() / 16)?,
+            RuntimeValue::Link(link) => self.charge(
+                link.path.len().saturating_add(
+                    link.resolved_path
+                        .as_ref()
+                        .and_then(Option::as_ref)
+                        .map_or(0, String::len),
+                ) / 16,
+            )?,
+            RuntimeValue::File(file) => self.charge(file.path.len() / 16)?,
+            RuntimeValue::Regex(pattern, flags) => {
+                self.charge(pattern.len().saturating_add(flags.len()) / 16)?
+            }
+            RuntimeValue::List(values) => {
+                for value in values {
+                    self.comparison_preflight(value)?;
+                }
+            }
+            RuntimeValue::Object(values) => {
+                for (key, value) in values {
+                    self.charge(key.len() / 16 + 1)?;
+                    self.comparison_preflight(value)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
     fn contains_checked(
         &mut self,
         values: &[RuntimeValue],
         needle: &RuntimeValue,
     ) -> Result<bool, RuntimeValue> {
+        // Validate diagnostic operands before membership short-circuiting.
+        self.comparison_preflight(needle)?;
         for value in values {
-            if self.equals_checked(value, needle)? {
+            self.comparison_preflight(value)?;
+        }
+        for value in values {
+            if self.equals_prechecked(value, needle)? {
                 return Ok(true);
             }
         }
@@ -2957,20 +3010,23 @@ impl<'a> Evaluator<'a> {
         left: &RuntimeValue,
         right: &RuntimeValue,
     ) -> Result<bool, RuntimeValue> {
-        let text_bytes = |value: &RuntimeValue| match value {
-            RuntimeValue::String(value) => value.len(),
-            RuntimeValue::Link(link) => link.path.len(),
-            RuntimeValue::File(file) => file.path.len(),
-            _ => 0,
-        };
-        self.charge(1 + text_bytes(left).saturating_add(text_bytes(right)) / 16)?;
+        self.comparison_preflight(left)?;
+        self.comparison_preflight(right)?;
+        self.equals_prechecked(left, right)
+    }
+    fn equals_prechecked(
+        &mut self,
+        left: &RuntimeValue,
+        right: &RuntimeValue,
+    ) -> Result<bool, RuntimeValue> {
+        self.charge(1)?;
         match (left, right) {
             (RuntimeValue::List(a), RuntimeValue::List(b)) => {
                 if a.len() != b.len() {
                     return Ok(false);
                 }
                 for (a, b) in a.iter().zip(b) {
-                    if !self.equals_checked(a, b)? {
+                    if !self.equals_prechecked(a, b)? {
                         return Ok(false);
                     }
                 }
@@ -2979,7 +3035,7 @@ impl<'a> Evaluator<'a> {
             (RuntimeValue::List(values), other) | (other, RuntimeValue::List(values))
                 if values.len() == 1 =>
             {
-                self.equals_checked(&values[0], other)
+                self.equals_prechecked(&values[0], other)
             }
             (RuntimeValue::Link(link), RuntimeValue::String(text))
             | (RuntimeValue::String(text), RuntimeValue::Link(link))
@@ -5522,5 +5578,85 @@ mod loose_link_reference_tests {
             ..Default::default()
         });
         assert!(evaluator.equals_checked(&resolved, &unresolved).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod checked_comparison_admission_tests {
+    use super::*;
+    fn object(fields: usize) -> RuntimeValue {
+        RuntimeValue::Object(
+            (0..fields)
+                .map(|index| {
+                    (
+                        format!("field-{index}"),
+                        RuntimeValue::String("value-value-1234".into()),
+                    )
+                })
+                .collect(),
+        )
+    }
+    #[test]
+    fn object_fallbacks_charge_wide_deep_and_repeated_work_before_plain_clones() {
+        let wide = object(128);
+        let context = BasesEvaluationContext {
+            work_limit: Some(32),
+            ..Default::default()
+        };
+        assert!(
+            matches!(Evaluator::new(&context).equals_checked(&wide,&wide),Err(RuntimeValue::Error(message))if message.starts_with("budget\0"))
+        );
+        let mut deep = RuntimeValue::String("leaf".into());
+        for _ in 0..40 {
+            deep = RuntimeValue::Object(IndexMap::from([("child".into(), deep)]));
+        }
+        assert!(
+            matches!(Evaluator::new(&context).equals_checked(&deep,&deep),Err(RuntimeValue::Error(message))if message.starts_with("budget\0"))
+        );
+        let small = object(1);
+        let context = BasesEvaluationContext {
+            work_limit: Some(22),
+            ..Default::default()
+        };
+        let mut evaluator = Evaluator::new(&context);
+        assert!(evaluator.equals_checked(&small, &small).unwrap());
+        assert!(evaluator.equals_checked(&small, &small).unwrap());
+        assert!(
+            matches!(evaluator.equals_checked(&small,&small),Err(RuntimeValue::Error(message))if message.starts_with("budget\0"))
+        );
+        let cancellation = OperationCancellation::default();
+        cancellation.cancel();
+        let context = BasesEvaluationContext {
+            cancellation: Some(cancellation),
+            ..Default::default()
+        };
+        assert!(
+            matches!(Evaluator::new(&context).equals_checked(&wide,&wide),Err(RuntimeValue::Error(message))if message.starts_with("cancelled\0"))
+        );
+    }
+    #[test]
+    fn nested_diagnostics_are_not_false_equality_or_membership() {
+        for code in ["unavailable", "budget", "cancelled"] {
+            let diagnostic = RuntimeValue::Error(format!("{code}\0Captured diagnostic"));
+            let nested = RuntimeValue::List(vec![RuntimeValue::Object(IndexMap::from([(
+                "nested".into(),
+                diagnostic.clone(),
+            )]))]);
+            let context = BasesEvaluationContext::default();
+            let mut evaluator = Evaluator::new(&context);
+            for result in [
+                evaluator.equals_checked(&nested, &RuntimeValue::List(vec![])),
+                evaluator.equals_checked(&nested, &nested),
+                evaluator.contains_checked(
+                    &[RuntimeValue::Bool(true), nested.clone()],
+                    &RuntimeValue::Bool(true),
+                ),
+                evaluator.contains_checked(&[], &nested),
+            ] {
+                assert!(
+                    matches!(result,Err(RuntimeValue::Error(message))if message.starts_with(&format!("{code}\0")))
+                );
+            }
+        }
     }
 }

@@ -545,4 +545,21 @@ fn wiki_string_equality_in_partial_previews_is_unavailable_without_namespace_exp
         .diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code == "unavailable"));
+    let nested=compile_base_source("filters: file.ext == 'md'\nformulas:\n  contains: '[author == \"[[Target|Alias]]\"].contains(true)'\n  equality: '[author == \"[[Target|Alias]]\"] == [true]'\nviews:\n  - type: table\n    name: Nested\n    order: [file.path,formula.contains,formula.equality]\n").unwrap();
+    let nested = query_preview(
+        &nested,
+        &capture,
+        &id("definition"),
+        &[],
+        &QueryOptions::default(),
+        MAX_PREVIEW_QUERY_OWNED_BYTES,
+    )
+    .unwrap();
+    assert_eq!(nested.value.counts.scanned, 2);
+    assert_eq!(nested.value.rows.len(), 1);
+    for property in ["formula.contains", "formula.equality"] {
+        assert!(
+            matches!(&nested.value.rows[0].values[property],BaseValue::Error{code,..}if code=="unavailable")
+        );
+    }
 }
