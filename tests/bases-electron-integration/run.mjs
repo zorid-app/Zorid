@@ -80,7 +80,12 @@ function appKit(action){
   }`;
   return JSON.parse(execFileSync('osascript',['-l','JavaScript','-e',script,String(child.pid),electron,action],{encoding:'utf8',timeout:action==='show'?6000:5000}));
 }
-async function diskGuard(){const stat=await fs.statfs(out,{bigint:true});const free=stat.bavail*stat.bsize;assert.ok(free>=1073741824n,'At least 1 GiB free required');(evidence.diskGuards??=[]).push({at:Date.now(),bytes:String(free)});}
+async function diskGuard(){
+  const stat=await fs.statfs(out,{bigint:true}),free=stat.bavail*stat.bsize,required=1073741824n;
+  // Preserve the observed sample even when the unchanged guard aborts launch.
+  (evidence.diskGuards??=[]).push({name:'minimum-free-space',at:Date.now(),bytes:String(free),requiredBytes:String(required)});
+  assert.ok(free>=required,'At least 1 GiB free required');
+}
 async function stop(){
   browserCDP?.close();browserCDP=undefined;if(!child)return;
   let ownershipFailure;try{await nativeChildren();}catch(error){ownershipFailure=error;}
