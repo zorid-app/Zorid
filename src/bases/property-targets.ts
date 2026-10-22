@@ -119,8 +119,8 @@ export async function queryPropertyTargets(input: PropertyTargetsInput): Promise
     }
     const captured = (input.clock ?? createBaseClockHost()).capture(input.timezone);
     if (!Number.isSafeInteger(captured.clockMs)) throw new DocumentSemanticsError('invalid_request');
-    const report = await pin.propertyTargets({ options: { propertyDefinitionsSource, currentEntryId: current.id,
-      clockMs: captured.clockMs, timezone: captured.timezone, maxRows: input.maxRows ?? 10000, maxSteps: input.maxSteps } });
+    const report = await pin.propertyTargets({ options: { ...(propertyDefinitionsSource ? { propertyDefinitionsSource } : {}), currentEntryId: current.id,
+      clockMs: captured.clockMs, timezone: captured.timezone, maxRows: input.maxRows ?? 10000, ...(input.maxSteps === undefined ? {} : { maxSteps: input.maxSteps }) } });
     reportCheck(report);
     if (settings ? !sameEntry(report.value.definition, settings) : report.value.definition !== null) throw new DocumentSemanticsError('property_targets_stale');
     const latestInventory = await adapter.list(); check();

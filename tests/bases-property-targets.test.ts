@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { MemoryAdapter } from '../src/core/memory-adapter.ts';
 import { Vault } from '../src/core/vault.ts';
 import type { DocumentService } from '../src/core/document-semantics.ts';
@@ -8,6 +9,7 @@ import { closePropertyTargetQueries, queryPropertyTargets } from '../src/bases/p
 
 const snapshot = { localStoreId: 'store', generationEpoch: 'epoch', generation: '1', versions: { schema: 1, extraction: 'md1', resolver: 'r1', query: 'q1' } };
 const source = { localStoreId: 'store', watermark: '7' };
+const { captureDocumentRequest } = createRequire(import.meta.url)('../desktop/document-semantics.cjs');
 const settingsText = '\uFEFF# exact saved bytes\r\nproperties:\r\n  author: {type: relation, filter: \'file.hasTag("person")\'}\r\n';
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 class IdentityAdapter extends MemoryAdapter {
@@ -67,6 +69,16 @@ test('no saved property definitions sends no synthetic settings and returns core
   const actual = await queryPropertyTargets(f.input);
   assert.equal(f.calls[0].options.propertyDefinitionsSource, undefined); assert.equal(actual.settings, null); assert.deepEqual(actual.relationTargets, {});
   assert.ok(!f.events.includes('read'));
+});
+test('default target options omit absent own keys accepted by strict desktop option admission', async () => {
+  const f = await fixture(false);
+  await queryPropertyTargets({ ...f.input, maxSteps: undefined });
+  const options = f.calls[0].options;
+  assert.equal(Object.hasOwn(options, 'propertyDefinitionsSource'), false);
+  assert.equal(Object.hasOwn(options, 'maxSteps'), false);
+  // Both endpoints use the desktop baseOptions validator. The older host in
+  // this isolated branch exposes base only; the common shape must pass it too.
+  assert.doesNotThrow(() => captureDocumentRequest({ schemaVersion: 1, command: { op: 'base', pinId: '1', id: 'base', options: { ...options, currentEntryId: 'note' } } }));
 });
 test('absent service or advertised method is unavailable without a local filter fallback', async () => {
   const f = await fixture(); f.unavailable();
