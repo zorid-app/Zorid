@@ -90,3 +90,54 @@ snapshots, launch/target/version receipts and cleanup are retained in the new
 directory. No real vault or clipboard was changed. A fresh campaign requires a
 new coordinated slot and should journal each input acknowledgement before
 repeating the missing scenarios; this partial pass establishes no popup parity.
+
+## Actual owned reference pass002 — popup/edit/dismiss observed
+
+A second explicit coordinator slot used a fresh owned process and a new output
+folder, `/private/tmp/zorid-bases-hover-runtime-reference-20261022-002`.
+The prepared helper passed syntax checks and independent source review before
+launch. It journals each CDP send/reply/deadline, per-action acknowledgement and
+debugger pause/resume/crash event. The exact archive hash was checked before
+launch; the load log confirms the same owned 1.14.4 package. PID1465, start
+`2026-10-22 02:28:17` local, used the disposable profile from pass001.
+Browser identity is Electron31.6.0/Chrome126.0.6478.234 with the 1.7.4 launcher;
+the page title and loaded archive establish the actual 1.14.4 application.
+
+Eight PNG/DOM/frame/input captures completed at **1024×800 CSS px, DPR2, dark**:
+
+| Capture | Actual observation |
+| --- | --- |
+| `01-baseline`, `02-ordinary-hover` | No popup; ordinary trusted hover waited700 ms plus capture delay. |
+| `03-modifier-mouse-hover` | Direct CDP mouse entry with modifier flag4 produced trusted `mouseover`/`mousemove` with `metaKey:true` and opened one rendered popup. No physical Meta-key down was used in this phase. |
+| `04-unmodified-mouse-retains` | Trusted `metaKey:false` mousemove at the same target retained the popup. This is mouse-modifier removal, not proof of physical key release. |
+| `05-enter-popup-body` | Moving into the rendered paragraph retained the popup without a modifier. |
+| `06-enter-popup-editor` | Clicking the paragraph changed the popup to `is-editing`, focused a visible CodeMirror `.cm-content` with `contenteditable="true"`, and retained it. No text was inserted or changed. |
+| `07-outside-dismiss` | An outside click followed by700 ms yielded zero popups. |
+| `08-hover-before-key` | Ordinary hover again yielded zero popups before the separate Meta-key scenario. |
+
+The rendered popup rectangle was **x352/y181.515625, 452×260.3515625 CSS px**,
+below the link rectangle x352/y154.515625,74.2578125×17.0625. Its first paragraph
+was x385/y344.8671875,386×24. After entering editing, the popup remained at the
+same anchor with **452×340.2578125** dimensions; the visible editable body was
+x429/y297.7109375,342×191.0625. These are measurements of this short fixture,
+not universal fixed heights. Rendered and editor screenshots were inspected.
+
+Before the final key scenario, a separately retained bounded request refreshed
+ordinary pointer entry immediately before keyDown, avoiding an unbounded delay
+between helper invocations; the original prepared request was preserved. Both
+moves and the Meta `Input.dispatchKeyEvent` acknowledged successfully. After the
+750 ms wait, the final DOM `Runtime.evaluate` call9 timed out. No pause, crash or
+runtime-exception event was recorded before that deadline. No terminal key-phase
+screenshot/assertion was reached; key-after-hover popup state and physical Meta
+release retention remain unobserved. This narrows the failure boundary relative
+to pass001 but does not establish a reference source defect or its cause.
+
+The first failure was terminal: no further inputs, retry or restart. Browser
+close timed out; exact PID/start/profile checks preceded SIGTERM/SIGKILL.
+`cleanup.json` records no owned processes, a closed endpoint, unchanged note/Base
+bytes, unchanged original51-pair catalog and all four restored configuration
+hashes matching their originals. The heavy runtime slot was explicitly released.
+New `capture-catalog.json` contains only these eight captures. `report.json`
+SHA-256 is `f2a02db9315b765cf264687848f434974c2d9858548f8ac01d7dfd044239a29b`.
+These reference observations add no Zorid parity or runtime-acceptance claim;
+remaining physical-key behavior stays qualified by static evidence above.
