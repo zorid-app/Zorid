@@ -33,12 +33,13 @@ async function fixture(options:{readOnly?:boolean;viewName?:string;source?:strin
  const change=(label:string,value:string,event='change')=>{const node=control<HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement>(label);node.value=value;node.dispatchEvent(new dom.window.Event(event,{bubbles:true}));};
  const key=(node:Element,value:string)=>node.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:value,bubbles:true,cancelable:true}));
  const submit=()=>{const form=dialog()?.querySelector('form');assert.ok(form,'open form');form.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));};
- const applied=async()=>{submit();await until(()=>!dialog(),'accepted toolbar patch closes its dialog');await session.flush();};
+ const applied=async()=>{doc.getElementById('outside')!.dispatchEvent(new dom.window.MouseEvent('pointerdown',{bubbles:true}));await until(()=>!dialog(),'outside click saves and closes the menu');await session.flush();};
+ const configure=()=>{click('Views');click(`Configure view ${session.state.result!.view.name}`);};
  const disk=async()=>BaseDocument.parse(await vault.read('Work.base'));
  const paths=()=>session.state.result!.rows.map(row=>row.path);
  const unchangedNotes=async()=>{for(const[path,text]of Object.entries(notes))assert.equal(await adapter.read(path),text,path);};
- return{adapter,vault,dom,doc,host,buffers,errors,publications,getBuffer,session,dialog,control,click,change,key,submit,applied,disk,paths,unchangedNotes,initial,
-  async cleanup(){adapter.fail=false;const cancel=dialog()?.querySelector<HTMLButtonElement>('[aria-label="Cancel"]');cancel?.click();for(const input of host.querySelectorAll('input,textarea'))key(input,'Escape');await session.close();for(const buffer of buffers.values())await buffer.dispose();dom.window.close();}};
+ return{adapter,vault,dom,doc,host,buffers,errors,publications,getBuffer,session,dialog,control,click,change,key,submit,applied,configure,disk,paths,unchangedNotes,initial,
+  async cleanup(){adapter.fail=false;const cancel=dialog()?.querySelector<HTMLButtonElement>('[aria-label="Cancel"]');cancel?.click();for(const input of host.querySelectorAll('.bases-session-content input,.bases-session-content textarea'))key(input,'Escape');await session.close();for(const buffer of buffers.values())await buffer.dispose();dom.window.close();}};
 }
 
 test('actual session switches all existing views without writing configuration or notes',async()=>{
@@ -51,9 +52,9 @@ test('actual session switches all existing views without writing configuration o
  }finally{await f.cleanup();}
 });
 
-test('view options are staged then change only the selected view layout/name and preserve extensions',async()=>{
+test('view configuration automatically changes only the selected view layout/name and preserve extensions',async()=>{
  const f=await fixture();try{
-  f.click('View options');f.change('Layout','cards');f.change('View name','Current tasks','input');
+  f.configure();f.change('Layout','cards');f.change('View name','Current tasks','input');
   assert.equal(f.session.state.result!.view.type,'table');assert.equal(await f.adapter.read('Work.base'),source);
   await f.applied();const document=await f.disk();assert.equal(document.views[0].type,'cards');assert.equal(document.views[0].name,'Current tasks');
   assert.equal(document.views[0].pluginView,'keep');assert.deepEqual(document.getRoot('pluginRoot'),{future:'keep'});assert.match(document.toString(),/# preserve this comment/);
@@ -92,14 +93,14 @@ test('changing grouping resets manual column visibility and partitions the actua
  }finally{await f.cleanup();}
 });
 
-test('dirty toolbar drafts survive refresh and block view switching/close until explicitly canceled',async()=>{
+test('dirty toolbar drafts survive refresh and block view switching/close until explicitly reverted',async()=>{
  const f=await fixture();try{
-  f.click('View options');f.change('View name','Unsaved name','input');const input=f.control<HTMLInputElement>('View name');
+  f.configure();const input=f.control<HTMLInputElement>('View name');input.focus();f.change('View name','Unsaved name','input');
   await f.vault.modify('Tasks/Alpha.md',notes['Tasks/Alpha.md']+'external note update\n');await f.session.refresh();
   assert.equal(f.control('View name'),input);assert.equal(input.value,'Unsaved name');assert.equal(f.session.hasPendingChanges(),true);
   await assert.rejects(f.session.selectView(1),/Finish or cancel/);await assert.rejects(f.session.close(),/Finish or cancel/);
   assert.equal(input.isConnected,true);assert.equal(await f.adapter.read('Work.base'),source);
-  f.click('Cancel',f.dialog()!);await until(()=>!f.session.hasPendingChanges(),'cancel releases unaccepted toolbar draft');await f.session.selectView(1);
+  f.change('View name','Table','input');input.dispatchEvent(new f.dom.window.Event('blur'));await f.applied();await f.session.selectView(1);
   assert.equal(f.session.state.result!.view.name,'Cards');assert.equal(await f.adapter.read('Work.base'),source);
  }finally{await f.cleanup();}
 });
@@ -123,7 +124,7 @@ test('readonly sessions retain view switching while exposing no toolbar mutation
 
 test('named-view embeds omit rename but can persist layout without breaking their binding',async()=>{
  const f=await fixture({viewName:'Table'});try{
-  f.click('View options');assert.equal(f.dialog()!.querySelector('[aria-label="View name"]'),null);f.change('Layout','list');await f.applied();
+  f.configure();assert.equal(f.dialog()!.querySelector('[aria-label="View name"]'),null);f.change('Layout','list');await f.applied();
   assert.equal(f.session.state.result!.view.name,'Table');assert.equal(f.session.state.result!.view.type,'list');assert.equal((await f.disk()).views[0].name,'Table');await f.unchangedNotes();
  }finally{await f.cleanup();}
 });
@@ -138,6 +139,21 @@ test('failed accepted save retains exact draft and Retry save persists it withou
   f.adapter.fail=false;f.submit();await until(()=>!f.dialog(),'successful exact retry closes dialog');await f.session.flush();
   assert.equal(await f.adapter.read('Work.base'),draft);assert.equal(f.adapter.writes.filter(write=>write.path==='Work.base').length,1);assert.deepEqual(f.publications,['Work.base']);
   assert.deepEqual(f.paths(),['Tasks/Gamma.md','Tasks/Alpha.md','Tasks/Beta.md']);await f.unchangedNotes();
+ }finally{await f.cleanup();}
+});
+
+test('failed Configure view command retains its exact shared draft and retries persistence once',async()=>{
+ const f=await fixture();try{
+  f.adapter.fail=true;f.configure();f.change('Layout','cards');
+  f.doc.getElementById('outside')!.dispatchEvent(new f.dom.window.MouseEvent('pointerdown',{bubbles:true}));
+  await until(()=>!!f.dialog()?.textContent?.includes('Retry save'),'failed view command offers exact persistence retry');
+  const buffer=await f.getBuffer('Work.base'),draft=buffer.text;
+  assert.equal(buffer.dirty,true);assert.equal(await f.adapter.read('Work.base'),source);
+  assert.equal(BaseDocument.parse(draft).views[0].type,'cards');
+  assert.equal(f.control<HTMLSelectElement>('Layout').disabled,true);assert.deepEqual(f.publications,['Work.base']);
+  f.adapter.fail=false;f.submit();await until(()=>!f.dialog(),'retry closes the settled view menu');await f.session.flush();
+  assert.equal(await f.adapter.read('Work.base'),draft);assert.deepEqual(f.publications,['Work.base']);
+  assert.equal(f.session.state.result!.view.type,'cards');await f.unchangedNotes();
  }finally{await f.cleanup();}
 });
 

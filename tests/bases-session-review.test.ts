@@ -30,7 +30,7 @@ async function fixture(adapter = new MemoryAdapter({'Work.base':source, 'One.md'
     assert.ok(cell); key(cell,'Enter'); const input = cell.querySelector<HTMLInputElement>('input')!; assert.ok(input); input.value=value; return input;
   };
   const stop = async () => {
-    const input = container.querySelector('.zorid-bases-table-input'); if(input)key(input,'Escape');
+    const input = container.querySelector('.zorid-bases-table-input,[data-base-editing] input,[data-base-editing] textarea'); if(input)key(input,'Escape');
     await session.close(); for(const buffer of buffers.values())await buffer.dispose(); dom.window.close();
   };
   return {vault,dom,container,buffers,getBuffer,session,key,edit,publications,stop};

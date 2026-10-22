@@ -44,7 +44,7 @@ async function fixture(type: string, empty = false) {
   const key = (node: Element, key: string) => node.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
   return { host, dom, session, key, opens, openedFiles, writes: () => writes, status: () => host.querySelector('.bases-session-status')!.textContent!,
     publish() { current = true; demand.resolve({ source, published: snapshot, current: true, rebuildRequired: false, coverageComplete: true }); for (const listener of [...listeners]) listener(update()); },
-    async cleanup() { for (const input of host.querySelectorAll('input,textarea')) key(input, 'Escape'); await session.close(); await session.ready; assert.equal(listeners.size, 0); assert.equal(closes, opens.length); dom.window.close(); },
+    async cleanup() { for (const input of host.querySelectorAll('.bases-session-content input,.bases-session-content textarea')) key(input, 'Escape'); await session.close(); await session.ready; assert.equal(listeners.size, 0); assert.equal(closes, opens.length); dom.window.close(); },
   };
 }
 for (const type of ['table', 'cards', 'list', 'kanban']) test(`${type} previews disable actual edit affordances and rebind the same view after publication`, async () => {
@@ -53,11 +53,11 @@ for (const type of ['table', 'cards', 'list', 'kanban']) test(`${type} previews 
     assert.ok(sharedBasePreview(f.session.state.result!)); assert.match(f.status(), /1 of 3 files indexed; 2 remaining/); assert.match(f.status(), /Read-only preview/); assert.match(f.status(), /Counts and aggregates cover indexed notes only/); assert.match(f.status(), /not been checked yet/); assert.match(f.status(), /1 file is unavailable/); assert.match(f.status(), /1 note could not be checked against the filters/);
     const content = f.host.querySelector('.bases-session-content')!, old = content.firstElementChild;
     assert.ok(old); assert.equal(content.querySelector('input:not([type="checkbox"]),textarea,[contenteditable="true"]'), null); for (const checkbox of content.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) assert.equal(checkbox.disabled, true); assert.equal(content.querySelector('[draggable="true"]'), null);
-    assert.equal(f.host.querySelector('button[aria-label="View options"]'), null); assert.equal(f.dom.window.document.querySelector('[role="dialog"]'), null);
+    assert.equal(f.host.querySelector('button[aria-label="Properties"]'), null); assert.equal(f.dom.window.document.querySelector('[role="dialog"]'), null);
     for (const node of content.querySelectorAll('[role="gridcell"],.bases-rendered-value,.bases-kanban-card,.bases-cards-item')) { f.key(node, 'Enter'); node.dispatchEvent(new f.dom.window.MouseEvent('dblclick', { bubbles: true })); node.dispatchEvent(new f.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true })); }
     assert.equal(content.querySelector('input:not([type="checkbox"]),textarea,[contenteditable="true"]'), null); for (const checkbox of content.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) assert.equal(checkbox.disabled, true); assert.equal(f.writes(), 0);
     f.publish(); await f.session.ready; assert.equal(sharedBasePreview(f.session.state.result!), undefined); assert.notEqual(content.firstElementChild, old, 'same-type readonly transition must rebuild callback owners');
-    assert.equal(f.host.querySelector<HTMLButtonElement>('button[aria-label="View options"]')!.disabled, false);
+    assert.equal(f.host.querySelector<HTMLButtonElement>('button[aria-label="Properties"]')!.disabled, false);
     // A retained retired node cannot recover its old callbacks or mutate the result.
     old!.dispatchEvent(new f.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); assert.equal(f.writes(), 0);
     if (type === 'table') { const cell = content.querySelector('[role="gridcell"][data-property="note.status"]')!; f.key(cell, 'Enter'); assert.ok(cell.querySelector('input'), 'published table regains its editor'); f.key(cell.querySelector('input')!, 'Escape'); }

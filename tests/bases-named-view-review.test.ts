@@ -67,15 +67,16 @@ test('named Kanban preserves exact failed configuration retry and leaves sibling
   const session = createBaseSession(host, { vault: f.vault, basePath: 'Work.base', viewName: 'Target', buffers: f.host, validate() {}, openFile() {} });
   try {
     await session.ready; adapter.fail = true;
-    host.querySelector('.bases-kanban-edit-columns')!.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
-    const checkbox = dom.window.document.querySelector<HTMLInputElement>('input[aria-label="Show Todo"]')!;
-    assert.ok(checkbox); checkbox.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })); await tick();
+    host.querySelector<HTMLButtonElement>('button[aria-label="Group"]')!.click();
+    const checkbox = dom.window.document.querySelector<HTMLInputElement>('input[aria-label="Show group Todo"]')!;
+    assert.ok(checkbox); checkbox.click();
+    for(let i=0;i<100&&!dom.window.document.querySelector('form')?.textContent?.includes('Retry save');i++)await new Promise(resolve=>setTimeout(resolve,5));
     const buffer = await f.host.getBuffer('Work.base'); assert.equal(buffer.dirty, true); assert.ok(buffer.error);
     assert.deepEqual(BaseDocument.parse(buffer.text).views[1].groupOrder, ['Done']);
     assert.deepEqual(BaseDocument.parse(await f.vault.read('Work.base')).views[1].groupOrder, ['Todo', 'Done']);
     adapter.fail = false;
-    const retry = dom.window.document.querySelector<HTMLInputElement>('input[aria-label="Show Todo"]'); assert.ok(retry); assert.equal(retry.checked, true);
-    retry.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })); await tick(); await session.flush();
+    const retry = [...dom.window.document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Retry save');assert.ok(retry);
+    retry.click();for(let i=0;i<100&&session.hasPendingChanges();i++)await new Promise(resolve=>setTimeout(resolve,5));await session.flush();
     const saved = BaseDocument.parse(await f.vault.read('Work.base')); assert.deepEqual(saved.views[1].groupOrder, ['Done']); assert.deepEqual(saved.views[0].groupOrder, ['Todo', 'Done']);
     assert.equal(session.state.result!.view.name, 'Target'); assert.equal(host.querySelector('select')!.value, '1');
   } finally { adapter.fail = false; await session.close(); await f.dispose(); dom.window.close(); }

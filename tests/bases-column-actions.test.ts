@@ -87,8 +87,9 @@ test('session Edit columns persists visibility and keeps formula config editable
     const note = await f.vault.read('One.md');
     const card = element.querySelector('.bases-kanban-card');
     assert.equal(card?.getAttribute('draggable'), 'false');
-    element.querySelector<HTMLButtonElement>('.bases-kanban-edit-columns')!.click();
-    dom.window.document.querySelector<HTMLButtonElement>('.bases-columns-toggle')!.click();
+    element.querySelector<HTMLButtonElement>('button[aria-label="Group"]')!.click();
+    dom.window.document.querySelector<HTMLButtonElement>('button[aria-label="Hide all groups"]')!.click();
+    for(let i=0;i<100&&session.hasPendingChanges();i++)await new Promise(resolve=>setTimeout(resolve,5));
     await session.flush();
     assert.deepEqual(BaseDocument.parse(await f.vault.read('Board.base')).views[0].groupOrder, []);
     assert.equal(await f.vault.read('One.md'), note);

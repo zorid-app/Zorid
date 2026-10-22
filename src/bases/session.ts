@@ -54,6 +54,7 @@ export interface BaseSessionOptions {
   readonly clock?: BaseClockHost;
   readonly visibility?: BaseSessionVisibility;
   readonly viewName?: string;
+  readonly closeCreatedFile?: () => boolean | Promise<boolean>;
   readonly openCreatedFile?: (path: string, event: MouseEvent | KeyboardEvent, anchor?: HTMLElement) => void | Promise<void>;
   readonly openFile: (path: string, event: MouseEvent | KeyboardEvent) => void;
   readonly validate: () => void;
@@ -183,34 +184,19 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     immediate: true,
     preflight() { action(); if (pending.size || propertyDraft() || settings.hasDraft() || summaryPanel) throw new Error('Finish or cancel the current edit before changing the view.'); },
     selectView,
-    save(version, patch) {
-      action(); if (options.readOnly) return Promise.reject(new Error('This base is read-only'));
-      if (typeof version !== 'number') return Promise.reject(new Error('The base result is stale'));
-      const attempt: { buffer?: NoteBuffer; text?: string } = {};
-      configurationAttempt = attempt;
-      return track(() => controller.updateView(version, patch)).catch(error => {
-        const buffer = attempt.buffer, text = attempt.text;
-        if (buffer && (buffer.dirty || buffer.error)) {
-          throw new BaseToolbarSaveError(error instanceof Error ? error.message : String(error), () => track(async () => {
-            if (buffer.path !== options.basePath || buffer.text !== text) throw new Error('The retained configuration changed. Save or resolve that draft before retrying.');
-            await buffer.flush(); await controller.refresh();
-          }));
-        }
-        throw error;
-      }).finally(() => { if (configurationAttempt === attempt) configurationAttempt = undefined; });
-    },
-    saveConfiguration(version, patch) { if (typeof version !== 'number') return Promise.reject(new Error('The base result is stale')); return track(() => controller.updateConfiguration(version, patch)); },
+    save(version, patch) { return saveConfigurationCommand(() => controller.updateView(numericVersion(version), patch)); },
+    saveConfiguration(version, patch) { return saveConfigurationCommand(() => controller.updateConfiguration(numericVersion(version), patch)); },
     commands: {
-      updateView: (version, index, patch) => track(() => controller.updateViewAt(numericVersion(version), index, patch)),
-      editFormula: (version, originalName, name, expression) => track(() => controller.editFormula(numericVersion(version), originalName, name, expression)),
-      renameFormula: (version, from, to) => track(() => controller.renameFormula(numericVersion(version), from, to)),
-      addView: (version, type, name) => track(() => controller.addView(numericVersion(version), type, name)),
-      duplicateView: (version, index, name) => track(() => controller.duplicateView(numericVersion(version), index, name)),
-      removeView: (version, index) => track(() => controller.removeView(numericVersion(version), index)),
-      moveView: (version, from, to) => track(() => controller.moveView(numericVersion(version), from, to)),
-      setDefaultView: (version, index) => track(() => controller.setDefaultView(numericVersion(version), index)),
-      updateRoot: (version, patch) => track(() => controller.updateRoot(numericVersion(version), patch)),
-      setFormula: (version, name, expression) => track(() => controller.setFormula(numericVersion(version), name, expression)),
+      updateView: (version, index, patch) => saveConfigurationCommand(() => controller.updateViewAt(numericVersion(version), index, patch)),
+      editFormula: (version, originalName, name, expression) => saveConfigurationCommand(() => controller.editFormula(numericVersion(version), originalName, name, expression)),
+      renameFormula: (version, from, to) => saveConfigurationCommand(() => controller.renameFormula(numericVersion(version), from, to)),
+      addView: (version, type, name) => saveConfigurationCommand(() => controller.addView(numericVersion(version), type, name)),
+      duplicateView: (version, index, name) => saveConfigurationCommand(() => controller.duplicateView(numericVersion(version), index, name)),
+      removeView: (version, index) => saveConfigurationCommand(() => controller.removeView(numericVersion(version), index)),
+      moveView: (version, from, to) => saveConfigurationCommand(() => controller.moveView(numericVersion(version), from, to)),
+      setDefaultView: (version, index) => saveConfigurationCommand(() => controller.setDefaultView(numericVersion(version), index)),
+      updateRoot: (version, patch) => saveConfigurationCommand(() => controller.updateRoot(numericVersion(version), patch)),
+      setFormula: (version, name, expression) => saveConfigurationCommand(() => controller.setFormula(numericVersion(version), name, expression)),
     },
     onSearch(text) { if (propertyDraft() || settings.hasDraft()) { report(new Error('Finish or cancel the property edit before searching.')); return; } void track(() => controller.setSearchTerms(text.split(/\s+/).filter(Boolean))).catch(report); },
     onNew: () => track(() => createItem()),
@@ -219,6 +205,18 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     onDraftChange: schedule,
     onError: report,
   });
+  function saveConfigurationCommand(operation: () => Promise<void>): Promise<void> {
+    action(); if (options.readOnly) return Promise.reject(new Error('This base is read-only'));
+    const attempt: { buffer?: NoteBuffer; text?: string } = {}; configurationAttempt = attempt;
+    return track(operation).catch(error => {
+      const buffer = attempt.buffer, text = attempt.text;
+      if (buffer && (buffer.dirty || buffer.error)) throw new BaseToolbarSaveError(error instanceof Error ? error.message : String(error), () => track(async () => {
+        if (buffer.path !== options.basePath || buffer.text !== text) throw new Error('The retained configuration changed. Save or resolve that draft before retrying.');
+        await buffer.flush(); await controller.refresh();
+      }));
+      throw error;
+    }).finally(() => { if (configurationAttempt === attempt) configurationAttempt = undefined; });
+  }
   function assertPropertyWritable(property: string, value?: import('./expression.ts').BaseExpressionValue): void {
     const invalid = definitions.diagnostics.find(item => item.property === basePropertyName(property));
     if (definitionsError || invalid) throw new Error(definitionsError ?? invalid!.message);
@@ -283,6 +281,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   }
   async function createItem(group?: { property: string; value: BaseValue }, anchor?: HTMLElement): Promise<void> {
     action(); if (options.readOnly || !controller.state.result || sharedBasePreview(controller.state.result)) throw new Error('This base is read-only');
+    if (await options.closeCreatedFile?.()) return;
+    alive();
     // Retain an uncertain operation across retries rather than choosing a new filename.
     if (!creation || creation.status === 'committed') creation = await prepareBaseItemCreation({ vault: options.vault, document: controller.state.source, basePath: options.basePath, viewIndex: selectedIndex, group, validate: alive });
     const operation = creation, entry = await operation.run(); alive();
