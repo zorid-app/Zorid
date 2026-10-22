@@ -111,7 +111,7 @@ export interface BaseConfigurationPatch {
   readonly view?: BaseViewPatch;
   readonly root?: BaseRootPatch;
 }
-interface PropertyState { readonly requestedKey: string; readonly key?: string; readonly value?: BaseValue }
+interface PropertyState { readonly requestedKey: string; readonly targetKey: string; readonly key?: string; readonly value?: BaseValue }
 interface PropertyHistoryEntry {
   readonly kind: 'properties'; path: string; identity: number;
   readonly entryId?: string; readonly before: readonly PropertyState[]; readonly after: readonly PropertyState[];
@@ -131,11 +131,14 @@ export class BaseBulkEditError extends Error {
     this.name = 'BaseBulkEditError'; this.completedPaths = Object.freeze([...completedPaths]); this.failedPath = failedPath;
   }
 }
-function propertyState(source: string, keys: readonly string[]): PropertyState[] {
+function propertyState(source: string, keys: readonly string[], targets?: readonly PropertyState[]): PropertyState[] {
   const properties = readProperties(source);
   return keys.map(requestedKey => {
-    const found = properties.find(item => item.key === requestedKey) ?? properties.find(item => item.key.toLowerCase() === requestedKey.toLowerCase());
-    return found ? { requestedKey, key: found.key, value: structuredClone(found.value) } : { requestedKey };
+    const retained = targets?.find(state => state.requestedKey === requestedKey);
+    const found = retained ? properties.find(item => item.key === retained.targetKey)
+      : properties.find(item => item.key === requestedKey) ?? properties.find(item => item.key.toLowerCase() === requestedKey.toLowerCase());
+    const targetKey = retained?.targetKey ?? found?.key ?? requestedKey;
+    return found ? { requestedKey, targetKey, key: found.key, value: structuredClone(found.value) } : { requestedKey, targetKey };
   });
 }
 function statesEqual(left: readonly PropertyState[], right: readonly PropertyState[]): boolean { return JSON.stringify(left) === JSON.stringify(right); }
@@ -482,13 +485,13 @@ export class BaseController {
         try {
           const witness = sharedBaseWitness(result!, path);
           await this.options.mutations.transform(path, source => {
-            validate(); const before = propertyState(source, keys);
+            validate(); const before = propertyState(source, keys, entry?.after);
             let next = source;
             for (const edit of values) {
-              const key = edit.property.slice(5), current = propertyState(next, [key])[0];
-              next = edit.remove ? current.key === undefined ? next : removeProperty(next, current.key) : setProperty(next, current.key ?? key, edit.value);
+              const key = edit.property.slice(5), current = propertyState(next, [key], before)[0];
+              next = edit.remove ? current.key === undefined ? next : removeProperty(next, current.key) : setProperty(next, current.key ?? current.targetKey, edit.value);
             }
-            const after = propertyState(next, keys);
+            const after = propertyState(next, keys, before);
             // An exact failed draft retry retains its original undo baseline.
             if (!entry || !statesEqual(before, entry.after)) {
               entry = { kind: 'properties', path, identity: this.identities.get(path)!, entryId: witness?.entryId ?? this.options.vault.entries.get(path)?.entryId, before, after };
@@ -613,12 +616,12 @@ export class BaseController {
             const desired = direction === 'undo' ? entry.before : entry.after;
             await this.options.mutations.transform(path, text => {
               validate(entry);
-              const current = propertyState(text, expected.map(state => state.requestedKey));
+              const current = propertyState(text, expected.map(state => state.requestedKey), expected);
               const retry = this.pendingHistoryDirection.get(entry) === direction && statesEqual(current, desired);
               if (!statesEqual(current, expected) && !retry) throw new Error('A touched property changed after this command; its current value was preserved');
               let next = text;
               for (const state of desired) {
-                const current = propertyState(next, [state.requestedKey])[0];
+                const current = propertyState(next, [state.requestedKey], [state])[0];
                 if (current.key !== undefined && current.key !== state.key) next = removeProperty(next, current.key);
                 if (state.key !== undefined) next = setProperty(next, state.key, state.value!);
               }

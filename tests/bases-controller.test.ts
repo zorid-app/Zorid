@@ -206,9 +206,25 @@ test('Kanban empty group removes the exact frontmatter key including list member
     const disk = await f.vault.read('One.md');
     assert.deepEqual(readProperties(disk).map(item => [item.key, item.value]), [['status', 'keep sibling'], ['other', 12]]);
     assert.ok(disk.endsWith('Original body\n'));
+    await f.controller.undo();
+    assert.deepEqual(Object.fromEntries(readProperties(await f.vault.read('One.md')).map(item => [item.key, item.value])), { Status: ['Todo', 'Later'], status: 'keep sibling', other: 12 });
+    await f.controller.redo();
+    assert.deepEqual(Object.fromEntries(readProperties(await f.vault.read('One.md')).map(item => [item.key, item.value])), { status: 'keep sibling', other: 12 });
     await f.controller.editProperty({ version: f.controller.state.version, path: 'One.md', property: 'Status', value: null });
     assert.equal(readProperties(await f.vault.read('One.md')).find(item => item.key === 'status')?.value, null);
   } finally { await f.stop(); }
+});
+
+test('failed empty-group draft retry stays anchored to the originally removed key and preserves case siblings', async () => {
+  class Adapter extends MemoryAdapter { fail = false; override async write(path: string, source: string) { if (this.fail && path === 'One.md') throw new Error('disk full'); return super.write(path, source); } }
+  const adapter = new Adapter({ 'Work.base': base, 'One.md': '---\nStatus: [Todo, Later]\nstatus: keep\n---\nBody' }), f = await fixture(adapter);
+  try {
+    adapter.fail = true; await assert.rejects(f.controller.moveToGroup({ version: f.controller.state.version, path: 'One.md', value: null }), /disk full/);
+    adapter.fail = false; await f.controller.moveToGroup({ version: f.controller.state.version, path: 'One.md', value: null });
+    assert.deepEqual(Object.fromEntries(readProperties(await f.vault.read('One.md')).map(item => [item.key, item.value])), { status: 'keep' });
+    await f.controller.undo();
+    assert.deepEqual(Object.fromEntries(readProperties(await f.vault.read('One.md')).map(item => [item.key, item.value])), { Status: ['Todo', 'Later'], status: 'keep' });
+  } finally { adapter.fail = false; await f.stop(); }
 });
 
 test('retrying an already-transformed failed draft still attempts persistence and cannot claim false success', async () => {
