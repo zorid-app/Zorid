@@ -9,6 +9,49 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Actual normal supported-web002-retry now **passes all5 phases**, terminal0,
+frozen checkout `099d94edbbfbee7e79160872d1a62bb55e7601a5`, current Rust958b19ac
+and matching generated WASM36809d/795637. It uses the normal app's browser
+adapter/default vault, not fixture mode: create/title, trusted keyboard durable
+source, reload identity/revision/source, rich search and exact result open.
+Report `/private/tmp/zorid-bases-web-ui-actual-20261022-002-retry/report.json`,
+SHA `256df1ee94d1a8a9635fc99db877c9b218694c127e341b919468e6af9e487758`.
+Source/artifact/harness/Chrome postproof matches; owned Chrome38277 exits0 via
+Browser.close, server closes, zero renderer exceptions. Initial002 remains a
+0-phase sandbox-listen EPERM result. This is supported-web smoke acceptance,
+not full rendered Bases acceptance. `bases_docs_model` owns its history record.
+
+Actual browser006 is **failed**:8 original groups pass, ninth fails its expected
+unavailable filter diagnostic; all10 Q3 groups are unexecuted. Exact current
+WASM was loaded through normal dedicated Workers and source/module postproof
+matches. Chrome32183 exits0, Vite closes, fixture IDB is deleted and profile is
+absent; no artifact/cleanup failure. Report SHA
+`81ec51ba1829ca819f0da6ae7dbaa66d58c82d886fb88fd57e4ca4cde5e299b8` at
+`/private/tmp/zorid-bases-browser-actual-20261022-006/report.json`.
+`bases_expressions` investigates with independent `bases_duration_review`:
+source suggests intentionally published Error data now produces a conversion
+`type` diagnostic, while property `unavailable` diagnostics remain. Actual local
+payload must be captured before any oracle correction. Original failing
+assertions remain; no product regression or correction is established yet.
+
+Completed WASM cache retirement is terminal0:304 reproducible intermediates
+removed; actual free space rises363.25390625MiB during that measurement window.
+All976 protected files remain byte-identical. Receipt:
+`/private/tmp/zorid-bases-completed-wasm-cache-retirement-20261022-001.json`.
+Later actual free space falls to242660KiB; cause is unknown. Native1GiB guard
+is unchanged. `bases_controller` may retire only completed web campaign generated
+caches, preserving raw profile storage/IDB and evidence; no user/system data.
+
+Acceptance audit identifies three genuine scenario gaps, now owned in isolated
+branches: `bases_summaries` C1 multi-view custom-summary references/name guards;
+`bases_embeds` C2 mounted/nested/fenced rename binding; `bases_layouts` C3 group
+menu/header preview/focus and failed column-order save reconciliation. C3 also
+reveals missing production Group-menu live preview/cancellation and unchanged
+property-alias preservation; `bases_table` owns toolbar-groups.ts/toolbar.ts and
+focused tests. No actual acceptance is implied. Root retains main integration;
+main is unchanged `e7d655e1`. Other supplemental/visual/recovery/fullheavy gates
+remain open.
+
 Latest actual CLI006 is **fully passing**:125 commands,17 checks (7 original
 plus10 Q3),133 typed-value assertions,16 Q3 diagnostic entries plus10 exact
 legacy Delta warnings. Frozen checkout is

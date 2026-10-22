@@ -2,6 +2,20 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Normal supported-web002-retry passes all5 phases at current099d94ed/core958b19ac:
+normal browser storage, trusted edit, reload, search and reopen, with exact
+source/artifact proof and owned cleanup. Expanded browser006 instead fails its
+ninth group after8 passes;10 new groups are unexecuted. Investigators must
+capture actual malformed-metadata rollup/filter diagnostics before correcting
+its possibly stale error-code oracle. No full browser/Bases acceptance claimed.
+
+Additional C1–C3 scenarios are authored/reviewed separately. C3 exposes a real
+source gap: manual Group-menu row dragging lacks live insertion preview and
+Escape focus restoration, and reorder rewrites an unchanged property alias.
+`bases_table` owns the fix; strict durable configuration assertions stay intact.
+Native UI remains below its unchanged1GiB disk guard; user space request remains
+pending. Completed-cache retirement preserves all raw storage and evidence.
+
 Actual standalone CLI006 now **passes all125 commands/17 checks**, including
 all10 expanded groups,133 typed values and exact16 Q3+10 legacy diagnostics.
 Source/binary/stream/input/export/physical-source hashes reverify; all children
