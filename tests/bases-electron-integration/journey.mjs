@@ -41,7 +41,14 @@ async function openSummary(c){
   else{await c.ui.click(`${active} [role="columnheader"][title="note.rating"]`,{button:'right'});await c.ui.button('Summarize...','.context-menu');}
   await c.ui.wait(`return !!document.querySelector('.zorid-bases-summary-picker');`,'Summary picker opens through visible header or footer');
 }
-async function summary(c,name){await openSummary(c);await c.ui.click(`.zorid-bases-summary-picker [role="option"][data-summary-id=${JSON.stringify(name)}]`);await c.ui.idle();}
+async function summary(c,name){
+  await openSummary(c);await c.ui.click(`.zorid-bases-summary-picker [role="option"][data-summary-id=${JSON.stringify(name)}]`);
+  await c.saved('Library.base',source=>assert.equal(c.yaml.parse(source).views.find(v=>v.name==='Books table').summaries['note.rating'],name),'selected-summary-saved-'+name);
+  // Two distinct summaries can have the same numeric value. Observe this exact
+  // selection's published label, not the previous summary's coincidentally equal
+  // value or a momentary idle gap before its queued configuration write.
+  await c.ui.wait(`return document.querySelector('${active} .zorid-bases-table-footer [data-summary-property="note.rating"] .summary-function-name')?.textContent===${JSON.stringify(name)};`,'Acknowledged selected summary '+name);await c.ui.idle();
+}
 async function focusResize(c,selector){
   // The separator prevents pointerdown's default focus. Cancel its header menu,
   // which restores header focus, then Tab into the real keyboard separator.

@@ -89,6 +89,7 @@ they do not represent new production behavior. Native host SHA-256:
 | 002 / `8d32d229` | Replacement, view creation and duplication saved; 3 durable checks/31 actions. Duplicate continued into new view settings. | Harness raced that intentional continuation; now waits acknowledged dialog state and reuses the open target. |
 | 003 / `37c0c67a` | View lifecycle completed; 4 durable checks/47 actions. | Harness used legacy Add expression label; actual immediate route is Add filter → Edit expression. |
 | 004 / `d056b089` | View lifecycle and advanced filter's exact 28-row oracle reached; 4 durable checks/60 actions. Removing the filter restored73 rows but lost focus to BODY, so Escape could not close its menu. | **Production keyboard/focus defect**, reported to toolbar owner/root. Screenshot and actual activeElement evidence retained; not bypassed with outside click. |
+| 005 / `09cd214e` | Prior focus gate, formula lifecycle, search/limit, built-in Sum30/213 and custom RatingTotal213 reached; 7 durable checks/106 actions. Results was closed when export awaited. | Harness completion gap: identical values could let the previous Sum213 satisfy the RatingTotal213 check before the selection's configuration/query completed; screenshot state still recorded Sum. Require exact durable selection and visible selected-summary name before continuing. Toolbar owner separately audits the menu lifecycle; definitive reproduction and export acceptance remain unperformed. |
 
 Evidence directories are `/private/tmp/zorid-bases-heavy-first-20261022-001` through
 `004`, with sibling `.log` files. Each retains screenshots, disposable files,
@@ -96,6 +97,14 @@ action logs, exact durable assertions and process cleanup outcomes. Runs002–00
 also verify source/artifact hashes after failure. All owned Electron/native
 processes exited with no leaked children. Cleanup termination is not normal
 application quit/restart acceptance. No complete heavy-user pass is claimed.
+
+Run005 uses matching intermediate host SHA-256
+`811f40b614a9790fee9a4a5b39122fbf93d79ec2bf70c271a264b49b7118f161` and
+retains evidence in `/private/tmp/zorid-bases-heavy-20261022-005` with sibling log.
+Its source/artifact provenance passes after failure. Electron12948/native13037
+exit0 without leaked children through cleanup. Results actions now record actual
+pointer coordinates and before/after visible menu/summary/busy states to distinguish
+toggle behavior from subsequent refreshes; this is read-only diagnostic evidence.
 
 Before005, the journey was statically reconciled with the current integrated
 controls: hidden initial summary footers open through header Summarize; visible

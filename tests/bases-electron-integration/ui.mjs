@@ -26,9 +26,12 @@ export class UI {
     const selector = await this.wait(`const root=document.querySelector(${JSON.stringify(scope)});const all=root?[...root.querySelectorAll('button,[role="menuitem"]')]:[];const match=all.filter(e=>!e.disabled&&e.getClientRects().length&&(e.getAttribute('aria-label')===${JSON.stringify(label)}||e.textContent.trim()===${JSON.stringify(label)}));if(match.length!==1)return false;const e=match[0];return {index:[...document.querySelectorAll('button,[role="menuitem"]')].indexOf(e)};`, `Exactly one visible ${label} button in ${scope}`);
     // Index is from all nodes; address by exact DOM index to avoid text escaping.
     const point = await this.wait(`const e=document.querySelectorAll('button,[role="menuitem"]')[${selector.index}];if(!e||e.disabled)return false;e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;return e.contains(document.elementFromPoint(x,y))?{x,y}:false;`, 'Button hit target');
+    const resultsState=()=>this.dom(`const e=document.querySelector(${JSON.stringify(scope)})?.querySelector('button[aria-label="Results"]');return {expanded:e?.getAttribute('aria-expanded'),dialog:!!document.querySelector('[role="dialog"][aria-label="Results"]'),busy:document.querySelector('.pane.is-active .bases-session-content')?.getAttribute('aria-busy'),summary:document.querySelector('.pane.is-active .zorid-bases-table-footer [data-summary-property="note.rating"] .summary-function-name')?.textContent};`);
+    const before=label==='Results'?await resultsState():undefined;
     await this.cdp.call('Input.dispatchMouseEvent', {type:'mousePressed',button:'left',clickCount:1,...point});
     await this.cdp.call('Input.dispatchMouseEvent', {type:'mouseReleased',button:'left',clickCount:1,...point});
-    this.actions.push({action:'button',label,scope,at:Date.now()});
+    const after=label==='Results'?await resultsState():undefined;
+    this.actions.push({action:'button',label,scope,point,...(before?{before,after}:{}),at:Date.now()});
   }
   async key(key, {code, modifiers = 0, commands} = {}) {
     const codes = {Enter:['Enter',13],Escape:['Escape',27],Tab:['Tab',9],Backspace:['Backspace',8],Delete:['Delete',46],ArrowDown:['ArrowDown',40],ArrowUp:['ArrowUp',38],ArrowRight:['ArrowRight',39],ArrowLeft:['ArrowLeft',37],Home:['Home',36],End:['End',35]};
