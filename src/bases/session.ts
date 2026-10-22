@@ -25,6 +25,8 @@ import { createBasePropertyRenderer } from './property-widgets.ts';
 import type { BasePropertyWidgetEdit, BasePropertyWidgetAcknowledgement } from './property-widgets.ts';
 import { baseValuesEqual } from './expression.ts';
 import { icon } from '../ui/icons.ts';
+import { enhanceBaseSummaryEditor } from './toolbar-formula-editor.ts';
+import type { BaseFormulaEditor } from './toolbar-formula-editor.ts';
 import type { BaseRelationTarget } from './property-widgets.ts';
 import { BASE_PROPERTY_DEFINITIONS_PATH, BASE_PROPERTY_TYPES, basePropertyName, parseBasePropertyDefinitions, updateBasePropertyDefinition, parseBasePropertyInput, inferBasePropertyDefinition, basePropertyValueDiagnostic } from './property-definitions.ts';
 import type { BasePropertyDefinition, BasePropertyDefinitions, BasePropertyType } from './property-definitions.ts';
@@ -317,11 +319,13 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     panel.append(heading, fields, menu, error, retry, cancelChanges); doc.body.append(panel); summaryPanel = panel;
     let dirty = false, saving = false, destroyed = false, generation = 0, closeRequest: boolean | undefined, retryPersistence: (() => Promise<void>) | undefined;
     let retryAccepted: { name: string; expression: string; deleted?: boolean } | undefined, timer: ReturnType<typeof setTimeout> | undefined;
+    let formulaEditor: BaseFormulaEditor | undefined;
     const mark = () => { summaryDraft = dirty || saving || !!retryPersistence; panel.setAttribute('aria-busy', String(saving)); schedule(); };
     const updateDirty = () => { dirty = name.value.trim() !== acceptedName || expression.value !== acceptedExpression; mark(); };
     const place = () => { const bounds = anchor.getBoundingClientRect(); panel.style.left = `${Math.max(8, Math.min(bounds.left, (win?.innerWidth ?? 800) - 468))}px`; panel.style.top = `${Math.max(8, Math.min(bounds.bottom, (win?.innerHeight ?? 600) - panel.offsetHeight - 8))}px`; };
-    const cleanup = () => { if (destroyed) return; destroyed = true; if (timer) clearTimeout(timer); doc.removeEventListener('pointerdown', outside, true); win?.removeEventListener('resize', place); panel.remove(); if (summaryPanel === panel) { summaryPanel = undefined; summaryDraft = false; destroySummaryEditor = undefined; } };
+    const cleanup = () => { if (destroyed) return; destroyed = true; if (timer) clearTimeout(timer); doc.removeEventListener('pointerdown', outside, true); win?.removeEventListener('resize', place); formulaEditor?.destroy(); panel.remove(); if (summaryPanel === panel) { summaryPanel = undefined; summaryDraft = false; destroySummaryEditor = undefined; } };
     const close = (chooser: boolean) => {
+      if (destroyed) return;
       if (saving) { closeRequest = closeRequest === true || chooser; return; }
       if (dirty || retryPersistence) { closeRequest = closeRequest === true || chooser; void save(); return; }
       cleanup(); render(controller.state);
@@ -334,12 +338,12 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     };
     const accept = (next: { name: string; expression: string; deleted?: boolean }) => {
       acceptedName = next.name; acceptedExpression = next.expression; expectedSource = controller.state.source;
-      title.textContent = `Edit property ${acceptedName}`; retryPersistence = undefined; retryAccepted = undefined; retry.hidden = true; cancelChanges.hidden = true; fields.disabled = false; error.textContent = '';
+      title.textContent = `Edit property ${acceptedName}`; retryPersistence = undefined; retryAccepted = undefined; retry.hidden = true; cancelChanges.hidden = true; fields.disabled = false; expression.disabled = false; formulaEditor?.sync(); error.textContent = '';
       updateDirty(); if (next.deleted) { dirty = false; mark(); close(true); } else if (closeRequest !== undefined && !dirty) close(closeRequest);
     };
     const fail = (failure: unknown, next: { name: string; expression: string; deleted?: boolean }) => {
       error.textContent = failure instanceof Error ? failure.message : String(failure); dirty = true;
-      if (failure instanceof BaseToolbarSaveError) { retryPersistence = failure.retry; retryAccepted = next; retry.hidden = false; fields.disabled = true; } else cancelChanges.hidden = false;
+      if (failure instanceof BaseToolbarSaveError) { retryPersistence = failure.retry; retryAccepted = next; retry.hidden = false; fields.disabled = true; expression.disabled = true; formulaEditor?.sync(); } else cancelChanges.hidden = false;
       mark();
     };
     async function save(): Promise<void> {
@@ -360,17 +364,19 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     expression.addEventListener('keydown', event => { if (event.isComposing) return; if (event.key === 'Tab') { void save(); } });
     cancelChanges.addEventListener('click', () => { if (saving || retryPersistence) return; name.value = acceptedName; expression.value = acceptedExpression; dirty = false; mark(); close(true); });
     back.addEventListener('click', () => close(true));
-    panel.addEventListener('keydown', event => { if (event.key === 'Escape' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); close(true); } });
+    panel.addEventListener('keydown', event => { if (!event.defaultPrevented && event.key === 'Escape' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); close(true); } });
     more.addEventListener('click', () => { menu.hidden = !menu.hidden; more.setAttribute('aria-expanded', String(!menu.hidden)); });
     remove.addEventListener('click', () => { if (saving || retryPersistence) return; if (timer) clearTimeout(timer); menu.hidden = true;
-      const next = { name: acceptedName, expression: acceptedExpression, deleted: true }; saving = true; fields.disabled = true; mark();
-      void saveConfigurationCommand(() => { if (controller.state.source !== expectedSource) throw new Error('This Base changed while the summary was open.'); return controller.removeSummary(controller.state.version, acceptedName); }).then(() => { saving = false; accept(next); }, failure => { saving = false; fields.disabled = false; fail(failure, next); });
+      const next = { name: acceptedName, expression: acceptedExpression, deleted: true }; saving = true; fields.disabled = true; expression.disabled = true; formulaEditor?.sync(); mark();
+      void saveConfigurationCommand(() => { if (controller.state.source !== expectedSource) throw new Error('This Base changed while the summary was open.'); return controller.removeSummary(controller.state.version, acceptedName); }).then(() => { saving = false; accept(next); }, failure => { saving = false; fields.disabled = false; expression.disabled = false; formulaEditor?.sync(); fail(failure, next); });
     });
     retry.addEventListener('click', () => { if (!retryPersistence || !retryAccepted || saving) return; saving = true; mark(); const operation = retryPersistence, next = retryAccepted;
       void track(operation).then(() => { saving = false; accept(next); }, failure => { saving = false; fail(failure, next); });
     });
     const outside = (event: Event) => { if (!panel.contains(event.target as Node)) close(false); };
-    doc.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', place); destroySummaryEditor = cleanup; place(); name.focus(); name.select(); mark();
+    doc.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', place); destroySummaryEditor = cleanup;
+    try { formulaEditor = enhanceBaseSummaryEditor(expression, { onEscape: () => close(true) }); } catch (failure) { cleanup(); throw failure; }
+    place(); name.focus(); name.select(); mark();
   }
   async function createItem(group?: { property: string; value: BaseValue }, anchor?: HTMLElement): Promise<void> {
     action(); if (options.readOnly || !controller.state.result || sharedBasePreview(controller.state.result)) throw new Error('This base is read-only');

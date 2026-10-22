@@ -135,7 +135,10 @@ test('Add summary selects a unique empty draft, saves on name blur, and Escape r
     const name = f.dom.window.document.querySelector<HTMLInputElement>('[aria-label="Summary name"]')!;
     assert.equal(name.value, 'new summary 2'); name.value = 'Discarded'; name.dispatchEvent(new f.dom.window.Event('input', { bubbles: true })); f.key(name, 'Escape'); await tick();
     assert.equal(name.value, 'new summary 2'); assert.equal(f.dom.window.document.querySelector('[aria-label="Summary name"]'), name);
-    f.key(f.dom.window.document.querySelector('[aria-label="Summary expression"]')!, 'Escape');
+    const expression = f.dom.window.document.querySelector('[aria-label="Summary expression"]')!;
+    const consumedEscape = new f.dom.window.KeyboardEvent('keydown', {key:'Escape',bubbles:true,cancelable:true}); consumedEscape.preventDefault(); expression.dispatchEvent(consumedEscape);
+    assert.equal(f.dom.window.document.querySelector('[aria-label="Summary expression"]'),expression,'completion-consumed Escape keeps its editor');
+    f.key(expression, 'Escape');
     await until(() => !!f.dom.window.document.querySelector('[aria-label="Summarize"]'));
     assert.deepEqual(BaseDocument.parse(await f.vault.read('Work.base')).getRoot('summaries'), { 'new summary': 'values.length' }); assert.deepEqual(f.errors, []);
   } finally { await f.cleanup(); }
@@ -166,4 +169,20 @@ test('file title opening forwards its captured row identity and image acquisitio
     assert.equal(baseImageSourceValue({type:'list',value:[{type:'string',value:'Other.png'},image]},'Cover.png'),image);
     assert.deepEqual(baseImageSourceValue(image,'Different.png'),{type:'string',value:'Different.png'});
   } finally {await f.cleanup();}
+});
+
+
+test('failed live summary saves lock and retry the exact accepted configuration draft', async () => {
+  const f = await fixture();
+  try {
+    f.host.querySelector<HTMLButtonElement>('[data-summary-property="note.score"]')!.click(); await until(() => !!f.dom.window.document.querySelector('[aria-label="Edit Sum"]'));
+    f.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Edit Sum"]')!.click(); await until(() => !!f.dom.window.document.querySelector('[aria-label="Summary name"]'));
+    const before = await f.vault.read('Work.base'); f.adapter.fail = true;
+    const expression = f.dom.window.document.querySelector<HTMLTextAreaElement>('[aria-label="Summary expression"]')!; expression.focus(); expression.value = 'values.length'; expression.dispatchEvent(new f.dom.window.Event('input', { bubbles: true }));
+    await until(() => [...f.dom.window.document.querySelectorAll<HTMLButtonElement>('.bases-summary-editor button')].some(button => button.textContent === 'Retry save' && !button.hidden));
+    assert.equal(await f.vault.read('Work.base'), before); assert.equal(expression.closest('fieldset')!.disabled, true); assert.equal(expression.disabled, true); assert.equal(expression.value, 'values.length'); assert.equal(f.session.hasPendingChanges(), true);
+    f.adapter.fail = false; [...f.dom.window.document.querySelectorAll<HTMLButtonElement>('.bases-summary-editor button')].find(button => button.textContent === 'Retry save')!.click();
+    await until(async () => (BaseDocument.parse(await f.vault.read('Work.base')).getRoot('summaries') as Record<string,string>).Sum === 'values.length'); await until(() => !f.session.hasPendingChanges());
+    assert.equal(expression.closest('fieldset')!.disabled, false); assert.equal(expression.disabled, false); assert.equal(expression.value, 'values.length'); assert.equal(f.adapter.revisions.get('Work.base'), 3, 'one builtin seed and one accepted summary write');
+  } finally { await f.cleanup(); }
 });
