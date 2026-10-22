@@ -117,3 +117,20 @@ test('ordinary lists edit inline, and chip Enter/Escape preserve existing text w
 test('offset datetime editing preserves its original literal value on open and close', async () => {
   const s = setup('2026-01-01T12:30:00-05:00', {type:'datetime'}); s.click(); assert.equal(s.input().type, 'text'); assert.equal(s.input().value, '2026-01-01T12:30:00-05:00'); s.key('Enter'); await tick(); assert.equal(s.edits.length, 0); s.close();
 });
+
+
+test('blur retained during IME commits final input even when activeElement stays on input', async () => {
+  let release!: () => void; const writes: BasePropertyWidgetEdit[] = [];
+  const s = setup('before', {type:'text'}, {commit: async edit => { writes.push(edit); await new Promise<void>(resolve=>{release=resolve;}); }});
+  s.click(); const input = s.input(); input.dispatchEvent(new s.dom.window.CompositionEvent('compositionstart',{bubbles:true})); input.value='composing'; input.dispatchEvent(new s.dom.window.FocusEvent('blur'));
+  s.element.dispatchEvent(new s.dom.window.Event('scroll')); s.dom.window.dispatchEvent(new s.dom.window.Event('resize'));
+  input.dispatchEvent(new s.dom.window.CompositionEvent('compositionend',{bubbles:true})); input.value='確定した入力'; input.dispatchEvent(new s.dom.window.InputEvent('input',{bubbles:true,data:'確定した入力'}));
+  assert.equal(s.dom.window.document.activeElement,input); await tick(); assert.equal(writes.length,1); assert.deepEqual(writes[0].value,baseExpressionValue('確定した入力')); assert.equal(input.disabled,true); assert.equal(s.element.dataset.baseEditing,'pending');
+  release(); await tick(); assert.equal(s.element.dataset.baseEditing,undefined); assert.equal(s.element.textContent,'確定した入力'); s.close();
+});
+
+test('renewed focus or Escape cancels a deferred composing-blur finish without losing the draft', async () => {
+  const s=setup('before',{type:'text'}); s.click(); const input=s.input(); input.dispatchEvent(new s.dom.window.CompositionEvent('compositionstart')); input.value='draft'; input.dispatchEvent(new s.dom.window.FocusEvent('blur')); input.dispatchEvent(new s.dom.window.CompositionEvent('compositionend'));
+  input.dispatchEvent(new s.dom.window.FocusEvent('focus')); await tick(); assert.equal(s.edits.length,0); assert.equal(input.value,'draft'); assert.equal(s.element.dataset.baseEditing,'draft');
+  input.dispatchEvent(new s.dom.window.CompositionEvent('compositionstart')); input.dispatchEvent(new s.dom.window.FocusEvent('blur')); input.dispatchEvent(new s.dom.window.CompositionEvent('compositionend')); s.key('Escape'); await tick(); assert.equal(s.edits.length,0); assert.equal(s.element.textContent,'before'); s.close();
+});

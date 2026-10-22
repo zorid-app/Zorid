@@ -73,6 +73,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   const picker = multiple || ['select', 'status', 'relation', 'link'].includes(type);
   let acceptedPresentation = presentation;
   let value = presentation.value, disposed = false, pending = false, editing = false, composing = false;
+  let blurDuringComposition = false, compositionEpoch = 0;
   let finishAfterPending = false, editingIndex: number | undefined;
   let input: HTMLInputElement | undefined, popup: HTMLDivElement | undefined;
   let draftChanged = false;
@@ -197,6 +198,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   }
   function cancel() {
     if (pending) return;
+    blurDuringComposition = false; compositionEpoch++;
     editing = false; closePopup(); draw(); element.focus();
   }
   function renderChoices() {
@@ -294,10 +296,17 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (type === 'date' || type === 'datetime') input.max = type === 'date' ? '9999-12-31' : '9999-12-31T23:59:59';
     if (type === 'number') input.inputMode = 'decimal';
     input.value = multiple ? '' : inputText(value, definition);
-    input.addEventListener('compositionstart', () => { composing = true; });
-    input.addEventListener('compositionend', () => { composing = false; later(() => { if (picker) renderChoices(); if (!element.contains(document.activeElement) && !popup?.contains(document.activeElement)) void finish(); }); });
+    input.addEventListener('focus', () => { blurDuringComposition = false; compositionEpoch++; });
+    input.addEventListener('compositionstart', () => { composing = true; blurDuringComposition = false; compositionEpoch++; });
+    input.addEventListener('compositionend', () => {
+      composing = false;
+      const blurred = blurDuringComposition, epoch = compositionEpoch; blurDuringComposition = false;
+      // The final input event follows compositionend. A retained blur must still
+      // finish when a synthetic/native blur leaves activeElement on this input.
+      later(() => { if (epoch !== compositionEpoch) return; if (picker) renderChoices(); if (blurred || (!element.contains(document.activeElement) && !popup?.contains(document.activeElement))) void finish(); });
+    });
     input.addEventListener('input', () => { input?.removeAttribute('aria-invalid'); if (picker && !composing) { selected = 0; renderChoices(); } });
-    input.addEventListener('blur', () => later(() => { if (!element.contains(document.activeElement) && !popup?.contains(document.activeElement)) void finish(); }));
+    input.addEventListener('blur', () => { if (composing) { blurDuringComposition = true; return; } later(() => { if (!element.contains(document.activeElement) && !popup?.contains(document.activeElement)) void finish(); }); });
     input.addEventListener('keydown', event => {
       event.stopPropagation();
       if (composing || event.isComposing || pending) return;
