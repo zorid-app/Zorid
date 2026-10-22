@@ -108,6 +108,35 @@ Optional CUA native input checkpoint remains isolated with `bases_e2e`, review
 `bases_core_review`; it must preserve normal default campaign behavior and
 strict selected-value/save/file oracles. No owned app is currently running.
 
+Current source includes reviewed rich-cell focus fix `f6731180` and optional CUA
+checkpoint `81dfeb1e` (26 independent checks pass). Desktop build004 session92808
+is terminal0; receipt `/private/tmp/zorid-bases-date-c2-desktop-build-004-receipt.json`,
+SHA `d3fd606ed7c9af9354f5222722a5309341533d82611792add464a4f182608add`.
+Frontend producer f673; later81df changes harness only. Safety004 aborts before
+launch at unchanged1GiB guard,0actions/0checks.
+
+Owned-cache retirement93570 completes:1283 reproducible WASM compiler/test files,
+609860424 logical bytes; free526991360→1087651840 bytes. All8 preserved product
+hashes unchanged. Source and evidence untouched. Receipt
+`/private/tmp/zorid-bases-date-v8-cache-retirement-20261022-001-result.json`, SHA
+`ac0c9ec2413a1957b6e87012e02f86a82c4daeb1987c9dec3ebdc640fc3dded6`.
+No compiler was running; these caches require rebuilding if invoked again.
+
+Actual native-select-cua-current001 on81df/build004/host6e04 fails18actions /
+1visibilitycheck: exact owned Electron96184/window5258 verified; CUA original
+Home,8Down,Return reaches **blue**, not strict requiredpurple. Four passive
+frames and adjacent CUA receipt retained. No fallback/value assignment or Apply;
+durable checks remain unexecuted. Freeze verified, SIGKILL cleanup has no leaks.
+Next separate usability probe must inspect/select the actual visible Purple item.
+
+Disk falls again:335692KiB then121344KiB observed. Native guard unchanged; root
+requests2–3GB free through asynchronous user resource question. A heredoc-based
+checkpoint write fails before edits due temporary-file ENOSPC; this smaller patch
+records the state. All owned apps are closed. Continue source-only review where
+possible; do not mark full goal blocked from this first resource failure turn.
+Properties-only passive observer remains isolated with `bases_embeds`, review
+`bases_duration_review`; main/visual prep review owner `bases_core_review`.
+
 ### Superseded checkpoint snapshot — retained evidence
 
 ### Latest execution update
