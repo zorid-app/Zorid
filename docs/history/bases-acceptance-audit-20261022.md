@@ -216,3 +216,19 @@ real filter/search/export actions, light mode/scaling and accessibility. Rich
 property/relation additions need Zorid acceptance scenarios, not fabricated
 Obsidian reference captures. This is a functional completion queue; it does not
 activate deferred mobile, Tasks/Calendar, sync or performance campaigns.
+
+## 2026-10-22 R2/B4 inventory addendum
+
+A read-only source recheck at `099d94ed` confirms the
+[completed named-Type retirement inventory](bases-type-retirement-inventory-20261022.md).
+Generic Base creation, querying and property controls have no named note-Type
+admission requirement. They use ordinary files/properties and optional
+property-value definitions; `type: book` remains ordinary user data under the
+[current implementation goal](../plans/bases-implementation-goal.md).
+
+The earlier R2/B4 rows remain the findings of this frozen audit. Their requested
+old-consumer inventory is now recorded; this addendum does not rewrite those rows
+or claim runtime acceptance. Existing Type parsers, registries, presets and
+Task/Calendar consumers remain deferred dependencies. Preserve their user files
+and data; no removal, migration or resumed Task/Calendar implementation follows
+from completing this inventory. This recheck ran no builds, tests or apps.

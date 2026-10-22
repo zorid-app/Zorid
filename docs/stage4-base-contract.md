@@ -6,9 +6,12 @@ old source assignments. Use the [Bases implementation goal](plans/bases-implemen
 for current scope; named note Types are removed, rich property definitions remain,
 and New copies complete template notes. Preserve the evidence below as recorded.
 
-Current compiler semantic version: `zorid-base-yaml-expression-v4`, covering
-shared summaries, property definitions, rich values, immutable file lookup and
-captured random seeds. Earlier version decisions below retain their dated scope.
+Compiler semantic version in this historical contract snapshot:
+`zorid-base-yaml-expression-v4`, covering shared summaries, property definitions,
+rich values, immutable file lookup and captured random seeds. For the current
+version, read `BASE_COMPILER_VERSION` in
+[program.rs](../crates/zorid-bases/src/program.rs). Earlier version decisions
+below retain their dated scope.
 
 Prepared 2026-10-17 by `/root/stage4_base_reuse`, against Zorid
 `f69dc90de0de697dfb75a5a3d1805b69dba982b3`. Scope is this document and
