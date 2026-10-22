@@ -244,6 +244,50 @@ test('sidebar-only property drafts guard unload and sidebar file/visibility surv
   assert.equal((workspace as any).sidebarBase.path,'Work.base');assert.equal((workspace as any).sidebarBase.context,'One.md');
 });
 
+test('a clean sidebar Base follows a file rename and remains editable with the same main-note context',async t=>{
+  const{workspace,adapter}=await setup(t);await workspace.openNote('One.md');await (workspace as any).openBaseSidebar('Work.base');
+  const previous=(workspace as any).sidebarBase;await workspace.vault.rename('Work.base','Renamed.base');
+  await until(()=>(workspace as any).sidebarBase?.path==='Renamed.base','clean sidebar remounts renamed Base');
+  assert.notEqual((workspace as any).sidebarBase.session,previous.session);assert.equal((workspace as any).sidebarBase.context,'One.md');
+  const sidebar=document.querySelector<HTMLElement>('.sidebar-base-host')!,input=startEdit(sidebar,'Done');key(input,'Enter');await until(()=>!input.isConnected,'renamed sidebar property saves');
+  await workspace.flush();assert.match(await adapter.read('One.md'),/status: Done/);assert.equal(workspace.activePane.viewPath,'One.md');
+});
+
+test('a clean sidebar Base follows folder rename without changing the selected sidebar tab or hidden state',async t=>{
+  const{workspace}=await setup(t,new MemoryAdapter({'Bases/Work.base':base,'One.md':note}));await workspace.openNote('One.md');await (workspace as any).openBaseSidebar('Bases/Work.base');
+  (workspace as any).rightTab='outline';(workspace as any).renderRight();workspace.root.classList.add('right-hidden');
+  await workspace.vault.rename('Bases','Moved');await until(()=>(workspace as any).sidebarBase?.path==='Moved/Work.base','sidebar follows containing folder');
+  assert.equal((workspace as any).rightTab,'outline');assert.equal(workspace.root.classList.contains('right-hidden'),true);assert.equal((workspace as any).sidebarBase.context,'One.md');
+});
+
+test('a sidebar Base rename preserves its dirty property DOM until cancellation and explicit reopening',async t=>{
+  const{workspace,adapter}=await setup(t);await workspace.openNote('One.md');await (workspace as any).openBaseSidebar('Work.base');
+  const previous=(workspace as any).sidebarBase,sidebar=document.querySelector<HTMLElement>('.sidebar-base-host')!,input=startEdit(sidebar,'Unaccepted');
+  await workspace.vault.rename('Work.base','Renamed.base');await new Promise(resolve=>setTimeout(resolve,60));
+  assert.equal((workspace as any).sidebarBase,previous);assert.equal(input.isConnected,true);assert.equal(input.value,'Unaccepted');await assert.rejects(workspace.flush(),/Finish|cancel|edit/);assert.equal(await adapter.read('One.md'),note);
+  key(input,'Escape');workspace.root.querySelector<HTMLButtonElement>('[aria-label="Bases"]')!.click();
+  await until(()=>(workspace as any).sidebarBase?.path==='Renamed.base','cancelled retained sidebar can reopen renamed target');
+  const current=document.querySelector<HTMLElement>('.sidebar-base-host')!,accepted=startEdit(current,'Done');key(accepted,'Enter');await until(()=>!accepted.isConnected,'reopened sidebar edits');await workspace.flush();assert.match(await adapter.read('One.md'),/status: Done/);
+});
+
+test('a newer explicit sidebar target supersedes a queued background rename remount',async t=>{
+  const{workspace}=await setup(t,new MemoryAdapter({'Work.base':base,'Other.base':base,'One.md':note}));await workspace.openNote('One.md');await (workspace as any).openBaseSidebar('Work.base');
+  let opened:Promise<void>|undefined;const stop=workspace.vault.on('rename',()=>{opened=(workspace as any).openBaseSidebar('Other.base');});
+  try{await workspace.vault.rename('Work.base','Renamed.base');await opened;await new Promise(resolve=>setTimeout(resolve,60));assert.equal((workspace as any).sidebarBase.path,'Other.base');assert.equal((workspace as any).sidebarBasePath,'Other.base');}
+  finally{stop();}
+});
+
+test('a destination replacement during clean sidebar teardown is not adopted by the rename remount',async t=>{
+  const{workspace,adapter}=await setup(t);await workspace.openNote('One.md');await (workspace as any).openBaseSidebar('Work.base');
+  const previous=(workspace as any).sidebarBase,close=previous.session.close.bind(previous.session);let release!:()=>void,started!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;}),entered=new Promise<void>(resolve=>{started=resolve;});
+  previous.session.close=async()=>{started();await gate;await close();};
+  await workspace.vault.rename('Work.base','Renamed.base');await entered;
+  await workspace.vault.trash('Renamed.base');await workspace.vault.create('Renamed.base','views: [{type: list, name: Replacement}]\n');release();
+  await until(()=>!!document.querySelector('.notice')?.textContent?.includes('selected sidebar Base changed'),'replacement identity rejection is visible');
+  assert.equal((workspace as any).sidebarBase,previous);assert.equal(await adapter.read('One.md'),note);assert.match(await adapter.read('Renamed.base'),/Replacement/);
+});
+
 test('Create Base retries its retained uncertain operation without allocating a second filename',async t=>{
   const{workspace,adapter,dom}=await setup(t,new MemoryAdapter({}));const write=adapter.write.bind(adapter);let writes=0;
   adapter.write=async(path,source)=>{await write(path,source);if(path==='Untitled.base'&&++writes===1)throw new Error('Creation acknowledgement lost');};

@@ -817,6 +817,8 @@ export class Workspace {
       this.renderSidebar(); this.renderRight();
     }), this.vault.on('rename', change => {
       const oldPath = change.oldPath!;
+      const sidebar=this.sidebarBase,generation=this.vaultGeneration,sidebarIntent=this.sidebarBaseIntent;
+      const movedSidebar=sidebar&&(sidebar.path===oldPath||sidebar.path.startsWith(oldPath+'/'))?change.path+sidebar.path.slice(oldPath.length):undefined;
       const movedBuffers=new Set([...this.buffers].filter(([path,buffer])=>this.bufferEntries.has(buffer)&&this.bufferEntries.get(buffer)===this.entryTokens.get(path)).map(([,buffer])=>buffer));
       this.invalidateTreeTokens(oldPath); this.invalidateTreeTokens(change.path);
       const relocate=(path:string)=>path===oldPath||path.startsWith(oldPath+'/')?change.path+path.slice(oldPath.length):path;
@@ -834,6 +836,15 @@ export class Workspace {
       }
       for (const pane of this.panes) for (const tab of pane.tabs) if (tab.path === oldPath || tab.path?.startsWith(oldPath + '/')) {
         const previous = tab.path; tab.path = change.path + previous.slice(oldPath.length);
+      }
+      if(sidebar&&movedSidebar&&!sidebar.session.hasPendingChanges()){
+        const token=this.treeEntryToken(movedSidebar);
+        this.run(async()=>{
+          // A move is a new source binding. Never retarget retained drafts or a
+          // newer sidebar request, nor adopt a replacement at the destination.
+          if(generation!==this.vaultGeneration||sidebarIntent!==this.sidebarBaseIntent||this.sidebarBase!==sidebar||this.sidebarBasePath!==movedSidebar||!token||this.treeEntryToken(movedSidebar)!==token||sidebar.session.hasPendingChanges())return;
+          await this.openBaseSidebar(movedSidebar,{activate:false,reveal:false});
+        });
       }
       this.renderSidebar(); this.renderRight(); this.panes.forEach(pane => this.run(()=>this.renderPane(pane))); this.saveSession();
     }), this.vault.on('modify', change => {
@@ -942,7 +953,7 @@ export class Workspace {
     this.right = el('aside','right-sidebar'); this.right.setAttribute('aria-label','Right sidebar');
     const rightTabs = el('div','right-tabs');
     for (const [type,glyph,label] of [['backlinks','link','Backlinks'],['outline','list','Outline'],['tags','tag','Tags']] as const) rightTabs.append(button(glyph,label,()=>{this.run(async()=>{await this.sidebarBase?.session.flush();this.rightTab=type;this.renderRight();});}));
-    rightTabs.append(button('table','Bases',()=>this.run(async()=>{await this.sidebarBase?.session.flush();if(this.sidebarBase){this.rightTab='base';this.renderRight();this.saveSession();}else{const path=this.sidebarBasePath??this.current()?.path;if(path&&/\.base$/i.test(path))await this.openBaseSidebar(path);else notice('Open a Base first.');}})));
+    rightTabs.append(button('table','Bases',()=>this.run(async()=>{await this.sidebarBase?.session.flush();const path=this.sidebarBasePath??this.sidebarBase?.path??this.current()?.path;if(this.sidebarBase&&this.sidebarBase.path===path){this.rightTab='base';this.renderRight();this.saveSession();}else if(path&&/\.base$/i.test(path))await this.openBaseSidebar(path);else notice('Open a Base first.');})));
     rightTabs.append(button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle')); this.rightContent=el('div','right-content'); this.right.append(rightTabs,this.rightContent);
     this.status = el('footer','status-bar'); this.status.setAttribute('aria-live','polite');
     if(this.platform.editorOnly){
@@ -2069,16 +2080,23 @@ export class Workspace {
     }
   }
 
-  private async openBaseSidebar(path:string,options:{reveal?:boolean;persist?:boolean}={}):Promise<void>{
+  private async openBaseSidebar(path:string,options:{reveal?:boolean;persist?:boolean;activate?:boolean}={}):Promise<void>{
     const vault=this.vault,generation=this.vaultGeneration,intent=++this.sidebarBaseIntent;
-    await this.sidebarBase?.session.close();this.sidebarBase=undefined;
+    const token=this.treeEntryToken(path);
+    if(!token||vault.entries.get(path)?.type!=='file')throw new Error('The selected sidebar Base is unavailable.');
+    const previous=this.sidebarBase;
+    await previous?.session.close();
+    if(vault!==this.vault||generation!==this.vaultGeneration||intent!==this.sidebarBaseIntent||this.sidebarBase!==previous)return;
+    if(this.treeEntryToken(path)!==token)throw new Error('The selected sidebar Base changed while closing the previous view.');
+    this.sidebarBase=undefined;
     await this.prepareBase(path,generation);
     if(vault!==this.vault||generation!==this.vaultGeneration||intent!==this.sidebarBaseIntent)return;
-    const token=this.treeEntryToken(path),host=el('div','sidebar-base-host');
+    if(this.treeEntryToken(path)!==token)throw new Error('The selected sidebar Base changed before opening.');
+    const host=el('div','sidebar-base-host');
     const validate=()=>{if(vault!==this.vault||generation!==this.vaultGeneration||!token||this.treeEntryToken(path)!==token||intent!==this.sidebarBaseIntent)throw new Error('The sidebar Base changed.');};
     const context=this.current()?.path??path;
     const session=this.createWorkspaceBaseSession(host,path,()=>this.activePane,validate,context);
-    this.sidebarBase={path,session,host,context};this.sidebarBasePath=path;this.rightTab='base';if(options.reveal!==false)this.root.classList.remove('right-hidden');this.renderRight();await session.ready;if(options.persist!==false)this.saveSession();
+    this.sidebarBase={path,session,host,context};this.sidebarBasePath=path;if(options.activate!==false)this.rightTab='base';if(options.reveal!==false)this.root.classList.remove('right-hidden');this.renderRight();await session.ready;if(options.persist!==false)this.saveSession();
   }
 
   private async changePropertyDefinition(property:string,definition:BasePropertyDefinition,validate:()=>void):Promise<void>{
