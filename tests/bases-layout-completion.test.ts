@@ -281,3 +281,55 @@ test('vertical source-column scrolling pins the grabbed card while mounting late
   assert.equal(container.querySelector('[data-path="Card-0.md"]'), null, 'normal virtualization resumes after cancel');
   view.destroy(); dom.window.close();
 });
+
+test('host group write capability disables only unsafe column creation, source dragging and drop destinations', async () => {
+  const { dom, container, result } = fixture(); const created: unknown[] = [], moved: unknown[] = [];
+  const groups = result.groups.map((group, i) => ({ ...group, sharedKeyId: `group-${i}`, ...(i === 0 ? { editKey: 'Todo' } : {}) }));
+  const source: BaseQueryResult = { ...result, shared: {} as NonNullable<BaseQueryResult['shared']>, groups };
+  const view = createBaseKanbanView(container, { result: source, openFile() {}, isGroupWritable: group => Object.hasOwn(group, 'editKey'),
+    createItem: async request => { created.push(request); }, requestMove: async request => { moved.push(request); } });
+  const [safe, unsafe] = [...container.querySelectorAll<HTMLElement>('.bases-kanban-column')];
+  assert.equal(safe.querySelector<HTMLButtonElement>('.bases-kanban-column-create')!.disabled, false);
+  assert.equal(unsafe.querySelector<HTMLButtonElement>('.bases-kanban-column-create')!.disabled, true);
+  assert.equal(unsafe.querySelector<HTMLButtonElement>('.bases-kanban-column-footer button')!.disabled, true);
+  assert.equal(safe.querySelector<HTMLElement>('.bases-kanban-card')!.draggable, true);
+  assert.equal(unsafe.querySelector<HTMLElement>('.bases-kanban-card')!.draggable, false);
+  unsafe.querySelector<HTMLButtonElement>('.bases-kanban-column-create')!.click(); assert.equal(created.length, 0);
+  assert.equal(await view.move('A.md', groups[1].key!), false); assert.equal(moved.length, 0);
+  safe.querySelector('.bases-kanban-card')!.dispatchEvent(columnDragEvent(dom, 'dragstart'));
+  const over = columnDragEvent(dom, 'dragover'); unsafe.dispatchEvent(over); assert.equal(over.defaultPrevented, false);
+  assert.equal(unsafe.querySelector('.bases-kanban-card-drop-placeholder'), null);
+  unsafe.dispatchEvent(columnDragEvent(dom, 'drop')); await tick(); assert.equal(moved.length, 0);
+  view.destroy(); dom.window.close();
+});
+
+test('synthesized empty shared columns preserve additive capability metadata for the host predicate', async () => {
+  const { dom, container, result } = fixture(); const created: unknown[] = [];
+  const first = { ...result.groups[0], sharedKeyId: 'first', editKey: 'Todo' };
+  const empty = { key: value('Empty'), sharedKeyId: 'empty', listed: true, count: 0, editKey: ['[[Exact.md]]', 'raw'] };
+  const source: BaseQueryResult = { ...result, shared: {} as NonNullable<BaseQueryResult['shared']>, view: { ...result.view, groupOrder: ['Todo', 'Empty'] },
+    groups: [first], groupOptions: [{ key: first.key!, sharedKeyId: 'first', listed: true, count: 1, editKey: 'Todo' }, empty] };
+  const seen: unknown[] = [];
+  const view = createBaseKanbanView(container, { result: source, openFile() {}, isGroupWritable: group => { if (group.sharedKeyId === 'empty') seen.push((group as unknown as { editKey: unknown }).editKey); return Object.hasOwn(group, 'editKey'); }, createItem: async request => { created.push(request.groupKeyId); } });
+  const columns = [...container.querySelectorAll<HTMLElement>('.bases-kanban-column')]; columns[1].querySelector<HTMLButtonElement>('.bases-kanban-column-create')!.click(); await tick();
+  assert.deepEqual(created, ['empty']); assert.ok(seen.length); assert.ok(seen.every(raw => JSON.stringify(raw) === JSON.stringify(empty.editKey)));
+  view.destroy(); dom.window.close();
+});
+
+test('shared column reorder uses core orderKey independently of editKey and refuses unavailable order values', async () => {
+  const { dom, container, result } = fixture(); const orders: unknown[] = [];
+  const rich = (name: string) => ({ type: 'namespace' as const, name, get() { throw Error('A rich display value must not be converted for config'); } });
+  const groups = [{ key: rich('Author A'), sharedKeyId: 'author-a', orderKey: ['[[Author A.md]]', 'other'], editKey: 'wrong-for-order', rows: [result.rows[0]] },
+    { key: rich('Author B'), sharedKeyId: 'author-b', orderKey: '[[Author B.md]]', rows: [result.rows[1]] }];
+  const source: BaseQueryResult = { ...result, shared: {} as NonNullable<BaseQueryResult['shared']>, groups };
+  const view = createBaseKanbanView(container, { result: source, openFile() {}, isGroupWritable: () => false, requestGroupOrder: async request => { orders.push(request.order); } });
+  let headings = [...container.querySelectorAll<HTMLElement>('.bases-kanban-column-header')];
+  assert.equal(headings[0].draggable, true, 'configuration ordering is independent of note write capability');
+  headings[0].dispatchEvent(columnDragEvent(dom, 'dragstart')); headings[1].dispatchEvent(columnDragEvent(dom, 'drop')); await tick();
+  assert.deepEqual(orders, [['[[Author B.md]]', ['[[Author A.md]]', 'other']]]);
+  view.update({ ...source, version: 2, groups: [{ ...groups[0] }, { key: groups[1].key, sharedKeyId: 'author-b', rows: groups[1].rows }] });
+  headings = [...container.querySelectorAll<HTMLElement>('.bases-kanban-column-header')]; assert.ok(headings.every(heading => !heading.draggable));
+  const refused = columnDragEvent(dom, 'dragstart'); headings[0].dispatchEvent(refused); assert.equal(refused.defaultPrevented, true);
+  headings[1].dispatchEvent(columnDragEvent(dom, 'drop')); await tick(); assert.equal(orders.length, 1);
+  view.destroy(); dom.window.close();
+});

@@ -9,6 +9,7 @@ import { showContextMenu } from '../platform/context-menu.ts';
 import { baseValueToString } from './expression.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import { baseEditValue } from './view-actions.ts';
+import type { BaseValue } from './document.ts';
 import { normalizeBaseProperty } from './query.ts';
 import type { BaseQueryGroup, BaseQueryResult, BaseQueryRow } from './query.ts';
 
@@ -34,6 +35,8 @@ export interface BaseKanbanViewOptions extends Omit<BaseCardsViewOptions, 'onErr
   readonly requestMove?: (request: BaseKanbanMoveRequest) => Promise<void>;
   readonly onError?: (error: unknown, request: BaseKanbanMoveRequest) => void;
   readonly readOnly?: boolean;
+  /** Host owns whether this exact group can safely edit its source property. */
+  readonly isGroupWritable?: (group: BaseQueryGroup) => boolean;
   readonly createItem?: (request: BaseKanbanCreateRequest) => Promise<void>;
   readonly onPresentationError?: (error: unknown) => void;
   /** The shared toolbar supplies Group in full sessions; standalone renderer hosts may expose its fallback. */
@@ -125,9 +128,24 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     for (const stored of scrolls.keys()) if (typeof stored !== 'string' && equal(stored, key)) scrolls.delete(stored);
     if (top > 0) scrolls.set(key, top);
   };
+  const groupWritable = (group: BaseQueryGroup | undefined): boolean => {
+    if (!group || options.readOnly) return false;
+    try { return options.isGroupWritable?.(group) ?? true; }
+    catch (error) { reportPresentationError(presentation, error); return false; }
+  };
+  function columnOrderValues(snapshot: BaseQueryResult, item: BaseQueryGroup): readonly BaseValue[] | undefined {
+    const storedOrder = Array.isArray(snapshot.view.groupOrder) ? snapshot.view.groupOrder : undefined;
+    const listed = snapshot.groupOptions.filter(option => option.listed);
+    const ordinals = listed.flatMap((option, index) => (snapshot.shared !== undefined ? option.sharedKeyId === item.sharedKeyId
+      : item.key && matchesBaseGroupKey(option.key, item.key)) ? [index] : []);
+    if (storedOrder && ordinals.length && ordinals.every(index => index < storedOrder.length)) return ordinals.map(index => storedOrder[index]);
+    if (snapshot.shared !== undefined) return Object.hasOwn(item, 'orderKey') ? [(item as BaseQueryGroup & { orderKey: BaseValue }).orderKey] : undefined;
+    try { return [baseEditValue(item.key!)]; } catch { return undefined; }
+  }
+  const canOrderColumns = () => !options.readOnly && !!options.requestGroupOrder && groups.every(group => columnOrderValues(result, group) !== undefined);
   const canMove = (path: string) => {
     const property = propertyOf(result);
-    return !!options.requestMove && !options.readOnly && !!property && !property.startsWith('formula.') &&
+    return !!options.requestMove && groupWritable(locate(path)) && !!property && !property.startsWith('formula.') &&
       (!property.startsWith('file.') || property === 'file.folder') && (property === 'file.folder' || path.endsWith('.md'));
   };
   const locate = (path: string) => groups.find(group => group.rows.some(row => row.path === path));
@@ -154,7 +172,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
   async function move(path: string, destination: BaseExpressionValue): Promise<boolean> {
     if (destroyed || pending.has(path) || !canMove(path)) return false;
     const source = locate(path), target = groups.find(group => equal(group.key, destination));
-    if (!source?.key || !target?.key || equal(source.key, target.key)) return false;
+    if (!source?.key || !target?.key || !groupWritable(target) || equal(source.key, target.key)) return false;
     if (propertyOf(result) === 'file.folder' && target.key.type !== 'string') return false;
     if (result.shared !== undefined && (typeof source.sharedKeyId !== 'string' || typeof target.sharedKeyId !== 'string')) return false;
     const request: BaseKanbanMoveRequest = Object.freeze({ path, version: result.version, property: propertyOf(result)!, source: source.key, destination: target.key,
@@ -200,17 +218,12 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     previewColumnDrop(group, event); columnDrag = undefined;
     const reordered = source.preview;
     if (reordered.every((item, index) => item === groups[index])) { paintColumnPreview(); return; }
-    const snapshot = result, storedOrder = Array.isArray(snapshot.view.groupOrder) ? snapshot.view.groupOrder : undefined;
-    const listed = snapshot.groupOptions.filter(option => option.listed);
-    const savedGroup = (item: BaseQueryGroup) => {
-      const ordinals = listed.flatMap((option, index) => (snapshot.shared !== undefined ? option.sharedKeyId === item.sharedKeyId
-        : item.key && matchesBaseGroupKey(option.key, item.key)) ? [index] : []);
-      return storedOrder && ordinals.length ? ordinals.filter(index => index < storedOrder.length).map(index => storedOrder[index]) : [baseEditValue(item.key!)];
-    };
+    const snapshot = result, saved = reordered.map(item => columnOrderValues(snapshot, item));
+    if (saved.some(item => item === undefined)) { paintColumnPreview(); return; }
     const operation = { snapshot, groups: reordered }; pendingColumnOrder = operation; groupOrderPending = true;
     paintColumnPreview();
     void (async () => {
-      try { await options.requestGroupOrder!({ version: snapshot.version, property: propertyOf(snapshot)!, order: reordered.flatMap(savedGroup) }); }
+      try { await options.requestGroupOrder!({ version: snapshot.version, property: propertyOf(snapshot)!, order: saved.flatMap(item => item!) }); }
       catch (error) {
         if (!destroyed && pendingColumnOrder === operation && result === snapshot) {
           pendingColumnOrder = undefined; paintColumnPreview();
@@ -331,26 +344,26 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
       column.append(heading, body);
       if (!options.readOnly && options.createItem && group.key) {
         const create = async (button: HTMLButtonElement) => {
-          if (destroyed || !root.contains(button) || button.disabled) return;
+          if (destroyed || !root.contains(button) || button.disabled || !groupWritable(group)) return;
           button.disabled = true;
           try { await options.createItem!({ version: result.version, property: propertyOf(result)!, group: group.key!,
             ...(group.sharedKeyId ? { groupKeyId: group.sharedKeyId } : {}), anchor: button }); }
           catch (error) { if (!destroyed) { status.textContent = error instanceof Error ? error.message : String(error); reportPresentationError(presentation, error); } }
-          finally { button.disabled = false; }
+          finally { button.disabled = !groupWritable(group); }
         };
         const plus = doc.createElement('button'); plus.type = 'button'; plus.className = 'bases-kanban-column-create clickable-icon';
-        plus.setAttribute('aria-label', 'Create note'); plus.append(icon('plus', 16, doc));
+        plus.disabled = !groupWritable(group); plus.setAttribute('aria-label', 'Create note'); plus.append(icon('plus', 16, doc));
         plus.addEventListener('click', () => void create(plus)); heading.append(plus);
         const footer = doc.createElement('div'); footer.className = 'bases-kanban-column-footer';
         const add = doc.createElement('button'); add.type = 'button'; add.className = 'text-icon-button';
-        add.append(icon('plus', 16, doc), doc.createTextNode('New')); add.addEventListener('click', () => void create(add));
+        add.disabled = !groupWritable(group); add.append(icon('plus', 16, doc), doc.createTextNode('New')); add.addEventListener('click', () => void create(add));
         footer.append(add); column.append(footer);
       }
       if (!options.readOnly && options.requestGroupOrder && group.key) {
-        heading.draggable = !groupOrderPending;
+        heading.draggable = !groupOrderPending && canOrderColumns();
         let ownedColumnDrag: ColumnDrag | undefined;
         heading.addEventListener('dragstart', event => {
-          if (destroyed || groupOrderPending || pendingColumnOrder || hasActiveEdits() || !root.contains(heading) || (event.target as Element)?.closest('button') || !event.dataTransfer) { event.preventDefault(); return; }
+          if (destroyed || !canOrderColumns() || groupOrderPending || pendingColumnOrder || hasActiveEdits() || !root.contains(heading) || (event.target as Element)?.closest('button') || !event.dataTransfer) { event.preventDefault(); return; }
           columnDrag = ownedColumnDrag = { group, version: result.version, original: groups, preview: groups };
           paintColumnPreview();
           column.classList.add('is-being-dragged');
@@ -371,7 +384,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
       if (columns && group.key && (propertyOf(result)?.startsWith('note.') || propertyOf(result) === 'file.folder')) column.addEventListener('contextmenu', event => {
         if (destroyed || !root.contains(heading) || event.defaultPrevented || (event.target as Element)?.closest('.bases-kanban-card,button')) return;
         event.preventDefault(); const version = result.version;
-        const items = [...(options.createItem ? [{ id: 'new', label: 'Add item', icon: 'plus' }] : []), { id: 'hide', label: 'Hide column', icon: 'eye-off' }, { id: 'edit', label: 'Edit columns', icon: 'stretch-horizontal' }];
+        const items = [...(options.createItem ? [{ id: 'new', label: 'Add item', icon: 'plus', enabled: groupWritable(group) }] : []), { id: 'hide', label: 'Hide column', icon: 'eye-off' }, { id: 'edit', label: 'Edit columns', icon: 'stretch-horizontal' }];
         void showContextMenu(event, items, { document: doc, isCurrent: () => !destroyed && result.version === version && root.contains(heading) }).then(action => {
           if (destroyed || result.version !== version || !root.contains(heading)) return;
           if (action === 'new') { column.querySelector<HTMLButtonElement>('.bases-kanban-column-create')?.click(); return; }
@@ -382,7 +395,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
       body.addEventListener('scroll', () => { if (destroyed || !root.contains(body)) return; saveScroll(group.key, body.scrollTop); renderRows(body, group); });
       column.addEventListener('dragover', event => {
         if (!destroyed && !groupOrderPending && root.contains(column) && columnDrag && columnDrag.version === result.version && !hasActiveEdits()) { event.preventDefault(); previewColumnDrop(group, event); return; }
-        if (!destroyed && root.contains(column) && drag && drag.version === result.version && canMove(drag.path) && group.key) { event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'; previewCardDrop(column, group); }
+        if (!destroyed && root.contains(column) && drag && drag.version === result.version && canMove(drag.path) && group.key && groupWritable(group)) { event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'; previewCardDrop(column, group); }
       });
       column.addEventListener('dragleave', event => { if (!(event.relatedTarget instanceof doc.defaultView!.Node) || !column.contains(event.relatedTarget)) clearCardPreview(); });
       column.addEventListener('drop', event => {
@@ -461,12 +474,12 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
             const group = queryGroups[actual++];
             if (group?.sharedKeyId !== option.sharedKeyId) throw new Error('Shared group order does not match its saved configuration.');
             displayed.push(group);
-          } else displayed.push({ key: option.key, sharedKeyId: option.sharedKeyId, rows: [] });
+          } else displayed.push({ ...option, rows: [] });
         });
         if (actual !== queryGroups.length) throw new Error('Shared group order is incomplete.');
         groups = displayed;
       } else groups = result.groupOptions.filter(option => option.listed).map(option =>
-        queryGroups.find(group => group.key && matchesBaseGroupKey(option.key, group.key)) ?? { key: option.key, rows: [] });
+        queryGroups.find(group => group.key && matchesBaseGroupKey(option.key, group.key)) ?? { ...option, rows: [] });
     } else groups = result.shared !== undefined ? queryGroups : [...queryGroups.filter(group => group.key?.type === 'null'), ...queryGroups.filter(group => group.key?.type !== 'null')];
     properties = result.properties;
     width = typeof result.view.columnWidth === 'number' && Number.isFinite(result.view.columnWidth) ? Math.max(200, Math.min(500, result.view.columnWidth)) : 280;
