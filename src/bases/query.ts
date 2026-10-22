@@ -57,10 +57,14 @@ export interface BaseQueryGroup {
   readonly sharedKeyId?: string | null;
   /** JS null denotes an ungrouped result; typed null denotes the empty-key group. */
   readonly key: BaseExpressionValue | null;
+  readonly editKey?: BaseExpressionValue;
+  readonly orderKey?: BaseValue;
   readonly rows: readonly BaseQueryRow[];
   readonly summaries?: Readonly<Record<string, BaseExpressionValue>>;
 }
 export interface BaseQueryGroupOption {
+  readonly editKey?: BaseExpressionValue;
+  readonly orderKey?: BaseValue;
   readonly sharedKeyId?: string;
   readonly key: BaseExpressionValue;
   /** Matching rows before search, sorting and the limit. */
@@ -76,6 +80,8 @@ export interface BaseQueryResult {
   readonly version: BaseQuerySnapshot['version'];
   /** The selected complete view configuration, including unknown presentation options. */
   readonly view: BaseViewConfig;
+  readonly editKey?: BaseExpressionValue;
+  readonly orderKey?: BaseValue;
   readonly rows: readonly BaseQueryRow[];
   readonly groups: readonly BaseQueryGroup[];
   /** Explicit group-order entries (including empty ones), followed by unlisted keys. */

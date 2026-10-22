@@ -15,10 +15,11 @@ async function until(check: () => boolean | Promise<boolean>) { for (let i = 0; 
 class Adapter extends MemoryAdapter {
   documentSemantics?: DocumentService;
   revisions = new Map<string, number>();
+  fail = false;
   identify<T extends { path: string }>(row: T) { return { ...row, entryId: row.path, revision: `r${this.revisions.get(row.path) ?? 1}` }; }
   override async list() { return (await super.list()).map(row => this.identify(row)); }
   override async stat(path: string) { const row = await super.stat(path); return row && this.identify(row); }
-  override async write(path: string, text: string) { await super.write(path, text); this.revisions.set(path, (this.revisions.get(path) ?? 1) + 1); }
+  override async write(path: string, text: string) { if (this.fail && path === 'Work.base') throw new Error('Summary disk unavailable'); await super.write(path, text); this.revisions.set(path, (this.revisions.get(path) ?? 1) + 1); }
 }
 const snapshot = { localStoreId: 'store', generationEpoch: 'epoch', generation: '1', versions: { schema: 1, extraction: 'md1', resolver: 'r1', query: 'q1' } }, source = { localStoreId: 'store', watermark: '1' };
 const summaryBase = 'views:\n  - type: table\n    name: Table\n    order: [file.name, score, projects]\n    summaries: {score: Sum}\n  - type: cards\n    name: Cards\n    summaries: {score: Sum}\n';

@@ -65,12 +65,12 @@ export interface DocumentBaseRefreshHint {
 export interface DocumentBaseResult {
   readonly snapshotId:DocumentSnapshotId;readonly view:DocumentValue;
   readonly rows:readonly{readonly entryId:string;readonly revision:string;readonly path:string;readonly values:Readonly<Record<string,DocumentBaseValue>>;readonly editValues?:Readonly<Record<string,DocumentBaseValue>>}[];
-  readonly groups:readonly{readonly keyId:string|null;readonly key:DocumentBaseValue|null;readonly entryIds:readonly string[];readonly summaries?:Readonly<Record<string,DocumentBaseValue>>}[];
+  readonly groups:readonly{readonly keyId:string|null;readonly key:DocumentBaseValue|null;readonly entryIds:readonly string[];readonly editKey?:DocumentBaseValue;readonly orderKey?:DocumentBaseValue;readonly summaries?:Readonly<Record<string,DocumentBaseValue>>}[];
   readonly summaries?:Readonly<Record<string,DocumentBaseValue>>;
   readonly summaryPreviews?:Readonly<Record<string,DocumentBaseValue>>;
   readonly relationTargets?:Readonly<Record<string,readonly {readonly entryId:string;readonly revision:string;readonly path:string;readonly label:string}[]>>;
   readonly propertyDefinitionDiagnostics?:readonly {readonly property?:string|null;readonly code?:string;readonly message:string}[];
-  readonly groupOptions:readonly{readonly keyId:string;readonly key:DocumentBaseValue;readonly count:number;readonly listed:boolean}[];
+  readonly groupOptions:readonly{readonly keyId:string;readonly key:DocumentBaseValue;readonly editKey?:DocumentBaseValue;readonly orderKey?:DocumentBaseValue;readonly count:number;readonly listed:boolean}[];
   readonly properties:readonly string[];readonly availableProperties:readonly string[];
   readonly counts:{readonly scanned:number;readonly matched:number;readonly afterGroupOrder:number;readonly afterSearch:number;readonly returned:number};
   readonly diagnostics:readonly{readonly phase:string;readonly entryId:string;readonly path:string;readonly property:string|null;readonly code:string;readonly message:string}[];

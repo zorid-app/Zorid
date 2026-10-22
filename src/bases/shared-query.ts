@@ -9,7 +9,7 @@ import type { VaultEntry } from '../core/types.ts';
 import { BASE_NULL, BaseExpressionError } from './expression.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import type { BaseQueryOptions, BaseQueryResult, BaseQueryDiagnostic } from './query.ts';
-import type { BaseViewConfig } from './document.ts';
+import type { BaseViewConfig, BaseValue } from './document.ts';
 import { createBaseClockHost } from './clock.ts';
 import type { BaseClockCapture, BaseClockHost } from './clock.ts';
 
@@ -74,6 +74,19 @@ function projectBaseResult(raw: DocumentBaseResult|DocumentBasePreviewResult, ve
       }
     }
   };
+  // Decode only the core-authorized persisted configuration representation.
+  // Typed display values never become YAML via labels or client inference.
+  const persistedKey = (input: DocumentBaseValue, depth = 0): BaseValue => {
+    if (--remaining < 0 || depth > 128) return invalid('The Base group key is too large to display.');
+    switch(input.type) {
+      case 'null': return null;
+      case 'string': case 'boolean': return input.value;
+      case 'number': return Number.isFinite(input.value) ? input.value : invalid('The Base group order key is invalid.');
+      case 'list': return Object.freeze(input.value.map(item=>persistedKey(item,depth+1))) as unknown as BaseValue;
+      case 'object': return Object.freeze(Object.fromEntries(input.value.map(([key,item])=>[key,persistedKey(item,depth+1)])));
+      default: return invalid('The shared Base group order key is not a persisted value.');
+    }
+  };
   const rows = Object.freeze(result.rows.map(row => Object.freeze({ path: row.path, entryId: row.entryId, revision: row.revision,
     ...(row.editValues?{editValues:Object.freeze(Object.fromEntries(Object.entries(row.editValues).map(([key,item])=>[key,value(item)])))}:{}),
     values: Object.freeze(Object.fromEntries(Object.entries(row.values).map(([key, item]) => [key, value(item)]))) })));
@@ -83,6 +96,7 @@ function projectBaseResult(raw: DocumentBaseResult|DocumentBasePreviewResult, ve
     const keyId = (group as typeof group & { readonly keyId?: string | null }).keyId;
     if (group.key === null ? keyId !== null : typeof keyId !== 'string' || !keyId.length) return invalid('Shared Base group identity is missing.');
     return Object.freeze({ key: group.key === null ? null : value(group.key), sharedKeyId: keyId,
+      ...(group.editKey!==undefined?{editKey:value(group.editKey)}:{}),...(group.orderKey!==undefined?{orderKey:persistedKey(group.orderKey)}:{}),
       ...(group.summaries ? { summaries: Object.freeze(Object.fromEntries(Object.entries(group.summaries).map(([key, item]) => [key, value(item)]))) } : {}),
       rows: Object.freeze(group.entryIds.map(id => byId.get(id) ?? invalid())) });
   }));
@@ -104,7 +118,8 @@ function projectBaseResult(raw: DocumentBaseResult|DocumentBasePreviewResult, ve
     groupOptions: Object.freeze(result.groupOptions.map(option => {
       const keyId = (option as typeof option & { readonly keyId?: string }).keyId;
       if (typeof keyId !== 'string' || !keyId.length) return invalid('Shared Base group option identity is missing.');
-      return Object.freeze({ ...option, sharedKeyId: keyId, key: value(option.key) });
+      const {editKey,orderKey,...plain}=option;
+      return Object.freeze({ ...plain, sharedKeyId: keyId, key: value(option.key), ...(editKey!==undefined?{editKey:value(editKey)}:{}), ...(orderKey!==undefined?{orderKey:persistedKey(orderKey)}:{}) });
     })),
     properties: Object.freeze([...result.properties]), availableProperties: Object.freeze([...result.availableProperties]),
     counts: Object.freeze({ ...result.counts }), diagnostics: Object.freeze(diagnostics),

@@ -191,3 +191,20 @@ test('editable raw values preserve exact persisted aliases independently from ty
   assert.ok(Object.isFrozen(projected.editValues));
   assert.notDeepEqual(projected.editValues?.['note.author'],projected.values['note.author']);
 });
+
+test('core group assignment stays typed while order keys decode into plain persisted configuration', () => {
+  const source=raw();
+  const assignment:DocumentBaseValue={type:'list',value:[{type:'string',value:'[[/People/Ada.md|Ada]]'}]};
+  const first=source.groups[0] as {editKey?:DocumentBaseValue;orderKey?:DocumentBaseValue};first.editKey=assignment;first.orderKey=assignment;
+  const option=source.groupOptions[0] as {editKey?:DocumentBaseValue;orderKey?:DocumentBaseValue};option.editKey=assignment;option.orderKey=assignment;
+  (source.groups[1] as {orderKey?:DocumentBaseValue}).orderKey={type:'string',value:'2026-10-22T01:30:00.123-04:00'};
+  const output=project(source);
+  assert.deepEqual(output.groups[0].editKey,assignment);
+  assert.deepEqual(output.groups[0].orderKey,['[[/People/Ada.md|Ada]]']);
+  assert.deepEqual(output.groupOptions[0].orderKey,output.groups[0].orderKey);
+  assert.ok(Object.isFrozen(output.groups[0].orderKey));
+  assert.equal(output.groups[1].editKey,undefined,'readonly group gets no invented assignment');
+  assert.equal(output.groups[1].orderKey,'2026-10-22T01:30:00.123-04:00');
+  (source.groups[1] as {orderKey?:DocumentBaseValue}).orderKey={type:'date',timestamp:0,hasTime:true};
+  assert.throws(()=>project(source),/not a persisted value/);
+});
