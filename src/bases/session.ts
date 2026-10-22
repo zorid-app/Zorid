@@ -54,6 +54,7 @@ export interface BaseSessionOptions {
   readonly clock?: BaseClockHost;
   readonly visibility?: BaseSessionVisibility;
   readonly viewName?: string;
+  readonly openCreatedFile?: (path: string, event: MouseEvent | KeyboardEvent, anchor?: HTMLElement) => void | Promise<void>;
   readonly openFile: (path: string, event: MouseEvent | KeyboardEvent) => void;
   readonly validate: () => void;
   readonly loadThumbnail?: BaseCardsViewOptions['loadThumbnail'];
@@ -280,14 +281,16 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     fields.append(name, expression); footer.append(cancel, apply); form.append(fields, error, footer); panel.append(heading, form); doc.body.append(panel); summaryPanel = panel;
     const bounds = anchor.getBoundingClientRect(); panel.style.left = `${Math.max(8, Math.min(bounds.left, (win?.innerWidth ?? 800) - 468))}px`; panel.style.top = `${Math.max(8, Math.min(bounds.bottom, (win?.innerHeight ?? 600) - panel.offsetHeight - 8))}px`; name.focus();
   }
-  async function createItem(group?: { property: string; value: BaseValue }): Promise<void> {
+  async function createItem(group?: { property: string; value: BaseValue }, anchor?: HTMLElement): Promise<void> {
     action(); if (options.readOnly || !controller.state.result || sharedBasePreview(controller.state.result)) throw new Error('This base is read-only');
     // Retain an uncertain operation across retries rather than choosing a new filename.
     if (!creation || creation.status === 'committed') creation = await prepareBaseItemCreation({ vault: options.vault, document: controller.state.source, basePath: options.basePath, viewIndex: selectedIndex, group, validate: alive });
     const operation = creation, entry = await operation.run(); alive();
     if (operation.plan.warnings.length) status.textContent = operation.plan.warnings.join(' ');
     await controller.refresh();
-    const event = new (win?.MouseEvent ?? MouseEvent)('click'); options.openFile(entry.path, event);
+    const event = new (win?.MouseEvent ?? MouseEvent)('click');
+    if (options.openCreatedFile) await options.openCreatedFile(entry.path, event, anchor ?? toolbar.querySelector<HTMLElement>('[aria-label="New"]') ?? content);
+    else options.openFile(entry.path, event);
   }
   async function exportResults(format: BaseExportFormat, copy: boolean): Promise<void> {
     const result = controller.state.result; if (!result) throw new Error('Wait for results before exporting.');
@@ -455,7 +458,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         case 'kanban': mounted = createBaseKanbanView(content, { ...shared, loadThumbnail: options.loadThumbnail, onError: report, onPresentationError: report,
           readOnly: !writable, showColumnControls: false,
           ...(moveEnabled ? { requestMove: request => track(() => { assertPropertyWritable(request.property); return actions.requestMove(request); }) } : {}),
-          ...(writable ? { requestGroupOrder: request => track(() => actions.requestGroupOrder(request)), createItem: request => track(() => { if (request.version !== controller.state.version) throw new Error('The base result is stale'); return createItem({ property: request.property, value: baseEditValue(request.group) }); }) } : {}),
+          ...(writable ? { requestGroupOrder: request => track(() => actions.requestGroupOrder(request)), createItem: request => track(() => { if (request.version !== controller.state.version) throw new Error('The base result is stale'); return createItem({ property: request.property, value: baseEditValue(request.group) }, (request as typeof request & { anchor?: HTMLElement }).anchor ?? content); }) } : {}),
         }); break;
         default: content.textContent = `Unsupported base view: ${result.view.type}`;
       }
