@@ -9,6 +9,31 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest actual CLI006 is **fully passing**:125 commands,17 checks (7 original
+plus10 Q3),133 typed-value assertions,16 Q3 diagnostic entries plus10 exact
+legacy Delta warnings. Frozen checkout is
+`5796d3a5b9f75e5ac112a818d30fd34ed683cb5f`; build source `f95ab6be`, Rust tree
+`958b19aca4666414e956fbb2f406558af5a18366`, preserved CLI SHA39ac0029 as below.
+All250 output/error stream hashes,29 stdin hashes,54 exports and14 physical Q3
+sources reverify after terminal0. All125 children close with no signal
+(121 exit0;2 expected exit3;2 expected exit4); no host, Electron or IPC starts.
+Report: `/private/tmp/zorid-bases-cli-actual-20261022-006/zorid-bases-cli-m3XxfB/report.json`,
+SHA `5b78c104af8bd0c36bad1558ff6acb81e5c15756b8b58542dbe9a02c48149d7b`.
+Its post-run-integrity receipt is adjacent. Failed004/005 stay unaltered.
+This accepts the expanded standalone CLI campaign, not Browser/WASM/UI/mobile
+or complete expression/platform equivalence. `bases_embeds` owns a reviewed
+evidence-only history record.
+
+Root owns sole heavy **WASM build99325**, pinned offline tools/release/j1,
+log `/private/tmp/zorid-bases-final-wasm-build-001.log`. It regenerates the actual
+module and source fingerprint; no old generated module is accepted for this
+closure. No app/browser/CLI/Cargo may overlap. UI probe002 remains frozen and
+unlaunched because the unchanged1GiB native runner guard is not met. A request
+to free2–3GB has been sent asynchronously to the user; no reply or disk recovery
+is assumed. Source/normal-tool verification continues where safe.
+
+Earlier artifact/runtime evidence follows:
+
 Latest runtime/artifact update: full current Rust closure remains359/20 passing,
 crates `958b19aca4666414e956fbb2f406558af5a18366`. Matching native/CLI build72852
 exits0 in4m22s. Preserved artifacts and build/source/linkage receipts are under

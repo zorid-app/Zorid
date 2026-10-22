@@ -2,6 +2,15 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Actual standalone CLI006 now **passes all125 commands/17 checks**, including
+all10 expanded groups,133 typed values and exact16 Q3+10 legacy diagnostics.
+Source/binary/stream/input/export/physical-source hashes reverify; all children
+close. The359-test core and matching native/CLI build stay verified. This does
+not accept browser/WASM, complete desktop, visual, recovery or mobile behavior.
+Matching WASM is building with one offline compiler job. Native probe002 remains
+unlaunched below the unchanged1GiB guard; the user has been asked for additional
+space while safe independent work continues.
+
 Matching native/CLI artifacts now build successfully for the359-test core;
 preserved hashes/source receipts are retained. Actual CLI004's known legacy
 Delta diagnostic expectation is corrected with exact multiset checks. Fresh005
