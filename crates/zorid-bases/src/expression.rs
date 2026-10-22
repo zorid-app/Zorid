@@ -30,6 +30,11 @@ mod regex_admission;
 #[cfg(test)]
 #[path = "expression_regex_admission_tests.rs"]
 mod regex_admission_tests;
+#[path = "expression_stringification.rs"]
+mod reference_stringification;
+#[cfg(test)]
+#[path = "object_stringification_tests.rs"]
+mod object_stringification_tests;
 #[path = "expression_duration.rs"]
 mod duration_semantics;
 #[path = "expression_duration_dependency.rs"]
@@ -1032,14 +1037,22 @@ pub(crate) fn group_values_match(
         }
         _ => unreachable!("comparison errors are diagnostics"),
     })?;
-    Ok(equal || manual && matches!(key,RuntimeValue::String(key) if key==&stringify(value)))
+    if equal || !manual { return Ok(equal); }
+    if let RuntimeValue::String(key) = key {
+        let text = stringify_checked(value, &mut |work| check(work).map_err(|error|
+            RuntimeValue::Error(format!("{}\0{}", error.code, error.message))))
+            .map_err(runtime_diagnostic)?;
+        return Ok(key == &text);
+    }
+    Ok(false)
 }
 pub(crate) fn group_value_string(
     value: &RuntimeValue,
     check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
 ) -> Result<String, ExpressionDiagnostic> {
-    group_comparison_work(value, check)?;
-    Ok(stringify(value))
+    stringify_checked(value, &mut |work| check(work).map_err(|error|
+        RuntimeValue::Error(format!("{}\0{}", error.code, error.message))))
+        .map_err(runtime_diagnostic)
 }
 
 fn summary_runtime_value(
@@ -2080,7 +2093,7 @@ fn string_data(value: &RuntimeValue) -> Option<&str> {
         | RuntimeValue::Html(value)
         | RuntimeValue::Image(value)
         | RuntimeValue::Icon(value) => Some(value),
-        RuntimeValue::Link(link) => Some(&link.path),
+        RuntimeValue::Link(link) => Some(if link.external { &link.path } else { link.raw_destination.as_deref().unwrap_or(&link.path) }),
         _ => None,
     }
 }
@@ -2160,7 +2173,8 @@ impl<'a> Evaluator<'a> {
         };
         self.remaining_work = remaining;
         match expression {
-            Expr::Literal(value) => from_json(value, None),
+            Expr::Literal(value) => from_json_checked(value, 0, &mut 0usize, &mut |work| self.charge(work))
+                .unwrap_or_else(|error| error),
             Expr::Regex(pattern, flags, identity) => {
                 if let Err(error) = self.charge(pattern.len() / 16 + flags.len() + 1) {
                     return error;
@@ -2366,7 +2380,7 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    fn add(&self, left: RuntimeValue, right: RuntimeValue) -> RuntimeValue {
+    fn add(&mut self, left: RuntimeValue, right: RuntimeValue) -> RuntimeValue {
         if let (
             RuntimeValue::List(a) | RuntimeValue::TagList(a),
             RuntimeValue::List(b) | RuntimeValue::TagList(b),
@@ -2382,19 +2396,8 @@ impl<'a> Evaluator<'a> {
             }
         }
         if string_data(&left).is_some() || string_data(&right).is_some() {
-            return RuntimeValue::String(format!(
-                "{}{}",
-                if matches!(left, RuntimeValue::Null) {
-                    String::new()
-                } else {
-                    plain_string(&left)
-                },
-                if matches!(right, RuntimeValue::Null) {
-                    String::new()
-                } else {
-                    plain_string(&right)
-                }
-            ));
+            return reference_stringification::concatenate(&left, &right, &mut |work| self.charge(work))
+                .map(RuntimeValue::String).unwrap_or_else(|error| error);
         }
         if let (RuntimeValue::Duration(left), RuntimeValue::Duration(right)) = (&left, &right) {
             return RuntimeValue::Duration(add_durations(left, right));
@@ -2479,7 +2482,10 @@ impl<'a> Evaluator<'a> {
                         _ => RuntimeValue::Error("access\0String index must be a number".into()),
                     };
                 }
-                plain_string(&value)
+                match stringify_checked(&value, &mut |work| self.charge(work)) {
+                    Ok(value) => value,
+                    Err(error) => return error,
+                }
             }
         };
         self.property(object, &property)
@@ -2690,7 +2696,9 @@ impl<'a> Evaluator<'a> {
                     subpath: None,
                     path: file.path.clone(),
                     target: file.witness.clone(),
-                    display: arguments.get(1).map(plain_string),
+                    display: match arguments.get(1).map(|value| stringify_checked(value, &mut |work| self.charge(work))).transpose() {
+                        Ok(display) => display, Err(error) => return error,
+                    },
                     display_value: arguments.get(1).cloned().map(Box::new),
                     resolved_path: Some(Some(file.path.clone())),
                     external: false,
@@ -3105,7 +3113,8 @@ impl<'a> Evaluator<'a> {
         match name {
             "isTruthy" => return RuntimeValue::Bool(is_truthy(&receiver)),
             "isEmpty" => return RuntimeValue::Bool(is_empty(&receiver)),
-            "toString" => return RuntimeValue::String(stringify(&receiver)),
+            "toString" => return stringify_checked(&receiver, &mut |work| self.charge(work))
+                .map(RuntimeValue::String).unwrap_or_else(|error| error),
             "isType" => {
                 return RuntimeValue::Bool(call_signatures::is_type(
                     &receiver,
@@ -3393,24 +3402,9 @@ impl<'a> Evaluator<'a> {
                 .map(RuntimeValue::List)
                 .unwrap_or_else(|error| error),
             "join" => {
-                let separator = eager.first().map(plain_string).unwrap_or_default();
-                let content = values.iter().try_fold(0usize, |total, value| {
-                    value_bytes(value).map(|bytes| total.saturating_add(bytes))
-                });
-                if content
-                    .unwrap_or(usize::MAX)
-                    .saturating_add(separator.len().saturating_mul(values.len()))
-                    > 8 * 1024 * 1024
-                {
-                    return RuntimeValue::Error("budget\0Joined text exceeds byte budget".into());
-                }
-                RuntimeValue::String(
-                    values
-                        .iter()
-                        .map(stringify)
-                        .collect::<Vec<_>>()
-                        .join(&separator),
-                )
+                let separator = eager.first().and_then(string_data).unwrap_or_default();
+                reference_stringification::join(values, separator, &mut |work| self.charge(work))
+                    .map(RuntimeValue::String).unwrap_or_else(|error| error)
             }
             "map" => {
                 let mut result = Vec::new();
@@ -3471,11 +3465,8 @@ impl<'a> Evaluator<'a> {
                     .map(|value| value as isize);
                 RuntimeValue::List(slice_values(values, start, end))
             }
-            "sort" => {
-                let mut output = values.to_vec();
-                output.sort_by(compare_sort_keys);
-                RuntimeValue::List(output)
-            }
+            "sort" => checked_sort_values(values, &mut |work| self.charge(work))
+                .map(RuntimeValue::List).unwrap_or_else(|error| error),
             "unique" => unique_values(values, &mut |work| self.charge(work))
                 .map(RuntimeValue::List)
                 .unwrap_or_else(|error| error),
@@ -3616,7 +3607,9 @@ impl<'a> Evaluator<'a> {
                 source_path: Some(String::new()),
                 subpath: None,
                 path: file.path.clone(),
-                display: arguments.first().map(plain_string),
+                display: match arguments.first().map(|value| stringify_checked(value, &mut |work| self.charge(work))).transpose() {
+                    Ok(display) => display, Err(error) => return error,
+                },
                 display_value: arguments.first().cloned().map(Box::new),
                 resolved_path: Some(Some(file.path.clone())),
                 external: false,
@@ -4089,7 +4082,7 @@ impl<'a> Evaluator<'a> {
     }
 
     fn compare(
-        &self,
+        &mut self,
         left: &RuntimeValue,
         right: &RuntimeValue,
         operator: &str,
@@ -4098,21 +4091,13 @@ impl<'a> Evaluator<'a> {
         // and loose equality. Only the right String is duration-coerced here,
         // matching the reference's asymmetric relational dispatch.
         if matches!(left, RuntimeValue::Duration(_)) || matches!(right, RuntimeValue::Duration(_)) {
-            let numeric = |value: &RuntimeValue| -> Result<f64, String> {
-                match value {
-                    RuntimeValue::Duration(value) => duration_semantics::elapsed(value, &self.now),
-                    RuntimeValue::Date(value) => Ok(value.millis as f64),
-                    RuntimeValue::Number(value) => Ok(*value),
-                    value => Ok(loose_numeric_text(&plain_string(value)).unwrap_or(f64::NAN)),
-                }
-            };
-            let a = numeric(left)?;
+            let a = self.duration_relational_number(left)?;
             let b = if matches!(left, RuntimeValue::Duration(_)) {
                 match string_data(right).and_then(parse_duration) {
                     Some(value) => duration_semantics::elapsed(&value, &self.now)?,
-                    None => numeric(right)?,
+                    None => self.duration_relational_number(right)?,
                 }
-            } else {numeric(right)?};
+            } else { self.duration_relational_number(right)? };
             return Ok(match operator {">" => a > b, "<" => a < b, ">=" => a >= b, _ => a <= b});
         }
         let ordering = if let (
@@ -4132,6 +4117,21 @@ impl<'a> Evaluator<'a> {
             ">=" => !ordering.is_lt(),
             _ => !ordering.is_gt(),
         })
+    }
+
+    fn duration_relational_number(&mut self, value: &RuntimeValue) -> Result<f64, String> {
+        match value {
+            RuntimeValue::Duration(value) => duration_semantics::elapsed(value, &self.now),
+            RuntimeValue::Date(value) => Ok(value.millis as f64),
+            RuntimeValue::Number(value) => Ok(*value),
+            value => {
+                let text = stringify_checked(value, &mut |work| self.charge(work)).map_err(|error| match error {
+                    RuntimeValue::Error(message) => message,
+                    _ => unreachable!("stringification errors are diagnostics"),
+                })?;
+                Ok(loose_numeric_text(&text).unwrap_or(f64::NAN))
+            }
+        }
     }
 
     fn make_link(&mut self, target: &str, display: Option<RuntimeValue>) -> RuntimeValue {
@@ -4164,7 +4164,9 @@ impl<'a> Evaluator<'a> {
             },
             external,
             path,
-            display: display.as_ref().map(plain_string).or(parsed_display),
+            display: match display.as_ref().map(|value| stringify_checked(value, &mut |work| self.charge(work))).transpose() {
+                Ok(display) => display.or(parsed_display), Err(error) => return error,
+            },
             display_value: display.map(Box::new),
         })
     }
@@ -4322,67 +4324,116 @@ fn numeric_pair(
     }
 }
 
-fn from_json(value: &Value, _hint: Option<&str>) -> RuntimeValue {
-    if let Some(link) = runtime_link_from_json(value) {
-        return RuntimeValue::Link(link);
+fn admit_legacy_json(
+    bytes: &mut usize,
+    added: usize,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<(), RuntimeValue> {
+    check(1 + added / 16)?;
+    *bytes = bytes.checked_add(added).filter(|bytes| *bytes <= crate::MAX_BASE_REQUEST_BYTES)
+        .ok_or_else(|| RuntimeValue::Error("budget\0Legacy value conversion exceeds byte budget".into()))?;
+    Ok(())
+}
+
+fn from_json_checked(
+    value: &Value,
+    depth: usize,
+    bytes: &mut usize,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<RuntimeValue, RuntimeValue> {
+    check(1)?;
+    if depth > 128 {
+        return Err(RuntimeValue::Error("budget\0Legacy value conversion nesting exceeds 128".into()));
     }
-    match value {
+    if let Some(link) = runtime_link_from_json_checked(value, depth, bytes, check)? {
+        return Ok(RuntimeValue::Link(link));
+    }
+    Ok(match value {
         Value::Null => RuntimeValue::Null,
         Value::Bool(value) => RuntimeValue::Bool(*value),
         Value::Number(value) => RuntimeValue::Number(value.as_f64().unwrap_or(f64::NAN)),
-        Value::String(value) => RuntimeValue::String(value.clone()),
-        Value::Array(values) => {
-            RuntimeValue::List(values.iter().map(|value| from_json(value, None)).collect())
+        Value::String(value) => {
+            admit_legacy_json(bytes, value.len(), check)?;
+            RuntimeValue::String(reference_stringification::copy_text(value, check)?)
         }
-        Value::Object(values) => RuntimeValue::Object(
-            values
-                .iter()
-                .map(|(key, value)| (key.clone(), from_json(value, None)))
-                .collect(),
-        ),
-    }
-}
-
-fn runtime_link_from_json(value: &Value) -> Option<BasesLink> {
-    let object = value.as_object()?;
-    if object.get("type").and_then(Value::as_str) != Some("Link") {
-        return None;
-    }
-    let link = object.get("value")?.as_object()?;
-    let path = link.get("path")?.as_str()?;
-    // A legacy structured Link path has no raw-destination provenance. Never
-    // guess its fragment: literal # filenames are valid identity paths.
-    let subpath = match link.get("subpath") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(value)) if value.starts_with('#') => Some(value.clone()),
-        _ => return None,
-    };
-    Some(BasesLink {
-        raw_destination: None,
-        source_path: None,
-        subpath,
-        target: None,
-        path: path.to_string(),
-        display: link.get("display").map(runtime_display_string),
-        display_value: None,
-        resolved_path: link
-            .get("resolvedPath")
-            .map(|value| value.as_str().map(String::from)),
-        external: link
-            .get("external")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        Value::Array(values) => {
+            admit_legacy_json(bytes, values.len().saturating_mul(std::mem::size_of::<RuntimeValue>()), check)?;
+            let mut output = Vec::new();
+            output.try_reserve_exact(values.len()).map_err(|_| RuntimeValue::Error("budget\0Legacy list allocation failed".into()))?;
+            for value in values { output.push(from_json_checked(value, depth + 1, bytes, check)?); }
+            RuntimeValue::List(output)
+        }
+        Value::Object(values) => {
+            admit_legacy_json(bytes, values.len().saturating_mul(std::mem::size_of::<(String, RuntimeValue)>()).saturating_mul(2), check)?;
+            let mut output = IndexMap::new();
+            output.try_reserve(values.len()).map_err(|_| RuntimeValue::Error("budget\0Legacy object allocation failed".into()))?;
+            for (key, value) in values {
+                admit_legacy_json(bytes, key.len(), check)?;
+                output.insert(reference_stringification::copy_text(key, check)?, from_json_checked(value, depth + 1, bytes, check)?);
+            }
+            RuntimeValue::Object(output)
+        }
     })
 }
 
-fn runtime_display_string(value: &Value) -> String {
-    value
-        .as_object()
+fn runtime_link_from_json_checked(
+    value: &Value,
+    depth: usize,
+    bytes: &mut usize,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<Option<BasesLink>, RuntimeValue> {
+    // Preserve recognition of the legacy structured Link, without inventing
+    // destination provenance, a fragment or immutable resolution authority.
+    let parsed = (|| {
+        let object = value.as_object()?;
+        if object.get("type").and_then(Value::as_str) != Some("Link") { return None; }
+        let link = object.get("value")?.as_object()?;
+        let path = link.get("path")?.as_str()?;
+        let subpath = match link.get("subpath") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(value)) if value.starts_with('#') => Some(value.as_str()),
+            _ => return None,
+        };
+        Some((link, path, subpath))
+    })();
+    let Some((link, path, subpath)) = parsed else { return Ok(None); };
+    let resolved = link.get("resolvedPath").map(|value| value.as_str());
+    admit_legacy_json(bytes, std::mem::size_of::<BasesLink>().saturating_add(path.len())
+        .saturating_add(subpath.map_or(0, str::len))
+        .saturating_add(resolved.flatten().map_or(0, str::len)), check)?;
+    Ok(Some(BasesLink {
+        raw_destination: None,
+        source_path: None,
+        subpath: subpath.map(|value| reference_stringification::copy_text(value, check)).transpose()?,
+        target: None,
+        path: reference_stringification::copy_text(path, check)?,
+        display: link.get("display").map(|value| runtime_display_string_checked(value, depth + 1, bytes, check)).transpose()?,
+        display_value: None,
+        resolved_path: resolved.map(|value| value.map(|value| reference_stringification::copy_text(value, check)).transpose()).transpose()?,
+        external: link.get("external").and_then(Value::as_bool).unwrap_or(false),
+    }))
+}
+
+#[cfg(test)]
+fn runtime_link_from_json(value: &Value) -> Option<BasesLink> {
+    runtime_link_from_json_checked(value, 0, &mut 0usize, &mut |_| Ok(()))
+        .expect("bounded legacy Link fixture")
+}
+
+fn runtime_display_string_checked(
+    value: &Value,
+    depth: usize,
+    bytes: &mut usize,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<String, RuntimeValue> {
+    if let Some(value) = value.as_object()
         .filter(|value| value.get("type").and_then(Value::as_str) == Some("String"))
-        .and_then(|value| value.get("value"))
-        .and_then(Value::as_str)
-        .map(String::from)
-        .unwrap_or_else(|| plain_string(&from_json(value, None)))
+        .and_then(|value| value.get("value")).and_then(Value::as_str) {
+        admit_legacy_json(bytes, value.len(), check)?;
+        return reference_stringification::copy_text(value, check);
+    }
+    let value = from_json_checked(value, depth, bytes, check)?;
+    stringify_checked(&value, check)
 }
 
 fn to_plain(value: &RuntimeValue) -> Value {
@@ -4476,8 +4527,9 @@ fn plain_string(value: &RuntimeValue) -> String {
     }
 }
 
+#[cfg(test)]
 fn stringify(value: &RuntimeValue) -> String {
-    plain_string(value)
+    stringify_checked(value, &mut |_| Ok(())).expect("bounded test value")
 }
 
 fn is_truthy(value: &RuntimeValue) -> bool {
@@ -5737,14 +5789,59 @@ fn string_split(
         .map(RuntimeValue::List)
         .unwrap_or_else(|error| error)
 }
-fn compare_sort_keys(left: &RuntimeValue, right: &RuntimeValue) -> std::cmp::Ordering {
-    match (left, right) {
-        (RuntimeValue::Number(left), RuntimeValue::Number(right)) => {
-            left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+fn checked_sort_values(
+    values: &[RuntimeValue],
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<Vec<RuntimeValue>, RuntimeValue> {
+    type Key = (Option<f64>, String, usize);
+    let key_slots = values.len().saturating_mul(std::mem::size_of::<Key>());
+    let output_slots = values.len().saturating_mul(std::mem::size_of::<RuntimeValue>());
+    let mut payload = 0usize;
+    for value in values {
+        payload = payload.saturating_add(charged_value_bytes(value, check)?);
+        if payload > 8 * 1024 * 1024 {
+            return Err(RuntimeValue::Error("budget\0Sorted values exceed byte budget".into()));
         }
-        _ => plain_string(left).cmp(&plain_string(right)),
     }
+    let collation_slots = values.len().saturating_mul(std::mem::size_of::<crate::list_sort::ListSortKey<'_>>())
+        .saturating_add(values.len().saturating_mul(2 * std::mem::size_of::<usize>()));
+    // Retain the key vector, borrowed collation view, two index work vectors,
+    // result vector, cloned values, keys and one in-flight checked key.
+    if key_slots.saturating_add(collation_slots).saturating_add(output_slots)
+        .saturating_add(payload).saturating_add(16 * 1024 * 1024) > crate::MAX_BASE_REQUEST_BYTES {
+        return Err(RuntimeValue::Error("budget\0Sort scratch exceeds byte budget".into()));
+    }
+    check(1 + key_slots / 16 + output_slots / 16)?;
+    let mut keys = Vec::new();
+    keys.try_reserve_exact(values.len()).map_err(|_| RuntimeValue::Error("budget\0Sort key allocation failed".into()))?;
+    let mut text_bytes = 0usize;
+    for (index, value) in values.iter().enumerate() {
+        let text = match string_data(value) {
+            Some(data) => reference_stringification::copy_text(data, check)?,
+            None => stringify_checked(value, check)?,
+        };
+        text_bytes = text_bytes.saturating_add(text.capacity());
+        if text_bytes > 8 * 1024 * 1024 {
+            return Err(RuntimeValue::Error("budget\0Sort keys exceed byte budget".into()));
+        }
+        keys.push((match value { RuntimeValue::Number(value) => Some(*value), _ => None }, text, index));
+    }
+    check(1 + collation_slots / 16)?;
+    let mut collation = Vec::new();
+    collation.try_reserve_exact(keys.len()).map_err(|_| RuntimeValue::Error("budget\0Sort collation view allocation failed".into()))?;
+    for (number, text, _) in &keys {
+        collation.push(crate::list_sort::ListSortKey { number: *number, text });
+    }
+    let order = crate::list_sort::sorted_indices(&collation, check)?;
+    let mut output = Vec::new();
+    output.try_reserve_exact(values.len()).map_err(|_| RuntimeValue::Error("budget\0Sort result allocation failed".into()))?;
+    for position in order {
+        check(0)?;
+        output.push(values[keys[position].2].clone());
+    }
+    Ok(output)
 }
+
 fn js_array_index(key: &str) -> Option<u32> {
     key.parse::<u32>()
         .ok()
@@ -5948,130 +6045,14 @@ pub(crate) fn unique_bucket_key(
     value: &RuntimeValue,
     check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
 ) -> Result<String, RuntimeValue> {
-    fn json_text(
-        output: &mut String,
-        text: &str,
-        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
-    ) -> Result<(), RuntimeValue> {
-        check(text.len() / 16 + 1)?;
-        append_text(output, "\"", check)?;
-        let mut start = 0;
-        for (at, character) in text.char_indices() {
-            let escaped = match character {
-                '"' => Some("\\\""),
-                '\\' => Some("\\\\"),
-                '\u{8}' => Some("\\b"),
-                '\u{c}' => Some("\\f"),
-                '\n' => Some("\\n"),
-                '\r' => Some("\\r"),
-                '\t' => Some("\\t"),
-                _ => None,
-            };
-            if escaped.is_some() || character < '\u{20}' {
-                append_text(output, &text[start..at], check)?;
-                if let Some(escaped) = escaped {
-                    append_text(output, escaped, check)?;
-                } else {
-                    append_text(output, &format!("\\u{:04x}", character as u32), check)?;
-                }
-                start = at + character.len_utf8();
-            }
-        }
-        append_text(output, &text[start..], check)?;
-        append_text(output, "\"", check)
-    }
-    fn render(
-        value: &RuntimeValue,
-        depth: usize,
-        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
-    ) -> Result<String, RuntimeValue> {
-        check(1)?;
-        if depth > 128 {
-            return Err(RuntimeValue::Error(
-                "budget\0Unique key nesting exceeds 128".into(),
-            ));
-        }
-        let mut output = String::new();
-        match value {
-            RuntimeValue::List(values) | RuntimeValue::TagList(values) => {
-                for (index, value) in values.iter().enumerate() {
-                    if index > 0 {
-                        append_text(&mut output, ", ", check)?;
-                    }
-                    append_text(&mut output, &render(value, depth + 1, check)?, check)?;
-                }
-            }
-            RuntimeValue::Object(values) => {
-                let levels = (usize::BITS - values.len().max(1).leading_zeros()) as usize;
-                let mut max_key_bytes = 0usize;
-                for key in values.keys() {
-                    check(key.len() / 16 + 1)?;
-                    max_key_bytes = max_key_bytes.max(key.len());
-                }
-                check(
-                    values
-                        .len()
-                        .saturating_mul(max_key_bytes / 16 + 1)
-                        .saturating_mul(levels.saturating_mul(2) + 1),
-                )?;
-                let mut entries = values
-                    .iter()
-                    .enumerate()
-                    .map(|(ordinal, (key, value))| (js_array_index(key), ordinal, key, value))
-                    .collect::<Vec<_>>();
-                entries.sort_unstable_by(|a, b| match (a.0, b.0) {
-                    (Some(a), Some(b)) => a.cmp(&b),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => a.1.cmp(&b.1),
-                });
-                append_text(&mut output, "{", check)?;
-                for (index, (_, _, key, value)) in entries.into_iter().enumerate() {
-                    if index > 0 {
-                        append_text(&mut output, ",", check)?;
-                    }
-                    json_text(&mut output, key, check)?;
-                    append_text(&mut output, ":", check)?;
-                    json_text(&mut output, &render(value, depth + 1, check)?, check)?;
-                }
-                append_text(&mut output, "}", check)?;
-            }
-            RuntimeValue::Link(link) if !link.external => {
-                let (Some(raw), Some(_)) = (&link.raw_destination, &link.source_path) else {
-                    return Err(RuntimeValue::Error(
-                        "unavailable\0Unique Link key requires original destination and source"
-                            .into(),
-                    ));
-                };
-                append_text(&mut output, "[[", check)?;
-                append_text(&mut output, raw, check)?;
-                let display = match link.display_value.as_deref() {
-                    Some(RuntimeValue::Null) => None,
-                    Some(value) => Some(render(value, depth + 1, check)?),
-                    None => link.display.clone(),
-                };
-                if let Some(display) = display {
-                    append_text(&mut output, "|", check)?;
-                    append_text(&mut output, &display, check)?;
-                }
-                append_text(&mut output, "]]", check)?;
-            }
-            RuntimeValue::Error(message) => return Err(RuntimeValue::Error(message.clone())),
-            _ => {
-                let length = match value {
-                    RuntimeValue::File(file) => file.path.len(),
-                    RuntimeValue::Link(link) => link.path.len(),
-                    RuntimeValue::Regex(pattern, flags, _) => pattern.len() + flags.len(),
-                    RuntimeValue::ErrorValue(message) => message.len(),
-                    value => string_data(value).map_or(64, str::len),
-                };
-                check(length / 16 + 1)?;
-                append_text(&mut output, &plain_string(value), check)?;
-            }
-        }
-        Ok(output)
-    }
-    render(value, 0, check)
+    reference_stringification::stringify(value, reference_stringification::LinkPolicy::StrictOrigin, check)
+}
+
+fn stringify_checked(
+    value: &RuntimeValue,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<String, RuntimeValue> {
+    reference_stringification::stringify(value, reference_stringification::LinkPolicy::Presentation, check)
 }
 
 /// A single query's private regex encounter registry. Ordinals distinguish
