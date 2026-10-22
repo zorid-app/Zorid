@@ -1,5 +1,5 @@
 //! Select a real saved fenced Base block, never caller-supplied replacement YAML.
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,37 +20,71 @@ pub fn verify_inline_base_source(saved: &str, selected: &InlineBaseSource) -> bo
     if selected.source.len() > 262_144 || selected.start_byte >= selected.end_byte {
         return false;
     }
-    let Some(block) = saved.get(selected.start_byte..selected.end_byte) else { return false; };
-    let Some(opening_end) = block.find('\n') else { return false; };
+    let Some(block) = saved.get(selected.start_byte..selected.end_byte) else {
+        return false;
+    };
+    let Some(opening_end) = block.find('\n') else {
+        return false;
+    };
     let opening = block[..opening_end].trim_end_matches([' ', '\t', '\r']);
-    let Some(before_info) = opening.strip_suffix("base") else { return false; };
+    let Some(before_info) = opening.strip_suffix("base") else {
+        return false;
+    };
     let before_info = before_info.trim_end_matches([' ', '\t']);
-    let Some(marker @ (b'`' | b'~')) = before_info.as_bytes().last().copied() else { return false; };
-    let fence_len = before_info.bytes().rev().take_while(|byte| *byte == marker).count();
-    if fence_len < 3 { return false; }
+    let Some(marker @ (b'`' | b'~')) = before_info.as_bytes().last().copied() else {
+        return false;
+    };
+    let fence_len = before_info
+        .bytes()
+        .rev()
+        .take_while(|byte| *byte == marker)
+        .count();
+    if fence_len < 3 {
+        return false;
+    }
     let closing_start = selected.start_byte + block.rfind('\n').unwrap() + 1;
-    let closing = block.rsplit('\n').next().unwrap_or_default().trim_end_matches([' ', '\t', '\r']);
-    let closing_len = closing.bytes().rev().take_while(|byte| *byte == marker).count();
-    if closing_len < fence_len { return false; }
+    let closing = block
+        .rsplit('\n')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches([' ', '\t', '\r']);
+    let closing_len = closing
+        .bytes()
+        .rev()
+        .take_while(|byte| *byte == marker)
+        .count();
+    if closing_len < fence_len {
+        return false;
+    }
 
+    let Some(parsing) = crate::phases::inline_parsing_source(saved) else {
+        return false;
+    };
     let mut text = None;
-    for (event, range) in Parser::new_ext(saved, Options::ENABLE_YAML_STYLE_METADATA_BLOCKS).into_offset_iter() {
+    for (event, range) in Parser::new(&parsing).into_offset_iter() {
         match event {
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
                 let end = saved[..range.end].trim_end_matches(['\r', '\n']).len();
                 // Nested list/blockquote prefixes and indentation belong to the
                 // selected raw lines, while the parser excludes those prefixes.
                 let line_start = saved[..range.start].rfind('\n').map_or(0, |at| at + 1);
-                if line_start == selected.start_byte && end == selected.end_byte && info.as_ref() == "base" {
+                if line_start == selected.start_byte
+                    && end == selected.end_byte
+                    && info.as_ref() == "base"
+                {
                     text = Some(String::new());
                 }
             }
             Event::Text(value) if text.is_some() => {
                 // An unclosed block may end in fence-looking code text. Only a
                 // real parser-recognized closing line is outside its text spans.
-                if range.end > closing_start { return false; }
+                if range.end > closing_start {
+                    return false;
+                }
                 let target = text.as_mut().unwrap();
-                if target.len().saturating_add(value.len()) > 262_144 { return false; }
+                if target.len().saturating_add(value.len()) > 262_144 {
+                    return false;
+                }
                 target.push_str(&value);
             }
             Event::End(TagEnd::CodeBlock) if text.is_some() => {
@@ -68,7 +102,11 @@ mod tests {
 
     fn selection(note: &str, block: &str, source: &str) -> InlineBaseSource {
         let start_byte = note.find(block).unwrap();
-        InlineBaseSource { source: source.into(), start_byte, end_byte: start_byte + block.len() }
+        InlineBaseSource {
+            source: source.into(),
+            start_byte,
+            end_byte: start_byte + block.len(),
+        }
     }
 
     #[test]
@@ -77,27 +115,82 @@ mod tests {
         let note = format!("# Café\n\n{block}\nOther\n");
         let selected = selection(&note, block, "views: []\n");
         assert!(verify_inline_base_source(&note, &selected));
-        assert!(!verify_inline_base_source(&note, &InlineBaseSource { source: "views: [fake]\n".into(), ..selected.clone() }));
-        assert!(!verify_inline_base_source(&note, &InlineBaseSource { end_byte: selected.end_byte + 1, ..selected.clone() }));
+        assert!(!verify_inline_base_source(
+            &note,
+            &InlineBaseSource {
+                source: "views: [fake]\n".into(),
+                ..selected.clone()
+            }
+        ));
+        assert!(!verify_inline_base_source(
+            &note,
+            &InlineBaseSource {
+                end_byte: selected.end_byte + 1,
+                ..selected.clone()
+            }
+        ));
         let nested = format!("````markdown\n{block}\n````");
-        assert!(!verify_inline_base_source(&nested, &selection(&nested, block, "views: []\n")));
+        assert!(!verify_inline_base_source(
+            &nested,
+            &selection(&nested, block, "views: []\n")
+        ));
         let unclosed = "```base\nviews: []";
-        assert!(!verify_inline_base_source(unclosed, &selection(unclosed, unclosed, "views: []")));
+        assert!(!verify_inline_base_source(
+            unclosed,
+            &selection(unclosed, unclosed, "views: []")
+        ));
         let frontmatter = format!("---\nconfig: |\n  ```base\n  views: []\n  ```\n---\n");
         let fake = "  ```base\n  views: []\n  ```";
-        assert!(!verify_inline_base_source(&frontmatter, &selection(&frontmatter, fake, "views: []\n")));
+        assert!(!verify_inline_base_source(
+            &frontmatter,
+            &selection(&frontmatter, fake, "views: []\n")
+        ));
+        let commented_frontmatter =
+            "--- # metadata\ndescription: |\n  ```base\n  views: []\n  ```\n---\n";
+        assert!(!verify_inline_base_source(
+            commented_frontmatter,
+            &selection(commented_frontmatter, fake, "views: []\n")
+        ));
+        let invalid_frontmatter =
+            "--- # invalid metadata\n[not: valid YAML\n  ```base\n  views: []\n  ```\n---\n";
+        assert!(!verify_inline_base_source(
+            invalid_frontmatter,
+            &selection(invalid_frontmatter, fake, "views: []\n")
+        ));
+        let ofm_comment = format!("%%\n{block}\n%%\n");
+        assert!(!verify_inline_base_source(
+            &ofm_comment,
+            &selection(&ofm_comment, block, "views: []\n")
+        ));
+        let real_after_comment = format!("%% hidden %%\n{block}\n");
+        assert!(verify_inline_base_source(
+            &real_after_comment,
+            &selection(&real_after_comment, block, "views: []\n")
+        ));
     }
 
     #[test]
     fn commonmark_normalization_accepts_crlf_indentation_and_long_tilde_fences() {
         let block = "  ~~~~base\r\n  views: []\r\n  ~~~~~";
         let note = format!("é\r\n\r\n{block}\r\n");
-        assert!(verify_inline_base_source(&note, &selection(&note, block, "views: []\n")));
+        assert!(verify_inline_base_source(
+            &note,
+            &selection(&note, block, "views: []\n")
+        ));
         let wrong_language = "```yaml\nviews: []\n```";
-        assert!(!verify_inline_base_source(wrong_language, &selection(wrong_language, wrong_language, "views: []\n")));
+        assert!(!verify_inline_base_source(
+            wrong_language,
+            &selection(wrong_language, wrong_language, "views: []\n")
+        ));
         let nested = "> - ```base\n>   views: []\n>   ```";
-        assert!(verify_inline_base_source(nested, &selection(nested, nested, "views: []\n")));
+        assert!(verify_inline_base_source(
+            nested,
+            &selection(nested, nested, "views: []\n")
+        ));
         let fake_close = "```base\nviews: []\ntext```";
-        assert!(!verify_inline_base_source(fake_close, &selection(fake_close, fake_close, "views: []\ntext```")));
+        assert!(!verify_inline_base_source(
+            fake_close,
+            &selection(fake_close, fake_close, "views: []\ntext```")
+        ));
     }
 }

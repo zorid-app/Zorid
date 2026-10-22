@@ -50,6 +50,7 @@ pub(crate) struct Phases {
     repairs: Vec<WikiRepair>,
 }
 impl Phases {
+    pub(crate) fn into_parsing(self) -> String { self.parsing }
     pub(crate) fn owned_bytes(&self) -> usize {
         self.parsing.capacity() + self.visible.capacity()
         + self.repairs.capacity() * std::mem::size_of::<WikiRepair>()

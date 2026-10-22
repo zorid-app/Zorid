@@ -146,6 +146,16 @@ pub(crate) fn parse_borrowed(source: &str) -> Result<ParseFacts, ExtractionError
     while job.phase() != ParseFactsPhase::Ready { job.step_inner(None).expect("unbounded extraction"); }
     Ok(job.take_facts().expect("ready facts"))
 }
+/// Reuse the exact document frontmatter/BOM/OFM masking phases for saved query
+/// source admission. Masks retain original byte coordinates; later metadata
+/// extraction, wiki repair and derived facts are unnecessary for this selector.
+pub(crate) fn inline_parsing_source(source: &str) -> Option<String> {
+    let mut job = FactsJob::from_source(Source::Borrowed(source)).ok()?;
+    while job.phase() != ParseFactsPhase::WikiRepairs {
+        job.step_inner(None).ok()?;
+    }
+    Some(job.markdown.into_parsing())
+}
 fn empty_facts(source_length: SourceLength) -> ParseFacts {
     ParseFacts { schema_version: SCHEMA_VERSION, dialect_version: DIALECT_VERSION.into(), source_length,
         frontmatter: Frontmatter { state: FrontmatterState::Absent, range: None, body_start: SourcePoint { byte: 0, utf16: 0 } },
