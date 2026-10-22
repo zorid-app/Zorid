@@ -1,5 +1,5 @@
 import { Compartment, EditorState, Transaction } from '@codemirror/state';
-import { EditorView, keymap } from '@codemirror/view';
+import { EditorView, keymap, placeholder } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { autocompletion, completionKeymap, snippetCompletion } from '@codemirror/autocomplete';
 import type { Completion, CompletionContext } from '@codemirror/autocomplete';
@@ -40,6 +40,7 @@ function summaryReceiverKind(expression: BaseExpression): 'list' | 'scalar' | un
   if (expression.kind === 'call') {
     if (expression.callee.kind === 'identifier') {
       const name = expression.callee.name;
+      if(name === 'if') { const yes=expression.args[1] && summaryReceiverKind(expression.args[1]), no=expression.args[2] && summaryReceiverKind(expression.args[2]); return yes===no ? yes : undefined; }
       return name === 'list' ? 'list' : (summaryFunctions as readonly string[]).includes(name) ? 'scalar' : undefined;
     }
     const callee = expression.callee;
@@ -51,6 +52,24 @@ function summaryReceiverKind(expression: BaseExpression): 'list' | 'scalar' | un
   }
   if (expression.kind === 'member' && expression.key.kind === 'literal' && expression.key.value.type === 'string' && expression.key.value.value === 'length' && summaryReceiverKind(expression.object) === 'list') return 'scalar';
   return undefined;
+}
+/** Isolate the receiver in a partially typed call or arithmetic expression. */
+function summaryReceiverSource(source:string):string {
+  let depth=0;
+  for(let index=source.length-1;index>=0;index--){
+    const character=source[index];
+    if(character==='"'||character==="'"){
+      const quote=character;
+      for(index--;index>=0;index--){
+        if(source[index]!==quote)continue;
+        let slashes=0;for(let before=index-1;before>=0&&source[before]==='\\';before--)slashes++;
+        if(slashes%2===0)break;
+      }
+    }else if(character===')'||character===']')depth++;
+    else if(character==='('||character==='['){if(depth)depth--;else return source.slice(index+1).trim();}
+    else if(!depth&&/[,+\-*/%!<>=&|]/u.test(character))return source.slice(index+1).trim();
+  }
+  return source.trim();
 }
 
 // Original lexical presentation, independent of the expression evaluator. The
@@ -103,7 +122,7 @@ function completions(options: BaseFormulaEditorOptions, summary = false) {
     if (receiver.endsWith('.')) {
       if (summary) {
         let kind: ReturnType<typeof summaryReceiverKind>;
-        try { kind = summaryReceiverKind(parseBaseExpression(receiver.slice(0,-1))); } catch { return null; }
+        try { kind = summaryReceiverKind(parseBaseExpression(summaryReceiverSource(receiver.slice(0,-1)))); } catch { return null; }
         if (!kind) return null;
         const members = kind === 'list' ? [{label:'length',type:'property'},...methods] : methods.filter(method => (summaryBaseMethods as readonly string[]).includes(method.label.replace(/\(\)$/u,'')));
         return {from:suffix.from,options:members,validFor:/^[$_\p{L}\p{N}\p{M}]*$/u};
@@ -190,12 +209,12 @@ function enhanceFormulaEditor(textarea: HTMLTextAreaElement, options: BaseFormul
   textarea.hidden = true; textarea.tabIndex = -1; textarea.setAttribute('aria-hidden', 'true');
   let destroyed = false, synchronizing = false, publishing = false, composingKey = false, lastDiagnostic: string | undefined;
   const attributes = new Compartment(), editability = new Compartment();
-  const contentAttributes = () => EditorView.contentAttributes.of({
+  const contentAttributes = () => [EditorView.contentAttributes.of({
     'aria-label': textarea.getAttribute('aria-label') ?? 'Formula',
     'aria-multiline': 'true',
     'aria-readonly': String(textarea.readOnly || textarea.disabled),
     'aria-describedby': [textarea.getAttribute('aria-describedby'), error.id].filter(Boolean).join(' '),
-  });
+  }),placeholder(textarea.placeholder)];
   const editable = () => [EditorState.readOnly.of(textarea.readOnly || textarea.disabled), EditorView.editable.of(!textarea.readOnly && !textarea.disabled)];
   const restoreNative = () => {
     textarea.hidden = original.hidden;
@@ -259,7 +278,7 @@ function enhanceFormulaEditor(textarea: HTMLTextAreaElement, options: BaseFormul
   }
   textarea.addEventListener('input', sync);
   const observer = win?.MutationObserver ? new win.MutationObserver(sync) : undefined;
-  observer?.observe(textarea, { attributes: true, attributeFilter: ['disabled', 'readonly', 'aria-label', 'aria-describedby'] });
+  observer?.observe(textarea, { attributes: true, attributeFilter: ['disabled', 'readonly', 'aria-label', 'aria-describedby', 'placeholder'] });
   diagnose();
   return {
     sync,

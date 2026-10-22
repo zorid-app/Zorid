@@ -146,6 +146,19 @@
 .bases-formula-editor-error { color: var(--text-error); padding: 4px 8px; border-top: 1px solid var(--background-modifier-border); font-family: var(--font-interface,var(--font-text)); font-size: 12px; }
 .bases-formula-editor-error:empty { display: none; }
 .bases-formula-editor .cm-tooltip-autocomplete { border: 1px solid var(--background-modifier-border); border-radius: 5px; background: var(--background-secondary); color: var(--text-normal); }
+/* Summary pages share the reference form geometry and the formula editor. */
+.bases-summary-editor { padding: 0; font-size: 15px; line-height: 1.3; }
+.bases-summary-editor h3 { padding: 4px; border: 0; }
+.bases-summary-editor h3 > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bases-summary-editor h3 > [aria-label="Summary actions"] { margin-inline-start: auto; flex: none; }
+.bases-summary-editor .bases-toolbar-fields { padding: 4px 8px 8px; gap: 8px; }
+.bases-summary-editor .bases-toolbar-fields > label:first-child { flex-direction: column; align-items: stretch; gap: 4px; }
+.bases-summary-editor .bases-toolbar-fields > label:nth-of-type(2) { justify-content: space-between; }
+.bases-summary-editor .bases-toolbar-fields > label:nth-of-type(2) > span { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border: 1px solid currentColor; border-radius: 50%; color: var(--text-faint); font-size: 12px; }
+.bases-summary-editor .bases-formula-editor { resize: both; min-width: 100%; max-width: 260px; }
+.bases-summary-editor .bases-formula-editor .cm-content { min-height: calc(var(--input-height,28px) * 3); }
+.bases-summary-editor .bases-summary-actions { border-top: 1px solid var(--background-modifier-border); padding: 4px; }
+.bases-summary-editor .bases-summary-actions .mod-warning { color: var(--text-error); }
 .bases-filter-actions { display: flex; gap: 8px; padding-top: 4px; }
 .bases-filter-actions > button { border: 0; box-shadow: none; background: transparent; color: var(--text-muted); padding: 4px; }
 .bases-filter-actions > button:hover { color: var(--text-normal); }

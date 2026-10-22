@@ -19,7 +19,7 @@ function fixture(options: BaseFormulaEditorOptions = {}, value = 'note.cost * 2'
   }
   dom.window.Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
   dom.window.Range.prototype.getBoundingClientRect = () => new dom.window.DOMRect();
-  const textarea = dom.window.document.querySelector('textarea')!; textarea.value = value; if(summary)textarea.setAttribute('aria-label','Summary expression');
+  const textarea = dom.window.document.querySelector('textarea')!; textarea.value = value; if(summary){textarea.setAttribute('aria-label','Summary expression');textarea.placeholder='values.reduce( ... )';}
   const changes: string[] = []; textarea.addEventListener('input', () => changes.push(textarea.value));
   const editor = summary ? enhanceBaseSummaryEditor(textarea,options) : enhanceBaseFormulaEditor(textarea, options);
   const content = dom.window.document.querySelector<HTMLElement>('.cm-content')!;
@@ -194,6 +194,7 @@ test('owner-document-only hosts keep a native editor and cleanly restore its loc
 test('summary editor completes values and implemented globals without exposing note or host context',async()=>{
  const f=fixture({propertyIds:['note.cost','file.name','formula.Total','this.score'],functionNames:['if','list','max','min','number','now','random','file','image','notImplemented']},'',true);
  try{
+  assert.equal(f.content.querySelector('.cm-placeholder')?.textContent,'values.reduce( ... )');
   f.editor.focus();startCompletion(f.view);await new Promise(resolve=>setTimeout(resolve,170));
   assert.deepEqual(new Set(currentCompletions(f.view.state).map(item=>item.label)),new Set(['values','if()','list()','max()','min()','number()','now()']));
   closeCompletion(f.view);f.view.dispatch({changes:{from:0,insert:'val'},selection:{anchor:3}});startCompletion(f.view);await new Promise(resolve=>setTimeout(resolve,170));
@@ -209,11 +210,17 @@ test('summary list completions preserve receivers and include length without off
    ['values.su','values.sum()'],['values.le','values.length'],
    ['values.filter(value > 0).su','values.filter(value > 0).sum()'],
    ['list(2).un','list(2).unique()'],
+   ['1 + values.su','1 + values.sum()'],
+   ['if(true, values.su','if(true, values.sum()'],
+   ['if(true, values, values).su','if(true, values, values).sum()'],
+   ['if(true, values.filter(value > 0).su','if(true, values.filter(value > 0).sum()'],
+   ['if(true, values.filter(value != ",").su','if(true, values.filter(value != ",").sum()'],
+   ['if("a, b + c".isEmpty(), values.su','if("a, b + c".isEmpty(), values.sum()'],
   ]){
    closeCompletion(f.view);f.view.dispatch({changes:{from:0,to:f.view.state.doc.length,insert:expression},selection:{anchor:expression.length}});startCompletion(f.view);await new Promise(resolve=>setTimeout(resolve,170));
    assert.equal(acceptCompletion(f.view),true,expression);assert.equal(f.textarea.value,expected);
   }
-  for(const expression of ['note.','file.','formula.','this.','unknown.','values.sum().su','"values.su']){
+  for(const expression of ['note.','file.','formula.','this.','unknown.','1 + unknown.su','if(true, file.su','values.sum().su','"values.su','if(true, "values.su']){
    closeCompletion(f.view);f.view.dispatch({changes:{from:0,to:f.view.state.doc.length,insert:expression},selection:{anchor:expression.length}});startCompletion(f.view);await new Promise(resolve=>setTimeout(resolve,80));
    assert.deepEqual(currentCompletions(f.view.state),[],expression);
   }
