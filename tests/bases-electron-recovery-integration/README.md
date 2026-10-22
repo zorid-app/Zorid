@@ -40,9 +40,11 @@ claimed crash-durable before its checkpoint can run.
 Pure protocol checks require no application or native executable:
 
 ```sh
-node --test tests/bases-electron-recovery-integration/protocol.test.mjs
+node --test tests/bases-electron-recovery-integration/protocol.test.mjs \
+  tests/bases-electron-recovery-integration/relay-process.test.mjs
 ```
 
-Those checks verify framing, arming, native-success selection and the watchdog;
-they are not actual native campaign results. Authoring or passing helper checks
-does not complete either runtime acceptance gate.
+Those checks verify framing, arming, success selection and the watchdog. The
+subprocess check uses an explicitly simulated Node peer to verify pipe forwarding
+and EOF cleanup; its invented unit receipt is not a Rust/native result. Authoring
+or passing helper checks does not complete either runtime acceptance gate.
