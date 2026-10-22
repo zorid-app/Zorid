@@ -67,3 +67,9 @@ test('rich file-link opening carries its exact target witness and never runs lab
   let captured:unknown,gets=0;const value=rich('link','Target.md') as BaseExpressionValue & {presentation:BaseRichPresentation};value.presentation={kind:'link',value:'Target.md',target:{entryId:'target-1',revision:'r7'},label:{type:'string',get value(){gets++;return 'unsafe';}} as BaseExpressionValue};
   const s=setup(value,{openFile:(_path,_event,witness)=>{captured=witness;}});s.element.querySelector('a')!.dispatchEvent(new s.dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));assert.deepEqual(captured,{entryId:'target-1',revision:'r7'});assert.equal(gets,0);s.close();
 });
+
+
+test('list rendering never invokes accessor elements or array callback methods', () => {
+  let gets=0;const getter:BaseExpressionValue[]=[];Object.defineProperty(getter,0,{enumerable:true,get(){gets++;return baseExpressionValue('executed');}});getter.length=1;const s=setup({type:'list',value:getter});assert.equal(gets,0);assert.match(s.element.textContent!,/inert own values/);s.close();
+  const callbacks=[baseExpressionValue('safe')];Object.defineProperty(callbacks,'forEach',{get(){gets++;throw new Error('array method getter');}});const t=setup({type:'list',value:callbacks});assert.equal(gets,0);assert.equal(t.element.textContent,'safe');t.close();
+});

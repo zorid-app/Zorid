@@ -135,7 +135,14 @@ export function mountBaseRichValue(element: HTMLElement, value: BaseExpressionVa
         }
       } else {
         const kind = own(value, 'type'), data = own(value, 'value');
-        if (kind === 'list' && Array.isArray(data)) data.forEach((child, index) => { if (index) appendText(parent, ', '); render(parent, child, depth + 1, insideLink); });
+        if (kind === 'list' && Array.isArray(data)) {
+          const length = own(data, 'length'); if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0 || length > nodes + 1) throw new Error('The rich property list is too large to display.');
+          for (let index = 0; index < length; index++) {
+            const descriptor = Object.getOwnPropertyDescriptor(data, String(index));
+            if (!descriptor || !('value' in descriptor)) throw new Error('Rich property lists must contain inert own values.');
+            if (index) appendText(parent, ', '); render(parent, descriptor.value, depth + 1, insideLink);
+          }
+        }
         else if (kind === 'namespace') appendText(parent, typeof own(value, 'name') === 'string' ? own(value, 'name') as string : '');
         else if (kind === 'error') { const message = document.createElement('span'); message.className = 'bases-rich-error'; const text = own(own(value, 'error'), 'message'); appendText(message, typeof text === 'string' ? text : 'Property error'); parent.append(message); }
         else if (kind === 'string' && typeof data === 'string') appendText(parent, data);
