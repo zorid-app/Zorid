@@ -159,6 +159,25 @@ fn empty_or_unconfigured_property_settings_are_valid_without_invented_definition
 }
 
 #[test]
+fn bounded_yaml_aliases_keep_the_source_and_cycles_are_diagnosed() {
+    let settings = "shared: &options\n  type: multiselect\n  options: [{value: Rust}]\nproperties:\n  topics: *options\n";
+    let generation = generation(settings, &[]);
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), settings)
+            .unwrap();
+    assert!(definitions.diagnostics().is_empty());
+    assert_eq!(definitions.get("topics").unwrap().options[0].value, "Rust");
+    assert_eq!(definitions.source(), Some(settings));
+    let settings = "properties: &cycle\n  cycle: *cycle\n";
+    let generation = generation(settings, &[]);
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), settings)
+            .unwrap();
+    assert!(!definitions.diagnostics().is_empty());
+    assert_eq!(definitions.source(), Some(settings));
+}
+
+#[test]
 fn normal_queries_filter_sort_formula_and_group_using_rollups() {
     let generation = generation(
         SETTINGS,
