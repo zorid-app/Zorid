@@ -26,8 +26,9 @@ const properties = (source: string) => Object.fromEntries(readProperties(source)
 test('view creation, duplication, default ordering and deletion retain the selected view and custom data', async () => {
   const f = await fixture(undefined, 'First');
   try {
-    await f.controller.addView(f.controller.state.version, 'kanban');
+    await f.controller.addView(f.controller.state.version, 'kanban', undefined, { columnWidth: 320 });
     assert.equal(f.controller.state.result?.view.name, 'Kanban');
+    assert.equal(f.controller.state.result?.view.columnWidth, 320);
     await f.controller.duplicateView(f.controller.state.version, 0);
     assert.equal(f.controller.state.result?.view.name, 'First 2');
     assert.deepEqual(f.controller.state.result?.view.pluginView, { keep: true });

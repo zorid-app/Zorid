@@ -357,11 +357,12 @@ export class BaseController {
 
   /** Read-only footer advice from an independent saved-core invocation. Opening
    * a menu never writes configuration, publishes results or cancels its query. */
-  async summaryPreviews(property: string): Promise<Readonly<Record<string, BaseExpressionValue>>> {
+  async summaryPreviews(property: string, groupKeyId?: string): Promise<Readonly<Record<string, BaseExpressionValue>>> {
     if (typeof property !== 'string' || !property.trim()) throw new Error('A summary property is required');
     property = normalizeBaseProperty(property);
     const version = this.current.version, source = this.current.source, epoch = this.epoch;
     const { validate: validateResult } = this.guard(version, this.path);
+    if (groupKeyId !== undefined && (typeof groupKeyId !== 'string' || !groupKeyId || !this.current.result!.groups.some(group => group.sharedKeyId === groupKeyId))) throw new Error('This Base group is stale or unavailable for summary previews');
     const vault = this.options.vault, adapter = vault.adapter, service = adapter.documentSemantics;
     if (!service) throw new Error('Summary previews are unavailable on this host');
     const retained = this.queryEntries.get(this.current.result!);
@@ -383,8 +384,8 @@ export class BaseController {
     const current = currentPath === this.path ? definition : await observe(currentPath); validate();
     if (!current?.entryId || !current.revision || current.entryId !== retained.current.entryId || current.revision !== retained.current.revision || current.path !== retained.current.path) throw new Error('The current saved note changed; refresh before requesting summary previews');
     const captured = sharedBaseCapture(this.current.result!);
-    const query: BaseQueryOptions & { summaryPreviewProperty: string; inlineSource?: { source: string; startByte: number; endByte: number } } = {
-      ...this.query, searchTerms: this.query.searchTerms && [...this.query.searchTerms], summaryPreviewProperty: property,
+    const query: BaseQueryOptions & { summaryPreviewProperty: string; summaryPreviewGroupKeyId?: string; inlineSource?: { source: string; startByte: number; endByte: number } } = {
+      ...this.query, searchTerms: this.query.searchTerms && [...this.query.searchTerms], summaryPreviewProperty: property, summaryPreviewGroupKeyId: groupKeyId,
       ...(captured ? { now: () => new Date(captured.clockMs), timezone: captured.timezone } : {}),
       ...(inline ? { inlineSource: { source, startByte: inline.startByte, endByte: inline.endByte } } : {}),
     };
@@ -738,11 +739,13 @@ export class BaseController {
     await this.refresh(); return true;
   }
 
-  async addView(version: number, type: string, name?: string): Promise<void> {
+  async addView(version: number, type: string, name?: string, patch?: BaseViewPatch): Promise<void> {
+    const detached = structuredClone(patch ?? {});
     await this.changeConfiguration(version, document => {
       const defaultName = type ? type[0].toUpperCase() + type.slice(1) : '';
       const chosen = validateBaseViewName(name ?? uniqueBaseViewName(defaultName, document.views), document.views);
-      return document.addView(type, chosen);
+      if (Object.hasOwn(detached, 'type') && detached.type !== type || Object.hasOwn(detached, 'name') && detached.name !== chosen) throw new Error('Initial view settings must use the requested view type and name');
+      const index = document.addView(type, chosen); document.updateView(index, detached); return index;
     });
   }
 
