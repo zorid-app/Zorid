@@ -183,3 +183,10 @@ test('adding a condition preserves an existing OR group and offers root-level fi
  }finally{f.cleanup();}
  const g=fixture(true);try{g.click('Filter');g.click('Add filter group');g.submit();await tick();assert.deepEqual((g.calls.pop()![2] as any).view.filters,{and:[{and:[]}]});}finally{g.cleanup();}
 });
+
+test('a synchronous host failure retains the editable toolbar draft and clears saving state',async()=>{
+ const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
+ const document=BaseDocument.parse('views: [{type: table, name: A}]'),result=executeBaseQuery(document,{version:1,files:[]});
+ const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(){},save():Promise<void>{throw new Error('host unavailable');},onDraftChange(){},onError(){}});toolbar.update({result,views:document.views,selectedIndex:0,readOnly:false,allowRename:true,label:p=>p});
+ try{doc.querySelector<HTMLButtonElement>('[aria-label="Results"]')!.click();const input=doc.querySelector<HTMLInputElement>('[aria-label="Limit"]')!;input.value='5';input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));doc.querySelector('form')!.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await tick();assert.equal(input.disabled,false);assert.equal(input.value,'5');assert.equal(toolbar.hasDraft(),true);assert.match(doc.querySelector('[role="alert"]')?.textContent??'',/host unavailable/);doc.querySelector<HTMLButtonElement>('[aria-label="Cancel"]')!.click();assert.equal(toolbar.hasDraft(),false);}finally{toolbar.destroy();dom.window.close();}
+});

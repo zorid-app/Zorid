@@ -65,6 +65,7 @@ export class BaseToolbarSaveError extends Error {
   readonly retry: () => Promise<void>;
   constructor(message: string, retry: () => Promise<void>) { super(message); this.retry = retry; }
 }
+const invoke = (operation:()=>Promise<void>):Promise<void> => { try { return Promise.resolve(operation()); } catch (failure) { return Promise.reject(failure); } };
 const mapping = (value: unknown): value is Record<string, BaseValue> => !!value && typeof value === 'object' && !Array.isArray(value);
 function configurationSnapshot(state: BaseToolbarState): {views: BaseViewConfig[]; root: Record<string, BaseValue | undefined>} {
   const root = state.root ? Object.fromEntries(Object.entries(state.root).filter(([key]) => key !== 'views')) : {filters:state.rootFilters};
@@ -197,7 +198,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         try { options.preflight(); } catch (failure) { report(failure); return; }
         const commandGeneration = generation, commandInputs = inputStates();
         own.saving = true; options.onDraftChange(); for (const input of commandInputs.keys()) input.disabled = true; item.disabled = true;
-        void action().then(() => {
+        void invoke(action).then(() => {
           if (destroyed || panel !== own) return;
           own.saving = false;
           const refreshed = deferredState; deferredState = undefined;
@@ -584,7 +585,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const disabled = inputStates();
       if (!auto) for (const input of disabled.keys()) input.disabled = true;
       error.textContent = 'Saving…';
-      void operation().then(() => {
+      void invoke(operation).then(() => {
         if (destroyed || panel !== own) return;
         own.saving = false; own.failure = undefined; retryPersistence = undefined; retainedAttempt = undefined;
         if(retrying)for(const [input,wasDisabled] of attempt.inputs) input.disabled=wasDisabled;
