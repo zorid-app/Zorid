@@ -955,7 +955,11 @@ fn summary_runtime_value(
             display_value,
             external,
         } => {
-            *bytes = bytes.saturating_add(path.len() + subpath.as_ref().map_or(0, String::len) + display.as_ref().map_or(0, String::len));
+            *bytes = bytes.saturating_add(
+                path.len()
+                    + subpath.as_ref().map_or(0, String::len)
+                    + display.as_ref().map_or(0, String::len),
+            );
             RuntimeValue::Link(BasesLink {
                 path: path.clone(),
                 subpath: subpath.clone(),
@@ -3280,11 +3284,27 @@ fn plain_string(value: &RuntimeValue) -> String {
         RuntimeValue::Object(_) => serde_json::to_string(&to_plain(value)).unwrap_or_default(),
         RuntimeValue::File(value) => value.path.clone(),
         RuntimeValue::Link(value) if value.external => value.path.clone(),
-        RuntimeValue::Link(value) => value
-            .display
-            .as_ref()
-            .map(|display| format!("[[{}|{display}]]", value.path))
-            .unwrap_or_else(|| format!("[[{}]]", value.path)),
+        RuntimeValue::Link(value) => {
+            // Raw destinations already contain their fragment. Resolved
+            // relation projections carry a canonical file path plus explicit
+            // destination metadata; restore that metadata exactly once.
+            let data = if value.resolved_path.as_ref().and_then(Option::as_deref)
+                == Some(value.path.as_str())
+            {
+                value
+                    .subpath
+                    .as_ref()
+                    .map(|subpath| format!("{}{subpath}", value.path))
+            } else {
+                None
+            };
+            let data = data.as_deref().unwrap_or(&value.path);
+            value
+                .display
+                .as_ref()
+                .map(|display| format!("[[{data}|{display}]]"))
+                .unwrap_or_else(|| format!("[[{data}]]"))
+        }
         RuntimeValue::Regex(pattern, flags) => format!("/{pattern}/{flags}"),
         RuntimeValue::Image(value) => super::order::image_text(value),
         RuntimeValue::Error(message) => message.clone(),
@@ -4027,7 +4047,9 @@ fn is_external(value: &str) -> bool {
 /// The destination is already semantic text. Match the shared resolver's
 /// literal-fragment-before-percent-decoding rule; `%23` is part of a filename.
 pub(crate) fn link_subpath(destination: &str) -> Option<String> {
-    destination.find('#').map(|index| destination[index..].to_owned())
+    destination
+        .find('#')
+        .map(|index| destination[index..].to_owned())
 }
 pub(super) fn strip_subpath(value: &str) -> String {
     value
@@ -4421,8 +4443,11 @@ fn typed_value(
             BaseValue::File { path: value.path }
         }
         RuntimeValue::Link(value) => {
-            *bytes = bytes
-                .saturating_add(value.path.len() + value.subpath.as_ref().map_or(0, String::len) + value.display.as_ref().map_or(0, String::len));
+            *bytes = bytes.saturating_add(
+                value.path.len()
+                    + value.subpath.as_ref().map_or(0, String::len)
+                    + value.display.as_ref().map_or(0, String::len),
+            );
             BaseValue::Link {
                 path: value.path,
                 subpath: value.subpath,
@@ -4462,8 +4487,11 @@ fn value_bytes(value: &RuntimeValue) -> Option<usize> {
             | RuntimeValue::Icon(value)
             | RuntimeValue::Error(value) => bytes = bytes.saturating_add(value.len()),
             RuntimeValue::Link(link) => {
-                bytes = bytes
-                    .saturating_add(link.path.len() + link.subpath.as_ref().map_or(0, String::len) + link.display.as_ref().map_or(0, String::len));
+                bytes = bytes.saturating_add(
+                    link.path.len()
+                        + link.subpath.as_ref().map_or(0, String::len)
+                        + link.display.as_ref().map_or(0, String::len),
+                );
                 if let Some(display) = link.display_value.as_deref() {
                     work.push(display);
                 }
@@ -4482,7 +4510,9 @@ fn value_bytes(value: &RuntimeValue) -> Option<usize> {
                 }
                 for link in file.links.iter().chain(&file.embeds).chain(&file.backlinks) {
                     bytes = bytes.saturating_add(
-                        32 + link.path.len() + link.subpath.as_ref().map_or(0, String::len) + link.display.as_ref().map_or(0, String::len),
+                        32 + link.path.len()
+                            + link.subpath.as_ref().map_or(0, String::len)
+                            + link.display.as_ref().map_or(0, String::len),
                     );
                     if let Some(display) = link.display_value.as_deref() {
                         work.push(display);
@@ -5125,3 +5155,52 @@ mod loose_group_reference_tests {
 #[cfg(test)]
 #[path = "link_subpath_tests.rs"]
 mod link_subpath_tests;
+
+#[cfg(test)]
+mod group_link_spelling_tests {
+    use super::*;
+    #[test]
+    fn canonical_relations_restore_explicit_fragment_once_and_file_identity_has_none() {
+        for (path, subpath, resolved, expected) in [
+            (
+                "People/A#B.md",
+                Some("#Heading"),
+                Some("People/A#B.md"),
+                "[[People/A#B.md#Heading|Alias]]",
+            ),
+            (
+                "People/A#B.md",
+                Some("#^block-id"),
+                Some("People/A#B.md"),
+                "[[People/A#B.md#^block-id|Alias]]",
+            ),
+            (
+                "../People/A%23B.md#Heading",
+                Some("#Heading"),
+                Some("People/A#B.md"),
+                "[[../People/A%23B.md#Heading|Alias]]",
+            ),
+            (
+                "People/A#B.md",
+                None,
+                Some("People/A#B.md"),
+                "[[People/A#B.md|Alias]]",
+            ),
+            (
+                "Missing#Heading",
+                Some("#Heading"),
+                None,
+                "[[Missing#Heading|Alias]]",
+            ),
+        ] {
+            let value = RuntimeValue::Link(BasesLink {
+                path: path.into(),
+                subpath: subpath.map(str::to_string),
+                resolved_path: Some(resolved.map(str::to_string)),
+                display: Some("Alias".into()),
+                ..Default::default()
+            });
+            assert_eq!(stringify(&value), expected);
+        }
+    }
+}
