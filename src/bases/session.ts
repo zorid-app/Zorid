@@ -103,7 +103,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   status.className = 'bases-session-status'; status.setAttribute('role', 'status');
   root.append(toolbar, content, status); container.append(root);
   let disposed = false, closing = false, mounted: MountedView | undefined, mountedType: string | undefined;
-  let mountedResult: BaseQueryResult | undefined, deferred: BaseControllerState | undefined;
+  let mountedResult: BaseQueryResult | undefined, renderingResult: BaseQueryResult | undefined, deferred: BaseControllerState | undefined;
   let mountedIndex = -1, mountedMove = false, mountedWritable = false;
   const widgetResults = new Map<string | number, BaseQueryResult>(), widgetSources = new Map<string | number, string>();
   const rememberWidgetResult = (result: BaseQueryResult, source: string) => {
@@ -480,7 +480,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const openResultFile = (path: string, event: MouseEvent | KeyboardEvent, witness?: { readonly entryId: string; readonly revision: string }) => {
       try {
         action();
-        const active = mountedResult ?? result, row = active.rows.find(row => row.path === path);
+        const active = renderingResult ?? mountedResult ?? result, row = active.rows.find(row => row.path === path);
         const captured = row ? sharedBaseWitness(active, row.path) : undefined;
         options.openFile(path, event, witness ?? captured);
       } catch (error) { report(error); }
@@ -499,7 +499,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         createOption: (property, value, presentation) => track(async () => { const definition = definitions.properties[basePropertyName(property)]; if (!definition) throw new Error('Configure this property first.'); await saveDefinition(basePropertyName(property), { ...definition, options: [...definition.options ?? [], { value }] }, definition); return acknowledgeWidget(presentation); }),
       }),
       getSummary: (property: string, groupIndex: number | null) => {
-        const active = mountedResult ?? result;
+        const active = renderingResult ?? mountedResult ?? result;
         const summaries = (groupIndex === null ? active : active.groups[groupIndex]) as { summaries?: Readonly<Record<string, import('./expression.ts').BaseExpressionValue>> } | undefined;
         const value = summaries?.summaries?.[property];
         const selection = active.view.summaries;
@@ -510,7 +510,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       requestAddSummary: (property: string, anchor: HTMLElement, name?: string) => addSummary(property, anchor, name),
       requestEditSummary: (property: string, id: string, anchor: HTMLElement, groupIndex?: number | null) => editSummary(property, id, anchor, groupIndex),
       requestHideSummary: (property: string) => track(() => {
-        const active = mountedResult ?? result, current = active.view.summaries;
+        const active = renderingResult ?? mountedResult ?? result, current = active.view.summaries;
         const selection: Record<string, BaseValue> = current && typeof current === 'object' && !Array.isArray(current) ? { ...(current as Record<string, BaseValue>) } : {};
         delete selection[property]; delete selection[basePropertyName(property)];
         return controller.updateView(numericVersion(active.version), { summaries: selection });
@@ -525,7 +525,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       }); },
       } : {}),
       getSummaryOptions: async (property: string, groupIndex: number | null) => {
-        const active = mountedResult ?? result, group = groupIndex === null ? undefined : active.groups[groupIndex];
+        const active = renderingResult ?? mountedResult ?? result, group = groupIndex === null ? undefined : active.groups[groupIndex];
         if (groupIndex !== null && !group) throw new Error('This result group changed; reopen its summary picker.');
         const previews = await controller.summaryPreviews(property, group?.sharedKeyId ?? undefined);
         const custom = BaseDocument.parse(controller.state.source).getRoot('summaries');
@@ -534,7 +534,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       },
       summaryOptions: [...new Set(['Average','Min','Max','Sum','Range','Median','Stddev','Earliest','Latest','Checked','Unchecked','Empty','Filled','Unique', ...Object.keys((document.getRoot('summaries') as Record<string, BaseValue>) ?? {})])].map(id => ({ id, label: id })),
       ...(writable ? { requestSummary: (property: string, id: string) => track(() => {
-        const active = mountedResult ?? result;
+        const active = renderingResult ?? mountedResult ?? result;
         const current = active.view.summaries;
         const selections: Record<string, BaseValue> = current && typeof current === 'object' && !Array.isArray(current) ? { ...(current as Record<string, BaseValue>) } : {};
         delete selections[basePropertyName(property)];
@@ -547,7 +547,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       parsePropertyInput: (raw: string, property: string, row: import('./query.ts').BaseQueryRow) => parseBasePropertyInput(raw, definitions.properties[basePropertyName(property)] ?? inferBasePropertyDefinition(row.values[property] ?? { type: 'null' }), row.values[property]),
       ...(writable ? {
         ...(options.deleteFiles ? { deleteFiles: (rows: readonly import('./query.ts').BaseQueryRow[]) => track(async () => {
-          const active = mountedResult ?? result;
+          const active = renderingResult ?? mountedResult ?? result;
           if (active.version !== controller.state.version) throw new Error('The Base result is stale; refresh before deleting files.');
           await options.deleteFiles!(rows, active);
         }) } : {}),
@@ -569,33 +569,38 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const groupingProperty = grouping && typeof grouping === 'object' && !Array.isArray(grouping) ? (grouping as Record<string, BaseValue>).property : undefined;
     let groupWritable = true; if (typeof groupingProperty === 'string') { try { assertPropertyWritable(groupingProperty); } catch { groupWritable = false; } }
     const moveEnabled = writable && groupWritable && actions.canMove(result);
-    if (mounted && mountedType === result.view.type && mountedIndex === selectedIndex && mountedMove === moveEnabled && mountedWritable === writable && mountedDefinitionsRevision === definitionsRevision) mounted.update(result);
-    else {
-      mounted?.destroy(); mounted = undefined; content.replaceChildren();
-      switch (result.view.type) {
-        case 'table': mounted = createBaseTableView(content, shared); break;
-        case 'cards': mounted = createBaseCardsView(content, { ...shared, loadThumbnail: options.loadThumbnail }); break;
-        case 'list': mounted = createBaseListView(content, shared); break;
-        case 'kanban': mounted = createBaseKanbanView(content, { ...shared, loadThumbnail: options.loadThumbnail, onError: report, onPresentationError: report,
-          readOnly: !writable, showColumnControls: false,
-          isGroupWritable: (group: BaseQueryGroup) => {
-            const active = mountedResult ?? result, grouping = active.view.groupBy;
-            if (!grouping || typeof grouping !== 'object' || Array.isArray(grouping) || !('property' in grouping) || typeof grouping.property !== 'string') return false;
-            const property = normalizeBaseProperty(grouping.property);
-            if (property === 'file.folder') return group.key?.type === 'string';
-            if (!property.startsWith('note.')) return false;
-            try { assertPropertyWritable(property); } catch { return false; }
-            if (active.shared === undefined) return true;
-            const saved = typeof group.sharedKeyId === 'string' && (active.groups.find(candidate => candidate.sharedKeyId === group.sharedKeyId) ?? active.groupOptions.find(candidate => candidate.listed && candidate.sharedKeyId === group.sharedKeyId));
-            return !!saved && 'editKey' in saved && saved.editKey !== undefined;
-          },
-          ...(moveEnabled ? { requestMove: request => track(() => { assertPropertyWritable(request.property); return actions.requestMove(request); }) } : {}),
-          ...(writable ? { requestGroupOrder: request => track(() => actions.requestGroupOrder(request)), createItem: request => track(() => { if (request.version !== controller.state.version) throw new Error('The base result is stale'); return createItem(actions.creationGroup(request), (request as typeof request & { anchor?: HTMLElement }).anchor ?? content); }) } : {}),
-        }); break;
-        default: content.textContent = `Unsupported base view: ${result.view.type}`;
+    // Retained renderer callbacks must use the incoming snapshot while their
+    // synchronous update builds DOM, without adopting it if that update fails.
+    renderingResult = result;
+    try {
+      if (mounted && mountedType === result.view.type && mountedIndex === selectedIndex && mountedMove === moveEnabled && mountedWritable === writable && mountedDefinitionsRevision === definitionsRevision) mounted.update(result);
+      else {
+        mounted?.destroy(); mounted = undefined; content.replaceChildren();
+        switch (result.view.type) {
+          case 'table': mounted = createBaseTableView(content, shared); break;
+          case 'cards': mounted = createBaseCardsView(content, { ...shared, loadThumbnail: options.loadThumbnail }); break;
+          case 'list': mounted = createBaseListView(content, shared); break;
+          case 'kanban': mounted = createBaseKanbanView(content, { ...shared, loadThumbnail: options.loadThumbnail, onError: report, onPresentationError: report,
+            readOnly: !writable, showColumnControls: false,
+            isGroupWritable: (group: BaseQueryGroup) => {
+              const active = renderingResult ?? mountedResult ?? result, grouping = active.view.groupBy;
+              if (!grouping || typeof grouping !== 'object' || Array.isArray(grouping) || !('property' in grouping) || typeof grouping.property !== 'string') return false;
+              const property = normalizeBaseProperty(grouping.property);
+              if (property === 'file.folder') return group.key?.type === 'string';
+              if (!property.startsWith('note.')) return false;
+              try { assertPropertyWritable(property); } catch { return false; }
+              if (active.shared === undefined) return true;
+              const saved = typeof group.sharedKeyId === 'string' && (active.groups.find(candidate => candidate.sharedKeyId === group.sharedKeyId) ?? active.groupOptions.find(candidate => candidate.listed && candidate.sharedKeyId === group.sharedKeyId));
+              return !!saved && 'editKey' in saved && saved.editKey !== undefined;
+            },
+            ...(moveEnabled ? { requestMove: request => track(() => { assertPropertyWritable(request.property); return actions.requestMove(request); }) } : {}),
+            ...(writable ? { requestGroupOrder: request => track(() => actions.requestGroupOrder(request)), createItem: request => track(() => { if (request.version !== controller.state.version) throw new Error('The base result is stale'); return createItem(actions.creationGroup(request), (request as typeof request & { anchor?: HTMLElement }).anchor ?? content); }) } : {}),
+          }); break;
+          default: content.textContent = `Unsupported base view: ${result.view.type}`;
+        }
+        mountedType = result.view.type; mountedIndex = selectedIndex; mountedMove = moveEnabled; mountedWritable = writable;
       }
-      mountedType = result.view.type; mountedIndex = selectedIndex; mountedMove = moveEnabled; mountedWritable = writable;
-    }
+    } finally { renderingResult = undefined; }
     mountedResult = result; mountedDefinitionsRevision = definitionsRevision; renderStatus(state);
   }
   const switchViewKey = (event: KeyboardEvent) => {
