@@ -69,7 +69,7 @@ impl Kind {
             Self::String => string_data(value).is_some(),
             Self::Number => matches!(value, RuntimeValue::Number(_)),
             Self::Boolean => matches!(value, RuntimeValue::Bool(_)),
-            Self::Regex => matches!(value, RuntimeValue::Regex(_, _)),
+            Self::Regex => matches!(value, RuntimeValue::Regex(_, _, _)),
             Self::Date => matches!(value, RuntimeValue::Date(_)),
             Self::File => matches!(value, RuntimeValue::File(_)),
             Self::Link => matches!(value, RuntimeValue::Link(link) if !link.external),
@@ -231,7 +231,7 @@ pub(super) fn method(receiver: &RuntimeValue, name: &str) -> Option<Signature> {
             "filter" => params![required("value", &[Boolean])],
             _ => return None,
         },
-        RuntimeValue::Regex(_, _) if name == "matches" => params![required("value", &[String])],
+        RuntimeValue::Regex(_, _, _) if name == "matches" => params![required("value", &[String])],
         RuntimeValue::Date(_) => match name {
             "format" => params![required("format", &[String])],
             "date" | "time" | "relative" | "isEmpty" => params![],
@@ -276,7 +276,7 @@ fn public_types(value: &RuntimeValue) -> &'static [&'static str] {
         RuntimeValue::Duration(_) => &["Duration"],
         RuntimeValue::Object(_) => &["Object"],
         RuntimeValue::File(_) => &["File"],
-        RuntimeValue::Regex(_, _) => &["RegExp"],
+        RuntimeValue::Regex(_, _, _) => &["RegExp"],
         RuntimeValue::Error(_) | RuntimeValue::ErrorValue(_) => &["Error"],
     }
 }

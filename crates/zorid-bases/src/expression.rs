@@ -484,6 +484,10 @@ pub(crate) struct BasesFile {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct BasesLink {
+    /// Original constructor data and owning note; Some("") is vault root.
+    /// None is unavailable provenance, never permission to guess an origin.
+    pub raw_destination: Option<String>,
+    pub source_path: Option<String>,
     pub subpath: Option<String>,
     pub target: Option<super::RecordWitness>,
     pub path: String,
@@ -630,7 +634,7 @@ pub(crate) enum RuntimeValue {
     Object(IndexMap<String, RuntimeValue>),
     File(Box<BasesFile>),
     Link(BasesLink),
-    Regex(String, String),
+    Regex(String, String, u64),
     Html(String),
     Image(String),
     Icon(String),
@@ -1664,6 +1668,7 @@ struct Evaluator<'a> {
     remaining_work: usize,
     summary_only: bool,
     random_state: u64,
+    next_regex_identity: u64,
 }
 
 pub(crate) const BASES_WORK_BUDGET_EXCEEDED: &str = "Obsidian Base expression work budget exceeded";
@@ -1817,6 +1822,7 @@ impl<'a> Evaluator<'a> {
             remaining_work: context.work_limit.unwrap_or(100_000),
             summary_only: false,
             random_state: seeded_row_state(context),
+            next_regex_identity: 0,
         }
     }
 
@@ -1851,7 +1857,13 @@ impl<'a> Evaluator<'a> {
         self.remaining_work = remaining;
         match expression {
             Expr::Literal(value) => from_json(value, None),
-            Expr::Regex(pattern, flags) => RuntimeValue::Regex(pattern.clone(), flags.clone()),
+            Expr::Regex(pattern, flags) => {
+                let Some(identity) = self.next_regex_identity.checked_add(1) else {
+                    return RuntimeValue::Error("budget\0Regex identities exhausted".into());
+                };
+                self.next_regex_identity = identity;
+                RuntimeValue::Regex(pattern.clone(), flags.clone(), identity)
+            },
             Expr::Identifier(name) => self.identifier(name, scope),
             Expr::Array(values) => {
                 let mut result = Vec::new();
@@ -2125,6 +2137,28 @@ impl<'a> Evaluator<'a> {
                 if matches!(value, RuntimeValue::Error(_)) {
                     return value;
                 }
+                if let Some(text) = string_data(&object) {
+                    return match value {
+                        RuntimeValue::Null => RuntimeValue::Null,
+                        RuntimeValue::Number(index) => {
+                            if let Err(error) = self.charge(text.len() / 16 + 1) {
+                                return error;
+                            }
+                            // Keep the accepted Unicode-scalar policy while
+                            // following charAt's truncation and empty bounds.
+                            let index = if index.is_nan() { 0.0 } else { index.trunc() };
+                            RuntimeValue::String(if index >= 0.0 && index.is_finite() {
+                                text.chars()
+                                    .nth(index as usize)
+                                    .map(String::from)
+                                    .unwrap_or_default()
+                            } else {
+                                String::new()
+                            })
+                        }
+                        _ => RuntimeValue::Error("access\0String index must be a number".into()),
+                    };
+                }
                 plain_string(&value)
             }
         };
@@ -2331,6 +2365,8 @@ impl<'a> Evaluator<'a> {
             "link" => match first {
                 RuntimeValue::Null => RuntimeValue::Null,
                 RuntimeValue::File(file) => RuntimeValue::Link(BasesLink {
+                    raw_destination: Some(file.path.clone()),
+                    source_path: Some(String::new()),
                     subpath: None,
                     path: file.path.clone(),
                     target: file.witness.clone(),
@@ -2531,7 +2567,7 @@ impl<'a> Evaluator<'a> {
             | RuntimeValue::Icon(value)
             | RuntimeValue::Error(value)
             | RuntimeValue::ErrorValue(value) => self.charge(value.len() / 16 + 1)?,
-            RuntimeValue::Regex(pattern, flags) => {
+            RuntimeValue::Regex(pattern, flags, _) => {
                 self.charge((pattern.len() + flags.len()) / 16 + 1)?
             }
             RuntimeValue::List(values) | RuntimeValue::TagList(values) => {
@@ -2885,7 +2921,7 @@ impl<'a> Evaluator<'a> {
             RuntimeValue::Object(object) => {
                 self.object_method(object, name, arguments, scope, validated.as_deref())
             }
-            RuntimeValue::Regex(pattern, flags) if name == "matches" => {
+            RuntimeValue::Regex(pattern, flags, _) if name == "matches" => {
                 match regex_is_match(&pattern, &flags, &plain_string(&values[0])) {
                     Ok(matches) => RuntimeValue::Bool(matches),
                     Err(error) => RuntimeValue::Error(error),
@@ -2897,7 +2933,12 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    fn string_method(&self, value: &str, name: &str, arguments: &[RuntimeValue]) -> RuntimeValue {
+    fn string_method(
+        &mut self,
+        value: &str,
+        name: &str,
+        arguments: &[RuntimeValue],
+    ) -> RuntimeValue {
         let first = arguments.first().cloned().unwrap_or(RuntimeValue::Null);
         match name {
             "contains" => RuntimeValue::Bool(
@@ -2906,37 +2947,38 @@ impl<'a> Evaluator<'a> {
                         .to_lowercase()
                         .contains(&plain_string(&first).to_lowercase()),
             ),
-            "containsAll" => RuntimeValue::Bool(
-                arguments
-                    .iter()
-                    .all(|argument| value.contains(&plain_string(argument))),
-            ),
-            "containsAny" => RuntimeValue::Bool(
-                arguments
-                    .iter()
-                    .any(|argument| value.contains(&plain_string(argument))),
-            ),
+            "containsAll" | "containsAny" => {
+                let haystack = value.to_lowercase();
+                let all = name == "containsAll";
+                for argument in arguments {
+                    let needle = plain_string(argument).to_lowercase();
+                    if let Err(error) = self.charge(haystack.len() / 16 + needle.len() / 16 + 1) {
+                        return error;
+                    }
+                    if haystack.contains(&needle) != all {
+                        return RuntimeValue::Bool(!all);
+                    }
+                }
+                RuntimeValue::Bool(all)
+            }
             "endsWith" => RuntimeValue::Bool(value.ends_with(&plain_string(&first))),
             "lower" => RuntimeValue::String(value.to_lowercase()),
             "replace" => {
                 let replacement = arguments.get(1).map(plain_string).unwrap_or_default();
-                if value.len().saturating_add(
-                    value
-                        .len()
-                        .saturating_add(1)
-                        .saturating_mul(replacement.len()),
-                ) > 8 * 1024 * 1024
-                {
-                    return RuntimeValue::Error("budget\0Replacement exceeds byte budget".into());
-                }
                 match first {
-                    RuntimeValue::Regex(pattern, flags) => {
-                        regex_replace(value, &pattern, &flags, &replacement)
-                            .map(RuntimeValue::String)
-                            .unwrap_or_else(RuntimeValue::Error)
+                    RuntimeValue::Regex(pattern, flags, _) => {
+                        regex_replace(value, &pattern, &flags, &replacement, &mut |work| {
+                            self.charge(work)
+                        })
+                        .map(RuntimeValue::String)
+                        .unwrap_or_else(|error| error)
                     }
                     other => {
-                        RuntimeValue::String(value.replace(&plain_string(&other), &replacement))
+                        literal_replace(value, &plain_string(&other), &replacement, &mut |work| {
+                            self.charge(work)
+                        })
+                        .map(RuntimeValue::String)
+                        .unwrap_or_else(|error| error)
                     }
                 }
             }
@@ -2967,7 +3009,8 @@ impl<'a> Evaluator<'a> {
                 arguments
                     .get(1)
                     .and_then(|item| self.number(item).ok())
-                    .map(|value| value as usize),
+                    .map(js_uint32),
+                &mut |work| self.charge(work),
             ),
             "startsWith" => RuntimeValue::Bool(value.starts_with(&plain_string(&first))),
             "title" => RuntimeValue::String(title_case(value)),
@@ -2986,7 +3029,11 @@ impl<'a> Evaluator<'a> {
                     .first()
                     .and_then(|item| self.number(item).ok())
                     .unwrap_or(0.0);
-                let factor = 10_f64.powf(digits);
+                let factor = if digits > 0.0 {
+                    10_f64.powf(digits)
+                } else {
+                    1.0
+                };
                 {
                     let scaled = value * factor;
                     let lower = scaled.floor();
@@ -3006,13 +3053,10 @@ impl<'a> Evaluator<'a> {
                 let digits = arguments
                     .first()
                     .and_then(|item| self.number(item).ok())
-                    .unwrap_or(0.0)
-                    .max(0.0) as usize;
-                if digits > 100 {
-                    RuntimeValue::Error("budget\0Numeric precision exceeds 100".into())
-                } else {
-                    RuntimeValue::String(format!("{value:.digits$}"))
-                }
+                    .unwrap_or(0.0);
+                fixed_number(value, digits)
+                    .map(RuntimeValue::String)
+                    .unwrap_or_else(|error| error)
             }
             _ => method_not_found("Number", name),
         }
@@ -3118,17 +3162,9 @@ impl<'a> Evaluator<'a> {
                 }
                 RuntimeValue::List(result)
             }
-            "flat" => RuntimeValue::List(
-                values
-                    .iter()
-                    .flat_map(|value| match value {
-                        RuntimeValue::List(values) | RuntimeValue::TagList(values) => {
-                            values.clone()
-                        }
-                        value => vec![value.clone()],
-                    })
-                    .collect(),
-            ),
+            "flat" => flatten_values(values, &mut |work| self.charge(work))
+                .map(RuntimeValue::List)
+                .unwrap_or_else(|error| error),
             "join" => {
                 let separator = eager.first().map(plain_string).unwrap_or_default();
                 let content = values.iter().try_fold(0usize, |total, value| {
@@ -3213,19 +3249,9 @@ impl<'a> Evaluator<'a> {
                 output.sort_by(compare_sort_keys);
                 RuntimeValue::List(output)
             }
-            "unique" => {
-                let mut seen = HashSet::new();
-                RuntimeValue::List(
-                    values
-                        .iter()
-                        .filter(|value| {
-                            matches!(value, RuntimeValue::Error(_))
-                                || seen.insert(unique_key(value))
-                        })
-                        .cloned()
-                        .collect(),
-                )
-            }
+            "unique" => unique_values(values, &mut |work| self.charge(work))
+                .map(RuntimeValue::List)
+                .unwrap_or_else(|error| error),
             "sum" | "mean" | "min" | "max" | "median" | "stddev" => {
                 // Numeric collection functions select actual numbers. They do
                 // not coerce null, booleans or numeric-looking strings. Mean's
@@ -3346,6 +3372,8 @@ impl<'a> Evaluator<'a> {
                 }
             }
             "asLink" => RuntimeValue::Link(BasesLink {
+                raw_destination: Some(file.path.clone()),
+                source_path: Some(String::new()),
                 subpath: None,
                 path: file.path.clone(),
                 display: arguments.first().map(plain_string),
@@ -3542,7 +3570,7 @@ impl<'a> Evaluator<'a> {
                 ) / 16,
             )?,
             RuntimeValue::File(file) => self.charge(file.path.len() / 16)?,
-            RuntimeValue::Regex(pattern, flags) => {
+            RuntimeValue::Regex(pattern, flags, _) => {
                 self.charge(pattern.len().saturating_add(flags.len()) / 16)?
             }
             RuntimeValue::List(values) | RuntimeValue::TagList(values) => {
@@ -3800,6 +3828,13 @@ impl<'a> Evaluator<'a> {
 
     fn make_link(&mut self, target: &str, display: Option<RuntimeValue>) -> RuntimeValue {
         let (path, parsed_display) = parse_link_text(target);
+        // A parsed wiki constructor is returned directly by the registration;
+        // its embedded alias wins even when a display argument was supplied.
+        let display = if target.starts_with("[[") && target.ends_with("]]") {
+            parsed_display.clone().map(RuntimeValue::String)
+        } else {
+            display
+        };
         let external = is_external(&path);
         let resolved = if external || self.context.relationships.is_none() {
             None
@@ -3810,6 +3845,8 @@ impl<'a> Evaluator<'a> {
             }
         };
         RuntimeValue::Link(BasesLink {
+            raw_destination: Some(path.clone()),
+            source_path: Some(String::new()),
             subpath: link_subpath(&path),
             target: resolved.as_ref().map(|(_, witness)| witness.clone()),
             resolved_path: if external || self.context.relationships.is_some() {
@@ -4013,6 +4050,8 @@ fn runtime_link_from_json(value: &Value) -> Option<BasesLink> {
         _ => return None,
     };
     Some(BasesLink {
+        raw_destination: None,
+        source_path: None,
         subpath,
         target: None,
         path: path.to_string(),
@@ -4068,7 +4107,7 @@ fn to_plain(value: &RuntimeValue) -> Value {
         ),
         RuntimeValue::File(value) => Value::String(value.path.clone()),
         RuntimeValue::Link(value) => Value::String(value.path.clone()),
-        RuntimeValue::Regex(pattern, flags) => Value::String(format!("/{pattern}/{flags}")),
+        RuntimeValue::Regex(pattern, flags, _) => Value::String(format!("/{pattern}/{flags}")),
         RuntimeValue::Error(message) | RuntimeValue::ErrorValue(message) => Value::Object(
             Map::from_iter([("error".to_string(), Value::String(message.clone()))]),
         ),
@@ -4122,7 +4161,7 @@ fn plain_string(value: &RuntimeValue) -> String {
                 .map(|display| format!("[[{data}|{display}]]"))
                 .unwrap_or_else(|| format!("[[{data}]]"))
         }
-        RuntimeValue::Regex(pattern, flags) => format!("/{pattern}/{flags}"),
+        RuntimeValue::Regex(pattern, flags, _) => format!("/{pattern}/{flags}"),
         RuntimeValue::Image(value) => super::order::image_text(value),
         RuntimeValue::ErrorValue(message) => format!("Error: {}", error_message(message)),
         RuntimeValue::Error(message) => message.clone(),
@@ -4181,7 +4220,7 @@ fn value_type(value: &RuntimeValue) -> &'static str {
         RuntimeValue::File(_) => "File",
         RuntimeValue::Link(value) if value.external => "URL",
         RuntimeValue::Link(_) => "Link",
-        RuntimeValue::Regex(_, _) => "RegExp",
+        RuntimeValue::Regex(_, _, _) => "RegExp",
         RuntimeValue::Html(_) => "HTML",
         RuntimeValue::Image(_) => "Image",
         RuntimeValue::Icon(_) => "Icon",
@@ -4217,6 +4256,76 @@ fn format_number(value: f64) -> String {
     } else {
         value.to_string()
     }
+}
+
+fn fixed_number(value: f64, precision: f64) -> Result<String, RuntimeValue> {
+    let precision = precision.trunc();
+    if precision < 0.0 {
+        return Err(RuntimeValue::Error(
+            "type\0Numeric precision must be nonnegative".into(),
+        ));
+    }
+    if precision > 100.0 {
+        return Err(RuntimeValue::Error(
+            "budget\0Numeric precision exceeds 100".into(),
+        ));
+    }
+    let digits = precision as usize;
+    if value.abs() >= 1e21 {
+        let text = format!("{value:e}");
+        return Ok(text
+            .split_once('e')
+            .map(|(mantissa, exponent)| {
+                format!(
+                    "{mantissa}e{}{exponent}",
+                    if exponent.starts_with('-') { "" } else { "+" }
+                )
+            })
+            .unwrap_or(text));
+    }
+    let magnitude = value.abs();
+    let mut text = format!("{magnitude:.digits$}");
+    // The formatter rounds the exact binary value ties-to-even; JS toFixed
+    // selects the larger integer at an exact positive tie. After removing the
+    // mantissa's powers of two, an exact half has exponent -1. Multiplying by
+    // 5^digits leaves its value modulo four unchanged, identifying the ties
+    // the formatter rounded down without an imprecise floating multiplication.
+    let bits = magnitude.to_bits();
+    let exponent = ((bits >> 52) & 0x7ff) as i32;
+    let mantissa = (bits & ((1_u64 << 52) - 1)) | if exponent == 0 { 0 } else { 1_u64 << 52 };
+    if mantissa != 0 {
+        let zeros = mantissa.trailing_zeros();
+        let binary_exponent = if exponent == 0 {
+            -1074
+        } else {
+            exponent - 1023 - 52
+        };
+        if binary_exponent + digits as i32 + zeros as i32 == -1 && (mantissa >> zeros) & 3 == 1 {
+            let mut bytes = text.into_bytes();
+            let mut carry = true;
+            for digit in bytes.iter_mut().rev() {
+                if *digit == b'.' {
+                    continue;
+                }
+                if *digit == b'9' {
+                    *digit = b'0';
+                } else {
+                    *digit += 1;
+                    carry = false;
+                    break;
+                }
+            }
+            if carry {
+                bytes.insert(0, b'1');
+            }
+            text = String::from_utf8(bytes).expect("formatted decimal digits");
+        }
+    }
+    // A negative input may round to zero, but negative zero itself prints as0.
+    if value < 0.0 {
+        text.insert(0, '-');
+    }
+    Ok(text)
 }
 
 fn parse_timezone_offset(value: &str) -> Option<FixedOffset> {
@@ -5014,30 +5123,136 @@ fn string_slice(value: &str, start: isize, end: Option<isize>) -> RuntimeValue {
             .collect(),
     )
 }
-fn string_split(value: &str, separator: &RuntimeValue, limit: Option<usize>) -> RuntimeValue {
-    let requested = limit.unwrap_or(usize::MAX);
-    let take = requested.min(100_001);
-    let values: Result<Vec<String>, String> = match separator {
-        RuntimeValue::Regex(pattern, flags) => compile_regex(pattern, flags)
-            .map(|regex| regex.split(value).take(take).map(String::from).collect()),
-        other if plain_string(other).is_empty() => Ok(value
-            .chars()
-            .take(take)
-            .map(|character| character.to_string())
-            .collect()),
-        other => Ok(value
-            .split(&plain_string(other))
-            .take(take)
-            .map(String::from)
-            .collect()),
-    };
-    match values {
-        Ok(values) if values.len() > 100_000 => {
-            RuntimeValue::Error("budget\0Split result exceeds item budget".into())
+fn flatten_values(
+    values: &[RuntimeValue],
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<Vec<RuntimeValue>, RuntimeValue> {
+    fn visit(
+        values: &[RuntimeValue],
+        depth: usize,
+        output: &mut Vec<RuntimeValue>,
+        bytes: &mut usize,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<(), RuntimeValue> {
+        if depth > 128 {
+            return Err(RuntimeValue::Error(
+                "budget\0Flatten nesting exceeds 128".into(),
+            ));
         }
-        Ok(values) => RuntimeValue::List(values.into_iter().map(RuntimeValue::String).collect()),
-        Err(error) => RuntimeValue::Error(error),
+        for value in values {
+            check(1)?;
+            if let RuntimeValue::List(nested) | RuntimeValue::TagList(nested) = value {
+                visit(nested, depth + 1, output, bytes, check)?;
+            } else {
+                let size = value_bytes(value).unwrap_or(usize::MAX);
+                check(size / 16)?;
+                *bytes = bytes.saturating_add(size);
+                if *bytes > 8 * 1024 * 1024 || output.len() >= 100_000 {
+                    return Err(RuntimeValue::Error(
+                        "budget\0Flatten result exceeds budget".into(),
+                    ));
+                }
+                output.push(value.clone());
+            }
+        }
+        Ok(())
     }
+    let mut output = Vec::new();
+    visit(values, 0, &mut output, &mut 0, check)?;
+    Ok(output)
+}
+
+fn js_uint32(value: f64) -> usize {
+    if !value.is_finite() || value == 0.0 {
+        0
+    } else {
+        value.trunc().rem_euclid(4_294_967_296.0) as usize
+    }
+}
+
+fn string_split(
+    value: &str,
+    separator: &RuntimeValue,
+    limit: Option<usize>,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> RuntimeValue {
+    fn run(
+        value: &str,
+        separator: &RuntimeValue,
+        limit: usize,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<Vec<RuntimeValue>, RuntimeValue> {
+        let mut output = Vec::new();
+        if limit == 0 {
+            return Ok(output);
+        }
+        check(value.len() / 16 + 1)?;
+        let mut bytes = 0usize;
+        let mut push = |value: Option<&str>| -> Result<bool, RuntimeValue> {
+            let size = value.map_or(0, str::len).saturating_add(16);
+            check(size / 16 + 1)?;
+            bytes = bytes.saturating_add(size);
+            if output.len() >= 100_000 || bytes > 8 * 1024 * 1024 {
+                return Err(RuntimeValue::Error(
+                    "budget\0Split result exceeds item budget".into(),
+                ));
+            }
+            output.push(
+                value
+                    .map(|value| RuntimeValue::String(value.into()))
+                    .unwrap_or(RuntimeValue::Null),
+            );
+            Ok(output.len() == limit)
+        };
+        if let RuntimeValue::Regex(pattern, flags, _) = separator {
+            let regex = compile_regex(pattern, flags).map_err(RuntimeValue::Error)?;
+            if value.is_empty() {
+                if !regex.is_match(value) {
+                    push(Some(value))?;
+                }
+                return Ok(output);
+            }
+            let mut end = 0;
+            for captures in regex.captures_iter(value) {
+                let matched = captures.get(0).expect("full regex match");
+                // JS split omits zero-width separators at either boundary and
+                // advances a Unicode scalar under the accepted string policy.
+                if matched.is_empty() && (matched.end() == end || matched.start() == value.len()) {
+                    continue;
+                }
+                if push(Some(&value[end..matched.start()]))? {
+                    return Ok(output);
+                }
+                for capture in captures.iter().skip(1) {
+                    if push(capture.map(|capture| capture.as_str()))? {
+                        return Ok(output);
+                    }
+                }
+                end = matched.end();
+            }
+            push(Some(&value[end..]))?;
+        } else {
+            let separator = plain_string(separator);
+            if separator.is_empty() {
+                for character in value.chars() {
+                    let mut buffer = [0; 4];
+                    if push(Some(character.encode_utf8(&mut buffer)))? {
+                        break;
+                    }
+                }
+            } else {
+                for part in value.split(&separator) {
+                    if push(Some(part))? {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(output)
+    }
+    run(value, separator, limit.unwrap_or(usize::MAX), check)
+        .map(RuntimeValue::List)
+        .unwrap_or_else(|error| error)
 }
 fn compare_sort_keys(left: &RuntimeValue, right: &RuntimeValue) -> std::cmp::Ordering {
     match (left, right) {
@@ -5047,18 +5262,370 @@ fn compare_sort_keys(left: &RuntimeValue, right: &RuntimeValue) -> std::cmp::Ord
         _ => plain_string(left).cmp(&plain_string(right)),
     }
 }
-fn unique_key(value: &RuntimeValue) -> String {
-    match value {
-        RuntimeValue::Tag(value) => format!("Tag:{value}"),
-        RuntimeValue::Date(date) => format!("date:{}:{}", date.millis, date.date_only),
-        RuntimeValue::Link(link) => format!("link:{}", link.path),
-        RuntimeValue::File(file) => format!("file:{}", file.path),
-        _ => format!(
-            "{}:{}",
-            value_type(value),
-            serde_json::to_string(&to_plain(value)).unwrap_or_default()
-        ),
+fn js_array_index(key: &str) -> Option<u32> {
+    key.parse::<u32>()
+        .ok()
+        .filter(|index| *index < u32::MAX && index.to_string() == key)
+}
+
+/// Constructor-strict recursive equality shared by unique and Object values.
+/// File/Link authority is never reconstructed from a presentation DTO.
+pub(crate) fn strict_values_equal(
+    left: &RuntimeValue,
+    right: &RuntimeValue,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<bool, RuntimeValue> {
+    fn admit(
+        value: &RuntimeValue,
+        depth: usize,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<(), RuntimeValue> {
+        check(1)?;
+        if depth > 128 {
+            return Err(RuntimeValue::Error(
+                "budget\0Strict comparison nesting exceeds 128".into(),
+            ));
+        }
+        match value {
+            RuntimeValue::Error(message) => return Err(RuntimeValue::Error(message.clone())),
+            RuntimeValue::List(values) | RuntimeValue::TagList(values) => {
+                for value in values {
+                    admit(value, depth + 1, check)?;
+                }
+            }
+            RuntimeValue::Object(values) => {
+                for (key, value) in values {
+                    check(key.len() / 16 + 1)?;
+                    admit(value, depth + 1, check)?;
+                }
+            }
+            RuntimeValue::Link(link) => {
+                check(
+                    (link.path.len()
+                        + link.raw_destination.as_ref().map_or(0, String::len)
+                        + link.source_path.as_ref().map_or(0, String::len)
+                        + link.display.as_ref().map_or(0, String::len))
+                        / 16
+                        + 1,
+                )?;
+                if let Some(value) = link.display_value.as_deref() {
+                    admit(value, depth + 1, check)?;
+                }
+            }
+            RuntimeValue::String(value)
+            | RuntimeValue::Tag(value)
+            | RuntimeValue::Html(value)
+            | RuntimeValue::Image(value)
+            | RuntimeValue::Icon(value)
+            | RuntimeValue::ErrorValue(value) => check(value.len() / 16 + 1)?,
+            _ => {}
+        }
+        Ok(())
     }
+    fn display(
+        left: &BasesLink,
+        right: &BasesLink,
+        depth: usize,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<bool, RuntimeValue> {
+        match (
+            left.display_value.as_deref(),
+            right.display_value.as_deref(),
+        ) {
+            (Some(left), Some(right)) => compare(left, right, depth + 1, check),
+            (Some(RuntimeValue::Null), None) => Ok(right.display.is_none()),
+            (None, Some(RuntimeValue::Null)) => Ok(left.display.is_none()),
+            (Some(RuntimeValue::String(left)), None) => Ok(right.display.as_ref() == Some(left)),
+            (None, Some(RuntimeValue::String(right))) => Ok(left.display.as_ref() == Some(right)),
+            (None, None) => Ok(left.display == right.display),
+            _ => Ok(false),
+        }
+    }
+    fn compare(
+        left: &RuntimeValue,
+        right: &RuntimeValue,
+        depth: usize,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<bool, RuntimeValue> {
+        check(1)?;
+        if depth > 128 {
+            return Err(RuntimeValue::Error(
+                "budget\0Strict comparison nesting exceeds 128".into(),
+            ));
+        }
+        Ok(match (left, right) {
+            (RuntimeValue::Null, RuntimeValue::Null) => true,
+            (RuntimeValue::Bool(a), RuntimeValue::Bool(b)) => a == b,
+            (RuntimeValue::ErrorValue(a), RuntimeValue::ErrorValue(b)) => {
+                error_message(a) == error_message(b)
+            }
+            (RuntimeValue::Number(a), RuntimeValue::Number(b)) => a == b,
+            (RuntimeValue::String(a), RuntimeValue::String(b))
+            | (RuntimeValue::Tag(a), RuntimeValue::Tag(b))
+            | (RuntimeValue::Html(a), RuntimeValue::Html(b))
+            | (RuntimeValue::Image(a), RuntimeValue::Image(b))
+            | (RuntimeValue::Icon(a), RuntimeValue::Icon(b)) => a == b,
+            (RuntimeValue::Date(a), RuntimeValue::Date(b)) => {
+                a.millis == b.millis && a.date_only == b.date_only
+            }
+            (RuntimeValue::Duration(a), RuntimeValue::Duration(b)) => {
+                [
+                    a.years,
+                    a.months,
+                    a.weeks,
+                    a.days,
+                    a.hours,
+                    a.minutes,
+                    a.seconds,
+                    a.milliseconds,
+                ] == [
+                    b.years,
+                    b.months,
+                    b.weeks,
+                    b.days,
+                    b.hours,
+                    b.minutes,
+                    b.seconds,
+                    b.milliseconds,
+                ]
+            }
+            (RuntimeValue::Regex(_, _, a), RuntimeValue::Regex(_, _, b)) => a == b,
+            (RuntimeValue::List(a), RuntimeValue::List(b))
+            | (RuntimeValue::TagList(a), RuntimeValue::TagList(b)) => {
+                if a.len() != b.len() {
+                    return Ok(false);
+                }
+                for (a, b) in a.iter().zip(b) {
+                    if !compare(a, b, depth + 1, check)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            (RuntimeValue::Object(a), RuntimeValue::Object(b)) => {
+                if a.len() != b.len() {
+                    return Ok(false);
+                }
+                for (key, a) in a {
+                    let Some(b) = b.get(key) else {
+                        return Ok(false);
+                    };
+                    if !compare(a, b, depth + 1, check)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            (RuntimeValue::File(a), RuntimeValue::File(b)) => {
+                let (Some(a_witness), Some(b_witness)) = (&a.witness, &b.witness) else {
+                    return Err(RuntimeValue::Error(
+                        "unavailable\0Strict File equality requires captured identity".into(),
+                    ));
+                };
+                a_witness == b_witness && a.path == b.path
+            }
+            (RuntimeValue::Link(a), RuntimeValue::Link(b)) => {
+                if a.external != b.external {
+                    return Ok(false);
+                }
+                if a.external {
+                    a.path == b.path && display(a, b, depth, check)?
+                } else {
+                    let (Some(a_raw), Some(b_raw), Some(a_source), Some(b_source)) = (
+                        &a.raw_destination,
+                        &b.raw_destination,
+                        &a.source_path,
+                        &b.source_path,
+                    ) else {
+                        return Err(RuntimeValue::Error("unavailable\0Strict Link equality requires original destination and source".into()));
+                    };
+                    a_raw == b_raw && a_source == b_source && display(a, b, depth, check)?
+                }
+            }
+            _ => false,
+        })
+    }
+    admit(left, 0, check)?;
+    admit(right, 0, check)?;
+    compare(left, right, 0, check)
+}
+
+/// Reference toString bucket keys; unlike JSON value serialization, Object
+/// values become ordered JSON strings of their children's strings. This helper
+/// can also serve the ordinary converter after its independent signature audit.
+pub(crate) fn unique_bucket_key(
+    value: &RuntimeValue,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<String, RuntimeValue> {
+    fn json_text(
+        output: &mut String,
+        text: &str,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<(), RuntimeValue> {
+        check(text.len() / 16 + 1)?;
+        append_text(output, "\"", check)?;
+        let mut start = 0;
+        for (at, character) in text.char_indices() {
+            let escaped = match character {
+                '"' => Some("\\\""),
+                '\\' => Some("\\\\"),
+                '\u{8}' => Some("\\b"),
+                '\u{c}' => Some("\\f"),
+                '\n' => Some("\\n"),
+                '\r' => Some("\\r"),
+                '\t' => Some("\\t"),
+                _ => None,
+            };
+            if escaped.is_some() || character < '\u{20}' {
+                append_text(output, &text[start..at], check)?;
+                if let Some(escaped) = escaped {
+                    append_text(output, escaped, check)?;
+                } else {
+                    append_text(output, &format!("\\u{:04x}", character as u32), check)?;
+                }
+                start = at + character.len_utf8();
+            }
+        }
+        append_text(output, &text[start..], check)?;
+        append_text(output, "\"", check)
+    }
+    fn render(
+        value: &RuntimeValue,
+        depth: usize,
+        check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+    ) -> Result<String, RuntimeValue> {
+        check(1)?;
+        if depth > 128 {
+            return Err(RuntimeValue::Error(
+                "budget\0Unique key nesting exceeds 128".into(),
+            ));
+        }
+        let mut output = String::new();
+        match value {
+            RuntimeValue::List(values) | RuntimeValue::TagList(values) => {
+                for (index, value) in values.iter().enumerate() {
+                    if index > 0 {
+                        append_text(&mut output, ", ", check)?;
+                    }
+                    append_text(&mut output, &render(value, depth + 1, check)?, check)?;
+                }
+            }
+            RuntimeValue::Object(values) => {
+                check(values.len())?;
+                let mut entries = values
+                    .iter()
+                    .enumerate()
+                    .map(|(ordinal, (key, value))| (js_array_index(key), ordinal, key, value))
+                    .collect::<Vec<_>>();
+                check(entries.len().saturating_mul(
+                    (usize::BITS - entries.len().max(1).leading_zeros()) as usize,
+                ))?;
+                entries.sort_unstable_by(|a, b| match (a.0, b.0) {
+                    (Some(a), Some(b)) => a.cmp(&b),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => a.1.cmp(&b.1),
+                });
+                append_text(&mut output, "{", check)?;
+                for (index, (_, _, key, value)) in entries.into_iter().enumerate() {
+                    if index > 0 {
+                        append_text(&mut output, ",", check)?;
+                    }
+                    json_text(&mut output, key, check)?;
+                    append_text(&mut output, ":", check)?;
+                    json_text(&mut output, &render(value, depth + 1, check)?, check)?;
+                }
+                append_text(&mut output, "}", check)?;
+            }
+            RuntimeValue::Link(link) if !link.external => {
+                let (Some(raw), Some(_)) = (&link.raw_destination, &link.source_path) else {
+                    return Err(RuntimeValue::Error(
+                        "unavailable\0Unique Link key requires original destination and source"
+                            .into(),
+                    ));
+                };
+                append_text(&mut output, "[[", check)?;
+                append_text(&mut output, raw, check)?;
+                let display = match link.display_value.as_deref() {
+                    Some(RuntimeValue::Null) => None,
+                    Some(value) => Some(render(value, depth + 1, check)?),
+                    None => link.display.clone(),
+                };
+                if let Some(display) = display {
+                    append_text(&mut output, "|", check)?;
+                    append_text(&mut output, &display, check)?;
+                }
+                append_text(&mut output, "]]", check)?;
+            }
+            RuntimeValue::Error(message) => return Err(RuntimeValue::Error(message.clone())),
+            _ => {
+                check(value_bytes(value).unwrap_or(usize::MAX) / 16 + 1)?;
+                append_text(&mut output, &plain_string(value), check)?;
+            }
+        }
+        Ok(output)
+    }
+    render(value, 0, check)
+}
+
+fn unique_values(
+    values: &[RuntimeValue],
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<Vec<RuntimeValue>, RuntimeValue> {
+    let mut buckets = IndexMap::<String, Vec<&RuntimeValue>>::new();
+    let mut bytes = 0usize;
+    let mut count = 0usize;
+    for value in values {
+        check(1)?;
+        let key = unique_bucket_key(value, check)?;
+        if !buckets.contains_key(&key) {
+            bytes = bytes.saturating_add(key.len() + 32);
+        }
+        let bucket = buckets.entry(key).or_default();
+        let mut seen = false;
+        for prior in bucket.iter() {
+            if strict_values_equal(prior, value, check)? {
+                seen = true;
+                break;
+            }
+        }
+        if !seen {
+            let size = value_bytes(value).unwrap_or(usize::MAX);
+            check(size / 16 + 1)?;
+            bytes = bytes.saturating_add(size);
+            count += 1;
+            if bytes > 8 * 1024 * 1024 || count > 100_000 {
+                return Err(RuntimeValue::Error(
+                    "budget\0Unique result exceeds budget".into(),
+                ));
+            }
+            bucket.push(value);
+        }
+    }
+    check(
+        buckets
+            .len()
+            .saturating_mul((usize::BITS - buckets.len().max(1).leading_zeros()) as usize),
+    )?;
+    let mut ordered = buckets
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, (key, values))| (js_array_index(&key), ordinal, values))
+        .collect::<Vec<_>>();
+    ordered.sort_unstable_by(|a, b| match (a.0, b.0) {
+        (Some(a), Some(b)) => a.cmp(&b),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.1.cmp(&b.1),
+    });
+    let mut output = Vec::with_capacity(count);
+    for (_, _, values) in ordered {
+        for value in values {
+            check(0)?;
+            output.push(value.clone());
+        }
+    }
+    Ok(output)
 }
 
 /// Expressions run once per record, so each pattern is compiled once and reused.
@@ -5101,20 +5668,137 @@ fn regex_replace(
     pattern: &str,
     flags: &str,
     replacement: &str,
-) -> Result<String, String> {
-    let regex = compile_regex(pattern, flags)?;
-    Ok(if flags.contains('g') {
-        regex.replace_all(value, replacement)
-    } else {
-        regex.replace(value, replacement)
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<String, RuntimeValue> {
+    check(value.len() / 16 + pattern.len() / 16 + 1)?;
+    let regex = compile_regex(pattern, flags).map_err(RuntimeValue::Error)?;
+    let named = regex.capture_names().any(|name| name.is_some());
+    let mut output = String::new();
+    let mut end = 0;
+    for captures in regex.captures_iter(value) {
+        check(1)?;
+        let matched = captures.get(0).expect("full regex match");
+        append_text(&mut output, &value[end..matched.start()], check)?;
+        replacement_text(&mut output, replacement, value, &captures, named, check)?;
+        end = matched.end();
+        if !flags.contains('g') {
+            break;
+        }
     }
-    .to_string())
+    append_text(&mut output, &value[end..], check)?;
+    Ok(output)
 }
-fn regex_split(value: &str, pattern: &str, flags: &str) -> Result<Vec<String>, String> {
-    Ok(compile_regex(pattern, flags)?
-        .split(value)
-        .map(String::from)
-        .collect())
+
+fn append_text(
+    output: &mut String,
+    text: &str,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<(), RuntimeValue> {
+    check(text.len() / 16 + 1)?;
+    if output.len().saturating_add(text.len()) > 8 * 1024 * 1024 {
+        return Err(RuntimeValue::Error(
+            "budget\0Replacement exceeds byte budget".into(),
+        ));
+    }
+    output.push_str(text);
+    Ok(())
+}
+
+fn literal_replace(
+    value: &str,
+    pattern: &str,
+    replacement: &str,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<String, RuntimeValue> {
+    check(value.len() / 16 + 1)?;
+    if pattern.is_empty() {
+        return Ok(value.into());
+    }
+    let mut output = String::new();
+    let mut end = 0;
+    for (start, _) in value.match_indices(pattern) {
+        append_text(&mut output, &value[end..start], check)?;
+        // Literal replacement is split/join in the shipped registration, so
+        // dollar templates are deliberately interpreted only for RegExp.
+        append_text(&mut output, replacement, check)?;
+        end = start + pattern.len();
+    }
+    append_text(&mut output, &value[end..], check)?;
+    Ok(output)
+}
+
+/// ECMAScript GetSubstitution for the supported, stateless regex subset.
+/// Captures absent from an alternative become empty text in a replacement;
+/// split retains them as Null instead. Named syntax is literal without any
+/// named capture group, and numeric captures use the longest valid index.
+fn replacement_text(
+    output: &mut String,
+    replacement: &str,
+    input: &str,
+    captures: &regex::Captures<'_>,
+    named: bool,
+    check: &mut impl FnMut(usize) -> Result<(), RuntimeValue>,
+) -> Result<(), RuntimeValue> {
+    let matched = captures.get(0).expect("full regex match");
+    let mut at = 0;
+    while let Some(next) = replacement[at..].find('$') {
+        let dollar = at + next;
+        append_text(output, &replacement[at..dollar], check)?;
+        let suffix = &replacement[dollar + 1..];
+        let mut consumed = 1;
+        let text = match suffix.as_bytes().first().copied() {
+            Some(b'$') => {
+                consumed = 2;
+                Some("$")
+            }
+            Some(b'&') => {
+                consumed = 2;
+                Some(matched.as_str())
+            }
+            Some(b'`') => {
+                consumed = 2;
+                Some(&input[..matched.start()])
+            }
+            Some(b'\'') => {
+                consumed = 2;
+                Some(&input[matched.end()..])
+            }
+            Some(first @ b'0'..=b'9') => {
+                let mut index = usize::from(first - b'0');
+                if let Some(second @ b'0'..=b'9') = suffix.as_bytes().get(1).copied() {
+                    let pair = index * 10 + usize::from(second - b'0');
+                    if pair > 0 && pair < captures.len() {
+                        index = pair;
+                        consumed = 3;
+                    }
+                }
+                if index > 0 && index < captures.len() {
+                    if consumed == 1 {
+                        consumed = 2;
+                    }
+                    Some(captures.get(index).map_or("", |capture| capture.as_str()))
+                } else {
+                    None
+                }
+            }
+            Some(b'<') if named => {
+                if let Some(end) = suffix.find('>') {
+                    consumed = end + 2;
+                    Some(
+                        captures
+                            .name(&suffix[1..end])
+                            .map_or("", |capture| capture.as_str()),
+                    )
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        append_text(output, text.unwrap_or("$"), check)?;
+        at = dollar + consumed;
+    }
+    append_text(output, &replacement[at..], check)
 }
 fn title_case(value: &str) -> String {
     static WORD: LazyLock<Regex> =
