@@ -2,11 +2,12 @@
 //! remains the document crate's responsibility; this module never writes source.
 use crate::{BaseValue, ExpressionDiagnostic, PropertyValue};
 /// Change whenever Base configuration compilation or language meaning changes.
-pub const BASE_COMPILER_VERSION: &str = "zorid-base-yaml-expression-v2";
+pub const BASE_COMPILER_VERSION: &str = "zorid-base-yaml-expression-summaries-v3";
 
 #[derive(Clone, Debug)]
 pub struct BaseProgram {
     pub(crate) formulas: Vec<(String, String)>,
+    pub(crate) summaries: Vec<(String, String)>,
     pub(crate) filter: Option<Filter>,
     pub(crate) views: Vec<View>,
     /// Exact decoded configuration, including unknown fields. This is not a
@@ -61,6 +62,7 @@ pub(crate) struct View {
     pub group: Option<Criterion>,
     pub group_order: Option<Vec<BaseValue>>,
     pub limit: Option<usize>,
+    pub summaries: Vec<(String, String)>,
     pub refresh_dependency: crate::query::BaseClockDependency,
 }
 
@@ -103,6 +105,10 @@ pub(crate) fn clock_independent(
         .formulas
         .iter()
         .all(|(_, source)| crate::expression::clock_independent(source, check))
+        && program
+            .summaries
+            .iter()
+            .all(|(_, source)| crate::expression::clock_independent(source, check))
         && program.filter.as_ref().is_none_or(|f| filter(f, check))
         && program
             .views
@@ -258,6 +264,18 @@ pub fn compile_base(configuration: PropertyValue) -> Result<BaseProgram, Express
             .collect::<Result<_, _>>()?,
         _ => return Err(error("Formulas must be a named mapping")),
     };
+    let summaries: Vec<(String, String)> = match get(&configuration, "summaries") {
+        None => Vec::new(),
+        Some(PropertyValue::Object(values)) => values
+            .iter()
+            .map(|(name, value)| {
+                text(value)
+                    .map(|value| (name.clone(), value.into()))
+                    .ok_or_else(|| error("Summary definitions must be strings"))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => return Err(error("Summaries must be a named mapping")),
+    };
     let root_filter = get(&configuration, "filters")
         .map(|value| filter(value, 0))
         .transpose()?;
@@ -348,8 +366,29 @@ pub fn compile_base(configuration: PropertyValue) -> Result<BaseProgram, Express
         let view_filter = get(configuration, "filters")
             .map(|value| filter(value, 0))
             .transpose()?;
-        let refresh_dependency = view_filter.as_ref().map_or(common_refresh, |filter| {
-            common_refresh.join(filter_clock_dependency(filter, &mut refresh_check))
+        let view_summaries = match get(configuration, "summaries") {
+            None => Vec::new(),
+            Some(PropertyValue::Object(values)) => values
+                .iter()
+                .map(|(property, name)| {
+                    text(name)
+                        .map(|name| (property_id(property), name.into()))
+                        .ok_or_else(|| error("View summary selections must be strings"))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            _ => return Err(error("View summaries must be a property-to-name mapping")),
+        };
+        let mut summary_refresh = common_refresh;
+        for (_, name) in &view_summaries {
+            if let Some((_, source)) = summaries.iter().find(|(candidate, _)| candidate == name) {
+                summary_refresh = summary_refresh.join(crate::expression::clock_dependency(
+                    source,
+                    &mut refresh_check,
+                ));
+            }
+        }
+        let refresh_dependency = view_filter.as_ref().map_or(summary_refresh, |filter| {
+            summary_refresh.join(filter_clock_dependency(filter, &mut refresh_check))
         });
         views.push(View {
             configuration: configuration.clone(),
@@ -359,11 +398,13 @@ pub fn compile_base(configuration: PropertyValue) -> Result<BaseProgram, Express
             group,
             group_order,
             limit,
+            summaries: view_summaries,
             refresh_dependency,
         });
     }
     Ok(BaseProgram {
         formulas,
+        summaries,
         filter: root_filter,
         views,
         configuration,

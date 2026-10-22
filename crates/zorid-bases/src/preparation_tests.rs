@@ -1674,3 +1674,37 @@ fn proof_running_heap_stops_after_each_record_entry_and_fact() {
         );
     }
 }
+
+#[test]
+fn summary_answers_copy_overall_and_group_values_without_aliasing_cache_entries() {
+    let r = first();
+    let mut cache = BasePreparationCache::new();
+    let source = "summaries:\n  Count: values.length\nviews:\n  - type: table\n    name: T\n    summaries:\n      file.name: Count\n";
+    let (program, prepared) = answer_inputs(&mut cache, &r, source, 0);
+    let seed = cache
+        .query_prepared_cached(&program, &prepared, &r.options, 0)
+        .unwrap();
+    assert_eq!(seed.outcome(), PreparationCacheOutcome::Miss);
+    let mut owned = seed.into_value();
+    assert_eq!(
+        owned.summaries["file.name"],
+        crate::BaseValue::Number { value: 3.0 }
+    );
+    owned.summaries.insert(
+        "file.name".into(),
+        crate::BaseValue::Number { value: 999.0 },
+    );
+    owned.groups[0].summaries.clear();
+    let hit = cache
+        .query_prepared_cached(&program, &prepared, &r.options, 1)
+        .unwrap();
+    assert_eq!(hit.outcome(), PreparationCacheOutcome::Hit);
+    assert_eq!(
+        hit.value().summaries["file.name"],
+        crate::BaseValue::Number { value: 3.0 }
+    );
+    assert_eq!(
+        hit.value().groups[0].summaries["file.name"],
+        crate::BaseValue::Number { value: 3.0 }
+    );
+}

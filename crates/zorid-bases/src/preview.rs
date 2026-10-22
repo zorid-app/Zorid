@@ -43,6 +43,8 @@ pub struct BasePreviewResult {
     pub view: PropertyValue,
     pub rows: Vec<BaseRow>,
     pub groups: Vec<BaseGroup>,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub summaries: std::collections::BTreeMap<String, BaseValue>,
     pub group_options: Vec<GroupOption>,
     pub properties: Vec<String>,
     pub available_properties: Vec<String>,
@@ -612,6 +614,7 @@ pub fn query_preview(
         view: result.view,
         rows: result.rows,
         groups: result.groups,
+        summaries: result.summaries,
         group_options: result.group_options,
         properties: result.properties,
         available_properties: result.available_properties,

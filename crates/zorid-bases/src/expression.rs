@@ -663,6 +663,180 @@ pub(crate) fn evaluate(
     })
 }
 
+/// Evaluate a summary with only `values` and list callback bindings in scope.
+/// File values are rehydrated from the same immutable query input, never from
+/// an ambient vault. Conversion work shares the expression work allowance.
+pub(crate) fn evaluate_summary(
+    source: &str,
+    values: &[&BaseValue],
+    options: &crate::EvaluationOptions,
+    relationships: Option<&super::graph::PreparedRelationships<'_>>,
+    mut file: impl FnMut(&str) -> Result<BasesFile, ExpressionDiagnostic>,
+) -> Result<EvaluationResult, ExpressionDiagnostic> {
+    let timezone = BasesTimezone::from_setting(Some(&options.timezone))
+        .map_err(|message| ExpressionDiagnostic::new("input", message))?;
+    let context = BasesEvaluationContext {
+        relationships,
+        now: Some(
+            invocation_clock(options.clock_ms)
+                .ok_or_else(|| {
+                    ExpressionDiagnostic::new("input", "Clock or timestamp is out of range")
+                })?
+                .to_rfc3339(),
+        ),
+        timezone,
+        work_limit: Some(options.max_steps),
+        cancellation: options.cancellation.clone(),
+        ..Default::default()
+    };
+    let mut evaluator = Evaluator::new(&context);
+    evaluator.summary_only = true;
+    let mut bytes = 0usize;
+    let mut converted = Vec::new();
+    for value in values {
+        converted.push(summary_runtime_value(
+            value,
+            0,
+            &mut bytes,
+            &mut evaluator,
+            &mut file,
+        )?);
+    }
+    let value = match parse_cached(source) {
+        Ok(ast) => {
+            let scope = BTreeMap::from([("values".into(), RuntimeValue::List(converted))]);
+            typed_result(evaluator.evaluate(&ast, &scope))
+        }
+        Err(message) => {
+            let (code, text) = message.split_once('\0').unwrap_or(("parse", &message));
+            Err(ExpressionDiagnostic::new(code, text))
+        }
+    };
+    // Semantic failures are visible cells and still consume query work. Only
+    // resource/cancellation failures reject the entire bounded query.
+    let value = match value {
+        Ok(value) => value,
+        Err(error) if ["budget", "cancelled"].contains(&error.code.as_str()) => return Err(error),
+        Err(error) => BaseValue::Error {
+            code: error.code,
+            message: error.message,
+        },
+    };
+    Ok(EvaluationResult {
+        value,
+        steps_used: options.max_steps.saturating_sub(evaluator.remaining_work),
+    })
+}
+
+fn summary_runtime_value(
+    value: &BaseValue,
+    depth: usize,
+    bytes: &mut usize,
+    evaluator: &mut Evaluator<'_>,
+    file: &mut impl FnMut(&str) -> Result<BasesFile, ExpressionDiagnostic>,
+) -> Result<RuntimeValue, ExpressionDiagnostic> {
+    if depth > 128 {
+        return Err(ExpressionDiagnostic::new(
+            "budget",
+            "Summary values exceed depth budget",
+        ));
+    }
+    evaluator.charge(1).map_err(|value| match value {
+        RuntimeValue::Error(message) => {
+            let (code, text) = message.split_once('\0').unwrap_or(("budget", &message));
+            ExpressionDiagnostic::new(code, text)
+        }
+        _ => unreachable!("charge errors are diagnostics"),
+    })?;
+    *bytes = bytes.saturating_add(64);
+    let result = match value {
+        BaseValue::Null => RuntimeValue::Null,
+        BaseValue::Boolean { value } => RuntimeValue::Bool(*value),
+        BaseValue::Number { value } => RuntimeValue::Number(*value),
+        BaseValue::String { value } => {
+            *bytes = bytes.saturating_add(value.len());
+            RuntimeValue::String(value.clone())
+        }
+        BaseValue::List { value } => RuntimeValue::List(
+            value
+                .iter()
+                .map(|value| summary_runtime_value(value, depth + 1, bytes, evaluator, file))
+                .collect::<Result<_, _>>()?,
+        ),
+        BaseValue::Object { value } => {
+            let mut result = IndexMap::new();
+            for (key, value) in value {
+                *bytes = bytes.saturating_add(key.len());
+                result.insert(
+                    key.clone(),
+                    summary_runtime_value(value, depth + 1, bytes, evaluator, file)?,
+                );
+            }
+            RuntimeValue::Object(result)
+        }
+        BaseValue::Date {
+            timestamp,
+            has_time,
+        } => RuntimeValue::Date(DateValue {
+            millis: *timestamp,
+            date_only: !has_time,
+            timezone: evaluator.timezone.clone(),
+        }),
+        BaseValue::Duration {
+            years,
+            months,
+            weeks,
+            days,
+            hours,
+            minutes,
+            seconds,
+            milliseconds,
+        } => RuntimeValue::Duration(DurationValue {
+            years: *years,
+            months: *months,
+            weeks: *weeks,
+            days: *days,
+            hours: *hours,
+            minutes: *minutes,
+            seconds: *seconds,
+            milliseconds: *milliseconds,
+        }),
+        BaseValue::File { path } => {
+            // Admission precedes this clone in the query reducer.
+            let hydrated = RuntimeValue::File(Box::new(file(path)?));
+            *bytes = bytes.saturating_add(value_bytes(&hydrated).unwrap_or(usize::MAX));
+            hydrated
+        }
+        BaseValue::Link {
+            path,
+            target,
+            display,
+            external,
+        } => {
+            *bytes = bytes.saturating_add(path.len() + display.as_ref().map_or(0, String::len));
+            RuntimeValue::Link(BasesLink {
+                path: path.clone(),
+                target: target.clone(),
+                display: display.clone(),
+                external: *external,
+                ..Default::default()
+            })
+        }
+        BaseValue::Error { code, message } => {
+            *bytes = bytes.saturating_add(code.len() + message.len());
+            RuntimeValue::Error(format!("{code}\0{message}"))
+        }
+    };
+    let allocated = value_bytes(&result).unwrap_or(usize::MAX);
+    if *bytes > 8 * 1024 * 1024 || allocated > 8 * 1024 * 1024 {
+        return Err(ExpressionDiagnostic::new(
+            "budget",
+            "Summary values exceed byte budget",
+        ));
+    }
+    Ok(result)
+}
+
 pub(crate) fn validate(expression: &str) -> Result<(), String> {
     parse_cached(expression).map(|_| ())
 }
@@ -824,9 +998,11 @@ pub(crate) fn clock_dependency(
                             | "repeat" | "reverse" | "slice" | "split" | "startsWith" | "title"
                             | "trim" | "abs" | "ceil" | "floor" | "round" | "toFixed" | "date"
                             | "format" | "time" | "filter" | "flat" | "join" | "map" | "reduce"
-                            | "sort" | "unique" | "sum" | "mean" | "keys" | "values"
-                            | "matches" | "hasLink" | "asLink" | "hasProperty" | "hasTag"
-                            | "inFolder" => Dependency::None,
+                            | "sort" | "unique" | "sum" | "mean" | "min" | "max" | "median"
+                            | "stddev" | "earliest" | "latest" | "keys" | "values" | "matches"
+                            | "hasLink" | "asLink" | "hasProperty" | "hasTag" | "inFolder" => {
+                                Dependency::None
+                            }
                             _ => Dependency::Instant,
                         };
                         own.join(walk(receiver, check)?)
@@ -1198,6 +1374,7 @@ struct Evaluator<'a> {
     formula_cache: HashMap<String, RuntimeValue>,
     formula_stack: HashSet<String>,
     remaining_work: usize,
+    summary_only: bool,
 }
 
 pub(crate) const BASES_WORK_BUDGET_EXCEEDED: &str = "Obsidian Base expression work budget exceeded";
@@ -1219,6 +1396,7 @@ impl<'a> Evaluator<'a> {
             formula_cache: HashMap::new(),
             formula_stack: HashSet::new(),
             remaining_work: context.work_limit.unwrap_or(100_000),
+            summary_only: false,
         }
     }
 
@@ -1298,6 +1476,16 @@ impl<'a> Evaluator<'a> {
     fn identifier(&mut self, name: &str, scope: &Scope) -> RuntimeValue {
         if let Some(value) = scope.get(name) {
             return value.clone();
+        }
+        if self.summary_only {
+            return scope
+                .get(if name.eq_ignore_ascii_case("values") {
+                    "values"
+                } else {
+                    name
+                })
+                .cloned()
+                .unwrap_or(RuntimeValue::Null);
         }
         let lower = name.to_lowercase();
         if self.context.file.metadata_unavailable
@@ -1463,7 +1651,7 @@ impl<'a> Evaluator<'a> {
 
     fn member(&mut self, object: &Expr, member: &Member, scope: &Scope) -> RuntimeValue {
         if let Expr::Identifier(namespace) = object {
-            if namespace.eq_ignore_ascii_case("formula") {
+            if !self.summary_only && namespace.eq_ignore_ascii_case("formula") {
                 let name = match member {
                     Member::Named(name) => name.clone(),
                     Member::Computed(expression) => {
@@ -1645,9 +1833,6 @@ impl<'a> Evaluator<'a> {
         arguments: &[Expr],
         scope: &Scope,
     ) -> RuntimeValue {
-        if let RuntimeValue::Error(_) = receiver {
-            return receiver;
-        }
         let work = match &receiver {
             RuntimeValue::List(values) => values.len(),
             RuntimeValue::Object(values) => values.len(),
@@ -1674,6 +1859,9 @@ impl<'a> Evaluator<'a> {
             };
             let expected = values.first().map(plain_string).unwrap_or_default();
             return RuntimeValue::Bool(value_type(&receiver).eq_ignore_ascii_case(&expected));
+        }
+        if let RuntimeValue::Error(_) = receiver {
+            return receiver;
         }
         match receiver {
             // As in Obsidian, a method on a missing value is missing rather than an error.
@@ -1826,7 +2014,20 @@ impl<'a> Evaluator<'a> {
                     .and_then(|item| self.number(item).ok())
                     .unwrap_or(0.0);
                 let factor = 10_f64.powf(digits);
-                RuntimeValue::Number((value * factor).round() / factor)
+                {
+                    let scaled = value * factor;
+                    let lower = scaled.floor();
+                    let rounded = if scaled - lower < 0.5 {
+                        lower
+                    } else {
+                        lower + 1.0
+                    };
+                    RuntimeValue::Number(if rounded == 0.0 && scaled < 0.0 {
+                        -0.0
+                    } else {
+                        rounded / factor
+                    })
+                }
             }
             "toFixed" => {
                 let digits = arguments
@@ -2026,28 +2227,86 @@ impl<'a> Evaluator<'a> {
                 RuntimeValue::List(
                     values
                         .iter()
-                        .filter(|value| seen.insert(unique_key(value)))
+                        .filter(|value| {
+                            matches!(value, RuntimeValue::Error(_))
+                                || seen.insert(unique_key(value))
+                        })
                         .cloned()
                         .collect(),
                 )
             }
-            "sum" => values
-                .iter()
-                .map(|value| self.number(value))
-                .sum::<Result<f64, _>>()
-                .map(RuntimeValue::Number)
-                .unwrap_or_else(RuntimeValue::Error),
-            "mean" => {
-                if values.is_empty() {
-                    RuntimeValue::Null
-                } else {
-                    values
-                        .iter()
-                        .map(|value| self.number(value))
-                        .sum::<Result<f64, _>>()
-                        .map(|sum| RuntimeValue::Number(sum / values.len() as f64))
-                        .unwrap_or_else(RuntimeValue::Error)
+            "sum" | "mean" | "min" | "max" | "median" | "stddev" => {
+                // Numeric collection functions select actual numbers. They do
+                // not coerce null, booleans or numeric-looking strings. Mean's
+                // divisor is the original list length, matching the reference.
+                let mut numbers = values
+                    .iter()
+                    .filter_map(|value| match value {
+                        RuntimeValue::Number(value) => Some(*value),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                if numbers.is_empty() {
+                    return RuntimeValue::Null;
                 }
+                if name == "median" {
+                    let work = numbers.len().saturating_mul(
+                        (usize::BITS - numbers.len().max(1).leading_zeros()) as usize,
+                    );
+                    if let Err(error) = self.charge(work) {
+                        return error;
+                    }
+                    numbers.sort_by(f64::total_cmp);
+                }
+                let sum = numbers.iter().sum::<f64>();
+                let result = match name {
+                    "sum" => sum,
+                    "mean" => sum / values.len() as f64,
+                    "min" => numbers.into_iter().reduce(f64::min).unwrap(),
+                    "max" => numbers.into_iter().reduce(f64::max).unwrap(),
+                    "median" => {
+                        let middle = numbers.len() / 2;
+                        if numbers.len() % 2 == 0 {
+                            (numbers[middle - 1] + numbers[middle]) / 2.0
+                        } else {
+                            numbers[middle]
+                        }
+                    }
+                    "stddev" => {
+                        let mean = sum / numbers.len() as f64;
+                        (numbers
+                            .iter()
+                            .map(|value| (value - mean).powi(2))
+                            .sum::<f64>()
+                            / numbers.len() as f64)
+                            .sqrt()
+                    }
+                    _ => unreachable!(),
+                };
+                RuntimeValue::Number(result)
+            }
+            "earliest" | "latest" => {
+                let dates = values.iter().filter_map(|value| match value {
+                    RuntimeValue::Date(value) => Some(value.millis),
+                    RuntimeValue::String(value) => {
+                        parse_date(value, &self.timezone).map(|date| date.millis)
+                    }
+                    _ => None,
+                });
+                let selected = dates.reduce(if name == "earliest" {
+                    i64::min
+                } else {
+                    i64::max
+                });
+                selected
+                    .map(|millis| {
+                        RuntimeValue::Date(DateValue {
+                            millis,
+                            date_only: false,
+                            timezone: self.timezone.clone(),
+                        })
+                    })
+                    .unwrap_or(RuntimeValue::Null)
             }
             _ => method_not_found("List", name),
         }
@@ -3436,8 +3695,14 @@ fn compare_sort_keys(left: &RuntimeValue, right: &RuntimeValue) -> std::cmp::Ord
 }
 fn unique_key(value: &RuntimeValue) -> String {
     match value {
-        RuntimeValue::Link(_) => stringify(value),
-        _ => serde_json::to_string(&to_plain(value)).unwrap_or_default(),
+        RuntimeValue::Date(date) => format!("date:{}:{}", date.millis, date.date_only),
+        RuntimeValue::Link(link) => format!("link:{}", link.path),
+        RuntimeValue::File(file) => format!("file:{}", file.path),
+        _ => format!(
+            "{}:{}",
+            value_type(value),
+            serde_json::to_string(&to_plain(value)).unwrap_or_default()
+        ),
     }
 }
 

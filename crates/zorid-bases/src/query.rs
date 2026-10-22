@@ -151,6 +151,9 @@ pub struct BaseGroup {
     pub key_id: Option<String>,
     pub key: Option<BaseValue>,
     pub entry_ids: Vec<crate::EntryId>,
+    /// Aggregates of exactly this group's returned rows, including offscreen rows.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub summaries: BTreeMap<String, BaseValue>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -176,6 +179,9 @@ pub struct BaseQueryResult {
     pub view: PropertyValue,
     pub rows: Vec<BaseRow>,
     pub groups: Vec<BaseGroup>,
+    /// Aggregates after filters, group visibility, search, ordering and limit.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub summaries: BTreeMap<String, BaseValue>,
     pub group_options: Vec<GroupOption>,
     pub properties: Vec<String>,
     pub available_properties: Vec<String>,
@@ -214,6 +220,8 @@ pub(crate) struct QueryRowsResult {
     pub(crate) view: PropertyValue,
     pub(crate) rows: Vec<BaseRow>,
     pub(crate) groups: Vec<BaseGroup>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) summaries: BTreeMap<String, BaseValue>,
     pub(crate) group_options: Vec<GroupOption>,
     pub(crate) properties: Vec<String>,
     pub(crate) available_properties: Vec<String>,
@@ -936,6 +944,7 @@ pub(crate) fn query_base_validated(
         view: rows.view,
         rows: rows.rows,
         groups: rows.groups,
+        summaries: rows.summaries,
         group_options: rows.group_options,
         properties: rows.properties,
         available_properties: rows.available_properties,
@@ -1032,6 +1041,13 @@ pub(crate) fn query_rows_validated(
         .chain(properties.iter())
         .cloned()
         .collect::<BTreeSet<_>>();
+    for (property, _) in &view.summaries {
+        admit(&mut admission, |admission| {
+            admission.charge(0)?;
+            Ok(map_slot::<String, ()>().saturating_add(crate::preview::string_bytes(property)))
+        })?;
+        needed.insert(property.clone());
+    }
     if let Some(group) = &view.group {
         admit(&mut admission, |admission| {
             admission.charge(0)?;
@@ -1626,6 +1642,7 @@ pub(crate) fn query_rows_validated(
                     key_id: Some(format!("base-key-v1:{key_id}")),
                     key: Some(key),
                     entry_ids: Vec::new(),
+                    summaries: BTreeMap::new(),
                 });
                 by_key.insert(key_id, index);
                 index
@@ -1706,8 +1723,20 @@ pub(crate) fn query_rows_validated(
             key_id: None,
             key: None,
             entry_ids: rows.iter().map(|row| row.entry_id.clone()).collect(),
+            summaries: BTreeMap::new(),
         });
     }
+    let summaries = summarize_rows(
+        program,
+        view,
+        &rows,
+        &mut groups,
+        input,
+        options,
+        relationships.as_ref(),
+        &mut steps_used,
+        &mut admission,
+    )?;
     let dependency =
         program
             .refresh_dependency(options.view_index)
@@ -1756,6 +1785,7 @@ pub(crate) fn query_rows_validated(
         view: view.configuration.clone(),
         rows,
         groups,
+        summaries,
         group_options,
         properties,
         available_properties: available,
@@ -1772,6 +1802,150 @@ pub(crate) fn query_rows_validated(
         refresh_hint,
     };
     Ok(result)
+}
+
+/// Summary inputs come from returned rows, after saved limits. Preview callers
+/// keep their existing explicit prepared-subset aggregate coverage markers.
+fn summarize_rows(
+    program: &BaseProgram,
+    view: &program::View,
+    rows: &[BaseRow],
+    groups: &mut [BaseGroup],
+    input: &QueryRows<'_>,
+    options: &QueryOptions,
+    relationships: Option<&crate::graph::PreparedRelationships<'_>>,
+    steps: &mut usize,
+    admission: &mut Admission<'_>,
+) -> Result<BTreeMap<String, BaseValue>, ExpressionDiagnostic> {
+    if view.summaries.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    admit(admission, |_| {
+        Ok(input
+            .records
+            .len()
+            .saturating_mul(map_slot::<&str, &DetachedRecord>())
+            .saturating_add(
+                rows.len()
+                    .saturating_mul(map_slot::<&crate::EntryId, &BaseRow>()),
+            )
+            .saturating_add(slots::<&BaseRow>(rows.len())))
+    })?;
+    *steps = steps
+        .saturating_add(input.records.len())
+        .saturating_add(rows.len());
+    check_query_work(
+        *steps,
+        admission,
+        options,
+        "Summary lookup exceeds query work budget",
+    )?;
+    let by_path = input
+        .records
+        .iter()
+        .map(|record| (record.path.as_str(), record))
+        .collect::<HashMap<_, _>>();
+    let by_id = rows
+        .iter()
+        .map(|row| (&row.entry_id, row))
+        .collect::<HashMap<_, _>>();
+    let timezone = expression::BasesTimezone::from_setting(Some(&options.evaluation.timezone))
+        .map_err(|message| ExpressionDiagnostic::new("input", message))?;
+    let evaluate = |selected: &[&BaseRow], steps: &mut usize, admission: &mut Admission<'_>| {
+        let mut result = BTreeMap::new();
+        for (property, name) in &view.summaries {
+            if options
+                .evaluation
+                .cancellation
+                .as_ref()
+                .is_some_and(|token| token.stop_reason().is_some())
+            {
+                return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+            }
+            admit(admission, |_| Ok(slots::<&BaseValue>(selected.len())))?;
+            *steps = steps.saturating_add(selected.len()).saturating_add(1);
+            check_query_work(
+                *steps,
+                admission,
+                options,
+                "Summary inputs exceed query work budget",
+            )?;
+            let null = BaseValue::Null;
+            let values = selected
+                .iter()
+                .map(|row| row.values.get(property).unwrap_or(&null))
+                .collect::<Vec<_>>();
+            let mut invocation = options.evaluation.clone();
+            invocation.formulas.clear();
+            invocation.current_record = None;
+            invocation.max_steps = invocation.max_steps.min(
+                options
+                    .max_steps
+                    .saturating_sub(*steps)
+                    .saturating_sub(admission_work(admission)),
+            );
+            let evaluated = crate::summaries::evaluate(
+                program,
+                name,
+                &values,
+                &invocation,
+                relationships,
+                |path| {
+                    let record = by_path.get(path).ok_or_else(|| {
+                        ExpressionDiagnostic::new(
+                            "unavailable",
+                            "Summary file is not in the query snapshot",
+                        )
+                    })?;
+                    let mut file = crate::runtime_file(record, &timezone)?;
+                    if let Some(graph) = relationships {
+                        graph.attach(&mut file);
+                    }
+                    file.metadata_unavailable |= record.witness.as_ref().is_some_and(|witness| {
+                        input
+                            .unavailable
+                            .is_some_and(|ids| ids.contains(&witness.entry_id))
+                    });
+                    Ok(file)
+                },
+            )?;
+            *steps = steps.saturating_add(evaluated.steps_used);
+            check_query_work(
+                *steps,
+                admission,
+                options,
+                "Summary evaluation exceeds query work budget",
+            )?;
+            admit(admission, |admission| {
+                let value_bytes = crate::preview::value_bytes(&evaluated.value, admission)?;
+                Ok(map_slot::<String, BaseValue>()
+                    .saturating_add(crate::preview::string_bytes(property))
+                    .saturating_add(value_bytes))
+            })?;
+            crate::encoded_size(&evaluated.value, options.max_output_bytes)?;
+            result.insert(property.clone(), evaluated.value);
+        }
+        Ok::<_, ExpressionDiagnostic>(result)
+    };
+    let selected = rows.iter().collect::<Vec<_>>();
+    let overall = evaluate(&selected, steps, admission)?;
+    for group in groups {
+        admit(admission, |_| Ok(slots::<&BaseRow>(group.entry_ids.len())))?;
+        *steps = steps.saturating_add(group.entry_ids.len());
+        check_query_work(
+            *steps,
+            admission,
+            options,
+            "Group summary lookup exceeds query work budget",
+        )?;
+        let selected = group
+            .entry_ids
+            .iter()
+            .map(|id| by_id[id])
+            .collect::<Vec<_>>();
+        group.summaries = evaluate(&selected, steps, admission)?;
+    }
+    Ok(overall)
 }
 
 /// Recompute only scheduling metadata for this invocation. This does not prove

@@ -480,3 +480,33 @@ fn small_prepared_subset_does_not_prepare_a_hundred_thousand_entry_namespace() {
     assert_eq!(result.value.rows.len(), 127);
     assert!(result.value.steps_used <= 500_000);
 }
+
+#[test]
+fn summaries_describe_prepared_subset_without_claiming_complete_aggregates() {
+    let builder = fixture();
+    let captured = capture_rows(&builder, &["definition", "a"]);
+    let program = compile_base_source("filters: file.ext == 'md'\nviews:\n  - type: table\n    name: T\n    summaries:\n      score: Sum\n").unwrap();
+    let result = query_preview(
+        &program,
+        &captured,
+        &id("definition"),
+        &[],
+        &QueryOptions::default(),
+        MAX_PREVIEW_QUERY_OWNED_BYTES,
+    )
+    .unwrap();
+    assert_eq!(
+        result.value.summaries["note.score"],
+        BaseValue::Number { value: 1.0 }
+    );
+    assert_eq!(
+        result.value.groups[0].summaries["note.score"],
+        BaseValue::Number { value: 1.0 }
+    );
+    assert!(!result.value.complete && !result.value.aggregates_complete);
+    assert_eq!(
+        result.value.counts_scope,
+        zorid_bases::PreviewCountsScope::PreparedSubset
+    );
+    assert_eq!(result.value.progress.pending_files, 1);
+}

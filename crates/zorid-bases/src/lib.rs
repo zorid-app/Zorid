@@ -16,6 +16,7 @@ pub use preparation::{
     MAX_PREPARED_GENERATIONS, MAX_PREPARED_GENERATION_BYTES, PREPARATION_IDLE_MS,
 };
 mod query;
+mod summaries;
 mod preview;
 pub use preview::{
     query_preview, BasePreviewResult, BasePreviewStatus, CommittedBasePreviewResult,

@@ -1497,6 +1497,29 @@ fn value_heap(v: &crate::BaseValue, m: &mut Maintenance<'_>) -> Option<usize> {
         _ => m.bytes(0),
     }
 }
+fn summary_heap(
+    values: &std::collections::BTreeMap<String, crate::BaseValue>,
+    m: &mut Maintenance<'_>,
+) -> Option<usize> {
+    if values.is_empty() {
+        return Some(0);
+    }
+    let cell = size_of::<(String, crate::BaseValue)>().checked_add(size_of::<usize>())?;
+    let mut bytes = values
+        .len()
+        .checked_mul(16)?
+        .checked_mul(cell)?
+        .checked_add(64)?;
+    m.bytes(values.len().checked_mul(cell)?)?;
+    for (key, value) in values {
+        bytes = costs([
+            bytes,
+            m.retained(key.capacity(), key.len())?,
+            value_heap(value, m)?,
+        ])?;
+    }
+    Some(bytes)
+}
 fn result_heap(r: &BaseQueryResult, m: &mut Maintenance<'_>) -> Option<usize> {
     if !r.metadata_complete || !r.relationships_available || !r.diagnostics.is_empty() {
         return None;
@@ -1508,6 +1531,7 @@ fn result_heap(r: &BaseQueryResult, m: &mut Maintenance<'_>) -> Option<usize> {
             m.retained(hint.timezone.capacity(), hint.timezone.len())
         })?,
         property_heap(&r.view, m)?,
+        summary_heap(&r.summaries, m)?,
         vector_cost(&r.rows, m, |r, m| {
             // std's current BTreeMap uses <=16 cells per node. Charge one full
             // node per entry conservatively rather than pretending len is its
@@ -1552,6 +1576,7 @@ fn result_heap(r: &BaseQueryResult, m: &mut Maintenance<'_>) -> Option<usize> {
                     g.key_id.as_ref().map_or(0, String::len),
                 )?,
                 g.key.as_ref().map_or(Some(0), |v| value_heap(v, m))?,
+                summary_heap(&g.summaries, m)?,
                 vector_cost(&g.entry_ids, m, |id, m| m.bytes(id.as_str().len()))?,
             ])
         })?,
@@ -1713,6 +1738,11 @@ fn copy_result(
     Ok(BaseQueryResult {
         snapshot_id: r.snapshot_id.clone(),
         view: copy_property(&r.view, o)?,
+        summaries: r
+            .summaries
+            .iter()
+            .map(|(k, v)| Ok((k.clone(), copy_value(v, o)?)))
+            .collect::<Result<_, ExpressionDiagnostic>>()?,
         rows: copy_vec(&r.rows, o, |r| {
             Ok(crate::BaseRow {
                 entry_id: r.entry_id.clone(),
@@ -1727,6 +1757,11 @@ fn copy_result(
         })?,
         groups: copy_vec(&r.groups, o, |g| {
             Ok(crate::BaseGroup {
+                summaries: g
+                    .summaries
+                    .iter()
+                    .map(|(k, v)| Ok((k.clone(), copy_value(v, o)?)))
+                    .collect::<Result<_, ExpressionDiagnostic>>()?,
                 key_id: g.key_id.clone(),
                 key: g.key.as_ref().map(|v| copy_value(v, o)).transpose()?,
                 entry_ids: copy_vec(&g.entry_ids, o, |id| Ok(id.clone()))?,
