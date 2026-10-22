@@ -121,3 +121,13 @@ Relation target filters are vault-wide candidate predicates. `this` is rejected
 with a definition diagnostic because per-origin relation target membership has no
 contract yet. This does not change ordinary Base `this` evaluation. Derived
 reverse/rollup dependencies remain explicitly unavailable during candidate filtering.
+
+Grouped note fields expose optional `editKey` values for moves and New actions.
+Lists remain whole group keys. Transfer values differ from ordinary cell
+`editValues`: a witnessed link becomes a vault-rooted wiki link with escaped path
+characters and its original alias. The captured resolver verifies the generated
+link reaches the same target revision. This intentionally uses an unambiguous
+rooted path rather than Obsidian's destination-dependent shortest link spelling.
+It preserves identity when a destination note is in another folder. Unresolved
+relative link groups expose an unavailable diagnostic instead of a writable key.
+File, formula, reverse relation and rollup groups do not gain writable note keys.

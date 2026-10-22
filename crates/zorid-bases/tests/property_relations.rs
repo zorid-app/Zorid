@@ -57,21 +57,6 @@ fn generation_with_settings_file(
     books: &[(&str, &str)],
     settings_file: bool,
 ) -> Generation {
-    let store = OperationId::new("properties-store").unwrap();
-    let source = SourceSnapshotId::new(store.clone(), SourceWatermark::new("1").unwrap());
-    let snapshot = IndexSnapshotId::new(
-        store,
-        OperationId::new("properties-epoch").unwrap(),
-        1,
-        SemanticVersions::new(
-            INDEX_SCHEMA_VERSION,
-            document_extraction_version(),
-            RESOLVER_VERSION,
-            LITERAL_QUERY_VERSION,
-        )
-        .unwrap(),
-    )
-    .unwrap();
     let mut inputs = vec![
         (
             "settings",
@@ -100,6 +85,25 @@ fn generation_with_settings_file(
             .iter()
             .map(|(name, text)| (*name, format!("Books/{name}.md"), text.to_string(), true)),
     );
+    generation_from_records(inputs)
+}
+
+fn generation_from_records(inputs: Vec<(&str, String, String, bool)>) -> Generation {
+    let store = OperationId::new("properties-store").unwrap();
+    let source = SourceSnapshotId::new(store.clone(), SourceWatermark::new("1").unwrap());
+    let snapshot = IndexSnapshotId::new(
+        store,
+        OperationId::new("properties-epoch").unwrap(),
+        1,
+        SemanticVersions::new(
+            INDEX_SCHEMA_VERSION,
+            document_extraction_version(),
+            RESOLVER_VERSION,
+            LITERAL_QUERY_VERSION,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let entries = inputs
         .iter()
         .map(|(name, path, _, _)| EntryState {
@@ -1024,7 +1028,10 @@ fn typed_group_edit_keys_persist_raw_dates_and_whole_relation_lists() {
         .collect::<Vec<_>>();
     assert_eq!(
         raw,
-        vec!["[[Authors/Ada|A. Lovelace]]", "[[Authors/Grace|G. Hopper]]"]
+        vec![
+            "[[/Authors/Ada.md|A. Lovelace]]",
+            "[[/Authors/Grace.md|G. Hopper]]"
+        ]
     );
     let moved = format!(
         "---\nauthor: {}\n---\n",
@@ -1100,4 +1107,104 @@ fn configured_empty_group_edit_keys_are_raw_and_derived_group_keys_stay_readonly
             "{property}"
         );
     }
+}
+
+#[test]
+fn group_link_transfers_keep_targets_across_folders_duplicates_and_reserved_paths() {
+    fn records(first: &str, second: &str, new_note: Option<&str>) -> Generation {
+        let mut records = vec![
+            (
+                "ada",
+                "People/A#% space.md".into(),
+                "---\ntype: author\n---\n".into(),
+                true,
+            ),
+            (
+                "decoy",
+                "Elsewhere/People/A#% space.md".into(),
+                "---\ntype: author\n---\n".into(),
+                true,
+            ),
+            ("first", "Origins/first.md".into(), first.into(), true),
+            (
+                "second",
+                "Elsewhere/Nested/second.md".into(),
+                second.into(),
+                true,
+            ),
+        ];
+        if let Some(source) = new_note {
+            records.push(("new", "New/Deep/third.md".into(), source.into(), true));
+        }
+        generation_from_records(records)
+    }
+    let first = "---\nkind: card\nauthor: '[[../People/A%23%25%20space.md|Original Alias]]'\n---\n";
+    let second = "---\nkind: card\nauthor: '[[../People/A%23%25%20space.md|Other]]'\n---\n";
+    let program = compile_base_source("filters: 'kind == \"card\"'\nviews:\n  - type: table\n    name: Cards\n    order: [file.name, author]\n    groupBy: {property: author, direction: ASC}\n").unwrap();
+    let before = records(first, second, None);
+    let result =
+        zorid_bases::query_generation(&program, &before, &[], &QueryOptions::default()).unwrap();
+    assert_eq!(
+        result.groups.len(),
+        2,
+        "same relative spelling reaches different folders before transfer"
+    );
+    let target = result
+        .groups
+        .iter()
+        .find(|group| group.entry_ids.contains(&id("first")))
+        .unwrap();
+    let Some(BaseValue::String { value: raw }) = &target.edit_key else {
+        panic!("resolved group must expose a safe transfer key")
+    };
+    assert_eq!(raw, "[[/People/A%23%25%20space.md|Original Alias]]");
+    let persisted_source = format!(
+        "---\nkind: card\nauthor: {}\n---\n",
+        serde_json::to_string(raw).unwrap()
+    );
+    let after = records(first, &persisted_source, Some(&persisted_source));
+    let persisted =
+        zorid_bases::query_generation(&program, &after, &[], &QueryOptions::default()).unwrap();
+    assert_eq!(persisted.groups.len(), 1);
+    assert_eq!(persisted.groups[0].key_id, target.key_id);
+    assert_eq!(persisted.groups[0].entry_ids.len(), 3);
+    for row in &persisted.rows {
+        assert!(
+            matches!(&row.values["note.author"], BaseValue::Link {target:Some(witness), ..} if witness.entry_id == id("ada"))
+        );
+    }
+    assert_eq!(
+        persisted
+            .rows
+            .iter()
+            .find(|row| row.entry_id == id("first"))
+            .unwrap()
+            .edit_values["note.author"],
+        BaseValue::String {
+            value: "[[../People/A%23%25%20space.md|Original Alias]]".into()
+        }
+    );
+}
+
+#[test]
+fn unresolved_relative_group_transfers_are_explicitly_unavailable() {
+    let generation = generation_with_settings_file(
+        "",
+        &[("first", "---\nauthor: '[[../Gone|Missing]]'\n---\n")],
+        false,
+    );
+    let program = compile_base_source("filters: 'file.inFolder(\"Books\")'\nviews:\n  - type: table\n    name: Cards\n    order: [author]\n    groupBy: {property: author, direction: ASC}\n").unwrap();
+    let result =
+        zorid_bases::query_generation(&program, &generation, &[], &QueryOptions::default())
+            .unwrap();
+    assert!(result.groups[0].edit_key.is_none());
+    assert!(result.diagnostics.iter().any(|issue| issue.phase == "group"
+        && issue.code == "unavailable"
+        && issue.message.contains("Unresolved relative")));
+    assert_eq!(
+        result.rows[0].edit_values["note.author"],
+        BaseValue::String {
+            value: "[[../Gone|Missing]]".into()
+        }
+    );
 }

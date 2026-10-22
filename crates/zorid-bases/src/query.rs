@@ -671,6 +671,151 @@ fn raw_matches_rendered(
     })
 }
 
+/// Transfer serialization is deliberately destination-independent. Ordinary
+/// cell editValues keep original bytes; grouping moves may root a link path to
+/// preserve its captured target identity in a different destination folder.
+fn transfer_group_edit_key(
+    rendered: &BaseValue,
+    source: &BaseValue,
+    records: &HashMap<&crate::EntryId, &DetachedRecord>,
+    graph: Option<&crate::graph::PreparedRelationships<'_>>,
+    check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+) -> Result<Option<BaseValue>, ExpressionDiagnostic> {
+    check(1)?;
+    match rendered {
+        BaseValue::Link {
+            path,
+            target,
+            display,
+            external,
+            ..
+        } => {
+            if *external {
+                return Ok(configured_group_edit_key(source));
+            }
+            let raw_link = match source {
+                BaseValue::String { value } => expression::wikilink(value),
+                _ => None,
+            };
+            let original_path = raw_link
+                .as_ref()
+                .map_or(path.as_str(), |link| link.path.as_str());
+            let Some(witness) = target else {
+                if original_path.starts_with('/') {
+                    return Ok(configured_group_edit_key(source));
+                }
+                return Err(ExpressionDiagnostic::new("unavailable", "Unresolved relative link groups cannot be transferred safely to another folder"));
+            };
+            let record = records
+                .get(&witness.entry_id)
+                .filter(|record| record.witness.as_ref() == Some(witness))
+                .ok_or_else(|| {
+                    ExpressionDiagnostic::new(
+                        "unavailable",
+                        "Group link target has no exact captured revision",
+                    )
+                })?;
+            let mut rooted = String::from("/");
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            check(record.path.len())?;
+            for byte in record.path.bytes() {
+                if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'.' | b'_' | b'~')
+                {
+                    rooted.push(byte as char);
+                } else {
+                    rooted.push('%');
+                    rooted.push(HEX[(byte >> 4) as usize] as char);
+                    rooted.push(HEX[(byte & 15) as usize] as char);
+                }
+            }
+            if let Some((_, fragment)) = original_path.split_once('#') {
+                rooted.push('#');
+                rooted.push_str(fragment);
+            }
+            let alias = raw_link
+                .as_ref()
+                .and_then(|link| link.display.as_ref())
+                .or(display.as_ref());
+            if rooted.len() > 4096
+                || rooted.contains("]]")
+                || rooted.contains("[[")
+                || rooted.contains('|')
+                || alias.is_some_and(|alias| alias.contains("]]") || alias.contains("[["))
+            {
+                return Err(ExpressionDiagnostic::new(
+                    "unavailable",
+                    "Group link cannot be represented safely as a readable rooted wiki link",
+                ));
+            }
+            let resolved = graph
+                .ok_or_else(|| {
+                    ExpressionDiagnostic::new(
+                        "unavailable",
+                        "Group link transfer requires the captured namespace",
+                    )
+                })?
+                .resolve_target(&expression::BasesFile::default(), &rooted, check)?;
+            if !resolved
+                .as_ref()
+                .is_some_and(|(_, target)| target == witness)
+            {
+                return Err(ExpressionDiagnostic::new(
+                    "unavailable",
+                    "Rooted group link does not preserve the captured target identity",
+                ));
+            }
+            let value = if let Some(alias) = alias {
+                format!("[[{rooted}|{alias}]]")
+            } else {
+                format!("[[{rooted}]]")
+            };
+            Ok(Some(BaseValue::String { value }))
+        }
+        BaseValue::List { value } => {
+            let raw = match source {
+                BaseValue::List { value: raw } if raw.len() == value.len() => Some(raw.as_slice()),
+                _ => None,
+            };
+            let mut result = Vec::with_capacity(value.len());
+            for (index, value) in value.iter().enumerate() {
+                let source = raw.map_or(source, |raw| &raw[index]);
+                let Some(value) = transfer_group_edit_key(value, source, records, graph, check)?
+                else {
+                    return Ok(None);
+                };
+                result.push(value);
+            }
+            Ok(Some(BaseValue::List { value: result }))
+        }
+        BaseValue::Object { value } => {
+            let BaseValue::Object { value: raw } = source else {
+                return Ok(None);
+            };
+            if raw.len() != value.len() {
+                return Ok(None);
+            }
+            let mut result = Vec::with_capacity(value.len());
+            for ((key, value), (raw_key, source)) in value.iter().zip(raw) {
+                if key != raw_key {
+                    return Ok(None);
+                }
+                let Some(value) = transfer_group_edit_key(value, source, records, graph, check)?
+                else {
+                    return Ok(None);
+                };
+                result.push((key.clone(), value));
+            }
+            Ok(Some(BaseValue::Object { value: result }))
+        }
+        BaseValue::Error { .. }
+        | BaseValue::File { .. }
+        | BaseValue::Html { .. }
+        | BaseValue::Image { .. }
+        | BaseValue::Icon { .. }
+        | BaseValue::Duration { .. } => Ok(None),
+        _ => Ok(configured_group_edit_key(source)),
+    }
+}
 fn configured_group_edit_key(value: &BaseValue) -> Option<BaseValue> {
     match value {
         BaseValue::Null
@@ -1603,6 +1748,26 @@ pub(crate) fn query_rows_validated(
             .unwrap_or(&null)
             .clone()
     };
+    admit(&mut admission, |_| {
+        Ok(input
+            .records
+            .len()
+            .saturating_mul(map_slot::<&crate::EntryId, &DetachedRecord>()))
+    })?;
+    let by_id = input
+        .records
+        .iter()
+        .map(|record| {
+            (
+                &record
+                    .witness
+                    .as_ref()
+                    .expect("query witness validated")
+                    .entry_id,
+                record,
+            )
+        })
+        .collect::<HashMap<_, _>>();
     let writable_group_property = view
         .group
         .as_ref()
@@ -1652,7 +1817,50 @@ pub(crate) fn query_rows_validated(
             admit(&mut admission, |admission| {
                 crate::preview::value_bytes(candidate, admission)
             })?;
-            let value = configured_group_edit_key(candidate);
+            let value = match transfer_group_edit_key(
+                rendered,
+                candidate,
+                &by_id,
+                relationships.as_ref(),
+                &mut |work| {
+                    steps_used = steps_used.saturating_add(work);
+                    if options
+                        .evaluation
+                        .cancellation
+                        .as_ref()
+                        .is_some_and(|token| token.is_cancelled())
+                    {
+                        return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+                    }
+                    check_query_work(
+                        steps_used,
+                        &admission,
+                        options,
+                        "Group transfer serialization exceeds query work budget",
+                    )
+                },
+            ) {
+                Ok(value) => value,
+                Err(error) if matches!(error.code.as_str(), "budget" | "cancelled") => {
+                    return Err(error)
+                }
+                Err(error) => {
+                    report(
+                        &mut diagnostics,
+                        by_id[&row.entry_id],
+                        "group",
+                        Some(property),
+                        error,
+                        &mut admission,
+                    )?;
+                    None
+                }
+            };
+            if let Some(value) = &value {
+                admit(&mut admission, |admission| {
+                    crate::preview::value_bytes(value, admission)
+                })?;
+            }
             admit(&mut admission, |_| {
                 Ok(map_slot::<String, Option<BaseValue>>()
                     .saturating_add(crate::preview::string_bytes(&identity)))
@@ -1823,32 +2031,12 @@ pub(crate) fn query_rows_validated(
             .saturating_add(string_copies(
                 ["file.links", "file.embeds", "file.backlinks"],
                 admission,
-            )?)
-            .saturating_add(
-                input
-                    .records
-                    .len()
-                    .saturating_mul(map_slot::<&crate::EntryId, &DetachedRecord>()),
-            ))
+            )?))
     })?;
     let mut matched_available = FILE_PROPERTIES
         .iter()
         .map(|property| property.to_string())
         .collect::<Vec<_>>();
-    let by_id = input
-        .records
-        .iter()
-        .map(|record| {
-            (
-                &record
-                    .witness
-                    .as_ref()
-                    .expect("query witness validated")
-                    .entry_id,
-                record,
-            )
-        })
-        .collect::<HashMap<_, _>>();
     if relationship_available {
         matched_available.extend(["file.links", "file.embeds", "file.backlinks"].map(String::from));
     }
