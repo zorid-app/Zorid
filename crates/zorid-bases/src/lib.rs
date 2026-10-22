@@ -361,7 +361,7 @@ fn runtime_file(
         };
         properties.insert(
             key.clone(),
-            expression::infer_frontmatter_value(value, timezone),
+            expression::infer_frontmatter_property(key, value, timezone),
         );
     }
     if hints.keys().any(|name| !properties.contains_key(*name)) {

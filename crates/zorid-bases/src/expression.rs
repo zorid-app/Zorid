@@ -609,6 +609,9 @@ pub(crate) enum RuntimeValue {
     Bool(bool),
     Number(f64),
     String(String),
+    // String/List subclasses retained only inside one core invocation.
+    Tag(String),
+    TagList(Vec<RuntimeValue>),
     Date(DateValue),
     Duration(DurationValue),
     List(Vec<RuntimeValue>),
@@ -620,6 +623,17 @@ pub(crate) enum RuntimeValue {
     Image(String),
     Icon(String),
     Error(String),
+}
+
+/// Sparse provenance extracted from actual evaluated values, never property names.
+/// It preserves internal String/List subclasses across the summary boundary while
+/// keeping the public BaseValue DTO unchanged.
+#[derive(Clone, Debug)]
+pub(crate) enum TagShape {
+    Tag,
+    TagList,
+    List(Vec<(usize, TagShape)>),
+    Object(Vec<(String, TagShape)>),
 }
 
 pub(crate) struct Session<'a> {
@@ -656,6 +670,22 @@ impl<'a> Session<'a> {
             .saturating_sub(self.evaluator.remaining_work)
     }
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<BaseValue, ExpressionDiagnostic> {
+        self.evaluate_tagged(source, false, &mut |_| Ok(()))
+            .map(|(value, _)| value)
+    }
+    pub(crate) fn evaluate_with_tag_shape(
+        &mut self,
+        source: &str,
+        mut reserve: impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+    ) -> Result<(BaseValue, Option<TagShape>), ExpressionDiagnostic> {
+        self.evaluate_tagged(source, true, &mut reserve)
+    }
+    fn evaluate_tagged(
+        &mut self,
+        source: &str,
+        preserve_tags: bool,
+        reserve: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+    ) -> Result<(BaseValue, Option<TagShape>), ExpressionDiagnostic> {
         let ast = parse_cached(source).map_err(|message| {
             let (code, text) = message
                 .split_once('\0')
@@ -663,7 +693,14 @@ impl<'a> Session<'a> {
             ExpressionDiagnostic::new(code, text)
         })?;
         let value = self.evaluator.evaluate(ast.as_ref(), &BTreeMap::new());
-        typed_result(value)
+        let shape = if preserve_tags {
+            self.evaluator
+                .tag_shape(&value, 0, reserve)
+                .map_err(runtime_diagnostic)?
+        } else {
+            None
+        };
+        Ok((typed_result(value)?, shape))
     }
 }
 pub(crate) fn evaluate(
@@ -705,7 +742,9 @@ pub(crate) fn runtime_from_base_value(
                     mark(display);
                 }
             }
-            RuntimeValue::List(values) => values.iter_mut().for_each(mark),
+            RuntimeValue::List(values) | RuntimeValue::TagList(values) => {
+                values.iter_mut().for_each(mark)
+            }
             RuntimeValue::Object(values) => values.values_mut().for_each(mark),
             _ => {}
         }
@@ -720,6 +759,7 @@ pub(crate) fn runtime_from_base_value(
 pub(crate) fn evaluate_summary(
     source: &str,
     values: &[&BaseValue],
+    tag_shapes: &[Option<&TagShape>],
     options: &crate::EvaluationOptions,
     relationships: Option<&super::graph::PreparedRelationships<'_>>,
     shared_files: Option<Arc<super::files::BasesFiles>>,
@@ -747,14 +787,14 @@ pub(crate) fn evaluate_summary(
     evaluator.summary_only = true;
     let mut bytes = 0usize;
     let mut converted = Vec::new();
-    for value in values {
-        converted.push(summary_runtime_value(
-            value,
-            0,
-            &mut bytes,
-            &mut evaluator,
-            &mut file,
-        )?);
+    for (index, value) in values.iter().enumerate() {
+        let mut value = summary_runtime_value(value, 0, &mut bytes, &mut evaluator, &mut file)?;
+        if let Some(Some(shape)) = tag_shapes.get(index) {
+            evaluator
+                .restore_tags(&mut value, shape, 0)
+                .map_err(runtime_diagnostic)?;
+        }
+        converted.push(value);
     }
     let value = match parse_cached(source) {
         Ok(ast) => {
@@ -810,6 +850,7 @@ fn group_comparison_work(
     check(1)?;
     match value {
         RuntimeValue::String(value)
+        | RuntimeValue::Tag(value)
         | RuntimeValue::Html(value)
         | RuntimeValue::Image(value)
         | RuntimeValue::Icon(value)
@@ -828,7 +869,7 @@ fn group_comparison_work(
                 / 16,
         )?,
         RuntimeValue::File(file) => check(file.path.len() / 16)?,
-        RuntimeValue::List(values) => {
+        RuntimeValue::List(values) | RuntimeValue::TagList(values) => {
             for value in values {
                 group_comparison_work(value, check)?
             }
@@ -1670,9 +1711,36 @@ fn canonical_function_name(name: &str) -> &str {
         .unwrap_or(name)
 }
 
+fn runtime_diagnostic(value: RuntimeValue) -> ExpressionDiagnostic {
+    let RuntimeValue::Error(message) = value else {
+        unreachable!()
+    };
+    let (code, text) = message.split_once('\0').unwrap_or(("type", &message));
+    ExpressionDiagnostic::new(code, text)
+}
+fn arity_error(name: &str, expected: usize) -> RuntimeValue {
+    RuntimeValue::Error(format!(
+        "arity\0{name} expects exactly {expected} argument(s)"
+    ))
+}
+fn tag_text(value: &str) -> String {
+    if value.starts_with('#') {
+        value.into()
+    } else {
+        format!("#{value}")
+    }
+}
+fn tag_matches(tag: &str, query: &str) -> bool {
+    let tag = tag.to_lowercase();
+    let query = tag_text(query).to_lowercase();
+    tag.starts_with(&query)
+        && (tag.len() == query.len() || tag.as_bytes().get(query.len()) == Some(&b'/'))
+}
+
 fn string_data(value: &RuntimeValue) -> Option<&str> {
     match value {
         RuntimeValue::String(value)
+        | RuntimeValue::Tag(value)
         | RuntimeValue::Html(value)
         | RuntimeValue::Image(value)
         | RuntimeValue::Icon(value) => Some(value),
@@ -1888,8 +1956,8 @@ impl<'a> Evaluator<'a> {
                 return RuntimeValue::Null;
             }
             if operator == "+"
-                && !matches!(left, RuntimeValue::String(_))
-                && !matches!(right, RuntimeValue::String(_))
+                && !matches!(left, RuntimeValue::String(_) | RuntimeValue::Tag(_))
+                && !matches!(right, RuntimeValue::String(_) | RuntimeValue::Tag(_))
             {
                 return RuntimeValue::Null;
             }
@@ -1925,7 +1993,11 @@ impl<'a> Evaluator<'a> {
     }
 
     fn add(&self, left: RuntimeValue, right: RuntimeValue) -> RuntimeValue {
-        if let (RuntimeValue::List(a), RuntimeValue::List(b)) = (&left, &right) {
+        if let (
+            RuntimeValue::List(a) | RuntimeValue::TagList(a),
+            RuntimeValue::List(b) | RuntimeValue::TagList(b),
+        ) = (&left, &right)
+        {
             return RuntimeValue::List(a.iter().chain(b).cloned().collect());
         }
         if let RuntimeValue::Date(date) = &left {
@@ -1935,7 +2007,9 @@ impl<'a> Evaluator<'a> {
                     .unwrap_or_else(RuntimeValue::Error);
             }
         }
-        if matches!(left, RuntimeValue::String(_)) || matches!(right, RuntimeValue::String(_)) {
+        if matches!(left, RuntimeValue::String(_) | RuntimeValue::Tag(_))
+            || matches!(right, RuntimeValue::String(_) | RuntimeValue::Tag(_))
+        {
             return RuntimeValue::String(format!(
                 "{}{}",
                 if matches!(left, RuntimeValue::Null) {
@@ -1981,7 +2055,7 @@ impl<'a> Evaluator<'a> {
                     Member::Computed(expression) => {
                         let value = self.evaluate(expression, scope);
                         match value {
-                            RuntimeValue::String(name) => name,
+                            RuntimeValue::String(name) | RuntimeValue::Tag(name) => name,
                             RuntimeValue::Error(_) => return value,
                             _ => {
                                 return RuntimeValue::Error(
@@ -2175,7 +2249,7 @@ impl<'a> Evaluator<'a> {
                 _ => RuntimeValue::Error("type\0link() requires text, URL or File".into()),
             },
             "list" => match first {
-                RuntimeValue::List(_) | RuntimeValue::Null => first,
+                RuntimeValue::List(_) | RuntimeValue::TagList(_) | RuntimeValue::Null => first,
                 value => RuntimeValue::List(vec![value]),
             },
             "max" | "min" => {
@@ -2224,6 +2298,424 @@ impl<'a> Evaluator<'a> {
         }
     }
 
+    fn tag_shape(
+        &mut self,
+        value: &RuntimeValue,
+        depth: usize,
+        reserve: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+    ) -> Result<Option<TagShape>, RuntimeValue> {
+        self.charge(1)?;
+        if depth > 128 {
+            return Err(RuntimeValue::Error(
+                "budget\0Tag provenance exceeds depth budget".into(),
+            ));
+        }
+        Ok(match value {
+            RuntimeValue::Tag(_) => Some(TagShape::Tag),
+            RuntimeValue::TagList(_) => Some(TagShape::TagList),
+            RuntimeValue::List(values) => {
+                let mut shapes = Vec::new();
+                for (index, value) in values.iter().enumerate() {
+                    if let Some(shape) = self.tag_shape(value, depth + 1, reserve)? {
+                        self.reserve_tag_slot(&mut shapes, reserve)?;
+                        shapes.push((index, shape));
+                    }
+                }
+                (!shapes.is_empty()).then_some(TagShape::List(shapes))
+            }
+            RuntimeValue::Object(values) => {
+                let mut shapes = Vec::new();
+                for (key, value) in values {
+                    self.charge(key.len() / 16 + 1)?;
+                    if let Some(shape) = self.tag_shape(value, depth + 1, reserve)? {
+                        self.reserve_tag_slot(&mut shapes, reserve)?;
+                        reserve(key.len()).map_err(|error| {
+                            RuntimeValue::Error(format!("{}\0{}", error.code, error.message))
+                        })?;
+                        shapes.push((key.clone(), shape));
+                    }
+                }
+                (!shapes.is_empty()).then_some(TagShape::Object(shapes))
+            }
+            _ => None,
+        })
+    }
+    fn reserve_tag_slot<T>(
+        &mut self,
+        values: &mut Vec<T>,
+        reserve: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+    ) -> Result<(), RuntimeValue> {
+        if values.len() == values.capacity() {
+            let target = values.capacity().saturating_mul(2).max(4);
+            self.charge(values.capacity().saturating_add(1))?;
+            reserve(
+                target
+                    .saturating_sub(values.capacity())
+                    .saturating_mul(std::mem::size_of::<T>()),
+            )
+            .map_err(|error| RuntimeValue::Error(format!("{}\0{}", error.code, error.message)))?;
+            values.reserve_exact(target - values.len());
+        }
+        Ok(())
+    }
+    fn restore_tags(
+        &mut self,
+        value: &mut RuntimeValue,
+        shape: &TagShape,
+        depth: usize,
+    ) -> Result<(), RuntimeValue> {
+        self.charge(1)?;
+        if depth > 128 {
+            return Err(RuntimeValue::Error(
+                "budget\0Tag restoration exceeds depth budget".into(),
+            ));
+        }
+        match (value, shape) {
+            (value @ RuntimeValue::String(_), TagShape::Tag) => {
+                let RuntimeValue::String(text) = std::mem::replace(value, RuntimeValue::Null)
+                else {
+                    unreachable!()
+                };
+                *value = RuntimeValue::Tag(text);
+            }
+            (value @ RuntimeValue::List(_), TagShape::TagList) => {
+                let RuntimeValue::List(mut values) = std::mem::replace(value, RuntimeValue::Null)
+                else {
+                    unreachable!()
+                };
+                for item in &mut values {
+                    self.restore_tags(item, &TagShape::Tag, depth + 1)?;
+                }
+                *value = RuntimeValue::TagList(values);
+            }
+            (RuntimeValue::List(values), TagShape::List(shapes)) => {
+                for (index, shape) in shapes {
+                    let Some(value) = values.get_mut(*index) else {
+                        return Err(RuntimeValue::Error(
+                            "input\0Invalid tag provenance index".into(),
+                        ));
+                    };
+                    self.restore_tags(value, shape, depth + 1)?;
+                }
+            }
+            (RuntimeValue::Object(values), TagShape::Object(shapes)) => {
+                for (key, shape) in shapes {
+                    self.charge(key.len() / 16 + 1)?;
+                    let Some(value) = values.get_mut(key) else {
+                        return Err(RuntimeValue::Error(
+                            "input\0Invalid tag provenance key".into(),
+                        ));
+                    };
+                    self.restore_tags(value, shape, depth + 1)?;
+                }
+            }
+            _ => {
+                return Err(RuntimeValue::Error(
+                    "input\0Invalid tag provenance shape".into(),
+                ))
+            }
+        }
+        Ok(())
+    }
+    /// Pay each repeated callback capture before cloning its full value tree.
+    /// Includes File metadata and Link identity/display data, unlike a rendered
+    /// payload estimate. Checkpoints make wide/deep capture cancellation visible.
+    fn charge_copy(&mut self, value: &RuntimeValue, depth: usize) -> Result<(), RuntimeValue> {
+        self.charge(1)?;
+        if depth > 128 {
+            return Err(RuntimeValue::Error(
+                "budget\0Callback capture exceeds depth budget".into(),
+            ));
+        }
+        match value {
+            RuntimeValue::String(value)
+            | RuntimeValue::Tag(value)
+            | RuntimeValue::Html(value)
+            | RuntimeValue::Image(value)
+            | RuntimeValue::Icon(value)
+            | RuntimeValue::Error(value) => self.charge(value.len() / 16 + 1)?,
+            RuntimeValue::Regex(pattern, flags) => {
+                self.charge((pattern.len() + flags.len()) / 16 + 1)?
+            }
+            RuntimeValue::List(values) | RuntimeValue::TagList(values) => {
+                for value in values {
+                    self.charge_copy(value, depth + 1)?;
+                }
+            }
+            RuntimeValue::Object(values) => {
+                for (key, value) in values {
+                    self.charge(key.len() / 16 + 1)?;
+                    self.charge_copy(value, depth + 1)?;
+                }
+            }
+            RuntimeValue::Link(link) => self.charge_link_copy(link, depth)?,
+            RuntimeValue::File(file) => {
+                self.charge(
+                    (file.path.len()
+                        + file.name.len()
+                        + file.basename.len()
+                        + file.folder.len()
+                        + file.extension.len()
+                        + file.ctime.as_ref().map_or(0, String::len)
+                        + file.mtime.as_ref().map_or(0, String::len)
+                        + file
+                            .witness
+                            .as_ref()
+                            .map_or(0, |w| w.entry_id.as_str().len() + w.revision.as_str().len()))
+                        / 16
+                        + 1,
+                )?;
+                for tag in &file.tags {
+                    self.charge(tag.len() / 16 + 1)?;
+                }
+                for (key, value) in &file.properties {
+                    self.charge(key.len() / 16 + 1)?;
+                    self.charge_copy(value, depth + 1)?;
+                }
+                for link in file.links.iter().chain(&file.embeds).chain(&file.backlinks) {
+                    self.charge_link_copy(link, depth + 1)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    fn charge_link_copy(&mut self, link: &BasesLink, depth: usize) -> Result<(), RuntimeValue> {
+        self.charge(
+            (link.path.len()
+                + link.subpath.as_ref().map_or(0, String::len)
+                + link.display.as_ref().map_or(0, String::len)
+                + link
+                    .resolved_path
+                    .as_ref()
+                    .and_then(Option::as_ref)
+                    .map_or(0, String::len)
+                + link
+                    .target
+                    .as_ref()
+                    .map_or(0, |w| w.entry_id.as_str().len() + w.revision.as_str().len()))
+                / 16
+                + 1,
+        )?;
+        if let Some(value) = &link.display_value {
+            self.charge_copy(value, depth + 1)?;
+        }
+        Ok(())
+    }
+    /// Mixed-case lookups use the ordinary eager registry implementation. Only
+    /// exact lowercase spellings are intercepted as callback AST operations.
+    fn ordinary_collection_callback(
+        &mut self,
+        receiver: RuntimeValue,
+        name: &str,
+        arguments: &[Expr],
+        scope: &Scope,
+    ) -> RuntimeValue {
+        if matches!(&receiver, RuntimeValue::Object(_)) && name == "reduce" {
+            return method_not_found("Object", name);
+        }
+        let expected = if name == "reduce" { 2 } else { 1 };
+        if arguments.len() != expected {
+            return arity_error(name, expected);
+        }
+        let arguments = match self.evaluate_arguments(arguments, scope) {
+            Ok(values) => values,
+            Err(error) => return error,
+        };
+        if name == "filter" {
+            match arguments[0] {
+                RuntimeValue::Null => return RuntimeValue::Null,
+                RuntimeValue::Bool(_) => {}
+                _ => return RuntimeValue::Error("type\0filter expects a Boolean".into()),
+            }
+        }
+        match receiver {
+            RuntimeValue::Object(values) if name == "map" => {
+                self.object_method(values, "map", &[], scope, Some(&arguments))
+            }
+            receiver => receiver,
+        }
+    }
+
+    fn object_entries<'v>(
+        &mut self,
+        values: &'v IndexMap<String, RuntimeValue>,
+    ) -> Result<Vec<(Option<u32>, usize, &'v String, &'v RuntimeValue)>, RuntimeValue> {
+        type Entry<'a> = (Option<u32>, usize, &'a String, &'a RuntimeValue);
+        if values
+            .len()
+            .saturating_mul(std::mem::size_of::<Entry<'_>>())
+            > 8 * 1024 * 1024
+        {
+            return Err(RuntimeValue::Error(
+                "budget\0Object enumeration exceeds byte budget".into(),
+            ));
+        }
+        self.charge(values.len())?;
+        let mut numeric = false;
+        let mut entries = Vec::with_capacity(values.len());
+        for (ordinal, (key, value)) in values.iter().enumerate() {
+            self.charge(key.len() / 16 + 1)?;
+            let index = key
+                .parse::<u32>()
+                .ok()
+                .filter(|index| *index < u32::MAX && index.to_string() == *key);
+            numeric |= index.is_some();
+            entries.push((index, ordinal, key, value));
+        }
+        if numeric {
+            self.charge(
+                entries
+                    .len()
+                    .saturating_mul((usize::BITS - entries.len().max(1).leading_zeros()) as usize),
+            )?;
+            entries.sort_unstable_by(|a, b| match (a.0, b.0) {
+                (Some(a), Some(b)) => a.cmp(&b),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.1.cmp(&b.1),
+            });
+        }
+        Ok(entries)
+    }
+    fn object_method(
+        &mut self,
+        values: IndexMap<String, RuntimeValue>,
+        name: &str,
+        arguments: &[Expr],
+        scope: &Scope,
+        validated: Option<&[RuntimeValue]>,
+    ) -> RuntimeValue {
+        if validated.is_some() {
+            if name == "map" {
+                return self.object_method(values, "values", &[], scope, Some(&[]));
+            }
+            if name == "filter" {
+                return RuntimeValue::Object(values);
+            }
+        }
+        if !["keys", "values", "map", "filter"].contains(&name) {
+            return method_not_found("Object", name);
+        }
+        if ["map", "filter"].contains(&name) && arguments.len() != 1 {
+            return arity_error(name, 1);
+        }
+        let entries = match self.object_entries(&values) {
+            Ok(entries) => entries,
+            Err(error) => return error,
+        };
+        if name == "keys" {
+            let mut bytes = 0usize;
+            let mut result = Vec::new();
+            for (_, _, key, _) in entries {
+                if let Err(error) = self.charge(key.len() / 16 + 1) {
+                    return error;
+                }
+                bytes = bytes.saturating_add(key.len() + 16);
+                if bytes > 8 * 1024 * 1024 {
+                    return RuntimeValue::Error("budget\0Object keys exceed byte budget".into());
+                }
+                result.push(RuntimeValue::String(key.clone()));
+            }
+            return RuntimeValue::List(result);
+        }
+        if name == "values" {
+            let mut bytes = 0usize;
+            let mut result = Vec::new();
+            for (_, _, _, value) in entries {
+                if let Err(error) = self.charge_copy(value, 0) {
+                    return error;
+                }
+                bytes = bytes.saturating_add(value_bytes(value).unwrap_or(usize::MAX));
+                if bytes > 8 * 1024 * 1024 {
+                    return RuntimeValue::Error("budget\0Object values exceed byte budget".into());
+                }
+                result.push(value.clone());
+            }
+            return RuntimeValue::List(result);
+        }
+        let mut mapped = Vec::new();
+        let mut filtered = IndexMap::new();
+        let mut bytes = 0usize;
+        for (_, _, key, value) in entries {
+            // Preserve parent index/acc/key/value unless explicitly shadowed.
+            // Charge before each scope clone, not once for all iterations.
+            for (name, capture) in scope {
+                if let Err(error) = self
+                    .charge(name.len() / 16 + 1)
+                    .and_then(|_| self.charge_copy(capture, 0))
+                {
+                    return error;
+                }
+            }
+            if let Err(error) = self
+                .charge(key.len() / 16 + 1)
+                .and_then(|_| self.charge_copy(value, 0))
+            {
+                return error;
+            }
+            let mut nested = scope.clone();
+            nested.insert("key".into(), RuntimeValue::String(key.clone()));
+            nested.insert("value".into(), value.clone());
+            let result = self.evaluate(&arguments[0], &nested);
+            if matches!(result, RuntimeValue::Error(_)) {
+                return result;
+            }
+            if name == "map" {
+                if let Err(error) = self.charge_copy(&result, 0) {
+                    return error;
+                }
+                bytes = bytes.saturating_add(value_bytes(&result).unwrap_or(usize::MAX));
+                if bytes > 8 * 1024 * 1024 {
+                    return RuntimeValue::Error("budget\0Object map exceeds byte budget".into());
+                }
+                mapped.push(result);
+            } else if is_truthy(&result) {
+                if let Err(error) = self.charge_copy(value, 0) {
+                    return error;
+                }
+                bytes = bytes
+                    .saturating_add(key.len() + 32)
+                    .saturating_add(value_bytes(value).unwrap_or(usize::MAX));
+                if bytes > 8 * 1024 * 1024 {
+                    return RuntimeValue::Error("budget\0Object filter exceeds byte budget".into());
+                }
+                filtered.insert(key.clone(), value.clone());
+            }
+        }
+        if name == "map" {
+            RuntimeValue::List(mapped)
+        } else {
+            RuntimeValue::Object(filtered)
+        }
+    }
+    fn membership_checked(
+        &mut self,
+        values: &[RuntimeValue],
+        needle: &RuntimeValue,
+        tag_list: bool,
+    ) -> Result<bool, RuntimeValue> {
+        if !tag_list {
+            return self.contains_checked(values, needle);
+        }
+        self.comparison_preflight(needle)?;
+        for value in values {
+            self.comparison_preflight(value)?;
+        }
+        let Some(query) = string_data(needle) else {
+            return Ok(false);
+        };
+        for value in values {
+            if let RuntimeValue::Tag(tag) = value {
+                self.charge((tag.len() + query.len()) / 16 + 1)?;
+                if tag_matches(tag, query) {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
     fn method(
         &mut self,
         receiver: RuntimeValue,
@@ -2231,9 +2723,10 @@ impl<'a> Evaluator<'a> {
         arguments: &[Expr],
         scope: &Scope,
     ) -> RuntimeValue {
+        let callback = matches!(name, "map" | "filter" | "reduce");
         let name = canonical_function_name(name);
         let work = match &receiver {
-            RuntimeValue::List(values) => values.len(),
+            RuntimeValue::List(values) | RuntimeValue::TagList(values) => values.len(),
             RuntimeValue::Object(values) => values.len(),
             RuntimeValue::File(file) if name == "hasLink" => file.links.len(),
             RuntimeValue::String(value) => value.len() / 256,
@@ -2272,9 +2765,44 @@ impl<'a> Evaluator<'a> {
         if let RuntimeValue::Error(_) = receiver {
             return receiver;
         }
+        if !callback
+            && ["map", "filter", "reduce"].contains(&name)
+            && matches!(
+                &receiver,
+                RuntimeValue::List(_) | RuntimeValue::TagList(_) | RuntimeValue::Object(_)
+            )
+        {
+            return self.ordinary_collection_callback(receiver, name, arguments, scope);
+        }
         match receiver {
             // As in Obsidian, a method on a missing value is missing rather than an error.
             RuntimeValue::Null => RuntimeValue::Null,
+            RuntimeValue::Tag(value) => {
+                if name == "matches" {
+                    if arguments.len() != 1 {
+                        return arity_error("matches", 1);
+                    }
+                    let values = match self.evaluate_arguments(arguments, scope) {
+                        Ok(values) => values,
+                        Err(error) => return error,
+                    };
+                    if matches!(values[0], RuntimeValue::Null) {
+                        return RuntimeValue::Null;
+                    }
+                    let Some(query) = string_data(&values[0]) else {
+                        return RuntimeValue::Error("type\0Tag.matches expects a String".into());
+                    };
+                    if let Err(error) = self.charge((value.len() + query.len()) / 16 + 1) {
+                        return error;
+                    }
+                    return RuntimeValue::Bool(tag_matches(&value, query));
+                }
+                let values = match self.evaluate_arguments(arguments, scope) {
+                    Ok(values) => values,
+                    Err(error) => return error,
+                };
+                self.string_method(&value, name, &values)
+            }
             RuntimeValue::String(value) => {
                 let values = match self.evaluate_arguments(arguments, scope) {
                     Ok(values) => values,
@@ -2303,14 +2831,11 @@ impl<'a> Evaluator<'a> {
                 };
                 self.date_method(&value, name, &values)
             }
-            RuntimeValue::List(values) => self.list_method(&values, name, arguments, scope),
-            RuntimeValue::Object(value) => match name {
-                "keys" => {
-                    RuntimeValue::List(value.keys().cloned().map(RuntimeValue::String).collect())
-                }
-                "values" => RuntimeValue::List(value.values().cloned().collect()),
-                _ => method_not_found("Object", name),
-            },
+            RuntimeValue::List(values) => self.list_method(&values, name, arguments, scope, false),
+            RuntimeValue::TagList(values) => {
+                self.list_method(&values, name, arguments, scope, true)
+            }
+            RuntimeValue::Object(value) => self.object_method(value, name, arguments, scope, None),
             RuntimeValue::Regex(pattern, flags) if name == "matches" => {
                 let values = match self.evaluate_arguments(arguments, scope) {
                     Ok(values) => values,
@@ -2489,6 +3014,7 @@ impl<'a> Evaluator<'a> {
         name: &str,
         arguments: &[Expr],
         scope: &Scope,
+        tag_list: bool,
     ) -> RuntimeValue {
         let eager = if ["map", "filter", "reduce"].contains(&name) {
             Vec::new()
@@ -2497,6 +3023,14 @@ impl<'a> Evaluator<'a> {
                 Ok(values) => values,
                 Err(error) => return error,
             }
+        };
+        let eager = if ["containsAll", "containsAny"].contains(&name) && eager.len() == 1 {
+            match eager.into_iter().next().unwrap() {
+                RuntimeValue::List(values) | RuntimeValue::TagList(values) => values,
+                value => vec![value],
+            }
+        } else {
+            eager
         };
         let extra = match name {
             "containsAll" | "containsAny" => {
@@ -2514,7 +3048,7 @@ impl<'a> Evaluator<'a> {
         match name {
             "contains" => {
                 let needle = eager.first().cloned().unwrap_or(RuntimeValue::Null);
-                self.contains_checked(values, &needle)
+                self.membership_checked(values, &needle, tag_list)
                     .map(RuntimeValue::Bool)
                     .unwrap_or_else(|error| error)
             }
@@ -2531,7 +3065,7 @@ impl<'a> Evaluator<'a> {
                 }
                 let all = name == "containsAll";
                 for needle in &eager {
-                    match self.contains_checked(values, needle) {
+                    match self.membership_checked(values, needle, tag_list) {
                         Ok(found) if found != all => return RuntimeValue::Bool(!all),
                         Ok(_) => {}
                         Err(error) => return error,
@@ -2562,7 +3096,9 @@ impl<'a> Evaluator<'a> {
                 values
                     .iter()
                     .flat_map(|value| match value {
-                        RuntimeValue::List(values) => values.clone(),
+                        RuntimeValue::List(values) | RuntimeValue::TagList(values) => {
+                            values.clone()
+                        }
                         value => vec![value.clone()],
                     })
                     .collect(),
@@ -2717,7 +3253,7 @@ impl<'a> Evaluator<'a> {
             "earliest" | "latest" => {
                 let dates = values.iter().filter_map(|value| match value {
                     RuntimeValue::Date(value) => Some(value.millis),
-                    RuntimeValue::String(value) => {
+                    RuntimeValue::String(value) | RuntimeValue::Tag(value) => {
                         parse_date(value, &self.timezone).map(|date| date.millis)
                     }
                     _ => None,
@@ -2860,6 +3396,7 @@ impl<'a> Evaluator<'a> {
         match object {
             RuntimeValue::Null => RuntimeValue::Null,
             RuntimeValue::String(value)
+            | RuntimeValue::Tag(value)
             | RuntimeValue::Html(value)
             | RuntimeValue::Image(value)
             | RuntimeValue::Icon(value)
@@ -2870,10 +3407,12 @@ impl<'a> Evaluator<'a> {
             RuntimeValue::Link(value) if property.eq_ignore_ascii_case("length") => {
                 RuntimeValue::Number(value.path.chars().count() as f64)
             }
-            RuntimeValue::List(values) if property.eq_ignore_ascii_case("length") => {
+            RuntimeValue::List(values) | RuntimeValue::TagList(values)
+                if property.eq_ignore_ascii_case("length") =>
+            {
                 RuntimeValue::Number(values.len() as f64)
             }
-            RuntimeValue::List(values) => property
+            RuntimeValue::List(values) | RuntimeValue::TagList(values) => property
                 .parse::<isize>()
                 .ok()
                 .and_then(|index| index_value(&values, index))
@@ -2937,7 +3476,7 @@ impl<'a> Evaluator<'a> {
         match value {
             RuntimeValue::Number(value) => Ok(*value),
             RuntimeValue::Bool(value) => Ok(if *value { 1.0 } else { 0.0 }),
-            RuntimeValue::String(value) => value
+            RuntimeValue::String(value) | RuntimeValue::Tag(value) => value
                 .parse()
                 .map_err(|_| format!("Unable to parse {value:?} as a number.")),
             RuntimeValue::Date(value) => Ok(value.millis as f64),
@@ -2955,6 +3494,7 @@ impl<'a> Evaluator<'a> {
                 return Err(RuntimeValue::Error(message.clone()));
             }
             RuntimeValue::String(value)
+            | RuntimeValue::Tag(value)
             | RuntimeValue::Html(value)
             | RuntimeValue::Image(value)
             | RuntimeValue::Icon(value) => self.charge(value.len() / 16)?,
@@ -2970,7 +3510,7 @@ impl<'a> Evaluator<'a> {
             RuntimeValue::Regex(pattern, flags) => {
                 self.charge(pattern.len().saturating_add(flags.len()) / 16)?
             }
-            RuntimeValue::List(values) => {
+            RuntimeValue::List(values) | RuntimeValue::TagList(values) => {
                 for value in values {
                     self.comparison_preflight(value)?;
                 }
@@ -3020,8 +3560,19 @@ impl<'a> Evaluator<'a> {
         right: &RuntimeValue,
     ) -> Result<bool, RuntimeValue> {
         self.charge(1)?;
+        if let RuntimeValue::Tag(value) = left {
+            self.charge(value.len() / 16 + 1)?;
+            return self.equals_prechecked(&RuntimeValue::String(value.clone()), right);
+        }
+        if let RuntimeValue::Tag(value) = right {
+            self.charge(value.len() / 16 + 1)?;
+            return self.equals_prechecked(left, &RuntimeValue::String(value.clone()));
+        }
         match (left, right) {
-            (RuntimeValue::List(a), RuntimeValue::List(b)) => {
+            (
+                RuntimeValue::List(a) | RuntimeValue::TagList(a),
+                RuntimeValue::List(b) | RuntimeValue::TagList(b),
+            ) => {
                 if a.len() != b.len() {
                     return Ok(false);
                 }
@@ -3119,11 +3670,16 @@ impl<'a> Evaluator<'a> {
             }
             (RuntimeValue::Null, RuntimeValue::Null) => true,
             (RuntimeValue::Null, _) | (_, RuntimeValue::Null) => false,
-            (RuntimeValue::List(a), RuntimeValue::List(b)) => {
-                a.len() == b.len() && a.iter().zip(b).all(|(a, b)| self.equals(a, b))
+            (
+                RuntimeValue::List(a) | RuntimeValue::TagList(a),
+                RuntimeValue::List(b) | RuntimeValue::TagList(b),
+            ) => a.len() == b.len() && a.iter().zip(b).all(|(a, b)| self.equals(a, b)),
+            (RuntimeValue::List(a) | RuntimeValue::TagList(a), b) if a.len() == 1 => {
+                self.equals(&a[0], b)
             }
-            (RuntimeValue::List(a), b) if a.len() == 1 => self.equals(&a[0], b),
-            (a, RuntimeValue::List(b)) if b.len() == 1 => self.equals(a, &b[0]),
+            (a, RuntimeValue::List(b) | RuntimeValue::TagList(b)) if b.len() == 1 => {
+                self.equals(a, &b[0])
+            }
             (RuntimeValue::String(a), RuntimeValue::Number(b))
             | (RuntimeValue::Number(b), RuntimeValue::String(a)) => {
                 loose_numeric_text(a) == Some(*b)
@@ -3154,14 +3710,17 @@ impl<'a> Evaluator<'a> {
         right: &RuntimeValue,
         operator: &str,
     ) -> Result<bool, String> {
-        let ordering =
-            if let (RuntimeValue::String(left), RuntimeValue::String(right)) = (left, right) {
-                left.cmp(right)
-            } else {
-                self.number(left)?
-                    .partial_cmp(&self.number(right)?)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            };
+        let ordering = if let (
+            RuntimeValue::String(left) | RuntimeValue::Tag(left),
+            RuntimeValue::String(right) | RuntimeValue::Tag(right),
+        ) = (left, right)
+        {
+            left.cmp(right)
+        } else {
+            self.number(left)?
+                .partial_cmp(&self.number(right)?)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        };
         Ok(match operator {
             ">" => ordering.is_gt(),
             "<" => ordering.is_lt(),
@@ -3416,6 +3975,7 @@ fn to_plain(value: &RuntimeValue) -> Value {
         RuntimeValue::Bool(value) => Value::Bool(*value),
         RuntimeValue::Number(value) => number_json(*value),
         RuntimeValue::String(value)
+        | RuntimeValue::Tag(value)
         | RuntimeValue::Html(value)
         | RuntimeValue::Icon(value)
         | RuntimeValue::Image(value) => Value::String(value.clone()),
@@ -3428,7 +3988,9 @@ fn to_plain(value: &RuntimeValue) -> Value {
             },
         )),
         RuntimeValue::Duration(value) => Value::String(format_duration(value)),
-        RuntimeValue::List(values) => Value::Array(values.iter().map(to_plain).collect()),
+        RuntimeValue::List(values) | RuntimeValue::TagList(values) => {
+            Value::Array(values.iter().map(to_plain).collect())
+        }
         RuntimeValue::Object(values) => Value::Object(
             values
                 .iter()
@@ -3450,9 +4012,10 @@ fn plain_string(value: &RuntimeValue) -> String {
         RuntimeValue::Null => "null".to_string(),
         RuntimeValue::Bool(value) => value.to_string(),
         RuntimeValue::Number(value) => format_number(*value),
-        RuntimeValue::String(value) | RuntimeValue::Html(value) | RuntimeValue::Icon(value) => {
-            value.clone()
-        }
+        RuntimeValue::String(value)
+        | RuntimeValue::Tag(value)
+        | RuntimeValue::Html(value)
+        | RuntimeValue::Icon(value) => value.clone(),
         RuntimeValue::Date(value) => format_date(
             value,
             if value.date_only {
@@ -3462,7 +4025,7 @@ fn plain_string(value: &RuntimeValue) -> String {
             },
         ),
         RuntimeValue::Duration(value) => format_duration(value),
-        RuntimeValue::List(values) => values
+        RuntimeValue::List(values) | RuntimeValue::TagList(values) => values
             .iter()
             .map(plain_string)
             .collect::<Vec<_>>()
@@ -3507,11 +4070,12 @@ fn is_truthy(value: &RuntimeValue) -> bool {
         RuntimeValue::Bool(value) => *value,
         RuntimeValue::Number(value) => *value != 0.0 && !value.is_nan(),
         RuntimeValue::String(value)
+        | RuntimeValue::Tag(value)
         | RuntimeValue::Html(value)
         | RuntimeValue::Image(value)
         | RuntimeValue::Icon(value) => !value.is_empty(),
         RuntimeValue::Link(link) if link.external => !link.path.is_empty(),
-        RuntimeValue::List(value) => !value.is_empty(),
+        RuntimeValue::List(value) | RuntimeValue::TagList(value) => !value.is_empty(),
         RuntimeValue::Object(value) => !value.is_empty(),
         _ => true,
     }
@@ -3521,12 +4085,13 @@ fn is_empty(value: &RuntimeValue) -> bool {
     match value {
         RuntimeValue::Null => true,
         RuntimeValue::String(value)
+        | RuntimeValue::Tag(value)
         | RuntimeValue::Html(value)
         | RuntimeValue::Image(value)
         | RuntimeValue::Icon(value) => value.is_empty(),
         RuntimeValue::Link(link) => link.path.is_empty(),
         RuntimeValue::Number(value) => value.is_nan(),
-        RuntimeValue::List(values) => values.is_empty(),
+        RuntimeValue::List(values) | RuntimeValue::TagList(values) => values.is_empty(),
         RuntimeValue::Object(values) => values.is_empty(),
         _ => false,
     }
@@ -3537,10 +4102,10 @@ fn value_type(value: &RuntimeValue) -> &'static str {
         RuntimeValue::Null => "Null",
         RuntimeValue::Bool(_) => "Boolean",
         RuntimeValue::Number(_) => "Number",
-        RuntimeValue::String(_) => "String",
+        RuntimeValue::String(_) | RuntimeValue::Tag(_) => "String",
         RuntimeValue::Date(_) => "Date",
         RuntimeValue::Duration(_) => "Duration",
-        RuntimeValue::List(_) => "List",
+        RuntimeValue::List(_) | RuntimeValue::TagList(_) => "List",
         RuntimeValue::Object(_) => "Object",
         RuntimeValue::File(_) => "File",
         RuntimeValue::Link(value) if value.external => "URL",
@@ -4142,7 +4707,7 @@ fn scale_duration(value: &DurationValue, scale: f64) -> DurationValue {
 fn coerce_duration(value: &RuntimeValue) -> Option<DurationValue> {
     match value {
         RuntimeValue::Duration(value) => Some(value.clone()),
-        RuntimeValue::String(value) => parse_duration(value),
+        RuntimeValue::String(value) | RuntimeValue::Tag(value) => parse_duration(value),
         _ => None,
     }
 }
@@ -4261,11 +4826,14 @@ fn file_property(file: &BasesFile, property: &str, timezone: &BasesTimezone) -> 
             .map(|size| RuntimeValue::Number(size as f64))
             .unwrap_or(RuntimeValue::Null),
         "properties" => RuntimeValue::Object(file.properties.clone()),
-        "tags" => RuntimeValue::List(
+        "tags" => RuntimeValue::TagList(
             file.tags
                 .iter()
-                .cloned()
-                .map(RuntimeValue::String)
+                .filter({
+                    let mut seen = HashSet::new();
+                    move |value| seen.insert(value.as_str())
+                })
+                .map(|value| RuntimeValue::Tag(tag_text(value)))
                 .collect(),
         ),
         "links" => RuntimeValue::List(file.links.iter().cloned().map(RuntimeValue::Link).collect()),
@@ -4487,6 +5055,7 @@ fn compare_sort_keys(left: &RuntimeValue, right: &RuntimeValue) -> std::cmp::Ord
 }
 fn unique_key(value: &RuntimeValue) -> String {
     match value {
+        RuntimeValue::Tag(value) => format!("Tag:{value}"),
         RuntimeValue::Date(date) => format!("date:{}:{}", date.millis, date.date_only),
         RuntimeValue::Link(link) => format!("link:{}", link.path),
         RuntimeValue::File(file) => format!("file:{}", file.path),
@@ -4659,7 +5228,7 @@ fn typed_value(
                 "Nonfinite numeric result",
             ))
         }
-        RuntimeValue::String(value) => {
+        RuntimeValue::String(value) | RuntimeValue::Tag(value) => {
             *bytes = bytes.saturating_add(value.len());
             BaseValue::String { value }
         }
@@ -4675,7 +5244,7 @@ fn typed_value(
             *bytes = bytes.saturating_add(value.len());
             BaseValue::Icon { value }
         }
-        RuntimeValue::List(values) => BaseValue::List {
+        RuntimeValue::List(values) | RuntimeValue::TagList(values) => BaseValue::List {
             value: values
                 .into_iter()
                 .map(|value| typed_value(value, depth + 1, bytes))
@@ -4748,6 +5317,7 @@ fn value_bytes(value: &RuntimeValue) -> Option<usize> {
         bytes = bytes.saturating_add(16);
         match value {
             RuntimeValue::String(value)
+            | RuntimeValue::Tag(value)
             | RuntimeValue::Html(value)
             | RuntimeValue::Image(value)
             | RuntimeValue::Icon(value)
@@ -4785,7 +5355,7 @@ fn value_bytes(value: &RuntimeValue) -> Option<usize> {
                     }
                 }
             }
-            RuntimeValue::List(values) => work.extend(values),
+            RuntimeValue::List(values) | RuntimeValue::TagList(values) => work.extend(values),
             RuntimeValue::Object(values) => {
                 for (key, value) in values {
                     bytes = bytes.saturating_add(key.len());
@@ -4882,6 +5452,71 @@ pub(crate) fn display_date(
 /// Pure interpretation of bounded raw frontmatter values. Resolution is a
 /// separate checked stage using the owning file's immutable source witness.
 /// Explicit property definitions may opt out before calling this helper.
+pub(crate) fn infer_frontmatter_property(
+    name: &str,
+    value: RuntimeValue,
+    timezone: &BasesTimezone,
+) -> RuntimeValue {
+    infer_frontmatter_value(
+        if name.eq_ignore_ascii_case("tags") {
+            frontmatter_tags(value)
+        } else {
+            value
+        },
+        timezone,
+    )
+}
+/// Preserve only an actually captured frontmatter TagList across a compatible
+/// scalar-definition replacement. Other lists/scalars never gain tag ancestry.
+pub(crate) fn preserve_frontmatter_tag_list(
+    original: Option<&RuntimeValue>,
+    replacement: RuntimeValue,
+) -> RuntimeValue {
+    if matches!(original, Some(RuntimeValue::TagList(_))) {
+        if let RuntimeValue::List(values) = replacement {
+            if values
+                .iter()
+                .all(|value| matches!(value, RuntimeValue::String(_)))
+            {
+                return RuntimeValue::TagList(
+                    values
+                        .into_iter()
+                        .map(|value| {
+                            let RuntimeValue::String(value) = value else {
+                                unreachable!()
+                            };
+                            RuntimeValue::Tag(tag_text(&value))
+                        })
+                        .collect(),
+                );
+            }
+            return RuntimeValue::List(values);
+        }
+    }
+    replacement
+}
+fn frontmatter_tags(value: RuntimeValue) -> RuntimeValue {
+    match value {
+        RuntimeValue::String(value) => {
+            RuntimeValue::TagList(vec![RuntimeValue::Tag(tag_text(&value))])
+        }
+        RuntimeValue::List(values)
+            if values
+                .iter()
+                .all(|v| matches!(v, RuntimeValue::String(_) | RuntimeValue::Null)) =>
+        {
+            let mut tags = Vec::with_capacity(values.len());
+            for value in values {
+                let RuntimeValue::String(value) = value else {
+                    return RuntimeValue::Error("type\0Tag arrays require string members".into());
+                };
+                tags.push(RuntimeValue::Tag(tag_text(&value)));
+            }
+            RuntimeValue::TagList(tags)
+        }
+        value => value,
+    }
+}
 pub(crate) fn infer_frontmatter_value(
     value: RuntimeValue,
     timezone: &BasesTimezone,
@@ -4923,7 +5558,14 @@ pub(crate) fn infer_frontmatter_value(
             RuntimeValue::Object(values) => RuntimeValue::Object(
                 values
                     .into_iter()
-                    .map(|(key, value)| (key, infer(value, timezone, depth + 1)))
+                    .map(|(key, value)| {
+                        let value = if key.eq_ignore_ascii_case("tags") {
+                            frontmatter_tags(value)
+                        } else {
+                            value
+                        };
+                        (key, infer(value, timezone, depth + 1))
+                    })
                     .collect(),
             ),
             value => value,
@@ -5195,6 +5837,7 @@ mod rich_expression_tests {
         let result = evaluate_summary(
             "values[0]",
             &[&icon],
+            &[],
             &crate::EvaluationOptions::default(),
             None,
             None,
@@ -5712,5 +6355,89 @@ mod checked_comparison_admission_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tag_provenance_budget_tests {
+    use super::*;
+
+    #[test]
+    fn provenance_admits_vector_growth_and_key_copies_before_allocating() {
+        let context = BasesEvaluationContext::default();
+        let mut evaluator = Evaluator::new(&context);
+        let mut reservations = Vec::new();
+        let values = RuntimeValue::List(vec![RuntimeValue::Tag("#a".into()); 9]);
+        let shape = evaluator
+            .tag_shape(&values, 0, &mut |bytes| {
+                reservations.push(bytes);
+                Ok(())
+            })
+            .unwrap()
+            .unwrap();
+        let TagShape::List(shapes) = shape else {
+            panic!("list provenance")
+        };
+        assert_eq!(shapes.len(), 9);
+        // Full capacity is paid at each growth, including spare slots.
+        assert_eq!(
+            reservations.iter().sum::<usize>(),
+            shapes.capacity() * std::mem::size_of::<(usize, TagShape)>()
+        );
+
+        let mut calls = 0;
+        let error = evaluator
+            .tag_shape(&values, 0, &mut |_| {
+                calls += 1;
+                Err(ExpressionDiagnostic::new(
+                    "budget",
+                    "Rejected before growth",
+                ))
+            })
+            .unwrap_err();
+        assert_eq!(runtime_diagnostic(error).code, "budget");
+        assert_eq!(calls, 1);
+        let object = RuntimeValue::Object(IndexMap::from([(
+            "key".into(),
+            RuntimeValue::Tag("#a".into()),
+        )]));
+        let mut bytes = 0;
+        let shape = evaluator
+            .tag_shape(&object, 0, &mut |cost| {
+                bytes += cost;
+                Ok(())
+            })
+            .unwrap()
+            .unwrap();
+        let TagShape::Object(shapes) = shape else {
+            panic!("object provenance")
+        };
+        assert_eq!(
+            bytes,
+            shapes.capacity() * std::mem::size_of::<(String, TagShape)>() + 3
+        );
+    }
+
+    #[test]
+    fn provenance_extraction_and_restoration_preserve_cancellation_and_work_errors() {
+        let context = BasesEvaluationContext {
+            work_limit: Some(1),
+            ..Default::default()
+        };
+        let mut evaluator = Evaluator::new(&context);
+        let value = RuntimeValue::List(vec![RuntimeValue::Tag("#a".into())]);
+        let error = evaluator.tag_shape(&value, 0, &mut |_| Ok(())).unwrap_err();
+        assert_eq!(runtime_diagnostic(error).code, "budget");
+        let cancellation = OperationCancellation::default();
+        cancellation.cancel();
+        let context = BasesEvaluationContext {
+            cancellation: Some(cancellation),
+            ..Default::default()
+        };
+        let mut evaluator = Evaluator::new(&context);
+        let error = evaluator
+            .restore_tags(&mut RuntimeValue::String("#a".into()), &TagShape::Tag, 0)
+            .unwrap_err();
+        assert_eq!(runtime_diagnostic(error).code, "cancelled");
     }
 }

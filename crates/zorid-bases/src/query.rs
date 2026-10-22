@@ -1726,6 +1726,24 @@ pub(crate) fn query_rows_validated(
         needed.insert(program::property_id(image));
     }
     let mut diagnostics = Vec::new();
+    // Invocation-only metadata from actual evaluated runtime results. It never
+    // enters the public rows/DTO or an answer cache, and never reevaluates a row.
+    let mut tag_shapes: HashMap<crate::EntryId, BTreeMap<String, expression::TagShape>> =
+        HashMap::new();
+    let mut tag_shape_bytes = 0usize;
+    let mut tag_properties = std::collections::BTreeSet::new();
+    for (property, _) in &view.summaries {
+        admit(&mut admission, |_| {
+            Ok(map_slot::<String, ()>() + crate::preview::string_bytes(property))
+        })?;
+        tag_properties.insert(property.clone());
+    }
+    if let Some(property) = &options.summary_preview_property {
+        admit(&mut admission, |_| {
+            Ok(map_slot::<String, ()>() + crate::preview::string_bytes(property) + 16)
+        })?;
+        tag_properties.insert(program::property_id(property));
+    }
     let mut rows = Vec::new();
     let mut steps_used = preparation_work;
     let mut retained_bytes = 0usize;
@@ -1797,6 +1815,7 @@ pub(crate) fn query_rows_validated(
                 .saturating_sub(steps_used)
                 .saturating_sub(admission_work(&admission)),
         );
+        let mut row_tag_shapes = BTreeMap::new();
         let row = with_session_files(
             "",
             record,
@@ -1852,8 +1871,33 @@ pub(crate) fn query_rows_validated(
                             .saturating_mul(24)
                             .saturating_add(256))
                     })?;
-                    let value = match session.evaluate(&value_expression(property)) {
-                        Ok(value) => value,
+                    let evaluated = if tag_properties.contains(property) {
+                        session.evaluate_with_tag_shape(&value_expression(property), |bytes| {
+                            tag_shape_bytes = tag_shape_bytes.saturating_add(bytes);
+                            if tag_shape_bytes > options.max_output_bytes {
+                                return Err(budget("Tag provenance exceeds byte budget"));
+                            }
+                            admit(&mut admission, |_| Ok(bytes))
+                        })
+                    } else {
+                        session
+                            .evaluate(&value_expression(property))
+                            .map(|value| (value, None))
+                    };
+                    let value = match evaluated {
+                        Ok((value, shape)) => {
+                            if let Some(shape) = shape {
+                                let bytes = map_slot::<String, expression::TagShape>()
+                                    .saturating_add(crate::preview::string_bytes(property));
+                                tag_shape_bytes = tag_shape_bytes.saturating_add(bytes);
+                                if tag_shape_bytes > options.max_output_bytes {
+                                    return Err(budget("Tag provenance exceeds byte budget"));
+                                }
+                                admit(&mut admission, |_| Ok(bytes))?;
+                                row_tag_shapes.insert(property.clone(), shape);
+                            }
+                            value
+                        }
                         Err(error) => {
                             if fatal(&error) {
                                 return Err(error);
@@ -2042,6 +2086,16 @@ pub(crate) fn query_rows_validated(
             retained_bytes = retained_bytes.saturating_add(encoded);
             if retained_bytes > options.max_output_bytes {
                 return Err(budget("Intermediate query rows exceed byte budget"));
+            }
+            if !row_tag_shapes.is_empty() {
+                let bytes = map_slot::<crate::EntryId, BTreeMap<String, expression::TagShape>>()
+                    + crate::preview::string_bytes(row.entry_id.as_str());
+                tag_shape_bytes = tag_shape_bytes.saturating_add(bytes);
+                if tag_shape_bytes > options.max_output_bytes {
+                    return Err(budget("Tag provenance exceeds byte budget"));
+                }
+                admit(&mut admission, |_| Ok(bytes))?;
+                tag_shapes.insert(row.entry_id.clone(), row_tag_shapes);
             }
             rows.push(row);
         }
@@ -2466,6 +2520,7 @@ pub(crate) fn query_rows_validated(
         view,
         &rows,
         &mut groups,
+        &tag_shapes,
         input,
         options,
         relationships.as_ref(),
@@ -2599,6 +2654,7 @@ fn summarize_rows(
     view: &program::View,
     rows: &[BaseRow],
     groups: &mut [BaseGroup],
+    tag_shapes: &HashMap<crate::EntryId, BTreeMap<String, expression::TagShape>>,
     input: &QueryRows<'_>,
     options: &QueryOptions,
     relationships: Option<&crate::graph::PreparedRelationships<'_>>,
@@ -2673,6 +2729,17 @@ fn summarize_rows(
             let values = selected
                 .iter()
                 .map(|row| row.values.get(property).unwrap_or(&null))
+                .collect::<Vec<_>>();
+            admit(admission, |_| {
+                Ok(slots::<Option<&expression::TagShape>>(selected.len()))
+            })?;
+            let selected_shapes = selected
+                .iter()
+                .map(|row| {
+                    tag_shapes
+                        .get(&row.entry_id)
+                        .and_then(|shapes| shapes.get(property))
+                })
                 .collect::<Vec<_>>();
             // File values expose complete captured properties, including nested
             // links. Build their shared projection once for all summaries, even
@@ -2773,6 +2840,7 @@ fn summarize_rows(
                 program,
                 name,
                 &values,
+                &selected_shapes,
                 &invocation,
                 relationships,
                 summary_files.clone(),

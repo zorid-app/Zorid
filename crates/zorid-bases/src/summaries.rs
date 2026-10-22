@@ -8,6 +8,7 @@ pub(crate) fn evaluate(
     program: &BaseProgram,
     name: &str,
     values: &[&BaseValue],
+    tag_shapes: &[Option<&expression::TagShape>],
     options: &EvaluationOptions,
     relationships: Option<&crate::graph::PreparedRelationships<'_>>,
     shared_files: Option<std::sync::Arc<crate::files::BasesFiles>>,
@@ -30,9 +31,15 @@ pub(crate) fn evaluate(
             )
         });
     match source {
-        Some(source) => {
-            expression::evaluate_summary(source, values, options, relationships, shared_files, file)
-        }
+        Some(source) => expression::evaluate_summary(
+            source,
+            values,
+            tag_shapes,
+            options,
+            relationships,
+            shared_files,
+            file,
+        ),
         None => Ok(EvaluationResult {
             value: BaseValue::Null,
             steps_used: 0,
