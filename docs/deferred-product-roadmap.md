@@ -9,6 +9,53 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Current continuation update: root `7e66e619` includes independently approved
+C1 picker lifecycle fix `12869443` (44 scoped +6 dependent tests pass) and
+audited [browser011](history/bases-browser-actual-011-20261022.md). WASM build73113
+passes, preserved `/private/tmp/zorid-bases-resume-wasm-e38e2461/receipt.json`;
+fingerprint9273555a, WASM c1298e7c. Actual browser4342 passes19/19 groups,
+162 typed expectations/16 diagnostics, source/assets/cleanup verified.
+Desktop build007/19495 passes on picker source12869443. Properties005/8244 and
+006 both stop BEFORE launch at unchanged1GiB disk guard,0actions/0checks.
+Owned completed WASM cache retirement1243files/450453613 logical bytes preserves
+26 product/source hashes; receipt
+`/private/tmp/zorid-bases-resume-wasm-cache-retirement-20261022-002.json`.
+Free854667264→1270030336B at retirement, later685492KiB observed. User resource
+question requests2–3GB more; no native/compiler app is currently running.
+Do not repeatedly retry the guard without changed resource evidence.
+
+Safety007/92421 fails33actions/6checks AFTER durable Base undo/redo successfully
+preserves unrelated external content. Next touched-property case changes physical
+score9→7 before the30s family rescan. Base history correctly routes but accepts
+logical core9→1 against stale core/buffer; physical source7 remains protected
+and exact (SHA3bb9062e), with pending projection. Read-only native diagnostic
+receipt `/private/tmp/zorid-safety007-core-readonly-001/diagnostic-receipt.json`
+SHA b3415213 records intent66 and unchanged originals. App SIGTERM exit0,
+no leaks, freeze verified. No physical overwrite or full Undo safety acceptance.
+
+Approved conditional-history boundary now being implemented in isolated branches
+from12869443: `bases_inline_core` owns Native/host/Store guarded saved-source
+capture (Store child owns additive schema17/table/migration fixtures);
+`bases_relations` owns desktop/platform wire; `bases_guarded_buffer` owns shared
+DurableWrites DTO, NoteBuffer/DurableNoteState exact-plan/retry plumbing;
+`bases_controller` owns existing controller.ts history/mutation-host sections.
+Physical source has separate DTO from logical core witness, never replaces
+original CRDT base. Compare touched fields against physical capture and latest
+draft, revalidate capture before logical authorship, persist proof with exact
+prepared intent, retain idempotent/uncertain retry and final no-clobber guards.
+No generic mutation/receipt redesign; no Cargo/runtime grants yet.
+
+Typed toolbar7dd46aa7 has147 focused tests passing but independent review holds
+three confirmed issues: preserved datetime seconds validity, unknown-category
+comparison operand retention, and chip-removal keyboard focus. Author fixes
+pending. Provider ordered0a809ff0→cf557a74→7229c4e1 has15 author tests passing;
+latest review pending, including readonly Vault.isMetadataRetired getter and
+same-frame wrapper/stale-construction/empty-frame retirement cases. Independently
+approved typed native campaign e9453d19 has65 authored cases/9 offline checks;
+not yet composed/executed. Private13-phase reference helper is independently
+approved but not granted/runtime-executed. All these remain unverified source
+work; main is still untouched e7d655e1.
+
 Latest resumed results (supersede running/pending statements below): root
 `6fcd58a2` includes reviewed relation lifecycle fix `ef383205` and canonical
 recovery fixture correction `e38e2461`. Rust library run47903 passes205 Bases
