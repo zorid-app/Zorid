@@ -73,7 +73,7 @@ export interface BrowserDocumentIndex extends Pick<DocumentTransport,'metadataRo
   tasks(input:{pinId:string;typeIds:string[];options?:DocumentTaskOptions}):Promise<unknown>;
   readonly propertyTargetsAvailable?:boolean;
   propertyTargets?(input:{pinId:string;options?:{propertyDefinitionsSource?:{id:string;source:string};currentEntryId?:string;clockMs?:number;timezone?:string;maxRows?:number;maxSteps?:number}}):Promise<unknown>;
-  base(input:{pinId:string;id:string;viewName?:string|null;options?:{viewIndex?:number;searchTerms?:string[];ignorePaths?:string[];clockMs?:number;timezone?:string;maxRows?:number;currentEntryId?:string;maxSteps?:number;inlineSource?:{source:string;startByte:number;endByte:number};propertyDefinitionsSource?:{id:string;source:string};summaryPreviewProperty?:string;randomSeed?:number}}):Promise<unknown>;
+  base(input:{pinId:string;id:string;viewName?:string|null;options?:{viewIndex?:number;searchTerms?:string[];ignorePaths?:string[];clockMs?:number;timezone?:string;maxRows?:number;currentEntryId?:string;maxSteps?:number;inlineSource?:{source:string;startByte:number;endByte:number};propertyDefinitionsSource?:{id:string;source:string};summaryPreviewProperty?:string;summaryPreviewGroupKeyId?:string;randomSeed?:number}}):Promise<unknown>;
   richStart(input:{pinId:string;spec:SearchSpec}):Promise<unknown>;
   richPrepare(input:{pinId:string;queryId:string}):Promise<unknown>;
   richPage(input:{pinId:string;queryId:string;cursor:string}):Promise<unknown>;
@@ -98,7 +98,7 @@ const digest=(value:string):Promise<string>=>byteDigest(new TextEncoder().encode
 function pageLimit(value:unknown):number{if(value===undefined)return 100;if(typeof value!=='number'||!Number.isInteger(value)||value<1||value>1000)throw fail('index_invalid_budget');return value;}
 function baseOptions(input:unknown,targets=false):string {
   if(input===undefined)input={};if(!input||typeof input!=='object'||Array.isArray(input))throw fail('index_invalid_request');
-  const value=input as Record<string,unknown>,allowed=new Set(targets?['propertyDefinitionsSource','currentEntryId','clockMs','timezone','maxRows','maxSteps']:['viewIndex','searchTerms','ignorePaths','clockMs','timezone','maxRows','currentEntryId','maxSteps','inlineSource','propertyDefinitionsSource','summaryPreviewProperty','randomSeed']);
+  const value=input as Record<string,unknown>,allowed=new Set(targets?['propertyDefinitionsSource','currentEntryId','clockMs','timezone','maxRows','maxSteps']:['viewIndex','searchTerms','ignorePaths','clockMs','timezone','maxRows','currentEntryId','maxSteps','inlineSource','propertyDefinitionsSource','summaryPreviewProperty','summaryPreviewGroupKeyId','randomSeed']);
   if(Object.keys(value).some(key=>!allowed.has(key)))throw fail('index_invalid_request');
   const result:Record<string,unknown>={};
   for(const key of ['viewIndex','maxRows','clockMs','maxSteps','randomSeed'])if(value[key]!==undefined){const n=value[key];if(typeof n!=='number'||!Number.isSafeInteger(n)||(key!=='clockMs'&&n<0))throw fail('index_invalid_request');result[key]=n;}
@@ -109,6 +109,7 @@ function baseOptions(input:unknown,targets=false):string {
   if(value.timezone!==undefined)result.timezone=inputText(value.timezone,256);
   for(const key of ['searchTerms','ignorePaths'])if(value[key]!==undefined){const array=value[key];if(!Array.isArray(array)||array.length>1000)throw fail('index_input_limit');result[key]=array.map(item=>inputText(item,4096));}
   if(value.summaryPreviewProperty!==undefined)result.summaryPreviewProperty=inputText(value.summaryPreviewProperty,65536);
+  if(value.summaryPreviewGroupKeyId!==undefined){const group=inputText(value.summaryPreviewGroupKeyId,8*1024*1024);if(!group.length||typeof result.summaryPreviewProperty!=='string')throw fail('index_invalid_request');result.summaryPreviewGroupKeyId=group;}
   if(value.inlineSource!==undefined){const inline=value.inlineSource as Record<string,unknown>;if(!inline||typeof inline!=='object'||Array.isArray(inline)||Object.keys(inline).length!==3||!['source','startByte','endByte'].every(key=>Object.hasOwn(inline,key))||!Number.isSafeInteger(inline.startByte)||!Number.isSafeInteger(inline.endByte)||Number(inline.startByte)<0||Number(inline.endByte)>LIMITS.text||Number(inline.endByte)<=Number(inline.startByte))throw fail('index_invalid_request');result.inlineSource={source:inputText(inline.source,262144),startByte:inline.startByte,endByte:inline.endByte};}
   if(value.propertyDefinitionsSource!==undefined){const source=value.propertyDefinitionsSource as Record<string,unknown>;if(!source||typeof source!=='object'||Array.isArray(source)||Object.keys(source).length!==2||!Object.hasOwn(source,'id')||!Object.hasOwn(source,'source')||!validId(source.id))throw fail('index_invalid_request');result.propertyDefinitionsSource={id:source.id,source:inputText(source.source,262144)};}
   const raw=JSON.stringify(result);if(size(raw)>1024*1024-16*1024)throw fail('index_input_limit');return raw;

@@ -222,6 +222,8 @@ struct BaseOptions {
     max_steps: usize,
     #[serde(default, deserialize_with = "text_option", skip_serializing_if = "Option::is_none")]
     summary_preview_property: Option<String>,
+    #[serde(default, deserialize_with = "text_option", skip_serializing_if = "Option::is_none")]
+    summary_preview_group_key_id: Option<String>,
     #[serde(default, deserialize_with = "random_seed_option", skip_serializing_if = "Option::is_none")]
     random_seed: Option<u64>,
 }
@@ -239,6 +241,7 @@ impl Default for BaseOptions {
             property_definitions_source: None,
             max_steps: QueryOptions::default().max_steps,
             summary_preview_property: None,
+            summary_preview_group_key_id: None,
             random_seed: None,
         }
     }
@@ -258,6 +261,7 @@ impl BaseOptions {
             || self.max_steps > QueryOptions::default().max_steps
             || self.random_seed.is_some_and(|value| value > 9_007_199_254_740_991)
             || self.summary_preview_property.as_ref().is_some_and(|value| value.is_empty() || value.len() > 65536)
+            || self.summary_preview_group_key_id.as_ref().is_some_and(|value| value.len() > 8 * 1024 * 1024)
         {
             return Err(failure("invalid_budget"));
         }
@@ -276,6 +280,7 @@ impl BaseOptions {
         options.max_steps = self.max_steps;
         options.current_entry_id = self.current_entry_id;
         options.summary_preview_property = self.summary_preview_property;
+        options.summary_preview_group_key_id = self.summary_preview_group_key_id;
         options.evaluation.random_seed = self.random_seed;
         Ok(options)
     }
@@ -1604,9 +1609,9 @@ mod clock_tests {
     fn property_target_options_and_base_preview_random_fields_are_strict_and_bounded() {
         let read: PropertyTargetOptions = serde_json::from_str(r#"{"clockMs":0,"currentEntryId":"note"}"#).unwrap();
         let (source, options) = read.into_options().unwrap();assert!(source.is_none());assert_eq!(options.max_rows, 10_000);
-        let base: BaseOptions = serde_json::from_str(r#"{"clockMs":0,"summaryPreviewProperty":"note.rating","randomSeed":0}"#).unwrap();
-        let options=base.into_options().unwrap();assert_eq!(options.summary_preview_property.as_deref(),Some("note.rating"));assert_eq!(options.evaluation.random_seed,Some(0));
-        for raw in [r#"{"summaryPreviewProperty":null}"#,r#"{"randomSeed":null}"#,r#"{"randomSeed":-1}"#,r#"{"randomSeed":1,"randomSeed":2}"#] {assert!(serde_json::from_str::<BaseOptions>(raw).is_err(),"{raw}");}
+        let base: BaseOptions = serde_json::from_str(r#"{"clockMs":0,"summaryPreviewProperty":"note.rating","summaryPreviewGroupKeyId":"opaque:[é]","randomSeed":0}"#).unwrap();
+        let options=base.into_options().unwrap();assert_eq!(options.summary_preview_property.as_deref(),Some("note.rating"));assert_eq!(options.summary_preview_group_key_id.as_deref(),Some("opaque:[é]"));assert_eq!(options.evaluation.random_seed,Some(0));
+        for raw in [r#"{"summaryPreviewProperty":null}"#,r#"{"summaryPreviewGroupKeyId":null}"#,r#"{"summaryPreviewGroupKeyId":"one","summaryPreviewGroupKeyId":"two"}"#,r#"{"randomSeed":null}"#,r#"{"randomSeed":-1}"#,r#"{"randomSeed":1,"randomSeed":2}"#] {assert!(serde_json::from_str::<BaseOptions>(raw).is_err(),"{raw}");}
         assert!(serde_json::from_str::<BaseOptions>(r#"{"clockMs":0,"randomSeed":9007199254740992}"#).unwrap().into_options().is_err());
         for raw in [r#"{"inlineSource":null}"#,r#"{"summaryPreviewProperty":"rating"}"#,r#"{"randomSeed":1}"#,r#"{"propertyDefinitionsSource":null}"#,r#"{"clockMs":null}"#] {assert!(serde_json::from_str::<PropertyTargetOptions>(raw).is_err(),"{raw}");}
     }

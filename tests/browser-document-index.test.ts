@@ -951,9 +951,10 @@ test('Base transport captures inline source summary preview and safe seeded rand
   const f=fixture(),source=`# ${'\\"'.repeat(40000)}\nviews: []\n`,note=`# Note\n\n\`\`\`base\n${source}\`\`\`\n`;
   f.file('note',note);const index=f.open();await f.build(index);const pin=await index.open();
   const inline={source,startByte:8,endByte:note.length-1};
-  const input={pinId:pin.pinId,id:'note',options:{inlineSource:inline,summaryPreviewProperty:'note.rating',randomSeed:9007199254740991,clockMs:0}};
+  const groupKey=`opaque:[${'é'.repeat(40000)}]`;
+  const input={pinId:pin.pinId,id:'note',options:{inlineSource:inline,summaryPreviewProperty:'note.rating',summaryPreviewGroupKeyId:groupKey,randomSeed:9007199254740991,clockMs:0}};
   const pending=index.base(input);inline.source='changed';await pending;
-  assert.equal(f.baseCalls[0].options.inlineSource.source,source);assert.equal(f.baseCalls[0].options.summaryPreviewProperty,'note.rating');assert.equal(f.baseCalls[0].options.randomSeed,9007199254740991);
-  for(const options of [{inlineSource:null},{propertyDefinitionsSource:null},{randomSeed:null},{randomSeed:-1},{randomSeed:9007199254740992},{summaryPreviewProperty:null}])await assert.rejects(index.base({pinId:pin.pinId,id:'note',options:options as any}),{code:'index_invalid_request'});
+  assert.equal(f.baseCalls[0].options.inlineSource.source,source);assert.equal(f.baseCalls[0].options.summaryPreviewProperty,'note.rating');assert.equal(f.baseCalls[0].options.summaryPreviewGroupKeyId,groupKey);assert.equal(f.baseCalls[0].options.randomSeed,9007199254740991);
+  for(const options of [{inlineSource:null},{propertyDefinitionsSource:null},{randomSeed:null},{randomSeed:-1},{randomSeed:9007199254740992},{summaryPreviewProperty:null},{summaryPreviewGroupKeyId:null},{summaryPreviewGroupKeyId:'missing-property'}])await assert.rejects(index.base({pinId:pin.pinId,id:'note',options:options as any}),{code:'index_invalid_request'});
   await index.closePin(pin.pinId);await index.close();
 });

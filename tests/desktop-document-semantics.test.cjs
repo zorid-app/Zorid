@@ -372,12 +372,13 @@ for(const outcome of ['success','rejection'])for(const retired of ['destination-
 
 test('saved Base transports rich source selectors and previews beyond64KiB without enlarging other commands',()=>{
   const yaml=`# ${'\\"'.repeat(40000)}\nviews: []\n`;
-  const input=request('base',{pinId:'1',id:'note',options:{inlineSource:{source:yaml,startByte:4,endByte:yaml.length+20},propertyDefinitionsSource:{id:'settings',source:'properties: {}\n'},summaryPreviewProperty:'note.rating',randomSeed:9007199254740991}});
+  const groupKey=`opaque:[${'é'.repeat(40000)}]`;
+  const input=request('base',{pinId:'1',id:'note',options:{inlineSource:{source:yaml,startByte:4,endByte:yaml.length+20},propertyDefinitionsSource:{id:'settings',source:'properties: {}\n'},summaryPreviewProperty:'note.rating',summaryPreviewGroupKeyId:groupKey,randomSeed:9007199254740991}});
   const captured=captureDocumentRequest(input);assert.ok(Buffer.byteLength(JSON.stringify(captured))>65536);
   input.command.options.inlineSource.source='changed';input.command.options.propertyDefinitionsSource.source='changed';
   assert.equal(captured.command.options.inlineSource.source,yaml);assert.equal(captured.command.options.propertyDefinitionsSource.source,'properties: {}\n');
-  assert.equal(captured.command.options.summaryPreviewProperty,'note.rating');assert.equal(captured.command.options.randomSeed,9007199254740991);
-  for(const options of [{inlineSource:null},{propertyDefinitionsSource:null},{randomSeed:null},{randomSeed:-1},{randomSeed:9007199254740992},{summaryPreviewProperty:null},{inlineSource:{source:'x',startByte:0,endByte:1,unknown:true}}])assert.throws(()=>captureDocumentRequest(request('base',{pinId:'1',id:'note',options})),{code:'invalid_document_request'});
+  assert.equal(captured.command.options.summaryPreviewProperty,'note.rating');assert.equal(captured.command.options.summaryPreviewGroupKeyId,groupKey);assert.equal(captured.command.options.randomSeed,9007199254740991);
+  for(const options of [{inlineSource:null},{propertyDefinitionsSource:null},{randomSeed:null},{randomSeed:-1},{randomSeed:9007199254740992},{summaryPreviewProperty:null},{summaryPreviewGroupKeyId:null},{summaryPreviewGroupKeyId:'missing-property'},{inlineSource:{source:'x',startByte:0,endByte:1,unknown:true}}])assert.throws(()=>captureDocumentRequest(request('base',{pinId:'1',id:'note',options})),{code:'invalid_document_request'});
   assert.throws(()=>captureDocumentRequest(request('preview_base',{previewId:'1',id:'note',options:{inlineSource:{source:'x',startByte:0,endByte:1}}})),{code:'invalid_document_request'});
 });
 

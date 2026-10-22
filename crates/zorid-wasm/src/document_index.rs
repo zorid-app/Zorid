@@ -625,6 +625,8 @@ pub(crate) struct BaseReadOptions {
     #[serde(default, deserialize_with = "present_option")]
     summary_preview_property: Option<String>,
     #[serde(default, deserialize_with = "present_option")]
+    summary_preview_group_key_id: Option<String>,
+    #[serde(default, deserialize_with = "present_option")]
     random_seed: Option<u64>,
 }
 impl BaseReadOptions {
@@ -639,6 +641,7 @@ impl BaseReadOptions {
             .saturating_add(self.inline_source.as_ref().map_or(0, |inline| inline.source.capacity()))
             .saturating_add(self.property_definitions_source.as_ref().map_or(0, |input| input.source.capacity().saturating_add(input.id.heap_capacity_bytes())))
             .saturating_add(self.summary_preview_property.as_ref().map_or(0, String::capacity))
+            .saturating_add(self.summary_preview_group_key_id.as_ref().map_or(0, String::capacity))
     }
 }
 fn present_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -1231,6 +1234,7 @@ pub(crate) fn base_query_options(
     }
     if input.random_seed.is_some_and(|value| value > 9_007_199_254_740_991)
         || input.summary_preview_property.as_ref().is_some_and(|value| value.is_empty() || value.len() > 65536)
+        || input.summary_preview_group_key_id.as_ref().is_some_and(|value| value.len() > 8 * 1024 * 1024)
     { return Err(BaseReadError::Code("index_invalid_budget")); }
     let mut options = zorid_bases::QueryOptions::default();
     if let Some(index) = input.view_index {
@@ -1243,6 +1247,7 @@ pub(crate) fn base_query_options(
     }
     options.current_entry_id = input.current_entry_id;
     options.summary_preview_property = input.summary_preview_property;
+    options.summary_preview_group_key_id = input.summary_preview_group_key_id;
     options.evaluation.random_seed = input.random_seed;
     if let Some(steps) = input.max_steps {
         options.max_steps = steps;
@@ -3121,6 +3126,8 @@ mod tests {
             r#"{"maxSteps":null}"#,
             r#"{"inlineSource":null}"#,
             r#"{"summaryPreviewProperty":null}"#,
+            r#"{"summaryPreviewGroupKeyId":null}"#,
+            r#"{"summaryPreviewGroupKeyId":"one","summaryPreviewGroupKeyId":"two"}"#,
             r#"{"randomSeed":null}"#,
             r#"{"randomSeed":-1}"#,
             r#"{"randomSeed":1,"randomSeed":2}"#,
@@ -3138,8 +3145,8 @@ mod tests {
             );
         }
         let program=zorid_bases::compile_base_source("views:\n  - type: table\n    name: Table\n").unwrap();
-        let options=base_query_options(serde_json::from_str(r#"{"summaryPreviewProperty":"note.rating","randomSeed":0}"#).unwrap(),None,&program).unwrap();
-        assert_eq!(options.summary_preview_property.as_deref(),Some("note.rating"));assert_eq!(options.evaluation.random_seed,Some(0));
+        let options=base_query_options(serde_json::from_str(r#"{"summaryPreviewProperty":"note.rating","summaryPreviewGroupKeyId":"opaque:[é]","randomSeed":0}"#).unwrap(),None,&program).unwrap();
+        assert_eq!(options.summary_preview_property.as_deref(),Some("note.rating"));assert_eq!(options.summary_preview_group_key_id.as_deref(),Some("opaque:[é]"));assert_eq!(options.evaluation.random_seed,Some(0));
         assert!(base_query_options(serde_json::from_str(r#"{"randomSeed":9007199254740992}"#).unwrap(),None,&program).is_err());
     }
     #[test]
