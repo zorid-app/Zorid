@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {delay, until} from '../tasks-electron-integration/cdp.mjs';
 import {MOD} from '../bases-electron-integration/ui.mjs';
+import {restartWithFreshSource, safetyAReady} from './freshness.mjs';
 import {fixtureFiles as originalFixtureFiles, template, vaultName, openBoundaries} from './fixtures.mjs';
 import {mountedRename, nestedRename, fencedRename, mountedRenameFixtures, nestedRenamedExternal, assertMountedRenameRetention, assertLogicalCellSelection, hoverPublication, newPublication, publicationFixtures, assertInlinePublicationFrame} from './mounted-rename-contract.mjs';
 export {template, vaultName};
@@ -127,13 +128,18 @@ async function sharedBodyAndHistory(c) {
   assert.equal(await c.read('A.md'), touched, 'History cannot overwrite an intervening touched property');
   assert.notEqual(undone, touched); await c.screenshot('s01-shared-body-conditional-history');
   await closeSplit(c);
+  return touched;
 }
 
-async function partialBulk(c) {
+async function partialBulk(c, aExpected) {
+  assert.equal(typeof aExpected, 'string', 'The preceding history scenario supplies its authored A source');
+  await restartWithFreshSource(c, 'A.md', aExpected, 'safety-before-partial-bulk');
+  const fresh = await c.ui.wait(`return (${safetyAReady.toString()})(document);`, 'Current rendered A score 7 before creating B conflict');
+  c.evidence.actions.push({action: 'safety-fresh-partial-bulk-row', ...fresh, at: Date.now()});
   const conflict = await conflictNote(c, 'B.md', 'Retained B body draft');
   await open(c, 'Safety.base');
   await c.ui.wait(`return document.querySelector(${JSON.stringify(c.ui.cell('B.md', 'note.score'))})?.textContent==='2';`, 'Fresh saved B row loaded despite retained buffer conflict');
-  const aBefore = await c.read('A.md');
+  const aBefore = await c.read('A.md'); assert.equal(aBefore, aExpected, 'Partial bulk starts from the exact authored score-7 source');
   await selectBaseCell(c, 'A.md'); await c.ui.key('ArrowDown', {modifiers: MOD.shift}); await c.ui.key('Delete');
   await message(c, '/Some files were saved before editing B.md failed/', active);
   await fm(c, 'A.md', p => assert.equal(p.score ?? null, null), 'partial-clear-first-file-durable');
@@ -163,7 +169,8 @@ async function settingsCAS(c) {
   assert.equal(await c.read('Properties.yaml'), externalSource);
   assert.equal(await c.ui.dom(`return document.querySelector(${JSON.stringify(label)})?.value;`), 'Retained local label');
   await c.screenshot('s03-property-settings-stale-draft'); await c.ui.button('Cancel', dialog('Property settings'));
-  await propertySettings(c); assert.equal(await c.ui.dom(`return document.querySelector(${JSON.stringify(label)})?.value;`), 'External authoritative label');
+  await restartWithFreshSource(c, 'Properties.yaml', externalSource, 'safety-before-fresh-property-settings');
+  await open(c, 'Safety.base'); await propertySettings(c); assert.equal(await c.ui.dom(`return document.querySelector(${JSON.stringify(label)})?.value;`), 'External authoritative label');
   await c.ui.type(label, 'Accepted fresh label'); await c.ui.button('Apply', dialog('Property settings'));
   await c.saved('Properties.yaml', source => { const value = c.yaml.parse(source); assert.equal(value.properties.topics.options[0].label, 'Accepted fresh label'); assert.equal(value.externalSentinel, 'keep'); }, 'fresh-property-settings-save-preserves-unrelated-config');
 }
@@ -517,10 +524,10 @@ export async function journey(c) {
   ];
   c.evidence.scenarios = phases.map(([name]) => ({name, status: 'unexecuted'}));
   await c.launch('safety-shared-writes-and-recovery');
-  let named, nested, newInline;
+  let named, nested, newInline, aExpected;
   for (let i = 0; i < phases.length; i++) {
     const [name, run] = phases[i], result = c.evidence.scenarios[i]; result.status = 'running'; result.started = new Date().toISOString();
-    try { const value = await run(c); if (name === 'named-fragment-dirty-reference-retry') named = value; if(name==='nested-mounted-embed-rename-dirty-child-retry')nested=value; if(name==='new-popup-inline-config-not-published-before-durable-original-retry')newInline=value; result.status = 'passed'; }
+    try { const value = await run(c, aExpected); if (name === 'shared-body-and-conditional-history') aExpected = value; if (name === 'named-fragment-dirty-reference-retry') named = value; if(name==='nested-mounted-embed-rename-dirty-child-retry')nested=value; if(name==='new-popup-inline-config-not-published-before-durable-original-retry')newInline=value; result.status = 'passed'; }
     catch (error) { result.status = 'failed'; result.failure = error.message; throw error; }
     finally { result.finished = new Date().toISOString(); }
   }

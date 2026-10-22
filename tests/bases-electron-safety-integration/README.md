@@ -27,8 +27,9 @@ node tests/bases-electron-safety-integration/run.mjs \
 The output parent must exist. The output directory must be new and outside source
 and artifact roots. Fixtures own `Properties.yaml` and output folders; the default
 heavy-user fixture/registry is not injected. Only this owned disposable vault is
-written. There is one app launch, normal quit, restart/readback and final normal
-quit, using the same guarded runner lifecycle as the main journey.
+written. The campaign uses the same guarded runner lifecycle as the main journey, with
+normal quit/relaunch freshness boundaries before partial bulk and after the
+settings stale-draft assertion, plus final restart/readback and normal quit.
 
 ## Exact acceptance steps and independent durable oracles
 
@@ -152,3 +153,42 @@ remain. The normal default Reading Hover has a separate rendering path; these
 new phases deliberately cover the active Hover body editor and New body editor.
 Native execution remains pending, including the clean toolbar portal ownership
 path before typing, rather than assuming a rapid input recipe will bypass it.
+
+## Fresh scenario baselines after deliberately stale external fixtures
+
+The score-7 source authored by the conditional-history phase is retained exactly,
+including its unrelated property/body sentinels. That phase still must reject
+the touched-property undo and preserve the complete physical source. Only after
+all same-session body/history assertions and the temporary split close, the
+partial-bulk phase performs a normal quit/relaunch. Before creating B's independent
+CLI conflict, it requires unchanged physical A bytes, a bounded read-only normal
+bridge observation equal to the authored full source, and a visible score-7 cell
+with matching current controller/rendered/widget versions and settled state.
+Neither physical readback alone nor a stale visible score is sufficient. All
+original B conflict, successful-A/failed-B, partial undo, recovery-copy, repeated
+bulk and undo oracles remain unchanged. No B recovery draft exists at this restart.
+
+The settings phase retains its first stale Apply, visible conflict, exact external
+registry bytes and exact local input. After Cancel it performs a separate normal
+quit/relaunch, waits for the normal logical registry read to equal the authored
+external source, then opens the ordinary Base/settings UI and requires the exact
+external label before the existing accepted edit/sentinel oracle. This establishes
+a fresh scenario baseline; it does **not** verify same-session registry/buffer
+reload. That production behavior has separate source tests and runtime scope.
+
+`freshness.mjs` polls only the existing read-only bridge, for at most a 45-second
+readiness window (each bridge operation also retains the common CDP deadline).
+Every observation checks physical equality before/after, records source hashes and
+match outcomes, and fails immediately on physical divergence or vault-owner
+mismatch. It never invokes a scanner, mutates/adopts a logical source, reloads a
+private buffer, or retries an Apply. A timeout fails the scenario.
+
+Run the bounded protocol/DOM tests with:
+
+```sh
+node --test --test-concurrency=1 tests/bases-electron-safety-integration/freshness.test.mjs
+```
+
+These source/protocol checks are not actual Electron acceptance. They do not
+erase safety012's retained ordinary-property save/reconciliation failure, prove
+its cause, or establish the separately implemented physical save guard.
