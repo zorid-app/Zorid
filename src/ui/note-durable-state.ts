@@ -16,7 +16,7 @@ export class DurableNoteState {
   private captures=new WeakMap<ConditionalSavedSourceCapture,Exclude<ConditionalSavedSourceStatus,'foreign'>>();
   private activeCaptures=new Map<string,ConditionalSavedSourceCapture>();
   private abandonedCaptures=new Set<string>();
-  private releasingCaptures=new WeakSet<ConditionalSavedSourceCapture>();
+  private releasingCaptures=new WeakMap<ConditionalSavedSourceCapture,Promise<void>>();
   error:Error|null=null;
   private vault:Vault;
   private writes:DurableWrites;
@@ -55,13 +55,20 @@ export class DurableNoteState {
       throw error;
     }
   });}
-  async releaseConditionalSavedSource(capture:ConditionalSavedSourceCapture):Promise<void>{
-    if(this.conditionalSavedSourceStatus(capture)!=='unattached')throw failure('only an unattached conditional source can be released by its caller');
-    if(this.releasingCaptures.has(capture))throw failure('conditional source release is already pending');
-    this.releasingCaptures.add(capture);
-    try{await this.writes.releaseSavedSource!(capture.captureId);this.captures.set(capture,'settled');this.activeCaptures.delete(capture.captureId);}
-    finally{this.releasingCaptures.delete(capture);}
+  releaseConditionalSavedSource(capture:ConditionalSavedSourceCapture):Promise<void>{
+    const pending=this.releasingCaptures.get(capture);if(pending)return pending;
+    if(this.conditionalSavedSourceStatus(capture)!=='unattached')return Promise.reject(failure('only an unattached conditional source can be released by its caller'));
+    const releasing=(async()=>{await this.writes.releaseSavedSource!(capture.captureId);this.captures.set(capture,'settled');this.activeCaptures.delete(capture.captureId);})();
+    this.releasingCaptures.set(capture,releasing);
+    void releasing.finally(()=>{if(this.releasingCaptures.get(capture)===releasing)this.releasingCaptures.delete(capture);}).catch(()=>{});
+    return releasing;
   }
+  /** Retirement releases only proofs that have never entered a write intent.
+   * Join an existing release; failed cleanup keeps this buffer owned/retryable. */
+  releaseUnattachedConditionalSavedSources():Promise<void>{return this.queue(async()=>{
+    for(const capture of this.activeCaptures.values())if(this.conditionalSavedSourceStatus(capture)==='unattached')await this.releaseConditionalSavedSource(capture);
+    for(const id of this.abandonedCaptures){await this.writes.releaseSavedSource!(id);this.abandonedCaptures.delete(id);}
+  });}
   validateConditionalSavedSource(capture:ConditionalSavedSourceCapture):void {
     if(this.conditionalSavedSourceStatus(capture)!=='unattached')throw failure('conditional source was already attached or belongs to another buffer');
     if(this.releasingCaptures.has(capture))throw failure('conditional source release is pending');
@@ -80,6 +87,7 @@ export class DurableNoteState {
     if(!input||typeof input.operationId!=='string'||!input.operationId||input.expectedEntryId!==this.base.entryId||typeof input.expectedRevision!=='string'||typeof input.expectedContent!=='string'||typeof input.path!=='string'||input.content!==op.content||!guard||typeof guard.captureId!=='string'||!guard.captureId||!witness||witness.entryId!==input.expectedEntryId||witness.revision!==input.expectedRevision||witness.path!==input.path)throw failure('invalid saved conditional write input');
     boundedUtf8(JSON.stringify(input),32*1024*1024,'checkpoint_too_large');
     if(op.plan&&(op.plan.operationId!==input.operationId||op.plan.entryId!==input.expectedEntryId))throw failure('conditional input/plan mismatch');
+    if(!op.pendingAck&&(input.path!==this.base.path||input.expectedRevision!==this.base.revision||input.expectedContent!==this.base.content))throw failure('saved conditional input does not match its retained baseline');
     if(op.planningRejected!==undefined&&(!['revision_conflict','source_capture_expired','conditional_source_changed'].includes(op.planningRejected)||op.ref))throw failure('invalid saved conditional planning rejection');
   }
   private async persist(state=this.state):Promise<void>{
@@ -104,7 +112,7 @@ export class DurableNoteState {
       this.state=raw;
       if(raw.operation){const op=raw.operation;if(typeof op.content!=='string'||!op.plan&&!op.input)throw failure('invalid saved operation');if(op.input!==undefined)this.checkInput(op);if(op.plan!==undefined){if(!op.plan||op.plan.version!==1||typeof op.plan.encodedPlan!=='string')throw failure('invalid saved operation');this.checkIdentity(op.plan);boundedUtf8(op.plan.encodedPlan,8*1024*1024,'plan_too_large');}if(op.ref){this.checkIdentity(op.ref);if(!op.plan||op.ref.operationId!==op.plan.operationId)throw failure('plan/ref mismatch');}}
       if(raw.operation?.ref)await this.resume(validate);
-      else if(observed.revision!==raw.base.revision){if(raw.draft===raw.base.content){raw.base=observed;raw.draft=observed.content;}else raw.conflict=true;}
+      else if(observed.revision!==raw.base.revision){if(!raw.operation&&raw.draft===raw.base.content){raw.base=observed;raw.draft=observed.content;}else raw.conflict=true;}
     }
     if(this.state.conflict)this.error=failure('file changed elsewhere; your draft is retained');
     this.changed();

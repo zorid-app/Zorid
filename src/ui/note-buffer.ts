@@ -98,7 +98,14 @@ export class NoteBuffer {
   /** Physical source is a separate observation for conditional history checks;
    * it never replaces savedText or the durable logical baseline. */
   captureConditionalSavedSource(witness:ConditionalSavedSourceWitness,validate:()=>void=()=>{}):Promise<ConditionalSavedSourceCapture|undefined>{
-    return this.enqueueResult(async()=>{this.requireLoaded();if(!this.durable)return undefined;return this.durable.captureConditionalSavedSource(witness,validate);});
+    if(this.disposing)return Promise.reject(new Error('This note buffer is closing'));
+    return this.enqueueResult(async()=>{
+      this.requireLoaded();if(this.disposing)throw new Error('This note buffer is closing');if(!this.durable)return undefined;
+      const capture=await this.durable.captureConditionalSavedSource(witness,()=>{validate();if(this.disposing)throw new Error('This note buffer is closing');});
+      try{validate();if(this.disposing)throw new Error('This note buffer is closing');}
+      catch(error){if(capture)await this.durable.releaseConditionalSavedSource(capture);throw error;}
+      return capture;
+    });
   }
   conditionalSavedSourceStatus(capture:ConditionalSavedSourceCapture):ConditionalSavedSourceStatus{return this.durable?.conditionalSavedSourceStatus(capture)??'foreign';}
   releaseConditionalSavedSource(capture:ConditionalSavedSourceCapture):Promise<void>{
@@ -412,6 +419,7 @@ export class NoteBuffer {
         try { await this.save(); }
         finally { this.cancelTimer(); }
       });
+      await this.durable?.releaseUnattachedConditionalSavedSources();
       // Facts cleanup must never become a durable save failure.
       await this.closeMetadataProjection();this.disposed=true;
     }).finally(()=>{if(this.disposing===closing)this.disposing=undefined;});

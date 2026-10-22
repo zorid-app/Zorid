@@ -43,7 +43,7 @@ async function fixture(){
   };
   adapter.durableWrites=writes;const vault=new Vault(adapter);await vault.initialize();
   const buffer=new NoteBuffer(vault,'One.md',{debounceMs:60000});await buffer.load();
-  return{buffer,vault,writes,planned,prepared,committed,released,captures,checkpoints,get saved(){return saved;},get capturesTaken(){return captureCount;},get current(){return current;},state:()=>JSON.parse(checkpoints.get('note/v1/entry')!.encodedState!),setPlan(fn:typeof onPlan){onPlan=fn;},setCommit(fn:typeof onCommit){onCommit=fn;},setCheckpoint(fn:typeof onCheckpoint){onCheckpoint=fn;},setRelease(fn:typeof onRelease){onRelease=fn;},external(text:string){saved=text;},async reopen(){const reopened=new NoteBuffer(vault,'One.md',{debounceMs:60000});await reopened.load();return reopened;}};
+  return{buffer,vault,writes,planned,prepared,committed,released,captures,checkpoints,get saved(){return saved;},get capturesTaken(){return captureCount;},get current(){return current;},state:()=>JSON.parse(checkpoints.get('note/v1/entry')!.encodedState!),setPlan(fn:typeof onPlan){onPlan=fn;},setCommit(fn:typeof onCommit){onCommit=fn;},setCheckpoint(fn:typeof onCheckpoint){onCheckpoint=fn;},setRelease(fn:typeof onRelease){onRelease=fn;},external(text:string){saved=text;},async advanceLogical(text:string){current={...current,content:text,revision:'peer-revision'};saved=text;await adapter.write('One.md',text);},async reopen(){const reopened=new NoteBuffer(vault,'One.md',{debounceMs:60000});await reopened.load();return reopened;}};
 }
 const witness={entryId:'entry',revision:'r1',path:'One.md'};
 async function stop(buffer:NoteBuffer){try{await buffer.dispose();}catch{ /* conflict remains intentionally retained */ }}
@@ -175,4 +175,64 @@ test('an unattached capture cannot be attached while its release is in flight',a
   f.setRelease(()=>new Promise<void>(resolve=>{release=resolve;}));const dropping=f.buffer.releaseConditionalSavedSource(capture);
   assert.throws(()=>f.buffer.update('unsafe',{conditionalSavedSource:capture}),/release is pending/);assert.equal(f.buffer.text,logical);assert.equal(f.planned.length,0);
   release();await dropping;assert.equal(f.buffer.conditionalSavedSourceStatus(capture),'settled');await stop(f.buffer);
+});
+
+test('restart preserves a reverted newest draft and its original baseline while a conditional input is retained',async()=>{
+  const f=await fixture(),capture=(await f.buffer.captureConditionalSavedSource(witness))!;
+  f.setPlan(async()=>{throw new Error('planning reply lost');});f.buffer.update('conditional original',{conditionalSavedSource:capture});await assert.rejects(f.buffer.flush());
+  const original=f.state().operation.input;
+  f.buffer.update(logical);await assert.rejects(f.buffer.flush());await f.advanceLogical('Peer committed content');
+  const reopened=await f.reopen();assert.equal(reopened.text,logical);assert.equal(reopened.savedText,logical);assert.deepEqual(reopened.savedDurableWitness,witness);assert.equal(reopened.hasRecoveryConflict,true);
+  assert.deepEqual(f.state().operation.input,original);assert.equal(f.capturesTaken,1);assert.equal(f.planned.length,2);
+  f.setPlan(async()=>{throw new DurableWritePlanningError('revision_conflict',false);});await assert.rejects(reopened.flush());
+  assert.deepEqual(f.planned[2],original);assert.equal(reopened.text,logical);assert.equal(reopened.savedText,logical);assert.equal(f.saved,'Peer committed content');await stop(reopened);
+});
+
+test('retained conditional input must match its saved baseline before any provider retry',async()=>{
+  for(const corrupt of [(op:any)=>{op.input.expectedContent='Invented baseline';},(op:any)=>{op.input.path='Elsewhere.md';op.input.conditionalSavedSource.logicalWitness.path='Elsewhere.md';},(op:any)=>{op.input.expectedRevision='other';op.input.conditionalSavedSource.logicalWitness.revision='other';}]){
+    const f=await fixture(),capture=(await f.buffer.captureConditionalSavedSource(witness))!;
+    f.setPlan(async()=>{throw new Error('planning reply lost');});f.buffer.update('retained draft',{conditionalSavedSource:capture});await assert.rejects(f.buffer.flush());
+    const checkpoint=f.checkpoints.get('note/v1/entry')!,saved=JSON.parse(checkpoint.encodedState!);corrupt(saved.operation);checkpoint.encodedState=JSON.stringify(saved);
+    await assert.rejects(f.reopen(),/retained baseline/);assert.equal(f.planned.length,1);assert.equal(f.prepared.length,0);
+  }
+});
+
+test('successful buffer retirement releases all unattached captures',async()=>{
+  const f=await fixture(),capture=(await f.buffer.captureConditionalSavedSource(witness))!;
+  await f.buffer.dispose();assert.deepEqual(f.released,[capture.captureId]);assert.equal(f.buffer.conditionalSavedSourceStatus(capture),'settled');assert.equal(f.captures.size,0);
+  await assert.rejects(f.buffer.captureConditionalSavedSource(witness),/disposed/);assert.equal(f.capturesTaken,1);
+});
+
+test('buffer retirement joins an already pending release and rejects new capture admission while closing',async()=>{
+  const f=await fixture(),capture=(await f.buffer.captureConditionalSavedSource(witness))!;let finish!:()=>void,calls=0,disposed=false;
+  f.setRelease(()=>{calls++;return new Promise<void>(resolve=>{finish=resolve;});});
+  const releasing=f.buffer.releaseConditionalSavedSource(capture),closing=f.buffer.dispose().then(()=>{disposed=true;});
+  await assert.rejects(f.buffer.captureConditionalSavedSource(witness),/closing/);await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(disposed,false);assert.equal(calls,1);finish();await releasing;await closing;assert.equal(disposed,true);assert.equal(calls,1);
+});
+
+test('retirement cleanup failure is retryable and cannot leave an unreleased proof behind a successful close',async()=>{
+  const f=await fixture(),capture=(await f.buffer.captureConditionalSavedSource(witness))!;
+  f.setRelease(async()=>{throw new Error('release unavailable');});await assert.rejects(f.buffer.dispose(),/release unavailable/);assert.equal(f.buffer.conditionalSavedSourceStatus(capture),'unattached');
+  f.setRelease(undefined);await f.buffer.dispose();assert.deepEqual(f.released,[capture.captureId]);assert.equal(f.captures.size,0);
+});
+
+test('a capture crossing retirement is abandoned and released before the buffer can close',async()=>{
+  const f=await fixture();let enter!:()=>void,finish!:()=>void;const entered=new Promise<void>(resolve=>{enter=resolve;}),gate=new Promise<void>(resolve=>{finish=resolve;});
+  const acquire=f.writes.captureSavedSource!;f.writes.captureSavedSource=async w=>{const capture=await acquire(w);enter();await gate;return capture;};
+  const acquiring=f.buffer.captureConditionalSavedSource(witness);await entered;const closing=f.buffer.dispose();finish();
+  await assert.rejects(acquiring,/closing/);await closing;assert.deepEqual(f.released,['capture-1']);assert.equal(f.planned.length,0);assert.equal(f.captures.size,0);
+});
+
+test('failed retirement does not release a pending conditional guard or lose its original input',async()=>{
+  const f=await fixture(),capture=(await f.buffer.captureConditionalSavedSource(witness))!;
+  f.setPlan(async()=>{throw new Error('planning reply lost');});f.buffer.update('conditional original',{conditionalSavedSource:capture});await assert.rejects(f.buffer.dispose(),/planning reply lost/);
+  const original=f.state().operation.input;assert.deepEqual(f.released,[]);assert.equal(f.buffer.conditionalSavedSourceStatus(capture),'pending');
+  f.setPlan(undefined);await f.buffer.dispose();assert.deepEqual(f.planned[1],original);assert.deepEqual(f.released,[capture.captureId]);assert.equal(f.saved,'conditional original');
+});
+
+test('retirement retries a release for an abandoned post-validation capture',async()=>{
+  const f=await fixture();let valid=true;const acquire=f.writes.captureSavedSource!;f.writes.captureSavedSource=async w=>{const capture=await acquire(w);valid=false;return capture;};
+  f.setRelease(async()=>{throw new Error('release reply lost');});await assert.rejects(f.buffer.captureConditionalSavedSource(witness,()=>{if(!valid)throw new Error('retired');}),/release reply lost/);
+  f.setRelease(undefined);await f.buffer.dispose();assert.deepEqual(f.released,['capture-1']);assert.equal(f.captures.size,0);
 });
