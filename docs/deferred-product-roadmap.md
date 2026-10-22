@@ -182,6 +182,43 @@ Full heavy requires just2 native color handoffs; generalized runtime remains
 gated on a successful direct visible Purple probe. Other select controls in
 current campaigns use custom widgets. Source-only File filter work continues.
 
+User subsequently confirms they interacted with the earlier test window. Treat
+that as explanation for probe002's extra changes, without assuming the cause of
+other runs. Disk recovers to about4GiB; no guard was lowered. CUA003 rejects an
+incorrect supplied frozen HEAD before launch (root input mistake); corrected
+CUA004 on319389/build004/host6e04 **passes19 runner actions/5checks**, plus a
+separate explicit CUA reopening/recreation workflow. Visible Purple item+Return,
+strict readback, real Apply, complete registry, exact unchanged note/Base and
+normal quit0/no leaks pass. Reviewed record now [CUA004](history/bases-native-select-cua-004-20261022.md).
+It does not accept the original CDP/key recipe or prepared-panel continuity.
+
+Full heavy017 on319389/build004/host6e04 fails240actions/29checks: root's second
+Return prematurely applies/closes the settings panel; strict SELECT readback
+finds0matches. Recorded as operator-input failure, not a product color defect.
+All partial evidence retained; reviewed [heavy017](history/bases-electron-heavy-017-20261022.md).
+Next handoff must inspect a screenshot and avoid blind extra Return. Normal
+cleanup SIGTERM exit0/no leaks is not normal-quit acceptance.
+
+Instrumented properties002 fails34actions/10checks on same source:182 passive
+events/0drops prove Alpha remains active and author relation is unresolved /
+nonclickable, with no later navigation. `bases_embeds` owns read-only causal
+investigation of ordinary-note/core relation integration; no pointer fix is
+justified. Safety005 onac4fdf/build004 advances past the fixed cell-focus issue,
+then fails26actions/4checks: conditional Undo UI shows score1, while physical
+A.md remains score9 for45seconds. `bases_inline_core` owns read-only shared
+durable-undo/publication investigation; preserve exact disk assertions, no
+weakened oracle or TS relation fallback. Both apps close normally via SIGTERM
+cleanup0/no leaks, frozen source/artifacts verified. No runtime is now live.
+
+File-filter implementation candidate `da1fee56` is frozen,88 focused checks pass;
+independent full source review `bases_controller` active. Preserve authored empty
+groups and exact-ack node promotion; new incomplete rows never save. A whitespace
+tag-input edge is queued for the correction bundle, not silently waived.
+Session operand provider `1d73d472` is independently approved6/6, awaiting matching
+toolbar API composition and TypeScript/native validation. Additional typed-visual
+operator completeness audit is read-only with `bases_ui_review`. Full goal and
+all remaining runtime/visual/main gates remain open.
+
 ### Superseded checkpoint snapshot — retained evidence
 
 ### Latest execution update
