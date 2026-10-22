@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {delay, until} from '../tasks-electron-integration/cdp.mjs';
+export const MOD={alt:1,control:2,meta:4,shift:8};
 
 // Every positive mutation is routed through visible app controls. DOM evaluation
 // locates/reads elements; it does not call workspace/controller/store APIs.
@@ -29,14 +30,14 @@ export class UI {
     await this.cdp.call('Input.dispatchMouseEvent', {type:'mouseReleased',button:'left',clickCount:1,...point});
     this.actions.push({action:'button',label,scope,at:Date.now()});
   }
-  async key(key, {code, modifiers = 0} = {}) {
+  async key(key, {code, modifiers = 0, commands} = {}) {
     const codes = {Enter:['Enter',13],Escape:['Escape',27],Tab:['Tab',9],Backspace:['Backspace',8],Delete:['Delete',46],ArrowDown:['ArrowDown',40],ArrowUp:['ArrowUp',38],ArrowRight:['ArrowRight',39],ArrowLeft:['ArrowLeft',37],Home:['Home',36],End:['End',35]};
     const mapped = codes[key] ?? [code ?? `Key${key.toUpperCase()}`, key.toUpperCase().charCodeAt(0)];
-    for (const type of ['keyDown','keyUp']) await this.cdp.call('Input.dispatchKeyEvent',{type,key,code:code ?? mapped[0],windowsVirtualKeyCode:mapped[1],modifiers});
-    this.actions.push({action:'key',key,modifiers,at:Date.now()});
+    for (const type of ['keyDown','keyUp']) await this.cdp.call('Input.dispatchKeyEvent',{type,key,code:code ?? mapped[0],windowsVirtualKeyCode:mapped[1],modifiers,...(type==='keyDown'&&commands?{commands}:{})});
+    this.actions.push({action:'key',key,modifiers,commands,at:Date.now()});
   }
   async type(selector, text) {
-    await this.click(selector); await this.key('a',{modifiers:4});
+    await this.click(selector); await this.key('a',{modifiers:MOD.meta,commands:['selectAll']});
     await this.cdp.call('Input.insertText',{text});
     this.actions.push({action:'text',selector,text,at:Date.now()});
   }

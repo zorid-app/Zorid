@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {until,delay} from '../tasks-electron-integration/cdp.mjs';
 import {parseCSV} from './csv.mjs';
+import {MOD} from './ui.mjs';
 
 const active='.pane.is-active .bases-session';
 const dialog=name=>`[role="dialog"][aria-label=${JSON.stringify(name)}]`;
@@ -200,9 +201,9 @@ export async function journey(c){
   await fmSaved(c,'Book 002.md',p=>{assert.equal(p.rating,2);assert.equal(p.status,'Reading');},'rectangular-paste-row-two');
   await c.ui.key('z',{modifiers:4});await c.ui.idle();
   await fmSaved(c,'Book 001.md',p=>{assert.equal(p.rating,5);assert.equal(p.status,'Reading');},'single-command-undo-restores-rectangular-edit');
-  await c.ui.key('z',{modifiers:5});await c.ui.idle();
+  await c.ui.key('z',{modifiers:MOD.meta|MOD.shift});await c.ui.idle();
   await fmSaved(c,'Book 001.md',p=>{assert.equal(p.rating,4);assert.equal(p.status,'Finished');},'redo-restores-rectangular-edit');
-  await c.ui.selectCell('Book 001.md','note.rating');await c.ui.key('ArrowRight',{modifiers:1});await c.ui.key('ArrowDown',{modifiers:1});
+  await c.ui.selectCell('Book 001.md','note.rating');await c.ui.key('ArrowRight',{modifiers:MOD.shift});await c.ui.key('ArrowDown',{modifiers:MOD.shift});
   await c.ui.key('Delete');await c.ui.idle();
   for(const file of['Book 001.md','Book 002.md'])await fmSaved(c,file,p=>{assert.equal(p.rating??null,null);assert.equal(p.status??null,null);},'range-clear-'+file);
   await c.ui.key('z',{modifiers:4});await c.ui.idle();
@@ -325,7 +326,7 @@ export async function journey(c){
   await fmSaved(c,'Book 001.md',p=>assert.equal(p.status,'Reading'),'kanban-pointer-drag-writes-original-note');
   await c.ui.wait(`return document.querySelector('${active} .bases-kanban-card[data-path="Book 001.md"]')?.getAttribute('aria-selected')==='true';`,'Dragged card remains selected');
   await c.ui.button('Search',active);await c.ui.key('Escape');await c.ui.key('Tab');await c.ui.key('Tab');
-  await c.ui.wait(`return document.activeElement?.classList.contains('bases-kanban-view');`,'Keyboard Tab enters Kanban surface from toolbar');await c.ui.key('ArrowLeft',{modifiers:8});await c.ui.idle();
+  await c.ui.wait(`return document.activeElement?.classList.contains('bases-kanban-view');`,'Keyboard Tab enters Kanban surface from toolbar');await c.ui.key('ArrowLeft',{modifiers:MOD.alt});await c.ui.idle();
   // Exact target is determined by visible adjacent columns, not guessed status order.
   const move=await fmSaved(c,'Book 001.md',p=>assert.notEqual(p.status,'Reading'),'kanban-keyboard-move-writes-original-note');
   await c.screenshot('07-kanban-after-move');
