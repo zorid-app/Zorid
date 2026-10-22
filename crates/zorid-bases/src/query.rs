@@ -8,6 +8,8 @@ use crate::{
     PropertyValue,
 };
 use serde::{Deserialize, Serialize};
+#[path = "grouping.rs"]
+mod grouping;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 pub const MAX_QUERY_STEPS: usize = 2_000_000;
@@ -350,27 +352,8 @@ fn canonical_admission(
             .saturating_add(128))
     })
 }
-fn key_id_admission(
-    value: &BaseValue,
-    admission: &mut Admission<'_>,
-) -> Result<(), ExpressionDiagnostic> {
-    canonical_admission(value, admission)?;
-    admit(admission, |admission| {
-        admission.charge(0)?;
-        Ok(crate::encoded_size(value, crate::MAX_BASE_REQUEST_BYTES)?
-            .saturating_mul(2)
-            .saturating_add(128))
-    })
-}
-fn group_value<'a>(view: &program::View, row: &'a BaseRow, null: &'a BaseValue) -> &'a BaseValue {
-    view.group
-        .as_ref()
-        .and_then(|group| row.values.get(&group.property))
-        .unwrap_or(null)
-}
 // A shape-only upper bound for the existing display implementation and its
-// intermediate string/list/map copies. This never interprets expression syntax
-// or substitutes a second renderer. JSON string escaping grows at most sixfold.
+// intermediate string/list/map copies. JSON string escaping grows at most sixfold.
 fn display_copy_bytes(
     value: &BaseValue,
     depth: usize,
@@ -1056,65 +1039,6 @@ fn serialize_group_order_key(
         }
         _ => transfer_group_edit_key(value, source, records, graph, check),
     }
-}
-
-fn manual_group_identity(
-    value: &BaseValue,
-    graph: Option<&crate::graph::PreparedRelationships<'_>>,
-    check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
-) -> Result<String, ExpressionDiagnostic> {
-    fn adapt(
-        value: &BaseValue,
-        graph: Option<&crate::graph::PreparedRelationships<'_>>,
-        check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
-    ) -> Result<BaseValue, ExpressionDiagnostic> {
-        check(1)?;
-        Ok(match value {
-            BaseValue::File { path } => {
-                check(path.len())?;
-                let (_, witness) = graph
-                    .ok_or_else(|| {
-                        ExpressionDiagnostic::new(
-                            "unavailable",
-                            "File group identity requires the captured namespace",
-                        )
-                    })?
-                    .resolve_target(
-                        &expression::BasesFile::default(),
-                        &encode_rooted_group_path(path),
-                        check,
-                    )?
-                    .filter(|(actual, _)| actual == path)
-                    .ok_or_else(|| {
-                        ExpressionDiagnostic::new(
-                            "unavailable",
-                            "File group identity is outside the captured namespace",
-                        )
-                    })?;
-                BaseValue::Link {
-                    path: path.clone(),
-                    target: Some(witness),
-                    display: None,
-                    display_value: None,
-                    external: false,
-                }
-            }
-            BaseValue::List { value } => BaseValue::List {
-                value: value
-                    .iter()
-                    .map(|value| adapt(value, graph, check))
-                    .collect::<Result<Vec<_>, _>>()?,
-            },
-            BaseValue::Object { value } => BaseValue::Object {
-                value: value
-                    .iter()
-                    .map(|(key, value)| Ok((key.clone(), adapt(value, graph, check)?)))
-                    .collect::<Result<Vec<_>, ExpressionDiagnostic>>()?,
-            },
-            value => value.clone(),
-        })
-    }
-    Ok(canonical(&adapt(value, graph, check)?))
 }
 
 fn encode_rooted_group_path(path: &str) -> String {
@@ -1961,6 +1885,41 @@ pub(crate) fn query_rows_validated(
                     let Some(requested) = property.strip_prefix("note.") else {
                         continue;
                     };
+                    // Name resolution follows exact-first/casefold runtime lookup.
+                    // Charge every candidate before the repeated scans or lowercase
+                    // allocations, including finding the original raw source below.
+                    let overlay = record.witness.as_ref().and_then(|witness| {
+                        input
+                            .property_values
+                            .and_then(|properties| properties.rows().get(&witness.entry_id))
+                    });
+                    for name in record
+                        .properties
+                        .iter()
+                        .map(|(name, _)| name.as_str())
+                        .chain(
+                            overlay
+                                .into_iter()
+                                .flat_map(|row| row.values.keys().map(String::as_str)),
+                        )
+                    {
+                        steps_used = steps_used
+                            .saturating_add(name.len().saturating_add(1).saturating_mul(4));
+                        if options
+                            .evaluation
+                            .cancellation
+                            .as_ref()
+                            .is_some_and(|token| token.is_cancelled())
+                        {
+                            return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+                        }
+                        check_query_work(
+                            steps_used.saturating_add(session.steps_used()),
+                            &admission,
+                            options,
+                            "Raw property name resolution exceeds query work budget",
+                        )?;
+                    }
                     if readonly_note_property(record, input.property_values, requested) {
                         continue;
                     }
@@ -2068,516 +2027,94 @@ pub(crate) fn query_rows_validated(
     }
     counts.matched = rows.len();
     let null = BaseValue::Null;
-    let group_key = |row: &BaseRow| {
-        view.group
-            .as_ref()
-            .and_then(|group| row.values.get(&group.property))
-            .unwrap_or(&null)
-            .clone()
-    };
     admit(&mut admission, |_| {
-        Ok(input
-            .records
-            .len()
-            .saturating_mul(map_slot::<&crate::EntryId, &DetachedRecord>()))
+        Ok(input.records.len().saturating_mul(
+            map_slot::<&crate::EntryId, &DetachedRecord>()
+                .saturating_add(map_slot::<&str, &DetachedRecord>()),
+        ))
     })?;
     let by_id = input
         .records
         .iter()
         .map(|record| {
             (
-                &record
-                    .witness
-                    .as_ref()
-                    .expect("query witness validated")
-                    .entry_id,
+                &record.witness.as_ref().expect("validated witness").entry_id,
                 record,
             )
         })
         .collect::<HashMap<_, _>>();
-    let writable_group_property = view
-        .group
-        .as_ref()
-        .and_then(|group| group.property.strip_prefix("note."))
-        .filter(|name| {
-            !input
-                .property_values
-                .is_some_and(|values| values.is_read_only_property(name))
-        });
+    let by_path = input
+        .records
+        .iter()
+        .map(|record| (record.path.as_str(), record))
+        .collect::<HashMap<_, _>>();
     let group_timezone = if view.group.is_some() {
         expression::BasesTimezone::from_setting(Some(&options.evaluation.timezone))
             .map_err(|message| ExpressionDiagnostic::new("input", message))?
     } else {
         expression::BasesTimezone::default()
     };
-    let definition_origin = options
-        .definition_entry_id
-        .as_ref()
-        .map(|id| {
-            by_id.get(id).copied().ok_or_else(|| {
-                ExpressionDiagnostic::new(
-                    "stale-source",
-                    "Base definition origin is outside the captured snapshot",
-                )
+    let definition_origin = if view.group.is_some() {
+        options
+            .definition_entry_id
+            .as_ref()
+            .map(|id| {
+                by_id.get(id).copied().ok_or_else(|| {
+                    ExpressionDiagnostic::new(
+                        "stale-source",
+                        "Base definition origin is outside the captured snapshot",
+                    )
+                })
             })
-        })
-        .transpose()?;
-    let empty_group_writable = writable_group_property
-        .is_some_and(|name| !readonly_empty_group_property(input.property_values, name));
-    let mut group_edit_keys = BTreeMap::<String, Option<BaseValue>>::new();
-    let mut group_order_keys = BTreeMap::<String, Option<BaseValue>>::new();
-    let mut rendered_group_keys = BTreeMap::<String, &BaseValue>::new();
-    let mut manual_group_keys = BTreeMap::<String, &BaseValue>::new();
-    if view.group.is_some() {
-        for row in &rows {
-            steps_used = steps_used.saturating_add(1);
-            check_query_work(
-                steps_used,
-                &admission,
-                options,
-                "Group source selection exceeds query work budget",
-            )?;
-            let rendered = group_value(view, row, &null);
-            canonical_admission(rendered, &mut admission)?;
-            let identity = canonical(rendered);
-            let row_writable = writable_group_property.is_some_and(|name| {
-                !readonly_note_property(by_id[&row.entry_id], input.property_values, name)
-            });
-            if let Some(existing) = group_edit_keys.get_mut(&identity) {
-                if !row_writable {
-                    *existing = None;
-                }
-                continue;
-            }
-            if group_edit_keys.len() >= options.max_groups {
-                return Err(budget("Group sources exceed group budget"));
-            }
-            if options
-                .evaluation
-                .cancellation
-                .as_ref()
-                .is_some_and(|token| token.is_cancelled())
-            {
-                return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
-            }
-            let property = &view
-                .group
-                .as_ref()
-                .expect("group property selected")
-                .property;
-            // editValues already contains the exact pre-coercion source when
-            // rendering changed it. Absent entries can only fall back to the
-            // recursively raw-safe rendered shape, never a namespace value.
-            let source = row.edit_values.get(property);
-            let candidate = source.unwrap_or(rendered);
-            admit(&mut admission, |admission| {
-                crate::preview::value_bytes(candidate, admission)
-            })?;
-            let value = if row_writable {
-                match transfer_group_edit_key(
-                    rendered,
-                    candidate,
-                    &by_id,
-                    relationships.as_ref(),
-                    &mut |work| {
-                        steps_used = steps_used.saturating_add(work);
-                        if options
-                            .evaluation
-                            .cancellation
-                            .as_ref()
-                            .is_some_and(|token| token.is_cancelled())
-                        {
-                            return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
-                        }
-                        check_query_work(
-                            steps_used,
-                            &admission,
-                            options,
-                            "Group transfer serialization exceeds query work budget",
-                        )
-                    },
-                ) {
-                    Ok(value) => value,
-                    Err(error) if matches!(error.code.as_str(), "budget" | "cancelled") => {
-                        return Err(error)
-                    }
-                    Err(error) => {
-                        report(
-                            &mut diagnostics,
-                            by_id[&row.entry_id],
-                            "group",
-                            Some(property),
-                            error,
-                            &mut admission,
-                        )?;
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-            if let Some(value) = &value {
-                admit(&mut admission, |admission| {
-                    crate::preview::value_bytes(value, admission)
-                })?;
-            }
-            admit(&mut admission, |_| {
-                Ok(map_slot::<String, Option<BaseValue>>()
-                    .saturating_add(crate::preview::string_bytes(&identity)))
-            })?;
-            let mut order_work = 0usize;
-            let order_remaining = options
-                .max_steps
-                .saturating_sub(steps_used)
-                .saturating_sub(admission_work(&admission));
-            let mut check = |work: usize| {
-                order_work = order_work.saturating_add(work);
-                if options
-                    .evaluation
-                    .cancellation
-                    .as_ref()
-                    .is_some_and(|token| token.is_cancelled())
-                {
-                    return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
-                }
-                if order_work > order_remaining {
-                    return Err(ExpressionDiagnostic::new(
-                        "budget",
-                        "Group order serialization exceeds query work budget",
-                    ));
-                }
-                Ok(())
-            };
-            let mut order_key = serialize_group_order_key(
-                rendered,
-                candidate,
-                &by_id,
-                relationships.as_ref(),
-                &group_timezone,
-                &mut check,
-            );
-            let original_identity =
-                match manual_group_identity(rendered, relationships.as_ref(), &mut check) {
-                    Ok(identity) => identity,
-                    Err(error) if matches!(error.code.as_str(), "budget" | "cancelled") => {
-                        return Err(error)
-                    }
-                    Err(_) => canonical(rendered),
-                };
-            if let Ok(Some(key)) = &order_key {
-                if canonical(key) != canonical(rendered) {
-                    let restored = hydrate_group_order_key(
-                        key,
-                        property,
-                        None,
-                        relationships.as_ref(),
-                        &group_timezone,
-                        &mut check,
-                        &mut |bytes| admit(&mut admission, |_| Ok(bytes)),
-                    )?;
-                    if manual_group_identity(&restored, relationships.as_ref(), &mut check)?
-                        != original_identity
-                        && canonical(key) != canonical(rendered)
-                    {
-                        order_key = Err(ExpressionDiagnostic::new(
-                            "unavailable",
-                            "Serialized manual group key does not preserve its typed identity",
-                        ));
-                    }
-                }
-            }
-            let manual_identity = if view.group_order.is_some() {
-                Some(original_identity)
-            } else {
-                None
-            };
-            steps_used = steps_used.saturating_add(order_work);
-            let order_key = match order_key {
-                Ok(value) => value,
-                Err(error) if matches!(error.code.as_str(), "budget" | "cancelled") => {
-                    return Err(error)
-                }
-                Err(error) => {
-                    if value.is_some() || writable_group_property.is_none() {
-                        report(
-                            &mut diagnostics,
-                            by_id[&row.entry_id],
-                            "group",
-                            Some(property),
-                            error,
-                            &mut admission,
-                        )?;
-                    }
-                    None
-                }
-            };
-            if let Some(key) = &order_key {
-                admit(&mut admission, |admission| {
-                    crate::preview::value_bytes(key, admission)
-                })?;
-            }
-            admit(&mut admission, |_| {
-                Ok(map_slot::<String, Option<BaseValue>>()
-                    .saturating_add(crate::preview::string_bytes(&identity))
-                    .saturating_add(map_slot::<String, &BaseValue>())
-                    .saturating_add(crate::preview::string_bytes(&identity)))
-            })?;
-            rendered_group_keys.insert(identity.clone(), rendered);
-            if let Some(manual) = manual_identity {
-                admit(&mut admission, |_| {
-                    Ok(map_slot::<String, &BaseValue>()
-                        .saturating_add(crate::preview::string_bytes(&manual)))
-                })?;
-                manual_group_keys.entry(manual).or_insert(rendered);
-            }
-            group_order_keys.insert(identity.clone(), order_key);
-            group_edit_keys.insert(identity, value);
-        }
-    }
-    let mut configured_group_sources = BTreeMap::<String, BaseValue>::new();
-    let mut configured_edit_keys = BTreeMap::<String, Option<BaseValue>>::new();
-    let mut configured_order_keys = BTreeMap::<String, Option<BaseValue>>::new();
-    let group_order = if let Some(keys) = &view.group_order {
-        if keys.len() > options.max_groups {
-            return Err(budget("Configured groups exceed group budget"));
-        }
-        let property = &view.group.as_ref().expect("compiled group order").property;
-        let mut normalized = Vec::with_capacity(keys.len());
-        for source in keys {
-            admit(&mut admission, |admission| {
-                Ok(crate::preview::value_bytes(source, admission)?
-                    .saturating_mul(4)
-                    .saturating_add(512))
-            })?;
-            let mut hydration_work = 0usize;
-            let remaining = options
-                .max_steps
-                .saturating_sub(steps_used)
-                .saturating_sub(admission_work(&admission));
-            let mut check = |work: usize| {
-                hydration_work = hydration_work.saturating_add(work);
-                if options
-                    .evaluation
-                    .cancellation
-                    .as_ref()
-                    .is_some_and(|token| token.is_cancelled())
-                {
-                    return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
-                }
-                if hydration_work > remaining {
-                    return Err(ExpressionDiagnostic::new(
-                        "budget",
-                        "Manual group order hydration exceeds query work budget",
-                    ));
-                }
-                Ok(())
-            };
-            canonical_admission(source, &mut admission)?;
-            let raw_identity = canonical(source);
-            let hydrated = if let Some(existing) = rendered_group_keys.get(&raw_identity) {
-                (*existing).clone()
-            } else {
-                hydrate_group_order_key(
-                    source,
-                    property,
-                    definition_origin,
-                    relationships.as_ref(),
-                    &group_timezone,
-                    &mut check,
-                    &mut |bytes| admit(&mut admission, |_| Ok(bytes)),
-                )?
-            };
-            let identity = manual_group_identity(&hydrated, relationships.as_ref(), &mut check)?;
-            steps_used = steps_used.saturating_add(hydration_work);
-            canonical_admission(&hydrated, &mut admission)?;
-            canonical_admission(source, &mut admission)?;
-            let key = manual_group_keys
-                .get(&identity)
-                .or_else(|| rendered_group_keys.get(&canonical(source)))
-                .map_or(&hydrated, |value| *value)
-                .clone();
-            canonical_admission(&key, &mut admission)?;
-            let identity = canonical(&key);
-            if configured_group_sources.contains_key(&identity) {
-                continue;
-            }
-            admit(&mut admission, |_| {
-                Ok(map_slot::<String, BaseValue>()
-                    .saturating_add(crate::preview::string_bytes(&identity)))
-            })?;
-            let mut serialization_work = 0usize;
-            let remaining = options
-                .max_steps
-                .saturating_sub(steps_used)
-                .saturating_sub(admission_work(&admission));
-            let mut check = |work: usize| {
-                serialization_work = serialization_work.saturating_add(work);
-                if options
-                    .evaluation
-                    .cancellation
-                    .as_ref()
-                    .is_some_and(|token| token.is_cancelled())
-                {
-                    return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
-                }
-                if serialization_work > remaining {
-                    return Err(ExpressionDiagnostic::new(
-                        "budget",
-                        "Configured group serialization exceeds query work budget",
-                    ));
-                }
-                Ok(())
-            };
-            let transfer = if empty_group_writable && !group_edit_keys.contains_key(&identity) {
-                transfer_group_edit_key(&key, source, &by_id, relationships.as_ref(), &mut check)
-            } else {
-                Ok(None)
-            };
-            let order = if !group_order_keys.contains_key(&identity) {
-                serialize_group_order_key(
-                    &key,
-                    source,
-                    &by_id,
-                    relationships.as_ref(),
-                    &group_timezone,
-                    &mut check,
-                )
-            } else {
-                Ok(None)
-            };
-            steps_used = steps_used.saturating_add(serialization_work);
-            let mut accept = |result:Result<Option<BaseValue>,ExpressionDiagnostic>| -> Result<Option<BaseValue>,ExpressionDiagnostic> { match result {
-                Ok(value) => Ok(value),
-                Err(error) if matches!(error.code.as_str(),"budget"|"cancelled") => Err(error),
-                Err(error) => {
-                    if let Some(record) = definition_origin.or_else(|| input.records.first()) { report(&mut diagnostics,record,"group",Some(property),error,&mut admission)?; }
-                    Ok(None)
-                }
-            }};
-            let transfer = accept(transfer)?;
-            let order = accept(order)?;
-            for value in transfer.iter().chain(order.iter()) {
-                admit(&mut admission, |admission| {
-                    crate::preview::value_bytes(value, admission)
-                })?;
-            }
-            admit(&mut admission, |_| {
-                Ok(2usize.saturating_mul(
-                    map_slot::<String, Option<BaseValue>>()
-                        .saturating_add(crate::preview::string_bytes(&identity)),
-                ))
-            })?;
-            configured_edit_keys.insert(identity.clone(), transfer);
-            configured_order_keys.insert(identity.clone(), order);
-            configured_group_sources.insert(identity, source.clone());
-            normalized.push(key);
-        }
-        Some(normalized)
+            .transpose()?
     } else {
         None
     };
-    let mut group_options = Vec::new();
-    if let Some(keys) = &group_order {
-        if keys.len() > options.max_groups {
-            return Err(budget("Configured groups exceed group budget"));
-        }
-        let mut indexed = BTreeMap::<String, (BaseValue, usize)>::new();
-        for row in &rows {
-            admit(&mut admission, |admission| {
-                admission.charge(0)?;
-                crate::preview::value_bytes(group_value(view, row, &null), admission)
-            })?;
-            canonical_admission(group_value(view, row, &null), &mut admission)?;
-            admit(&mut admission, |admission| {
-                admission.charge(0)?;
-                Ok(map_slot::<String, (BaseValue, usize)>())
-            })?;
-            let key = group_key(row);
-            let entry = indexed.entry(canonical(&key)).or_insert((key, 0));
-            entry.1 += 1;
-            if indexed.len() > options.max_groups {
-                return Err(budget("Query exceeds group-option budget"));
-            }
-        }
-        for key in keys {
-            canonical_admission(key, &mut admission)?;
-            admit(&mut admission, |_| Ok(map_slot::<String, ()>()))?;
-        }
-        let listed = keys.iter().map(canonical).collect::<HashSet<_>>();
-        for key in keys {
-            key_id_admission(key, &mut admission)?;
-            canonical_admission(key, &mut admission)?; // indexed lookup
-            admit(&mut admission, |admission| {
-                admission.charge(0)?;
-                Ok(slots::<GroupOption>(1)
-                    .saturating_add(crate::preview::value_bytes(key, admission)?)
-                    .saturating_add(32))
-            })?;
-            group_options.push(GroupOption {
-                key_id: group_key_id(key),
-                key: key.clone(),
-                edit_key: None,
-                order_key: None,
-                count: indexed
-                    .get(&canonical(key))
-                    .map(|(_, count)| *count)
-                    .unwrap_or(0),
-                listed: true,
-            });
-        }
-        for (key, (value, _)) in &indexed {
-            admit(&mut admission, |admission| {
-                admission.charge(0)?;
-                Ok(slots::<GroupOption>(1)
-                    .saturating_add(crate::preview::string_bytes(key))
-                    .saturating_add(32))
-            })?;
-            key_id_admission(value, &mut admission)?;
-        }
-        group_options.extend(
-            indexed
-                .into_iter()
-                .filter(|(key, _)| !listed.contains(key))
-                .map(|(_, (key, count))| GroupOption {
-                    key_id: group_key_id(&key),
-                    key,
-                    edit_key: None,
-                    order_key: None,
-                    count,
-                    listed: false,
-                }),
-        );
-        for row in &rows {
-            admit(&mut admission, |admission| {
-                admission.charge(0)?;
-                crate::preview::value_bytes(group_value(view, row, &null), admission)
-            })?;
-            canonical_admission(group_value(view, row, &null), &mut admission)?;
-        }
-        rows.retain(|row| listed.contains(&canonical(&group_key(row))));
-    }
-    for option in &mut group_options {
-        canonical_admission(&option.key, &mut admission)?;
-        let identity = canonical(&option.key);
-        let edit = group_edit_keys
-            .get(&identity)
-            .or_else(|| configured_edit_keys.get(&identity))
-            .and_then(Option::as_ref);
-        let order = group_order_keys
-            .get(&identity)
-            .or_else(|| configured_order_keys.get(&identity))
-            .and_then(Option::as_ref);
-        for value in edit.into_iter().chain(order) {
-            admit(&mut admission, |admission| {
-                crate::preview::value_bytes(value, admission)
-            })?;
-        }
-        option.edit_key = if writable_group_property.is_some() {
-            edit.cloned()
-        } else {
-            None
-        };
-        option.order_key = order.cloned();
+    let grouping = if view.group.is_some() {
+        Some(grouping::Engine::prepare(
+            &rows,
+            &mut grouping::Context {
+                view,
+                options,
+                timezone: &group_timezone,
+                records: &by_id,
+                paths: &by_path,
+                graph: relationships.as_ref(),
+                properties: input.property_values,
+                origin: definition_origin,
+                diagnostics: &mut diagnostics,
+                steps: &mut steps_used,
+                admission: &mut admission,
+            },
+        )?)
+    } else {
+        None
+    };
+    // The chooser inventories the matched collection before manual admission,
+    // search, sorting and the global limit. Its representatives may differ
+    // from the display groups, exactly as its independent source rows do.
+    let group_options = if let Some(grouping) = &grouping {
+        grouping.options(
+            &rows,
+            &mut grouping::Context {
+                view,
+                options,
+                timezone: &group_timezone,
+                records: &by_id,
+                paths: &by_path,
+                graph: relationships.as_ref(),
+                properties: input.property_values,
+                origin: definition_origin,
+                diagnostics: &mut diagnostics,
+                steps: &mut steps_used,
+                admission: &mut admission,
+            },
+        )?
+    } else {
+        Vec::new()
+    };
+    if let Some(grouping) = &grouping {
+        rows.retain(|row| grouping.admits(row));
     }
     counts.after_group_order = rows.len();
     let search_work = rows
@@ -2859,122 +2396,25 @@ pub(crate) fn query_rows_validated(
         return Err(budget("Query exceeds returned-row budget"));
     }
     counts.returned = rows.len();
-    let mut groups = Vec::<BaseGroup>::new();
-    if let Some(group) = &view.group {
-        let mut by_key = HashMap::new();
-        for row in &rows {
-            admit(&mut admission, |admission| {
-                admission.charge(0)?;
-                crate::preview::value_bytes(group_value(view, row, &null), admission)
-            })?;
-            canonical_admission(group_value(view, row, &null), &mut admission)?;
-            let key = group_key(row);
-            let key_id = canonical(&key);
-            let index = if let Some(index) = by_key.get(&key_id) {
-                *index
-            } else {
-                if groups.len() >= options.max_groups {
-                    return Err(budget("Query exceeds group budget"));
-                }
-                let index = groups.len();
-                admit(&mut admission, |admission| {
-                    admission.charge(0)?;
-                    Ok(slots::<BaseGroup>(1)
-                        .saturating_add(32)
-                        .saturating_add(crate::preview::string_bytes(&key_id))
-                        .saturating_add(map_slot::<String, usize>()))
-                })?;
-                let source = group_edit_keys.get(&key_id).and_then(Option::as_ref);
-                if let Some(value) = source {
-                    admit(&mut admission, |admission| {
-                        crate::preview::value_bytes(value, admission)
-                    })?;
-                }
-                let edit_key = source.cloned();
-                let order_source = group_order_keys.get(&key_id).and_then(Option::as_ref);
-                if let Some(value) = order_source {
-                    admit(&mut admission, |admission| {
-                        crate::preview::value_bytes(value, admission)
-                    })?;
-                }
-                let order_key = order_source.cloned();
-                groups.push(BaseGroup {
-                    key_id: Some(format!("base-key-v1:{key_id}")),
-                    key: Some(key),
-                    edit_key,
-                    order_key,
-                    entry_ids: Vec::new(),
-                    summaries: BTreeMap::new(),
-                });
-                by_key.insert(key_id, index);
-                index
-            };
-            admit(&mut admission, |admission| {
-                admission.charge(0)?;
-                Ok(slots::<crate::EntryId>(1)
-                    .saturating_add(crate::preview::string_bytes(row.entry_id.as_str())))
-            })?;
-            groups[index].entry_ids.push(row.entry_id.clone());
-        }
-        if let Some(keys) = &group_order {
-            for key in keys {
-                canonical_admission(key, &mut admission)?;
-                admit(&mut admission, |_| Ok(map_slot::<String, usize>()))?;
-            }
-            let positions = keys
-                .iter()
-                .enumerate()
-                .map(|(index, key)| (canonical(key), index))
-                .collect::<HashMap<_, _>>();
-            if admission.is_some() {
-                for group in &groups {
-                    canonical_admission(group.key.as_ref().unwrap(), &mut admission)?;
-                }
-                admit(&mut admission, |admission| {
-                    admission.charge(0)?;
-                    Ok(slots::<(usize, usize)>(groups.len())
-                        .saturating_add(slots::<BaseGroup>(groups.len())))
-                })?;
-                groups.sort_by_cached_key(|group| {
-                    positions
-                        .get(&canonical(group.key.as_ref().unwrap()))
-                        .copied()
-                        .unwrap_or(usize::MAX)
-                });
-            } else {
-                groups.sort_by_key(|group| {
-                    positions
-                        .get(&canonical(group.key.as_ref().unwrap()))
-                        .copied()
-                        .unwrap_or(usize::MAX)
-                });
-            }
-        } else {
-            admit(&mut admission, |_| Ok(slots::<BaseGroup>(groups.len())))?;
-            if groups.len() > 1 {
-                comparator_scratch_admission(
-                    groups.iter().filter_map(|group| group.key.as_ref()),
-                    &mut admission,
-                )?;
-            }
-            check_query_work(
-                steps_used,
-                &admission,
+    let mut groups = if let Some(grouping) = &grouping {
+        grouping.display(
+            &rows,
+            &mut grouping::Context {
+                view,
                 options,
-                "Comparator scratch exceeds query work budget",
-            )?;
-            groups.sort_by(|a, b| {
-                order::compare_with_timezone(
-                    a.key.as_ref().unwrap(),
-                    b.key.as_ref().unwrap(),
-                    group.descending,
-                    &options.evaluation.timezone,
-                )
-            });
-        }
+                timezone: &group_timezone,
+                records: &by_id,
+                paths: &by_path,
+                graph: relationships.as_ref(),
+                properties: input.property_values,
+                origin: definition_origin,
+                diagnostics: &mut diagnostics,
+                steps: &mut steps_used,
+                admission: &mut admission,
+            },
+        )?
     } else {
         admit(&mut admission, |admission| {
-            admission.charge(0)?;
             Ok(slots::<BaseGroup>(1)
                 .saturating_add(slots::<crate::EntryId>(rows.len()))
                 .saturating_add(string_copies(
@@ -2982,15 +2422,15 @@ pub(crate) fn query_rows_validated(
                     admission,
                 )?))
         })?;
-        groups.push(BaseGroup {
+        vec![BaseGroup {
             key_id: None,
             key: None,
             edit_key: None,
             order_key: None,
             entry_ids: rows.iter().map(|row| row.entry_id.clone()).collect(),
             summaries: BTreeMap::new(),
-        });
-    }
+        }]
+    };
     let (summaries, summary_previews) = summarize_rows(
         program,
         view,

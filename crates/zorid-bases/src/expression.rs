@@ -781,6 +781,91 @@ pub(crate) fn evaluate_summary(
     })
 }
 
+/// Query grouping converts each captured key once, then reuses exactly the
+/// same typed equality and stringification as ordinary core expressions.
+pub(crate) fn group_runtime_from_base(
+    value: &BaseValue,
+    timezone: &BasesTimezone,
+    options: &crate::EvaluationOptions,
+    mut file: impl FnMut(&str) -> Result<BasesFile, ExpressionDiagnostic>,
+) -> Result<(RuntimeValue, usize), ExpressionDiagnostic> {
+    let context = BasesEvaluationContext {
+        timezone: timezone.clone(),
+        work_limit: Some(options.max_steps),
+        cancellation: options.cancellation.clone(),
+        ..Default::default()
+    };
+    let mut evaluator = Evaluator::new(&context);
+    let value = summary_runtime_value(value, 0, &mut 0usize, &mut evaluator, &mut file)?;
+    Ok((
+        value,
+        options.max_steps.saturating_sub(evaluator.remaining_work),
+    ))
+}
+fn group_comparison_work(
+    value: &RuntimeValue,
+    check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+) -> Result<(), ExpressionDiagnostic> {
+    check(1)?;
+    match value {
+        RuntimeValue::String(value)
+        | RuntimeValue::Html(value)
+        | RuntimeValue::Image(value)
+        | RuntimeValue::Icon(value)
+        | RuntimeValue::Error(value) => check(value.len() / 16)?,
+        RuntimeValue::Link(link) => check(
+            link.path
+                .len()
+                .saturating_add(link.display.as_ref().map_or(0, String::len))
+                .saturating_add(
+                    link.resolved_path
+                        .as_ref()
+                        .and_then(Option::as_ref)
+                        .map_or(0, String::len),
+                )
+                / 16,
+        )?,
+        RuntimeValue::File(file) => check(file.path.len() / 16)?,
+        RuntimeValue::List(values) => {
+            for value in values {
+                group_comparison_work(value, check)?
+            }
+        }
+        RuntimeValue::Object(values) => {
+            for (key, value) in values {
+                check(key.len() / 16)?;
+                group_comparison_work(value, check)?
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+pub(crate) fn group_values_match(
+    key: &RuntimeValue,
+    value: &RuntimeValue,
+    manual: bool,
+    timezone: &BasesTimezone,
+    check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+) -> Result<bool, ExpressionDiagnostic> {
+    group_comparison_work(key, check)?;
+    group_comparison_work(value, check)?;
+    let context = BasesEvaluationContext {
+        timezone: timezone.clone(),
+        ..Default::default()
+    };
+    let evaluator = Evaluator::new(&context);
+    Ok(evaluator.equals(key, value)
+        || manual && matches!(key,RuntimeValue::String(key) if key==&stringify(value)))
+}
+pub(crate) fn group_value_string(
+    value: &RuntimeValue,
+    check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+) -> Result<String, ExpressionDiagnostic> {
+    group_comparison_work(value, check)?;
+    Ok(stringify(value))
+}
+
 fn summary_runtime_value(
     value: &BaseValue,
     depth: usize,

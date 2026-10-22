@@ -1280,13 +1280,13 @@ fn manual_date_order_rehydrates_raw_keys_and_preserves_dst_subsecond_identity() 
         persisted
             .groups
             .iter()
-            .map(|group| &group.key_id)
+            .map(|group| &group.key)
             .collect::<Vec<_>>(),
         result
             .groups
             .iter()
             .rev()
-            .map(|group| &group.key_id)
+            .map(|group| &group.key)
             .collect::<Vec<_>>()
     );
     assert!(persisted
@@ -1385,7 +1385,7 @@ fn manual_link_and_list_order_use_base_origin_and_persist_plain_rooted_keys() {
             .unwrap();
     assert_eq!(persisted.rows.len(), 2);
     assert_eq!(persisted.groups[0].entry_ids, vec![id("second")]);
-    assert_eq!(persisted.groups[1].key_id, result.groups[0].key_id);
+    assert_eq!(persisted.groups[1].key, result.groups[0].key);
     let first = "---\nkind: card\nauthor: ['[[/Config/Ada|A]]','[[/Other/Ada|B]]']\n---\n";
     let second = "---\nkind: card\nauthor: ['[[/Other/Ada|B]]','[[/Config/Ada|A]]']\n---\n";
     let raw = source("[['[[Ada]]','[[../Other/Ada]]']]");
@@ -1409,7 +1409,7 @@ fn manual_link_and_list_order_use_base_origin_and_persist_plain_rooted_keys() {
             .unwrap();
     assert_eq!(persisted.groups.len(), 2);
     assert_eq!(persisted.groups[0].entry_ids, vec![id("second")]);
-    assert_eq!(persisted.groups[1].key_id, result.groups[0].key_id);
+    assert_eq!(persisted.groups[1].key, result.groups[0].key);
     options.definition_entry_id = None;
     let relative = source("['[[Ada]]']");
     assert_eq!(
@@ -1597,4 +1597,228 @@ fn derived_group_readonly_uses_exact_first_casefold_resolution_and_raw_alias_sou
             value: "[[Authors/Ada|Raw Alias]]".into()
         }
     );
+}
+
+#[test]
+fn automatic_grouping_uses_first_match_without_changing_persisted_values() {
+    let notes = [
+        ("number", "---\nkind: card\nstatus: 1\n---\n"),
+        ("text", "---\nkind: card\nstatus: '1'\n---\n"),
+        ("list", "---\nkind: card\nstatus: [1]\n---\n"),
+    ];
+    let generation = generation_with_settings_file("", &notes, false);
+    let program=compile_base_source("filters: 'kind == \"card\"'\nviews:\n  - type: table\n    name: Groups\n    order: [file.name,status]\n    groupBy: {property: status, direction: ASC}\n").unwrap();
+    let result =
+        zorid_bases::query_generation(&program, &generation, &[], &QueryOptions::default())
+            .unwrap();
+    assert_eq!(result.groups.len(), 1);
+    assert_eq!(result.groups[0].entry_ids.len(), 3);
+    // File-path sort puts list first for the display, whereas the independent
+    // presearch chooser uses the metadata collection insertion order.
+    assert!(matches!(result.groups[0].key, Some(BaseValue::List { .. })));
+    assert_eq!(result.group_options.len(), 1);
+    assert_eq!(result.group_options[0].count, 3);
+    assert!(result
+        .rows
+        .iter()
+        .any(|row| matches!(row.values["note.status"], BaseValue::String { .. })));
+    assert!(result
+        .rows
+        .iter()
+        .any(|row| matches!(row.values["note.status"], BaseValue::Number { .. })));
+    assert!(result
+        .rows
+        .iter()
+        .any(|row| matches!(row.values["note.status"], BaseValue::List { .. })));
+}
+
+#[test]
+fn date_only_group_first_match_is_order_dependent_and_direction_cannot_change_it() {
+    let generation = generation_with_settings_file(
+        "",
+        &[
+            ("a-day", "---\nkind: card\nwhen: 2026-01-01\n---\n"),
+            (
+                "b-noon",
+                "---\nkind: card\nwhen: '2026-01-01T12:00:00Z'\n---\n",
+            ),
+            (
+                "c-evening",
+                "---\nkind: card\nwhen: '2026-01-01T18:00:00Z'\n---\n",
+            ),
+        ],
+        false,
+    );
+    let source = |row_direction: &str, group_direction: &str, limit: &str| {
+        format!("filters: 'kind == \"card\"'\nviews:\n  - type: table\n    name: Dates\n    order: [file.name,when]\n    sort: [{{property: file.name, direction: {row_direction}}}]\n    groupBy: {{property: when, direction: {group_direction}}}\n{limit}")
+    };
+    let run = |row_direction: &str, group_direction: &str, limit: &str| {
+        zorid_bases::query_generation(
+            &compile_base_source(&source(row_direction, group_direction, limit)).unwrap(),
+            &generation,
+            &[],
+            &QueryOptions::default(),
+        )
+        .unwrap()
+    };
+    let day_first = run("ASC", "ASC", "");
+    assert_eq!(day_first.groups.len(), 1);
+    assert_eq!(day_first.groups[0].entry_ids.len(), 3);
+    assert!(matches!(
+        day_first.groups[0].key,
+        Some(BaseValue::Date {
+            has_time: false,
+            ..
+        })
+    ));
+    let time_first = run("DESC", "ASC", "");
+    assert_eq!(time_first.groups.len(), 2);
+    assert!(time_first
+        .groups
+        .iter()
+        .any(|group| group.entry_ids == vec![id("c-evening"), id("a-day")]));
+    assert!(time_first
+        .groups
+        .iter()
+        .any(|group| group.entry_ids == vec![id("b-noon")]));
+    let descending_groups = run("DESC", "DESC", "");
+    for group in &time_first.groups {
+        assert!(descending_groups
+            .groups
+            .iter()
+            .any(|other| other.entry_ids == group.entry_ids && other.key == group.key));
+    }
+    let limited = run("DESC", "ASC", "    limit: 1\n");
+    assert_eq!(limited.groups.len(), 1);
+    assert_eq!(limited.groups[0].entry_ids, vec![id("c-evening")]);
+    assert_eq!(
+        limited
+            .group_options
+            .iter()
+            .map(|group| group.count)
+            .sum::<usize>(),
+        3
+    );
+}
+
+#[test]
+fn manual_group_slots_keep_duplicate_keys_and_first_match_admission() {
+    let generation = generation_with_settings_file(
+        "",
+        &[
+            ("first", "---\nkind: card\nstatus: 1\n---\n"),
+            ("second", "---\nkind: card\nstatus: '1'\n---\n"),
+            ("third", "---\nkind: card\nstatus: [1]\n---\n"),
+            ("unlisted", "---\nkind: card\nstatus: 2\n---\n"),
+        ],
+        false,
+    );
+    let source = |view: &str| {
+        format!("filters: 'kind == \"card\"'\nviews:\n  - type: {view}\n    name: Manual\n    order: [file.name,status]\n    groupBy: {{property: status, direction: DESC}}\n    groupOrder: [1, '1', [1], 1]\n")
+    };
+    let table = zorid_bases::query_generation(
+        &compile_base_source(&source("table")).unwrap(),
+        &generation,
+        &[],
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(table.counts.matched, 4);
+    assert_eq!(table.counts.after_group_order, 3);
+    assert_eq!(table.groups.len(), 1);
+    assert_eq!(table.groups[0].entry_ids.len(), 3);
+    assert_eq!(table.group_options.len(), 5);
+    assert_eq!(
+        table
+            .group_options
+            .iter()
+            .filter(|group| group.listed)
+            .map(|group| group.count)
+            .collect::<Vec<_>>(),
+        vec![3, 0, 0, 0]
+    );
+    let ids = table
+        .group_options
+        .iter()
+        .map(|group| &group.key_id)
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(ids.len(), 5);
+    assert_eq!(
+        table.groups[0].key_id.as_ref(),
+        Some(&table.group_options[0].key_id)
+    );
+    let kanban = zorid_bases::query_generation(
+        &compile_base_source(&source("kanban")).unwrap(),
+        &generation,
+        &[],
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(kanban.groups.len(), 4);
+    assert!(kanban
+        .groups
+        .iter()
+        .skip(1)
+        .all(|group| group.entry_ids.is_empty()));
+    assert_eq!(
+        kanban
+            .groups
+            .iter()
+            .map(|group| group.key_id.as_ref().unwrap())
+            .collect::<Vec<_>>(),
+        kanban
+            .group_options
+            .iter()
+            .filter(|group| group.listed)
+            .map(|group| &group.key_id)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn scalar_to_list_group_move_lands_in_the_destination_without_flattening_lists() {
+    let source="filters: 'kind == \"card\"'\nviews:\n  - type: kanban\n    name: Status\n    order: [file.name,status]\n    groupBy: {property: status, direction: ASC}\n    groupOrder: [Done, Open]\n";
+    let run = |second: &str| {
+        let generation = generation_with_settings_file(
+            "",
+            &[
+                ("destination", "---\nkind: card\nstatus: Done\n---\n"),
+                ("moving", second),
+            ],
+            false,
+        );
+        zorid_bases::query_generation(
+            &compile_base_source(source).unwrap(),
+            &generation,
+            &[],
+            &QueryOptions::default(),
+        )
+        .unwrap()
+    };
+    let before = run("---\nkind: card\nstatus: [Open]\n---\n");
+    let destination = &before.groups[0];
+    assert_eq!(
+        destination.edit_key,
+        Some(BaseValue::String {
+            value: "Done".into()
+        })
+    );
+    // The write contract preserves a list-valued note by wrapping a scalar
+    // destination. Core loose first-match grouping must show that move there.
+    let after = run("---\nkind: card\nstatus: [Done]\n---\n");
+    assert_eq!(after.groups[0].key_id, destination.key_id);
+    assert_eq!(
+        after.groups[0].entry_ids,
+        vec![id("destination"), id("moving")]
+    );
+    assert!(after.groups[1].entry_ids.is_empty());
+    assert!(matches!(
+        after
+            .rows
+            .iter()
+            .find(|row| row.entry_id == id("moving"))
+            .unwrap()
+            .values["note.status"],
+        BaseValue::List { .. }
+    ));
 }
