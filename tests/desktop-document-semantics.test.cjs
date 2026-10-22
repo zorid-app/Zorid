@@ -394,3 +394,14 @@ test('property target transport admits only the scoped method and retained pin i
   await assert.rejects(admitted.invoke(request('property_targets',{pinId:'1'})),{code:'snapshot_expired'});
   for(const options of [{inlineSource:{source:'x',startByte:0,endByte:1}},{summaryPreviewProperty:'rating'},{randomSeed:1},{propertyDefinitionsSource:null}])assert.throws(()=>captureDocumentRequest(request('property_targets',{pinId:'1',options})),{code:'invalid_document_request'});
 });
+
+test('saved relation display frames stay bound to the requested note and paired raw properties',()=>{
+  const command=request('property_targets',{pinId:'1',options:{currentEntryId:'note'}});
+  const current={witness:{entryId:'note',revision:'r1'},values:{author:{type:'link',path:'People/Ada.md',display:'Boss',target:{entryId:'ada',revision:'r2'},external:false}},editValues:{author:{type:'string',value:'[[../People/Ada|Boss]]'}}};
+  const report={snapshot,source,coverageComplete:true,value:{definition:{...entry,id:'settings',path:'Properties.yaml'},relationTargets:{},propertyDefinitionDiagnostics:[],refreshHint:null,currentRelationValues:current}};
+  assert.deepEqual(decodeDocumentReply(command,...wire('property_targets',report)),report);
+  for(const invalid of [null,{...current,witness:{entryId:'other',revision:'r1'}},{...current,editValues:{}},{...current,values:{author:null}},{...current,extra:true}]){
+    assert.throws(()=>decodeDocumentReply(command,...wire('property_targets',{...report,value:{...report.value,currentRelationValues:invalid}})),{code:'invalid_document_response'});
+  }
+  assert.throws(()=>decodeDocumentReply(request('property_targets',{pinId:'1'}),...wire('property_targets',report)),{code:'invalid_document_response'});
+});

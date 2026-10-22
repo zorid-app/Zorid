@@ -181,6 +181,11 @@ function page(value,op,limit){
     &&['scanComplete','coverageComplete','complete'].every(key=>typeof value[key]==='boolean')&&value.complete===(value.scanComplete&&value.coverageComplete);
 }
 const witness=value=>keys(value,['entryId','revision'])&&id(value.entryId)&&id(value.revision);
+// Typed value decoding stays in the shared renderer projection. This boundary
+// admits only the optional saved-note frame attached to the requested actor.
+const currentRelationValues=(value,currentEntryId)=>keys(value,['witness','values','editValues'])&&witness(value.witness)&&value.witness.entryId===currentEntryId
+  &&object(value.values)&&object(value.editValues)&&Object.keys(value.values).length<=10000&&Object.keys(value.values).length===Object.keys(value.editValues).length
+  &&Object.keys(value.values).every(key=>scalar(key)&&Object.hasOwn(value.editValues,key)&&object(value.values[key])&&object(value.editValues[key]));
 const category=value=>value===null||['not_started','working','done'].includes(value);
 const nullableString=value=>value===null||typeof value==='string';
 function taskProperty(value,datatype){
@@ -258,7 +263,7 @@ function decodeDocumentReply(request,marker,bytes){
     if(valid)valid=op==='search'?inner.hits.every(hit=>entry(hit.entry)&&integer(hit.line)&&object(hit.range)&&typeof hit.snippet==='string'&&typeof hit.snippetTruncated==='boolean'):
       inner.edges.every(edge=>entry(edge.source)&&entry(edge.target)&&edge.target.id===command.id&&integer(edge.linkIndex)&&object(edge.link));
   }else if(op==='tasks')valid=taskRead(value,command);
-  else if(op==='property_targets')valid=envelope(value)&&keys(value.value,['definition','relationTargets','propertyDefinitionDiagnostics','refreshHint'])&&(value.value.definition===null||entry(value.value.definition)&&value.value.definition.path==='Properties.yaml')&&object(value.value.relationTargets)&&Object.values(value.value.relationTargets).every(targets=>Array.isArray(targets)&&targets.length<=10000&&targets.every(target=>keys(target,['entryId','revision','path','label'])&&id(target.entryId)&&id(target.revision)&&scalar(target.path)&&scalar(target.label)))&&Array.isArray(value.value.propertyDefinitionDiagnostics);
+  else if(op==='property_targets')valid=envelope(value)&&keys(value.value,['definition','relationTargets','propertyDefinitionDiagnostics','refreshHint','currentRelationValues'],['definition','relationTargets','propertyDefinitionDiagnostics','refreshHint'])&&(!Object.hasOwn(value.value,'currentRelationValues')||currentRelationValues(value.value.currentRelationValues,command.options?.currentEntryId))&&(value.value.definition===null||entry(value.value.definition)&&value.value.definition.path==='Properties.yaml')&&object(value.value.relationTargets)&&Object.values(value.value.relationTargets).every(targets=>Array.isArray(targets)&&targets.length<=10000&&targets.every(target=>keys(target,['entryId','revision','path','label'])&&id(target.entryId)&&id(target.revision)&&scalar(target.path)&&scalar(target.label)))&&Array.isArray(value.value.propertyDefinitionDiagnostics);
   else if(op==='base')valid=envelope(value)&&keys(value.value,['definition','result'])&&entry(value.value.definition)&&value.value.definition.id===command.id&&object(value.value.result)&&same(value.value.result.snapshotId,value.snapshot)&&Array.isArray(value.value.result.rows);
   if(!valid)throw fail('invalid_document_response');
   return value;
