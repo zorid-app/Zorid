@@ -1554,15 +1554,18 @@ fn string_data(value: &RuntimeValue) -> Option<&str> {
 
 fn seeded_row_state(context: &BasesEvaluationContext<'_>) -> u64 {
     let mut state = context.random_seed.unwrap_or(0) ^ 0xcbf29ce484222325;
-    let identity = context
-        .file
-        .witness
-        .as_ref()
-        .map(|w| format!("{:?}", w))
-        .unwrap_or_else(|| context.file.path.clone());
-    for byte in identity.bytes() {
+    let mut mix = |byte: u8| {
         state ^= u64::from(byte);
         state = state.wrapping_mul(0x100000001b3);
+    };
+    if let Some(witness) = &context.file.witness {
+        // Opaque IDs are bounded ASCII. The separator cannot occur in either
+        // token; hashing never depends on Debug formatting or platform layout.
+        witness.entry_id.as_str().bytes().for_each(&mut mix);
+        mix(0);
+        witness.revision.as_str().bytes().for_each(&mut mix);
+    } else {
+        context.file.path.bytes().for_each(&mut mix);
     }
     state
 }
