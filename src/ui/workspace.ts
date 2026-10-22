@@ -1223,11 +1223,11 @@ export class Workspace {
       {
         const host=el('div','properties-host');scroll.append(host);
         const targets=this.notePropertyTargets(()=>path,()=>generation===this.vaultGeneration&&pane.viewPath===path&&pane.renderVersion===version&&this.buffers.get(path)===buffer,()=>pane.properties?.refresh());
-        const properties=renderProperties(host,{vault:this.vault,path,getRelationTargets:property=>targets.get(property),onPropertyDefinitionChange:(property,definition)=>this.changePropertyDefinition(property,definition,()=>{if(generation!==this.vaultGeneration||pane.viewPath!==path||pane.renderVersion!==version)throw new Error('The property panel changed.');}),isCurrent:()=>pane.viewPath===path&&pane.renderVersion===version&&this.buffers.get(path)===buffer,onError:error=>notice(error instanceof Error?error.message:String(error)),getSource:()=>buffer.text,onChange:async next=>{
+        const properties=renderProperties(host,{vault:this.vault,path,getRelationTargets:property=>targets.get(property),getDisplayValue:(property,raw)=>targets.getDisplayValue(property,raw),onPropertyDefinitionChange:(property,definition)=>this.changePropertyDefinition(property,definition,()=>{if(generation!==this.vaultGeneration||pane.viewPath!==path||pane.renderVersion!==version)throw new Error('The property panel changed.');}),isCurrent:()=>pane.viewPath===path&&pane.renderVersion===version&&this.buffers.get(path)===buffer,onError:error=>notice(error instanceof Error?error.message:String(error)),getSource:()=>buffer.text,onChange:async next=>{
           this.updateMarkdownBuffer(buffer,next);runtime.touch();
           for(const other of this.loadedViews()){if(this.current(other)?.path===path){other.editor?.setValue(next);other.refreshPreview?.();if(other!==pane)other.properties?.refresh();}}
           await buffer.flush();
-        },openLink:target=>this.run(()=>this.followLink(path,target,pane))});
+        },openLink:(target,witness)=>this.run(()=>this.openPropertyLink(path,target,pane,witness))});
         pane.properties={refresh:()=>properties.refresh(),destroy:()=>{targets.destroy();properties.destroy();}};
       }
       const baseSessions=this.embeddedBases(()=>pane,()=>{if(generation!==this.vaultGeneration||pane.runtime!==runtime||runtime.phase==='disposed')throw new Error('The source note is closed.');});
@@ -1332,9 +1332,9 @@ export class Workspace {
             openFile:(target,event,witness)=>this.run(()=>{
               validate();
               if(/^[a-z][\w+.-]*:/i.test(target)||target.startsWith('//')){if(/^(?:https?:\/\/|mailto:|tel:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');return;}
-              let path=target;
-              if(witness){const entry=[...vault.entries.values()].find(entry=>entry.entryId===witness.entryId);if(!entry||entry.type!=='file'||entry.revision!==witness.revision)throw new Error('The linked file changed. Refresh before opening.');path=entry.path;}
-              return this.openNote(path,('button'in event&&event.button===1)||event.metaKey||event.ctrlKey,owner(),true,target.includes('#')?target.slice(target.indexOf('#')):'');
+              const newTab=('button'in event&&event.button===1)||event.metaKey||event.ctrlKey;
+              if(witness)return this.openPropertyLink(sourcePath??path,target,owner(),witness,newTab);
+              return this.openNote(target,newTab,owner(),true,target.includes('#')?target.slice(target.indexOf('#')):'');
             }),
             loadThumbnail:async request=>{
               validate();if(request.signal.aborted)return null;
@@ -1411,9 +1411,9 @@ export class Workspace {
             listener();
             for(const pane of this.loadedViews())if(pane.viewPath===shared.path){pane.editor?.setValue(shared.text);pane.properties?.refresh();pane.refreshPreview?.();}
           }),
-          properties:{getRelationTargets:property=>targets.get(property),onPropertyDefinitionChange:(property,definition)=>this.changePropertyDefinition(property,definition,validateFile)},
+          properties:{getRelationTargets:property=>targets.get(property),getDisplayValue:(property,raw)=>targets.getDisplayValue(property,raw),onPropertyDefinitionChange:(property,definition)=>this.changePropertyDefinition(property,definition,validateFile)},
           flushEditor:()=>sessions.flush(),hasPendingEditorChanges:()=>sessions.hasPendingChanges(),closeEditor:async()=>{await sessions.close();await targets.close();},
-          openFile:async(target,event)=>{validateFile();const resolved=vault.entries.has(target)?target:vault.metadata.resolveLink(shared.path,target,'wiki');if(!resolved)throw new Error('The linked note is unavailable.');await this.openNote(resolved,('button'in event&&event.button===1)||event.metaKey||event.ctrlKey,this.activePane);},
+          openFile:async(target,event,witness)=>{validateFile();const newTab=('button'in event&&event.button===1)||event.metaKey||event.ctrlKey;if(witness){await this.openPropertyLink(shared.path,target,this.activePane,witness,newTab);return;}const resolved=vault.entries.has(target)?target:vault.metadata.resolveLink(shared.path,target,'wiki');if(!resolved)throw new Error('The linked note is unavailable.');await this.openNote(resolved,newTab,this.activePane);},
           editorFactory:(parent,options)=>this.editorFactory?this.editorFactory(parent,options):import('./editor.ts').then(module=>module.createEditor(parent,options)),
           editorOptions:{hotkeys:this.hotkeys,subscribeMetadata:this.subscribeDraftMetadata,paths:()=>{validateFile();return[...vault.entries.keys()];},
             listOptions:{useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList},
@@ -2344,6 +2344,17 @@ export class Workspace {
   }
   private async navigate(delta:number,pane:Pane):Promise<void>{const index=pane.historyIndex+delta;if(index<0||index>=pane.history.length)return;pane.historyIndex=index;this.current(pane).historyIndex=index;await this.openNote(pane.history[index],false,pane,false);}
   private async toggleReading(pane=this.activePane):Promise<void>{const tab=this.current(pane);if(tab.kind!=='note')return;if(tab.path&&!isMarkdown(tab.path))return;await this.flushPane(pane);tab.mode=tab.mode==='reading'?this.settings.defaultMode:'reading';await this.renderPane(pane);this.saveSession();}
+  private async openPropertyLink(source:string,target:string,pane:Pane,witness?:{readonly entryId:string;readonly revision:string},newTab=false):Promise<void>{
+    if(!witness){await this.followLink(source,target,pane);return;}
+    const vault=this.vault,generation=this.vaultGeneration;
+    const saved=[...vault.entries.values()].find(entry=>entry.type==='file'&&entry.entryId===witness.entryId&&entry.revision===witness.revision);
+    if(!saved)throw new Error('The related note changed. Refresh the property before opening it.');
+    const current=()=>this.vault===vault&&this.vaultGeneration===generation&&vault.entries.get(saved.path)?.entryId===witness.entryId&&vault.entries.get(saved.path)?.revision===witness.revision;
+    // A literal # in an old filename must never turn into a heading after a
+    // rename. Only a suffix of the witnessed current path proves a subpath.
+    const subpath=target.startsWith(saved.path+'#')?target.slice(saved.path.length):'';
+    await this.openNote(saved.path,newTab,pane,true,subpath,undefined,current,witness.entryId);
+  }
   private async followLink(source:string,target:string,pane:Pane,kind:'wiki'|'markdown'='wiki'):Promise<void>{if(/^[a-z][\w+.-]*:/i.test(target)||target.startsWith('//')){if(/^(?:https?:\/\/|mailto:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');return;}const resolved=this.vault.metadata.resolveLink(source,target,kind);if(resolved){await this.openNote(resolved,false,pane,true,target.includes('#')?target.slice(target.indexOf('#')):'');return;}const path=target.split('#')[0].replace(/\.md$/,'')+'.md';if(!path||path==='.md')return;const parent=parentOf(path);if(parent&&!this.vault.entries.has(parent))throw new Error(`Folder does not exist: ${parent}`);await this.vault.create(path,'');await this.openNote(path,false,pane);}
   private async dailyNote():Promise<void>{const now=new Date();const name=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}.md`;if(!this.vault.entries.has(name))await this.vault.create(name,'');await this.openNote(name);}
   private async split(edge:'right'|'bottom'='right',source=this.activePane,tab=this.current(source)):Promise<void>{

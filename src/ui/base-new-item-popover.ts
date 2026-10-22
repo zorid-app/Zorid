@@ -16,11 +16,11 @@ export interface BaseNewItemPopoverOptions {
   readonly validate: () => void;
   /** Workspace rename must relocate the shared buffer before resolving. */
   readonly rename: (path: string, destination: string, validate: () => void, witness?: { entryId: string; revision: string }) => Promise<void>;
-  readonly openFile: (path: string, event: MouseEvent | KeyboardEvent) => void | Promise<void>;
+  readonly openFile: (path: string, event: MouseEvent | KeyboardEvent, witness?: { readonly entryId: string; readonly revision: string }) => void | Promise<void>;
   readonly onError: (error: unknown) => void;
   readonly onClose?: () => void;
   readonly editorOptions?: Partial<Omit<EditorOptions, 'value' | 'onChange' | 'validateChange' | 'canMutate' | 'isCurrent'>>;
-  readonly properties?: Pick<PropertiesOptions, 'onPropertyDefinitionChange' | 'getRelationTargets'>;
+  readonly properties?: Pick<PropertiesOptions, 'onPropertyDefinitionChange' | 'getRelationTargets' | 'getDisplayValue'>;
   /** The workspace owns subscriptions and the buffer's lifetime. */
   readonly subscribeBuffer?: (buffer: NoteBuffer, listener: () => void) => () => void;
   /** Embedded editors retain their own accepted writes and unaccepted drafts. */
@@ -101,7 +101,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
   const properties = renderProperties(propertiesHost, { ...options.properties, ...(options.properties?.onPropertyDefinitionChange ? { onPropertyDefinitionChange: (property: string, definition: Parameters<NonNullable<PropertiesOptions['onPropertyDefinitionChange']>>[1]) => track(Promise.resolve().then(() => options.properties!.onPropertyDefinitionChange!(property, definition))) } : {}), vault: options.vault, path,
     getSource: () => buffer.text, isCurrent: () => { try { validate(); return true; } catch { return false; } },
     onChange: next => track((async () => { validate(); buffer.update(next, { validateWrite: validate }); bodySnapshot = next; editor?.setValue(next); refresh(); await buffer.flush(); })()),
-    openLink: target => { const event = new (win?.MouseEvent ?? MouseEvent)('click'); void Promise.resolve(options.openFile(target, event)).catch(report); },
+    openLink: (target, witness) => { const event = new (win?.MouseEvent ?? MouseEvent)('click'); void Promise.resolve(options.openFile(target, event, witness)).catch(report); },
     onError: report,
   });
   const propertiesRoot = propertiesHost.querySelector<HTMLElement>('.metadata-container')!;
