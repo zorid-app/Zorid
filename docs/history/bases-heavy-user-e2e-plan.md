@@ -107,6 +107,15 @@ activation so its link chip remains a navigation target. Kanban keyboard moves
 assert the exact adjacent visible status rather than merely a changed value.
 These are harness/source checks, not additional runtime acceptance.
 
+The following safe-path update keeps exact independent raw-value oracles: new
+Author Grace selection writes `[[/Author%20Grace.md]]` for this fixture's actual
+root filename. The other71 source relations preserve their existing plain text.
+After target rename, the new choice must become
+`[[/Author%20Grace%20Renamed.md]]`, while an old alias becomes
+`[[Author Grace Renamed]]`. Root owns the required frontmatter source-span and
+rooted/escaped rename correction; the authored assertions are not proof of that
+unexecuted behavior.
+
 ## Goal audit: concrete remaining acceptance
 
 The following maps the complete goal sections to the authored desktop campaign.

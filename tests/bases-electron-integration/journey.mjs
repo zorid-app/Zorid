@@ -192,7 +192,7 @@ export async function journey(c){
   // so clicking the chip's middle cannot accidentally navigate to its note.
   await c.ui.click(c.ui.cell('Book 001.md','note.author'),{button:'right'});await c.ui.key('Escape');await c.ui.key('Enter');
   await c.ui.type('.bases-property-popover input[role="combobox"]','Author Grace');await c.ui.key('ArrowDown');await c.ui.key('Enter');await c.ui.idle();
-  await fmSaved(c,'Book 001.md',p=>assert.equal(p.author,'[[Author Grace]]'),'relation-picker-stores-readable-link');
+  await fmSaved(c,'Book 001.md',p=>assert.equal(p.author,'[[/Author%20Grace.md]]'),'relation-picker-stores-rooted-exact-escaped-filename');
 
   for(const[property,type,initial]of[['finished','date','2026-10-01'],['appointment','datetime-local','2026-10-01T09:00']]){
     await c.ui.click(c.ui.cell('Book 001.md','note.'+property));const selector=`${c.ui.cell('Book 001.md','note.'+property)} input[type=${JSON.stringify(type)}]`;
@@ -269,7 +269,11 @@ export async function journey(c){
   const ratings=[];
   for(let n=1;n<=72;n++){
     const file=`Book ${String(n).padStart(3,'0')}.md`,properties=c.frontmatter(await c.read(file));
-    if(properties.author==='[[Author Grace]]')ratings.push(properties.rating);
+    // Only Book001 was selected anew. Every pre-existing readable alias must
+    // remain byte-for-byte data, independently of the new rooted choice format.
+    const grace=n===1||n%2===0;
+    assert.equal(properties.author,n===1?'[[/Author%20Grace.md]]':n%2===0?'[[Author Grace]]':'[[Author Ada]]',`${file} retains its exact intended author text`);
+    if(grace)ratings.push(properties.rating);
   }
   assert.equal(ratings.length,37);
   await c.ui.openFile('Authors.base');await c.ui.idle();
@@ -284,7 +288,8 @@ export async function journey(c){
   await c.ui.openFile('Author Grace.md');await c.ui.type('.pane.is-active .note-title','Author Grace Renamed');await c.ui.key('Enter');
   await c.saved('Author Grace Renamed.md',source=>assert.equal(source,authorBefore),'relation-target-normal-title-rename');
   await until(async()=>assert.ok(!(await fs.readdir(c.vault)).includes('Author Grace.md')),30000);
-  await fmSaved(c,'Book 001.md',p=>assert.equal(p.author,'[[Author Grace Renamed]]'),'relation-readable-link-follows-target-rename');
+  await fmSaved(c,'Book 001.md',p=>assert.equal(p.author,'[[/Author%20Grace%20Renamed.md]]'),'rooted-escaped-relation-follows-target-rename-with-exact-style');
+  await fmSaved(c,'Book 002.md',p=>assert.equal(p.author,'[[Author Grace Renamed]]'),'existing-plain-relation-follows-target-rename-with-exact-style');
   await c.ui.openFile('Authors.base');await c.ui.idle();await visibleCell(c,'Author Grace Renamed.md','note.bookCount','37');
   const referringBeforeDelete=await c.read('Book 001.md');
   await c.ui.click(c.ui.cell('Author Grace Renamed.md','note.bookCount'),{button:'right'});
