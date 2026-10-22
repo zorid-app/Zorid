@@ -56,3 +56,37 @@ screenshots before asserting timing/geometry/interaction parity. If an initial
 Base-only popup deliberately omits editing or per-source configuration, report
 that boundary explicitly rather than claim complete reference behavior. This
 audit does not activate a global preview framework or deferred mobile work.
+
+## Actual owned reference pass001 — partial, stopped on first failure
+
+The coordinator subsequently granted an actual reference slot. New evidence is
+isolated at `/private/tmp/zorid-bases-hover-runtime-reference-20261022-001`;
+the old 51-pair catalog and screenshots were not overwritten. The packaged
+launcher loaded the same hashed 1.14.4 archive from the existing owned profile.
+Only new synthetic `Hover.base` / `HoverCases/HoverTarget.md` were added. Page
+preview was disabled in the old fixture, so it was explicitly enabled for this
+pass; the original workspace/plugin settings were captured and restored afterward.
+
+`01-baseline` and `02-ordinary-hover` retain actual PNG, DOM/body, frame, active
+element and coordinate snapshots at **1024×800 CSS pixels, DPR2, dark theme**
+(2048×1600 PNG). The Base file link's rectangle was x352/y154.516,
+74.258×17.063 CSS px; unmodified pointer hover for 700 ms plus capture delay
+produced **no popup**. This is the sole completed hover behavior in this pass.
+
+The next Meta-hover input sequence stopped with
+**`CDP deadline: Input.dispatchMouseEvent`**. `FIRST_FAILURE.json` retains its
+request/stack; no Meta-popup assertion or terminal screenshot was reached. There
+is insufficient evidence to attribute that protocol/session failure to reference
+source behavior or a particular unjournaled mouse action. Popup geometry,
+modifier release retention, entering/editing the body and dismissal remain
+unobserved; the static facts above must not be relabeled as completed runtime.
+
+The pass did not restart. Browser.close itself timed out; cleanup verified the
+exact disposable profile/PID85786 before SIGTERM and then SIGKILL. `cleanup.json`
+records no remaining owned process and a closed debugger endpoint. Initial/final
+note and Base source are identical, fixture settings are restored, and the old
+capture catalog's hash is unchanged. `report.json`, the two captures, source
+snapshots, launch/target/version receipts and cleanup are retained in the new
+directory. No real vault or clipboard was changed. A fresh campaign requires a
+new coordinated slot and should journal each input acknowledgement before
+repeating the missing scenarios; this partial pass establishes no popup parity.
