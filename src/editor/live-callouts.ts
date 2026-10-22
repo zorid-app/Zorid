@@ -16,13 +16,16 @@ import { destroyMarkdown } from '../ui/markdown-lifecycle.ts';
 import { appendCodeBlock } from '../ui/code-block.ts';
 import { mathMarkdown, mathSpan } from './math-syntax.ts';
 import { bodyStart } from './live-properties.ts';
+import { inlineBaseRequest } from '../bases/inline-base.ts';
+import type { InlineBaseRenderer } from './live-bases.ts';
 
 export interface LiveCalloutOptions {
   open?: LinkHandler;
   renderEmbed?: (request: EmbedRequest) => { dom: HTMLElement; destroy(): void };
+  renderBase?: InlineBaseRenderer;
 }
 
-interface Span { from: number; to: number; source: string; identity: object; folds: Map<string, boolean> }
+interface Span { from: number; to: number; source: string; documentText: string; identity: object; folds: Map<string, boolean> }
 interface CalloutState { spans: readonly Span[]; decorations: DecorationSet; rendered: readonly { from: number; to: number }[]; focused: boolean; held: boolean; searched: ReadonlySet<object> }
 const calloutParser = markdown({ base: markdownLanguage, addKeymap: false, completeHTMLTags: false, extensions: mathMarkdown }).language.parser;
 const optionsFacet = Facet.define<LiveCalloutOptions, LiveCalloutOptions>({ combine: values => values[0] ?? {} });
@@ -35,6 +38,7 @@ const ignored = new Set(['FencedCode', 'CodeBlock', 'HTMLBlock', 'CommentBlock',
 
 function discover(state: EditorState, previous: readonly Span[] = [], transaction?: Transaction): Span[] {
   const tree = syntaxTree(state), prefix = bodyStart(state), old = new Map<number, Span>();
+  const documentText = state.doc.toString();
   for (const span of previous) {
     const from = transaction ? transaction.changes.mapPos(span.from, 1) : span.from;
     old.set(from, span);
@@ -48,7 +52,7 @@ function discover(state: EditorState, previous: readonly Span[] = [], transactio
     const line = state.doc.lineAt(node.from), first = line.text.match(/^ {0,3}>[ \t]?(.*)$/);
     if (node.from < prefix || !first || !parseCalloutHeader(first[1]) || node.to === tree.length && tree.length < state.doc.length) return false;
     const from = line.from, to = node.to, source = state.doc.sliceString(from, to), prior = old.get(from);
-    spans.push({ from, to, source, identity: prior?.identity ?? {}, folds: prior?.source === source ? prior.folds : new Map() });
+    spans.push({ from, to, source, documentText, identity: prior?.identity ?? {}, folds: prior?.source === source ? prior.folds : new Map() });
     return false;
   } });
   return spans;
@@ -133,8 +137,19 @@ function renderCallout(view: EditorView, span: Span, options: LiveCalloutOptions
         renderInline(heading, source.slice(from, to).trim()); into.append(heading); return;
       }
       if (node.name === 'FencedCode' || node.name === 'CodeBlock') {
+        const info = node.getChild('CodeInfo');
+        if (node.name === 'FencedCode' && info && text(info) === 'base' && options.renderBase) {
+          const firstLine = view.state.doc.lineAt(span.from).number;
+          const from = view.state.doc.line(firstLine + lineMap[lineAt(node.from)]).from;
+          const to = view.state.doc.line(firstLine + lineMap[lineAt(node.to)]).to;
+          const request = inlineBaseRequest(view.state.doc.toString(), from, to);
+          if (request) {
+            const instance = options.renderBase(request); into.append(instance.dom);
+            cleanup.push(() => instance.destroy()); return;
+          }
+        }
         const source = children(node).filter(child => child.name === 'CodeText').map(text).join('\n');
-        const info = node.getChild('CodeInfo'), handle = appendCodeBlock(into, source, info ? text(info) : '');
+        const handle = appendCodeBlock(into, source, info ? text(info) : '');
         cleanup.push(() => handle.destroy()); return;
       }
       if (node.name === 'HorizontalRule') { into.append(document.createElement('hr')); return; }
@@ -163,7 +178,9 @@ function renderCallout(view: EditorView, span: Span, options: LiveCalloutOptions
 class CalloutWidget extends WidgetType {
   readonly span: Span; readonly options: LiveCalloutOptions; readonly readOnly: boolean;
   constructor(span: Span, options: LiveCalloutOptions, readOnly: boolean) { super(); this.span = span; this.options = options; this.readOnly = readOnly; }
-  eq(other: WidgetType): boolean { return other instanceof CalloutWidget && other.span.identity === this.span.identity && other.span.source === this.span.source && other.options === this.options && other.readOnly === this.readOnly; }
+  eq(other: WidgetType): boolean { return other instanceof CalloutWidget && other.span.identity === this.span.identity && other.span.source === this.span.source
+    && (!this.options.renderBase || !/(?:`{3,}|~{3,})[ \t]*base(?:[ \t]|\n|$)/.test(this.span.source) || other.span.documentText === this.span.documentText)
+    && other.options === this.options && other.readOnly === this.readOnly; }
   toDOM(view: EditorView): HTMLElement {
     const wrapper = view.dom.ownerDocument.createElement('div'); wrapper.className = 'cm-live-callout cm-embed-block'; wrapper.contentEditable = 'false'; wrapper.tabIndex = -1;
     const cleanup: (() => void)[] = []; let disposed = false, timer: ReturnType<typeof setTimeout> | undefined;

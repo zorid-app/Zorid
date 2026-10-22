@@ -20,6 +20,8 @@ import { liveCallouts, renderedCalloutRanges } from '../editor/live-callouts.ts'
 import { liveMath, liveMathMarkdown } from '../editor/live-math.ts';
 import { liveFences } from '../editor/live-fences.ts';
 import { liveEmbeds } from '../editor/live-embeds.ts';
+import { liveBases } from '../editor/live-bases.ts';
+import type { InlineBaseRenderer } from '../editor/live-bases.ts';
 import type { EmbedRenderContext } from '../editor/live-embeds.ts';
 import { editorTransfers } from '../editor/transfers.ts';
 import type { TransferOptions } from '../editor/transfers.ts';
@@ -99,6 +101,7 @@ export interface EditorOptions {
   listOptions?: MarkdownListOptions;
   hotkeys?: EditorHotkeySource;
   renderEmbed?: (request: EmbedRequest, context?: EmbedRenderContext) => { dom: HTMLElement; destroy(): void };
+  renderBase?: InlineBaseRenderer;
 }
 
 const externalChange = Annotation.define<boolean>();
@@ -164,9 +167,10 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       } })] : []),
       ...(options.transfers ? [editorTransfers(options.transfers, captureAuthoring)] : []),
       menus.of(menuExtensions()),
-      ...(options.mode === 'live' ? [liveProperties(), liveCallouts({open: options.open, renderEmbed: options.renderEmbed}),
+      ...(options.mode === 'live' ? [liveProperties(), liveCallouts({open: options.open, renderEmbed: options.renderEmbed, renderBase: options.renderBase}),
         liveTables(options.open, owner => [wiki, editorCommandHotkeys(options.hotkeys, owner), nativeUpdates, nativeCaret], renderedCalloutRanges, canAuthor), liveTasks({excludes: renderedCalloutRanges}), liveLists({excludes: renderedCalloutRanges}),
-        liveMath({excludes: renderedCalloutRanges}), liveFences({excludes: renderedCalloutRanges}),
+        liveMath({excludes: renderedCalloutRanges}), liveFences({excludes: renderedCalloutRanges, ...(options.renderBase ? {handledLanguages: new Set(['base'])} : {})}),
+        ...(options.renderBase ? [liveBases(options.renderBase, {excludes: renderedCalloutRanges})] : []),
         ...(options.renderEmbed ? [liveEmbeds(options.renderEmbed, {excludes: renderedCalloutRanges})] : []),
         liveInline({nativeTouch: options.onNativeEditorState ? {isCurrent} : undefined,open: options.open,isUnresolved: options.isUnresolved,onHover: options.onLinkHover,excludes: renderedCalloutRanges})] : []),
     ]}),

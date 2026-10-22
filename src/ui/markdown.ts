@@ -7,10 +7,21 @@ import { readProperties } from '../core/properties.ts';
 import { decodeTableCellText, parseTable } from '../editor/table-model.ts';
 import { createMarkdownListRenderer } from './markdown-lists.ts';
 import { createCalloutPresentation, parseCalloutHeader } from './callout-presentation.ts';
+import { inlineBaseRequest, originalMarkdownOffset } from '../bases/inline-base.ts';
+import type { InlineBaseRequest } from '../bases/inline-base.ts';
 
 export type LinkHandler = (target: string, kind?: 'wiki' | 'markdown') => void;
 export interface EmbedRequest { target: string; kind: 'wiki' | 'markdown'; label?: string }
-export interface MarkdownRenderOptions { embed?: (request: EmbedRequest) => HTMLElement; properties?: boolean }
+export interface MarkdownRenderOptions {
+  embed?: (request: EmbedRequest) => HTMLElement;
+  base?: (request: InlineBaseRequest) => HTMLElement;
+  /** A subpath renderer must retain the full original note for guarded edits. */
+  sourceText?: string;
+  sourceOffset?: number;
+  /** Internal container/subpath mapping into sourceText's original coordinates. */
+  sourceMap?: (normalizedOffset: number) => number;
+  properties?: boolean;
+}
 
 /** Parser-owned inline rendering shared by Reading mode and live table cells. */
 export { renderMarkdownInline as inline } from './markdown-inline.ts';
@@ -42,6 +53,7 @@ function renderMarkdownBlocks(container: HTMLElement, markdown: string, open: Li
     }
     budget.remaining -= markdown.length;
   }
+  const originalSource = markdown;
   markdown = markdown.replace(/\r\n/g, '\n');
   const lines = markdown.split('\n');
   const starts = [0];
@@ -50,6 +62,16 @@ function renderMarkdownBlocks(container: HTMLElement, markdown: string, open: Li
     let low = 0, high = starts.length;
     while (low + 1 < high) { const middle = (low + high) >>> 1; if (starts[middle] <= offset) low = middle; else high = middle; }
     return low;
+  };
+  const sourceText = options.sourceText ?? originalSource;
+  const sourceMap = options.sourceMap ?? (offset => (options.sourceOffset ?? 0) + originalMarkdownOffset(originalSource, offset));
+  const renderBaseFence = (parent: HTMLElement, from: number, to: number, info: string): boolean => {
+    if (info !== 'base' || !options.base) return false;
+    const mappedFrom = sourceMap(from);
+    const physicalFrom = sourceText.lastIndexOf('\n', mappedFrom - 1) + 1;
+    const request = inlineBaseRequest(sourceText, physicalFrom, sourceMap(to));
+    if (!request) return false;
+    parent.append(options.base(request)); return true;
   };
   // Whole-document parser ownership prevents fences and display math inside
   // code, HTML, lists or quotes from becoming unrelated top-level blocks.
@@ -100,6 +122,7 @@ function renderMarkdownBlocks(container: HTMLElement, markdown: string, open: Li
     }
     const fence = root?.name === 'FencedCode' ? readCodeFence(lines, position) : null;
     if (fence) {
+      if (fence.closed && renderBaseFence(container, starts[position], root!.to, fence.info)) { position = fence.endLine; continue; }
       appendCodeBlock(container, fence.code, fence.info); position = fence.endLine; continue;
     }
     const heading = line.match(/^(#{1,6})\s+(.*)$/);
@@ -109,12 +132,20 @@ function renderMarkdownBlocks(container: HTMLElement, markdown: string, open: Li
     }
     if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) { container.append(el('hr')); continue; }
     if (/^\s*(?:>|[-*+]\s|\d+[.)]\s)/.test(line)) {
-      renderList ??= createMarkdownListRenderer(parsingSource, { quotes: true,
+      renderList ??= createMarkdownListRenderer(parsingSource, { quotes: true, renderFence: renderBaseFence,
         renderQuoteBody(parent, source, startLine) {
+          const childLines = source.split('\n'), childStarts = [0];
+          for (let index = 0; index < source.length; index++) if (source[index] === '\n') childStarts.push(index + 1);
+          const childMap = (offset: number) => {
+            let line = 0;
+            while (line + 1 < childStarts.length && childStarts[line + 1] <= offset) line++;
+            const parentLine = startLine + line;
+            return sourceMap(starts[parentLine] + lines[parentLine].length - childLines[line].length + offset - childStarts[line]);
+          };
           budget.depth++;
           try {
             renderMarkdownBlocks(parent, source, open, taskChange ? (line, checked) => taskChange(startLine + line, checked) : undefined,
-              options, budget, true);
+              { ...options, sourceText, sourceMap: childMap }, budget, true);
           } catch (error) { destroyMarkdown(parent); throw error; }
           finally { budget.depth--; }
         },

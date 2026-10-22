@@ -25,7 +25,12 @@ export function renderMarkdownList(parent: HTMLElement, source: string, startLin
  * Create a new renderer when the document changes; returned renderers share no
  * mutable DOM or checkbox state, and may render into different documents.
  */
-export function createMarkdownListRenderer(source: string, options: { quotes?: boolean; renderQuoteBody?: (parent: HTMLElement, source: string, startLine: number) => void } = {}): ListRenderer {
+export function createMarkdownListRenderer(source: string, options: {
+  quotes?: boolean;
+  renderQuoteBody?: (parent: HTMLElement, source: string, startLine: number) => void;
+  /** Return true after mounting a specialized parser-owned fenced renderer. */
+  renderFence?: (parent: HTMLElement, from: number, to: number, info: string) => boolean;
+} = {}): ListRenderer {
   source = source.replace(/\r\n/g, '\n');
   const starts = [0];
   for (let index = 0; index < source.length; index++) if (source[index] === '\n') starts.push(index + 1);
@@ -104,9 +109,10 @@ export function createMarkdownListRenderer(source: string, options: { quotes?: b
         const paragraph = document.createElement('p'); inline(paragraph, text(node.from, node.to)); container.append(paragraph); return;
       }
       if (node.name === 'CodeBlock' || node.name === 'FencedCode') {
+        const info = node.getChild('CodeInfo');
+        if (node.name === 'FencedCode' && options.renderFence?.(container, starts[lineAt(node.from)], node.to, info ? source.slice(info.from, info.to) : '')) return;
         const chunks = children(node).filter(child => child.name === 'CodeText');
         const value = chunks.map(child => text(child.from, child.to, true)).join('');
-        const info = node.getChild('CodeInfo');
         appendCodeBlock(container, value, info ? source.slice(info.from, info.to) : ''); return;
       }
       const literal = document.createElement('pre');

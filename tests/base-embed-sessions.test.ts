@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
 import {BaseEmbedSessions} from '../src/ui/base-embed-sessions.ts';
 import type {BaseSession} from '../src/bases/session.ts';
+import {inlineBaseRequest} from '../src/bases/inline-base.ts';
 
 const target=()=>({sourcePath:'Source.md',targetPath:'Work.base',viewName:'Table',targetIdentity:Symbol('file'),sourceIdentity:Symbol('source'),occurrence:{}});
 function fake(root:HTMLElement){
@@ -70,4 +71,27 @@ test('repeated clean preflights skip session flush work after initial loading',a
   const dom=new JSDOM('<body><main></main></body>'),doc=dom.window.document;let calls=0;
   const manager=new BaseEmbedSessions({recoveryHost:doc.body,create(root){const view=fake(root);view.session.flush=async()=>{calls++;};return view.session;}});
   await manager.mount(target(),doc.querySelector('main')!).ready;for(let i=0;i<20;i++)await manager.flush();assert.equal(calls,0);await manager.close();dom.window.close();
+});
+
+test('identical inline configurations at distinct source spans never reclaim each other or a file embed',async()=>{
+  const dom=new JSDOM('<body><main></main></body>'),doc=dom.window.document,views:ReturnType<typeof fake>[]=[];
+  const manager=new BaseEmbedSessions({recoveryHost:doc.body,create(root){const view=fake(root);views.push(view);return view.session;}});
+  const block='```base\nviews: []\n```',source=block+'\n\n'+block,request=target(),host=doc.querySelector('main')!;
+  const inline={...request,inline:inlineBaseRequest(source,0,block.length)!};
+  const first=manager.mount(inline,host);await first.ready;views[0].setDirty(true);first.detach();
+  const second=manager.mount({...inline,inline:inlineBaseRequest(source,block.length+2,source.length)!},host);await second.ready;second.detach();
+  await manager.mount(request,host).ready;assert.equal(views.length,3);
+  assert.equal(doc.querySelector('.base-embed-recovery input'),views[0].input);
+  views[0].setDirty(false);await manager.close();dom.window.close();
+});
+
+test('changed containing source cannot reclaim an inline session with a retained configuration draft',async()=>{
+  const dom=new JSDOM('<body><main></main></body>'),doc=dom.window.document,views:ReturnType<typeof fake>[]=[];
+  const manager=new BaseEmbedSessions({recoveryHost:doc.body,create(root){const view=fake(root);views.push(view);return view.session;}});
+  const block='```base\nviews: []\n```',source=block+'\nOld body',request=target(),host=doc.querySelector('main')!;
+  const first=manager.mount({...request,inline:inlineBaseRequest(source,0,block.length)!},host);await first.ready;
+  views[0].setDirty(true);first.detach();
+  await manager.mount({...request,inline:inlineBaseRequest(source.replace('Old body','New body'),0,block.length)!},host).ready;
+  assert.equal(views.length,2);assert.equal(doc.querySelector('.base-embed-recovery input'),views[0].input);
+  views[0].setDirty(false);await manager.close();dom.window.close();
 });

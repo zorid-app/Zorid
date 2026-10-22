@@ -1,4 +1,5 @@
 import type { BaseSession } from '../bases/session.ts';
+import type { InlineBaseRequest } from '../bases/inline-base.ts';
 
 export interface BaseEmbedTarget {
   sourcePath: string;
@@ -8,6 +9,8 @@ export interface BaseEmbedTarget {
   targetIdentity: unknown;
   sourceIdentity: unknown;
   occurrence?: object;
+  /** Inline configurations edit this original containing-note occurrence. */
+  inline?: InlineBaseRequest;
 }
 export interface BaseEmbedBinding { readonly ready: Promise<void>; detach(): void; }
 interface Entry {
@@ -51,7 +54,10 @@ export class BaseEmbedSessions {
     const matches = (entry: Entry) => !entry.attached && !entry.retiring && !entry.error && entry.target.sourcePath === target.sourcePath
       && entry.target.sourceIdentity === target.sourceIdentity
       && entry.target.targetPath === target.targetPath && entry.target.viewName === target.viewName
-      && entry.target.targetIdentity === target.targetIdentity;
+      && entry.target.targetIdentity === target.targetIdentity
+      && (!entry.target.inline && !target.inline || !!entry.target.inline && !!target.inline
+        && entry.target.inline.from === target.inline.from && entry.target.inline.to === target.inline.to
+        && entry.target.inline.documentText === target.inline.documentText);
     // An occurrence token is local to one editor extension. Reading rerenders
     // and mode changes may omit it; detached compatible sessions remain reusable.
     let entry = [...this.entries].find(value => matches(value) && value.target.occurrence === target.occurrence)

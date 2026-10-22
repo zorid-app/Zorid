@@ -16,6 +16,7 @@ import type { MediaView } from './media-view.ts';
 import { createCanvasEmbedPreview } from '../canvas/embed-preview.ts';
 import type { CanvasEmbedPreview } from '../canvas/embed-preview.ts';
 import type { BaseEmbedSessions, BaseEmbedBinding } from './base-embed-sessions.ts';
+import type { InlineBaseRequest } from '../bases/inline-base.ts';
 
 function nativeLoading(node: HTMLElement, loading: boolean): void {
   if (loading) node.dataset.nativeLoading = 'true'; else delete node.dataset.nativeLoading;
@@ -52,6 +53,7 @@ interface EmbedState {
   dirty: boolean;
   reconnectDocument?: Document;
   children: Set<EmbedState>;
+  inlineChildren: Set<HTMLElement>;
   lease?: AttachmentLease;
   pdfView?: PdfView;
   mediaView?: MediaView;
@@ -64,6 +66,7 @@ export class MarkdownEmbeds {
   private options: EmbedOptions;
   private states = new Set<EmbedState>();
   private nodes = new WeakMap<HTMLElement, EmbedState>();
+  private inlineBases = new Map<HTMLElement, BaseEmbedBinding>();
   private observer?: IntersectionObserver;
   private observed = new Map<Element, EmbedState>();
   private reconnectStates = new Map<Document, Set<EmbedState>>();
@@ -102,7 +105,7 @@ export class MarkdownEmbeds {
     const node = el('span', 'internal-embed markdown-embed');
     node.setAttribute('role', 'group'); node.setAttribute('aria-label', `Embed ${request.target}`);
     node.dataset.embedTarget = request.target;
-    const state: EmbedState = { node, request, source, ancestors, occurrence:context?.occurrence, version:0, visible:!this.observer, disposed:false, dirty:true, children:new Set() };
+    const state: EmbedState = { node, request, source, ancestors, occurrence:context?.occurrence, version:0, visible:!this.observer, disposed:false, dirty:true, children:new Set(), inlineChildren:new Set() };
     node.addEventListener('contextmenu', event => {
       if (state.disposed || event.defaultPrevented) return;
       const target = event.target as Element | null;
@@ -118,6 +121,33 @@ export class MarkdownEmbeds {
     node.append(el('span', 'embed-loading', 'Loading…'));
     if (this.observer) { this.observed.set(node, state); this.observer.observe(node); }
     else void this.refresh(state);
+    return node;
+  }
+
+  /** Both Reading and Live Edit mount the ordinary shared Base session. The
+   * workspace owns source persistence; this renderer never writes a file. */
+  renderBase(request: InlineBaseRequest, source: string, context?: { occurrence: object }, parent?: EmbedState): HTMLElement {
+    const node = el('div', 'internal-embed bases-embed interactive-child');
+    node.setAttribute('role', 'group'); node.setAttribute('aria-label', 'Embedded Base');
+    node.dataset.baseSource = source;
+    if (this.disposed) return node;
+    const bases = this.options.bases;
+    if (!bases) { node.append(el('span', 'embed-error', 'Writable Base embeds are unavailable in this view')); return node; }
+    nativeLoading(node, true);
+    try {
+      const sourceIdentity = bases.identity(source);
+      const binding = bases.sessions.mount({ sourcePath: source, targetPath: source, viewName: '',
+        sourceIdentity, targetIdentity: sourceIdentity, inline: request, occurrence: context?.occurrence }, node);
+      this.inlineBases.set(node, binding);
+      parent?.inlineChildren.add(node);
+      const settled = () => { if (this.inlineBases.get(node) === binding) nativeLoading(node, false); };
+      // Session creation owns its detailed error UI. Observe failures even if
+      // the containing note unmounts before the saved query is admitted.
+      void binding.ready.then(settled, settled);
+    } catch (error) {
+      nativeLoading(node, false);
+      node.append(el('span', 'embed-error', error instanceof Error ? error.message : String(error)));
+    }
     return node;
   }
 
@@ -209,6 +239,8 @@ export class MarkdownEmbeds {
   private clearChildren(state: EmbedState): void {
     for (const child of state.children) this.release(child, false);
     state.children.clear();
+    for (const node of state.inlineChildren) this.releaseEmbed(node);
+    state.inlineChildren.clear();
   }
 
   private release(state: EmbedState, prune = true): void {
@@ -229,6 +261,8 @@ export class MarkdownEmbeds {
 
   /** A live editor can unmount one widget without disposing its other embeds. */
   releaseEmbed(node: HTMLElement): void {
+    const inline = this.inlineBases.get(node);
+    if (inline) { inline.detach(); this.inlineBases.delete(node); nativeLoading(node, false); }
     const state = this.nodes.get(node);
     if (state) this.release(state);
   }
@@ -379,7 +413,9 @@ export class MarkdownEmbeds {
             .then(() => { if (current()) this.invalidate(path); })
             .catch(error => fail(error instanceof Error ? error.message : String(error)));
         },
-        {embed: child => this.render(child, path, [...state.ancestors, identity], state)});
+        {embed: child => this.render(child, path, [...state.ancestors, identity], state),
+          base: request => this.renderBase(request, path, undefined, state), sourceText,
+          sourceOffset: [...sourceText.matchAll(/\r\n|\r|\n/g)].slice(0, selection.startLine).reduce((_previous, match) => match.index! + match[0].length, 0) });
       if (current()) { state.node.append(content);settled(); }
       else destroyMarkdown(content);
     } catch (error) {
@@ -393,6 +429,8 @@ export class MarkdownEmbeds {
 
   destroy(): void {
     this.disposed = true;
+    for (const [node, binding] of this.inlineBases) { binding.detach(); nativeLoading(node, false); }
+    this.inlineBases.clear();
     this.lightbox?.destroy();
     this.observer?.disconnect(); this.observed.clear();
     for (const observer of this.reconnectObservers.values()) observer.disconnect();
