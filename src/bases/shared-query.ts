@@ -6,7 +6,7 @@ import type { DocumentBasePreviewResult, DocumentPreviewHandle } from '../core/d
 import type { DocumentRuntimeUpdate } from '../core/document-runtime.ts';
 import type { DocumentIndexProgress } from '../core/document-semantics.ts';
 import type { VaultEntry } from '../core/types.ts';
-import { BASE_NULL, BaseExpressionError } from './expression.ts';
+import { createSharedBaseValueProjector } from './shared-values.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import type { BaseQueryOptions, BaseQueryResult, BaseQueryDiagnostic } from './query.ts';
 import type { BaseViewConfig, BaseValue } from './document.ts';
@@ -42,42 +42,12 @@ function projectBaseResult(raw: DocumentBaseResult|DocumentBasePreviewResult, ve
     if (item && typeof item === 'object') { for (const child of Object.values(item)) freezeData(child, depth + 1); Object.freeze(item); }
   };
   freezeData(result);
-  let remaining = 200000;
-  const namespaces = new Map<string, BaseExpressionValue>();
-  const value = (input: DocumentBaseValue, depth = 0): BaseExpressionValue => {
-    if (--remaining < 0 || depth > 128) return invalid('The Base result is too large to display.');
-    switch (input.type) {
-      case 'null': return BASE_NULL;
-      case 'boolean': case 'number': case 'string': return Object.freeze({ ...input });
-      case 'date': return Object.freeze({ ...input, ...(!input.hasTime ? { presentationTimezone: timezone } : {}) });
-      // Existing presentation values express weeks as calendar days. No query
-      // arithmetic or grouping is repeated here.
-      case 'duration': return Object.freeze({ ...input, days: input.days + input.weeks * 7 });
-      case 'list': return Object.freeze({ type: 'list', value: Object.freeze(input.value.map(item => value(item, depth + 1))) });
-      case 'object': return Object.freeze({ type: 'object', value: Object.freeze(Object.fromEntries(input.value.map(([key, item]) => [key, value(item, depth + 1)]))) });
-      case 'error': {
-        const error = new BaseExpressionError('unsupported', input.message);
-        // Preserve Rust codes (including unavailable/numeric-domain) while
-        // adapting to the preexisting renderer's Error-shaped value.
-        Object.defineProperty(error, 'code', { value: input.code, enumerable: true });
-        return Object.freeze({ type: 'error', error: Object.freeze(error) });
-      }
-      case 'html': case 'image': case 'icon': return Object.freeze({type:'namespace',name:input.value,presentation:Object.freeze({kind:input.type,value:input.value}),get(){return BASE_NULL;}});
-      case 'file': case 'link': {
-        const key = JSON.stringify(input), existing = namespaces.get(key);
-        if (existing) return existing;
-        // The existing view renders a namespace by name. Its inert data getter
-        // is not an evaluator/host callback and cannot access a live vault.
-        const projected: BaseExpressionValue = Object.freeze({ type: 'namespace', name: input.type === 'link' ? input.display ?? input.path : input.path,
-          sharedValue: Object.freeze({ ...input }), ...(input.type==='link'?{presentation:Object.freeze({kind:'link' as const,value:input.path,...(input.displayValue?{label:value(input.displayValue,depth+1)}:{}),...(input.target?{target:input.target}:{}),external:input.external})}:{}), get(name: string) { return name === 'path' ? Object.freeze({ type: 'string', value: input.path }) : BASE_NULL; } });
-        namespaces.set(key, projected); return projected;
-      }
-    }
-  };
+  const budget = { remaining: 200000 };
+  const value = createSharedBaseValueProjector(timezone, budget);
   // Decode only the core-authorized persisted configuration representation.
   // Typed display values never become YAML via labels or client inference.
   const persistedKey = (input: DocumentBaseValue, depth = 0): BaseValue => {
-    if (--remaining < 0 || depth > 128) return invalid('The Base group key is too large to display.');
+    if (--budget.remaining < 0 || depth > 128) return invalid('The Base group key is too large to display.');
     switch(input.type) {
       case 'null': return null;
       case 'string': case 'boolean': return input.value;

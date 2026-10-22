@@ -1,11 +1,15 @@
 import type { Vault } from '../core/vault.ts';
 import { createBaseClockHost } from '../bases/clock.ts';
 import type { BaseClockHost } from '../bases/clock.ts';
-import { closePropertyTargetQueries, queryPropertyTargets } from '../bases/property-targets.ts';
+import { closePropertyTargetQueries, isPlainPropertyValue, queryPropertyTargets } from '../bases/property-targets.ts';
 import type { PropertyTarget, PropertyTargetsResult } from '../bases/property-targets.ts';
+import { baseValuesEqual } from '../bases/expression.ts';
+import type { BaseExpressionValue } from '../bases/expression.ts';
 
 export interface NotePropertyTargets {
   get(property: string): readonly PropertyTarget[] | undefined;
+  /** Bare property name and current raw editor value; never resolves a path. */
+  getDisplayValue(property: string, raw: BaseExpressionValue): BaseExpressionValue | undefined;
   invalidate(): void;
   destroy(): void;
   /** Joins cancelled reads and retries any unacknowledged pin close. */
@@ -87,6 +91,14 @@ export function createNotePropertyTargets(options: {
   }
   return {
     get(property) { return current() && !result?.diagnostics.some(issue => !issue.property || issue.property === property || issue.property === `note.${property}`) ? result?.relationTargets[property] ?? result?.relationTargets[`note.${property}`] : undefined; },
+    getDisplayValue(property, raw) {
+      if (!current() || !result || !result.coverageComplete || result.diagnostics.some(issue => !issue.property || issue.property === property || issue.property === `note.${property}`)) return;
+      const display = result.currentRelationValues, path = options.getPath(), entry = vault.entries.get(path), actor = result.current;
+      if (!display || !actor || actor.kind !== 'file' || actor.deleted || !entry || entry.type !== 'file' || actor.path !== path || actor.id !== display.witness.entryId || actor.revision !== display.witness.revision || entry.entryId !== display.witness.entryId || entry.revision !== display.witness.revision) return;
+      if (!Object.hasOwn(display.values, property) || !Object.hasOwn(display.editValues, property)) return;
+      const baseline = display.editValues[property];
+      return isPlainPropertyValue(raw) && isPlainPropertyValue(baseline) && baseValuesEqual(raw, baseline, true) ? display.values[property] : undefined;
+    },
     invalidate, destroy,
     close() {
       destroy();

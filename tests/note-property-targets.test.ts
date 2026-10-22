@@ -35,3 +35,37 @@ test('incomplete core coverage and filter diagnostics cannot masquerade as a com
   complete=true;f.manager.invalidate();await tick();assert.equal(f.manager.get('author')?.length,1);
   invalid=true;f.manager.invalidate();await tick();assert.equal(f.manager.get('author'),undefined);f.retire();assert.equal(f.manager.get('author'),undefined);await f.manager.close();
 });
+
+function withDisplay():PropertyTargetsResult{
+ const display={type:'namespace' as const,name:'Ada',presentation:{kind:'link' as const,value:'People/Ada.md',target:{entryId:'ada',revision:'r3'}},get(){throw new Error('No TypeScript resolver may run');}};
+ return{...result(),current:{id:'id:Note.md',revision:'r1',path:'Note.md',kind:'file',deleted:false},currentRelationValues:{witness:{entryId:'id:Note.md',revision:'r1'},values:{author:display,'note.author':display},editValues:{author:{type:'string',value:'[[People/Ada|Original spelling]]'},'note.author':{type:'list',value:[{type:'string',value:'[[Missing|Alias]]'}]}}}};
+}
+
+test('ordinary relation labels are shown only for the same saved actor and exact current raw property value',async()=>{
+ const response=withDisplay(),f=await setup(async()=>response);try{await tick();
+  const raw={type:'string' as const,value:'[[People/Ada|Original spelling]]'};assert.equal(f.manager.getDisplayValue('author',raw),response.currentRelationValues!.values.author);
+  assert.equal(f.manager.getDisplayValue('author',{type:'string',value:'[[People/Ada|Edited alias]]'}),undefined);
+  assert.equal(f.manager.getDisplayValue('author',{type:'namespace',name:'Ada',get(){throw new Error('Never called');}}),undefined);
+  assert.equal(f.manager.getDisplayValue('note.author',{type:'list',value:[{type:'string',value:'[[Missing|Alias]]'}]}),response.currentRelationValues!.values['note.author']);
+  assert.equal(f.manager.getDisplayValue('missing',raw),undefined);
+  const actor=f.vault.entries.get('Note.md')!;f.vault.entries.set('Note.md',{...actor,entryId:'replacement'});assert.equal(f.manager.getDisplayValue('author',raw),undefined);f.vault.entries.set('Note.md',{...actor,revision:'r2'});assert.equal(f.manager.getDisplayValue('author',raw),undefined);
+ }finally{await f.manager.close();}
+});
+
+test('display baselines honor coverage, diagnostics, invalidation, destruction and older hosts',async()=>{
+ let response=withDisplay();const f=await setup(async()=>response),raw={type:'string' as const,value:'[[People/Ada|Original spelling]]'};try{await tick();assert.ok(f.manager.getDisplayValue('author',raw));
+  response={...withDisplay(),diagnostics:[{property:'author',message:'Invalid core relation'}]};f.manager.invalidate();assert.equal(f.manager.getDisplayValue('author',raw),undefined);await tick();assert.equal(f.manager.getDisplayValue('author',raw),undefined);
+  response={...withDisplay(),coverageComplete:false};f.manager.invalidate();await tick();assert.equal(f.manager.getDisplayValue('author',raw),undefined);
+  response=result();f.manager.invalidate();await tick();assert.equal(f.manager.getDisplayValue('author',raw),undefined);
+  response=withDisplay();f.manager.invalidate();await tick();assert.ok(f.manager.getDisplayValue('author',raw));f.manager.destroy();assert.equal(f.manager.getDisplayValue('author',raw),undefined);
+ }finally{await f.manager.close();}
+});
+
+test('formatted, accessor, cyclic and sparse raw inputs never supply relation display authority',async()=>{
+ const f=await setup(async()=>withDisplay());try{await tick();let invoked=false;
+  const accessor={type:'string',get value(){invoked=true;return'[[People/Ada|Original spelling]]';}};assert.equal(f.manager.getDisplayValue('author',accessor as never),undefined);assert.equal(invoked,false);
+  const cycle:any={type:'list',value:[]};cycle.value.push(cycle);assert.equal(f.manager.getDisplayValue('author',cycle),undefined);
+  const sparse:any=[];sparse.length=1;sparse.foo={type:'string',value:'[[Missing|Alias]]'};assert.equal(f.manager.getDisplayValue('note.author',{type:'list',value:sparse}),undefined);
+  assert.equal(f.manager.getDisplayValue('author',{type:'date',timestamp:0,hasTime:false}),undefined);
+ }finally{await f.manager.close();}
+});

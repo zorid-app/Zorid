@@ -124,3 +124,22 @@ test('source motion across candidate evaluation is stale even when note and sett
   await until(() => f.events.includes('query')); f.staleStatus(); gate.resolve();
   await assert.rejects(pending, { code: 'property_targets_stale' }); assert.equal(f.events.filter(event => event === 'close').length, 1);
 });
+
+test('existing ordinary-note relation displays use frozen core values and exact inert raw baselines',async()=>{
+ const f=await fixture(),raw={type:'list',value:[{type:'string',value:'[[People/Ada|Original spelling]]'},{type:'string',value:'[[Missing|Old alias]]'}]};
+ const display={type:'list',value:[{type:'link',path:'People/Ada.md',display:'Ada',target:{entryId:'ada-id',revision:'ada-r3'},external:false},{type:'link',path:'Missing',display:'Old alias',target:null,external:false}]};
+ Object.assign(f.value,{currentRelationValues:{witness:{entryId:'id:One.md',revision:'r1'},values:{author:display},editValues:{author:raw}}});
+ const actual=await queryPropertyTargets(f.input),captured=actual.currentRelationValues!;
+ assert.deepEqual(captured.witness,{entryId:'id:One.md',revision:'r1'});assert.deepEqual(captured.editValues.author,raw);
+ assert.equal(captured.values.author.type,'list');const values=(captured.values.author as {value:any[]}).value;
+ assert.equal(values[0].type,'namespace');assert.equal(values[0].name,'Ada');assert.deepEqual(values[0].presentation.target,{entryId:'ada-id',revision:'ada-r3'});assert.equal(values[1].sharedValue.target,null);assert.equal(values[1].name,'Old alias');
+ assert.ok(Object.isFrozen(captured));assert.ok(Object.isFrozen(captured.witness));assert.ok(Object.isFrozen(captured.values));assert.ok(Object.isFrozen(values));assert.ok(Object.isFrozen(values[0].sharedValue.target));assert.ok(Object.isFrozen(captured.editValues.author));
+ display.value[0].display='Host mutation';raw.value[0].value='changed';assert.equal(values[0].name,'Ada');assert.equal((captured.editValues.author as {value:any[]}).value[0].value,'[[People/Ada|Original spelling]]');
+});
+
+test('mismatched display actor, unpaired fields and non-inert raw baselines reject before publication and close pins',async()=>{
+ for(const issue of ['identity','revision','keys','raw'] as const){
+  const f=await fixture();Object.assign(f.value,{currentRelationValues:{witness:{entryId:issue==='identity'?'another-note':'id:One.md',revision:issue==='revision'?'r2':'r1'},values:{author:{type:'null'}},editValues:issue==='keys'?{}:{author:issue==='raw'?{type:'date',timestamp:0,hasTime:false}:{type:'null'}}}});
+  await assert.rejects(queryPropertyTargets(f.input),{code:issue==='identity'||issue==='revision'?'property_targets_stale':'property_targets_invalid_values'});assert.equal(f.events.filter(event=>event==='close').length,1);
+ }
+});
