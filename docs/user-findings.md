@@ -2,16 +2,26 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Latest actual Electron007 reaches144 actions/14 checks and passes the previous
+filter-focus and Results continuation gates, including full CSV export. It stops
+at a blank all-null-group custom summary where the harness expected1; reference
+and raw core evidence are being checked before classifying this as a product or
+oracle defect. Final heavy-user acceptance remains open. Browser002's fenced
+request mismatch is a fixture contract error corrected in `6193e21f`, awaiting
+rerun. Final CLI002 passes85 commands/7 checks/30 exports with independent hashes.
+A separate source finding is a sidebar-mounted Base retaining its old path after
+rename; the scoped owner is adding clean-remount and dirty-draft regressions.
+
 Implementation is assembled in the isolated Bases coordinator branch; final
 acceptance remains open. Actual Electron campaign004 exposed loss of focus after
 removing a focused filter, which prevented Escape from closing the menu. Fixed
 in `76be6d1b` with a regression using the actual focused element; full runtime
-rerun is pending. Subsequent source audit found rooted relation links would lose
+rerun passed this focus gate in007. Subsequent source audit found rooted relation links would lose
 escaping on rename and frontmatter links were absent from the mutation-local
-rename index. Controller owner is implementing exact-span safe rewriting;
+rename index. Exact-span safe rewriting is now source-implemented and reviewed;
 verification must include actual target rename and all durable relation values.
 REA grouping evidence also requires bounded first-match hydrated comparison;
-Rust owner is implementing that behavior. These findings are not complete based
+Rust first-match behavior is implemented and passes its native corpus. These findings are not complete based
 on source changes or focused tests alone.
 
 ## Continuous REA-based Bases UI/UX matching — 2026-10-21

@@ -9,6 +9,29 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+2026-10-22 actual final-artifact campaigns: CLI002 at `9d086a97` passes85
+commands,7 independent checks and30 JSON/raw exports; every child exit and
+retained evidence hash was independently rechecked. Browser/WASM002 passes
+groups0–4, then rejects the fixture's body-only/CRLF inline request. The actual
+editor producer confirms the full-fence/LF contract; tests-only `6193e21f`
+corrects that request while retaining forged-source/span/actor rejection checks.
+The browser campaign still requires a complete rerun. Electron006 reached no UI
+because its launcher lacked required sandbox permissions; exact owned-process
+cleanup was checked separately. Escalated Electron007 at `992ac56a` reaches144
+actions/14 checks, including Results CSV export and custom-summary live editing,
+then stops at an all-null group's blank custom summary versus the authored
+numeric1 expectation. Root cause/reference oracle remains under investigation.
+Its source/artifact freeze passes and all owned processes are closed. Neither
+partial campaign establishes the full acceptance gates.
+
+Supplemental source-only harness owners cover gaps beyond the main journey:
+`bases_e2e` matched reference states/shared launch seam; `bases_session` stale
+writes/history/pending lifecycle; `bases_toolbar` configuration/export breadth;
+`bases_properties` ordinary-note and cross-layout rich controls; `bases_table`
+native clipboard and input ownership. `bases_embeds` investigates a clean sidebar
+Base rename retaining its old mounted path. Root owns composition and serialized
+runtime grants; none of these authored scenarios is accepted before execution.
+
 2026-10-22 frozen final-source preparation at `9d086a97`: the retained composed
 frontend log reports **671/671 passed**, zero failed/cancelled/skipped. The final
 Rust closure reports **192/192 across 13 targets** (82 library plus 110 integration
