@@ -1,7 +1,15 @@
 # Internal managed-record slice: provisional decisions
 
+**Historical proposal; current scope superseded (2026-10-22).** This draft does
+not define the current Bases architecture or require named note Types. Follow
+[the Bases implementation goal](../plans/bases-implementation-goal.md) and
+[the roadmap](../roadmap.md). Notes and Bases remain file-backed; optional rich
+property definitions are independent of named Types. Retained Tasks/Calendar
+Type consumers need reconciliation before their deferred implementation resumes.
+The managed-record experiment below grants no current implementation ownership.
+
 Status: Phase 0 proposal, not a frozen public API or implemented persistence.
-Read alongside [the accepted plan](implementation-plan.md) and the
+Read alongside [the historical plan routing page](implementation-plan.md) and the
 [execution checkpoint](execution.md). No new wire version is selected here.
 
 ## Separate authorities, shared infrastructure

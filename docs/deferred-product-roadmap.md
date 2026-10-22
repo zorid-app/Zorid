@@ -9,6 +9,18 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+2026-10-22 actual Electron005: matched host/renderer at `09cd214e`,106 actions
+and7 durable checks before stopping ahead of CSV export. Filter focus, view
+workflow, formulas, search, limits and independent summary values30/213 passed.
+Exact summary-name acknowledgement was missing in the harness because both old
+and new summaries returned213; `bfd2578e` corrects that synchronization and adds
+Results state diagnostics. Source review also confirms a real Results-menu UX
+gap: a summary-only save acknowledgement can close a newly opened Results panel.
+Toolbar owner is fixing it. Provenance verified; owned Electron/native processes
+closed with no leaks. The full journey remains unaccepted. Visual comparison
+flagged native-blue checkboxes, number alignment and raw date presentation;
+property owner is aligning these using focused REA/native-control evidence.
+
 2026-10-22 subsequent verification: actual standalone CLI campaign001 passed85
 commands,7 independent oracle checks and30 JSON/raw exports against the matched
 `44d9ae46` Rust closure; see

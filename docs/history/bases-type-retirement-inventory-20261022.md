@@ -86,14 +86,14 @@ Type-dependent source from the current ordinary-property direction.
 | [execution](../managed-data/execution.md), [first-party consumer contract](../managed-data/first-party-consumer-contract.md), [task/calendar/base contract](../managed-data/task-calendar-base-contract.md) | Retained source/evidence with explicit supersession banners. Type requirements and old WorkBlock assumptions require reconciliation before future work. |
 | [stage-four Base contract](../stage4-base-contract.md), [task/calendar contract](../task-calendar-contract.md) | Current-scope supersession headers route to the goal/roadmap; older bodies are evidence, not an active Type mandate. |
 
-One remaining documentation ambiguity is
+The frozen inventory identified a documentation ambiguity in
 [internal-contract-draft.md:3](../managed-data/internal-contract-draft.md#L3):
 it remains a provisional Phase 0 draft but calls its linked plan “accepted” and
 lists Types among file authorities at line 17 without its own current-scope
 supersession banner. Its destinations now route to superseded/history material.
-Treat that text as historical provisional context; a clearer banner is a small
-documentation follow-up, not authorization to restore named Types. This inventory
-owns only the new file and leaves that draft unchanged.
+The coordinator subsequently added a current-scope supersession banner and
+changed the historical plan label. The draft is retained as provisional history,
+without authorization to restore named Types or resume managed-record work.
 
 Property-reference “type registry” terminology denotes **property value types**;
 for example [interaction parity](../reference/interaction-parity.md#L126).
