@@ -498,7 +498,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         const patch = validateToolbarPatch(result, readPatch()), saved = configuredView.groupBy;
         // Validation canonicalizes IDs; an unchanged selection must retain its
         // original persisted spelling when only visibility/order/direction moves.
-        if (mapping(patch.groupBy) && mapping(saved) && typeof saved.property === 'string' && propertyId(patch.groupBy.property) === propertyId(saved.property)) patch.groupBy.property = saved.property;
+        if (mapping(patch.groupBy) && mapping(saved) && typeof saved.property === 'string' && propertyId(patch.groupBy.property) === propertyId(saved.property)) patch.groupBy = { ...patch.groupBy, property: saved.property };
         expectedPatch = {view:patch}; return () => options.save(version,patch);
       };
     } else {
