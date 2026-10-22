@@ -450,6 +450,30 @@ fn omitted_relation_settings_default_to_single_note_target_picker() {
 }
 
 #[test]
+fn clock_dependent_target_filters_refresh_even_when_the_base_expression_is_static() {
+    let settings = "properties:\n  related:\n    type: relation\n    relation: {targetFilter: 'today() != null'}\n";
+    let generation = generation(settings, &[]);
+    let definitions =
+        PropertyDefinitions::from_generation_source(&generation, &id("settings"), settings)
+            .unwrap();
+    let program = compile_base_source(
+        "views:\n  - type: table\n    name: Notes\n    order: [file.name, related]\n",
+    )
+    .unwrap();
+    let result = query_generation_with_properties(
+        &program,
+        &generation,
+        &[],
+        &definitions,
+        &QueryOptions::default(),
+    )
+    .unwrap();
+    let hint = result.refresh_hint.unwrap();
+    assert_eq!(hint.dependency, zorid_bases::BaseClockDependency::Day);
+    assert_eq!(hint.next_wake_ms, Some(86_400_000));
+}
+
+#[test]
 fn derived_values_cannot_be_attached_to_detached_rows_or_forged_graphs() {
     let generation = generation(SETTINGS, &[]);
     let definitions =

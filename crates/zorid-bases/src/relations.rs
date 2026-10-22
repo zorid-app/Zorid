@@ -5,8 +5,8 @@ use crate::{
     properties::{
         PropertyDefinitionDiagnostic, PropertyDefinitions, PropertyKind, RollupAggregation,
     },
-    BaseSnapshot, BaseValue, DetachedRecord, EvaluationOptions, ExpressionDiagnostic,
-    IndexSnapshotId, PropertyValue, QueryOptions, RecordWitness,
+    BaseClockDependency, BaseSnapshot, BaseValue, DetachedRecord, EvaluationOptions,
+    ExpressionDiagnostic, IndexSnapshotId, PropertyValue, QueryOptions, RecordWitness,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -49,6 +49,7 @@ pub struct PropertyRelationValues {
     rows: BTreeMap<EntryId, PropertyRelationRow>,
     diagnostics: Vec<PropertyRelationDiagnostic>,
     definition_diagnostics: Vec<PropertyDefinitionDiagnostic>,
+    clock_dependency: BaseClockDependency,
     steps_used: usize,
 }
 
@@ -70,6 +71,9 @@ impl PropertyRelationValues {
     }
     pub fn steps_used(&self) -> usize {
         self.steps_used
+    }
+    pub fn clock_dependency(&self) -> BaseClockDependency {
+        self.clock_dependency
     }
     pub fn property_names(&self) -> impl Iterator<Item = &str> {
         self.property_names.iter().map(String::as_str)
@@ -256,10 +260,33 @@ pub fn query_property_relations(
         rows: BTreeMap::new(),
         diagnostics: Vec::new(),
         definition_diagnostics: definitions.diagnostics().to_vec(),
+        clock_dependency: BaseClockDependency::None,
         steps_used: 0,
     };
     budget.keep(&result.property_names)?;
     budget.keep(&result.definition_diagnostics)?;
+    for (_, definition) in definitions.iter() {
+        if let Some(filter) = definition
+            .relation
+            .as_ref()
+            .and_then(|relation| relation.target_filter.as_ref())
+        {
+            let mut failure = None;
+            let dependency = crate::expression::clock_dependency(filter, &mut |work| match budget
+                .charge(work)
+            {
+                Ok(()) => Some(()),
+                Err(error) => {
+                    failure = Some(error);
+                    None
+                }
+            });
+            if let Some(error) = failure {
+                return Err(error);
+            }
+            result.clock_dependency = result.clock_dependency.join(dependency);
+        }
+    }
     let has_relations = definitions.iter().any(|(_, d)| {
         matches!(
             d.kind,
