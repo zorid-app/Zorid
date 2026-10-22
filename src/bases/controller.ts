@@ -29,7 +29,8 @@ export interface BaseMutationHost {
 export interface BaseConditionalSavedSource {
   /** Stable only for retries of this original semantic command. */
   readonly attempt: object;
-  validate(source: string): void;
+  /** Original logical bytes are captured before the physical-source await. */
+  validate(source: string, originalSavedSource: string): void;
 }
 export interface BaseBufferHost {
   /** Must return the workspace's shared buffer, including existing dirty drafts. */
@@ -41,7 +42,7 @@ export interface BaseBufferHost {
 /** No private buffers or direct disk writes: use the same recovery/CAS path as typing. */
 export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHost {
   let pending: Promise<unknown> = Promise.resolve();
-  const conditional = new WeakMap<NoteBuffer, { attempt: object; capture: ConditionalSavedSourceCapture; desiredSource?: string }>();
+  const conditional = new WeakMap<NoteBuffer, { attempt: object; capture: ConditionalSavedSourceCapture; originalSavedSource: string; desiredSource?: string }>();
   const conditionalAttempts = new WeakMap<object, { buffer: NoteBuffer; capture: ConditionalSavedSourceCapture }>();
   return {
     transform(path, transform, validate, validateWrite = validate, expectedWitness, sourceCondition) {
@@ -54,7 +55,7 @@ export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHos
         withBaseEditAdmissionPhase('after-buffer-load', () => { options.validate(); validate(); });
         if (buffer.path !== path) throw new Error('The edited file moved');
         const durableWitness = () => (buffer as NoteBuffer & { readonly savedDurableWitness?: BaseSavedWitness & { readonly path: string } }).savedDurableWitness;
-        const admitted = durableWitness();
+        let admitted = durableWitness();
         type ConditionalBuffer = NoteBuffer & {
           captureConditionalSavedSource?(witness: ConditionalSavedSourceWitness, validate?: () => void): Promise<ConditionalSavedSourceCapture | undefined>;
           releaseConditionalSavedSource?(capture: ConditionalSavedSourceCapture): Promise<void>;
@@ -78,6 +79,16 @@ export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHos
         if (retained && (!conditionalSource || retained.attempt !== conditionalSource.attempt)) throw new Error('Retry the original conditional Base command before editing this note');
         const status = retained && guarded.conditionalSavedSourceStatus?.(retained.capture);
         if (retained && (!status || status === 'foreign')) throw new Error('The original conditional Base save is no longer owned by this buffer');
+        // A fresh query can precede the workspace's clean-buffer notification.
+        // Reload only a genuine logical revision, never physical capture bytes,
+        // and never disturb an accepted draft or an original retained attempt.
+        if (expected && admitted?.entryId === expected.entryId && admitted.path === path && admitted.revision !== expected.revision
+          && !retained && !buffer.dirty && !buffer.error && !buffer.hasRecoveryConflict && typeof buffer.reload === 'function') {
+          await buffer.reload();
+          options.validate(); validate();
+          if (buffer.path !== path) throw new Error('The edited file moved');
+          admitted = durableWitness();
+        }
         // A committing original intent may have advanced the core revision before
         // its buffer acknowledgement. Resume that intent, never capture it again.
         if (expected && (!admitted || admitted.entryId !== expected.entryId || admitted.path !== path || status !== 'pending' && admitted.revision !== expected.revision)) {
@@ -94,19 +105,20 @@ export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHos
         try {
           if (conditionalSource && !retained && admitted) {
             if (!guarded.captureConditionalSavedSource || !guarded.releaseConditionalSavedSource || !guarded.conditionalSavedSourceStatus) throw new Error('Conditional saved-source capture is unavailable for this durable note');
+            const originalSavedSource = buffer.savedText;
             const capture = await guarded.captureConditionalSavedSource({ ...admitted, path }, () => { options.validate(); validate(); });
             // Explicit absence of both provider methods preserves the browser's
             // logical CAS path. Native providers expose a pair that rejects an
             // unsupported host; advertised capture failures never reach here.
             if (capture) {
-              retained = { attempt: conditionalSource.attempt, capture }; conditional.set(buffer, retained);
+              retained = { attempt: conditionalSource.attempt, capture, originalSavedSource }; conditional.set(buffer, retained);
               conditionalAttempts.set(conditionalSource.attempt, { buffer, capture });
               if (capture.logicalWitness.entryId !== admitted.entryId || capture.logicalWitness.revision !== admitted.revision || capture.logicalWitness.path !== path) throw new Error('The captured saved source belongs to a different note revision');
             }
           }
           if (retained) {
             options.validate(); validate(); validateIdentity();
-            conditionalSource!.validate(retained.capture.source);
+            conditionalSource!.validate(retained.capture.source, retained.originalSavedSource);
           }
           const source = buffer.text, next = withBaseEditAdmissionPhase('transform', () => transform(source));
           // Transform is synchronous: no intervening editor input may be discarded.
@@ -225,6 +237,7 @@ export class BaseController {
   private redoCommands: BaseHistoryCommand[] = [];
   private historyBusy = false;
   private pendingPropertyHistory = new Map<string, PropertyHistoryEntry>();
+  private propertySourceAttempts = new Map<string, { readonly attempt: object; readonly selection: number; readonly configuration: number; readonly entryId?: string }>();
   private pendingHistoryDirection = new WeakMap<BaseHistoryEntry, 'undo' | 'redo'>();
   private historySourceAttempts = new WeakMap<PropertyHistoryEntry, Record<'undo' | 'redo', object>>();
   private pendingConfigurations = new Map<string, { readonly expected: string; readonly witness?: BaseSavedWitness; readonly attempt: object; readonly index: number; readonly name: string; readonly bound: boolean; readonly selectionSerial: number; readonly entryId?: string; readonly adapter: Vault['adapter']; validate(): void; committed?(): Promise<BaseViewRenameReport | void> }>();
@@ -592,15 +605,25 @@ export class BaseController {
         const guard = guards.get(path)!, keys = [...new Set(values.map(edit => edit.property.slice(5)))];
         const signature = JSON.stringify([path, this.identities.get(path), values.map(({ property, value, remove }) => ({ property, value, remove }))]);
         let entry = this.pendingPropertyHistory.get(signature);
+        let attempt = this.propertySourceAttempts.get(signature);
+        const actor = result!.rows.find(row => row.path === path)!;
+        let pinnedBefore: readonly PropertyState[] | undefined;
         const validate = () => {
           guard.validateWrite();
           if (this.selectionSerial !== selection || this.configurationEpoch !== config) throw new Error('The Base configuration or selected view changed before editing');
           if (!completed.length) guard.validate();
         };
         try {
+          for (const [pendingSignature, pendingEntry] of this.pendingPropertyHistory) {
+            if (pendingEntry.path === path && pendingSignature !== signature) throw new Error('Retry the original Base property command before editing another value in this file');
+          }
+          if (attempt && (attempt.selection !== selection || attempt.configuration !== config || attempt.entryId !== actor.entryId)) throw new Error('The original Base property command changed; retry its retained save before editing');
+          if (!attempt) { attempt = { attempt: {}, selection, configuration: config, entryId: actor.entryId }; this.propertySourceAttempts.set(signature, attempt); }
           const witness = sharedBaseWitness(result!, path);
           await this.options.mutations.transform(path, source => {
             validate(); const before = propertyState(source, keys, entry?.after);
+            const originalRetry = entry && statesEqual(before, entry.after);
+            if (pinnedBefore && !statesEqual(before, pinnedBefore) && !originalRetry) throw new Error('A touched property changed in the shared draft; its current value was preserved');
             let next = source;
             for (const edit of values) {
               const key = edit.property.slice(5), current = propertyState(next, [key], before)[0];
@@ -616,10 +639,21 @@ export class BaseController {
           }, validate, () => {
             guard.validateWrite();
             if (this.selectionSerial !== selection || this.configurationEpoch !== config) throw new Error('The Base configuration or selected view changed before saving');
-          }, witness);
-          completed.push(path); this.pendingPropertyHistory.delete(signature);
+          }, witness, {
+            attempt: attempt.attempt,
+            validate: (physical, originalSavedSource) => {
+              validate();
+              // Ordinary Base edits are absolute frontmatter mutations. A
+              // pending physical branch, even formatting-only, must reconcile
+              // into a new logical witness before this command can author it.
+              if (physical !== originalSavedSource) throw new Error('The physical saved source changed; refresh after reconciliation before editing this property');
+              pinnedBefore = propertyState(originalSavedSource, keys, entry?.before);
+            },
+          });
+          completed.push(path); this.pendingPropertyHistory.delete(signature); this.propertySourceAttempts.delete(signature);
           if (entry && !statesEqual(entry.before, entry.after)) history.push(entry);
         } catch (error) {
+          if (!entry && !(error instanceof AggregateError)) this.propertySourceAttempts.delete(signature);
           this.recordHistory(history);
           if (groups.size === 1) throw error;
           throw new BaseBulkEditError(completed, path, error);
@@ -1055,7 +1089,7 @@ export class BaseController {
   dispose(): void {
     this.disposed = true; this.clearWake(); this.epoch++; this.lastInvalidation = { kind: 'controller-dispose' }; this.sharedQueries.dispose();
     for (const runner of this.summaryQueries) runner.dispose(); this.summaryQueries.clear();
-    this.undoCommands = []; this.redoCommands = []; this.pendingPropertyHistory.clear(); this.pendingConfigurations.clear();
+    this.undoCommands = []; this.redoCommands = []; this.pendingPropertyHistory.clear(); this.propertySourceAttempts.clear(); this.pendingConfigurations.clear();
     this.pendingViewReferences = undefined;
     for (const service of this.referenceServices) void closeBaseViewReferenceQueries(service).catch(() => {});
     this.referenceServices.clear();

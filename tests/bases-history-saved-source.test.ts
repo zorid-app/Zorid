@@ -238,12 +238,16 @@ test('generic shared-buffer Save can settle a failed undo, then original Undo ac
   const f = await controllerFixture(); try {
     await f.controller.editProperty({ version: f.controller.state.version, path: 'One.md', property: 'score', value: 9 });
     const buffer = f.buffers.get('One.md')!; let first = true;
+    assert.equal(buffer.captures, 1, 'the ordinary edit owns its own physical capture');
+    const editCapture = buffer.received[0];
     buffer.onFlush = async () => { if (first) { first = false; throw Error('Uncertain original undo'); } };
     await assert.rejects(f.controller.undo(), /Uncertain original undo/);
     assert.equal(f.controller.canUndo, true); assert.equal(f.controller.canRedo, false); assert.equal(score(buffer.text), 1);
+    assert.equal(buffer.captures, 2, 'Undo captures once before its uncertain save');
+    const undoCapture = buffer.received[1];
     await buffer.flush(); await f.controller.refresh();
     await f.controller.undo();
-    assert.equal(buffer.captures, 1); assert.equal(buffer.received.length, 1); assert.equal(score(await f.vault.read('One.md')), 1);
+    assert.equal(buffer.captures, 2); assert.deepEqual(buffer.received, [editCapture, undoCapture]); assert.equal(score(await f.vault.read('One.md')), 1);
     assert.equal(f.controller.canUndo, false); assert.equal(f.controller.canRedo, true);
   } finally { f.stop(); }
 });
