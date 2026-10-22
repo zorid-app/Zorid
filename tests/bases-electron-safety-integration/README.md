@@ -3,7 +3,9 @@
 Status: **authored, not executed**. This is an independent supplement to the
 heavy-user and matched visual campaigns. It uses the normal Electron app/native
 host and visible production controls. The common runner's optional campaign seam
-(`5c8c8a86`) must be composed before execution. No product API applies positive
+(`5c8c8a86`) must be composed before execution. Sidebar rename phases also require
+the composed sidebar fixes `bc22d072` and `8f7377ec` (isolated
+`8f6c043b` → `062aa020`). No product API applies positive
 mutations; DOM evaluation only observes controls/state. External writes, a path
 rename/recreation and recovery conflicts are explicitly labeled negative fixtures.
 
@@ -50,6 +52,9 @@ quit, using the same guarded runner lifecycle as the main journey.
 | `move-to-null-removes-group-property` / `null-column-new-preserves-safe-filter-default` | Move existing card to empty group; New in an empty configured group under a safe equality filter. | Existing field removed; New preserves inferred Todo rather than writing/deleting it due to null group. |
 | `template-column-new-copies-complete-conflicting-source` | Column New using conflicting full template. | Byte-for-byte template, literals/body preserved, original template unchanged, visible outside-view/unchanged-copy explanation. |
 | `folder-group-move-*` / New | Move file between actual folders via board, then New in destination. | Old path absent, new path exact bytes; one new note in target folder and none additionally in fallback Created. |
+| `sidebar-clean-base-file-rename-*` / folder rename | Mount context Base, select Outline and hide right sidebar. Rename Base and its parent folder through explorer context menu and real contenteditable rename input. | Exact Base bytes preserved, old paths absent, selected Outline and hidden state survive both renames. Expand → Bases opens moved target with main Context One; switching main Context Two updates exact saved row. |
+| `sidebar-dirty-rename-refusal` / retained move | Hold unapplied shared property-settings input in sidebar, attempt normal explorer rename; cancel rejected tree rename. Then explicitly labeled external filesystem rename. | Normal rename refuses with inline invalid state, original path remains, draft input retained. External move still retains input and exact registry. Cancel settings → normal Bases reopens remembered moved target with correct main context. |
+| `sidebar-explicit-newer-selection` | Open a different Base normally and use the ordinary sidebar command, then switch main note. | New sidebar title/static row stays current; old context-bound sidebar never revives. This sequential case does not establish an in-flight teardown race. |
 | `safety-restart-exact-*` | Signal-free quit/restart; reopen named host and read saved note/config/registry/group files. | Named view binds correctly, all captured durable bytes and recovery copy survive exactly. |
 
 The source-authoring check is `node --check` for all three modules plus offline
@@ -66,6 +71,9 @@ campaign; there are no silent skips or conditional acceptance branches.
   preservation are asserted. A dedicated mapped-selection oracle remains needed.
 - No pending durable I/O close/remount proof; unapplied draft close protection is
   tested explicitly.
+- No artificially delayed sidebar controller or service is installed. An observable
+  actual in-flight newest-selection race remains open; sequential selection is
+  not a substitute.
 - No native OS clipboard, IME, accessibility/screen-reader, light/scaling or matched
   Obsidian screenshot acceptance. Those remain independent required scenarios.
 - No mobile, sync, crash/power-loss, large-vault/performance or main integration

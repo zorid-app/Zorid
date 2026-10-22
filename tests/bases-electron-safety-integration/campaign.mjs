@@ -256,6 +256,61 @@ async function typedGroups(c) {
   await c.screenshot('s08-typed-groups-and-folder-moves');
 }
 
+const sidebar = '.right-sidebar .sidebar-base-host .bases-session';
+const tree = file => `[role="treeitem"][data-path=${JSON.stringify(file)}]`;
+async function beginTreeRename(c, file, name) {
+  await c.ui.click(tree(file), {button: 'right'}); await c.ui.button('Rename…', '.context-menu');
+  const label = `${tree(file)} .tree-label[role="textbox"][aria-label="Folder or file name"]`;
+  await c.ui.type(label, name); await c.ui.key('Enter'); return label;
+}
+async function sidebarRow(c, file, score) {
+  await c.ui.wait(`const root=document.querySelector(${JSON.stringify(sidebar)});return root?.querySelector('[role="grid"]')?.getAttribute('aria-label')==='Sidebar context'&&root.querySelector('[role="grid"]')?.getAttribute('aria-rowcount')==='2'&&root.querySelector(${JSON.stringify(c.ui.cell(file, 'note.score'))})?.textContent===${JSON.stringify(String(score))};`, 'Sidebar saved context row ' + file);
+}
+async function outlineHidden(c) {
+  await c.ui.wait(`return document.querySelector('.workspace')?.classList.contains('right-hidden')&&document.querySelector('.right-content > .right-heading')?.textContent==='Outline'&&!document.querySelector('.right-content .sidebar-base-host');`, 'Rename preserves hidden sidebar and selected Outline');
+}
+async function sidebarRenames(c) {
+  await open(c, 'Sidebars/Context.base'); const original = await c.read('Sidebars/Context.base');
+  await c.ui.command('Bases: Open in right sidebar');
+  await c.ui.openFile('Context One.md'); await waitNote(c, 'Context One'); await sidebarRow(c, 'Sidebar One.md', 11);
+  await c.ui.button('Outline', '.right-tabs'); await c.ui.click('.workspace-sidebar-toggle.is-right[aria-label="Collapse right sidebar"]'); await outlineHidden(c);
+  await beginTreeRename(c, 'Sidebars/Context.base', 'Renamed.base');
+  await c.saved('Sidebars/Renamed.base', source => assert.equal(source, original), 'sidebar-clean-base-file-rename-exact-source');
+  await until(async () => assert.ok(!(await fs.readdir(owned(c, 'Sidebars'))).includes('Context.base')), 30000); await outlineHidden(c);
+  await beginTreeRename(c, 'Sidebars', 'Shelves');
+  await c.saved('Shelves/Renamed.base', source => assert.equal(source, original), 'sidebar-clean-parent-folder-rename-exact-source');
+  await until(async () => assert.ok(!(await fs.readdir(c.vault)).includes('Sidebars')), 30000); await outlineHidden(c);
+  await c.ui.click('.workspace-sidebar-toggle.is-right[aria-label="Expand right sidebar"]');
+  await c.ui.wait(`return document.querySelector('.right-content > .right-heading')?.textContent==='Outline';`, 'Expanding does not silently select Bases');
+  await c.ui.button('Bases', '.right-tabs'); await sidebarRow(c, 'Sidebar One.md', 11);
+  await c.ui.openFile('Context Two.md'); await waitNote(c, 'Context Two'); await sidebarRow(c, 'Sidebar Two.md', 22);
+  await c.screenshot('s09a-clean-sidebar-file-and-folder-rename-preserve-context');
+  const registry = await c.read('Properties.yaml');
+  await c.ui.button('Properties', sidebar); await c.ui.button('Configure property topics', dialog('Properties')); await c.ui.button('Property type', dialog('Property'));
+  const label = field('Option label', dialog('Property settings') + ' .bases-property-option-row:nth-child(1)');
+  await c.ui.type(label, 'Unapplied sidebar option label');
+  const renameInput = await beginTreeRename(c, 'Shelves/Renamed.base', 'Must not rename.base');
+  await c.ui.wait(`return document.querySelector(${JSON.stringify(renameInput)})?.getAttribute('aria-invalid')==='true';`, 'Normal file rename is refused by the retained sidebar draft guard');
+  assert.equal(await c.read('Shelves/Renamed.base'), original); assert.ok(!(await fs.readdir(owned(c, 'Shelves'))).includes('Must not rename.base'));
+  assert.equal(await c.ui.dom(`return document.querySelector(${JSON.stringify(label)})?.value;`), 'Unapplied sidebar option label');
+  await c.ui.key('Escape'); // Cancel explorer rename, retaining the separate settings draft.
+  await fs.rename(owned(c, 'Shelves/Renamed.base'), owned(c, 'Shelves/Dirty moved.base'));
+  c.evidence.actions.push({action: 'external-sidebar-base-rename-fixture', from: 'Shelves/Renamed.base', to: 'Shelves/Dirty moved.base', reason: 'Normal rename correctly refuses pending sidebar drafts', at: Date.now()});
+  await c.ui.wait(`return !!document.querySelector(${JSON.stringify(tree('Shelves/Dirty moved.base'))});`, 'External move observed through the normal explorer');
+  assert.equal(await c.ui.dom(`return document.querySelector(${JSON.stringify(label)})?.value;`), 'Unapplied sidebar option label');
+  assert.equal(await c.read('Properties.yaml'), registry); await c.screenshot('s09b-external-sidebar-rename-retains-dirty-control');
+  await c.ui.button('Cancel', dialog('Property settings')); await c.ui.button('Bases', '.right-tabs'); await sidebarRow(c, 'Sidebar Two.md', 22);
+  assert.equal(await c.read('Shelves/Dirty moved.base'), original); assert.equal(await c.read('Properties.yaml'), registry);
+  // A real subsequent selection must remain current. No artificial pending
+  // controller/service promise is installed, so this is sequential selection
+  // acceptance rather than the independently required in-flight reentry race.
+  await open(c, 'Shelves/Other.base'); await c.ui.command('Bases: Open in right sidebar');
+  await c.ui.wait(`return document.querySelector(${JSON.stringify(sidebar + ' [role="grid"]')})?.getAttribute('aria-label')==='Other sidebar';`, 'Normal newer sidebar selection mounts the selected Base');
+  await c.ui.openFile('Context One.md'); await waitNote(c, 'Context One');
+  await c.ui.wait(`const root=document.querySelector(${JSON.stringify(sidebar)});return root?.querySelector('[role="grid"]')?.getAttribute('aria-label')==='Other sidebar'&&root.querySelector(${JSON.stringify(c.ui.cell('Sidebar Two.md', 'note.score'))})?.textContent==='22'&&!root.querySelector(${JSON.stringify(c.ui.cell('Sidebar One.md', 'note.score'))});`, 'Older context-bound sidebar cannot revive after a later ordinary selection');
+  await c.screenshot('s09c-sidebar-explicit-newer-selection');
+}
+
 export async function journey(c) {
   c.evidence.campaign = 'bases-desktop-safety';
   c.evidence.limitations.push(...openBoundaries);
@@ -267,6 +322,7 @@ export async function journey(c) {
     ['actor-path-reuse-and-unapplied-draft-close', pathReuseAndClose],
     ['named-fragment-dirty-reference-retry', namedReferenceRetry],
     ['typed-null-list-link-date-folder-new-and-moves', typedGroups],
+    ['sidebar-clean-renames-hidden-outline-and-retained-dirty-control', sidebarRenames],
   ];
   c.evidence.scenarios = phases.map(([name]) => ({name, status: 'unexecuted'}));
   await c.launch('safety-shared-writes-and-recovery');
@@ -279,7 +335,7 @@ export async function journey(c) {
   }
   assert.ok(named);
   const durable = new Map();
-  for (const file of ['A.md', 'B.md', 'Safety.base', 'Properties.yaml', 'Named.base', 'Named host.md', 'Scalar A.md', 'List A.md', 'Date A.md', 'Link A.md', 'To/Move.md']) durable.set(file, await c.read(file));
+  for (const file of ['A.md', 'B.md', 'Safety.base', 'Properties.yaml', 'Named.base', 'Named host.md', 'Scalar A.md', 'List A.md', 'Date A.md', 'Link A.md', 'To/Move.md', 'Shelves/Dirty moved.base', 'Shelves/Other.base']) durable.set(file, await c.read(file));
   await c.quit('safety-normal-quit-with-settled-recovery');
   await c.launch('safety-restart-and-binding-readback');
   await c.ui.openFile('Named host.md'); await waitNote(c, 'Named host');
