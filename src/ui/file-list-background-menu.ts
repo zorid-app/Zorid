@@ -10,6 +10,7 @@ export interface FileListBackgroundContext {
     newNote?: WorkspaceMenuAction;
     newFolder?: WorkspaceMenuAction;
     newCanvas?: WorkspaceMenuAction;
+    newBase?: WorkspaceMenuAction;
   };
 }
 
@@ -24,6 +25,7 @@ export function buildFileListBackgroundMenu(context: FileListBackgroundContext):
   add('file-list.new-note', 'New note', context.actions.newNote);
   add('file-list.new-folder', 'New folder', context.actions.newFolder);
   add('file-list.new-canvas', 'New canvas', context.actions.newCanvas);
+  add('file-list.new-base', 'New base', context.actions.newBase);
   let settled = false;
   return {
     items,
