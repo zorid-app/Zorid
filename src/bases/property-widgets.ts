@@ -285,6 +285,9 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
         }
       });
       element.append(checkbox);
+    } else if (displayValue.type === 'null') {
+      // Empty property presentation is distinct from expression string coercion.
+      element.textContent = '';
     } else if (!diagnostic && (type === 'date' || type === 'datetime') && value.type !== 'null') {
       // Obsidian's shipped date widgets use native date controls with ISO values;
       // their visible order/separators come from Chromium's locale, not a slash
