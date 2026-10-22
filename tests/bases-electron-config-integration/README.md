@@ -5,6 +5,18 @@ Source-only campaign authored in `codex/bases-config-e2e`, initially based on
 been performed by this authoring batch.** The launcher owns exact source/artifact
 provenance, disposable vault/profile creation, process isolation and cleanup.
 
+The first actual run stopped at the initial twelve-row assertion while only 718
+export files and no record files had entered the durable namespace. The emitted
+fixtures independently parse correctly. Initial readiness now retains the first
+Base rowcount/status and screenshot, then observes the normal read-only
+`window.zorid.list(vault)` inventory until every one of the 1,023 fixture file paths
+is present. It samples every second, reports progress every ten seconds and fails
+after 180 seconds. It does not trigger rescanning, importing, indexing or queries.
+The Base remains open throughout, so the unchanged twelve-row assertion still
+requires normal admission notifications to refresh the visible result. Physical
+scan completion and internally complete partial metadata generations are not
+substitutes for fixture admission. This precondition has no performance claim.
+
 Run only after the coordinator integrates this campaign, the optional campaign
 launcher seam, the shared private clipboard guard and the standalone Base source
 editor, builds matching artifacts, freezes the checkout and grants the serialized
@@ -64,6 +76,7 @@ Offline authoring checks:
 
 ```sh
 node --test tests/bases-electron-config-integration/oracles.test.mjs
+node --test tests/bases-electron-config-integration/admission.test.mjs
 node --check tests/bases-electron-config-integration/campaign.mjs
 node --check tests/bases-electron-config-integration/controls.mjs
 ```

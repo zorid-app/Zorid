@@ -7,6 +7,7 @@ import {createClipboardGuard} from '../bases-electron-clipboard-integration/clip
 import {fixtureFiles,records,exportRecords,recoveredInline,repairedStandalone} from './fixtures.mjs';
 import {rootMembership,filteredRecords,sortedRecords,exportMatrix,expectedTSV,parseDelimited,assertLargeTSV} from './oracles.mjs';
 import {active,dialog,input,closeMenu,choose,focusByTab,exactRows,section,group,match,addGroup,addCondition,editCondition,savedConfiguration,previewAndEscape} from './controls.mjs';
+import {awaitFixtureAdmission} from './admission.mjs';
 export {fixtureFiles,vaultName} from './fixtures.mjs';
 
 async function filters(c){
@@ -126,7 +127,9 @@ async function exports1005(c){
 }
 export async function journey(c){
   c.evidence.kind='actual-electron-bases-configuration';c.evidence.limitations.push('1005-row export fixture is a bounded functional test, not a performance budget or large-vault campaign.');
-  await c.launch('configuration-campaign');await c.ui.openFile('Configuration.base');await c.ui.idle();await exactRows(c,records.map(item=>item.path),'prelaunch-twelve-record-baseline');
+  await c.launch('configuration-campaign');await c.ui.openFile('Configuration.base');await c.ui.idle();
+  await awaitFixtureAdmission(c,[...fixtureFiles().keys()]);
+  await exactRows(c,records.map(item=>item.path),'prelaunch-twelve-record-baseline');
   await filters(c);await sorting(c);await properties(c);await groups(c);await formulas(c);await recovery(c);await exports1005(c);
   const fixtures=fixtureFiles();for(const item of records)assert.equal(await c.read(item.path),fixtures.get(item.path),'Configuration/preview interactions never alter note bytes: '+item.path);
   c.evidence.checks.push({name:'all-twelve-note-bodies-and-frontmatter-remain-exact',paths:records.map(item=>item.path)});
