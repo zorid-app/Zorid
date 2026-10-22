@@ -53,5 +53,10 @@ The context supplies `ui`/`cdp` getters; `vault`, `yaml`, `template`, `evidence`
 `external(file, source, label)`, `diskGuard()` and `prepareDownloads()`. Existing
 helper signatures are unchanged. Staged offline fixtures require an awaited
 normal quit before guarded filesystem writes and explicit fixture evidence.
-Positive user mutations still use actual UI. Every campaign module directory is
-hashed before/after the pass. The same explicit freeze/runtime grant applies.
+Positive user mutations still use actual UI. All admitted sibling campaign
+directories are hashed before/after, including imported clipboard helpers and
+explicit absent directories. The same explicit freeze/runtime grant applies.
+Initial fixture writes, normal readback and external-editor writes share a strict
+vault-relative path guard that rejects absolute names, traversal, backslashes,
+NULs and existing symlinks. Bounded offline guard checks run with
+`node --test tests/bases-electron-integration/owned-fixtures.test.mjs`.
