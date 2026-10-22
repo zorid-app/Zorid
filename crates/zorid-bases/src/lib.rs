@@ -469,17 +469,38 @@ pub(crate) fn with_session_files<T>(
     }
     let timezone = expression::BasesTimezone::from_setting(Some(&options.timezone))
         .map_err(|message| ExpressionDiagnostic::new("input", message))?;
-    let mut file = runtime_file(record, &timezone)?;
-    if let Some(graph) = relationships {
-        graph.attach(&mut file);
+    let captured_file =
+        |record: &DetachedRecord| -> Result<expression::BasesFile, ExpressionDiagnostic> {
+            if let Some(files) = &shared_files {
+                files
+                    .by_path(&record.path)
+                    .filter(|file| file.witness == record.witness)
+                    .cloned()
+                    .ok_or_else(|| {
+                        ExpressionDiagnostic::new(
+                            "unavailable",
+                            "Session file is not hydrated at the captured revision",
+                        )
+                    })
+            } else {
+                runtime_file(record, &timezone)
+            }
+        };
+    let mut file = captured_file(record)?;
+    if shared_files.is_none() {
+        if let Some(graph) = relationships {
+            graph.attach(&mut file);
+        }
     }
     let mut this_file = options
         .current_record
         .as_ref()
-        .map(|record| runtime_file(record, &timezone))
+        .map(captured_file)
         .transpose()?;
-    if let (Some(graph), Some(file)) = (relationships, this_file.as_mut()) {
-        graph.attach(file);
+    if shared_files.is_none() {
+        if let (Some(graph), Some(file)) = (relationships, this_file.as_mut()) {
+            graph.attach(file);
+        }
     }
     let mut property_work = 0usize;
     if let Some(derived) = property_values {
@@ -492,7 +513,9 @@ pub(crate) fn with_session_files<T>(
                 property_work = property_work
                     .saturating_add(1 + encoded_size(&row.values, 8 * 1024 * 1024)? / 16);
             }
-            derived.attach(file, &timezone)?;
+            if shared_files.is_none() {
+                derived.attach(file, &timezone)?;
+            }
         }
     }
     // Preview extraction failures are not absent properties. Published callers
