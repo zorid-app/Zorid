@@ -88,7 +88,7 @@ export async function journey(c){
   await choose(c,'Books table');
 
   // View-level advanced filter composes with the fixture's Base-wide membership.
-  await c.ui.button('Filter',active);await c.ui.button('Add expression',dialog('Filter'));
+  await c.ui.button('Filter',active);await c.ui.button('Add filter',dialog('Filter'));await c.ui.button('Edit expression',dialog('Filter'));
   await c.ui.type(input('Filter expression',dialog('Filter')),'note.rating >= 4');await apply(c,'Filter');
   await c.ui.wait(`return document.querySelector('${active} [role="grid"]')?.getAttribute('aria-rowcount')==='29';`,'28 high-rating rows');
   await c.screenshot('02-view-filter');
