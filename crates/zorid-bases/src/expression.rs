@@ -1054,7 +1054,7 @@ pub(crate) fn clock_dependency(
             }
             Expr::Call(callee, arguments) => {
                 let callee = match callee.as_ref() {
-                    Expr::Identifier(name) => match name.as_str() {
+                    Expr::Identifier(name) => match canonical_function_name(name) {
                         "now" => Dependency::Instant,
                         "today" => Dependency::Day,
                         "if" | "escapeHTML" | "date" | "duration" | "list" | "max" | "min"
@@ -1064,7 +1064,7 @@ pub(crate) fn clock_dependency(
                         _ => Dependency::Instant,
                     },
                     Expr::Member(receiver, Member::Named(method)) => {
-                        let own = match method.as_str() {
+                        let own = match canonical_function_name(method) {
                             // The receiver may be a Date at runtime; relative
                             // reads the invocation clock even for a static date.
                             "relative" => Dependency::Instant,
@@ -1355,10 +1355,14 @@ fn constant_member_name(expression: &Expr) -> Option<String> {
 
 fn member_maybe_matches(member: &Member, expected: &[&str]) -> bool {
     match member {
-        Member::Named(name) => expected.contains(&name.as_str()),
-        Member::Computed(value) => {
-            constant_member_name(value).is_none_or(|name| expected.contains(&name.as_str()))
-        }
+        Member::Named(name) => expected
+            .iter()
+            .any(|expected| name.eq_ignore_ascii_case(expected)),
+        Member::Computed(value) => constant_member_name(value).is_none_or(|name| {
+            expected
+                .iter()
+                .any(|expected| name.eq_ignore_ascii_case(expected))
+        }),
     }
 }
 
@@ -1410,9 +1414,14 @@ fn expression_uses_relationships(expression: &Expr) -> bool {
         }
         Expr::Call(callee, arguments) => {
             let relationship_call = match callee.as_ref() {
-                Expr::Identifier(name) => matches!(name.as_str(), "file" | "link" | "image"),
+                Expr::Identifier(name) => {
+                    matches!(canonical_function_name(name), "file" | "link" | "image")
+                }
                 Expr::Member(_, Member::Named(name)) => {
-                    matches!(name.as_str(), "hasLink" | "asFile" | "asLink" | "linksTo")
+                    matches!(
+                        canonical_function_name(name),
+                        "hasLink" | "asFile" | "asLink" | "linksTo"
+                    )
                 }
                 _ => false,
             };
@@ -1457,6 +1466,91 @@ pub(crate) const BASES_WORK_BUDGET_EXCEEDED: &str = "Obsidian Base expression wo
 pub(crate) const BASES_OPERATION_CANCELLED: &str = "Obsidian Base expression evaluation cancelled";
 
 type Scope = BTreeMap<String, RuntimeValue>;
+
+fn canonical_function_name(name: &str) -> &str {
+    const NAMES: &[&str] = &[
+        "if",
+        "escapeHTML",
+        "date",
+        "duration",
+        "file",
+        "html",
+        "image",
+        "icon",
+        "link",
+        "list",
+        "max",
+        "min",
+        "now",
+        "number",
+        "today",
+        "random",
+        "isTruthy",
+        "isEmpty",
+        "toString",
+        "isType",
+        "contains",
+        "containsAll",
+        "containsAny",
+        "endsWith",
+        "lower",
+        "replace",
+        "repeat",
+        "reverse",
+        "slice",
+        "split",
+        "startsWith",
+        "title",
+        "trim",
+        "abs",
+        "ceil",
+        "floor",
+        "round",
+        "toFixed",
+        "format",
+        "time",
+        "relative",
+        "filter",
+        "flat",
+        "join",
+        "map",
+        "reduce",
+        "sort",
+        "unique",
+        "sum",
+        "mean",
+        "median",
+        "stddev",
+        "earliest",
+        "latest",
+        "keys",
+        "values",
+        "matches",
+        "hasLink",
+        "asLink",
+        "asFile",
+        "linksTo",
+        "hasProperty",
+        "hasTag",
+        "inFolder",
+    ];
+    NAMES
+        .iter()
+        .find(|candidate| candidate.eq_ignore_ascii_case(name))
+        .copied()
+        .unwrap_or(name)
+}
+
+fn string_data(value: &RuntimeValue) -> Option<&str> {
+    match value {
+        RuntimeValue::String(value)
+        | RuntimeValue::Html(value)
+        | RuntimeValue::Image(value)
+        | RuntimeValue::Icon(value) => Some(value),
+        RuntimeValue::Link(link) => Some(&link.path),
+        _ => None,
+    }
+}
 
 fn seeded_row_state(context: &BasesEvaluationContext<'_>) -> u64 {
     let mut state = context.random_seed.unwrap_or(0) ^ 0xcbf29ce484222325;
@@ -1778,7 +1872,7 @@ impl<'a> Evaluator<'a> {
 
     fn call(&mut self, callee: &Expr, arguments: &[Expr], scope: &Scope) -> RuntimeValue {
         match callee {
-            Expr::Identifier(name) if name == "if" => {
+            Expr::Identifier(name) if name.eq_ignore_ascii_case("if") => {
                 let condition = arguments
                     .first()
                     .map(|value| self.evaluate(value, scope))
@@ -1852,6 +1946,7 @@ impl<'a> Evaluator<'a> {
     }
 
     fn global(&mut self, name: &str, arguments: &[RuntimeValue]) -> RuntimeValue {
+        let name = canonical_function_name(name);
         let first = arguments.first().cloned().unwrap_or(RuntimeValue::Null);
         match name {
             "random" => {
@@ -1864,29 +1959,52 @@ impl<'a> Evaluator<'a> {
                 bits ^= bits >> 31;
                 RuntimeValue::Number((bits >> 11) as f64 / 9_007_199_254_740_992.0)
             }
-            "escapeHTML" => RuntimeValue::String(escape_html(&plain_string(&first))),
+            "escapeHTML" => match first {
+                RuntimeValue::Null => RuntimeValue::Null,
+                value if string_data(&value).is_some() => {
+                    RuntimeValue::String(escape_html(string_data(&value).unwrap()))
+                }
+                _ => RuntimeValue::Error("type\0escapeHTML() requires text".into()),
+            },
             "date" => match first {
                 RuntimeValue::Null | RuntimeValue::Date(_) => first,
-                RuntimeValue::String(value) => parse_date(&value, &self.timezone)
-                    .map(RuntimeValue::Date)
-                    .unwrap_or(RuntimeValue::Null),
+                value if string_data(&value).is_some() => {
+                    parse_date(string_data(&value).unwrap(), &self.timezone)
+                        .map(RuntimeValue::Date)
+                        .unwrap_or(RuntimeValue::Null)
+                }
                 _ => RuntimeValue::Error("type\0date() requires text or Date".into()),
             },
-            "duration" => parse_duration(&plain_string(&first))
-                .map(RuntimeValue::Duration)
-                .unwrap_or_else(|| RuntimeValue::Error("Invalid duration".to_string())),
+            "duration" => match first {
+                RuntimeValue::Null => RuntimeValue::Null,
+                value if string_data(&value).is_some() => {
+                    parse_duration(string_data(&value).unwrap())
+                        .map(RuntimeValue::Duration)
+                        .unwrap_or(RuntimeValue::Null)
+                }
+                _ => RuntimeValue::Error("type\0duration() requires text".into()),
+            },
 
             "file" => match &first {
                 RuntimeValue::Null => RuntimeValue::Null,
                 RuntimeValue::File(_) => first,
                 RuntimeValue::Link(link) if !link.external => self.file_from_link(link),
-                RuntimeValue::String(target) => self.file_from_target(target),
+                RuntimeValue::Link(link) if link.external => RuntimeValue::Null,
+                value if string_data(value).is_some() => {
+                    self.file_from_target(string_data(value).unwrap())
+                }
                 _ => RuntimeValue::Error("type\0file() requires text, Link or File".into()),
             },
             "html" | "icon" => match first {
                 RuntimeValue::Null => RuntimeValue::Null,
-                RuntimeValue::String(value) if name == "html" => RuntimeValue::Html(value),
-                RuntimeValue::String(value) => RuntimeValue::Icon(value),
+                value if string_data(&value).is_some() => {
+                    let value = string_data(&value).unwrap().to_owned();
+                    if name == "html" {
+                        RuntimeValue::Html(value)
+                    } else {
+                        RuntimeValue::Icon(value)
+                    }
+                }
                 _ => RuntimeValue::Error(format!("type\0{name}() requires text")),
             },
             "image" => match first {
@@ -1897,7 +2015,9 @@ impl<'a> Evaluator<'a> {
                     RuntimeValue::File(file) => RuntimeValue::Image(file.path),
                     value => value,
                 },
-                RuntimeValue::String(value) => RuntimeValue::Image(value),
+                value if string_data(&value).is_some() => {
+                    RuntimeValue::Image(string_data(&value).unwrap().to_owned())
+                }
                 _ => RuntimeValue::Error("type\0image() requires text, Link, URL or File".into()),
             },
             "link" => match first {
@@ -1910,12 +2030,9 @@ impl<'a> Evaluator<'a> {
                     resolved_path: Some(Some(file.path.clone())),
                     external: false,
                 }),
-                RuntimeValue::String(value) => self.make_link(&value, arguments.get(1).cloned()),
-                RuntimeValue::Link(link) if link.external => RuntimeValue::Link(BasesLink {
-                    display: arguments.get(1).map(plain_string),
-                    display_value: arguments.get(1).cloned().map(Box::new),
-                    ..link
-                }),
+                value if string_data(&value).is_some() => {
+                    self.make_link(string_data(&value).unwrap(), arguments.get(1).cloned())
+                }
                 _ => RuntimeValue::Error("type\0link() requires text, URL or File".into()),
             },
             "list" => match first {
@@ -1947,9 +2064,11 @@ impl<'a> Evaluator<'a> {
             }
             "now" => RuntimeValue::Date(self.now.clone()),
             "number" => match first {
-                RuntimeValue::String(value) => parse_number_prefix(&value)
-                    .map(RuntimeValue::Number)
-                    .unwrap_or_else(|| RuntimeValue::Error("type\0Invalid number".into())),
+                value if string_data(&value).is_some() => {
+                    parse_number_prefix(string_data(&value).unwrap())
+                        .map(RuntimeValue::Number)
+                        .unwrap_or_else(|| RuntimeValue::Error("type\0Invalid number".into()))
+                }
                 RuntimeValue::Bool(value) => RuntimeValue::Number(if value { 1.0 } else { 0.0 }),
                 RuntimeValue::Number(value) => RuntimeValue::Number(value),
                 RuntimeValue::Date(value) => RuntimeValue::Number(value.millis as f64),
@@ -1973,6 +2092,7 @@ impl<'a> Evaluator<'a> {
         arguments: &[Expr],
         scope: &Scope,
     ) -> RuntimeValue {
+        let name = canonical_function_name(name);
         let work = match &receiver {
             RuntimeValue::List(values) => values.len(),
             RuntimeValue::Object(values) => values.len(),
@@ -2746,7 +2866,7 @@ impl<'a> Evaluator<'a> {
     fn make_link(&mut self, target: &str, display: Option<RuntimeValue>) -> RuntimeValue {
         let (path, parsed_display) = parse_link_text(target);
         let external = is_external(&path);
-        let resolved = if external {
+        let resolved = if external || self.context.relationships.is_none() {
             None
         } else {
             match self.resolve_target(&path) {
@@ -2756,7 +2876,11 @@ impl<'a> Evaluator<'a> {
         };
         RuntimeValue::Link(BasesLink {
             target: resolved.as_ref().map(|(_, witness)| witness.clone()),
-            resolved_path: Some(resolved.map(|(path, _)| path)),
+            resolved_path: if external || self.context.relationships.is_some() {
+                Some(resolved.map(|(path, _)| path))
+            } else {
+                None
+            },
             external,
             path,
             display: display.as_ref().map(plain_string).or(parsed_display),
@@ -4397,6 +4521,34 @@ mod rich_expression_tests {
             eval("html('abc').upper()").unwrap_err().code,
             "unknown-function"
         );
+    }
+
+    #[test]
+    fn built_in_dispatch_is_case_insensitive_and_string_subclasses_convert() {
+        for source in [
+            "IF(true, 2, unknown()) == 2",
+            "DATE('2024-01-01').FORMAT('YYYY') == '2024'",
+            "'Hello'.CONTAINS('ell')",
+            "ICON('BOOK').LOWER() == 'book'",
+            "LINK(LINK('Note')).isType('link')",
+            "escapeHTML(icon('<')) == '&lt;'",
+            "duration('invalid') == null",
+            "escapeHTML(null) == null",
+            "date('20240121') == date('2024-01-21')",
+        ] {
+            assert_eq!(
+                eval(source).unwrap(),
+                BaseValue::Boolean { value: true },
+                "{source}"
+            );
+        }
+        assert_eq!(
+            clock_dependency("TODAY()", &mut |_| Some(())),
+            crate::query::BaseClockDependency::Day
+        );
+        assert!(uses_relationships(
+            "LINK('Note').ASFILE().properties.rating"
+        ));
     }
 
     #[test]

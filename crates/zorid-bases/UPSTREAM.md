@@ -43,6 +43,19 @@ Adaptations:
   have scoped compatibility adaptations. Unicode string helpers retain upstream
   scalar semantics and regex matching remains stateless.
 
+Current Bases pass (2026-10-21): built-in file/link resolution now uses the
+immutable generation namespace and shared hydrated metadata; no inherited
+ambient filesystem resolver is exposed. HTML/image/icon and rich link labels
+cross the wire as inert typed values. Hosts sanitize/resolve resources. Random
+uses captured view-load entropy plus row identity/revision with a portable
+bounded PRNG, rather than an ambient JavaScript/native RNG. Its accepted fixture
+now checks the independently authored [0,1) invariant; historical rejected-host
+expectations remain in the historical source corpus. English Moment calendar
+formatting and case-insensitive built-in dispatch are reference-backed local
+adaptations. See `docs/reference/bases-expression-matrix.md` for exact REA/artifact
+evidence, wire responsibilities, deliberate limits and pending acceptance.
+The earlier initial-API rejection notes above describe extraction history.
+
 Status (2026-10-17): extraction and query engine integrated on main426d3a6c.
 Scoped native expression/query/generation checks pass. Actual Chrome WASM runs
 pass54 accepted Base cases (30 expressions,10 queries,7 generation cases and7

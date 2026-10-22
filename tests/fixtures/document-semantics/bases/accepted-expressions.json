@@ -843,9 +843,9 @@
       ]
     },
     {
-      "id": "unsupported-host-function",
+      "id": "random-bounded",
       "request": {
-        "expression": "random()",
+        "expression": "random() >= 0 && random() < 1",
         "record": {
           "path": "a.md",
           "properties": []
@@ -854,17 +854,18 @@
           "clockMs": 1705314030000,
           "timezone": "UTC",
           "maxSteps": 100000,
-          "formulas": []
+          "formulas": [],
+          "randomSeed": 14
         }
       },
       "expected": {
-        "type": "error",
-        "code": "unknown-function"
+        "type": "boolean",
+        "value": true
       },
-      "expectationSource": "current",
+      "expectationSource": "reference-backed independent bounded invariant",
       "evidence": [
-        "src/bases/expression.ts",
-        "tests/bases-expression.test.ts"
+        "docs/reference/bases-expression-matrix.md",
+        "REA ev_1d006a595ebc4f81549ee54555dcc53e6ff5a12e6ac6cf3dc15b48b176836ad4 (Obsidian1.14.4 random registration)"
       ]
     },
     {
