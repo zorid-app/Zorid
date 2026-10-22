@@ -2,6 +2,13 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Electron008 passes the exact null-group summary oracle, then exposes Summary
+actions opening below the viewport and hiding Delete summary. Scoped placement
+fix/regression is owned by `bases_session`; actual full journey remains open.
+The all-null summary was a harness error, supported by actual raw core output
+and REA; it is not a product arithmetic defect. Reviewed sidebar rename/race and
+plain-link picker fixes are composed in isolation, awaiting final runtime checks.
+
 Latest actual Electron007 reaches144 actions/14 checks and passes the previous
 filter-focus and Results continuation gates, including full CSV export. It stops
 at a blank all-null-group custom summary where the harness expected1; reference

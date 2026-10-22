@@ -9,6 +9,26 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+2026-10-22 actual Electron008 at `e1817cb0` reaches154 actions/15 checks. The
+corrected custom-summary oracle passes all4 independently scoped groups, exact
+member paths/counts, explicit blank/null and overall214. It then exposes a real
+popover geometry defect: Summary actions expands below the viewport, leaving
+Delete summary unreachable. `bases_session` owns the narrow placement fix and
+regression. Source/artifact fingerprints remain identical; exact owned-process
+checks confirm the app/native host are closed. The complete heavy-user journey
+remains open. Disk initially blocked launch; disposable coordinator test binaries
+and12 verified-clean obsolete worktrees were removed, retaining branches,
+commits, runtime evidence and product binaries (cleanup receipt in private tmp).
+
+Reviewed source composition now includes sidebar rename/newer-selection teardown
+`bc22d072`/`8f7377ec`, plain-link candidate/current-display identity guards
+`1d01d893`/`acda8704`, and all-null group regression `062d0335`. Focused TS
+composition is running; changed Rust/native/WASM artifacts are not yet rebuilt
+or accepted. Standalone source recovery is independently reviewing; editable
+Base hover integration and List file-drag gaps have named layout/workspace owners.
+Reference-only hover runtime is owned by `bases_docs_model`; heavy builds remain
+serialized behind that app slot. Supplemental campaign sources remain unexecuted.
+
 2026-10-22 browser/WASM003 at `6808bf5e` passes all9 semantic groups with no
 unexecuted groups, runner error, artifact mismatch or cleanup failure. The report
 retains dedicated Worker observations, completed normal Worker GET200 and exact
