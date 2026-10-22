@@ -170,6 +170,7 @@ fn groups_and_summary_values_use_the_same_reference_object_text() {
         "values[0].toString()",
         &[&base],
         &[],
+        None,
         &crate::EvaluationOptions::default(),
         None,
         None,
@@ -233,6 +234,8 @@ fn captured_internal_link_string_methods_read_original_data_without_mutating_loo
         evaluated("note.payload.toString()", value),
         expected("[[../Original#H|Alias]]")
     );
+    assert_eq!(evaluated("note.payload.length", RuntimeValue::Link(link.clone())), BaseValue::Number { value: 13.0 });
+    assert_eq!(evaluated("note.payload.lower()", RuntimeValue::Link(link.clone())), expected("../original#h"));
     assert_eq!(link.path, "Canonical/Resolved.md");
     assert_eq!(
         link.resolved_path,

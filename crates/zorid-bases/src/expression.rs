@@ -2086,6 +2086,10 @@ fn tag_matches(tag: &str, query: &str) -> bool {
         && (tag.len() == query.len() || tag.as_bytes().get(query.len()) == Some(&b'/'))
 }
 
+fn link_string_data(link: &BasesLink) -> &str {
+    if link.external { &link.path } else { link.raw_destination.as_deref().unwrap_or(&link.path) }
+}
+
 fn string_data(value: &RuntimeValue) -> Option<&str> {
     match value {
         RuntimeValue::String(value)
@@ -2093,7 +2097,7 @@ fn string_data(value: &RuntimeValue) -> Option<&str> {
         | RuntimeValue::Html(value)
         | RuntimeValue::Image(value)
         | RuntimeValue::Icon(value) => Some(value),
-        RuntimeValue::Link(link) => Some(if link.external { &link.path } else { link.raw_destination.as_deref().unwrap_or(&link.path) }),
+        RuntimeValue::Link(link) => Some(link_string_data(link)),
         _ => None,
     }
 }
@@ -3697,8 +3701,9 @@ impl<'a> Evaluator<'a> {
                     _ => RuntimeValue::Error("type\0linksTo() requires a File".into()),
                 }
             }
-            // Obsidian applies string functions to a link's path, e.g. `link.replace(...)`.
-            _ => self.string_method(&link.path, name, arguments),
+            // String inheritance reads original constructor data. Immutable
+            // lookup and presentation paths remain separate captured fields.
+            _ => self.string_method(link_string_data(link), name, arguments),
         }
     }
 
@@ -3715,7 +3720,7 @@ impl<'a> Evaluator<'a> {
                 RuntimeValue::Number(value.chars().count() as f64)
             }
             RuntimeValue::Link(value) if property.eq_ignore_ascii_case("length") => {
-                RuntimeValue::Number(value.path.chars().count() as f64)
+                RuntimeValue::Number(link_string_data(&value).chars().count() as f64)
             }
             RuntimeValue::List(values) | RuntimeValue::TagList(values)
                 if property.eq_ignore_ascii_case("length") =>
