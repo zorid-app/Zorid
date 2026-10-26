@@ -17,8 +17,8 @@ const specs={
   'view-menu':['Initial Table/Cards/List/Board ordering.'],
   'table-view-settings':['Configure Table while Table remains the active layout.'],
   'view-actions':['View actions; reference shell/menu glyph differences remain reviewable.'],
-  'results-menu':['Three results; no limit.','Retained reference includes an unrelated extra Untitled Base in its explorer.'],
-  'filter-menu':['Same Base-wide two-condition membership.','Retained reference has a transient unsaved visual condition; this capture keeps the actual saved filter state.'],
+  'results-menu':['Three results; no limit.'],
+  'filter-menu':['Same Base-wide two-condition membership.'],
   'properties-menu':['Five displayed properties; no registry.'],
   'sort-menu':['No configured sort.'],
   'group-menu':['Table has no grouping.'],
@@ -27,7 +27,7 @@ const specs={
   'summary-picker':['Cost previews from numeric10/20 and one null; selected Sum preview must be30.'],
   'summary-sum-selected':['Selected Sum30 with all three notes.'],
   'cards-view-settings':['Configure Cards while Table is still active; size200, no image, ratio1.'],
-  'cards-layout':['Cards renamed Gallery; same three notes and ordered file/status/cost fields.','Retained reference has Gallery as default after reorder; this changes menu order, not these cards.'],
+  'cards-layout':['Cards renamed Gallery; same three notes and ordered file/status/cost fields.'],
   'list-view-settings':['Configure List while Gallery remains active.'],
   'list-layout':['Bullet list; separator comma-space; no indentation.'],
   'kanban-view-settings':['Configure Board while List remains active; width280, no image, ratio0.5.'],
@@ -37,6 +37,31 @@ const specs={
   'new-title-focused':['Separate Single/Solo table state; three originals, priorUntitled and newUntitled1.','Template body remains a deliberate Zorid addition; title focus and exact selected text are independently asserted.'],
   'new-title-focus-retained':['Same New title remains selected after1000ms with no input.'],
 };
+
+// A fresh reference version must carry its own successful runtime provenance;
+// old screenshots are not relabelled merely because the installed app updated.
+export function validateReferenceProvenance(value,labels=Object.keys(specs)){
+  assert.equal(value?.schemaVersion,1,'Known visual reference provenance schema');
+  assert.equal(value.kind,'actual-obsidian-bases-visual-reference');
+  assert.equal(value.status,'passed','Complete reference capture run required');
+  assert.equal(value.application?.name,'Obsidian');
+  assert.match(value.application.version,/^\d+\.\d+\.\d+$/,'Explicit observed reference version');
+  assert.equal(value.runtime?.applicationVersion,value.application.version,'Observed runtime and selected package version agree');
+  for(const key of ['sha256','appJsSHA256'])assert.match(value.application.artifact?.[key]??'',/^[a-f0-9]{64}$/,'Pinned reference artifact '+key);
+  assert.deepEqual(value.viewport,{width:1024,height:800,deviceScaleFactor:2});
+  assert.equal(value.theme,'dark');assert.equal(value.nativeMenus,false);
+  assert.equal(value.sourceFrozen,true,'Reference helper/fixtures remained unchanged');
+  assert.equal(value.cleanup?.verified,true,'Reference owned-process cleanup verified');
+  assert.ok(Array.isArray(value.states));
+  assert.deepEqual(value.states.map(state=>state.label),labels,'Exact complete matched state sequence');
+  for(const state of value.states){
+    assert.ok(Array.isArray(state.notes)&&state.notes.every(note=>typeof note==='string'),'Observed per-state notes');
+    assert.match(state.sourceSHA256??'',/^[a-f0-9]{64}$/,'Exact captured Base source identity');
+  }
+  assert.ok(value.files&&typeof value.files==='object'&&!Array.isArray(value.files));
+  for(const file of [...labels.flatMap(label=>[label+'.png',label+'.json']),'capture-catalog.json','before-template-base.txt'])assert.match(value.files[file]??'',/^[a-f0-9]{64}$/,'Reference file identity '+file);
+  return value;
+}
 
 async function dismiss(c,label){
   for(let i=0;i<3&&await c.ui.dom(`return !!document.querySelector(${JSON.stringify(panel(label))});`);i++){await c.ui.key('Escape');await delay(300);}
@@ -57,23 +82,36 @@ async function offline(c,label,files){
 export async function journey(c){
   const arg=process.argv.indexOf('--reference');assert.ok(arg>=0&&process.argv[arg+1],'Explicit --reference');
   const reference=await fs.realpath(process.argv[arg+1]);
+  const provenanceBytes=await fs.readFile(path.join(reference,'reference-provenance.json'));
+  const provenance=validateReferenceProvenance(JSON.parse(provenanceBytes));
+  const referenceFiles=new Map([['reference-provenance.json',hash(provenanceBytes)]]),captures=[];
+  for(const[file,expected]of Object.entries(provenance.files)){
+    assert.ok(!path.isAbsolute(file)&&!file.split('/').includes('..'),'Owned relative reference file');
+    assert.equal(hash(await fs.readFile(path.join(reference,file))),expected,'Reference provenance file identity '+file);
+    referenceFiles.set(file,expected);
+  }
   const catalog=JSON.parse(await fs.readFile(path.join(reference,'capture-catalog.json'),'utf8'));
-  const referenceFiles=new Map(),captures=[];
+  assert.ok(Array.isArray(catalog));assert.deepEqual(catalog.map(item=>item.label),Object.keys(specs),'Exact matched capture catalog');
+  const notes=label=>[...specs[label],...provenance.states.find(state=>state.label===label).notes];
   for(const label of Object.keys(specs)){
     const png=await fs.readFile(path.join(reference,label+'.png')),json=await fs.readFile(path.join(reference,label+'.json'));
     const expected=catalog.find(item=>item.label===label);assert.ok(expected,'Known reference state '+label);assert.equal(hash(png),expected.sha256,'Retained reference PNG identity '+label);
+    const state=JSON.parse(json),declared=provenance.states.find(item=>item.label===label);
+    assert.equal(state.applicationVersion,provenance.application.version,'Reference state version '+label);
+    assert.deepEqual(state.viewport,provenance.viewport,'Reference state viewport '+label);assert.equal(state.theme,'dark','Reference state theme '+label);
+    assert.equal(typeof state.baseSource,'string');assert.equal(hash(state.baseSource),declared.sourceSHA256,'Reference state source identity '+label);
     assert.deepEqual([png.readUInt32BE(16),png.readUInt32BE(20)],[2048,1600],'Reference pixels '+label);
     for(const[ext,bytes]of[['png',png],['json',json]]){referenceFiles.set(label+'.'+ext,hash(bytes));await fs.writeFile(path.join(c.outputDirectory,'obsidian-'+label+'.'+ext),bytes);}
   }
   const reconstruction=await fs.readFile(path.join(reference,'before-template-base.txt'));referenceFiles.set('before-template-base.txt',hash(reconstruction));
-  c.evidence.reference={directory:reference,files:Object.fromEntries(referenceFiles),reconstructionSource:reconstruction.toString(),captureSpecs:specs};
-  c.evidence.limitations.push('Matching reference data/viewport and paired screenshots are inputs to visual review, not an automated pixel-parity assertion.','Reference later captures include unrelated explorer entries and some transient controls; each unmatched state is explicitly labelled.');
+  c.evidence.reference={directory:reference,application:provenance.application,runtime:provenance.runtime,files:Object.fromEntries(referenceFiles),reconstructionSource:reconstruction.toString(),captureSpecs:specs};
+  c.evidence.limitations.push('Matching reference data/viewport and paired screenshots are inputs to visual review, not an automated pixel-parity assertion.','Per-state reference observations and deliberate Zorid additions are recorded separately; an older reference version is not assumed equivalent.');
   const capture=async(label,extra={})=>{
     assert.ok(Object.hasOwn(specs,label));await c.ui.wait(`return innerWidth===1024&&innerHeight===800&&devicePixelRatio===2;`,'Capture viewport '+label);
     await c.screenshot(label);
     const snapshot=await c.ui.dom(`const rect=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return{x:r.x,y:r.y,width:r.width,height:r.height,font:s.font,fontSize:s.fontSize,padding:s.padding,border:s.border,bg:s.backgroundColor}};const visible=e=>e.getClientRects().length&&!e.closest('[hidden]');const focused=document.activeElement;return{title:document.title,viewport:{width:innerWidth,height:innerHeight,deviceScaleFactor:devicePixelRatio},theme:document.documentElement.dataset.theme,focused:focused?{tag:focused.tagName,cls:focused.className,text:focused.innerText?.slice(0,200),value:focused.value??null,selectedText:document.getSelection()?.toString()}:null,body:document.body.innerText,menus:[...document.querySelectorAll('[role=dialog],[role=menu],.bases-new-item-popover')].filter(visible).map(e=>({cls:e.className,aria:e.getAttribute('aria-label'),text:e.innerText,rect:rect(e)})),inputs:[...document.querySelectorAll('input,textarea,select')].filter(visible).map(e=>({tag:e.tagName,type:e.type,value:e.value,aria:e.getAttribute('aria-label'),cls:e.className})),metrics:[...document.querySelectorAll('.bases-session-toolbar,.bases-toolbar-action,.zorid-bases-table-header,.zorid-bases-table-column,.zorid-bases-table-body [role=row],.bases-cards-item,.bases-list-item,.bases-kanban-column,.bases-kanban-card')].filter(visible).slice(0,80).map(e=>({cls:e.className,text:e.innerText.slice(0,100),...rect(e)}))};`);
     const png=await fs.readFile(path.join(c.outputDirectory,label+'.png'));assert.deepEqual([png.readUInt32BE(16),png.readUInt32BE(20)],[2048,1600],'Actual capture pixels');
-    const row={label,referencePNG:'obsidian-'+label+'.png',actualPNG:label+'.png',referenceJSON:'obsidian-'+label+'.json',actualJSON:label+'.json',actualSHA256:hash(png),notes:specs[label],...extra};
+    const row={label,referencePNG:'obsidian-'+label+'.png',actualPNG:label+'.png',referenceJSON:'obsidian-'+label+'.json',actualJSON:label+'.json',actualSHA256:hash(png),notes:notes(label),...extra};
     await fs.writeFile(path.join(c.outputDirectory,label+'.json'),JSON.stringify({...snapshot,...row,baseSource:await c.read(label.startsWith('new-title')?'Single.base':'Reference.base')},null,2));captures.push(row);c.evidence.checks.push({name:'matched-reference-capture-'+label,...row});
   };
   try{
@@ -123,7 +161,7 @@ export async function journey(c){
     for(const[file,expected]of referenceFiles)assert.equal(hash(await fs.readFile(path.join(reference,file))),expected,'Reference capture remained immutable '+file);
     c.evidence.visualCaptures=captures;c.evidence.reference.verifiedAfter=true;
     await fs.writeFile(path.join(c.outputDirectory,'visual-comparison.json'),JSON.stringify({viewport:{width:1024,height:800,deviceScaleFactor:2},reference:Object.fromEntries(referenceFiles),captures,reviewStatus:'Paired evidence only; visual review pending'},null,2));
-    const rows=captures.map(row=>`<section><h2>${escape(row.label)}</h2><p>${row.notes.map(escape).join(' ')}</p><div class="pair"><figure><figcaption>Obsidian1.14.4</figcaption><img src="${escape(row.referencePNG)}"></figure><figure><figcaption>Zorid</figcaption><img src="${escape(row.actualPNG)}"></figure></div><a href="${escape(row.referenceJSON)}">Reference state</a> · <a href="${escape(row.actualJSON)}">Actual state</a></section>`).join('\n');
+    const rows=captures.map(row=>`<section><h2>${escape(row.label)}</h2><p>${row.notes.map(escape).join(' ')}</p><div class="pair"><figure><figcaption>Obsidian ${escape(provenance.application.version)}</figcaption><img src="${escape(row.referencePNG)}"></figure><figure><figcaption>Zorid</figcaption><img src="${escape(row.actualPNG)}"></figure></div><a href="${escape(row.referenceJSON)}">Reference state</a> · <a href="${escape(row.actualJSON)}">Actual state</a></section>`).join('\n');
     await fs.writeFile(path.join(c.outputDirectory,'visual-comparison.html'),`<!doctype html><meta charset="utf-8"><title>Bases matched visual evidence</title><style>body{margin:24px;background:#171717;color:#ddd;font:15px system-ui}section{margin:28px 0;border-top:1px solid #555}.pair{display:flex;gap:16px;overflow:auto}figure{margin:0;min-width:512px;flex:1}img{width:100%;height:auto}a{color:#b9a4ff}figcaption{padding:8px}</style><h1>Bases matched visual evidence</h1><p>1024×800 CSS pixels, DPR2, dark, three-note reference fixture. These pairs require visual review; capture completion is not a parity claim. Per-state differences are explicit.</p>${rows}`);
   }
 }
