@@ -2,6 +2,21 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+User screenshot 2026-10-26: native “The vault could not finish saving” / “Keep
+open” dialog during disposable Recovery001. Actual first failed-checkpoint retry
+and newer-draft continuation/restart pass, but subsequent held acceptedA/newB
+close scenario retains B and enhanced CM Tab does not resubmit it. Nativefallback
+contrast passes, enhanced version fails; bases_recovery_close owns narrow explicit
+commit bridge, independent review pending. Do not mark recovery complete or
+silently replace the B expectation with the older saved A.
+
+Fresh split/navigation defect fixed at7e12ab41 with explicit test setup11c246a9;
+25 focused checks and desktop002 pass, native rerun pending. Typed filter001 stops
+after five full String cases because operator model is sampled before expected
+notEndsWith appears; causal readiness audit pending, no semantic change approved.
+Fresh CLI125commands/17checks and browser19groups/162typed checks pass.
+
+
 2026-10-26 resume: ordinary property physical-source guard is now composed at
 b2ff6666, preserving original saved baseline/capture through retry and refusing
 physical edits before new authorship. Historical7null first arose in delayed

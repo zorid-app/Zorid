@@ -9,6 +9,38 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest 2026-10-26: CLI99317 PASSES125commands/17checks, browser30342 PASSES
+19groups/162typedexpectations/16Q3diagnostics on currentRust07265/core products.
+Fresh reports are archived under ignored local
+`tmp/bases-validation-20261026/fresh-validation-001.tar.gz` with verified per-file
+manifest. Raw historical evidence absence is not repaired by these fresh passes.
+
+Safety001/41873 FAILS7actions/1check before ordinary editor setup: explorerA
+click13ms after Split right command, twoBases remain; ownedSIGTERM0/no leaks,
+freezeverified. Independent actualWorkspace regression proves an uncovered
+initial destination-render navigation race; reviewed fix0e628f31 composes as
+7e12ab41. Reviewed explicit split/note-mode setup7eb2609f composes11c246a9.
+Root25 composed navigation/setup tests PASS0skip; desktop002/90921 PASS incl
+TypeScript on74dcc2a9. Current frontend receipt
+`/private/tmp/zorid-bases-20261026-products-001/frontend-receipt-002.json`.
+Reviewed visual provenance63262c21 composes74dcc2a9; actual current reference
+capture and visual comparison are still pending.
+
+Recovery001/7413 FAILS28actions/24checks: genuine checkpoint failure/original
+retry/automatic newerB continuation plus exact restart PASS, then held acceptedA
+plus newerB/close retains B but enhanced editor Tab cannot resubmit. User sent
+native close-blocked dialog screenshot during this disposable-vault campaign;
+it is data-preservation behavior, not a full recovery pass. Last owned app
+requiredSIGKILL cleanup/no leaks; first two normal quits exit0; freezeverified.
+`bases_recovery_close` owns the causal native-fallbackPASS/enhancedRED commit
+bridge fix; `bases_seam_review` owns independent review. No native acceptance yet.
+Filter001/38152 FAILS88actions/33checks after five full String cases; immediate
+operator model rejectsnotEndsWith after changing property, readiness diagnosis
+owned by bases_filter_readiness. Expected exact sources/members remain unchanged.
+Root starts fresh Safety with reviewed navigation/setup on the new frontend;
+other workers remain source-only in isolated worktrees, no concurrent app/build.
+
+
 Resume 2026-10-26: root isolated branch composes ordinary property physical
 source guard `b2ff6666` (reviewed originalff7750e7) and published table-history
 readiness `4453e584` (reviewed original641559da), plus historical reference006
