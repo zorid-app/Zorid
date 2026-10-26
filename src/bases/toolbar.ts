@@ -670,6 +670,9 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
                 if(!live()||descriptor.kind!=='unknown'||value.fields!==fields||value.source!==undefined||value.advanced
                   ||fields.text!==''||fields.arguments!==undefined||fields.values!==undefined||Object.hasOwn(fields,'operand')
                   ||editor.hasDraft()||!field||field.value!==''||field.validity.badInput
+                  // Native action buttons activate on Space release; keep their
+                  // original target until focus leaves. Combobox keys are owned.
+                  ||row.contains(focused)&&focused instanceof doc.defaultView!.HTMLButtonElement&&focused.getAttribute('role')!=='combobox'
                   ||host.contains(focused)||row.querySelector('[aria-expanded="true"],[role="listbox"]'))return;
                 const supplied=filterAdvice.filterProperty?.(fields.property);
                 if(!supplied||supplied.kind==='unknown')return;

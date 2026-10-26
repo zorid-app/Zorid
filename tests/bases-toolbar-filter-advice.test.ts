@@ -131,6 +131,45 @@ test('a real combobox press survives metadata delivery until its single release 
  }finally{f.cleanup();}
 });
 
+test('blank-row native action buttons retain their Space activation targets through metadata delivery',()=>{
+ for(const label of ['Remove filter','Edit expression']){
+  const f=fixture();try{
+   const row=f.row(),button=f.get<HTMLButtonElement>(label,row);button.focus();
+   button.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:' ',code:'Space',bubbles:true,cancelable:true}));
+   f.advice();f.refresh();assert.equal(f.row(),row,label);assert.equal(button.isConnected,true,label);assert.equal(f.doc.activeElement,button,label);
+   button.dispatchEvent(new f.dom.window.KeyboardEvent('keyup',{key:' ',code:'Space',bubbles:true,cancelable:true}));button.click();
+   assert.equal(row.isConnected,false,label+' original activation still runs');
+   if(label==='Remove filter')assert.equal(f.doc.querySelectorAll('.bases-filter-condition').length,1);
+   else assert.equal(f.get<HTMLTextAreaElement>('Filter expression',f.row()).value,'');
+   assert.deepEqual(f.saves,[]);
+  }finally{f.cleanup();}
+ }
+});
+
+test('a real closed Property combobox consumes Space immediately and keeps later blank-row recovery available',()=>{
+ const f=fixture();try{
+  const row=f.row(),button=f.get<HTMLSelectElement>('Filter property',row).nextElementSibling as HTMLButtonElement;button.focus();
+  const down=new f.dom.window.KeyboardEvent('keydown',{key:' ',code:'Space',bubbles:true,cancelable:true});button.dispatchEvent(down);
+  assert.equal(down.defaultPrevented,true,'The real combobox owns Space on keydown rather than delayed native button click');
+  const popup=f.doc.querySelector('[role="listbox"]');assert.ok(popup);f.advice();f.refresh();assert.equal(f.row(),row);assert.equal(f.doc.querySelector('[role="listbox"]'),popup);
+  button.dispatchEvent(new f.dom.window.KeyboardEvent('keyup',{key:' ',code:'Space',bubbles:true,cancelable:true}));
+  (f.doc.activeElement as HTMLElement).dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+  assert.equal(f.doc.activeElement,button);assert.equal(button.getAttribute('aria-expanded'),'false');
+  f.refresh();assert.notEqual(f.row(),row,'Closed property focus must not permanently block newly current String operators');assert.ok(f.catalog().includes('notEndsWith'));assert.deepEqual(f.saves,[]);
+ }finally{f.cleanup();}
+});
+
+test('leaving a focused blank-row action button permits safe current advice recovery without writing a draft',()=>{
+ for(const label of ['Remove filter','Edit expression']){
+  const f=fixture();try{
+   const before=f.document.toString(),row=f.row(),button=f.get<HTMLButtonElement>(label,row);button.focus();f.advice();f.refresh();
+   assert.equal(f.row(),row);assert.equal(f.doc.activeElement,button);assert.equal(f.catalog().includes('notEndsWith'),false);
+   f.doc.querySelector<HTMLButtonElement>('#outside')!.focus();f.refresh();assert.notEqual(f.row(),row);assert.ok(f.catalog().includes('notEndsWith'));
+   assert.equal(f.document.toString(),before);assert.deepEqual(f.saves,[]);assert.deepEqual(f.errors,[]);
+  }finally{f.cleanup();}
+ }
+});
+
 test('cancel, drag-out, drag-end and lost focus cannot leave a permanent pointer refresh fence',()=>{
  for(const ending of ['pointercancel','outside-up','dragend','blur']as const){
   const f=fixture();try{
