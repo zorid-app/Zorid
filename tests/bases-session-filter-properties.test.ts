@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import {MemoryAdapter} from '../src/core/memory-adapter.ts';
 import {Vault} from '../src/core/vault.ts';
 import {createDocumentService} from '../src/core/document-semantics.ts';
-import type {DocumentEntry, DocumentMetadata, DocumentMetadataRowsItem, DocumentProperty, DocumentService, DocumentSnapshotId, DocumentTransport} from '../src/core/document-semantics.ts';
+import type {DocumentBaseResult,DocumentEntry, DocumentMetadata, DocumentMetadataRowsItem, DocumentProperty, DocumentService, DocumentSnapshotId, DocumentTransport} from '../src/core/document-semantics.ts';
 import type {DocumentRuntimeUpdate} from '../src/core/document-runtime.ts';
 import type {VaultEntry} from '../src/core/types.ts';
-import {baseSessionFilterProperties,baseSessionFilterPropertyProvider} from '../src/bases/session.ts';
+import {baseSessionFilterProperties,baseSessionFilterPropertyProvider,createBaseSession} from '../src/bases/session.ts';
 import type {BasePropertyDefinitions} from '../src/bases/property-definitions.ts';
 import {JSDOM} from 'jsdom';
 import {BaseDocument} from '../src/bases/document.ts';
@@ -25,7 +25,7 @@ async function until(check:()=>boolean){for(let i=0;i<100&&!check();i++)await ne
 function harness(rows:DocumentMetadataRowsItem[],pending=false) {
  type Generation={snapshot:DocumentSnapshotId;source:{localStoreId:string;watermark:string};rows:DocumentMetadataRowsItem[];coverage:boolean};
  let generation:Generation={snapshot:{localStoreId:'store',generationEpoch:'epoch',generation:'1',versions},source:{localStoreId:'store',watermark:'1'},rows,coverage:true};
- let listener:((update:DocumentRuntimeUpdate|null)=>void)|undefined,notReady=pending,failRead=false,release:(()=>void)|undefined,closeGate:Promise<void>|undefined;
+ const listeners=new Set<(update:DocumentRuntimeUpdate|null)=>void>();let notReady=pending,failRead=false,release:(()=>void)|undefined,closeGate:Promise<void>|undefined;
  const pins=new Map<string,Generation>();let next=0;
  const update=():DocumentRuntimeUpdate=>({lifetime:'life',revision:generation.snapshot.generation,source:generation.source,published:generation.snapshot,freshness:'current',phase:'idle',progress:null,coverageComplete:generation.coverage,hasForegroundDemand:false,error:null});
  const unused=async():Promise<never>=>{throw Error('Filter types must not read bodies, evaluate queries or request maintenance');};
@@ -34,7 +34,7 @@ function harness(rows:DocumentMetadataRowsItem[],pending=false) {
   closePin:async pinId=>{await closeGate;pins.delete(pinId);},
   metadataRows:async input=>{if(failRead)throw {code:'invalid_response'};const g=pins.get(input.pinId)!;return {result:{snapshot:g.snapshot,source:g.source,coverageComplete:g.coverage,value:{snapshot:g.snapshot,next:null,scanComplete:true,coverageComplete:g.coverage,complete:g.coverage,mode:'reset',from:null,rows:g.rows,removedEntryIds:[]}},cursor:null};},
  };
- const service:DocumentService={...createDocumentService(transport),maintenance:{observeAndSubscribe:async callback=>{listener=callback;return {snapshot:update(),unsubscribe(){listener=undefined;}};},requestFreshness:()=>{throw Error('No metadata pump from a filter control');}}};
+ const service:DocumentService={...createDocumentService(transport),maintenance:{observeAndSubscribe:async callback=>{listeners.add(callback);return {snapshot:update(),unsubscribe(){listeners.delete(callback);}};},requestFreshness:()=>{throw Error('No metadata pump from a filter control');}}};
  class Adapter extends MemoryAdapter {
   readonly documentSemantics=service;reads=0;identities=new Map(rows.map(row=>[member(row).path,member(row)]));
   override async list(){return(await super.list()).map(row=>this.identify(row));}
@@ -45,7 +45,7 @@ function harness(rows:DocumentMetadataRowsItem[],pending=false) {
  const adapter=new Adapter(Object.fromEntries(rows.map(row=>[member(row).path,'---\nnotCaptured: true\n---\n# Never parse this body']))),vault=new Vault(adapter);
  return {vault,adapter,pins,snapshot:(definitions=empty,known:string[]=[],current=()=>true)=>baseSessionFilterProperties(vault,definitions,known,current),
   set(rows:DocumentMetadataRowsItem[],coverage=true){const n=String(Number(generation.snapshot.generation)+1);generation={snapshot:{...generation.snapshot,generation:n},source:{...generation.source,watermark:n},rows,coverage};},
-  wake(){notReady=false;listener?.(update());},failRead(){failRead=true;},holdClose(){closeGate=new Promise<void>(done=>{release=done;});return()=>release?.();},
+  wake(){notReady=false;for(const listener of [...listeners])listener(update());},failRead(){failRead=true;},holdClose(){closeGate=new Promise<void>(done=>{release=done;});return()=>release?.();},
  };
 }
 
@@ -205,4 +205,101 @@ test('a saved supported inverse method reopens structured after a retired openin
   assert.deepEqual([...row.querySelectorAll('.bases-filter-operand-chip span')].map(element=>element.textContent),['beta','gamma']);
   assert.equal(document.toString(),original);assert.deepEqual(saves,[]);assert.deepEqual(errors,[]);assert.deepEqual(old('note.text'),{kind:'unknown',metadataStatus:'unavailable'});
  }finally{current=false;toolbar.destroy();dom.window.close();await h.vault.closeMetadataProjection();}
+});
+
+async function metadataSessionFixture(beforeMetadata?:(session:ReturnType<typeof createBaseSession>,status:string)=>void){
+ const base='filters: \'note.kind == "typed-filter"\'\nproperties:\n  note.text: {displayName: Original label}\nviews:\n  - type: table\n    name: Typed\n    order: [file.name, note.text]\n    filters: \'!note["text"].startsWith("Alpha")\'\n';
+ const declarations='properties:\n  text: {type: text}\n';
+ const rows=[file('Work.base',[]),file('Properties.yaml',[]),file('Items/Deep/C.md',[property('text','text','delta beta')]),file('Items/D.md',[property('text','text','')]),file('Items/E.md',[property('text','text','ALPHA')])];
+ const h=harness(rows),service=h.adapter.documentSemantics,open=service.open.bind(service);let queries=0;
+ const observation=()=>{const frame=h.vault.metadataFrame!.frame!;return{source:frame.source,published:frame.snapshot,current:true,rebuildRequired:false,coverageComplete:true};};
+ service.status=async()=>{const current=observation();return{source:current.source,snapshot:current.published,coveredSource:current.source,current:true,rebuildRequired:false,coverageComplete:true};};
+ service.maintenance!.requestFreshness=()=>({result:Promise.resolve(observation()),async cancel(){}});
+ // Separate query and metadata consumers use the same public service. The
+ // literal core-query reply is already filtered C/D/E, matching native004; no
+ // TypeScript filter evaluation supplies membership or category authority.
+ service.open=async()=>{
+  const pin=await open();return{...pin,
+   metadata:async id=>({source:pin.source,snapshot:pin.snapshot,coverageComplete:true,value:{entry:member(rows.find(row=>member(row).id===id||member(row).path===id)!),metadata:null,exclusion:null}}),
+   base:async()=>{
+    queries++;const result:DocumentBaseResult={snapshotId:pin.snapshot,view:BaseDocument.parse(base).views[0],rows:rows.slice(2).map(row=>({entryId:member(row).id,revision:member(row).revision,path:member(row).path,values:{'file.name':{type:'string' as const,value:member(row).path.split('/').pop()!.slice(0,-3)},'note.text':{type:'string' as const,value:row.kind==='file'?row.value.metadata!.properties[0].value as string:''}}})),groups:[{key:null,keyId:null,entryIds:rows.slice(2).map(row=>member(row).id)}],groupOptions:[],properties:['file.name','note.text'],availableProperties:['file.name','note.text'],counts:{scanned:5,matched:3,afterGroupOrder:3,afterSearch:3,returned:3},diagnostics:[],relationshipsAvailable:true,metadataComplete:true,metadataIssues:[],stepsUsed:1};
+    return{source:pin.source,snapshot:pin.snapshot,coverageComplete:true,value:{definition:member(rows[0]),result}};
+   }};
+ };
+ await h.adapter.write('Work.base',base);await h.adapter.write('Properties.yaml',declarations);await h.vault.initialize();
+ const dom=new JSDOM('<main></main><button id="outside">Outside</button>',{pretendToBeVisual:true}),doc=dom.window.document,errors:unknown[]=[];
+ let subscriptions=0;const subscribe=h.vault.onMetadata.bind(h.vault);h.vault.onMetadata=callback=>{subscriptions++;const stop=subscribe(callback);return()=>{subscriptions--;stop();};};
+ let session:ReturnType<typeof createBaseSession>;const stopEarly=beforeMetadata?h.vault.onMetadata(state=>beforeMetadata(session,state.status)):()=>{};
+ session=createBaseSession(doc.querySelector('main')!,{vault:h.vault,basePath:'Work.base',validate(){},openFile(){},buffers:{validate(){},async getBuffer(){throw Error('Advisory refresh cannot request an edit buffer');}},onError:error=>errors.push(error)});
+ await session.ready;assert.ifError(session.state.error);
+ const panel=()=>doc.querySelector<HTMLElement>('[role="dialog"][aria-label="Filter"]')!;
+ const row=()=>panel().querySelectorAll('.bases-filter-section')[1].querySelector<HTMLElement>('.bases-filter-condition')!;
+ const cancel=()=>doc.querySelector<HTMLButtonElement>('button[aria-label="Cancel"]')?.click();
+ return{h,rows,base,declarations,dom,doc,session,errors,panel,row,cancel,queries:()=>queries,subscriptions:()=>subscriptions,
+  open(){doc.querySelector<HTMLButtonElement>('button[aria-label="Filter"]')!.click();},
+  async advance(duringStale?:()=>void){const next=String(Number(h.vault.metadataFrame!.frame!.snapshot.generation)+1);let invoked=false;const stop=duringStale?h.vault.onMetadata(state=>{if(!invoked&&state.status==='stale'){invoked=true;duringStale();}}):()=>{};try{h.set(rows);h.wake();await until(()=>h.vault.metadataFrame?.status==='current'&&h.vault.metadataFrame.frame?.snapshot.generation===next);}finally{stop();}if(duringStale)assert.equal(invoked,true);},
+  async cleanup(){stopEarly();cancel();await session.close();await h.vault.closeMetadataProjection();dom.window.close();}};
+}
+
+test('actual session refreshes declared filter advice when metadata alone advances after its query result',async()=>{
+ const f=await metadataSessionFixture();try{
+  const original=f.session.state,queryCount=f.queries(),actions=[...f.doc.querySelectorAll('.bases-toolbar-action')],grid=f.doc.querySelector('[role="grid"]');
+  assert.equal(baseSessionFilterPropertyProvider(f.h.vault,{properties:{text:{type:'text'}},diagnostics:[]},['note.text'],()=>true)('note.text')?.kind,'string');
+  await f.advance();assert.equal(f.session.state,original,'Metadata advice does not publish a new query result or mutation witness');assert.equal(f.queries(),queryCount);
+  assert.deepEqual([...f.doc.querySelectorAll('.bases-toolbar-action')],actions,'Metadata does not replace toolbar actions');assert.equal(f.doc.querySelector('[role="grid"]'),grid,'Metadata does not remount rows');
+  f.open();assert.equal(f.row().querySelector('textarea[aria-label="Filter expression"]'),null,'A metadata-only current frame must not leave the real session holding a retired provider');
+  assert.equal(f.row().querySelector<HTMLSelectElement>('select[aria-label="Condition"]')?.value,'notStartsWith');assert.equal(f.row().querySelector<HTMLInputElement>('input[aria-label="Filter value"]')?.value,'Alpha');
+  assert.equal(await f.h.adapter.read('Work.base'),f.base);assert.equal(await f.h.adapter.read('Properties.yaml'),f.declarations);assert.deepEqual(f.errors,[]);
+ }finally{await f.cleanup();}
+});
+
+test('metadata publication repairs an open fallback but preserves focused raw source until focus leaves',async()=>{
+ for(const editing of [false,true]){
+  const f=await metadataSessionFixture();try{
+   let raw:HTMLTextAreaElement|undefined,opening:HTMLElement|undefined;const original=f.session.state,count=f.queries();
+   await f.advance(()=>{f.open();opening=f.row();raw=f.row().querySelector<HTMLTextAreaElement>('textarea[aria-label="Filter expression"]')!;assert.ok(raw);if(editing){raw.focus();raw.setSelectionRange(2,8);}});
+   if(editing){assert.equal(f.row(),opening);assert.equal(f.doc.activeElement,raw);assert.equal(raw!.selectionStart,2);assert.equal(raw!.selectionEnd,8);f.doc.querySelector<HTMLButtonElement>('#outside')!.focus();await f.advance();}
+   assert.equal(f.row().querySelector('textarea[aria-label="Filter expression"]'),null);assert.equal(f.row().querySelector<HTMLSelectElement>('select[aria-label="Condition"]')?.value,'notStartsWith');
+   assert.equal(f.session.state,original);assert.equal(f.queries(),count);assert.equal(await f.h.adapter.read('Work.base'),f.base);assert.deepEqual(f.errors,[]);
+  }finally{await f.cleanup();}
+ }
+});
+
+test('failed close retains metadata subscription and successful close releases it',async()=>{
+ const f=await metadataSessionFixture();try{
+  assert.equal(f.subscriptions(),1);f.open();f.row().querySelector<HTMLButtonElement>('button[aria-label="Edit expression"]')!.click();const raw=f.row().querySelector<HTMLTextAreaElement>('textarea')!;raw.value='!note[';raw.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));
+  await assert.rejects(f.session.close(),/Finish or cancel/);assert.equal(f.subscriptions(),1);assert.equal(raw.isConnected,true);f.cancel();await f.advance();f.open();assert.equal(f.row().querySelector<HTMLSelectElement>('select[aria-label="Condition"]')?.value,'notStartsWith');
+  f.cancel();const state=f.session.state,count=f.queries();await f.session.close();assert.equal(f.subscriptions(),0);const html=f.doc.body.innerHTML;await f.advance();assert.equal(f.doc.body.innerHTML,html);assert.equal(f.session.state,state);assert.equal(f.queries(),count);assert.equal(await f.h.adapter.read('Work.base'),f.base);
+ }finally{await f.cleanup();}
+});
+
+test('metadata cannot refresh old declared advice while its replacement declaration read is pending',async()=>{
+ const f=await metadataSessionFixture();let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});const read=f.h.adapter.read.bind(f.h.adapter);let held=true,reading=false,newReads=0;
+ f.h.adapter.read=async path=>{const source=await read(path);if(path==='Properties.yaml'&&source.includes('type: number')&&++newReads>1&&held){reading=true;await gate;}return source;};
+ try{
+  await f.h.vault.modify('Properties.yaml','properties:\n  text: {type: number}\n');await until(()=>reading);await f.advance();f.open();const raw=f.row().querySelector<HTMLTextAreaElement>('textarea[aria-label="Filter expression"]');assert.ok(raw,'The pending registry read cannot refresh a retired String provider');
+  held=false;release();await f.session.refresh();assert.equal(f.row().querySelector('textarea[aria-label="Filter expression"]'),raw,'Incompatible current declaration preserves exact source');assert.equal(raw.value,'!note["text"].startsWith("Alpha")');assert.equal(await f.h.adapter.read('Work.base'),f.base);
+ }finally{held=false;release();await f.cleanup();}
+});
+
+test('normal source refresh updates property aliases in the same mounted real session table',async()=>{
+ const f=await metadataSessionFixture();try{
+  const grid=f.doc.querySelector('[role="grid"]')!;assert.ok(grid.textContent?.includes('Original label'));
+  await f.h.vault.modify('Work.base',f.base.replace('Original label','Updated label'));await f.session.refresh();
+  assert.equal(f.doc.querySelector('[role="grid"]'),grid,'The normal reuse path keeps the same mounted table');assert.ok(grid.textContent?.includes('Updated label'));assert.equal(grid.textContent?.includes('Original label'),false);
+ }finally{await f.cleanup();}
+});
+
+test('metadata delivered while flush or rejected close owns the session is reconsidered once it survives closing',async()=>{
+ for(const action of ['flush','failed-close']){
+  let armed=false,overlap:Promise<void>|undefined;
+  const f=await metadataSessionFixture((session,status)=>{if(armed&&status==='current'){armed=false;overlap=action==='flush'?session.flush():session.close();void overlap.catch(()=>{});}});
+  try{
+   if(action==='failed-close'){f.open();f.row().querySelector<HTMLButtonElement>('button[aria-label="Edit expression"]')!.click();const raw=f.row().querySelector<HTMLTextAreaElement>('textarea')!;raw.value='!note[';raw.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));}
+   const state=f.session.state,count=f.queries();armed=true;await f.advance();assert.ok(overlap,'The earlier public metadata subscriber actually starts '+action);
+   if(action==='flush')await overlap;else{await assert.rejects(overlap,/Finish or cancel/);f.cancel();}
+   f.open();assert.equal(f.row().querySelector('textarea[aria-label="Filter expression"]'),null,'Surviving '+action+' must not lose its only current-frame delivery');assert.equal(f.row().querySelector<HTMLSelectElement>('select[aria-label="Condition"]')?.value,'notStartsWith');
+   assert.equal(f.session.state,state);assert.equal(f.queries(),count);assert.equal(await f.h.adapter.read('Work.base'),f.base);
+  }finally{armed=false;await f.cleanup();}
+ }
 });

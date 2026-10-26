@@ -66,6 +66,8 @@ export interface BaseToolbarOptions {
 }
 export interface BaseToolbar {
   update(state: BaseToolbarState): void;
+  /** Metadata-only advice; never replaces query/context witnesses or actions. */
+  refreshFilterAdvice(state: BaseToolbarState): void;
   hasDraft(): boolean;
   /** Only this live toolbar's current connected portal, including its child controls. */
   owns(node: Node): boolean;
@@ -879,7 +881,14 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     if (!next.readOnly && !options.commands) { const node = button(doc, 'View', () => open('View options',node), 'View options'); node.className = 'bases-toolbar-action'; actions.append(node); }
     if (focusedLabel) Array.from(actions.querySelectorAll<HTMLButtonElement>('button')).find(node => node.getAttribute('aria-label') === focusedLabel)?.focus({ preventScroll: true });
   }
-  return { update, hasDraft, owns: node => !!(!destroyed && container.isConnected && panel?.node.isConnected && panel.trigger.isConnected && container.contains(panel.trigger) && panel.node.contains(node)), captureSaveAcknowledgement() { const token = panel?.failure, captured = panel; return () => { if (!destroyed && captured && captured === panel && token && captured.failure === token && !captured.saving && captured.acceptsSaveAcknowledgement?.()) { captured.failure = undefined; captured.dirty = false; captured.close(false); } }; },
+  return { update, refreshFilterAdvice(next) {
+      if(destroyed)return;
+      if(state&&next.result===state.result&&next.selectedIndex===state.selectedIndex&&next.readOnly===state.readOnly
+        &&JSON.stringify(configurationSnapshot(next))===JSON.stringify(configurationSnapshot(state))) {
+        state={...state,filterProperty:next.filterProperty,propertyType:next.propertyType};
+      }
+      panel?.refreshFilterAdvice?.(next);
+    }, hasDraft, owns: node => !!(!destroyed && container.isConnected && panel?.node.isConnected && panel.trigger.isConnected && container.contains(panel.trigger) && panel.node.contains(node)), captureSaveAcknowledgement() { const token = panel?.failure, captured = panel; return () => { if (!destroyed && captured && captured === panel && token && captured.failure === token && !captured.saving && captured.acceptsSaveAcknowledgement?.()) { captured.failure = undefined; captured.dirty = false; captured.close(false); } }; },
     destroy() { destroyed = true; if (panel) { panel.saving = false; panel.close(false); } container.replaceChildren(); },
   };
 }

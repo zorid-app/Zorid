@@ -6,7 +6,7 @@ import { sharedBaseCoverage, sharedBasePreview, sharedBaseWitness } from './shar
 import { createBaseClockHost } from './clock.ts';
 import type { BaseClockHost } from './clock.ts';
 import { BaseToolbarSaveError, createBaseToolbar } from './toolbar.ts';
-import type { BaseFilterOperandsSnapshot, BaseFilterPropertyDescriptor } from './toolbar.ts';
+import type { BaseFilterOperandsSnapshot, BaseFilterPropertyDescriptor, BaseToolbarState } from './toolbar.ts';
 import { createBaseViewActions } from './view-actions.ts';
 import { createBaseTableView } from './table-view.ts';
 import { baseEditAdmissionReceipt } from './edit-admission-diagnostics.ts';
@@ -17,6 +17,7 @@ import { createBaseKanbanView } from './kanban-view.ts';
 import { normalizeBaseProperty } from './query.ts';
 import type { BaseQueryOptions, BaseQueryResult, BaseQueryGroup } from './query.ts';
 import type { Vault } from '../core/vault.ts';
+import type { CommittedMetadataState } from '../core/committed-metadata-frame.ts';
 import type { NoteBuffer } from '../ui/note-buffer.ts';
 import { exportBaseResults } from './export.ts';
 import type { BaseExportFormat } from './export.ts';
@@ -259,25 +260,36 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     widgetResults.set(result.version, result); widgetSources.set(result.version, source);
     while (widgetResults.size > 4) { const key = [...widgetResults.keys()].find(key => key !== mountedResult?.version); if (key === undefined) break; widgetResults.delete(key); widgetSources.delete(key); }
   };
-  let propertyLabels: unknown;
+  let propertyLabels:unknown;
+  const propertyLabel=(labels:unknown,property:string)=>{
+    if(labels&&typeof labels==='object'&&!Array.isArray(labels)){
+      const config=(labels as Record<string,unknown>)[property]??(labels as Record<string,unknown>)[property.replace(/^note\./,'')];
+      if(config&&typeof config==='object'&&'displayName' in config&&typeof config.displayName==='string')return config.displayName;
+    }
+    return property.startsWith('file.')?property.replace(/^file\./,'file '):property.replace(/^(?:note|formula)\./,'');
+  };
+  const getPropertyLabel=(property:string)=>propertyLabel(propertyLabels,property);
   let definitions: BasePropertyDefinitions = { properties: {}, diagnostics: [] };
   let creation: BaseCreationOperation | undefined;
   let summaryPanel: HTMLElement | undefined;
   let summaryDraft = false, destroySummaryEditor: (() => void) | undefined;
   let definitionEpoch = 0, definitionsRevision = 0, mountedDefinitionsRevision = -1;
+  let definitionsLoading = false;
   let definitionsError: string | undefined;
   const loadDefinitions = async () => {
     const epoch = ++definitionEpoch;
+    definitionsLoading = true;
     let source = '';
     try { source = options.vault.entries.get(BASE_PROPERTY_DEFINITIONS_PATH)?.type === 'file' ? await options.vault.read(BASE_PROPERTY_DEFINITIONS_PATH) : ''; }
     catch (error) {
       if (disposed || epoch !== definitionEpoch) return;
-      definitionsError = error instanceof Error ? error.message : String(error); definitions = { properties: {}, diagnostics: [] }; definitionsRevision++;
+      definitionsLoading = false; definitionsError = error instanceof Error ? error.message : String(error); definitions = { properties: {}, diagnostics: [] }; definitionsRevision++;
       report(error); if (controller.state.result) render(controller.state); return;
     }
     if (disposed || epoch !== definitionEpoch) return;
     try { definitions = parseBasePropertyDefinitions(source); definitionsError = undefined; }
     catch (error) { definitionsError = error instanceof Error ? error.message : String(error); definitions = { properties: {}, diagnostics: [] }; report(error); }
+    definitionsLoading = false;
     if (definitions.diagnostics.length) report(new Error(definitions.diagnostics.map(item => item.message).join(' ')));
     // Definitions affect mounted controls, even if the query result is unchanged.
     definitionsRevision++;
@@ -643,6 +655,13 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     status.textContent = coverage && !coverage.generationComplete ? 'Some saved files are unavailable in these results.'
       : coverage && !coverage.metadataComplete ? 'Some saved properties are unavailable in these results.' : notice ?? '';
   }
+  function filterToolbarState(result: BaseQueryResult, document: BaseDocument, index: number): BaseToolbarState {
+    const capturedDefinitions=definitions,capturedLabels=document.getRoot('properties');
+    const writable = !options.readOnly && !sharedBasePreview(result);
+    const filterProperty = baseSessionFilterPropertyProvider(options.vault, capturedDefinitions, result.availableProperties, () => filterOwnerCurrent() && !definitionsLoading && !definitionsError && definitions===capturedDefinitions);
+    return { result, views: document.views, selectedIndex:index, rootFilters: document.getRoot('filters'), root: Object.fromEntries(['filters','formulas','properties','summaries','newItemFolder','newItemTemplate'].map(key => [key, document.getRoot(key)]).filter((entry): entry is [string, BaseValue] => entry[1] !== undefined)), readOnly: !writable, allowRename: true, propertyType: property => capturedDefinitions.properties[basePropertyName(property)]?.type,
+      filterProperty, label: property=>propertyLabel(capturedLabels,property) };
+  }
   function render(state: BaseControllerState): void {
     if (disposed) return;
     // Status changes never replace rows or a focused local property/config draft.
@@ -651,20 +670,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if (!state.result) return;
     const result = state.result;
     selectedIndex = controller.selectedViewIndex;
-    const document = BaseDocument.parse(state.source);
-    const choices = document.views;
-    propertyLabels = document.getRoot('properties');
-    const getPropertyLabel = (property: string) => {
-      if (propertyLabels && typeof propertyLabels === 'object' && !Array.isArray(propertyLabels)) {
-        const config = (propertyLabels as Record<string, unknown>)[property] ?? (propertyLabels as Record<string, unknown>)[property.replace(/^note\./, '')];
-        if (config && typeof config === 'object' && 'displayName' in config && typeof config.displayName === 'string') return config.displayName;
-      }
-      return property.startsWith('file.') ? property.replace(/^file\./, 'file ') : property.replace(/^(?:note|formula)\./, '');
-    };
-    const writable = !options.readOnly && !sharedBasePreview(result);
-    const filterProperty = baseSessionFilterPropertyProvider(options.vault, definitions, result.availableProperties, () => filterOwnerCurrent() && !definitionsError);
-    toolbarUI.update({ result, views: choices, selectedIndex, rootFilters: document.getRoot('filters'), root: Object.fromEntries(['filters','formulas','properties','summaries','newItemFolder','newItemTemplate'].map(key => [key, document.getRoot(key)]).filter((entry): entry is [string, BaseValue] => entry[1] !== undefined)), readOnly: !writable, allowRename: true, propertyType: property => definitions.properties[basePropertyName(property)]?.type,
-      filterProperty, label: getPropertyLabel });
+    const document = BaseDocument.parse(state.source);propertyLabels=document.getRoot('properties');
+    const toolbarState=filterToolbarState(result,document,selectedIndex),writable=!toolbarState.readOnly;
+    toolbarUI.update(toolbarState);
     // Toolbar rebases its own in-flight configuration without replacing row drafts.
     if (pending.size || activeDraft()) { deferred = state; return; }
     deferred = undefined;
@@ -882,17 +890,27 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       await settle();
       if (mounted?.hasQueuedConfiguration?.()) throw new Error('Wait for the queued column width changes before leaving this base');
       if (close) {
-        toolbarUI.destroy(); settings.destroy(); destroySummaryEditor?.(); stopDefinitions.forEach(stop => stop()); mounted?.destroy(); mounted = undefined; observer?.disconnect();
+        toolbarUI.destroy(); settings.destroy(); destroySummaryEditor?.(); stopDefinitions.forEach(stop => stop()); stopFilterMetadata(); mounted?.destroy(); mounted = undefined; observer?.disconnect();
         if (scheduled !== undefined) clearTimeout(scheduled);
         root.removeEventListener('keydown', switchViewKey, true); controller.dispose(); disposed = true; root.remove();
       }
     } catch (error) { report(error); throw error; }
-    finally { closing = false; renderStatus(controller.state); }
+    finally {
+      closing = false; renderStatus(controller.state);
+      const metadata=options.vault.metadataFrame;if(metadata)refreshFilterMetadata(metadata);
+    }
   }
   const stopDefinitions = (['create', 'modify', 'rename', 'delete', 'ready'] as const).map(event => options.vault.on(event, change => {
     renderStatus(controller.state);
     if (change.path === BASE_PROPERTY_DEFINITIONS_PATH || change.oldPath === BASE_PROPERTY_DEFINITIONS_PATH) void loadDefinitions().catch(report);
   }));
+  function refreshFilterMetadata(metadata:CommittedMetadataState):void {
+    const state=controller.state;
+    if(disposed||closing||definitionsLoading||definitionsError||!state.result||state.error||state.updating
+      ||options.vault.isMetadataRetired||metadata!==options.vault.metadataFrame||metadata.status!=='current'||!filterOwnerCurrent())return;
+    toolbarUI.refreshFilterAdvice(filterToolbarState(state.result,BaseDocument.parse(state.source),controller.selectedViewIndex));
+  }
+  const stopFilterMetadata = options.vault.onMetadata(refreshFilterMetadata);
   return {
     ready: loadDefinitions().then(() => controller.refresh()),
     get state() { return controller.state; },
