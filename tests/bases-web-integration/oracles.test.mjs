@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 import { databaseName, noteName, notePath, marker, source, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, harnessInputs, trackedHarnessInputs, trackOwnedStartup, finalEvidence, phaseNames, classifyRuntimeErrors, awaitRuntimeHealth, waitForObservation, streamingStorageSchema, storageObservationSnapshot } from './oracles.mjs';
 
 const entry = { id: 'ui-created-entry', revision: 'saved-revision', path: notePath, kind: 'file', deleted: false };
@@ -21,6 +23,29 @@ test('normal title transfer must focus the actual editable editor before input',
   editorFrame(editor(), noteName, source, true);
   for (const change of [f => { f.focusedEditor = false; }, f => { f.desktopBridge = true; }, f => { f.fixtureMarker = true; }, f => { f.editors = 2; }, f => { f.saveState = 'Saving…'; }]) {
     const f = editor(); change(f); assert.throws(() => editorFrame(f, noteName, source, true));
+  }
+});
+test('the actual runner frame expression parses and reads multiline public DOM without losing the final newline', () => {
+  const runner = readFileSync(new URL('./run.mjs', import.meta.url), 'utf8');
+  const authoredFrame = runner.slice(runner.indexOf('async function frame('), runner.indexOf('async function phase('));
+  const templates = [...authoredFrame.matchAll(/await dom\(((?:String\.raw)?`[\s\S]*?`)\);/g)];
+  assert.equal(templates.length, 1, 'Compile the actual authored frame body, not a test copy');
+  const body = new vm.Script(templates[0][1]).runInNewContext();
+  const expression = new vm.Script(`(()=>{${body}})()`);
+  const node = (visible = true) => ({ isConnected: true, getClientRects: () => visible ? [{}] : [], getAttribute: name => name === 'contenteditable' ? 'true' : null, querySelectorAll: selector => { assert.equal(selector, '.cm-line'); return source.split('\n').map(textContent => ({ textContent })); } });
+  for (const count of [0, 1, 2]) {
+    const editors = Array.from({ length: count }, () => node()), hidden = node(false);
+    const document = { activeElement: editors[0], querySelectorAll: selector => { assert.equal(selector, '.pane.is-active .cm-content[contenteditable="true"]'); return [...editors, hidden]; }, querySelector: selector => {
+      if (selector === '.workspace') return {};
+      if (selector === 'meta[name="zorid-core-fixture-build"]') return null;
+      if (selector === '.pane.is-active .note-title') return { value: noteName };
+      if (selector === '.save-state') return { textContent: '' };
+      assert.fail('Unexpected public DOM selector ' + selector);
+    } };
+    const frame = JSON.parse(JSON.stringify(expression.runInNewContext({ document, window: {}, performance: { timeOrigin: 123 } })));
+    assert.equal(frame.editors, count); assert.equal(frame.timeOrigin, 123);
+    if (count === 1) { assert.equal(frame.text, source); editorFrame(frame, noteName, source, true); }
+    else assert.throws(() => editorFrame(frame, noteName, source, true));
   }
 });
 test('reload requires a new document and the identical entry/revision', () => {
