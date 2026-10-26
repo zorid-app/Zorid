@@ -121,7 +121,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   let removeFocusObserver: (() => void) | undefined;
   let input: HTMLInputElement | undefined, popup: HTMLDivElement | undefined;
   let draftChanged = false;
-  let draft: string[] = [], selected = 0, choices: { value: string; label: string; option?: BasePropertyOption; missing?: boolean; target?: BaseRelationTarget }[] = [];
+  let draft: { text: string; value: BaseExpressionValue }[] = [], selected = 0, choices: { value: string; label: string; option?: BasePropertyOption; missing?: boolean; target?: BaseRelationTarget }[] = [];
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const later = (fn: () => void) => { const timer = setTimeout(() => { timers.delete(timer); if (!disposed) fn(); }, 0); timers.add(timer); };
   const current = () => !disposed && (options.isCurrent?.(acceptedPresentation) ?? true);
@@ -367,7 +367,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     const all = type === 'relation' || type === 'link'
       ? targets().map(target => ({ value: targetValue(target), label: target.label ?? target.path, missing: target.missing, target }))
       : (definition.options ?? []).map(option => ({ value: option.value, label: option.label ?? option.value, option }));
-    choices = all.filter(choice => (!multiple || !draft.some((value, index) => value === choice.value && index !== editingIndex)) && (choice.label.toLocaleLowerCase().includes(needle) || choice.value.toLocaleLowerCase().includes(needle)));
+    choices = all.filter(choice => (!multiple || !draft.some((item, index) => item.text === choice.value && index !== editingIndex)) && (choice.label.toLocaleLowerCase().includes(needle) || choice.value.toLocaleLowerCase().includes(needle)));
     selected = Math.max(0, Math.min(selected, choices.length - 1));
     if (choices[selected]?.missing) selected = choices.findIndex(choice => !choice.missing);
     choices.forEach((choice, index) => {
@@ -397,10 +397,10 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (!current() || pending || !validateRelationChoice(next, true)) return;
     if (choices.find(choice => choice.value === next)?.missing || ((type === 'relation' || type === 'link') && targetFor(next)?.missing)) { error(new Error('This related note is unavailable. Choose another note.')); return; }
     if (multiple) {
-      const duplicate = draft.findIndex((value, index) => value === next && index !== editingIndex);
+      const duplicate = draft.findIndex((item, index) => item.text === next && index !== editingIndex);
       if (duplicate >= 0) { popup?.querySelectorAll<HTMLElement>('.multi-select-pill')[duplicate]?.focus(); return; }
-      if (editingIndex !== undefined) { if (draft[editingIndex] !== next) { draft[editingIndex] = next; draftChanged = true; } editingIndex = undefined; }
-      else { draft.push(next); draftChanged = true; }
+      if (editingIndex !== undefined) { if (draft[editingIndex].text !== next) { draft[editingIndex] = {text:next,value:str(next)}; draftChanged = true; } editingIndex = undefined; }
+      else { draft.push({text:next,value:str(next)}); draftChanged = true; }
       if (input) input.value = ''; renderEditor(); input?.focus(); await saveDraft();
     }
     else await commit(str(next));
@@ -412,16 +412,16 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   }
   function editChip(index: number) {
     if (pending || !current() || !input || !multiple) return;
-    editingIndex = index; input.value = draft[index]; renderChoices(); input.focus(); input.select();
+    editingIndex = index; input.value = draft[index].text; renderChoices(); input.focus(); input.select();
   }
   async function saveDraft() {
-    if (multiple && draftChanged) await commit({ type: 'list', value: draft.map(str) }, true);
+    if (multiple && draftChanged) await commit({ type: 'list', value: draft.map(item => item.value) }, true);
   }
   function renderEditor() {
     if (!popup || !input) return;
     let chips = popup.querySelector<HTMLElement>('.multi-select-container');
     if (!chips) { chips = document.createElement('div'); chips.className = 'multi-select-container'; popup.prepend(chips); }
-    chips.replaceChildren(); if (multiple) draft.forEach((text, index) => chips!.append(chip(text, true, index))); chips.append(input); renderChoices();
+    chips.replaceChildren(); if (multiple) draft.forEach((item, index) => chips!.append(chip(item.text, true, index))); chips.append(input); renderChoices();
   }
   async function finish(restoreFailureFocus = true) {
     if (!current() || !editing || pending || composing || !input) return;
@@ -432,14 +432,14 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
           if (!draftChanged && !input.value) { cancel(); return; }
           if (input.value) {
             if (inlineList) {
-              const duplicate = draft.findIndex((value, index) => value === input!.value && index !== editingIndex);
+              const duplicate = draft.findIndex((item, index) => item.text === input!.value && index !== editingIndex);
               if (duplicate >= 0) { error(new Error('This value is already in the list.')); return; }
-              if (editingIndex !== undefined) { draft[editingIndex] = input.value; editingIndex = undefined; } else draft.push(input.value);
-              draftChanged = true;
+              if (editingIndex !== undefined) { if (draft[editingIndex].text !== input.value) { draft[editingIndex] = {text:input.value,value:str(input.value)}; draftChanged = true; } editingIndex = undefined; }
+              else { draft.push({text:input.value,value:str(input.value)}); draftChanged = true; }
             }
             else { error(new Error('Choose a matching option or clear the search before saving.')); return; }
           }
-          next = { type: 'list', value: draft.map(str) };
+          next = { type: 'list', value: draft.map(item => item.value) };
         } else {
           if (input.value === inputText(value, definition)) { cancel(); return; }
           const choice = choices.find(choice => !choice.missing && (choice.value === input!.value || choice.label === input!.value));
@@ -459,7 +459,9 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (!editable || !current() || pending || editing || options.canBegin?.() === false) return;
     if ((event.target as HTMLElement).closest('a,button,input,[role="link"]')) return;
     event.preventDefault(); event.stopPropagation(); editing = true; draftChanged = false; mark('draft');
-    draft = value.type === 'list' ? value.value.map(renderText) : value.type === 'null' ? [] : [renderText(value)];
+    // Chip labels are editable text; untouched persisted values retain their
+    // types and nested data until that specific chip is explicitly changed.
+    draft = (value.type === 'list' ? value.value : value.type === 'null' ? [] : [value]).map(item => ({text:renderText(item),value:item}));
     input = document.createElement('input'); input.className = 'metadata-input metadata-input-text'; input.setAttribute('aria-label', presentation.property.replace(/^note\./, '')); input.placeholder = 'Empty';
     input.type = basePropertyValueDiagnostic(value, definition) || (type === 'datetime' && value.type === 'string' && /(?:Z|[+-]\d{2}:\d{2})$/.test(value.value)) ? 'text' : type === 'date' ? 'date' : type === 'datetime' ? 'datetime-local' : 'text';
     if (type === 'date' || type === 'datetime') input.max = type === 'date' ? '9999-12-31' : '9999-12-31T23:59:59';
