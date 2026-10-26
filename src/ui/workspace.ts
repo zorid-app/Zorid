@@ -1209,6 +1209,8 @@ export class Workspace {
     if(!isMarkdown(path)){
       const host=el('div','attachment-view');content.append(host);
       host.oncontextmenu=event=>{
+        // Child viewers own handled menus (for example a Base row's file).
+        if(event.defaultPrevented)return;
         // Preserve the browser's playback menu on native controls.
         if((event.target as Element|null)?.closest?.('audio, video')){event.stopPropagation();return;}
         event.preventDefault();const entry=this.vault.entries.get(path);if(entry)this.fileMenu(entry,event.clientX,event.clientY);
