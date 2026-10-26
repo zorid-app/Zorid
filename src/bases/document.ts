@@ -1,4 +1,4 @@
-import { Document, isMap, isScalar, isSeq, parseDocument, visit } from 'yaml';
+import { Document, isAlias, isMap, isScalar, isSeq, parseDocument, visit } from 'yaml';
 import type { YAMLMap, YAMLSeq } from 'yaml';
 import { parseBaseExpression } from './expression.ts';
 import type { BaseExpression } from './expression.ts';
@@ -150,6 +150,13 @@ function validateInput(value: unknown, ancestors = new Set<object>()): asserts v
   } finally { ancestors.delete(value); }
 }
 
+function parseBaseYAML(source: string): Document {
+  return parseDocument(source, {
+    version: '1.2', schema: 'core', stringKeys: true, uniqueKeys: true,
+    resolveKnownTags: false, logLevel: 'silent',
+  });
+}
+
 /**
  * Original .base YAML document model. Unknown configuration is retained, not executed.
  * Custom tags and cyclic/excessive aliases fail explicitly. There is no query evaluator.
@@ -170,10 +177,7 @@ export class BaseDocument {
   }
 
   static parse(source: string): BaseDocument {
-    const doc: Document = parseDocument(source, {
-      version: '1.2', schema: 'core', stringKeys: true, uniqueKeys: true,
-      resolveKnownTags: false, logLevel: 'silent',
-    });
+    const doc = parseBaseYAML(source);
     if (!source.trim()) {
       doc.set('views', doc.createNode([{ type: 'table', name: 'Table' }]));
       const result = new BaseDocument(doc, source);
@@ -202,17 +206,55 @@ export class BaseDocument {
     return this.bom + doc.toString({ lineWidth: 0 }).replace(/\r?\n/g, this.newline);
   }
 
-  private edit(operation: (doc: Document) => void): void {
+  private edit(operation: (doc: Document) => void, renamedView?: number): void {
     const next = this.document.clone();
     try {
       operation(next);
       const values = validateDocument(next);
       if (equalValues(values, this.values)) return;
-      const source = this.serialize(next); // Verify alias order before publishing any mutation.
-      this.document = next; this.source = source; this.values = values;
+      // A view rename must not rewrite unrelated configuration bytes. Other
+      // mutations retain the normal serializer and its alias-order validation.
+      const result = renamedView === undefined
+        ? { document: next, source: this.serialize(next) }
+        : this.renamedViewSource(renamedView, values);
+      this.document = result.document; this.source = result.source; this.values = values;
     } catch (error) {
       throw error instanceof BaseDocumentError ? error : new BaseDocumentError(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  private renamedViewSource(index: number, expected: Readonly<Record<string, BaseValue>>): { document: Document; source: string } {
+    // Generic edits can leave the cloned AST's ranges referring to older text.
+    // Always locate the name in the current published source instead.
+    const current = parseBaseYAML(this.source);
+    const node = this.viewAt(current, index).get('name', true);
+    if ((!isScalar(node) && !isAlias(node)) || !node.range) throw new BaseDocumentError('Cannot locate the view name in the base source');
+    const [start, end] = node.range;
+    const name = (expected.views as readonly BaseViewConfig[])[index].name;
+    const quoted = JSON.stringify(name);
+    let replacement = quoted, suffix = '';
+    if (isScalar(node) && (node.type === 'BLOCK_LITERAL' || node.type === 'BLOCK_FOLDED')) {
+      // The header comment belongs to the name, but is not part of its value.
+      // Keep it byte-exact when replacing a block with an escaped inline string.
+      const raw = this.source.slice(start, end);
+      const header = /^[|>][1-9+-]*([^\r\n]*)\r?\n/.exec(raw);
+      if (!header) throw new BaseDocumentError('Cannot locate the block view name header');
+      suffix = header[1] + (raw.endsWith('\r\n') ? '\r\n' : raw.endsWith('\n') ? '\n' : '');
+    } else if (!/[\u0000-\u001f\u007f-\u009f]/.test(name)) {
+      if (isScalar(node) && node.type === 'QUOTE_SINGLE') replacement = `'${name.replace(/'/g, "''")}'`;
+      else if (!isScalar(node) || node.type === 'PLAIN') replacement = name;
+    }
+    // Plain scalars have different restrictions in flow/block contexts. Accept
+    // an encoding only if the entire parsed configuration exactly matches the
+    // normal mutation, including anchored-name alias effects and mapping order.
+    for (const value of new Set([replacement, quoted])) {
+      const source = this.source.slice(0, start) + value + suffix + this.source.slice(end);
+      const document = parseBaseYAML(source);
+      try {
+        if (equalValues(validateDocument(document), expected)) return { document, source };
+      } catch { /* Try the unambiguous quoted representation before rejecting. */ }
+    }
+    throw new BaseDocumentError('Cannot safely preserve the base source while renaming this view');
   }
 
   private viewList(doc: Document, create = false): YAMLSeq {
@@ -240,13 +282,18 @@ export class BaseDocument {
       return [key, descriptor.value];
     });
     for (const [, value] of entries) if (value !== undefined) validateInput(value);
+    const previous = this.views[index];
+    const nameOnly = previous && entries.some(([key, value]) => key === 'name' && typeof value === 'string')
+      && entries.every(([key, value]) => key === 'name' || (value === undefined
+        ? !Object.hasOwn(previous, key)
+        : Object.hasOwn(previous, key) && equalValues(previous[key]!, value)));
     this.edit(doc => {
       const view = this.viewAt(doc, index);
       for (const [key, value] of entries) {
         if (value === undefined) view.delete(key);
         else view.set(key, value !== null && typeof value === 'object' ? doc.createNode(value) : value);
       }
-    });
+    }, nameOnly ? index : undefined);
   }
 
   addView(type: string, name: string): number {
