@@ -2,6 +2,38 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Latest2026-10-26 update on rootc483d861: the failed scalar-edit Escape/focus
+finding is implemented and natively verified within Safety005's fifth scenario.
+Safety004 had already preserved both path-reused files and the exact user8 draft,
+but Escape left the failed editor active; its key-time focus was unrecorded.
+Reviewed focus restoration c48a217a now has a captured focused/enabled/invalid8
+input immediately before one Escape; cancellation and the unapplied-draft close
+guard pass. This does not retroactively pass Safety004 or all of Safety005.
+
+Safety005/54587 is terminal failed135actions/24checks after FIVE passed scenarios.
+The next named-reference retry cannot find Save recovery copy in the expected
+native notice; its view rename/clean reference updates are acknowledged and the
+retained retry panel is visible. bases_path_reuse owns isolated diagnosis. The
+remaining seven scenarios, including current C2 publication/retry cases, are
+unexecuted despite reviewed genuine checkpoint-fault relay ec2fe727. Preserve
+original recovery-copy/source/intent assertions while resolving the route.
+
+Normalweb003 reaches normal Workspace but its old version6 observer rejects the
+source-declared version8 streaming format after one New note action. Reviewed
+observer c483d861 passes25 focused tests; normalweb004 then dispatches five normal
+UI actions but stops at a SyntaxError in its rename/focus readiness expression.
+Neither completes a five-phase web pass; bases_acceptance_audit owns the isolated
+harness diagnosis. Both browsers/server clean up and final source proof verifies.
+
+Recovery002's three authored protocols pass; the earlier user screenshot finding
+is resolved only to that bounded recovery scope. CLI125/17, browser19groups/162
+typed expectations and Properties001188/65 passes retain their recorded sources.
+The append-only [fresh validation record](history/bases-resume-validation-20261026.md)
+and ignored archive parts001–005 preserve failures, partial passes and cleanup.
+Full safety/heavy-user/filter/reference/visual/normal-web acceptance and main
+integration remain open.
+
+
 User screenshot 2026-10-26: native “The vault could not finish saving” / “Keep
 open” dialog during disposable Recovery001. Actual first failed-checkpoint retry
 and newer-draft continuation/restart pass, but subsequent held acceptedA/newB

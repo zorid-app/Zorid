@@ -288,6 +288,104 @@ Logs: `/private/tmp/zorid-bases-boundaries-composed-20261026-001.log`
 and `/private/tmp/zorid-bases-vite-composed-20261026-002.log`
 (SHA-256 `172038ee19ebfaf6926fd240af56a1d6a2d222499e39a4ee092ed84cd7b370b5`).
 
+## Safety004 — changed-file feedback passes; failed-edit cancellation blocks
+
+Safety004 stops at **110 actions and 22 checks** on frozen source
+`c1cc76c1034108b10d7c28eb4f3da40f4a559110`, using frontend 005 and the unchanged
+native host. Four scenarios pass, the fifth fails and eight later scenarios
+remain unexecuted. The first four are the same shared-body/history, partial-bulk
+recovery, property-settings CAS and live-summary CAS scenarios recorded above.
+
+Within the fifth scenario, the actionable changed-file message appears, both
+replacement/original physical sources remain exact, and input `8` is retained.
+After Escape and an attempted navigation, the editor remains in error/draft
+state and configuration is blocked with a finish-or-cancel message. The run stops
+waiting for Configure property topics. Native focus at the Escape dispatch was
+not recorded, so loss of focus is a separately reproduced causal explanation,
+not a captured key-time fact from this run. The normal close-guard portion of
+this scenario does not complete here.
+
+Two preceding normal quits finish with code 0, null signal and no leaked
+children; final cleanup is SIGKILL with null exit code and no leaked children.
+Source/artifact freeze verifies. Frontend-005 receipt SHA-256 is
+`05bbe88c8588631381f17b3fa65d038b77db99ca35c7531122fa67acfba1d0ce`.
+
+Report: `/private/tmp/zorid-bases-safety-20261026-004/result.json`.
+SHA-256: `a1b85decf2391e35768919754323f5ea7654dabd2d9f8816b45b3cdd6850f0f0`.
+
+## Safety005 — five scenarios pass; named-reference retry stops the run
+
+Session 54587 stops at **135 actions and 24 checks** on frozen source
+`c483d861be0cbec9d361aa0a55d0f6ae669414d9`. Frontend 006 was built at
+`c48a217aec74f026632753a887916e216c9e446f`, including TypeScript checking and
+333 distribution files. Later changes before this run are test-harness changes,
+not product renderer changes. Its receipt has SHA-256
+`a5bdf20ae31dcaa6e7eae71298c4e3f061112fcf2adf736e690ce4fe1fb74db3`.
+
+The first **five scenario statuses pass**. The newly completed fifth scenario
+records the rejected scalar's exact `8`, enabled/invalid draft state and actual
+keyboard ownership immediately before one Escape. That single Escape dismisses
+the failed editor. The unapplied property-settings draft then blocks closing,
+remains intact, and can be explicitly cancelled before a clean close. This is
+bounded native verification of the focus/cancellation fix, not retroactive
+acceptance of Safety004.
+
+The sixth scenario acknowledges the Base view rename and its independent clean
+reference update, retaining a retry for the dirty reference. It then cannot find
+the expected Save recovery copy control in `.native-document-notice`. Captured
+UI instead contains the retained view-configuration error and Retry save button;
+the failure does not establish the cause of the missing notice. Dirty-reference
+recovery/retry and all seven subsequent scenarios remain incomplete. In
+particular, the new genuine C2 checkpoint-fault relay is present in this source
+but its later publication scenarios have not executed.
+
+Two normal quits finish with code 0, null signal and no leaked children; final
+cleanup is SIGKILL with null exit code and no leaked children. Before/after
+provenance is identical. Independent audits of Safety004/005 match 837 frozen
+Git blobs and 333 distribution hashes each, and verify both the retired original
+and authored replacement bytes. Safety005's captured pre-Escape focus frame is
+also checked directly.
+
+Report: `/private/tmp/zorid-bases-safety-20261026-005/result.json`.
+SHA-256: `2b08fd967ad95d270321dfa5b4b8a2faab03a0f31ff2093798a09f344e4409c0`.
+
+## Normal web003/004 — observer failures; no completed five-phase pass
+
+Normal web003 uses frozen source
+`f39653204fce9c64131dab51b3b562a8fd7459d5`. It reaches the normal Workspace and
+issues one New note action. The create-and-rename phase then fails because its
+read-only observer insists on an existing version-6 database. A separate static
+source audit establishes the supported streaming contract as **version 8 with
+31 stores**; this is a source-contract observation, not a retained successful
+database snapshot from web003. The other four phases are unexecuted.
+
+Normal web004 uses frozen source
+`c483d861be0cbec9d361aa0a55d0f6ae669414d9` with the reviewed streaming observer.
+Its control flow advances through the initial note/source check and dispatches
+five normal UI actions: New note, title focus, select-all, title text and Enter.
+It then fails in the renderer-evaluated rename/focus readiness expression with
+a SyntaxError at column 609. No phase completes, the four later phases are
+unexecuted, and the stored observations array is empty. The screenshot/diagnostic
+shows the requested title and normal editor, but does not establish the missing
+durable rename/focus assertion or whole web acceptance.
+
+Both Chrome processes exit with code 0 and null signal. Vite close resolves,
+HTTP listening is false, cleanup failures are empty and final provenance verifies
+for each run. Both owned profiles are retained separately and excluded from the
+archive. Independent audits match each run's 385 tracked and 441 Rust-input
+hashes to its frozen Git source.
+
+The reviewed streaming-observer change has **25 focused tests passed, zero
+failures and zero skips**. That source-level result does not turn either failed
+web run into a pass.
+
+Reports and SHA-256:
+
+| Report | SHA-256 |
+| --- | --- |
+| `/private/tmp/zorid-bases-web-20261026-003/report.json` | `721dd58f1fc96678ec9fa35bb0a1287f9f64afaae1c33322e93342beddf7d0fc` |
+| `/private/tmp/zorid-bases-web-20261026-004/report.json` | `3613ccf20d22556ac32585bca25a9518191c1e03e74778dda3e60279bff6b56d` |
+
 ## Durable local archive
 
 To survive temporary-directory cleanup, completed evidence and native products
@@ -347,6 +445,20 @@ hashes verify, with parts 001–003 and their manifests unchanged.
 | `fresh-validation-004.tar.gz` | 2,182,572 | `5d7506935c38b505a853eea065f3390b165a2e92bdd89a391a45030b356a9740` |
 | `fresh-validation-004-manifest.json` | — | `5511b4c43eb006963139cebf2da94e62fcb8c6d0f86ad2af5537d3fdffaeb9fe` |
 | `independent-content-audit-004.json` | — | `0160d1c3be20a4b46a0c9b62e413c5231d9c2d6cf71602d3b166dc5557475648` |
+
+Part 005 retains the completed Safety004/005 and normal-web003/004 evidence,
+frontend-005/006 receipts, five existing launch/build/focused-test logs and the
+static streaming-schema source audit. It contains **160 original regular files,
+19,440,240 original-file bytes, plus an embedded snapshot manifest**. All four
+owned profiles are excluded. No saved launch logs existed for Safety005 or
+normal-web004; none are reconstructed. Original/member hashes verify and all
+four earlier archive parts/manifests remain unchanged.
+
+| Additional local artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `fresh-validation-005.tar.gz` | 4,922,260 | `65e0fa88eee14cbcf0d953e03045f75f3876a1c2fe5e4c0acb4fb5b8c1294784` |
+| `fresh-validation-005-manifest.json` | — | `e168306d5c495841d3fd18caf309addefb89cbb82ce9b2aa399be2e177391ebf` |
+| `independent-content-audit-005.json` | — | `7a75bd7e9cb16fe4ee9d4713fa67b014bb4cd7880f62810e905d6865c24f5e3c` |
 
 Full archive directory:
 `/Users/ctk/Projects/Zorid/.worktrees/types-bases-model/tmp/bases-validation-20261026/`.

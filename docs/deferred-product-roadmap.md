@@ -9,7 +9,52 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
-Current coordinator state: root92887ca4 composes reviewed filter advice76bcf6db
+Checkpoint prepared after Safety005 on frozen root `c483d861`. Reviewed scalar
+failed-save focus restoration `c48a217a`, genuine inline checkpoint-fault relay
+`ec2fe727`, passive native failure receipts `00e893df`, and normal streaming
+observer `c483d861` are composed. The observer's25 focused tests pass0skip.
+Desktop006/17513 passes including TypeScript,333files, producerc48a217a; later
+changes before this freeze are harness-only. Receipt
+`/private/tmp/zorid-bases-20261026-products-001/frontend-receipt-006.json`.
+Native403cbeb8/CLI8e4e61e4 and Rust07265 remain unchanged. Main remains e7d655e1;
+no full-feature acceptance or main integration is claimed.
+
+Safety004 FAILS110actions/22checks, four scenarios passed. Actionable path-reuse
+feedback and exact retained8/file protection pass, but Escape fails to dismiss
+the editor and later configuration stays blocked. Actual key-time focus was not
+recorded; the focus-loss cause has separate regression evidence. Safety005/54587
+is now TERMINAL1, not running:135actions/24checks, first FIVE scenarios passed.
+It captures actual owned input8 focus before one Escape, then passes cancellation
+and the unapplied-draft close guard. The sixth named-reference scenario stops
+at absent Save recovery copy in .native-document-notice while the view rename
+retry remains visible. Seven later scenarios are unexecuted: no current C2
+publication runtime acceptance follows from the new relay's source alone.
+Both runs have two normal quits followed by SIGKILL cleanup, no leaked children
+and source/artifact freeze verified. `bases_path_reuse` owns isolated diagnosis
+of the named-reference recovery route; do not invent its cause from the selector.
+
+Normalweb003 enters Workspace and issues one New note action, then its legacy
+version6 observer rejects the source-declared version8 streaming contract.
+Normalweb004 on c483 advances through the initial v8 note/source check and five
+UI actions, then its renderer-evaluated rename readiness expression throws a
+SyntaxError. Neither run completes a phase: one failed/four unexecuted each.
+Both owned Chrome processes exit0/nullsignal, Vite closes, cleanup failures are
+empty and final provenance verifies. Schema source audit/observer25test passes
+remain separate from normal-web UI acceptance. `bases_acceptance_audit` owns the
+isolated readiness-expression diagnosis. Root coordinates further serial app
+passes; workers have no independent runtime/build grant.
+
+Completed evidence now has append-only archive parts001–005 under ignored local
+`tmp/bases-validation-20261026/`, with per-file/archive hashes and profile
+exclusions. See [the factual runtime history](history/bases-resume-validation-20261026.md).
+Preserve those archives before retiring the implementation worktree. Historical
+failures remain failures; safety beyond scenario5, all typed-filter cases,
+heavy-user, current reference/visual, normal-web completion and final integration
+remain open. Recovery002's three authored protocols, Properties001, CLI and
+browser semantic passes retain their exact recorded source limits.
+
+
+Earlier coordinator state: root92887ca4 composes reviewed filter advice76bcf6db
 as43b21f6f, reviewed public filter-close acknowledgement4da3a735 ascf00a2a2,
 and reviewed definitive saved-source changed-message931280fa as92887ca4.
 Root21 advice tests and10 close/message tests PASS0skip. Desktop005/1538 PASS
