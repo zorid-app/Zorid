@@ -2,6 +2,18 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Next completed cutoff2026-10-26, archive007/ad898/frontend008: Clipboard001
+PASSES92/24, including actual OS clipboard/custom-MIME paste, input/undo ownership,
+Chromium composition and pointer resize/row height. Clipboard restoration and
+normal quit pass; physical macOS IME coverage remains outside the assertions.
+Heavy001 FAILS306/43 after broad config/property edits and two actual native-menu
+color selections. Its Ada35 oracle conflicts with captured36 and36physical
+relations including the literal template; diagnosis supports a stale fixture
+expectation. Preserve the failed run and original strict later source oracles.
+Layouts001 FAILS28/1 at file-context-menu lookup; later layout/C2 cases unexecuted.
+Both forced SIGTERM cleanups finish0/null/no leaks; all sources/artifacts verify.
+The full heavy/safety/filter/reference and integration gates remain open.
+
 Latest factual cutoff2026-10-26 through Safety007/rootad8983d5: bottom placement
 of the full-workspace recovery notice now has bounded native acceptance of
 unobscured tab close and the unapplied-draft guard. Safety006 had stopped before

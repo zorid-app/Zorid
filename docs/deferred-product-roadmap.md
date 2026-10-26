@@ -9,6 +9,22 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Next completed cutoff (2026-10-26, archive007; frozenad898/frontend008):
+Clipboard001/57404 PASSES92actions/24checks for actual OS clipboard/custom-MIME
+paste, input/undo ownership, Chromium composition, pointer resize and row height.
+Normal quit0/null, clipboard restored, no leaks, freeze verified. Composition
+coverage uses the Chromium protocol; physical macOS IME parity is not claimed.
+
+Heavy001/69687 FAILS306/43 after real CUA purple/blue color selections and broad
+config/property/paste-undo checks. It expects Ada count35, but captured36 includes
+the literal template; physical36relation members and unfiltered registry support
+a stale count oracle. Preserve original failure and strict later expectations.
+Layouts001 FAILS28/1 at file-context-menu locator; actions alone establish no
+layout-case pass. Both SIGTERM cleanups0/null/no leaks/freeze true. All three
+match837frozenGit/333frontend hashes. Archive007 preserves these completed results
+separately; parts001–006 remain immutable. No full heavy/safety/filter/current
+reference or final integration completion is claimed.
+
 Latest factual cutoff (2026-10-26, archived part006): rootad8983d5 composes the
 reviewed bottom recovery-notice placement; desktop008 passes333files, producer
 ad8983d5. Safety006 on406c/frontend007 fails117actions/22checks before dispatching

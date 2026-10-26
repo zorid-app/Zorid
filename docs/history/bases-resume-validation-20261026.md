@@ -499,6 +499,69 @@ remain outside the archive and project source.
 | `/private/tmp/zorid-obsidian-1.14.5-bootstrap-20261026-003/result.json` | `02e0c23cef097b79d6e211d3d915c0d48293af2ae5d82722cd59536f048aa919` |
 | `/private/tmp/zorid-obsidian-1.14.5-bootstrap-20261026-004/result.json` | `505ae6cdf75a13f463f8cd25687d31cbac329b20f7245ad871faf77c4bed9ab1` |
 
+## Clipboard001 — bounded native clipboard/input campaign passes
+
+Clipboard001/session57404 **passes 92 actions and 24 checks** on frozen
+`ad8983d539e1d8853703819514309f71d83dd693` and frontend008. It exercises the
+actual OS clipboard, trusted custom-MIME paste, clipped and mixed read-only
+paste, selected row/column/group copy, native input copy ownership, undo, list
+append preserving aliases, pointer column resize/reset and durable tall rows.
+Chromium composition/input ownership assertions also pass. Their explicit limit
+is protocol-driven composition plus an untrusted `compositionend`, not a physical
+macOS input-source session.
+The private original OS clipboard is restored.
+
+The campaign's normal-quit request succeeds; the already-exited process has
+code0/null signal and no leaked children. Before/after source/artifact provenance
+is equal and verifies. This pass covers this authored clipboard campaign; it
+does not complete the full heavy-user, safety, reference or mobile gates.
+
+Report: `/private/tmp/zorid-bases-clipboard-20261026-001/result.json`.
+SHA-256: `06628da6f2de39b9e14681c215727e4092c2768f8af412b139351bbf2c9f730b`.
+
+## Heavy001 — positive edits; stale reverse-relation count oracle stops the run
+
+Heavy001/session69687 on frozen `ad8983d5` and frontend008 **fails at 306 actions
+and 43 checks**. Completed checks include real Base creation/config edits,
+formulas and summaries, full-result CSV download, rich property edits, relation
+filename preservation, date controls, rectangular edits/undo/redo and header
+reorder. Two actual CUA native-menu handoffs select purple and blue option colors;
+retained input receipts identify the owned window/menu and send no Return key.
+The corresponding option-color/source check passes. CSV uses the actual UI
+download with a test download directory, without native Save-dialog acceptance.
+
+The run then expects Author Ada's reverse-relation count to be35. The failure
+body shows36 and lists `Templates/Book.md` among the members. Independent physical
+fixture inspection finds36 Ada relations, including that literal template. The
+registry declares an unfiltered reverse relation on `author` and a count rollup;
+this supports the count-oracle diagnosis rather than a demonstrated product
+miscount. The original failed run is preserved; no corrected run or later
+heavy-user/restart acceptance follows from that diagnosis.
+
+SIGTERM cleanup finishes with code0/null signal, no leaked children and verified
+freeze. Synthetic rectangular TSV paste in this campaign is separate from
+Clipboard001's actual native clipboard acceptance.
+
+Report: `/private/tmp/zorid-bases-heavy-20261026-001/result.json`.
+SHA-256: `dc81cd8e60941f36a67cb4ab89d2ac4e577f7007f28bebc402eff7d611b5ea95`.
+
+## Layouts001 — file-context-menu locator stops the supplemental campaign
+
+Layouts001 on frozen `ad8983d5` and frontend008 **fails at 28 actions and one
+check**. Its only retained check is actual owned-window/renderer visibility.
+Some collapse/open interactions dispatch before the Actual file context menu
+wait fails, but no completed layout-case acceptance is inferred from actions
+alone. The failure does not by itself establish whether the missing DOM menu
+reflects the native context-menu service or a product defect; diagnosis remains
+separate. Later layout/publication cases are unexecuted.
+
+SIGTERM cleanup finishes with code0/null signal and no leaked children; source
+freeze verifies. Independent audits of all three part007 runs match 837 frozen
+Git file hashes and 333 frontend008 distribution hashes each.
+
+Report: `/private/tmp/zorid-bases-layouts-20261026-001/result.json`.
+SHA-256: `08dde35f99b84303e5b3fabbb0402762320564a8a9f0ac77077d06dcf2f1c9e5`.
+
 ## Durable local archive
 
 To survive temporary-directory cleanup, completed evidence and native products
@@ -586,6 +649,20 @@ The coordinator's composed94/31 stdout-only results are not reconstructed as log
 | `fresh-validation-006.tar.gz` | 5,008,908 | `c88226990385deac74c202505073a39a5e49c7d41de813456d0d0f4362aa8394` |
 | `fresh-validation-006-manifest.json` | — | `dfee907bed520e546781f300a69e8dee0771e626e8d99b27dfe78581446fcb7b` |
 | `independent-content-audit-006.json` | — | `da2c25319a7ace85a0f2208e25f079f76854a9b315718d1e2c9e13c4848d3f28` |
+
+Part007 separately retains completed Clipboard001, Heavy001 and Layouts001
+reports, provenance, screenshots, owned fixtures, CUA input receipts, downloaded
+CSV and relay evidence. It contains **148 original regular files, 17,298,313
+original-file bytes, plus an embedded snapshot manifest**. The three disposable
+profiles are excluded. All originals and compressed members hash-verify; earlier
+parts001–006 and their manifests remain unchanged. No vendor reference artifacts
+are included and no missing launch log is reconstructed.
+
+| Additional local artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `fresh-validation-007.tar.gz` | 5,477,860 | `5b291e26bd6b8ef27914572e82eed71c09d292906bf28f138b344e47503fb9c2` |
+| `fresh-validation-007-manifest.json` | — | `ccef8986703d6271df4a49eaa6d71c2301f82a955020734c9b29e4819a95cf11` |
+| `independent-content-audit-007.json` | — | `42d0f1552ab0f619afe67f0a5583c2e376544bd4763705c630dc9b9f41d03887` |
 
 Full archive directory:
 `/Users/ctk/Projects/Zorid/.worktrees/types-bases-model/tmp/bases-validation-20261026/`.
