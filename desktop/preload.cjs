@@ -34,7 +34,19 @@ const durable = async (name, ...args) => {
       && /^[a-z_]{1,64}$/.test(reply.error.code) && typeof reply.error.commitUncertain === 'boolean';
     return {notePlanning:true,schemaVersion:1,ok:false,error:{code:valid?reply.error.code:'invalid_planning_response',source:'host',commitUncertain:valid?reply.error.commitUncertain:true}};
   }
-  if (!reply?.ok) throw Object.assign(new Error('Durable editor request failed; retain pending recovery state.'), reply?.error, {source:'host'});
+  if (!reply?.ok) {
+    const savedSource = name === 'durableInvoke' && ['captureSavedSource','releaseSavedSource'].includes(args[2]);
+    const error = reply?.error;
+    // Main redacts failures to this bounded shape. contextBridge preserves the
+    // message but drops custom Error fields, so explain only a definitive guard
+    // rejection here; unknown replies and acknowledgement uncertainty stay generic.
+    if (savedSource && reply?.ok === false && error && typeof error === 'object' && !Array.isArray(error)
+      && Object.keys(error).length === 2 && Object.hasOwn(error,'code') && Object.hasOwn(error,'commitUncertain')
+      && error.code === 'conditional_source_changed' && error.commitUncertain === false) {
+      throw Object.assign(new Error('The file changed or was replaced. Your draft was kept; refresh before saving.'), {code:error.code,commitUncertain:false,source:'host'});
+    }
+    throw Object.assign(new Error('Durable editor request failed; retain pending recovery state.'), error, {source:'host'});
+  }
   return reply.result;
 };
 contextBridge.exposeInMainWorld('zorid', Object.freeze({

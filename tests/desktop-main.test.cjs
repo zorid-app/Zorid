@@ -121,6 +121,18 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   assert.deepEqual(structuredClone(await exposed.durableInvoke('/first','admitted','documentDrafts',[{op:'snapshot'},new Uint8Array()])),{documentDrafts:true,schemaVersion:1,ok:false,error:{code:'draft_expired',commitUncertain:false}},'transient draft errors remain plain bounded data without diagnostics');
   coreFailure=undefined;
   assert.deepEqual(structuredClone(await exposed.durableInvoke('/first','admitted','documentDrafts',[{op:'snapshot'},new Uint8Array()])),{documentDrafts:true,schemaVersion:1,ok:true,value:{queryId:'query'}});
+  for(const method of ['captureSavedSource','releaseSavedSource']){
+    const args=[method==='captureSavedSource'?{entryId:'entry',revision:'r1',path:'Replace.md'}:'capture'];
+    coreFailure=Object.assign(new Error('/private/replaced inode'),{code:'conditional_source_changed',commitUncertain:false,details:{token:'private'}});
+    assert.deepEqual(structuredClone(await invoke(windows[0],'durableInvoke','/first','admitted',method,args)),
+      {ok:false,error:{code:'conditional_source_changed',commitUncertain:false}},'actual main supplies explicit certainty and no raw native details');
+    await assert.rejects(exposed.durableInvoke('/first','admitted',method,args),
+      {message:'The file changed or was replaced. Your draft was kept; refresh before saving.'});
+    coreFailure.commitUncertain=true;
+    await assert.rejects(exposed.durableInvoke('/first','admitted',method,args),
+      {message:'Durable editor request failed; retain pending recovery state.'});
+  }
+  coreFailure=undefined;
   const savedURL = windows[0].webContents.mainFrame.url;
   windows[0].webContents.mainFrame.url = savedURL.replace('index.html', 'other.html');
   assert.throws(() => invoke(windows[0], 'getVault'), /Untrusted page/);
