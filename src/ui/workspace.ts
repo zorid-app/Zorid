@@ -999,10 +999,11 @@ export class Workspace {
     rightTabs.append(button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle')); this.rightContent=el('div','right-content'); this.right.append(rightTabs,this.rightContent);
     this.status = el('footer','status-bar'); this.status.setAttribute('aria-live','polite');
     const status=el('section','native-document-status');status.setAttribute('aria-label','Save and recovery notices');status.setAttribute('aria-live','polite');
-    center.prepend(status);this.nativeDocumentStatus=status;
+    this.nativeDocumentStatus=status;
     if(this.platform.editorOnly){
-      this.root.append(center);return;
+      center.prepend(status);this.root.append(center);return;
     }
+    center.append(status);
     this.root.append(ribbon,this.sidebar,center,this.right,this.status);
     this.addResizeHandle(this.sidebar,'left'); this.addResizeHandle(this.right,'right');
     this.sidebarControls=createSidebarControls(this.root,{onToggleLeft:()=>this.toggleLeft(),onToggleRight:()=>this.toggleRight()});

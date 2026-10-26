@@ -159,6 +159,7 @@ test('retained conflict outside the selected native document has a visible recov
   const f=await setup(t,{editorOnly:true},false,{},undefined,recovered.adapter);
   await f.workspace.openNote('Other.md');
   const status=document.querySelector<HTMLElement>('.native-document-status')!;
+  assert.ok(status.nextElementSibling?.matches('.panes'),'the native document keeps its existing notice-before-editor layout');
   assert.equal(status.hidden,false);assert.match(status.textContent??'',/Retained draft for “One” needs attention/);
   await assert.rejects(f.workspace.flush(),/draft preserved/);
   const save=[...status.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Save recovery copy')!;
@@ -176,6 +177,9 @@ test('full workspace exposes background recovery while a real Base owns the acti
   assert.ok(document.querySelector('[role="grid"][aria-label="Table"]'),'real Base rendered');
   const status=document.querySelector<HTMLElement>('.native-document-status');
   assert.ok(status,'the full workspace mounts shared save and recovery notices');
+  const panes=document.querySelector<HTMLElement>('.workspace-center > .panes')!;
+  assert.equal(panes.nextElementSibling,status,'global recovery stays below pane navigation so notices cannot push tab controls under open panels');
+  assert.equal(status.parentElement,panes.parentElement,'global recovery occupies its own area outside each pane');
   assert.equal(status.getAttribute('aria-label'),'Save and recovery notices');
   assert.equal(status.getAttribute('aria-live'),'polite');
   assert.equal(status.hidden,false);assert.match(status.textContent??'',/Retained draft for “One” needs attention/);
