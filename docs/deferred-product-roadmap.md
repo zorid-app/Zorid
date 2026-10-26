@@ -9,6 +9,33 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest factual cutoff (2026-10-26, archived part006): rootad8983d5 composes the
+reviewed bottom recovery-notice placement; desktop008 passes333files, producer
+ad8983d5. Safety006 on406c/frontend007 fails117actions/22checks before dispatching
+tab-close; Safety007 onad898/frontend008 advances through FIVE passed scenarios,
+including actual unobscured close/unapplied-draft guard, then fails the named
+recovery-copy locator135/24. Its capture contains a visible copy control in the
+second notice; the frozen helper searches only the first scope. No copy/retry or
+later C2 publication acceptance is claimed. Each run has two normal quits plus
+forced final SIGKILL cleanup, no leaks and verified freeze.
+
+Filter003 on406c/frontend007 fails251/71 after11 complete String cases: twelfth
+negated-any source/membership pass, structured reopen fails with raw expression.
+Normalweb005 on406c passes all FIVE UI phase statuses/11actions but the whole
+campaign fails explicit product-Worker identity: three captured workers have
+empty URL/title. Browser/Vite cleanup and final provenance pass. Current reference
+bootstrap003/004 stop before input at Page.enable timeout; no loaded-script or
+private-socket identity completion, no current visual/logic pass. Owned processes
+are cleaned up without leaks. Full safety/filter/heavy/current reference and
+final integration remain open. Later completed campaigns are recorded separately
+after this immutable archive cutoff; no running campaign is counted as passed.
+
+Part006 preserves exact reports/source/dist checks and excludes all owned
+profiles and vendor captures/code. Preserve ignored archives001–006 before
+retiring the implementation worktree. The coordinator's94/94 and31/31 composed
+focused passes below are stdout-only facts, with no saved logs. See
+[the factual runtime history](history/bases-resume-validation-20261026.md).
+
 Current coordinator update (2026-10-26): reviewed fixes composed at 24b71f94:
 full-workspace recovery notice 099cbf5b→931cc40a, accepted sidebar write drain
 8e874073→ecc4cee0, browser frame observation 7ddbbde0→c087c33a, shared panel
@@ -17,7 +44,8 @@ checkpoint faults b5e9e6ef→24b71f94. Composed focused checks: 94/94 plus
 31/31 PASS, zero skipped. Desktop007/8948 PASS including TypeScript, producer
 24b71f94; receipt `/private/tmp/zorid-bases-20261026-products-001/frontend-receipt-007.json`.
 Rust/native/CLI unchanged. No new native acceptance is inferred from these tests.
-Root owns the sole app lane for Safety006 next; reference worker is source-only.
+At that earlier checkpoint Safety006 was next; its completed result is above.
+Root retains ownership of the sole app lane; reference workers are source-only.
 Main remains clean at e7d655e1. Continue through the remaining runtime gates and
 reviewed main integration; status questions do not pause the authorized work.
 

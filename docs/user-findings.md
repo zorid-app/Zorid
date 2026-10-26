@@ -2,6 +2,28 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Latest factual cutoff2026-10-26 through Safety007/rootad8983d5: bottom placement
+of the full-workspace recovery notice now has bounded native acceptance of
+unobscured tab close and the unapplied-draft guard. Safety006 had stopped before
+that pointer action; its failure remains preserved. Safety007 first FIVE scenarios
+pass, then its named recovery-copy locator fails despite the visible control in
+the second notice. Frozen helper source searches only the first matching notice;
+exact owned-notice selection is under diagnosis. Copy/dirty-reference retry and
+all later C2 cases remain unverified.
+
+Filter003 passes11 complete String cases and the twelfth negated-any exact
+source/membership, then reopens raw text instead of structured controls. Preserve
+the structured-reopen oracle and remaining65-case scope. Normalweb005 passes all
+five normal UI phases but whole acceptance fails missing explicit core Worker
+identity (captured worker URL/title empty); do not waive the final gate. Reference
+bootstrap003/004 fail before input on protocol timeout, without loaded-script or
+private-socket identity completion. Static artifacts establish no runtime parity.
+
+[The append-only validation history](history/bases-resume-validation-20261026.md)
+and local archive parts001–006 retain these exact limits and cleanup/source proofs.
+Full safety/filter/heavy/current-reference acceptance and main integration remain
+open; subsequent completed campaigns have a separate archive cutoff.
+
 Latest2026-10-26 update on rootc483d861: the failed scalar-edit Escape/focus
 finding is implemented and natively verified within Safety005's fifth scenario.
 Safety004 had already preserved both path-reused files and the exact user8 draft,

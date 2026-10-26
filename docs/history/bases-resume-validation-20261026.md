@@ -386,6 +386,119 @@ Reports and SHA-256:
 | `/private/tmp/zorid-bases-web-20261026-003/report.json` | `721dd58f1fc96678ec9fa35bb0a1287f9f64afaae1c33322e93342beddf7d0fc` |
 | `/private/tmp/zorid-bases-web-20261026-004/report.json` | `3613ccf20d22556ac32585bca25a9518191c1e03e74778dda3e60279bff6b56d` |
 
+## Composed source checks and desktop007/008
+
+Reviewed fixes composed at `24b71f94` cover the full-workspace recovery notice,
+accepted sidebar write drain, browser frame observation, shared panel close,
+configuration-control readiness and genuine Layouts checkpoint faults. The
+coordinator reports **94/94 and 31/31 focused tests passed, zero skipped**, in
+terminal stdout. Those two composed runs have no saved log; the archived causal
+review logs are separate evidence and are not substitutes for them.
+
+Desktop007 passes including TypeScript and 333 distribution files, produced at
+`24b71f9440d44fbf39bd737c474afdf911fb1d79`. Desktop008 also passes with 333 files,
+produced at `ad8983d539e1d8853703819514309f71d83dd693` after the reviewed bottom
+placement of the recovery notice. These builds retain the Rust/native/CLI
+identities recorded above; a build alone establishes no runtime acceptance.
+
+| Receipt | SHA-256 |
+| --- | --- |
+| `frontend-receipt-007.json` | `45591743d90635b298df374ce508bcab39a3134694bdecc8f796dde5d90ba4a3` |
+| `frontend-receipt-008.json` | `92e5a8d2a28f9d73de607ae32f545c26b0c8bf02b0d928a61ca3c6ef1a490507` |
+
+## Safety006/007 — close geometry advances; named-reference locator stops retry
+
+Safety006/session12213 fails at **117 actions and 22 checks** on frozen
+`406c1252e638b3287b231fd5dc76593f02dd7dff` with frontend007. Four scenario
+statuses pass. The fifth records exact rejected scalar8 ownership and one
+successful Escape dismissal, then retains the unapplied property-settings draft.
+It stops waiting for an actionable, unobscured active tab-close control before
+sending that pointer action. The captured recovery notice and settings panel
+support the subsequent layout diagnosis; the close guard itself has not executed
+in this run. Eight later scenarios are unexecuted.
+
+Safety007/session44046 fails at **135 actions and 24 checks** on frozen
+`ad8983d539e1d8853703819514309f71d83dd693` with frontend008. Its first **five
+scenario statuses pass**, including the actual unobscured tab-close interaction
+and unapplied-draft close guard. The sixth acknowledges the view rename and
+independent clean-reference update, but fails locating an actionable Save
+recovery copy button within `.native-document-notice`.
+
+Unlike Safety005, the Safety007 failure capture shows the named-reference
+recovery notice and its visible Save recovery copy control, after an earlier
+Replace notice. The frozen helper uses `document.querySelector(scope)` and thus
+searches only the first notice. This is source-backed evidence for the locator
+scope problem; neither the recovery-copy action nor dirty-reference retry has
+passed. Seven later scenarios, including current C2 publication cases, remain
+unexecuted.
+
+Each run records two normal quits with code0/null signal and a final forced
+SIGKILL cleanup, all with no leaked children. Before/after provenance is equal;
+independent audit verifies 837 frozen Git blobs and 333 distribution hashes for
+each run, pre-Escape scalar8 ownership and exact retired/replacement physical
+bytes. No saved launch logs exist for these runs.
+
+| Report | SHA-256 |
+| --- | --- |
+| `/private/tmp/zorid-bases-safety-20261026-006/result.json` | `95e4aa6bb544706f86eee33bb23b7ca3f3007d204669fd108964af6778897dec` |
+| `/private/tmp/zorid-bases-safety-20261026-007/result.json` | `ae0a8301b4198d873bf1ac6aa9d0d5913ef0d9e5c3bda4e4c8774792b6511970` |
+
+## Filter003 — negated-any source/membership passes; structured reopen fails
+
+On frozen `406c1252` and frontend007, Filter003 fails at **251 actions and
+71 checks**. Eleven full String cases complete. The twelfth case passes its
+exact negated-any source and membership checks, then reopens as raw expression
+`!note["text"].containsAny("beta", "gamma")` instead of the expected structured
+typed controls. The failed structured-reopen assertion is preserved. Later
+typed cases and restart remain unexecuted; this is not a 65-case pass and does
+not establish a parser or metadata cause.
+
+SIGTERM cleanup finishes with code0/null signal, no leaked children and verified
+source/artifact freeze. Independent audit matches 837 frozen Git blobs and 333
+distribution hashes. No saved launch log exists.
+
+Report: `/private/tmp/zorid-bases-filters-20261026-003/result.json`.
+SHA-256: `c8efa1215695c0072cc960a0b896e4c9316325b97d123ac664df7af64c27df9b`.
+
+## Normal web005 — five UI phases pass; explicit Worker identity remains missing
+
+Normal web005/session17262 on frozen `406c1252` dispatches 11 actions and passes
+all five phase statuses: create-and-rename, keyboard-edit-and-durable-save,
+normal-reload, rich-search and open-search-result. **The whole campaign fails**
+the final Actual product Worker target observed assertion. Three actual Worker
+targets are captured, but each stored URL/title is empty, so the intended core
+Worker identity is unproven. The five positive UI phases do not waive that gate.
+
+Chrome closes normally with code0/null signal. Vite closes, HTTP listening is
+false, cleanup failures are empty and final provenance verifies. Independent
+audit matches 385 tracked and 441 Rust-input hashes to frozen source. The owned
+profile is retained separately and excluded from the archive. No saved launch
+log exists.
+
+Report: `/private/tmp/zorid-bases-web-20261026-005/report.json`.
+SHA-256: `3b53079f055768539ef6d50491a8ce38b935cb1af9c4625dc4c53d1d09604a2f`.
+
+## Current reference bootstrap003/004 — pre-input protocol failures
+
+Both selected Obsidian1.14.5 bootstrap attempts fail with `CDP deadline
+Page.enable`, before semantic input or any completed phase. Neither captures
+loaded renderer scripts or completes loaded-script/private-socket process
+identity gates. Static selected-artifact identity does not establish the loaded
+runtime identity, current visual comparison or 13-phase logic acceptance.
+Snapshot diagnostics also time out evaluating the renderer.
+
+Both owned processes require SIGKILL cleanup, with no remaining owned processes.
+Source freeze verifies and sampled real-user socket metadata is unchanged.
+The private socket still has stale metadata after cleanup; its removal is not
+claimed. Only selected original result/protocol metadata and launch logs are
+retained in part006. Vendor code, reference profiles, vaults, assets and captures
+remain outside the archive and project source.
+
+| Report | SHA-256 |
+| --- | --- |
+| `/private/tmp/zorid-obsidian-1.14.5-bootstrap-20261026-003/result.json` | `02e0c23cef097b79d6e211d3d915c0d48293af2ae5d82722cd59536f048aa919` |
+| `/private/tmp/zorid-obsidian-1.14.5-bootstrap-20261026-004/result.json` | `505ae6cdf75a13f463f8cd25687d31cbac329b20f7245ad871faf77c4bed9ab1` |
+
 ## Durable local archive
 
 To survive temporary-directory cleanup, completed evidence and native products
@@ -459,6 +572,20 @@ four earlier archive parts/manifests remain unchanged.
 | `fresh-validation-005.tar.gz` | 4,922,260 | `65e0fa88eee14cbcf0d953e03045f75f3876a1c2fe5e4c0acb4fb5b8c1294784` |
 | `fresh-validation-005-manifest.json` | — | `e168306d5c495841d3fd18caf309addefb89cbb82ce9b2aa399be2e177391ebf` |
 | `independent-content-audit-005.json` | — | `7a75bd7e9cb16fe4ee9d4713fa67b014bb4cd7880f62810e905d6865c24f5e3c` |
+
+Part006 retains completed Safety006/007, Filter003 and normal-web005 evidence,
+frontend007/008 receipts, build logs and existing causal review logs, plus the
+explicitly selected reference bootstrap metadata/logs described above. It
+contains **188 original regular files, 17,409,698 original-file bytes, plus an
+embedded snapshot manifest**. All four owned Zorid profiles are excluded. Every
+original/member hash verifies, with parts001–005 and their manifests unchanged.
+The coordinator's composed94/31 stdout-only results are not reconstructed as logs.
+
+| Additional local artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `fresh-validation-006.tar.gz` | 5,008,908 | `c88226990385deac74c202505073a39a5e49c7d41de813456d0d0f4362aa8394` |
+| `fresh-validation-006-manifest.json` | — | `dfee907bed520e546781f300a69e8dee0771e626e8d99b27dfe78581446fcb7b` |
+| `independent-content-audit-006.json` | — | `da2c25319a7ace85a0f2208e25f079f76854a9b315718d1e2c9e13c4848d3f28` |
 
 Full archive directory:
 `/Users/ctk/Projects/Zorid/.worktrees/types-bases-model/tmp/bases-validation-20261026/`.
