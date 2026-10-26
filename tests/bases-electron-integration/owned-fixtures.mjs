@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import {constants} from 'node:fs';
 import path from 'node:path';
 
-export const CAMPAIGN_DIRECTORIES=Object.freeze(['bases-visual-reference','bases-electron-safety-integration','bases-electron-config-integration','bases-electron-properties-integration','bases-electron-clipboard-integration','bases-electron-layouts-integration','bases-electron-recovery-integration','bases-electron-native-select-integration','bases-electron-filter-integration','bases-electron-sidebar-race-integration','bases-electron-selection-integration']);
+export const CAMPAIGN_DIRECTORIES=Object.freeze(['bases-visual-reference','bases-electron-safety-integration','bases-electron-config-integration','bases-electron-properties-integration','bases-electron-clipboard-integration','bases-electron-layouts-integration','bases-electron-recovery-integration','bases-electron-native-select-integration','bases-electron-filter-integration','bases-electron-sidebar-race-integration','bases-electron-selection-integration','bases-electron-sidebar-pin-integration']);
 
 /** Logical fixture names are literal vault-relative files, never host paths. */
 export function validateFixtureName(file){
