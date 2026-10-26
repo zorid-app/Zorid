@@ -41,7 +41,7 @@ test('desktop staging includes runtime assets/notices and excludes source, maps,
   const f = await fixture(t), result = await stageDesktop(f.root);
   const inputs = JSON.parse(await fs.readFile(result.inputManifest));
   assert.ok(inputs.files['desktop/menu-hotkeys.cjs']);
-  for (const module of ['editor-core', 'host-location', 'client-slots', 'rust-vault-service', 'durable-checkpoints', 'durable-writes', 'document-semantics']) assert.ok(inputs.files[`desktop/${module}.cjs`]);
+  for (const module of ['editor-core', 'host-location', 'client-slots', 'rust-vault-service', 'durable-checkpoints', 'durable-writes', 'conditional-saved-source', 'document-semantics']) assert.ok(inputs.files[`desktop/${module}.cjs`]);
   assert.equal(inputs.native.architecture, process.arch);
   assert.equal(inputs.native.resource, 'native/zorid-desktop-host');
   assert.equal(inputs.native.signed, undefined);
@@ -63,7 +63,7 @@ test('desktop staging includes runtime assets/notices and excludes source, maps,
   await assert.rejects(fs.access(path.join(result.appDirectory, 'stale.js')));
 });
 
-test('staged desktop loads the real WorkBlock codec through editor-core', async t => {
+test('staged desktop loads the real WorkBlock and conditional-source codecs through editor-core', async t => {
   const f = await fixture(t);
   for (const relative of desktopFiles) {
     await f.write(relative, await fs.readFile(new URL('../' + relative, import.meta.url)));
@@ -72,8 +72,14 @@ test('staged desktop loads the real WorkBlock codec through editor-core', async 
   const requireStaged = createRequire(path.join(result.appDirectory, 'package.json'));
   assert.equal(typeof requireStaged('./desktop/workblocks.cjs').captureWorkBlockRequest, 'function');
   assert.ok(requireStaged('./desktop/editor-core.cjs'));
+  const savedSource = requireStaged('./desktop/conditional-saved-source.cjs');
+  const guard = { captureId: 'physical-capture', logicalWitness: { entryId: 'note-entry', revision: 'saved-revision', path: 'Notes/A.md' } };
+  assert.deepEqual(savedSource.captureSavedSourceGuard(guard), guard);
+  assert.throws(() => savedSource.captureSavedSourceGuard({ ...guard, source: 'Unexpected source' }), { code: 'invalid_saved_source' });
   const inputs = JSON.parse(await fs.readFile(result.inputManifest));
   assert.ok(inputs.files['desktop/workblocks.cjs']);
+  assert.ok(inputs.files['desktop/conditional-saved-source.cjs']);
+  assert.deepEqual(await fs.readFile(path.join(result.appDirectory, 'desktop/conditional-saved-source.cjs')), await fs.readFile(new URL('../desktop/conditional-saved-source.cjs', import.meta.url)));
 });
 
 test('staging rejects incomplete renderer output and mismatched downloaded Electron', async t => {
