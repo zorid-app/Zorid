@@ -9,6 +9,16 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Next completed cutoff (2026-10-26, archive009): desktop009/10844 PASSES333files,
+producer22feac9d. Filter004/e184f114/frontend009 FAILS83actions/23checks after
+THREE complete String cases. Fourth negated starts-with exact source/membership
+pass, but reopening shows raw expression instead of structured controls. Cause
+remains under diagnosis; no65-case or restart acceptance. SIGTERM0/null/no leaks,
+837Git/333dist hashes and source freeze verify. Archive009 preserves originals;
+parts001–008 unchanged. Active Config001 is excluded from this factual cutoff;
+its launch or source fixes establish no runtime pass. Full outstanding acceptance
+and reviewed main integration remain separate.
+
 Next completed cutoff (2026-10-26, archive008): Safety008 on4a7fc7b5/frontend008
 FAILS161actions/28checks after SIX passed scenarios. Named-reference recovery copy
 and retry now pass their exact source assertions. Seventh mounted-file rename

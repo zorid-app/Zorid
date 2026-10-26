@@ -605,6 +605,33 @@ A proposed inspector-based successor establishes no result for this failed run.
 Report: `/private/tmp/zorid-bases-web-20261026-006/report.json`.
 SHA-256: `b4bd456274ed104bbf8063f293f536f0839bc9e57f63dbd13d58c0bc6974f9f8`.
 
+## Desktop009 and Filter004 — three String cases pass; negated-prefix reopen fails
+
+Desktop009/session10844 passes TypeScript/build with 333 distribution files,
+produced at `22feac9d263c3e0efb211642fe1f40a1992a0d65`. Receipt SHA-256 is
+`e2998f67ae90407ad0986cea9a35808afde8628be90d5f24e962aaa39a09c613`;
+build-log SHA-256 is
+`d82c53602b0908eb46c2bf7770b0edd27fc22f76d18100e13999512d35b1d319`.
+Rust/native/CLI identities remain unchanged. This successful build establishes
+no affected native acceptance by itself.
+
+Filter004 on frozen `e184f1147602647027d71cd7277484d57938789b` and frontend009
+**fails at 83 actions and 23 checks**. Three full String cases complete: equals,
+not-equals and starts-with. The fourth negated starts-with case passes exact
+source/membership checks but fails reopening with structured typed controls.
+Its capture shows `!note["text"].startsWith("Alpha")` as raw expression. Later
+String/typed cases and restart are unexecuted. The capture alone does not
+establish whether property metadata, control readiness or parsing causes the
+reopen failure; retain the original structured-control and 65-case oracles.
+
+SIGTERM cleanup finishes with code0/null signal and no leaked children.
+Before/after provenance is identical; independent audit verifies 837 frozen
+Git file hashes and 333 frontend009 hashes. Other active campaigns are outside
+this completed cutoff.
+
+Report: `/private/tmp/zorid-bases-filters-20261026-004/result.json`.
+SHA-256: `30e83559254387f341acb8a5356000a0d336f8aa50f2fa432f8a0a1d221daa39`.
+
 ## Durable local archive
 
 To survive temporary-directory cleanup, completed evidence and native products
@@ -719,6 +746,19 @@ unchanged. No vendor reference artifact or reconstructed launch log is included.
 | `fresh-validation-008.tar.gz` | 2,602,764 | `d31d1fded8ecc060d4fe9b930cce8abb34a62665bb764b40fcaaff1d232cdd73` |
 | `fresh-validation-008-manifest.json` | — | `4f258b1d170990735c43e27ab6a18031fc56df21c9a898bd8c5af1d5866ae08d` |
 | `independent-content-audit-008.json` | — | `07840b741547ac29848b18b254a44ea9a2534b9aa5f27a80dc794b4b8625b7de` |
+
+Part009 retains completed Filter004 report, provenance, screenshot and owned
+fixture data plus the frontend009 receipt/build log. It contains **19 original
+regular files, 2,345,141 original-file bytes, plus an embedded snapshot
+manifest**. The disposable profile is excluded. Original/member hashes verify;
+parts001–008 and their manifests remain unchanged. No vendor artifact or missing
+launch log is reconstructed. Active Config001 evidence is excluded.
+
+| Additional local artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `fresh-validation-009.tar.gz` | 410,257 | `7364133b7194df93b8a32279c12794c5635c571757b20d1de2ad5031564ac1ba` |
+| `fresh-validation-009-manifest.json` | — | `1eab1a25c2635ad55c495805d3d1e8c670e8348be2ed6f44f32249c12817d01e` |
+| `independent-content-audit-009.json` | — | `723967d9e39e7689356b625348b2be6dda1395619e612b609936c368efc48ef6` |
 
 Full archive directory:
 `/Users/ctk/Projects/Zorid/.worktrees/types-bases-model/tmp/bases-validation-20261026/`.

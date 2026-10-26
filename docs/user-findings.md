@@ -2,6 +2,13 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Next completed cutoff2026-10-26, archive009: Filter004/e184f114/frontend009
+FAILS83/23 after three complete String cases. Negated starts-with source and
+membership pass, then structured reopen fails with raw expression. Cause remains
+unproven; preserve the structured-control and65-case expectations. Desktop009
+passes333files at22feac9d; actual cleanup/provenance verify. Active Config001 is
+outside this cutoff. No full filter or broader acceptance completion follows.
+
 Next completed cutoff2026-10-26, archive008: Safety008/4a7fc7b5/frontend008
 PASSES first SIX scenarios, including named-reference exact recovery copy and
 original retry, then FAILS161/28 at mounted-file rename's exact-source assertion.
