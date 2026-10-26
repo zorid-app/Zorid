@@ -1,16 +1,13 @@
 import assert from 'node:assert/strict';
 import {fixtureFiles,cases,records,base,roundTripSources} from './fixtures.mjs';
 import {assertMembership,assertConfiguration,expectedPaths} from './oracles.mjs';
+import {closeTypedFilter as close} from './close-readiness.mjs';
 export {fixtureFiles,vaultName} from './fixtures.mjs';
 const active='.pane.is-active .bases-session',panel='[role="dialog"][aria-label="Filter"]';
 const local=panel+' .bases-filter-section:nth-of-type(2)',root=local+' .bases-filter-tree > .bases-filter-group';
 const row=number=>root+` > .bases-filter-condition:nth-of-type(${number})`;
 const value=scope=>scope+' input[aria-label="Filter value"]';
 async function choose(c,name){await c.ui.button('Views',active);await c.ui.button('Open view '+name,'[role="dialog"][aria-label="Views"]');await c.ui.wait(`return document.querySelector('${active} [aria-label="Views"]')?.textContent===${JSON.stringify(name)};`,'Selected exact filter view '+name);}
-async function close(c){
-  if(await c.ui.dom(`return !![...document.querySelectorAll('${panel} [role="listbox"]')].find(e=>e.getClientRects().length);`))await c.ui.key('Escape');
-  await c.ui.key('Escape');await c.ui.wait(`return !document.querySelector(${JSON.stringify(panel)});`,'Filter closes after acknowledgement');
-}
 async function membership(c,ids,name){
   const paths=expectedPaths(ids);
   const actual=await c.ui.wait(`const grid=document.querySelector('${active} [role="grid"]');if(grid?.getAttribute('aria-rowcount')!==${JSON.stringify(String(paths.length+1))})return false;const paths=[...grid.querySelectorAll('.zorid-bases-table-body .zorid-bases-table-row')].map(e=>e.querySelector('[data-path]')?.dataset.path);return JSON.stringify(paths)===${JSON.stringify(JSON.stringify(paths))}?paths:false;`,name);
