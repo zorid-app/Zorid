@@ -15,7 +15,7 @@ async function filters(c){
   const all=section('All views'),root=group(all);
   await addGroup(c,root);const rootOr=group(all,[0]);await match(c,rootOr,'or');
   await editCondition(c,rootOr,0,'note.status','eq','Todo');await addCondition(c,rootOr);await editCondition(c,rootOr,1,'note.status','eq','Done');
-  await addGroup(c,root);const rootNot=group(all,[1]);await match(c,rootNot,'not');await editCondition(c,rootNot,0,'note.enabled','eq','false');
+  await addGroup(c,root);const rootNot=group(all,[1]);await match(c,rootNot,'not');await editCondition(c,rootNot,0,'note.enabled','eq',false);
   const local=section('This view'),localRoot=group(local);await match(c,localRoot,'or');
   await addCondition(c,localRoot);await editCondition(c,localRoot,0,'note.score','gte','4');
   await addGroup(c,localRoot);const localAnd=group(local,[0]);await editCondition(c,localAnd,0,'note.priority','eq','High');

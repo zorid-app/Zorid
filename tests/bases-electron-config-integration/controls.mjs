@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import {delay} from '../tasks-electron-integration/cdp.mjs';
+import {closeAcknowledgedToolbarPanel} from '../bases-electron-filter-integration/close-readiness.mjs';
 export const active='.pane.is-active .bases-session';
 export const dialog=name=>`[role="dialog"][aria-label=${JSON.stringify(name)}]`;
 export const input=(name,scope='body')=>`${scope} input[aria-label=${JSON.stringify(name)}],${scope} textarea[aria-label=${JSON.stringify(name)}],${scope} [contenteditable="true"][aria-label=${JSON.stringify(name)}]`;
 export async function closeMenu(c,name){
-  // Completion Escape is a separate user interaction, not a retry of a failed
-  // action. Only issue it if an actual completion/picker popup is visible.
-  if(await c.ui.dom(`const panel=document.querySelector(${JSON.stringify(dialog(name))});return !![...panel?.querySelectorAll('[role="listbox"],.cm-tooltip-autocomplete')??[]].find(e=>e.getClientRects().length);`))await c.ui.key('Escape');
-  await c.ui.key('Escape');await c.ui.wait(`return !document.querySelector(${JSON.stringify(dialog(name))});`,'Closed acknowledged '+name);await c.ui.idle();
+  const triggerLabel=({Property:'Properties',Formula:'Properties','View options':'Views'})[name]??name;
+  // Config also edits Kanban and unsupported layouts. A present table still
+  // needs a matching rendered version, but those layouts have no grid marker.
+  await closeAcknowledgedToolbarPanel(c,{panelName:name,triggerLabel,requireTable:false,action:'configuration-panel-close-ready'});
+  await c.ui.idle();
 }
 export async function choose(c,name){await c.ui.button('Views',active);await c.ui.button('Open view '+name,dialog('Views'));await c.ui.wait(`return document.querySelector('${active} [aria-label="Views"]')?.textContent.trim()===${JSON.stringify(name)};`,'Selected view '+name);await c.ui.idle();}
 export async function focusByTab(c,predicate,label,{reverse=false,max=30}={}){
@@ -31,7 +33,13 @@ export async function editCondition(c,owner,index,property,operator,value){
   const row=condition(owner,index);
   await c.ui.select(`${row} > select[aria-label="Filter property"]`,property);
   await c.ui.select(`${row} > select[aria-label="Condition"]`,operator);
-  await c.ui.type(`${row} > input[aria-label="Filter value"]`,value);
+  const operand=`${row} .bases-filter-operand-host input[aria-label="Filter value"]`;
+  if(typeof value==='boolean'){
+    let state=await c.ui.wait(`const e=document.querySelector(${JSON.stringify(operand)});return e?.type==='checkbox'?{checked:e.checked,indeterminate:e.indeterminate}:false;`,'Real Boolean filter operand');
+    if(state.indeterminate){await c.ui.click(operand);state=await c.ui.dom(`const e=document.querySelector(${JSON.stringify(operand)});return {checked:e.checked,indeterminate:e.indeterminate};`);}
+    if(state.checked!==value)await c.ui.click(operand);
+    await c.ui.wait(`const e=document.querySelector(${JSON.stringify(operand)});return e?.type==='checkbox'&&e.checked===${value}&&e.indeterminate===false;`,'Exact Boolean filter operand');
+  }else await c.ui.type(operand,value);
 }
 export async function savedConfiguration(c,check,name){return c.saved('Configuration.base',source=>{const config=c.yaml.parse(source);assert.equal(config.fixtureSentinel,'config-keep');assert.deepEqual(config.pluginRoot,{version:19,nested:['one','two']});assert.match(source,/# Configuration acceptance/);for(const view of config.views)assert.ok(view.pluginView,'Unknown per-view field retained');check(config);},name);}
 
