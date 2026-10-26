@@ -4,6 +4,7 @@ import path from 'node:path';
 import {delay, until} from '../tasks-electron-integration/cdp.mjs';
 import {MOD} from '../bases-electron-integration/ui.mjs';
 import {restartWithFreshSource, safetyAReady} from './freshness.mjs';
+import {saveRecoveryCopyFor} from './recovery-notice.mjs';
 import {selectionSplitReady, waitSelectionNoteLive} from '../bases-electron-selection-integration/setup-readiness.mjs';
 import {sourceDigest,assertPreparedInlineWrite,assertInlineCheckpointFailure,assertOriginalInlineCheckpointRetry,withDeniedOwnedVaultLock} from './inline-checkpoint-fault.mjs';
 import {fixtureFiles as originalFixtureFiles, template, vaultName, openBoundaries} from './fixtures.mjs';
@@ -263,7 +264,7 @@ async function namedReferenceRetry(c) {
   assert.equal(await c.read('Named host.md'), conflict.external, 'Dirty reference failure preserves external original');
   await c.screenshot('s07-named-reference-partial-retry');
   const beforeCopies = new Set(await fs.readdir(c.vault));
-  await c.ui.button('Save recovery copy', '.native-document-notice');
+  await saveRecoveryCopyFor(c, 'Named host.md');
   const copy = await until(async () => { const names = (await fs.readdir(c.vault)).filter(name => !beforeCopies.has(name) && name.endsWith('.md')); assert.equal(names.length, 1); return names[0]; }, 30000);
   await c.saved(copy, source => assert.equal(source, conflict.draft), 'named-reference-recovery-copy-exact-user-draft');
   assert.equal(await c.read('Named host.md'), conflict.external);
@@ -333,7 +334,7 @@ async function nestedMountedRename(c) {
   // Before the dirty child can be rewritten, its original wrapper still names
   // the old fragment while its already-mounted session follows the saved name.
   const pending=await embedFrame(c,old);assertMountedRenameRetention(before,pending,{base:nestedRename.base,name:nestedRename.to,renderedName:nestedRename.from});
-  const names=new Set(await fs.readdir(c.vault));await c.ui.button('Save recovery copy','.native-document-notice');
+  const names=new Set(await fs.readdir(c.vault));await saveRecoveryCopyFor(c,nestedRename.child);
   const copy=await until(async()=>{const added=(await fs.readdir(c.vault)).filter(name=>!names.has(name)&&name.endsWith('.md'));assert.equal(added.length,1);return added[0];},30000);
   await c.saved(copy,source=>assert.equal(source,conflict.draft),'c2-nested-recovery-copy-exact-original-draft');
   await c.ui.button('Retry save',dialog('View options'));

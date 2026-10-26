@@ -220,3 +220,12 @@ node --test --test-concurrency=1 tests/bases-electron-safety-integration/freshne
 These source/protocol checks are not actual Electron acceptance. They do not
 erase safety012's retained ordinary-property save/reconciliation failure, prove
 its cause, or establish the separately implemented physical save guard.
+
+## Global recovery-copy targeting
+
+Named and nested reference recovery first observes the public `Save and recovery
+notices` region. The exact retained note label must own the region's single
+visible, enabled recovery-copy action. An unrelated earlier Retry-save row cannot
+become its scope, and ambiguous/wrong-note actions are refused. The existing
+production UI locator then performs the original one click; complete recovery
+copy and external-source assertions remain unchanged.
