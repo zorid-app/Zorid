@@ -9,6 +9,48 @@ export const phaseNames = Object.freeze(['create-and-rename', 'keyboard-edit-and
 export const harnessInputs = Object.freeze(['run.mjs', 'oracles.mjs', 'oracles.test.mjs', 'README.md'].map(name => 'tests/bases-web-integration/' + name));
 export const faviconReceiptWaitMs = 1000;
 
+// Discovery can report a Worker before its URL is assigned. Retain its real
+// lifecycle instead of treating the initial empty URL as its final identity.
+export function observeWorkerTarget(events, message) {
+  const info = message.params?.targetInfo;
+  const known = message.method === 'Target.targetDestroyed' && events.some(event => event.params?.targetInfo?.targetId === message.params?.targetId);
+  if (!known && (!['Target.targetCreated', 'Target.targetInfoChanged'].includes(message.method) || info?.type !== 'worker')) return false;
+  assert.ok(events.length < 128, 'Bounded raw Worker target events');
+  events.push(structuredClone(message)); return true;
+}
+
+export function productWorkerProof(evidence) {
+  const { workerTargetEvents: events, workerTargetSnapshot: snapshot, normalPageTarget, origin, requests } = evidence;
+  assert.ok(typeof normalPageTarget === 'string' && normalPageTarget.length > 0);
+  const targets = snapshot?.targets;
+  assert.ok(Array.isArray(events) && events.length <= 128 && Array.isArray(targets) && targets.length <= 64, 'Bounded Worker discovery evidence');
+  assert.ok(Number.isInteger(snapshot.eventsThrough) && snapshot.eventsThrough >= 0 && snapshot.eventsThrough <= events.length && Number.isFinite(snapshot.capturedAt), 'Final snapshot has an exact lifecycle boundary');
+  const workers = new Map();
+  for (const [index, event] of events.slice(0, snapshot.eventsThrough).entries()) {
+    if (event.method === 'Target.targetDestroyed') { const worker = workers.get(event.params.targetId); assert.ok(worker && !worker.destroyed, 'Destroyed Worker must have a unique earlier creation'); worker.destroyed = true; continue; }
+    assert.ok(['Target.targetCreated', 'Target.targetInfoChanged'].includes(event.method));
+    const info = event.params.targetInfo; assert.equal(info.type, 'worker'); assert.ok(typeof info.targetId === 'string' && info.targetId.length > 0);
+    if (event.method === 'Target.targetCreated') { assert.equal(workers.has(info.targetId), false, 'Unique Worker creation'); workers.set(info.targetId, { created: index, createdParentId: info.parentId, observedUrls: info.url ? [info.url] : [], info: { ...info }, destroyed: false }); }
+    else { const worker = workers.get(info.targetId); assert.ok(worker && !worker.destroyed, 'Worker URL changes require a live observed creation'); if (info.parentId !== undefined && worker.info.parentId !== undefined) assert.equal(info.parentId, worker.info.parentId, 'Worker parent cannot change'); if (info.url) worker.observedUrls.push(info.url); worker.info = { ...worker.info, ...info }; }
+  }
+  const seen = new Set(), matches = [];
+  for (const info of targets) {
+    assert.ok(typeof info.targetId === 'string' && !seen.has(info.targetId), 'Unique final target IDs'); seen.add(info.targetId);
+    if (info.type !== 'worker') continue;
+    let url; try { url = new URL(info.url); } catch { continue; }
+    if (url.origin !== origin || url.pathname !== '/src/platform/browser-core-worker.ts' || url.hash || url.username || url.password) continue;
+    const worker = workers.get(info.targetId);
+    assert.ok(worker && !worker.destroyed, 'Final product Worker must have a live observed creation');
+    assert.equal(worker.createdParentId, normalPageTarget, 'Created Worker belongs to the owned normal page');
+    assert.equal(info.parentId, normalPageTarget, 'Final Worker belongs to the owned normal page');
+    for (const observed of worker.observedUrls) assert.equal(observed, info.url, 'Final snapshot agrees with every observed Worker URL');
+    matches.push({ targetId: info.targetId, parentId: info.parentId, url: info.url, createdEvent: worker.created });
+  }
+  assert.equal(matches.length, 1, 'Exactly one current actual product Worker target observed');
+  assert.ok(requests.some(row => row.path === '/src/platform/browser-core-worker.ts' && row.method === 'GET' && row.statusCode === 200 && /Chrome\//.test(row.userAgent)), 'Actual browser fetched the normal product Worker');
+  return matches[0];
+}
+
 // Handwritten persistence contract inspected at browser-streaming-vault.ts
 // VERSION8, browser-normalized-idb.ts and browser-managed-records.ts. Normal
 // browser-default never selects the legacyFixture/version6 opener.
@@ -127,6 +169,7 @@ export function finalEvidence(evidence) {
   assert.deepEqual(classified.exceptions, [], 'Unclassified final runtime error');
   assert.deepEqual(classified.ambientNetworkErrors, evidence.ambientNetworkErrors, 'Ambient error evidence must retain exact raw errors and correlated receipts');
   assert.deepEqual(evidence.pendingNetworkErrors, [], 'Final runtime receipts must not remain pending');
+  assert.deepEqual(productWorkerProof(evidence), evidence.workerProof, 'Final acceptance retains correlated Worker evidence');
   assert.equal(evidence.provenanceVerified, true); assert.equal(evidence.finalProvenanceVerified, true);
   assert.equal(evidence.normalClose?.requested, true); assert.deepEqual(evidence.cleanup.failures, []);
   assert.equal(evidence.cleanup.chrome.exitCode, 0); assert.equal(evidence.cleanup.chrome.signalCode, null); assert.deepEqual(evidence.cleanup.chrome.signals, []);

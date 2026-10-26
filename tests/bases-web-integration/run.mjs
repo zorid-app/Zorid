@@ -11,7 +11,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { CDP, delay } from '../tasks-electron-integration/cdp.mjs';
 import { UI } from '../bases-electron-integration/ui.mjs';
 import { observeOwnedChild, cleanupOwnedResources } from '../browser-workblocks-worker/cleanup.mjs';
-import { databaseName, noteName, notePath, marker, source, phaseNames, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, trackedHarnessInputs, trackOwnedStartup, finalEvidence, classifyRuntimeErrors, awaitRuntimeHealth, waitForObservation, streamingStorageSchema, storageObservationSnapshot } from './oracles.mjs';
+import { databaseName, noteName, notePath, marker, source, phaseNames, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, trackedHarnessInputs, trackOwnedStartup, finalEvidence, classifyRuntimeErrors, awaitRuntimeHealth, waitForObservation, streamingStorageSchema, storageObservationSnapshot, observeWorkerTarget, productWorkerProof } from './oracles.mjs';
 
 const args = process.argv.slice(2), accepted = new Set(['--root', '--expected-head', '--wasm-dir', '--chrome', '--out', '--timeout-ms']);
 assert.equal(args.filter(value => value === '--runtime-authorized').length, 1, 'Explicit coordinator runtime authorization required');
@@ -63,7 +63,7 @@ const before = await provenance();
 await fs.mkdir(out); // Fresh evidence only. Never overwrite an earlier run.
 const profile = path.join(out, 'chrome-profile'); await fs.mkdir(profile);
 const started = Date.now(), deadline = started + timeoutMs;
-const evidence = { kind: 'actual-normal-web-workspace-smoke', status: 'running', started: new Date(started).toISOString(), timeoutMs, provenance: before, phases: phaseNames.map(name => ({ name, status: 'unexecuted' })), actions: [], observations: [], requests: [], workerTargets: [], errorEvents: [], errorObservedAt: [], networkReceipts: [], exceptions: [], ambientNetworkErrors: [], pendingNetworkErrors: [], startupDiagnostics: [], storageObservations: [], storageReadbacks: [], storageReadCount: 0, limitations: ['Five normal note UI phases only; not full Bases, desktop/mobile, sync, performance or visual parity.', 'CDP pointer/keyboard input and read-only IndexedDB inspection; not physical keyboard or OS focus parity.', 'The normal Vite development entry is exercised, not a production bundle.', 'Saved-byte checks inspect the normal streaming-v8 inline text projection, not encrypted retained graph integrity or chunked/binary content.'] };
+const evidence = { kind: 'actual-normal-web-workspace-smoke', status: 'running', started: new Date(started).toISOString(), timeoutMs, provenance: before, phases: phaseNames.map(name => ({ name, status: 'unexecuted' })), actions: [], observations: [], requests: [], workerTargets: [], workerTargetEvents: [], errorEvents: [], errorObservedAt: [], networkReceipts: [], exceptions: [], ambientNetworkErrors: [], pendingNetworkErrors: [], startupDiagnostics: [], storageObservations: [], storageReadbacks: [], storageReadCount: 0, limitations: ['Five normal note UI phases only; not full Bases, desktop/mobile, sync, performance or visual parity.', 'CDP pointer/keyboard input and read-only IndexedDB inspection; not physical keyboard or OS focus parity.', 'The normal Vite development entry is exercised, not a production bundle.', 'Saved-byte checks inspect the normal streaming-v8 inline text projection, not encrypted retained graph integrity or chunked/binary content.'] };
 let server, chrome, childReceipt, cdp, ui, cleanupCall, failure, timedOut = false;
 let stderr = '', eventOverflow = 0;
 const startupTasks = [];
@@ -155,12 +155,13 @@ try {
   childReceipt = observeOwnedChild(chrome); let spawnError; chrome.on('error', error => { spawnError = error; }); chrome.stderr.on('data', bytes => { if (stderr.length < 128000) stderr += bytes; });
   const port = await until(async () => { if (spawnError) throw spawnError; assert.ok(!childReceipt.exit, 'Owned Chrome exited during startup'); const value = (await fs.readFile(path.join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0]; assert.match(value, /^[1-9][0-9]{0,4}$/); assert.ok(Number(value) <= 65535); return value; }, 'Owned Chrome debugger');
   const target = await bounded(() => fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT', signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) }).then(reply => reply.json()));
+  evidence.normalPageTarget = target.id;
   cdp = new CDP(target.webSocketDebuggerUrl); cleanupCall = cdp.call.bind(cdp);
   // Shared input helpers must also stop after the whole-run deadline. Cleanup
   // alone retains the original bounded transport for Browser.close/screenshots.
   cdp.call = async (method, parameters) => { await healthy(); return bounded(() => cleanupCall(method, parameters)); };
   ui = new UI(cdp, evidence.actions);
-  cdp.ws.addEventListener('message', event => { const message = JSON.parse(event.data); if (message.method === 'Network.requestWillBeSent' || message.method === 'Network.responseReceived') networkEvent(message); if (message.method === 'Target.targetCreated' && message.params.targetInfo.type === 'worker') { if (evidence.workerTargets.length < 32) evidence.workerTargets.push(message.params.targetInfo); else eventOverflow++; } if (message.method === 'Runtime.exceptionThrown' || message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error' || message.method === 'Log.entryAdded' && message.params.entry.level === 'error') { if (evidence.errorEvents.length < 128) { evidence.errorEvents.push(message); evidence.errorObservedAt.push(Date.now()); } else eventOverflow++; for (const finish of [...networkWaiters]) finish(); } });
+  cdp.ws.addEventListener('message', event => { const message = JSON.parse(event.data); try { observeWorkerTarget(evidence.workerTargetEvents, message); } catch (error) { eventOverflow++; evidence.workerObservationFailure = error.message; } if (message.method === 'Network.requestWillBeSent' || message.method === 'Network.responseReceived') networkEvent(message); if (message.method === 'Target.targetCreated' && message.params.targetInfo.type === 'worker') { if (evidence.workerTargets.length < 32) evidence.workerTargets.push(message.params.targetInfo); else eventOverflow++; } if (message.method === 'Runtime.exceptionThrown' || message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error' || message.method === 'Log.entryAdded' && message.params.entry.level === 'error') { if (evidence.errorEvents.length < 128) { evidence.errorEvents.push(message); evidence.errorObservedAt.push(Date.now()); } else eventOverflow++; for (const finish of [...networkWaiters]) finish(); } });
   for (const method of ['Runtime.enable', 'Page.enable', 'Network.enable', 'Log.enable']) await bounded(() => cdp.call(method));
   await bounded(() => cdp.call('Target.setDiscoverTargets', { discover: true })); evidence.browser = await bounded(() => cdp.call('Browser.getVersion'));
   await bounded(() => cdp.call('Page.navigate', { url: origin + '/' }));
@@ -198,7 +199,9 @@ try {
   assert.equal(eventOverflow, 0, 'No passive evidence overflow');
   assert.ok(evidence.requests.some(row => row.path === '/src/main.ts' && row.statusCode === 200 && /Chrome\//.test(row.userAgent)), 'Actual normal main.ts requested');
   assert.ok(evidence.requests.some(row => row.path.includes('/src/platform/browser-core-worker.ts') && row.statusCode === 200 && /Chrome\//.test(row.userAgent)), 'Actual product core Worker requested');
-  assert.ok(evidence.workerTargets.some(row => row.url.includes('/src/platform/browser-core-worker.ts')), 'Actual product Worker target observed');
+  const targets = await bounded(() => cdp.call('Target.getTargets'));
+  evidence.workerTargetSnapshot = { targets: targets.targetInfos, eventsThrough: evidence.workerTargetEvents.length, capturedAt: Date.now() }; // Pre-close read-only discovery boundary.
+  evidence.workerProof = productWorkerProof(evidence);
   evidence.assetResponses = [];
   for (const name of ['zorid_wasm.js', 'zorid_wasm_bg.wasm']) {
     const assetPath = '/' + before.wasm.modulePrefix + '/' + name;

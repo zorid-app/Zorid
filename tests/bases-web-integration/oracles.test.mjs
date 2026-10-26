@@ -2,12 +2,54 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { databaseName, noteName, notePath, marker, source, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, harnessInputs, trackedHarnessInputs, trackOwnedStartup, finalEvidence, phaseNames, classifyRuntimeErrors, awaitRuntimeHealth, waitForObservation, streamingStorageSchema, storageObservationSnapshot } from './oracles.mjs';
+import { databaseName, noteName, notePath, marker, source, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, harnessInputs, trackedHarnessInputs, trackOwnedStartup, finalEvidence, phaseNames, classifyRuntimeErrors, awaitRuntimeHealth, waitForObservation, streamingStorageSchema, storageObservationSnapshot, observeWorkerTarget, productWorkerProof } from './oracles.mjs';
 
 const entry = { id: 'ui-created-entry', revision: 'saved-revision', path: notePath, kind: 'file', deleted: false };
 const snapshot = () => ({ database: databaseName, version: 8, entries: [{ ...entry }], contents: [{ id: entry.id, bytes: [...new TextEncoder().encode(source)] }] });
 const editor = () => ({ workspace: true, desktopBridge: false, fixtureMarker: false, title: noteName, editors: 1, connected: true, editable: true, text: source, saveState: '', focusedEditor: true });
 const search = () => ({ query: marker, total: '1 match in 1 file', status: '', groups: [{ entryId: entry.id, path: notePath, title: noteName, badge: '1', snippets: [{ text: marker, marks: [marker] }] }] });
+const workerInfo = (targetId = 'core', url = '', parentId = 'normal-page') => ({ targetId, type: 'worker', title: '', url, attached: false, parentId });
+const workerEvent = (method, info) => ({ method: 'Target.' + method, params: method === 'targetDestroyed' ? { targetId: info } : { targetInfo: info } });
+function workerFixture() {
+  const origin = 'http://127.0.0.1:60741', url = origin + '/src/platform/browser-core-worker.ts?worker_file&type=module';
+  return { origin, normalPageTarget: 'normal-page', workerTargetEvents: [workerEvent('targetCreated', workerInfo()), workerEvent('targetInfoChanged', workerInfo('core', url))], workerTargetSnapshot: { targets: [workerInfo('core', url)], eventsThrough: 2, capturedAt: 100 }, requests: [{ path: '/src/platform/browser-core-worker.ts', method: 'GET', statusCode: 200, userAgent: 'Chrome/156' }] };
+}
+test('Worker URL discovery retains created/changed/destroyed records across normal reload and proves the current exact target', () => {
+  const evidence = workerFixture(), events = [];
+  const old = workerInfo('old', evidence.workerTargetSnapshot.targets[0].url);
+  for (const message of [workerEvent('targetCreated', workerInfo('old')), workerEvent('targetInfoChanged', old), workerEvent('targetDestroyed', 'old'), ...evidence.workerTargetEvents]) observeWorkerTarget(events, message);
+  evidence.workerTargetEvents = events; evidence.workerTargetSnapshot.eventsThrough = events.length;
+  assert.equal(events.length, 5); assert.equal(events[0].params.targetInfo.url, '');
+  assert.equal(productWorkerProof(evidence).targetId, 'core');
+  const retained = events[1].params.targetInfo.url; old.url = 'mutated'; assert.equal(events[1].params.targetInfo.url, retained, 'Raw lifecycle owns its captured values');
+});
+test('the final read-only snapshot can identify a blank-created Worker but blank targets alone never prove product execution', () => {
+  const evidence = workerFixture(); evidence.workerTargetEvents = [workerEvent('targetCreated', workerInfo())]; evidence.workerTargetSnapshot.eventsThrough = 1;
+  assert.equal(evidence.workerTargetEvents.some(event => event.params.targetInfo.url.includes('/src/platform/browser-core-worker.ts')), false, 'The old created-only URL assertion fails even for the valid later snapshot');
+  assert.equal(productWorkerProof(evidence).targetId, 'core');
+  evidence.workerTargetSnapshot.targets[0].url = ''; assert.throws(() => productWorkerProof(evidence), /Exactly one current/);
+  const recorded005 = workerFixture(); recorded005.workerTargetEvents = ['first', 'second', 'third'].map(id => workerEvent('targetCreated', workerInfo(id))); recorded005.workerTargetSnapshot.targets = []; recorded005.workerTargetSnapshot.eventsThrough = 3;
+  assert.throws(() => productWorkerProof(recorded005), /Exactly one current/, 'Historical empty-URL creation receipts stay insufficient');
+});
+test('a retained pre-close Worker snapshot is not rewritten by later normal browser shutdown events', () => {
+  const evidence = workerFixture(), before = productWorkerProof(evidence);
+  observeWorkerTarget(evidence.workerTargetEvents, workerEvent('targetDestroyed', 'core'));
+  assert.equal(evidence.workerTargetEvents.length, 3); assert.deepEqual(productWorkerProof(evidence), before);
+  evidence.workerTargetSnapshot.eventsThrough = 3;
+  assert.throws(() => productWorkerProof(evidence), /live observed creation/);
+});
+test('Worker proof rejects wrong origin/path/parent, orphan or destroyed IDs, conflicting discovery and missing browser HTTP200', () => {
+  for (const change of [e => { e.workerTargetEvents[0].params.targetInfo.url = e.origin + '/different-worker.ts'; }, e => { e.workerTargetEvents[0].params.targetInfo.url = e.origin + '/different-worker.ts'; e.workerTargetEvents[1].params.targetInfo.url = ''; }, e => { delete e.workerTargetEvents[0].params.targetInfo.parentId; }, e => { e.workerTargetSnapshot.targets[0].url = 'http://127.0.0.1:9/src/platform/browser-core-worker.ts'; }, e => { e.workerTargetSnapshot.targets[0].url = e.origin + '/fake/browser-core-worker.ts'; }, e => { e.workerTargetSnapshot.targets[0].parentId = 'other-page'; }, e => { e.workerTargetEvents[0].params.targetInfo.parentId = 'other-page'; }, e => { e.workerTargetSnapshot.targets[0].targetId = 'orphan'; }, e => { e.workerTargetEvents.push(workerEvent('targetDestroyed', 'core')); e.workerTargetSnapshot.eventsThrough++; }, e => { e.workerTargetEvents[1].params.targetInfo.url += '&other=1'; }, e => { e.requests[0].statusCode = 304; }, e => { e.requests[0].userAgent = 'driver-fetch'; }, e => { e.workerTargetSnapshot.targets.push(workerInfo('duplicate', e.workerTargetSnapshot.targets[0].url)); }]) {
+    const evidence = workerFixture(); change(evidence); assert.throws(() => productWorkerProof(evidence));
+  }
+});
+test('Worker lifecycle collection is bounded and rejects impossible changed-before-created or duplicate identities', () => {
+  const events = [], message = workerEvent('targetCreated', workerInfo());
+  assert.equal(observeWorkerTarget(events, { method: 'Target.targetCreated', params: { targetInfo: { type: 'page' } } }), false);
+  for (let i = 0; i < 128; i++) observeWorkerTarget(events, message);
+  assert.throws(() => observeWorkerTarget(events, message), /Bounded raw/); assert.equal(events.length, 128);
+  for (const events of [[workerFixture().workerTargetEvents[1]], [message, message]]) { const evidence = workerFixture(); evidence.workerTargetEvents = events; assert.throws(() => productWorkerProof(evidence)); }
+});
 
 test('the handwritten complete source is exactly51 UTF8 bytes including final newline', () => {
   assert.equal(Buffer.byteLength(source), 51); assert.equal(source, 'Ordinary browser note.\nZoridFunctionalUiMarker7c42\n');
@@ -141,7 +183,7 @@ test('an unknown schema cannot masquerade as a retryable empty projection', asyn
   assert.equal(calls, 1); assert.equal(pauses, 0);
 });
 
-const final = () => ({ workflowCompleted: true, phases: phaseNames.map(name => ({ name, status: 'passed' })), exceptions: [], errorEvents: [], networkReceipts: [], ambientNetworkErrors: [], pendingNetworkErrors: [], eventOverflow: 0, provenanceVerified: true, finalProvenanceVerified: true, normalClose: { requested: true }, cleanup: { failures: [], chrome: { exitCode: 0, signalCode: null, signals: [] }, vite: { closeResolved: true } }, startupCleanupTimedOut: false, startupResources: [{ creationSettled: true, expired: false, cleanupStatus: 'not_required' }] });
+const final = () => ({ ...workerFixture(), workerProof: productWorkerProof(workerFixture()), workflowCompleted: true, phases: phaseNames.map(name => ({ name, status: 'passed' })), exceptions: [], errorEvents: [], networkReceipts: [], ambientNetworkErrors: [], pendingNetworkErrors: [], eventOverflow: 0, provenanceVerified: true, finalProvenanceVerified: true, normalClose: { requested: true }, cleanup: { failures: [], chrome: { exitCode: 0, signalCode: null, signals: [] }, vite: { closeResolved: true } }, startupCleanupTimedOut: false, startupResources: [{ creationSettled: true, expired: false, cleanupStatus: 'not_required' }] });
 test('an error arriving after the five phases and initial proof still fails final acceptance', () => {
   const evidence = final(); finalEvidence(evidence);
   evidence.exceptions.push({ method: 'Runtime.exceptionThrown', params: { message: 'late actual failure' } });

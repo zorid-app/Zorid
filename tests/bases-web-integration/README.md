@@ -73,6 +73,18 @@ Worker and content-addressed asset requests are recorded. Separately labelled
 driver GETs verify those ordinary server routes' bytes; they are not counted as
 browser fetches. Exceptions/console errors and incomplete phases fail. The
 whole workflow has a bounded deadline; resource cleanup has its own bounds.
+Worker discovery retains bounded raw creation, URL-change and destruction events.
+An initially blank creation URL is not a product-Worker identity. Before closing
+Chrome, a read-only `Target.getTargets` snapshot must identify exactly one live,
+previously observed Worker belonging to the owned normal page, with the exact
+same-origin `/src/platform/browser-core-worker.ts` pathname, agreeing with any
+observed URL changes and the actual browser GET/HTTP200 receipt. Query parameters
+remain in the raw URL. The snapshot records its lifecycle-event boundary; later
+normal shutdown events remain retained without rewriting this pre-close proof.
+Blank URLs, unmatched target IDs, wrong parents/origins/paths, destroyed targets
+and network requests alone cannot satisfy it. Historical web005's five UI phases
+passed, but its created-only blank-URL receipts failed overall acceptance; the new
+observer requires a fresh run and does not retrospectively accept that report.
 Late startup resources are tracked and their close outcomes are awaited/recorded;
 unresolved or failed cleanup cannot pass. Final acceptance checks exceptions
 again after browser exit and final provenance, including errors arriving during
