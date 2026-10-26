@@ -33,6 +33,7 @@ summary editing or CAS and failure campaigns.
 | P4 | Multiple relation add then remove | Existing aliased link and unresolved literal unchanged |
 | P5 | Cards text/tags; List select/link; Kanban status/multiselect | Exact disk notes after each edit and live values in following layouts |
 | P6 | Table derived value pointer + Enter attempt; all layouts derived readonly presentation | Exact focused current Table cell before Enter; exact count 1; no edit or write |
+| P8 | Unconfigured mixed List: add text with Enter, remove its Boolean chip; inspect a known missing relation in all four layouts and after restart | Handwritten whole-source/typed model/body after each edit, retained Number/null/nested List/Object/raw link; unresolved alias has no link role, class or anchor |
 | C1 | Select one custom summary on two properties in each of two Tables; reject blank/colliding names; rename then delete from the second view | All four references change or disappear together; unrelated custom/builtin selections and definitions survive; rejected names preserve exact Base bytes |
 | P7 | Normal quit, offline bytes/configuration, fresh launch, normal quit | Five independently expected raw files plus the whole expected Base configuration/comment; both Tables retain unrelated summaries and no deleted reference |
 
@@ -40,8 +41,8 @@ Each alternative layout has actual editing actions. The Kanban status edit must
 publish exactly one Alpha card inside the actual `Complete` column before the
 next edit. All property selectors are scoped to the active pane.
 
-`raw-oracle.mjs` contains fourteen preauthored source edits plus two registry
-option insertions. These edit fixed expected spans seeded from `fixtures.mjs`;
+`raw-oracle.mjs` contains the original fourteen preauthored source edits and two
+registry option insertions, plus P8's two mixed-list edits. These edit fixed expected spans seeded from `fixtures.mjs`;
 they never copy a read/save result or call the product serializer. The Alpha
 fixture includes preserved double/single quotes, a frontmatter comment, an
 edited scalar comment, an unrelated scalar comment and exact body text. Every
@@ -54,6 +55,29 @@ prelaunch fixture and updated only by explicit intended changes, plus the
 original comment. It never copies a saved Base into the expected configuration.
 The five raw files and the Base configuration/comment are asserted before quit,
 offline, and after fresh launch.
+
+P8 appends `mixedRaw` and `missingAuthor` to the existing Alpha fixture and every
+view's property order. It adds no note, row, layout, runner hook or private API.
+`mixedRaw` deliberately has no registry definition: it starts with Number 42,
+Boolean true, null, a nested List, an Object and an aliased raw link containing a
+block subpath. Actual pointer input on its non-link Number chip opens the inline
+editor. Enter adds `Native mixed item`; the actual `Remove true` button removes
+only the original Boolean. Both successful edits compare the whole independently
+authored source, the typed property model and the exact Markdown body. The final
+value differs from the fixture, so P7's normal quit, offline read and fresh launch
+must retain the edited typed value rather than merely return to its initial state.
+The existing save oracle also compares each physical saved source to the normal
+logical bridge read.
+
+`missingAuthor` is a declared relation with the raw alias `Missing person` and a
+target absent from the entire prelaunch file map. This supplies the core's known
+unresolved link case, rather than an unloaded legacy target. The current visible
+widget must show exactly one unresolved alias with the existing unresolved title,
+no link role, internal-link class, anchor or href. Public version/busy/error
+markers must agree before that inspection succeeds. All four layouts are checked;
+Table is checked again after restart. The missing chip is never opened or clicked.
+These additions preserve every original property, readonly and summary action and
+oracle. Their source tests and documentation do not establish native acceptance.
 
 Each alternative layout has actual editing actions. P6's Cards/List/Kanban portion
 is explicitly **inspection**, since their value/card activation may correctly

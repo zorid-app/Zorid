@@ -42,6 +42,36 @@ async function addTag(c,selector,text){
   await c.ui.click(selector);await c.ui.type(`${selector} .bases-property-inline-editor input`,text);await c.ui.key('Enter');
   await c.ui.wait(`return !document.querySelector('[data-base-editing="pending"]');`,'Tag chip saved immediately');await c.ui.key('Escape');await c.ui.idle();
 }
+async function openMixedList(c){
+  const selector=property('table',alpha,'mixedRaw');
+  await c.ui.wait(`const e=document.querySelector(${esc(selector)}),pill=e?.querySelector(':scope > .multi-select-pill');if(!e?.isConnected||!e.getClientRects().length||e.closest('[hidden],[inert],[aria-disabled="true"]')||e.hasAttribute('data-base-editing'))return false;const session=e.closest('.bases-session'),widget=e.getAttribute('data-base-widget-version');if(!session||widget===null||widget!==session.getAttribute('data-base-controller-version')||session.getAttribute('data-base-controller-updating')==='true'||session.getAttribute('data-base-controller-error')==='true'||session.querySelector('.bases-session-content')?.getAttribute('aria-busy')==='true')return false;return pill?.querySelector('.multi-select-pill-content')?.textContent==='42'&&!pill.matches('[role="link"],.internal-link');`,'Current mixed list first chip is the original non-link Number 42');
+  await c.ui.click(`${selector} > .multi-select-pill:first-child`);
+  await c.ui.wait(`const e=document.querySelector(${esc(selector)});return !!e?.querySelector('.bases-property-inline-editor input[aria-label="mixedRaw"]');`,'Unconfigured mixed list opens its real inline editor');
+  return selector;
+}
+async function closeMixedList(c,selector){
+  await c.ui.wait(`return !document.querySelector('[data-base-editing="pending"]');`,'Mixed list chip save acknowledged');
+  await c.ui.key('Escape');
+  await c.ui.wait(`const e=document.querySelector(${esc(selector)});return e&&!e.hasAttribute('data-base-editing')&&!e.querySelector('.bases-property-inline-editor');`,'Mixed list editor closes after its accepted save');
+  await c.ui.idle();
+}
+// Read public presentation only. A known missing target must never look like a
+// navigable link merely because its raw source contains a readable path.
+export function unresolvedRelationWitness(document,selector){
+  const e=document.querySelector(selector);
+  if(!e?.isConnected||!e.getClientRects().length||e.closest('[hidden],[inert],[aria-disabled="true"]')||e.hasAttribute('data-base-editing'))return false;
+  const session=e.closest('.bases-session'),widget=e.getAttribute('data-base-widget-version');
+  if(!session||widget===null||widget!==session.getAttribute('data-base-controller-version')||session.getAttribute('data-base-controller-updating')==='true'||session.getAttribute('data-base-controller-error')==='true'||session.querySelector('.bases-session-content')?.getAttribute('aria-busy')==='true')return false;
+  const pills=e.querySelectorAll('.multi-select-pill');if(pills.length!==1)return false;
+  const pill=pills[0],title='Unresolved relation or target outside available choices. Its stored value is preserved.';
+  if(!pill.getClientRects().length||!pill.classList.contains('is-unresolved')||pill.hasAttribute('role')||pill.classList.contains('internal-link')||pill.hasAttribute('href')||pill.querySelector('a,[role="link"],.internal-link,[href]')||pill.querySelector('.multi-select-pill-content')?.textContent!=='Missing person'||pill.title!==title)return false;
+  return {property:e.getAttribute('data-property'),label:'Missing person',title,unresolved:true,navigationSemantics:false,widgetVersion:widget};
+}
+async function missingRelation(c,layout,phase='authoring'){
+  const selector=property(layout,alpha,'missingAuthor');
+  const witness=await c.ui.wait(`return (${unresolvedRelationWitness.toString()})(document,${esc(selector)});`,'Known missing relation is unresolved and non-navigable in '+layout+' '+phase);
+  c.evidence.checks.push({name:'P8-known-missing-relation-public-presentation-'+layout+'-'+phase,...witness});
+}
 async function readOnlyAttempt(c,layout,file,name,expectedSource){
   const selector=property(layout,file,name);assert.equal(await c.read(file),expectedSource,'Independent raw source before derived attempt');
   // Click the actual property's empty padding, avoiding a derived link's valid
@@ -179,6 +209,12 @@ async function propertiesJourney(c){
   await pick(c,property('table',alpha,'peers'),'Alpha',{multiple:true});expected[alpha].peers.push('[[/Items/Alpha.md]]');rawStep('addPeer');await saved(alpha,'P4-relation-add-preserves-alias-and-unresolved');
   await openPicker(c,property('table',alpha,'peers'));await c.ui.button('Remove [[/Items/Alpha.md]]','.bases-property-popover');await c.ui.wait(`return !document.querySelector('[data-base-editing="pending"]');`,'Relation removal saved');await c.ui.key('Escape');await c.ui.idle();expected[alpha].peers.pop();rawStep('removePeer');await saved(alpha,'P4-relation-remove-preserves-originals');
 
+  // P8: an unconfigured raw List retains typed members through actual chip edits.
+  let mixed=await openMixedList(c);await c.ui.type(`${mixed} .bases-property-inline-editor input[aria-label="mixedRaw"]`,'Native mixed item');await c.ui.key('Enter');
+  expected[alpha].mixedRaw.push('Native mixed item');rawStep('addMixedRaw');await saved(alpha,'P8-mixed-list-add-preserves-all-raw-types-and-body');await closeMixedList(c,mixed);
+  mixed=await openMixedList(c);await c.ui.button('Remove true',`${mixed} .bases-property-inline-editor`);
+  assert.equal(expected[alpha].mixedRaw[1],true);expected[alpha].mixedRaw.splice(1,1);rawStep('removeMixedBoolean');await saved(alpha,'P8-mixed-list-remove-only-Boolean-retains-other-types-and-body');await closeMixedList(c,mixed);
+
   // P5: real edits in every alternative layout; each is checked against disk.
   await view(c,'cards');await editText(c,property('cards',alpha,'blurb'),'Cards text 🌱');expected[alpha].blurb='Cards text 🌱';rawStep('cardsText');await saved(alpha,'P5-cards-text-edit');await addTag(c,property('cards',alpha,'tags'),'cards-tag');expected[alpha].tags.push('cards-tag');rawStep('cardsTag');await saved(alpha,'P5-cards-tags-edit');await c.screenshot('properties-03-cards');
   await view(c,'list');await visible(c,property('list',alpha,'blurb'),'Cards text 🌱');await pick(c,property('list',alpha,'priority'),'High');expected[alpha].priority='High';rawStep('listPriority');await saved(alpha,'P5-list-select-edit');await pick(c,property('list',alpha,'reference'),'Ada');expected[alpha].reference='[[/Targets/Ada.md]]';rawStep('listLink');await saved(alpha,'P5-list-plain-link-edit');await c.screenshot('properties-04-list');
@@ -188,6 +224,7 @@ async function propertiesJourney(c){
   // P6: derived fields have values, but no edit inputs or durable note writes.
   for(const layout of ['table','cards','list','kanban']){
     await view(c,layout);await c.ui.wait(`return document.querySelector(${esc(property(layout,beta,'peerCount'))})?.textContent.trim()==='1';`,'Exact derived count 1 in '+layout);
+    await missingRelation(c,layout);
     for(const name of ['peerCount','incoming']){
       const selector=property(layout,beta,name);
       await c.ui.wait(`const e=document.querySelector(${esc(selector)});return e&&!e.hasAttribute('data-base-editing')&&!e.querySelector('input.metadata-input,textarea,[contenteditable="true"]');`,'Derived readonly presentation '+layout+' '+name);
@@ -205,12 +242,14 @@ async function propertiesJourney(c){
   c.evidence.checks.push({name:'P7-offline-note-and-registry-byte-and-base-config-oracle',files:[...expectedRaw.keys()],baseConfiguration:structuredClone(expectedConfig)});
   await c.launch('supplemental-properties-restart');await c.ui.openFile('Properties.base');await c.ui.idle();await view(c,'table');
   await visible(c,property('table',alpha,'blurb'),'Cards text 🌱');await visible(c,property('table',alpha,'topics'),'Picker topic');await visible(c,property('table',alpha,'status'),'Complete');
+  await visible(c,property('table',alpha,'mixedRaw'),'Native mixed item');await missingRelation(c,'table','restart');await saved(alpha,'P8-restart-mixed-list-exact-types-and-full-body');
   for(const name of [originalTable,mirrorTable])await verifySummaryDeletion(c,name);await chooseView(c,originalTable);
   for(const [file,source]of expectedRaw)await c.saved(file,current=>expectedFile(file,current,source),'P7-restart-independent-source-or-config-'+file);
   await c.screenshot('properties-06-restart');await c.quit('P7-normal-quit-after-restart');
 }
 
-// Preserve the original actions/oracles; add only bounded passive diagnostics.
+// All original cases remain; this wrapper adds only passive diagnostics around
+// their actions and the explicit P8 typed-integrity extension above.
 export async function journey(c){
   const allowedPaths=[...fixtureFiles().keys()],allowedProperties=[...new Set(Object.values(initial).flatMap(value=>Object.keys(value)).flatMap(key=>[key,'note.'+key])),'file.name'];
   return withNavigationObservation(c,propertiesJourney,{allowedPaths,allowedProperties});

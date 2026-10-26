@@ -19,6 +19,14 @@ export const rawEdits={
   boardTopics:['topics:\n  - Legacy\n  - Design\n  - Picker topic\npeers:','topics:\n  - Legacy\n  - Design\n  - Picker topic\n  - Rust\npeers:'],
   priorityOption:['      - value: High\n        color: red\n  topics:','      - value: High\n        color: red\n      - value: Picker priority\n  topics:'],
   topicOption:['      - value: Rust\n        color: orange\n  peers:','      - value: Rust\n        color: orange\n      - value: Picker topic\n  peers:'],
+  addMixedRaw:[
+    'mixedRaw:\n  - 42\n  - true\n  - null\n  - - 7\n    - nested\n  - nested:\n      - false\n      - 3\n  - "[[../Targets/Ada#^block|Ada alias]]"\nmissingAuthor:',
+    'mixedRaw:\n  - 42\n  - true\n  - null\n  - - 7\n    - nested\n  - nested:\n      - false\n      - 3\n  - "[[../Targets/Ada#^block|Ada alias]]"\n  - Native mixed item\nmissingAuthor:',
+  ],
+  removeMixedBoolean:[
+    'mixedRaw:\n  - 42\n  - true\n  - null\n  - - 7\n    - nested\n  - nested:\n      - false\n      - 3\n  - "[[../Targets/Ada#^block|Ada alias]]"\n  - Native mixed item\nmissingAuthor:',
+    'mixedRaw:\n  - 42\n  - null\n  - - 7\n    - nested\n  - nested:\n      - false\n      - 3\n  - "[[../Targets/Ada#^block|Ada alias]]"\n  - Native mixed item\nmissingAuthor:',
+  ],
 };
 export function applyRawEdit(source,name){
   const edit=rawEdits[name];assert.ok(edit,'Named preauthored raw edit: '+name);const [before,after]=edit;

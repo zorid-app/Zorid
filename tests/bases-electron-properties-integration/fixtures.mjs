@@ -6,7 +6,7 @@ export const bodies={
   [beta]:'# Beta body\n\nSecond immutable body sentinel.\n',
 };
 export const initial={
-  [alpha]:{type:'sample',blurb:'Original text',tags:['seed'],reference:'[[../Targets/Ada|Ada reference]]',status:'Planned',priority:'Low',topics:['Legacy','Design'],peers:['[[Beta|Beta alias]]','unresolved literal'],author:'[[../Targets/Ada|Original Ada]]',rating:3,done:false,due:'2026-10-22',appointment:'2026-10-22T09:00:00-04:00',notes:['original item'],untouched:'leave me'},
+  [alpha]:{type:'sample',blurb:'Original text',tags:['seed'],reference:'[[../Targets/Ada|Ada reference]]',status:'Planned',priority:'Low',topics:['Legacy','Design'],peers:['[[Beta|Beta alias]]','unresolved literal'],author:'[[../Targets/Ada|Original Ada]]',rating:3,done:false,due:'2026-10-22',appointment:'2026-10-22T09:00:00-04:00',notes:['original item'],untouched:'leave me',mixedRaw:[42,true,null,[7,'nested'],{nested:[false,3]},'[[../Targets/Ada#^block|Ada alias]]'],missingAuthor:'[[../Targets/Missing|Missing person]]'},
   [beta]:{type:'sample',blurb:'Second text',tags:[],reference:'[[../Targets/Grace]]',status:'Working',priority:'High',topics:['Design'],peers:[],author:'[[../Targets/Grace]]',rating:2,done:true,due:'2026-10-23',appointment:'2026-10-23T10:00',notes:[],untouched:'leave beta'},
 };
 // Authored raw source oracle, intentionally containing preserved comments and
@@ -35,6 +35,17 @@ appointment: "2026-10-22T09:00:00-04:00"
 notes:
   - original item
 untouched: 'leave me' # keep this unrelated comment
+mixedRaw:
+  - 42
+  - true
+  - null
+  - - 7
+    - nested
+  - nested:
+      - false
+      - 3
+  - "[[../Targets/Ada#^block|Ada alias]]"
+missingAuthor: "[[../Targets/Missing|Missing person]]"
 ---
 ${bodies[alpha]}`;
 export const registryRaw=`# Keep this ordinary registry comment exactly.
@@ -99,8 +110,12 @@ properties:
     type: datetime
   notes:
     type: list
+  missingAuthor:
+    type: relation
+    relation:
+      targetFilter: 'type == "person"'
 `;
-const order='[file.name, note.blurb, note.tags, note.reference, note.status, note.priority, note.topics, note.peers, note.author, note.incoming, note.peerCount, note.rating, note.done, note.due, note.appointment, note.notes]';
+const order='[file.name, note.blurb, note.tags, note.reference, note.status, note.priority, note.topics, note.peers, note.author, note.incoming, note.peerCount, note.rating, note.done, note.due, note.appointment, note.notes, note.mixedRaw, note.missingAuthor]';
 export function fixtureFiles(){
   const files=new Map([
     ['Properties.base',`# Supplemental property interaction fixture\nfixtureSentinel: preserve-property-campaign\nfilters: 'note.type == "sample"'\nviews:\n  - type: table\n    name: Property table\n    order: ${order}\n    sort: [{property: file.name, direction: ASC}]\n  - type: cards\n    name: Property cards\n    order: ${order}\n  - type: list\n    name: Property list\n    order: ${order}\n  - type: kanban\n    name: Property board\n    order: ${order}\n    groupBy: {property: note.status, direction: ASC}\n`],
