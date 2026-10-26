@@ -1,0 +1,139 @@
+# Bases resume validation — 2026-10-26
+
+Fresh CLI and browser/WASM campaigns pass. Native safety and recovery remain
+incomplete: the safety run stops during split setup, and recovery stops while
+resubmitting a retained newer summary draft. Neither failed native run establishes
+full acceptance. This record describes these completed runs, not later fixes.
+
+## Source and build identity
+
+The runtime checkout was frozen at
+`9c6088b3e9c015369e5bc4e1791a2709272cb4f2`, on the isolated
+`codex/types-bases-model` branch. Native/CLI and desktop frontend receipts name
+build source `4453e584a16b3c7fa3cd0b834feea63b7fb1cada`; the subsequent commits
+before the runtime freeze only add documentation. The Rust tree is
+`07265b1d344e89cd84c2fae143c4c4ab8678c2ca`.
+
+The desktop build, including TypeScript checking, and cached native/CLI build
+finished successfully. The focused composed run passed **63 tests, zero failures
+and zero skips**. This is not a new full Rust-suite result.
+
+| Product or receipt | SHA-256 |
+| --- | --- |
+| Native desktop host | `403cbeb86da2d0279cd919134bd3ebc53cd95b21b9303e5581b6a08fce2d3c99` |
+| Standalone CLI | `8e4e61e4f158f0bfcc1a40286f9a3f677ecabc741ffba680a901721b4246f42b` |
+| Native build receipt | `42a1f9b4e34cc56d8ecbfe8c7533b283a433b1078e0543d46332c3ca19e106aa` |
+| Frontend receipt, 333 files | `52dd4948c4c90a739e0f19a2bf8998150dc7bfa6226e1dd025a82738c14322d5` |
+| WASM JavaScript | `81c4a5c09ada24257106eaadeaafb46032ec0de7a947f7bee0d2352ed0e6a0c1` |
+| WASM binary | `c1298e7c89384cb754a6a488238451beee9cd97050a97981b5c72564361510cc` |
+
+Original receipts and native executables are under
+`/private/tmp/zorid-bases-20261026-products-001/`. The browser runner independently
+checked its current Rust fingerprint
+`c46bb16d3a51f6b7dcf9a46e5ee118ab912c9b451ce3a4f255c0caa08ce81fde`;
+it did not build or substitute an evaluator.
+
+## Standalone CLI — pass
+
+Session 99317 completed **125 commands and 17 checks**. The report verifies the
+supplied build source's Rust/Cargo trees against the checkout and the supplied
+CLI hash. The host is associated by hash but is not executed by this campaign.
+The ten Q3 checks include **162 typed row-value expectations, 16 Q3 diagnostic
+entries and ten legacy-context diagnostic entries**.
+
+The process exits are 121 expected successes, two expected exit-3 cases and two
+expected exit-4 cases; every child has a null signal. An independent retained-file
+audit verified all **250 stdout/stderr streams, 29 stdin files and 54 exports**
+against their recorded hashes. No Electron app, desktop host or daemon was run.
+
+Report:
+`/private/tmp/zorid-bases-cli-20261026-001/zorid-bases-cli-NPuDb9/report.json`.
+SHA-256: `17c33308ed6c80077a5d7258b713aeae29b319bcd515e831440bc0f37a3a7e81`.
+
+## Browser/Worker/WASM — pass
+
+Session 30342 completed **all 19 planned groups**, with no unexecuted groups,
+runner error or artifact failures, using owned headless Chrome
+`156.0.8078.47`. The ten Q3 groups use the same committed typed expectations.
+A separate read-only comparison of their retained result payloads against the
+authored fixtures verified all **162 typed row values**; it did not rerun the
+semantic implementation.
+
+The owned Chrome process exited with code 0 and null signal after cleanup's
+SIGTERM request. Its disposable profile's absence was confirmed, the Vite server
+closed, and the report records deletion of the fixture database. Three worker
+requests and three worker target observations were retained. The campaign's two
+explicit deferred gates remain: rendered/full-app UI, and mobile/other-browser/
+sync/stress acceptance.
+
+Report: `/private/tmp/zorid-bases-browser-20261026-001/report.json`.
+SHA-256: `7db733130cdc82ce24ca3dbf672db142eaddfbe80b171738e6747901866f04e1`.
+
+## Native safety — setup failure
+
+Session 41873 stops at **seven actions and one check**. After submitting Split
+right, the automation clicks the A explorer row approximately 13 ms later. The
+final DOM contains two Bases and no ordinary editor; the wait for editor A fails.
+This run does not establish which internal navigation stage caused the outcome,
+and none of the later conflict, partial-bulk, registry or embed scenarios ran.
+
+Owned cleanup reports `SIGTERM-cleanup`, exit 0, null signal and no leaked
+children. Before/after source and artifact manifests are identical. An independent
+audit matched their 837 tracked source hashes to Git blobs at the frozen commit
+and their 333 distribution hashes to the frontend receipt.
+
+Report: `/private/tmp/zorid-bases-safety-20261026-001/result.json`.
+SHA-256: `c7eb527d647d2d4c54a2edfea97f12f2b4d7287ae794cf55e3e3aa338deac3d8`.
+
+## Native recovery — first protocol passes; later continuation fails
+
+Session 7413 stops at **28 actions and 24 checks**. Its first protocol passes:
+the owned lock-access failure produces a genuine failed checkpoint
+acknowledgement; the newer summary draft remains visible; one original retry
+continues the exact newer B source automatically. Whole-source/unrelated-file
+checks and a fresh-process readback pass, including two normal quit checks.
+
+The second protocol holds the acknowledgement of genuinely committed A
+(`values.length`), accepts newer B (`values.sum() + 7`), requests close, then
+releases A. The visible B draft remains with the closing error. The campaign's
+subsequent ordinary focus/Tab action does not persist B: the final physical
+`Recovery.base` still contains A. This record does not attribute the failure to
+a particular event handler or assert that the closing latch is stuck. The
+remaining lost-New-reply protocol is unexecuted.
+
+The first two app lifecycles are already exited with code 0 and null signal.
+The last requires `SIGKILL-cleanup`, null exit code and signal `SIGKILL`;
+all three cleanup receipts have no leaked children. Before/after source and
+artifact manifests are identical; the same 837-source/333-distribution-file
+independent audit passes. Forced cleanup is not a successful normal quit.
+
+Report: `/private/tmp/zorid-bases-recovery-20261026-001/result.json`.
+SHA-256: `ceb58b7decd8111d4714705badacb48961f807cd2008b3c6eb69fcde4e044752`.
+
+## Durable local archive
+
+To survive temporary-directory cleanup, completed evidence and native products
+are copied into the implementation worktree's ignored
+`tmp/bases-validation-20261026/`. The compressed archive contains **486 retained
+original regular files**, totaling **57,731,042 original-file bytes**, plus an
+embedded snapshot manifest. It includes the four reports,
+provenance, screenshots, owned vault/relay/CLI evidence, product receipts,
+executables and seven launch/build/focused-test logs. Both disposable Electron
+Chromium profile directories are explicitly excluded. No proprietary reference
+artifacts, user browser profiles or symlinks are included.
+
+Every included original file is hashed before and after archiving, without
+mutation; every compressed member is then read back and hash-verified. The
+manifest records original absolute paths, archive member names, sizes, modes
+and hashes. These are local retained artifacts, not tracked project source.
+
+| Local artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `fresh-validation-001.tar.gz` | 19,910,416 | `43fbd8c1536e746c3ccaf904170199b0c00837e29cb377277db558e19adb0e88` |
+| `fresh-validation-001-manifest.json` | — | `ba222ae124e9efe34d351ef93dd61dfefa32e468e8c05d52648b1551bb4341c7` |
+| `independent-content-audit-001.json` | — | `ee424904c90dc5a9f68602564b8d339b0c03cd5dd7764a22de324630c15eb439` |
+
+Full archive directory:
+`/Users/ctk/Projects/Zorid/.worktrees/types-bases-model/tmp/bases-validation-20261026/`.
+Full native safety/recovery, heavy-user, visual/reference, normal-web and final
+integration acceptance remain separate. No main merge or completion is claimed.
