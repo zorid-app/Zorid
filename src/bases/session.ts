@@ -554,7 +554,6 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     name.addEventListener('blur', () => { void save(); });
     name.addEventListener('keydown', event => { if (event.isComposing) return; if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); name.value = acceptedName; updateDirty(); name.blur(); } else if (event.key === 'Enter') { event.preventDefault(); name.blur(); } });
     expression.addEventListener('input', () => { generation++; updateDirty(); if (timer) clearTimeout(timer); timer = setTimeout(() => { timer = undefined; void save(); }, 250); });
-    expression.addEventListener('keydown', event => { if (event.isComposing) return; if (event.key === 'Tab') { void save(); } });
     cancelChanges.addEventListener('click', () => { if (saving || retryPersistence) return; name.value = acceptedName; expression.value = acceptedExpression; dirty = false; mark(); close(true); });
     back.addEventListener('click', () => close(true));
     panel.addEventListener('keydown', event => { if (!event.defaultPrevented && event.key === 'Escape' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); close(true); } });
@@ -576,7 +575,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     });
     const outside = (event: Event) => { if (!panel.contains(event.target as Node)) close(false); };
     doc.addEventListener('pointerdown', outside, true); win?.addEventListener('resize', place); win?.addEventListener('scroll', scroll, true); resize?.observe(panel); destroySummaryEditor = cleanup;
-    try { formulaEditor = enhanceBaseSummaryEditor(expression, { onEscape: () => close(true) }); } catch (failure) { cleanup(); throw failure; }
+    try { formulaEditor = enhanceBaseSummaryEditor(expression, { onEscape: () => close(true), onCommit: () => { void save(); } }); } catch (failure) { cleanup(); throw failure; }
     place(); name.focus(); name.select(); mark();
   }
   async function createItem(group?: { property: string; value: BaseValue }, anchor?: HTMLElement): Promise<void> {

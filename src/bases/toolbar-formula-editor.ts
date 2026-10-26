@@ -15,6 +15,8 @@ export interface BaseFormulaEditorOptions {
   methodNames?: readonly string[];
   /** Invoked by Escape only after CodeMirror's completion handler declines it. */
   onEscape?(): void;
+  /** Submit on an unhandled Tab while retaining normal browser focus navigation. */
+  onCommit?(): void;
   /** Syntax diagnostics only: editing never evaluates an expression. */
   onDiagnostics?(message: string | undefined): void;
 }
@@ -24,7 +26,7 @@ export interface BaseFormulaEditor {
   hasFocus(): boolean;
   destroy(): void;
 }
-export type BaseSummaryEditorOptions = Pick<BaseFormulaEditorOptions, 'functionNames' | 'methodNames' | 'onEscape' | 'onDiagnostics'>;
+export type BaseSummaryEditorOptions = Pick<BaseFormulaEditorOptions, 'functionNames' | 'methodNames' | 'onEscape' | 'onCommit' | 'onDiagnostics'>;
 
 // Summary scope contains an empty list named values in the reference editor.
 // Candidates below are implemented by the shared Rust evaluator; no host or
@@ -173,6 +175,9 @@ function nativeFormulaEditor(textarea: HTMLTextAreaElement, options: BaseFormula
   };
   const keydown = (event: KeyboardEvent) => {
     if (event.key === 'Escape' && !event.defaultPrevented && !event.isComposing && options.onEscape) { event.preventDefault(); options.onEscape(); }
+    else if (event.key === 'Tab' && !event.defaultPrevented && !event.isComposing && event.keyCode !== 229
+      && !event.altKey && !event.ctrlKey && !event.metaKey && !destroyed && textarea.isConnected
+      && doc.activeElement === textarea && !textarea.disabled && !textarea.readOnly && !textarea.closest('[inert]')) options.onCommit?.();
   };
   textarea.addEventListener('input', sync); textarea.addEventListener('keydown', keydown); sync();
   return { sync, focus() { if (!destroyed) textarea.focus(); }, hasFocus: () => !destroyed && doc.activeElement === textarea, destroy() {
@@ -191,7 +196,7 @@ export function enhanceBaseFormulaEditor(textarea: HTMLTextAreaElement, options:
 export function enhanceBaseSummaryEditor(textarea: HTMLTextAreaElement, options: BaseSummaryEditorOptions = {}): BaseFormulaEditor {
   const supported = (provided: readonly string[] | undefined, allowed: readonly string[]) => provided === undefined ? allowed : provided.filter(name => allowed.includes(name.replace(/\(\)$/u,'')));
   return enhanceFormulaEditor(textarea,{
-    onEscape:options.onEscape,onDiagnostics:options.onDiagnostics,propertyIds:['values'],
+    onEscape:options.onEscape,onCommit:options.onCommit,onDiagnostics:options.onDiagnostics,propertyIds:['values'],
     functionNames:supported(options.functionNames,summaryFunctions),
     methodNames:supported(options.methodNames,[...summaryBaseMethods,...summaryListMethods]),
   },true);
@@ -223,6 +228,11 @@ function enhanceFormulaEditor(textarea: HTMLTextAreaElement, options: BaseFormul
     }
   };
   let view: EditorView;
+  const commit = () => {
+    if (!destroyed && !synchronizing && !composingKey && !view.composing && !textarea.disabled && !textarea.readOnly
+      && !view.state.readOnly && view.hasFocus && view.contentDOM.isConnected && !wrapper.closest('[inert]')) options.onCommit?.();
+    return false; // Completion/snippet keymaps run first; unhandled Tab still moves focus.
+  };
   try { view = new EditorView({
     parent: wrapper,
     state: EditorState.create({ doc: textarea.value, extensions: [
@@ -230,6 +240,7 @@ function enhanceFormulaEditor(textarea: HTMLTextAreaElement, options: BaseFormul
       EditorView.domEventObservers({keydown(event) { composingKey = event.isComposing || event.keyCode === 229; }}),
       history(), keymap.of([...completionKeymap, ...defaultKeymap, ...historyKeymap,
         { key: 'Escape', run: view => { if (!options.onEscape || composingKey || view.composing) return false; options.onEscape(); return true; } },
+        { key: 'Tab', run: commit, shift: commit },
       ]),
       autocompletion({ override: [completions(options,summary)], defaultKeymap: false }),
       attributes.of(contentAttributes()), editability.of(editable()),

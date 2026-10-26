@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { EditorView } from '@codemirror/view';
 import { undo, redo } from '@codemirror/commands';
-import { acceptCompletion, closeCompletion, completionStatus, currentCompletions, startCompletion } from '@codemirror/autocomplete';
+import { acceptCompletion, closeCompletion, completionStatus, currentCompletions, startCompletion, snippet } from '@codemirror/autocomplete';
 import { enhanceBaseFormulaEditor, enhanceBaseSummaryEditor } from '../src/bases/toolbar-formula-editor.ts';
 import type { BaseFormulaEditorOptions } from '../src/bases/toolbar-formula-editor.ts';
 
@@ -237,4 +237,76 @@ test('summary contextual candidates are restricted to supported methods and Esca
   f.key('Escape');assert.equal(escapes,1);f.key('Enter');assert.equal(f.textarea.value,'values.\n');assert.ok(f.content.querySelector('span'),'summary tokens share syntax highlighting');
   f.editor.destroy();assert.equal(f.textarea.hidden,false);assert.equal(f.textarea.value,'values.\n');assert.equal(f.editor.hasFocus(),false);
  }finally{f.cleanup();}
+});
+
+
+test('summary explicit Tab commits once without consuming focus navigation or submitting on blur', () => {
+  let commits = 0;
+  const f = fixture({ onCommit: () => commits++ }, 'values.sum()', true);
+  try {
+    f.editor.focus();
+    const tab = new f.dom.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    f.content.dispatchEvent(tab);
+    assert.equal(commits, 1); assert.equal(tab.defaultPrevented, false); assert.equal(f.textarea.value, 'values.sum()');
+    const internal = f.dom.window.document.createElement('button'); f.content.closest('.bases-formula-editor')!.append(internal); internal.focus();
+    assert.equal(commits, 1, 'internal focus and blur do not introduce an implicit submit');
+    const outside = f.dom.window.document.createElement('button'); f.dom.window.document.body.append(outside); outside.focus();
+    assert.equal(commits, 1, 'ordinary blur does not duplicate explicit Tab submission');
+    f.editor.focus();
+    const backward = new f.dom.window.KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    f.content.dispatchEvent(backward); assert.equal(commits, 2); assert.equal(backward.defaultPrevented, false);
+    f.textarea.value = 'values.length'; f.editor.sync(); assert.equal(commits, 2, 'programmatic synchronization never submits');
+  } finally { f.cleanup(); }
+});
+
+test('summary snippet Tab navigation takes precedence over explicit submission', () => {
+  let commits = 0;
+  const f = fixture({ onCommit: () => commits++ }, '', true);
+  try {
+    f.editor.focus(); snippet('list(${one}, ${two}, ${three})')(f.view, null, 0, 0);
+    const first = f.view.state.selection.main;
+    assert.equal(f.view.state.sliceDoc(first.from, first.to), 'one');
+    const tab = new f.dom.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    f.content.dispatchEvent(tab);
+    const second = f.view.state.selection.main;
+    assert.equal(f.view.state.sliceDoc(second.from, second.to), 'two');
+    assert.equal(tab.defaultPrevented, true); assert.equal(commits, 0, 'handled snippet navigation never saves a partial formula');
+    const reverse = new f.dom.window.KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    f.content.dispatchEvent(reverse); assert.equal(reverse.defaultPrevented, true); assert.equal(commits, 0);
+  } finally { f.cleanup(); }
+});
+
+test('summary explicit commit ignores composition, disabled or retired ownership', () => {
+  let commits = 0;
+  const f = fixture({ onCommit: () => commits++ }, 'values.sum()', true);
+  try {
+    f.editor.focus();
+    f.content.dispatchEvent(new f.dom.window.KeyboardEvent('keydown', { key: 'Tab', isComposing: true, bubbles: true, cancelable: true }));
+    f.content.dispatchEvent(new f.dom.window.KeyboardEvent('keydown', { key: 'Tab', keyCode: 229, bubbles: true, cancelable: true }));
+    assert.equal(commits, 0);
+    const prevented = new f.dom.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }); prevented.preventDefault(); f.content.dispatchEvent(prevented);
+    for(const modifiers of [{altKey:true},{ctrlKey:true},{metaKey:true}])f.content.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Tab',bubbles:true,cancelable:true,...modifiers}));
+    assert.equal(commits,0,'handled or modified keys do not submit');
+    f.textarea.disabled = true; f.editor.sync(); f.key('Tab'); assert.equal(commits, 0);
+    f.textarea.disabled = false; f.textarea.readOnly = true; f.editor.sync(); f.key('Tab'); assert.equal(commits, 0);
+    f.textarea.readOnly = false; f.editor.sync(); f.editor.focus();
+    const wrapper = f.content.closest('.bases-formula-editor')!; wrapper.setAttribute('inert', ''); f.key('Tab'); assert.equal(commits, 0);
+    wrapper.removeAttribute('inert'); f.editor.focus(); f.key('Tab'); assert.equal(commits, 1, 'one admitted Tab still submits after negative paths');
+    f.editor.destroy(); f.key('Tab'); assert.equal(commits, 1, 'destroy removes the key receiver');
+  } finally { f.cleanup(); }
+});
+
+test('native summary fallback shares the same single unhandled Tab submit contract', () => {
+  const dom = new JSDOM('<textarea aria-label="Summary expression"></textarea><button>Next</button>', { pretendToBeVisual: true });
+  const textarea = dom.window.document.querySelector('textarea')!; textarea.value = 'values.length';
+  let commits = 0; const editor = enhanceBaseSummaryEditor(textarea, { onCommit: () => commits++ });
+  const tab = (extra: KeyboardEventInit = {}) => { const event = new dom.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true, ...extra }); textarea.dispatchEvent(event); return event; };
+  try {
+    assert.equal(textarea.hidden, false); editor.focus(); assert.equal(tab().defaultPrevented, false); assert.equal(commits, 1);
+    dom.window.document.querySelector('button')!.focus(); assert.equal(commits, 1); tab(); assert.equal(commits, 1, 'a non-owner cannot submit');
+    editor.focus(); tab({ isComposing: true }); tab({ keyCode: 229 }); tab({altKey:true}); tab({ctrlKey:true}); tab({metaKey:true}); assert.equal(commits, 1);
+    textarea.disabled = true; tab(); textarea.disabled = false; textarea.readOnly = true; tab(); assert.equal(commits, 1);
+    textarea.readOnly = false; editor.focus(); assert.equal(tab({ shiftKey: true }).defaultPrevented, false); assert.equal(commits, 2);
+    editor.destroy(); tab(); assert.equal(commits, 2);
+  } finally { editor.destroy(); dom.window.close(); }
 });
