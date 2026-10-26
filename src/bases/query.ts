@@ -21,7 +21,10 @@ export interface BaseQueryFile {
 }
 export interface BaseQueryOptions {
   readonly viewIndex?: number;
-  readonly currentFilePath?: string;
+  /** Undefined selects the standalone Base; null explicitly has no current file. */
+  readonly currentFilePath?: string | null;
+  /** Host-side identity guard, never a replacement for snapshot-owned metadata. */
+  readonly currentFileEntryId?: string;
   readonly functions?: BaseFunctionRegistry;
   readonly now?: () => Date;
   /** Selected IANA/fixed timezone; omitted uses the host device timezone. */
@@ -325,7 +328,7 @@ export function executeBaseQuery(document: BaseDocument, snapshot: BaseQuerySnap
       entries.set(input.path, entry);
     } catch (error) { report('input', input.path, error); }
   }
-  if (options.currentFilePath !== undefined) current = entries.get(options.currentFilePath);
+  if (options.currentFilePath !== undefined && options.currentFilePath !== null) current = entries.get(options.currentFilePath);
   let matched: Entry[] = [];
   for (const entry of entries.values()) {
     if (options.ignore?.(entry.path)) continue;

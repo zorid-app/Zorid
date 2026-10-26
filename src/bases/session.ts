@@ -219,7 +219,7 @@ export interface BaseSession {
   readonly state: BaseControllerState;
   refresh(): Promise<void>;
   selectView(index: number): Promise<void>;
-  setCurrentFile(path: string): Promise<void>;
+  setCurrentFile(path: string | null, expectedEntryId?: string): Promise<void>;
   /** Passive saved-name transition for sibling embeds; retains all drafts. */
   rebindViewName(from: string, to: string): boolean;
   /** Workspace preflight: retain the mounted view while settling accepted edits. */
@@ -898,7 +898,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     get state() { return controller.state; },
     refresh: () => controller.refresh(),
     selectView,
-    setCurrentFile: path => { action(); return controller.setCurrentFilePath(path); },
+    setCurrentFile: (path, expectedEntryId) => { action(); return controller.setCurrentFilePath(path, expectedEntryId); },
     rebindViewName: (from, to) => { alive(); return controller.rebindViewName(from, to); },
     hasPendingChanges: () => !disposed && (!!pending.size || !!mounted?.hasQueuedConfiguration?.() || controller.hasPendingViewReferences || creation?.status === 'uncertain' || activeDraft() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error)),
     owns: node => { try { alive(); return !closing && root.isConnected && toolbarUI.owns(node); } catch { return false; } },

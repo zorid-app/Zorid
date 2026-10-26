@@ -116,7 +116,7 @@ interface Run {
   previewTask?: Promise<void>; previewRequested?: boolean; previewEnabled?: boolean;
 }
 export interface SharedBaseQueryInput {
-  service: DocumentService; definition: VaultEntry; current: VaultEntry; entries: readonly VaultEntry[];
+  service: DocumentService; definition: VaultEntry; current: VaultEntry | null; entries: readonly VaultEntry[];
   readFile?(path: string): Promise<string>;
   query: BaseQueryOptions; viewIndex: number; viewName?: string; readonly version: number; isCurrent(): boolean; clock?: BaseClockHost;
   onPreview?(result: BaseQueryResult): void;
@@ -164,7 +164,9 @@ export class SharedBaseQueryRunner {
     try {
       await Promise.all([...this.runs].filter(other => other !== run && !other.active).map(other => this.close(other))); check();
       if (input.query.functions) return invalid('Custom Base functions are unavailable with shared document queries.');
-      if (!input.definition.entryId || !input.definition.revision || !input.current.entryId || !input.current.revision) return invalid('Saved entry identity is unavailable for this Base.');
+      if (!input.definition.entryId || !input.definition.revision || input.current !== null && (!input.current?.entryId || !input.current.revision)) return invalid('Saved entry identity is unavailable for this Base.');
+      if (input.query.currentFilePath === null && input.current !== null) return invalid('The Base current-file context is inconsistent.');
+      if (input.query.currentFileEntryId !== undefined && (!input.current || input.current.entryId !== input.query.currentFileEntryId)) return invalid('The pinned current note changed. Refresh before using this Base.');
       const ignorePaths = input.query.ignore ? input.entries.filter(entry => entry.type === 'file' && input.query.ignore!(entry.path)).map(entry => entry.path) : undefined;
       const previewSupported = !input.query.inlineSource && !input.entries.some(entry => entry.path === 'Properties.yaml' && entry.type === 'file') && input.service.basePreviewAvailable === true && !!input.service.maintenance;
       if (previewSupported && typeof input.service.openPreview !== 'function') return invalid('The Base preview capability is incomplete.');
@@ -195,7 +197,7 @@ export class SharedBaseQueryRunner {
               if (!Number.isSafeInteger(clockMs)) return invalid('The Base query clock is invalid.');
               const report = await handle.base({ id: input.definition.entryId!, viewName: input.viewName, options: {
                 viewIndex: input.viewIndex, searchTerms: input.query.searchTerms, ignorePaths, clockMs, timezone: captured.timezone,
-                maxRows: 10000, currentEntryId: input.current.entryId, maxSteps: input.query.maxSteps,
+                maxRows: 10000, ...(input.current ? { currentEntryId: input.current.entryId } : {}), maxSteps: input.query.maxSteps,
               } });
               if (!previewLive()) return;
               if (report.definition.id !== input.definition.entryId || report.definition.revision !== input.definition.revision || report.definition.path !== input.definition.path) return invalid('The captured Base definition changed.');
@@ -278,7 +280,7 @@ export class SharedBaseQueryRunner {
         propertyDefinitionsSource = { id: settings.entryId, source };
       }
       const options = { viewIndex: input.viewIndex, searchTerms: input.query.searchTerms, ignorePaths, clockMs, timezone, maxRows: 10000, propertyDefinitionsSource, summaryPreviewProperty: input.query.summaryPreviewProperty, summaryPreviewGroupKeyId: input.query.summaryPreviewGroupKeyId, randomSeed: input.query.randomSeed,
-        currentEntryId: input.current.entryId, maxSteps: input.query.maxSteps, inlineSource: input.query.inlineSource };
+        ...(input.current ? { currentEntryId: input.current.entryId } : {}), maxSteps: input.query.maxSteps, inlineSource: input.query.inlineSource };
       const report = await read(() => pin.base({ id: definition.id, viewName: input.viewName, options })); check();
       if (report.value.definition.id !== definition.id || report.value.definition.revision !== definition.revision || report.value.definition.path !== definition.path
         || JSON.stringify(report.value.result.snapshotId) !== JSON.stringify(pin.snapshot)) return invalid();

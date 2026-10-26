@@ -225,6 +225,13 @@ function propertyState(source: string, keys: readonly string[], targets?: readon
   });
 }
 function statesEqual(left: readonly PropertyState[], right: readonly PropertyState[]): boolean { return JSON.stringify(left) === JSON.stringify(right); }
+function currentFilePath(query: BaseQueryOptions, basePath: string): string | null { return query.currentFilePath === undefined ? basePath : query.currentFilePath; }
+function validateCurrentIdentity(current: VaultEntry | null | undefined, expectedEntryId: string | undefined): void {
+  if (expectedEntryId !== undefined && (!current || current.entryId !== expectedEntryId)) throw new Error('The pinned current note changed. Refresh before using this Base.');
+}
+function sameCurrentFile(left: VaultEntry | null | undefined, right: VaultEntry | null | undefined): boolean {
+  return left === null ? right === null : !!left && !!right && left.entryId === right.entryId && left.revision === right.revision && left.path === right.path;
+}
 
 export class BaseController {
   private options: BaseControllerOptions;
@@ -244,6 +251,7 @@ export class BaseController {
   private pendingViewReferences?: BaseViewReferenceOperation;
   private referenceServices = new Set<NonNullable<Vault['adapter']['documentSemantics']>>();
   private epoch = 0;
+  private currentFileRequest = 0;
   // Paths remain private: rejection diagnostics expose only their roles.
   private lastInvalidation: { readonly kind: BaseEditInvalidationKind; readonly paths?: readonly string[] } = { kind: 'initial' };
   private version = 0;
@@ -258,7 +266,7 @@ export class BaseController {
   private requested = false;
   private sharedQueries = new SharedBaseQueryRunner();
   private summaryQueries = new Set<SharedBaseQueryRunner>();
-  private queryEntries = new WeakMap<BaseQueryResult, { readonly definition: VaultEntry; readonly current: VaultEntry }>();
+  private queryEntries = new WeakMap<BaseQueryResult, { readonly definition: VaultEntry; readonly current: VaultEntry | null }>();
   private clock: BaseClockHost;
   private lastCapture?: BaseClockCapture;
   private cancelWake?: () => void;
@@ -370,10 +378,13 @@ export class BaseController {
           if (viewIndex < 0) throw new Error(`Base view not found: ${this.viewName}`);
         }
         let result: BaseQueryResult;
+        const currentPath = currentFilePath(this.query, this.path), expectedCurrentEntryId = this.query.currentFileEntryId;
+        const current = service || expectedCurrentEntryId !== undefined
+          ? currentPath === null ? null : (currentPath === this.path ? definition ?? await observe(currentPath) : await observe(currentPath)) ?? null
+          : null;
+        validateCurrentIdentity(current, expectedCurrentEntryId);
         if (service) {
-          const currentPath = this.query.currentFilePath ?? this.path;
-          const current = currentPath === this.path ? definition : await observe(currentPath);
-          if (!definition || !current) throw new Error('The saved Base or current file is unavailable.');
+          if (!definition || currentPath !== null && !current) throw new Error('The saved Base or current file is unavailable.');
           const owner = this, allowPreview = !this.current.result || !!sharedBasePreview(this.current.result);
           const effectiveQuery: BaseQueryOptions & { inlineSource?: { source: string; startByte: number; endByte: number } } = inline ? { ...this.query, inlineSource: { source, startByte: inline.startByte, endByte: inline.endByte } } : this.query;
           const request = { service, definition, current, entries: [...this.options.vault.entries.values()], query: effectiveQuery,
@@ -396,7 +407,11 @@ export class BaseController {
           const latest = await observe(this.path);
           if (!latest || latest.entryId !== definition.entryId || latest.revision !== definition.revision) throw new Error('The Base definition changed. Refresh before editing.');
           if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
-          this.queryEntries.set(result, { definition: Object.freeze({ ...definition }), current: Object.freeze({ ...current }) });
+          if (expectedCurrentEntryId !== undefined) {
+            validateCurrentIdentity(currentPath === this.path ? latest : currentPath === null ? null : await observe(currentPath), expectedCurrentEntryId);
+            if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
+          }
+          this.queryEntries.set(result, { definition: Object.freeze({ ...definition }), current: current === null ? null : Object.freeze({ ...current }) });
         } else {
           const files = [...this.options.vault.entries.values()].filter(entry => entry.type === 'file').map(entry => {
             const metadata = this.options.vault.metadata.get(entry.path);
@@ -408,7 +423,9 @@ export class BaseController {
         this.query = { ...this.query, viewIndex };
         this.lastCapture = sharedBaseCapture(result);
         this.stale = false; this.armWake(result);
-        const signature = JSON.stringify([source, this.identities.get(this.path), result.rows.map(row => this.identities.get(row.path)), { ...result, version: 0 }, sharedBaseCoverage(result)]);
+        // Identical rows can still belong to a different `this` context. Keep
+        // its saved witness with the result used by footer advice and edits.
+        const signature = JSON.stringify([source, this.identities.get(this.path), [currentPath, current?.entryId, current?.revision], result.rows.map(row => this.identities.get(row.path)), { ...result, version: 0 }, sharedBaseCoverage(result)]);
         if (signature === this.signature && !this.settled.error) { this.publish(this.settled); return; }
         this.version = version; this.signature = signature;
         this.publish({ version, source, result, error: null, updating: false });
@@ -459,12 +476,26 @@ export class BaseController {
     return this.refresh();
   }
 
-  setCurrentFilePath(path: string): Promise<void> {
-    path = normalizePath(path);
-    if (this.query.currentFilePath === path) return Promise.resolve();
-    this.query = { ...this.query, currentFilePath: path };
+  async setCurrentFilePath(path: string | null, expectedEntryId?: string): Promise<void> {
+    if (path !== null) path = normalizePath(path);
+    else expectedEntryId = undefined;
+    if (expectedEntryId !== undefined && (typeof expectedEntryId !== 'string' || !expectedEntryId)) throw new Error('A saved current-note identity is required');
+    const request = ++this.currentFileRequest, vault = this.options.vault, adapter = vault.adapter;
+    const validate = async () => {
+      const current = path === null ? null : adapter.stat ? await adapter.stat(path) : vault.entries.get(path);
+      if (this.disposed || request !== this.currentFileRequest || vault.adapter !== adapter) throw new Error('The current file changed before its context was ready');
+      validateCurrentIdentity(current, expectedEntryId);
+    };
+    // A failed expected identity must not retarget a retained pinned context.
+    // Register first so a slower preflight cannot supersede a newer selection.
+    if (expectedEntryId !== undefined) await validate();
+    if (this.query.currentFilePath === path && this.query.currentFileEntryId === expectedEntryId) return;
+    this.query = { ...this.query, currentFilePath: path, currentFileEntryId: expectedEntryId };
     this.stale = true; this.clearWake(); this.epoch++; this.lastInvalidation = { kind: 'current-file-change' }; this.sharedQueries.cancel();
-    return this.refresh();
+    await this.refresh();
+    // refresh publishes generic read errors in state. An identity-bound setter
+    // additionally rejects a replaced note rather than positively ACKing a pin.
+    if (expectedEntryId !== undefined) await validate();
   }
 
   /** Read-only footer advice from an independent saved-core invocation. Opening
@@ -492,9 +523,10 @@ export class BaseController {
     const inline = this.options.inlineSource ? await this.options.inlineSource.read() : undefined;
     validate();
     if (inline && (inline.source !== source || inline.witness && (inline.witness.entryId !== definition.entryId || inline.witness.revision !== definition.revision))) throw new Error('The containing note changed; refresh before requesting summary previews');
-    const currentPath = this.query.currentFilePath ?? this.path;
-    const current = currentPath === this.path ? definition : await observe(currentPath); validate();
-    if (!current?.entryId || !current.revision || current.entryId !== retained.current.entryId || current.revision !== retained.current.revision || current.path !== retained.current.path) throw new Error('The current saved note changed; refresh before requesting summary previews');
+    const currentPath = currentFilePath(this.query, this.path);
+    const current = currentPath === null ? null : (currentPath === this.path ? definition : await observe(currentPath)) ?? null; validate();
+    validateCurrentIdentity(current, this.query.currentFileEntryId);
+    if (current !== null && (!current.entryId || !current.revision) || !sameCurrentFile(current, retained.current)) throw new Error('The current saved note changed; refresh before requesting summary previews');
     const captured = sharedBaseCapture(this.current.result!);
     const query: BaseQueryOptions & { summaryPreviewProperty: string; summaryPreviewGroupKeyId?: string; inlineSource?: { source: string; startByte: number; endByte: number } } = {
       ...this.query, searchTerms: this.query.searchTerms && [...this.query.searchTerms], summaryPreviewProperty: property, summaryPreviewGroupKeyId: groupKeyId,
@@ -510,9 +542,10 @@ export class BaseController {
       };
       const result = await runner.query(request); validate();
       const latestDefinition = await observe(this.path); validate();
-      const latestCurrent = currentPath === this.path ? latestDefinition : await observe(currentPath); validate();
+      const latestCurrent = currentPath === null ? null : (currentPath === this.path ? latestDefinition : await observe(currentPath)) ?? null; validate();
+      validateCurrentIdentity(latestCurrent, this.query.currentFileEntryId);
       if (!latestDefinition || latestDefinition.entryId !== definition.entryId || latestDefinition.revision !== definition.revision
-        || !latestCurrent || latestCurrent.entryId !== current.entryId || latestCurrent.revision !== current.revision) throw new Error('The saved Base or current note changed; refresh before requesting summary previews');
+        || !sameCurrentFile(latestCurrent, current)) throw new Error('The saved Base or current note changed; refresh before requesting summary previews');
       const previews = (result as BaseQueryResult & { readonly summaryPreviews?: Readonly<Record<string, BaseExpressionValue>> }).summaryPreviews;
       if (!previews) throw new Error('Summary previews are unavailable on this host');
       return previews;
