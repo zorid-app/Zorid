@@ -562,6 +562,49 @@ Git file hashes and 333 frontend008 distribution hashes each.
 Report: `/private/tmp/zorid-bases-layouts-20261026-001/result.json`.
 SHA-256: `08dde35f99b84303e5b3fabbb0402762320564a8a9f0ac77077d06dcf2f1c9e5`.
 
+## Safety008 — named-reference copy/retry passes; mounted rename rewrites spacing
+
+Safety008 on frozen `4a7fc7b5461290ae5723cba30f8d1b78ddf34712` and frontend008
+**fails at 161 actions and 28 checks**. Its first **six scenario statuses pass**.
+The named-fragment dirty-reference case now saves an exact recovery copy of the
+retained user draft and completes the original reference retry, preserving its
+alias, independent other-view reference and external body. This is bounded
+acceptance of the sixth scenario; Safety007 remains a failed earlier run.
+
+The seventh mounted-file-embed rename case stops at its exact saved-source
+assertion. The requested view name is written, and the sentinel comment/extra
+field remain, but unrelated flow-array spacing changes from `[file.name, score]`
+to `[ file.name, score ]` and from `[file.name]` to `[ file.name ]`. Both captured
+diff and physical Base bytes show this change. The byte-preservation oracle is
+retained; no completed mounted-case or later C2 publication acceptance follows.
+Six subsequent scenarios are unexecuted.
+
+Two normal quits finish with code0/null signal; the final owned app requires
+SIGKILL cleanup, with no leaked children in any exit. Source/artifact freeze is
+verified. Independent audit matches 837 frozen Git files and 333 frontend008
+hashes and verifies the physical spacing difference.
+
+Report: `/private/tmp/zorid-bases-safety-20261026-008/result.json`.
+SHA-256: `2e9aca919d462c1be8d7f655bc9386b7dfda82748f1f7e17456499d76492e4d4`.
+
+## Normal web006 — five UI phases pass; current Worker identity gate still fails
+
+Normal web006 on frozen `6d7b981d7d8021f2407c4c64e4fa6743349426ae` dispatches
+11 actions and passes all five UI phase statuses. **Whole campaign status remains
+failed**: the stricter final snapshot finds one current generic Worker target,
+but its URL/title remain blank and no explicit product Worker is identified.
+The three historical Worker captures also have blank URL/title. A current generic
+Worker does not satisfy the strict core-product identity assertion.
+
+Chrome exits normally with code0/null signal. Vite closes, HTTP listening is
+false, cleanup failures are empty and final provenance verifies. Independent
+audit matches 385 tracked and 441 Rust-input hashes to this frozen source.
+The owned browser profile is retained separately and excluded from the archive.
+A proposed inspector-based successor establishes no result for this failed run.
+
+Report: `/private/tmp/zorid-bases-web-20261026-006/report.json`.
+SHA-256: `b4bd456274ed104bbf8063f293f536f0839bc9e57f63dbd13d58c0bc6974f9f8`.
+
 ## Durable local archive
 
 To survive temporary-directory cleanup, completed evidence and native products
@@ -663,6 +706,19 @@ are included and no missing launch log is reconstructed.
 | `fresh-validation-007.tar.gz` | 5,477,860 | `5b291e26bd6b8ef27914572e82eed71c09d292906bf28f138b344e47503fb9c2` |
 | `fresh-validation-007-manifest.json` | — | `ccef8986703d6271df4a49eaa6d71c2301f82a955020734c9b29e4819a95cf11` |
 | `independent-content-audit-007.json` | — | `42d0f1552ab0f619afe67f0a5583c2e376544bd4763705c630dc9b9f41d03887` |
+
+Part008 separately retains completed Safety008 and normal-web006 reports,
+provenance, screenshots, owned fixture/relay data and existing browser diagnostics.
+It contains **79 original regular files, 7,803,237 original-file bytes, plus an
+embedded snapshot manifest**. Both owned profiles are excluded. Every original
+and compressed member hash verifies; parts001–007 and their manifests remain
+unchanged. No vendor reference artifact or reconstructed launch log is included.
+
+| Additional local artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `fresh-validation-008.tar.gz` | 2,602,764 | `d31d1fded8ecc060d4fe9b930cce8abb34a62665bb764b40fcaaff1d232cdd73` |
+| `fresh-validation-008-manifest.json` | — | `4f258b1d170990735c43e27ab6a18031fc56df21c9a898bd8c5af1d5866ae08d` |
+| `independent-content-audit-008.json` | — | `07840b741547ac29848b18b254a44ea9a2534b9aa5f27a80dc794b4b8625b7de` |
 
 Full archive directory:
 `/Users/ctk/Projects/Zorid/.worktrees/types-bases-model/tmp/bases-validation-20261026/`.

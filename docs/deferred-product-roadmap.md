@@ -9,6 +9,19 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Next completed cutoff (2026-10-26, archive008): Safety008 on4a7fc7b5/frontend008
+FAILS161actions/28checks after SIX passed scenarios. Named-reference recovery copy
+and retry now pass their exact source assertions. Seventh mounted-file rename
+writes the requested name but normalizes unrelated flow-array spacing, failing
+the preserved exact-source oracle; six later scenarios are unexecuted. Two normal
+quits plus final SIGKILL cleanup, no leaks and verified source/artifact freeze.
+Normalweb006 on6d7b981d passes all five UI phases/11actions but whole campaign
+FAILS strict current product-Worker identity: one current generic Worker still
+has blank URL/title. Normal browser/Vite cleanup and final proof pass. A source
+successor is not runtime acceptance. Archive008 preserves originals separately;
+parts001–007 are unchanged. Full safety/C2/heavy/filter/current reference/web
+identity and final integration gates remain open.
+
 Next completed cutoff (2026-10-26, archive007; frozenad898/frontend008):
 Clipboard001/57404 PASSES92actions/24checks for actual OS clipboard/custom-MIME
 paste, input/undo ownership, Chromium composition, pointer resize and row height.

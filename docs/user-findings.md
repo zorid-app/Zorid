@@ -2,6 +2,16 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+Next completed cutoff2026-10-26, archive008: Safety008/4a7fc7b5/frontend008
+PASSES first SIX scenarios, including named-reference exact recovery copy and
+original retry, then FAILS161/28 at mounted-file rename's exact-source assertion.
+The correct view name is written but unrelated flow-array spacing is normalized.
+Keep the byte-preservation oracle and six later unexecuted cases intact; the
+minimal rename fix is under diagnosis. Normalweb006/6d7b981d passes five UI phases
+but fails explicit current product-Worker proof; the one current generic Worker
+has blank URL/title. All cleanup/provenance checks verify. No full safety/C2,
+heavy/filter/current-reference/web identity or integration completion is claimed.
+
 Next completed cutoff2026-10-26, archive007/ad898/frontend008: Clipboard001
 PASSES92/24, including actual OS clipboard/custom-MIME paste, input/undo ownership,
 Chromium composition and pointer resize/row height. Clipboard restoration and
