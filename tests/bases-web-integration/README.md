@@ -55,6 +55,31 @@ unresolved or failed cleanup cannot pass. Final acceptance checks exceptions
 again after browser exit and final provenance, including errors arriving during
 the asset-verification tail.
 
+Raw error events remain intact. The only separately classified ambient error is
+the browser's automatic optional `/favicon.ico` GET returning HTTP404. It requires
+the exact same-origin URL with no query, a network Log error, the same observed
+CDP request ID, `Other` resource type and automatic `other` initiator without a
+script stack or redirect, plus the matching GET request and404 response. Error
+text alone never grants an exception. Other assets, statuses, network failures,
+JavaScript exceptions and console errors remain fatal. Minimal Network receipts
+record method/URL/type/initiator/status, never headers, cookies or bodies.
+
+If that precise favicon Log event arrives before its Network receipts, a barrier
+blocks all further UI input while waiting for the corresponding actual events,
+for at most one second within the existing whole-run budget. Missing,
+contradictory or ambiguous correlation fails; final proof cannot leave it pending.
+The historical web002 run lacked those receipts and remains failed/inconclusive,
+not retrospectively accepted. Final acceptance reclassifies the retained raw
+events and requires the exact ambient receipt evidence.
+
+Known fatal errors leave readiness waits immediately rather than being retried
+for the whole120-second budget. Ordinary readiness keeps its existing100ms poll;
+no semantic input is repeated. Startup/failure diagnostics read the actual public
+DOM, including Workspace/New control state and bounded body text, and can still
+be captured after the workflow deadline. Passive HTTP request collection runs
+before normal asset handlers so short-circuit responses remain observable; it
+does not replace, alter or fulfill any application request.
+
 Only the fresh owned headless Chrome child/profile and loopback Vite server are
 created. `Browser.close` must yield a normal exit; fallback signals cannot satisfy
 acceptance. All cleanup branches run and failures remain failures. The profile

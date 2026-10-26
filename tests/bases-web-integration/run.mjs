@@ -11,7 +11,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { CDP, delay } from '../tasks-electron-integration/cdp.mjs';
 import { UI } from '../bases-electron-integration/ui.mjs';
 import { observeOwnedChild, cleanupOwnedResources } from '../browser-workblocks-worker/cleanup.mjs';
-import { databaseName, noteName, notePath, marker, source, phaseNames, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, trackedHarnessInputs, trackOwnedStartup, finalEvidence } from './oracles.mjs';
+import { databaseName, noteName, notePath, marker, source, phaseNames, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, trackedHarnessInputs, trackOwnedStartup, finalEvidence, classifyRuntimeErrors, awaitRuntimeHealth, waitForObservation } from './oracles.mjs';
 
 const args = process.argv.slice(2), accepted = new Set(['--root', '--expected-head', '--wasm-dir', '--chrome', '--out', '--timeout-ms']);
 assert.equal(args.filter(value => value === '--runtime-authorized').length, 1, 'Explicit coordinator runtime authorization required');
@@ -63,10 +63,11 @@ const before = await provenance();
 await fs.mkdir(out); // Fresh evidence only. Never overwrite an earlier run.
 const profile = path.join(out, 'chrome-profile'); await fs.mkdir(profile);
 const started = Date.now(), deadline = started + timeoutMs;
-const evidence = { kind: 'actual-normal-web-workspace-smoke', status: 'running', started: new Date(started).toISOString(), timeoutMs, provenance: before, phases: phaseNames.map(name => ({ name, status: 'unexecuted' })), actions: [], observations: [], requests: [], workerTargets: [], exceptions: [], limitations: ['Five normal note UI phases only; not full Bases, desktop/mobile, sync, performance or visual parity.', 'CDP pointer/keyboard input and read-only IndexedDB inspection; not physical keyboard or OS focus parity.', 'The normal Vite development entry is exercised, not a production bundle.'] };
+const evidence = { kind: 'actual-normal-web-workspace-smoke', status: 'running', started: new Date(started).toISOString(), timeoutMs, provenance: before, phases: phaseNames.map(name => ({ name, status: 'unexecuted' })), actions: [], observations: [], requests: [], workerTargets: [], errorEvents: [], errorObservedAt: [], networkReceipts: [], exceptions: [], ambientNetworkErrors: [], pendingNetworkErrors: [], startupDiagnostics: [], limitations: ['Five normal note UI phases only; not full Bases, desktop/mobile, sync, performance or visual parity.', 'CDP pointer/keyboard input and read-only IndexedDB inspection; not physical keyboard or OS focus parity.', 'The normal Vite development entry is exercised, not a production bundle.'] };
 let server, chrome, childReceipt, cdp, ui, cleanupCall, failure, timedOut = false;
 let stderr = '', eventOverflow = 0;
 const startupTasks = [];
+const networkById = new Map(), networkWaiters = new Set();
 function live() { if (timedOut || Date.now() >= deadline) { timedOut = true; throw Error('Whole normal-web smoke deadline'); } }
 async function bounded(action, resource) {
   live(); let timer;
@@ -77,9 +78,37 @@ async function bounded(action, resource) {
   finally { clearTimeout(timer); }
 }
 async function until(check, label) {
-  let last;
-  while (Date.now() < deadline) { try { live(); return await bounded(check); } catch (error) { last = error; if (timedOut) throw error; } await delay(100); }
-  throw new Error(label + ': ' + (last?.message ?? 'deadline'));
+  return waitForObservation(() => bounded(check), { now: Date.now, deadline, assertHealthy: healthy, pause: delay, label });
+}
+function runtimeErrors(final = false) {
+  const state = classifyRuntimeErrors(evidence.errorEvents, evidence.networkReceipts, evidence.origin, { observedAt: evidence.errorObservedAt, now: Date.now(), final });
+  Object.assign(evidence, state); evidence.eventOverflow = eventOverflow; return { ...state, eventOverflow };
+}
+async function healthy() {
+  return awaitRuntimeHealth(() => { live(); return runtimeErrors(); }, expiresAt => new Promise(resolve => {
+    const finish = () => { clearTimeout(timer); networkWaiters.delete(finish); resolve(); };
+    const timer = setTimeout(finish, Math.max(1, Math.min(expiresAt, deadline) - Date.now())); networkWaiters.add(finish);
+  }));
+}
+function networkEvent(message) {
+  const value = message.params, id = value?.requestId;
+  if (typeof id !== 'string' || id.length > 128) { eventOverflow++; return; }
+  let record = networkById.get(id);
+  if (!record) {
+    if (evidence.networkReceipts.length >= 2000) { eventOverflow++; return; }
+    record = { requestId: id, requestCount: 0, responseCount: 0 }; networkById.set(id, record); evidence.networkReceipts.push(record);
+  }
+  const request = message.method === 'Network.requestWillBeSent', data = request ? value.request : value.response;
+  if (typeof data?.url !== 'string' || data.url.length > 4096) { eventOverflow++; return; }
+  if (request) { record.requestCount++; record.request = { method: data.method, url: data.url, type: value.type, initiatorType: value.initiator?.type, initiatorHasStack: !!value.initiator?.stack, redirected: !!value.redirectResponse }; }
+  else { record.responseCount++; record.response = { url: data.url, status: data.status, type: value.type }; }
+  for (const finish of [...networkWaiters]) finish();
+}
+async function diagnostic(label, afterFailure = false) {
+  const expression = `(()=>{const control=document.querySelector('.workspace .sidebar-toolbar button[aria-label="New note"]'),active=document.activeElement;return {url:location.href,title:document.title,readyState:document.readyState,visibility:document.visibilityState,workspace:!!document.querySelector('.workspace'),desktopBridge:!!window.zorid,fixtureMarker:!!document.querySelector('meta[name="zorid-core-fixture-build"]'),newNote:control?{connected:control.isConnected,visible:!!control.getClientRects().length,disabled:control.matches(':disabled')}:null,active:active?{tag:active.tagName,label:active.getAttribute('aria-label')}:null,body:document.body?.innerText.slice(0,12000)??''};})()`;
+  const reply = await (afterFailure ? cleanupCall('Runtime.evaluate', { expression, returnByValue: true }) : cdp.call('Runtime.evaluate', { expression, returnByValue: true }));
+  if (reply.exceptionDetails) throw Error('Public diagnostic evaluation failed');
+  assert.ok(evidence.startupDiagnostics.length < 4); evidence.startupDiagnostics.push({ label, at: Date.now(), ...reply.result.value });
 }
 async function dom(body) { return bounded(() => cdp.evaluate(`(()=>{${body}})()`)); }
 async function screenshot(name) { const image = await bounded(() => cdp.call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })); await fs.writeFile(path.join(out, name + '.png'), Buffer.from(image.data, 'base64')); }
@@ -89,16 +118,15 @@ async function frame(label) {
   assert.ok(evidence.observations.length < 2000, 'Bounded passive frame receipts'); evidence.observations.push({ label, ...value }); return value;
 }
 async function phase(index, run) { const item = evidence.phases[index]; item.status = 'running'; item.started = new Date().toISOString(); try { await run(); item.status = 'passed'; } catch (error) { item.status = 'failed'; item.error = error.message; throw error; } finally { item.finished = new Date().toISOString(); } }
-function quiet() { assert.deepEqual(evidence.exceptions, [], 'No renderer exceptions or console errors'); }
 try {
   // These variables affect only this dedicated harness process, never the user's shell.
   for (const key of ['ZORID_CORE_FIXTURES', 'ZORID_CORE_BUILD_ID', 'ZORID_CORE_WASM_DIR']) delete process.env[key];
   // A cache race must fail, never launch an implicit compiler from normal config.
   process.env.CARGO = '/usr/bin/false'; process.env.WASM_BINDGEN = '/usr/bin/false';
   const vite = await bounded(() => import('vite'));
-  server = await bounded(() => vite.createServer({ root, configFile: path.join(root, 'vite.config.mjs'), envFile: false, mode: 'development', clearScreen: false, logLevel: 'error', cacheDir: path.join(profile, 'vite-cache'), server: { host: '127.0.0.1', port: 0, strictPort: true, fs: { allow: [root, canonicalSourceRoot] } }, plugins: [{ name: 'normal-web-smoke-passive-request-receipts', configureServer(viteServer) { viteServer.middlewares.use((request, response, next) => {
+  server = await bounded(() => vite.createServer({ root, configFile: path.join(root, 'vite.config.mjs'), envFile: false, mode: 'development', clearScreen: false, logLevel: 'error', cacheDir: path.join(profile, 'vite-cache'), server: { host: '127.0.0.1', port: 0, strictPort: true, fs: { allow: [root, canonicalSourceRoot] } }, plugins: [{ name: 'normal-web-smoke-passive-request-receipts', enforce: 'pre', configureServer(viteServer) { viteServer.middlewares.use((request, response, next) => {
     const pathname = new URL(request.url, 'http://127.0.0.1').pathname;
-    if (pathname === '/src/main.ts' || pathname.includes('/src/platform/browser-core-worker.ts') || pathname.startsWith('/' + before.wasm.modulePrefix + '/')) {
+    if (pathname === '/src/main.ts' || pathname === '/favicon.ico' || pathname.includes('/src/platform/browser-core-worker.ts') || pathname.startsWith('/' + before.wasm.modulePrefix + '/')) {
       assert.ok(evidence.requests.length < 1000, 'Bounded normal-app request receipts');
       const record = { path: pathname, method: request.method, userAgent: request.headers['user-agent'] ?? '', at: Date.now() }; evidence.requests.push(record);
       response.once('finish', () => { record.statusCode = response.statusCode; record.finished = Date.now(); });
@@ -115,41 +143,42 @@ try {
   cdp = new CDP(target.webSocketDebuggerUrl); cleanupCall = cdp.call.bind(cdp);
   // Shared input helpers must also stop after the whole-run deadline. Cleanup
   // alone retains the original bounded transport for Browser.close/screenshots.
-  cdp.call = (method, parameters) => bounded(() => cleanupCall(method, parameters));
+  cdp.call = async (method, parameters) => { await healthy(); return bounded(() => cleanupCall(method, parameters)); };
   ui = new UI(cdp, evidence.actions);
-  cdp.ws.addEventListener('message', event => { const message = JSON.parse(event.data); if (message.method === 'Target.targetCreated' && message.params.targetInfo.type === 'worker') { if (evidence.workerTargets.length < 32) evidence.workerTargets.push(message.params.targetInfo); else eventOverflow++; } if (message.method === 'Runtime.exceptionThrown' || message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error' || message.method === 'Log.entryAdded' && message.params.entry.level === 'error') { if (evidence.exceptions.length < 128) evidence.exceptions.push(message); else eventOverflow++; } });
-  for (const method of ['Runtime.enable', 'Page.enable', 'Log.enable']) await bounded(() => cdp.call(method));
+  cdp.ws.addEventListener('message', event => { const message = JSON.parse(event.data); if (message.method === 'Network.requestWillBeSent' || message.method === 'Network.responseReceived') networkEvent(message); if (message.method === 'Target.targetCreated' && message.params.targetInfo.type === 'worker') { if (evidence.workerTargets.length < 32) evidence.workerTargets.push(message.params.targetInfo); else eventOverflow++; } if (message.method === 'Runtime.exceptionThrown' || message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error' || message.method === 'Log.entryAdded' && message.params.entry.level === 'error') { if (evidence.errorEvents.length < 128) { evidence.errorEvents.push(message); evidence.errorObservedAt.push(Date.now()); } else eventOverflow++; for (const finish of [...networkWaiters]) finish(); } });
+  for (const method of ['Runtime.enable', 'Page.enable', 'Network.enable', 'Log.enable']) await bounded(() => cdp.call(method));
   await bounded(() => cdp.call('Target.setDiscoverTargets', { discover: true })); evidence.browser = await bounded(() => cdp.call('Browser.getVersion'));
   await bounded(() => cdp.call('Page.navigate', { url: origin + '/' }));
-  await until(async () => { assert.equal(await dom('return !!document.querySelector(".workspace .sidebar-toolbar button[aria-label=\\"New note\\"]");'), true); assert.equal(await dom('return !!window.zorid||!!document.querySelector("meta[name=\\"zorid-core-fixture-build\\"]");'), false); quiet(); }, 'Normal browser Workspace');
+  await until(async () => { assert.equal(await dom('return !!document.querySelector(".workspace .sidebar-toolbar button[aria-label=\\"New note\\"]");'), true); assert.equal(await dom('return !!window.zorid||!!document.querySelector("meta[name=\\"zorid-core-fixture-build\\"]");'), false); }, 'Normal browser Workspace');
+  await diagnostic('workspace-ready');
   let created, renamed, saved, savedTime;
   await phase(0, async () => {
     await bounded(() => ui.button('New note', '[aria-label="Left sidebar"]'));
     created = await until(async () => savedNote(await storage(), 'Untitled.md', ''), 'Normal UI create persisted');
     await bounded(() => ui.type('.pane.is-active .note-title', noteName)); await bounded(() => ui.key('Enter'));
     renamed = await until(async () => { const current = savedNote(await storage(), notePath, '', created); editorFrame(await frame('title-Enter-focus'), noteName, '', true); return current; }, 'Normal rename and title transfer');
-    assert.notEqual(renamed.revision, created.revision); quiet();
+    assert.notEqual(renamed.revision, created.revision); await healthy();
   });
   await phase(1, async () => {
     // In particular: no pointer, focus(), or editor API call before this input.
     editorFrame(await frame('before-body-input'), noteName, '', true);
     await bounded(() => cdp.call('Input.insertText', { text: source })); evidence.actions.push({ action: 'keyboard-insertText-after-normal-title-transfer', text: source });
     saved = await until(async () => { editorFrame(await frame('saved-note-ready'), noteName, source); return savedNote(await storage(), notePath, source, created); }, 'Durable whole note and settled normal save state');
-    assert.notEqual(saved.revision, renamed.revision); savedTime = await dom('return performance.timeOrigin;'); await screenshot('saved-note'); quiet();
+    assert.notEqual(saved.revision, renamed.revision); savedTime = await dom('return performance.timeOrigin;'); await screenshot('saved-note'); await healthy();
   });
   await phase(2, async () => {
     await bounded(() => cdp.call('Page.reload', { ignoreCache: true }));
     await until(async () => { const f = await frame('reload-ready'); editorFrame(f, noteName, source); const current = savedNote(await storage(), notePath, source); reloadFrame(savedTime, f.timeOrigin, saved, current); }, 'Normal reload retains document source and identity');
-    await screenshot('reopened-note'); quiet();
+    await screenshot('reopened-note'); await healthy();
   });
   await phase(3, async () => {
     await bounded(() => ui.button('Search', '[aria-label="Left sidebar"]')); await bounded(() => ui.type('.document-search input[aria-label="Search vault"]', marker));
     await until(async () => { const found = await dom(`const root=document.querySelector('.document-search');return {query:root?.querySelector('input[aria-label="Search vault"]')?.value,total:root?.querySelector('.document-search-total')?.textContent,status:root?.querySelector('.document-search-status')?.textContent.trim(),groups:root?[...root.querySelectorAll('.document-search-file')].map(e=>({entryId:e.dataset.entryId,path:e.querySelector('.document-search-title')?.title,title:e.querySelector('.document-search-name')?.textContent,badge:e.querySelector('.document-search-badge')?.textContent,snippets:[...e.querySelectorAll('.document-search-excerpt')].map(n=>({text:n.textContent,marks:[...n.querySelectorAll('mark')].map(m=>m.textContent)}))})):[]};`); searchFrame(found, saved); evidence.search = found; }, 'Exact normal rich search');
-    await screenshot('rich-search'); quiet();
+    await screenshot('rich-search'); await healthy();
   });
   await phase(4, async () => {
     await bounded(() => ui.click('.document-search-title'));
-    await until(async () => { editorFrame(await frame('opened-search-result'), noteName, source); assert.deepEqual(savedNote(await storage(), notePath, source), saved); }, 'Search opens the same saved note'); quiet();
+    await until(async () => { editorFrame(await frame('opened-search-result'), noteName, source); assert.deepEqual(savedNote(await storage(), notePath, source), saved); }, 'Search opens the same saved note'); await healthy();
   });
   assert.equal(eventOverflow, 0, 'No passive evidence overflow');
   assert.ok(evidence.requests.some(row => row.path === '/src/main.ts' && row.statusCode === 200 && /Chrome\//.test(row.userAgent)), 'Actual normal main.ts requested');
@@ -164,9 +193,10 @@ try {
     const digest = sha(Buffer.from(await bounded(() => response.arrayBuffer()))); assert.equal(digest, before.wasm.files[name]); evidence.assetResponses.push({ name, sha256: digest, route: assetPath, kind: 'driver-read-only-verification-after-observed-browser-fetch' });
   }
   assert.deepEqual(await bounded(provenance), before, 'Source/artifact freeze after actual workflow'); evidence.provenanceVerified = true;
-  quiet(); evidence.workflowCompleted = true;
+  await healthy(); evidence.workflowCompleted = true;
 } catch (error) {
   failure = error; evidence.status = 'failed'; evidence.failure = String(error.stack ?? error);
+  if (cleanupCall) try { await diagnostic('failure', true); } catch (diagnosticError) { evidence.failureDiagnosticError = diagnosticError.message; }
   if (cleanupCall) try { const image = await cleanupCall('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }); await fs.writeFile(path.join(out, 'failure.png'), Buffer.from(image.data, 'base64')); } catch (captureError) { evidence.failureScreenshotError = captureError.message; }
 } finally {
   // Browser.close is the positive normal-close attempt. Fallback cleanup cannot
@@ -188,7 +218,7 @@ try {
     failure ??= Error('Normal Browser.close and owned resource cleanup did not complete cleanly'); evidence.status = 'failed';
   }
   try { assert.deepEqual(await provenance(), before); evidence.finalProvenanceVerified = true; } catch (error) { failure ??= error; evidence.status = 'failed'; evidence.finalProvenanceError = error.message; }
-  evidence.eventOverflow = eventOverflow;
+  runtimeErrors(true);
   if (!failure) try { finalEvidence(evidence); evidence.status = 'passed'; } catch (error) { failure = error; evidence.status = 'failed'; evidence.finalAcceptanceError = error.message; }
   evidence.finished = new Date().toISOString(); evidence.elapsedMs = Date.now() - started; evidence.cleanupDeadlineExcludedMs = Math.max(0, Date.now() - deadline);
   await fs.writeFile(path.join(out, 'chrome-stderr.log'), stderr); await fs.writeFile(path.join(out, 'cdp-events.json'), JSON.stringify(cdp?.events ?? [], null, 2));

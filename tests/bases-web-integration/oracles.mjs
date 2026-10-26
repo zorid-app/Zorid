@@ -7,6 +7,60 @@ export const marker = 'ZoridFunctionalUiMarker7c42';
 export const source = 'Ordinary browser note.\n' + marker + '\n';
 export const phaseNames = Object.freeze(['create-and-rename', 'keyboard-edit-and-durable-save', 'normal-reload', 'rich-search', 'open-search-result']);
 export const harnessInputs = Object.freeze(['run.mjs', 'oracles.mjs', 'oracles.test.mjs', 'README.md'].map(name => 'tests/bases-web-integration/' + name));
+export const faviconReceiptWaitMs = 1000;
+
+/** No text-only error exemption. The sole ambient case is the browser's
+ * automatic optional favicon GET with a matching observed HTTP404 response. */
+export function classifyRuntimeErrors(events, network, origin, { observedAt = [], now = 0, final = false } = {}) {
+  const exceptions = [], ambientNetworkErrors = [], pendingNetworkErrors = [];
+  let favicon;
+  try { const url = new URL(origin); if (url.protocol === 'http:' && url.hostname === '127.0.0.1' && url.origin === origin) favicon = origin + '/favicon.ico'; } catch { /* Unknown origin never grants an exception. */ }
+  const records = new Map();
+  for (const row of network) records.set(row.requestId, records.has(row.requestId) ? null : row);
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index], entry = event?.params?.entry;
+    const candidate = favicon && event?.method === 'Log.entryAdded' && entry?.source === 'network' && entry.level === 'error' && entry.url === favicon
+      && entry.text === 'Failed to load resource: the server responded with a status of 404 (Not Found)' && typeof entry.networkRequestId === 'string' && entry.networkRequestId.length > 0;
+    if (!candidate) { exceptions.push(event); continue; }
+    const receipt = records.get(entry.networkRequestId), request = receipt?.request, response = receipt?.response;
+    const contradicted = records.has(entry.networkRequestId) && receipt === null || receipt && (receipt.requestCount > 1 || receipt.responseCount > 1)
+      || request && (request.method !== 'GET' || request.url !== favicon || request.type !== 'Other' || request.initiatorType !== 'other' || request.initiatorHasStack !== false || request.redirected !== false)
+      || response && (response.url !== favicon || response.status !== 404 || response.type !== 'Other');
+    if (contradicted) { exceptions.push(event); continue; }
+    if (request && response && receipt.requestCount === 1 && receipt.responseCount === 1) {
+      ambientNetworkErrors.push({ reason: 'automatic-optional-favicon-404', event, receipt: structuredClone(receipt) }); continue;
+    }
+    const received = observedAt[index], expiresAt = received + faviconReceiptWaitMs;
+    if (!final && Number.isFinite(received) && received <= now && now < expiresAt) pendingNetworkErrors.push({ event, index, expiresAt });
+    else exceptions.push(event);
+  }
+  return { exceptions, ambientNetworkErrors, pendingNetworkErrors };
+}
+
+/** Pending correlation is a barrier, never permission to continue UI input.
+ * The caller notifies on real network receipts or the bounded receipt deadline. */
+export async function awaitRuntimeHealth(read, waitForChange) {
+  for (;;) {
+    const state = read(); assert.deepEqual(state.exceptions, [], 'Fatal renderer or unclassified network error');
+    assert.equal(state.eventOverflow, 0, 'Runtime evidence overflow');
+    if (!state.pendingNetworkErrors.length) return state;
+    await waitForChange(Math.min(...state.pendingNetworkErrors.map(row => row.expiresAt)));
+  }
+}
+
+/** A readiness assertion can be transient; a known runtime failure cannot.
+ * Health checks sit outside the retry catch and retain the original100ms poll. */
+export async function waitForObservation(check, { now, deadline, assertHealthy, pause, label }) {
+  let last;
+  while (now() < deadline) {
+    await assertHealthy();
+    let value;
+    try { value = await check(); }
+    catch (error) { await assertHealthy(); last = error; await pause(100); continue; }
+    await assertHealthy(); return value;
+  }
+  throw new Error(label + ': ' + (last?.message ?? 'deadline'));
+}
 
 export function trackedHarnessInputs(tracked) {
   for (const name of [...harnessInputs, 'tests/tasks-electron-integration/cdp.mjs', 'tests/bases-electron-integration/ui.mjs', 'tests/browser-workblocks-worker/cleanup.mjs']) assert.ok(tracked.includes(name), 'Executing harness input must be tracked in the frozen checkout: ' + name);
@@ -31,6 +85,10 @@ export function finalEvidence(evidence) {
   assert.equal(evidence.workflowCompleted, true);
   assert.deepEqual(evidence.phases.map(({ name, status }) => ({ name, status })), phaseNames.map(name => ({ name, status: 'passed' })));
   assert.deepEqual(evidence.exceptions, [], 'Late renderer errors must fail final acceptance'); assert.equal(evidence.eventOverflow, 0);
+  const classified = classifyRuntimeErrors(evidence.errorEvents, evidence.networkReceipts, evidence.origin, { final: true });
+  assert.deepEqual(classified.exceptions, [], 'Unclassified final runtime error');
+  assert.deepEqual(classified.ambientNetworkErrors, evidence.ambientNetworkErrors, 'Ambient error evidence must retain exact raw errors and correlated receipts');
+  assert.deepEqual(evidence.pendingNetworkErrors, [], 'Final runtime receipts must not remain pending');
   assert.equal(evidence.provenanceVerified, true); assert.equal(evidence.finalProvenanceVerified, true);
   assert.equal(evidence.normalClose?.requested, true); assert.deepEqual(evidence.cleanup.failures, []);
   assert.equal(evidence.cleanup.chrome.exitCode, 0); assert.equal(evidence.cleanup.chrome.signalCode, null); assert.deepEqual(evidence.cleanup.chrome.signals, []);

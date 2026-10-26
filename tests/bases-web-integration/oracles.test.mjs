@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { databaseName, noteName, notePath, marker, source, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, harnessInputs, trackedHarnessInputs, trackOwnedStartup, finalEvidence, phaseNames } from './oracles.mjs';
+import { databaseName, noteName, notePath, marker, source, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, harnessInputs, trackedHarnessInputs, trackOwnedStartup, finalEvidence, phaseNames, classifyRuntimeErrors, awaitRuntimeHealth, waitForObservation } from './oracles.mjs';
 
 const entry = { id: 'ui-created-entry', revision: 'saved-revision', path: notePath, kind: 'file', deleted: false };
 const snapshot = () => ({ database: databaseName, version: 6, entries: [{ ...entry }], contents: [{ id: entry.id, bytes: [...new TextEncoder().encode(source)] }] });
@@ -70,7 +70,7 @@ test('the observer uses one readonly metadata/content transaction and closes the
   } finally { if (old === undefined) delete globalThis.indexedDB; else globalThis.indexedDB = old; }
 });
 
-const final = () => ({ workflowCompleted: true, phases: phaseNames.map(name => ({ name, status: 'passed' })), exceptions: [], eventOverflow: 0, provenanceVerified: true, finalProvenanceVerified: true, normalClose: { requested: true }, cleanup: { failures: [], chrome: { exitCode: 0, signalCode: null, signals: [] }, vite: { closeResolved: true } }, startupCleanupTimedOut: false, startupResources: [{ creationSettled: true, expired: false, cleanupStatus: 'not_required' }] });
+const final = () => ({ workflowCompleted: true, phases: phaseNames.map(name => ({ name, status: 'passed' })), exceptions: [], errorEvents: [], networkReceipts: [], ambientNetworkErrors: [], pendingNetworkErrors: [], eventOverflow: 0, provenanceVerified: true, finalProvenanceVerified: true, normalClose: { requested: true }, cleanup: { failures: [], chrome: { exitCode: 0, signalCode: null, signals: [] }, vite: { closeResolved: true } }, startupCleanupTimedOut: false, startupResources: [{ creationSettled: true, expired: false, cleanupStatus: 'not_required' }] });
 test('an error arriving after the five phases and initial proof still fails final acceptance', () => {
   const evidence = final(); finalEvidence(evidence);
   evidence.exceptions.push({ method: 'Runtime.exceptionThrown', params: { message: 'late actual failure' } });
@@ -97,4 +97,74 @@ test('late owned Vite creation waits for its actual close and retains a close fa
   rejected.state.expired = true; await rejected.settled;
   assert.equal(rejected.state.cleanupStatus, 'failed'); assert.match(rejected.state.cleanupError, /owned close failed/);
   const evidence = final(); evidence.startupResources = [rejected.state]; assert.throws(() => finalEvidence(evidence), /Late owned resource cleanup failed/);
+});
+
+// The exact lone network error from failed actual web002. That run had no
+// Network request/response receipts, so it remains unclassified and failed.
+const origin = 'http://127.0.0.1:60741';
+const faviconError = () => ({ method: 'Log.entryAdded', params: { entry: { source: 'network', level: 'error', text: 'Failed to load resource: the server responded with a status of 404 (Not Found)', timestamp: 1793044989745.856, url: origin + '/favicon.ico', networkRequestId: '52753.243' } } });
+const faviconReceipt = () => ({ requestId: '52753.243', requestCount: 1, responseCount: 1, request: { method: 'GET', url: origin + '/favicon.ico', type: 'Other', initiatorType: 'other', initiatorHasStack: false, redirected: false }, response: { url: origin + '/favicon.ico', status: 404, type: 'Other' } });
+const classify = (events, network, options = {}) => classifyRuntimeErrors(events, network, origin, options);
+test('recorded web002 favicon text alone stays fatal; only complete matching automatic GET404 receipts classify as ambient', () => {
+  const event = faviconError(); assert.deepEqual(classify([event], [], { final: true }).exceptions, [event]);
+  const receipt = faviconReceipt(), state = classify([event], [receipt], { final: true });
+  assert.deepEqual(state.exceptions, []); assert.deepEqual(state.pendingNetworkErrors, []);
+  assert.deepEqual(state.ambientNetworkErrors, [{ reason: 'automatic-optional-favicon-404', event, receipt }]);
+  assert.deepEqual(classify([event], [receipt, faviconReceipt()], { final: true }).exceptions, [event], 'Duplicate correlation sidecars cannot choose a preferred witness');
+});
+test('favicon classification rejects JS/console errors, other assets/origins/queries, scripts, redirects and mismatched status/request witnesses', () => {
+  for (const change of [
+    (e, r) => { e.method = 'Runtime.exceptionThrown'; }, (e, r) => { e.method = 'Runtime.consoleAPICalled'; },
+    (e, r) => { e.params.entry.source = 'javascript'; }, (e, r) => { e.params.entry.url = origin + '/src/main.ts'; },
+    (e, r) => { e.params.entry.url = origin + '/favicon.ico?version=1'; }, (e, r) => { e.params.entry.url = 'https://other.example/favicon.ico'; },
+    (e, r) => { r.request.method = 'POST'; }, (e, r) => { r.request.type = 'Fetch'; }, (e, r) => { r.request.initiatorType = 'script'; },
+    (e, r) => { r.request.initiatorHasStack = true; }, (e, r) => { r.request.redirected = true; },
+    (e, r) => { r.request.url += '?different'; }, (e, r) => { r.response.url += '?different'; },
+    (e, r) => { r.response.status = 500; }, (e, r) => { r.response.status = '404'; },
+    (e, r) => { r.requestId = 'another-request'; }, (e, r) => { r.requestCount = 2; }, (e, r) => { r.responseCount = 2; },
+    (e, r) => { delete r.request; }, (e, r) => { delete r.response; },
+  ]) {
+    const event = faviconError(), receipt = faviconReceipt(); change(event, receipt);
+    const result = classify([event], [receipt], { final: true }); assert.deepEqual(result.exceptions, [event]); assert.deepEqual(result.ambientNetworkErrors, []);
+  }
+});
+test('Log-before-Network ordering blocks positive work until exact correlated receipts arrive', async () => {
+  const event = faviconError(), network = []; let now = 100, waits = 0, positiveWork = 0;
+  const read = () => ({ ...classify([event], network, { observedAt: [100], now }), eventOverflow: 0 });
+  assert.equal(read().pendingNetworkErrors.length, 1); assert.deepEqual(read().exceptions, []);
+  await awaitRuntimeHealth(read, async expiresAt => {
+    assert.equal(expiresAt, 1100); assert.equal(positiveWork, 0); waits++; now += 100;
+    if (waits === 1) { const receipt = faviconReceipt(); delete receipt.response; receipt.responseCount = 0; network.push(receipt); }
+    else { network[0].response = faviconReceipt().response; network[0].responseCount = 1; }
+  });
+  positiveWork++; assert.equal(waits, 2); assert.equal(positiveWork, 1); assert.equal(read().ambientNetworkErrors.length, 1);
+});
+test('missing correlation expires after the bounded receipt barrier and is fatal at final proof', async () => {
+  const event = faviconError(); let now = 100, waits = 0;
+  await assert.rejects(awaitRuntimeHealth(() => ({ ...classify([event], [], { observedAt: [100], now }), eventOverflow: 0 }), async expiresAt => { waits++; now = expiresAt; }), /Fatal renderer or unclassified network error/);
+  assert.equal(waits, 1); assert.deepEqual(classify([event], [], { observedAt: [100], now: 100, final: true }).exceptions, [event]);
+});
+test('a fatal JS event during a pending favicon barrier stops without waiting for a receipt or permitting positive work', async () => {
+  const events = [faviconError()]; let wakes = 0;
+  await assert.rejects(awaitRuntimeHealth(() => ({ ...classify(events, [], { observedAt: [100, 100], now: 100 }), eventOverflow: 0 }), async () => {
+    wakes++; events.push({ method: 'Runtime.exceptionThrown', params: { exceptionDetails: { text: 'actual fatal JS error' } } });
+  }), /Fatal renderer or unclassified network error/);
+  assert.equal(wakes, 1);
+});
+test('fatal observation errors stop before another readiness check or sleep', async () => {
+  for (const point of ['before', 'during-failed-check', 'after-successful-check']) {
+    let fatal = point === 'before', calls = 0, pauses = 0;
+    await assert.rejects(waitForObservation(async () => { calls++; fatal = true; if (point === 'during-failed-check') throw Error('not mounted yet'); return true; }, { now: () => 0, deadline: 120000, assertHealthy: async () => { if (fatal) throw Error('known actual JS failure'); }, pause: async () => { pauses++; }, label: 'Normal Workspace' }), /known actual JS failure/);
+    assert.equal(calls, point === 'before' ? 0 : 1); assert.equal(pauses, 0);
+  }
+});
+test('ordinary readiness retains the existing100ms polling and whole-run budget', async () => {
+  let now = 0, calls = 0; const pauses = [];
+  await assert.rejects(waitForObservation(async () => { calls++; throw Error('not mounted yet'); }, { now: () => now, deadline: 150, assertHealthy: async () => {}, pause: async ms => { pauses.push(ms); now += ms; }, label: 'Normal Workspace' }), /Normal Workspace: not mounted yet/);
+  assert.equal(calls, 2); assert.deepEqual(pauses, [100, 100]);
+});
+test('final acceptance independently recomputes raw errors and requires retained ambient correlation', () => {
+  const value = final(), event = faviconError(), receipt = faviconReceipt(); value.origin = origin; value.errorEvents = [event]; value.networkReceipts = [receipt]; value.ambientNetworkErrors = classify([event], [receipt], { final: true }).ambientNetworkErrors;
+  finalEvidence(value); value.ambientNetworkErrors = []; assert.throws(() => finalEvidence(value), /Ambient error evidence/);
+  const hidden = final(); hidden.origin = origin; hidden.errorEvents = [event]; assert.throws(() => finalEvidence(hidden), /Unclassified final runtime error/);
 });
