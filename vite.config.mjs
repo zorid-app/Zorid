@@ -64,14 +64,16 @@ export default defineConfig(async({mode,command})=>{
     define:{__ZORID_CORE_FIXTURES__:JSON.stringify(fixture),__ZORID_CORE_BUILD_ID__:JSON.stringify(buildId),__ZORID_CORE_MODULE_PATH__:JSON.stringify(core.modulePath||'')},
     plugins:[runtimeAssets(assets,{core:!native&&!fixture})],
     // Vite's dev optimizer redirects bare IDs, not relative local CJS imports.
-    // Keep source imports valid in Node; route only these two dev boundaries.
+    // Keep source imports valid in Node; route these pure local dev boundaries.
     resolve:command==='serve'?{alias:[
       {find:'../../desktop/workblocks.cjs',replacement:'zorid-local/workblocks.cjs'},
       {find:'../../desktop/document-semantics.cjs',replacement:'zorid-local/document-semantics.cjs'},
+      {find:'../../desktop/conditional-saved-source.cjs',replacement:'zorid-local/conditional-saved-source.cjs'},
       {find:'zorid-local/workblocks.cjs',replacement:path.join(root,'desktop/workblocks.cjs')},
       {find:'zorid-local/document-semantics.cjs',replacement:path.join(root,'desktop/document-semantics.cjs')},
+      {find:'zorid-local/conditional-saved-source.cjs',replacement:path.join(root,'desktop/conditional-saved-source.cjs')},
     ]}:undefined,
-    optimizeDeps:{include:['zorid-local/workblocks.cjs','zorid-local/document-semantics.cjs']},
+    optimizeDeps:{include:['zorid-local/workblocks.cjs','zorid-local/document-semantics.cjs','zorid-local/conditional-saved-source.cjs']},
     server:{host:'127.0.0.1',port:5173,strictPort:true},
     preview:{host:'127.0.0.1',port:4173,strictPort:true},
     // Native WebKit and Electron load relative chunks from dist/index.html.
