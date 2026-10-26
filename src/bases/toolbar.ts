@@ -550,7 +550,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       try{operandSnapshot=options.filterOperands?.();}catch(failure){report(failure);}
       const operandEditors=new Set<BaseFilterValues>();
       disposers.push(()=>{for(const editor of operandEditors)editor.destroy();operandEditors.clear();});
-      type Section={section:HTMLElement;refreshBlankAdvice():void;get():FilterNode|undefined;acknowledge():()=>void};
+      type Section={section:HTMLElement;refreshUntouchedAdvice():void;get():FilterNode|undefined;acknowledge():()=>void};
       let rootEditor:Section|undefined,viewEditor:Section|undefined;
       own.refreshFilterAdvice=next=>{
         if(own.saving||own.failure||next.readOnly!==opening.readOnly||next.selectedIndex!==opening.selectedIndex
@@ -558,7 +558,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
           ||JSON.stringify(configurationSnapshot(next))!==JSON.stringify(configuration))return;
         filterAdvice=next;
         if(compositions.size||pressedPointers.size||releasedPointers.size||node.querySelector('[role="combobox"][aria-expanded="true"],[role="listbox"],.cm-tooltip-autocomplete'))return;
-        rootEditor?.refreshBlankAdvice();viewEditor?.refreshBlankAdvice();
+        rootEditor?.refreshUntouchedAdvice();viewEditor?.refreshUntouchedAdvice();
       };
       const syncDraft=()=>{own.innerDraft=[...operandEditors].some(editor=>editor.hasDraft());};
       const semanticChanged=()=>{
@@ -588,9 +588,9 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         const count=(source:FilterNode|undefined)=>{const n=baseFilterCount(source);flair.textContent=String(n);flair.hidden=n===0;};count(initial);disclosure.append(flair);section.append(disclosure,content);
         const alive=()=>!destroyed&&panel===own&&section.isConnected;
         const localEditors=new Set<BaseFilterValues>(),validators=new Set<()=>void>(),rendered=new WeakMap<BaseFilterDraftNode,HTMLElement>();
-        const refreshBlankAdvice=new Set<()=>void>();
+        const refreshUntouchedAdvice=new Set<()=>void>();
         let tree:HTMLElement,renderBudget=1000;
-        const release=()=>{for(const editor of localEditors){editor.destroy();operandEditors.delete(editor);}localEditors.clear();validators.clear();refreshBlankAdvice.clear();syncDraft();};
+        const release=()=>{for(const editor of localEditors){editor.destroy();operandEditors.delete(editor);}localEditors.clear();validators.clear();refreshUntouchedAdvice.clear();syncDraft();};
         const focusNode=(value:BaseFilterDraftNode)=>{const row=rendered.get(value);if(row)focusVisible(row,'Filter property');};
         const renderNode=(value:BaseFilterDraftNode,remove:()=>void,depth=0):HTMLElement=>{
           const row=doc.createElement('div');row.className=value.kind==='condition'?'bases-filter-condition':'bases-filter-group';rendered.set(value,row);
@@ -614,7 +614,24 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
               // Keep such saved source editable verbatim, never coerce its data.
               if(!selected){
                 const expression=doc.createElement('textarea');expression.setAttribute('aria-label','Filter expression');expression.value=value.source??'';expression.rows=2;
-                expression.addEventListener('input',()=>{if(live()){updateBaseFilterExpression(value,expression.value);semanticChanged();}});row.append(expression,removeButton);return row;
+                expression.addEventListener('input',()=>{if(live()){updateBaseFilterExpression(value,expression.value);semanticChanged();}});row.append(expression,removeButton);
+                const saved=value.source;
+                // A retired metadata frame can temporarily hide a saved operator.
+                // Recover only untouched source once current advice supports it.
+                if(descriptor.kind==='unknown'&&saved!==undefined&&value.acceptedSource===saved){
+                  const refreshSaved=()=>{
+                    const focused=doc.activeElement;
+                    if(!live()||value.advanced||value.fields!==fields||value.source!==saved||value.acceptedSource!==saved||expression.value!==saved
+                      ||focused&&row.contains(focused))return;
+                    const supplied=filterAdvice.filterProperty?.(fields.property);
+                    if(!supplied||supplied.kind==='unknown'||!baseFilterOperators(baseFilterProperty(fields.property,supplied),fields.operator).some(item=>item.id===fields.operator))return;
+                    refreshUntouchedAdvice.delete(refreshSaved);
+                    const budget=renderBudget;renderBudget=1;const replacement=renderNode(value,remove,depth);renderBudget=budget;row.replaceWith(replacement);
+                    enhanceControls?.();place();
+                  };
+                  refreshUntouchedAdvice.add(refreshSaved);
+                }
+                return row;
               }
               let initialValues:readonly BaseFilterLiteral[]|undefined;
               try{initialValues=filterConditionValues(fields);}catch{/* incomplete local draft */}
@@ -657,11 +674,11 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
                 const supplied=filterAdvice.filterProperty?.(fields.property);
                 if(!supplied||supplied.kind==='unknown')return;
                 const label=focused instanceof doc.defaultView!.HTMLElement&&row.contains(focused)?focused.getAttribute('aria-label'):undefined;
-                editor.destroy();localEditors.delete(editor);operandEditors.delete(editor);validators.delete(validate);refreshBlankAdvice.delete(refreshBlank);
+                editor.destroy();localEditors.delete(editor);operandEditors.delete(editor);validators.delete(validate);refreshUntouchedAdvice.delete(refreshBlank);
                 const budget=renderBudget;renderBudget=1;const replacement=renderNode(value,remove,depth);renderBudget=budget;row.replaceWith(replacement);
                 if(label)focusVisible(replacement,label);syncDraft();place();
               };
-              refreshBlankAdvice.add(refreshBlank);
+              refreshUntouchedAdvice.add(refreshBlank);
               const blocked=()=>{syncDraft();if(own.innerDraft){error.textContent='Add or clear the pending item before changing its condition.';return true;}return !canRestructure();};
               property.addEventListener('change',()=>{
                 if(!live())return;
@@ -711,7 +728,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
           content.append(actions);render();
         };
         if(expanded)initialize();
-        return {section,refreshBlankAdvice(){for(const refresh of [...refreshBlankAdvice])refresh();},get:()=>readBaseFilterDraft(draft),acknowledge(){const source=readBaseFilterDraft(draft),acknowledge=captureBaseFilterAcknowledgement(draft);return ()=>{acknowledge();count(source);for(const validate of validators)validate();};}};
+        return {section,refreshUntouchedAdvice(){for(const refresh of [...refreshUntouchedAdvice])refresh();},get:()=>readBaseFilterDraft(draft),acknowledge(){const source=readBaseFilterDraft(draft),acknowledge=captureBaseFilterAcknowledgement(draft);return ()=>{acknowledge();count(source);for(const validate of validators)validate();};}};
       }
       rootEditor=filterSection('All views',initialRoot,false,!!options.commands?.updateRoot);
       viewEditor=filterSection('This view',initialView,true);fields.append(rootEditor.section,viewEditor.section);

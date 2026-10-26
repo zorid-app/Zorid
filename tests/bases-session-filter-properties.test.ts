@@ -184,3 +184,25 @@ test('a retained filter draft acquires the current declared String catalog after
   assert.deepEqual(saves,[],'blank and incomplete local rows cannot write a Base');assert.deepEqual(errors,[]);
  }finally{current=false;toolbar.destroy();dom.window.close();await h.vault.closeMetadataProjection();}
 });
+
+test('a saved supported inverse method reopens structured after a retired opening frame is replaced by current advice',async()=>{
+ const h=harness([file('A.md',[property('text','text','Alpha')],'a')]),definitions:BasePropertyDefinitions={properties:{text:{type:'text'}},diagnostics:[]};
+ const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
+ const source='!note["text"].containsAny("beta", "gamma")';
+ const document=BaseDocument.parse(JSON.stringify({fixtureSentinel:'keep',views:[{type:'table',name:'Typed',order:['file.name','note.text'],filters:{and:[source]}}]}));
+ const original=document.toString();let version=1,current=true;const saves:unknown[]=[],errors:unknown[]=[];
+ const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(){},async save(_version,patch){saves.push(patch);},onDraftChange(){},onError:error=>errors.push(error)});
+ const state=(provider:ReturnType<typeof baseSessionFilterPropertyProvider>)=>({result:executeBaseQuery(document,{version,files:[{path:'A.md',properties:{text:'Alpha'}}]},{viewIndex:0}),views:document.views,selectedIndex:0,root:{fixtureSentinel:'keep'},readOnly:false,allowRename:true,label:(property:string)=>property.replace(/^note\./,''),propertyType:(property:string)=>property==='note.text'?'text':undefined,filterProperty:provider});
+ try{
+  await h.vault.initialize();const old=baseSessionFilterPropertyProvider(h.vault,definitions,['note.text'],()=>current);toolbar.update(state(old));
+  h.set([file('A.md',[property('text','text','Alpha')],'a')]);h.wake();await until(()=>h.vault.metadataFrame?.frame?.snapshot.generation==='2');
+  assert.deepEqual(old('note.text'),{kind:'unknown',metadataStatus:'unavailable'},'Retired advice must never be revived for a reopened row');
+  doc.querySelector<HTMLButtonElement>('button[aria-label="Filter"]')!.click();const panel=doc.querySelector('[role="dialog"][aria-label="Filter"]')!,raw=panel.querySelector<HTMLTextAreaElement>('textarea[aria-label="Filter expression"]')!;assert.ok(raw);assert.equal(raw.value,source);
+  version++;const next=baseSessionFilterPropertyProvider(h.vault,definitions,['note.text'],()=>current);assert.equal(next('note.text')?.kind,'string');toolbar.update(state(next));
+  const row=panel.querySelectorAll('.bases-filter-section')[1].querySelector('.bases-filter-condition')!;
+  assert.equal(row.querySelector('textarea[aria-label="Filter expression"]'),null,'An untouched supported method is not permanently trapped in raw fallback');
+  assert.equal(row.querySelector<HTMLSelectElement>('select[aria-label="Filter property"]')?.value,'note.text');assert.equal(row.querySelector<HTMLSelectElement>('select[aria-label="Condition"]')?.value,'notContainsAny');
+  assert.deepEqual([...row.querySelectorAll('.bases-filter-operand-chip span')].map(element=>element.textContent),['beta','gamma']);
+  assert.equal(document.toString(),original);assert.deepEqual(saves,[]);assert.deepEqual(errors,[]);assert.deepEqual(old('note.text'),{kind:'unknown',metadataStatus:'unavailable'});
+ }finally{current=false;toolbar.destroy();dom.window.close();await h.vault.closeMetadataProjection();}
+});
