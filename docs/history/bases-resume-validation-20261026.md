@@ -3,9 +3,10 @@
 Fresh CLI and browser/WASM campaigns pass. Native safety and recovery remain
 incomplete: the safety run stops during split setup, and recovery stops while
 resubmitting a retained newer summary draft. Neither failed native run establishes
-full acceptance. This record describes these completed runs, not later fixes.
+full acceptance. A subsequent rich-property campaign passes on frontend 002, as
+recorded separately below. This record describes completed runs, not later fixes.
 
-## Source and build identity
+## Initial source and build identity
 
 The runtime checkout was frozen at
 `9c6088b3e9c015369e5bc4e1791a2709272cb4f2`, on the isolated
@@ -110,6 +111,58 @@ independent audit passes. Forced cleanup is not a successful normal quit.
 Report: `/private/tmp/zorid-bases-recovery-20261026-001/result.json`.
 SHA-256: `ceb58b7decd8111d4714705badacb48961f807cd2008b3c6eb69fcde4e044752`.
 
+## Later rich-property campaign — bounded pass
+
+Properties session 22470 passes **188 actions and 65 checks** on frozen source
+`9e589589218d2f8723332c274af9f364905bfb12`. Frontend 002 was built at
+`74dcc2a9368471b07b12b49f2f09515cf394be4b`; the intervening commit only adds
+documentation. Its receipt, `frontend-receipt-002.json` in the products directory,
+has SHA-256
+`9fa54f89db3d72ef5dce7a796ca3c939f1eab27334bd58149f29c440ea6afafe`.
+The native host and Rust tree remain those listed above. This run predates the
+later enhanced-editor Tab/blur fix and does not verify that fix.
+
+The campaign covers text/tags/plain links, select and multiselect option creation
+with unknown-value preservation, status, relation add/remove with aliases and
+unresolved links preserved, and durable edits across Table, Cards, List and
+Kanban. It verifies actual Kanban membership after a status save. Derived
+read-only presentation is inspected in all four layouts; negative pointer/Enter
+attempts are exercised in Table, not all four layouts.
+
+The C1 summary scenario selects one shared custom definition through four
+independent references across two views/properties. Blank/colliding rename guards
+preserve source, and rename/delete update all four references while preserving
+unrelated custom and built-in selections. Final note/registry byte and Base
+configuration oracles, six fresh-process source/configuration checks, and both
+normal quits pass. This does not claim every Base formatting byte was authored
+independently in advance.
+
+Both app cleanup receipts report already exited, code 0, null signal and no
+leaked children. Before/after provenance matches; an independent audit verifies
+837 frozen Git blobs, 333 frontend-002 hashes and all six final physical sources
+against the recorded restart checks.
+
+Report: `/private/tmp/zorid-bases-properties-20261026-001/result.json`.
+SHA-256: `b026bcc4878e6cd782f4cd55e0909c7318b71e6e2695681a05e49265e30b5b0c`.
+
+## Later safety attempt — row-count setup failure
+
+Safety session 87569 uses the same frozen source/frontend 002 and stops at
+**six actions and one check**. Its split-ready helper expects row count 3. The
+visible fixture has a header, two result rows and a summary row; the frozen
+renderer counts that visible footer, implying count 4. That explanation is an
+inference from source and the screenshot/text, not a captured native row-count
+attribute. The readiness wait fails before any A-row click or note-body input.
+This does not exercise the subsequent conflict/recovery scenarios or establish
+a product failure from those scenarios.
+
+Owned cleanup reports `SIGTERM-cleanup`, code 0, null signal and no leaked
+children. Source/artifact provenance matches before and after; the independent
+837-Git-blob/333-frontend-file comparison also passes.
+
+Report: `/private/tmp/zorid-bases-safety-20261026-002/result.json`.
+SHA-256: `b38878531b3d0e29ee569be05cedc2203f3c2f459d319df90d2c449451e0e431`.
+
 ## Durable local archive
 
 To survive temporary-directory cleanup, completed evidence and native products
@@ -132,6 +185,19 @@ and hashes. These are local retained artifacts, not tracked project source.
 | `fresh-validation-001.tar.gz` | 19,910,416 | `43fbd8c1536e746c3ccaf904170199b0c00837e29cb377277db558e19adb0e88` |
 | `fresh-validation-001-manifest.json` | — | `ba222ae124e9efe34d351ef93dd61dfefa32e468e8c05d52648b1551bb4341c7` |
 | `independent-content-audit-001.json` | — | `ee424904c90dc5a9f68602564b8d339b0c03cd5dd7764a22de324630c15eb439` |
+
+Part 001 remains unchanged. A separate part 002 retains the completed
+Properties001/Safety002 reports, provenance, screenshots, owned fixture data,
+three launch/build logs and frontend-002 receipt. It contains **85 original
+regular files, 12,366,126 original-file bytes, plus an embedded snapshot
+manifest**. Both corresponding disposable Chromium profile directories are
+excluded, and the same original/member hash verification passes.
+
+| Additional local artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `fresh-validation-002.tar.gz` | 2,044,438 | `6db4614644f4eb138397ca347163bdee4578aa8660c8bfa505d940ce3d849baf` |
+| `fresh-validation-002-manifest.json` | — | `e59d0c522c9c85255d4c18267b72411e7598d9499a663e18dcf09218275bd529` |
+| `independent-content-audit-002.json` | — | `649b8c81c2ce87be8c03fc962b968c66c1c7ab38c84b13a61f842e2335ba5fa6` |
 
 Full archive directory:
 `/Users/ctk/Projects/Zorid/.worktrees/types-bases-model/tmp/bases-validation-20261026/`.
