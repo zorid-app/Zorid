@@ -9,6 +9,29 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Resume 2026-10-26: root isolated branch composes ordinary property physical
+source guard `b2ff6666` (reviewed originalff7750e7) and published table-history
+readiness `4453e584` (reviewed original641559da), plus historical reference006
+recordf4524757. Root63 focused tests pass0skip, including actual shared-buffer
+paste/history lifecycle, property guard/retries and registry reconciliation.
+Desktop build6367 and cached native/CLI rebuild both finish0; Rust remains
+07265b1d. Fresh receipts and preserved executables:
+`/private/tmp/zorid-bases-20261026-products-001/{frontend-receipt,native-receipt}.json`.
+Native SHA403cbeb8 and CLI8e4e61e4 match earlier products. No new Rust runtime
+changes or full-suite acceptance are claimed. Main stays clean e7d655e1.
+
+Most historical /private/tmp evidence, native copies and private normal-web/
+reference harnesses are no longer available after the interruption. Committed
+records remain historical. Do not reconstruct missing raw artifacts as observed
+facts. Current Obsidian is1.14.5; `bases_reference_resume` owns explicitly new
+bounded REA reference provenance and later capture recovery; no app launch grant.
+`bases_acceptance_audit` owns isolated reproducible normal-web harness authorship.
+Root owns the sole native app/build lane and begins the fresh safety campaign
+with original exact conflict/recovery assertions and reviewed freshness setup.
+No worker may launch an app/heavy build concurrently. Full completion and main
+integration remain pending.
+
+
 Latest root update: isolated `f10da606` composes independently reviewed split
 navigation `e852ff26` (original14663e60), registry physical saved-source Apply
 `29128ef6` (original8c216414), and top-level Null display `f10da606`

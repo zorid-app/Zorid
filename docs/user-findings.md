@@ -2,6 +2,16 @@
 
 ## Bases actual acceptance findings — 2026-10-22
 
+2026-10-26 resume: ordinary property physical-source guard is now composed at
+b2ff6666, preserving original saved baseline/capture through retry and refusing
+physical edits before new authorship. Historical7null first arose in delayed
+external CRDT reconciliation after an unguarded ordinary clear; it was not a
+Null display or YAML setter defect. Reviewed table history readiness4453e584
+adds passive public busy/version/focus waits before the original commands.
+The focused composed63 tests pass and desktop/native/CLI builds pass. Actual
+safety/heavy-user acceptance still needs rerun; no main integration claim.
+
+
 Latest actual safety012 on rootf10da606 FAILS44actions/6checks: after correct
 shared-body/history and genuine independent CLI B conflict, bulk clear saves A
 as `score: 7null` instead of Null. Original exact source/value oracles retained;
