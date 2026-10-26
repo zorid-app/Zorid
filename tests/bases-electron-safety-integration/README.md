@@ -87,6 +87,14 @@ may expose that loss. It is not waived or marked passed by these offline checks.
 C2 runtime acceptance is pending the scoped inline selection-restoration fix,
 matching artifacts and an explicit native runtime grant.
 
+The path-reuse fixture pins both complete sources independently: replacement
+`Replace.md` keeps score6 and its replacement body; `Retired/Original.md` keeps
+the original score3, properties and body. The campaign rechecks both after the
+single Escape, before and after the normal final save drain, through normal
+physical/logical restart readback, and after the final restarted quit. Later reads
+never become new expected baselines. These assertions add no Retry action and
+cannot clear, adopt or write either source to make the scenario pass.
+
 ## Boundaries still open
 
 - The scoped post-prepare checkpoint-access failure below is the only I/O fault

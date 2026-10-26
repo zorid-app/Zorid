@@ -210,10 +210,23 @@ export function pathReuseScalarFrame(document, selector) {
     inputFocused:!!input&&active===input,active:{tag:active?.tagName??null,label:active?.getAttribute('aria-label')??null}};
 }
 
+// Exact negative-fixture sources, independent of later reads or save results.
+const pathReuseSources = Object.freeze({
+  'Replace.md': '---\nkind: replacement\nscore: 6\nuntouched: replacement\n---\nReplacement identity body 😀\n',
+  'Retired/Original.md': '---\nkind: replacement\nscore: 3\nuntouched: keep\n---\n# Original actor\n',
+});
+async function checkProtectedPathReuseSources(c, name) {
+  for (const [file, expected] of Object.entries(pathReuseSources)) {
+    const source = await c.read(file); assert.equal(source, expected, 'The cancelled scalar edit cannot write either path-reuse source');
+    c.evidence.checks.push({name: name + '-' + file, file, sha256: sourceDigest(source), source, scope: 'Exact physical bytes; no save or logical-state adoption.'});
+  }
+}
+
 async function pathReuseAndClose(c) {
   await open(c, 'Replacement.base');
   await c.ui.click(c.ui.cell('Replace.md', 'note.score'), {count: 2}); await c.ui.type(`${c.ui.cell('Replace.md', 'note.score')} input`, '8');
-  const old = await c.read('Replace.md'), replacement = '---\nkind: replacement\nscore: 6\nuntouched: replacement\n---\nReplacement identity body 😀\n';
+  const old = await c.read('Replace.md'), replacement = pathReuseSources['Replace.md'];
+  assert.equal(old, pathReuseSources['Retired/Original.md'], 'Original actor begins with the independently authored score3 source');
   await fs.mkdir(owned(c, 'Retired'), {recursive: true}); await fs.rename(owned(c, 'Replace.md'), owned(c, 'Retired/Original.md')); await fs.writeFile(owned(c, 'Replace.md'), replacement);
   c.evidence.actions.push({action: 'external-path-reuse-fixture', from: 'Replace.md', preservedAt: 'Retired/Original.md', replacement, at: Date.now()});
   await delay(1200); await c.ui.key('Enter'); await message(c, '/stale|changed|replaced|conflict/i', active);
@@ -225,6 +238,7 @@ async function pathReuseAndClose(c) {
   c.evidence.actions.push({action:'path-reuse-scalar-focus',phase:'before-single-Escape',frame:retained,at:Date.now()});
   await c.screenshot('s05-path-reuse-retained-draft'); await c.ui.key('Escape');
   await c.ui.wait(`const cell=document.querySelector(${JSON.stringify(c.ui.cell('Replace.md','note.score'))});return cell&&!cell.hasAttribute('data-base-editing')&&!cell.querySelector('input');`, 'Single Escape closes the rejected scalar draft');
+  await checkProtectedPathReuseSources(c, 'path-reuse-after-single-Escape');
   await open(c, 'Safety.base');
   const before = await c.read('Properties.yaml'); await propertySettings(c);
   const label = field('Option label', dialog('Property settings') + ' .bases-property-option-row:nth-child(1)');
@@ -568,7 +582,10 @@ export async function journey(c) {
   const durable = new Map();
   for (const file of ['A.md', 'B.md', 'Safety.base', 'Properties.yaml', 'Named.base', 'Named host.md', 'Scalar A.md', 'List A.md', 'Date A.md', 'Link A.md', 'To/Move.md', 'Shelves/Dirty moved.base', 'Shelves/Other.base']) durable.set(file, await c.read(file));
   for(const file of [...mountedRenameFixtures().keys(),...publicationFixtures().keys(),newInline.file])durable.set(file,await c.read(file));
+  await checkProtectedPathReuseSources(c, 'path-reuse-before-final-drain');
+  for (const [file, expected] of Object.entries(pathReuseSources)) durable.set(file, expected);
   await c.quit('safety-normal-quit-with-settled-recovery');
+  await checkProtectedPathReuseSources(c, 'path-reuse-after-final-drain');
   await c.launch('safety-restart-and-binding-readback');
   await c.ui.openFile('Named host.md'); await waitNote(c, 'Named host');
   await c.ui.wait(`return document.querySelectorAll('.pane.is-active .bases-embed .bases-session').length>=2&&document.querySelector('.pane.is-active .bases-embed .bases-session [role="grid"]')?.getAttribute('aria-label')==='Renamed view';`, 'Named fragments mount after normal restart');
@@ -583,4 +600,5 @@ export async function journey(c) {
   await showPublicationHover(c,hoverPublication.to);await c.ui.openFile('A.md');await c.ui.wait(`return !document.querySelector(${JSON.stringify(hoverSurface)});`,'Restart Hover closes normally');
   await openEmbeddedNote(c,newInline.file,`.pane.is-active .bases-embed[data-base-source=${JSON.stringify(newInline.file)}]`,newPublication.to);
   await c.screenshot('s09-safety-restart-and-named-embeds'); await c.diskGuard(); await c.quit('safety-final-normal-quit');
+  await checkProtectedPathReuseSources(c, 'path-reuse-after-restart-final-drain');
 }
