@@ -9,6 +9,24 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Current root update: reviewed enhanced-summary explicit Tab commit78cc48f9
+composes a8086315; root19 relevant tests PASS0skip, independent30/30 approved.
+Desktop003/5716 PASS inclTypeScript, receipt
+`/private/tmp/zorid-bases-20261026-products-001/frontend-receipt-003.json`.
+Reviewed reproducible normal-web harness3478b100 composesb9a60f39, actualruntime
+pending. Root now owns the sole app lane for fresh Recovery002; no other app or
+heavy build is running/authorized.
+
+Actual Properties001/22470 PASSES188actions/65checks, all four layouts and C1
+shared summaries, exact sources and restart on9e589589/frontend002/native403.
+It precedes the enhanced-summary Tab fix; no full heavy/safety/recovery acceptance
+claim. Safety002/87569 FAILS6actions/1check in setup: expected grid rowcount3
+omitted actual summary footer (two records+header+footer=4). NoAinput occurs;
+clean SIGTERM0/no leaks/freeze true. bases_safety_setup owns correction plus real
+renderer regression; original synthetically constructed test missed the footer.
+The independent product navigation fix remains valid and separately tested.
+
+
 Latest 2026-10-26: CLI99317 PASSES125commands/17checks, browser30342 PASSES
 19groups/162typedexpectations/16Q3diagnostics on currentRust07265/core products.
 Fresh reports are archived under ignored local
