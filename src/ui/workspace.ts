@@ -2356,9 +2356,13 @@ export class Workspace {
     if(vault!==this.vault||generation!==this.vaultGeneration||intent!==this.sidebarBaseIntent)return;
     if(this.treeEntryToken(path)!==token)throw new Error('The selected sidebar Base changed before opening.');
     const host=el('div','sidebar-base-host');
-    const validate=()=>{if(vault!==this.vault||generation!==this.vaultGeneration||!token||this.treeEntryToken(path)!==token||intent!==this.sidebarBaseIntent)throw new Error('The sidebar Base changed.');};
+    // New selection intents choose the next mount; the current session still
+    // owns its accepted work while close drains it. Retire that authority only
+    // when the actual mounted session changes, keeping file/vault guards live.
+    let session:BaseSession|undefined;
+    const validate=()=>{if(vault!==this.vault||generation!==this.vaultGeneration||!token||this.treeEntryToken(path)!==token||(session?this.sidebarBase?.session!==session:intent!==this.sidebarBaseIntent))throw new Error('The sidebar Base changed.');};
     const context=this.current()?.path??path;
-    const session=this.createWorkspaceBaseSession(host,path,()=>this.activePane,validate,context);
+    session=this.createWorkspaceBaseSession(host,path,()=>this.activePane,validate,context);
     this.sidebarBase={path,session,host,context};this.sidebarBasePath=path;if(options.activate!==false)this.rightTab='base';if(options.reveal!==false)this.root.classList.remove('right-hidden');this.renderRight();await session.ready;if(options.persist!==false)this.saveSession();
   }
 
@@ -2374,7 +2378,7 @@ export class Workspace {
   private renderRight():void{
     this.clearDocumentBacklinks();
     if(!this.vault||!this.activePane)return;
-    if(this.rightTab==='base'&&this.sidebarBase){const saved=this.sidebarBase;if(!this.rightContent.contains(saved.host))this.rightContent.replaceChildren(saved.host);const context=this.current()?.path??saved.path;if(context!==saved.context){saved.context=context;void saved.session.setCurrentFile(context).catch(error=>notice(error instanceof Error?error.message:String(error)));}return;}
+    if(this.rightTab==='base'&&this.sidebarBase){const saved=this.sidebarBase;if(!this.rightContent.contains(saved.host))this.rightContent.replaceChildren(saved.host);const context=this.current()?.path??saved.path;if(context!==saved.context&&!saved.closing){saved.context=context;void saved.session.setCurrentFile(context).catch(error=>notice(error instanceof Error?error.message:String(error)));}return;}
     this.rightContent.replaceChildren();delete this.rightContent.dataset.metadataStatus;const path=this.current()?.path;
     if(this.rightTab==='backlinks'){
       if(this.vault.adapter.documentSemantics){
