@@ -22,18 +22,22 @@ const retryDelays=[1_000,3_000,10_000,30_000] as const;
 export function mountImportStatus(host:HTMLElement,options:ImportStatusOptions):ImportStatusView {
   let status=options.status,entryCount=options.entryCount,busy=false,destroyed=false,attempts=0;
   let timer:ReturnType<typeof setTimeout>|null=null;
-  let progress=status?{scanId:status.scanId,observed:status.observed,scanComplete:status.scanComplete}:null;
-  const observeProgress=(next:DesktopReconciliation|null)=>{
+  let progress=status?{scanId:status.scanId,observed:status.observed,scanComplete:status.scanComplete,entryCount}:null;
+  const observeProgress=(next:DesktopReconciliation|null,count:number)=>{
     if(!next){progress=null;return false;}
     if(!progress||next.scanId!==progress.scanId){
-      progress={scanId:next.scanId,observed:next.observed,scanComplete:next.scanComplete};
+      progress={scanId:next.scanId,observed:next.observed,scanComplete:next.scanComplete,entryCount:count};
       return false;
     }
-    const advanced=next.observed>progress.observed||(!progress.scanComplete&&next.scanComplete);
+    // Discovery can finish before the durable namespace is fully admitted.
+    // Count only a new inventory high water mark within this same scan; the
+    // report's imported counter is per-call and duplicate reports can repeat it.
+    const advanced=next.observed>progress.observed||(!progress.scanComplete&&next.scanComplete)||count>progress.entryCount;
     // Remember high-water marks, so regressing/duplicate notifications cannot
     // manufacture progress. A new scan establishes a baseline, never progress.
     progress.observed=Math.max(progress.observed,next.observed);
     progress.scanComplete ||= next.scanComplete;
+    progress.entryCount=Math.max(progress.entryCount,count);
     return advanced;
   };
   const element=el('section','import-status');element.setAttribute('aria-label','Notes availability');
@@ -83,7 +87,7 @@ export function mountImportStatus(host:HTMLElement,options:ImportStatusOptions):
     element,
     update(next,count){
       if(destroyed)return;
-      const wasComplete=complete(),advanced=observeProgress(next);status=next;entryCount=count;
+      const wasComplete=complete(),advanced=observeProgress(next,count);status=next;entryCount=count;
       if(complete())cancelTimer();
       else if(wasComplete||advanced){attempts=0;schedule();}
       refresh();

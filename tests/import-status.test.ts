@@ -124,6 +124,34 @@ test('large vault progress continues beyond four pages with at least a one-secon
   }finally{f.close();}
 });
 
+test('completed physical scan keeps importing durable pages beyond four retries, then bounds a real stall',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const f=setup();try{
+    let calls=0,count=163;
+    const status=()=>report({observed:1025,scanComplete:true,finished:true,imported:151});
+    const view=mountImportStatus(f.host,{status:status(),entryCount:count,retry:async()=>{
+      calls++;
+      // The scan counters stay fixed, and the per-call import counter repeats.
+      // Workspace publishes status before reloading its durable inventory.
+      view.update(status(),count);
+      if(calls<=7)count+=100;
+      view.update(status(),count);
+    }});
+    for(let page=1;page<=7;page++){
+      t.mock.timers.tick(999);assert.equal(calls,page-1);
+      t.mock.timers.tick(1);await settle();assert.equal(calls,page);
+      assert.equal(view.element.hidden,true);
+    }
+    // Counts falling and returning to their high water mark are not new work.
+    view.update(status(),count-1);view.update(status(),count);
+    for(const delay of delays){t.mock.timers.tick(delay);await settle();}
+    assert.equal(calls,11);assert.equal(view.element.dataset.state,'incomplete');
+    t.mock.timers.tick(1_000_000);await settle();assert.equal(calls,11);
+    view.element.querySelector('button')!.click();await settle();assert.equal(calls,12);
+    view.update(completed(),count);t.mock.timers.tick(1_000_000);assert.equal(calls,12);view.destroy();
+  }finally{f.close();}
+});
+
 test('new scan identities, first reports and per-call counters do not replenish stalled retries',async t=>{
   t.mock.timers.enable({apis:['setTimeout']});
   const f=setup();try{
