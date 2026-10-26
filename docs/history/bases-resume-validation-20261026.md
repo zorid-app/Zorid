@@ -1,10 +1,10 @@
 # Bases resume validation — 2026-10-26
 
-Fresh CLI and browser/WASM campaigns pass. Native safety and recovery remain
-incomplete: the safety run stops during split setup, and recovery stops while
-resubmitting a retained newer summary draft. Neither failed native run establishes
-full acceptance. A subsequent rich-property campaign passes on frontend 002, as
-recorded separately below. This record describes completed runs, not later fixes.
+Fresh CLI and browser/WASM campaigns pass. The first native safety and recovery
+runs fail; subsequent rich-property and full three-protocol recovery campaigns
+pass on their separately identified sources below. Safety remains incomplete.
+This record preserves the earlier failures and describes completed runs, not
+later fixes or whole-feature acceptance.
 
 ## Initial source and build identity
 
@@ -163,6 +163,44 @@ children. Source/artifact provenance matches before and after; the independent
 Report: `/private/tmp/zorid-bases-safety-20261026-002/result.json`.
 SHA-256: `b38878531b3d0e29ee569be05cedc2203f3c2f459d319df90d2c449451e0e431`.
 
+## Later native recovery — all three authored protocols pass
+
+Recovery session 42961 passes **36 actions and 36 checks**, including all three
+authored recovery protocols, on frozen source
+`16cd01e57402fd0cac4751d4c3dd5623dd6cc92b`. Frontend 003 was built at
+`a8086315dbe95e26a6cbaea935ba2e1f38f93a0a`; intervening additions are checkpoint
+documentation and the normal-web test harness, without product frontend changes.
+Its receipt, `frontend-receipt-003.json`, has SHA-256
+`44b4c0d1a2abf5f0df620601d6a1d1bde9bef465a64e82d1fd673f5bba6b70a3`.
+The native host/Rust tree remain unchanged. The associated composed summary
+recovery tests also pass **19 tests, zero failures and zero skips**.
+
+- The genuine checkpoint-access failure retains newer B; one original retry
+  automatically continues the exact B source. Whole-source/unrelated-file and
+  fresh-process readback checks pass, as in the first protocol of Recovery001.
+- The held committed-A acknowledgement, newer B and close request retain B.
+  After A is released, the explicit close-guard retry path uses ordinary
+  focus/Tab to save the exact B source; a later close retry occurs only after
+  durable acknowledgement. The relay records exactly two preparations and
+  successful commits for the exact A/B bodies. A fresh process reads B back.
+  This exercises the conservative retry route, not an automatic-B-close claim.
+- The genuine create acknowledgement is deliberately dropped after the native
+  commit. The test explicitly interrupts its owned app, then starts a fresh
+  process and verifies the original create receipt replay, the same file
+  identity and one exact full-template copy. It does not claim same-mounted
+  transport reconnection, arbitrary crash or power-loss recovery.
+
+Five app lifecycles finish through normal quits with code 0, null signal and no
+leaked children. The one intentional lost-reply negative fixture uses
+`SIGKILL-cleanup`, null exit code and signal `SIGKILL`, with no leaked children;
+it is not counted as a normal quit. Before/after source/artifact provenance is
+identical. Independent retained-file checks match 837 frozen Git blobs, all
+333 frontend-003 hashes and the last saved source for each of eight physical
+fixture files. These results do not relabel the earlier failed Recovery001 run.
+
+Report: `/private/tmp/zorid-bases-recovery-20261026-002/result.json`.
+SHA-256: `362a06deb7f6ef3c150e98946258f134850fea1f80be4c37bae83933c024e74c`.
+
 ## Durable local archive
 
 To survive temporary-directory cleanup, completed evidence and native products
@@ -199,7 +237,20 @@ excluded, and the same original/member hash verification passes.
 | `fresh-validation-002-manifest.json` | — | `e59d0c522c9c85255d4c18267b72411e7598d9499a663e18dcf09218275bd529` |
 | `independent-content-audit-002.json` | — | `649b8c81c2ce87be8c03fc962b968c66c1c7ab38c84b13a61f842e2335ba5fa6` |
 
+Part 003 separately retains completed Recovery002 evidence, the frontend-003
+receipt and three launch/build/focused-test logs: **26 original regular files,
+2,703,629 original-file bytes, plus an embedded snapshot manifest**. The owned
+Chromium profile is excluded. All original/member hashes verify, and both earlier
+archive parts and their manifests remain unchanged.
+
+| Additional local artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `fresh-validation-003.tar.gz` | 759,858 | `180a260d7ef2f69a6e2563460434d299f2043a7e88bf8e8d51ff4e5adf30b99d` |
+| `fresh-validation-003-manifest.json` | — | `021f39d1b96039871840f40305784641c0a9fe8c6c4e877883662031878fecd6` |
+| `independent-content-audit-003.json` | — | `dc6943b6ae3b9cc6c2a1fa3ce954148e3d30cf4e72a338c3990e659916d77f5b` |
+
 Full archive directory:
 `/Users/ctk/Projects/Zorid/.worktrees/types-bases-model/tmp/bases-validation-20261026/`.
-Full native safety/recovery, heavy-user, visual/reference, normal-web and final
-integration acceptance remain separate. No main merge or completion is claimed.
+Full native safety, heavy-user, visual/reference, normal-web and final integration
+acceptance remain separate. The passing recovery result covers its three authored
+protocols only. No main merge or completion is claimed.
