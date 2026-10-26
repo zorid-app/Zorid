@@ -18,6 +18,7 @@ node tests/bases-electron-layouts-integration/run.mjs \
   --native /absolute/matched/zorid-desktop-host \
   --electron /absolute/Electron.app/Contents/MacOS/Electron \
   --out /private/tmp/zorid-bases-layouts-UNIQUE \
+  --show-window --cua-native-context-menus \
   --ready bases-native-and-frontend-frozen
 ```
 
@@ -27,7 +28,37 @@ pointer input and keyboard input. DOM evaluation only reads/locates controls,
 state, accessible names and the owned profile's persisted recovery/session data.
 Real Chromium dragstart supplies `Input.dragIntercepted` data; the campaign never
 fabricates DataTransfer contents or calls controller/workspace APIs to make a
-positive operation happen.
+positive operation happen. File context menus use the actual Electron native
+menu, so they are handled by the explicit mixed CDP/CUA mode below.
+
+The native menu flag is admitted only for this exact canonical Layouts campaign,
+with the owned window shown. It creates five separate private
+`native-context-menu-cua-NNNN-UUID/ready.json` rendezvous and emits
+`CUA_NATIVE_CONTEXT_MENU_READY`. Each fresh nonce binds the current exact owned
+app PID, executable/profile, one freshly observed visible native window and
+renderer, mounted layout and Base tab to an authored request. The request's
+`expectedLabels` are expectations, never observations of the native menu.
+
+For every checkpoint, the coordinator must use CUA to inspect the actual owned
+native AX menu, assert its exact labels and order, and retain the actual AX
+read/screenshot and native input receipt separately. The first, fourth and fifth
+menus must show `Open in new tab`, `Bookmark`, `Version history`, `Rename…`,
+`Move to trash`, then receive a real click on `Open in new tab`. The second has
+the same ordered labels and receives a real `Bookmark` click. The third must
+replace only `Bookmark` with `Remove bookmark` and receive actual Escape.
+The requested files remain Alpha, Alpha, Alpha, Beta and Gamma respectively.
+
+Only after the actual AX assertion and native input, write the advertised
+`{"token":"EXACT_FRESH_NONCE","action":"continue"}` to that checkpoint's
+`continueFile`. No observed labels, selected command, value or product result is
+accepted in this signal. Each checkpoint has a five-minute deadline, rejects
+stale nonces, aliases and changed ready files, and cannot issue input. Existing
+exact new-tab identity, persisted bookmark, source, restart and cleanup oracles
+remain mandatory after continuing. A runner pass alone does not establish the
+native labels/order assertion; final acceptance also requires those five actual
+CUA AX/input receipts. This is mixed CDP/CUA execution, not default-CDP or
+hardware-input acceptance. No renderer menu fallback or production override is
+used. Without the explicit mode, the campaign fails before launching an app.
 
 Live insertion can move a target element before release. Those cases use
 `dropAtLast()` to release at the last successfully acknowledged drag-over point;

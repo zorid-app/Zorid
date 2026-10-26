@@ -11,6 +11,7 @@ import {createRequire} from 'node:module';
 import {CDP,delay,until} from '../tasks-electron-integration/cdp.mjs';
 import {UI} from './ui.mjs';
 import {waitForNativeSelectCua,assertSingleCuaProcess,nativeSelectCuaMode,nativeSelectCuaRequest} from './native-select-checkpoint.mjs';
+import {nativeContextMenuMode,nativeContextMenuRequest,NATIVE_MENU_CASES,waitForNativeContextMenuCua} from './native-context-menu-checkpoint.mjs';
 import {fixtureFiles,template} from './fixtures.mjs';
 import {journey} from './journey.mjs';
 import {CAMPAIGN_DIRECTORIES,validateFixtureName,readFixture,writeFixture,campaignClosure} from './owned-fixtures.mjs';
@@ -38,6 +39,7 @@ const campaign=campaignPath?await import(pathToFileURL(campaignPath).href):undef
 if(campaign)assert.ok(typeof campaign.fixtureFiles==='function'&&typeof campaign.journey==='function','Explicit supplemental campaign exports');
 const cuaMode=nativeSelectCuaMode(process.argv,{windowMode:requestedWindowMode,bootstrap:windowBootstrapProbe,campaignPath,minimalCampaignPath:path.join(path.dirname(harness),'bases-electron-native-select-integration/campaign.mjs'),allowedCampaignPaths:CAMPAIGN_DIRECTORIES.map(name=>path.join(path.dirname(harness),name,'campaign.mjs'))});
 const cuaNativeSelect=!!cuaMode;
+const cuaNativeContextMenus=nativeContextMenuMode(process.argv.slice(2),{windowMode:requestedWindowMode,bootstrap:windowBootstrapProbe,campaignPath,layoutsCampaignPath:path.join(path.dirname(harness),'bases-electron-layouts-integration/campaign.mjs')});
 const externalCliArtifact=await admitExternalCli({argv:process.argv.slice(2),campaignPath,safetyCampaignPath:path.join(path.dirname(harness),'bases-electron-safety-integration/campaign.mjs')});
 if(campaign?.createNativeRelay)assertRelayCampaign(campaignPath,path.dirname(harness));
 const vaultName=campaign?.vaultName??'vault';assert.match(vaultName,/^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$/,'Owned fixture vault basename');
@@ -56,6 +58,23 @@ async function provenance(){if(externalCliArtifact)await assertExternalCli(exter
 const processes=()=>execFileSync('ps',['-ww','-axo','pid=,ppid=,command='],{encoding:'utf8'}).split('\n').map(line=>{const m=line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);return m?{pid:Number(m[1]),parent:Number(m[2]),command:m[3]}:null;}).filter(Boolean);
 let child,cdp,browserCDP,ui,record,before,failure,relay,relayExecutable,relayIdentity,relayFiles=[],externalCliConflicts;
 const natives=new Map();let cuaCheckpointCount=0;
+let nativeMenuCheckpointCount=0;
+async function nativeContextMenu(caseId){
+  assert.ok(cuaNativeContextMenus&&child&&!exited(),'Explicit owned native context menu mode required');
+  assert.equal(caseId,NATIVE_MENU_CASES[nativeMenuCheckpointCount],'Original five menu operations retain their exact order');
+  const request=nativeContextMenuRequest(caseId),owned=assertSingleCuaProcess(processes(),electron,child.pid);
+  assert.ok(owned?.command.startsWith(electron+' ')&&owned.command.includes(path.join(root,'desktop/main.cjs'))&&(owned.command.includes('--user-data-dir='+profile+' ')||owned.command.endsWith('--user-data-dir='+profile)),'Exact owned Electron command and profile');
+  assert.equal(record.visibility?.mode,'visible');
+  const native=assertNativeWindowVisible(appKit('observe'),child.pid);
+  const document=assertRendererVisible(await ui.dom('return {visibilityState:document.visibilityState,hidden:document.hidden,hasFocus:document.hasFocus()};'));
+  const frame=await ui.dom(`const pane=document.querySelector('.pane.is-active'),base=pane?.querySelector('.bases-session');return {paneId:pane?.dataset.paneId,tabId:pane?.querySelector('.tab.is-active')?.dataset.tabId,view:base?.querySelector('button[aria-label="Views"]')?.textContent,updating:base?.getAttribute('data-base-controller-updating'),error:base?.getAttribute('data-base-controller-error'),busy:base?.querySelector('.bases-session-content')?.getAttribute('aria-busy')};`);
+  assert.equal(frame.view,request.layout,'The requested ordinary layout is still mounted');assert.equal(frame.updating,'false');assert.equal(frame.error,'false');assert.equal(frame.busy,'false');assert.ok(frame.tabId,'Exact retained Base tab identity required');
+  const identity={pid:child.pid,executable:electron,command:owned.command,profile,root,visibility:{native,document},frame,windowIds:native.windows.filter(window=>window.ownerPID===child.pid&&window.layer===0&&window.onscreen).map(window=>window.windowNumber)};
+  assert.equal(identity.windowIds.length,1,'Native menu checkpoint identifies exactly one owned main window');
+  const checkpointNumber=nativeMenuCheckpointCount+1,directory=path.join(out,`native-context-menu-cua-${String(checkpointNumber).padStart(4,'0')}-${randomUUID()}`);
+  await waitForNativeContextMenuCua({directory,identity,request,evidence,isAlive:()=>!exited(),onReady:ready=>console.log(JSON.stringify({kind:'CUA_NATIVE_CONTEXT_MENU_READY',checkpointNumber,...ready}))});
+  nativeMenuCheckpointCount++;
+}
 async function nativeSelectInput(request){
   assert.ok(cuaNativeSelect&&(cuaMode!=='minimal'||cuaCheckpointCount===0)&&child&&!exited(),'Owned CUA checkpoint with single use in minimal mode');
   const checkpointNumber=++cuaCheckpointCount;
@@ -177,7 +196,8 @@ try{
   evidence.fixtureManifest=await tree(vault);
   if(externalCliArtifact){const env={...process.env,ZORID_LOCAL_DATA_DIR:path.join(sandbox,'app-data')};for(const key of ['DISPLAY','ZORID_IPC_ENDPOINT','ZORID_DESKTOP_ENDPOINT','ZORID_FIXTURE_VAULT','ZORID_FIXTURE_CLIENT_ID'])delete env[key];externalCliConflicts=await createExternalCliConflicts({artifact:externalCliArtifact,vault,outputDirectory:out,evidence,env});}
   if(windowBootstrapProbe){await launch('owned-visible-window-bootstrap');await screenshot('owned-visible-window-bootstrap');await quit('owned-window-bootstrap-normal-quit');}
-  else await (campaign?.journey??journey)({get ui(){return ui;},get cdp(){return cdp;},vault,yaml,template:campaign?(campaign.template??''):template,evidence,outputDirectory:out,...(externalCliConflicts?{externalCliConflicts}:{}),...(relay?{relay:Object.freeze({arm:input=>relay.arm(input),release:token=>relay.release(token),events:()=>relay.events()}),forceShutdown}:{}),launch,quit,read,saved,frontmatter,screenshot,external,diskGuard,prepareDownloads});
+  else await (campaign?.journey??journey)({get ui(){return ui;},get cdp(){return cdp;},vault,yaml,template:campaign?(campaign.template??''):template,evidence,outputDirectory:out,...(cuaNativeContextMenus?{nativeContextMenu}:{}),...(externalCliConflicts?{externalCliConflicts}:{}),...(relay?{relay:Object.freeze({arm:input=>relay.arm(input),release:token=>relay.release(token),events:()=>relay.events()}),forceShutdown}:{}),launch,quit,read,saved,frontmatter,screenshot,external,diskGuard,prepareDownloads});
+  if(cuaNativeContextMenus)assert.equal(nativeMenuCheckpointCount,NATIVE_MENU_CASES.length,'All five original native menus must reach their CUA checkpoint');
   const after=await provenance();await fs.writeFile(path.join(out,'provenance-after.json'),JSON.stringify(after,null,2));assert.deepEqual(after,before,'Exact source/artifact freeze survived journey');evidence.provenanceVerified=true;evidence.status='passed';
 }catch(error){failure=error;evidence.status='failed';evidence.failure={message:error.message,stack:error.stack};if(cdp)try{evidence.failureDOM=await ui.dom(`
   const active=document.activeElement,cell=active?.closest('[data-path][data-property]');

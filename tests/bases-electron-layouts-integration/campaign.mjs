@@ -41,8 +41,9 @@ function orderConfiguration(c, source, viewName, order) { const expected = c.yam
 async function savedOrder(c, original, order, label) { const expected = orderConfiguration(c, original, 'Board', order); return c.saved('Layouts.base', source => assert.deepEqual(c.yaml.parse(source), expected), label); }
 
 export async function journey(c) {
+  assert.equal(typeof c.nativeContextMenu,'function','Layouts requires the explicit visible native context menu CUA mode');
   c.evidence.layoutCases = [];
-  c.evidence.layoutScope = {unresolved: []};
+  c.evidence.layoutScope = {unresolved: [],nativeMenuAcceptance:'Five mixed CDP/CUA checkpoints require separate actual native AX labels/order and input receipts. Runner continuation alone establishes no native menu observation.'};
   c.evidence.limitations.push('Source-authored supplemental campaign; its executed case list and retained result determine actual acceptance.', 'Native drag payloads are captured from Chromium; no receiving external application or OS Finder drag is exercised.', 'Formula-derived groups test per-column read-only behavior; typed/null/folder grouping belongs to the separate session campaign.', 'Matched Obsidian font/height pixel parity and rich property edits are outside these case assertions.', 'Hover physical-key-after-entry and physical key-release behavior are Zorid-only checks: the corresponding reference protocol phase did not reach a terminal assertion.');
   const expected = await bytes(c);
   await c.launch('supplemental-layout-interactions');
@@ -79,14 +80,15 @@ export async function journey(c) {
     for (const [name, kind, note] of [['Grouped cards', 'cards', 'Alpha'], ['Grouped list', 'list', 'Beta'], ['Board', 'kanban', 'Gamma']]) {
       await choose(c, name); const retained = await baseTab(c), target = kind === 'list' ? `${row(kind, note)} a.internal-link` : row(kind, note);
       await c.ui.click(target, {button: 'right'});
-      const labels = await c.ui.wait(`const menus=[...document.querySelectorAll('.context-menu')].filter(e=>e.getClientRects().length);return menus.length===1?[...menus[0].querySelectorAll('.context-menu-item')].map(e=>e.textContent.trim()):false;`, 'Actual file context menu');
-      assert.deepEqual(labels, ['Open in new tab', 'Bookmark', 'Version history', 'Rename…', 'Move to trash']);
-      const before = await tabs(c); await newTabOracle(c, before, note, () => c.ui.button('Open in new tab', '.context-menu'));
+      // File menus use Electron's native menu, outside renderer DOM. The CUA
+      // checkpoint requires separate actual AX labels/order and native input;
+      // its control-flow signal cannot stand in for the product result below.
+      const before = await tabs(c); await newTabOracle(c, before, note, () => c.nativeContextMenu(kind+'-open'));
       await selectTab(c, retained); await c.ui.idle();
       if (kind === 'cards') {
-        await c.ui.click(target, {button: 'right'}); await c.ui.button('Bookmark', '.context-menu');
+        await c.ui.click(target, {button: 'right'}); await c.nativeContextMenu('cards-bookmark');
         await c.ui.wait(`return Object.entries(localStorage).some(([key,raw])=>key.startsWith('zorid:workspace:')&&JSON.parse(raw).bookmarks?.includes('Items/Alpha.md'));`, 'Bookmark persisted by normal UI action');
-        await c.ui.click(target, {button: 'right'}); await c.ui.wait(`return [...document.querySelectorAll('.context-menu-item')].some(e=>e.textContent.trim()==='Remove bookmark');`, 'Context action reflects bookmark'); await c.ui.key('Escape');
+        await c.ui.click(target, {button: 'right'}); await c.nativeContextMenu('cards-bookmark-state');
       }
     }
     await noMutation(c, expected, 'Context opening/bookmarking does not modify vault files');
