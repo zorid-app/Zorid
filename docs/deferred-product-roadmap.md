@@ -2,12 +2,54 @@
 
 ## Execution checkpoint — shared-core coordinator
 
-Current as of2026-10-22. Read this summary first; dated execution evidence below
+Current as of2026-10-26. Read this summary first; dated execution evidence below
 is historical where it conflicts with this checkpoint. The maintained stage
 sequence is in [roadmap.md](roadmap.md); S1 scope is in
 [plans/indexing-search.md](plans/indexing-search.md).
 
 ### Latest execution update
+
+Current coordinator state: root92887ca4 composes reviewed filter advice76bcf6db
+as43b21f6f, reviewed public filter-close acknowledgement4da3a735 ascf00a2a2,
+and reviewed definitive saved-source changed-message931280fa as92887ca4.
+Root21 advice tests and10 close/message tests PASS0skip. Desktop005/1538 PASS
+inclTypeScript, producer43b21f6f; later changes are test/docs plus desktop preload
+message handling, not renderer source. Receipt
+`/private/tmp/zorid-bases-20261026-products-001/frontend-receipt-005.json`.
+Native/CLI remain403cbeb8/8e4e61e4, Rust07265 unchanged. Mainclean e7d655e1.
+
+Recovery002/42961 PASSES36actions/36checks/all3protocols, five normal quits plus
+one intentional lost-create SIGKILL interruption, no leaked children/freezeTRUE.
+Properties001 PASSES188/65 before the final summary-Tab/filter-advice changes.
+CLI125/17 and browser19groups/162typed expectations PASS. Durable factual history
+[and archive manifests](history/bases-resume-validation-20261026.md) preserve
+all results/limits. Parts001–004 are under ignored local tmp; preserve them
+before retiring this implementation worktree.
+
+Safety003/73430 FAILS107actions/22checks: first FOUR scenario statuses pass,
+then actor path-reuse error feedback does not match accessible changed-file
+message. Both replacement6 and retiredoriginal3 physical bytes are exact; input8
+remains visibly retained. Generic host error code was NOT captured; inode/native
+source diagnosis is separately labelled inference. New preload message fix is
+reviewed/tested but needs actual rerun. Fresh partial-clear acceptance follows
+normal restart/freshness; it is NOT exact native replay of the earlier stale9/
+physical7/late-import7null race. That source guard has separate causal tests.
+
+Filter002/58096 FAILS315actions/99checks after15Stringcases and list-exact
+remove/re-add checks; close-key pending-ack phase is a tested causal model,
+not captured002internalstate. Fresh advice+close readiness need native65-case
+acceptance. Normalweb002/8977 reaches actual Workspace but fails all5phases
+unexecuted because uncorrelated favicon404 was classed as a runtime error;
+module-loading failure is gone. A strict correlated ambient-error/fatal-wait
+TEST-only successor is under review; no retroactive pass or asset substitution.
+
+Current Obsidian1.14.5 bootstrap001/30590 stopsPREINPUT on an unsupported
+page-title version guard,0phases/0inputs. Owned cleanup/real-user socket identity
+monitor pass; actual owned private-socket lsof gate was unexecuted. Successor
+source records target metadata plus exact loaded script identity before any
+input. No full13/visual reference runtime acceptance or concurrent app grant.
+Root starts fresh Safety004 next; workers remain source-only in isolated trees.
+
 
 Current root update: reviewed enhanced-summary explicit Tab commit78cc48f9
 composes a8086315; root19 relevant tests PASS0skip, independent30/30 approved.
