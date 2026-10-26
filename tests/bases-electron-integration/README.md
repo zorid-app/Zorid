@@ -9,6 +9,16 @@ cancellation and Tab navigation.
 Explicit synthetic typed Bases/plain ClipboardEvents go to the production paste
 handler. No production data/controller APIs mutate positive state.
 
+The reverse-relation oracle inventories every saved Markdown file, including the
+literal `Templates/Book.md`. Library's own template-folder filter does not exclude
+that ordinary note from the vault-wide relation graph. After Book001's intended
+reassignment, Ada has 35 numbered books plus the template (36 incoming files),
+and Grace has 37 numbered books. Both exact incoming path lists, numeric counts,
+rating averages and read-only derived cells are checked. All 72 original author
+spellings, complete note bodies, both author sources and literal template bytes
+remain guarded. This corrects the numbered-books-only Ada oracle in actual heavy
+20261026-001; that failed run remains failed and requires a fresh native pass.
+
 Run only after the integration coordinator freezes matching frontend/native
 artifacts and grants the runtime resource slot. The harness never builds.
 

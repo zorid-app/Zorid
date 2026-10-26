@@ -7,6 +7,7 @@ import {assertScopedGroupSummaries} from './summary-oracle.mjs';
 import {MOD} from './ui.mjs';
 import {numericEditFrame} from './numeric-edit-diagnostics.mjs';
 import {waitForBaseHistoryReady} from './history-readiness.mjs';
+import {readRelationSources,wholeFileRelationOracle,authorRelationFrame,assertAuthorRelations} from './relation-oracle.mjs';
 
 const active='.pane.is-active .bases-session';
 const dialog=name=>`[role="dialog"][aria-label=${JSON.stringify(name)}]`;
@@ -311,27 +312,21 @@ export async function journey(c){
   await c.ui.drag(`${active} [role="columnheader"][title="note.rating"]`,`${active} [role="columnheader"][title="note.status"]`);await c.ui.idle();
   await c.saved('Library.base',source=>{const order=c.yaml.parse(source).views.find(v=>v.name==='Books table').order;assert.ok(order.indexOf('note.rating')<order.indexOf('note.status'));},'header-drag-restores-property-order');
 
-  // A second Base observes the same relation edits through Rust-derived reverse
-  // relations and rollups. The oracle is authored from all durable book files,
-  // independently of renderer-mounted rows or production query implementations.
-  const authorBefore=await c.read('Author Grace.md');
-  const ratings=[];
-  for(let n=1;n<=72;n++){
-    const file=`Book ${String(n).padStart(3,'0')}.md`,properties=c.frontmatter(await c.read(file));
-    // Only Book001 was selected anew. Every pre-existing readable alias must
-    // remain byte-for-byte data, independently of the new rooted choice format.
-    const grace=n===1||n%2===0;
-    assert.equal(properties.author,n===1?'[[/Author%20Grace.md]]':n%2===0?'[[Author Grace]]':'[[Author Ada]]',`${file} retains its exact intended author text`);
-    if(grace)ratings.push(properties.rating);
-  }
-  assert.equal(ratings.length,37);
+  // Relationships use the complete saved namespace. Library's Templates filter
+  // selects its own rows; it must not remove the template's ordinary Ada edge.
+  const relationSources=await readRelationSources(c.vault);
+  const expectedRelations=wholeFileRelationOracle(relationSources,c.frontmatter,c.template);
+  const authorBefore=relationSources.get('Author Grace.md');
   await c.ui.openFile('Authors.base');await c.ui.idle();
-  await visibleCell(c,'Author Grace.md','note.bookCount','37');
-  await visibleCell(c,'Author Ada.md','note.bookCount','35');
-  await c.ui.wait(`const e=document.querySelector(${JSON.stringify(c.ui.cell('Author Grace.md','note.averageRating'))});return e&&Math.abs(Number(e.textContent)-${ratings.reduce((a,b)=>a+b,0)/ratings.length})<0.000001;`,'Average rollup reflects all 37 related files');
-  await visibleCell(c,'Author Grace.md','note.books','Book 001');
-  assert.equal(await c.read('Author Grace.md'),authorBefore,'Derived reverse/rollup data never written into author note');
-  c.evidence.checks.push({name:'reverse-relations-and-rollups',author:'Author Grace.md',count:ratings.length,average:ratings.reduce((a,b)=>a+b,0)/ratings.length,independentRatings:ratings});
+  for(const [author,expected] of Object.entries(expectedRelations)){
+    const frame=await until(async()=>{
+      const observed=await c.ui.dom(`return (${authorRelationFrame.toString()})(document,${JSON.stringify(author)});`);
+      assertAuthorRelations(observed,expected);return observed;
+    },45000);
+    assert.equal(await c.read(author),relationSources.get(author),'Derived reverse/rollup data never written into '+author);
+    c.evidence.checks.push({name:'reverse-relations-and-rollups',author,...expected,observed:frame});
+  }
+  assert.equal(await c.read('Templates/Book.md'),c.template,'Relationship derivation leaves the complete literal template unchanged');
   await c.screenshot('03b-reverse-relations-rollups');
 
   await c.ui.openFile('Author Grace.md');await c.ui.type('.pane.is-active .note-title','Author Grace Renamed');await c.ui.key('Enter');
