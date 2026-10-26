@@ -998,9 +998,10 @@ export class Workspace {
     rightTabs.append(button('table','Bases',()=>this.run(async()=>{await this.sidebarBase?.session.flush();const path=this.sidebarBasePath??this.sidebarBase?.path??this.current()?.path;if(this.sidebarBase&&this.sidebarBase.path===path){this.rightTab='base';this.renderRight();this.saveSession();}else if(path&&/\.base$/i.test(path))await this.openBaseSidebar(path);else notice('Open a Base first.');})));
     rightTabs.append(button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle')); this.rightContent=el('div','right-content'); this.right.append(rightTabs,this.rightContent);
     this.status = el('footer','status-bar'); this.status.setAttribute('aria-live','polite');
+    const status=el('section','native-document-status');status.setAttribute('aria-label','Save and recovery notices');status.setAttribute('aria-live','polite');
+    center.prepend(status);this.nativeDocumentStatus=status;
     if(this.platform.editorOnly){
-      const status=el('section','native-document-status');status.setAttribute('aria-label','Save and recovery notices');status.setAttribute('aria-live','polite');
-      center.prepend(status);this.nativeDocumentStatus=status;this.root.append(center);return;
+      this.root.append(center);return;
     }
     this.root.append(ribbon,this.sidebar,center,this.right,this.status);
     this.addResizeHandle(this.sidebar,'left'); this.addResizeHandle(this.right,'right');

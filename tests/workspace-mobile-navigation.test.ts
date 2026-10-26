@@ -8,7 +8,7 @@ import {MemoryAdapter} from '../src/core/memory-adapter.ts';
 import type {EditorHandle,EditorOptions} from '../src/ui/editor.ts';
 import type {PdfViewOptions} from '../src/ui/pdf-view.ts';
 import type {PlatformVault} from '../src/platform/index.ts';
-import {durableRecoveryFixture,recoveredDraft} from './helpers/durable-recovery-fixture.ts';
+import {durableRecoveryFixture,externalText,recoveredDraft} from './helpers/durable-recovery-fixture.ts';
 
 function editor(parent:HTMLElement,options:EditorOptions):EditorHandle {
   const input=document.createElement('textarea');input.value=options.value;parent.append(input);
@@ -138,8 +138,8 @@ test('native selected document does not restore unrelated workspace panes',async
 });
 
 
-test('native editor-only autosave errors stay visible and retry the shared save',async t=>{
-  const f=await setup(t,{editorOnly:true,initialPath:'A.md',initialEntryId:'id_A_md'});
+for(const editorOnly of [true,false])test(`${editorOnly?'native editor-only':'full workspace'} autosave errors stay visible and retry the shared save`,async t=>{
+  const f=await setup(t,{editorOnly,initialPath:'A.md',initialEntryId:'id_A_md'});
   const write=f.adapter.write.bind(f.adapter);f.adapter.write=async()=>{throw new Error('Disk unavailable: IPC checkpoint_cas operation-uuid schema_version');};
   const input=document.querySelector('textarea')!;input.value='Retained after failure';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));
   await assert.rejects(f.workspace.flush(),/Disk unavailable/);
@@ -166,6 +166,47 @@ test('retained conflict outside the selected native document has a visible recov
   await f.workspace.flush();assert.equal(recovered.copies.length,1);
   assert.equal(await recovered.adapter.read(recovered.copies[0]),recoveredDraft);
   assert.equal(f.workspace.activePane.viewPath,'Other.md');assert.equal(status.hidden,true);
+});
+
+test('full workspace exposes background recovery while a real Base owns the active pane',async t=>{
+  const recovered=await durableRecoveryFixture();
+  await recovered.adapter.write('Work.base','views: [{type: table, name: Table, order: [file.name]}]\n');
+  const f=await setup(t,{},false,{},undefined,recovered.adapter);
+  await f.workspace.openNote('Work.base');
+  assert.ok(document.querySelector('[role="grid"][aria-label="Table"]'),'real Base rendered');
+  const status=document.querySelector<HTMLElement>('.native-document-status');
+  assert.ok(status,'the full workspace mounts shared save and recovery notices');
+  assert.equal(status.getAttribute('aria-label'),'Save and recovery notices');
+  assert.equal(status.getAttribute('aria-live'),'polite');
+  assert.equal(status.hidden,false);assert.match(status.textContent??'',/Retained draft for “One” needs attention/);
+  const saves=[...status.querySelectorAll<HTMLButtonElement>('button')].filter(button=>button.textContent==='Save recovery copy');
+  assert.equal(saves.length,1);assert.equal(saves[0].disabled,false);
+  saves[0].click();
+  const deadline=Date.now()+2000;
+  while(!status.hidden){assert.ok(Date.now()<deadline,'recovery acknowledgement hides notice');await new Promise(done=>setTimeout(done,5));}
+  await f.workspace.flush();
+  assert.equal(recovered.copies.length,1);assert.equal(await recovered.adapter.read(recovered.copies[0]),recoveredDraft);
+  assert.equal(await recovered.adapter.read('One.md'),externalText);
+  assert.equal(recovered.plans,0,'recovery never tries to overwrite or rebase the original');
+  assert.equal(f.workspace.activePane.viewPath,'Work.base','background recovery does not activate another note');
+  assert.ok(document.querySelector('[role="grid"][aria-label="Table"]'));
+});
+
+test('full workspace uses the active note recovery banner and reveals background actions after navigation',async t=>{
+  const recovered=await durableRecoveryFixture();
+  const f=await setup(t,{},false,{},undefined,recovered.adapter);
+  await f.workspace.openNote('One.md');
+  const status=document.querySelector<HTMLElement>('.native-document-status');
+  assert.ok(status);assert.equal(status.hidden,true,'current note already owns the full recovery banner');
+  assert.equal(document.querySelector<HTMLElement>('.note-recovery')?.hidden,false);
+  assert.equal([...document.querySelectorAll('button')].filter(button=>button.textContent==='Save recovery copy').length,1);
+  await f.workspace.openNote('Other.md');
+  assert.equal(status.hidden,false);
+  assert.equal([...status.querySelectorAll('button')].filter(button=>button.textContent==='Save recovery copy').length,1);
+  [...status.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Save recovery copy')!.click();
+  const deadline=Date.now()+2000;
+  while(!status.hidden){assert.ok(Date.now()<deadline,'background recovery resolves');await new Promise(done=>setTimeout(done,5));}
+  await f.workspace.flush();
 });
 
 

@@ -11,3 +11,6 @@
 .note-recovery[hidden] { display:none; }
 .note-recovery p { margin:0; line-height:1.5; }
 .note-recovery-actions { margin:10px 0 0; }
+.workspace:not(.native-editor-only) .native-document-status { flex:0 1 auto; max-height:35%; overflow:auto; padding:12px 20px; border-bottom:1px solid var(--background-modifier-border); background:var(--background-secondary); }
+.workspace:not(.native-editor-only) .native-document-status[hidden] { display:none; }
+.workspace:not(.native-editor-only) .native-document-notice p { margin:0; line-height:1.5; }
