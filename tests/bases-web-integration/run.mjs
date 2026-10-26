@@ -11,7 +11,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { CDP, delay } from '../tasks-electron-integration/cdp.mjs';
 import { UI } from '../bases-electron-integration/ui.mjs';
 import { observeOwnedChild, cleanupOwnedResources } from '../browser-workblocks-worker/cleanup.mjs';
-import { databaseName, noteName, notePath, marker, source, phaseNames, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, trackedHarnessInputs, trackOwnedStartup, finalEvidence, classifyRuntimeErrors, awaitRuntimeHealth, waitForObservation, streamingStorageSchema, storageObservationSnapshot, observeWorkerTarget, productWorkerProof } from './oracles.mjs';
+import { databaseName, noteName, notePath, marker, source, phaseNames, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, trackedHarnessInputs, trackOwnedStartup, finalEvidence, classifyRuntimeErrors, awaitRuntimeHealth, waitForObservation, streamingStorageSchema, storageObservationSnapshot, observeWorkerTarget, productWorkerProof, liveWorkerCandidate, inspectWorker } from './oracles.mjs';
 
 const args = process.argv.slice(2), accepted = new Set(['--root', '--expected-head', '--wasm-dir', '--chrome', '--out', '--timeout-ms']);
 assert.equal(args.filter(value => value === '--runtime-authorized').length, 1, 'Explicit coordinator runtime authorization required');
@@ -201,6 +201,21 @@ try {
   assert.ok(evidence.requests.some(row => row.path.includes('/src/platform/browser-core-worker.ts') && row.statusCode === 200 && /Chrome\//.test(row.userAgent)), 'Actual product core Worker requested');
   const targets = await bounded(() => cdp.call('Target.getTargets'));
   evidence.workerTargetSnapshot = { targets: targets.targetInfos, eventsThrough: evidence.workerTargetEvents.length, capturedAt: Date.now() }; // Pre-close read-only discovery boundary.
+  const candidate = liveWorkerCandidate(evidence); evidence.workerInspection = {};
+  await inspectWorker({targetId:candidate.targetId,origin,ws:cdp.ws,deadline,receipt:evidence.workerInspection,
+    attach:targetId=>bounded(()=>cleanupCall('Target.attachToTarget',{targetId,flatten:false}),{name:'Worker Inspector attach',closeLate:reply=>cleanupCall('Target.detachFromTarget',{sessionId:reply.sessionId})}),
+    send:(sessionId,message)=>bounded(()=>cdp.call('Target.sendMessageToTarget',{sessionId,message})),
+    detach:sessionId=>cleanupCall('Target.detachFromTarget',{sessionId}),
+    fetchSource:async url=>{
+      const response=await bounded(()=>fetch(url,{redirect:'error',signal:AbortSignal.timeout(Math.max(1,deadline-Date.now()))}));assert.equal(response.status,200);
+      const reader=response.body.getReader(),chunks=[];let bytes=0;
+      try{for(;;){const next=await bounded(()=>reader.read());if(next.done)break;bytes+=next.value.length;assert.ok(bytes<=1024*1024,'Bounded ordinary Worker module response');chunks.push(Buffer.from(next.value));}}
+      finally{await reader.cancel();reader.releaseLock();}
+      return{url:response.url,status:response.status,bytes,sha256:sha(Buffer.concat(chunks)),kind:'driver-read-only-module-verification-after-actual-worker-script'};
+    },
+  });
+  const afterInspector=await bounded(()=>cdp.call('Target.getTargets'));
+  evidence.workerInspection.postSnapshot={targets:afterInspector.targetInfos,eventsThrough:evidence.workerTargetEvents.length,capturedAt:Date.now()};
   evidence.workerProof = productWorkerProof(evidence);
   evidence.assetResponses = [];
   for (const name of ['zorid_wasm.js', 'zorid_wasm_bg.wasm']) {

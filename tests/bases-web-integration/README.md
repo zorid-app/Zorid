@@ -74,17 +74,37 @@ driver GETs verify those ordinary server routes' bytes; they are not counted as
 browser fetches. Exceptions/console errors and incomplete phases fail. The
 whole workflow has a bounded deadline; resource cleanup has its own bounds.
 Worker discovery retains bounded raw creation, URL-change and destruction events.
-An initially blank creation URL is not a product-Worker identity. Before closing
-Chrome, a read-only `Target.getTargets` snapshot must identify exactly one live,
-previously observed Worker belonging to the owned normal page, with the exact
-same-origin `/src/platform/browser-core-worker.ts` pathname, agreeing with any
-observed URL changes and the actual browser GET/HTTP200 receipt. Query parameters
-remain in the raw URL. The snapshot records its lifecycle-event boundary; later
-normal shutdown events remain retained without rewriting this pre-close proof.
-Blank URLs, unmatched target IDs, wrong parents/origins/paths, destroyed targets
-and network requests alone cannot satisfy it. Historical web005's five UI phases
-passed, but its created-only blank-URL receipts failed overall acceptance; the new
-observer requires a fresh run and does not retrospectively accept that report.
+Chrome156 can leave dedicated Worker target URLs blank even after a final
+`Target.getTargets` snapshot. Such metadata identifies only a unique live target
+whose creation and snapshot parents match the owned normal page; it does not
+identify the product script. The harness explicitly attaches to that already
+running target with `Target.attachToTarget(flatten: false)`, correlates replies
+through its exact session, and performs only three read-only Inspector commands:
+standard `self.location` properties, `Debugger.enable` to observe parsed scripts,
+and `Debugger.getScriptSource` for the exact entry script. It installs no auto
+attach, pause, breakpoint, resume, source replacement or product API call. If
+this nonflattened protocol is unsupported, the run fails with that exact cause.
+
+WorkerLocation and the actual entry-script URL must agree on the same-origin
+`/src/platform/browser-core-worker.ts` resource, including its observed query.
+The loaded entry source is retained with its independently recomputed SHA256
+and a one-MiB byte bound. A separately labelled ordinary driver GET of that exact
+module URL must return HTTP200 and identical bytes/hash; it does not replace the
+existing real Chrome GET/HTTP200 requirement. The Inspector detaches in `finally`;
+a new read-only target snapshot must retain the same live owned ID/parent after
+detach. Both snapshots record exact lifecycle-event boundaries. Normal shutdown
+events remain retained without rewriting pre-close liveness proof. Foreign
+sessions/targets, protocol or script errors, pauses, missing entry scripts,
+source mismatches, timeouts and failed detach all fail acceptance. Raw target
+metadata, network requests alone, or an unexecuted Inspector check cannot pass.
+
+Actual web005 and web006 each passed five UI phases but failed overall Worker
+identity acceptance. Their blank-URL receipts remain insufficient; these new
+observations require a fresh run. Offline Inspector tests use a fake protocol
+transport and prove its admission/cleanup rules, not actual Chrome acceptance.
+The read-only domain interfaces are documented in the official
+[Target protocol](https://chromedevtools.github.io/devtools-protocol/tot/Target/)
+and [Debugger protocol](https://chromedevtools.github.io/devtools-protocol/tot/Debugger/).
 Late startup resources are tracked and their close outcomes are awaited/recorded;
 unresolved or failed cleanup cannot pass. Final acceptance checks exceptions
 again after browser exit and final provenance, including errors arriving during

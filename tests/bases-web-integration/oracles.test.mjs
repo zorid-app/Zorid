@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { databaseName, noteName, notePath, marker, source, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, harnessInputs, trackedHarnessInputs, trackOwnedStartup, finalEvidence, phaseNames, classifyRuntimeErrors, awaitRuntimeHealth, waitForObservation, streamingStorageSchema, storageObservationSnapshot, observeWorkerTarget, productWorkerProof } from './oracles.mjs';
+import {createHash} from 'node:crypto';
+import { databaseName, noteName, notePath, marker, source, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, harnessInputs, trackedHarnessInputs, trackOwnedStartup, finalEvidence, phaseNames, classifyRuntimeErrors, awaitRuntimeHealth, waitForObservation, streamingStorageSchema, storageObservationSnapshot, observeWorkerTarget, productWorkerProof, liveWorkerCandidate, inspectWorker, workerLocationExpression } from './oracles.mjs';
 
 const entry = { id: 'ui-created-entry', revision: 'saved-revision', path: notePath, kind: 'file', deleted: false };
 const snapshot = () => ({ database: databaseName, version: 8, entries: [{ ...entry }], contents: [{ id: entry.id, bytes: [...new TextEncoder().encode(source)] }] });
@@ -10,24 +11,31 @@ const editor = () => ({ workspace: true, desktopBridge: false, fixtureMarker: fa
 const search = () => ({ query: marker, total: '1 match in 1 file', status: '', groups: [{ entryId: entry.id, path: notePath, title: noteName, badge: '1', snippets: [{ text: marker, marks: [marker] }] }] });
 const workerInfo = (targetId = 'core', url = '', parentId = 'normal-page') => ({ targetId, type: 'worker', title: '', url, attached: false, parentId });
 const workerEvent = (method, info) => ({ method: 'Target.' + method, params: method === 'targetDestroyed' ? { targetId: info } : { targetInfo: info } });
+const inspectedSource='self.postMessage({ready:true});\n';
+const digest=value=>createHash('sha256').update(value).digest('hex');
 function workerFixture() {
-  const origin = 'http://127.0.0.1:60741', url = origin + '/src/platform/browser-core-worker.ts?worker_file&type=module';
-  return { origin, normalPageTarget: 'normal-page', workerTargetEvents: [workerEvent('targetCreated', workerInfo()), workerEvent('targetInfoChanged', workerInfo('core', url))], workerTargetSnapshot: { targets: [workerInfo('core', url)], eventsThrough: 2, capturedAt: 100 }, requests: [{ path: '/src/platform/browser-core-worker.ts', method: 'GET', statusCode: 200, userAgent: 'Chrome/156' }] };
+  const origin='http://127.0.0.1:60741',url=origin+'/src/platform/browser-core-worker.ts?worker_file&type=module';
+  const snapshot={targets:[workerInfo('core',url)],eventsThrough:2,capturedAt:100};
+  return {origin,normalPageTarget:'normal-page',workerTargetEvents:[workerEvent('targetCreated',workerInfo()),workerEvent('targetInfoChanged',workerInfo('core',url))],workerTargetSnapshot:snapshot,
+    workerInspection:{targetId:'core',sessionId:'owned-session',complete:true,detached:true,locationExpression:workerLocationExpression,location:{href:url,origin,pathname:'/src/platform/browser-core-worker.ts'},
+      commands:['Runtime.evaluate','Debugger.enable','Debugger.getScriptSource'].map((method,index)=>({id:index+1,method,replied:true})),scripts:[{scriptId:'entry',url}],entryScript:{scriptId:'entry',url,source:inspectedSource,bytes:Buffer.byteLength(inspectedSource),sha256:digest(inspectedSource)},driverSource:{url,status:200,bytes:Buffer.byteLength(inspectedSource),sha256:digest(inspectedSource)},postSnapshot:structuredClone(snapshot)},
+    requests:[{path:'/src/platform/browser-core-worker.ts',method:'GET',statusCode:200,userAgent:'Chrome/156'}]};
 }
 test('Worker URL discovery retains created/changed/destroyed records across normal reload and proves the current exact target', () => {
   const evidence = workerFixture(), events = [];
   const old = workerInfo('old', evidence.workerTargetSnapshot.targets[0].url);
   for (const message of [workerEvent('targetCreated', workerInfo('old')), workerEvent('targetInfoChanged', old), workerEvent('targetDestroyed', 'old'), ...evidence.workerTargetEvents]) observeWorkerTarget(events, message);
-  evidence.workerTargetEvents = events; evidence.workerTargetSnapshot.eventsThrough = events.length;
+  evidence.workerTargetEvents = events; evidence.workerTargetSnapshot.eventsThrough = events.length; evidence.workerInspection.postSnapshot.eventsThrough = events.length;
   assert.equal(events.length, 5); assert.equal(events[0].params.targetInfo.url, '');
   assert.equal(productWorkerProof(evidence).targetId, 'core');
   const retained = events[1].params.targetInfo.url; old.url = 'mutated'; assert.equal(events[1].params.targetInfo.url, retained, 'Raw lifecycle owns its captured values');
 });
 test('the final read-only snapshot can identify a blank-created Worker but blank targets alone never prove product execution', () => {
-  const evidence = workerFixture(); evidence.workerTargetEvents = [workerEvent('targetCreated', workerInfo())]; evidence.workerTargetSnapshot.eventsThrough = 1;
+  const evidence = workerFixture(); evidence.workerTargetEvents = [workerEvent('targetCreated', workerInfo())]; evidence.workerTargetSnapshot.eventsThrough = 1; evidence.workerInspection.postSnapshot.eventsThrough = 1;
   assert.equal(evidence.workerTargetEvents.some(event => event.params.targetInfo.url.includes('/src/platform/browser-core-worker.ts')), false, 'The old created-only URL assertion fails even for the valid later snapshot');
   assert.equal(productWorkerProof(evidence).targetId, 'core');
-  evidence.workerTargetSnapshot.targets[0].url = ''; assert.throws(() => productWorkerProof(evidence), /Exactly one current/);
+  evidence.workerTargetSnapshot.targets[0].url = ''; evidence.workerInspection.postSnapshot.targets[0].url = ''; assert.equal(productWorkerProof(evidence).targetId,'core','Blank metadata needs the independent actual Inspector proof');
+  delete evidence.workerInspection; assert.throws(() => productWorkerProof(evidence),/Actual owned Worker inspection/);
   const recorded005 = workerFixture(); recorded005.workerTargetEvents = ['first', 'second', 'third'].map(id => workerEvent('targetCreated', workerInfo(id))); recorded005.workerTargetSnapshot.targets = []; recorded005.workerTargetSnapshot.eventsThrough = 3;
   assert.throws(() => productWorkerProof(recorded005), /Exactly one current/, 'Historical empty-URL creation receipts stay insufficient');
 });
@@ -49,6 +57,53 @@ test('Worker lifecycle collection is bounded and rejects impossible changed-befo
   for (let i = 0; i < 128; i++) observeWorkerTarget(events, message);
   assert.throws(() => observeWorkerTarget(events, message), /Bounded raw/); assert.equal(events.length, 128);
   for (const events of [[workerFixture().workerTargetEvents[1]], [message, message]]) { const evidence = workerFixture(); evidence.workerTargetEvents = events; assert.throws(() => productWorkerProof(evidence)); }
+});
+function inspectorTransport(options={}){
+  const evidence=workerFixture(),url=evidence.workerInspection.location.href,receipt={},listeners=new Set(),sent=[],detaches=[];
+  const ws={addEventListener(type,listener){assert.equal(type,'message');listeners.add(listener);},removeEventListener(type,listener){assert.equal(type,'message');listeners.delete(listener);}};
+  const emit=(message,{sessionId='owned-session',targetId='core'}={})=>{const event={data:JSON.stringify({method:'Target.receivedMessageFromTarget',params:{sessionId,targetId,message:JSON.stringify(message)}})};for(const listener of listeners)listener(event);};
+  const script=()=>emit({method:'Debugger.scriptParsed',params:{scriptId:'entry',url}});
+  return{receipt,listeners,sent,detaches,evidence,async run(){
+    return inspectWorker({targetId:'core',origin:evidence.origin,ws,deadline:Date.now()+1000,rpcTimeoutMs:20,cleanupTimeoutMs:20,receipt,
+      attach:async target=>{assert.equal(target,'core');if(options.attachFailure)throw Error('attach unavailable');return{sessionId:'owned-session'};},
+      send:async(sessionId,raw)=>{
+        assert.equal(sessionId,'owned-session');const request=JSON.parse(raw);sent.push(request);const reply=result=>emit({id:request.id,result},options.wrongTarget?{targetId:'foreign-worker'}:{});
+        if(options.foreignOnly){emit({id:request.id,error:{message:'foreign failure'}},{sessionId:'foreign-session'});return;}
+        emit({id:request.id,error:{message:'foreign failure'}},{sessionId:'foreign-session'});
+        if(options.commandError){emit({id:request.id,error:{message:'owned command failure'}});return;}
+        if(request.method==='Runtime.evaluate'){assert.deepEqual(request.params,{expression:workerLocationExpression,returnByValue:true,awaitPromise:false});reply(options.locationException?{exceptionDetails:{text:'unavailable'}}:{result:{type:'object',value:{href:options.wrongLocation?'http://127.0.0.1:9/foreign-worker.ts':url,origin:evidence.origin,pathname:'/src/platform/browser-core-worker.ts'}}});}
+        else if(request.method==='Debugger.enable'){if(options.scriptOverflow)for(let i=0;i<257;i++)emit({method:'Debugger.scriptParsed',params:{scriptId:'extra'+i,url:''}});if(options.pause)emit({method:'Debugger.paused',params:{reason:'other'}});if(!options.missingScript)script();reply({debuggerId:'owned-debugger'});}
+        else if(request.method==='Debugger.getScriptSource'){assert.deepEqual(request.params,{scriptId:'entry'});reply({scriptSource:options.oversized?'x'.repeat(1024*1024+1):inspectedSource});}
+        else assert.fail('No undeclared Worker command '+request.method);
+        if(options.hungAcknowledgement)return new Promise(()=>{});
+      },
+      fetchSource:async href=>{assert.equal(href,url);return{url,status:200,bytes:Buffer.byteLength(inspectedSource),sha256:options.sourceMismatch?'0'.repeat(64):digest(inspectedSource)};},
+      detach:async sessionId=>{detaches.push(sessionId);if(options.lateError)emit({method:'Runtime.exceptionThrown',params:{exceptionDetails:{text:'late actual failure'}}});if(options.detachHang)return new Promise(()=>{});if(options.detachFailure)throw Error('detach unavailable');},
+    });
+  }};
+}
+test('owned Inspector reads standard WorkerLocation and actual entry bytes without a product call or execution control',async()=>{
+  const fixture=inspectorTransport();await fixture.run();
+  assert.deepEqual(fixture.sent.map(item=>item.method),['Runtime.evaluate','Debugger.enable','Debugger.getScriptSource']);
+  assert.deepEqual(fixture.detaches,['owned-session']);assert.equal(fixture.listeners.size,0);assert.equal(fixture.receipt.complete,true);
+  fixture.evidence.workerInspection={...fixture.receipt,postSnapshot:fixture.evidence.workerTargetSnapshot};
+  assert.equal(productWorkerProof(fixture.evidence).entrySourceSha256,digest(inspectedSource));
+});
+test('foreign session replies cannot prove the owned Worker and its timeout still detaches and removes the listener',async()=>{
+  const fixture=inspectorTransport({foreignOnly:true});await assert.rejects(fixture.run(),/reply deadline/);
+  assert.equal(fixture.receipt.complete,false);assert.deepEqual(fixture.detaches,['owned-session']);assert.equal(fixture.listeners.size,0);
+});
+test('wrong target, own protocol errors, evaluation exceptions, wrong entry URL and source hash all fail with owned detach',async()=>{
+  for(const options of [{wrongTarget:true},{commandError:true},{locationException:true},{wrongLocation:true},{sourceMismatch:true},{oversized:true},{pause:true},{missingScript:true},{hungAcknowledgement:true},{scriptOverflow:true},{lateError:true}]){
+    const fixture=inspectorTransport(options);await assert.rejects(fixture.run());assert.equal(fixture.receipt.complete,false);assert.deepEqual(fixture.detaches,['owned-session']);assert.equal(fixture.listeners.size,0);
+    assert.ok(!fixture.sent.some(item=>/pause|resume|setBreakpoint|runIfWaiting|setScriptSource/.test(item.method)),'No control fallback even after failure');
+  }
+});
+test('attach or detach failure cannot leave a positive Inspector receipt or a retained observer',async()=>{
+  for(const options of [{attachFailure:true},{detachFailure:true},{detachHang:true}]){const fixture=inspectorTransport(options);await assert.rejects(fixture.run());assert.equal(fixture.receipt.complete,false);assert.equal(fixture.listeners.size,0);assert.equal(fixture.detaches.length,options.attachFailure?0:1);}
+});
+test('strict final Worker proof rejects missing Inspector/source/parent/liveness evidence and rehashes retained entry source',()=>{
+  for(const change of [e=>{delete e.workerInspection;},e=>{e.workerInspection.detached=false;},e=>{e.workerInspection.location.href=e.origin+'/wrong-worker.ts';},e=>{e.workerInspection.entryScript.source+='changed';},e=>{e.workerInspection.driverSource.sha256='0'.repeat(64);},e=>{e.workerInspection.scripts[0].scriptId='wrong-entry';},e=>{e.workerInspection.postSnapshot.targets[0].parentId='other-page';},e=>{e.workerInspection.postSnapshot.targets=[];},e=>{e.workerInspection.protocolFailure='late worker failure';}]){const evidence=workerFixture();change(evidence);assert.throws(()=>productWorkerProof(evidence));}
 });
 
 test('the handwritten complete source is exactly51 UTF8 bytes including final newline', () => {
