@@ -3,6 +3,7 @@ import {delay,until} from '../tasks-electron-integration/cdp.mjs';
 import {MOD} from '../bases-electron-integration/ui.mjs';
 import {createClipboardGuard} from './clipboard.mjs';
 import {nativePasteReceipt} from './paste-probe.mjs';
+import {closeAcknowledgedToolbarPanel} from '../bases-electron-filter-integration/close-readiness.mjs';
 export const vaultName='native-clipboard-vault';
 const active='.pane.is-active .bases-session';
 const dialog=name=>`[role="dialog"][aria-label=${JSON.stringify(name)}]`;
@@ -60,7 +61,7 @@ async function pointerResize(c){
   await c.saved('Clipboard.base',source=>assert.ok(Math.abs(c.yaml.parse(source).views.find(v=>v.name==='Source').columnSize['note.sourceA']-(width+64))<=1),'pointer-column-resize-persists-intended-delta');
   await c.ui.click(handle,{count:2});await c.ui.idle();await c.saved('Clipboard.base',source=>assert.equal(c.yaml.parse(source).views.find(v=>v.name==='Source').columnSize?.['note.sourceA'],undefined),'double-click-resets-to-automatic-width');
   await c.ui.button('Views',active);await c.ui.button('Configure view Source',dialog('Views'));await c.ui.select(`${dialog('View options')} select[aria-label="Row height"]`,'Tall');
-  for(let i=0;i<3&&await c.ui.dom(`return !!document.querySelector(${JSON.stringify(dialog('View options'))});`);i++){await c.ui.key('Escape');await delay(100);}
+  await closeAcknowledgedToolbarPanel(c,{panelName:'View options',triggerLabel:'Views',action:'clipboard-view-options-close-ready'});
   await c.saved('Clipboard.base',source=>assert.equal(c.yaml.parse(source).views.find(v=>v.name==='Source').rowHeight,'tall'),'row-height-setting-is-durable');
   await c.ui.wait(`return document.querySelector('${active} .zorid-bases-table').style.getPropertyValue('--zorid-base-row-height')==='120px';`,'Tall rows use reference fourfold geometry');await c.screenshot('native-clipboard-pointer-resize-and-tall-rows');
 }
