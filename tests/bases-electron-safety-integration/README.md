@@ -89,7 +89,9 @@ matching artifacts and an explicit native runtime grant.
 
 ## Boundaries still open
 
-- No injected native I/O interruption, lost reply or uncertain creation receipt.
+- The scoped post-prepare checkpoint-access failure below is the only I/O fault
+  planned here. Arbitrary disk failure, power loss, lost reply and uncertain
+  creation recovery remain separate gates. Actual phase results establish execution.
 - No actual failed-live-save queued-newer-draft retry; stale configuration CAS is
   distinct. Do not infer retry correctness from that scenario.
 - No claim that the ordinary note's caret position is unchanged; body undo/source
@@ -120,7 +122,8 @@ No later execution is implied.
 
 ## C2 Hover and New inline publication supplement
 
-Status: **authored, not executed** from `2fe6e055`. These two bounded phases
+Status: **authored; checkpoint-fault repair not yet executed** (2026-10-26).
+The original scope from `2fe6e055` remains. These two bounded phases
 preserve the prior eleven phases and append five named inert inputs (51 total
 prelaunch files), plus one note created through normal New during execution.
 Neither the launchers nor the literal template are product-creation evidence.
@@ -130,15 +133,22 @@ source checks below do not establish that those controls work in the app.
 
 | Phase | Normal actions and strict result |
 | --- | --- |
-| `hover-inline-config-not-published-before-durable-original-retry` | Open the fixture Base, modifier-hover its real file-name link, enter the normal File preview, and click its body paragraph to open the shared live editor. Populate A.md/note.score selection and rename the nested fence through Views. The explicitly labeled negative fixture makes only the owned containing folder0555. Require real permission feedback, exact old physical source, actionable original Retry save with the requested name retained, unchanged original host/binding/session DOM and old rendered view, exact score selection, and the property grid's advertised `aria-disabled=true` admission state. Restore permissions in `finally`, click the original Retry save once, and require the independent exact new whole-note source, same host ownership and logical selection, with no new files or A mutation. Normal navigation/reopen and restart resolve the new view. |
-| `new-popup-inline-config-not-published-before-durable-original-retry` | Use ordinary Base New with the literal full template; require exactly one created note and byte-exact initial copy. Click Edit note body, select its nested score cell and perform the same real permission-failure/original-retry protocol in the New popup. The source may publish only after acknowledgement; the exact original host retains its owned inline node and logical selection. Close normally and reopen the created note; the template remains byte-identical, no duplicate note appears and restart resolves the saved view. |
+| `hover-inline-config-not-published-before-durable-original-retry` | Open the fixture Base, modifier-hover its real file-name link, enter the normal File preview, and click its body paragraph to open the shared live editor. Populate A.md/note.score selection and rename the nested fence through Views. The approved relay holds only the real inert preparation reply for the exact whole containing-note source. Deny access to the exact owned `.zorid/vault.lock` inode, release the unchanged reply, and require a correlated native `checkpoint_storage` / `commit_uncertain:true` response before any commit. Require a safe visible failure message, exact old physical source, actionable original Retry save with the requested name retained, unchanged original host/binding/session DOM and old rendered view, exact score selection, and the property grid's advertised `aria-disabled=true` admission state. Restore the exact original inode/mode in `finally`; then require unchanged physical AND logical source/revision before clicking the original Retry save once. Require the identical failed checkpoint CAS to succeed before that original prepared token commits, and require the independent exact new whole-note source, same host ownership and logical selection, with no new files or A mutation. Normal navigation/reopen and restart resolve the new view. |
+| `new-popup-inline-config-not-published-before-durable-original-retry` | Use ordinary Base New with the literal full template; require exactly one created note and byte-exact initial copy. Click Edit note body, select its nested score cell and perform the same real post-prepare checkpoint-failure/original-retry protocol in the New popup. The source may publish only after acknowledgement; the exact original host retains its owned inline node and logical selection. Close normally and reopen the created note; the template remains byte-identical, no duplicate note appears and restart resolves the saved view. |
 
 Weak DOM identities observe both the original surface and its nested binding;
 they do not mutate the UI or invoke application APIs. Failed publication must
 retain the actual binding/session nodes; after acknowledgement a clean inline
 remount is permitted only with the same host ownership and logical selection.
-The permission-negative source check repeats after a short bounded interval;
-there is no injected semantic result, private IPC failure or retry loop.
+The failed publication/source checks repeat after a short bounded interval.
+The relay forwards the original native reply bytes and existing public protocol;
+it never manufactures an error or changes a command. The failure is a genuine
+owned-lock access denial after inert preparation, not public-file projection
+failure or arbitrary device failure. Public parent-directory0555 was removed:
+that can allow a valid logical commit with pending projection and cannot prove
+this precommit-failure condition. No product guard was added for this fixture.
+Lock cleanup keeps an original descriptor, rejects aliases/hardlinks and refuses
+to chmod a replacement path. Normal bridge reads resume only after restoration.
 The evidence records one rename UI submission and one original retry click.
 That is an accepted-intent observation, not a count of native filesystem writes.
 The retained error panel can legitimately obscure the property grid. This phase
@@ -146,7 +156,17 @@ asserts its advertised `aria-disabled` state and exact unchanged A bytes; it doe
 not claim a functional negative click/key probe through that panel or bypass
 normal pointer hit testing to manufacture one.
 
-Offline contract tests reject early publication, changed root/session on failure,
+Only exact Recovery and Safety campaign paths can select the shared relay. Its
+provenance is exactly the generated owned wrapper plus the existing canonical
+Recovery control/protocol/relay files; all existing PID, private-directory, source
+hash and Node-executable guards remain. No other campaign gains relay admission.
+
+Offline lock/protocol tests reject unowned/symlink/hardlink/replaced lock paths,
+restore the exact inode on callback failure, and reject a mismatched prepared
+source, missing/incorrect uncertain checkpoint failure, an early logical commit,
+a different checkpoint retry, replacement intent, duplicate commit or relay fault.
+They never launch a host or app. Existing publication contract tests reject early
+publication, changed root/session on failure,
 wrong containing-note binding, detached/transferred hosts, lost selection and an
 unblocked advertised property-grid state. All previous contract checks and authored source oracles
 remain. The normal default Reading Hover has a separate rendering path; these

@@ -16,6 +16,7 @@ import {journey} from './journey.mjs';
 import {CAMPAIGN_DIRECTORIES,validateFixtureName,readFixture,writeFixture,campaignClosure} from './owned-fixtures.mjs';
 import {relayProcessOwnership,livingOwnedProcesses,discoverUnannouncedRelayProcesses} from './native-ownership.mjs';
 import {windowMode,assertNativeWindowVisible,assertRendererVisible,nativeWindowAdapterSource} from './window-visibility.mjs';
+import {assertRelayCampaign,assertRelayProvenance} from './relay-admission.mjs';
 import {admitExternalCli,assertExternalCli,createExternalCliConflicts} from '../bases-electron-safety-integration/external-cli-conflict.mjs';
 
 const arg = name => { const i=process.argv.indexOf(name); return i<0?undefined:process.argv[i+1]; };
@@ -37,9 +38,8 @@ const campaign=campaignPath?await import(pathToFileURL(campaignPath).href):undef
 if(campaign)assert.ok(typeof campaign.fixtureFiles==='function'&&typeof campaign.journey==='function','Explicit supplemental campaign exports');
 const cuaMode=nativeSelectCuaMode(process.argv,{windowMode:requestedWindowMode,bootstrap:windowBootstrapProbe,campaignPath,minimalCampaignPath:path.join(path.dirname(harness),'bases-electron-native-select-integration/campaign.mjs'),allowedCampaignPaths:CAMPAIGN_DIRECTORIES.map(name=>path.join(path.dirname(harness),name,'campaign.mjs'))});
 const cuaNativeSelect=!!cuaMode;
-const recoveryCampaign=campaignPath===path.join(path.dirname(harness),'bases-electron-recovery-integration/campaign.mjs');
 const externalCliArtifact=await admitExternalCli({argv:process.argv.slice(2),campaignPath,safetyCampaignPath:path.join(path.dirname(harness),'bases-electron-safety-integration/campaign.mjs')});
-if(campaign?.createNativeRelay)assert.ok(recoveryCampaign,'Only the approved recovery campaign may select a test relay');
+if(campaign?.createNativeRelay)assertRelayCampaign(campaignPath,path.dirname(harness));
 const vaultName=campaign?.vaultName??'vault';assert.match(vaultName,/^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$/,'Owned fixture vault basename');
 const outRequested=path.resolve(required('--out'));
 // Require an existing evidence parent; aliases are resolved before any writes.
@@ -163,7 +163,8 @@ try{
     const stat=await fs.lstat(relay.executable);assert.ok(stat.isFile()&&!stat.isSymbolicLink()&&(stat.mode&0o111),'Regular executable relay wrapper');
     relayIdentity=structuredClone(relay.processIdentity);assert.ok(path.isAbsolute(relayIdentity?.executable)&&Array.isArray(relayIdentity.args),'Immutable relay process identity');
     relayFiles=[...new Set(relay.provenanceFiles)];assert.ok(relayFiles.includes(relayExecutable),'Relay wrapper is in immutable provenance');
-    for(const file of relayFiles){assert.equal(await fs.realpath(file),file,'Relay provenance file cannot alias');assert.ok(file===relayExecutable||file.startsWith(path.dirname(campaignPath)+path.sep),'Relay provenance belongs to owned source or generated wrapper');assert.ok((await fs.lstat(file)).isFile(),'Relay provenance is a regular file');}
+    assertRelayProvenance(relayFiles,{testsRoot:path.dirname(harness),wrapper:relayExecutable});
+    for(const file of relayFiles){assert.equal(await fs.realpath(file),file,'Relay provenance file cannot alias');assert.ok((await fs.lstat(file)).isFile(),'Relay provenance is a regular file');}
   }
   before=await provenance();await fs.writeFile(path.join(out,'provenance-before.json'),JSON.stringify(before,null,2));
   await fs.mkdir(vault,{recursive:true});await fs.mkdir(profile);await fs.mkdir(path.join(sandbox,'app-data'));if(!campaign&&!windowBootstrapProbe)await fs.mkdir(path.join(vault,'Created'));

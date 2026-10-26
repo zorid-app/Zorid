@@ -47,7 +47,7 @@ export function fixtureFiles() {
   ]);
 }
 export const openBoundaries = [
-  'No durable-I/O interruption, lost create reply or uncertain receipt is synthesized; those native recovery requirements remain open.',
+  'This campaign is limited to owned post-prepare checkpoint-access denial and original retry; actual phase results establish execution. Arbitrary disk/power loss and lost-create recovery are separate gates.',
   'Queued newer drafts during a failed live save require a deterministic native failure fixture; external stale-CAS coverage does not establish that retry continuation.',
   'Native OS clipboard, screen reader, IME and matched visual/scaling scenarios belong to separate acceptance campaigns.',
   'Sidebar newest-selection race requires an observable real UI in-flight boundary; sequential selection does not establish that race. No synthetic pending controller is installed.',
