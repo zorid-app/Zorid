@@ -161,7 +161,11 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
       const rendered = baseRichPresentation(shown as BaseExpressionValue), path = own(rendered, 'value');
       if (rawKind === 'string' && typeof rawData === 'string' && own(rendered, 'kind') === 'link' && typeof path === 'string') {
         const target = own(rendered, 'target'), entryId = own(target, 'entryId'), revision = own(target, 'revision'), subpath = own(rendered, 'subpath');
-        pairedTargets.set(rawData, { path, label: labelText(own(rendered, 'label')) ?? labelText(shown), entryId: typeof entryId === 'string' ? entryId : undefined, revision: typeof revision === 'string' ? revision : undefined, ...(typeof subpath === 'string' && subpath.startsWith('#') ? {subpath} : {}) });
+        const shared = own(shown, 'sharedValue');
+        // Explicit core null means unresolved in this saved generation. Absent
+        // legacy resolution metadata and external links do not establish that.
+        const missing = own(shared, 'type') === 'link' && own(shared, 'target') === null && own(shared, 'external') === false;
+        pairedTargets.set(rawData, { path, label: labelText(own(rendered, 'label')) ?? labelText(shown), entryId: typeof entryId === 'string' ? entryId : undefined, revision: typeof revision === 'string' ? revision : undefined, ...(missing ? {missing:true} : {}), ...(typeof subpath === 'string' && subpath.startsWith('#') ? {subpath} : {}) });
       }
     }; pair(value, displayValue);
   };
