@@ -183,8 +183,26 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     displayValue = options.getDisplayValue?.(acceptedPresentation) ?? acceptedPresentation.value; value = options.getEditableValue?.(acceptedPresentation) ?? next; pairTargets();
     return true;
   };
-  const commit = async (next: BaseExpressionValue, keepOpen = false): Promise<boolean> => {
+  const commit = async (next: BaseExpressionValue, keepOpen = false, restoreFailureFocus = true): Promise<boolean> => {
     if (!editable || !current() || pending) return false;
+    const focusInput = !picker && restoreFailureFocus ? input : undefined;
+    const ownedFocus = !!focusInput && document.activeElement === focusInput && document.hasFocus();
+    let focusMoved = false;
+    const moved = (event: FocusEvent) => { if (event.target !== focusInput) focusMoved = true; };
+    const pointedOutside = (event: PointerEvent) => { if (!element.contains(event.target as Node)) focusMoved = true; };
+    const leftWindow = () => { focusMoved = true; };
+    const navigated = (event: KeyboardEvent) => { if (event.key === 'Tab' && !event.isComposing) focusMoved = true; };
+    const removeObservers = () => {
+      document.removeEventListener('focusin', moved, true); document.removeEventListener('pointerdown', pointedOutside, true);
+      document.removeEventListener('keydown', navigated, true); win?.removeEventListener('blur', leftWindow);
+    };
+    if (ownedFocus) {
+      // Disabling can blur a focused Chromium input. Restore only the failed
+      // scalar editor's original ownership, never a subsequent navigation intent.
+      document.addEventListener('focusin', moved, true); document.addEventListener('pointerdown', pointedOutside, true);
+      document.addEventListener('keydown', navigated, true); win?.addEventListener('blur', leftWindow);
+      removeFocusObserver = removeObservers;
+    }
     pending = true; let accepted = false; mark('pending'); if (input) input.disabled = true;
     try {
       const acknowledgement = await options.commit({ ...acceptedPresentation, path: acceptedPresentation.row.path, value: next });
@@ -199,8 +217,15 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     } catch (failure) { error(failure); return false; }
     finally {
       pending = false;
+      if (ownedFocus) { removeObservers(); if (removeFocusObserver === removeObservers) removeFocusObserver = undefined; }
       if (!disposed && accepted && finishAfterPending && editing) { editing = false; closePopup(); draw(); }
-      if (!disposed && input) { input.disabled = false; if (keepOpen && editing && !finishAfterPending) input.focus(); }
+      if (!disposed && input) {
+        input.disabled = false;
+        if (keepOpen && editing && !finishAfterPending) input.focus();
+        else if (!accepted && ownedFocus && !focusMoved && editing && !composing && current()
+          && input === focusInput && input.isConnected && element.isConnected && element.contains(input)
+          && (document.activeElement === input || document.activeElement === document.body || document.activeElement === document.documentElement)) input.focus();
+      }
       finishAfterPending = false;
     }
   };
@@ -398,7 +423,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
     if (!chips) { chips = document.createElement('div'); chips.className = 'multi-select-container'; popup.prepend(chips); }
     chips.replaceChildren(); if (multiple) draft.forEach((text, index) => chips!.append(chip(text, true, index))); chips.append(input); renderChoices();
   }
-  async function finish() {
+  async function finish(restoreFailureFocus = true) {
     if (!current() || !editing || pending || composing || !input) return;
     try {
       let next: BaseExpressionValue;
@@ -427,7 +452,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
         next = parseBasePropertyInput(input.value, definition, value);
       }
       if (JSON.stringify(next) === JSON.stringify(value)) { cancel(); return; }
-      await commit(next);
+      await commit(next, false, restoreFailureFocus);
     } catch (failure) { error(failure); }
   }
   function begin(event: MouseEvent | KeyboardEvent) {
@@ -462,7 +487,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
         else if (multiple && input?.value && ['list', 'tags'].includes(type)) void choose(input.value);
         else void finish();
       } else if (multiple && (event.key === 'Backspace' || event.key === 'ArrowLeft') && !input?.value && draft.length) { event.preventDefault(); popup?.querySelectorAll<HTMLElement>('.multi-select-pill')[draft.length - 1]?.focus(); }
-      else if (event.key === 'Tab') { void finish(); }
+      else if (event.key === 'Tab') { void finish(false); }
     });
     if (picker) {
       input.setAttribute('role', 'combobox'); input.setAttribute('aria-autocomplete', 'list');

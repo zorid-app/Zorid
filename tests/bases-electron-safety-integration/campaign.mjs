@@ -201,6 +201,13 @@ async function summaryCAS(c) {
   await c.screenshot('s04-summary-stale-newer-draft'); await c.ui.button('Cancel changes', dialog('Edit summary')); await c.ui.key('Escape');
 }
 
+export function pathReuseScalarFrame(document, selector) {
+  const inputs=[...document.querySelectorAll(selector)],input=inputs[0],active=document.activeElement;
+  return {matches:inputs.length,connected:input?.isConnected??false,value:input?.value??null,disabled:input?.disabled??null,
+    invalid:input?.getAttribute('aria-invalid')??null,editState:input?.closest('[data-base-editing]')?.getAttribute('data-base-editing')??null,
+    inputFocused:!!input&&active===input,active:{tag:active?.tagName??null,label:active?.getAttribute('aria-label')??null}};
+}
+
 async function pathReuseAndClose(c) {
   await open(c, 'Replacement.base');
   await c.ui.click(c.ui.cell('Replace.md', 'note.score'), {count: 2}); await c.ui.type(`${c.ui.cell('Replace.md', 'note.score')} input`, '8');
@@ -209,8 +216,13 @@ async function pathReuseAndClose(c) {
   c.evidence.actions.push({action: 'external-path-reuse-fixture', from: 'Replace.md', preservedAt: 'Retired/Original.md', replacement, at: Date.now()});
   await delay(1200); await c.ui.key('Enter'); await message(c, '/stale|changed|replaced|conflict/i', active);
   assert.equal(await c.read('Replace.md'), replacement); assert.equal(await c.read('Retired/Original.md'), old);
-  await c.ui.wait(`const e=document.querySelector(${JSON.stringify(c.ui.cell('Replace.md', 'note.score') + ' input')});return e?.value==='8';`, 'Stale editor retains original user input');
+  const staleInput=c.ui.cell('Replace.md','note.score')+' input';
+  const focusExpression=`(${pathReuseScalarFrame.toString()})(document,${JSON.stringify(staleInput)})`;
+  c.evidence.actions.push({action:'path-reuse-scalar-focus',phase:'before-owned-wait',frame:await c.ui.dom(`return ${focusExpression};`),at:Date.now()});
+  const retained=await c.ui.wait(`const state=${focusExpression};return state.matches===1&&state.connected&&state.value==='8'&&state.disabled===false&&state.invalid==='true'&&state.editState==='draft'&&state.inputFocused?state:false;`, 'Rejected scalar retains exact input and keyboard ownership');
+  c.evidence.actions.push({action:'path-reuse-scalar-focus',phase:'before-single-Escape',frame:retained,at:Date.now()});
   await c.screenshot('s05-path-reuse-retained-draft'); await c.ui.key('Escape');
+  await c.ui.wait(`const cell=document.querySelector(${JSON.stringify(c.ui.cell('Replace.md','note.score'))});return cell&&!cell.hasAttribute('data-base-editing')&&!cell.querySelector('input');`, 'Single Escape closes the rejected scalar draft');
   await open(c, 'Safety.base');
   const before = await c.read('Properties.yaml'); await propertySettings(c);
   const label = field('Option label', dialog('Property settings') + ' .bases-property-option-row:nth-child(1)');
