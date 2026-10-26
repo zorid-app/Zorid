@@ -209,11 +209,16 @@ class CoreVaultFixtureService {
   documentRuntimeSourceHint() { this.documentScheduler?.sourceHint(); }
   async poll() {
     if (this.closed) return;
-    const host=this.documentRuntimeEnabled?this.runtimeOwner()?.host:this.host;
+    const owner=this.documentRuntimeEnabled?this.runtimeOwner():null;
+    const host=this.documentRuntimeEnabled?owner?.host:this.host;
     if(!host)return;
     if (this.polling) return this.polling;
+    const maintenanceGuard=owner?()=>{
+      if(this.closed||this.runtimeFailed||owner.paused||!this.documentRuntimeOwners.has(owner))throw error('client_ownership_lost');
+      owner.assertActive();
+    }:null;
     const before=this.cursor;
-    this.polling = this.pollNow(host).then(()=>{if(this.cursor!==before)this.documentRuntimeSourceHint();}).catch(reason => {
+    this.polling = this.pollNow(host,maintenanceGuard).then(()=>{if(this.cursor!==before)this.documentRuntimeSourceHint();}).catch(reason => {
       if(this.host.fatal||this.host.exited){this.runtimeFailed=true;this.stopPolling();void this.documentScheduler?.close();}
       if (!this.closed) this.notify({ type: 'error', message: 'Native vault reconciliation needs attention.', code: reason?.code ?? 'reconciliation_failed' });
     }).finally(() => { this.polling = null; });
@@ -243,15 +248,23 @@ class CoreVaultFixtureService {
     this.reconciliation=structuredClone(status);
     this.notify({type:'reconciliation',reconciliation:structuredClone(status)});
   }
-  async scanNow(host=this.host) {
+  async scanNow(host=this.host,maintenanceGuard=null) {
     try {
-      const scan=await host.rescan();
+      maintenanceGuard?.();
+      // Rescan is trusted main-process maintenance, not an admitted client RPC.
+      // Retain the selected owner's guard through the actual transport queue
+      // and response; journal reads below still use that owner's leased host.
+      const scan=maintenanceGuard
+        ?(await this.host.request({method:'rescan'},undefined,undefined,maintenanceGuard)).result
+        :await host.rescan();
+      maintenanceGuard?.();
       this.lastScan=Date.now();
       this.documentScheduler?.wake();
       this.updateReconciliation(scan.reconciliation);
       if(!scan.complete)this.notify({type:'error',code:'scan_incomplete',message:'Native vault scan is incomplete; existing files are retained.'});
       return scan;
     } catch(reason) {
+      maintenanceGuard?.();
       if(this.reconciliation)this.updateReconciliation({...this.reconciliation,complete:false,failure:'scan_failed'});
       throw reason;
     }
@@ -264,11 +277,11 @@ class CoreVaultFixtureService {
     await this.poll();
     return this.reconciliation?structuredClone(this.reconciliation):null;
   }
-  async pollNow(host=this.host) {
+  async pollNow(host=this.host,maintenanceGuard=null) {
     const hints = [...this.hints]; this.hints.clear();
     if (this.needsScan || (this.familyMode && hints.length) || Date.now() - this.lastScan >= this.rescanMs) {
       this.needsScan = false;
-      await this.scanNow(host);
+      await this.scanNow(host,maintenanceGuard);
     } else if (!this.familyMode && hints.length) {
       const report = await host.reconcile(hints);
       if (report.blocked.length) this.notify({ type: 'error', code: 'reconciliation_blocked', message: 'Native vault reconciliation retained conflicting data.' });

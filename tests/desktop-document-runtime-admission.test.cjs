@@ -181,8 +181,17 @@ test('failed preparation after a successful flush allows only release retry with
  * notification, with no runtime or native request-registry policy. */
 function pollingOwners(){
   const host=Object.create(RustVaultService.prototype),requests=[],states=new Map(),revocations=new Map();
+  let scanDispatch,scanReply;
   host.capabilities=['documents','document_runtime'];host.root='/unused-runtime-owner-poll';
   host.request=async(command,bytes,reference,beforeDispatch)=>{
+    if(command.method==='rescan'){
+      if(scanDispatch)await scanDispatch;
+      beforeDispatch?.();
+      if(reference)throw failure('client_operation_unsupported'); // Actual native authorization policy.
+      requests.push({command,reference});
+      if(scanReply)await scanReply;
+      return {result:{complete:true,reconciliation:{scanId:'scan',complete:true}}};
+    }
     beforeDispatch?.();assert.equal(command.method,'changes_after');
     const state=states.get(reference?.client_id);assert.ok(state);assert.deepEqual(reference,state.lease);assert.equal(state.revoked,false);
     requests.push({command,reference});
@@ -212,8 +221,35 @@ function pollingOwners(){
     const handle=service.registerDocumentRuntimeOwner({host:guarded,clientId:id,localStoreId:'authority',assertActive});
     return {handle,guarded,revokeGuard(){state.revoked=true;}};
   }
-  return {service,requests,revocations,add,get polling(){return polling;}};
+  return {service,requests,revocations,add,get polling(){return polling;},
+    holdScanDispatch(promise){scanDispatch=promise;},holdScanReply(promise){scanReply=promise;}};
 }
+
+test('periodic maintenance rescan uses trusted authority while journal polling retains the admitted lease',async()=>{
+  const f=pollingOwners(),owner=f.add(clientId);f.service.cursor='6';f.service.needsScan=true;
+  await assert.rejects(owner.guarded.rescan(),{code:'client_operation_unsupported'});
+  const events=[];f.service.listeners.add(event=>events.push(event));
+  const reply=gate();f.holdScanReply(reply.promise);
+  const first=f.service.poll();await settled();const second=f.service.poll();await settled();
+  assert.equal(f.requests.length,1,'one serialized maintenance pass despite concurrent poll ticks');
+  assert.equal(f.requests[0].command.method,'rescan');assert.equal(f.requests[0].reference,undefined);
+  reply.resolve();await Promise.all([first,second]);
+  assert.equal(f.service.reconciliation.complete,true);
+  assert.deepEqual(f.requests.map(row=>row.command.method),['rescan','changes_after']);
+  assert.equal(f.requests[1].reference.client_id,clientId);
+  assert.equal(events.some(event=>event.code==='client_operation_unsupported'),false);
+});
+
+for(const boundary of ['queued','inflight'])test(`maintenance rescan rejects a retired owner at its ${boundary} boundary`,async()=>{
+  const f=pollingOwners(),owner=f.add(clientId);f.service.cursor='6';f.service.needsScan=true;
+  const wait=gate();if(boundary==='queued')f.holdScanDispatch(wait.promise);else f.holdScanReply(wait.promise);
+  const events=[];f.service.listeners.add(event=>events.push(event));
+  const pending=f.service.poll();await settled();owner.revokeGuard();wait.resolve();await pending;
+  assert.equal(f.requests.length,boundary==='queued'?0:1);
+  assert.equal(f.service.reconciliation,null,'stale result must not publish availability');
+  assert.equal(events.some(event=>event.type==='reconciliation'),false);
+  assert.equal(f.service.cursor,'6','stale owner must not continue the journal');
+});
 
 test('idle poll revokes a stale selected owner and continues the durable cursor through the other admitted lease',async()=>{
   const f=pollingOwners(),first=f.add(clientId),secondId='10000000-0000-4000-8000-000000000003',second=f.add(secondId);
