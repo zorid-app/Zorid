@@ -4,6 +4,7 @@ import path from 'node:path';
 import {delay, until} from '../tasks-electron-integration/cdp.mjs';
 import {MOD} from '../bases-electron-integration/ui.mjs';
 import {restartWithFreshSource, safetyAReady} from './freshness.mjs';
+import {selectionSplitReady, waitSelectionNoteLive} from '../bases-electron-selection-integration/setup-readiness.mjs';
 import {fixtureFiles as originalFixtureFiles, template, vaultName, openBoundaries} from './fixtures.mjs';
 import {mountedRename, nestedRename, fencedRename, mountedRenameFixtures, nestedRenamedExternal, assertMountedRenameRetention, assertLogicalCellSelection, hoverPublication, newPublication, publicationFixtures, assertInlinePublicationFrame} from './mounted-rename-contract.mjs';
 export {template, vaultName};
@@ -52,7 +53,7 @@ async function registryExternal(c, source, label) {
   await fs.writeFile(owned(c, 'Properties.yaml'), source);
   c.evidence.actions.push({action: 'external-property-definition-fixture', file: 'Properties.yaml', label, source, at: Date.now()});
 }
-async function waitNote(c, title) { await c.ui.wait(`return document.querySelector('.pane.is-active .note-title')?.value===${JSON.stringify(title)}&&!!document.querySelector(${JSON.stringify(editor)});`, 'Ordinary editor ' + title); }
+async function waitNote(c, title) { await waitSelectionNoteLive(c, title); }
 async function recoveryCopy(c, expectedDraft, expectedOriginal, file, name) {
   const before = new Set(await fs.readdir(c.vault));
   await c.ui.button('Save recovery copy', '.pane.is-active .note-recovery');
@@ -91,7 +92,11 @@ async function closeSplit(c) {
 }
 
 async function sharedBodyAndHistory(c) {
-  await open(c, 'Safety.base'); await c.ui.command('Split right');
+  await open(c, 'Safety.base');
+  const originalTabId=await c.ui.dom(`return document.querySelector('.pane.is-active .tab.is-active')?.getAttribute('data-tab-id');`);assert.ok(originalTabId);
+  await c.ui.command('Split right');
+  const split=await c.ui.wait(`return (${selectionSplitReady.toString()})(document,${JSON.stringify(originalTabId)},3);`,'Two current Safety Bases and newly active split tab');
+  c.evidence.actions.push({action:'safety-split-mounted',split,at:Date.now()});
   await c.ui.openFile('A.md'); await waitNote(c, 'A');
   const before = await c.read('A.md'), marker = 'Shared body draft 😀', appended = '\n' + marker;
   await c.ui.click(editor); await c.ui.key('ArrowDown', {modifiers: MOD.meta});

@@ -4,12 +4,12 @@ import {JSDOM} from 'jsdom';
 import {UI} from '../bases-electron-integration/ui.mjs';
 import {selectionSplitReady,selectionNoteMode,waitSelectionNoteLive} from './setup-readiness.mjs';
 
-const base=id=>`<section class="pane"><div class="tab is-active" data-tab-id="${id}"></div><section class="bases-session" data-base-controller-version="1" data-base-controller-updating="false" data-base-controller-error="false"><div class="bases-session-content" aria-busy="false"><div class="zorid-bases-table" role="grid" aria-rowcount="2" data-base-rendered-version="1"></div></div></section></section>`;
-function fixture(markup=''){
+const base=(id,rowCount=2)=>`<section class="pane"><div class="tab is-active" data-tab-id="${id}"></div><section class="bases-session" data-base-controller-version="1" data-base-controller-updating="false" data-base-controller-error="false"><div class="bases-session-content" aria-busy="false"><div class="zorid-bases-table" role="grid" aria-rowcount="${rowCount}" data-base-rendered-version="1"></div></div></section></section>`;
+function fixture(markup='',title='Selection note'){
   const dom=new JSDOM('<body>'+markup+'</body>',{runScripts:'outside-only'}),document=dom.window.document,evidence={actions:[]},clicks=[];
   const ui=new UI({evaluate:source=>structuredClone(dom.window.eval(source)),async call(){throw Error('A setup wait cannot inject input');}},[]),wait=ui.wait.bind(ui);
   ui.wait=(body,label,timeout)=>wait(body,label,Math.min(timeout??20000,1000));
-  ui.click=async selector=>{clicks.push(selector);assert.equal(selectionNoteMode(document,'Selection note')?.mode,'reading','Only mounted Reading can receive a switch');const pane=document.querySelector(selector).closest('.pane');setTimeout(()=>{pane.querySelector('.markdown-preview').remove();pane.querySelector('button').dataset.hotkeyName='Switch to reading view';pane.insertAdjacentHTML('beforeend','<div class="cm-content" contenteditable="true"></div>');},10);};
+  ui.click=async selector=>{clicks.push(selector);assert.equal(selectionNoteMode(document,title)?.mode,'reading','Only mounted Reading can receive a switch');const pane=document.querySelector(selector).closest('.pane');setTimeout(()=>{pane.querySelector('.markdown-preview').remove();pane.querySelector('button').dataset.hotkeyName='Switch to reading view';pane.insertAdjacentHTML('beforeend','<div class="cm-content" contenteditable="true"></div>');},10);};
   return{dom,document,ui,evidence,clicks};
 }
 test('split admission requires exactly two current mounted Base grids and a new active tab',()=>{
@@ -47,5 +47,33 @@ test('delayed Live Edit surface causes no mode toggle and wrong title/mode times
     f.document.querySelector('input').value='Other note';const original=f.ui.wait;f.ui.wait=(body,label)=>original(body,label,10);
     await assert.rejects(waitSelectionNoteLive(f),/Expected note title/);assert.deepEqual(f.clicks,[]);
     f.document.querySelector('input').value='Selection note';f.document.querySelector('button').dataset.hotkeyName='Switch to Live Edit';assert.equal(selectionNoteMode(f.document,'Selection note'),false,'Reading toggle plus stale Live content is not a mounted mode');
+  }finally{f.dom.window.close();}
+});
+test('two-row Safety setup requires three rendered grid rows and an exact original tab identity',()=>{
+  const f=fixture(base('original',3)+base('new',3));try{
+    const panes=f.document.querySelectorAll('.pane');panes[1].classList.add('is-active');
+    assert.equal(selectionSplitReady(f.document,'original'),false,'The Selection default must not silently accept Safety row counts');
+    const ready=selectionSplitReady(f.document,'original',3);assert.equal(ready.newActiveTabId,'new');assert.deepEqual(ready.states.map(state=>state.rowCount),[3,3]);
+    for(const count of [0,-1,1.5,NaN,Infinity,'3',null])assert.equal(selectionSplitReady(f.document,'original',count),false,'Invalid expected count cannot admit a split');
+    for(const id of ['',null,1,{}])assert.equal(selectionSplitReady(f.document,id,3),false,'Missing or non-string original tab identity cannot admit a split');
+    panes[1].querySelector('[role="grid"]').setAttribute('aria-rowcount','4');assert.equal(selectionSplitReady(f.document,'original',3),false,'Both split views must show the independently expected count');
+    panes[1].querySelector('[role="grid"]').setAttribute('aria-rowcount','3');panes[1].querySelector('.bases-session').setAttribute('data-base-controller-updating','true');assert.equal(selectionSplitReady(f.document,'original',3),false,'A matching but still updating split must not admit the next click');
+  }finally{f.dom.window.close();}
+});
+test('Safety custom note title waits for its actual mounted mode before one ordinary Live Edit switch',async()=>{
+  const f=fixture('<section class="pane is-active"><div class="tab is-active" data-tab-id="A"></div></section>','A');try{
+    const waiting=waitSelectionNoteLive(f,'A');
+    setTimeout(()=>f.document.querySelector('.pane').insertAdjacentHTML('beforeend','<input class="note-title" value="A"><button data-hotkey-command="toggle-reading" data-hotkey-name="Switch to Live Edit"></button>'),10);
+    setTimeout(()=>f.document.querySelector('.pane').insertAdjacentHTML('beforeend','<div class="markdown-preview"></div>'),20);
+    const ready=await waiting;assert.equal(ready.title,'A');assert.equal(ready.mode,'live');assert.equal(f.clicks.length,1);assert.equal(f.evidence.actions[0].initial.title,'A');
+  }finally{f.dom.window.close();}
+});
+test('custom note readiness rejects wrong titles and invalid expected titles without sending input',async()=>{
+  const f=fixture('<section class="pane is-active"><input class="note-title" value="Wrong"><button data-hotkey-command="toggle-reading" data-hotkey-name="Switch to reading view"></button><div class="cm-content" contenteditable="true"></div></section>','A');try{
+    const original=f.ui.wait;f.ui.wait=(body,label)=>original(body,label,10);
+    await assert.rejects(waitSelectionNoteLive(f,'A'),/Expected note title/);assert.deepEqual(f.clicks,[]);
+    for(const title of ['',null,7,{}])await assert.rejects(waitSelectionNoteLive(f,title),/exact expected note title/);
+    assert.deepEqual(f.clicks,[]);assert.deepEqual(f.evidence.actions,[]);
+    f.document.querySelector('input').value='A';assert.equal((await waitSelectionNoteLive(f,'A')).mode,'live');assert.deepEqual(f.clicks,[]);
   }finally{f.dom.window.close();}
 });

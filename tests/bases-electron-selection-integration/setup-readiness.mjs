@@ -1,14 +1,14 @@
 // These are observed UI setup boundaries, not workspace/navigation APIs.
-export function selectionSplitReady(document,originalTabId){
+export function selectionSplitReady(document,originalTabId,expectedRowCount=2){
   const panes=[...document.querySelectorAll('.pane')];
-  if(panes.length!==2||!originalTabId)return false;
+  if(panes.length!==2||typeof originalTabId!=='string'||!originalTabId||!Number.isSafeInteger(expectedRowCount)||expectedRowCount<1)return false;
   const states=panes.map(pane=>{
     const sessions=pane.querySelectorAll('.bases-session'),session=sessions[0],grid=session?.querySelector('.zorid-bases-table[role="grid"]');
     const tab=pane.querySelector('.tab.is-active'),version=session?.getAttribute('data-base-controller-version');
-    if(sessions.length!==1||!grid?.isConnected||grid.getAttribute('aria-rowcount')!=='2'||!tab?.dataset.tabId)return null;
+    if(sessions.length!==1||!grid?.isConnected||grid.getAttribute('aria-rowcount')!==String(expectedRowCount)||!tab?.dataset.tabId)return null;
     if(!/^(0|[1-9]\d*)$/.test(version??'')||grid.getAttribute('data-base-rendered-version')!==version)return null;
     if(session.getAttribute('data-base-controller-updating')!=='false'||session.getAttribute('data-base-controller-error')!=='false'||session.querySelector('.bases-session-content')?.getAttribute('aria-busy')!=='false')return null;
-    return{tabId:tab.dataset.tabId,active:pane.classList.contains('is-active'),rowCount:2,version};
+    return{tabId:tab.dataset.tabId,active:pane.classList.contains('is-active'),rowCount:expectedRowCount,version};
   });
   if(states.some(state=>!state)||states.filter(state=>state.active).length!==1)return false;
   const original=states.find(state=>state.tabId===originalTabId),active=states.find(state=>state.active);
@@ -25,8 +25,9 @@ export function selectionNoteMode(document,title){
   else return false;
   return{title,mode,tabId:pane.querySelector('.tab.is-active')?.getAttribute('data-tab-id')??null,observedAt:Date.now()};
 }
-export async function waitSelectionNoteLive(c){
-  const title='Selection note',read=`(${selectionNoteMode.toString()})(document,${JSON.stringify(title)})`;
+export async function waitSelectionNoteLive(c,title='Selection note'){
+  if(typeof title!=='string'||!title)throw new Error('An exact expected note title is required');
+  const read=`(${selectionNoteMode.toString()})(document,${JSON.stringify(title)})`;
   const initial=await c.ui.wait(`return ${read};`,'Expected note title and mounted mode surface');
   c.evidence.actions.push({action:'selection-note-mode-mounted',initial,at:Date.now()});
   if(initial.mode==='reading')await c.ui.click('.pane.is-active button[data-hotkey-command="toggle-reading"][data-hotkey-name="Switch to Live Edit"]');
