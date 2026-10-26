@@ -45,9 +45,9 @@ drag acceptance.
 | All layouts file drag | Actual native payload has exactly one `text/plain` value `[[Items/Alpha]]`; List begins from its actual filename link. Cancellation writes nothing. No external receiving-app/Finder claim. |
 | Column insertion/cancellation/reorder | Visible column positions and insertion slot change before any save; actual Escape removes the drag state and preserves original config; completed drag saves exact Done/Todo/Later ordering. Cleanup `dragCancel` cannot satisfy the Escape assertion. |
 | Normal Group-menu row drag | Uses the toolbar's ordinary Group dialog and actual draggable row grip. Real Tab reaches the source row; visible row positions preview Todo/Done/Later before drop while exact Base bytes remain unchanged. Actual Escape keeps the menu open, restores Done/Todo/Later and the exact source row's keyboard focus before cleanup. A completed drag saves the complete expected parsed configuration; another normal menu drag restores the fixture for subsequent cases. No alternate columns popover or keyboard-reorder substitution. |
-| Failed column-order save | The owned vault directory is temporarily mode0555 to make a real atomic Base-configuration save fail. Exact prior Base bytes remain, the board reconciles to its prior visible order with no insertion placeholder, and normal recovery storage retains exactly the intended full configuration source. Permissions are always restored; ordinary navigation retries that exact source, reopening the board shows the saved order, then normal header dragging restores the fixture. This is a separate labeled negative fixture from the card-status failure below. |
+| Failed column-order save | Before the same ordinary header drag, arm the real relay for the exact entry and independently hand-patched complete Board group-order source. Hold its genuine inert preparation, deny only the owned vault.lock inode, release the unchanged reply and require a correlated uncertain checkpoint failure with no logical commit. Exact prior physical/logical Base bytes remain; the board reconciles to its prior visible order with no insertion placeholder. Read-only WAL-aware native checkpoint evidence must retain the exact original base, desired complete configuration, running client, guarded input, plan and unauthorized prepared intent. Restore the exact inode/mode in finally, verify old physical AND logical source/revision, then the original ordinary navigation replays the identical failed CAS and commits the original prepared token once. Reopen shows the saved order, then normal header dragging restores the fixture. No public-directory projection fault or legacy localStorage draft can satisfy this case. |
 | Sorted insertion/draft ownership | Alt-arrow in a real number draft retains exact input/focus and does not mutate disk; Escape cancels it; moving Gamma gives exact Beta/Gamma/Delta destination ordering and changes only Gamma's status bytes. |
-| Failed move/recovery | Owned Items directory is temporarily mode0555. Actual save failure leaves original bytes and rolls visual card back; normal recovery storage retains the exact desired transformed draft. Permissions are always restored; normal UI navigation retries and commits exact intended status/body. This is an explicit negative fixture, not a positive filesystem edit or an atomicity claim. |
+| Failed move/recovery | Arm the same approved prepared-reply/owned-checkpoint-lock protocol for the exact Alpha entry and literal full desired status/body source before its original card drag. Require the actual uncertain checkpoint failure, unchanged core/physical original, visible move error and card rollback. Its running-client native checkpoint retains exact base/draft/guard/plan and the original unauthorized prepared intent. Restore only the original inode/mode and prove unchanged logical/physical source before the same original navigation retry; the identical failed CAS succeeds before that original token commits exactly once. Full desired source and unrelated sources remain strict. This is a checkpoint-access fault, not a public-file projection failure, arbitrary I/O or power-loss claim. |
 | Computed-group read-only | Root/group labels are exact; all column New controls are disabled and four cards are non-draggable; no source changes. No typed/null/folder grouping claim. |
 | Theme/scale/keyboard | Exact light1180×820DPR1 and dark960×740DPR2 environment; four positive-sized cards stay inside container bounds; Base tab identity remains; actual Tab reaches Alpha's file link and Chromium AX reports role link/name Alpha. Screenshots are observations, not pixel-parity approval. |
 | Reference-fixture hover | Exact authored `Hover.base`/`HoverCases/HoverTarget.md` from owned reference002 at1024×800DPR2dark; ordinary hover waits750ms with zero popups; trusted modifier-bearing mouse entry opens exactly one popup, default452px width/left alignment/10px gap, no autofocus; modifier-flag removal and pointer entry retain it; collapsed Properties/Open link controls and rendered text are present. Clicking its paragraph enters a focused editable body. Literal source replacement, normal navigation flush and exact file readback prove the durable edit; the normal note editor shows the same change. Clean outside click and parent navigation dismiss. No font or popup-height pixel oracle. |
@@ -76,8 +76,27 @@ running this revision. A browser document URL fails the same exact Markdown
 payload oracle used by Cards/Kanban; source tests do not establish actual native
 List drag acceptance.
 
-The two permission-negative cases require the normal non-root user filesystem
-semantics. A failure to produce the specified error/recovery draft fails the
-case; it is not skipped or replaced with a controller stub. The menu assertion
+The two checkpoint-negative cases are source-authored; their actual case results
+establish execution. They require the normal non-root user's filesystem access
+semantics and the already approved real Recovery relay; no reply bytes, commands
+or product objects are replaced. The exact Layouts campaign is the third explicit
+relay admission beside Recovery and Safety; provenance remains exactly the three
+unchanged Recovery control/protocol/relay sources and generated owned wrapper.
+The shared owned-lock helper rejects aliases/hardlinks and restores only its
+original open inode in finally. Its correlated native checkpoint failure must
+precede any original-intent commit; a pre-capture error or projection failure
+cannot satisfy the protocol. The legacy localStorage draft query was retired:
+native buffers persist recovery checkpoints in SQLite. Read-only WAL-aware audit
+preserves the original exact recovery-source assertion, including its running
+client and native intent, without modifying storage or calling private product
+state. A missing fault or checkpoint fails the case, without a substitute stub.
+
+The column body's independent source oracle hand-patches only the unique known
+Board groupOrder span. It rejects unexpected/ambiguous source format or prior
+order before input, does not invoke the product configuration writer, and retains
+the existing complete parsed-configuration oracle. Ordinary Alpha navigation
+checks input.note-title.value and its actually mounted public Reading/Live Edit
+surface; the retired contenteditable .inline-title selector is not used and no
+extra focus, mode switch or input is injected. The menu assertion
 expects the native host's Version history capability. An unavailable capability
 also fails explicitly so the coordinator can assess the actual run conditions.

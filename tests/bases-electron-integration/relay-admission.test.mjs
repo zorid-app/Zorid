@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import {assertRelayCampaign,assertRelayProvenance} from './relay-admission.mjs';
 const testsRoot='/owned/tests',wrapper='/owned/evidence/native-relay/native-relay';
 const files=[wrapper,...['control.mjs','protocol.mjs','relay.mjs'].map(name=>testsRoot+'/bases-electron-recovery-integration/'+name)];
-test('relay admission preserves recovery and admits only the exact safety campaign',()=>{
-  for(const name of ['recovery','safety'])assert.doesNotThrow(()=>assertRelayCampaign(testsRoot+'/bases-electron-'+name+'-integration/campaign.mjs',testsRoot));
-  for(const candidate of [undefined,testsRoot+'/bases-electron-layouts-integration/campaign.mjs',testsRoot+'/bases-electron-safety-integration/other.mjs',testsRoot+'/bases-electron-safety-integration/../bases-electron-safety-integration/campaign.mjs','/elsewhere/tests/bases-electron-safety-integration/campaign.mjs'])assert.throws(()=>assertRelayCampaign(candidate,testsRoot));
+test('relay admission preserves recovery and admits only the exact safety and layouts campaigns',()=>{
+  for(const name of ['recovery','safety','layouts'])assert.doesNotThrow(()=>assertRelayCampaign(testsRoot+'/bases-electron-'+name+'-integration/campaign.mjs',testsRoot));
+  for(const candidate of [undefined,testsRoot+'/bases-electron-properties-integration/campaign.mjs',testsRoot+'/bases-electron-safety-integration/other.mjs',testsRoot+'/bases-electron-safety-integration/../bases-electron-safety-integration/campaign.mjs','/elsewhere/tests/bases-electron-safety-integration/campaign.mjs'])assert.throws(()=>assertRelayCampaign(candidate,testsRoot));
 });
 test('relay provenance requires every exact shared source and rejects broad directory admission',()=>{
   assert.doesNotThrow(()=>assertRelayProvenance(files,{testsRoot,wrapper}));

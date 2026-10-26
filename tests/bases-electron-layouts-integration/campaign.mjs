@@ -6,7 +6,10 @@ import {MOD} from '../bases-electron-integration/ui.mjs';
 import {fixtureFiles, names, hoverTextFiles} from './fixtures.mjs';
 import {hoverJourney} from './hover.mjs';
 import {beginDrag, assertWikiPayload} from './drag.mjs';
+import {columnOrderSource,layoutNoteSurface,withLayoutCheckpointFailure} from './checkpoint-fault.mjs';
+import {assertOriginalInlineCheckpointRetry} from '../bases-electron-safety-integration/inline-checkpoint-fault.mjs';
 export {fixtureFiles};
+export {createNativeRelay} from '../bases-electron-recovery-integration/control.mjs';
 export const vaultName = 'LayoutInteractions';
 const active = '.pane.is-active .bases-session';
 const panel = name => `[role="dialog"][aria-label=${JSON.stringify(name)}]`;
@@ -65,7 +68,7 @@ export async function journey(c) {
       for (const options of [{modifiers: MOD.meta}, {button: 'middle'}]) {
         const before = await tabs(c), target = kind === 'list' ? `${row(kind, 'Alpha')} a.internal-link` : row(kind, 'Alpha');
         await newTabOracle(c, before, 'Alpha', () => c.ui.click(target, options));
-        await c.ui.wait(`return document.querySelector('.pane.is-active .inline-title')?.textContent==='Alpha';`, 'Opened exact note content');
+        await c.ui.wait(`return (${layoutNoteSurface.toString()})(document,'Alpha');`, 'Opened exact ordinary note title and mounted public mode');
         await selectTab(c, retained); await c.ui.idle(); assert.equal(await selectedView(c), name);
       }
     }
@@ -144,23 +147,24 @@ export async function journey(c) {
   });
 
   await step(c, 'failed-column-configuration-save-reconciles-and-retries-retained-source', async () => {
-    const folder = await fs.realpath(c.vault), mode = (await fs.stat(folder)).mode & 0o777, original = await c.read('Layouts.base');
-    assert.ok(folder.startsWith(await fs.realpath(c.outputDirectory) + path.sep), 'Permission fixture is strictly inside owned output');
-    const wanted = orderConfiguration(c, original, 'Board', ['Todo', 'Done', 'Later']); let retained;
-    try {
-      await fs.chmod(folder, 0o555); c.evidence.actions.push({action: 'owned-negative-column-config-permission-fixture', path: folder, mode: '0555', purpose: 'real atomic Base configuration save failure, distinct from a card property move', at: Date.now()});
-      await c.ui.drag(`${column('Done')} .bases-kanban-column-header`, `${column('Todo')} .bases-kanban-column-header`);
-      await c.ui.wait(`const text=[...document.querySelectorAll('${active} .bases-kanban-status,${active} .bases-session-status')].map(e=>e.textContent).join(' ');return /EACCES|permission denied|not permitted|read.only/i.test(text)?text:false;`, 'Failed actual column configuration save has permission feedback', 45000);
-      assert.equal(await c.read('Layouts.base'), original, 'Failed column save leaves exact durable configuration bytes unchanged');
-      await c.ui.wait(`const columns=[...document.querySelectorAll('${active} .bases-kanban-column')].map(e=>({name:e.querySelector('.bases-kanban-column-body')?.getAttribute('aria-label'),left:e.getBoundingClientRect().left})).sort((a,b)=>a.left-b.left);return JSON.stringify(columns.map(e=>e.name))===${JSON.stringify(JSON.stringify(['Done', 'Todo', 'Later']))}&&!document.querySelector('${active} .bases-kanban-column-drop-placeholder');`, 'Failed column preview reconciles to prior rendered order without an insertion placeholder');
-      const drafts = await c.ui.wait(`const values=[];for(const[key,raw]of Object.entries(localStorage)){if(!key.startsWith('zorid:draft:')||!key.endsWith(encodeURIComponent('Layouts.base')))continue;const draft=JSON.parse(raw);if(draft.base===${JSON.stringify(original)}&&typeof draft.content==='string')values.push({key,draft});}return values.length===1?values[0]:false;`, 'Failed column command retains exactly one ordinary configuration recovery draft');
-      assert.deepEqual(c.yaml.parse(drafts.draft.content), wanted, 'Retained configuration changes only Board group order'); retained = drafts.draft.content;
-      c.evidence.checks.push({name: 'failed-column-config-original-and-retained-draft', original, ...drafts}); await capture(c, 'failed-column-order-reconciled-retained-draft');
-    } finally { await fs.chmod(folder, mode); c.evidence.actions.push({action: 'restore-owned-column-config-fixture-permissions', path: folder, mode, at: Date.now()}); }
-    await c.ui.openFile('Items/Alpha.md'); await c.saved('Layouts.base', source => assert.equal(source, retained), 'normal-navigation-retries-exact-retained-column-configuration');
-    await c.ui.openFile('Layouts.base'); await c.ui.idle(); await choose(c, 'Board'); assert.deepEqual(await boardOrder(c), ['Todo', 'Done', 'Later']);
-    await c.ui.drag(`${column('Todo')} .bases-kanban-column-header`, `${column('Done')} .bases-kanban-column-header`); await savedOrder(c, retained, ['Done', 'Todo', 'Later'], 'restored-column-order-after-recovery-acknowledgement');
-    expected['Layouts.base'] = await c.read('Layouts.base'); await noMutation(c, expected, 'Column configuration failure/retry never changes note bytes');
+    const original=await c.read('Layouts.base'),wanted=orderConfiguration(c,original,'Board',['Todo','Done','Later']),retained=columnOrderSource(original);
+    assert.deepEqual(c.yaml.parse(retained),wanted,'The independent exact source patch changes only Board group order');
+    const proof=await withLayoutCheckpointFailure(c,{file:'Layouts.base',original,desired:retained,label:'column-configuration',
+      submit:()=>c.ui.drag(`${column('Done')} .bases-kanban-column-header`,`${column('Todo')} .bases-kanban-column-header`),
+      verifyFailure:async()=>{
+        await c.ui.wait(`const text=[...document.querySelectorAll('${active} .bases-kanban-status,${active} .bases-session-status')].map(e=>e.textContent).join(' ');return /could not|failed|retained|checkpoint/i.test(text)?text:false;`,'Failed actual column configuration has visible recovery feedback',10000);
+        assert.equal(await c.read('Layouts.base'),original,'Failed column save leaves exact durable configuration bytes unchanged');
+        await c.ui.wait(`const columns=[...document.querySelectorAll('${active} .bases-kanban-column')].map(e=>({name:e.querySelector('.bases-kanban-column-body')?.getAttribute('aria-label'),left:e.getBoundingClientRect().left})).sort((a,b)=>a.left-b.left);return JSON.stringify(columns.map(e=>e.name))===${JSON.stringify(JSON.stringify(['Done','Todo','Later']))}&&!document.querySelector('${active} .bases-kanban-column-drop-placeholder');`,'Failed column preview reconciles to prior rendered order without an insertion placeholder');
+        await capture(c,'failed-column-order-reconciled-retained-draft');
+      }});
+    assert.deepEqual(c.yaml.parse(proof.recovery.draft.content),wanted,'Retained native configuration draft changes only Board group order');
+    c.evidence.checks.push({name:'failed-column-config-original-and-retained-draft',original,...proof.recovery,held:proof.held,negative:proof.negative});
+    await c.ui.openFile('Items/Alpha.md');await c.saved('Layouts.base',source=>assert.equal(source,retained),'normal-navigation-retries-exact-retained-column-configuration');
+    const replay=assertOriginalInlineCheckpointRetry((await c.relay.events()).slice(proof.offset),proof);c.evidence.checks.push({name:'column-configuration-exact-original-checkpoint-and-intent-retry',...replay});
+    await c.ui.wait(`return (${layoutNoteSurface.toString()})(document,'Alpha');`,'Original navigation retry mounts the exact ordinary Alpha note');
+    await c.ui.openFile('Layouts.base');await c.ui.idle();await choose(c,'Board');assert.deepEqual(await boardOrder(c),['Todo','Done','Later']);
+    await c.ui.drag(`${column('Todo')} .bases-kanban-column-header`,`${column('Done')} .bases-kanban-column-header`);await savedOrder(c,retained,['Done','Todo','Later'],'restored-column-order-after-recovery-acknowledgement');
+    expected['Layouts.base']=await c.read('Layouts.base');await noMutation(c,expected,'Column configuration failure/retry never changes note bytes');
   });
 
   await step(c, 'Kanban-rank-sorted-insertion-and-input-owned-draft', async () => {
@@ -178,20 +182,22 @@ export async function journey(c) {
   });
 
   await step(c, 'Kanban-failed-move-retains-exact-recovery-draft-and-retries-via-navigation', async () => {
-    const folder = await fs.realpath(path.join(c.vault, 'Items')), vault = await fs.realpath(c.vault); assert.ok(folder.startsWith(vault + path.sep));
-    const mode = (await fs.stat(folder)).mode & 0o777, original = expected['Items/Alpha.md'], desired = original.replace('status: Todo\n', 'status: Done\n');
-    try {
-      await fs.chmod(folder, 0o555); c.evidence.actions.push({action: 'owned-negative-permission-fixture', path: folder, mode: '0555', purpose: 'real atomic note save failure', at: Date.now()});
-      await c.ui.drag(row('kanban', 'Alpha'), `${column('Done')} .bases-kanban-column-body`);
-      await c.ui.wait(`return /Could not move .*Alpha/.test(document.querySelector('${active} .bases-kanban-status')?.textContent??'');`, 'Failed real write has visible move feedback', 45000);
-      assert.equal(await c.read('Items/Alpha.md'), original, 'Failed save did not touch original file');
-      await c.ui.wait(`return !!document.querySelector(${JSON.stringify(column('Todo') + ' .bases-kanban-card[data-path="Items/Alpha.md"]')});`, 'Failed optimistic card preview returns to source column');
-      const draft = await c.ui.wait(`for(const[key,raw]of Object.entries(localStorage)){if(!key.startsWith('zorid:draft:')||!key.endsWith(encodeURIComponent('Items/Alpha.md')))continue;const draft=JSON.parse(raw);if(draft.base===${JSON.stringify(original)}&&draft.content===${JSON.stringify(desired)})return{key,draft};}return false;`, 'Exact desired source retained in normal recovery storage');
-      c.evidence.checks.push({name: 'failed-move-durable-recovery-draft', file: 'Items/Alpha.md', ...draft}); await capture(c, 'kanban-failed-move-retained-draft');
-    } finally { await fs.chmod(folder, mode); c.evidence.actions.push({action: 'restore-owned-fixture-permissions', path: folder, mode, at: Date.now()}); }
-    // Navigation uses the normal session flush path to retry the retained draft.
-    await c.ui.openFile('Items/Alpha.md'); await c.saved('Items/Alpha.md', source => assert.equal(source, desired), 'navigation-retries-retained-Kanban-write'); expected['Items/Alpha.md'] = desired;
-    await c.ui.openFile('Layouts.base'); await c.ui.idle(); await choose(c, 'Board'); await noMutation(c, expected, 'Failure repair changes only the retained Alpha status');
+    const original=expected['Items/Alpha.md'],desired=original.replace('status: Todo\n','status: Done\n');assert.notEqual(desired,original);
+    const proof=await withLayoutCheckpointFailure(c,{file:'Items/Alpha.md',original,desired,label:'card-status',
+      submit:()=>c.ui.drag(row('kanban','Alpha'),`${column('Done')} .bases-kanban-column-body`),
+      verifyFailure:async()=>{
+        await c.ui.wait(`return /Could not move .*Alpha/.test(document.querySelector('${active} .bases-kanban-status')?.textContent??'');`,'Failed real write has visible move feedback',10000);
+        assert.equal(await c.read('Items/Alpha.md'),original,'Failed save did not touch original file');
+        await c.ui.wait(`return !!document.querySelector(${JSON.stringify(column('Todo')+' .bases-kanban-card[data-path="Items/Alpha.md"]')});`,'Failed optimistic card preview returns to source column');
+        await capture(c,'kanban-failed-move-retained-draft');
+      }});
+    c.evidence.checks.push({name:'failed-move-durable-recovery-draft',file:'Items/Alpha.md',...proof.recovery,held:proof.held,negative:proof.negative});
+    // The same original navigation flush, not retyping or another card move,
+    // retries the exact failed checkpoint and original prepared intent.
+    await c.ui.openFile('Items/Alpha.md');await c.saved('Items/Alpha.md',source=>assert.equal(source,desired),'navigation-retries-retained-Kanban-write');expected['Items/Alpha.md']=desired;
+    const replay=assertOriginalInlineCheckpointRetry((await c.relay.events()).slice(proof.offset),proof);c.evidence.checks.push({name:'card-status-exact-original-checkpoint-and-intent-retry',...replay});
+    await c.ui.wait(`return (${layoutNoteSurface.toString()})(document,'Alpha');`,'Original card retry navigation mounts Alpha');
+    await c.ui.openFile('Layouts.base');await c.ui.idle();await choose(c,'Board');await noMutation(c,expected,'Failure repair changes only the retained Alpha status');
   });
 
   await step(c, 'computed-Kanban-groups-remain-read-only-with-exact-labels', async () => {

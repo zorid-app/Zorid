@@ -156,7 +156,7 @@ asserts its advertised `aria-disabled` state and exact unchanged A bytes; it doe
 not claim a functional negative click/key probe through that panel or bypass
 normal pointer hit testing to manufacture one.
 
-Only exact Recovery and Safety campaign paths can select the shared relay. Its
+Only exact Recovery, Safety and Layouts campaign paths can select the shared relay. Its
 provenance is exactly the generated owned wrapper plus the existing canonical
 Recovery control/protocol/relay files; all existing PID, private-directory, source
 hash and Node-executable guards remain. No other campaign gains relay admission.
