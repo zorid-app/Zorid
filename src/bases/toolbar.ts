@@ -74,7 +74,7 @@ export interface BaseToolbar {
 }
 type FilterNode = BaseFilterNode;
 type PanelName = 'Views' | 'View options' | 'Add view' | 'Results' | 'Property' | 'Formula' | 'New item settings' | 'Filter' | 'Sort' | 'Properties' | 'Group';
-interface Panel { rebase?(state: BaseToolbarState, expectedName?: string): boolean; flush?(): void; name: PanelName; node: HTMLElement; trigger: HTMLElement; dirty: boolean; innerDraft?: boolean; saving: boolean; failure?: object; acceptsSaveAcknowledgement?: () => boolean; close(restore?: boolean): void }
+interface Panel { rebase?(state: BaseToolbarState, expectedName?: string): boolean; refreshFilterAdvice?(state:BaseToolbarState):void; flush?(): void; name: PanelName; node: HTMLElement; trigger: HTMLElement; dirty: boolean; innerDraft?: boolean; saving: boolean; failure?: object; acceptsSaveAcknowledgement?: () => boolean; close(restore?: boolean): void }
 /** Only a retained, exact accepted configuration may offer a persistence retry. */
 export class BaseToolbarSaveError extends Error {
   readonly retry: () => Promise<void>;
@@ -199,6 +199,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const exact=JSON.stringify(snapshot)===JSON.stringify(configuration);
       const summaryOnly=name==='Results'&&!own.failure&&JSON.stringify(resultsConfigurationWitness(snapshot))===JSON.stringify(resultsConfigurationWitness(configuration));
       if((!exact&&!summaryOnly)||next.views[selectedIndex]?.name!==expectedName)return false;
+      own.refreshFilterAdvice?.(next);
       configuration=snapshot;opening=next;result=next.result;version=result.version;configuredView=next.views[selectedIndex]??result.view;refreshPanel?.(result,own.dirty);return true;
     };
     panel = own; trigger.setAttribute('aria-expanded', 'true');
@@ -519,13 +520,46 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     } else {
       const initialView = result.view.filters === undefined ? undefined : structuredClone(result.view.filters) as FilterNode;
       const initialRoot = opening.rootFilters === undefined ? undefined : structuredClone(opening.rootFilters) as FilterNode;
+      // Metadata advice may become current while an incomplete row is local.
+      // Keep its providers separate from the original mutation/context witness.
+      let filterAdvice=opening;
+      const compositions=new Set<EventTarget>(),pressedPointers=new Set<number>(),releasedPointers=new Set<number>();
+      let pointerFrame:number|undefined;
+      const cancelPointerFrame=()=>{if(pointerFrame!==undefined){win?.cancelAnimationFrame(pointerFrame);pointerFrame=undefined;}};
+      const resetPointers=()=>{pressedPointers.clear();releasedPointers.clear();cancelPointerFrame();};
+      const inside=(target:EventTarget|null)=>target instanceof doc.defaultView!.Node&&node.contains(target);
+      const compositionStart=(event:CompositionEvent)=>{if(event.target)compositions.add(event.target);};
+      const compositionEnd=(event:CompositionEvent)=>{if(event.target)compositions.delete(event.target);};
+      const pointerDown=(event:PointerEvent)=>{if(event.button===0&&inside(event.target)){pressedPointers.add(event.pointerId);releasedPointers.delete(event.pointerId);}};
+      const pointerUp=(event:PointerEvent)=>{
+        if(!pressedPointers.delete(event.pointerId))return;
+        if(!inside(event.target)){releasedPointers.delete(event.pointerId);return;}
+        // Native click follows release. Keep that target stable through click,
+        // with one frame as a bounded fallback when a release produces no click.
+        releasedPointers.add(event.pointerId);
+        if(pointerFrame===undefined){if(win?.requestAnimationFrame)pointerFrame=win.requestAnimationFrame(()=>{pointerFrame=undefined;releasedPointers.clear();});else queueMicrotask(()=>releasedPointers.clear());}
+      };
+      const pointerCancel=(event:PointerEvent)=>{pressedPointers.delete(event.pointerId);releasedPointers.delete(event.pointerId);if(!releasedPointers.size)cancelPointerFrame();};
+      const clicked=()=>{queueMicrotask(()=>{releasedPointers.clear();cancelPointerFrame();});};
+      const lostInteraction=()=>{compositions.clear();resetPointers();};
+      node.addEventListener('compositionstart',compositionStart,true);node.addEventListener('compositionend',compositionEnd,true);node.addEventListener('pointerdown',pointerDown,true);
+      doc.addEventListener('pointerup',pointerUp,true);doc.addEventListener('pointercancel',pointerCancel,true);doc.addEventListener('click',clicked,true);doc.addEventListener('dragend',resetPointers,true);win?.addEventListener('blur',lostInteraction);
+      disposers.push(()=>{node.removeEventListener('compositionstart',compositionStart,true);node.removeEventListener('compositionend',compositionEnd,true);node.removeEventListener('pointerdown',pointerDown,true);doc.removeEventListener('pointerup',pointerUp,true);doc.removeEventListener('pointercancel',pointerCancel,true);doc.removeEventListener('click',clicked,true);doc.removeEventListener('dragend',resetPointers,true);win?.removeEventListener('blur',lostInteraction);lostInteraction();});
       let savedViewFilter = JSON.stringify(initialView), savedRootFilter = JSON.stringify(initialRoot);
       let operandSnapshot:BaseFilterOperandsSnapshot|undefined;
       try{operandSnapshot=options.filterOperands?.();}catch(failure){report(failure);}
       const operandEditors=new Set<BaseFilterValues>();
       disposers.push(()=>{for(const editor of operandEditors)editor.destroy();operandEditors.clear();});
-      type Section={section:HTMLElement;get():FilterNode|undefined;acknowledge():()=>void};
+      type Section={section:HTMLElement;refreshBlankAdvice():void;get():FilterNode|undefined;acknowledge():()=>void};
       let rootEditor:Section|undefined,viewEditor:Section|undefined;
+      own.refreshFilterAdvice=next=>{
+        if(own.saving||own.failure||next.readOnly!==opening.readOnly||next.selectedIndex!==opening.selectedIndex
+          ||next.views[selectedIndex]?.name!==configuredView.name||next.views[selectedIndex]?.type!==configuredView.type
+          ||JSON.stringify(configurationSnapshot(next))!==JSON.stringify(configuration))return;
+        filterAdvice=next;
+        if(compositions.size||pressedPointers.size||releasedPointers.size||node.querySelector('[role="combobox"][aria-expanded="true"],[role="listbox"],.cm-tooltip-autocomplete'))return;
+        rootEditor?.refreshBlankAdvice();viewEditor?.refreshBlankAdvice();
+      };
       const syncDraft=()=>{own.innerDraft=[...operandEditors].some(editor=>editor.hasDraft());};
       const semanticChanged=()=>{
         syncDraft();
@@ -554,8 +588,9 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         const count=(source:FilterNode|undefined)=>{const n=baseFilterCount(source);flair.textContent=String(n);flair.hidden=n===0;};count(initial);disclosure.append(flair);section.append(disclosure,content);
         const alive=()=>!destroyed&&panel===own&&section.isConnected;
         const localEditors=new Set<BaseFilterValues>(),validators=new Set<()=>void>(),rendered=new WeakMap<BaseFilterDraftNode,HTMLElement>();
+        const refreshBlankAdvice=new Set<()=>void>();
         let tree:HTMLElement,renderBudget=1000;
-        const release=()=>{for(const editor of localEditors){editor.destroy();operandEditors.delete(editor);}localEditors.clear();validators.clear();syncDraft();};
+        const release=()=>{for(const editor of localEditors){editor.destroy();operandEditors.delete(editor);}localEditors.clear();validators.clear();refreshBlankAdvice.clear();syncDraft();};
         const focusNode=(value:BaseFilterDraftNode)=>{const row=rendered.get(value);if(row)focusVisible(row,'Filter property');};
         const renderNode=(value:BaseFilterDraftNode,remove:()=>void,depth=0):HTMLElement=>{
           const row=doc.createElement('div');row.className=value.kind==='condition'?'bases-filter-condition':'bases-filter-group';rendered.set(value,row);
@@ -572,7 +607,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
               const choices=[['file.file',opening.label('file.file')==='file file'?'file':opening.label('file.file')] as const,...propertyOptions.filter(([key])=>key!=='file.file')];
               if(!choices.some(([key])=>key===fields.property))choices.unshift([fields.property,fields.property]);
               const property=select(doc,'Filter property',choices,fields.property);
-              const descriptor=baseFilterProperty(fields.property,opening.filterProperty?.(fields.property),opening.propertyType?.(fields.property));
+              const descriptor=baseFilterProperty(fields.property,filterAdvice.filterProperty?.(fields.property),filterAdvice.propertyType?.(fields.property));
               let catalog=baseFilterOperators(descriptor,fields.operator);
               let selected=catalog.find(item=>item.id===fields.operator);
               // A recognized AST can still require a different property family.
@@ -613,11 +648,25 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
                 onDraftChange(){syncDraft();validate();semanticChanged();},
               });
               localEditors.add(editor);operandEditors.add(editor);validators.add(validate);
+              const refreshBlank=()=>{
+                const field=primary(),focused=doc.activeElement;
+                if(!live()||descriptor.kind!=='unknown'||value.fields!==fields||value.source!==undefined||value.advanced
+                  ||fields.text!==''||fields.arguments!==undefined||fields.values!==undefined||Object.hasOwn(fields,'operand')
+                  ||editor.hasDraft()||!field||field.value!==''||field.validity.badInput
+                  ||host.contains(focused)||row.querySelector('[aria-expanded="true"],[role="listbox"]'))return;
+                const supplied=filterAdvice.filterProperty?.(fields.property);
+                if(!supplied||supplied.kind==='unknown')return;
+                const label=focused instanceof doc.defaultView!.HTMLElement&&row.contains(focused)?focused.getAttribute('aria-label'):undefined;
+                editor.destroy();localEditors.delete(editor);operandEditors.delete(editor);validators.delete(validate);refreshBlankAdvice.delete(refreshBlank);
+                const budget=renderBudget;renderBudget=1;const replacement=renderNode(value,remove,depth);renderBudget=budget;row.replaceWith(replacement);
+                if(label)focusVisible(replacement,label);syncDraft();place();
+              };
+              refreshBlankAdvice.add(refreshBlank);
               const blocked=()=>{syncDraft();if(own.innerDraft){error.textContent='Add or clear the pending item before changing its condition.';return true;}return !canRestructure();};
               property.addEventListener('change',()=>{
                 if(!live())return;
                 if(blocked()){property.value=value.fields!.property;return;}
-                const category=baseFilterProperty(property.value,opening.filterProperty?.(property.value),opening.propertyType?.(property.value));
+                const category=baseFilterProperty(property.value,filterAdvice.filterProperty?.(property.value),filterAdvice.propertyType?.(property.value));
                 const next=baseFilterOperators(category)[0];
                 publish({property:property.value,operator:next.id,text:'',type:'text'},{incomplete:next.arity!=='none'});render();focusNode(value);
               });
@@ -662,7 +711,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
           content.append(actions);render();
         };
         if(expanded)initialize();
-        return {section,get:()=>readBaseFilterDraft(draft),acknowledge(){const source=readBaseFilterDraft(draft),acknowledge=captureBaseFilterAcknowledgement(draft);return ()=>{acknowledge();count(source);for(const validate of validators)validate();};}};
+        return {section,refreshBlankAdvice(){for(const refresh of [...refreshBlankAdvice])refresh();},get:()=>readBaseFilterDraft(draft),acknowledge(){const source=readBaseFilterDraft(draft),acknowledge=captureBaseFilterAcknowledgement(draft);return ()=>{acknowledge();count(source);for(const validate of validators)validate();};}};
       }
       rootEditor=filterSection('All views',initialRoot,false,!!options.commands?.updateRoot);
       viewEditor=filterSection('This view',initialView,true);fields.append(rootEditor.section,viewEditor.section);
@@ -781,7 +830,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
   }
   function update(next: BaseToolbarState) {
     if (destroyed) return;
-    if (hasDraft()) { deferredState = next; return; }
+    if (hasDraft()) { panel?.refreshFilterAdvice?.(next); deferredState = next; return; }
     if (panel && options.immediate) {
       if (!panel.rebase?.(next)) { panel.close(false); update(next); return; }
       state = next;

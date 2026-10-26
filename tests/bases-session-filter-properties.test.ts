@@ -8,6 +8,10 @@ import type {DocumentRuntimeUpdate} from '../src/core/document-runtime.ts';
 import type {VaultEntry} from '../src/core/types.ts';
 import {baseSessionFilterProperties,baseSessionFilterPropertyProvider} from '../src/bases/session.ts';
 import type {BasePropertyDefinitions} from '../src/bases/property-definitions.ts';
+import {JSDOM} from 'jsdom';
+import {BaseDocument} from '../src/bases/document.ts';
+import {executeBaseQuery} from '../src/bases/query.ts';
+import {createBaseToolbar} from '../src/bases/toolbar.ts';
 
 const empty:BasePropertyDefinitions={properties:{},diagnostics:[]};
 const versions={schema:1,extraction:'zorid-markdown-1:metadata-2',resolver:'resolver-1',query:'query-1'};
@@ -142,4 +146,41 @@ test('an excluded-only frame retires declared controls immediately while pin-clo
   const provider=baseSessionFilterPropertyProvider(h.vault,{properties:{state:{type:'select',options:[{value:'open'}]}},diagnostics:[]},['note.state'],()=>true);assert.equal(provider('note.state')?.kind,'string');
   const retained=h.vault.metadataFrame;release=h.holdClose();close=h.vault.closeMetadataProjection();assert.equal(h.vault.isMetadataRetired,true);assert.equal(h.vault.metadataFrame,retained,'the historical snapshot getter retains its existing close-ACK contract');assert.ok(h.pins.size>0);assert.deepEqual(provider('note.state'),{kind:'unknown',metadataStatus:'unavailable'});assert.equal(h.adapter.reads,0);release();await close;
  }finally{release?.();await(close??h.vault.closeMetadataProjection());}assert.equal(h.pins.size,0);
+});
+
+test('a retained filter draft acquires the current declared String catalog after its captured metadata frame is superseded',async()=>{
+ const h=harness([file('A.md',[property('text','text','Alpha')],'a')]);
+ const definitions:BasePropertyDefinitions={properties:{text:{type:'text'}},diagnostics:[]};
+ const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
+ const document=BaseDocument.parse('views:\n - type: table\n   name: Typed\n   filters: {and: [\'note.text != "other"\']}\n');
+ let version=1,current=true;const saves:unknown[]=[],errors:unknown[]=[];
+ const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(){},async save(_version,patch){saves.push(patch);},onDraftChange(){},onError:error=>errors.push(error)});
+ const refresh=()=>{
+  const result=executeBaseQuery(document,{version,files:[{path:'A.md',properties:{text:'Alpha'}}]},{viewIndex:0});
+  toolbar.update({result,views:document.views,selectedIndex:0,root:{},readOnly:false,allowRename:true,label:property=>property.replace(/^note\./,''),propertyType:property=>property==='note.text'?'text':undefined,filterProperty:baseSessionFilterPropertyProvider(h.vault,definitions,['note.text'],()=>current)});
+ };
+ try{
+  await h.vault.initialize();refresh();
+  doc.querySelector<HTMLButtonElement>('button[aria-label="Filter"]')!.click();
+  const section=doc.querySelectorAll('.bases-filter-section')[1];assert.ok(section);
+  section.querySelector<HTMLButtonElement>('button[aria-label="Add filter"]')!.click();
+  const captured=baseSessionFilterPropertyProvider(h.vault,definitions,['note.text'],()=>current);
+  assert.equal(captured('note.text')?.kind,'string');
+  // Genuine public runtime delivery supersedes the opening advisory frame. No
+  // old provider is allowed to adopt those new facts merely to repair the UI.
+  h.set([file('A.md',[property('text','text','Alpha')],'a')]);h.wake();
+  await until(()=>h.vault.metadataFrame?.frame?.snapshot.generation==='2');
+  assert.deepEqual(captured('note.text'),{kind:'unknown',metadataStatus:'unavailable'});
+  const row=()=>section.querySelectorAll('.bases-filter-condition')[1];
+  const propertySelect=row().querySelector<HTMLSelectElement>('select[aria-label="Filter property"]')!;
+  propertySelect.value='note.text';propertySelect.dispatchEvent(new dom.window.Event('change',{bubbles:true}));
+  const catalog=()=>[...row().querySelector<HTMLSelectElement>('select[aria-label="Condition"]')!.options].map(option=>option.value);
+  assert.equal(row().querySelector<HTMLSelectElement>('select[aria-label="Filter property"]')!.value,'note.text');
+  assert.deepEqual(catalog(),['eq','neq','isEmpty','isNotEmpty'],'the retired opening provider conservatively presents its unknown family');
+  version++;refresh();
+  assert.equal(baseSessionFilterPropertyProvider(h.vault,definitions,['note.text'],()=>current)('note.text')?.kind,'string');
+  assert.equal(doc.querySelector('[role="dialog"][aria-label="Filter"]'),section.parentElement?.parentElement?.parentElement);
+  assert.ok(catalog().includes('notEndsWith'),'a current same-configuration advisory update must not leave a retained row stuck on unknown operators');
+  assert.deepEqual(saves,[],'blank and incomplete local rows cannot write a Base');assert.deepEqual(errors,[]);
+ }finally{current=false;toolbar.destroy();dom.window.close();await h.vault.closeMetadataProjection();}
 });
