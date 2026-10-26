@@ -9,6 +9,33 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Coordinator update: composed implementation through02e34894 on isolated
+codex/types-bases-model; main remains e7d655e1 and sole integration ownership is
+unchanged. Reviewed typed-list preservation904e7145, unresolved relations9a5972ca,
+exact view-name source mutation7a493f52, null/current identity4f91c461, and import
+continuation f3b0c2ba/02e34894 are integrated. New composed source tests42/42,
+web/property oracle tests42/42, import/service tests23/23 PASS. Desktop010/19330
+PASS including TypeScript, producer02e34894; matching receipt010 is in the private
+products directory. Rust tree07265/native403cbeb8/CLI8e4e61e4 unchanged.
+
+Current Obsidian1.14.5 full typed-filter campaign005 PASSES13phases/111checks/
+856trustedinputs, including native Date/DateTime values before blur and exact
+saved source/membership/reopen. Both receipt audits accept the bounded result.
+Final restart verifies cleared baseline, not an active filter; final cleanup
+uses SIGKILL fallback, no owned processes, private stale socket remains. Real
+user socket/source/framework identity protections pass. Visual003 stops after
+one of23states on a stale Views selector; immutable source successor pending.
+
+Root owns the next actual Config002 pass: unchanged1023physical files,1005export
+records,180s admission limit. Config001 genuinely stopped at929files: UI retry
+progress omitted durable inventory and periodic rescan used a rejected leased
+command. Both causes have reviewed causal fixes, not native acceptance yet.
+Metadata-only filter advice, sidebar pin UI, nested-definition retention remain
+isolated pending review/integration. All remaining safety/heavy/layout/filter/
+configuration/sidebar/visual native gates remain open. Do not stop on status
+questions; continue the authorized implementation, verification and main merge.
+
+
 Next completed cutoff (2026-10-26, archive009): desktop009/10844 PASSES333files,
 producer22feac9d. Filter004/e184f114/frontend009 FAILS83actions/23checks after
 THREE complete String cases. Fourth negated starts-with exact source/membership
