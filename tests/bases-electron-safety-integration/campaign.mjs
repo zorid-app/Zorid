@@ -95,7 +95,7 @@ async function sharedBodyAndHistory(c) {
   await open(c, 'Safety.base');
   const originalTabId=await c.ui.dom(`return document.querySelector('.pane.is-active .tab.is-active')?.getAttribute('data-tab-id');`);assert.ok(originalTabId);
   await c.ui.command('Split right');
-  const split=await c.ui.wait(`return (${selectionSplitReady.toString()})(document,${JSON.stringify(originalTabId)},3);`,'Two current Safety Bases and newly active split tab');
+  const split=await c.ui.wait(`return (${selectionSplitReady.toString()})(document,${JSON.stringify(originalTabId)},4);`,'Two current Safety Bases and newly active split tab');
   c.evidence.actions.push({action:'safety-split-mounted',split,at:Date.now()});
   await c.ui.openFile('A.md'); await waitNote(c, 'A');
   const before = await c.read('A.md'), marker = 'Shared body draft 😀', appended = '\n' + marker;

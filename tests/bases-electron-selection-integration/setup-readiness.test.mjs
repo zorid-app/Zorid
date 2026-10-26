@@ -49,15 +49,15 @@ test('delayed Live Edit surface causes no mode toggle and wrong title/mode times
     f.document.querySelector('input').value='Selection note';f.document.querySelector('button').dataset.hotkeyName='Switch to Live Edit';assert.equal(selectionNoteMode(f.document,'Selection note'),false,'Reading toggle plus stale Live content is not a mounted mode');
   }finally{f.dom.window.close();}
 });
-test('two-row Safety setup requires three rendered grid rows and an exact original tab identity',()=>{
-  const f=fixture(base('original',3)+base('new',3));try{
+test('two-record Safety setup requires four rendered grid rows including header and summary and an exact original tab identity',()=>{
+  const f=fixture(base('original',4)+base('new',4));try{
     const panes=f.document.querySelectorAll('.pane');panes[1].classList.add('is-active');
     assert.equal(selectionSplitReady(f.document,'original'),false,'The Selection default must not silently accept Safety row counts');
-    const ready=selectionSplitReady(f.document,'original',3);assert.equal(ready.newActiveTabId,'new');assert.deepEqual(ready.states.map(state=>state.rowCount),[3,3]);
+    const ready=selectionSplitReady(f.document,'original',4);assert.equal(ready.newActiveTabId,'new');assert.deepEqual(ready.states.map(state=>state.rowCount),[4,4]);
     for(const count of [0,-1,1.5,NaN,Infinity,'3',null])assert.equal(selectionSplitReady(f.document,'original',count),false,'Invalid expected count cannot admit a split');
-    for(const id of ['',null,1,{}])assert.equal(selectionSplitReady(f.document,id,3),false,'Missing or non-string original tab identity cannot admit a split');
-    panes[1].querySelector('[role="grid"]').setAttribute('aria-rowcount','4');assert.equal(selectionSplitReady(f.document,'original',3),false,'Both split views must show the independently expected count');
-    panes[1].querySelector('[role="grid"]').setAttribute('aria-rowcount','3');panes[1].querySelector('.bases-session').setAttribute('data-base-controller-updating','true');assert.equal(selectionSplitReady(f.document,'original',3),false,'A matching but still updating split must not admit the next click');
+    for(const id of ['',null,1,{}])assert.equal(selectionSplitReady(f.document,id,4),false,'Missing or non-string original tab identity cannot admit a split');
+    panes[1].querySelector('[role="grid"]').setAttribute('aria-rowcount','3');assert.equal(selectionSplitReady(f.document,'original',4),false,'A record-only count omitting the summary cannot admit the split');
+    panes[1].querySelector('[role="grid"]').setAttribute('aria-rowcount','4');panes[1].querySelector('.bases-session').setAttribute('data-base-controller-updating','true');assert.equal(selectionSplitReady(f.document,'original',4),false,'A matching but still updating split must not admit the next click');
   }finally{f.dom.window.close();}
 });
 test('Safety custom note title waits for its actual mounted mode before one ordinary Live Edit switch',async()=>{
