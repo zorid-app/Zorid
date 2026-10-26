@@ -137,6 +137,68 @@ async function controllerFixture(clock?: import('../src/bases/clock.ts').BaseClo
   const controller = new BaseController({ vault, basePath: 'Work.base', delayMs: 1000, onChange: value => { if (value.result) states.push(value.result); }, ...(clock ? { clock } : { query: { now: () => new Date(42) } }), mutations: { async transform() { mutations++; }, async rename() { mutations++; } } });
   return { ...f, vault, controller, states, mutations: () => mutations };
 }
+async function propertiesControllerFixture() {
+  const f = await controllerFixture(), settingsSource = 'properties:\n  status: {type: select, options: [{value: Todo}, {value: Done}]}\n';
+  await f.vault.adapter.write('Properties.yaml', settingsSource); await f.vault.reload();
+  const open = f.service.open, reads: string[] = [];
+  f.service.open = async () => {
+    const pin = await open();
+    return { ...pin,
+      metadata: async id => {
+        reads.push(id);
+        return id === 'Properties.yaml' ? { snapshot, source, coverageComplete: true, value: {
+          entry: { id, path: id, revision: 'r1', kind: 'file', deleted: false }, metadata: null, exclusion: null,
+        } } : pin.metadata(id);
+      },
+      base: async input => {
+        assert.deepEqual(input.options?.propertyDefinitionsSource, { id: 'Properties.yaml', source: settingsSource });
+        return pin.base(input);
+      },
+    };
+  };
+  return { ...f, reads };
+}
+test('a Base with Properties.yaml automatically renders after bounded demand precedes actual publication', async () => {
+  const f = await propertiesControllerFixture(), pending = f.controller.refresh();
+  try {
+    await until(() => f.state.demands === 1); f.budget();
+    await until(() => f.state.registrations === 2 || !!f.controller.state.error);
+    assert.equal(f.controller.state.error, null, 'bounded indexing is pending work, not a terminal Base error');
+    assert.equal(f.controller.state.updating, true);
+    assert.equal(f.state.pins, 0); assert.equal(f.previews.length, 0, 'property definitions must not enable unsupported previews');
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    assert.equal(f.state.demands, 1, 'wait for actual publication without more foreground demands');
+    f.publish(); await pending;
+    assert.equal(f.controller.state.error, null); assert.equal(f.controller.state.updating, false);
+    assert.deepEqual(f.controller.state.result?.rows.map(row => row.path), ['One.md']);
+    assert.deepEqual(f.reads, ['Work.base', 'Properties.yaml']);
+    assert.equal(f.listeners.size, 0); assert.equal(f.state.pinCloses, 1); assert.equal(f.previews.length, 0);
+  } finally { f.releaseGates(); f.controller.dispose(); await pending; }
+});
+for (const outcome of ['cancelled', 'retired'] as const) test(`a Properties.yaml publication wait releases its subscription when ${outcome}`, async () => {
+  const f = await propertiesControllerFixture(), pending = f.controller.refresh();
+  try {
+    await until(() => f.state.demands === 1); f.budget(); await until(() => f.state.registrations === 2);
+    if (outcome === 'cancelled') f.controller.dispose(); else f.retire();
+    const before = f.controller.state;
+    await pending;
+    assert.equal(f.listeners.size, 0); assert.equal(f.state.pins, 0); assert.equal(f.previews.length, 0);
+    if (outcome === 'cancelled') assert.equal(f.controller.state, before);
+    else assert.match(f.controller.state.error?.message ?? '', /could not finish indexing/);
+  } finally { f.releaseGates(); f.controller.dispose(); await pending; }
+});
+test('late publication-wait registration releases its exact listener after cancellation', async () => {
+  const f = await propertiesControllerFixture(), pending = f.controller.refresh();
+  try {
+    await until(() => f.state.demands === 1);
+    const registration = f.holdObserver(); f.budget(); await until(() => f.state.registrations === 2);
+    f.controller.dispose(); await pending; const retired = f.controller.state;
+    // A callback can arrive before the cancelled registration returns its
+    // cleanup handle. Neither event may revive the disposed controller.
+    f.publish(); registration.resolve(); await until(() => f.listeners.size === 0);
+    assert.equal(f.controller.state, retired); assert.equal(f.state.pins, 0); assert.equal(f.previews.length, 0);
+  } finally { f.releaseGates(); f.controller.dispose(); await pending; }
+});
 test('preview controller and direct view actions reject writes, configuration and rename', async () => {
   const f = await controllerFixture(), pending = f.controller.refresh();
   try {

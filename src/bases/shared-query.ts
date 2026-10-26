@@ -222,9 +222,11 @@ export class SharedBaseQueryRunner {
       // prove that a replacement capture has the same definition or context.
       const onProgress = (_progress: DocumentIndexProgress) => { loadPreview(); };
       let maintained = await catchUpDocumentIndex(input.service, { isCurrent: live, signal: run.abort.signal, onProgress }); check();
-      if (!maintained.current && previewSupported) {
+      if (!maintained.current && input.service.maintenance) {
         // A bounded demand can finish before the first build. Wait on actual
         // owner updates, without submitting another demand or pumping the core.
+        // Property settings and inline definitions can disable previews while
+        // still requiring the same automatic published-generation handoff.
         let stopped = false, unsubscribe: (() => void) | undefined, serial = 0, last: DocumentRuntimeUpdate | null = null, notify = () => {};
         let rejectAbort: (reason: unknown) => void = () => {};
         const changed = () => { serial++; notify(); };
@@ -236,7 +238,7 @@ export class SharedBaseQueryRunner {
           if (value?.phase === 'indexing') onProgress({ phase: 'indexing', ...(value.progress ? { prepared: value.progress.prepared, total: value.progress.total } : {}) });
         };
         const registering = input.service.maintenance!.observeAndSubscribe(update);
-        void registering.then(value => { if (stopped) value.unsubscribe(); }, () => {});
+        void registering.then(value => { if (stopped) value.unsubscribe(); else unsubscribe = value.unsubscribe; }, () => {});
         try {
           const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject; if (run.abort.signal.aborted) onAbort(); });
           void aborted.catch(() => {});
