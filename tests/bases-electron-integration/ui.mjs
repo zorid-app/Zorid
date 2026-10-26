@@ -111,7 +111,10 @@ export class UI {
     }
   }
   async select(selector, value) {
-    const model = await this.wait(`const e=document.querySelector(${JSON.stringify(selector)});return e?.tagName==='SELECT'?{label:e.getAttribute('aria-label'),custom:e.hidden&&e.nextElementSibling?.getAttribute('role')==='combobox',values:[...e.options].map(o=>({value:o.value,label:o.textContent,disabled:o.disabled}))}:false;`, 'Select value model');
+    const model = await this.wait(`const matches=[...document.querySelectorAll(${JSON.stringify(selector)})],e=matches[0];if(e?.tagName!=='SELECT')return false;const row=e.closest('.bases-filter-condition'),base=document.querySelector('.pane.is-active .bases-session'),attr=(node,name)=>node?.getAttribute(name)??null;return {matches:matches.length,connected:e.isConnected,label:e.getAttribute('aria-label'),custom:e.hidden&&e.nextElementSibling?.getAttribute('role')==='combobox',value:e.value,selectedIndex:e.selectedIndex,nativeDisabled:e.matches(':disabled'),ariaDisabled:!!e.closest('[aria-disabled="true"]'),inert:!!e.closest('[inert]'),values:[...e.options].map(o=>({value:o.value,label:o.textContent,disabled:o.disabled})),filterProperty:row?.querySelector('select[aria-label="Filter property"]')?.value??null,activeBase:base?{controllerVersion:attr(base,'data-base-controller-version'),controllerUpdating:attr(base,'data-base-controller-updating'),controllerError:attr(base,'data-base-controller-error'),busy:attr(base.querySelector('.bases-session-content'),'aria-busy'),renderedVersion:attr(base.querySelector('.zorid-bases-table'),'data-base-rendered-version')}:null};`, 'Select value model');
+    // Retain the observed model even when the original admission assertion
+    // rejects it. This diagnostic adds no input, retry or readiness condition.
+    this.actions.push({action:'select-value-model',selector,requestedValue:value,model:structuredClone(model),at:Date.now()});
     const values=model.values;
     const index = values.findIndex(o => o.value === value || o.label === value);
     assert.ok(index >= 0 && !values[index].disabled, `Selectable ${value}`);
