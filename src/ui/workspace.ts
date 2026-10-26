@@ -1045,13 +1045,20 @@ export class Workspace {
     if(this.platform.editorOnly)newTab=false;
     if(this.vault.entries.get(path)?.type!=='file') throw new Error(`File not found: ${path}`);
     const intent=(this.navigationIntent.get(pane)??0)+1,generation=this.vaultGeneration,version=pane.renderVersion;this.navigationIntent.set(pane,intent);
+    // A split activates its destination before its first view is mounted. That
+    // older render may assign the first version while this newer open flushes.
+    // Admit only the same untouched initial tab; established views keep their
+    // existing render-version fence.
+    const initialTab=version===0?this.current(pane):undefined;
+    const initialOrigin=initialTab?{tab:initialTab,id:initialTab.id,path:initialTab.path,kind:initialTab.kind,mode:initialTab.mode}:undefined;
     await this.flushPane(pane);
     if(/\.base$/i.test(path))await this.prepareBase(path,generation);
     if(expectedEntryId!==undefined){
       const validate=()=>{if(generation!==this.vaultGeneration||this.navigationIntent.get(pane)!==intent||!this.panes.includes(pane)||this.vault.entries.get(path)?.entryId!==expectedEntryId||(commitGuard&&!commitGuard()))throw new Error('The selected note changed before admission');};
       if(isMarkdown(path))await this.bufferFor(path,expectedEntryId,validate);validate();
     }
-    if(this.navigationIntent.get(pane)!==intent||generation!==this.vaultGeneration||pane.renderVersion!==version||!this.panes.includes(pane)||(expectedActivation!==undefined&&expectedActivation!==this.paneActivationRevision)||(commitGuard&&!commitGuard()))return;
+    const initialCurrent=initialOrigin&&this.current(pane)===initialOrigin.tab&&pane.active===initialOrigin.id&&initialOrigin.tab.path===initialOrigin.path&&initialOrigin.tab.kind===initialOrigin.kind&&initialOrigin.tab.mode===initialOrigin.mode;
+    if(this.navigationIntent.get(pane)!==intent||generation!==this.vaultGeneration||(initialOrigin?!initialCurrent:pane.renderVersion!==version)||!this.panes.includes(pane)||(expectedActivation!==undefined&&expectedActivation!==this.paneActivationRevision)||(commitGuard&&!commitGuard()))return;
     this.noteNavigation.set(pane,(this.noteNavigation.get(pane)??0)+1);
     this.capturePaneState(pane);const current=this.current(pane);
     const existing=pane.tabs.find(tab=>tab.path===path&&tab.kind==='note');
