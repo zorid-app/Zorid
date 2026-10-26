@@ -9,6 +9,19 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Current coordinator update (2026-10-26): reviewed fixes composed at 24b71f94:
+full-workspace recovery notice 099cbf5b→931cc40a, accepted sidebar write drain
+8e874073→ecc4cee0, browser frame observation 7ddbbde0→c087c33a, shared panel
+close fad35d28→8110962b, Config controls 9149f989→9d577061, and genuine Layouts
+checkpoint faults b5e9e6ef→24b71f94. Composed focused checks: 94/94 plus
+31/31 PASS, zero skipped. Desktop007/8948 PASS including TypeScript, producer
+24b71f94; receipt `/private/tmp/zorid-bases-20261026-products-001/frontend-receipt-007.json`.
+Rust/native/CLI unchanged. No new native acceptance is inferred from these tests.
+Root owns the sole app lane for Safety006 next; reference worker is source-only.
+Main remains clean at e7d655e1. Continue through the remaining runtime gates and
+reviewed main integration; status questions do not pause the authorized work.
+
+
 Checkpoint prepared after Safety005 on frozen root `c483d861`. Reviewed scalar
 failed-save focus restoration `c48a217a`, genuine inline checkpoint-fault relay
 `ec2fe727`, passive native failure receipts `00e893df`, and normal streaming
