@@ -9,6 +9,44 @@ export const phaseNames = Object.freeze(['create-and-rename', 'keyboard-edit-and
 export const harnessInputs = Object.freeze(['run.mjs', 'oracles.mjs', 'oracles.test.mjs', 'README.md'].map(name => 'tests/bases-web-integration/' + name));
 export const faviconReceiptWaitMs = 1000;
 
+// Handwritten persistence contract inspected at browser-streaming-vault.ts
+// VERSION8, browser-normalized-idb.ts and browser-managed-records.ts. Normal
+// browser-default never selects the legacyFixture/version6 opener.
+const storageLayout = {
+  metadata: ['id', [['by_path', 'path', false]]], content: ['id'], receipts: ['operation_id'], journal: ['sequence'], control: ['key'], presentation: ['id'],
+  intents: [['client_id', 'intent_id'], [['by_operation', 'operation_id', true]]], checkpoint_heads: [['clientId', 'key']],
+  checkpoint_revisions: [['clientId', 'revision'], [['by_creation', ['clientId', 'creationOrder'], true], ['by_global_sequence', 'order', true], ['by_key', ['clientId', 'key', 'order'], false], ['by_sequence', ['clientId', 'order'], true]]],
+  sync_state: ['key'], sync_text: ['key'], sync_authored: ['key', [['by_pending_order', ['pending', 'order'], false]]], sync_envelopes: ['key'], sync_cursors: ['key'], sync_revisions: ['revision'],
+  sync_source_headers: [['realmId', 'vaultId', 'updateId']], sync_source_payloads: [['realmId', 'vaultId', 'updateId']], sync_source_wires: [['realmId', 'vaultId', 'updateId']],
+  sync_graph_records: [['realmId', 'vaultId', 'updateId']], sync_graph_activities: [['realmId', 'vaultId', 'updateId']],
+  binary_stages: [['clientId', 'stageId'], [['by_operation', ['clientId', 'operationId'], true]]], binary_stage_chunks: [['clientId', 'stageId', 'sequenceOrder']],
+  binary_reads: [['clientId', 'readId'], [['by_active', 'active', false], ['by_pin', ['clientId', 'pinId'], true]]],
+  sync_materialization_refs: ['id'], sync_publication_refs: [['id', 'revision']],
+  managed_collections: [['realmId', 'vaultId', 'owner', 'collection']], managed_records: [['realmId', 'vaultId', 'owner', 'collection', 'record', 'generation']],
+  managed_receipts: [['realmId', 'vaultId', 'updateId'], [['by_retry', ['realmId', 'vaultId', 'owner', 'collection', 'updateId'], false]]],
+  managed_operation_sources: [['realmId', 'vaultId', 'owner', 'collection', 'record', 'generation', 'operationId', 'updateId'], [['by_operation', ['realmId', 'vaultId', 'owner', 'collection', 'record', 'generation', 'operationId'], false]]],
+  managed_local_operations: [['realmId', 'vaultId', 'owner', 'collection', 'operationId']],
+  managed_changes: [['realmId', 'vaultId', 'sequenceOrder'], [['by_collection', ['realmId', 'vaultId', 'owner', 'collection', 'sequenceOrder'], false]]],
+};
+export const streamingStorageSchema = Object.freeze({ version: 8, stores: Object.keys(storageLayout).sort().map(name => { const [keyPath, indexes = []] = storageLayout[name]; return { name, keyPath, autoIncrement: false, indexes: indexes.map(([name, keyPath, unique]) => ({ name, keyPath, unique, multiEntry: false })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0) }; }) });
+class StorageObservationFailure extends Error { constructor(code, message) { super(message); this.name = 'StorageObservationFailure'; this.code = code; } }
+
+export function storageObservationSnapshot(probe) {
+  if (!probe || !['ready', 'not-ready', 'fatal'].includes(probe.kind)) throw new StorageObservationFailure('invalid_storage_observation', 'Storage observer returned no classified evidence');
+  if (probe.kind === 'fatal') throw new StorageObservationFailure(probe.code, probe.message);
+  try {
+    assert.equal(probe.schema.database, databaseName); assert.equal(probe.schema.version, streamingStorageSchema.version);
+    assert.deepEqual(probe.schema.stores, streamingStorageSchema.stores);
+    assert.deepEqual(probe.inventory.filter(row => row.name === databaseName), [{ name: databaseName, version: 8 }]);
+    assert.equal(probe.snapshot.database, databaseName); assert.equal(probe.snapshot.version, 8);
+    if (probe.kind === 'not-ready') {
+      assert.equal(probe.code, 'entry_not_committed'); assert.deepEqual(probe.snapshot.entries, []); assert.deepEqual(probe.snapshot.contents, []);
+    }
+  } catch { throw new StorageObservationFailure('unsupported_storage_observation', 'Unexpected normal streaming storage schema or observer result'); }
+  if (probe.kind === 'not-ready') throw Error('The UI-created note has not committed yet');
+  return probe.snapshot;
+}
+
 /** No text-only error exemption. The sole ambient case is the browser's
  * automatic optional favicon GET with a matching observed HTTP404 response. */
 export function classifyRuntimeErrors(events, network, origin, { observedAt = [], now = 0, final = false } = {}) {
@@ -56,7 +94,7 @@ export async function waitForObservation(check, { now, deadline, assertHealthy, 
     await assertHealthy();
     let value;
     try { value = await check(); }
-    catch (error) { await assertHealthy(); last = error; await pause(100); continue; }
+    catch (error) { await assertHealthy(); if (error instanceof StorageObservationFailure) throw error; last = error; await pause(100); continue; }
     await assertHealthy(); return value;
   }
   throw new Error(label + ': ' + (last?.message ?? 'deadline'));
@@ -103,7 +141,7 @@ export function finalEvidence(evidence) {
 
 export function savedNote(snapshot, expectedPath, expectedSource, previous) {
   assert.equal(snapshot.database, databaseName);
-  assert.equal(snapshot.version, 6, 'The independently inspected browser schema is version6');
+  assert.equal(snapshot.version, 8, 'The normal browser uses the inspected streaming schema version8');
   assert.equal(snapshot.entries.length, 1, 'Fresh normal vault contains exactly the one UI-created entry');
   const entry = snapshot.entries[0];
   assert.equal(entry.kind, 'file'); assert.equal(entry.deleted, false); assert.equal(entry.path, expectedPath);
@@ -138,41 +176,62 @@ export function searchFrame(frame, entry) {
 
 /** A serialized observational reader. It never creates an absent database or
  * issues a write transaction, and closes its connection at every outcome. */
-export async function readOnlyDatabaseSnapshot(name) {
-  if (typeof indexedDB.databases !== 'function') throw Error('Read-only database inventory unavailable');
-  const matches = (await indexedDB.databases()).filter(row => row.name === name);
-  if (matches.length !== 1 || matches[0].version !== 6) throw Error('Expected existing version6 normal browser database');
-  return new Promise((resolve, reject) => {
+export async function readOnlyDatabaseSnapshot(name, expected) {
+  const observation = { inventory: [], schema: null };
+  const fatal = (code, message) => ({ ...observation, kind: 'fatal', code, message });
+  if (typeof indexedDB === 'undefined' || typeof indexedDB.databases !== 'function') return fatal('storage_inventory_unavailable', 'Read-only database inventory unavailable');
+  try { observation.inventory = (await indexedDB.databases()).map(row => ({ name: row.name ?? null, version: row.version ?? null })).sort((a, b) => String(a.name).localeCompare(String(b.name))); }
+  catch { return fatal('storage_inventory_failed', 'Could not enumerate existing browser databases'); }
+  if (observation.inventory.length > 32) return fatal('storage_inventory_limit', 'Unexpected database inventory size');
+  const matches = observation.inventory.filter(row => row.name === name);
+  if (matches.length !== 1) return fatal('normal_database_missing', 'Expected one already-existing normal browser database; observer will not create one');
+  return new Promise(resolve => {
     let database, settled = false;
-    const fail = error => { if (settled) return; settled = true; database?.close(); reject(error); };
-    const opening = indexedDB.open(name, matches[0].version);
-    opening.onupgradeneeded = () => { opening.transaction?.abort(); fail(Error('Read-only observer refused database creation/upgrade')); };
-    opening.onerror = () => fail(Error('Read-only observer could not open existing database'));
-    opening.onblocked = () => fail(Error('Read-only observer database open blocked'));
+    const finish = value => { if (settled) return; settled = true; database?.close(); resolve(value); };
+    const fail = (code, message) => finish(fatal(code, message));
+    let opening;
+    try { opening = indexedDB.open(name); } // No version: never request an upgrade.
+    catch { fail('storage_open_failed', 'Could not open the existing database read-only'); return; }
+    opening.onupgradeneeded = () => { opening.transaction?.abort(); fail('unexpected_storage_upgrade', 'Read-only observer refused database creation/upgrade'); };
+    opening.onerror = () => fail('storage_open_failed', 'Read-only observer could not open existing database');
+    opening.onblocked = () => fail('storage_open_blocked', 'Read-only observer database open blocked');
     opening.onsuccess = () => {
       database = opening.result;
       if (settled) { database.close(); return; }
-      database.onversionchange = () => fail(Error('Database version changed during observation'));
+      database.onversionchange = () => fail('storage_version_changed', 'Database version changed during observation');
       try {
-        if (database.version !== 6 || !database.objectStoreNames.contains('metadata') || !database.objectStoreNames.contains('content')) throw Error('Unexpected normal database schema');
-        const tx = database.transaction(['metadata', 'content'], 'readonly');
+        const stores = Array.from(database.objectStoreNames).sort();
+        observation.schema = { database: name, version: database.version, stores: [] };
+        if (!stores.length || stores.length > 128) { fail('unsupported_streaming_schema', 'Unexpected normal streaming store inventory size'); return; }
+        const tx = database.transaction(stores, 'readonly');
+        tx.onerror = tx.onabort = () => fail('storage_observation_failed', 'Read-only observer transaction failed');
+        for (const storeName of stores) {
+          const store = tx.objectStore(storeName), names = Array.from(store.indexNames).sort();
+          if (names.length > 64) { tx.abort(); fail('storage_schema_limit', 'Unexpected index inventory size'); return; }
+          observation.schema.stores.push({ name: storeName, keyPath: store.keyPath, autoIncrement: store.autoIncrement, indexes: names.map(indexName => { const index = store.index(indexName); return { name: indexName, keyPath: index.keyPath, unique: index.unique, multiEntry: index.multiEntry }; }) });
+        }
+        // Capture the complete observed inventory/schema before comparison. A
+        // version6/unknown layout is diagnostic evidence, never an adopted format.
+        if (matches[0].version !== expected.version || database.version !== expected.version || JSON.stringify(observation.schema.stores) !== JSON.stringify(expected.stores)) {
+          tx.abort(); fail('unsupported_streaming_schema', 'Expected the inspected normal streaming version8 store/key/index layout'); return;
+        }
         const metadata = tx.objectStore('metadata'), content = tx.objectStore('content');
-        if (metadata.keyPath !== 'id' || content.keyPath !== 'id') { tx.abort(); throw Error('Unexpected normal database keys'); }
         const entries = metadata.getAll(), contents = content.getAll();
-        tx.onerror = tx.onabort = () => fail(Error('Read-only observer transaction failed'));
         tx.oncomplete = () => {
           if (settled) return;
           try {
-            if (entries.result.length > 16 || contents.result.length > 16) throw Error('Unexpected fixture storage inventory');
+            if (entries.result.length > 16 || contents.result.length > 16) { fail('storage_row_limit', 'Unexpected fixture storage inventory'); return; }
             const rows = contents.result.map(row => {
-              if (!(row.bytes instanceof Uint8Array) || row.bytes.length > 65536) throw Error('Unexpected saved-byte representation');
+              if (!(row.bytes instanceof Uint8Array) || row.bytes.length > 65536) throw Error('Unexpected inline text-byte representation');
               return { id: row.id, bytes: Array.from(row.bytes) };
             });
-            const observation = { database: name, version: database.version, entries: entries.result.filter(row => !row.deleted), contents: rows };
-            settled = true; database.close(); resolve(observation);
-          } catch (error) { fail(error); }
+            const snapshot = { database: name, version: database.version, entries: entries.result.filter(row => !row.deleted), contents: rows };
+            if (!snapshot.entries.length && !rows.length) { finish({ ...observation, kind: 'not-ready', code: 'entry_not_committed', snapshot }); return; }
+            if (snapshot.entries.length !== rows.length || snapshot.entries.some(entry => !rows.some(row => row.id === entry.id))) { fail('unsupported_inline_projection', 'Smoke note requires the complete ordinary inline-text projection'); return; }
+            finish({ ...observation, kind: 'ready', snapshot });
+          } catch { fail('unsupported_inline_projection', 'Smoke note requires Uint8Array inline text, not an encoded/chunked fallback'); }
         };
-      } catch (error) { fail(error); }
+      } catch { fail('storage_observation_failed', 'Could not observe the existing streaming schema and inline text'); }
     };
   });
 }

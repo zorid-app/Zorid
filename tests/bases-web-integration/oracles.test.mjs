@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { databaseName, noteName, notePath, marker, source, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, harnessInputs, trackedHarnessInputs, trackOwnedStartup, finalEvidence, phaseNames, classifyRuntimeErrors, awaitRuntimeHealth, waitForObservation } from './oracles.mjs';
+import { databaseName, noteName, notePath, marker, source, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, harnessInputs, trackedHarnessInputs, trackOwnedStartup, finalEvidence, phaseNames, classifyRuntimeErrors, awaitRuntimeHealth, waitForObservation, streamingStorageSchema, storageObservationSnapshot } from './oracles.mjs';
 
 const entry = { id: 'ui-created-entry', revision: 'saved-revision', path: notePath, kind: 'file', deleted: false };
-const snapshot = () => ({ database: databaseName, version: 6, entries: [{ ...entry }], contents: [{ id: entry.id, bytes: [...new TextEncoder().encode(source)] }] });
+const snapshot = () => ({ database: databaseName, version: 8, entries: [{ ...entry }], contents: [{ id: entry.id, bytes: [...new TextEncoder().encode(source)] }] });
 const editor = () => ({ workspace: true, desktopBridge: false, fixtureMarker: false, title: noteName, editors: 1, connected: true, editable: true, text: source, saveState: '', focusedEditor: true });
 const search = () => ({ query: marker, total: '1 match in 1 file', status: '', groups: [{ entryId: entry.id, path: notePath, title: noteName, badge: '1', snippets: [{ text: marker, marks: [marker] }] }] });
 
@@ -35,39 +35,85 @@ test('rich search requires exact count, file identity, raw marker highlight and 
   }
 });
 
-test('the observer never opens an absent or wrong-version database', async () => {
-  const old = globalThis.indexedDB;
-  try {
-    for (const databases of [[], [{ name: databaseName, version: 7 }]]) {
-      let opens = 0; globalThis.indexedDB = { databases: async () => databases, open() { opens++; throw Error('Must not open'); } };
-      await assert.rejects(readOnlyDatabaseSnapshot(databaseName), /Expected existing version6/); assert.equal(opens, 0);
-    }
-  } finally { if (old === undefined) delete globalThis.indexedDB; else globalThis.indexedDB = old; }
-});
-
-test('the observer aborts unexpected upgrade instead of allowing creation', async () => {
-  const old = globalThis.indexedDB; let aborted = 0;
-  try {
-    globalThis.indexedDB = { databases: async () => [{ name: databaseName, version: 6 }], open(name, version) {
-      assert.equal(name, databaseName); assert.equal(version, 6);
-      const request = { transaction: { abort() { aborted++; } } }; queueMicrotask(() => request.onupgradeneeded()); return request;
+const schema = () => ({ database: databaseName, version: 8, stores: structuredClone(streamingStorageSchema.stores) });
+async function withStorage(options, run) {
+  const old = globalThis.indexedDB, actualSchema = options.schema ?? schema();
+  const data = { entries: options.entries ?? [{ ...entry }], contents: options.contents ?? [{ id: entry.id, bytes: new TextEncoder().encode(source) }] };
+  const receipt = { opens: [], transactions: [], reads: [], closes: 0, aborts: 0, upgradesAborted: 0 };
+  const database = { version: actualSchema.version, objectStoreNames: actualSchema.stores.map(row => row.name), close() { receipt.closes++; }, transaction(names, mode) {
+    assert.equal(mode, 'readonly'); receipt.transactions.push([names, mode]);
+    const captured = structuredClone(data); let aborted = false;
+    const tx = { abort() { aborted = true; receipt.aborts++; queueMicrotask(() => tx.onabort?.()); }, objectStore(name) {
+      const descriptor = actualSchema.stores.find(row => row.name === name); assert.ok(descriptor);
+      return { keyPath: descriptor.keyPath, autoIncrement: descriptor.autoIncrement, indexNames: descriptor.indexes.map(row => row.name), index(name) { return descriptor.indexes.find(row => row.name === name); }, getAll() {
+        assert.ok(name === 'metadata' || name === 'content', 'Observer may inspect other schema metadata, never other store contents'); receipt.reads.push(name);
+        if (name === 'metadata') options.onMetadataRead?.(data);
+        return { result: captured[name === 'metadata' ? 'entries' : 'contents'] };
+      } };
     } };
-    await assert.rejects(readOnlyDatabaseSnapshot(databaseName), /refused database creation/); assert.equal(aborted, 1);
-  } finally { if (old === undefined) delete globalThis.indexedDB; else globalThis.indexedDB = old; }
-});
-
-test('the observer uses one readonly metadata/content transaction and closes the connection', async () => {
-  const old = globalThis.indexedDB, calls = []; let closed = 0;
+    queueMicrotask(() => { if (!aborted) tx.oncomplete?.(); }); return tx;
+  } };
   try {
-    const database = { version: 6, objectStoreNames: { contains: name => ['metadata', 'content'].includes(name) }, close() { closed++; }, transaction(names, mode) {
-      calls.push([names, mode]);
-      const tx = { objectStore(name) { return { keyPath: 'id', getAll() { return { result: name === 'metadata' ? [{ ...entry }] : [{ id: entry.id, bytes: new TextEncoder().encode(source) }] }; } }; } };
-      queueMicrotask(() => tx.oncomplete()); return tx;
+    globalThis.indexedDB = { databases: async () => options.inventory ?? [{ name: databaseName, version: actualSchema.version }], open(...args) {
+      receipt.opens.push(args); assert.deepEqual(args, [databaseName], 'Existing open must not request any version upgrade');
+      const request = { result: database, transaction: { abort() { receipt.upgradesAborted++; } } };
+      queueMicrotask(() => options.upgrade ? request.onupgradeneeded() : request.onsuccess()); return request;
     } };
-    globalThis.indexedDB = { databases: async () => [{ name: databaseName, version: 6 }], open() { const request = { result: database }; queueMicrotask(() => request.onsuccess()); return request; } };
-    assert.deepEqual(savedNote(await readOnlyDatabaseSnapshot(databaseName), notePath, source), entry);
-    assert.deepEqual(calls, [[['metadata', 'content'], 'readonly']]); assert.equal(closed, 1);
+    await run(receipt, data);
   } finally { if (old === undefined) delete globalThis.indexedDB; else globalThis.indexedDB = old; }
+}
+const observe = () => readOnlyDatabaseSnapshot(databaseName, streamingStorageSchema);
+
+test('normal streaming contract pins exactly31 stores and explicit version8 read-layout markers', () => {
+  assert.equal(streamingStorageSchema.version, 8); assert.equal(streamingStorageSchema.stores.length, 31);
+  assert.deepEqual(streamingStorageSchema.stores.find(row => row.name === 'metadata'), { name: 'metadata', keyPath: 'id', autoIncrement: false, indexes: [{ name: 'by_path', keyPath: 'path', unique: false, multiEntry: false }] });
+  assert.deepEqual(streamingStorageSchema.stores.find(row => row.name === 'sync_source_payloads').keyPath, ['realmId', 'vaultId', 'updateId']);
+});
+test('an absent database is captured and never opened or created', async () => {
+  await withStorage({ inventory: [] }, async receipt => { const probe = await observe(); assert.equal(probe.kind, 'fatal'); assert.deepEqual(probe.inventory, []); assert.equal(probe.schema, null); assert.throws(() => storageObservationSnapshot(probe), /already-existing/); assert.deepEqual(receipt.opens, []); });
+});
+test('the observer aborts an unexpected upgrade instead of allowing a raced database creation', async () => {
+  await withStorage({ upgrade: true }, async receipt => { const probe = await observe(); assert.equal(probe.kind, 'fatal'); assert.equal(probe.code, 'unexpected_storage_upgrade'); assert.equal(receipt.upgradesAborted, 1); assert.deepEqual(receipt.transactions, []); });
+});
+test('legacy6 and unknown future schemas are observed before strict fatal rejection with no data reads', async () => {
+  for (const version of [6, 9]) {
+    const actual = schema(); actual.version = version;
+    await withStorage({ schema: actual }, async receipt => { const probe = await observe(); assert.equal(probe.kind, 'fatal'); assert.equal(probe.code, 'unsupported_streaming_schema'); assert.deepEqual(probe.inventory, [{ name: databaseName, version }]); assert.deepEqual(probe.schema, actual); assert.equal(receipt.transactions.length, 1); assert.deepEqual(receipt.reads, []); assert.equal(receipt.closes, 1); assert.throws(() => storageObservationSnapshot(probe), /streaming version8/); });
+  }
+});
+test('version8 wrong store/key/index/autoIncrement layouts remain fatal and captured', async () => {
+  for (const change of [s => { s.stores.find(row => row.name === 'metadata').keyPath = 'path'; }, s => { s.stores.find(row => row.name === 'metadata').indexes[0].unique = true; }, s => { s.stores.find(row => row.name === 'content').autoIncrement = true; }, s => { s.stores = s.stores.filter(row => row.name !== 'sync_publication_refs'); }]) {
+    const actual = schema(); change(actual);
+    await withStorage({ schema: actual }, async receipt => { const probe = await observe(); assert.equal(probe.kind, 'fatal'); assert.deepEqual(probe.schema, actual); assert.deepEqual(receipt.reads, []); assert.equal(receipt.closes, 1); });
+  }
+});
+test('one consistent readonly transaction reads actual inline bytes and retains metadata/content revision agreement', async () => {
+  await withStorage({ onMetadataRead(data) { data.entries[0].revision = 'concurrent-next'; data.contents[0].bytes = new TextEncoder().encode('Concurrent bytes.\n'); } }, async (receipt, data) => {
+    const probe = await observe(); assert.equal(probe.kind, 'ready'); assert.deepEqual(probe.schema, schema());
+    assert.deepEqual(savedNote(storageObservationSnapshot(probe), notePath, source), entry);
+    assert.equal(data.entries[0].revision, 'concurrent-next'); assert.deepEqual(receipt.transactions, [[streamingStorageSchema.stores.map(row => row.name), 'readonly']]); assert.deepEqual(receipt.reads, ['metadata', 'content']); assert.equal(receipt.closes, 1);
+  });
+});
+test('only the known-schema empty projection is retryable; encoded/chunked/missing inline bodies have no fallback', async () => {
+  await withStorage({ entries: [], contents: [] }, async () => { const probe = await observe(); assert.equal(probe.kind, 'not-ready'); assert.equal(probe.code, 'entry_not_committed'); assert.throws(() => storageObservationSnapshot(probe), /not committed/); });
+  for (const contents of [[], [{ id: entry.id, bytes: 'encoded payload' }], [{ id: entry.id, bytes: new ArrayBuffer(8) }]]) {
+    await withStorage({ contents }, async receipt => { const probe = await observe(); assert.equal(probe.kind, 'fatal'); assert.equal(probe.code, 'unsupported_inline_projection'); assert.equal(receipt.closes, 1); assert.throws(() => storageObservationSnapshot(probe)); });
+  }
+});
+test('a stable wrong schema exits after one observation with no readiness sleep', async () => {
+  const actual = schema(); actual.version = 6;
+  await withStorage({ schema: actual }, async () => {
+    let calls = 0, pauses = 0;
+    await assert.rejects(waitForObservation(async () => { calls++; return storageObservationSnapshot(await observe()); }, { now: () => 0, deadline: 120000, assertHealthy: async () => {}, pause: async () => { pauses++; }, label: 'Normal storage' }), /streaming version8/);
+    assert.equal(calls, 1); assert.equal(pauses, 0);
+  });
+});
+test('an unknown schema cannot masquerade as a retryable empty projection', async () => {
+  const actual = schema(); actual.version = 9;
+  const probe = { kind: 'not-ready', code: 'entry_not_committed', schema: actual, inventory: [{ name: databaseName, version: 9 }], snapshot: { database: databaseName, version: 9, entries: [], contents: [] } };
+  let calls = 0, pauses = 0;
+  await assert.rejects(waitForObservation(async () => { calls++; return storageObservationSnapshot(probe); }, { now: () => 0, deadline: 120000, assertHealthy: async () => {}, pause: async () => { pauses++; }, label: 'Normal storage' }), /Unexpected normal streaming storage schema/);
+  assert.equal(calls, 1); assert.equal(pauses, 0);
 });
 
 const final = () => ({ workflowCompleted: true, phases: phaseNames.map(name => ({ name, status: 'passed' })), exceptions: [], errorEvents: [], networkReceipts: [], ambientNetworkErrors: [], pendingNetworkErrors: [], eventOverflow: 0, provenanceVerified: true, finalProvenanceVerified: true, normalClose: { requested: true }, cleanup: { failures: [], chrome: { exitCode: 0, signalCode: null, signals: [] }, vite: { closeResolved: true } }, startupCleanupTimedOut: false, startupResources: [{ creationSettled: true, expired: false, cleanupStatus: 'not_required' }] });

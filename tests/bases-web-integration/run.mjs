@@ -11,7 +11,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { CDP, delay } from '../tasks-electron-integration/cdp.mjs';
 import { UI } from '../bases-electron-integration/ui.mjs';
 import { observeOwnedChild, cleanupOwnedResources } from '../browser-workblocks-worker/cleanup.mjs';
-import { databaseName, noteName, notePath, marker, source, phaseNames, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, trackedHarnessInputs, trackOwnedStartup, finalEvidence, classifyRuntimeErrors, awaitRuntimeHealth, waitForObservation } from './oracles.mjs';
+import { databaseName, noteName, notePath, marker, source, phaseNames, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, trackedHarnessInputs, trackOwnedStartup, finalEvidence, classifyRuntimeErrors, awaitRuntimeHealth, waitForObservation, streamingStorageSchema, storageObservationSnapshot } from './oracles.mjs';
 
 const args = process.argv.slice(2), accepted = new Set(['--root', '--expected-head', '--wasm-dir', '--chrome', '--out', '--timeout-ms']);
 assert.equal(args.filter(value => value === '--runtime-authorized').length, 1, 'Explicit coordinator runtime authorization required');
@@ -63,11 +63,12 @@ const before = await provenance();
 await fs.mkdir(out); // Fresh evidence only. Never overwrite an earlier run.
 const profile = path.join(out, 'chrome-profile'); await fs.mkdir(profile);
 const started = Date.now(), deadline = started + timeoutMs;
-const evidence = { kind: 'actual-normal-web-workspace-smoke', status: 'running', started: new Date(started).toISOString(), timeoutMs, provenance: before, phases: phaseNames.map(name => ({ name, status: 'unexecuted' })), actions: [], observations: [], requests: [], workerTargets: [], errorEvents: [], errorObservedAt: [], networkReceipts: [], exceptions: [], ambientNetworkErrors: [], pendingNetworkErrors: [], startupDiagnostics: [], limitations: ['Five normal note UI phases only; not full Bases, desktop/mobile, sync, performance or visual parity.', 'CDP pointer/keyboard input and read-only IndexedDB inspection; not physical keyboard or OS focus parity.', 'The normal Vite development entry is exercised, not a production bundle.'] };
+const evidence = { kind: 'actual-normal-web-workspace-smoke', status: 'running', started: new Date(started).toISOString(), timeoutMs, provenance: before, phases: phaseNames.map(name => ({ name, status: 'unexecuted' })), actions: [], observations: [], requests: [], workerTargets: [], errorEvents: [], errorObservedAt: [], networkReceipts: [], exceptions: [], ambientNetworkErrors: [], pendingNetworkErrors: [], startupDiagnostics: [], storageObservations: [], storageReadbacks: [], storageReadCount: 0, limitations: ['Five normal note UI phases only; not full Bases, desktop/mobile, sync, performance or visual parity.', 'CDP pointer/keyboard input and read-only IndexedDB inspection; not physical keyboard or OS focus parity.', 'The normal Vite development entry is exercised, not a production bundle.', 'Saved-byte checks inspect the normal streaming-v8 inline text projection, not encrypted retained graph integrity or chunked/binary content.'] };
 let server, chrome, childReceipt, cdp, ui, cleanupCall, failure, timedOut = false;
 let stderr = '', eventOverflow = 0;
 const startupTasks = [];
 const networkById = new Map(), networkWaiters = new Set();
+const storageObservationHashes = new Set(), storageReadbackHashes = new Set();
 function live() { if (timedOut || Date.now() >= deadline) { timedOut = true; throw Error('Whole normal-web smoke deadline'); } }
 async function bounded(action, resource) {
   live(); let timer;
@@ -112,7 +113,19 @@ async function diagnostic(label, afterFailure = false) {
 }
 async function dom(body) { return bounded(() => cdp.evaluate(`(()=>{${body}})()`)); }
 async function screenshot(name) { const image = await bounded(() => cdp.call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })); await fs.writeFile(path.join(out, name + '.png'), Buffer.from(image.data, 'base64')); }
-async function storage() { return bounded(() => cdp.evaluate(`(${readOnlyDatabaseSnapshot.toString()})(${JSON.stringify(databaseName)})`)); }
+async function storage() {
+  assert.ok(evidence.storageReadCount++ < 2000, 'Bounded read-only storage observations');
+  const probe = await bounded(() => cdp.evaluate(`(${readOnlyDatabaseSnapshot.toString()})(${JSON.stringify(databaseName)},${JSON.stringify(streamingStorageSchema)})`));
+  // Keep actual inventory/schema evidence even when the strict decoder rejects
+  // it. Repeated readiness reads do not duplicate the same full schema payload.
+  const observed = { kind: probe?.kind, code: probe?.code, message: probe?.message, inventory: probe?.inventory, schema: probe?.schema }, observedHash = sha(JSON.stringify(observed));
+  if (!storageObservationHashes.has(observedHash)) { assert.ok(storageObservationHashes.size < 32, 'Bounded schema variants'); storageObservationHashes.add(observedHash); evidence.storageObservations.push({ at: Date.now(), sha256: observedHash, ...observed }); }
+  if (probe?.snapshot) {
+    const digest = sha(JSON.stringify(probe.snapshot));
+    if (!storageReadbackHashes.has(digest)) { assert.ok(storageReadbackHashes.size < 64, 'Bounded durable readback variants'); storageReadbackHashes.add(digest); evidence.storageReadbacks.push({ at: Date.now(), sha256: digest, snapshot: probe.snapshot }); }
+  }
+  return storageObservationSnapshot(probe);
+}
 async function frame(label) {
   const value = await dom(`const editors=[...document.querySelectorAll('.pane.is-active .cm-content[contenteditable="true"]')].filter(e=>e.getClientRects().length),e=editors[0];return {workspace:!!document.querySelector('.workspace'),desktopBridge:!!window.zorid,fixtureMarker:!!document.querySelector('meta[name="zorid-core-fixture-build"]'),title:document.querySelector('.pane.is-active .note-title')?.value,editors:editors.length,connected:!!e?.isConnected,editable:e?.getAttribute('contenteditable')==='true',focusedEditor:document.activeElement===e,text:e?[...e.querySelectorAll('.cm-line')].map(line=>line.textContent).join('\n'):null,saveState:document.querySelector('.save-state')?.textContent??null,timeOrigin:performance.timeOrigin};`);
   assert.ok(evidence.observations.length < 2000, 'Bounded passive frame receipts'); evidence.observations.push({ label, ...value }); return value;

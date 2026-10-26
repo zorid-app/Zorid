@@ -36,8 +36,31 @@ outside source/build roots. No package installation is performed.
 | Open result | Normal search-result pointer input opens the exact title/source; read-only persisted entry/revision/bytes still match. |
 
 IndexedDB inspection enumerates the existing normal database first, refuses
-creation/upgrade/version changes, and uses only `readonly` transactions over
-metadata/content. It never changes database contents, source, settings, clocks,
+creation/upgrade/version changes, and pins the current normal streaming version8
+format, including its31 stores, key paths and indexes. The normal path is
+`browser-default.ts` → `browser-core-worker.ts` → `openBrowserStreamingVault`;
+the version6 opener is selected only by `legacyFixture: true` and is not accepted
+as a normal-web result. The schema contract is handwritten from
+`browser-streaming-vault.ts`, `browser-normalized-idb.ts` and
+`browser-managed-records.ts`, not inferred from whatever database appears.
+
+The observer opens an already-enumerated database **without a requested version**
+and aborts any unexpected upgrade. It captures actual database names/versions and
+store/key/index metadata before deciding whether that known format is supported.
+Unknown/legacy versions or layouts return fatal diagnostic evidence rather than
+requesting conversion, accepting another format or polling for120 seconds.
+Only a known-schema empty projection awaiting the UI create commit is retryable.
+The runner retains distinct schema observations and durable readbacks before its
+strict decoder can fail.
+
+One consistent `readonly` transaction covers the observed schema and reads only
+the `metadata`/`content` rows. Normal streaming publication stores visible small
+text as `content: {id, bytes: Uint8Array}`. The independent whole-byte oracles use
+those actual inline bytes for the empty note and the51-byte body. No product
+codec, parser, adapter read or decryption method constructs expected bytes. This
+does not verify the retained encrypted graph or support chunked/binary content;
+an absent/encoded/incompatible inline projection fails without a fallback.
+It never changes database contents, source, settings, clocks,
 session storage, application controllers or adapter state. DOM evaluation reads
 visible controls, focus, text and results; all positive changes use ordinary
 pointer/keyboard input. The expected source/search results are handwritten.
