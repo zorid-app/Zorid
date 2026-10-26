@@ -201,6 +201,93 @@ fixture files. These results do not relabel the earlier failed Recovery001 run.
 Report: `/private/tmp/zorid-bases-recovery-20261026-002/result.json`.
 SHA-256: `362a06deb7f6ef3c150e98946258f134850fea1f80be4c37bae83933c024e74c`.
 
+## Safety003 — four scenarios pass; path-reuse feedback stops the run
+
+Session 73430 stops at **107 actions and 22 checks** on frozen source
+`36dad4c1fc228658b54fe74959974966917b72d9`, with frontend 004 built at that same
+commit and the unchanged native host. The frontend-004 receipt has SHA-256
+`38090c09df2df8f0bdc8d5664958f82b1fa8707861d68a5806948ff2a809d18c`.
+The recorded scenario statuses are four passed, one failed and eight unexecuted.
+
+The four completed scenarios cover shared dirty-body/property saves and
+conditional history; partial bulk failure, undo and recovery; stale property
+settings; and stale live-summary configuration with newer input. In particular,
+the partial clear durably saves `score: null`, publishes its blank cell, preserves
+the conflicted B file, and passes subsequent recovery/clear/undo checks. This is
+bounded partial-clear acceptance after the explicit freshness setup. It does not
+replay the original stale-physical `7null` merge interleaving or establish a full
+safety campaign pass; the source-guard regressions remain separate evidence.
+
+The fifth scenario types `8`, retires the original `Replace.md`, writes a new
+identity at that path, then submits the stale editor. At failure, its screenshot
+shows the retained `8`; the captured cell has `mod-error` and its nested input is
+`aria-invalid`, while the page displays the generic durable-request error. The
+captured role-alert list is empty, and the wait for visible
+stale/changed/replaced/conflict feedback fails.
+A separate post-run physical audit confirms both authored files remain exact:
+replacement score `6` and retired original score `3`. Those physical observations
+do not make the failed visible-recovery assertion pass. The remaining close-guard
+steps in that scenario and all eight later scenarios are unexecuted.
+
+Two preceding normal quits have code 0, null signal and no leaked children.
+Final cleanup requires SIGKILL, null exit code and no leaked children.
+Before/after provenance is identical; independent comparison verifies 837 frozen
+Git blobs, 333 frontend-004 hashes, the original fixture hash at the retired path,
+and the complete authored replacement source.
+
+Report: `/private/tmp/zorid-bases-safety-20261026-003/result.json`.
+SHA-256: `429e2131462eca4f0ae33996eaa6d357871959c863459970bfef0685871103d0`.
+
+## Typed Filter002 — String cases and partial list round-trip pass
+
+Session 58096 stops at **315 actions and 99 checks** on frozen source
+`292cf8bb61c79528ed08d13648dd5e39cfe586e9`, using frontend 003 and the unchanged
+native host. All 15 String cases pass their source, membership, reopened-control
+and clear assertions, including zero results. The following `list-exact` case
+passes source/membership/reopen checks and the remove/re-add type/shape checks.
+Its subsequent close wait fails with the Filter panel still mounted.
+
+The last dispatched input is Escape after re-adding the list item. An early
+Escape before acknowledgement is a timing hypothesis: the actual panel/ACK state
+at that key dispatch was not recorded. This is not proof of a product close bug
+or a completed list scenario. Remaining typed cases and restart acceptance stay
+unexecuted. Owned cleanup is SIGTERM, code 0, null signal and no leaked children.
+Before/after provenance matches, including independent verification of 837 Git
+blobs and the 333 frontend-003 hashes.
+
+Report: `/private/tmp/zorid-bases-filters-20261026-002/result.json`.
+SHA-256: `c4bbf7b531ac342e892b08f24ba7cab9dcd0b4ed2437aae1c633e3182c39982e`.
+
+## Normal web001 — module-load failure before Workspace acceptance
+
+Session 7720 fails before any input or any of the five authored normal-web phases
+executes, on frozen source `16cd01e57402fd0cac4751d4c3dd5623dd6cc92b`. The actual
+browser exception says `/desktop/conditional-saved-source.cjs?import` does not
+provide the named export `captureSavedSourceGuard`, while loading
+`src/platform/desktop-note-plan.ts`. This is distinct from the passing browser
+Worker/WASM semantic fixture above: normal Workspace startup was not established.
+
+Owned Chrome PID 21982 exits with code 0 and null signal after normal close is
+requested. Vite close resolves, HTTP listening is false and cleanup failures are
+empty. The campaign retains its owned Chrome profile separately; the archive
+excludes that directory. Final provenance verification passes. An independent
+read-only audit matches 385 tracked and 441 Rust-input hashes to frozen Git blobs.
+
+Report: `/private/tmp/zorid-bases-web-20261026-001/report.json`.
+SHA-256: `9ac1ec68eb04dcf51193a60f7a320135b282285db1df11ef230342e3597287fe`.
+
+The subsequent Vite-boundary and staging fixes are integrated as `5dca58ed` and
+`332f0f50`. Their composed boundary test run records **four passed and one failed**:
+the Vite test cannot bind `127.0.0.1` under its sandbox (`EPERM`). A separate
+focused Vite rerun with the required execution access passes **one test, zero
+failures and zero skips**. That focused pass neither rewrites the earlier failed
+run nor establishes a successful normal-web UI or packaged-app runtime.
+
+Logs: `/private/tmp/zorid-bases-boundaries-composed-20261026-001.log`
+(SHA-256 `2ae3b47d210031b9984fa539c7e4edc3bd2edd679e7ba6dca49c1ed00e02ed43`)
+and `/private/tmp/zorid-bases-vite-composed-20261026-002.log`
+(SHA-256 `172038ee19ebfaf6926fd240af56a1d6a2d222499e39a4ee092ed84cd7b370b5`).
+
 ## Durable local archive
 
 To survive temporary-directory cleanup, completed evidence and native products
@@ -248,6 +335,18 @@ archive parts and their manifests remain unchanged.
 | `fresh-validation-003.tar.gz` | 759,858 | `180a260d7ef2f69a6e2563460434d299f2043a7e88bf8e8d51ff4e5adf30b99d` |
 | `fresh-validation-003-manifest.json` | — | `021f39d1b96039871840f40305784641c0a9fe8c6c4e877883662031878fecd6` |
 | `independent-content-audit-003.json` | — | `dc6943b6ae3b9cc6c2a1fa3ce954148e3d30cf4e72a338c3990e659916d77f5b` |
+
+Part 004 retains the completed Safety003, Filter002 and normal-web001 evidence,
+frontend-004 receipt and six launch/build/boundary-test logs. It contains **94
+original regular files, 9,571,849 original-file bytes, plus an embedded snapshot
+manifest**. All three owned profile directories are excluded. Original/member
+hashes verify, with parts 001–003 and their manifests unchanged.
+
+| Additional local artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `fresh-validation-004.tar.gz` | 2,182,572 | `5d7506935c38b505a853eea065f3390b165a2e92bdd89a391a45030b356a9740` |
+| `fresh-validation-004-manifest.json` | — | `5511b4c43eb006963139cebf2da94e62fcb8c6d0f86ad2af5537d3fdffaeb9fe` |
+| `independent-content-audit-004.json` | — | `0160d1c3be20a4b46a0c9b62e413c5231d9c2d6cf71602d3b166dc5557475648` |
 
 Full archive directory:
 `/Users/ctk/Projects/Zorid/.worktrees/types-bases-model/tmp/bases-validation-20261026/`.
