@@ -6,6 +6,7 @@ export interface BaseEmbedTarget {
   sourcePath: string;
   targetPath: string;
   viewName: string;
+  viewId?:string;
   /** File incarnation, not its reusable path spelling. */
   targetIdentity: unknown;
   sourceIdentity: unknown;
@@ -31,7 +32,7 @@ interface Entry {
   settled: boolean;
   retiring?: Promise<void>;
 }
-type RenameAwareSession = BaseSession & { rebindViewName?(from: string, to: string): void };
+type RenameAwareSession = BaseSession & { rebindViewName?(from: string, to: string,viewId?:string): void };
 
 /** A tab owns these sessions. Synchronous Markdown widget disposal only unmounts
  * a binding; it never closes a writable query or abandons its property draft. */
@@ -63,7 +64,7 @@ export class BaseEmbedSessions {
     const matches = (entry: Entry) => (!entry.attached || !!entry.inlineHandoff && !!entry.lease && typeof target.occurrence === 'object' && target.occurrence !== null && entry.target.occurrence === target.occurrence)
       && !entry.retiring && !entry.error && entry.target.sourcePath === target.sourcePath
       && entry.target.sourceIdentity === target.sourceIdentity
-      && entry.target.targetPath === target.targetPath && entry.target.viewName === target.viewName
+      && entry.target.targetPath === target.targetPath && (target.viewId!==undefined?entry.target.viewId===target.viewId:entry.target.viewName===target.viewName)
       && entry.target.targetIdentity === target.targetIdentity
       && (!entry.target.inline && !target.inline || !!entry.target.inline && !!target.inline
         && entry.target.inline.from === target.inline.from && entry.target.inline.to === target.inline.to
@@ -141,13 +142,15 @@ export class BaseEmbedSessions {
    * Markdown fragments. Reuse the same session/draft when that exact occurrence
    * remounts; a replaced Base incarnation and unrelated external source edits
    * retain their ordinary identity guards and cannot reclaim this binding. */
-  renameViewBinding(basePath:string,from:string,to:string,targetIdentity:unknown):number {
+  renameViewBinding(basePath:string,from:string,to:string,targetIdentity:unknown,viewId?:string):number {
     if(this.closed||targetIdentity===undefined||targetIdentity===null||from===to)return 0;
     let changed=0;
     for(const entry of this.entries){
       const target=entry.target;
       if(entry.retiring||entry.error||target.inline||target.targetPath!==basePath||target.targetIdentity!==targetIdentity||target.viewName!==from)continue;
-      (entry.session as RenameAwareSession|undefined)?.rebindViewName?.(from,to);
+      const boundId=target.viewId??entry.session?.selectedViewIdentity;
+      if(viewId!==undefined&&boundId!==viewId)continue;
+      (entry.session as RenameAwareSession|undefined)?.rebindViewName?.(from,to,viewId);
       entry.target={...target,viewName:to};
       entry.root.setAttribute('aria-label',`${basePath}${to?` — ${to}`:''}`);
       changed++;

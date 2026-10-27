@@ -1,8 +1,7 @@
 import { isAlias, isMap, isScalar, parseDocument, visit } from 'yaml';
 import type { BaseExpressionValue } from './expression.ts';
 
-/** Ordinary visible vault file. There is no named note-Type registry. */
-export const BASE_PROPERTY_DEFINITIONS_PATH = 'Properties.yaml';
+/** Value-control definitions supplied explicitly by a collection owner. */
 export const MAX_BASE_PROPERTY_SETTINGS_BYTES = 256 * 1024;
 export const MAX_BASE_PROPERTY_DEFINITIONS = 1024;
 export const MAX_BASE_PROPERTY_OPTIONS = 1024;
@@ -106,12 +105,12 @@ export function updateBasePropertyDefinition(source: string, property: string, d
     const keys = new Set<string>();
     for (const pair of map.items) {
       const node = isAlias(pair.key) ? pair.key.resolve(doc) : pair.key;
-      if (node !== null && !isScalar(node)) throw new BasePropertyDefinitionError('Properties.yaml contains complex YAML keys. Edit the source before changing these settings.');
+      if (node !== null && !isScalar(node)) throw new BasePropertyDefinitionError('Property configuration contains complex YAML keys. Edit the source before changing these settings.');
       const value = node === null ? null : node.value;
-      if ((value !== null && typeof value === 'object') || typeof value === 'symbol' || typeof value === 'function') throw new BasePropertyDefinitionError('Properties.yaml contains complex YAML keys. Edit the source before changing these settings.');
+      if ((value !== null && typeof value === 'object') || typeof value === 'symbol' || typeof value === 'function') throw new BasePropertyDefinitionError('Property configuration contains complex YAML keys. Edit the source before changing these settings.');
       // yaml's ordinary-object projection uses an empty key for null.
       const key = value === null ? '' : String(value);
-      if (keys.has(key)) throw new BasePropertyDefinitionError('Properties.yaml contains overlapping YAML keys. Edit the source before changing these settings.');
+      if (keys.has(key)) throw new BasePropertyDefinitionError('Property configuration contains overlapping YAML keys. Edit the source before changing these settings.');
       keys.add(key);
     }
   } });
@@ -154,7 +153,7 @@ export function updateBasePropertyDefinition(source: string, property: string, d
     }
     return JSON.stringify([Object.entries(data).filter(([key]) => key !== 'properties'), Object.entries(properties).filter(([name]) => name !== property), unfamiliar]);
   };
-  if (retainedData(raw) !== retainedData(after)) throw new BasePropertyDefinitionError('These settings share YAML values with another field. Edit Properties.yaml to change them together.');
+  if (retainedData(raw) !== retainedData(after)) throw new BasePropertyDefinitionError('These settings share YAML values with another field. Edit the property configuration to change them together.');
   return output;
 }
 export interface BasePropertyOptionMigration { readonly property: string; readonly from: string; readonly to: string; }

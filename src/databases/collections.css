@@ -1,0 +1,18 @@
+.collection-source-bar { display: flex; align-items: center; gap: 8px; padding: 5px 12px; color: var(--text-muted); }
+.collection-source-bar button { padding: 5px 8px; background: transparent; border: 0; border-radius: 5px; color: inherit; cursor: pointer; }
+.collection-source-bar button:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+.collection-source-chooser, .collection-property-editor { padding: 24px; max-width: 720px; margin: 16px auto; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--background-primary); }
+.collection-source-choices { display: flex; gap: 16px; margin: 20px 0; }
+.collection-source-choices > button { flex: 1; min-height: 100px; text-align: left; padding: 16px; font-size: 16px; }
+.collection-source-choices small { display: block; font-size: 13px; color: var(--text-muted); margin-top: 10px; }
+.collection-source-chooser button, .collection-property-editor button { cursor: pointer; border: 1px solid var(--background-modifier-border); border-radius: 5px; padding: 7px 10px; background: var(--background-primary); color: var(--text-normal); margin: 4px; }
+.collection-source-chooser input, .collection-source-chooser select, .collection-property-editor input, .collection-property-editor select { padding: 7px 9px; margin: 4px; max-width: 100%; background: var(--background-primary); color: var(--text-normal); border: 1px solid var(--background-modifier-border); border-radius: 5px; }
+.collection-source-existing { display: flex; flex-wrap: wrap; }
+.collection-property-row { padding: 10px 0; border-bottom: 1px solid var(--background-modifier-border); }
+.collection-option-list { padding-left: 24px; }
+.collection-delete-confirmation { padding: 10px; border: 1px solid var(--color-red); border-radius: 5px; }
+.collection-property-editor [role="alert"], .collection-source-chooser [role="alert"] { color: var(--color-red); }
+.collections-modal { width: min(860px, 92vw); max-height: 85vh; overflow: auto; }
+.collection-browser-item, .collection-browser-entry { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--background-modifier-border); }
+.collection-browser button { cursor: pointer; margin: 4px; border-radius: 5px; background: var(--background-primary); color: var(--text-normal); padding: 6px 10px; border: 1px solid var(--background-modifier-border); }
+.collection-browser [role="alert"] { color: var(--color-red); }

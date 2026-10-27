@@ -6,16 +6,20 @@ import { clearProperties, sortProperties } from './property-menus.ts';
 import type { Vault } from '../core/vault.ts';
 import { baseExpressionValue } from '../bases/expression.ts';
 import type { BaseExpressionValue } from '../bases/expression.ts';
-import { BASE_PROPERTY_DEFINITIONS_PATH, parseBasePropertyDefinitions } from '../bases/property-definitions.ts';
 import type { BasePropertyDefinition } from '../bases/property-definitions.ts';
 import { basePropertyPopoverOwner,mountBasePropertyWidget } from '../bases/property-widgets.ts';
 import type { BaseRelationTarget } from '../bases/property-widgets.ts';
 
 export interface PropertiesOptions {
   getSource: () => string;
-  /** Shared vault-wide value definitions; never a named note-Type registry. */
+  /** Vault access supplies file/link controls only; it never discovers a schema. */
   vault?: Vault;
   path?: string;
+  /** Explicit collection-scoped definitions supplied by the current owner. */
+  getDefinitions?: () => Readonly<Record<string, BasePropertyDefinition>>;
+  /** Managed membership/identities cannot be edited as ordinary YAML keys. */
+  isManaged?: () => boolean;
+  collectionName?: () => string | undefined;
   onPropertyDefinitionChange?: (property: string, definition: BasePropertyDefinition) => Promise<void> | void;
   /** Optional Rust-filtered targets. A filtered relation is never evaluated locally. */
   getRelationTargets?: (property: string, definition: BasePropertyDefinition) => readonly BaseRelationTarget[] | undefined;
@@ -77,7 +81,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   const selectType = (label: string, current: string) => {
     const node = element('select', 'metadata-property-type'); node.setAttribute('aria-label', label);
     for (const type of types) { const option = element('option', '', labels[type]); option.value = type; node.append(option); }
-    if (options.vault) for (const [type, label] of [['link', 'Link'], ['select', 'Select'], ['multiselect', 'Multiselect'], ['status', 'Status'], ['relation', 'Relation'], ['reverseRelation', 'Reverse relation'], ['rollup', 'Rollup']]) { const option = element('option', '', label); option.value = type; node.append(option); }
+    if (options.getDefinitions && options.onPropertyDefinitionChange) for (const [type, label] of [['link', 'Link'], ['select', 'Select'], ['multiselect', 'Multiselect'], ['status', 'Status'], ['relation', 'Relation'], ['reverseRelation', 'Reverse relation'], ['rollup', 'Rollup']]) { const option = element('option', '', label); option.value = type; node.append(option); }
     node.value = current; return node;
   };
   const root = element('div', 'metadata-container'); root.setAttribute('aria-label', 'Properties');
@@ -98,6 +102,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
   let definitionLoad = 0;
   const unsubscribers: (() => void)[] = [];
   const definitionFor = (key: string) => Object.hasOwn(definitions, key) ? definitions[key] : undefined;
+  const managedKey=(key:string)=>!!options.isManaged?.()&&(key==='_id'||key==='_type'||!!definitionFor(key));
   const showMenu = options.showMenu ?? showContextMenu;
   const clipboard = options.writeClipboard ?? (document.defaultView?.navigator.clipboard?.writeText
     ? (text: string) => document.defaultView!.navigator.clipboard.writeText(text) : undefined);
@@ -313,6 +318,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
       queueMicrotask(() => { if (!destroyed && !row.dirty) renderValue(row); });
     });
     row.keyInput.addEventListener('change', () => {
+      if(managedKey(row.key)){row.keyInput.value=row.key;return;}
       const newKey = row.keyInput.value;
       commit(row.error, source => renameProperty(source, row.key, newKey), () => {
         const oldKey = row.key; rows.delete(oldKey); rows.set(newKey, row); row.key = newKey;
@@ -340,12 +346,14 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
       }, () => { selectedTypes.set(row.key, type); row.dirty = false; row.renderedValue = undefined; });
     });
     const remove = button('×', 'metadata-property-remove'); remove.setAttribute('aria-label', `Remove ${property.key}`);
-    remove.addEventListener('click', () => commit(row.error, source => removeProperty(source, row.key), () => { selectedTypes.delete(row.key); }));
+    remove.addEventListener('click', () => {if(managedKey(row.key))return;commit(row.error, source => removeProperty(source, row.key), () => { selectedTypes.delete(row.key); });});
     row.element.append(row.selector, row.keyInput, row.value, remove, row.error); return row;
   }
 
   function refresh(): void {
+    definitions = options.getDefinitions?.() ?? {};
     if (destroyed) return;
+    heading.textContent=options.collectionName?.()?`${options.collectionName!()} properties`:'Properties';
     let properties: Property[];
     try { properties = readProperties(options.getSource()); error(globalError); addButton.disabled = false; }
     catch (problem) { error(globalError, problem); addButton.disabled = true; return; }
@@ -363,7 +371,13 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
       // even after focus moves elsewhere. External keys get distinct rows.
       row.keyInput.setAttribute('aria-label', `${property.key} name`); row.selector.setAttribute('aria-label', `${property.key} type`);
       row.element.querySelector('.metadata-property-remove')?.setAttribute('aria-label', `Remove ${property.key}`);
-      row.selector.value = definitionFor(property.key)?.type ?? typeFor(property);
+      row.keyInput.readOnly=managedKey(property.key);
+      const reserved=!!options.isManaged?.()&&(property.key==='_id'||property.key==='_type');
+      row.element.hidden=reserved;
+      const remove=row.element.querySelector<HTMLButtonElement>('.metadata-property-remove');if(remove)remove.hidden=managedKey(property.key);
+      const definition=definitionFor(property.key);
+      if(definition&&![...row.selector.options].some(option=>option.value===definition.type)){const option=element('option','',definition.type==='multiselect'?'Multi-select':definition.type[0].toUpperCase()+definition.type.slice(1));option.value=definition.type;row.selector.append(option);}
+      row.selector.value = definition?.type ?? typeFor(property);
       row.selector.disabled = !!definitionFor(property.key) && !options.onPropertyDefinitionChange; renderValue(row);
       // Reinsert only when order actually changed, preserving DOM focus and selection.
       if (rowsContainer.children[index] !== row.element) rowsContainer.insertBefore(row.element, rowsContainer.children[index] ?? null);
@@ -405,6 +419,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     const reserved = ['aliases', 'cssclasses', 'tags'].includes(row.key);
     const inferred = row.property.value === null ? 'text' : row.property.type;
     const assigned = selectedTypes.get(row.key);
+    if(managedKey(row.key)){event.preventDefault?.();event.stopPropagation?.();return;}
     const submenu: ContextMenuItem[] = [];
     if (!reserved) {
       submenu.push({ id: 'property-type-automatic', label: assigned ? 'Automatic' : `Automatic (${inferred === 'unknown' ? 'Unknown' : labels[inferred]})`, checked: !assigned, enabled: !hasDraft(row) });
@@ -484,7 +499,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
       { label: 'Sort', submenu: [
         { id: 'properties-sort-asc', label: 'Name (A to Z)', enabled: !dirty },
         { id: 'properties-sort-desc', label: 'Name (Z to A)', enabled: !dirty },
-      ] }, { type: 'separator' }, { id: 'properties-clear', label: 'Clear file properties', enabled: !dirty },
+      ] }, { type: 'separator' }, { id: 'properties-clear', label: 'Clear file properties', enabled: !dirty&&!options.isManaged?.() },
     ], actions);
   }
   function routeMenu(event: MenuEvent): void {
@@ -540,20 +555,11 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     addForm.append(name, selector, add, cancel); root.append(addForm); name.focus();
   });
   async function loadDefinitions(): Promise<void> {
-    if (!options.vault || destroyed) return;
-    const request = ++definitionLoad;
-    try {
-      const exists = options.vault.entries.get(BASE_PROPERTY_DEFINITIONS_PATH)?.type === 'file';
-      const parsed = exists ? parseBasePropertyDefinitions(await options.vault.read(BASE_PROPERTY_DEFINITIONS_PATH)) : { properties: {}, diagnostics: [] };
-      if (destroyed || request !== definitionLoad || !(options.isCurrent?.() ?? true)) return;
-      definitions = parsed.properties; refresh();
-      if (parsed.diagnostics.length) report(new Error(parsed.diagnostics.map(item => `${item.property}: ${item.message}`).join('\n')));
-    } catch (problem) { if (!destroyed && request === definitionLoad) report(problem); }
+    if (destroyed) return;
+    definitions = options.getDefinitions?.() ?? {};
+    refresh();
   }
-  if (options.vault) {
-    for (const event of ['create', 'modify', 'delete', 'rename', 'ready'] as const) unsubscribers.push(options.vault.on(event, change => { if (event === 'ready' || change.path === BASE_PROPERTY_DEFINITIONS_PATH || change.oldPath === BASE_PROPERTY_DEFINITIONS_PATH) void loadDefinitions(); }));
-    void loadDefinitions();
-  }
+  void loadDefinitions();
   const editObserver = document.defaultView?.MutationObserver ? new document.defaultView.MutationObserver(() => {
     if(destroyed)return;
     // A rich widget explicitly cancelling its failed draft removes its marker.

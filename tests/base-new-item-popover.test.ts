@@ -111,7 +111,7 @@ test('embedded-session close failures retain the popup and shared buffer for ret
 });
 
 test('Escape cancels a descendant rich property draft before popup dismissal can blur-save it', async () => {
-  const s=await setup('---\ncount: 2\n---\nBody');await s.vault.create('Properties.yaml','properties:\n  count: {type: number}\n');await tick();
+  const s=await setup('---\ncount: 2\n---\nBody',{properties:{getDefinitions:()=>({count:{type:'number'}})}});await tick();
   s.handle.element.querySelector<HTMLElement>('.metadata-properties-heading')!.click();
   const value=s.handle.element.querySelector<HTMLElement>('[data-property-key="count"] .metadata-property-value')!;value.click();
   const input=value.querySelector<HTMLInputElement>('input')!;assert.ok(input);input.value='3';input.dispatchEvent(new s.dom.window.Event('input',{bubbles:true}));
@@ -121,8 +121,8 @@ test('Escape cancels a descendant rich property draft before popup dismissal can
 
 test('a rich property portal opened during delayed child close retains its exact unaccepted draft', async () => {
   let release!:()=>void,started!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),entered=new Promise<void>(resolve=>{started=resolve;});
-  const s=await setup('---\ntopics: []\n---\nBody',{closeEditor:async()=>{started();await gate;}});
-  await s.vault.create('Properties.yaml','properties:\n  topics: {type: multiselect, options: [{value: Rust}]}\n');await tick();s.handle.element.querySelector<HTMLElement>('.metadata-properties-heading')!.click();
+  const s=await setup('---\ntopics: []\n---\nBody',{properties:{getDefinitions:()=>({topics:{type:'multiselect',options:[{value:'Rust'}]}})},closeEditor:async()=>{started();await gate;}});
+  await tick();s.handle.element.querySelector<HTMLElement>('.metadata-properties-heading')!.click();
   const closing=s.handle.close();await entered;
   const value=s.handle.element.querySelector<HTMLElement>('[data-property-key="topics"] .metadata-property-value')!;value.click();
   const input=s.dom.window.document.querySelector<HTMLInputElement>('.bases-property-popover input')!;assert.ok(input);input.value='Rust';input.dispatchEvent(new s.dom.window.Event('input',{bubbles:true}));

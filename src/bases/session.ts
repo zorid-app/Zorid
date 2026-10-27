@@ -1,7 +1,11 @@
 import { BaseController, createBaseMutationHost } from './controller.ts';
-import { createBasePropertyDefinitionSaver } from './property-definition-save.ts';
 import type { BaseBufferHost, BaseControllerState, BaseViewRenamed } from './controller.ts';
-import { BaseDocument } from './document.ts';
+import { BaseDocument, baseViewSource, baseViewSetting } from './document.ts';
+import type { BaseViewSource } from './document.ts';
+import { mountSourceChooser, mountCollectionEditor, collectionPropertyDefinitions, collectionValue } from '../databases/collection-ui.ts';
+import type { SourceChooser, CollectionEditor } from '../databases/collection-ui.ts';
+import {planCollectionEntryCreation} from '../databases/creation.ts';
+import type { DatabaseCollection, DatabaseEntry, DatabaseRequest } from '../core/databases.ts';
 import { sharedBaseCoverage, sharedBasePreview, sharedBaseWitness } from './shared-query.ts';
 import { createBaseClockHost } from './clock.ts';
 import type { BaseClockHost } from './clock.ts';
@@ -23,19 +27,18 @@ import { exportBaseResults } from './export.ts';
 import type { BaseExportFormat } from './export.ts';
 import { prepareBaseItemCreation } from './creation.ts';
 import type { BaseCreationOperation } from './creation.ts';
-import { baseEditablePropertyValue, baseImageSourceValue } from './view-actions.ts';
+import { baseEditablePropertyValue, baseImageSourceValue, baseEditValue, baseGroupWriteValue } from './view-actions.ts';
 import type { BaseValue, BaseViewPatch } from './document.ts';
 import type { BasePresentationOptions, BasePropertyPresentation } from './presentation-common.ts';
 import { createBasePropertyRenderer } from './property-widgets.ts';
 import type { BasePropertyWidgetEdit, BasePropertyWidgetAcknowledgement } from './property-widgets.ts';
-import { baseValuesEqual } from './expression.ts';
+import { baseValuesEqual, baseExpressionValue } from './expression.ts';
 import { icon } from '../ui/icons.ts';
 import { enhanceBaseSummaryEditor } from './toolbar-formula-editor.ts';
 import type { BaseFormulaEditor } from './toolbar-formula-editor.ts';
 import type { BaseRelationTarget } from './property-widgets.ts';
-import { BASE_PROPERTY_DEFINITIONS_PATH, BASE_PROPERTY_TYPES, basePropertyName, parseBasePropertyDefinitions, parseBasePropertyInput, inferBasePropertyDefinition, basePropertyValueDiagnostic } from './property-definitions.ts';
-import type { BasePropertyDefinition, BasePropertyDefinitions, BasePropertyType } from './property-definitions.ts';
-import { createBasePropertySettingsPanel } from './property-settings-panel.ts';
+import { basePropertyName, parseBasePropertyInput, inferBasePropertyDefinition, basePropertyValueDiagnostic } from './property-definitions.ts';
+import type { BasePropertyDefinition, BasePropertyDefinitions } from './property-definitions.ts';
 
 const unavailableFilterOperands = Object.freeze({ files: Object.freeze([]), folders: Object.freeze([]), tags: Object.freeze([]), properties: Object.freeze([]), metadataStatus: 'unavailable' as const });
 
@@ -205,6 +208,7 @@ export interface BaseSessionOptions {
   readonly clock?: BaseClockHost;
   readonly visibility?: BaseSessionVisibility;
   readonly viewName?: string;
+  readonly viewId?: string;
   /** Rebind an existing named embed after its new name is durably saved. */
   readonly onViewRenamed?: (event: BaseViewRenamed) => void;
   readonly closeCreatedFile?: () => boolean | Promise<boolean>;
@@ -224,7 +228,8 @@ export interface BaseSession {
   selectView(index: number): Promise<void>;
   setCurrentFile(path: string | null, expectedEntryId?: string): Promise<void>;
   /** Passive saved-name transition for sibling embeds; retains all drafts. */
-  rebindViewName(from: string, to: string): boolean;
+  readonly selectedViewIdentity?:string;
+  rebindViewName(from: string, to: string, viewId?:string): boolean;
   /** Workspace preflight: retain the mounted view while settling accepted edits. */
   flush(options?: { dismissCleanPanels?: boolean }): Promise<void>;
   hasPendingChanges(): boolean;
@@ -254,16 +259,32 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const content = doc.createElement('div'), status = doc.createElement('div');
   root.className = 'bases-session'; toolbar.className = 'bases-session-toolbar'; content.className = 'bases-session-content';
   status.className = 'bases-session-status'; status.setAttribute('role', 'status');
-  root.append(toolbar, content, status); container.append(root);
+  const sourceBar = doc.createElement('div'); sourceBar.className = 'collection-source-bar';
+  const sourcePanel = doc.createElement('div'); sourcePanel.className = 'collection-source-panel';
+  root.append(toolbar, sourceBar, sourcePanel, content, status); container.append(root);
   let disposed = false, closing = false, mounted: MountedView | undefined, mountedType: string | undefined;
   let mountedResult: BaseQueryResult | undefined, renderingResult: BaseQueryResult | undefined, deferred: BaseControllerState | undefined;
   let mountedIndex = -1, mountedMove = false, mountedWritable = false;
   const widgetResults = new Map<string | number, BaseQueryResult>(), widgetSources = new Map<string | number, string>();
   const rememberWidgetResult = (result: BaseQueryResult, source: string) => {
     widgetResults.set(result.version, result); widgetSources.set(result.version, source);
-    while (widgetResults.size > 4) { const key = [...widgetResults.keys()].find(key => key !== mountedResult?.version); if (key === undefined) break; widgetResults.delete(key); widgetSources.delete(key); }
+    if(collection&&!collectionVersions.has(result.version))collectionVersions.set(result.version,{collection,entries:new Map(collectionEntries)});
+    while (widgetResults.size > 4) { const key = [...widgetResults.keys()].find(key => key !== mountedResult?.version); if (key === undefined) break; widgetResults.delete(key); widgetSources.delete(key);collectionVersions.delete(key); }
   };
   let propertyLabels:unknown;
+  let collection: DatabaseCollection | undefined, collectionEntries = new Map<string, DatabaseEntry>();
+  let collectionLoad = 0, loadedCollectionId: string | undefined;
+  let chooser: SourceChooser | undefined, collectionEditor: CollectionEditor | undefined;
+  const collectionMutations = new Map<string, DatabaseRequest>();
+  const collectionVersions = new Map<string|number,{collection:DatabaseCollection;entries:Map<string,DatabaseEntry>}>();
+  let pendingCollectionCreate: DatabaseRequest | undefined;
+  const databaseService = options.vault.adapter.databases;
+  const currentViewSource = (): BaseViewSource => {
+    const view = BaseDocument.parse(controller.state.source).views[controller.selectedViewIndex];
+    return view ? baseViewSource(view) : {kind:'untyped'};
+  };
+  const collectionMode = () => currentViewSource().kind === 'collection';
+
   const propertyLabel=(labels:unknown,property:string)=>{
     if(labels&&typeof labels==='object'&&!Array.isArray(labels)){
       const config=(labels as Record<string,unknown>)[property]??(labels as Record<string,unknown>)[property.replace(/^note\./,'')];
@@ -271,7 +292,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     }
     return property.startsWith('file.')?property.replace(/^file\./,'file '):property.replace(/^(?:note|formula)\./,'');
   };
-  const getPropertyLabel=(property:string)=>propertyLabel(propertyLabels,property);
+  const getPropertyLabel=(property:string)=>collection?.properties.find(field=>field.id===basePropertyName(property))?.name??propertyLabel(propertyLabels,property);
   let definitions: BasePropertyDefinitions = { properties: {}, diagnostics: [] };
   let creation: BaseCreationOperation | undefined;
   let summaryPanel: HTMLElement | undefined;
@@ -281,23 +302,27 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   let definitionsLoading = false;
   let definitionsError: string | undefined;
   const loadDefinitions = async () => {
-    const epoch = ++definitionEpoch;
-    definitionsLoading = true;
-    let source = '';
-    try { source = options.vault.entries.get(BASE_PROPERTY_DEFINITIONS_PATH)?.type === 'file' ? await options.vault.read(BASE_PROPERTY_DEFINITIONS_PATH) : ''; }
-    catch (error) {
-      if (disposed || epoch !== definitionEpoch) return;
-      definitionsLoading = false; definitionsError = error instanceof Error ? error.message : String(error); definitions = { properties: {}, diagnostics: [] }; definitionsRevision++;
-      report(error); if (controller.state.result) render(controller.state); return;
+    const source = currentViewSource(), epoch = ++collectionLoad;
+    if (source.kind === 'untyped') {
+      loadedCollectionId = undefined; collection = undefined; collectionEntries.clear();
+      definitions = { properties: {}, diagnostics: [] }; definitionsLoading = false; definitionsError = undefined; definitionsRevision++;
+      return;
     }
-    if (disposed || epoch !== definitionEpoch) return;
-    try { definitions = parseBasePropertyDefinitions(source); definitionsError = undefined; }
-    catch (error) { definitionsError = error instanceof Error ? error.message : String(error); definitions = { properties: {}, diagnostics: [] }; report(error); }
-    definitionsLoading = false;
-    if (definitions.diagnostics.length) report(new Error(definitions.diagnostics.map(item => item.message).join(' ')));
-    // Definitions affect mounted controls, even if the query result is unchanged.
-    definitionsRevision++;
-    if (controller.state.result) render(controller.state);
+    loadedCollectionId = source.id; collection=undefined;definitions={properties:{},diagnostics:[]};definitionsLoading = true;
+    try {
+      if (!databaseService) throw new Error('Collections are unavailable in this vault.');
+      const response = await databaseService.request({op:'get',collectionId:source.id});
+      if (disposed || epoch !== collectionLoad || currentViewSource().kind !== 'collection' || (currentViewSource() as {id:string}).id !== source.id) return;
+      collection = response.collections.find(item=>item.id===source.id);
+      collectionEntries = new Map(response.entries.map(item=>[item.entryId,item]));
+      if (!collection || collection.deleted) throw new Error('Collection deleted. Restore it or change this view’s source.');
+      definitions = {properties:collectionPropertyDefinitions(collection),diagnostics:[]}; definitionsError = undefined;
+    } catch (failure) {
+      if (disposed || epoch !== collectionLoad) return;
+      definitions = {properties:{},diagnostics:[]}; definitionsError = failure instanceof Error ? failure.message : String(failure);
+    }
+    definitionsLoading = false; definitionsRevision++;
+    render(controller.state);
   };
   let selectedIndex = options.query?.viewIndex ?? 0;
   let notice: string | undefined;
@@ -315,7 +340,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     try { options.onError?.(error); } catch { /* User error reporters do not change persistence. */ }
   };
   const propertyDraft = () => !!mounted?.hasActiveEdits?.() || !!content.querySelector('.zorid-bases-table-input, [data-base-editing]');
-  const activeDraft = () => propertyDraft() || toolbarUI.hasDraft() || settings.hasDraft() || summaryDraft;
+  const activeDraft = () => propertyDraft() || toolbarUI.hasDraft() || settings.hasDraft() || summaryDraft || !!chooser?.hasPendingChanges() || !!collectionEditor?.hasPendingChanges();
   const editsPending = () => !!pending.size || !!mounted?.hasQueuedConfiguration?.() || controller.hasPendingViewReferences || activeDraft() || !!summaryHasRawDraft?.() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error);
   let editsWerePending = false;
   const schedule = () => {
@@ -350,7 +375,6 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     },
   }) : { async transform() { throw new Error('This base is read-only'); } };
   const mutations = bufferMutations;
-  const propertyDefinitionSaver = createBasePropertyDefinitionSaver();
   const hostClock = options.clock ?? createBaseClockHost({ document: doc, window: win });
   const clock: BaseClockHost = {
     capture: zone => hostClock.capture(zone), scheduleAt: (deadline, callback) => hostClock.scheduleAt(deadline, callback),
@@ -361,7 +385,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       return () => { stopClock(); stopPane?.(); };
     },
   };
-  const controller = new BaseController({ vault: options.vault, basePath: options.basePath, mutations, query, clock, viewName: options.viewName, ...(options.inlineSource ? { inlineSource: options.inlineSource } : {}),
+  const controller = new BaseController({ vault: options.vault, basePath: options.basePath, mutations, query, clock, viewName: options.viewName,viewId:options.viewId, ...(options.inlineSource ? { inlineSource: options.inlineSource } : {}),
     onViewRenamed: options.onViewRenamed,
     onChange(state) { render(state); options.onState?.(state); },
   });
@@ -369,13 +393,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     isGroupListProperty(property) { const definition = definitions.properties[basePropertyName(property)]; return !!definition && (['list', 'tags', 'multiselect'].includes(definition.type) || definition.type === 'relation' && !!definition.relation?.multiple); },
     validateFolder(path) { if (path && options.vault.entries.get(path)?.type !== 'folder') throw new Error('The destination folder no longer exists'); },
   });
-  const settings = createBasePropertySettingsPanel(root, {
-    definitions: () => definitions,
-    properties: () => controller.state.result?.availableProperties ?? [],
-    preflight() { action(); if (options.readOnly) throw new Error('This base is read-only'); if (pending.size || propertyDraft() || toolbarUI.hasDraft() || summaryPanel) throw new Error('Finish or cancel the current edit first.'); },
-    save: (property, definition, expected) => track(() => saveDefinition(property, definition, expected)),
-    onDraftChange: schedule, onError: report,
-  });
+  const settings = { hasDraft: () => false, destroy() {} };
   const filterOwnerCurrent = () => {
     if (disposed || closing) return false;
     try { options.validate(); return true; } catch { return false; }
@@ -383,7 +401,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const toolbarUI = createBaseToolbar(toolbar, {
     immediate: true,
     filterOperands: () => baseSessionFilterOperands(options.vault, definitions, controller.state.result?.availableProperties ?? [], filterOwnerCurrent),
-    preflight() { action(); if (pending.size || propertyDraft() || settings.hasDraft() || summaryPanel) throw new Error('Finish or cancel the current edit before changing the view.'); },
+    preflight() { action(); if (pending.size || propertyDraft() || settings.hasDraft() || summaryPanel || chooser?.hasPendingChanges() || collectionEditor?.hasPendingChanges()) throw new Error('Finish or cancel the current edit before changing the view.'); },
     selectView,
     save(version, patch) { return saveConfigurationCommand(() => controller.updateView(numericVersion(version), patch)); },
     saveConfiguration(version, patch) { return saveConfigurationCommand(() => controller.updateConfiguration(numericVersion(version), patch)); },
@@ -392,15 +410,18 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       editFormula: (version, originalName, name, expression) => saveConfigurationCommand(() => {
         if (originalName !== undefined) return controller.editFormula(numericVersion(version), originalName, name, expression);
         const state = controller.state, document = BaseDocument.parse(state.source), view = document.views[controller.selectedViewIndex];
-        const formulas = document.getRoot('formulas');
+        const formulas = baseViewSetting(document,controller.selectedViewIndex,'formulas');
         if (formulas && typeof formulas === 'object' && !Array.isArray(formulas) && Object.hasOwn(formulas, name)) throw new Error('A formula with this name already exists');
-        document.setFormula(name, expression);
+        document.setViewFormula(controller.selectedViewIndex,name, expression);
         const order = Array.isArray(view.order) ? [...view.order] : [...state.result?.properties ?? []];
         if (!order.includes(`formula.${name}`)) order.push(`formula.${name}`);
-        return controller.updateConfiguration(numericVersion(version), { root: { formulas: document.getRoot('formulas') }, view: { order } });
+        return controller.updateConfiguration(numericVersion(version), { root: { formulas: baseViewSetting(document,controller.selectedViewIndex,'formulas') }, view: { order } });
       }),
       renameFormula: (version, from, to) => saveConfigurationCommand(() => controller.renameFormula(numericVersion(version), from, to)),
-      addView: (version, type, name, patch?: BaseViewPatch) => saveConfigurationCommand(() => controller.addView(numericVersion(version), type, name, patch)),
+      addView: async (_version, type, name, patch?: BaseViewPatch) => { const expectedSource=controller.state.source;await chooseSource(async source=> {
+        if(controller.state.source!==expectedSource)throw new Error('This Base changed. Reopen Add view.');
+        await saveConfigurationCommand(() => controller.addView(controller.state.version, type, name, {...patch,source}));
+      }); },
       duplicateView: (version, index, name) => saveConfigurationCommand(() => controller.duplicateView(numericVersion(version), index, name)),
       removeView: (version, index) => saveConfigurationCommand(() => controller.removeView(numericVersion(version), index)),
       moveView: (version, from, to) => saveConfigurationCommand(() => controller.moveView(numericVersion(version), from, to)),
@@ -411,10 +432,55 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     onSearch(text) { if (propertyDraft() || settings.hasDraft()) { report(new Error('Finish or cancel the property edit before searching.')); return; } void track(() => controller.setSearchTerms(text.split(/\s+/).filter(Boolean))).catch(report); },
     onNew: () => track(() => createItem()),
     onExport: (format, copy) => track(() => exportResults(format, copy)),
-    onPropertySettings(property) { try { settings.open(property); } catch (error) { report(error); } },
+    onPropertySettings: property => openCollectionProperties(basePropertyName(property)),
     onDraftChange: schedule,
     onError: report,
   });
+  function closeSourceChooser(): void { chooser?.destroy(); chooser=undefined; }
+  function chooseSource(choose:(source:BaseViewSource)=>Promise<void>, cancel=true):Promise<void> {
+    action(); if (options.readOnly) return Promise.reject(new Error('This Base is read-only.'));
+    if(chooser?.hasPendingChanges()||collectionEditor?.hasPendingChanges())return Promise.reject(new Error('Finish or cancel the current collection edit before changing the view source.'));
+    closeSourceChooser(); collectionEditor?.destroy(); collectionEditor=undefined;
+    return new Promise((resolve,reject)=>{
+      chooser=mountSourceChooser(sourcePanel,{service:databaseService,isCurrent:()=>!disposed&&!closing,
+        choose:async source=>{await choose(source);closeSourceChooser();await loadDefinitions();if(!disposed)render(controller.state);resolve();},
+        ...(cancel?{onCancel:()=>{closeSourceChooser();resolve();}}:{}),onError:report});
+    });
+  }
+  function openCollectionProperties(propertyId?:string):void {
+    action();if(options.readOnly||!databaseService||!collection||collection.deleted)throw new Error('This collection is unavailable.');
+    if(pending.size||propertyDraft()||toolbarUI.hasDraft())throw new Error('Finish editing the current value first.');
+    if(collectionEditor){collectionEditor.element.querySelector<HTMLInputElement>('input')?.focus();return;}
+    collectionEditor=mountCollectionEditor(sourcePanel,{service:databaseService,collection,entries:[...collectionEntries.values()],propertyId,
+      isCurrent:()=>!disposed&&!closing&&currentViewSource().kind==='collection'&&(currentViewSource() as {id:string}).id===collection?.id,
+      onSaved:async()=>{await options.vault.reload();await loadDefinitions();await controller.refresh();},
+      onClose:()=>{collectionEditor?.destroy();collectionEditor=undefined;schedule();}});
+  }
+  async function editCollectionProperties(edits:readonly Parameters<typeof actions.editProperty>[0][]):Promise<void> {
+    action();if(!databaseService||!collection||collection.deleted||!edits.length)throw new Error('This collection is unavailable.');
+    const version=edits[0].version,captured=collectionVersions.get(version),result=widgetResults.get(version);
+    if(!captured||!result||widgetSources.get(version)!==controller.state.source||captured.collection.id!==collection.id)throw new Error('This collection view changed. Refresh before editing.');
+    const batches=new Map<string,{entry:DatabaseEntry;values:Record<string,string|number|boolean|null|string[]>}>();
+    for(const edit of edits){
+      if(edit.version!==version)throw new Error('The edited cells belong to different view snapshots.');
+      const row=result.rows.find(row=>row.path===edit.path),entry=row?.entryId?captured.entries.get(row.entryId):undefined,fieldId=basePropertyName(edit.property);
+      if(!entry||entry.deleted||entry.collectionId!==captured.collection.id||!captured.collection.properties.some(field=>field.id===fieldId))throw new Error('The collection entry changed. Refresh before editing.');
+      const next=collectionValue(baseEditValue(edit.value));let batch=batches.get(entry.entryId);
+      if(!batch){batch={entry,values:{}};batches.set(entry.entryId,batch);}batch.values[fieldId]=next;
+    }
+    const completed:string[]=[];
+    for(const {entry,values}of batches.values()){
+      const signature=JSON.stringify([entry.entryId,version,values]);let request=collectionMutations.get(signature);
+      if(!request){request={op:'set_entry',operationId:crypto.randomUUID(),entryId:entry.entryId,expectedRevision:entry.revision,expectedCollectionRevision:captured.collection.revision,values};collectionMutations.set(signature,request);}
+      const response=await databaseService.request(request),saved=response.entries.find(item=>item.entryId===entry.entryId);
+      if(!saved||saved.pendingProjection)throw new Error('The property is committed locally but its note still needs publication. Retry this edit.');
+      completed.push(signature);
+    }
+    for(const signature of completed)collectionMutations.delete(signature);
+    await options.vault.reload();await loadDefinitions();await controller.refresh();
+  }
+  const editCollectionProperty=(edit:Parameters<typeof actions.editProperty>[0])=>editCollectionProperties([edit]);
+  const editProperty=(edit:Parameters<typeof actions.editProperty>[0])=>collectionMode()?editCollectionProperty(edit):Promise.reject(new Error('Vault note views are browsing only. Open the note to edit its properties.'));
   function saveConfigurationCommand(operation: () => Promise<void>): Promise<void> {
     action(); if (options.readOnly) return Promise.reject(new Error('This base is read-only'));
     const attempt: { buffer?: NoteBuffer; text?: string } = {}; configurationAttempt = attempt;
@@ -453,16 +519,6 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if (diagnostic) throw new Error(diagnostic);
   }
   function numericVersion(version: string | number): number { if (typeof version !== 'number') throw new Error('The base result is stale'); return version; }
-  async function saveDefinition(property: string, definition: BasePropertyDefinition | null, expected?: BasePropertyDefinition | null): Promise<void> {
-    action(); if (options.readOnly || !options.buffers) throw new Error('This base is read-only');
-    const registryValidate = () => {alive(); options.buffers!.validate();}; registryValidate();
-    if (!options.vault.entries.has(BASE_PROPERTY_DEFINITIONS_PATH)) await options.vault.create(BASE_PROPERTY_DEFINITIONS_PATH, 'properties: {}\n', registryValidate);
-    const buffer = await options.buffers.getBuffer(BASE_PROPERTY_DEFINITIONS_PATH); registryValidate();
-    await propertyDefinitionSaver.save(buffer, property, definition, expected, registryValidate, previousText => {
-      changedBuffers.add(buffer); options.buffers!.onBufferChange?.(BASE_PROPERTY_DEFINITIONS_PATH, buffer, previousText);
-    });
-    await loadDefinitions();
-  }
   const summaryNames = ['Average', 'Min', 'Max', 'Sum', 'Range', 'Median', 'Stddev', 'Earliest', 'Latest', 'Checked', 'Unchecked', 'Empty', 'Filled', 'Unique'];
   function summaryScope(anchor: HTMLElement, index?: number | null): number | null {
     if (index !== undefined) return index;
@@ -471,7 +527,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   }
   function addSummary(property: string, anchor: HTMLElement, suggested?: string): void {
     action(); if (options.readOnly || pending.size || activeDraft()) throw new Error('Finish or cancel the current edit first.');
-    const state = controller.state, document = BaseDocument.parse(state.source), configured = document.getRoot('summaries');
+    const state = controller.state, document = BaseDocument.parse(state.source), configured = baseViewSetting(document,controller.selectedViewIndex,document.views[controller.selectedViewIndex]?.source===undefined?'summaries':'summaryDefinitions');
     const summaries: Record<string, BaseValue> = configured && typeof configured === 'object' && !Array.isArray(configured) ? { ...(configured as Record<string, BaseValue>) } : {};
     const used = new Set([...summaryNames, ...Object.keys(summaries)]), base = suggested?.trim() || 'new summary';
     let name = base; for (let suffix = 2; used.has(name); suffix++) name = `${base} ${suffix}`;
@@ -483,7 +539,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       .then(() => openSummaryEditor(property, anchor, name, summaryScope(anchor))).catch(report);
   }
   function editSummary(property: string, id: string, anchor: HTMLElement, groupIndex?: number | null): void {
-    const document = BaseDocument.parse(controller.state.source), raw = document.getRoot('summaries');
+    const document = BaseDocument.parse(controller.state.source), raw = baseViewSetting(document,controller.selectedViewIndex,document.views[controller.selectedViewIndex]?.source===undefined?'summaries':'summaryDefinitions');
     const summaries: Record<string, BaseValue> = raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as Record<string, BaseValue>) } : {};
     const scope = summaryScope(anchor, groupIndex);
     if (Object.hasOwn(summaries, id)) { openSummaryEditor(property, anchor, id, scope); return; }
@@ -501,7 +557,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     action(); if (options.readOnly || pending.size || activeDraft()) throw new Error('Finish or cancel the current edit first.');
     destroySummaryEditor?.();
     let expectedSource = controller.state.source, acceptedName = initialName;
-    const configured = BaseDocument.parse(expectedSource).getRoot('summaries');
+    const configured = baseViewSetting(BaseDocument.parse(expectedSource),controller.selectedViewIndex,BaseDocument.parse(expectedSource).views[controller.selectedViewIndex]?.source===undefined?'summaries':'summaryDefinitions');
     let acceptedExpression = configured && typeof configured === 'object' && !Array.isArray(configured) && typeof (configured as Record<string, BaseValue>)[initialName] === 'string' ? (configured as Record<string, BaseValue>)[initialName] as string : '';
     const groupKey = groupIndex === null ? undefined : controller.state.result?.groups[groupIndex]?.sharedKeyId;
     const panel = doc.createElement('section'); panel.className = 'bases-toolbar-popover bases-summary-editor'; panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Edit summary');
@@ -569,7 +625,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       const next: SummaryAttempt = { name: name.value.trim(), expression: expression.value, source: expectedSource }, submitted = generation;
       if (!next.name) { error.textContent = 'Summary name must not be empty.'; return; }
       if (controller.state.source !== expectedSource) { error.textContent = 'This Base changed while the summary was open. Reopen its editor before saving.'; cancelChanges.hidden = false; return; }
-      try { const projected = BaseDocument.parse(expectedSource); projected.editSummary(acceptedName, next.name, next.expression); next.source = projected.toString(); } catch (failure) { fail(failure, next); return; }
+      try { const projected = BaseDocument.parse(expectedSource); projected.editViewSummary(controller.selectedViewIndex,acceptedName, next.name, next.expression); next.source = projected.toString(); } catch (failure) { fail(failure, next); return; }
       saving = true; mark();
       try { await saveConfigurationCommand(() => controller.editSummary(controller.state.version, acceptedName, next.name, next.expression)); if (!destroyed) { saving = false; if (accept(next) && generation !== submitted && dirty && doc.activeElement !== name) void save(); } }
       catch (failure) { if (!destroyed) { saving = false; fail(failure, next); } }
@@ -591,7 +647,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     more.addEventListener('click', () => toggleActions(menu.hidden));
     menu.addEventListener('keydown', event => { if (event.key === 'Escape' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); toggleActions(false); } });
     remove.addEventListener('click', () => { if (saving || retryPersistence) return; if (timer) clearTimeout(timer); toggleActions(false);
-      const projected = BaseDocument.parse(expectedSource); projected.removeSummary(acceptedName);
+      const projected = BaseDocument.parse(expectedSource); projected.removeViewSummary(controller.selectedViewIndex,acceptedName);
       const next: SummaryAttempt = { name: acceptedName, expression: acceptedExpression, deleted: true, source: projected.toString() }; saving = true; fields.disabled = true; expression.disabled = true; formulaEditor?.sync(); mark();
       void saveConfigurationCommand(() => { if (controller.state.source !== expectedSource) throw new Error('This Base changed while the summary was open.'); return controller.removeSummary(controller.state.version, acceptedName); }).then(() => { saving = false; accept(next); }, failure => { saving = false; fields.disabled = false; expression.disabled = false; formulaEditor?.sync(); fail(failure, next); });
     });
@@ -607,6 +663,25 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     action(); if (options.readOnly || !controller.state.result || sharedBasePreview(controller.state.result)) throw new Error('This base is read-only');
     if (await options.closeCreatedFile?.()) return;
     alive();
+    if(collectionMode()){
+      if(!databaseService||!collection||collection.deleted)throw new Error('This collection is unavailable.');
+      if(!pendingCollectionCreate){
+        const plan=await planCollectionEntryCreation({vault:options.vault,collection,document:BaseDocument.parse(controller.state.source),basePath:options.basePath,viewIndex:selectedIndex,group,validate:alive});alive();
+        const folder=plan.path.includes('/')?plan.path.slice(0,plan.path.lastIndexOf('/')):'';
+        let parent='';for(const segment of folder.split('/').filter(Boolean)){parent=parent?`${parent}/${segment}`:segment;if(options.vault.entries.get(parent)?.type==='file')throw new Error('A file occupies the new entry’s folder.');if(!options.vault.entries.has(parent))await options.vault.createFolder(parent,alive);}
+        pendingCollectionCreate={op:'create_entry',operationId:crypto.randomUUID(),collectionId:collection.id,expectedCollectionRevision:collection.revision,entryId:crypto.randomUUID(),path:plan.path,body:plan.body,values:plan.values};
+      }
+      const request=pendingCollectionCreate;
+      const response=await databaseService.request(request);alive();
+      const entry=response.entries.find(entry=>request.op==='create_entry'&&entry.entryId===request.entryId);
+      if(!entry||entry.pendingProjection)throw new Error('The entry is committed locally but its note still needs publication. Use New again to retry.');
+      pendingCollectionCreate=undefined;
+      await options.vault.reload();await loadDefinitions();await controller.refresh();
+      notice=controller.state.result&&!controller.state.result.rows.some(row=>row.entryId===entry.entryId)?'Created entry is not shown in the current results.':undefined;renderStatus(controller.state);
+      const event=new(win?.MouseEvent??MouseEvent)('click');
+      if(options.openCreatedFile)await options.openCreatedFile(entry.path,event,anchor??content);else options.openFile(entry.path,event);
+      return;
+    }
     // Retain an uncertain operation across retries rather than choosing a new filename.
     if (!creation || creation.status === 'committed') creation = await prepareBaseItemCreation({ vault: options.vault, document: controller.state.source, basePath: options.basePath, viewIndex: selectedIndex, group, validate: alive });
     const operation = creation, entry = await operation.run(); alive();
@@ -619,7 +694,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   }
   async function exportResults(format: BaseExportFormat, copy: boolean): Promise<void> {
     const result = controller.state.result; if (!result) throw new Error('Wait for results before exporting.');
-    const labels = BaseDocument.parse(controller.state.source).getRoot('properties');
+    const labels = baseViewSetting(BaseDocument.parse(controller.state.source),controller.selectedViewIndex,'properties');
     const text = exportBaseResults(result, format, property => {
       const settings = labels && typeof labels === 'object' && !Array.isArray(labels) ? labels as Record<string, BaseValue> : {};
       const setting = settings[property] ?? settings[basePropertyName(property)];
@@ -669,22 +744,54 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       : coverage && !coverage.metadataComplete ? 'Some saved properties are unavailable in these results.' : notice ?? '';
   }
   function filterToolbarState(result: BaseQueryResult, document: BaseDocument, index: number): BaseToolbarState {
-    const capturedDefinitions=definitions,capturedLabels=document.getRoot('properties');
+    const capturedDefinitions=definitions;
     const writable = !options.readOnly && !sharedBasePreview(result);
+    const browseOnly=baseViewSource(document.views[index]??result.view).kind==='untyped';
     const filterProperty = baseSessionFilterPropertyProvider(options.vault, capturedDefinitions, result.availableProperties, () => filterOwnerCurrent() && !definitionsLoading && !definitionsError && definitions===capturedDefinitions);
-    return { result, views: document.views, selectedIndex:index, rootFilters: document.getRoot('filters'), root: Object.fromEntries(['filters','formulas','properties','summaries','newItemFolder','newItemTemplate'].map(key => [key, document.getRoot(key)]).filter((entry): entry is [string, BaseValue] => entry[1] !== undefined)), readOnly: !writable, allowRename: true, propertyType: property => capturedDefinitions.properties[basePropertyName(property)]?.type,
-      filterProperty, label: property=>propertyLabel(capturedLabels,property) };
+    return { result, views: document.views, selectedIndex:index, rootFilters: document.views[index]?.source===undefined?document.getRoot('filters'):undefined, settings:Object.fromEntries(['formulas','properties','newItemFolder','newItemTemplate'].map(key=>[key,baseViewSetting(document,index,key)]).filter((entry):entry is [string,BaseValue]=>entry[1]!==undefined)), root: Object.fromEntries(['filters','formulas','properties','summaries','newItemFolder','newItemTemplate'].map(key => [key, document.getRoot(key)]).filter((entry): entry is [string, BaseValue] => entry[1] !== undefined)), readOnly: !writable, browseOnly, allowRename: true, propertyType: property => capturedDefinitions.properties[basePropertyName(property)]?.type,
+      filterProperty, label: getPropertyLabel };
+  }
+  function renderSourceBar(source:BaseViewSource):void{
+    sourceBar.replaceChildren();
+    const sourceButton=doc.createElement('button');sourceButton.type='button';sourceButton.className='collection-source-button';sourceButton.textContent=source.kind==='untyped'?'Notes in your vault':collection?.name??'Collection';sourceButton.setAttribute('aria-label','Change view source');
+    sourceButton.disabled=!!options.readOnly;sourceButton.onclick=()=>{if(activeDraft()){report(new Error('Finish or cancel the current edit first.'));return;}void chooseSource(async next=>{await saveConfigurationCommand(()=>controller.setViewSource(controller.state.version,selectedIndex,next));}).catch(report);};sourceBar.append(sourceButton);
+    if(source.kind==='collection'&&collection&&!collection.deleted&&!options.readOnly){const configure=doc.createElement('button');configure.type='button';configure.textContent='Add property';configure.onclick=()=>{try{openCollectionProperties();}catch(failure){report(failure);}};sourceBar.append(configure);}
+    if(source.kind==='collection'&&collection?.deleted&&databaseService&&!options.readOnly){
+      const restore=doc.createElement('button');restore.type='button';restore.textContent='Restore collection';let request:DatabaseRequest|undefined;
+      restore.onclick=()=>{if(!request)request={op:'restore',operationId:crypto.randomUUID(),collectionId:collection!.id,expectedRevision:collection!.revision};restore.disabled=true;void track(async()=>{const reply=await databaseService.request(request!);if(reply.projection.pending||reply.projection.issues.length)throw new Error('Some collection files still need publication. Retry Restore.');await options.vault.reload();await loadDefinitions();await controller.refresh();}).catch(report).finally(()=>{restore.disabled=false;});};sourceBar.append(restore);
+    }
   }
   function render(state: BaseControllerState): void {
     if (disposed) return;
     // Status changes never replace rows or a focused local property/config draft.
     renderStatus(state);
-    if (state.error) { deferred = undefined; return; }
-    if (!state.result) return;
+    if (state.error) {
+      deferred = undefined;
+      try{const view=BaseDocument.parse(state.source).views[controller.selectedViewIndex];if(view){const source=baseViewSource(view);renderSourceBar(source);if(source.kind==='collection'&&loadedCollectionId!==source.id)void loadDefinitions();}}
+      catch{/* The existing source error stays visible. */}
+      if(!propertyDraft()&&!activeDraft()){mounted?.destroy();mounted=undefined;mountedResult=undefined;content.textContent=state.error.message;}
+      return;
+    }
+    if (!state.result) {
+      try {
+        if(!state.updating&&!BaseDocument.parse(state.source).views.length){
+          toolbar.hidden=true;sourceBar.hidden=true;
+          if(pending.size||toolbarUI.hasDraft()){deferred=state;return;}
+          mounted?.destroy();mounted=undefined;mountedResult=undefined;content.replaceChildren();
+          if(!chooser)void chooseSource(async source=>{await saveConfigurationCommand(()=>controller.addView(controller.state.version,'table','View',{source}));},false);
+        }
+      } catch(failure) { report(failure); }
+      return;
+    }
+    toolbar.hidden=false;sourceBar.hidden=false;
     const result = state.result;
     selectedIndex = controller.selectedViewIndex;
-    const document = BaseDocument.parse(state.source);propertyLabels=document.getRoot('properties');
-    const toolbarState=filterToolbarState(result,document,selectedIndex),writable=!toolbarState.readOnly;
+    const document = BaseDocument.parse(state.source);propertyLabels=baseViewSetting(document,selectedIndex,'properties');
+    const source=baseViewSource(document.views[selectedIndex]??result.view);
+    if(source.kind==='collection'&&loadedCollectionId!==source.id){void loadDefinitions();}
+    else if(source.kind==='untyped'&&loadedCollectionId!==undefined){void loadDefinitions();}
+    renderSourceBar(source);
+    const toolbarState=filterToolbarState(result,document,selectedIndex),writable=!toolbarState.readOnly&&source.kind==='collection'&&!definitionsLoading&&!definitionsError;
     toolbarUI.update(toolbarState);
     // Toolbar rebases its own in-flight configuration without replacing row drafts.
     if (pending.size || activeDraft()) { deferred = state; return; }
@@ -732,16 +839,15 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     };
     const shared = { result, canBeginPropertyEdit, getEditableValue: baseEditablePropertyValue, getPropertyLabel, getPropertyType: (property: string) => definitions.properties[basePropertyName(property)]?.type,
       openFile: openResultFile,
-      ...(writable ? { editProperty: (edit: Parameters<typeof actions.editProperty>[0]) => track(() => { assertPropertyWritable(edit.property, edit.value); return actions.editProperty(edit); }) } : {}),
+      ...(writable ? { editProperty: (edit: Parameters<typeof actions.editProperty>[0]) => track(() => { assertPropertyWritable(edit.property, edit.value); return editProperty(edit); }) } : {}),
       onError: report, onEditStateChange: () => { renderStatus(controller.state); schedule(); },
       contextMenu: options.contextMenu, hoverFile: options.hoverFile, dragFile: options.dragFile,
       renderProperty: createBasePropertyRenderer({ canBegin: canBeginPropertyEdit, getEditableValue: presentation => baseEditablePropertyValue(presentation.row, presentation.property), getDefinition: property => definitions.properties[basePropertyName(property)],
-        commit: (edit: BasePropertyWidgetEdit) => track(async () => { assertPropertyWritable(edit.property, edit.value); await actions.editProperty(edit); return acknowledgeWidget(edit, edit.value); }), readOnly: presentation => !writable || !!definitionsError || definitions.diagnostics.some(item => item.property === basePropertyName(presentation.property)),
+        commit: (edit: BasePropertyWidgetEdit) => track(async () => { assertPropertyWritable(edit.property, edit.value); await editProperty(edit); return acknowledgeWidget(edit, edit.value); }), readOnly: presentation => !writable || !!definitionsError || definitions.diagnostics.some(item => item.property === basePropertyName(presentation.property)),
         isCurrent: presentation => !disposed && !!mountedResult && widgetResults.has(presentation.version),
         getRelationTargets,
         loadImage: options.loadThumbnail ? (source, signal, presentation) => options.loadThumbnail!({ row: presentation.row, property: presentation.property, value: baseImageSourceValue(presentation.value, source), version: presentation.version, signal }) : undefined,
         openFile: openResultFile, onError: report,
-        createOption: (property, value, presentation) => track(async () => { const definition = definitions.properties[basePropertyName(property)]; if (!definition) throw new Error('Configure this property first.'); await saveDefinition(basePropertyName(property), { ...definition, options: [...definition.options ?? [], { value }] }, definition); return acknowledgeWidget(presentation); }),
       }),
       getSummary: (property: string, groupIndex: number | null) => {
         const active = renderingResult ?? mountedResult ?? result;
@@ -760,24 +866,16 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         delete selection[property]; delete selection[basePropertyName(property)];
         return controller.updateView(numericVersion(active.version), { summaries: selection });
       }),
-      propertyTypes: BASE_PROPERTY_TYPES.map(id => ({ id, label: id === 'datetime' ? 'Date & time' : id === 'reverseRelation' ? 'Reverse relation' : id[0].toUpperCase() + id.slice(1) })),
-      requestPropertyType: (property: string, id: string) => {
-        if (id === 'rollup' || id === 'reverseRelation') { settings.open(property, undefined, id); return Promise.resolve(); }
-        return track(() => {
-        if (!property.startsWith('note.') || !BASE_PROPERTY_TYPES.includes(id as BasePropertyType)) throw new Error('Choose a supported note property type.');
-        const bare = basePropertyName(property), previous = definitions.properties[bare];
-        return saveDefinition(bare, { ...previous, type: id as BasePropertyType }, previous ?? null);
-      }); },
       } : {}),
       getSummaryOptions: async (property: string, groupIndex: number | null) => {
         const active = renderingResult ?? mountedResult ?? result, group = groupIndex === null ? undefined : active.groups[groupIndex];
         if (groupIndex !== null && !group) throw new Error('This result group changed; reopen its summary picker.');
         const previews = await controller.summaryPreviews(property, group?.sharedKeyId ?? undefined);
-        const custom = BaseDocument.parse(controller.state.source).getRoot('summaries');
+        const custom = baseViewSetting(BaseDocument.parse(controller.state.source),controller.selectedViewIndex,BaseDocument.parse(controller.state.source).views[controller.selectedViewIndex]?.source===undefined?'summaries':'summaryDefinitions');
         const order = [...new Set(['Empty', 'Filled', 'Unique', 'Average', 'Min', 'Max', 'Sum', 'Range', 'Median', 'Stddev', 'Earliest', 'Latest', 'Checked', 'Unchecked', ...Object.keys(custom && typeof custom === 'object' && !Array.isArray(custom) ? custom : {})])];
         return order.filter(id => Object.hasOwn(previews, id)).map(id => ({ id, label: id, preview: previews[id] }));
       },
-      summaryOptions: [...new Set(['Average','Min','Max','Sum','Range','Median','Stddev','Earliest','Latest','Checked','Unchecked','Empty','Filled','Unique', ...Object.keys((document.getRoot('summaries') as Record<string, BaseValue>) ?? {})])].map(id => ({ id, label: id })),
+      summaryOptions: [...new Set(['Average','Min','Max','Sum','Range','Median','Stddev','Earliest','Latest','Checked','Unchecked','Empty','Filled','Unique', ...Object.keys((baseViewSetting(document,controller.selectedViewIndex,document.views[controller.selectedViewIndex]?.source===undefined?'summaries':'summaryDefinitions') as Record<string, BaseValue>) ?? {})])].map(id => ({ id, label: id })),
       ...(writable ? { requestSummary: (property: string, id: string) => saveConfigurationCommand(() => {
         const active = renderingResult ?? mountedResult ?? result;
         const current = active.view.summaries;
@@ -796,7 +894,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
           if (active.version !== controller.state.version) throw new Error('The Base result is stale; refresh before deleting files.');
           await options.deleteFiles!(rows, active);
         }) } : {}),
-        editProperties: (edits: readonly import('./table-view.ts').BaseTableEdit[]) => track(() => { edits.forEach(edit => assertPropertyWritable(edit.property)); return actions.editProperties(edits); }),
+        editProperties: (edits: readonly import('./table-view.ts').BaseTableEdit[]) => track(() => { edits.forEach(edit => assertPropertyWritable(edit.property)); return editCollectionProperties(edits); }),
         patchView: (patch: BaseViewPatch) => saveConfigurationCommand(() => controller.updateView(numericVersion(mountedResult?.version ?? result.version), patch)),
         onConfigurationSettled: () => {
           if (disposed) return;
@@ -805,8 +903,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         },
         getConfigurationIdentity: () => disposed ? undefined : options.vault.entries.get(options.basePath)?.entryId,
         isConfigurationClosing: () => disposed || closing,
-        undo: () => track(() => controller.undo()), redo: () => track(() => controller.redo()),
-        requestEditProperty: (property: string, anchor: HTMLElement) => settings.open(property, anchor),
+        ...(source.kind==='collection'?{requestEditProperty:(property:string)=>openCollectionProperties(basePropertyName(property))}:{}),
       } : {}),
     };
     if (sharedBasePreview(result) && !result.rows.length) {
@@ -845,7 +942,11 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
               const saved = typeof group.sharedKeyId === 'string' && (active.groups.find(candidate => candidate.sharedKeyId === group.sharedKeyId) ?? active.groupOptions.find(candidate => candidate.listed && candidate.sharedKeyId === group.sharedKeyId));
               return !!saved && 'editKey' in saved && saved.editKey !== undefined;
             },
-            ...(moveEnabled ? { requestMove: request => track(() => { assertPropertyWritable(request.property); return actions.requestMove(request); }) } : {}),
+            ...(moveEnabled ? { requestMove: request => track(() => { assertPropertyWritable(request.property); if(request.property==='file.folder')return actions.requestMove(request);
+              const active=controller.state.result,sourceGroup=active?.groups.find(group=>group.rows.some(row=>row.path===request.path)),destination=active?.groups.find(group=>group.sharedKeyId===request.destinationKeyId)??active?.groupOptions.find(group=>group.listed&&group.sharedKeyId===request.destinationKeyId);
+              if(!active||active.version!==request.version||sourceGroup?.sharedKeyId!==request.sourceKeyId||!destination)throw new Error('The card group changed.');
+              let value=baseGroupWriteValue(destination,active.shared!==undefined);const definition=definitions.properties[basePropertyName(request.property)];if(definition?.type==='multiselect'&&value!==null&&!Array.isArray(value))value=[value];
+              return editCollectionProperty({version:request.version,path:request.path,property:request.property,value:baseExpressionValue(value)}); }) } : {}),
             ...(writable ? { requestGroupOrder: request => track(() => actions.requestGroupOrder(request)), createItem: request => track(() => { if (request.version !== controller.state.version) throw new Error('The base result is stale'); return createItem(actions.creationGroup(request), (request as typeof request & { anchor?: HTMLElement }).anchor ?? content); }) } : {}),
           }); break;
           default: content.textContent = `Unsupported base view: ${result.view.type}`;
@@ -874,6 +975,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if (pending.size || activeDraft()) throw new Error('Finish or cancel the property edit before switching views');
     const views = BaseDocument.parse(controller.state.source).views;
     if (!Number.isInteger(index) || index < 0 || index >= views.length) throw new Error('The selected base view does not exist');
+    closeSourceChooser();collectionEditor?.destroy();collectionEditor=undefined;
     await controller.setView(index);
     if (!controller.state.error) selectedIndex = controller.selectedViewIndex;
   }
@@ -891,6 +993,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const configurationAcknowledged = await controller.acknowledgeConfigurationRetry();
     if (acknowledgesSavedDraft || configurationAcknowledged) acknowledgement();
     releaseCleanBuffers();
+    if(pendingCollectionCreate)throw new Error('The new entry is uncertain. Use New again to reconcile it before leaving this Base.');
     if (creation?.status === 'uncertain') throw new Error('The new note creation is uncertain. Use New again to reconcile it before leaving this base.');
     if (activeDraft()) throw new Error('Finish or cancel the property edit before leaving this base');
   }
@@ -905,6 +1008,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       if (dismissCleanPanels && summaryHasRawDraft?.()) throw new Error('Finish or cancel the summary edit before changing context');
       if (dismissCleanPanels) { mounted?.dismissCleanPanels?.(); toolbarUI.dismissCleanPanel(); settings.destroy(); destroySummaryEditor?.(); }
       if (close) {
+        closeSourceChooser();collectionEditor?.destroy();collectionEditor=undefined;if(collectionRefreshTimer!==undefined)clearTimeout(collectionRefreshTimer);
         toolbarUI.destroy(); settings.destroy(); destroySummaryEditor?.(); stopDefinitions.forEach(stop => stop()); stopFilterMetadata(); mounted?.destroy(); mounted = undefined; observer?.disconnect();
         if (scheduled !== undefined) clearTimeout(scheduled);
         root.removeEventListener('keydown', switchViewKey, true); controller.dispose(); disposed = true; root.remove();
@@ -916,9 +1020,10 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       if (editsWerePending) schedule();
     }
   }
+  let collectionRefreshTimer:ReturnType<typeof setTimeout>|undefined;
   const stopDefinitions = (['create', 'modify', 'rename', 'delete', 'ready'] as const).map(event => options.vault.on(event, change => {
     renderStatus(controller.state);
-    if (change.path === BASE_PROPERTY_DEFINITIONS_PATH || change.oldPath === BASE_PROPERTY_DEFINITIONS_PATH) void loadDefinitions().catch(report);
+    if(currentViewSource().kind==='collection'&&collectionRefreshTimer===undefined)collectionRefreshTimer=setTimeout(()=>{collectionRefreshTimer=undefined;if(!disposed)void loadDefinitions();},30);
   }));
   function refreshFilterMetadata(metadata:CommittedMetadataState):void {
     const state=controller.state;
@@ -928,13 +1033,14 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   }
   const stopFilterMetadata = options.vault.onMetadata(refreshFilterMetadata);
   return {
-    ready: loadDefinitions().then(() => controller.refresh()),
+    ready: controller.refresh().then(()=>loadDefinitions()),
     get state() { return controller.state; },
-    refresh: () => controller.refresh(),
+    refresh: async () => { await loadDefinitions(); await controller.refresh(); },
     selectView,
     setCurrentFile: (path, expectedEntryId) => { action(); return controller.setCurrentFilePath(path, expectedEntryId); },
-    rebindViewName: (from, to) => { alive(); return controller.rebindViewName(from, to); },
-    hasPendingChanges: () => !disposed && (!!pending.size || !!mounted?.hasQueuedConfiguration?.() || controller.hasPendingViewReferences || creation?.status === 'uncertain' || activeDraft() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error)),
+    get selectedViewIdentity(){return controller.selectedViewIdentity;},
+    rebindViewName: (from, to, viewId) => { alive(); return controller.rebindViewName(from, to,viewId); },
+    hasPendingChanges: () => !disposed && (!!pending.size || !!mounted?.hasQueuedConfiguration?.() || controller.hasPendingViewReferences || creation?.status === 'uncertain' || !!pendingCollectionCreate || activeDraft() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error)),
     owns: node => { try { alive(); return !closing && root.isConnected && toolbarUI.owns(node); } catch { return false; } },
     flush: options => finish(false, options?.dismissCleanPanels),
     close: () => finish(true),

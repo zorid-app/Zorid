@@ -20,7 +20,9 @@ export interface BaseNewItemPopoverOptions {
   readonly onError: (error: unknown) => void;
   readonly onClose?: () => void;
   readonly editorOptions?: Partial<Omit<EditorOptions, 'value' | 'onChange' | 'validateChange' | 'canMutate' | 'isCurrent'>>;
-  readonly properties?: Pick<PropertiesOptions, 'onPropertyDefinitionChange' | 'getRelationTargets' | 'getDisplayValue'>;
+  readonly properties?: Pick<PropertiesOptions, 'onPropertyDefinitionChange' | 'getRelationTargets' | 'getDisplayValue' | 'getDefinitions' | 'isManaged' | 'collectionName'>;
+  /** True means the host committed typed values and refreshed the same buffer. */
+  readonly changeProperties?: (next:string,buffer:NoteBuffer)=>Promise<boolean>;
   /** The workspace owns subscriptions and the buffer's lifetime. */
   /** Defer only body publication while an owned inline configuration saves. */
   readonly deferSourceUpdate?: () => boolean;
@@ -104,7 +106,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
   }
   const properties = renderProperties(propertiesHost, { ...options.properties, ...(options.properties?.onPropertyDefinitionChange ? { onPropertyDefinitionChange: (property: string, definition: Parameters<NonNullable<PropertiesOptions['onPropertyDefinitionChange']>>[1]) => track(Promise.resolve().then(() => options.properties!.onPropertyDefinitionChange!(property, definition))) } : {}), vault: options.vault, path,
     getSource: () => buffer.text, isCurrent: () => { try { validate(); return true; } catch { return false; } },
-    onChange: next => track((async () => { validate(); buffer.update(next, { validateWrite: validate }); bodySnapshot = next; editor?.setValue(next); refresh(); await buffer.flush(); })()),
+    onChange: next => track((async () => { validate(); if(await options.changeProperties?.(next,buffer)){validate();bodySnapshot=buffer.text;editor?.setValue(buffer.text);refresh();return;} buffer.update(next, { validateWrite: validate }); bodySnapshot = next; editor?.setValue(next); refresh(); await buffer.flush(); })()),
     openLink: (target, witness) => { const event = new (win?.MouseEvent ?? MouseEvent)('click'); void Promise.resolve(options.openFile(target, event, witness)).catch(report); },
     onError: report,
   });

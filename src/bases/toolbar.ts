@@ -25,12 +25,16 @@ export interface BaseToolbarState {
   selectedIndex: number;
   rootFilters?: BaseValue;
   root?: Readonly<Record<string, BaseValue>>;
+  /** Effective configuration for this view; root remains the persisted witness. */
+  settings?: Readonly<Record<string,BaseValue>>;
   search?: string;
   propertyType?(property: string): string | undefined;
   filterProperty?(property: string): BaseFilterPropertyDescriptor | undefined;
   functionNames?: readonly string[];
   methodNames?: readonly string[];
   readOnly: boolean;
+  /** Untyped note sources expose browsing, filtering and sorting only. */
+  browseOnly?: boolean;
   allowRename: boolean;
   label(property: string): string;
 }
@@ -94,12 +98,12 @@ function resultsConfigurationWitness(snapshot:ReturnType<typeof configurationSna
   const witness=structuredClone(snapshot);delete witness.root.summaries;for(const view of witness.views)delete (view as BaseViewPatch).summaries;return witness;
 }
 function applyConfigurationPatch(snapshot: ReturnType<typeof configurationSnapshot>, patch: {view?:BaseViewPatch;root?:Record<string,BaseValue|undefined>}, index: number): ReturnType<typeof configurationSnapshot> {
-  const next = structuredClone(snapshot);
-  const merge = (target:Record<string,BaseValue|undefined>, values:Record<string,BaseValue|undefined>) => { for (const [key,value] of Object.entries(values)) { if (value === undefined) delete target[key]; else target[key] = structuredClone(value); } };
-  if (patch.view) merge(next.views[index] as BaseViewPatch,patch.view);
-  if (patch.root) merge(next.root,patch.root);
-  return next;
+  const document=BaseDocument.parse(JSON.stringify({...snapshot.root,views:snapshot.views}));
+  document.updateViewConfiguration(index,patch);
+  const keys=new Set([...Object.keys(snapshot.root),...Object.keys(patch.root??{})]);keys.delete('views');
+  return{views:structuredClone(document.views) as BaseViewConfig[],root:Object.fromEntries([...keys].map(key=>[key,document.getRoot(key)]))};
 }
+
 const propertyId = (value: BaseValue | undefined) => typeof value === 'string' ? normalizeBaseProperty(value) : '';
 const button = (doc: Document, text: string, action: () => void, label = text) => {
   const node = doc.createElement('button'); node.type = 'button'; node.textContent = text; node.setAttribute('aria-label', label); node.addEventListener('click', action); return node;
@@ -146,6 +150,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
   });
   function open(name: PanelName, trigger: HTMLElement, targetIndex?: number, formulaName?: string) {
     if (!state || destroyed || state.readOnly && !['Views', 'Results'].includes(name)) return;
+    if (state.browseOnly && ['Properties','Property','Formula','Group'].includes(name)) return;
     try { options.preflight(); if (hasDraft()) throw new Error('Apply or cancel the current toolbar changes first.'); } catch (error) { report(error); return; }
     if (panel?.name === name) { panel.close(); return; }
     panel?.close(false);
@@ -332,11 +337,11 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const property = formulaName!;
       const display = doc.createElement('input'); display.value = opening.label(property); display.setAttribute('aria-label','Display name'); display.placeholder = property.slice(property.indexOf('.') + 1);
       const label = doc.createElement('label'); label.append(doc.createTextNode('Display name'),display); fields.append(label); display.addEventListener('input',changed);
-      readOperation = () => { const root = propertyDisplayPatch(opening.root,new Map([[property,display.value]])); if (!options.commands?.updateRoot) throw new Error('Property labels are unavailable.'); expectedPatch = {root}; return () => options.commands!.updateRoot!(version,root); };
+      readOperation = () => { const root = propertyDisplayPatch(opening.settings??opening.root,new Map([[property,display.value]])); if (!options.commands?.updateRoot) throw new Error('Property labels are unavailable.'); expectedPatch = {root}; return () => options.commands!.updateRoot!(version,root); };
       if (property.startsWith('formula.')) menuAction('Edit formula',async () => { own.saving = false; own.close(false); open('Formula',trigger,undefined,property.slice(8)); });
       else if (property.startsWith('note.') && options.onPropertySettings) menuAction('Property type',async () => { own.saving = false; own.close(false); options.onPropertySettings!(property); });
     } else if (name === 'Formula') {
-      const names = mapping(opening.root?.formulas) ? opening.root!.formulas as Record<string, BaseValue> : {};
+      const names = mapping((opening.settings??opening.root)?.formulas) ? (opening.settings??opening.root)!.formulas as Record<string, BaseValue> : {};
       const input = doc.createElement('input'); input.placeholder = 'Formula name'; input.setAttribute('aria-label', 'Formula name'); input.value = formulaName ?? '';
       const expression = doc.createElement('textarea'); expression.setAttribute('aria-label', 'Formula expression'); expression.placeholder = 'Enter a formula…'; const initialExpression = formulaName ? names[formulaName] : undefined; expression.value = typeof initialExpression === 'string' ? initialExpression : ''; expression.rows = 5;
       fields.append(input, expression); input.addEventListener('input', changed); expression.addEventListener('input', changed);
@@ -345,14 +350,14 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       // Use the same document transformation to project the exact acknowledgement witness.
       readOperation = () => {
         const name = input.value.trim(), source = expression.value;
-        const currentNames = mapping(opening.root?.formulas) ? opening.root!.formulas as Record<string,BaseValue> : {};
+        const currentNames = mapping((opening.settings??opening.root)?.formulas) ? (opening.settings??opening.root)!.formulas as Record<string,BaseValue> : {};
         if (!name) throw new Error('Formula name must not be empty.');
         if (name !== formulaName && Object.hasOwn(currentNames,name)) throw new Error('A formula with that name already exists.');
         if (!source.trim() && !auto) throw new Error('Formula expression must not be empty.');
         if (options.commands?.editFormula) {
           const projected = BaseDocument.parse(JSON.stringify({...opening.root,views:opening.views}));
-          if (formulaName && formulaName !== name) projected.renameFormula(formulaName,name);
-          projected.setFormula(name,source);
+          if (formulaName && formulaName !== name) projected.renameViewFormula(selectedIndex,formulaName,name);
+          projected.setViewFormula(selectedIndex,name,source);
           const keys = new Set([...Object.keys(opening.root??{}),'formulas']); keys.delete('views');
           const root = Object.fromEntries([...keys].map(key=>[key,projected.getRoot(key)]));
           expectedSnapshot = {views:structuredClone(projected.views) as BaseViewConfig[],root};
@@ -366,7 +371,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       };
       if (formulaName && options.commands?.setFormula) menuAction('Remove formula', () => options.commands!.setFormula!(version, formulaName!, undefined));
     } else if (name === 'New item settings') {
-      const folder = doc.createElement('input'), template = doc.createElement('input'); folder.setAttribute('aria-label', 'New item folder'); template.setAttribute('aria-label', 'New item template'); folder.value = typeof opening.root?.newItemFolder === 'string' ? opening.root.newItemFolder : ''; template.value = typeof opening.root?.newItemTemplate === 'string' ? opening.root.newItemTemplate : '';
+      const folder = doc.createElement('input'), template = doc.createElement('input'); folder.setAttribute('aria-label', 'New item folder'); template.setAttribute('aria-label', 'New item template'); folder.value = typeof (opening.settings??opening.root)?.newItemFolder === 'string' ? (opening.settings??opening.root)!.newItemFolder as string : ''; template.value = typeof (opening.settings??opening.root)?.newItemTemplate === 'string' ? (opening.settings??opening.root)!.newItemTemplate as string : '';
       for (const [text, input] of [['Folder',folder], ['Template',template]] as const) { const label = doc.createElement('label'); label.append(doc.createTextNode(text), input); fields.append(label); input.addEventListener('input', changed); }
       const hint = doc.createElement('p'); hint.textContent = 'Zorid copies the complete template, including its body. Placeholders stay literal.'; fields.append(hint);
       readOperation = () => { if (!options.commands?.updateRoot) throw new Error('Creation settings are unavailable.'); return () => options.commands!.updateRoot!(version, {newItemFolder:folder.value.trim() || undefined,newItemTemplate:template.value.trim() || undefined}); };
@@ -447,7 +452,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         if (candidates.length > 100) { const hint = doc.createElement('p'); hint.textContent = 'Showing the first 100 properties. Refine your search to find more.'; list.append(hint); }
       };
       if (options.immediate && options.commands?.editFormula) menuAction('Add formula',async()=>{
-        const formulas = mapping(opening.root?.formulas) ? opening.root!.formulas as Record<string,BaseValue> : {};
+        const formulas = mapping((opening.settings??opening.root)?.formulas) ? (opening.settings??opening.root)!.formulas as Record<string,BaseValue> : {};
         const name = uniqueViewName(Object.keys(formulas).map(name=>({type:'formula',name})),search.value.trim()||'Untitled');
         await options.commands!.editFormula!(version,undefined,name,'');
         const refreshed = deferredState; deferredState = undefined; if (!refreshed) return;
@@ -464,7 +469,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
       const updateAddProperty = () => { addProperty.hidden = !search.value.trim() || properties.some(property => property === normalizeBaseProperty(`note.${search.value.trim()}`)); addProperty.textContent = `Add property “${search.value.trim()}”`; };
       fields.append(addProperty,button(doc,'Hide all',() => { order = []; changed(); render(); }));
       search.addEventListener('input',() => { render(); updateAddProperty(); }); updateAddProperty(); render(); readPatch = () => ({ order });
-      readOperation = () => { const view = validateToolbarPatch(result, {order}); if (!displayNames.size) { expectedPatch = {view}; return () => options.save(version, view); } if (!options.saveConfiguration) throw new Error('Combined property configuration is unavailable.'); const root = propertyDisplayPatch(opening.root, displayNames); expectedPatch = {view,root}; return () => options.saveConfiguration!(version, {view,root}); };
+      readOperation = () => { const view = validateToolbarPatch(result, {order}); if (!displayNames.size) { expectedPatch = {view}; return () => options.save(version, view); } if (!options.saveConfiguration) throw new Error('Combined property configuration is unavailable.'); const root = propertyDisplayPatch(opening.settings??opening.root, displayNames); expectedPatch = {view,root}; return () => options.saveConfiguration!(version, {view,root}); };
     } else if (name === 'Sort') {
       let sortDrag: {item:BaseValue;source:HTMLElement;token:string;version:BaseQueryResult['version']} | undefined;
       const sort = Array.isArray(result.view.sort) ? structuredClone(result.view.sort) as BaseValue[] : [];
@@ -738,6 +743,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         return {section,refreshUntouchedAdvice(){for(const refresh of [...refreshUntouchedAdvice])refresh();},get:()=>readBaseFilterDraft(draft),acknowledge(){const source=readBaseFilterDraft(draft),acknowledge=captureBaseFilterAcknowledgement(draft);return ()=>{acknowledge();count(source);for(const validate of validators)validate();};}};
       }
       rootEditor=filterSection('All views',initialRoot,false,!!options.commands?.updateRoot);
+      if(configuredView.source!==undefined)rootEditor.section.hidden=true;
       viewEditor=filterSection('This view',initialView,true);fields.append(rootEditor.section,viewEditor.section);
       readPatch=()=>({filters:viewEditor!.get() as BaseValue|undefined});
       readOperation=()=>{
@@ -871,6 +877,7 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
     searchCount.textContent = searchInput.value ? `${next.result.counts.returned} results` : '';
     actions.replaceChildren();
     if (!next.readOnly) for (const [name, glyph] of [['Sort','arrow-up-down'],['Group','stretch-horizontal'],['Filter','list-filter'],['Properties','list']] as const) {
+      if (next.browseOnly && (name === 'Group' || name === 'Properties')) continue;
       const node = button(doc, '', () => open(name, node), name); node.className = 'bases-toolbar-action'; node.title = name; node.setAttribute('aria-haspopup','dialog');
       const label = doc.createElement('span'); label.className = 'bases-toolbar-label'; label.textContent = name;
       node.append(icon(glyph,16,doc),label);

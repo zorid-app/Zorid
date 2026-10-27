@@ -1,3 +1,5 @@
+import type { DatabaseCollection, DatabaseEntry } from '../core/databases.ts';
+import type { BasePropertyDefinition } from '../bases/property-definitions.ts';
 import type { Vault } from '../core/vault.ts';
 import type { CommittedMetadataState } from '../core/committed-metadata-frame.ts';
 import { createBaseClockHost } from '../bases/clock.ts';
@@ -8,6 +10,9 @@ import { baseValuesEqual } from '../bases/expression.ts';
 import type { BaseExpressionValue } from '../bases/expression.ts';
 
 export interface NotePropertyTargets {
+  getCollection(): {collection:DatabaseCollection;entry:DatabaseEntry}|undefined;
+  prepareCollection(): Promise<{collection:DatabaseCollection;entry:DatabaseEntry}|undefined>;
+  getDefinitions(): Readonly<Record<string,BasePropertyDefinition>>;
   get(property: string): readonly PropertyTarget[] | undefined;
   /** Bare property name and current raw editor value; never resolves a path. */
   getDisplayValue(property: string, raw: BaseExpressionValue): BaseExpressionValue | undefined;
@@ -34,6 +39,23 @@ export function createNotePropertyTargets(options: {
   let timer: ReturnType<typeof setTimeout> | undefined, abort: AbortController | undefined;
   let wake: (() => void) | undefined, pending: Promise<void> = Promise.resolve(), closing: Promise<void> | undefined;
   const stops: (() => void)[] = [];
+  let collectionState:{collection:DatabaseCollection;entry:DatabaseEntry}|undefined;
+  let collectionSerial=0;
+  async function prepareCollection(){
+    const databases=vault.adapter.databases,entry=vault.entries.get(options.getPath()),request=++collectionSerial;
+    if(!databases||!entry?.entryId){collectionState=undefined;return;}
+    const reply=await databases.request({op:'get_entry',entryId:entry.entryId});
+    if(disposed||!options.isCurrent()||vault.entries.get(options.getPath())?.entryId!==entry.entryId)throw new Error('The collection note changed.');
+    const member=reply.entries.find(item=>item.entryId===entry.entryId&&!item.deleted),collection=member&&reply.collections.find(item=>item.id===member.collectionId&&!item.deleted);
+    const next=member&&collection?{collection,entry:member}:undefined;
+    if(request===collectionSerial){const changed=JSON.stringify(next)!==JSON.stringify(collectionState);collectionState=next;if(changed)notify();}
+    return next;
+  }
+  if(vault.adapter.databases){
+    for(const event of ['create','modify','delete','rename','ready']as const)stops.push(vault.on(event,()=>{void prepareCollection().catch(()=>{});}));
+    void prepareCollection().catch(()=>{});
+  }
+
   const current = () => { try { return !disposed && options.isCurrent() && vault.adapter.documentSemantics === service; } catch { return false; } };
   const notify = () => { if (current()) { try { options.onChange(); } catch { /* A renderer cannot strand the query queue. */ } } };
   function invalidate() {
@@ -46,7 +68,7 @@ export function createNotePropertyTargets(options: {
   function run() {
     if (!current() || !service?.propertyTargetsAvailable) return;
     const entry = vault.entries.get(options.getPath());
-    if (!entry?.entryId || !entry.revision || entry.type !== 'file' || !vault.entries.has('Properties.yaml')) return;
+    if (!entry?.entryId || !entry.revision || entry.type !== 'file') return;
     const captured = ++serial, controller = new AbortController(); abort?.abort(); abort = controller;
     // Join the previous request's cancellation/close before opening another pin.
     pending = pending.then(async () => {
@@ -98,12 +120,19 @@ export function createNotePropertyTargets(options: {
   }
   function destroy() {
     if (disposed) return;
-    disposed = true; serial++; abort?.abort(); wake?.(); wake = undefined;
+    disposed = true; serial++; collectionSerial++;collectionState=undefined; abort?.abort(); wake?.(); wake = undefined;
     if (timer !== undefined) clearTimeout(timer); timer = undefined;
     for (const stop of stops.splice(0)) stop();
     result = undefined;
   }
   return {
+    getCollection:()=>current()?collectionState:undefined,
+    prepareCollection,
+    getDefinitions(){
+      if(!current()||!collectionState)return{};
+      return Object.fromEntries(collectionState.collection.properties.map(property=>[property.name,{type:property.datatype==='multi-select'?'multiselect':property.datatype,
+        ...(property.options.length?{options:property.options.map(option=>({value:option.name,label:option.name,...(option.category?{category:option.category==='not_started'?'todo' as const:option.category==='working'?'in-progress' as const:'done' as const}:{})}))}:{})} satisfies BasePropertyDefinition]));
+    },
     get(property) { return current() && !result?.diagnostics.some(issue => !issue.property || issue.property === property || issue.property === `note.${property}`) ? result?.relationTargets[property] ?? result?.relationTargets[`note.${property}`] : undefined; },
     getDisplayValue(property, raw) {
       if (!current() || !result || !result.coverageComplete || result.diagnostics.some(issue => !issue.property || issue.property === property || issue.property === `note.${property}`)) return;

@@ -216,7 +216,7 @@ test('Add view persistence retry retains its exact atomic layout patch without a
   const size=get<HTMLInputElement>('Card size');size.value='440';size.dispatchEvent(new dom.window.Event('input',{bubbles:true}));name.focus();name.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await tick();
   assert.deepEqual(calls,[[1,'cards','Gallery',{cardSize:440}]]);assert.equal(name.value,'Gallery');assert.equal(size.value,'440');assert.equal(size.disabled,true);assert.equal(toolbar.hasDraft(),true);
   const retry=doc.querySelector<HTMLButtonElement>('button[type="submit"]')!;assert.equal(retry.textContent,'Retry save');retry.click();await tick();
-  assert.equal(calls.length,1);assert.equal(retries,1);assert.deepEqual(document.views.at(-1),{type:'cards',name:'Gallery',cardSize:440});assert.equal(toolbar.hasDraft(),false);assert.equal(doc.querySelector('[role="dialog"]'),null);assert.equal(errors.length,1);
+  assert.equal(calls.length,1);assert.equal(retries,1);assert.match(String(document.views.at(-1)?.id),/^[a-z0-9]{12}$/);assert.deepEqual(document.views.at(-1),{type:'cards',name:'Gallery',id:document.views.at(-1)?.id,cardSize:440});assert.equal(toolbar.hasDraft(),false);assert.equal(doc.querySelector('[role="dialog"]'),null);assert.equal(errors.length,1);
  }finally{toolbar.destroy();dom.window.close();}
 });
 

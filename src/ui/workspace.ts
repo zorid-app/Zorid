@@ -64,11 +64,11 @@ import {baseFileHoverAnchor} from '../bases/file-hover.ts';
 import type {BaseFileHoverTarget,BaseFileHoverContent} from './base-file-hover.ts';
 import {createNotePropertyTargets} from './note-property-targets.ts';
 import type {NotePropertyTargets} from './note-property-targets.ts';
+import type {DatabaseRequest} from '../core/databases.ts';
+import {collectionValue,mountCollectionBrowser} from '../databases/collection-ui.ts';
+import {newBaseViewId} from '../bases/document.ts';
 import {inlineBaseRequest,replaceInlineBaseSource} from '../bases/inline-base.ts';
 import type {InlineBaseRequest} from '../bases/inline-base.ts';
-import {BASE_PROPERTY_DEFINITIONS_PATH} from '../bases/property-definitions.ts';
-import {createBasePropertyDefinitionSaver} from '../bases/property-definition-save.ts';
-import type {BasePropertyDefinition} from '../bases/property-definitions.ts';
 import {sharedBaseWitness} from '../bases/shared-query.ts';
 import {prepareBaseFileCreation} from '../bases/creation.ts';
 import type {BaseCreationOperation} from '../bases/creation.ts';
@@ -133,6 +133,7 @@ export class Workspace {
   panes: Pane[] = [];
   activePane!: Pane;
   buffers = new Map<string, NoteBuffer>();
+  private collectionPropertyRequests=new WeakMap<NoteBuffer,Map<string,DatabaseRequest>>();
   settings: Settings = { theme: 'system', fontSize: 16, readableWidth: true, showInlineTitle: true, defaultMode: 'live', useTab:true, tabSize:4, smartIndentList:true, autoConvertHtml:true, ...DEFAULT_ATTACHMENT_IMPORT_SETTINGS };
   private hotkeys!: HotkeyPreferences;
   private hotkeyCleanup?: () => void;
@@ -156,7 +157,6 @@ export class Workspace {
   private status = el('footer', 'status-bar');
   private nativeDocumentStatus?:HTMLElement;
   private nativeRecoveryBusy=new WeakSet<NoteBuffer>();
-  private propertyDefinitionSaver=createBasePropertyDefinitionSaver();
   private treeTab: 'files' | 'search' | 'bookmarks' = 'files';
   private rightTab: 'backlinks' | 'outline' | 'tags' | 'base' = 'backlinks';
   private sidebarBase?:SidebarBaseState;
@@ -914,18 +914,6 @@ export class Workspace {
           }}
         });return;
       }
-      if(change.path===BASE_PROPERTY_DEFINITIONS_PATH){
-        // Registry settings can own a shared buffer even without a source tab.
-        // A genuine logical modify event may refresh that buffer only while it
-        // remains clean; physical capture is never used as reload authority.
-        const buffer=this.buffers.get(change.path),generation=this.vaultGeneration,vault=this.vault,token=this.treeEntryToken(change.path);
-        const current=()=>generation===this.vaultGeneration&&vault===this.vault&&this.buffers.get(change.path)===buffer&&!!token&&this.treeEntryToken(change.path)===token&&this.bufferEntries.get(buffer!)===token;
-        if(buffer&&!buffer.dirty&&!buffer.error&&!buffer.hasRecoveryConflict)this.run(async()=>{
-          if(!current()||buffer.dirty||buffer.error||buffer.hasRecoveryConflict)return;
-          await buffer.reload();
-          if(current())this.renderStatus();
-        });
-      }
       if(!isMarkdown(change.path)){for(const pane of this.panes)if(this.current(pane)?.path===change.path)this.run(()=>this.renderPane(pane,{refresh:true}));for(const [tab,pane] of this.cachedViews)if(pane.viewPath===change.path)this.run(async()=>{await this.disposePaneViews(pane);if(this.cachedViews.get(tab)===pane)this.cachedViews.delete(tab);});return;}
       const buffer = this.buffers.get(change.path);
       if (buffer && !buffer.dirty) this.run(async () => {
@@ -1335,8 +1323,10 @@ export class Workspace {
         const validateProperties=()=>{validateFile();if(pane.viewPath!==path||pane.renderVersion!==version||pane.runtime!==runtime||runtime.phase==='disposed')throw new Error('The property panel changed.');};
         const propertyCurrent=()=>{try{validateProperties();return true;}catch{return false;}};
         const targets=this.notePropertyTargets(()=>path,propertyCurrent,()=>pane.properties?.refresh());
-        const properties=renderProperties(host,{vault:this.vault,path,getRelationTargets:property=>targets.get(property),getDisplayValue:(property,raw)=>targets.getDisplayValue(property,raw),onPropertyDefinitionChange:(property,definition)=>this.changePropertyDefinition(property,definition,validateProperties),isCurrent:propertyCurrent,onError:error=>notice(error instanceof Error?error.message:String(error)),getSource:()=>buffer.text,onChange:async next=>{
-          validateProperties();this.updateMarkdownBuffer(buffer,next,validateFile);runtime.touch();
+        const properties=renderProperties(host,{vault:this.vault,path,getDefinitions:()=>targets.getDefinitions(),isManaged:()=>!!targets.getCollection(),collectionName:()=>targets.getCollection()?.collection.name,getRelationTargets:property=>targets.get(property),getDisplayValue:(property,raw)=>targets.getDisplayValue(property,raw),isCurrent:propertyCurrent,onError:error=>notice(error instanceof Error?error.message:String(error)),getSource:()=>buffer.text,onChange:async next=>{
+          validateProperties();
+          if(await this.changeManagedNoteProperties(buffer,next,targets,validateProperties)){for(const other of this.loadedViews())if(this.current(other)?.path===path){other.editor?.setValue(buffer.text);other.properties?.refresh();other.refreshPreview?.();}return;}
+          this.updateMarkdownBuffer(buffer,next,validateFile);runtime.touch();
           for(const other of this.loadedViews()){if(this.current(other)?.path===path){other.editor?.setValue(next);other.refreshPreview?.();if(other!==pane)other.properties?.refresh();}}
           await buffer.flush();
         },openLink:(target,witness)=>this.run(()=>this.openPropertyLink(path,target,pane,witness))});
@@ -1395,7 +1385,7 @@ export class Workspace {
     if(version===pane.renderVersion)pane.viewReady=true;this.renderStatus();
   }
 
-  private createWorkspaceBaseSession(host:HTMLElement,path:string,owner:()=>Pane,validate:()=>void,sourcePath?:string|SidebarBaseContext,viewName?:string,inline?:InlineBaseRequest,onSourceError?:(error:Error|null)=>void,onInlineSourceSaved?:(next:InlineBaseRequest)=>boolean):BaseSession{
+  private createWorkspaceBaseSession(host:HTMLElement,path:string,owner:()=>Pane,validate:()=>void,sourcePath?:string|SidebarBaseContext,viewName?:string,inline?:InlineBaseRequest,onSourceError?:(error:Error|null)=>void,onInlineSourceSaved?:(next:InlineBaseRequest)=>boolean,viewId?:string):BaseSession{
     const vault=this.vault,resources=this.attachments!;
     const sourceContext=typeof sourcePath==='object'?sourcePath:{path:sourcePath??path};
     const hover=createBaseFileHover({parent:host,isMac:this.hotkeys.platform==='mac',
@@ -1480,11 +1470,11 @@ export class Workspace {
       }
     }:undefined;
     let session:BaseSession,composed:BaseSession|undefined;
-    try{session=(this.viewFactories.base??createBaseSession)(host,{vault,basePath:path,validate,viewName,inlineSource,query:{currentFilePath:sourceContext.path,...(sourceContext.entryId?{currentFileEntryId:sourceContext.entryId}:{})},
+    try{session=(this.viewFactories.base??createBaseSession)(host,{vault,basePath:path,validate,viewName,viewId,inlineSource,query:{currentFilePath:sourceContext.path,...(sourceContext.entryId?{currentFileEntryId:sourceContext.entryId}:{})},
             hoverFile:(row,event)=>{try{validate();const anchor=baseFileHoverAnchor(row,event);if(anchor)hover.hover(row,event,anchor);}catch(error){notice(error instanceof Error?error.message:String(error));}},
             ...(onSourceError?{onState:state=>onSourceError(state.error)}:{}),
             onEditsSettled:()=>{const sidebar=this.sidebarBase;if(sidebar&&sidebar.session===composed)this.retrySidebarFollowingContext(sidebar);},
-            onViewRenamed:event=>{validate();const identity=this.treeEntryToken(event.basePath);if(!identity)return;for(const sessions of new Set([this.baseNewItemEmbeds,...this.baseHoverEmbeds,...this.loadedViews().map(pane=>pane.baseEmbeds)].filter((sessions):sessions is BaseEmbedSessions=>!!sessions)))sessions.renameViewBinding(event.basePath,event.from,event.to,identity);},
+            onViewRenamed:event=>{validate();const identity=this.treeEntryToken(event.basePath);if(!identity)return;for(const sessions of new Set([this.baseNewItemEmbeds,...this.baseHoverEmbeds,...this.loadedViews().map(pane=>pane.baseEmbeds)].filter((sessions):sessions is BaseEmbedSessions=>!!sessions)))sessions.renameViewBinding(event.basePath,event.from,event.to,identity,event.viewId);},
             closeCreatedFile:()=>this.baseNewItem?.element.contains(host)?false:this.closeBaseNewItem(),
             openCreatedFile:async(target,_event,anchor)=>{
               validate();
@@ -1533,7 +1523,7 @@ export class Workspace {
     let flushing:Promise<void>|undefined,closing:Promise<void>|undefined,closed=false;
     const flush=(options?:Parameters<BaseSession['flush']>[0]):Promise<void>=>{if(closed)return Promise.resolve();if(closing)return closing;if(flushing)return options?.dismissCleanPanels?flushing.then(()=>flush(options)):flushing;const pending=Promise.resolve().then(async()=>{await this.finishInlinePublicationAt(path);await hover.flush();await session.flush(options);});flushing=pending;const clear=()=>{if(flushing===pending)flushing=undefined;};void pending.then(clear,clear);return pending;};
     const close=()=>{if(closed)return Promise.resolve();if(closing)return closing;const pending=Promise.resolve().then(async()=>{await flushing;await this.finishInlinePublicationAt(path);await hover.close();await session.close();await hover.destroy();closed=true;});closing=pending;const clear=()=>{if(closing===pending)closing=undefined;};void pending.then(clear,clear);return pending;};
-    return composed={get ready(){return session.ready;},get state(){return session.state;},refresh:()=>session.refresh(),selectView:index=>session.selectView(index),setCurrentFile:(target,expectedEntryId)=>session.setCurrentFile(target,expectedEntryId),rebindViewName:(from,to)=>session.rebindViewName(from,to),flush,close,owns:node=>!closed&&!closing&&session.owns?.(node)===true,hasPendingChanges:()=>hover.hasPendingChanges()||session.hasPendingChanges()};
+    return composed={get ready(){return session.ready;},get state(){return session.state;},refresh:()=>session.refresh(),selectView:index=>session.selectView(index),setCurrentFile:(target,expectedEntryId)=>session.setCurrentFile(target,expectedEntryId),get selectedViewIdentity(){return session.selectedViewIdentity;},rebindViewName:(from,to,viewId)=>session.rebindViewName(from,to,viewId),flush,close,owns:node=>!closed&&!closing&&session.owns?.(node)===true,hasPendingChanges:()=>hover.hasPendingChanges()||session.hasPendingChanges()};
   }
 
   /** Base hover uses the ordinary shared draft, editor and embed save boundary. */
@@ -1558,9 +1548,8 @@ export class Workspace {
     let properties:PropertiesView|undefined,propertyInputGeneration=0,expanded=false;
     const targets=this.notePropertyTargets(()=>path,()=>current()&&!disposed,()=>properties?.refresh());
     const syncPeers=()=>{for(const pane of this.loadedViews())if(pane.viewPath===path){pane.editor?.setValue(buffer.text);pane.properties?.refresh();pane.refreshPreview?.();}};
-    properties=renderProperties(propertiesHost,{vault,path,getSource:()=>buffer.text,isCurrent:()=>{try{admit();return true;}catch{return false;}},getRelationTargets:property=>targets.get(property),getDisplayValue:(property,raw)=>targets.getDisplayValue(property,raw),
-      onPropertyDefinitionChange:(property,definition)=>track(Promise.resolve().then(()=>this.changePropertyDefinition(property,definition,admit))),
-      onChange:next=>{admit();return track((async()=>{this.updateMarkdownBuffer(buffer,next,validateFile);syncPeers();await buffer.flush();})());},
+    properties=renderProperties(propertiesHost,{vault,path,getSource:()=>buffer.text,getDefinitions:()=>targets.getDefinitions(),isManaged:()=>!!targets.getCollection(),collectionName:()=>targets.getCollection()?.collection.name,isCurrent:()=>{try{admit();return true;}catch{return false;}},getRelationTargets:property=>targets.get(property),getDisplayValue:(property,raw)=>targets.getDisplayValue(property,raw),
+      onChange:next=>{admit();return track((async()=>{if(await this.changeManagedNoteProperties(buffer,next,targets,admit)){syncPeers();properties?.refresh();return;}this.updateMarkdownBuffer(buffer,next,validateFile);syncPeers();await buffer.flush();})());},
       openLink:(target,witness)=>this.run(async()=>{admit();await this.openPropertyLink(path,target,owner(),witness);}),onError:report});
     const heading=propertiesHost.querySelector<HTMLElement>('.metadata-properties-heading')!,propertiesRoot=propertiesHost.querySelector<HTMLElement>('.metadata-container')!;
     const drawProperties=()=>{heading.replaceChildren(icon(expanded?'down':'right',16,host.ownerDocument),el('span','metadata-properties-title','Properties'));heading.setAttribute('role','button');heading.setAttribute('aria-expanded',String(expanded));propertiesRoot.classList.toggle('is-collapsed',!expanded);for(const node of propertiesRoot.querySelectorAll<HTMLElement>(':scope > .metadata-content,:scope > .metadata-add-button'))node.style.display=expanded?'':'none';onStateChange();};
@@ -1572,7 +1561,7 @@ export class Workspace {
     const recoveryCleanup=this.mountNoteRecovery(host,buffer);
     const sessions=new BaseEmbedSessions({recoveryHost:host,create:async(container,nested)=>{
       const validate=()=>{validateFile();if(disposed||!nested.sourceIdentity||this.treeEntryToken(nested.sourcePath)!==nested.sourceIdentity||!nested.targetIdentity||this.treeEntryToken(nested.targetPath)!==nested.targetIdentity)throw new Error('The preview embedded Base changed. Its draft is retained.');};
-      validate();await this.prepareBase(nested.targetPath,generation);validate();return this.createWorkspaceBaseSession(container,nested.targetPath,owner,validate,nested.sourcePath,nested.viewName||undefined,nested.inline,undefined,nested.onInlineSourceSaved);
+      validate();await this.prepareBase(nested.targetPath,generation);validate();return this.createWorkspaceBaseSession(container,nested.targetPath,owner,validate,nested.sourcePath,nested.viewName||undefined,nested.inline,undefined,nested.onInlineSourceSaved,nested.viewId);
     }});this.baseHoverEmbeds.add(sessions);
     const task=(target:string,line:number,checked:boolean)=>{admit();const identity=this.treeEntryToken(target);const operation=this.changeTask(target,line,checked,()=>{validateFile();if(!identity||this.treeEntryToken(target)!==identity)throw new Error('The preview task changed.');});track(operation);return operation;};
     const embeds=new MarkdownEmbeds({vault,resources:this.attachments,bases:{sessions,identity:target=>this.treeEntryToken(target)},pdfFactory:this.viewFactories.pdf,
@@ -1669,7 +1658,7 @@ export class Workspace {
       const sessions=new BaseEmbedSessions({recoveryHost:recovery,create:async(container,target)=>{
         const validateEmbed=()=>{validateFile();if(!target.sourceIdentity||this.treeEntryToken(target.sourcePath)!==target.sourceIdentity||!target.targetIdentity||this.treeEntryToken(target.targetPath)!==target.targetIdentity)throw new Error('The embedded Base source changed. Its draft is retained.');};
         validateEmbed();await this.prepareBase(target.targetPath,generation);validateEmbed();
-        return this.createWorkspaceBaseSession(container,target.targetPath,()=>this.activePane,validateEmbed,target.sourcePath,target.viewName||undefined,target.inline,undefined,target.onInlineSourceSaved);
+        return this.createWorkspaceBaseSession(container,target.targetPath,()=>this.activePane,validateEmbed,target.sourcePath,target.viewName||undefined,target.inline,undefined,target.onInlineSourceSaved,target.viewId);
       }});
       this.baseNewItemEmbeds=sessions;
       const embeds=new MarkdownEmbeds({vault,resources:this.attachments,bases:{sessions,identity:target=>this.treeEntryToken(target)},
@@ -1704,7 +1693,8 @@ export class Workspace {
             listener();
             for(const pane of this.loadedViews())if(pane.viewPath===shared.path){pane.editor?.setValue(shared.text);pane.properties?.refresh();pane.refreshPreview?.();}
           }),
-          properties:{getRelationTargets:property=>targets.get(property),getDisplayValue:(property,raw)=>targets.getDisplayValue(property,raw),onPropertyDefinitionChange:(property,definition)=>this.changePropertyDefinition(property,definition,validateFile)},
+          changeProperties:(next,buffer)=>this.changeManagedNoteProperties(buffer,next,targets,validateFile),
+          properties:{getDefinitions:()=>targets.getDefinitions(),isManaged:()=>!!targets.getCollection(),collectionName:()=>targets.getCollection()?.collection.name,getRelationTargets:property=>targets.get(property),getDisplayValue:(property,raw)=>targets.getDisplayValue(property,raw)},
           flushEditor:()=>sessions.flush(),hasPendingEditorChanges:()=>sessions.hasPendingChanges(),closeEditor:async()=>{await sessions.close();await targets.close();},
           openFile:async(target,event,witness)=>{validateFile();const newTab=('button'in event&&event.button===1)||event.metaKey||event.ctrlKey;if(witness){await this.openPropertyLink(shared.path,target,this.activePane,witness,newTab);return;}const resolved=vault.entries.has(target)?target:vault.metadata.resolveLink(shared.path,target,'wiki');if(!resolved)throw new Error('The linked note is unavailable.');await this.openNote(resolved,newTab,this.activePane);},
           editorFactory:(parent,options)=>this.editorFactory?this.editorFactory(parent,options):import('./editor.ts').then(module=>module.createEditor(parent,options)),
@@ -1738,7 +1728,7 @@ export class Workspace {
         if(!target.targetIdentity||this.treeEntryToken(target.targetPath)!==target.targetIdentity||vault.entries.get(target.targetPath)?.type!=='file')throw new Error('The embedded Base file changed. Your edits are retained.');
       };
       validate();await this.prepareBase(target.targetPath,generation);validate();
-      return this.createWorkspaceBaseSession(container,target.targetPath,owner,validate,target.sourcePath,target.viewName||undefined,target.inline,undefined,target.onInlineSourceSaved);
+      return this.createWorkspaceBaseSession(container,target.targetPath,owner,validate,target.sourcePath,target.viewName||undefined,target.inline,undefined,target.onInlineSourceSaved,target.viewId);
     }});
     pane.baseEmbeds=sessions;return sessions;
   }
@@ -2495,13 +2485,50 @@ export class Workspace {
     this.sidebarBase={path,session,host,context:context.path,contextEntryId:context.entryId,pinned:!!target,pinnedContext:target};this.sidebarPinnedContext=target;this.sidebarBasePath=path;if(options.activate!==false)this.rightTab='base';if(options.reveal!==false)this.root.classList.remove('right-hidden');this.renderRight();await session.ready;if(options.persist!==false)this.saveSession();
   }
 
-  private async changePropertyDefinition(property:string,definition:BasePropertyDefinition,validate:()=>void):Promise<void>{
-    const vault=this.vault,generation=this.vaultGeneration;
-    const alive=()=>{validate();if(vault!==this.vault||generation!==this.vaultGeneration)throw new Error('The property vault changed.');};alive();
-    if(!vault.entries.has(BASE_PROPERTY_DEFINITIONS_PATH)){await vault.create(BASE_PROPERTY_DEFINITIONS_PATH,'properties: {}\n');alive();}
-    const buffer=await this.baseBufferFor(BASE_PROPERTY_DEFINITIONS_PATH,alive);alive();
-    await this.propertyDefinitionSaver.save(buffer,property,definition,undefined,alive);
-    for(const pane of this.loadedViews())pane.properties?.refresh();
+  /** Collection values use the same typed operation as a Base cell. The note
+   * buffer owns composing the returned projection with any newer body draft. */
+  private async changeManagedNoteProperties(buffer:NoteBuffer,next:string,targets:NotePropertyTargets,validate:()=>void):Promise<boolean>{
+    const before=buffer.text,vault=this.vault,generation=this.vaultGeneration;validate();
+    const selected=await targets.prepareCollection();validate();
+    if(!selected)return false;
+    if(vault!==this.vault||generation!==this.vaultGeneration||buffer.text!==before)throw new Error('This note changed while the property was being prepared. Its draft is retained.');
+    const previousProperties=readProperties(before),proposedProperties=readProperties(next);
+    const previous=new Map(previousProperties.map(property=>[property.key,property.value])),proposed=new Map(proposedProperties.map(property=>[property.key,property.value]));
+    for(const key of ['_id','_type'])if(JSON.stringify(previous.get(key))!==JSON.stringify(proposed.get(key)))throw new Error('Collection identity is managed by Zorid.');
+    const databases=vault.adapter.databases;if(!databases)throw new Error('Collections are unavailable in this vault.');
+    const signature=JSON.stringify([selected.entry.entryId,previousProperties,proposedProperties]);
+    let requests=this.collectionPropertyRequests.get(buffer);if(!requests){requests=new Map();this.collectionPropertyRequests.set(buffer,requests);}
+    let request=requests.get(signature);
+    if(!request){
+      if(previous.get('_id')!==selected.entry.entryId||previous.get('_type')!==selected.collection.name)throw new Error('This collection’s readable properties changed. Refresh the note before editing; the draft is retained.');
+      for(const field of selected.collection.properties)if(!previous.has(field.name))throw new Error('The collection schema changed. Refresh the note before editing; the draft is retained.');
+      const values:Record<string,string|number|boolean|null|readonly string[]>={};
+      const typed=(field:typeof selected.collection.properties[number],input:unknown)=>{
+        let value=input??null;
+        if(value!==null&&(field.datatype==='select'||field.datatype==='status')){
+          const option=field.options.find(option=>option.name===value);if(!option)throw new Error(`The ${field.name} options changed. Refresh the note before editing; the draft is retained.`);value=option.id;
+        }else if(value!==null&&field.datatype==='multi-select'){
+          if(!Array.isArray(value))throw new Error(`${field.name} needs a list of options.`);
+          value=value.map(label=>{const option=field.options.find(option=>option.name===label);if(!option)throw new Error(`The ${field.name} options changed. Refresh the note before editing; the draft is retained.`);return option.id;});
+        }
+        return collectionValue(value);
+      };
+      for(const field of selected.collection.properties){
+        if(JSON.stringify(previous.get(field.name))===JSON.stringify(proposed.get(field.name)))continue;
+        const authoritative=selected.entry.values[field.id]??null;
+        const rendered=(field.datatype==='select'||field.datatype==='status')&&typeof authoritative==='string'?field.options.find(option=>option.id===authoritative)?.name??authoritative:field.datatype==='multi-select'&&Array.isArray(authoritative)?authoritative.map(id=>field.options.find(option=>option.id===id)?.name??id):authoritative;
+        if(JSON.stringify(previous.get(field.name)??null)!==JSON.stringify(rendered))throw new Error(`The saved ${field.name} value changed in another view. Refresh the note before editing; the draft is retained.`);
+        values[field.id]=typed(field,proposed.get(field.name));
+      }
+      if(!Object.keys(values).length)return false;
+      request={op:'set_entry',operationId:crypto.randomUUID(),entryId:selected.entry.entryId,expectedRevision:selected.entry.revision,expectedCollectionRevision:selected.collection.revision,values};requests.set(signature,request);
+    }
+    await buffer.flush();validate();
+    const response=await databases.request(request);validate();
+    const saved=response.entries.find(entry=>entry.entryId===selected.entry.entryId);
+    if(!saved||saved.pendingProjection)throw new Error('The property is committed locally but its note still needs publication. Retry this edit.');
+    await buffer.refreshManagedProjection(validate);validate();requests.delete(signature);
+    await targets.prepareCollection();return true;
   }
 
   private renderRight():void{
@@ -2631,6 +2658,18 @@ export class Workspace {
     await this.openNote(path,false,pane,true,'',activation);if(generation!==this.vaultGeneration||this.activePane!==pane||this.current(pane)?.path!==path||this.navigationIntent.get(pane)!==intent+1)return;
     const title=pane.element.querySelector<HTMLInputElement>('.note-title');
     if(title&&!title.hidden){title.focus();title.select();}else pane.editor?.focus();
+  }
+  private openCollections():void{
+    const vault=this.vault,generation=this.vaultGeneration,service=vault.adapter.databases;if(!service)throw new Error('Collections are unavailable in this vault.');
+    const {content,close}=modal('Collections');content.classList.add('collections-modal');
+    const current=()=>vault===this.vault&&generation===this.vaultGeneration&&content.isConnected&&!this.platformReleased;
+    const browser=mountCollectionBrowser(content,{service,isCurrent:current,
+      open:async collection=>{if(!current())return;const stem=collection.name.replace(/[\\/:*?"<>|\u0000-\u001f]/g,' ').trim()||'Collection';let path='',index=0;do{path=`${stem}${index?' '+index:''}.base`;index++;}while(vault.entries.has(path));await vault.create(path,JSON.stringify({views:[{id:newBaseViewId(),type:'table',name:collection.name,source:{kind:'collection',id:collection.id}}]},null,2)+'\n');if(!current())return;close();await this.openNote(path);},
+      openEntry:async entry=>{if(!current())return;close();await this.openNote(entry.path,false,this.activePane,true,'',undefined,undefined,entry.entryId);},
+      duplicatePath:entry=>{const stem=entry.path.replace(/\.md$/i,'');let path='',index=1;do{path=`${stem} copy${index>1?' '+index:''}.md`;index++;}while(vault.entries.has(path));return path;},
+      onMutation:async()=>{if(current())await vault.reload();},
+    });
+    const observer=new MutationObserver(()=>{if(!content.isConnected){browser.destroy();observer.disconnect();}});observer.observe(document.body,{childList:true});
   }
   private hasPendingBaseCreation():boolean{return !!this.pendingBaseCreation&&this.pendingBaseCreation.operation?.status!=='committed';}
   private async newBase(folder=''):Promise<void>{
@@ -2835,7 +2874,7 @@ export class Workspace {
     }]:[];
     return [...WORKSPACE_HOTKEY_COMMANDS.filter(command=>command.id!=='new-window'||workspaceWindowBridge(window.zorid)).map(command=>({
       id:command.id,name:command.name,shortcut:this.hotkeys.label(command.id),action:()=>this.executeHotkey(command.id),
-    })),{id:'new-base',name:'Bases: Create new base',action:()=>this.newBase()},...(path&&/\.base$/i.test(path)?[{id:'base-sidebar',name:'Bases: Open in right sidebar',action:()=>this.openBaseSidebar(path)}]:[]),...history];
+    })),{id:'new-base',name:'Bases: Create new base',action:()=>this.newBase()},...(this.vault.adapter.databases?[{id:'collections',name:'Collections: Browse collections',action:()=>this.openCollections()}]:[]),...(path&&/\.base$/i.test(path)?[{id:'base-sidebar',name:'Bases: Open in right sidebar',action:()=>this.openBaseSidebar(path)}]:[]),...history];
   }
   private syncNativeHotkeys():void{
     void window.zorid?.setMenuHotkeys?.(['new-window','close-tab'].map(id=>({id:id as 'new-window'|'close-tab',shortcut:this.hotkeys.label(id)}))).catch(error=>notice(error instanceof Error?error.message:String(error)));
