@@ -2572,7 +2572,10 @@ export class Workspace {
     const saved=response.entries.find(entry=>entry.entryId===selected.entry.entryId);
     if(!saved||saved.pendingProjection)throw new Error('The property is committed locally but its note still needs publication. Retry this edit.');
     await buffer.refreshManagedProjection(validate);validate();requests.delete(signature);
-    await targets.prepareCollection();return true;
+    // The setter and canonical buffer refresh above already confirmed this
+    // save. A later membership read only refreshes presentation; retry it once
+    // through normal invalidation rather than reporting the committed edit as failed.
+    try{await targets.prepareCollection();}catch{targets.invalidate();}return true;
   }
 
   private renderRight():void{

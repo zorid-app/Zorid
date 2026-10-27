@@ -6,6 +6,7 @@ import type { CommittedMetadataState } from '../src/core/committed-metadata-fram
 import type { DocumentService } from '../src/core/document-semantics.ts';
 import type { PropertyTargetsInput, PropertyTargetsResult } from '../src/bases/property-targets.ts';
 import { createNotePropertyTargets } from '../src/ui/note-property-targets.ts';
+import {Workspace} from '../src/ui/workspace.ts';
 const tick=()=>new Promise(resolve=>setTimeout(resolve,40));
 async function setup(query:(input:PropertyTargetsInput)=>Promise<PropertyTargetsResult>,metadata?:CommittedMetadataState){
   const adapter=new MemoryAdapter({'Note.md':'body','Other.md':'other','Properties.yaml':'properties: {}'}),list=adapter.list.bind(adapter);
@@ -169,6 +170,7 @@ async function collectionFixture(options:{listedIdentity?:boolean;ordinary?:bool
   const schema={id:'abcdefghijkl',name:'Books',revision:'schema-r1',deleted:false,properties:[{id:'mnopqrstuvwx',name:'Deadline',datatype:'date' as const,options:[]}]};
   const requests:import('../src/core/databases.ts').DatabaseRequest[]=[],reads:string[]=[];
   let onRequest:((entryId:string)=>Promise<void>)|undefined,requestError:unknown,mutateReply:((value:any)=>void)|undefined;
+  let deadline:string|null=null,memberRevision='member-r1';
   const adapter=new MemoryAdapter({'Note.md':raw,'Other.md':'Other body'}) as MemoryAdapter&{durableWrites:import('../src/core/durable-writes.ts').DurableWrites;databases:import('../src/core/databases.ts').DatabaseService};
   if(options.listedIdentity){const list=adapter.list.bind(adapter);adapter.list=async()=> (await list()).map(row=>({...row,entryId:row.path==='Note.md'?'trusted-note':'trusted-other',revision:'r1'}));}
   const unsupported=async():Promise<never>=>{throw new Error('Unexpected write');};
@@ -176,9 +178,16 @@ async function collectionFixture(options:{listedIdentity?:boolean;ordinary?:bool
     readText:async path=>{reads.push('path:'+path);const row=[...records.values()].find(row=>row.path===path);if(!row)throw new Error('Missing note');return structuredClone(row);},
     readTextById:async id=>{reads.push('id:'+id);return structuredClone(records.get(id)??null);},planWrite:unsupported,prepare:unsupported,commit:unsupported,query:unsupported,listUnacknowledged:unsupported,acknowledge:unsupported};
   adapter.databases={request:async command=>{
-    assert.equal(command.op,'get_entry');if(command.op!=='get_entry')throw new Error('Unexpected collection operation');requests.push(command);
+    requests.push(command);
+    if(command.op==='set_entry'){
+      assert.equal(command.entryId,'trusted-note');assert.equal(command.expectedRevision,memberRevision);assert.equal(command.expectedCollectionRevision,schema.revision);
+      const row=records.get(command.entryId)!;deadline=command.values.mnopqrstuvwx as string|null;memberRevision='member-r2';
+      const content=row.content.replace(/^Deadline: .*$/m,'Deadline: '+(deadline??'null'));records.set(row.entryId,{...row,revision:'r2',content,stat:{...row.stat,size:content.length}});await adapter.write(row.path,content);
+      return{collections:[structuredClone(schema)],entries:[{entryId:row.entryId,collectionId:schema.id,revision:memberRevision,fileRevision:'r2',path:row.path,values:{mnopqrstuvwx:deadline},deleted:false,pendingProjection:false}],projection:{pending:0,issues:[]}};
+    }
+    assert.equal(command.op,'get_entry');if(command.op!=='get_entry')throw new Error('Unexpected collection operation');
     const row=records.get(command.entryId)!;
-    const reply={collections:[structuredClone(schema)],entries:[{entryId:row.entryId,collectionId:schema.id,revision:'member-r1',fileRevision:row.revision,path:row.path,values:{mnopqrstuvwx:null},deleted:false,pendingProjection:false}],projection:{pending:0,issues:[]}};
+    const reply={collections:[structuredClone(schema)],entries:[{entryId:row.entryId,collectionId:schema.id,revision:memberRevision,fileRevision:row.revision,path:row.path,values:{mnopqrstuvwx:deadline},deleted:false,pendingProjection:false}],projection:{pending:0,issues:[]}};
     if(onRequest)await onRequest(command.entryId);if(requestError)throw requestError;
     if(ordinary)throw Object.assign(new Error('Ordinary note'),{source:'host',code:'collection_not_found',commitUncertain:false});
     mutateReply?.(reply);return reply;
@@ -265,5 +274,35 @@ test('close joins obsolete collection reads as well as the latest selected path'
 test('a replacement no-ID inventory actor cannot reuse a previously resolved collection cache',async()=>{
   const f=await collectionFixture();try{await f.manager.prepareCollection();f.vault.entries.set('Note.md',{...f.vault.entries.get('Note.md')!});
     assert.equal(f.manager.getCollection(),undefined);assert.deepEqual(f.manager.getDefinitions(),{});
+  }finally{await f.manager.close();}
+});
+
+
+test('committed collection setter refresh acknowledges the coherent new file while inventory still has the old revision',async()=>{
+  const f=await collectionFixture({listedIdentity:true});try{
+    const before=await f.manager.prepareCollection();assert.ok(before);const body=f.records.get('trusted-note')!.content.split('---').at(-1);
+    const saved=await f.adapter.databases.request({op:'set_entry',operationId:'setter-1',entryId:before.entry.entryId,expectedRevision:before.entry.revision,expectedCollectionRevision:before.collection.revision,values:{mnopqrstuvwx:'2026-10-28'}});
+    assert.equal(saved.entries[0].fileRevision,'r2');assert.match(f.records.get('trusted-note')!.content,/Deadline: 2026-10-28/);assert.equal(f.records.get('trusted-note')!.content.split('---').at(-1),body);
+    assert.equal(f.vault.entries.get('Note.md')!.revision,'r1','normal inventory publication may lag the committed projection');
+    const refreshed=await f.manager.prepareCollection();assert.equal(refreshed?.entry.fileRevision,'r2');assert.equal(refreshed?.entry.values.mnopqrstuvwx,'2026-10-28');assert.equal(f.manager.getCollection()?.entry.revision,'member-r2');assert.equal(f.manager.getDefinitions().Deadline.type,'date');assert.ok(!f.reads.some(read=>read.startsWith('path:')),'known identities do not require another full path read');
+  }finally{await f.manager.close();}
+});
+
+test('definite ordinary nonmembership accepts coherent same-actor content newer than listed inventory',async()=>{
+  const f=await collectionFixture({listedIdentity:true,ordinary:true});try{
+    await f.manager.prepareCollection();const before=f.records.get('trusted-note')!;f.records.set(before.entryId,{...before,revision:'r2',content:before.content+'\nSaved newer body'});
+    assert.equal(f.vault.entries.get('Note.md')!.revision,'r1');assert.equal(await f.manager.prepareCollection(),undefined);assert.equal(f.manager.getCollection(),undefined);assert.ok(!f.reads.some(read=>read.startsWith('path:')));
+  }finally{await f.manager.close();}
+});
+
+
+test('Workspace managed setter completes its postcommit target refresh while inventory publication lags',async()=>{
+  const f=await collectionFixture({listedIdentity:true});try{
+    const saved=f.records.get('trusted-note')!,content=saved.content.replace('untrusted-frontmatter-id',saved.entryId).replace('Misleading type label','Books');f.records.set(saved.entryId,{...saved,content});
+    const buffer={path:saved.path,text:content,savedText:content,savedDurableWitness:{entryId:saved.entryId,path:saved.path,revision:saved.revision},async flush(){},async refreshManagedProjection(validate:()=>void){validate();const current=f.records.get(saved.entryId)!;buffer.text=current.content;buffer.savedText=current.content;buffer.savedDurableWitness={entryId:current.entryId,path:current.path,revision:current.revision};}};
+    const owner={vault:f.vault,vaultGeneration:0,collectionPropertyRequests:new WeakMap()};
+    const change=(Workspace.prototype as unknown as {changeManagedNoteProperties:Function}).changeManagedNoteProperties;
+    assert.equal(await change.call(owner,buffer,content.replace('Deadline: null','Deadline: 2026-10-28'),f.manager,()=>{}),true,'committed edit must return success after its final collection refresh');
+    assert.equal(f.requests.filter(command=>command.op==='set_entry').length,1);assert.equal(f.vault.entries.get(saved.path)!.revision,'r1');assert.equal(buffer.savedDurableWitness.revision,'r2');assert.equal(f.manager.getCollection()?.entry.fileRevision,'r2');assert.match(buffer.text,/Deadline: 2026-10-28/);assert.ok(buffer.text.endsWith('Body'));
   }finally{await f.manager.close();}
 });

@@ -6,12 +6,13 @@ import {renderProperties} from '../src/ui/properties.ts';
 import type {DatabaseCollection,DatabaseEntry,DatabaseRequest} from '../src/core/databases.ts';
 const collection:DatabaseCollection={id:'abcdefghijkl',name:'Work',revision:'schema-r1',deleted:false,properties:[{id:'mnopqrstuvwx',name:'Status',datatype:'status',options:[{id:'111111111111',name:'Started',category:'working'},{id:'222222222222',name:'Done',category:'done'},{id:'333333333333',name:'Paused',category:'working'}]}]};
 const source=(status:string)=>`---\n_id: entry-1\n_type: Work\nStatus: ${status}\n---\nBody`;
-function fixture(authoritative:string,selectedCollection:DatabaseCollection=collection){
+function fixture(authoritative:string,selectedCollection:DatabaseCollection=collection,options:{failFinalRefresh?:boolean;failCanonicalRefresh?:boolean}={}){
+  let preparations=0,invalidations=0;
   const requests:DatabaseRequest[]=[],sequence:string[]=[];let member:DatabaseEntry={entryId:'entry-1',collectionId:collection.id,revision:'entry-r2',fileRevision:'file-r2',path:'Note.md',values:{mnopqrstuvwx:authoritative},deleted:false,pendingProjection:false};
   const vault={adapter:{databases:{async request(command:DatabaseRequest){sequence.push('set');requests.push(command);member={...member,revision:'entry-r3',values:{mnopqrstuvwx:'333333333333'}};buffer.text+='\nLater body';return{collections:[selectedCollection],entries:[member],projection:{pending:0,issues:[]}};}}}};
-  const owner={vault,vaultGeneration:0,collectionPropertyRequests:new WeakMap()},buffer={text:source('Started'),async flush(){sequence.push('flush');},async refreshManagedProjection(){sequence.push('refresh');buffer.text=buffer.text.replace('Status: Started','Status: Paused');}},targets={async prepareCollection(){return{collection:selectedCollection,entry:member};}};
+  const owner={vault,vaultGeneration:0,collectionPropertyRequests:new WeakMap()},buffer={text:source('Started'),async flush(){sequence.push('flush');},async refreshManagedProjection(){sequence.push('refresh');if(options.failCanonicalRefresh)throw new Error('Canonical refresh failed');buffer.text=buffer.text.replace('Status: Started','Status: Paused');}},targets={async prepareCollection(){if(++preparations===2&&options.failFinalRefresh)throw new Error('Membership refresh temporarily unavailable');return{collection:selectedCollection,entry:member};},invalidate(){invalidations++;}};
   const change=(Workspace.prototype as unknown as {changeManagedNoteProperties:Function}).changeManagedNoteProperties;
-  return{requests,sequence,buffer,change:()=>change.call(owner,buffer,source('Paused'),targets,()=>{}) as Promise<boolean>};
+  return{requests,sequence,buffer,get invalidations(){return invalidations;},change:()=>change.call(owner,buffer,source('Paused'),targets,()=>{}) as Promise<boolean>};
 }
 test('a stale visible managed value cannot acquire the latest revision and overwrite another view',async()=>{
   const f=fixture('222222222222');await assert.rejects(f.change(),/saved Status value changed/);assert.equal(f.requests.length,0);assert.deepEqual(f.sequence,[]);assert.equal(f.buffer.text,source('Started'));
@@ -87,4 +88,15 @@ test('rendered Number property retains the old option label and accepts correcti
 test('uncertain retained-value setter retries its original operation without reinterpreting the cleared problem marker',async()=>{
   const f=preservedNumberFixture(5,{loseSetReply:true});await assert.rejects(f.change(),/acknowledgement lost/);assert.match(f.buffer.text,/Status: Started/);assert.equal(f.member().values.mnopqrstuvwx,5);assert.equal(f.member().problems?.mnopqrstuvwx,undefined);
   assert.equal(await f.change(),true);const setters=f.requests.filter(request=>request.op==='set_entry');assert.equal(setters.length,2);assert.deepEqual(setters[0],setters[1]);assert.equal(f.requests.filter(request=>request.op==='compose').length,1);assert.deepEqual(f.sequence,['compose','flush','set_entry','flush','set_entry','refresh']);assert.equal((f.buffer.text.match(/Later typing/g)??[]).length,1);assert.ok(f.buffer.text.endsWith('Unsaved body\nLater typing'));assert.match(f.buffer.text,/Status: 5/);
+});
+
+
+test('confirmed canonical collection save acknowledges success when only its final membership refresh fails',async()=>{
+  const f=fixture('111111111111',collection,{failFinalRefresh:true});assert.equal(await f.change(),true);
+  assert.deepEqual(f.sequence,['flush','set','refresh']);assert.equal(f.requests.length,1);assert.equal(f.requests[0].op,'set_entry');assert.equal(f.invalidations,1,'one normal refresh invalidation follows an ancillary read failure');assert.match(f.buffer.text,/Status: Paused/);assert.ok(f.buffer.text.endsWith('Later body'));
+});
+
+
+test('canonical buffer refresh failure remains a retained save error and never becomes ancillary success',async()=>{
+  const f=fixture('111111111111',collection,{failCanonicalRefresh:true});await assert.rejects(f.change(),/Canonical refresh failed/);assert.deepEqual(f.sequence,['flush','set','refresh']);assert.equal(f.requests.length,1);assert.equal(f.invalidations,0);assert.match(f.buffer.text,/Status: Started/);assert.ok(f.buffer.text.endsWith('Later body'));
 });

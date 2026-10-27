@@ -61,11 +61,11 @@ export function createNotePropertyTargets(options: {
       if(entry?.type!=='file')throw new Error('The collection note is unavailable.');
       // A namespace listing may intentionally omit durable identities. Resolve
       // through the admitted provider, never from readable _id/_type content.
-      const fallback=!entry.entryId||!entry.revision;
+      const fallback=!entry.entryId;
       const witness=fallback&&adapter.durableWrites?await vault.readDurableText(path):undefined;
       if(!live())throw new Error('The collection note changed.');
-      const entryId=fallback?witness?.entryId:entry.entryId,revision=fallback?witness?.revision:entry.revision;
-      if(!entryId||!revision||!durable)throw new Error('The collection note identity is unavailable.');
+      const entryId=fallback?witness?.entryId:entry.entryId;
+      if(!entryId||!durable)throw new Error('The collection note identity is unavailable.');
       resolvedId=entryId;
       const selected=vault.entries.get(path);
       if(selected?.entryId&&selected.entryId!==entryId)throw new Error('The collection note changed.');
@@ -81,10 +81,12 @@ export function createNotePropertyTargets(options: {
       const latest=vault.entries.get(path);
       if(latest?.entryId&&latest.entryId!==entryId)throw new Error('The collection note changed.');
       const observed=await vault.readDurableTextById(entryId);
-      if(!live()||!observed||observed.path!==path||observed.revision!==revision||latest?.entryId&&latest.entryId!==observed.entryId)throw new Error('The collection note changed.');
+      if(!live()||!observed||observed.entryId!==entryId||observed.path!==path||latest?.entryId&&latest.entryId!==observed.entryId)throw new Error('The collection note changed.');
       if(!reply)return apply(undefined);
+      // Inventory publication can lag a committed property projection. Bind
+      // freshness to the returned member and coherent read of the same actor.
       const member=reply.entries.find(item=>item.entryId===entryId);
-      if(!member||member.deleted||member.path!==path||member.fileRevision!==revision)throw new Error('The collection note changed.');
+      if(!member||member.deleted||member.path!==path||member.fileRevision!==observed.revision)throw new Error('The collection note changed.');
       const collection=reply.collections.find(item=>item.id===member.collectionId&&!item.deleted);
       if(!collection)throw new Error('The collection note is unavailable.');
       return apply({collection,entry:member});
