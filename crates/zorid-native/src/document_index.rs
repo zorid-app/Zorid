@@ -549,7 +549,7 @@ impl NativeVault {
         // The Store captured schema, ownership and values in the same authority
         // transaction as this generation's source manifest. Never read today's
         // collection state while querying retained note bytes.
-        let state = manifest.database_state();
+        let state = pin.database_state();
         let scope = database_source_scope(state, source_kind)?;
         let mut result = zorid_bases::query_generation_scoped(program.value(), pin.generation(), &facts, scope, &selected)?;
         for row in &result.rows {

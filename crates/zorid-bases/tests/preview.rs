@@ -1,8 +1,10 @@
 //! First-build preview expectations are fixed prepared-subset facts, never an
 //! ordinary published snapshot manufactured to satisfy the shared evaluator.
+use std::{collections::BTreeMap, sync::Arc};
 use zorid_bases::{
-    compile_base_source, query_generation, query_preview, BaseValue, FilePresentationFacts,
-    OperationCancellation, QueryOptions, RecordWitness, MAX_PREVIEW_QUERY_OWNED_BYTES,
+    compile_base_source, query_generation, query_preview, BaseSourceScope, BaseValue,
+    BaseViewSource, FilePresentationFacts, OperationCancellation, QueryOptions, RecordWitness,
+    MAX_PREVIEW_QUERY_OWNED_BYTES,
 };
 use zorid_core::{EntryId, EntryKind, EntryState, OperationId, Revision, VaultPath};
 use zorid_index::{
@@ -11,6 +13,23 @@ use zorid_index::{
     SemanticVersions, SourceSnapshotId, SourceWatermark, INDEX_SCHEMA_VERSION,
     LITERAL_QUERY_VERSION, MAX_SEARCH_OWNED_BYTES, RESOLVER_VERSION,
 };
+/// The pure reducer receives a trusted in-process test scope. Production
+/// native/browser preview paths do not have one and remain explicitly disabled.
+fn trusted_options() -> QueryOptions {
+    QueryOptions {
+        source_scope: Some(Arc::new(
+            BaseSourceScope::captured(
+                BaseViewSource::Untyped,
+                "test-capture-1".into(),
+                &BTreeMap::new(),
+                BTreeMap::new(),
+                vec![],
+            )
+            .unwrap(),
+        )),
+        ..QueryOptions::default()
+    }
+}
 fn id(value: &str) -> EntryId {
     EntryId::new(value).unwrap()
 }
@@ -93,7 +112,7 @@ fn coherent_capture_growth_keeps_old_rows_and_explicit_partial_aggregates() {
         &old,
         &id("definition"),
         &[],
-        &QueryOptions::default(),
+        &trusted_options(),
         MAX_PREVIEW_QUERY_OWNED_BYTES,
     )
     .unwrap();
@@ -124,7 +143,7 @@ fn coherent_capture_growth_keeps_old_rows_and_explicit_partial_aggregates() {
         &newer,
         &id("definition"),
         &[],
-        &QueryOptions::default(),
+        &trusted_options(),
         MAX_PREVIEW_QUERY_OWNED_BYTES,
     )
     .unwrap();
@@ -138,10 +157,16 @@ fn coherent_capture_growth_keeps_old_rows_and_explicit_partial_aggregates() {
             .collect::<Vec<_>>(),
         ["B.md", "A.md"]
     );
-    assert_eq!(
-        second.value.rows[0].values["note.score"],
-        BaseValue::Number { value: 3.0 }
-    );
+    assert!(second.value.rows.iter().all(|row| row
+        .values
+        .keys()
+        .all(|key| key.starts_with("file."))
+        && row.edit_values.is_empty()));
+    assert!(second
+        .value
+        .properties
+        .iter()
+        .all(|key| key.starts_with("file.")));
     assert_eq!(first.value.rows.len(), 1);
     let wire = serde_json::to_value(&second.value).unwrap();
     assert_eq!(wire["status"], "indexing");
@@ -155,7 +180,7 @@ fn full_prepared_scalar_rows_reuse_existing_published_evaluator() {
     source(&mut builder, "b", "---\nscore: 3\n---\n", true);
     let capture = capture_rows(&builder, &["definition", "a", "b"]);
     let program = compile_base_source(base()).unwrap();
-    let options = QueryOptions::default();
+    let options = trusted_options();
     let preview = query_preview(
         &program,
         &capture,
@@ -202,12 +227,12 @@ fn negative_relationship_filter_is_unavailable_not_false_absence() {
             &capture,
             &id("definition"),
             &[],
-            &QueryOptions::default(),
+            &trusted_options(),
             MAX_PREVIEW_QUERY_OWNED_BYTES,
         )
         .unwrap();
         assert!(result.value.rows.is_empty());
-        assert_eq!(result.value.unavailable_filter_rows, 2);
+        assert_eq!(result.value.unavailable_filter_rows, 1);
         assert!(result
             .value
             .diagnostics
@@ -216,7 +241,7 @@ fn negative_relationship_filter_is_unavailable_not_false_absence() {
     }
 }
 #[test]
-fn failed_metadata_is_unknown_but_known_binary_and_plaintext_have_absent_properties() {
+fn failed_note_metadata_remains_unknown_and_nonnotes_are_not_browsed() {
     let mut builder = builder(vec![
         entry("definition", "View.base"),
         entry("bad", "Bad.md"),
@@ -234,7 +259,7 @@ fn failed_metadata_is_unknown_but_known_binary_and_plaintext_have_absent_propert
         &capture,
         &id("definition"),
         &[],
-        &QueryOptions::default(),
+        &trusted_options(),
         MAX_PREVIEW_QUERY_OWNED_BYTES,
     )
     .unwrap();
@@ -247,9 +272,9 @@ fn failed_metadata_is_unknown_but_known_binary_and_plaintext_have_absent_propert
             .iter()
             .map(|r| r.path.as_str())
             .collect::<Vec<_>>(),
-        ["photo.png", "Plain.txt", "View.base"]
+        Vec::<&str>::new()
     );
-    let mut options = QueryOptions::default();
+    let mut options = trusted_options();
     options.current_entry_id = Some(id("bad"));
     let known = compile_base_source("filters: file.path == \"Bad.md\"\nviews:\n  - type: table\n    name: Table\n    order: [file.path]\n").unwrap();
     let known = query_preview(
@@ -275,7 +300,7 @@ fn pending_definition_or_current_is_unavailable_and_prepared_file_fields_remain_
             &capture,
             &id("definition"),
             &[],
-            &QueryOptions::default(),
+            &trusted_options(),
             MAX_PREVIEW_QUERY_OWNED_BYTES
         )
         .unwrap_err()
@@ -283,7 +308,7 @@ fn pending_definition_or_current_is_unavailable_and_prepared_file_fields_remain_
         "unavailable"
     );
     let capture = capture_rows(&builder, &["definition", "a"]);
-    let mut options = QueryOptions::default();
+    let mut options = trusted_options();
     options.current_entry_id = Some(id("b"));
     assert_eq!(
         query_preview(
@@ -331,7 +356,7 @@ fn presentation_facts_require_exact_prepared_revision_and_membership() {
         &capture,
         &id("definition"),
         &[fact.clone()],
-        &QueryOptions::default(),
+        &trusted_options(),
         MAX_PREVIEW_QUERY_OWNED_BYTES,
     )
     .unwrap();
@@ -346,7 +371,7 @@ fn presentation_facts_require_exact_prepared_revision_and_membership() {
             &capture,
             &id("definition"),
             &[fact.clone()],
-            &QueryOptions::default(),
+            &trusted_options(),
             MAX_PREVIEW_QUERY_OWNED_BYTES
         )
         .unwrap_err()
@@ -360,7 +385,7 @@ fn presentation_facts_require_exact_prepared_revision_and_membership() {
             &capture,
             &id("definition"),
             &[fact],
-            &QueryOptions::default(),
+            &trusted_options(),
             MAX_PREVIEW_QUERY_OWNED_BYTES
         )
         .unwrap_err()
@@ -381,7 +406,7 @@ fn tightening_copy_output_work_and_cancellation_limits_never_mutate_capture() {
                 &capture,
                 &id("definition"),
                 &[],
-                &QueryOptions::default(),
+                &trusted_options(),
                 bytes
             )
             .unwrap_err()
@@ -389,7 +414,7 @@ fn tightening_copy_output_work_and_cancellation_limits_never_mutate_capture() {
             "budget"
         );
     }
-    let mut options = QueryOptions::default();
+    let mut options = trusted_options();
     options.max_steps = 1;
     assert_eq!(
         query_preview(
@@ -404,7 +429,7 @@ fn tightening_copy_output_work_and_cancellation_limits_never_mutate_capture() {
         .code,
         "budget"
     );
-    options = QueryOptions::default();
+    options = trusted_options();
     options.max_output_bytes = 1;
     assert_eq!(
         query_preview(
@@ -421,7 +446,7 @@ fn tightening_copy_output_work_and_cancellation_limits_never_mutate_capture() {
     );
     let cancellation = OperationCancellation::default();
     cancellation.cancel();
-    options = QueryOptions::default();
+    options = trusted_options();
     options.evaluation.cancellation = Some(cancellation);
     assert_eq!(
         query_preview(
@@ -463,7 +488,7 @@ fn small_prepared_subset_does_not_prepare_a_hundred_thousand_entry_namespace() {
     }
     let names = names.iter().map(String::as_str).collect::<Vec<_>>();
     let capture = capture_rows(&builder, &names);
-    let mut options = QueryOptions::default();
+    let mut options = trusted_options();
     options.max_steps = 500_000;
     let result = query_preview(
         &compile_base_source(base()).unwrap(),
@@ -491,7 +516,7 @@ fn summaries_describe_prepared_subset_without_claiming_complete_aggregates() {
         &captured,
         &id("definition"),
         &[],
-        &QueryOptions::default(),
+        &trusted_options(),
         MAX_PREVIEW_QUERY_OWNED_BYTES,
     )
     .unwrap();
@@ -532,7 +557,7 @@ fn wiki_string_equality_in_partial_previews_is_unavailable_without_namespace_exp
         &capture,
         &id("definition"),
         &[],
-        &QueryOptions::default(),
+        &trusted_options(),
         MAX_PREVIEW_QUERY_OWNED_BYTES,
     )
     .unwrap();
@@ -552,25 +577,67 @@ fn wiki_string_equality_in_partial_previews_is_unavailable_without_namespace_exp
         &capture,
         &id("definition"),
         &[],
-        &QueryOptions::default(),
+        &trusted_options(),
         MAX_PREVIEW_QUERY_OWNED_BYTES,
     )
     .unwrap();
     assert_eq!(nested.value.counts.scanned, 2);
     assert_eq!(nested.value.rows.len(), 1);
     for property in ["formula.contains", "formula.equality"] {
-        assert!(
-            matches!(&nested.value.rows[0].values[property],BaseValue::Error{code,..}if code=="unavailable")
-        );
+        assert!(!nested.value.rows[0].values.contains_key(property));
+        assert!(nested
+            .value
+            .diagnostics
+            .iter()
+            .any(
+                |diagnostic| diagnostic.property.as_deref() == Some(property)
+                    && diagnostic.code == "unavailable"
+            ));
     }
 }
-
 
 #[test]
 fn unscoped_indexing_preview_fails_closed_instead_of_classifying_owned_notes_as_untyped() {
     let builder = fixture();
     let snapshot = capture_rows(&builder, &["definition", "a"]);
     let program = compile_base_source(base()).unwrap();
-    let error = query_preview(&program, &snapshot, &id("definition"), &[], &QueryOptions::default(), MAX_PREVIEW_QUERY_OWNED_BYTES).unwrap_err();
+    let error = query_preview(
+        &program,
+        &snapshot,
+        &id("definition"),
+        &[],
+        &QueryOptions::default(),
+        MAX_PREVIEW_QUERY_OWNED_BYTES,
+    )
+    .unwrap_err();
     assert_eq!(error.code, "source-unavailable");
+}
+
+#[test]
+fn trusted_untyped_preview_excludes_owned_prepared_notes() {
+    let builder = fixture();
+    let snapshot = capture_rows(&builder, &["definition", "a"]);
+    let scope = BaseSourceScope::captured(
+        BaseViewSource::Untyped,
+        "captured-state-1".into(),
+        &BTreeMap::from([(id("a"), "aaaaaaaaaaaa".into())]),
+        BTreeMap::new(),
+        vec![],
+    )
+    .unwrap();
+    let options = QueryOptions {
+        source_scope: Some(Arc::new(scope)),
+        ..QueryOptions::default()
+    };
+    let result = query_preview(
+        &compile_base_source(base()).unwrap(),
+        &snapshot,
+        &id("definition"),
+        &[],
+        &options,
+        MAX_PREVIEW_QUERY_OWNED_BYTES,
+    )
+    .unwrap();
+    assert!(result.value.rows.is_empty());
+    assert_eq!(result.value.counts.returned, 0);
 }
