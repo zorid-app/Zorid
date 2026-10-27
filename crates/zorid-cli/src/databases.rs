@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+const MAX_REQUEST_BYTES: usize = zorid_native::MAX_DATABASE_REQUEST_BYTES;
 
 #[derive(Subcommand)]
 pub enum Command {
@@ -81,7 +81,7 @@ fn read_json(reader: &mut impl Read) -> Result<Value> {
     if bytes.len() > MAX_REQUEST_BYTES {
         return Err(Failure::new(
             "input_too_large",
-            "Database request exceeds the 1048576 byte limit; nothing was committed",
+            "Database request exceeds the native protocol byte limit; nothing was committed",
             2,
         ));
     }
