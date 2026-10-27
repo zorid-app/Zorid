@@ -1,5 +1,16 @@
 # User findings queue
 
+## Local app and cleanup request — 2026-10-26
+
+Completed: main `6f7237ed` packaged as an unsigned arm64 local build and installed
+at `~/Applications/Zorid.app`;355 packaged files verify before installation.
+Previous build outputs/duplicate native binaries were removed. All105 extra Git
+worktrees are removed; only main remains. Four uncommitted test files and their
+patches, branch refs and validation evidence are preserved in
+`tmp/worktree-cleanup-backup-20261026/`. Obsolete build caches and disposable test
+profiles/vaults were cleaned; normal vaults/app data, dependencies and toolchains
+remain. Free space rose from approximately2GiB to9.1GiB. No extra UI tests run.
+
 ## Bases desktop closeout — 2026-10-26
 
 - Computed reverse relations/rollups falsely showed missing-raw diagnostics:

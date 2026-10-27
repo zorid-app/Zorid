@@ -63,10 +63,14 @@ Owned test apps are closed.
 Final reports, screenshots, private continuation sources/fixtures, provenance and
 build receipts are preserved under the main workspace's ignored
 `tmp/bases-desktop-closeout-20261026-final/`, indexed by `manifest.json`.
-Original detailed runs remain under `/private/tmp/zorid-bases-*`; matching binaries
-are in `/private/tmp/zorid-bases-20261026-products-002/`. Earlier immutable evidence
-parts001–010 stay in the feature worktree; do not retire it without preserving them.
-Recovered vendor implementation/assets are not included in project source.
+Original run reports remain under `/private/tmp/zorid-bases-*`. After the user
+requested local installation and cleanup, duplicate binaries and disposable test
+profiles/vaults were removed. The verified native binary remains inside the
+installed `~/Applications/Zorid.app`. Earlier immutable evidence parts001–010 and
+original helper archives moved to `tmp/worktree-cleanup-backup-20261026/bases-validation-and-harnesses/`.
+Earlier S1 evidence moved to that backup's `s1-evidence/` directory. The feature
+worktrees are retired; all branch references remain. Recovered vendor implementation
+is not included in project source.
 
 ## Retained limits
 
@@ -83,3 +87,27 @@ visual reference captured14/23. No complete native/reference parity, physical IM
 mobile/other-OS acceptance or performance budget follows. These retained coverage
 limits do not reopen blanket testing after the user's explicit scope reduction.
 Tasks, calendars, sync and mobile remain later work.
+
+
+## Local app installation and requested cleanup
+
+Built the native renderer from main `6f7237ed`, reused the independently hashed
+native host with an identical Rust tree, and packaged an unsigned arm64 app using
+the normal package preflight. The copied bundle passes355-file verification before
+atomic installation at `/Users/ctk/Applications/Zorid.app`. It is a local,
+unnotarized build. No additional UI campaign was run.
+
+User subsequently requested all worktrees and unnecessary build/cache data be
+cleaned.105 extra worktrees were removed, leaving only main. Four uncommitted test
+files from three worktrees were preserved byte-for-byte with patches and original
+HEADs under `tmp/worktree-cleanup-backup-20261026/`; feature branches remain. Prior
+source backups, research, evidence and helper archives were relocated there before
+removal. Project target/staging/release/dist caches, old duplicate native binaries,
+disposable playgrounds and owned test profiles/vaults were removed. Source,
+dependencies, toolchains, normal user vaults and application data were retained.
+
+The cleanup backup includes `inventory.json`, `preserved-changes.json`,
+`removed-worktrees.json`, `removed-cache-and-data.json`, `installed-app.json`,
+package inputs and build/verification logs. Free space increased from about2GiB
+to9.1GiB during this pass. Historical provenance paths refer to their original
+locations; the backup inventory records their relocation.

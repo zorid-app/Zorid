@@ -9,6 +9,15 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+**Local installation/cleanup follow-up:** main `6f7237ed` produced the verified
+355-file arm64 local app at `~/Applications/Zorid.app`. User requested worktree/
+cache cleanup: all105 extra worktrees are removed; only main remains. Four dirty
+test files, patches, branch refs and earlier validation evidence are preserved in
+`tmp/worktree-cleanup-backup-20261026/`. Build caches, duplicate apps/binaries and
+disposable test data were removed; normal vaults and app data are retained. Free
+space is9.1GiB. No new functional test campaign was added. See the closeout's
+follow-up section for relocated evidence and installation receipt.
+
 **Local desktop Bases closeout — 2026-10-26.** Root owns integration from
 `codex/types-bases-model` / `.worktrees/types-bases-model`; canonical main's
 integration parent is `e7d655e1`. Reviewed product source is `be163101`, with
