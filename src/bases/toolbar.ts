@@ -402,11 +402,11 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         const refreshed = deferredState; deferredState = undefined;
         if (!options.immediate || !refreshed) return;
         own.saving = false; own.close(false); update(refreshed);
-        const index = refreshed.views.findIndex(view=>view.name===duplicateName);
-        if (index >= 0) { open('View options',trigger,index); const input = panel?.node.querySelector<HTMLInputElement>('[aria-label="View name"]'); input?.select(); }
+        const index=refreshed.selectedIndex,created=refreshed.views[index];
+        if (created&&typeof created.id==='string'&&!opening.views.some(view=>view.id===created.id)) { open('View options',trigger,index); const input = panel?.node.querySelector<HTMLInputElement>('[aria-label="View name"]'); input?.select(); }
       });
       if (options.commands?.moveView) { menuAction('Move view earlier', () => options.commands!.moveView!(version, selectedIndex, selectedIndex - 1), selectedIndex > 0); menuAction('Move view later', () => options.commands!.moveView!(version, selectedIndex, selectedIndex + 1), selectedIndex < opening.views.length - 1); }
-      if (options.commands?.removeView) menuAction('Delete view', () => options.commands!.removeView!(version, selectedIndex), opening.views.length > 1).classList.add('mod-destructive');
+      if (options.commands?.removeView) menuAction('Delete view', () => options.commands!.removeView!(version, selectedIndex), opening.views.length > 0).classList.add('mod-destructive');
       if (options.commands?.updateRoot) menuAction('New item settings', async () => { own.saving = false; own.close(false); open('New item settings', trigger); });
       if (options.immediate) {
         const actions = doc.createElement('div'); actions.className = 'bases-view-actions'; actions.hidden = true;
@@ -800,7 +800,12 @@ export function createBaseToolbar(container: HTMLElement, options: BaseToolbarOp
         if (!auto) {
           if(own.dirty){footer.hidden=false;error.textContent='The retained draft is saved. Your newer changes are still here.';options.onDraftChange();return;}
           own.dirty = false; const refreshed = deferredState; deferredState = undefined; own.close(); if (refreshed) update(refreshed);
-          if (autoAdd && !closeWhenSettled && refreshed) { const name = form.querySelector<HTMLInputElement>('[aria-label="View name"]')?.value.trim(); const index = refreshed.views.findIndex(view=>view.name===name); if (index>=0) open('View options',trigger,index); }
+          if (autoAdd && !closeWhenSettled && refreshed) {
+            const index=refreshed.selectedIndex,created=refreshed.views[index];
+            // Add selects its new identity. Labels may repeat and cannot choose
+            // which view owns the follow-up configuration controls.
+            if(created&&typeof created.id==='string'&&!opening.views.some(view=>view.id===created.id))open('View options',trigger,index);
+          }
           return;
         }
         if (deferredState) {

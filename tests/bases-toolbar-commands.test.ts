@@ -299,3 +299,24 @@ test('view forms accept repeated display labels for creation and indexed rename'
   assert.deepEqual(f.errors,[]);assert.equal(uniqueViewName(f.state.views,'Library'),'Library 2');
  }finally{f.cleanup();}
 });
+
+test('Add view with a repeated label reopens options for its new stable identity',async()=>{
+ const dom=new JSDOM('<main></main>',{pretendToBeVisual:true}),doc=dom.window.document;
+ const document=BaseDocument.parse('views: [{id: aaaaaaaaaaaa, type: table, name: Shared, rowHeight: medium}]');let version=1,selectedIndex=0;
+ const updates:{index:number;id:unknown}[]=[],errors:unknown[]=[];
+ const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(index){selectedIndex=index;refresh();},async save(){},commands:{
+  async addView(expected,type,name,initial){assert.equal(expected,version);selectedIndex=document.addView(type,name!);document.updateView(selectedIndex,initial??{});version++;refresh();},
+  async updateView(expected,index,patch){assert.equal(expected,version);updates.push({index,id:document.views[index].id});document.updateView(index,patch);version++;refresh();},
+ },onDraftChange(){},onError:error=>errors.push(error)});
+ function refresh(){const result=executeBaseQuery(document,{version,files:[]},{viewIndex:selectedIndex});toolbar.update({result,views:document.views,selectedIndex,readOnly:false,allowRename:true,label:property=>property});}refresh();
+ try{
+  doc.querySelector<HTMLButtonElement>('[aria-label="Views"]')!.click();doc.querySelector<HTMLButtonElement>('[aria-label="Add view"]')!.click();
+  const name=doc.querySelector<HTMLInputElement>('[aria-label="View name"]')!;name.value='Shared';name.dispatchEvent(new dom.window.Event('input',{bubbles:true}));
+  const layout=doc.querySelector<HTMLSelectElement>('[aria-label="Layout"]')!;layout.value='cards';layout.dispatchEvent(new dom.window.Event('change',{bubbles:true}));
+  name.focus();name.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));await tick();
+  assert.equal(document.views.length,2);const createdId=document.views[1].id;assert.notEqual(createdId,'aaaaaaaaaaaa');
+  assert.equal(doc.querySelector<HTMLSelectElement>('[aria-label="Layout"]')?.value,'cards','the follow-up menu belongs to the newly added view');
+  const size=doc.querySelector<HTMLInputElement>('[aria-label="Card size"]')!;assert.ok(size);size.focus();size.value='440';size.dispatchEvent(new dom.window.Event('input',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,280));
+  assert.deepEqual(updates,[{index:1,id:createdId}]);assert.equal(document.views[1].cardSize,440);assert.equal(document.views[0].rowHeight,'medium');assert.equal(document.views[0].cardSize,undefined);assert.deepEqual(errors,[]);
+ }finally{toolbar.destroy();dom.window.close();}
+});

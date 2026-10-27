@@ -43,6 +43,8 @@ test('empty Base first view onboarding saves an independent untyped source with 
   assert.ok(host.querySelector('.collection-source-chooser'));[...host.querySelectorAll('button')].find(button=>button.textContent?.startsWith('Notes in your vault'))!.click();
   await until(()=>!host.querySelector('.collection-source-chooser')&&!!session.state.result&&!session.hasPendingChanges());
   const source=BaseDocument.parse(await vault.read('Work.base'));assert.deepEqual(source.views[0].source,{kind:'untyped'});assert.equal(host.querySelector('[aria-label="Properties"]'),null);assert.equal(host.querySelector('[aria-label="Group"]'),null);assert.ok(host.querySelector('[aria-label="Filter"]'));assert.ok(host.querySelector('[aria-label="Sort"]'));assert.ok(!vault.entries.has('Properties.yaml'));
+  host.querySelector<HTMLButtonElement>('[aria-label="Views"]')!.click();dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Configure view View"]')!.click();const remove=dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Delete view"]')!;assert.equal(remove.disabled,false);remove.click();
+  await until(()=>BaseDocument.parse(session.state.source).views.length===0&&!!host.querySelector('.collection-source-chooser'));assert.equal(host.querySelector('.bases-session-toolbar')?.hasAttribute('hidden'),true);
   await session.close();for(const buffer of buffers.values())await buffer.dispose();dom.window.close();
 });
 
