@@ -14,9 +14,9 @@ const original = '# keep comment\nplugin: {z: [one, 2]}\nviews:\n  - type: table
 /** Real Vault/NoteBuffer/mutation host/shared query, with an explicit native-boundary
  * model: physical bytes can change independently of the logical Store record.
  * This tests the consumer contract, not native filesystem/CRDT correctness. */
-async function fixture(referenceNotes: Record<string, string> = {}) {
-  let generation = 1, physical = original, captureCount = 0;
-  let current: DurableWriteRead = {path, entryId: 'base-id', revision: 'r1', content: original, stat: {ctime: 1, mtime: 1, size: original.length}};
+async function fixture(referenceNotes: Record<string, string> = {}, initialSource = original, failCollectionQuery = false) {
+  let generation = 1, physical = initialSource, captureCount = 0;
+  let current: DurableWriteRead = {path, entryId: 'base-id', revision: 'r1', content: initialSource, stat: {ctime: 1, mtime: 1, size: initialSource.length}};
   const notes = new Map<string, DurableWriteRead>(), physicalNotes = new Map<string, string>();
   for (const [target, content] of Object.entries(referenceNotes)) {
     notes.set(target, {path: target, content, entryId: 'ref-' + target, revision: 'r1', stat: {ctime: 1, mtime: 1, size: content.length}}); physicalNotes.set(target, content);
@@ -35,7 +35,7 @@ async function fixture(referenceNotes: Record<string, string> = {}) {
     override async list() { return (await super.list()).map(row => savedRecord(row.path) ? {...row, ...savedRecord(row.path).stat, entryId: savedRecord(row.path).entryId, revision: savedRecord(row.path).revision} : row); }
     override async stat(target: string) { const row = await super.stat(target); return row && savedRecord(target) ? {...row, ...savedRecord(target).stat, entryId: savedRecord(target).entryId, revision: savedRecord(target).revision} : row; }
   }
-  const adapter = new Adapter({[path]: original, ...referenceNotes});
+  const adapter = new Adapter({[path]: initialSource, ...referenceNotes});
   const unused = async (): Promise<never> => { throw Error('Unexpected fixture operation'); };
   adapter.durableWrites = {
     checkpoints: {scope, load: async key => structuredClone(checkpoints.get(key) ?? null), compareAndSwap: async change => {
@@ -94,6 +94,7 @@ async function fixture(referenceNotes: Record<string, string> = {}) {
         metadata: async () => ({source, snapshot: snap, coverageComplete: true, value: {entry, metadata: null, exclusion: null}}),
         base: async request => {
           const view = BaseDocument.parse(saved.content).views[request.options?.viewIndex ?? 0];
+          if (failCollectionQuery && view.source && typeof view.source === 'object' && !Array.isArray(view.source) && view.source.kind === 'collection') throw new Error('collection_deleted');
           const result: DocumentBaseResult = {snapshotId: snap, view, rows: [], groups: [], groupOptions: [], properties: ['file.name'], availableProperties: ['file.name'], counts: {scanned: 0, matched: 0, afterGroupOrder: 0, afterSearch: 0, returned: 0}, diagnostics: [], relationshipsAvailable: true, metadataComplete: true, metadataIssues: [], stepsUsed: 1};
           return {source, snapshot: snap, coverageComplete: true, value: {definition: entry, result}};
         }};
@@ -103,10 +104,12 @@ async function fixture(referenceNotes: Record<string, string> = {}) {
   const buffers = new Map<string, NoteBuffer>(); const getBuffer = async (target: string) => { let value = buffers.get(target); if (!value) { value = new NoteBuffer(vault, target, {debounceMs: 60000}); buffers.set(target, value); } await value.load(); return value; };
   const buffer = await getBuffer(path); let alive = true;
   const controller = new BaseController({vault, basePath: path, mutations: createBaseMutationHost({getBuffer, validate() { if (!alive) throw Error('Retired config host'); }}), onViewRenamed: event => renamed.push(event.to), delayMs: 1000});
-  await controller.refresh(); assert.equal(controller.state.error, null);
+  await controller.refresh(); if (!failCollectionQuery) assert.equal(controller.state.error, null);
   return {vault, adapter, buffer, controller, planned, committed, released, captures, renamed, get backlinkCalls() { return backlinkCalls; },
     get physical() { return physical; }, get logical() { return current.content; }, get capturesTaken() { return captureCount; },
     async externalReference(target: string, content: string) { const old = notes.get(target); notes.set(target, {path: target, content, entryId: old?.entryId ?? 'ref-' + target, revision: old ? 'external-revision' : 'r1', stat: {ctime: 1, mtime: 2, size: content.length}}); physicalNotes.set(target, content); await adapter.write(target, content); },
+    async configuration(source: string) { current = {...current,content:source,revision:'r'+ ++generation,stat:{...current.stat,mtime:generation,size:source.length}};physical=source;await adapter.write(path,source);await vault.reload();await controller.refresh(); },
+    replaceLogical(source: string, entryId = current.entryId) { current = {...current,entryId,content:source,revision:'r'+ ++generation,stat:{...current.stat,mtime:generation,size:source.length}};physical=source; },
     external(source: string) { physical = source; }, retire() { alive = false; },
     setPlan(fn: typeof onPlan) { onPlan = fn; }, setCommit(fn: typeof onCommit) { onCommit = fn; }, setCapture(fn: typeof onCapture) { onCapture = fn; },
     async close() { controller.dispose(); onPlan = undefined; onCommit = undefined; for (const value of buffers.values()) { try { await value.dispose(); } catch {} } },
@@ -282,4 +285,43 @@ test('direct named rename retry keeps the original reference witness rather than
     assert.equal(f.backlinkCalls, 1); assert.equal(f.capturesTaken, 1); assert.equal(await f.adapter.read('One.md'), 'Changed [[Work.base#First]]');
     assert.equal(await f.adapter.read('Late.md'), '[[Work.base#First]]'); assert.deepEqual(f.renamed, ['Renamed']); assert.equal(f.controller.hasPendingViewReferences, true);
   } finally { await f.close(); }
+});
+
+
+const deletedSource = 'filters: legacy == true\nviews:\n  - type: table\n    name: Books\n    id: aaaaaaaaaaaa\n    source: {kind: collection, id: books0123456}\n    filters: Status == "Done"\n    order: [file.name, Status]\n    groupBy: {property: Status, direction: ASC}\n';
+
+test('initial genuine collection query failure exposes coherent parsed source and permits only source repair',async()=>{
+  const f=await fixture({},deletedSource,true);try{
+    assert.match(f.controller.state.error?.message??'',/collection_deleted/);assert.equal(f.controller.state.result,null);
+    const read=f.controller.configurationRead;assert.ok(read);assert.equal(read.source,deletedSource);assert.equal(read.entryId,'base-id');assert.equal(read.revision,'r1');assert.equal(read.viewIndex,0);assert.equal(read.viewId,'aaaaaaaaaaaa');
+    await assert.rejects(f.controller.updateView(f.controller.state.version,{limit:2}),/stale/);await assert.rejects(f.controller.editProperty({version:f.controller.state.version,path:'One.md',property:'Status',value:'Done'}),/stale/);
+    await f.controller.repairViewSource(read,{kind:'untyped'});
+    const saved=BaseDocument.parse(f.logical);assert.deepEqual(saved.views[0].source,{kind:'untyped'});assert.equal(saved.views[0].filters,undefined);assert.equal(saved.views[0].groupBy,undefined);assert.equal(saved.views[0].order,undefined);assert.equal(saved.getRoot('filters'),'legacy == true');assert.equal(f.controller.state.error,null);assert.ok(f.controller.state.result);assert.equal(f.physical,f.logical);
+  }finally{await f.close();}
+});
+
+test('query failure publishes fresh independent read proof while old successful result stays retained; parse failure retires proof',async()=>{
+  const f=await fixture({},original,true);try{
+    const old=f.controller.state.result;await f.configuration(deletedSource);
+    const read=f.controller.configurationRead;assert.ok(read);assert.equal(read.source,deletedSource);assert.equal(f.controller.state.source,original);assert.equal(f.controller.state.result,old);assert.ok(f.controller.state.error);
+    await f.configuration('views: [');assert.equal(f.controller.configurationRead,undefined);await assert.rejects(f.controller.repairViewSource(read,{kind:'untyped'}),/changed/);
+  }finally{await f.close();}
+});
+
+test('source repair rejects forged/stale receipts, replaced durable witnesses and unrelated dirty drafts',async()=>{
+  const f=await fixture({},deletedSource,true);try{
+    const old=f.controller.configurationRead;assert.ok(old);await assert.rejects(f.controller.repairViewSource({...old},{kind:'untyped'}),/changed/);
+    await f.controller.refresh();const current=f.controller.configurationRead;assert.ok(current);assert.notEqual(current,old);await assert.rejects(f.controller.repairViewSource(old,{kind:'untyped'}),/changed/);
+    f.buffer.update(deletedSource+'# retained draft\n');await assert.rejects(f.controller.repairViewSource(current,{kind:'untyped'}),/unsaved|external/);assert.equal(f.buffer.text,deletedSource+'# retained draft\n');assert.equal(f.logical,deletedSource);
+    f.buffer.update(deletedSource);await f.buffer.flush();
+    f.replaceLogical(deletedSource,'replacement-id');await assert.rejects(f.controller.repairViewSource(current,{kind:'untyped'}),/changed/);assert.equal(f.logical,deletedSource);assert.equal(f.planned.length,0);
+  }finally{await f.close();}
+});
+
+test('source repair preserves external physical changes and refuses selection/epoch motion across admission',async()=>{
+  const f=await fixture({},deletedSource,true);try{
+    const read=f.controller.configurationRead;assert.ok(read);f.external(deletedSource+'# external\n');
+    await assert.rejects(f.controller.repairViewSource(read,{kind:'untyped'}),/physical saved source changed/);assert.equal(f.logical,deletedSource);assert.equal(f.physical,deletedSource+'# external\n');assert.equal(f.buffer.text,deletedSource);
+    f.external(deletedSource);f.setCapture(async()=>{await f.controller.refresh();});await assert.rejects(f.controller.repairViewSource(read,{kind:'untyped'}),/changed|retired|stale/);assert.equal(f.logical,deletedSource);assert.equal(f.planned.length,0);
+  }finally{await f.close();}
 });
