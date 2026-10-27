@@ -71,9 +71,9 @@ Live validation overlapped ordinary acknowledged writes to Test1 and a subsequen
 file creation. The initial121-byte Test1 observation matches normal Write
 operation44; subsequent operation45 changes it again. No prior121-byte retained
 draft existed in the backup. Nine other original files remain unchanged at the
-first observation. The DB cannot establish who initiated ordinary writes; root
-asked the user whether these were their edits. Do not claim every file stayed
-unchanged, or attribute normal note-write operations to metadata-only rebinding.
+first observation. The user explicitly confirmed testing edits to Test1 after reopening. These
+successful ordinary saves are separate from metadata-only rebinding; do not claim
+every file stayed unchanged during interactive verification.
 
 Evidence is retained in ignored `tmp/native-identity-fix-20261027/`: before/after
 hashed snapshots, acceptance receipt, pre-repair SQLite backup, read-only checker,

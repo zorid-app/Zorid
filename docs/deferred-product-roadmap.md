@@ -26,8 +26,7 @@ no schema change or data reset. A later live snapshot has12/12 current, zero
 content/state mismatches and zero pending work. Native UI shows the normal Base
 and no availability warning. Ordinary acknowledged Test1 writes and another file
 creation occurred during live validation, so no blanket unchanged-file claim is
-made; nine other original files are unchanged at the first check. User activity
-confirmation was requested separately. Hashed snapshots, pre-repair DB backup,
+made; nine other original files are unchanged at the first check. The user explicitly confirmed testing those edits. Hashed snapshots, pre-repair DB backup,
 write timeline and build/test/install receipts: `tmp/native-identity-fix-20261027/`.
 See [repair closeout](history/native-file-identity-repair-20261027.md).
 

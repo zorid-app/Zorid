@@ -36,9 +36,8 @@ Actual vault recovery verifies11/11 original bindings current (formerly1/11), al
 original logical IDs retained, schema unchanged and no reset. Later live activity
 shows12/12 current with no baseline/content/state mismatch or pending work. Test1
 changed through normal acknowledged write operations and another file appeared;
-nine other originals remain unchanged at the first snapshot. User activity
-confirmation was requested; do not attribute these writes to metadata repair or
-claim all file contents were unchanged. The repair itself performs no file-byte or
+nine other originals remain unchanged at the first snapshot. The user confirmed testing those edits; do not attribute them to metadata repair
+or claim all file contents were unchanged. The repair itself performs no file-byte or
 logical-content writes. Evidence, read-only checker and pre-repair DB backup are
 in `tmp/native-identity-fix-20261027/`; [closeout](history/native-file-identity-repair-20261027.md).
 No broad regression/reference campaign was added.
