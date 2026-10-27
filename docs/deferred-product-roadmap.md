@@ -7,6 +7,26 @@ is historical where it conflicts with this checkpoint. The maintained stage
 sequence is in [roadmap.md](roadmap.md); S1 scope is in
 [plans/indexing-search.md](plans/indexing-search.md).
 
+**Local collections P2 closed; P006 restart finding — 2026-10-27.** Root
+`7a810bb5` composes `fc72f099`, independently reviewed with no must-fix findings.
+Root P2 regression 10/10, full TS and native frontend002 PASS; unavailable-tsx
+first launch ran no tests. Bounded actual normal Electron P2 PASS: UI-created
+Tasks/two notes, Status→Number, ordinary-note correction In progress→7 and
+Not started→null remove warnings, preserve exact bodies and persist through normal
+quit/reopen/raw-YAML checks. Receipts:
+`/private/tmp/zorid-local-collections-desktop-20261027/p2-ui-observations.json` and
+`p2-disk-after-normal-quit.json` in the same directory. All three foreground
+sessions 79092/13222/42387 normal exit 0; user finished testing, no live test app.
+
+New **P006** actual restart defect remains: collection notes render generic
+editable `_id`/`_type` and inferred-null JSON controls instead of managed schema
+controls. Values/bodies and Base membership (two entries) persist; observations
+and note switching do not settle it. `managed_editor_saves` owns read-only diagnosis;
+cause/fix unestablished. Feature/main integration remains held. See [P005](plans/types-properties-implementation.md#p005--2026-10-27--datatype-correction-source-finding)
+and [P006](plans/types-properties-implementation.md#p006--2026-10-27--managed-note-controls-after-app-restart).
+Browser WASM never compiled: 186MiB free <1.5GiB prerequisite. No matched browser
+artifact or browser acceptance; no Tauri actions, and main ownership unchanged.
+
 ### Latest execution update
 
 **Local collections review correction — 2026-10-27, P005.** Independent main-owner
@@ -167,7 +187,7 @@ New recovery/Cards/List; continuation003 covers actual Chromium Kanban move,
 keyboard move, split consistency and sidebar context; continuation004 verifies
 exact inline configuration and stale-write protection; continuation005 PASSES
 8checks/18actions, external discovery, exact note/Base/template-body restart and
-two normal quits (exit0, no leaks). All source/artifact freezes verify. Passed
+two normal quits (exit 0, no leaks). All source/artifact freezes verify. Passed
 stages were not restarted after the user's explicit no-unnecessary-tests steering.
 
 Confirmed defects fixed: computed reverse/rollup values falsely required raw
@@ -350,7 +370,7 @@ version6 observer rejects the source-declared version8 streaming contract.
 Normalweb004 on c483 advances through the initial v8 note/source check and five
 UI actions, then its renderer-evaluated rename readiness expression throws a
 SyntaxError. Neither run completes a phase: one failed/four unexecuted each.
-Both owned Chrome processes exit0/nullsignal, Vite closes, cleanup failures are
+Both owned Chrome processes exit 0/nullsignal, Vite closes, cleanup failures are
 empty and final provenance verifies. Schema source audit/observer25test passes
 remain separate from normal-web UI acceptance. `bases_acceptance_audit` owns the
 isolated readiness-expression diagnosis. Root coordinates further serial app
@@ -448,7 +468,7 @@ retry/automatic newerB continuation plus exact restart PASS, then held acceptedA
 plus newerB/close retains B but enhanced editor Tab cannot resubmit. User sent
 native close-blocked dialog screenshot during this disposable-vault campaign;
 it is data-preservation behavior, not a full recovery pass. Last owned app
-requiredSIGKILL cleanup/no leaks; first two normal quits exit0; freezeverified.
+requiredSIGKILL cleanup/no leaks; first two normal quits exit 0; freezeverified.
 `bases_recovery_close` owns the causal native-fallbackPASS/enhancedRED commit
 bridge fix; `bases_seam_review` owns independent review. No native acceptance yet.
 Filter001/38152 FAILS88actions/33checks after five full String cases; immediate
@@ -493,7 +513,7 @@ receipt `/private/tmp/zorid-bases-final-native-07265b1d/receipt.json`.
 Actual selection003/2985 PASSES60actions/11checks, including caret and nonempty
 selection preservation across frontmatter length changes, full source checks,
 and normal quit/restart. Frozen75270dc8/current native/frontend011; both normal
-quits exit0/nullsignal/no leaks and source/artifact freeze verified.
+quits exit 0/nullsignal/no leaks and source/artifact freeze verified.
 Actual safety011/33817 fails44actions/7checks at top-level Null displayed as
 literalnull after correct durable partial clear. Reviewed display fix above
 preserves storage/coercion and all original blank-cell assertions.
@@ -555,7 +575,7 @@ Frontend010/76384 passes on this exact root,333files; receipt
 Actual properties009/75682 PASSES188actions/65checks, all4layouts, C1 shared
 summaries/four-reference rename/delete and two normal quit/restart passes.
 Report SHA6dca1f17c8331d5d73f73cd3a0ef6a602aa2a1702aed52a1a9c0cc4882b61898;
-both app lifecycles exit0/nullsignal/no leaks; source/artifact freeze verifies.
+both app lifecycles exit 0/nullsignal/no leaks; source/artifact freeze verifies.
 This is bounded rich-property acceptance, not full heavy/reference/main acceptance.
 
 Full Rust62319 is terminal101:1164 passed,7 failed,2 pre-existing ignored cases,
@@ -571,7 +591,7 @@ All30 new guard cases pass within this run. This is NOT a full-suite pass.
 Actual selection001/18791 fails45actions/3checks after its first caret mapping
 and exact physical source pass. Its second ordinary double-click fires while
 the Base query is updating; no input opens. Source/artifact freeze and owned
-SIGTERM exit0/no leaks verify. bases_e2e owns test-only readiness correction;
+SIGTERM exit 0/no leaks verify. bases_e2e owns test-only readiness correction;
 nonempty range preservation remains unexecuted. Reference004 verifies baseline
 and exact14-item String operator catalog, then Enter chooses existing alpha-one
 instead of intended literalalpha; private005 uses shipped Shift+Enter literal
@@ -690,7 +710,7 @@ score9→7 before the30s family rescan. Base history correctly routes but accept
 logical core9→1 against stale core/buffer; physical source7 remains protected
 and exact (SHA3bb9062e), with pending projection. Read-only native diagnostic
 receipt `/private/tmp/zorid-safety007-core-readonly-001/diagnostic-receipt.json`
-SHA b3415213 records intent66 and unchanged originals. App SIGTERM exit0,
+SHA b3415213 records intent66 and unchanged originals. App SIGTERM exit 0,
 no leaks, freeze verified. No physical overwrite or full Undo safety acceptance.
 
 Approved conditional-history boundary now being implemented in isolated branches
@@ -736,14 +756,14 @@ Native properties003 fails18actions/4checks after status-padding click. Passive
 trace proves that click hit the status cell; its missing picker cause remains
 unknown. Separate Alpha click9.6s later is confirmed user interaction. Safety006
 fails7actions/1visibilitycheck before opening ordinary A; no durable safety phase
-accepted. Both apps close SIGTERM exit0/leaked[], freeze verified. User confirms
+accepted. Both apps close SIGTERM exit 0/leaked[], freeze verified. User confirms
 interacting and agrees to leave subsequent tests untouched. Fresh properties004
 then passes124actions/32checks through P1–P6: ordinary relation opens Ada without
 rewriting alias, relation add/remove, actual property edits across all4 layouts,
 and derived readonly controls. It stops at C1's acknowledged custom-summary editor
 return-to-picker assertion. Full C1/restart remains unexecuted, not passed.
 `bases_summaries` owns read-only causal diagnosis. Properties004 closes SIGTERM
-exit0/leaked[], freeze verified. No owned app remains running at this checkpoint.
+exit 0/leaked[], freeze verified. No owned app remains running at this checkpoint.
 Typed-filter toolbar/provider/campaign batches remain isolated pending review/
 composition; provider `0a809ff0` has independent10/10 tests and source approval.
 
@@ -867,7 +887,7 @@ Visible properties-current001 on same build003 (docs-only source `0f81c1e5`)
 passes34 actions /10 durable checks through text/tags/plain links/status and
 picker-created select/multiselect options, then fails ordinary-note relation
 readback: last Alpha tree click is followed by Properties.yaml viewer rather
-than Alpha. Native closes SIGTERM exit0, no leaked owned processes; freeze
+than Alpha. Native closes SIGTERM exit 0, no leaked owned processes; freeze
 verified. `bases_embeds` owns causal investigation, no confirmed cause/fix yet.
 Do not mark remaining property/layout/relation/restart scenarios passed.
 Optional CUA native input checkpoint remains isolated with `bases_e2e`, review
@@ -935,7 +955,7 @@ window5452; first CUA AX observation already lacks Property settings and shows
 Book topic Writing rather than fixture Design. Root sends NO input, records
 this observation and signals control-flow continuation only. Strict run fails
 18actions/1visibilitycheck; no Purple/Apply/durable acceptance. Freeze verified;
-normal SIGTERM exit0, no leaked owned processes. Raw owned files independently
+normal SIGTERM exit 0, no leaked owned processes. Raw owned files independently
 show Writing and saved Research option withoutcolor; those changes are not
 represented by recorded campaign inputs. Cause remains unproven; asynchronous
 user question asks whether they interacted with the test window, answer pending.
@@ -963,7 +983,7 @@ Return prematurely applies/closes the settings panel; strict SELECT readback
 finds0matches. Recorded as operator-input failure, not a product color defect.
 All partial evidence retained; reviewed [heavy017](history/bases-electron-heavy-017-20261022.md).
 Next handoff must inspect a screenshot and avoid blind extra Return. Normal
-cleanup SIGTERM exit0/no leaks is not normal-quit acceptance.
+cleanup SIGTERM exit 0/no leaks is not normal-quit acceptance.
 
 Instrumented properties002 fails34actions/10checks on same source:182 passive
 events/0drops prove Alpha remains active and author relation is unresolved /
@@ -1210,7 +1230,7 @@ legacy Delta warnings. Frozen checkout is
 `958b19aca4666414e956fbb2f406558af5a18366`, preserved CLI SHA39ac0029 as below.
 All250 output/error stream hashes,29 stdin hashes,54 exports and14 physical Q3
 sources reverify after terminal0. All125 children close with no signal
-(121 exit0;2 expected exit3;2 expected exit4); no host, Electron or IPC starts.
+(121 exit 0;2 expected exit3;2 expected exit4); no host, Electron or IPC starts.
 Report: `/private/tmp/zorid-bases-cli-actual-20261022-006/zorid-bases-cli-m3XxfB/report.json`,
 SHA `5b78c104af8bd0c36bad1558ff6acb81e5c15756b8b58542dbe9a02c48149d7b`.
 Its post-run-integrity receipt is adjacent. Failed004/005 stay unaltered.
@@ -1881,7 +1901,7 @@ binary readback are INCLUDED. The same persisted database also passes startup
 query, warm reopen, one offline edit and incremental reopen/search; each separate
 open records exactly1 capture. Query samples11.8–21.6ms. Offline edit may close
 before indexing settles; incremental reopen verifies final current/complete state.
-All five owned Chrome processes exit0 without signal; live disk guard minimum
+All five owned Chrome processes exit 0 without signal; live disk guard minimum
 2,489,638,912bytes. Reports/screenshots/guard/comparison are retained in
 `.worktrees/s1-evidence/browser-one-capture-benchmark-6df77a14/`.
 
@@ -1978,7 +1998,7 @@ all five phases and complete literal/range/order oracles. Evidence:
 `.worktrees/s1-evidence/acceptance-web-main-100/report.json`. Warm query samples
 12–32ms; import plus exact readback83.3s; component fixture DOM, not full workspace.
 Actual normal10k browser import fails the300s deadline at172/10003 files, with
-owned Chrome cleanup exit0; evidence `acceptance-web-main-10000-red/report.json`.
+owned Chrome cleanup exit 0; evidence `acceptance-web-main-10000-red/report.json`.
 This is a practical import timeout, not an observed4096-source rejection. Root
 retains those failures and is narrowing whole-vault reconstruction, autonomous
 indexing during import, and per-operation serialization/storage hypotheses.
@@ -3204,7 +3224,7 @@ independently reviewed actual-browser harness. Main tooling7 checks pass. The
 CLI tool separately labels legacy versus normal desktop local-family admission,
 validates exact query source watermarks and fences executable hashes at run
 boundaries. Actual100-note legacy CLI smoke used
-the frozen verified binary,18 commands exit0, exact expected text hits/ranges and
+the frozen verified binary,18 commands exit 0, exact expected text hits/ranges and
 five authority samples, all103 physical files unchanged. Evidence:
 `/private/tmp/zorid-s1-cli-smoke-c91106b2/report.json`. Existing inline imported PNG
 is classified Unreadable, so coverageComplete=false is retained despite full text
@@ -3240,7 +3260,7 @@ floor never crossed. Evidence `/private/tmp/zorid-s1-release-a200ef44/build.json
 Release CLI SHA `d927dd299b59290b4b6bcdb9c7ed4b4802d51ff31c502fea8e5aa46b851f7988`;
 host SHA `28379b3f6fc9d52127d655d4ee2bfc46b0341327da7092a69c009030b25f9bcc`.
 Release100-note local-family smoke passed all eight full oracles, exact warm/source
-witnesses and preservation checks, all commands exit0:
+witnesses and preservation checks, all commands exit 0:
 `/private/tmp/zorid-s1-cli-family-release-80dfce28-100/report.json`. Cold index941ms,
 queries89–97ms including process startup; setup is separately recorded. One small
 sample and a compiler-profile change are not an algorithm speedup or10k acceptance.
@@ -3356,7 +3376,7 @@ First measured setup fix is integrated through main `2c53a98d` (production
 `eaecfb89c69c2b24c22c998a67582564b9a402172a2eceb60b8c7d8e41238821`, host SHA
 `26bbd6bbd7ad8bad90a60c6abb8a1f70f4e203d02caf6d369213f32cbcf5a143`.
 Normal-family100 passes all eight full query/source oracles, complete coverage,
-all103 physical sources and five authority reads,23 normal exit0 commands:
+all103 physical sources and five authority reads,23 normal exit 0 commands:
 `/private/tmp/zorid-s1-cli-family-release-51060b1d-100/report.json`.
 Same-cap legacy10k is terminal incomplete, rescan240.256s/3,383 observed entries,
 normal command exits, no index/query phase; all10,003 physical sources and binary
@@ -3755,7 +3775,7 @@ owner continues retained physical root fixes and same-client typed transport.
 
 Mobile bridge checkpoint (2026-10-18 05:26 UTC): root composition `7f97d7f1`
 exactly matches approved finalf42b5dcb across five source/test files. The retained
-9/9 focused log and root combined fullTS exit0 are recorded in
+9/9 focused log and root combined fullTS exit 0 are recorded in
 mobile-web-routing-bridge-integration.md. Bounded command admission and original-
 only receipt semantics are accepted. Workspace activation and paired actual
 native behavior remain open; no new iOS build or physical result is claimed.
@@ -3775,7 +3795,7 @@ original native request; only exact duplicates coalesce. No wire change needed.
 Browser delivery checkpoint (2026-10-18 05:20 UTC): canonical `2972911c`
 integrates the root browser candidate `46e7360e`, which combines the reviewed33-file browser WorkBlocks implementation
 with canonical `2120024d`. Its actual current-input WASM build and full TypeScript
-check both exit0. Fresh Chrome/IndexedDB/WASM run passes12 selected groups with
+check both exit 0. Fresh Chrome/IndexedDB/WASM run passes12 selected groups with
 443 strict transactions,43 atomicity snapshots and10 causal ordering pairs;
 Chrome/Vite/profile and12 databases clean up, then runner72675 naturally exits0.
 Independent exact-artifact review approves this bounded source/runtime composition;
@@ -3818,7 +3838,7 @@ This component is not on main and does not establish actual live editor renderin
 Retained editor checkpoint (2026-10-18 04:55 UTC): canonical `e4d6b297`
 integrates independently approved interaction source047d5687. Root isolated
 composition exactly matches the entire approved src/tests tree;91 focused cases
-and fullTS exit0 are recorded with commands, source hashes and retained logs in
+and fullTS exit 0 are recorded with commands, source hashes and retained logs in
 `docs/verification/mobile-editor-interaction/`. Native/TS owners were notified.
 Opt into canMutate/interactionState at construction, including the first active
 editor; revoke writer before setter. Per-editor menus abort and validate epoch
@@ -3954,9 +3974,9 @@ next phone delivery. Root has independent reviewers available for frozen UI
 successor; no additional permission is needed for already-authorized wiring.
 
 Physical Dev17 delivery (2026-10-18 03:58 UTC): root inspected persistent
-phone17-build2.exit0, signature_verify_exit0, bundleapp.zorid.notes.dev build17
+phone17-build2.exit 0, signature_verify_exit 0, bundleapp.zorid.notes.dev build17
 and binary SHAa1933a0e385b35c736cefc38e3a2aa562ce630d0b7ac4117c6a7441a3c2d1a60.
-Actual devicectl install and launch JSON both outcome success (separate exit0),
+Actual devicectl install and launch JSON both outcome success (separate exit 0),
 launched PID10215. Evidence under /Users/ctk/orca/artifacts/zorid-native-20261018.
 Source native649b3acc/reviewed2ccce; one-WK channel absent. No gesture/Home/runtime
 acceptance inferred; prior Simulator startup remained inconclusive. Current phone
@@ -4544,7 +4564,7 @@ serialized; existing1274Simulator only. No phone9replacement/TestFlight; NewNote
 history/import remain gaps. Root source-only records integration allowed, no heavy
 overlap. Native retains slot through terminals+ownedUIcleanup andexplicitreturn.
 
-00:57UTC: records1842c15e granted tests17018 exit0,33/33 pass (9adversarial,
+00:57UTC: records1842c15e granted tests17018 exit 0,33/33 pass (9adversarial,
 24traces), no source/lockchanges; log /private/tmp/zorid-records-1842c15e-tests.log.
 Root independent actualsource review approved library slice, programmaticbatch
 caller memory bound remains documented; productionstorage/wire adoption separate.
@@ -4609,7 +4629,7 @@ or unreviewed custom CRDT choice merely because plan doesn't mandate Yrs.
 
 00:46UTC canonical integration: main3322d30b merges exact reviewed1a350fd2
 (a2702e5+aadda867) managed-data feasibility fixture+7docs, byte comparisons pass.
-All12 tests50530 exit0; log /private/tmp/zorid-managed-record-feasibility.log.
+All12 tests50530 exit 0; log /private/tmp/zorid-managed-record-feasibility.log.
 Independent source review approved meaningful negative controls/actualTextReplica
 firewall/provisional contracts. No production records/storage/sync/UI implementation.
 Next NEW crates/zorid-records/** reserved managed lead; root/source manifests and
@@ -4820,7 +4840,7 @@ frozen527 frontend slot unchanged; no additional compiler grant.
 
 00:15UTC: main d1ceed0a integrates the reviewed native staged-import library/ABI
 from d9836528. All six integrated source files compare exactly with the tested
-candidate. Corrected host module50497 exit0,10/10; ABI63416 exit0,5/5; logs
+candidate. Corrected host module50497 exit 0,10/10; ABI63416 exit 0,5/5; logs
 tmp/native-import-host-fixed-test.log and tmp/native-import-abi-test.log. Earlier
 authorization collision failure is fixed by querying the same durable stage
 after authorization error; no uncertain outcome allocates replacement identity.
@@ -4835,7 +4855,7 @@ minimal catalog/picker hooks after bd57 reconciliation, preserving Pages371,
 container/plugin d809 and import/session bd57 scopes. Source work remains isolated.
 
 00:10UTC source checkpoint: import runtime boundary fix5a226480 independently
-reviewed, targeted reproduction101→fixed58276exit0/1pass. Root composed only fix
+reviewed, targeted reproduction101→fixed58276exit 0/1pass. Root composed only fix
 as d9836528 in native-import-integration; no duplicate dependency change. Host
 module rerun awaits native two-file frontend check slot return, not main yet.
 Atomic menu authority12933f3c independently source-approved, uncompiled; composed
@@ -4862,7 +4882,7 @@ Native two-file cached Swift frontend typecheck527fe77e requestmsg26599770b5fb
 is queued next, not yet granted. No parallel root/native compiler.
 
 Canonical update00:03UTC: main60ffc972 integrates source-identical3288 native9
-Settings/search/minimum-one and caret batch. Independent review, fulltsc99639exit0,
+Settings/search/minimum-one and caret batch. Independent review, fulltsc99639exit 0,
 focused66/66 tests55162 pass. Actual Simulator8/9 evidence and phoneDev9 repeated
 install/launch65171both0 recorded docs/history/native-mobile-integration.md. Caret pixel/
 dragUI gaps remain; no menus/import/loader/tabs included. Root checks terminal,
@@ -4887,7 +4907,7 @@ tingkai-c/native9-integration HEADe2d8d2fc; source review/typecheck pending, not
 
 Resource update23:56UTC: native owner returned exclusive heavy slot. Frozen3288c1bb
 Simulator9 passes actual final Remove-disabled check; signed phoneDev9 build63961
-and install 75081 exit0, strict signature/version checks pass. Launch failed only
+and install 75081 exit 0, strict signature/version checks pass. Launch failed only
 because device was locked, not an app crash; native owner may retry launch without
 rebuild. Root now owns heavy slot for isolated import5fc59cae host10→ABI5 focused
 checks, official Rust1.95 -j1/offline/locked, existing stage4-verified cache.
@@ -5003,7 +5023,7 @@ Latest execution steering — Vite then Stage5 (2026-10-17 22:41 UTC):
   Keep Electron main/preload/Rust build authority separate from renderer bundler.
   Required acceptance: dev/production browser +worker/WASM, nativefile renderer/
   packaging and coordinated iOS asset loading. No default change before checks.
-- Native phone6 built52508/installed+launched24342 exit0 on frozen829cd2c9.
+- Native phone6 built52508/installed+launched24342 exit 0 on frozen829cd2c9.
   Detailed UI checks ongoing, no compiler live at last report. Root requested
   slot release before heavy Vite proof. Native owns title→body keyboard-bounce
   finding msg5dc07b64e4ef and mobile-specific source; root avoids focus edits.
@@ -5023,7 +5043,7 @@ Latest checkpoint — 2026-10-17 22:25 UTC (supersedes older pending statuses):
   property save/reload and shared search/navigation pass. Rebuilt desktop Table/
   Board/property save exact63 physical bytes/sharedsearch2/navigation pass. Desktop
   initially caught undefined optional scalar IPC mismatch; reviewed701e fixes
-  request construction, retains strict decoder. Test Electron59332 closed exit0.
+  request construction, retains strict decoder. Test Electron59332 closed exit 0.
 - Main full TypeScript exits0;92 focused consumer tests pass. Functional source
   matches verified candidate (only main's newer docs and trailing whitespace
   differ). Details/evidence: docs/shared-document-semantics-plan.md. No full-repo,
@@ -5031,7 +5051,7 @@ Latest checkpoint — 2026-10-17 22:25 UTC (supersedes older pending statuses):
 - Mobile source f7d78f6d combines reviewed FFI/Swift/adapter/perf/presentation;
   owner reports240 focused tests +typecheck0. Actual FFI75210/10 accepted, source
   blobs unchanged in combined branch. Separate signed Dev phone build5/51 source
-  installed80513 exit0 and launched0; simulator keyboard toolbar/PDF2pages and
+  installed80513 exit 0 and launched0; simulator keyboard toolbar/PDF2pages and
   navigation/save observed. Final Stage4 mobile linkage/phone UI remain unproved.
 - Native owner retains ordinary durable identitybbf despite runtime rebind;
   root replied msg09f79ae8d517 and acknowledged deliveryaa3e8e53a9b5. No duplicate
@@ -5048,7 +5068,7 @@ Current update — 2026-10-17 21:31 UTC (supersedes older pending statuses):
 - Current isolated root candidatee97d5bf9 composes Base context+frame-error/null
   guards, search+released-owner fix, typed-date display, retained-row edit witness
   +provider atomic rename and deferred pin-close handling. Combined frontend
-  check1925 passes91/91, full TypeScript79631 exit0 (before final pin follow-up).
+  check1925 passes91/91, full TypeScript79631 exit 0 (before final pin follow-up).
   Reviewer source gates pass for these slices. Last presentation gap: Kanban loose
   equality merged distinct Rust keys; contract owner adds opaque existing-canonical
   keyId fields, Base owner projects them, renderer owner uses them through moves/
@@ -5058,7 +5078,7 @@ Current update — 2026-10-17 21:31 UTC (supersedes older pending statuses):
   and scoped native hooks. Main remains root-owned. Its phonebuild5 is signed
   ready but uninstalled until actual CoreDevice connectivity; simulator hotfix
   proof and separate outstanding keyboard/PDF presentation are recorded in findings.
-- Subsequent21:36 checkpoint: native facade21944 exit0, all6 tests PASS,
+- Subsequent21:36 checkpoint: native facade21944 exit 0, all6 tests PASS,
   including explicit external import and authenticated sync receive with exact
   bytes, metadata/search/backlink retarget, old-pin coherence, rebuild equivalence
   and no authored receive echo. Reviewed tests29bdb786 integrated mainecd52a4f.
@@ -5074,7 +5094,7 @@ Current update — 2026-10-17 21:31 UTC (supersedes older pending statuses):
   under source audit; do not integrate controller until resolved. Search57dafece
   source frozen,16 focused tests/typecheck pass, independent review pending.
 - Reviewed engine39a306e7 composed into main without source conflicts. Normal
-  browser backlink removal also PASS. Main full frontend typecheck7046 exit0,
+  browser backlink removal also PASS. Main full frontend typecheck7046 exit 0,
   focused document/browser/desktop/backlink/workspace tests24094 PASS 48/48.
   No Rust engine changes since recorded native/WASM proof. Final merge commit
   records these gates; remaining search/Base migrations keep Stage4 active.
@@ -5083,7 +5103,7 @@ Current update — 2026-10-17 21:31 UTC (supersedes older pending statuses):
   Markdown49/49 and Base51/51 remain verified with matching binary provenance.
 - Normal rebuilt Electron UI PASS: shared backlink shown, Source navigation,
   editor save removes backlink; independent physical Source exact42 bytes.
-  App8635 exited0 and closed. Normal web bundle87821 exit0, server52415(port8767):
+  App8635 exited0 and closed. Normal web bundle87821 exit 0, server52415(port8767):
   create/rename/normal save/shared backlink/navigation and reload restored source
   pass; final backlink removal after edit also passes. Earlier closed-worker under resource
   pressure did not recur after reload; root cause is not established.
@@ -5127,9 +5147,9 @@ this update are historical checkpoints where their status differs:
   Current server40946(port8766) serves tmp/stage4-browser-index-app-fixed,
   source0d35e292; root Chrome tab1268039028 is marked for continuation.
   Old corpus server22178 stopped after downloaded reports; no Rust/Electron
-  process live. Full frontend tsc18913 exit0; desktop app webpack70127 exit0,
+  process live. Full frontend tsc18913 exit 0; desktop app webpack70127 exit 0,
   but normal desktop UI has not yet run. Temporary node_modules symlink removed.
-- New actual browser evidence: WASM63741 exit0 (official1.95, release/j1,
+- New actual browser evidence: WASM63741 exit 0 (official1.95, release/j1,
   2m35s). BinarySHA2566c67442d272195269eb2d92e723c3fc8fd92e237c33c9368e046a92134903256.
   Chrome real-worker Markdown49/49 +4 malformed checks PASS, downloaded actual
   results independently pass verify.mjs. Real-worker Base51/51 +5 request checks
@@ -5151,7 +5171,7 @@ this update are historical checkpoints where their status differs:
   Bundle tmp/stage4-browser-index-app-d89dbd56 uses exact content-addressed pair.
   Local fixture servers22178(port8765) and48874(port8766) remain live; root Chrome
   tab1268039028 holds failing harness. No Rust compiler live at this checkpoint.
-- Actual desktop transport now passes: run33242 exit0 in1.86s with freshly
+- Actual desktop transport now passes: run33242 exit 0 in1.86s with freshly
   built CLI `target/stage4-verified/debug/zorid` and desktop host; log
   tmp/stage4-desktop-actual-run3.log. Earlier run2 reached Base then failed a
   fixture assertion: column IDs use literal dotted property names. Fixture-only
@@ -5409,7 +5429,7 @@ Historical preceding updates:
   tmp/shared-rust-toolchain/toolchains/stable-aarch64-apple-darwin, explicit
   bin/cargo plus RUSTC needed. Official wasm-bindgen0.2.129 archive digest verified
   and binary --version passes at tmp/stage4-tools/wasm-bindgen; approved portable
-  dependencies prefetched67204 exit0 without building. Do not assume a recorded
+  dependencies prefetched67204 exit 0 without building. Do not assume a recorded
   toolchain/worktree/process path still exists: revalidate before reuse.
 - Stage4 is now explicitly authorized and active. First-goal acceptance is
   committed as f69dc90; new built-in goal covers all shared document semantics
@@ -5672,7 +5692,7 @@ Historical preceding updates:
   install failed only sandboxDNS. Store schema10 foundation is composed in
   isolated aggregateb86149e, not main; schema11 Store/native streaming activation
   remains in progress with exact shared types and fresh-only development format.
-- gRPC proof compiled16543exit0 and passed actualChrome and nativeHTTP2 clients
+- gRPC proof compiled16543exit 0 and passed actualChrome and nativeHTTP2 clients
   against the same Rust endpoint.131072-byte upload/download hash exact; limit,
   hash/id mismatch, uncertain response+exact retry and cancellation-after-accept
   checked. Source/evidence83d47e6+69c9fa2+3f2a89d remain isolatedprototype only.
@@ -5691,7 +5711,7 @@ Historical preceding updates:
   and deleted only at completion; quietrepeat unchanged. Unicode Text write/read
   matched41,800bytes exactly. Fresh default Electron imported270folders+note,
   cleared warning, opened larger note and saved typedmarker through Rust;
-  independentCLI/physical41,819bytes exact. App21921 normalQuitexit0. See
+  independentCLI/physical41,819bytes exact. App21921 normalQuitexit 0. See
   native-progress-verification.md for hashes, retries and automation limitations.
   Protobuf foundation integrated17907d8+7e29a08, corrected pinnedpnpm12 environment
   lock07117b1; isolated worker's original pnpm9 install was misidentified and is
@@ -5811,14 +5831,14 @@ Historical preceding updates:
   cycle on retained fixture. Search/watch are no longer missing implementation.
 - Combined client aggregate c6c5772 (through browserd1ac52c, desktopdiagbbbb358,
   UI744083c, workflow305d397 and verifiedCLI) has independent seam approval,
-  TypeScript9653 exit0, desktop production23356 exit0 and3 targeted workspace/
+  TypeScript9653 exit 0, desktop production23356 exit 0 and3 targeted workspace/
   platform tests5743 pass. Actual no-opt-in Electron4610 uses aggregate dist and
   default-discovered host on fresh /private/tmp/zorid-incomplete-ui-us4yx3m4:
   257dirs show persistent incomplete warning/details with zero imports, rather
   than an apparently empty ready vault. Removing only agent-created emptydirs
   lets automatic polling import Visible.md and clear the warning; exact note
   read through UI. Explicit retry was not proved because polling completed first.
-  Normal app-menu Quit4610 exit0 confirmed; no test app remains.
+  Normal app-menu Quit4610 exit 0 confirmed; no test app remains.
 - Browser owner reports actual simultaneous-tab saves: winner remains committed,
   losing exact draft survives reload and recovery-copy creation/reload preserves
   both versions. Tiny real undo/selection/copy pass; IME not exercised. Folder/
@@ -5838,7 +5858,7 @@ Historical preceding updates:
   because the corruption test reloaded its deliberately corrupt graph in its
   assertion. Corrected oracle independently counts durable pending outbox rows;
   runtime behavior was unchanged. Host incomplete-process gate68733 passes2/2
-  and bounded-diagnostic check passes1/1; CLI/host build7548 exit0.
+  and bounded-diagnostic check passes1/1; CLI/host build7548 exit 0.
 - Retained actual fixture now reconciles ExternalTools->ExternalRenamed plus
   text edit and binary-child deletion through the rebuilt standalone CLI.
   Folder/text IDs unchanged; exact33textbytes hash
@@ -5848,7 +5868,7 @@ Historical preceding updates:
   Report /private/tmp/zorid-compound-reconciliation-1017.json. No test Electron
   process was present. Diagnostic activation remains isolated until UI wiring
   joins it; do not copy its changed host into main before that coherent batch.
-- Browser rebuild9631 exit0 (webpack6.074sec, unchanged Rust cache). Actual normal
+- Browser rebuild9631 exit 0 (webpack6.074sec, unchanged Rust cache). Actual normal
   browser create/save/reload without credentials passed on8791; namespace,
   simultaneous-tab and recovery evidence remain with browser owner. CLI
   search/watch proposal approved, implementation package_sol. Streaming requires
@@ -5878,7 +5898,7 @@ Historical preceding updates:
   target/debug and dist for ordinary desktop startup; provenance JSON retained
   beside binaries. No repeated main build needed for source-equivalent artifacts.
   Native host SHA2563bd287c11baf7a7321725e8d06d38296f975cc0e032daa7b4f5b3801be680ee6.
-  Actual test app72273 normal Quit exit0 confirmed; no test app left running.
+  Actual test app72273 normal Quit exit 0 confirmed; no test app left running.
 - Browser normal default source ff90295 source-approved after release-phase retry
   and independent legacy export fixes. Heavy browser87504 passed with existing
   tasklocal Rust overlay/pinned wasm-bindgen (first95472 lacked wasm target and
@@ -5997,7 +6017,7 @@ Historical preceding updates:
 - Broken live fixture evidence is now secured in
   `/private/tmp/zorid-wal-split-74662.{lsof,stat}.txt` and physical-note snapshot
   `/private/tmp/zorid-wal-split-physical-snapshot`. Normal Cmd-Q closed launch37850
-  exit0; database recovery is not claimed. Lock fix source independently approved;
+  exit 0; database recovery is not claimed. Lock fix source independently approved;
   data_readiness granted minimal sqlite_lock_tests gate before other native runs.
 - User confirms creation works but rename fails. Actual `native_namespace_pending`
   matches incomplete adapter connection; desktop_integration full-file command
@@ -6030,7 +6050,7 @@ the current checkpoint and [final acceptance](history/shared-core-milestone-acce
   evidence is secured. Earlier sequential interop evidence is retained, but
   concurrent safety is not established. Native combined gate waits for this fix.
 - Encrypted restore extension integrated as main `e71f59a` after candidate
-  f53a6b5 recovery54884 exit0: clean CLI restored exact text and 262163-byte
+  f53a6b5 recovery54884 exit 0: clean CLI restored exact text and 262163-byte
   multi-chunk binary, then restart preserved both. Existing metadata/credential
   restore test81517 and pinned WAL permission/log snapshot check also passed.
 - Concurrent-editor follow-up remains failing/unproven: test launch37850,
@@ -6046,7 +6066,7 @@ the current checkpoint and [final acceptance](history/shared-core-milestone-acce
   match the built native candidate. Actual fresh CLI14-record receive, nested
   text/binary hashes, deleted-path absence, rebuilt Electron New note/save,
   simultaneous-open CLI upload and browser exact receive passed. Electron92846
-  quit normally exit0. See browser-relay-verification.md for scope and hashes.
+  quit normally exit 0. See browser-relay-verification.md for scope and hashes.
 - `core_cli` owns the next serialized recovery check: binary extension3aab341
   in an isolated candidate, then existing metadata/permission snapshot checks.
   Mixed namespace obligations and external-edit imports remain isolated follow-ups;
@@ -6158,7 +6178,7 @@ the current checkpoint and [final acceptance](history/shared-core-milestone-acce
 - Editor acknowledged the handoff and reported Canvas session70192 as its live
   handle via `msg_8a891d676c3e`; wait for explicit slot release before core builds.
 - `be8bfc3`/`90e7b91` integrate source-reviewed retained-binary and classifier
-  WASM bindings after21 native wrapper tests (session45875 exit0). New exports
+  WASM bindings after21 native wrapper tests (session45875 exit 0). New exports
   are NOT yet browser-verified. Rebuild once with remaining FamilyCommand/wire
   routing bindings for the combined browser storage/relay gate; do not reuse
   artifact11d2544 as evidence for these exports.
@@ -6233,7 +6253,7 @@ the current checkpoint and [final acceptance](history/shared-core-milestone-acce
 
 - Main `90aa624` through `ec5b2ee` now contains purpose-separated recovery,
   portable raw-response codecs and text/file-v2 planners. Combined current-native
-  candidate `a72e13c` passed 108 tests (session60597 exit0), including known-note
+  candidate `a72e13c` passed 108 tests (session60597 exit 0), including known-note
   clean-client recovery. Evidence: `portable-family-integration-acceptance.md`.
   Browser admission `cdd6b49` passed 47 focused tests/full TypeScript in its
   reviewed source candidate; actual browser lifecycle proof remains required.
@@ -6265,7 +6285,7 @@ the current checkpoint and [final acceptance](history/shared-core-milestone-acce
 
 - Latest main promotion: namespace commits `82a8567` through `1a81819` include
   retained move/delete projection and bounded per-member progress. Main-based
-  candidate `8ba5c55` passed 158 native/store/host tests, session12395 exit0;
+  candidate `8ba5c55` passed 158 native/store/host tests, session12395 exit 0;
   evidence in `native-namespace.md`. Distributed namespace sync remains separate.
 - Desktop flush lifetime fix `e39e266` has three fail-before regressions and
   8/8 passing focused tests. Browser transport `5681a11` through `634ab77` passed
@@ -6280,7 +6300,7 @@ the current checkpoint and [final acceptance](history/shared-core-milestone-acce
   text-sync CLI, desktop-host/wrapper and shared protocol decoder batch.
   Candidate `3660c77` plus resolved lock passed 202 Rust tests (session14067),
   6 protocol tests, fresh CLI/host builds and 46 CJS tests (session72147), all
-  exit0. Real CLI processes converged offline text through a loopback relay;
+  exit 0. Real CLI processes converged offline text through a loopback relay;
   real desktop-host/CLI fixtures covered concurrent access and checkpoint
   restart. See `native-sync-integration-acceptance.md`. Ordinary app storage
   selection, Electron UI, browser/server convergence, full namespace/binary
@@ -6312,13 +6332,13 @@ the current checkpoint and [final acceptance](history/shared-core-milestone-acce
   a source-level API/transaction audit before implementation ownership is split.
 
 - Main `227f084` contains both native/CLI batches and editor E1/E2. Native batch2
-  candidate `3df1de8` passed 109 tests in a fresh target (session30255 exit0),
+  candidate `3df1de8` passed 109 tests in a fresh target (session30255 exit 0),
   covering folder creation, bounded rescans and coherent reads/change cursors.
   See `docs/history/core-integration-acceptance.md`. Apps still use existing storage;
   no migration, push or deployment by this session.
 - Editor candidate `6b96d1f` passed 29 focused and 1963 aggregate tests,
   TypeScript and production webpack (three performance warnings), session64815
-  exit0. The stale parser-tree bug has eight verified fail-before regressions;
+  exit 0. The stale parser-tree bug has eight verified fail-before regressions;
   source fix `a8cfb75` equals editor `dfbfae7`. Native Base property writes and
   horizontal/vertical Canvas edge resizing persisted on that build; a draft
   committed on blur without loss (focus retention unproven). Audio playback
@@ -6326,7 +6346,7 @@ the current checkpoint and [final acceptance](history/shared-core-milestone-acce
   `cc55574` is on main; owned Electron exited0. Tested dist is in
   `editor-base-embed-integration`, not the primary checkout's older dist.
 - Isolated core `b510194` passed the entire Rust workspace in dedicated
-  target-verification: session34798 exit0, 201 passes, one ignored crash helper
+  target-verification: session34798 exit 0, 201 passes, one ignored crash helper
   explicitly invoked by its parent. Includes schema5 host intents, text plans,
   file/namespace/chunk plans, authenticated envelope capability, relay and basic
   backup/restore. SQLite unsigned conversions and two invalid test setups were
@@ -6334,8 +6354,8 @@ the current checkpoint and [final acceptance](history/shared-core-milestone-acce
   convergence. WASM crate native tests do not substitute for browser execution.
 - Backend foundation is integrated on main at `04bf12b`. Candidate `91694d3`
   passed 28 protocol/crypto/server checks including managed backup/restore
-  (session65524 exit0); no-default-features crypto passed 8 including its doc
-  test (session 5557 exit0). Offline lock resolution preserved existing pins.
+  (session65524 exit 0); no-default-features crypto passed 8 including its doc
+  test (session 5557 exit 0). Offline lock resolution preserved existing pins.
   See `docs/history/backend-integration-acceptance.md`. The server remains a loopback
   fixture: hosted enrollment, admin UI and deployment are unfinished.
 - Web foundation is integrated on main `c369571`. Candidate8eb89de passed

@@ -1,7 +1,7 @@
 # Local collections, types and Base views — implementation tracker
 
 Updated: 2026-10-27. Owner: this discussion's coordinator (`/root`).
-State: **verifying — local only; bounded CLI pass, full UI acceptance open**.
+State: **verifying — local only; bounded CLI/P2 UI passes, P006 desktop issue open**.
 Latest authorization: the user explicitly resumed with **"ok start"** on
 2026-10-27 after the documentation handoff. Root's built-in goal is active;
 this repository tracker remains the cross-session record. Collaboration/sync is
@@ -17,18 +17,33 @@ Incoming corrections: [user findings](../user-findings.md).
 
 | Item | Current state |
 | --- | --- |
-| Current task | P004: bounded actual CLI successor passes; normal Electron test window is live with user interaction. Preserve that active session and hold UI automation. Full UI/browser/main acceptance remains open; no Tauri work. |
-| Composition branch/worktree | `codex/local-databases` / `.worktrees/local-databases`, main base `c36c4b0e`; current HEAD `06696a2c` is test-only source `ab538c71` correcting the CLI status oracle. Product artifacts retain the recorded `d7aecf48`/equivalent-Rust `d7a033b7` identities. |
+| Current task | P006: diagnose generic collection-note controls after normal app restart. P005/E11 retained-value correction is source-reviewed and bounded actual UI PASS; full feature/main handoff remains held by P006. No Tauri work. |
+| Composition branch/worktree | `codex/local-databases` / `.worktrees/local-databases`, main base `c36c4b0e`; current HEAD `7a810bb5` composes P2 fix `fc72f099`. Native artifacts retain their earlier receipt; frontend rebuilt and passed as `frontend-native-002.log`. |
 | Canonical main at resume | `c36c4b0e`, observed clean. Root does not integrate or mutate main. |
 | Main integration ownership | Shared-core owner acknowledged from `term_d8b43288-7bf1-464c-af5f-b779721982e3` at 2026-10-27 16:56:08 UTC; retains sole integration. Root terminal: `term_4603116b-4cb4-4e5a-b3a5-968bea283161`. |
 | Ordered handoff | Documentation `bc006f23` queued to that owner, not integrated at this cutoff. Product batches follow review and affected checks. |
-| Product implementation | Source composed; final narrow UI/source review closed through `06696a2c`, no remaining must-fix or source edits pending at this cutoff. Actual standalone CLI successor PASS 30 commands/13 checks/all 7 scenarios; full desktop/browser/main acceptance remains open. |
-| Source checks | Final query 24/24, native query-facade 3/3, CLI 3/3 + phase1/1 and error compatibility 2/2 PASS, in addition to earlier Store64/native32/host4/composedJS61/session5 receipts. Counts have distinct source/scope limits; do not aggregate overlapping runs. |
-| Product verification | CLI first receipt FAIL at command 29 on counter-type oracle; corrected strict successor PASS 30/13/all 7. Electron onboarding source choices observed through CUA; user actively uses the disposable test window. Full desktop UI/browser/main acceptance open. |
+| Product implementation | P2 fix composed and independently reviewed with no must-fix findings; actual CLI and bounded E11 desktop correction pass. Newly observed P006 restart controls issue has no established cause/fix. Full feature/main acceptance held; browser unsupported/unbuilt at low-disk cutoff. |
+| Source checks | New root-composed P2 tests 10/10 PASS (`preserved-properties-composed-002.log`), full TS and native frontend002 PASS. First unavailable-tsx launch ran no tests. Earlier native/query/core/CLI/source receipts retain their exact limits and are not summed. |
+| Product verification | Normal Electron P2 correction/clear after Status→Number PASS, exact 7/null and bodies persist through normal quit/reopen. New P006 shows generic `_id`/`_type`/null controls despite persistent values/two Base members. Three foreground sessions exited 0; no live test app. Browser not built; feature/main acceptance open. |
 | Reference evidence | Bounded Notion filter-creation UI observations; design section 1 records exact cases and limits. |
-| Next action | Respect the user's live test window; hold UI input and do not close it. Record observations and resume bounded UI automation without interfering when the user is finished. Browser readiness/acceptance and ordered main-owner handoff remain separate gates. |
-| Dependencies | Remaining normal Electron scenarios/cleanup after user testing, browser readiness/acceptance and sole main-owner integration. Scoped indexing previews remain a safe capability gap; CLI excludes concurrent clients, crash and external-edit acceptance. |
+| Next action | `managed_editor_saves` read-only diagnosis of P006 lifecycle/managed-control attachment; reproduce/fix only after evidence identifies cause. User finished testing and allowed resumption; no active test window to preserve. Browser/main gates stay separate. |
+| Dependencies | P006 root cause/fix + focused restart verification, full desktop scope, browser readiness/space and sole main-owner integration. WASM preflight 186MiB <1.5GiB: no compilation started. Scoped indexing previews remain a safe capability gap. |
 | Resource lane | Root serializes actual validation and any required Rust work in shared `tmp/local-database-target`, release offline `-j1`; no parallel heavy builds or worker Git mutations. Latest user steering: no further Tauri work, including new benchmark/prototype/cleanup work from this pass. |
+
+Latest cutoff evidence: root `7a810bb5`, independent P2 review closed and
+`preserved-properties-composed-002.log` 10/10 + full TS/native frontend002 PASS.
+Actual normal Electron: UI-created Tasks/two notes, Status→Number, reopened notes
+corrected In progress→7 and Not started→null, warnings removed, bodies exact;
+normal quit/reopen independently confirms raw YAML 7/null and exact bodies.
+Receipts: `/private/tmp/zorid-local-collections-desktop-20261027/p2-ui-observations.json`
+and `/private/tmp/zorid-local-collections-desktop-20261027/p2-disk-after-normal-quit.json`.
+Sessions 79092/13222/42387 all normal exit 0. P006 remains an actual restart issue:
+generic editable identity/null controls replace managed collection controls;
+values/membership persist, including two Base-embed members. It persists across
+observations/note switch; cause/fix not established. `managed_editor_saves` owns
+read-only diagnosis. This closes only the reported P2 interaction, not P006 or
+full desktop/browser/main acceptance. WASM compilation did not start at 186 MiB
+free; no browser artifact or local-collection browser acceptance claimed.
 
 Before each resumed pass or after context compaction:
 
@@ -180,12 +195,12 @@ repeat passed scenarios only after relevant changes or unresolved failures.
 | A06 Shared entry | Two views/splits/linked placements reflect the same durable entry changes without overwriting body edits. | Not run |
 | A07 Untyped New | Ordinary note created in specified default/deduced folder without prompts; feasible filter defaults applied; no collection assigned. | Not run |
 | A08 Identity/rename/duplicate | Renames retain IDs/values; in-collection Duplicate gets new entry ID; folder moves retain membership; missing/duplicate external IDs cannot merge unrelated files. | Not run |
-| A09 Schema changes | Populated field/option deletion and incompatible datatype cases follow the settled contract, retain recovery evidence and survive restart. | Not run |
+| A09 Schema changes | Populated field/option deletion and incompatible datatype cases follow the settled contract, retain recovery evidence and survive restart. | Specific retained Status→Number correction/clear PASS in P005 normal UI; broader schema matrix open. |
 | A10 Delete/restore | Deleting view/Base preserves collections; deleting collection includes hidden members; referencing views show deleted source; restore/path collision/partial-failure cases preserve unrelated data. | Not run |
 | A11 Publication crash | Interrupt between structured commit and readable publication; restart resumes bounded work, preserves body/unknown external data and refuses stale overwrite. | Not run |
 | A12 Registry removal | No special Properties.yaml reads/writes/creation/watchers/admission; existing file is ordinary content and cannot grant schema authority or block queries, across affected hosts. | Not run |
 | A13 Independent clients | Standalone CLI and normal editor local operations follow same validation/storage guards; browser support/capability outcome recorded separately. | Bounded independent CLI PASS 30/13/all 7; concurrent editor and browser acceptance open. |
-| A14 Product lifecycle | Matching installed desktop create/configure/edit/delete/restore/normal quit/reopen; exact supported layouts/keyboard behavior and remaining platform limits recorded. | Not run |
+| A14 Product lifecycle | Matching installed desktop create/configure/edit/delete/restore/normal quit/reopen; exact supported layouts/keyboard behavior and remaining platform limits recorded. | P005 bounded normal quit/reopen passes; P006 managed controls fail after restart. Full acceptance held. |
 
 ## Open decisions and findings queue
 
@@ -446,6 +461,43 @@ The WASM preflight did **not start compilation**: only 186 MiB free, below the
 1.5 GiB prerequisite. Receipt:
 `tmp/local-databases-20261027/wasm-build-preflight-lowdisk.json`. Lane released;
 no cleanup, source changes or app actions followed. No Tauri work.
+
+Native P2 contract acceptance: **12/12 independent CLI commands, 8/8 checks
+PASS**, `/private/tmp/zorid-local-p2-native-20261027-ToE2hE/report.json`.
+The matched CLI preserved the readable label and original option ID/problem
+after conversion/restart; composition returned the canonical label and exact
+file/member/schema revisions. Numeric correction and null clearing on separate
+entries removed preservation and published across restart, retaining body and
+unmanaged data exactly. All owned processes exited zero with observed closure.
+This validates the native contract, not the Workspace setter or actual desktop
+interaction. No Rust/source changes or builds were needed for this run.
+
+P2 UI successor `fc72f099` → root `7a810bb5` is composed and independently
+reviewed with no must-fix findings. Composed focused tests **10/10 PASS**
+(`preserved-properties-composed-002.log`), full TypeScript and native frontend
+build **PASS** (`frontend-native-002.log`). The first local test-launch attempt
+used an unavailable `tsx` executable and ran no tests; the successor uses the
+repository's normal `node --test` path.
+
+Actual normal Electron P2 interaction **PASS, bounded**: UI-created Tasks
+collection, two authored entries, Status → Number schema change, ordinary note
+reopen with retained label/warning, numeric `7` correction and explicit null
+clear both work and remove warnings. Bodies remain exact. Normal quit/reopen and
+independent YAML parsing confirm persisted values/body. Receipt:
+`/private/tmp/zorid-local-collections-desktop-20261027/p2-ui-observations.json`.
+The owned test app was quit normally; all three foreground exec sessions exited
+zero. This closes the reported P2 interaction, not full feature acceptance.
+
+### P006 — 2026-10-27 — managed note controls after app restart
+
+Actual restart observation: the corrected/cleared entries reopen with persisted
+values and bodies, but show generic frontmatter controls including `_id`/`_type`
+and inferred JSON null fields, rather than managed collection schema controls.
+The state persists across observations and switching notes; a Base embed still
+shows its two collection entries. `managed_editor_saves` owns read-only lifecycle
+diagnosis first. Cause and fix are not yet established; never infer membership
+from readable `_type`. Full desktop acceptance/main integration remain held.
+See the P2 UI receipt for exact observations and input/automation caveats.
 
 ### Receipt template
 

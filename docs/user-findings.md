@@ -1,3 +1,21 @@
+## Managed collection note controls missing after restart — 2026-10-27 P006
+
+Actual normal Electron restart on source `7a810bb5` shows generic frontmatter
+controls including editable `_id`/`_type` and inferred JSON null instead of managed
+collection schema controls. Values and bodies remain persisted; the Base embed
+still has two collection members. It persists across observations and switching
+notes, so no transient-settling explanation is assumed. `managed_editor_saves`
+owns read-only lifecycle diagnosis; cause/fix not yet established. Feature/main
+integration remains held, with browser readiness separately open.
+
+Evidence: [tracker P006](plans/types-properties-implementation.md#p006--2026-10-27--managed-note-controls-after-app-restart),
+`/private/tmp/zorid-local-collections-desktop-20261027/p2-ui-observations.json` and
+`p2-disk-after-normal-quit.json` in the same directory. User finished testing and
+allowed resumption. All three owned foreground sessions 79092/13222/42387 exited 0
+normally; no live test app. The earlier P2 correction/clear interaction passes
+within its bounded scope; that is not full feature acceptance. WASM compilation
+never started at 186 MiB free, no browser artifact/acceptance. No Tauri work.
+
 # User findings queue
 
 ## Retained datatype value cannot be corrected in note properties — 2026-10-27
@@ -6,11 +24,16 @@
   value `Started` converted to Number remains readable, but correction or clear
   through ordinary note properties is rejected even after reopen. E11 requires
   preserving the value until the user explicitly corrects or clears it.
-- Implementation: assigned to `local_ui`, retained-projection contract assist
-  from `local_core`; entry/schema revision guards must remain. Independent review
-  assigned to `collection_ui_review`. Fix and focused regression pending.
-- Verification: source finding only; no runtime reproduction or acceptance yet.
-  Main integration held. No Tauri work.
+- Implementation: `fc72f099`→root `7a810bb5` fixes the scoped setter while
+  retaining entry/schema and stale-note guards. Independent review closed with
+  no must-fix findings; composed 10/10 regression tests, full TS and native
+  frontend002 PASS. First unavailable-tsx launch ran no tests.
+- Verification: bounded actual normal Electron PASS for Status→Number then 7
+  correction and null clearing on separate UI-created entries; warnings removed,
+  exact bodies persist through normal quit/reopen/raw-YAML checks. P005 records
+  exact receipts and input caveats. This closes the reported P2 interaction;
+  full feature/main integration stays held by the new P006 restart controls issue.
+  No Tauri work.
 
 ## Local collections actual CLI pass; user testing Electron — 2026-10-27
 
@@ -1542,7 +1565,7 @@ them or interrupting the current work.
 | Make Rust core the default (2026-10-17) | Rust is the main default for desktop and normal browser. Actual normal startup/save/reload works without credentials/backend; current native crash recovery and browser competing-tab recovery copy pass | Actual native undo/selection/Zhuyin composition/redo/restart pass; test apps closed. Keep local vault operation independent of credentials/backend; no mobile default or production enrollment claim |
 | New file works, but rename fails (user reported 2026-10-17; subsequently confirms working) | User now confirms rename works. Full command candidate 4883a3b + 57ada91 passed focused checks, reviews and TypeScript/webpack build; matching native candidate 9c61837 passed its bounded checks | Root verified the actual window loads desktop-file-commands/dist/index.html and opened the fresh lockfixed fixture. Automated title/menu rename proof was interrupted; user confirmation is recorded separately. Integrate reviewed batch and retain restart/sync verification gaps |
 | Later desktop edits must stay in Rust authority | POSIX lock fix is integrated. Current default Rust desktop saves match independent CLI while the host remains open; actual Store11 app/host crash, subsequent competing CLI write, normal reopen and recovery copy preserve exact draft/original bytes | Cross-process authority and current crash recovery evidence now pass. Preserve no-loss retained-draft semantics; automatic stale-editor merging remains deferred |
-| New note button fails in Rust-backed desktop vault (user screenshot, 2026-10-17) | Actual user reports `zorid:write` / `Core vault fixture operation failed` while creating a file; existing-note integration does not cover ordinary create | Implemented in isolated candidate a29605b; actual rebuilt New note created Untitled.md, saved exact40 bytes, CLI uploaded and browser read identical bytes. Normal quit exited0. Integrated on main5d29c53; see browser-relay-verification.md |
+| New note button fails in Rust-backed desktop vault (user screenshot, 2026-10-17) | Actual user reports `zorid:write` / `Core vault fixture operation failed` while creating a file; existing-note integration does not cover ordinary create | Implemented in isolated candidate a29605b; actual rebuilt New note created Untitled.md, saved exact40 bytes, CLI uploaded and browser read identical bytes. Normal quit exited 0. Integrated on main5d29c53; see browser-relay-verification.md |
 | Discuss WebSocket/WebRTC transport | Current transfer is HTTP; proposed next step is WebSocket wake notifications with HTTP encrypted transfer, then WebRTC for P2P | Discussion only; no transport migration approved or implemented. Persistent sync must retain reconnect catch-up and durable acknowledgment independently of transport |
 | Check LiveSync deletion behavior and apply relevant lessons | Rechecked deletion implementation, watcher reflection, conflict and GC specifications against pinned upstream sources; Zorid causal Delete/Recovery/Restore core inspected | Logical tombstones must survive offline peers; stale watcher events and lookup errors cannot authorize deletion. Preserve unseen concurrent edits and observed folder membership. Native physical deletion, recoverable UI and retention remain incomplete; quiet recovery UX is a recommendation, not implemented |
 | Prioritize a usable complete build over production-grade testing | Latest explicit user direction: implement everything fast so the user can use it | Combine integration gates: compile/build, short real editing/sync smoke, and targeted data-loss/security regressions. Defer exhaustive compatibility, stress testing and repeated independent validation; do not add tests for low-impact reversible changes. Report remaining gaps without holding usable work for production readiness |

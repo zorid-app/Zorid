@@ -8,6 +8,17 @@ Older plans remain detailed capability inventories, not competing delivery order
 
 ## Current focus
 
+Current local-delivery cutoff: `7a810bb5` closes the independently reviewed
+retained-datatype correction P2 with 10/10 focused regressions and a bounded actual
+normal Electron correction/clear/quit-reopen PASS. Full feature acceptance/main
+integration is **held by P006**: after restart, collection notes show generic
+frontmatter/identity/null controls instead of managed schema controls, while data
+and membership persist. Read-only diagnosis is assigned; no cause/fix claimed.
+[Tracker P005/P006](plans/types-properties-implementation.md#p006--2026-10-27--managed-note-controls-after-app-restart)
+retains evidence and scope limits. The user finished testing; all owned foreground
+test sessions closed normally. Browser WASM did not compile due low disk, so no
+matched browser artifact/acceptance. No further Tauri work; finish local collections.
+
 ### Latest local collection design steering — 2026-10-27
 
 The user now chooses local collections with internal Types and independently
