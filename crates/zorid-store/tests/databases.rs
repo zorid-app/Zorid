@@ -43,7 +43,7 @@ fn update(
 ) -> DatabaseSnapshot {
     request(
         store,
-        json!({"op":"update","operationId":format!("update-{}-{name}",collection.revision),"collectionId":collection.id,"expectedRevision":collection.revision,"name":name,"properties":properties,"confirmDestructive":confirm}),
+        json!({"op":"update","operationId":format!("update-{}",collection.revision),"collectionId":collection.id,"expectedRevision":collection.revision,"name":name,"properties":properties,"confirmDestructive":confirm}),
     )
 }
 fn get(store: &mut Store, collection: &DatabaseCollection) -> DatabaseSnapshot {
@@ -986,7 +986,8 @@ fn independently_tombstoned_member_stays_deleted_after_collection_restore() {
     );
     assert!(restored.entries[0].deleted);
     assert!(store.database_pending_projections(20).unwrap().is_empty());
-    assert!(store.read(&entry.entry_id).unwrap().unwrap().state.deleted);
+    assert!(store.read(&entry.entry_id).unwrap().is_none());
+    assert!(store.read_metadata(&entry.entry_id).unwrap().is_none());
 }
 
 #[test]
