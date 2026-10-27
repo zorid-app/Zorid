@@ -1,0 +1,1727 @@
+{
+  "sourceCommit": "fd6a40ca",
+  "inputs": [
+    {
+      "path": "shell/target/release/zorid-tauri-native-prototype",
+      "bytes": 34699840,
+      "sha256": "ef0b69e2f9fcf96ad9291db929b98e85060711f85a8350e3e30cca87e10b439f"
+    },
+    {
+      "path": "shell/target/release/zorid-native-host-comparator",
+      "bytes": 21396816,
+      "sha256": "d834a1a983ec86f1d3ac4268b22936f524751ee4102c2b32efa7a98c20ae9f17"
+    },
+    {
+      "path": "shell/Cargo.lock",
+      "bytes": 125195,
+      "sha256": "0c7300157b76e095a0d2ba0fe7acdaa0157a85fd0299f487898e8d22df3cb206"
+    },
+    {
+      "path": "shell/src/main.rs",
+      "bytes": 19647,
+      "sha256": "15028a348ce2a65bad79e84ac2ce378afb8d9d8b1d192012ea489cc93d5a6a91"
+    },
+    {
+      "path": "electron/main.cjs",
+      "bytes": 14505,
+      "sha256": "62d72a27a32cf1c8cc7360049f21d7e05cd45063cf207ccff00290925a681135"
+    },
+    {
+      "path": "electron/preload.cjs",
+      "bytes": 969,
+      "sha256": "68555361485caae3a84fb24fabceaf048e02da30b2e52c0e3605e4c36c7663ce"
+    },
+    {
+      "path": "bench/memory-workload.js",
+      "bytes": 24173,
+      "sha256": "87de4d9036e1448bc502fb305e2fc3164613439f389d7c7edcec540813736a54"
+    },
+    {
+      "path": "bench/run.mjs",
+      "bytes": 10396,
+      "sha256": "5530a6ad0b2f8173764a6d18d3ac5ef63cc95554905c81143823a70c613d8590"
+    }
+  ],
+  "rendererAssets": [
+    {
+      "path": "assets/binary-DgksuYVr.js",
+      "bytes": 796,
+      "sha256": "6f473855f93b6248e6e09282c71bab9f656ee039d2373e2dce11fa605f1a25ba"
+    },
+    {
+      "path": "assets/binary-DgksuYVr.js.map",
+      "bytes": 2746,
+      "sha256": "727782e439970e0dbe226b92b4e073cef7d541dfe9756ef756c0109f69c0f974"
+    },
+    {
+      "path": "assets/browser-core-worker-hhG1GG1n.js",
+      "bytes": 463448,
+      "sha256": "d1c4ec623103f175566bf4f06841899c66b14aef002f89af5df39ecc721e9655"
+    },
+    {
+      "path": "assets/browser-core-worker-hhG1GG1n.js.map",
+      "bytes": 1937738,
+      "sha256": "092a3452783645b9d89732857c1ba86426b48d802df87b37a989edb13e18331c"
+    },
+    {
+      "path": "assets/browser-default-BWzN_tbd.js",
+      "bytes": 499,
+      "sha256": "0c49b8a91a1f2797488a8e7f47bfe95f0cdc44d9aef493196745abeb6994774f"
+    },
+    {
+      "path": "assets/browser-default-BWzN_tbd.js.map",
+      "bytes": 128574,
+      "sha256": "f4b16483ea92daad2945e26c619fd5a53a3a88429a4a4cafbc077fce37126cd7"
+    },
+    {
+      "path": "assets/dist-MVNiJyLe.js",
+      "bytes": 8008,
+      "sha256": "3222c9cfd00ae9cb5183cad3b87763d47e7c96426a83b2e6cbc46949a317002b"
+    },
+    {
+      "path": "assets/dist-MVNiJyLe.js.map",
+      "bytes": 36314,
+      "sha256": "cd021696a11ed0726f5932d993636f9d736e42e59781abd035799ed0b7d196fc"
+    },
+    {
+      "path": "assets/index-BCc5_oTG.js",
+      "bytes": 2060727,
+      "sha256": "638a0758b8c02e8aec7297c5cf8ca2068f99b01799699c0f27e3bef01c817327"
+    },
+    {
+      "path": "assets/index-BCc5_oTG.js.map",
+      "bytes": 7615311,
+      "sha256": "7934bf92b44554f8e1c118fcc1616cc8d91dd645d82f7eee110b6d17c51fee06"
+    },
+    {
+      "path": "assets/index-CZOy2oQ3.css",
+      "bytes": 158202,
+      "sha256": "ea3e35a204eb2d834d795220e78b11b2fb3477a9020cdf5440085b549814a2a6"
+    },
+    {
+      "path": "assets/mobile-DMeIliOi.js",
+      "bytes": 5430,
+      "sha256": "ca2ad8b148103aae883d1763a2369adb2555cd00e65826c114ff2bd2df380371"
+    },
+    {
+      "path": "assets/mobile-DMeIliOi.js.map",
+      "bytes": 21076,
+      "sha256": "ee7ab979bf7afba9fc9764d0d5751efafa44f0da24ef3389c701b203dc3f62df"
+    },
+    {
+      "path": "assets/mobile-native-QPkKAsCQ.js",
+      "bytes": 71309,
+      "sha256": "94fb601c47a356b5edbd0b59f7ee5ba2e3fbc508352273d4f6d957a830d679fc"
+    },
+    {
+      "path": "assets/mobile-native-QPkKAsCQ.js.map",
+      "bytes": 229538,
+      "sha256": "e78fc242a5ec5a52222999a934a71e33e24d3550c0555d97b9e47ee24bf4bae0"
+    },
+    {
+      "path": "assets/prism-worker-tBALHc6d.js",
+      "bytes": 757,
+      "sha256": "ac697715a6a78a28caa81f746c8f00bef3782e84d9b8797d16fdd831eacd8080"
+    },
+    {
+      "path": "assets/prism-worker-tBALHc6d.js.map",
+      "bytes": 3171,
+      "sha256": "09065ace47d80508c1efeb6f3a14578d603da427cc1acc723189573547678330"
+    },
+    {
+      "path": "assets/styles-CuMWnA8x.css",
+      "bytes": 1750,
+      "sha256": "7b2cd0d396a692a0335b1cba09da137cbdeae4ae99d8b15a0acb4c729b32de33"
+    },
+    {
+      "path": "assets/styles-DsSaz5qT.css",
+      "bytes": 21199,
+      "sha256": "16e7c6397331b93d17c34e5f7e15c6ba0fc9a63b1fc3457cc98ecbd56cbfa846"
+    },
+    {
+      "path": "assets/tauri-native-DqwQtDR4.js",
+      "bytes": 1103,
+      "sha256": "8777c0ba95bb67ef050d0b279cb53cbe41bfe1e82769f74b4529b2dd62a830d8"
+    },
+    {
+      "path": "assets/tauri-native-DqwQtDR4.js.map",
+      "bytes": 5006,
+      "sha256": "480503cc1d9117a7301f10a574dccd3f7c9236b03fc36725532b9d76cb458a3f"
+    },
+    {
+      "path": "assets/view-B5I_ozKb.js",
+      "bytes": 378007,
+      "sha256": "99973053e60abdf83eefd63fec9eb47037ab323920596ce86fd3f7c7008061a9"
+    },
+    {
+      "path": "assets/view-B5I_ozKb.js.map",
+      "bytes": 1839032,
+      "sha256": "90155ba91ab4f7eafd3368434b74a006b49f490e508afa1dfdf0b2dbd466032b"
+    },
+    {
+      "path": "assets/view-DfQEvxvi.js",
+      "bytes": 14835,
+      "sha256": "58c85c47b95c2c33c4ba9d7d4fd43d5ca9637ad8bb6cba42f833a0543ccd64b4"
+    },
+    {
+      "path": "assets/view-DfQEvxvi.js.map",
+      "bytes": 43744,
+      "sha256": "c5c85def0e02a1f0d54781535f8aad4df65d0d761d7eb61952a50407d1cdd7c1"
+    },
+    {
+      "path": "assets/web-BM6gMsWP.js",
+      "bytes": 8507,
+      "sha256": "906cfc3dd4c70255b183161db02570c399d3a32e06140b7d38f6a3fe394a960e"
+    },
+    {
+      "path": "assets/web-BM6gMsWP.js.map",
+      "bytes": 35437,
+      "sha256": "e5d939758debac8f73caa6883bd8fe7c417e84c71ba1a720ad29a2d27e981336"
+    },
+    {
+      "path": "index.html",
+      "bytes": 806,
+      "sha256": "1294bce535ad391adb4f0a4705d01af28e3e349a366e5b6bc1b9896a8cff7f90"
+    },
+    {
+      "path": "lib/mathjax/LICENSE",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-mhchem-font-extension/chtml/woff2/mjx-mhc-m.woff2",
+      "bytes": 2400,
+      "sha256": "2ea308c69f139e9ee7bc452e12a449c13e3b9ce4c08aebc4e86e15df232a26e0"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-mhchem-font-extension/chtml/woff2/mjx-mhc-n.woff2",
+      "bytes": 916,
+      "sha256": "f9054e3dd268155cb38c708ef7b7c7c03e83ac3723afcb65ae65a37bbb301f4e"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-mhchem-font-extension/chtml.js",
+      "bytes": 3587,
+      "sha256": "09dec3f1b8299aa81b5d4e45fa8ef4675f6a1907056f030a357fb9916bad8703"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-mhchem-font-extension/package.json",
+      "bytes": 4385,
+      "sha256": "c61057212d281a8fda24797a939460531417dbdf904b6f33976cde8ca313c6b7"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-b.woff2",
+      "bytes": 19340,
+      "sha256": "69e45ca329dd2fcc3671dc20884f2baf29348a43833104266be098eba544fda2"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-bi.woff2",
+      "bytes": 1484,
+      "sha256": "d0c95edf7b3223c8e66fcb4b6faaf74fc3376eea59c20f23677f4d54905a356e"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-brk.woff2",
+      "bytes": 980,
+      "sha256": "4f03a0d86ff005f12cbb0ffd162bae0766415e48e07ed3fa5970e685594de15d"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-c.woff2",
+      "bytes": 6644,
+      "sha256": "1faef92bbe440c459bcea0b7530044827749507e39bf49248c2203f9eb422bce"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-cb.woff2",
+      "bytes": 7064,
+      "sha256": "03de6a3467f88e79425df3505a936e6b336efbc5c0421f40905d1d52fddbe4ed"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-f.woff2",
+      "bytes": 5932,
+      "sha256": "6cb008e934883d1f4652562276469dfc1ade06ee4ceebd6979e79b1c98472b47"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-fb.woff2",
+      "bytes": 6180,
+      "sha256": "303b28cdca9c064d93dc1672b843933ab20e28f777adb08b9eafa6f442f074d7"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-i.woff2",
+      "bytes": 7472,
+      "sha256": "82c82a2e0c8bc89421ce9cbb4ecea806c8ceec4b4fd0269726b9439ca853b365"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-lo.woff2",
+      "bytes": 5160,
+      "sha256": "98b20475232f47749126ae098177b5c71d3b6512e068efedb3a912c2c8f6ed0f"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-m.woff2",
+      "bytes": 8552,
+      "sha256": "82e8abfaecf005f639e18b1e7dece8700c56df76eac8ea94e4b5915bedee7567"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-mi.woff2",
+      "bytes": 9676,
+      "sha256": "4bd1e8cefc7cf1b9aa2f2c6beb01ecef7ebf5d1f81d82f954a9688360a399fc3"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-n.woff2",
+      "bytes": 164864,
+      "sha256": "fad3b88ec7aac4959e3de19044931682bd4d1500c72a85d2d113b73b694c4133"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-ob.woff2",
+      "bytes": 8412,
+      "sha256": "62f1a8f7ced532d6ab1f6af3a5b3363eb6c774fe40d29092bbea27ac95a9f89e"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-os.woff2",
+      "bytes": 8164,
+      "sha256": "01bc6e82013dca9c1cbb132c353a0f63add97325bb979bba5e619591525c2a6e"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-s3.woff2",
+      "bytes": 2560,
+      "sha256": "07165a0e10ae4b6b24db34b28d0a8c46bd4ac53b4d1682098ee7a3e88d2f1c83"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-s4.woff2",
+      "bytes": 4352,
+      "sha256": "b20a0e1b03043ae1a540857bdf1b220297ff0e78b110b1e15554addf91ad0937"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-so.woff2",
+      "bytes": 6472,
+      "sha256": "0e9f0e5baa090d44c728e2ddaa39b4c465ff15d349e3547488503eb318628a45"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-ss.woff2",
+      "bytes": 6168,
+      "sha256": "e0d564a939fce2e4d0c09a86f0dc936c2a9cdb42e44eb264dbc5ef01d71e179c"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-ssb.woff2",
+      "bytes": 4896,
+      "sha256": "4a2e4827bad85a9ae5fe906f179ccfce154bfc29e19115ceb8d7f1f6e8ce31cd"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-ssi.woff2",
+      "bytes": 8472,
+      "sha256": "b6dfb310dd7b5c059e9b748b4766fcdd6fa0005c17d9229f3bb1bd095acfae1a"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-v.woff2",
+      "bytes": 6716,
+      "sha256": "bd9d7db0883dc1adca7ed1c20042609e4e3d1f07f106b6bc8eeeab49d560393b"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml/woff2/mjx-tex-zero.woff2",
+      "bytes": 960,
+      "sha256": "2c146f72c9a345aa282398a752d03af71d83a011f3d067297b533a31f0c5f5cb"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/chtml.js",
+      "bytes": 80986,
+      "sha256": "1ff6fa2f22384fa16c0575f09b98ee4d900a61d185f6fcee4e960c0d2190d0c9"
+    },
+    {
+      "path": "lib/mathjax/fonts/mathjax-tex-font/package.json",
+      "bytes": 4991,
+      "sha256": "86d89ab67ecdf67f642b0fc5fc249e7fcdf26ea6531ee8fa3eaba9a0378000a3"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/action.js",
+      "bytes": 1843,
+      "sha256": "7c46fc1ef8118723bf2f386d704ab289e5dd683471e0ad4e1e717244959b565b"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/ams.js",
+      "bytes": 21194,
+      "sha256": "6ff85ab489da04ec533a22b9b93d5d5d51f9f51ef02c723439734e65d9257d14"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/amscd.js",
+      "bytes": 4310,
+      "sha256": "81d6115aa4358a98da5e6d477ac4198cbc11c2c2752745b3529a8b6e2761202f"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/autoload.js",
+      "bytes": 3331,
+      "sha256": "8da941fdea660944fc6a4434823dce9cf369b88cb6c0ab50b00700b7a92dbf0c"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/bbm.js",
+      "bytes": 2143,
+      "sha256": "fb780f6e8ca565439b3c6dc78f3e42b525905fd43c5e15471994a2a1da914ca8"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/bboldx.js",
+      "bytes": 7397,
+      "sha256": "772503b34ac5b7c56e56c7698403bad6ff3ea3fd1882c22b4e1ef518e6ef86c5"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/bbox.js",
+      "bytes": 2323,
+      "sha256": "9d9ff6d1c592d2a4fe728412d2d5ec29379f4721bfa3b8356ad2045eb939b848"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/begingroup.js",
+      "bytes": 4266,
+      "sha256": "0f606d5a71301992e92d8697ccbf8318736110691d8a94303f3f254cd589421a"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/boldsymbol.js",
+      "bytes": 2460,
+      "sha256": "baaabd9fb430fe4fdbfa9db74aa60b118dd650a68239280368abfd1bc30a0e10"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/braket.js",
+      "bytes": 4653,
+      "sha256": "d401832d91ca89fc8f76cf1ea67ce25b21c4a2b1d9da0db605204f262c8d69ee"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/bussproofs.js",
+      "bytes": 12204,
+      "sha256": "87451074cc17e2c8064d630b91cc56171182cc5a46c1313006014f56c498d8d4"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/cancel.js",
+      "bytes": 2255,
+      "sha256": "9ff91ff84d9776606cdb66da62ffe9bb39cfdfabcf070f214d35e553689ffece"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/cases.js",
+      "bytes": 4277,
+      "sha256": "6805d481aaee3f78d82bb9f0b6b9ac47b0804c30f10253394724459d95d41a8c"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/centernot.js",
+      "bytes": 2148,
+      "sha256": "e3c08e96d11f020027a9b325e7b8661f08940babba218b786ac29d50d822dfba"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/color.js",
+      "bytes": 6818,
+      "sha256": "f569ebbf53726afeb3f7a7803500ac2088aada400a2000394879d0b503311b17"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/colortbl.js",
+      "bytes": 3185,
+      "sha256": "dff289abcff30d0e109eb51a6f6be2d09e46b7e1db5bc881719f9f1bf483ab8f"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/colorv2.js",
+      "bytes": 1524,
+      "sha256": "434397a8b307ee5e824b065ecf3145ce8ffae58f465e054b3d9b853f5f904baf"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/configmacros.js",
+      "bytes": 2588,
+      "sha256": "5a7b6e7b7980f8d3425ddbcbbe21299da5b1254d5702e91bdbb9d04f487f4664"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/dsfont.js",
+      "bytes": 1898,
+      "sha256": "74a9961b43c43644c28c582fc14031b7f42bac0b771140a5d80af383415ea978"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/empheq.js",
+      "bytes": 5946,
+      "sha256": "028e775eca9919375d3397a947d6086383ec99a501a5080b2833ffda5d578a14"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/enclose.js",
+      "bytes": 1731,
+      "sha256": "5301d91e2e7d6f86a29c13c1b9726b7476b9de9b1745011886c914372fab4cf3"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/extpfeil.js",
+      "bytes": 2445,
+      "sha256": "2d1f82bf22acefe6c358e3a3dca293cc2fda338f2db4fd147befc75122c41841"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/fontsizev3.js",
+      "bytes": 1637,
+      "sha256": "0e8fe554424a274d5809efc11f3a48602713bb7d2b2280ae4fcac04181f128f2"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/gensymb.js",
+      "bytes": 1588,
+      "sha256": "cd5cb8a68719acc0c215f4377e4d37eb35d4f49bab26c7e46efff5e4dbc7f6d3"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/html.js",
+      "bytes": 2813,
+      "sha256": "a647d13d009d5ecee4239cfe681ef831f2bd0f2a91033b922ae6bf3481d156e0"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/mathtools.js",
+      "bytes": 22389,
+      "sha256": "0a403d24ff0fbb698cb0efd1cfe8569bfb47e492165204170481e7e6619a1dcc"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/mhchem.js",
+      "bytes": 38920,
+      "sha256": "7447710d9804aea68b4491e8fde752d69a905e0d27a8a39705c535f64cfa7fdc"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/newcommand.js",
+      "bytes": 8833,
+      "sha256": "27bc6df0fc8567eaff5153e679e5de53e9cf0918aae714d8dd72fd3a40ca2293"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/noerrors.js",
+      "bytes": 1243,
+      "sha256": "479c00d274f7f38e25d44a13e407bf8adeb83b02dd05639a302ca7c0db3d4cc2"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/noundefined.js",
+      "bytes": 1384,
+      "sha256": "d29d871d8d38802cc1581f6e4f5d673c357a8bf9802114ea57f51a53d0a0fef3"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/physics.js",
+      "bytes": 19564,
+      "sha256": "3a1d1b0ab203b446a2c04d9f5a0bf59e6225c83a27aea0b2403f28293aadb79a"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/require.js",
+      "bytes": 4007,
+      "sha256": "6ccbfb7f9a6e627fabdc39ce034f99355172b9778891cce33243844501098130"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/setoptions.js",
+      "bytes": 3729,
+      "sha256": "756100054a264bcfd47c1b5c03b7e4dcdd7cca679b78b693a6926e887ab59c39"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/tagformat.js",
+      "bytes": 1975,
+      "sha256": "9da0f12949eb209f8cfa06fd88ddce12bf6b8880d29c067a7ad08f42164a3a57"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/texhtml.js",
+      "bytes": 2504,
+      "sha256": "6269dda09c28b4291cd4d95e880c9dc053cc95b41c644ce057bab5640cb83113"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/textcomp.js",
+      "bytes": 5135,
+      "sha256": "d085215c2d77df0c8dbf460b991c59efa9e69cbd7e1f6e94bf5cbb363aa1c69c"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/textmacros.js",
+      "bytes": 10279,
+      "sha256": "12a52659988472d8f160a96a774e970f89153a0f2e329d2a1d0e318d4ab9bdab"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/unicode.js",
+      "bytes": 3586,
+      "sha256": "bf1ddc9fe506f782c0e9271c0c52c4b258f9e4eac3d2905274d0c5d239e2a2b3"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/units.js",
+      "bytes": 2118,
+      "sha256": "25278814cbc050fcd4e8849c014c238cf6801e00405e0acaf5d98924fd1e26a7"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/upgreek.js",
+      "bytes": 2157,
+      "sha256": "0f4c96104699aeada37446dfb3d50438efec4e11c58982abaa2ff781d42d3667"
+    },
+    {
+      "path": "lib/mathjax/input/tex/extensions/verb.js",
+      "bytes": 1779,
+      "sha256": "b2290ff1be4d33c57dd476d87d1753d4cde0a5991612b4a24db881a15c85a250"
+    },
+    {
+      "path": "lib/mathjax/tex-chtml-nofont.js",
+      "bytes": 888469,
+      "sha256": "7bdac90a30f926c017b5dd45be9e5291b49749e324e854f539ec6387fde39a58"
+    },
+    {
+      "path": "lib/mathjax/ui/safe.js",
+      "bytes": 6375,
+      "sha256": "ddd5b5eb3076bdf71c9b0508c58fae095b441a22b7bf2ff2e1ad5ace389f49b2"
+    },
+    {
+      "path": "lib/pdfjs/LICENSE",
+      "bytes": 10174,
+      "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+    },
+    {
+      "path": "lib/pdfjs/build/pdf.min.mjs",
+      "bytes": 364570,
+      "sha256": "d52477eb9df74c4541686dc8f93b7b70d011d118ee5a336d7ff109867994a548"
+    },
+    {
+      "path": "lib/pdfjs/build/pdf.mjs",
+      "bytes": 682097,
+      "sha256": "17db150cdcbc5da2d30ea9d1db66748e1d0604810919ec2d13b990b4699e675f"
+    },
+    {
+      "path": "lib/pdfjs/build/pdf.sandbox.min.mjs",
+      "bytes": 673827,
+      "sha256": "c456d49597577540fb5a7574432e50f7e408ff1340deab7055a244b30fa8d637"
+    },
+    {
+      "path": "lib/pdfjs/build/pdf.sandbox.mjs",
+      "bytes": 726764,
+      "sha256": "d082ce7325cdbb5c876619d30d0800be20cf863d06c86b8feedaba9231ade3d2"
+    },
+    {
+      "path": "lib/pdfjs/build/pdf.worker.min.mjs",
+      "bytes": 1031813,
+      "sha256": "b53a18c9bc0b7296fa96297fc47a09678fa46b4bce38ca469d978653af1d7bd6"
+    },
+    {
+      "path": "lib/pdfjs/build/pdf.worker.mjs",
+      "bytes": 1874990,
+      "sha256": "8e08ca2569f381cc30334620baa33187973ebb1a644f8c1745632dd8cd85749f"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/78-EUC-H.bcmap",
+      "bytes": 2404,
+      "sha256": "d92a261336dc18b8c03a46eb4d462382d33f4338fa195d303256b2031434c874"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/78-EUC-V.bcmap",
+      "bytes": 173,
+      "sha256": "61670bebc4e4827b67230c054fd0d820d6e30c3584d02e386804e62bbedc032a"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/78-H.bcmap",
+      "bytes": 2379,
+      "sha256": "ece6415b853d61e1b2560165151407d35cf16e6556932b85a13ea75276b77402"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/78-RKSJ-H.bcmap",
+      "bytes": 2398,
+      "sha256": "696b1f973c97623496703809eaaa5f9b40696c77540057413f4b826a08edfa7b"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/78-RKSJ-V.bcmap",
+      "bytes": 173,
+      "sha256": "53cb6d560ab377da48cf65d6dcacb0bdb31f13fab7066c580de38c12a73a7ff9"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/78-V.bcmap",
+      "bytes": 169,
+      "sha256": "289000f02fd34872b6975503217f33abae6bee676e7d28f640473a67c8db1712"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/78ms-RKSJ-H.bcmap",
+      "bytes": 2651,
+      "sha256": "a2442595218f5f8bd8e1b42188e368587d876cfe0cc4cd87196f077c878f72e2"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/78ms-RKSJ-V.bcmap",
+      "bytes": 290,
+      "sha256": "f8ddceba96bfd9d3740bd1789ee30d1f47c78371520a8084f71f7df58f19be0b"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/83pv-RKSJ-H.bcmap",
+      "bytes": 905,
+      "sha256": "44040051ec818fe09b9703472bea72efd2759d5eeb5ff0d77c718d6bb5e6d1df"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/90ms-RKSJ-H.bcmap",
+      "bytes": 721,
+      "sha256": "c13e043e85ff715b75bb03801e8fd0fb8f3a75e4a48496faa6baaf92b5b48ba1"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/90ms-RKSJ-V.bcmap",
+      "bytes": 290,
+      "sha256": "499bb916ce1adbe4289b6e5811f4dc20eb238cdc2ffad20cf26ae56716885bab"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/90msp-RKSJ-H.bcmap",
+      "bytes": 715,
+      "sha256": "7b8b3b8bbf821702e9a4df9f3596ce292380c8c1b0925dedadbb4e4b2d80498b"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/90msp-RKSJ-V.bcmap",
+      "bytes": 291,
+      "sha256": "6296c2b5c07dca8128e96d5296d621a3268803d4fa0e5812a21e52fe2802aacb"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/90pv-RKSJ-H.bcmap",
+      "bytes": 982,
+      "sha256": "fb5103f03d3a34547e18d316e52b6d9b26e485c662999222f84d2ba54c2e4fa8"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/90pv-RKSJ-V.bcmap",
+      "bytes": 260,
+      "sha256": "7bcb5ad2ba55b9662ce379e16c2d9cc2b82d621a579807353741172e4af615c2"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Add-H.bcmap",
+      "bytes": 2419,
+      "sha256": "a2ffab28b990998181bcca9b0e914bb2207820f100ae31d5c469444892e5ad8e"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Add-RKSJ-H.bcmap",
+      "bytes": 2413,
+      "sha256": "b29f4b52e2465d0485856d5e69f1ba69927deb2848d8fd328c8035583b35bb7e"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Add-RKSJ-V.bcmap",
+      "bytes": 287,
+      "sha256": "2aa2232c283a3f5d0997c2834a36cead0b79ce2657944cfeed08140c293460ff"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Add-V.bcmap",
+      "bytes": 282,
+      "sha256": "25125d3b1be64e86b2df5b3344170b45a42bcaa0b46e43a34314ef73c166e542"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-CNS1-0.bcmap",
+      "bytes": 317,
+      "sha256": "8c65be9d51a9f269a547dc12460707aaf4031ab67ebe8a2900f4b4cc6b3e450e"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-CNS1-1.bcmap",
+      "bytes": 371,
+      "sha256": "73152bc1a59cc594b414ac6068be48e5512b96ae85920c40e32a99269fdb0c04"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-CNS1-2.bcmap",
+      "bytes": 376,
+      "sha256": "a1b8d353bdef9584c820464e8f1c9e2013d64ebf433cba0aa831dddf515818c2"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-CNS1-3.bcmap",
+      "bytes": 401,
+      "sha256": "2ffc0c75c79fafde506163d3c08c390d183251009f3fbf6ae50d1167d14b9570"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-CNS1-4.bcmap",
+      "bytes": 405,
+      "sha256": "98a1f470c878c6b9691a4d7aef776af8ac9b55f5587c9fafa00547f3bf655716"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-CNS1-5.bcmap",
+      "bytes": 406,
+      "sha256": "ddd6e29955eb8cb545f2ebd09c628c3bbda5023256eda1b728f743c75fb77829"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-CNS1-6.bcmap",
+      "bytes": 406,
+      "sha256": "317bb2db71e0e5b7b0c47b75de1da915c2e22f65f0c0861507f9ca7ba238f8a2"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-CNS1-UCS2.bcmap",
+      "bytes": 41193,
+      "sha256": "e665837f2197c6bd08cd8955ad4d6932cee2398e2e328b25b00e6bfb3bd72af9"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-GB1-0.bcmap",
+      "bytes": 217,
+      "sha256": "8b81cce8a11d510e505704953cfa4e4ab080c1a0cab991145a3512ee433946b9"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-GB1-1.bcmap",
+      "bytes": 250,
+      "sha256": "0426983081788ec7202703e71f1efa4b860f75b936994236010b39d89251a81e"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-GB1-2.bcmap",
+      "bytes": 465,
+      "sha256": "e67b37a83b160ab3831306a71a605893b24454ee81ac9b6123bf2d3984d268d5"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-GB1-3.bcmap",
+      "bytes": 470,
+      "sha256": "aa299afc3e12a28726147305f191be28c7498078c8b182ece7886ac79cd99078"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-GB1-4.bcmap",
+      "bytes": 601,
+      "sha256": "8fbd7d74c2ddb1350c1cecce54a73fde3f5453093d4bed445283ec0033d2097f"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-GB1-5.bcmap",
+      "bytes": 625,
+      "sha256": "c22cb2fcff24112fa31dab2111bdc51957006576d31aad5a25e67793ac01428c"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-GB1-UCS2.bcmap",
+      "bytes": 33974,
+      "sha256": "20507620260c0c935c35afc1e70e5888aa7125d5ec7ffc03cef1959feb2c1641"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-Japan1-0.bcmap",
+      "bytes": 225,
+      "sha256": "464f08905236f5703b1f5cf8358767c8b18e6bcc808840d081f1de2c7ab38134"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-Japan1-1.bcmap",
+      "bytes": 226,
+      "sha256": "4c823848722187d1ffe75ae3f5f9126ccd2d7895a05fad14c919fb119e037008"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-Japan1-2.bcmap",
+      "bytes": 233,
+      "sha256": "7810fb808e367e70429e90a9478fe6a3fdc3e214f25c7582ce9c2da6a242315c"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-Japan1-3.bcmap",
+      "bytes": 242,
+      "sha256": "84deb1828711ad3d390c9899c38abce1bf619d65ff7bf1a326ec95acc45f08f8"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-Japan1-4.bcmap",
+      "bytes": 337,
+      "sha256": "3f8a4f974919c2b8bae5d10175ffa2673be140481e00840542c85d48ef184067"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-Japan1-5.bcmap",
+      "bytes": 430,
+      "sha256": "1d3ce4ff28d977f8cf37a912ae4ec811f4175c3167b1ec0b2567feec3e79e1db"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-Japan1-6.bcmap",
+      "bytes": 485,
+      "sha256": "5609797b9401b30be72ef9645da62a87829f058c3be4b5c623383119f584b1d9"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-Japan1-UCS2.bcmap",
+      "bytes": 40951,
+      "sha256": "66c5d0dc4964f4093e77b194023f3a0f689324028ec8330e1e1d0570bcba7c2f"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-Korea1-0.bcmap",
+      "bytes": 241,
+      "sha256": "dfb8c3874f0e5a8c3acf597d2c12d2b63e90bc5e4f0fce990ec4c56077d80b32"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-Korea1-1.bcmap",
+      "bytes": 386,
+      "sha256": "62f277b7b1c441c007797ae707d5c37258d029ce4661a2b911e2e1ee35e6adc1"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-Korea1-2.bcmap",
+      "bytes": 391,
+      "sha256": "1d77068af462f96d7ad28ad7e7d43eef6423c685b479d7dc25ff5df38db0380d"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Adobe-Korea1-UCS2.bcmap",
+      "bytes": 23293,
+      "sha256": "857b723088be97255053562bfa41bd1075a7f7910d3bab59a0645c8bbc7060ff"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/B5-H.bcmap",
+      "bytes": 1086,
+      "sha256": "718ad0ffbef4c34f8f3f31292c462e519cd567a5511fc8b346c60010d64f4ef9"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/B5-V.bcmap",
+      "bytes": 142,
+      "sha256": "b5c37383517477620ced927b6b4ffd4f4cc6230d8051b5b46a21d6768e07f7d8"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/B5pc-H.bcmap",
+      "bytes": 1099,
+      "sha256": "bab6028aead1d6149400e904ab10cfd319082d826473ed4c582c8eeed920f17e"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/B5pc-V.bcmap",
+      "bytes": 144,
+      "sha256": "41543142b9767f3b76133899fc8453282b01ad3c653acaeea42d78c5a7d08c63"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/CNS-EUC-H.bcmap",
+      "bytes": 1780,
+      "sha256": "e8f89cd61e6486b948205da46499d659ed0aed949b7095fd3c8e95ffe2b0e7a9"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/CNS-EUC-V.bcmap",
+      "bytes": 1920,
+      "sha256": "cae422bec2ac6dbe86bf921cec942bacd2d0b733ffcca5f91b3ba14e917025a0"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/CNS1-H.bcmap",
+      "bytes": 706,
+      "sha256": "e8487971ab20cd16f3de3e8ac56ec994b72b658ad113f2818239dfd5108f501a"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/CNS1-V.bcmap",
+      "bytes": 143,
+      "sha256": "42df8076aaa7574505e7304af83a3323ec032c4177d64b1309db8c043d594a8a"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/CNS2-H.bcmap",
+      "bytes": 504,
+      "sha256": "bc6024d274d440f0625c69e25f37036ef6cb6689432ceaa160d3432a2a716ca7"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/CNS2-V.bcmap",
+      "bytes": 93,
+      "sha256": "2e4f70a8afd23a121030fc2e5b5f3816e903b11e7ba8b8c09654b31c80399c38"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/ETHK-B5-H.bcmap",
+      "bytes": 4426,
+      "sha256": "d2f10fa519336bc4efcc7b6deb9604b75429946b40d82e311cb3a97a1994c89a"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/ETHK-B5-V.bcmap",
+      "bytes": 158,
+      "sha256": "1fea3fd0d9f0f679f80505800851ef2e4131d81127e18c006938ffa2f4c8b247"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/ETen-B5-H.bcmap",
+      "bytes": 1125,
+      "sha256": "87ee6b3f5bfda5fe26fa35431264c7d73070d10dbbf398a75185d63ae322c18d"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/ETen-B5-V.bcmap",
+      "bytes": 158,
+      "sha256": "47dc0d2c21e3bde317947aec1675ceabc1d5460a60bf9c24334b8c407a17172c"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/ETenms-B5-H.bcmap",
+      "bytes": 101,
+      "sha256": "d5f5a73da4173b7da9a3a20e16f26f9cd5d12deb1553409919e0cec6fd37fdee"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/ETenms-B5-V.bcmap",
+      "bytes": 172,
+      "sha256": "18252fca90f472f479af1bddd60d6ab51c8e1b55dcf6845951426504934543e0"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/EUC-H.bcmap",
+      "bytes": 578,
+      "sha256": "f9939cd57fccdc65c5d9f4c205fd497ebdbd283643308da5663801a8c1d9c595"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/EUC-V.bcmap",
+      "bytes": 170,
+      "sha256": "1283a50a706507c4436da83ede9ad7a4440be25378f2e96f6c81a430081426a3"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Ext-H.bcmap",
+      "bytes": 2536,
+      "sha256": "4000ed4e61a1c668ef453bbd0603cfa383defa793abd46a57ed870d7f527350b"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Ext-RKSJ-H.bcmap",
+      "bytes": 2542,
+      "sha256": "e0d2f0df337660e73813238dd4a725f11f0621b90f3273857db253d0e7694caa"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Ext-RKSJ-V.bcmap",
+      "bytes": 218,
+      "sha256": "f617a22b6d67febb187990952006c91a9f5a4db21155d268c656252d0c21985d"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Ext-V.bcmap",
+      "bytes": 215,
+      "sha256": "c2087fb845a9e3acea0c2922cd40e6af67e11957bec74dcd597f1285edd490ce"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GB-EUC-H.bcmap",
+      "bytes": 549,
+      "sha256": "928bad06fd84a48f5ba7150d7716609119fb660f2aaa73eccad81ddab9b9d203"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GB-EUC-V.bcmap",
+      "bytes": 179,
+      "sha256": "a9ad88ac2479da529b16dc48abc5952332e27bc355335f91df5729a587533324"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GB-H.bcmap",
+      "bytes": 528,
+      "sha256": "1018c777a8910b5bb46d7d54a4aee9d51ca5cff8addb2b41c969d9101cb3fd1c"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GB-V.bcmap",
+      "bytes": 175,
+      "sha256": "0b96789143c0bbf9f1641ae7165b3456dccd14dabffcbb0bd654d5bf6f94f863"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GBK-EUC-H.bcmap",
+      "bytes": 14692,
+      "sha256": "2103fed28650ede096a2281104a1a8a4304dae0db414342c636867522307123b"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GBK-EUC-V.bcmap",
+      "bytes": 180,
+      "sha256": "a7fd35dd14d9dbdb955f34e6c0630618b6620dfd09d4283b2f65a65ce77fcaea"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GBK2K-H.bcmap",
+      "bytes": 19662,
+      "sha256": "3d919ae72af16c5cc6846ec87a4326a9f125e493c59d3628429d35c2c95fe8c4"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GBK2K-V.bcmap",
+      "bytes": 219,
+      "sha256": "b927fdfd595c07ce9158bf2ec13f4641b2e83b01c70989dadfabd6ed7c6ac2dc"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GBKp-EUC-H.bcmap",
+      "bytes": 14686,
+      "sha256": "d15ebd8e81fb4fe8a244f1b1e877922e03500ac69eddf5001093e502430451d2"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GBKp-EUC-V.bcmap",
+      "bytes": 181,
+      "sha256": "fdc736d46e642625dccc8ad8c59f2c69fc7db7a13f2e799c6c6b779e707bb97a"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GBT-EUC-H.bcmap",
+      "bytes": 7290,
+      "sha256": "dc5f44e48a39f3367ae28665027d8ab1d8cedb5a9dcc5068a900acd6709f60f9"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GBT-EUC-V.bcmap",
+      "bytes": 180,
+      "sha256": "a1ad24e63653b8aa388c18fa5e498f007564e43dde699a9f91ccb4645c999be8"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GBT-H.bcmap",
+      "bytes": 7269,
+      "sha256": "8afda745a505763f3ff54c8126eeb48ef376ea9ed07d9f42ff9a22c5c547ec57"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GBT-V.bcmap",
+      "bytes": 176,
+      "sha256": "cdc2ec5c3c7c7033290c9a8894878202f08674eb9b1ae7d36218430326768771"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GBTpc-EUC-H.bcmap",
+      "bytes": 7298,
+      "sha256": "7b23e2f7bfdb6c918f567b7324bf858f398bd8cd5f268d74ece19a3c91bf4f32"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GBTpc-EUC-V.bcmap",
+      "bytes": 182,
+      "sha256": "d7a1b13ead9ab511cf2cd01de6ce8b02aa8e8767e84895337d7a3b67f039f93b"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GBpc-EUC-H.bcmap",
+      "bytes": 557,
+      "sha256": "3c4a4eb82f05abe51f6650985c630e180438bfdd491318f5d20d2ec29236e1c3"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/GBpc-EUC-V.bcmap",
+      "bytes": 181,
+      "sha256": "215bdfa2842705624b4cf4cd29b8e3c720f1e192365e0305c11030a424c84d7c"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/H.bcmap",
+      "bytes": 553,
+      "sha256": "a0233e21047ec00b852125b243cbcf30abee511155b6d8159c24f944384bc9ee"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/HKdla-B5-H.bcmap",
+      "bytes": 2654,
+      "sha256": "5242bce18fb13ab4cc59b146a03eba36e4ce42667eeff09e10981a9d2aa4996b"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/HKdla-B5-V.bcmap",
+      "bytes": 148,
+      "sha256": "2e0537f786c0791d41a925f72bad2d4e7268aa6cbf15a1400a722672cec38e2c"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/HKdlb-B5-H.bcmap",
+      "bytes": 2414,
+      "sha256": "fdc8159984bf5dbe475c0d5dfcb621ecee4dea07c38c668bd77f4c679e23b9b3"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/HKdlb-B5-V.bcmap",
+      "bytes": 148,
+      "sha256": "b249eb9dcb915ab45057c5d4d7aa55ef88d0efbb092af6bae0b2d4705d139abf"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/HKgccs-B5-H.bcmap",
+      "bytes": 2292,
+      "sha256": "ab64c7fc5e9b2e97750cc4f269b0da14fd8649e49151b7598c8df86599bac591"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/HKgccs-B5-V.bcmap",
+      "bytes": 149,
+      "sha256": "02ebdf7cdffb5395fb21091cd58a013a18ae5388922822f9dc6292ef16b98956"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/HKm314-B5-H.bcmap",
+      "bytes": 1772,
+      "sha256": "bfd8bbde6b36a9da4c1c902c74121a30d9807a7079a00eeea218be6adc223cef"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/HKm314-B5-V.bcmap",
+      "bytes": 149,
+      "sha256": "2a64a815cfb6fdd480674a868762e3d161fda17543b20c9209978559f0667164"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/HKm471-B5-H.bcmap",
+      "bytes": 2171,
+      "sha256": "49d7c037758826b5b6c0fa329c35bbf25d3943197754e72ecd30c6fb04d745e6"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/HKm471-B5-V.bcmap",
+      "bytes": 149,
+      "sha256": "be24c109e78aa4fe3c1f27d30aab3ed0741e783fa1b6b6c2719741072b54b132"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/HKscs-B5-H.bcmap",
+      "bytes": 4437,
+      "sha256": "08599378f41d96b40537adef6e6edcc4a787bc63f5accf47c026df4905a13914"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/HKscs-B5-V.bcmap",
+      "bytes": 159,
+      "sha256": "d073542b7dad1c4cbf01c1af5f0cd13218d1281a491956e310c55702fc8705c4"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Hankaku.bcmap",
+      "bytes": 132,
+      "sha256": "b454701f7aecd7856769016dfd04ca64280a060f2c67a2466d50b4395d24974e"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Hiragana.bcmap",
+      "bytes": 124,
+      "sha256": "2ed669394756dd9458651cd9995ab29ab691ecb7686659003306cdf22767a414"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/KSC-EUC-H.bcmap",
+      "bytes": 1848,
+      "sha256": "6784e16dbc5861c036c23d3e55f0d4ba0975a3e464da0ee8e49bcfff0be070c4"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/KSC-EUC-V.bcmap",
+      "bytes": 164,
+      "sha256": "fdb36bad85e9924823d49db374067988e024cf80fc894711f2c9178951cbbe95"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/KSC-H.bcmap",
+      "bytes": 1831,
+      "sha256": "c1f6d61f1d3304fd539a65ae72624fa567ecc3853bf52e283958a7a2515b3eee"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/KSC-Johab-H.bcmap",
+      "bytes": 16791,
+      "sha256": "939993d213f68db763bf156217c217ae23af082b91a0eacecf3d11eb4ff8ef8c"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/KSC-Johab-V.bcmap",
+      "bytes": 166,
+      "sha256": "5d61967aac0e666def721e8b8d0fed8f95a879a14f2e76ce516c3d11c621e519"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/KSC-V.bcmap",
+      "bytes": 160,
+      "sha256": "d7da5afd9f1fe74816d79c9325f0139a4efb6438664ebfdf9a7aa92f3034360f"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/KSCms-UHC-H.bcmap",
+      "bytes": 2787,
+      "sha256": "5b70d8f6a4fa9e2283dc649f0ff95d906d56efbee50a20e8d2faec3a8fed078e"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/KSCms-UHC-HW-H.bcmap",
+      "bytes": 2789,
+      "sha256": "a5e6ba22aceb02fdedee11bfb9ed138463d89e85b87810b9f075b469d936f8ec"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/KSCms-UHC-HW-V.bcmap",
+      "bytes": 169,
+      "sha256": "890332a6a26880d463a12f2a6ff048bf9cf7e45077cfb1ca8815b89baa7bf411"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/KSCms-UHC-V.bcmap",
+      "bytes": 166,
+      "sha256": "1631b531c9a40c8cbe24c2317dba107362e49fa6e18af620414d627c111d570c"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/KSCpc-EUC-H.bcmap",
+      "bytes": 2024,
+      "sha256": "709480682c55cedbb0124b9960d78e28febeee0df2e34607d61aac6601647ec7"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/KSCpc-EUC-V.bcmap",
+      "bytes": 166,
+      "sha256": "031707887d6fc2378a36cdb6775334fd7a236c3f95048d8436abf43fe26fc49d"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Katakana.bcmap",
+      "bytes": 100,
+      "sha256": "3b6ca6642fbf8822da00d5e58a8aa275216d5c32dbf2bd73e934197fc9fc5c53"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/LICENSE",
+      "bytes": 2080,
+      "sha256": "aa92ab5a472974865a96fd4a4e9c13bb41bf6fe1b309cb6b8da48bc9e19839a2"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/NWP-H.bcmap",
+      "bytes": 2765,
+      "sha256": "286c6c9e335da330928a01edc3c97a3a623f1f7f3c42762b0a7dc2f651b1a78f"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/NWP-V.bcmap",
+      "bytes": 252,
+      "sha256": "3a75fb7b59adfb172710758c425d8ac6c93fd5360a64dd4afd5dd04e60ab4b4d"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/RKSJ-H.bcmap",
+      "bytes": 534,
+      "sha256": "a70de61a22a898f693f02cc011c3e3cff2e10aaa7cddb4661e456a21ae859f78"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/RKSJ-V.bcmap",
+      "bytes": 170,
+      "sha256": "68c1a64506471a524ea5cfc3b3a9f8f70031989a6bd95427b1351f33ccf50b06"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/Roman.bcmap",
+      "bytes": 96,
+      "sha256": "1c6b3ef9d9e5cb1aa329142ce9414b90f9b6d7f9182a2a9e927378dab8f0d43f"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniCNS-UCS2-H.bcmap",
+      "bytes": 48280,
+      "sha256": "779428116752f34e2490a1941d24e4634c71e3c22d053b811d2090ae2fb3c704"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniCNS-UCS2-V.bcmap",
+      "bytes": 156,
+      "sha256": "1e5cc184b850ea44abc2df8ae5674279df668e8edf5e2a1a2ea2bd77adbd280f"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniCNS-UTF16-H.bcmap",
+      "bytes": 50419,
+      "sha256": "32ff139b3c7b91d6ad25f994701f3ce7b242906022c418fd73e6493fc228bfe5"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniCNS-UTF16-V.bcmap",
+      "bytes": 156,
+      "sha256": "278eb1e68d1a236c60ef59472cf0176ee0d45f364285e76ca12419a08d46fb9a"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniCNS-UTF32-H.bcmap",
+      "bytes": 52679,
+      "sha256": "bf26eb67fe19ee5ba915799e80ca72408400aa8342fdf6a244a4f44de8f97336"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniCNS-UTF32-V.bcmap",
+      "bytes": 160,
+      "sha256": "f7da3caf83ceb1cb37936fa10700d9ba6e9c3f72c5bc9724e3ac79bff0c0179e"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniCNS-UTF8-H.bcmap",
+      "bytes": 53629,
+      "sha256": "2f2a742bcd1a84a148a4a518b9eed51a8f9c6ca5ed3bc5e2e41fff97de5dc2d8"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniCNS-UTF8-V.bcmap",
+      "bytes": 157,
+      "sha256": "b7c3f10780a8c62dd1c8ff6c30dc1e4e23b6cdc87c3a96fcd514cc98ffd3af9d"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniGB-UCS2-H.bcmap",
+      "bytes": 43366,
+      "sha256": "9201569b402e81ad8860650bd86350c4fa28e5dd5971f05fcacaf40f51de18ed"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniGB-UCS2-V.bcmap",
+      "bytes": 193,
+      "sha256": "f10282335e4d64203bc2a653a3a47d745ec76c8ae04549f4d50180c1899be216"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniGB-UTF16-H.bcmap",
+      "bytes": 44086,
+      "sha256": "386fd39581245c034da016a92d23f3df1117d169f996100050b264fc09a84e35"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniGB-UTF16-V.bcmap",
+      "bytes": 178,
+      "sha256": "0473cfbba612b92dd9918f0ff8aee9112897c48e0ffdc0eb82da3144ed8ea84a"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniGB-UTF32-H.bcmap",
+      "bytes": 45738,
+      "sha256": "f48a145dc4e3ed1dca1dde7111716a72306a2a4191ab05c6bae3a5c3a961cd2f"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniGB-UTF32-V.bcmap",
+      "bytes": 182,
+      "sha256": "106acc49b7118bdef944e32107b4f348238f3929a0a15d3b7aab7b9101535993"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniGB-UTF8-H.bcmap",
+      "bytes": 46837,
+      "sha256": "f217b439c80ee5fa1bc2cf6d1defcc319f8d84483d166a00ee199e05a68588df"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniGB-UTF8-V.bcmap",
+      "bytes": 181,
+      "sha256": "a64df947632878eacc532fa193c735c92a383b7d66e6f8374ac193af7c64fc63"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJIS-UCS2-H.bcmap",
+      "bytes": 25439,
+      "sha256": "ad2352f40870880fbf7f8ee5abadff743fbd025fbf9830b8ada472d1c5e4da0b"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJIS-UCS2-HW-H.bcmap",
+      "bytes": 119,
+      "sha256": "16e87edca954177c0881c874859d6783220925d821b5cdfb8755b61ebd93f9ce"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJIS-UCS2-HW-V.bcmap",
+      "bytes": 680,
+      "sha256": "1973457e2c0192819947e56068625b34fb9a72ecc8a476ce6d7eaae5f73e2e5c"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJIS-UCS2-V.bcmap",
+      "bytes": 664,
+      "sha256": "42a133d8e2ce9dd6d2288018e01592d2bf2435b326d39b94ea0b6e6a44ac33d3"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJIS-UTF16-H.bcmap",
+      "bytes": 39443,
+      "sha256": "f6a89c5688978548c83fcee990e205bc63c74274d5c69b49032a3bd4c49a05ee"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJIS-UTF16-V.bcmap",
+      "bytes": 643,
+      "sha256": "c67126fc7c73850855186bb0d6482ac0a365057e0b58778c4ab9f234683fef53"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJIS-UTF32-H.bcmap",
+      "bytes": 40539,
+      "sha256": "96195950ce0fe24443d8eb426fa6b88534ec421d7bef9046f0b2362809cfba73"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJIS-UTF32-V.bcmap",
+      "bytes": 677,
+      "sha256": "ed4dafda402bdd19c4d5d8bf2ab41473c0f86f384552b4c7b963d6627daedeb1"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJIS-UTF8-H.bcmap",
+      "bytes": 41695,
+      "sha256": "798fb0bf06ab0788d1f6a91c2db7de581612eef03c628f10e8f7ecd8f70ab448"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJIS-UTF8-V.bcmap",
+      "bytes": 678,
+      "sha256": "1021611424f913b2df0bfdbe94bd327c04e224ec89d8e821c6501ea3d21f4265"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJIS2004-UTF16-H.bcmap",
+      "bytes": 39534,
+      "sha256": "710a32d7cb43fd6bd9dbf30da5971f8c941590f74441e208d852c2be0e74cc97"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJIS2004-UTF16-V.bcmap",
+      "bytes": 647,
+      "sha256": "3b149aff5c5707b57fb3215d1775852c8b1f413ec0f679ea628f25cf87fe098d"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJIS2004-UTF32-H.bcmap",
+      "bytes": 40630,
+      "sha256": "8d2658e18741af7937d586a57c89729a6fec0d86121197c1f8518aa58b29cdfb"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJIS2004-UTF32-V.bcmap",
+      "bytes": 681,
+      "sha256": "6dd475782f2897648a683c48b2fa015a15b8f06856760bddc8a17a63f418bacb"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJIS2004-UTF8-H.bcmap",
+      "bytes": 41779,
+      "sha256": "691c614ce432b3e62486efb54e5c84c6da5afe9b51b21253bde4758feb484183"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJIS2004-UTF8-V.bcmap",
+      "bytes": 682,
+      "sha256": "40a8c7ea2d46711c5f78fc9a878a7db68b1543ba5cd60ecf14f519a2deb829b7"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJISPro-UCS2-HW-V.bcmap",
+      "bytes": 705,
+      "sha256": "6826f94d789d7bf1960668c1c5819c34c9585c1b23152fbc19ee81c7df08524b"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJISPro-UCS2-V.bcmap",
+      "bytes": 689,
+      "sha256": "493de9fd1a08f7946065d8ab58f0c3c9fe489f5a0f109f2d05a3169b4bd5789f"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJISPro-UTF8-V.bcmap",
+      "bytes": 726,
+      "sha256": "6181d382cf736c5e09492e8be9f26f31fa25b7462253f23ab16646af432cad81"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJISX0213-UTF32-H.bcmap",
+      "bytes": 40517,
+      "sha256": "692044e1fb33445668632bc9fe7386805c624864be1ddeb29d65bb0c99fc630c"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJISX0213-UTF32-V.bcmap",
+      "bytes": 684,
+      "sha256": "dd54e16ca7bffb3a886242549b2bf7d78a277087f7c60d2636f118c21a5b0646"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJISX02132004-UTF32-H.bcmap",
+      "bytes": 40608,
+      "sha256": "f80ea5a989be30ccda5a8804baef6d3b4b044d2b339bf8b31c671b2466171cf6"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniJISX02132004-UTF32-V.bcmap",
+      "bytes": 688,
+      "sha256": "94c22bd99e771c5fbe0dd8dc39850570d4db0075074aca13e272813edd7cc57f"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniKS-UCS2-H.bcmap",
+      "bytes": 25783,
+      "sha256": "a1081396ab4adb6f4a5b6c15f896963c244c1c9bcb65ce5616d06096a1b9811c"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniKS-UCS2-V.bcmap",
+      "bytes": 178,
+      "sha256": "6cab547431958fbdc1d401d06ebd4dd61a73f5509a10f974df32bcbca11a2e43"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniKS-UTF16-H.bcmap",
+      "bytes": 26327,
+      "sha256": "42d35b396286499dfae1737a07adb3a64500df37b426580bfb1d3ea872938519"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniKS-UTF16-V.bcmap",
+      "bytes": 164,
+      "sha256": "5bdb7390c80dcc136cb47d41dc7460082560969c17322ee739fe3020fb642410"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniKS-UTF32-H.bcmap",
+      "bytes": 26451,
+      "sha256": "3a01ec51ed1b828101351e337ffb8250abe11880032e5210f881170fed2588de"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniKS-UTF32-V.bcmap",
+      "bytes": 168,
+      "sha256": "dfda895eceaed081af030dbbb962b49629eea817fc3c02bae15db93d0c68acd7"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniKS-UTF8-H.bcmap",
+      "bytes": 27790,
+      "sha256": "3fac9c65145f72d7d42157a3b9c5ed6904632184e6a0888f2b828699afd2002f"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/UniKS-UTF8-V.bcmap",
+      "bytes": 169,
+      "sha256": "9ecc6cf30dd354b9778ddba163b6cc7302b087ce9f39d1ba73472d2b75ed13ca"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/V.bcmap",
+      "bytes": 166,
+      "sha256": "b9ad1c0c09ff14bca52f9a28a9767eb857ad0e8946e64ba14c7387a7eb69866a"
+    },
+    {
+      "path": "lib/pdfjs/cmaps/WP-Symbol.bcmap",
+      "bytes": 179,
+      "sha256": "543923bead225732aba30976690ee89095a19628277b5863efecc2c728d5d7bf"
+    },
+    {
+      "path": "lib/pdfjs/iccs/CGATS001Compat-v2-micro.icc",
+      "bytes": 8464,
+      "sha256": "73e1ba37d2bad5bab2a964f40a9eed96209666efc067c3322626214bbef234a0"
+    },
+    {
+      "path": "lib/pdfjs/iccs/LICENSE",
+      "bytes": 6553,
+      "sha256": "286e4fd7b447330b2c88e23890e3cd0a9d38cb398d4a59cb247f578ccbda3213"
+    },
+    {
+      "path": "lib/pdfjs/standard_fonts/FoxitDingbats.pfb",
+      "bytes": 29513,
+      "sha256": "845c752392b6c914fb989c75a08b7792b88f542d2499042ef2889f8c814a16ed"
+    },
+    {
+      "path": "lib/pdfjs/standard_fonts/FoxitFixed.pfb",
+      "bytes": 17597,
+      "sha256": "b6c8fe53f134b8b6d4578cd2d544df4cee9624c4efa8d51a560fb40ea296101b"
+    },
+    {
+      "path": "lib/pdfjs/standard_fonts/FoxitFixedBold.pfb",
+      "bytes": 18055,
+      "sha256": "f1b7159702973f54fc86254ea38bcf3712b2a736eb3a0995751e9f4bb45ad603"
+    },
+    {
+      "path": "lib/pdfjs/standard_fonts/FoxitFixedBoldItalic.pfb",
+      "bytes": 19151,
+      "sha256": "8a000945843bd31add06aee63bf9fd41b7578b4f3242a4b7cd46349ad9d24d4d"
+    },
+    {
+      "path": "lib/pdfjs/standard_fonts/FoxitFixedItalic.pfb",
+      "bytes": 18746,
+      "sha256": "5007faf8320fa1fcc08b8894b356ad976f60b992ba29ee5272578bbdebaf3876"
+    },
+    {
+      "path": "lib/pdfjs/standard_fonts/FoxitSerif.pfb",
+      "bytes": 19469,
+      "sha256": "4f57d2b9d884af8f907bf22df6019b52d86cbf6214fdbd02b1ae05472a543f35"
+    },
+    {
+      "path": "lib/pdfjs/standard_fonts/FoxitSerifBold.pfb",
+      "bytes": 19395,
+      "sha256": "0bdf4b04e964139818d51eda03d566ba999fc3ba2421b1c6c51f9dc969022e80"
+    },
+    {
+      "path": "lib/pdfjs/standard_fonts/FoxitSerifBoldItalic.pfb",
+      "bytes": 20733,
+      "sha256": "a406cac82583bf98175cb62c87ed5e95c45fbb34eece63a10b0a13e793cb2e10"
+    },
+    {
+      "path": "lib/pdfjs/standard_fonts/FoxitSerifItalic.pfb",
+      "bytes": 21227,
+      "sha256": "610ae0687198045c4db5d1a6650fd5e92536631706382eb8b72e38df578d0ae9"
+    },
+    {
+      "path": "lib/pdfjs/standard_fonts/FoxitSymbol.pfb",
+      "bytes": 16729,
+      "sha256": "47967d055530e7357088a08403115425643ec2cdfd6201ba8af0fbd7116c1539"
+    },
+    {
+      "path": "lib/pdfjs/standard_fonts/LICENSE_FOXIT",
+      "bytes": 1553,
+      "sha256": "b578cdd2345840ada550bd12519533812320d5f1d21cf4c1c7e1b1b0a31c98b7"
+    },
+    {
+      "path": "lib/pdfjs/standard_fonts/LICENSE_LIBERATION",
+      "bytes": 4414,
+      "sha256": "93fed46019c38bbe566b479d22148e2e8a1e85ada614accb0211c37b2c61c19b"
+    },
+    {
+      "path": "lib/pdfjs/standard_fonts/LiberationSans-Bold.ttf",
+      "bytes": 137052,
+      "sha256": "361c61b82d575c5c35fd9157fda8b0194bcfcd0d88ea8521a4fb5dd53d33dddc"
+    },
+    {
+      "path": "lib/pdfjs/standard_fonts/LiberationSans-BoldItalic.ttf",
+      "bytes": 135124,
+      "sha256": "a224075ac17495ad0a3af3bc0a419ac0704a8b3fd1095456201fb9b095fc281d"
+    },
+    {
+      "path": "lib/pdfjs/standard_fonts/LiberationSans-Italic.ttf",
+      "bytes": 162036,
+      "sha256": "832b4406dbef23628800d3aaad21048534ac84d7e3ad955be83b8172ed8ef512"
+    },
+    {
+      "path": "lib/pdfjs/standard_fonts/LiberationSans-Regular.ttf",
+      "bytes": 139512,
+      "sha256": "f8ace1f892b2bd9dc1792ba7f097fa7588f84fed48321480e04de5390828221f"
+    },
+    {
+      "path": "lib/pdfjs/wasm/LICENSE_OPENJPEG",
+      "bytes": 2112,
+      "sha256": "a6af136f3e15038a666b61f376612a07d9a4e48cb7c01adbf3e33b3f14ab49b6"
+    },
+    {
+      "path": "lib/pdfjs/wasm/LICENSE_PDFJS_OPENJPEG",
+      "bytes": 1285,
+      "sha256": "717fc62da03292dbb4dd0c8280bd4ce7bb8550dcf31d772bc93455fb50313425"
+    },
+    {
+      "path": "lib/pdfjs/wasm/LICENSE_PDFJS_QCMS",
+      "bytes": 1285,
+      "sha256": "eb5104ca33552be007857a28351bc408f379ddd4bfacab1226b09c6d1e9fd7c4"
+    },
+    {
+      "path": "lib/pdfjs/wasm/LICENSE_QCMS",
+      "bytes": 1121,
+      "sha256": "36d847ae882f6574ebc72f56a4f354e4f104fde4a584373496482e97d52d31bc"
+    },
+    {
+      "path": "lib/pdfjs/wasm/openjpeg.wasm",
+      "bytes": 257382,
+      "sha256": "cb031f36245b389e1f5bffc59d10eed35bb0f85d7368b46c3f0b462042ec8e9e"
+    },
+    {
+      "path": "lib/pdfjs/wasm/openjpeg_nowasm_fallback.js",
+      "bytes": 462316,
+      "sha256": "53c228428a8861035a34738966af263fc9d4cee6df25a0ad942af947469a0bd9"
+    },
+    {
+      "path": "lib/pdfjs/wasm/qcms_bg.wasm",
+      "bytes": 94519,
+      "sha256": "6017eca5939cde1836e88e6d8cd27ae039246f206515ea4487bdfd0e3fb16e26"
+    },
+    {
+      "path": "lib/pdfjs/web/images/altText_add.svg",
+      "bytes": 920,
+      "sha256": "1a9591a23999e1924438b948a9f9671147f04e01e5be724391a3a8a2b58289d9"
+    },
+    {
+      "path": "lib/pdfjs/web/images/altText_disclaimer.svg",
+      "bytes": 3397,
+      "sha256": "5d19067a6b51e5bcc2d61325033a8450d301535505a97c50f4141f4cd9e2cf05"
+    },
+    {
+      "path": "lib/pdfjs/web/images/altText_done.svg",
+      "bytes": 1087,
+      "sha256": "5b40360d098d1a93227a0a5cdb110f6e5ff3a3eb4af97b61e856c49e17141621"
+    },
+    {
+      "path": "lib/pdfjs/web/images/altText_spinner.svg",
+      "bytes": 2710,
+      "sha256": "4089182e21627182ed1d4020978b597d984fb8de4cf547e9f4ac2aec9af13179"
+    },
+    {
+      "path": "lib/pdfjs/web/images/altText_warning.svg",
+      "bytes": 1532,
+      "sha256": "07264f4de78a45a4177ddefb48837217aa69b51462ef5b35d3fb9f90000c9ead"
+    },
+    {
+      "path": "lib/pdfjs/web/images/annotation-check.svg",
+      "bytes": 415,
+      "sha256": "9a680f1212888ede7dcae6bfc8cafc447babf4ce531271c8d07277b0aedade96"
+    },
+    {
+      "path": "lib/pdfjs/web/images/annotation-comment.svg",
+      "bytes": 883,
+      "sha256": "c58b385b4a0be6de822a3262b8191073d1730f6420368bd9c6d80db7312327ff"
+    },
+    {
+      "path": "lib/pdfjs/web/images/annotation-help.svg",
+      "bytes": 2168,
+      "sha256": "74d9bba0814d12f5ae2715189e1747b7edf5ff6d82c4ca75bae86d717319b6eb"
+    },
+    {
+      "path": "lib/pdfjs/web/images/annotation-insert.svg",
+      "bytes": 408,
+      "sha256": "b2153e2c88c62179029ea9876d463216529ecf581b77d52c971a2cdf3d3166c6"
+    },
+    {
+      "path": "lib/pdfjs/web/images/annotation-key.svg",
+      "bytes": 1452,
+      "sha256": "5772b8dd158b0f02bb2be689bb680f4903d84e202cb29a3dc0560af53134c6ba"
+    },
+    {
+      "path": "lib/pdfjs/web/images/annotation-newparagraph.svg",
+      "bytes": 426,
+      "sha256": "a583cca122263d94c3eebfefe83c965a1b305b9c84e5aa3c5ba10527941db7db"
+    },
+    {
+      "path": "lib/pdfjs/web/images/annotation-noicon.svg",
+      "bytes": 158,
+      "sha256": "76399e70d311834d11ab2d6239118b36847d79a78d7655b1f839d51c811304cf"
+    },
+    {
+      "path": "lib/pdfjs/web/images/annotation-note.svg",
+      "bytes": 1041,
+      "sha256": "11a75c9f233dd3e5e3500edcdd733358394f28395337616e8b0430694bf0dba1"
+    },
+    {
+      "path": "lib/pdfjs/web/images/annotation-paperclip.svg",
+      "bytes": 552,
+      "sha256": "0213c8baed4f8c497881ffed0e49abb309291d51725aaf1a0a757174b4999368"
+    },
+    {
+      "path": "lib/pdfjs/web/images/annotation-paragraph.svg",
+      "bytes": 1143,
+      "sha256": "efbcd2a6cfb4581dad74a1c09ad43cf2b8245611e5b19c966317da948f2bcb7c"
+    },
+    {
+      "path": "lib/pdfjs/web/images/annotation-pushpin.svg",
+      "bytes": 1375,
+      "sha256": "22197186d18445959e5fe5577d8e34440b31d87c811daf47318078310c0c5530"
+    },
+    {
+      "path": "lib/pdfjs/web/images/cursor-editorFreeHighlight.svg",
+      "bytes": 2936,
+      "sha256": "90b04428328a67e184fe1b1a1f28cb0d62bf6e298614ca241b6564fb24cb9e7e"
+    },
+    {
+      "path": "lib/pdfjs/web/images/cursor-editorFreeText.svg",
+      "bytes": 1452,
+      "sha256": "fedb05ee0dd510514ed9edb24b3b4da2707931279a0bf48e2a1deb3a1f4cf581"
+    },
+    {
+      "path": "lib/pdfjs/web/images/cursor-editorInk.svg",
+      "bytes": 1323,
+      "sha256": "0ae889debe01269b49b89d8845995281223b8ae289405758631076b763da3efe"
+    },
+    {
+      "path": "lib/pdfjs/web/images/cursor-editorTextHighlight.svg",
+      "bytes": 5402,
+      "sha256": "c6252b0edcb68dac87557a027180fcbdbd93466841aa34792530f7cce54cec5d"
+    },
+    {
+      "path": "lib/pdfjs/web/images/editor-toolbar-delete.svg",
+      "bytes": 909,
+      "sha256": "f1f47a2cb479a87807f9bd61bd5813c1fe857dbbcb4fb35ae7a77ca39114f920"
+    },
+    {
+      "path": "lib/pdfjs/web/images/editor-toolbar-edit.svg",
+      "bytes": 869,
+      "sha256": "c6eacc709e4dd30a57120b6531856c003a4c931c46656c3625e2fd5886cf4ce6"
+    },
+    {
+      "path": "lib/pdfjs/web/images/loading-icon.gif",
+      "bytes": 2545,
+      "sha256": "483c4a0396691993a641ec409c44b8b7e1daab0ae7e2b2944c4bc59520bb7655"
+    },
+    {
+      "path": "lib/pdfjs/web/images/messageBar_closingButton.svg",
+      "bytes": 1092,
+      "sha256": "7393c7791916243eca6bbdda8bf137d36600fffc76d7a55d33a77bd4e7778193"
+    },
+    {
+      "path": "lib/pdfjs/web/images/messageBar_info.svg",
+      "bytes": 1076,
+      "sha256": "050e838b982b1b3e993e06bd666f8693ea98e89fb568c39c4af32e128477aeef"
+    },
+    {
+      "path": "lib/pdfjs/web/images/messageBar_warning.svg",
+      "bytes": 811,
+      "sha256": "888a4bf2ad5150028663dde01fe71599336c87ca12697180e51bd8a13b88084f"
+    },
+    {
+      "path": "lib/pdfjs/web/images/toolbarButton-editorHighlight.svg",
+      "bytes": 910,
+      "sha256": "df0aac50621777fb63da60b38c71c5bbbde746c4dd55c30dd141621cb30b7cc4"
+    },
+    {
+      "path": "lib/pdfjs/web/images/toolbarButton-menuArrow.svg",
+      "bytes": 681,
+      "sha256": "2db41f97615a8c912f676a62c88b12e2b8715f4ed188df325737423501aa4a8a"
+    },
+    {
+      "path": "lib/pdfjs/web/pdf_viewer.css",
+      "bytes": 161505,
+      "sha256": "6db2ef81fd88b85403e727d42b9f20b96bf84a6362334dc0146f45a896b7a0d5"
+    },
+    {
+      "path": "lib/pdfjs/web/pdf_viewer.d.mts",
+      "bytes": 54,
+      "sha256": "85ad88b315ef15eff4fa2311c4a1d29aa77e1db0355de822a14cb007c2b713b4"
+    },
+    {
+      "path": "lib/pdfjs/web/pdf_viewer.mjs",
+      "bytes": 285782,
+      "sha256": "5b708f0d8cf13278d2be50cead1e5564f5b55ee18c7b9054b58316ac6c2f9515"
+    },
+    {
+      "path": "lib/prism/LICENSE",
+      "bytes": 1066,
+      "sha256": "2b947f0901a7ffcf08a89957da9783c0e9c6e72cb6ce8e959f501ab5409e4d2b"
+    },
+    {
+      "path": "lib/prism/manifest.json",
+      "bytes": 53801,
+      "sha256": "2c401eca6cad73db15a2bc1758294e970d026021b01c8d2c0dd26de317f4ab12"
+    },
+    {
+      "path": "lib/prism/prism.js",
+      "bytes": 574969,
+      "sha256": "56fb0ba458d65f18dc576e68b4ba27134a6177149d85f6e513acc3d0e4ed922a"
+    },
+    {
+      "path": "native-bench.js",
+      "bytes": 24218,
+      "sha256": "9ca492608e3ec0b355a9e3d3f51c33c0958f376b42d55fca0d5ec079ac1236db"
+    }
+  ]
+}

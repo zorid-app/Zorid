@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "kind": "electron",
+  "mode": "save",
+  "label": "matched",
+  "directory": "/private/tmp/zorid-tauri-native-electron-save-matched-ntHujr",
+  "vault": "/private/tmp/zorid-tauri-native-electron-save-matched-ntHujr/vault",
+  "data": "/private/tmp/zorid-tauri-native-electron-save-matched-ntHujr/data",
+  "started": "2026-10-27T15:51:23.760Z",
+  "phases": [],
+  "launches": [
+    {
+      "pid": 950,
+      "at": "2026-10-27T15:51:24.407Z",
+      "control": {
+        "phase": "save",
+        "expectedNotes": 1,
+        "marker": "native-electron-2218fcdf-adae-4952-a88a-a657cbebab95 π 漢字 🦀"
+      },
+      "exitCode": 0
+    },
+    {
+      "pid": 1093,
+      "at": "2026-10-27T15:51:29.805Z",
+      "control": {
+        "phase": "save",
+        "expectedNotes": 2,
+        "marker": "native-electron-2218fcdf-adae-4952-a88a-a657cbebab95 π 漢字 🦀",
+        "verifyOnly": true
+      },
+      "exitCode": 0
+    }
+  ],
+  "sameFrontendCapabilities": true,
+  "fixtureBefore": {
+    "notes": 1,
+    "sha256": "6e23382b52c2905005da0c4917a88530fedb42bfdf57adf1344547a98f5d625f"
+  },
+  "probe": {
+    "binary": "/private/tmp/zorid-tauri-memory-probe-lrYeIQ/memory-probe",
+    "source": "/Users/ctk/Projects/Zorid/.worktrees/tauri-native/prototypes/tauri-native/bench/memory-probe.c",
+    "sourceSha256": "9ac598477d5436696c97693e1d86e372054131ca2115c5c9f0670740eb025323",
+    "binarySha256": "3a148abba8ee8b040402fb653414457077577d46049e01ef34d913bffd840c63",
+    "accounting": "proc_pid_rusage RUSAGE_INFO_V4: ri_phys_footprint and ri_resident_size",
+    "responsibility": "optional private dlsym responsibility_get_pid_responsible_for_pid; no task ports or process mutation"
+  },
+  "saved": {
+    "phase": "save",
+    "status": "passed",
+    "marker": "native-electron-2218fcdf-adae-4952-a88a-a657cbebab95 π 漢字 🦀",
+    "verifyOnly": false,
+    "benchmarkText": "native-electron-2218fcdf-adae-4952-a88a-a657cbebab95 π 漢字 🦀\nEmbedded Rust core fixture\n\nExact durable text.\n",
+    "createdText": "native-electron-2218fcdf-adae-4952-a88a-a657cbebab95 π 漢字 🦀 created note\n",
+    "createdDOM": "native-electron-2218fcdf-adae-4952-a88a-a657cbebab95 π 漢字 🦀 created note\n",
+    "noteTitles": [
+      "Untitled"
+    ],
+    "hasDesktopSidebar": true
+  },
+  "physicalSaveMatches": true,
+  "clientBefore": "17bb4c60-5de8-4973-9250-d472df802c88",
+  "reopened": {
+    "phase": "save",
+    "status": "passed",
+    "marker": "native-electron-2218fcdf-adae-4952-a88a-a657cbebab95 π 漢字 🦀",
+    "verifyOnly": true,
+    "benchmarkText": "native-electron-2218fcdf-adae-4952-a88a-a657cbebab95 π 漢字 🦀\nEmbedded Rust core fixture\n\nExact durable text.\n",
+    "createdText": "native-electron-2218fcdf-adae-4952-a88a-a657cbebab95 π 漢字 🦀 created note\n",
+    "noteTitles": [
+      "Benchmark"
+    ],
+    "hasDesktopSidebar": true
+  },
+  "clientAfter": "17bb4c60-5de8-4973-9250-d472df802c88",
+  "status": "passed",
+  "cleanup": {
+    "remaining": [],
+    "newWebKitCandidates": [],
+    "newWebKitStillPresent": []
+  },
+  "finished": "2026-10-27T15:51:33.125Z"
+}

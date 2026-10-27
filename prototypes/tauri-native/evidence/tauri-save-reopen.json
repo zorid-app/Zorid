@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "kind": "tauri",
+  "mode": "save",
+  "label": "second",
+  "directory": "/private/tmp/zorid-tauri-native-tauri-save-second-jjCg00",
+  "vault": "/private/tmp/zorid-tauri-native-tauri-save-second-jjCg00/vault",
+  "data": "/private/tmp/zorid-tauri-native-tauri-save-second-jjCg00/data",
+  "started": "2026-10-27T15:50:27.179Z",
+  "phases": [],
+  "launches": [
+    {
+      "pid": 99444,
+      "at": "2026-10-27T15:50:28.200Z",
+      "control": {
+        "phase": "save",
+        "expectedNotes": 1,
+        "marker": "native-tauri-5837d500-3ab1-4638-ad4d-00e09188f998 π 漢字 🦀"
+      },
+      "exitCode": 0
+    },
+    {
+      "pid": 99565,
+      "at": "2026-10-27T15:50:34.284Z",
+      "control": {
+        "phase": "save",
+        "expectedNotes": 2,
+        "marker": "native-tauri-5837d500-3ab1-4638-ad4d-00e09188f998 π 漢字 🦀",
+        "verifyOnly": true
+      },
+      "exitCode": 0
+    }
+  ],
+  "sameFrontendCapabilities": true,
+  "fixtureBefore": {
+    "notes": 1,
+    "sha256": "6e23382b52c2905005da0c4917a88530fedb42bfdf57adf1344547a98f5d625f"
+  },
+  "probe": {
+    "binary": "/private/tmp/zorid-tauri-memory-probe-P3tSIQ/memory-probe",
+    "source": "/Users/ctk/Projects/Zorid/.worktrees/tauri-native/prototypes/tauri-native/bench/memory-probe.c",
+    "sourceSha256": "9ac598477d5436696c97693e1d86e372054131ca2115c5c9f0670740eb025323",
+    "binarySha256": "3a148abba8ee8b040402fb653414457077577d46049e01ef34d913bffd840c63",
+    "accounting": "proc_pid_rusage RUSAGE_INFO_V4: ri_phys_footprint and ri_resident_size",
+    "responsibility": "optional private dlsym responsibility_get_pid_responsible_for_pid; no task ports or process mutation"
+  },
+  "saved": {
+    "benchmarkText": "native-tauri-5837d500-3ab1-4638-ad4d-00e09188f998 π 漢字 🦀\nEmbedded Rust core fixture\n\nExact durable text.\n",
+    "createdDOM": "native-tauri-5837d500-3ab1-4638-ad4d-00e09188f998 π 漢字 🦀 created note\n",
+    "createdText": "native-tauri-5837d500-3ab1-4638-ad4d-00e09188f998 π 漢字 🦀 created note\n",
+    "hasDesktopSidebar": true,
+    "marker": "native-tauri-5837d500-3ab1-4638-ad4d-00e09188f998 π 漢字 🦀",
+    "noteTitles": [
+      "Untitled"
+    ],
+    "phase": "save",
+    "status": "passed",
+    "verifyOnly": false
+  },
+  "physicalSaveMatches": true,
+  "clientBefore": "34d125d5-eb97-4303-a485-4572bf9dad02",
+  "reopened": {
+    "benchmarkText": "native-tauri-5837d500-3ab1-4638-ad4d-00e09188f998 π 漢字 🦀\nEmbedded Rust core fixture\n\nExact durable text.\n",
+    "createdText": "native-tauri-5837d500-3ab1-4638-ad4d-00e09188f998 π 漢字 🦀 created note\n",
+    "hasDesktopSidebar": true,
+    "marker": "native-tauri-5837d500-3ab1-4638-ad4d-00e09188f998 π 漢字 🦀",
+    "noteTitles": [
+      "Benchmark"
+    ],
+    "phase": "save",
+    "status": "passed",
+    "verifyOnly": true
+  },
+  "clientAfter": "34d125d5-eb97-4303-a485-4572bf9dad02",
+  "status": "passed",
+  "cleanup": {
+    "remaining": [],
+    "newWebKitCandidates": [],
+    "newWebKitStillPresent": []
+  },
+  "finished": "2026-10-27T15:50:51.750Z"
+}
