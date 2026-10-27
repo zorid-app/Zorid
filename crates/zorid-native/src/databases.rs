@@ -32,6 +32,16 @@ fn empty_snapshot() -> DatabaseSnapshot {
         entries: vec![],
     }
 }
+fn publication_message(error: &Error, schema: bool) -> String {
+    match error {
+        Error::Busy(_) | Error::ConditionalSource(_) => "The saved file changed outside Zorid. Its content and your collection change are retained; reconcile the file and retry publication.",
+        Error::UnsafePath(_) => "Publication is blocked by a changed or unsafe file path. The existing file was preserved.",
+        Error::Unsupported(_) if !schema => "This entry has unsupported or invalid frontmatter. Its source is preserved; repair it and retry publication.",
+        Error::Contract(_) | Error::Store(zorid_store::StoreError::Contract(_)) if !schema => "This entry has invalid or conflicting properties. Its source and saved collection change are retained for repair.",
+        _ if schema => "The collection definition could not be published. Its saved change is retained; retry publication.",
+        _ => "This entry could not be published. Its saved collection change is retained; retry publication.",
+    }.into()
+}
 fn operation(stage: &str, id: &str, revision: &str, content: &[u8]) -> Result<OperationId> {
     let mut hash = Sha256::new();
     for bytes in [
@@ -242,7 +252,7 @@ impl NativeVault {
             if let Err(error) = self.database_publish_schema_locked(&projection) {
                 report.issues.push(DatabaseProjectionIssue {
                     entry_id: None,
-                    message: error.to_string(),
+                    message: publication_message(&error, true),
                 });
             }
         }
@@ -260,7 +270,7 @@ impl NativeVault {
                 if let Err(error) = self.database_publish_entry_locked(&projection) {
                     report.issues.push(DatabaseProjectionIssue {
                         entry_id: Some(projection.entry_id.clone()),
-                        message: error.to_string(),
+                        message: publication_message(&error, false),
                     });
                 }
             }
@@ -300,7 +310,7 @@ impl NativeVault {
             if let Err(error) = self.database_publish_entry_locked(&projection) {
                 report.issues.push(DatabaseProjectionIssue {
                     entry_id: Some(entry.entry_id.clone()),
-                    message: error.to_string(),
+                    message: publication_message(&error, false),
                 });
             }
         }

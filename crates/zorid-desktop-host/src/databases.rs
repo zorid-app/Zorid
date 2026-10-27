@@ -15,6 +15,50 @@ pub(crate) struct Request {
     bytes: usize,
 }
 
+fn domain_code(error: &zorid_native::Error) -> Option<&'static str> {
+    let reason = match error {
+        zorid_native::Error::Contract(zorid_core::ContractError::InvalidMutation { reason })
+        | zorid_native::Error::Store(zorid_store::StoreError::Contract(
+            zorid_core::ContractError::InvalidMutation { reason },
+        )) => reason.as_str(),
+        _ => return None,
+    };
+    Some(match reason {
+        "A collection with this name already exists, including Trash" => "collection_name_taken",
+        "Names must be nonempty single-line text of at most 256 bytes"
+        | "Collection name must be a portable filename"
+        | "Collection name is reserved on supported filesystems" => "collection_invalid_name",
+        "Collection changed; reload before saving"
+        | "Collection entry changed; reload before saving" => "collection_stale",
+        "Collection does not exist" | "Entry is not a collection member" => "collection_not_found",
+        "Collection is deleted"
+        | "Entry is deleted"
+        | "Cannot write a deleted collection entry" => "collection_deleted",
+        "Property names must be unique and cannot use _id or _type" => {
+            "collection_property_name_taken"
+        }
+        "Option labels must be unique within a property" => "collection_option_name_taken",
+        "Too many collection properties"
+        | "Too many property options"
+        | "Local collection limit reached"
+        | "Local collection entry limit reached"
+        | "Local collection data exceeds its byte limit"
+        | "Entry body exceeds byte limit" => "collection_limit",
+        _ if reason.strip_prefix("Invalid value for property ").is_some() => {
+            "collection_invalid_value"
+        }
+        _ if reason
+            .strip_prefix("Confirm removal of values in ")
+            .and_then(|value| value.strip_suffix(" affected collection entries"))
+            .and_then(|value| value.parse::<u32>().ok())
+            .is_some_and(|count| (1..=4096).contains(&count)) =>
+        {
+            "collection_destructive_confirmation"
+        }
+        _ => return None,
+    })
+}
+
 pub(crate) fn execute(
     vault: &mut NativeVault,
     marker: Request,
@@ -34,7 +78,6 @@ pub(crate) fn execute(
         .to_owned();
     let may_commit = request.may_commit();
     let reply = vault.database_request(&request).map_err(|error| {
-        let message = error.to_string();
         let definite_source_conflict = op == "compose"
             && matches!(
                 error,
@@ -43,13 +86,13 @@ pub(crate) fn execute(
                     | zorid_native::Error::Busy(_)
                     | zorid_native::Error::Unsupported(_)
             );
-        let mut result = if definite_source_conflict {
+        if definite_source_conflict {
             fault("collection_source_conflict")
+        } else if let Some(code) = domain_code(&error) {
+            fault(code)
         } else {
             native_fault(error)
-        };
-        result["message"] = json!(message.chars().take(4096).collect::<String>());
-        result
+        }
     })?;
     let body = serde_json::to_vec(&json!({"schemaVersion":DATABASE_SCHEMA_VERSION,"op":op,"value":reply}))
         .map_err(|_| json!({"code":"response_codec","commit_uncertain":may_commit,"message":"Keep the identical local collection request"}))?;
