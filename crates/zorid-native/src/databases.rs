@@ -26,6 +26,15 @@ fn invalid(reason: impl Into<String>) -> Error {
 fn core_request(command: Value) -> Result<zorid_store::DatabaseRequest> {
     serde_json::from_value(command).map_err(|_| invalid("Invalid local collection request"))
 }
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(DIGITS[(byte >> 4) as usize] as char);
+        output.push(DIGITS[(byte & 15) as usize] as char);
+    }
+    output
+}
 fn empty_snapshot() -> DatabaseSnapshot {
     DatabaseSnapshot {
         collections: vec![],
@@ -53,7 +62,10 @@ fn operation(stage: &str, id: &str, revision: &str, content: &[u8]) -> Result<Op
         hash.update((bytes.len() as u64).to_be_bytes());
         hash.update(bytes);
     }
-    Ok(OperationId::new(format!("database-{:x}", hash.finalize()))?)
+    Ok(OperationId::new(format!(
+        "database-{}",
+        hex(hash.finalize().as_slice())
+    ))?)
 }
 
 #[derive(Deserialize)]
@@ -134,7 +146,7 @@ impl NativeVault {
         }
         // Exact mutation retries still return their original logical receipt,
         // while the refreshed scoped snapshot reports actual file publication.
-        let refreshed = if request.operation() == Some("get_entry") {
+        let refreshed = if matches!(request.operation(), Some("list" | "get_entry")) {
             self.store.database_request(&command)?
         } else if snapshot.collections.len() == 1 {
             self.store.database_request(&core_request(
@@ -154,7 +166,7 @@ impl NativeVault {
     fn database_compose_locked(
         &mut self,
         id: &EntryId,
-        expected: &Revision,
+        _expected: &Revision,
         baseline: &str,
         proposed: &str,
     ) -> Result<DatabaseReply> {
@@ -406,7 +418,11 @@ impl NativeVault {
                         operation_id: operation(
                             "properties",
                             projection.entry_id.as_str(),
-                            &projection.entry_revision,
+                            &format!(
+                                "{}:{}",
+                                projection.entry_revision,
+                                refreshed.state.revision.as_str()
+                            ),
                             composed.as_bytes(),
                         )?,
                         mutation: Mutation::Write {
@@ -428,8 +444,8 @@ impl NativeVault {
                     let parent = format!(".trash/collections/{}", projection.collection_id);
                     self.database_ensure_folders_locked(&parent)?;
                     let path = VaultPath::new(format!(
-                        "{parent}/entry-{:x}.md",
-                        Sha256::digest(projection.entry_id.as_str().as_bytes())
+                        "{parent}/entry-{}.md",
+                        hex(Sha256::digest(projection.entry_id.as_str().as_bytes()).as_slice())
                     ))?;
                     let request = MutationRequest {
                         operation_id: operation(
@@ -451,6 +467,11 @@ impl NativeVault {
                         return Err(Error::Busy("Collection entry move to Trash is pending"));
                     }
                 }
+                // A prior logical Move can be committed while its physical
+                // namespace publication is still pending. Reopen/retry must
+                // prove the file actually reached Trash before acknowledging.
+                let _ = self.recover_locked();
+                self.project(&projection.entry_id)?;
             }
             DatabaseProjectionKind::Restore => {
                 if stored.state.path.as_str().starts_with(".trash/") {
@@ -478,6 +499,7 @@ impl NativeVault {
                         return Err(Error::Busy("Collection entry restore is pending"));
                     }
                 }
+                let _ = self.recover_locked();
                 // A delete may have superseded an unpublished property change.
                 // Moving the old file out of Trash alone cannot acknowledge its
                 // current authoritative values.
@@ -543,7 +565,7 @@ impl NativeVault {
             }
         };
         if available(original)? {
-            return Ok(VaultPath::new(original.into())?);
+            return Ok(VaultPath::new(original)?);
         }
         let (stem, extension) = original
             .rsplit_once('.')

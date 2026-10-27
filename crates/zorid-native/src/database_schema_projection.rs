@@ -75,15 +75,18 @@ impl NativeVault {
         let name = leaf(&projection.path)?;
         let previous_name = projection.previous_path.as_deref().map(leaf).transpose()?;
         let previous_source = projection.previous_source.as_deref();
-        let trash = format!(".trash-{}.yaml", projection.collection_id);
-        let stage = format!(
-            ".projection-{}-{}.yaml",
-            projection.collection_id, projection.revision
+        let trash = format!(
+            ".trash-{}.yaml",
+            hex(Sha256::digest(projection.collection_id.as_bytes()).as_slice())
         );
-        let retained = format!(
-            ".previous-{}-{}.yaml",
-            projection.collection_id, projection.revision
-        );
+        let key = operation(
+            "schema",
+            &projection.collection_id,
+            &projection.revision,
+            &[],
+        )?;
+        let stage = format!(".projection-{}.yaml", key.as_str());
+        let retained = format!(".previous-{}.yaml", key.as_str());
         // Every deterministic private artifact remains associated with this
         // durable queue item until publication and acknowledgement complete.
         verify_types(&self.paths, &dir)?;

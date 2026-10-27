@@ -106,3 +106,89 @@ pub(crate) fn execute(
         body,
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn body_marker_mismatch_cannot_commit_a_collection() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = NativeVault::open(dir.path()).unwrap();
+        let body = serde_json::to_vec(&json!({"schemaVersion":1,"command":{"op":"create","operationId":"create","name":"Work"}})).unwrap();
+        let result = execute(
+            &mut vault,
+            Request {
+                schema_version: 1,
+                bytes: body.len() + 1,
+            },
+            &body,
+        )
+        .unwrap_err();
+        assert_eq!(result["code"], "invalid_request");
+        let listed = vault
+            .database_request(&DatabaseRequest {
+                schema_version: 1,
+                command: json!({"op":"list"}),
+            })
+            .unwrap();
+        assert!(listed.snapshot.collections.is_empty());
+    }
+
+    #[test]
+    fn reply_marker_and_json_body_identify_exact_local_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = NativeVault::open(dir.path()).unwrap();
+        let body = serde_json::to_vec(&json!({"schemaVersion":1,"command":{"op":"create","operationId":"create","name":"Work"}})).unwrap();
+        let (marker, bytes) = execute(
+            &mut vault,
+            Request {
+                schema_version: 1,
+                bytes: body.len(),
+            },
+            &body,
+        )
+        .unwrap();
+        assert_eq!(
+            marker,
+            json!({"databases":true,"schemaVersion":1,"bytes":bytes.len()})
+        );
+        let report: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(report["schemaVersion"], 1);
+        assert_eq!(report["op"], "create");
+        assert_eq!(report["value"]["collections"][0]["name"], "Work");
+        assert_eq!(report["value"]["projection"]["pending"], 0);
+    }
+
+    #[test]
+    fn domain_errors_use_static_codes_without_native_diagnostics() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = NativeVault::open(dir.path()).unwrap();
+        let body = serde_json::to_vec(&json!({"schemaVersion":1,"command":{"op":"create","operationId":"create","name":"bad/name"}})).unwrap();
+        let error = execute(
+            &mut vault,
+            Request {
+                schema_version: 1,
+                bytes: body.len(),
+            },
+            &body,
+        )
+        .unwrap_err();
+        assert_eq!(error["code"], "collection_invalid_name");
+        assert_eq!(error["commit_uncertain"], false);
+        assert!(!error.to_string().contains("bad/name"));
+        let body = serde_json::to_vec(&json!({"schemaVersion":1,"command":{"op":"compose","entryId":"unknown","expectedRevision":"v1","baseline":"","proposed":""}})).unwrap();
+        // An ordinary unknown note does not manufacture collection membership.
+        let (_, report) = execute(
+            &mut vault,
+            Request {
+                schema_version: 1,
+                bytes: body.len(),
+            },
+            &body,
+        )
+        .unwrap();
+        let report: Value = serde_json::from_slice(&report).unwrap();
+        assert!(report["value"].get("composition").is_none());
+    }
+}

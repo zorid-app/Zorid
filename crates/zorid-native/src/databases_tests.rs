@@ -41,6 +41,11 @@ fn local_collection_create_properties_restart_and_rename_keep_identity() {
     assert_eq!(values.get("_id"), Some(&json!("note-one")));
     assert_eq!(values.get("_type"), Some(&json!("Work")));
     let before = created.snapshot.entries[0].clone();
+    let listed = request(&mut vault, json!({"op":"list"})).unwrap();
+    assert!(
+        listed.snapshot.entries.is_empty(),
+        "collection listing must not widen to all member entries"
+    );
     drop(vault);
     let mut vault = NativeVault::open_existing(dir.path()).unwrap();
     let mut properties = serde_json::to_value(&collection.properties).unwrap();
@@ -165,4 +170,123 @@ fn internal_schema_symlink_is_never_followed() {
     .unwrap();
     assert_eq!(result.projection.pending, 1);
     assert!(!outside.path().join("Work.yaml").exists());
+}
+
+#[test]
+fn valid_external_properties_body_and_unknown_frontmatter_reconcile_on_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    let collection = create(&mut vault);
+    entry(&mut vault, &collection, "note-one", "One.md");
+    let path = dir.path().join("One.md");
+    let source = std::fs::read_to_string(&path).unwrap();
+    let external = source
+        .replace("\"Status\": \"Not started\"", "\"Status\": \"Done\"")
+        .replace("Text 🐈", "External body")
+        .replacen("---\n", "---\n# Unknown preserved\nextra: [A, B]\n", 1);
+    assert_ne!(external, source);
+    std::fs::write(&path, &external).unwrap();
+    let result = request(&mut vault, json!({"op":"get","collectionId":collection.id})).unwrap();
+    assert_eq!(result.projection.pending, 0, "{:?}", result.projection);
+    assert!(
+        result.projection.issues.is_empty(),
+        "{:?}",
+        result.projection
+    );
+    let status = &collection.properties[0];
+    assert_eq!(
+        result.snapshot.entries[0].values.get(&status.id),
+        Some(&json!(status.options[2].id))
+    );
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("# Unknown preserved\nextra: [A, B]\n"));
+    assert!(saved.ends_with("# Keep body\n\nExternal body\n"));
+    assert_eq!(
+        source::properties(&saved).unwrap().get("Status"),
+        Some(&json!("Done"))
+    );
+}
+
+#[test]
+fn external_type_does_not_reassign_and_external_identity_mismatch_is_preserved() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    let collection = create(&mut vault);
+    entry(&mut vault, &collection, "note-one", "One.md");
+    let path = dir.path().join("One.md");
+    let source = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        source.replace("\"_type\": \"Work\"", "\"_type\": \"Other\""),
+    )
+    .unwrap();
+    let repaired = request(&mut vault, json!({"op":"get","collectionId":collection.id})).unwrap();
+    assert_eq!(repaired.projection.pending, 0, "{:?}", repaired.projection);
+    assert_eq!(repaired.snapshot.entries[0].collection_id, collection.id);
+    let source = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        source::properties(&source).unwrap().get("_type"),
+        Some(&json!("Work"))
+    );
+    let invalid = source.replace("\"_id\": \"note-one\"", "\"_id\": \"other-entry\"");
+    std::fs::write(&path, &invalid).unwrap();
+    let failed = request(&mut vault, json!({"op":"get","collectionId":collection.id})).unwrap();
+    assert!(!failed.projection.issues.is_empty());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), invalid);
+    assert_eq!(failed.snapshot.entries[0].entry_id.as_str(), "note-one");
+}
+
+#[test]
+fn repeated_normalization_of_same_canonical_bytes_does_not_reuse_an_old_write_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    let collection = create(&mut vault);
+    entry(&mut vault, &collection, "note-one", "One.md");
+    let path = dir.path().join("One.md");
+    let canonical = std::fs::read_to_string(&path).unwrap();
+    for spaces in ["  ", "   "] {
+        let external = canonical.replace("\"Status\": ", &format!("\"Status\":{spaces}"));
+        assert_ne!(external, canonical);
+        std::fs::write(&path, external).unwrap();
+        let result = request(&mut vault, json!({"op":"get","collectionId":collection.id})).unwrap();
+        assert_eq!(result.projection.pending, 0, "{:?}", result.projection);
+        assert!(
+            result.projection.issues.is_empty(),
+            "{:?}",
+            result.projection
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), canonical);
+    }
+}
+
+#[test]
+fn restart_after_logical_trash_move_requires_actual_physical_publication() {
+    fn stop(stage: &str) {
+        if stage == "namespace_committed" {
+            panic!("interrupted after logical namespace commit");
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    let collection = create(&mut vault);
+    entry(&mut vault, &collection, "note-one", "One.md");
+    vault.fault = Some(stop);
+    let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        request(
+            &mut vault,
+            json!({"op":"delete","operationId":"delete-interrupted","collectionId":collection.id,"expectedRevision":collection.revision}),
+        )
+    }));
+    assert!(interrupted.is_err());
+    vault.fault = None;
+    drop(vault);
+    let mut vault = NativeVault::open_existing(dir.path()).unwrap();
+    let result = request(&mut vault, json!({"op":"get","collectionId":collection.id})).unwrap();
+    assert_eq!(result.projection.pending, 0, "{:?}", result.projection);
+    assert!(!dir.path().join("One.md").exists());
+    let trashed = &result.snapshot.entries[0];
+    assert!(trashed.deleted && trashed.path.starts_with(".trash/"));
+    assert!(std::fs::read_to_string(dir.path().join(&trashed.path))
+        .unwrap()
+        .ends_with("# Keep body\n\nText 🐈\n"));
 }
