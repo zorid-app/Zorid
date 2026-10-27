@@ -9,6 +9,21 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+**Current follow-up — native filesystem identity, 2026-10-27:** user explicitly
+requests fixing the persisted macOS device-number issue. Main product source is
+`460f8dbc` (compact availability status instead of a large banner); the underlying
+binding repair is active in `codex/content-equivalent-rebaseline` /
+`.worktrees/content-equivalent-rebaseline`, owner `bases_fixture_admission`.
+Root composes/rebuilds/installs; `bases_final_spec` reviews safety. No concurrent
+heavy builds. Actual vault contents/baselines match and active-work gates are zero.
+The accepted design refreshes only an idle, content-equivalent bound namespace
+under atomic Store CAS, preserving history and write-race protection. It does not
+guess volume identity or reset the vault. Changed/missing bound files block this
+conservative repair; extra untracked files are imported normally afterward.
+Focused native regression/implementation and real app acceptance remain pending.
+Temporary worktrees/build outputs must be removed again after delivery, preserving
+the prior cleanup request. No broad reference/test campaign is reopened.
+
 **Local installation/cleanup follow-up:** main `6f7237ed` produced the verified
 355-file arm64 local app at `~/Applications/Zorid.app`. User requested worktree/
 cache cleanup: all105 extra worktrees are removed; only main remains. Four dirty

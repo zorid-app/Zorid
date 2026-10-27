@@ -1,5 +1,34 @@
 # User findings queue
 
+## Native file identity across macOS device changes — 2026-10-27
+
+User reports the persistent availability warning, then explicitly requests fixing
+its underlying cause. Read-only diagnosis: all10 public file bodies match saved
+authority, indexing is current, and all11 inode/parent inode numbers match; old
+bindings retain a different macOS device number. No pending projection, namespace,
+intent, observation, binary-command or recovery work was found. A changed device
+number is not evidence that notes disappeared.
+
+The large banner UX is fixed at `460f8dbc`, installed in the local app: usable
+vaults get a compact status-bar control with details/Retry on demand. Eleven
+component checks and two workspace wiring checks pass; TypeScript/renderer build
+and355-file package verification pass. This does not repair physical bindings.
+
+Underlying fix owner `bases_fixture_admission`, branch
+`codex/content-equivalent-rebaseline`, `.worktrees/content-equivalent-rebaseline`,
+base `460f8dbc`; root owns composition/install and final_spec challenges safety.
+Implement a content-equivalent current-namespace rebaseline, not an inference that
+old and new device numbers identify the same volume. One complete revalidated
+scan must match every bound path/kind and exact saved physical baseline, with
+current logical state and no active work; extra untracked files remain eligible
+for ordinary import. Recheck the whole batch under an immediate Store transaction,
+keep historical proofs immutable and retain all live pathname/parent/race checks.
+Changed/missing bound files or unfinished writes block this conservative batch.
+No reset, deletion or overwrite of user note contents is authorized by this repair.
+
+Implementation, focused native regression and actual updated-app recovery are
+pending. Keep verification confined to this defect and its write-safety guards.
+
 ## Local app and cleanup request — 2026-10-26
 
 Completed: main `6f7237ed` packaged as an unsigned arm64 local build and installed
