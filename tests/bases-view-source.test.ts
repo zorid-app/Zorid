@@ -184,3 +184,37 @@ test('failed add and duplicate retries retain exact allocated identities and sav
     adapter.fail=false;await f.controller.duplicateView(duplicateVersion,0,'Same');assert.equal(await f.vault.read('Personal.base'),duplicated);assert.equal(f.controller.selectedViewIdentity,views[1].id);
   }finally{adapter.fail=false;await f.stop();}
 });
+
+
+test('top-level view selection recovers a neighbor after another pane deletes the selected view',async()=>{
+  const a='aaaaaaaaaaaa',b='bbbbbbbbbbbb',c='cccccccccccc';
+  const source=document([view(untyped,{id:a,name:'First'}),view(untyped,{id:b,name:'Selected'}),view(untyped,{id:c,name:'Next'})]).toString();
+  const f=await fixture(source);try{
+    await f.controller.setView(1);assert.equal(f.controller.selectedViewIdentity,b);
+    const changed=BaseDocument.parse(await f.vault.read('Personal.base'));changed.removeView(1);await f.vault.modify('Personal.base',changed.toString());await f.controller.refresh();
+    assert.equal(f.controller.state.error,null);assert.equal(f.controller.selectedViewIndex,1);assert.equal(f.controller.selectedViewIdentity,c);assert.equal(f.controller.state.result?.view.name,'Next');assert.equal(f.controller.state.source,changed.toString());
+    await f.controller.renameView(f.controller.state.version,1,'Surviving');assert.equal(BaseDocument.parse(await f.vault.read('Personal.base')).views[1].name,'Surviving');
+  }finally{await f.stop();}
+});
+
+test('external last-view deletion publishes current empty onboarding and permits adding a view',async()=>{
+  const source=document([view(untyped,{id:'aaaaaaaaaaaa',name:'Only'})]).toString();
+  const f=await fixture(source);try{
+    assert.equal(f.controller.selectedViewIdentity,'aaaaaaaaaaaa');
+    await f.vault.modify('Personal.base','views: []\n');await f.controller.refresh();
+    assert.equal(f.controller.state.error,null);assert.equal(f.controller.state.result,null);assert.equal(f.controller.state.source,'views: []\n');assert.equal(f.controller.selectedViewIdentity,undefined);
+    await f.controller.addView(f.controller.state.version,'list','New',{source:untyped});assert.equal(f.controller.state.error,null);assert.equal(f.controller.state.result?.view.name,'New');assert.equal(BaseDocument.parse(await f.vault.read('Personal.base')).views.length,1);
+  }finally{await f.stop();}
+});
+
+test('explicit ID/name embeds do not retarget when their selected view is externally deleted',async()=>{
+  for(const selection of [{viewId:'aaaaaaaaaaaa'},{viewName:'Bound'}]){
+    const source=document([view(untyped,{id:'aaaaaaaaaaaa',name:'Bound'}),view(untyped,{id:'bbbbbbbbbbbb',name:'Other'})]).toString();
+    const f=await fixture(source,selection);try{
+      const original=f.controller.state.result;assert.equal(original?.view.id,'aaaaaaaaaaaa');
+      const changed=BaseDocument.parse(await f.vault.read('Personal.base'));changed.removeView(0);await f.vault.modify('Personal.base',changed.toString());await f.controller.refresh();
+      assert.match(f.controller.state.error?.message??'',/no longer exists|not found/);assert.equal(f.controller.state.result,original);assert.equal(f.controller.selectedViewIdentity,'aaaaaaaaaaaa');
+      await f.vault.modify('Personal.base','views: []\n');await f.controller.refresh();assert.ok(f.controller.state.error);assert.equal(f.controller.state.result,original);
+    }finally{await f.stop();}
+  }
+});

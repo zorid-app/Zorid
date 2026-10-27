@@ -241,6 +241,7 @@ export class BaseController {
   private query: BaseQueryOptions;
   private viewName?: string;
   private selectedViewId?: string;
+  private readonly explicitlyBoundView: boolean;
   private selectionSerial = 0;
   private configurationEpoch = 0;
   private undoCommands: BaseHistoryCommand[] = [];
@@ -284,6 +285,7 @@ export class BaseController {
     this.options = options; this.path = normalizePath(options.basePath);
     this.clock = options.clock ?? createBaseClockHost();
     this.query = { ...options.query }; this.viewName = options.viewName; this.selectedViewId = options.viewId;
+    this.explicitlyBoundView = options.viewId !== undefined || options.viewName !== undefined;
     for (const path of options.vault.entries.keys()) this.identities.set(path, ++this.nextIdentity);
     this.subscriptions = (['create', 'modify', 'rename', 'delete', 'ready'] as const).map(event => options.vault.on(event, change => {
       if (event === 'ready' || change.path === this.path || change.oldPath === this.path) this.configurationEpoch++;
@@ -378,7 +380,8 @@ export class BaseController {
         if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
         let version = this.version + 1;
         const document = BaseDocument.parse(source);
-        if (!document.views.length && this.viewName === undefined && this.selectedViewId === undefined) {
+        if (!document.views.length && !this.explicitlyBoundView) {
+          this.selectedViewId = undefined;
           const latest = await observe(this.path);
           if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
           if (!latest || service && (!definition || latest.entryId !== definition.entryId || latest.revision !== definition.revision || latest.mtime !== definition.mtime || latest.size !== definition.size)) throw new Error('The Base configuration changed. Refresh before adding a view.');
@@ -391,8 +394,12 @@ export class BaseController {
         }
         this.emptyConfigurationWitness = undefined;
         let viewIndex = this.query.viewIndex ?? 0;
-        if (this.selectedViewId !== undefined) viewIndex = baseViewIndexById(document.views, this.selectedViewId);
-        else if (this.viewName !== undefined) viewIndex = baseViewIndexByName(document.views, this.viewName);
+        if (this.selectedViewId !== undefined) {
+          const retainedIndex = document.views.findIndex(view => view.id === this.selectedViewId);
+          if (retainedIndex >= 0) viewIndex = retainedIndex;
+          else if (this.explicitlyBoundView) viewIndex = baseViewIndexById(document.views, this.selectedViewId);
+          else { this.selectedViewId = undefined; viewIndex = Math.min(Math.max(0, viewIndex), document.views.length - 1); }
+        } else if (this.viewName !== undefined) viewIndex = baseViewIndexByName(document.views, this.viewName);
         const selectedId = document.views[viewIndex]?.id;
         if (typeof selectedId === 'string') this.selectedViewId = selectedId;
         let result: BaseQueryResult;
