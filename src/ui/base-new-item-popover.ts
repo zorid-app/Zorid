@@ -192,7 +192,7 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     }
     validate();
     const focused = document.activeElement as HTMLElement | null;
-    if (focused && (root.contains(focused) || properties.owns(focused))) focused.blur();
+    if (focused && focused !== retry && (root.contains(focused) || properties.owns(focused))) focused.blur();
     const currentTitleAttempt = titleAttempt;
     // Native change/blur and shared widget commits enter their queues first.
     await Promise.resolve(); await Promise.resolve();
@@ -207,7 +207,9 @@ export async function openBaseNewItemPopover(options: BaseNewItemPopoverOptions)
     if (composingTitle || titleText().trim() !== titleBaseline) throw new Error('The title changed while saving; its draft is preserved.');
     if (propertyGeneration !== propertyInputGeneration) throw new Error('Property input changed while saving; finish the current edit before closing.');
     if (buffer.dirty || buffer.error) throw buffer.error ?? new Error('The new note still has pending changes.');
-    propertyDraft = false; error.hidden = retry.hidden = true;
+    propertyDraft = false;
+    if (document.activeElement === retry) title.focus({ preventScroll: true });
+    error.hidden = retry.hidden = true;
   }
   function hasPendingChanges() { return !closed && (composingTitle || titleProblem || propertyDraft || properties.hasPendingChanges() || titleText().trim() !== titleBaseline || !!writes.size || !!loading || buffer.dirty || !!buffer.error || !!options.hasPendingEditorChanges?.() || !!root.querySelector('[data-base-editing]') || [...root.querySelectorAll<HTMLElement>('.metadata-property-error')].some(node => !node.hidden && !!node.textContent?.trim())); }
   function ownedPortal(target: Node) { return properties.owns(target) || options.ownsEditorPortal?.(target) === true; }

@@ -43,11 +43,28 @@ test('lazy body and property edits share one buffer; properties preserve newer f
   await s.handle.close(); const saved = await s.vault.read('Untitled.md'); assert.match(saved, /status: Done/); assert.ok(saved.endsWith('User body')); assert.equal(s.destroyedEditor, 1); await s.cleanup();
 });
 
-test('failed title rename retains exact draft and surface until successful retry', async () => {
-  let reject = true; const s = await setup(undefined, { rename: async () => { if (reject) throw new Error('Name collision'); } });
+test('failed title rename retains its draft and successful Retry keeps Escape in the popup', async () => {
+  let reject = true, s: Awaited<ReturnType<typeof setup>>;
+  s = await setup(undefined, { rename: async (_path, destination, validate) => { if (reject) throw new Error('Name collision'); validate(); await s.buffer.rename(destination); } });
+  const source = s.buffer.text;
   s.setTitle('Taken'); await assert.rejects(s.handle.close(), /Name collision/); assert.equal(s.title.textContent, 'Taken'); assert.ok(s.handle.element.isConnected); assert.equal(s.closed, 0); assert.equal(s.handle.hasPendingChanges(), true);
-  // Restore the original already-existing name without invoking rename again.
-  reject = false; s.setTitle('Untitled'); await s.handle.close(); assert.equal(s.closed, 1); await s.cleanup();
+  const retry = s.handle.element.querySelector<HTMLButtonElement>('.bases-new-item-retry')!;
+  retry.focus(); retry.click(); await tick(); assert.equal(retry.hidden, false); assert.equal(s.title.textContent, 'Taken');
+  reject = false; s.setTitle('Recovered popup note'); retry.focus(); retry.click(); await tick();
+  assert.equal(s.handle.path, 'Recovered popup note.md'); assert.equal(await s.vault.read(s.handle.path), source); assert.equal(retry.hidden, true); assert.equal(s.dom.window.document.activeElement, s.title);
+  s.title.dispatchEvent(new s.dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); await tick();
+  assert.equal(s.closed, 1); assert.equal(s.dom.window.document.activeElement, s.anchor); await s.cleanup();
+});
+
+test('successful Retry does not take focus moved outside during the save', async () => {
+  let release!: () => void, started!: () => void, s: Awaited<ReturnType<typeof setup>>;
+  const gate = new Promise<void>(resolve => { release = resolve; }), entered = new Promise<void>(resolve => { started = resolve; });
+  s = await setup(undefined, { rename: async (_path, destination, validate) => { started(); await gate; validate(); await s.buffer.rename(destination); } });
+  s.setTitle('Invalid/name'); await assert.rejects(s.handle.flush(), /path separators/);
+  s.setTitle('Recovered popup note'); const retry = s.handle.element.querySelector<HTMLButtonElement>('.bases-new-item-retry')!;
+  retry.focus(); retry.click(); await entered;
+  const sibling = s.dom.window.document.querySelector<HTMLButtonElement>('#sibling')!; sibling.focus(); release(); await tick();
+  assert.equal(s.handle.path, 'Recovered popup note.md'); assert.equal(retry.hidden, true); assert.equal(s.dom.window.document.activeElement, sibling); await s.cleanup();
 });
 
 test('failed buffer flush retains body draft and does not dispose shared buffer', async () => {
