@@ -1,11 +1,5 @@
 # User findings queue
 
-## Direct Rust Tauri integration and actual comparison — 2026-10-27
-
-User explicitly requests a NEW worktree and actual Rust embedding rather than another shell-only benchmark. Root owns `codex/tauri-native`, `.worktrees/tauri-native`, base `9c0567e4`; workers and seams are named in the roadmap. Implement native Rust worker + existing embedded core, desktop editor UI, real durable-save/close/reopen gates, then matched memory comparison with a no-extra-broker Electron counterpart. Both source/dependency graphs and frontend capabilities must match. No production replacement is authorized by the experiment. Implementation, native verification, feature gaps and measured results are tracked separately; early frontend typecheck/production build and Electron smoke are not Tauri acceptance.
-
-Implemented `fd6a40ca`: actual Tauri embeds the shared Rust core with no Node/server/child host. Both native Tauri and the matching Electron counterpart pass Unicode edit, new-note creation, exact physical save, native close/reopen and stable client identity. Four protected C/D runs pass12 state/source receipts with all101 note hashes unchanged through normal close. Tauri saves20.5–20.7MiB (~13%) with one note; eight tabs are near parity; the271KiB note state is3.7–10MiB higher. Two earlier invalid measurement attempts are excluded (one has confirmed manual input); no core/editor bug fix is claimed. Independent review passes the bounded opt-in integration, not full desktop migration. Detailed evidence and remaining services: `docs/history/tauri-native-experiment-20261027.md`.
-
 ## Tauri desktop performance feasibility — 2026-10-27
 
 Follow-up authorization: user asks for further RAM evaluation after the initial uncertain RSS result. Root resumes the isolated branch with `memory-run.mjs`; `benchmark_audit` owns a read-only libproc physical-footprint probe and `tauri_shell` owns phase-controlled UI workload evidence. Compare 100/1,000-note fixtures with one note, eight actual tabs and a roughly250KB note, using longer settling/sampling and alternating serial runs. This remains evaluation, not authorization to replace the production shell. Compressed-memory accounting, XPC attribution and cleanup must be reported separately from observed savings.
@@ -17,9 +11,8 @@ tabs/large-note states offset it. Larger receipts retain scan-limit warnings and
 some viewports differ. User explicitly challenges fairness and lack of direct
 Rust integration: correct, both shells retain Node + separate Rust host. Do not
 use these results to reject a properly integrated Tauri migration. Node-free
-embedding was not implemented at that cutoff; the subsequent actual native
-experiment is recorded above. Full desktop adapter/drafts/runtime contracts remain
-required before migration. See `docs/history/tauri-memory-evaluation-20261027.md`.
+embedding is feasible but not implemented; full desktop adapter/drafts/runtime
+contracts must be preserved. See `docs/history/tauri-memory-evaluation-20261027.md`.
 
 
 User authorizes an isolated prototype and matched Electron/Tauri comparison; no production migration is decided. Root owns `codex/tauri-benchmark`, `.worktrees/tauri-benchmark`, based on `8507a855`; worker `tauri_shell` owns the standalone shell and `benchmark_audit` reviews transport and measurement. The benchmark reuses identical installed renderer assets, a common disposable Node broker, and the installed Rust host. Shell-only timing and RSS are distinct from a future Node-free integration. Native input/IME, large-vault behavior, platform parity and production installation size require separate evidence. Implementation and runtime results are tracked in `docs/history/tauri-benchmark-20261027.md`.

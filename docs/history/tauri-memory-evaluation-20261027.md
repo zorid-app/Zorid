@@ -9,8 +9,6 @@ isolated. Production Zorid and real vaults are unchanged.
 
 ## Decision and measurements
 
-Subsequent work now implements and measures the actual Node-free candidate in a new worktree: [embedded-core Tauri experiment](tauri-native-experiment-20261027.md). This report remains the historical shell-only evaluation.
-
 The shell-only experiment does not reproduce a general44% RAM saving. It also
 **does not answer whether an optimized Node-free Tauri migration would save RAM**.
 The user correctly challenged that distinction. The earlier recommendation against
