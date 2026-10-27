@@ -99,7 +99,8 @@ test('add, duplicate and remove views retain their options and allow parser-vali
   assert.equal(base.addView('custom.plugin', 'Table'), 5); // Duplicate names are valid in the document parser.
   assert.equal(base.views[5].type, 'custom.plugin');
   assert.equal(base.duplicateView(3, '#Board: copy'), 6); // UI naming restrictions are a separate layer.
-  assert.deepEqual(base.views[6], { ...base.views[3], name: '#Board: copy' });
+  assert.deepEqual(base.views[6], { ...base.views[3], name: '#Board: copy', id: base.views[6].id });
+  assert.notEqual(base.views[6].id, base.views[3].id);
   base.updateView(6, { columnWidth: 400 });
   assert.equal(base.views[3].columnWidth, 300);
   base.removeView(2); assert.deepEqual(base.views.map(view => view.type), ['table', 'cards', 'kanban', 'community-timeline', 'custom.plugin', 'kanban']);

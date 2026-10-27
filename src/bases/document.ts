@@ -18,6 +18,33 @@ export type BaseRootPatch = BaseViewPatch;
  * source is the legacy untyped representation, not a mixed-source wildcard. */
 export type BaseViewSource = Readonly<{ kind: 'untyped' }> | Readonly<{ kind: 'collection'; id: string }>;
 const untypedSource: BaseViewSource = Object.freeze({ kind: 'untyped' });
+/** Separate identity from editable labels. Rejection sampling avoids modulo
+ * bias; callers pass the occupied identities when allocating within a Base. */
+export type BaseViewIdAllocator = (used: Iterable<string>) => string;
+export function newBaseViewId(used: Iterable<string> = []): string {
+  const occupied = new Set(used), alphabet = '0123456789abcdefghijklmnopqrstuvwxyz';
+  for (let attempt = 0; attempt < 128; attempt++) {
+    let id = '';
+    for (const byte of globalThis.crypto.getRandomValues(new Uint8Array(32))) {
+      if (byte < 252) id += alphabet[byte % 36];
+      if (id.length === 12) break;
+    }
+    if (id.length === 12 && !occupied.has(id)) return id;
+  }
+  throw new BaseDocumentError('Could not allocate a unique view identity');
+}
+export function baseViewIndexById(views: readonly BaseViewConfig[], id: string): number {
+  if (!/^[0-9a-z]{12}$/.test(id)) throw new BaseDocumentError('Invalid view identity');
+  const matches = views.map((view, index) => view.id === id ? index : -1).filter(index => index >= 0);
+  if (matches.length !== 1) throw new BaseDocumentError('The selected Base view no longer exists or has ambiguous identity');
+  return matches[0];
+}
+export function baseViewIndexByName(views: readonly BaseViewConfig[], name: string): number {
+  const matches = views.map((view, index) => view.name === name ? index : -1).filter(index => index >= 0);
+  if (!matches.length) throw new BaseDocumentError(`Base view not found: ${name}`);
+  if (matches.length !== 1) throw new BaseDocumentError(`Base view name is ambiguous: ${name}`);
+  return matches[0];
+}
 export function baseViewSource(view: BaseViewConfig): BaseViewSource {
   const value = view.source;
   if (value === undefined) return untypedSource;
@@ -41,7 +68,7 @@ const sourceSpecificViewKeys = ['filters', 'sort', 'groupBy', 'groupOrder', 'ord
  * when selecting a different source. This patch edits no entry or sibling view. */
 export function resetViewSourcePatch(view: BaseViewConfig, source: BaseViewSource): BaseViewPatch {
   const checked = baseViewSource({ type: view.type, name: view.name, source });
-  const patch: BaseViewPatch = { source: checked };
+  const patch: BaseViewPatch = { source: checked, ...(view.id === undefined ? { id: newBaseViewId() } : {}) };
   for (const key of sourceSpecificViewKeys) patch[key] = undefined;
   return patch;
 }
@@ -51,7 +78,6 @@ export function validateBaseViewName(name: string, views: readonly BaseViewConfi
   if (typeof name !== 'string') throw new BaseDocumentError('View name must be a string');
   name = name.trim();
   if (!name || /[:#|^\\\r\n]|%%|\[\[|\]\]/.test(name)) throw new BaseDocumentError('The view name is empty or contains unsupported characters');
-  if (views.some((view, index) => index !== except && view.name === name)) throw new BaseDocumentError('A view with this name already exists');
   return name;
 }
 
@@ -145,6 +171,7 @@ function validateDocument(doc: Document): Readonly<Record<string, BaseValue>> {
   const root = rootValues(doc);
   if (Object.hasOwn(root, 'views')) {
     if (!Array.isArray(root.views)) throw new BaseDocumentError('Base views must be a list');
+    const identities = new Set<string>();
     for (const view of root.views) {
       if (!view || typeof view !== 'object' || Array.isArray(view)) throw new BaseDocumentError('Each base view must be a mapping');
       for (const key of ['type', 'name']) {
@@ -152,6 +179,9 @@ function validateDocument(doc: Document): Readonly<Record<string, BaseValue>> {
           throw new BaseDocumentError(`View ${key} must be a nonempty string`);
         }
       }
+      const id = (view as Record<string, BaseValue>).id;
+      if (id !== undefined && (typeof id !== 'string' || !/^[0-9a-z]{12}$/.test(id) || identities.has(id))) throw new BaseDocumentError('View identities must be unique 12-character lowercase alphanumeric strings');
+      if (typeof id === 'string') identities.add(id);
       baseViewSource(view as BaseViewConfig);
     }
   }
@@ -212,8 +242,10 @@ export class BaseDocument {
   private newline: string;
   private bom: string;
   private values: Readonly<Record<string, BaseValue>>;
+  private allocateViewId: BaseViewIdAllocator;
 
-  private constructor(document: Document, source: string) {
+  private constructor(document: Document, source: string, allocateViewId: BaseViewIdAllocator = newBaseViewId) {
+    this.allocateViewId = allocateViewId;
     this.document = document;
     this.source = source;
     this.newline = /\r?\n/.exec(source)?.[0] ?? '\n';
@@ -221,16 +253,16 @@ export class BaseDocument {
     this.values = rootValues(document);
   }
 
-  static parse(source: string): BaseDocument {
+  static parse(source: string, allocateViewId: BaseViewIdAllocator = newBaseViewId): BaseDocument {
     const doc = parseBaseYAML(source);
     if (!source.trim()) {
       doc.set('views', doc.createNode([{ type: 'table', name: 'Table' }]));
-      const result = new BaseDocument(doc, source);
+      const result = new BaseDocument(doc, source, allocateViewId);
       result.source = result.serialize(doc);
       return result;
     }
     validateDocument(doc);
-    const result = new BaseDocument(doc, source);
+    const result = new BaseDocument(doc, source, allocateViewId);
     if (!doc.has('views')) {
       result.edit(next => next.set('views', next.createNode([{ type: 'table', name: 'Table' }])));
     }
@@ -347,15 +379,26 @@ export class BaseDocument {
     const next = baseViewSource({ type: view.type, name: view.name, source });
     const previous = baseViewSource(view);
     if (view.source !== undefined && previous.kind === next.kind && (previous.kind === 'untyped' || next.kind === 'collection' && previous.id === next.id)) return;
-    this.updateView(index, resetViewSourcePatch(view, next));
+    const patch = resetViewSourcePatch(view, next);
+    if (view.id === undefined) patch.id = this.allocateViewId(this.views.flatMap(view => typeof view.id === 'string' ? [view.id] : []));
+    this.updateView(index, patch);
+  }
+
+  private ensureViewIdentities(doc: Document): Set<string> {
+    const identities = new Set(this.views.flatMap(view => typeof view.id === 'string' ? [view.id] : []));
+    for (const view of this.viewList(doc, true).items) {
+      if (!isMap(view)) throw new BaseDocumentError('Aliased view mappings cannot receive separate view identities');
+      if (!view.has('id')) { const id = this.allocateViewId(identities); identities.add(id); view.set('id', id); }
+    }
+    return identities;
   }
 
   addView(type: string, name: string): number {
     if (typeof type !== 'string' || typeof name !== 'string') throw new BaseDocumentError('View type and name must be strings');
     let index = 0;
     this.edit(doc => {
-      const views = this.viewList(doc, true); index = views.items.length;
-      views.add(doc.createNode({ type, name }));
+      const identities = this.ensureViewIdentities(doc), views = this.viewList(doc, true); index = views.items.length;
+      views.add(doc.createNode({ type, name, id: this.allocateViewId(identities) }));
     });
     return index;
   }
@@ -364,7 +407,8 @@ export class BaseDocument {
     if (typeof newName !== 'string') throw new BaseDocumentError('View name must be a string');
     let added = 0;
     this.edit(doc => {
-      const copy = this.viewAt(doc, index).clone() as YAMLMap; copy.set('name', newName);
+      const identities = this.ensureViewIdentities(doc);
+      const copy = this.viewAt(doc, index).clone() as YAMLMap; copy.set('name', newName); copy.set('id', this.allocateViewId(identities));
       // Give copied anchors unique names so later existing aliases keep their targets.
       const used = new Set<string>(), replacements = new Map<string, string>();
       visit(doc, { Value: (_, node) => { if (node.anchor) used.add(node.anchor); } });

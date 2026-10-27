@@ -69,7 +69,7 @@ function fragmentMatches(fragment: string, from: string, kind: 'wiki' | 'markdow
   if (kind === 'markdown') try { name = decodeURIComponent(name); } catch { /* Keep malformed literal spelling. */ }
   // Existing exact named-view links win over heading-style normalization. A
   // normalized spelling cannot choose between distinct case/punctuation peers.
-  if (names.includes(name)) return name === from;
+  if (names.includes(name)) return names.filter(candidate => candidate === name).length === 1 && name === from;
   const candidates = names.filter(candidate => baseViewReferenceKey(candidate) === baseViewReferenceKey(name));
   return candidates.length === 1 && candidates[0] === from;
 }

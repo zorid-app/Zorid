@@ -40,7 +40,8 @@ test('view creation, duplication, default ordering and deletion retain the selec
     await f.controller.removeView(f.controller.state.version);
     assert.equal(f.controller.state.result?.view.name, 'Renamed original');
     assert.match(await f.vault.read('Work.base'), /# keep/); assert.match(await f.vault.read('Work.base'), /plugin:/);
-    await assert.rejects(f.controller.addView(f.controller.state.version, 'table', 'Second'), /already exists/);
+    await f.controller.addView(f.controller.state.version, 'table', 'Second');
+    assert.equal(BaseDocument.parse(await f.vault.read('Work.base')).views.filter(view => view.name === 'Second').length, 2);
     await assert.rejects(f.controller.addView(f.controller.state.version, 'table', 'bad#name'), /unsupported/);
   } finally { await f.stop(); }
 });

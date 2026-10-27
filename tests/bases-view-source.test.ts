@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BaseDocument, baseViewSource, baseViewSetting, resetViewSourcePatch } from '../src/bases/document.ts';
+import { BaseDocument, baseViewSource, baseViewSetting, resetViewSourcePatch, newBaseViewId, baseViewIndexByName, baseViewIndexById } from '../src/bases/document.ts';
 import { BaseController, createBaseMutationHost } from '../src/bases/controller.ts';
 import { inferBaseCreationDefaults, planBaseItemCreation, prepareBaseFileCreation } from '../src/bases/creation.ts';
 import { executeBaseQuery } from '../src/bases/query.ts';
@@ -26,7 +26,7 @@ test('switching source resets field configuration only in the selected view', ()
   const second = view(projects, {name:'Projects', filters:'Status == "Active"', order:['file.name','Status']});
   const doc = document([first, second], {filters:'legacy == true',newItemFolder:'Legacy',pluginRoot:{keep:true}});
   doc.changeViewSource(0, projects);
-  assert.deepEqual(doc.views[0], view(projects, {name:'Books',rowHeight:55,pluginLayout:{keep:true}}));
+  assert.deepEqual(doc.views[0], view(projects, {name:'Books',rowHeight:55,pluginLayout:{keep:true},id:doc.views[0].id}));
   assert.deepEqual(doc.views[1], second); assert.equal(doc.getRoot('filters'),'legacy == true');
   assert.equal(baseViewSetting(doc,0,'newItemFolder'),undefined);
   assert.deepEqual(doc.getRoot('pluginRoot'),{keep:true});
@@ -85,10 +85,10 @@ test('new Base persists no views for onboarding, while explicit-source note crea
   assert.equal(plan.path,'Reading/New book.md');assert.equal(plan.text,'');assert.ok(plan.warnings.some(w=>w.includes('computed')));
 });
 
-async function fixture(source: string) {
-  const vault=new Vault(new MemoryAdapter({'Personal.base':source,'Note.md':'Body'}));await vault.initialize();
+async function fixture(source: string, selection: {viewName?:string;viewId?:string} = {}, adapter = new MemoryAdapter({'Personal.base':source,'Note.md':'Body'})) {
+  const vault=new Vault(adapter);await vault.initialize();
   const buffers=new Map<string,NoteBuffer>();const getBuffer=async(path:string)=>{let buffer=buffers.get(path);if(!buffer){buffer=new NoteBuffer(vault,path,{debounceMs:60000});buffers.set(path,buffer);}await buffer.load();return buffer;};
-  const controller=new BaseController({vault,basePath:'Personal.base',mutations:createBaseMutationHost({getBuffer,validate(){}}),delayMs:1000});await controller.refresh();
+  const controller=new BaseController({vault,basePath:'Personal.base',...selection,mutations:createBaseMutationHost({getBuffer,validate(){}}),delayMs:1000});await controller.refresh();
   return{vault,controller,getBuffer,async stop(){controller.dispose();for(const buffer of buffers.values())await buffer.dispose();}};
 }
 
@@ -133,4 +133,54 @@ test('legacy formula and summary edits cannot rewrite explicit-source sibling de
   doc.renameViewFormula(0,'label','caption');assert.deepEqual(doc.views[1],sibling);assert.deepEqual(doc.views[0].order,['formula.caption']);
   doc.editViewSummary(0,'Total','Count','values.count()');assert.deepEqual(doc.views[1],sibling);assert.deepEqual(doc.views[0].summaries,{score:'Count'});
   doc.removeViewSummary(0,'Count');assert.deepEqual(doc.views[1],sibling);assert.deepEqual(doc.views[0].summaries,{});
+});
+
+
+test('new views and duplicates have distinct stable identities independent of repeated display names',()=>{
+  const doc=BaseDocument.parse('views: [{type: table, name: Same}]');
+  doc.addView('list','Same');assert.equal(doc.views.length,2);assert.ok(doc.views.every(view=>typeof view.id==='string'&&/^[a-z0-9]{12}$/.test(view.id)));
+  const original=doc.views[0].id;doc.duplicateView(0,'Same');assert.equal(new Set(doc.views.map(view=>view.id)).size,3);assert.equal(doc.views[0].id,original);
+  const copy=doc.views[2].id;doc.updateView(2,{name:'Renamed'});doc.moveView(2,0);assert.equal(doc.views[0].id,copy);
+  assert.deepEqual(BaseDocument.parse(doc.toString()).views,doc.views);assert.equal(baseViewIndexById(doc.views,copy as string),0);
+  assert.throws(()=>baseViewIndexByName(doc.views,'Same'),/ambiguous/);
+  for(const views of [[view(untyped,{id:'short'})],[view(untyped,{id:'abcdefghijkl'}),view(untyped,{id:'abcdefghijkl'})]])assert.throws(()=>document(views),/identities/);
+  assert.match(newBaseViewId(doc.views.map(view=>view.id as string)),/^[a-z0-9]{12}$/);
+});
+
+test('selected identity survives repeated labels, external reordering, rename and deleting a neighboring view',async()=>{
+  const a='aaaaaaaaaaaa',b='bbbbbbbbbbbb';
+  const f=await fixture(document([view(untyped,{id:a,name:'Same',filters:'file.ext == "md"'}),view(untyped,{id:b,name:'Same',filters:'file.ext == "md"'})]).toString());try{
+    await f.controller.setView(1);assert.equal(f.controller.selectedViewIdentity,b);
+    const doc=BaseDocument.parse(await f.vault.read('Personal.base'));doc.moveView(1,0);await f.vault.modify('Personal.base',doc.toString());await f.controller.refresh();assert.equal(f.controller.selectedViewIdentity,b);assert.equal(f.controller.selectedViewIndex,0);assert.equal(f.controller.state.result?.view.id,b);
+    await f.controller.renameView(f.controller.state.version,0,'Same');assert.equal(f.controller.state.result?.view.id,b);
+    await f.controller.removeView(f.controller.state.version,1);assert.equal(f.controller.state.result?.view.id,b);assert.equal(f.controller.state.error,null);
+  }finally{await f.stop();}
+});
+
+test('legacy ambiguous name bindings fail safely while explicit ID bindings select the intended repeated name',async()=>{
+  const a='aaaaaaaaaaaa',b='bbbbbbbbbbbb';const source=document([view(untyped,{id:a,name:'Same',filters:'false'}),view(untyped,{id:b,name:'Same',filters:'file.ext == "md"'})]).toString();
+  const ambiguous=await fixture(source,{viewName:'Same'});try{assert.match(ambiguous.controller.state.error?.message??'',/ambiguous/);assert.equal(ambiguous.controller.state.result,null);}finally{await ambiguous.stop();}
+  const explicit=await fixture(source,{viewId:b});try{assert.equal(explicit.controller.state.error,null);assert.equal(explicit.controller.state.result?.view.id,b);assert.deepEqual(explicit.controller.state.result?.rows.map(row=>row.path),['Note.md']);}finally{await explicit.stop();}
+});
+
+test('renaming a repeated label never guesses which legacy name references to rewrite',async()=>{
+  const source=document([view(untyped,{id:'aaaaaaaaaaaa',name:'Same',filters:'file.ext == "md"'}),view(untyped,{id:'bbbbbbbbbbbb',name:'Same',filters:'file.ext == "md"'})]).toString();
+  const f=await fixture(source);try{
+    await f.vault.create('Link.md','[[Personal.base#Same]]');await f.controller.refresh();
+    await f.controller.renameView(f.controller.state.version,0,'Changed');assert.equal(await f.vault.read('Link.md'),'[[Personal.base#Same]]');assert.equal(f.controller.state.result?.view.id,'aaaaaaaaaaaa');assert.equal(f.controller.state.result?.view.name,'Changed');
+  }finally{await f.stop();}
+});
+
+
+test('failed add and duplicate retries retain exact allocated identities and saved bytes',async()=>{
+  class Adapter extends MemoryAdapter { fail=false;override async write(path:string,text:string){if(this.fail&&path==='Personal.base')throw new Error('disk full');return super.write(path,text);} }
+  const source='views: []\n',adapter=new Adapter({'Personal.base':source,'Note.md':'Body'}),f=await fixture(source,{},adapter);try{
+    const version=f.controller.state.version;adapter.fail=true;
+    await assert.rejects(f.controller.addView(version,'table','Same',{source:untyped}),/disk full/);
+    const buffer=await f.getBuffer('Personal.base'),desired=buffer.text,firstId=BaseDocument.parse(desired).views[0].id;
+    adapter.fail=false;await f.controller.addView(version,'table','Same',{source:untyped});assert.equal(await f.vault.read('Personal.base'),desired);assert.equal(f.controller.selectedViewIdentity,firstId);
+    const duplicateVersion=f.controller.state.version;adapter.fail=true;
+    await assert.rejects(f.controller.duplicateView(duplicateVersion,0,'Same'),/disk full/);const duplicated=buffer.text,views=BaseDocument.parse(duplicated).views;assert.notEqual(views[0].id,views[1].id);
+    adapter.fail=false;await f.controller.duplicateView(duplicateVersion,0,'Same');assert.equal(await f.vault.read('Personal.base'),duplicated);assert.equal(f.controller.selectedViewIdentity,views[1].id);
+  }finally{adapter.fail=false;await f.stop();}
 });

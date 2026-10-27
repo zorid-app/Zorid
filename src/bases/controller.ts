@@ -1,4 +1,4 @@
-import { BaseDocument, baseViewSetting, uniqueBaseViewName, validateBaseViewName } from './document.ts';
+import { BaseDocument, baseViewSetting, baseViewIndexById, baseViewIndexByName, newBaseViewId, uniqueBaseViewName, validateBaseViewName } from './document.ts';
 import type { BaseValue, BaseViewPatch, BaseRootPatch, BaseViewSource } from './document.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import { executeBaseQuery, normalizeBaseProperty } from './query.ts';
@@ -18,7 +18,7 @@ import type { ConditionalSavedSourceCapture, ConditionalSavedSourceWitness } fro
 import { closeBaseViewReferenceQueries, prepareBaseViewReferences } from './view-references.ts';
 import type { BaseViewReferenceOperation, BaseViewRenameReport } from './view-references.ts';
 
-export interface BaseViewRenamed { readonly basePath: string; readonly index: number; readonly from: string; readonly to: string }
+export interface BaseViewRenamed { readonly basePath: string; readonly index: number; readonly viewId?: string; readonly from: string; readonly to: string }
 
 export interface BaseMutationHost {
   /** Run transform once against the latest shared draft, validating after all awaits. */
@@ -172,6 +172,8 @@ export interface BaseControllerOptions {
   clock?: BaseClockHost;
   /** Internal embedded-view binding, resolved against each fresh configuration. */
   viewName?: string;
+  /** Stable binding for new embeds; display names may repeat. */
+  viewId?: string;
   /** Rebind an active named embed after config acknowledgement, before its saved
    * source references are updated. Must preserve the original embed identity. */
   onViewRenamed?(event: BaseViewRenamed): void;
@@ -238,6 +240,7 @@ export class BaseController {
   private path: string;
   private query: BaseQueryOptions;
   private viewName?: string;
+  private selectedViewId?: string;
   private selectionSerial = 0;
   private configurationEpoch = 0;
   private undoCommands: BaseHistoryCommand[] = [];
@@ -248,6 +251,7 @@ export class BaseController {
   private pendingHistoryDirection = new WeakMap<BaseHistoryEntry, 'undo' | 'redo'>();
   private historySourceAttempts = new WeakMap<PropertyHistoryEntry, Record<'undo' | 'redo', object>>();
   private emptyConfigurationWitness?: BaseSavedWitness;
+  private configurationViewIds?: { readonly source: string; readonly ids: string[] };
   private pendingConfigurations = new Map<string, { readonly expected: string; readonly witness?: BaseSavedWitness; readonly attempt: object; readonly index: number; readonly name: string; readonly bound: boolean; readonly selectionSerial: number; readonly entryId?: string; readonly adapter: Vault['adapter']; validate(): void; committed?(): Promise<BaseViewRenameReport | void> }>();
   private pendingViewReferences?: BaseViewReferenceOperation;
   private referenceServices = new Set<NonNullable<Vault['adapter']['documentSemantics']>>();
@@ -279,7 +283,7 @@ export class BaseController {
   constructor(options: BaseControllerOptions) {
     this.options = options; this.path = normalizePath(options.basePath);
     this.clock = options.clock ?? createBaseClockHost();
-    this.query = { ...options.query }; this.viewName = options.viewName;
+    this.query = { ...options.query }; this.viewName = options.viewName; this.selectedViewId = options.viewId;
     for (const path of options.vault.entries.keys()) this.identities.set(path, ++this.nextIdentity);
     this.subscriptions = (['create', 'modify', 'rename', 'delete', 'ready'] as const).map(event => options.vault.on(event, change => {
       if (event === 'ready' || change.path === this.path || change.oldPath === this.path) this.configurationEpoch++;
@@ -306,11 +310,12 @@ export class BaseController {
   }
   /** Host-wide saved-name notification. Passive embeds retain their drafts and
    * exact original binding; the host chooses when to refresh/render them. */
-  rebindViewName(from: string, to: string): boolean {
-    if (this.disposed || this.viewName !== from) return false;
+  rebindViewName(from: string, to: string, viewId?: string): boolean {
+    if (this.disposed || this.viewName !== from || viewId !== undefined && this.selectedViewId !== undefined && this.selectedViewId !== viewId) return false;
     this.viewName = to; return true;
   }
   get selectedViewIndex(): number { return this.query.viewIndex ?? 0; }
+  get selectedViewIdentity(): string | undefined { return this.selectedViewId; }
   get canUndo(): boolean { return !this.disposed && !this.historyBusy && this.undoCommands.length > 0; }
   get canRedo(): boolean { return !this.disposed && !this.historyBusy && this.redoCommands.length > 0; }
 
@@ -373,7 +378,7 @@ export class BaseController {
         if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
         let version = this.version + 1;
         const document = BaseDocument.parse(source);
-        if (!document.views.length && this.viewName === undefined) {
+        if (!document.views.length && this.viewName === undefined && this.selectedViewId === undefined) {
           const latest = await observe(this.path);
           if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
           if (!latest || service && (!definition || latest.entryId !== definition.entryId || latest.revision !== definition.revision || latest.mtime !== definition.mtime || latest.size !== definition.size)) throw new Error('The Base configuration changed. Refresh before adding a view.');
@@ -386,10 +391,10 @@ export class BaseController {
         }
         this.emptyConfigurationWitness = undefined;
         let viewIndex = this.query.viewIndex ?? 0;
-        if (this.viewName !== undefined) {
-          viewIndex = document.views.findIndex(view => view.name === this.viewName);
-          if (viewIndex < 0) throw new Error(`Base view not found: ${this.viewName}`);
-        }
+        if (this.selectedViewId !== undefined) viewIndex = baseViewIndexById(document.views, this.selectedViewId);
+        else if (this.viewName !== undefined) viewIndex = baseViewIndexByName(document.views, this.viewName);
+        const selectedId = document.views[viewIndex]?.id;
+        if (typeof selectedId === 'string') this.selectedViewId = selectedId;
         let result: BaseQueryResult;
         const currentPath = currentFilePath(this.query, this.path), expectedCurrentEntryId = this.query.currentFileEntryId;
         const current = service || expectedCurrentEntryId !== undefined
@@ -401,7 +406,7 @@ export class BaseController {
           const owner = this, allowPreview = !this.current.result || !!sharedBasePreview(this.current.result);
           const effectiveQuery: BaseQueryOptions & { inlineSource?: { source: string; startByte: number; endByte: number } } = inline ? { ...this.query, inlineSource: { source, startByte: inline.startByte, endByte: inline.endByte } } : this.query;
           const request = { service, definition, current, entries: [...this.options.vault.entries.values()], query: effectiveQuery,
-            viewIndex, viewName: this.viewName, get version() { return owner.version + 1; }, clock: this.clock, isCurrent: () => !this.disposed && epoch === this.epoch,
+            viewIndex, viewName: this.selectedViewId === undefined ? this.viewName : undefined, get version() { return owner.version + 1; }, clock: this.clock, isCurrent: () => !this.disposed && epoch === this.epoch,
             readFile: (path: string) => this.options.vault.read(path),
             ...(allowPreview ? {
               onPreview: (result: BaseQueryResult) => {
@@ -468,6 +473,8 @@ export class BaseController {
   }
 
   setView(viewIndex: number): Promise<void> {
+    const selected = BaseDocument.parse(this.current.source).views[viewIndex];
+    if (!Number.isInteger(viewIndex) || !selected) return Promise.reject(new Error('The selected base view does not exist'));
     if (this.viewName !== undefined) {
       if (this.current.error) return Promise.reject(this.current.error);
       if (!this.current.result) return Promise.reject(new Error('The Base configuration is not ready'));
@@ -477,6 +484,7 @@ export class BaseController {
       // cannot retarget an embedded view to an unrelated configuration.
       this.viewName = view.name;
     }
+    this.selectedViewId = typeof selected.id === 'string' ? selected.id : undefined;
     this.selectionSerial++;
     this.query = { ...this.query, viewIndex }; this.stale = true; this.clearWake(); this.epoch++; this.lastInvalidation = { kind: 'view-selection' }; this.sharedQueries.cancel();
     return this.refresh();
@@ -549,7 +557,7 @@ export class BaseController {
     const runner = new SharedBaseQueryRunner(); this.summaryQueries.add(runner);
     try {
       const request = { service, definition, current, entries: [...vault.entries.values()], query, version,
-        viewIndex: this.selectedViewIndex, viewName: this.viewName, clock: this.clock,
+        viewIndex: this.selectedViewIndex, viewName: this.selectedViewId === undefined ? this.viewName : undefined, clock: this.clock,
         isCurrent: () => !this.disposed && epoch === this.epoch && version === this.current.version && vault.adapter === adapter,
         readFile: async (path: string) => { validate(); const text = await vault.read(path); validate(); return text; },
       };
@@ -893,10 +901,21 @@ export class BaseController {
     });
   }
 
+  private allocateConfigurationViewId(source: string, position: number, occupied: Iterable<string>): string {
+    if (this.configurationViewIds?.source !== source) this.configurationViewIds = { source, ids: [] };
+    const ids = this.configurationViewIds.ids, used = new Set(occupied), previous = ids[position];
+    if (previous !== undefined) {
+      if (used.has(previous)) throw new Error('The retained view identity allocation no longer matches this configuration');
+      return previous;
+    }
+    const id = newBaseViewId(used); ids[position] = id; return id;
+  }
+
   /** Shared absolute-source transaction. A retry persists the same draft once. */
   private async changeConfiguration(version: number, change: (document: BaseDocument) => number, committed?: () => Promise<BaseViewRenameReport | void>): Promise<BaseViewRenameReport | void> {
     const { validate, validateWrite } = this.guard(version, this.path, true), expected = this.current.source;
-    const document = BaseDocument.parse(expected), index = change(document), desired = document.toString();
+    let allocation = 0;
+    const document = BaseDocument.parse(expected, used => this.allocateConfigurationViewId(expected, allocation++, used)), index = change(document), desired = document.toString();
     const selected = document.views[index];
     if (!selected && document.views.length) throw new Error('The selected base view does not exist');
     const selectionSerial = this.selectionSerial;
@@ -940,11 +959,12 @@ export class BaseController {
       if (prepared || this.options.inlineSource) this.pendingConfigurations.set(desired, retry);
       throw error;
     }
-    this.pendingConfigurations.clear();
+    this.pendingConfigurations.clear(); this.configurationViewIds = undefined;
     // A config's own modify event advances epoch. An explicit view selection
     // also advances it, but updates query/name: never undo that later choice.
     if (!this.disposed && this.selectionSerial === selectionSerial) {
       this.query = { ...this.query, viewIndex: index };
+      this.selectedViewId = typeof selected?.id === 'string' ? selected.id : undefined;
       if (this.viewName !== undefined) this.viewName = selected?.name;
       this.stale = true; this.clearWake();
       this.epoch++; this.lastInvalidation = { kind: 'configuration-commit' }; this.sharedQueries.cancel();
@@ -973,10 +993,12 @@ export class BaseController {
       || inline?.witness && (inline.witness.entryId !== entry.entryId || inline.witness.revision !== entry.revision)) throw new Error('The Base changed while its configuration retry was being acknowledged');
     if (this.selectionSerial === retry.selectionSerial) {
       this.query = { ...this.query, viewIndex: retry.index };
+      const selected = BaseDocument.parse(source).views[retry.index];
+      this.selectedViewId = typeof selected?.id === 'string' ? selected.id : undefined;
       if (retry.bound) this.viewName = retry.name || undefined;
       this.stale = true; this.clearWake(); this.epoch++; this.lastInvalidation = { kind: 'configuration-retry-ack' }; this.sharedQueries.cancel();
     }
-    this.pendingConfigurations.clear();
+    this.pendingConfigurations.clear(); this.configurationViewIds = undefined;
     try { await retry.committed?.(); } finally { await this.refresh(); } return true;
   }
 
@@ -1003,6 +1025,10 @@ export class BaseController {
     if (from === undefined) throw new Error('The renamed Base view does not exist');
     const viewNames = document.views.map(view => view.name);
     const to = validateBaseViewName(rawName, document.views, index), active = this.selectedViewIndex;
+    // Legacy name fragments can be rewritten only while both sides resolve to
+    // one view. Repeated labels use stable IDs; ambiguous old links remain inert.
+    const canRenameReferences = viewNames.filter(name => name === from).length === 1 && !viewNames.some((name, candidate) => candidate !== index && name === to);
+    if (!canRenameReferences && document.views[index].id === undefined) patch = { ...patch, id: this.allocateConfigurationViewId(this.current.source, 0, document.views.flatMap(view => typeof view.id === 'string' ? [view.id] : [])) };
     if (to === from) {
       await this.changeConfiguration(version, next => { next.updateViewConfiguration(index, { root, view: { ...patch, name: to } }); return active; });
       return Object.freeze({ basePath: this.path, from, to, completedPaths: Object.freeze([]), failedPaths: Object.freeze([]), references: 0, mode: this.options.vault.adapter.documentSemantics ? 'core' : 'legacy' });
@@ -1038,7 +1064,7 @@ export class BaseController {
       if (!after || after.type !== 'file' || before.entryId !== after.entryId || before.revision !== after.revision || before.mtime !== after.mtime || before.size !== after.size || source !== desired) throw new Error('The saved renamed Base changed while its references were being validated');
     };
     if (adapter.documentSemantics) this.referenceServices.add(adapter.documentSemantics);
-    const operation = this.options.inlineSource ? undefined : await prepareBaseViewReferences({ vault: this.options.vault, base: original, from, to, viewNames,
+    const operation = this.options.inlineSource || !canRenameReferences ? undefined : await prepareBaseViewReferences({ vault: this.options.vault, base: original, from, to, viewNames,
       mutations: this.options.mutations, validate, validateWrite: referenceWrite, validateRenamed });
     validate();
     let report: BaseViewRenameReport = Object.freeze({ basePath: this.path, from, to, completedPaths: Object.freeze([]), failedPaths: Object.freeze([]), references: 0, mode: adapter.documentSemantics ? 'core' : 'legacy' });
@@ -1046,7 +1072,7 @@ export class BaseController {
       // Publish the binding transition once the name is saved, even if one of
       // the independently saved references subsequently fails.
       if (operation) this.pendingViewReferences = operation;
-      this.options.onViewRenamed?.(Object.freeze({ basePath: this.path, index, from, to }));
+      if (canRenameReferences) this.options.onViewRenamed?.(Object.freeze({ basePath: this.path, index, ...(typeof document.views[index].id === 'string' ? { viewId: document.views[index].id as string } : {}), from, to }));
       if (!operation) return report;
       report = await operation.run();
       if (this.pendingViewReferences === operation) this.pendingViewReferences = undefined;
@@ -1134,7 +1160,7 @@ export class BaseController {
   dispose(): void {
     this.disposed = true; this.clearWake(); this.epoch++; this.lastInvalidation = { kind: 'controller-dispose' }; this.sharedQueries.dispose();
     for (const runner of this.summaryQueries) runner.dispose(); this.summaryQueries.clear();
-    this.undoCommands = []; this.redoCommands = []; this.pendingPropertyHistory.clear(); this.propertySourceAttempts.clear(); this.pendingConfigurations.clear();
+    this.undoCommands = []; this.redoCommands = []; this.pendingPropertyHistory.clear(); this.propertySourceAttempts.clear(); this.pendingConfigurations.clear(); this.configurationViewIds = undefined;
     this.pendingViewReferences = undefined;
     for (const service of this.referenceServices) void closeBaseViewReferenceQueries(service).catch(() => {});
     this.referenceServices.clear();
