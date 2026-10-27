@@ -1,12 +1,11 @@
-//! Optional vault-wide value definitions, independent of named note types.
-//! The original YAML and unknown settings stay authoritative and unchanged.
+//! Validated value definitions scoped by the caller to a saved source.
+//! Ordinary Base queries do not discover a vault-wide definition registry.
 use crate::{BaseValue, ExpressionDiagnostic, IndexSnapshotId, PropertyValue, RecordWitness};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use zorid_core::EntryId;
 use zorid_index::Generation;
 
-pub const PROPERTY_SETTINGS_PATH: &str = "Properties.yaml";
 pub const MAX_PROPERTY_SETTINGS_BYTES: usize = 256 * 1024;
 pub const MAX_PROPERTY_DEFINITIONS: usize = 1024;
 pub const MAX_PROPERTY_OPTIONS: usize = 1024;
@@ -117,17 +116,9 @@ pub struct PropertyDefinitions {
 }
 
 impl PropertyDefinitions {
-    /// Explicit absence is valid only if this generation has no settings file.
+    /// Empty definitions for ordinary files. A legacy registry filename has no
+    /// special meaning and must never block a query or grant field semantics.
     pub fn absent(generation: &Generation) -> Result<Self, ExpressionDiagnostic> {
-        if generation
-            .records()
-            .any(|r| r.witness().entry().path.as_str() == PROPERTY_SETTINGS_PATH)
-        {
-            return Err(ExpressionDiagnostic::new(
-                "unavailable",
-                "The captured Properties.yaml must be read before querying property definitions",
-            ));
-        }
         Ok(Self {
             snapshot_id: generation.id().clone(),
             witness: None,
@@ -158,12 +149,6 @@ impl PropertyDefinitions {
             )
         })?;
         let entry = record.witness().entry();
-        if entry.path.as_str() != PROPERTY_SETTINGS_PATH {
-            return Err(ExpressionDiagnostic::new(
-                "input",
-                "Property settings must be the vault-root Properties.yaml file",
-            ));
-        }
         record.check_text(source.as_bytes())?;
         let mut result = Self {
             snapshot_id: generation.id().clone(),

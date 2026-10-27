@@ -1542,3 +1542,27 @@ fn property_targets_current_values_preserve_saved_relative_aliases_and_revision(
     assert_eq!(vault.read(&id("note")).unwrap().unwrap().content.unwrap(), source.replace("Boss", "Chief").as_bytes());
     vault.close_document_snapshot(old);vault.close_document_snapshot(fresh);
 }
+
+
+#[test]
+fn retired_global_registry_is_ordinary_native_data_and_explicit_attachment_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    let settings = "properties: [not a valid registry]\n";
+    create(&mut vault, "settings", "Properties.yaml", settings);
+    create(&mut vault, "note", "Note.md", "---\nscore: 7\n---\nBody");
+    create(&mut vault, "base", "Notes.base", "views: [{type: list, name: Notes, source: {kind: untyped}, filters: 'score == 7'}]\n");
+    vault.initialize_document_index().unwrap(); build(&mut vault);
+    let pin = vault.open_document_snapshot().unwrap();
+    let result = vault.query_base_document(&pin, &id("base"), &QueryOptions::default()).unwrap();
+    assert_eq!(result.value.result.rows.len(), 1);
+    assert_eq!(result.value.result.rows[0].entry_id, id("note"));
+    assert!(result.value.result.property_definition_diagnostics.is_empty());
+    let targets = vault.query_property_targets_document(&pin, None, &QueryOptions::default()).unwrap();
+    assert!(targets.value.definition.is_none()); assert!(targets.value.relation_targets.is_empty());
+    let legacy = DocumentPropertyDefinitionsSource { id: id("settings"), source: settings.into() };
+    expect_code(vault.query_base_document_sources(&pin, &id("base"), None, Some(&legacy), None, &QueryOptions::default()), "unsupported_property_definitions");
+    expect_code(vault.query_property_targets_document(&pin, Some(&legacy), &QueryOptions::default()), "unsupported_property_definitions");
+    assert_eq!(vault.read(&id("settings")).unwrap().unwrap().content.unwrap(), settings.as_bytes());
+    vault.close_document_snapshot(pin);
+}

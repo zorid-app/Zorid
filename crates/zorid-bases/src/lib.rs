@@ -25,13 +25,15 @@ pub use preparation::{
 };
 mod preview;
 mod query;
+mod sources;
+pub use sources::{BaseSourceScope, query_generation_scoped};
 mod summaries;
 pub use preview::{
     query_preview, BasePreviewResult, BasePreviewStatus, CommittedBasePreviewResult,
     PreviewCountsScope, MAX_PREVIEW_QUERY_OWNED_BYTES,
 };
 pub use program::{
-    compile_base, compile_base_source, BaseCompileError, BaseProgram, BASE_COMPILER_VERSION,
+    compile_base, compile_base_source, BaseCompileError, BaseProgram, BaseViewSource, BASE_COMPILER_VERSION,
 };
 pub use query::{
     query_base, BaseClockDependency, BaseGroup, BaseQueryResult, BaseRefreshHint, BaseRow,

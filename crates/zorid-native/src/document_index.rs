@@ -360,7 +360,7 @@ impl NativeVault {
         self.query_base_document_inner(pin, containing, view_name, Some(inline), None, options)
     }
     /// Cross-host wire seam. Attachments are source selectors, not definitions;
-    /// the native host always reads and checks its own retained root settings.
+    /// legacy global definition attachments are explicitly unsupported.
     pub fn query_base_document_sources(
         &self,
         pin: &DocumentQueryPin,
@@ -406,25 +406,14 @@ impl NativeVault {
         pin: &DocumentQueryPin,
         properties: Option<&DocumentPropertyDefinitionsSource>,
     ) -> NativeDocumentResult<(Option<zorid_core::EntryState>, Option<zorid_bases::properties::PropertyDefinitions>)> {
-        let manifest = self.document_manifest(pin)?;
-        let property_entry = manifest.entries().iter().find(|entry|
-            entry.state.kind == EntryKind::File && entry.state.path.as_str() == "Properties.yaml"
-        );
-        if let Some(property_entry) = property_entry {
-            let id = &property_entry.state.id;
-            let projected = self.store.read_document_projection(pin, id)?;
-            let bytes = projected.content.ok_or_else(|| NativeDocumentError::SourceUnavailable(id.clone()))?;
-            let text = std::str::from_utf8(&bytes).map_err(|_| NativeDocumentError::SourceUnavailable(id.clone()))?;
-            if properties.is_some_and(|supplied| &supplied.id != id || supplied.source != text) {
-                return Err(zorid_bases::ExpressionDiagnostic::new("property_source_mismatch", "Property settings do not match the saved root file").into());
-            }
-            Ok((Some(projected.witness.entry().clone()), Some(zorid_bases::properties::PropertyDefinitions::from_generation_source(pin.generation(), id, text)?)))
-        } else {
-            if properties.is_some() {
-                return Err(zorid_bases::ExpressionDiagnostic::new("property_source_mismatch", "No saved root property settings exist").into());
-            }
-            Ok((None, None))
+        self.document_manifest(pin)?;
+        if properties.is_some() {
+            return Err(zorid_bases::ExpressionDiagnostic::new(
+                "unsupported_property_definitions",
+                "Vault-wide property definition attachments are no longer supported",
+            ).into());
         }
+        Ok((None, None))
     }
     /// Selectors locate actual source bytes in this pin; no caller AST is trusted.
     /// Invalid YAML is diagnostic data, while missing/non-text sources fail closed.

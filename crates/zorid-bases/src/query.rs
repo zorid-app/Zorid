@@ -94,6 +94,9 @@ impl<'de> Deserialize<'de> for BaseSnapshot {
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct QueryOptions {
     pub view_index: usize,
+    /// Trusted native snapshot membership, never deserialized from a client.
+    #[serde(skip)]
+    pub source_scope: Option<std::sync::Arc<crate::BaseSourceScope>>,
     pub search_terms: Vec<String>,
     pub ignore_paths: Vec<String>,
     pub evaluation: EvaluationOptions,
@@ -129,6 +132,7 @@ impl Default for QueryOptions {
     fn default() -> Self {
         Self {
             view_index: 0,
+            source_scope: None,
             search_terms: Vec::new(),
             ignore_paths: Vec::new(),
             evaluation: EvaluationOptions::default(),
@@ -1568,10 +1572,12 @@ pub(crate) fn validate_rows_invocation(
     if let Some(values) = input.property_values {
         values.validate_context(&options.evaluation)?;
     }
-    program
-        .views
-        .get(options.view_index)
-        .ok_or_else(|| ExpressionDiagnostic::new("configuration", "View index out of range"))?;
+    let view = program.views.get(options.view_index).ok_or_else(|| ExpressionDiagnostic::new("configuration", "View index out of range"))?;
+    match &options.source_scope {
+        Some(scope) if scope.source() != &view.source => return Err(ExpressionDiagnostic::new("source-mismatch", "Captured membership belongs to a different view source")),
+        None if matches!(view.source, crate::BaseViewSource::Collection { .. }) => return Err(ExpressionDiagnostic::new("source-unavailable", "Collection source requires authoritative captured membership")),
+        _ => {},
+    }
     if input.records.len() > options.max_scanned {
         return Err(budget("Snapshot exceeds scanned-record budget"));
     }
@@ -1720,6 +1726,8 @@ pub(crate) fn query_rows_validated(
 ) -> Result<QueryRowsResult, ExpressionDiagnostic> {
     let budget = |message: &str| ExpressionDiagnostic::new("budget", message);
     let options = validated.selected_options.as_ref().unwrap_or(options);
+    let effective = program.effective_view(options.view_index)?;
+    let program = effective.as_ref();
     let view = program
         .views
         .get(options.view_index)
@@ -1780,12 +1788,16 @@ pub(crate) fn query_rows_validated(
             )?),
         )
     })?;
-    let properties = view
+    let mut properties = view
         .order
         .iter()
         .filter(|property| property.starts_with("note.") || available.contains(property))
         .cloned()
         .collect::<Vec<_>>();
+    if matches!(view.source, crate::BaseViewSource::Untyped) {
+        properties.retain(|property| property.starts_with("file."));
+        if properties.is_empty() { properties.push("file.name".into()); }
+    }
     admit(&mut admission, |admission| {
         admission.charge(0)?;
         Ok(available
@@ -1978,6 +1990,10 @@ pub(crate) fn query_rows_validated(
         None
     };
     for record in input.records {
+        if !record.path.to_ascii_lowercase().ends_with(".md") { continue; }
+        if let Some(scope) = &options.source_scope {
+            if !record.witness.as_ref().is_some_and(|w| scope.includes(&w.entry_id)) { continue; }
+        }
         if ignored.contains(&record.path) {
             continue;
         }
@@ -2505,7 +2521,7 @@ pub(crate) fn query_rows_validated(
         })?;
         matched_available.push(format!("formula.{name}"));
     }
-    let available = matched_available;
+    let available = if matches!(view.source, crate::BaseViewSource::Untyped) { matched_available.into_iter().filter(|key| key.starts_with("file.")).collect::<Vec<_>>() } else { matched_available };
     admit(&mut admission, |admission| {
         admission.charge(0)?;
         Ok(available
@@ -2748,6 +2764,11 @@ pub(crate) fn query_rows_validated(
         } else {
             (None, Vec::new())
         };
+    if matches!(view.source, crate::BaseViewSource::Untyped) {
+        // Frontmatter remains available to predicates and sort expressions, but
+        // untyped browsing never exposes a property grid or editable cells.
+        for row in &mut rows { row.values.retain(|key, _| key.starts_with("file.")); row.edit_values.clear(); }
+    }
     let dependency = program
         .refresh_dependency(options.view_index)
         .join(

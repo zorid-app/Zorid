@@ -1359,18 +1359,13 @@ fn read_property_definitions(
     generation: &Generation,
     supplied: Option<PropertyDefinitionsSource>,
 ) -> Result<(Option<&EntryState>, Option<zorid_bases::properties::PropertyDefinitions>), BaseReadError> {
-    let entry = generation.manifest().entries().iter().find(|entry|
-        entry.kind == zorid_core::EntryKind::File && entry.path.as_str() == "Properties.yaml"
-    );
-    match (entry, supplied) {
-        (None, None) => Ok((None, None)),
-        (Some(entry), Some(source)) if entry.id == source.id => Ok((Some(entry), Some(
-            zorid_bases::properties::PropertyDefinitions::from_generation_source(generation, &source.id, &source.source)
-                .map_err(BaseReadError::Evaluation)?
-        ))),
-        _ => Err(BaseReadError::Code("index_property_source_mismatch")),
+    let _ = generation;
+    if supplied.is_some() {
+        return Err(BaseReadError::Code("index_unsupported_property_definitions"));
     }
+    Ok((None, None))
 }
+
 fn property_targets_read<'a>(
     generation: &'a Generation,
     facts: &[zorid_bases::FilePresentationFacts],
@@ -2374,6 +2369,26 @@ mod tests {
         let (embedded, _) = evaluate_base(&generation.generation, &EntryId::new("inline").unwrap(), inline_source.as_bytes(), &[], input, None, None).unwrap();
         assert_eq!(embedded.result.rows.len(), 1);
         assert_eq!(embedded.result.rows[0].values["formula.context"], zorid_bases::BaseValue::String {value: "Config/Inline.md".into()});
+    }
+    #[test]
+    fn retired_global_registry_never_grants_wasm_definitions_or_blocks_an_ordinary_query() {
+        let settings = "properties: [not a valid registry]\n";
+        let base = "views: [{type: list, name: Notes, source: {kind: untyped}}]\n";
+        let mut h: serde_json::Value = serde_json::from_str(&header()).unwrap();
+        h["entries"].as_array_mut().unwrap().extend([
+            serde_json::json!({"id":"settings","path":"Properties.yaml","kind":"file","revision":"r1","deleted":false}),
+            serde_json::json!({"id":"base","path":"Notes.base","kind":"file","revision":"r1","deleted":false}),
+        ]);
+        let mut builder = WasmDocumentIndexBuilder::new(&h.to_string()).unwrap();
+        for id in ["a", "b"] { builder.add_text(id, b"body").unwrap(); }
+        builder.add_text("settings", settings.as_bytes()).unwrap(); builder.add_text("base", base.as_bytes()).unwrap();
+        let generation = builder.finish().unwrap();
+        let (result, _) = evaluate_base(&generation.generation, &EntryId::new("base").unwrap(), base.as_bytes(), &[], BaseReadOptions::default(), None, None).unwrap();
+        assert_eq!(result.result.rows.len(), 2);
+        let targets = property_targets_read(&generation.generation, &[], PropertyTargetReadOptions::default()).unwrap();
+        assert!(targets.definition.is_none()); assert!(targets.relation_targets.is_empty());
+        let supplied = serde_json::from_value::<BaseReadOptions>(serde_json::json!({"propertyDefinitionsSource":{"id":"settings","source":settings}})).unwrap();
+        assert!(matches!(evaluate_base(&generation.generation, &EntryId::new("base").unwrap(), base.as_bytes(), &[], supplied, None, None), Err(BaseReadError::Code("index_unsupported_property_definitions"))));
     }
     #[test]
     fn property_settings_attachment_is_required_and_checked_against_exact_retained_source() {

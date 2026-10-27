@@ -111,7 +111,9 @@ function baseOptions(input:unknown,targets=false):string {
   if(value.summaryPreviewProperty!==undefined)result.summaryPreviewProperty=inputText(value.summaryPreviewProperty,65536);
   if(value.summaryPreviewGroupKeyId!==undefined){const group=inputText(value.summaryPreviewGroupKeyId,8*1024*1024);if(!group.length||typeof result.summaryPreviewProperty!=='string')throw fail('index_invalid_request');result.summaryPreviewGroupKeyId=group;}
   if(value.inlineSource!==undefined){const inline=value.inlineSource as Record<string,unknown>;if(!inline||typeof inline!=='object'||Array.isArray(inline)||Object.keys(inline).length!==3||!['source','startByte','endByte'].every(key=>Object.hasOwn(inline,key))||!Number.isSafeInteger(inline.startByte)||!Number.isSafeInteger(inline.endByte)||Number(inline.startByte)<0||Number(inline.endByte)>LIMITS.text||Number(inline.endByte)<=Number(inline.startByte))throw fail('index_invalid_request');result.inlineSource={source:inputText(inline.source,262144),startByte:inline.startByte,endByte:inline.endByte};}
-  if(value.propertyDefinitionsSource!==undefined){const source=value.propertyDefinitionsSource as Record<string,unknown>;if(!source||typeof source!=='object'||Array.isArray(source)||Object.keys(source).length!==2||!Object.hasOwn(source,'id')||!Object.hasOwn(source,'source')||!validId(source.id))throw fail('index_invalid_request');result.propertyDefinitionsSource={id:source.id,source:inputText(source.source,262144)};}
+  // Keep the legacy key recognized only to return a clear unsupported-input
+  // error. It can no longer attach a global schema to arbitrary files.
+  if(value.propertyDefinitionsSource!==undefined){if(value.propertyDefinitionsSource===null)throw fail('index_invalid_request');throw fail('index_unsupported_property_definitions');}
   const raw=JSON.stringify(result);if(size(raw)>1024*1024-16*1024)throw fail('index_input_limit');return raw;
 }
 function taskOptions(input:unknown):string {
@@ -463,19 +465,12 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
       const fact={witness:{entryId:e.id,revision:e.revision},size:presentation.size_bytes,ctimeMs:presentation.ctime_ms,mtimeMs:presentation.mtime_ms};factsBytes+=size(JSON.stringify(fact))+(facts.length?1:0);if(factsBytes>LIMITS.baseFacts)throw fail('index_input_limit');facts.push(fact);}
     return JSON.stringify(facts);
   }
-  async function savedPropertyOptions(pin:Pin,raw:string):Promise<string> {
-    const options=JSON.parse(raw) as Record<string,unknown>,entry=pin.header.entries.find(e=>e.kind==='file'&&e.path==='Properties.yaml');
-    if(entry){const row=await readRow(pin.generation,entry);if(!row.projection||row.projection.byteLength>262144)throw fail('index_source_unavailable');
-      let source:string;try{source=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(row.projection);}catch{throw fail('index_source_unavailable');}
-      const expected={id:entry.id,source};if(options.propertyDefinitionsSource!==undefined&&!equal(options.propertyDefinitionsSource,expected))throw fail('index_property_source_mismatch');options.propertyDefinitionsSource=expected;}
-    const captured=JSON.stringify(options);if(size(captured)>1024*1024-16*1024)throw fail('index_input_limit');return captured;
-  }
   const api:BrowserDocumentIndex={
     ...(propertyTargetsAvailable?{propertyTargetsAvailable:true,async propertyTargets(input:NonNullable<Parameters<NonNullable<BrowserDocumentIndex['propertyTargets']>>[0]>){
       const pinId=inputText(input.pinId,128),captured=baseOptions(input.options,true),g=await assertPin(pinId);active();
       const pin=pins.get(pinId);if(!pin||pin.value!==g||typeof g.propertyTargetsJson!=='function')throw fail('index_unavailable');
       const admitted=()=>{active();if(pins.get(pinId)!==pin)throw fail('index_snapshot_expired');};
-      const facts=baseFacts(pin),options=await savedPropertyOptions(pin,captured);await assertPin(pinId);admitted();
+      const facts=baseFacts(pin),options=captured;await assertPin(pinId);admitted();
       const result=json<unknown>(rust(()=>g.propertyTargetsJson!(facts,options)));await assertPin(pinId);admitted();return result;
     }}:{}),
     initialize(){active();return recover();},
@@ -756,7 +751,7 @@ export function createBrowserDocumentIndexBackend(host:BrowserDocumentIndexHost)
       const g=await assertPin(pinId);active();const pin=pins.get(pinId);if(!pin||pin.value!==g)throw fail('index_snapshot_expired');
       const admitted=()=>{active();if(pins.get(pinId)!==pin)throw fail('index_snapshot_expired');};
       const entry=pin.header.entries.find(e=>e.id===id&&e.kind==='file');if(!entry)throw fail('index_missing_source');
-      const factsJson=baseFacts(pin),options=await savedPropertyOptions(pin,captured);
+      const factsJson=baseFacts(pin),options=captured;
       const row=await readRow(pin.generation,entry);if(!row.projection)throw fail('index_source_unavailable');
       await assertPin(pinId);
       // No await after acquiring this owner handle: close/rebuild cannot free it

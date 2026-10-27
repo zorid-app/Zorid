@@ -2,7 +2,44 @@
 //! remains the document crate's responsibility; this module never writes source.
 use crate::{BaseValue, ExpressionDiagnostic, PropertyValue};
 /// Change whenever Base configuration compilation or language meaning changes.
-pub const BASE_COMPILER_VERSION: &str = "zorid-base-yaml-expression-grouping-v9";
+pub const BASE_COMPILER_VERSION: &str = "zorid-base-view-sources-v10";
+
+/// A view has exactly one source. Display labels never identify membership.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum BaseViewSource {
+    #[default]
+    Untyped,
+    Collection { id: String },
+}
+impl BaseViewSource {
+    pub fn validate(&self) -> Result<(), ExpressionDiagnostic> {
+        if let Self::Collection { id } = self {
+            if id.len() != 12 || !id.bytes().all(|c| c.is_ascii_digit() || c.is_ascii_lowercase()) {
+                return Err(error("Collection source requires a 12-character lowercase alphanumeric identity"));
+            }
+        }
+        Ok(())
+    }
+}
+fn view_source(value: Option<&PropertyValue>) -> Result<BaseViewSource, ExpressionDiagnostic> {
+    let Some(value) = value else { return Ok(BaseViewSource::Untyped); };
+    let PropertyValue::Object(fields) = value else { return Err(error("View source must be a mapping")); };
+    let source = match get(value, "kind").and_then(text) {
+        Some("untyped") if fields.len() == 1 => BaseViewSource::Untyped,
+        Some("collection") if fields.len() == 2 && get(value, "id").and_then(text).is_some() => BaseViewSource::Collection { id: get(value, "id").and_then(text).unwrap().into() },
+        _ => return Err(error("Choose exactly one collection or untyped notes as the view source")),
+    };
+    source.validate()?;
+    Ok(source)
+}
+fn named_expressions(configuration: &PropertyValue, key: &str) -> Result<Vec<(String, String)>, ExpressionDiagnostic> {
+    match get(configuration, key) {
+        None => Ok(Vec::new()),
+        Some(PropertyValue::Object(values)) => values.iter().map(|(name, value)| text(value).map(|value| (name.clone(), value.into())).ok_or_else(|| error("Expression definitions must be strings"))).collect(),
+        _ => Err(error("Expression definitions must be a named mapping")),
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct BaseProgram {
@@ -16,6 +53,19 @@ pub struct BaseProgram {
     pub configuration: PropertyValue,
 }
 impl BaseProgram {
+    pub fn view_source(&self, index: usize) -> Option<&BaseViewSource> { self.views.get(index).map(|view| &view.source) }
+    /// Explicitly sourced views own their expressions and filters. Legacy root
+    /// configuration is inherited only by views without a source declaration.
+    pub(crate) fn effective_view(&self, index: usize) -> Result<std::borrow::Cow<'_, Self>, ExpressionDiagnostic> {
+        let view = self.views.get(index).ok_or_else(|| error("View index out of range"))?;
+        if !view.explicit_source { return Ok(std::borrow::Cow::Borrowed(self)); }
+        let mut selected = self.clone();
+        selected.filter = None;
+        selected.formulas = named_expressions(&view.configuration, "formulas")?;
+        selected.summaries = named_expressions(&view.configuration, "summaryDefinitions")?;
+        selected.summary_preview_dependency = crate::query::BaseClockDependency::Instant;
+        Ok(std::borrow::Cow::Owned(selected))
+    }
     pub fn view_names(&self) -> Vec<Option<&str>> {
         self.views
             .iter()
@@ -56,6 +106,8 @@ pub(crate) struct Criterion {
 }
 #[derive(Clone, Debug)]
 pub(crate) struct View {
+    pub source: BaseViewSource,
+    pub explicit_source: bool,
     pub configuration: PropertyValue,
     pub filter: Option<Filter>,
     pub order: Vec<String>,
@@ -93,6 +145,9 @@ pub(crate) fn clock_independent(
     program: &BaseProgram,
     check: &mut impl FnMut(usize) -> Option<()>,
 ) -> bool {
+    // Scoped expression definitions are selected per invocation. Until the
+    // answer-cache proof captures that selection, use fresh answers for them.
+    if program.views.iter().any(|view| view.explicit_source) { return false; }
     fn filter(value: &Filter, check: &mut impl FnMut(usize) -> Option<()>) -> bool {
         if check(1).is_none() {
             return false;
@@ -328,6 +383,12 @@ pub fn compile_base(configuration: PropertyValue) -> Result<BaseProgram, Express
         }) {
             return Err(error("Each view needs nonempty type and name"));
         }
+        let source = view_source(get(configuration, "source"))?;
+        let explicit_source = get(configuration, "source").is_some();
+        if explicit_source {
+            named_expressions(configuration, "formulas")?;
+            named_expressions(configuration, "summaryDefinitions")?;
+        }
         let order = match get(configuration, "order") {
             None => vec!["file.name".into()],
             Some(PropertyValue::Array(values)) => values
@@ -399,6 +460,7 @@ pub fn compile_base(configuration: PropertyValue) -> Result<BaseProgram, Express
         });
         views.push(View {
             configuration: configuration.clone(),
+            source, explicit_source,
             filter: view_filter,
             order,
             sort,
@@ -406,7 +468,7 @@ pub fn compile_base(configuration: PropertyValue) -> Result<BaseProgram, Express
             group_order,
             limit,
             summaries: view_summaries,
-            refresh_dependency,
+            refresh_dependency: if explicit_source { crate::query::BaseClockDependency::Instant } else { refresh_dependency },
         });
     }
     Ok(BaseProgram {

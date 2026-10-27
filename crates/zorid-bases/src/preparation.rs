@@ -151,6 +151,9 @@ fn stopped(options: &QueryOptions) -> Result<(), ExpressionDiagnostic> {
 }
 fn limits(options: &QueryOptions) -> Result<(), ExpressionDiagnostic> {
     stopped(options)?;
+    if options.source_scope.is_some() {
+        return Err(ExpressionDiagnostic::new("source-unavailable", "Scoped membership requires fresh source-bound query preparation"));
+    }
     if options.max_steps == 0
         || options.max_steps > crate::MAX_QUERY_STEPS
         || options.max_scanned > crate::MAX_QUERY_SCANNED
@@ -1751,6 +1754,7 @@ fn copy_options(o: &QueryOptions, independent: bool) -> Result<QueryOptions, Exp
     stopped(o)?;
     Ok(QueryOptions {
         view_index: o.view_index,
+        source_scope: None,
         search_terms: copy_strings(&o.search_terms, o)?,
         ignore_paths: copy_strings(&o.ignore_paths, o)?,
         current_entry_id: o.current_entry_id.clone(),

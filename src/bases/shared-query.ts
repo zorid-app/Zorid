@@ -71,7 +71,7 @@ function projectBaseResult(raw: DocumentBaseResult|DocumentBasePreviewResult, ve
       rows: Object.freeze(group.entryIds.map(id => byId.get(id) ?? invalid())) });
   }));
   const diagnostics: BaseQueryDiagnostic[] = result.diagnostics.map(item => Object.freeze({ ...item, property: item.property ?? undefined, phase: item.phase as BaseQueryDiagnostic['phase'] }));
-  if ('propertyDefinitionDiagnostics' in result && Array.isArray(result.propertyDefinitionDiagnostics)) for(const diagnostic of result.propertyDefinitionDiagnostics) diagnostics.push(Object.freeze({phase:'input',path:'Properties.yaml',property:diagnostic.property??undefined,code:diagnostic.code??'configuration',message:diagnostic.message}));
+  if ('propertyDefinitionDiagnostics' in result && Array.isArray(result.propertyDefinitionDiagnostics)) for(const diagnostic of result.propertyDefinitionDiagnostics) diagnostics.push(Object.freeze({phase:'input',path:definition?.path ?? '',property:diagnostic.property??undefined,code:diagnostic.code??'configuration',message:diagnostic.message}));
   const paths = new Map(entries.filter(entry => entry.entryId).map(entry => [entry.entryId, entry.path]));
   for (const issue of result.metadataIssues) {
     const path = paths.get(issue.witness.entryId) ?? '';
@@ -168,7 +168,7 @@ export class SharedBaseQueryRunner {
       if (input.query.currentFilePath === null && input.current !== null) return invalid('The Base current-file context is inconsistent.');
       if (input.query.currentFileEntryId !== undefined && (!input.current || input.current.entryId !== input.query.currentFileEntryId)) return invalid('The pinned current note changed. Refresh before using this Base.');
       const ignorePaths = input.query.ignore ? input.entries.filter(entry => entry.type === 'file' && input.query.ignore!(entry.path)).map(entry => entry.path) : undefined;
-      const previewSupported = !input.query.inlineSource && !input.entries.some(entry => entry.path === 'Properties.yaml' && entry.type === 'file') && input.service.basePreviewAvailable === true && !!input.service.maintenance;
+      const previewSupported = !input.query.inlineSource && input.service.basePreviewAvailable === true && !!input.service.maintenance;
       if (previewSupported && typeof input.service.openPreview !== 'function') return invalid('The Base preview capability is incomplete.');
       run.previewEnabled = previewSupported && !!input.onPreview;
       const previewLive = () => live() && run.previewEnabled === true;
@@ -272,16 +272,7 @@ export class SharedBaseQueryRunner {
       const clockMs = input.query.now?.().getTime() ?? captured.clockMs;
       if (!Number.isSafeInteger(clockMs)) return invalid('The Base query clock is invalid.');
       const timezone = captured.timezone;
-      let propertyDefinitionsSource: { id: string; source: string } | undefined;
-      const settings = input.entries.find(entry => entry.path === 'Properties.yaml' && entry.type === 'file');
-      if (settings) {
-        if (!settings.entryId || !input.readFile) return invalid('Saved property settings are unavailable. Refresh this Base to retry.');
-        const metadata = await read(() => pin.metadata(settings.entryId!)); check();
-        if (metadata.value.entry.path !== settings.path || metadata.value.entry.revision !== settings.revision) return invalid('Property settings changed. Refresh this Base before editing.');
-        const source = await input.readFile(settings.path); check();
-        propertyDefinitionsSource = { id: settings.entryId, source };
-      }
-      const options = { viewIndex: input.viewIndex, searchTerms: input.query.searchTerms, ignorePaths, clockMs, timezone, maxRows: 10000, propertyDefinitionsSource, summaryPreviewProperty: input.query.summaryPreviewProperty, summaryPreviewGroupKeyId: input.query.summaryPreviewGroupKeyId, randomSeed: input.query.randomSeed,
+      const options = { viewIndex: input.viewIndex, searchTerms: input.query.searchTerms, ignorePaths, clockMs, timezone, maxRows: 10000, summaryPreviewProperty: input.query.summaryPreviewProperty, summaryPreviewGroupKeyId: input.query.summaryPreviewGroupKeyId, randomSeed: input.query.randomSeed,
         ...(input.current ? { currentEntryId: input.current.entryId } : {}), maxSteps: input.query.maxSteps, inlineSource: input.query.inlineSource };
       const report = await read(() => pin.base({ id: definition.id, viewName: input.viewName, options })); check();
       if (report.value.definition.id !== definition.id || report.value.definition.revision !== definition.revision || report.value.definition.path !== definition.path

@@ -157,8 +157,8 @@ export async function queryPropertyTargets(input: PropertyTargetsInput): Promise
   if (!maintained.current || !maintained.snapshot || maintained.rebuildRequired) throw new DocumentSemanticsError('property_targets_index_not_current');
   const inventory = await adapter.list(); check();
   if (!sameSaved(inventory.find(entry => entry.path === current.path), current)) throw new DocumentSemanticsError('property_targets_stale');
-  const settingsFile = inventory.find(entry => entry.path === 'Properties.yaml' && entry.type === 'file');
-  const settings = settingsFile ? saved(settingsFile) : null;
+  // Definitions belong to databases. Ordinary note queries never read a global registry.
+  const settings = null;
   let pin: TargetsPin | undefined, result: PropertyTargetsResult;
   try {
     pin = await service.open(); check();
@@ -170,22 +170,14 @@ export async function queryPropertyTargets(input: PropertyTargetsInput): Promise
     };
     const noteMetadata = await pin.metadata(current.id); reportCheck(noteMetadata);
     if (!sameEntry(noteMetadata.value.entry, current)) throw new DocumentSemanticsError('property_targets_stale');
-    let propertyDefinitionsSource: { id: string; source: string } | undefined;
-    if (settings) {
-      const metadata = await pin.metadata(settings.id); reportCheck(metadata);
-      if (!sameEntry(metadata.value.entry, settings)) throw new DocumentSemanticsError('property_targets_stale');
-      const source = await input.readFile(settings.path); check();
-      propertyDefinitionsSource = { id: settings.id, source };
-    }
     const captured = (input.clock ?? createBaseClockHost()).capture(input.timezone);
     if (!Number.isSafeInteger(captured.clockMs)) throw new DocumentSemanticsError('invalid_request');
-    const report = await pin.propertyTargets({ options: { ...(propertyDefinitionsSource ? { propertyDefinitionsSource } : {}), currentEntryId: current.id,
+    const report = await pin.propertyTargets({ options: { currentEntryId: current.id,
       clockMs: captured.clockMs, timezone: captured.timezone, maxRows: input.maxRows ?? 10000, ...(input.maxSteps === undefined ? {} : { maxSteps: input.maxSteps }) } });
     reportCheck(report);
-    if (settings ? !sameEntry(report.value.definition, settings) : report.value.definition !== null) throw new DocumentSemanticsError('property_targets_stale');
+    if (report.value.definition !== null) throw new DocumentSemanticsError('property_targets_stale');
     const latestInventory = await adapter.list(); check();
-    const latestSettings = latestInventory.find(entry => entry.path === 'Properties.yaml' && entry.type === 'file');
-    if (!sameSaved(latestInventory.find(entry => entry.path === current.path), current) || (settings ? !sameSaved(latestSettings, settings) : !!latestSettings)) throw new DocumentSemanticsError('property_targets_stale');
+    if (!sameSaved(latestInventory.find(entry => entry.path === current.path), current)) throw new DocumentSemanticsError('property_targets_stale');
     // Core status observes all saved candidates, not merely the note/settings
     // visible in the workspace's possibly older namespace inventory.
     const latest = await service.status(); check();

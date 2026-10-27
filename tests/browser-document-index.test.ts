@@ -958,3 +958,19 @@ test('Base transport captures inline source summary preview and safe seeded rand
   for(const options of [{inlineSource:null},{propertyDefinitionsSource:null},{randomSeed:null},{randomSeed:-1},{randomSeed:9007199254740992},{summaryPreviewProperty:null},{summaryPreviewGroupKeyId:null},{summaryPreviewGroupKeyId:'missing-property'}])await assert.rejects(index.base({pinId:pin.pinId,id:'note',options:options as any}),{code:'index_invalid_request'});
   await index.closePin(pin.pinId);await index.close();
 });
+
+
+test('retired global registry is ordinary browser data and explicit global attachments are rejected',async()=>{
+  const f=fixture({propertyTargets:true});
+  f.file('settings','properties: [this is not a valid registry]\n',{path:'Properties.yaml'});
+  f.file('note','---\nscore: 7\n---\nbody');f.file('base','views: [{type: list, name: Notes, source: {kind: untyped}}]\n',{path:'Notes.base'});
+  const index=f.open();await f.build(index);const pin=await index.open();
+  try {
+    await index.propertyTargets!({pinId:pin.pinId,options:{currentEntryId:'note',clockMs:0}});
+    await index.base({pinId:pin.pinId,id:'base',options:{clockMs:0}});
+    assert.equal(f.propertyTargetCalls[0].options.propertyDefinitionsSource,undefined);
+    assert.equal(f.baseCalls[0].options.propertyDefinitionsSource,undefined);
+    for(const call of [()=>index.propertyTargets!({pinId:pin.pinId,options:{propertyDefinitionsSource:{id:'settings',source:'properties: {}'}}}),()=>index.base({pinId:pin.pinId,id:'base',options:{propertyDefinitionsSource:{id:'settings',source:'properties: {}'}}})])await assert.rejects(call(),{code:'index_unsupported_property_definitions'});
+    assert.equal(f.propertyTargetCalls.length,1);assert.equal(f.baseCalls.length,1);
+  } finally {await index.closePin(pin.pinId);await index.close();}
+});
