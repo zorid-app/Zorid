@@ -5,7 +5,8 @@ import {parse} from 'yaml';
 import {BaseDocument} from '../../src/bases/document.ts';
 import {executeBaseQuery} from '../../src/bases/query.ts';
 import {BASE, VIEW, A, B, RENAMED_A, ROW_A, ROW_B, ROW_NULL, fixtureFiles, expectedFiles, phases} from './fixtures.mjs';
-import {sidebarPinFrame, pinFrameReady, assertPinFrame, assertPinAudit, installPinAudit, assertRenamedIdentity} from './oracles.mjs';
+import {sidebarPinFrame, pinFrameReady, assertPinFrame, assertPinAudit, installPinAudit, assertRenamedIdentity, pinKeyboardPortalFrame, assertCleanPinKeyboardPortal} from './oracles.mjs';
+import {keyboardPinFromCleanPortal} from './campaign.mjs';
 
 const expected = {pinned: false, rows: [{path: ROW_A, score: 11}], title: 'Context A'};
 const frame = () => ({hostCount: 1, visibleHosts: 1, hostConnected: true, gridVisible: true, gridLabel: VIEW, rowCount: '2',
@@ -85,5 +86,52 @@ test('passive audit captures removed notices and a transient controller error be
     assertPinAudit(structuredClone(audit.read()), {requireRefusal: true});
     const session = dom.window.document.querySelector('.bases-session'); session.setAttribute('data-base-controller-error', 'true'); session.setAttribute('data-base-controller-error', 'false');
     const caught = structuredClone(audit.finish()); assert.equal(caught.events.length, 2); assert.throws(() => assertPinAudit(caught));
+  } finally { dom.window.close(); }
+});
+
+const keyboardFrame = () => ({panelCount: 1, panelConnected: true, panelVisible: true, bodyPortal: true, nameValue: VIEW, nameDisabled: false,
+  triggerExpanded: 'true', pinCount: 1, pinVisible: true, pinDisabled: false, pinLabel: 'Pin sidebar Base', pinPressed: 'false', focusedName: true, focusedPin: false,
+  focus: {tag: 'INPUT', role: null, label: 'View name', path: null, property: null}});
+function keyboardDriver(frames, {portalCloses = true} = {}) {
+  const keys = [], evidence = {actions: []}; let index = 0;
+  const ui = {
+    async dom(source) { assert.ok(source.includes('pinKeyboardPortalFrame')); return structuredClone(frames[Math.min(index++, frames.length - 1)]); },
+    async key(key, options) { keys.push({key, options}); },
+    async wait(source, label) { assert.ok(source.includes('View options')); assert.match(label, /before its frozen-context result/); if (!portalCloses) throw Error('Owned clean portal remained connected'); return true; },
+    async click() { throw Error('The keyboard route cannot issue a pointer action'); },
+  };
+  return {ui, evidence, keys};
+}
+test('clean-portal keyboard protocol retains each focus frame and sends only ordinary Shift+Tab and one Enter', async () => {
+  const initial = keyboardFrame(), back = {...keyboardFrame(), focusedName: false, focus: {tag: 'BUTTON', role: null, label: 'Back', path: null, property: null}}, pin = {...keyboardFrame(), focusedName: false, focusedPin: true, focus: {tag: 'BUTTON', role: null, label: 'Pin sidebar Base', path: null, property: null}};
+  const driver = keyboardDriver([initial, back, pin]); await keyboardPinFromCleanPortal(driver);
+  assert.deepEqual(driver.keys, [{key: 'Tab', options: {modifiers: 8}}, {key: 'Tab', options: {modifiers: 8}}, {key: 'Enter', options: undefined}]);
+  const receipt = driver.evidence.actions[0]; assert.equal(receipt.tabKeys, 2); assert.equal(receipt.frames.length, 3); assert.equal(receipt.activated, true); assert.ok(receipt.portalAbsentAt >= receipt.activationAt);
+  assert.equal(receipt.frames[0].frame.focusedName, true); assert.equal(receipt.frames.at(-1).frame.focusedPin, true); assert.equal(phases.length, 7);
+});
+test('a modeled Tab trap fails at48 without activating Pin or issuing a focus/pointer/extra-key fallback', async () => {
+  const driver = keyboardDriver([keyboardFrame()]); await assert.rejects(keyboardPinFromCleanPortal(driver), /reachable through bounded ordinary Shift\+Tab/);
+  assert.equal(driver.keys.length, 48); assert.ok(driver.keys.every(item => item.key === 'Tab' && item.options.modifiers === 8));
+  const receipt = driver.evidence.actions[0]; assert.equal(receipt.tabKeys, 48); assert.equal(receipt.frames.length, 49); assert.equal(receipt.activated, false); assert.equal(receipt.portalAbsentAt, undefined);
+});
+test('early portal removal, a dirty name, a disabled/wrong Pin and incorrect initial focus all fail before activation', async () => {
+  for (const changed of [{panelCount: 0, panelConnected: false}, {nameValue: ''}, {pinDisabled: true}, {pinLabel: 'Unpin sidebar Base', pinPressed: 'true'}, {bodyPortal: false}]) {
+    const driver = keyboardDriver([keyboardFrame(), {...keyboardFrame(), ...changed, focusedName: false, focusedPin: true}]);
+    await assert.rejects(keyboardPinFromCleanPortal(driver)); assert.equal(driver.keys.length, 1); assert.equal(driver.keys[0].key, 'Tab'); assert.equal(driver.evidence.actions[0].activated, false);
+  }
+  const initial = keyboardDriver([{...keyboardFrame(), focusedName: false, focusedPin: true}]); await assert.rejects(keyboardPinFromCleanPortal(initial), /initially focuses/); assert.deepEqual(initial.keys, []);
+});
+test('failure to dismiss the clean portal after one keyboard activation cannot accept a later frozen row', async () => {
+  const driver = keyboardDriver([keyboardFrame(), {...keyboardFrame(), focusedName: false, focusedPin: true}], {portalCloses: false});
+  await assert.rejects(keyboardPinFromCleanPortal(driver), /Owned clean portal remained connected/);
+  assert.deepEqual(driver.keys.map(item => item.key), ['Tab', 'Enter']); assert.equal(driver.evidence.actions[0].activated, true); assert.equal(driver.evidence.actions[0].portalAbsentAt, undefined);
+});
+test('portable clean-portal reader observes actual fixture focus and rejects portals inside the inert host', () => {
+  const dom = document(`<aside class="right-sidebar"><div class="right-tabs"><button class="sidebar-base-pin" aria-label="Pin sidebar Base" aria-pressed="false"></button></div><div class="sidebar-base-host"><button aria-label="Views" aria-expanded="true"></button></div></aside><section class="bases-toolbar-popover" data-panel="View options" role="dialog"><input aria-label="View name" value="${VIEW}"></section>`);
+  try {
+    const doc = dom.window.document, name = doc.querySelector('input'), pin = doc.querySelector('.sidebar-base-pin'); name.focus();
+    const read = () => structuredClone(dom.window.eval(`(${pinKeyboardPortalFrame.toString()})(document)`));
+    assertCleanPinKeyboardPortal(read(), {initial: true}); pin.focus(); const focused = read(); assertCleanPinKeyboardPortal(focused); assert.equal(focused.focusedPin, true); assert.equal(focused.focus.label, 'Pin sidebar Base');
+    doc.querySelector('.sidebar-base-host').append(doc.querySelector('.bases-toolbar-popover')); assert.throws(() => assertCleanPinKeyboardPortal(read()));
   } finally { dom.window.close(); }
 });

@@ -77,6 +77,28 @@ export function assertPinAudit(audit, {requireRefusal = false} = {}) {
   }
   if (requireRefusal) assert.ok(audit.events.length > 0, 'Intentional draft refusal was observed');
 }
+/** Public focus/portal facts for the keyboard-only Pin route. */
+export function pinKeyboardPortalFrame(document) {
+  const visible = node => !!node && !!node.getClientRects().length && !node.closest('[hidden]');
+  const panels = [...document.querySelectorAll('.bases-toolbar-popover[data-panel="View options"][role="dialog"]')], panel = panels[0];
+  const name = panel?.querySelector('input[aria-label="View name"]'), active = document.activeElement;
+  const pins = [...document.querySelectorAll('.right-sidebar .right-tabs button.sidebar-base-pin')], pin = pins[0];
+  return {panelCount: panels.length, panelConnected: !!panel?.isConnected, panelVisible: visible(panel), bodyPortal: panel?.parentElement === document.body,
+    nameValue: name?.value ?? null, nameDisabled: name?.disabled ?? null,
+    triggerExpanded: document.querySelector('.right-sidebar .sidebar-base-host button[aria-label="Views"]')?.getAttribute('aria-expanded') ?? null,
+    pinCount: pins.length, pinVisible: visible(pin), pinDisabled: pin?.disabled ?? null, pinLabel: pin?.getAttribute('aria-label') ?? null, pinPressed: pin?.getAttribute('aria-pressed') ?? null,
+    focusedName: active === name, focusedPin: active === pin,
+    focus: {tag: active?.tagName ?? null, role: active?.getAttribute('role') ?? null, label: active?.getAttribute('aria-label') ?? null,
+      path: active?.getAttribute('data-path') ?? null, property: active?.getAttribute('data-property') ?? null}};
+}
+export function assertCleanPinKeyboardPortal(frame, {initial = false} = {}) {
+  assert.equal(frame.panelCount, 1); assert.equal(frame.panelConnected, true); assert.equal(frame.panelVisible, true); assert.equal(frame.bodyPortal, true);
+  assert.equal(frame.nameValue, VIEW, 'Tab traversal must leave the clean view name untouched'); assert.equal(frame.nameDisabled, false); assert.equal(frame.triggerExpanded, 'true');
+  assert.equal(frame.pinCount, 1); assert.equal(frame.pinVisible, true); assert.equal(frame.pinDisabled, false); assert.equal(frame.pinLabel, 'Pin sidebar Base'); assert.equal(frame.pinPressed, 'false');
+  assert.equal(typeof frame.focusedPin, 'boolean');
+  if (initial) assert.equal(frame.focusedName, true, 'The normal clean-panel opener initially focuses its actual View name field');
+  return frame;
+}
 /** Test-owned bounded error observation only; no product state or callbacks. */
 export function installPinAudit() {
   let phase = 'ordinary-sidebar-context', overflow = false;

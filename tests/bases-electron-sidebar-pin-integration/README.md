@@ -21,6 +21,15 @@ Electron app. Fixture notes remain byte-for-byte unchanged; only the explicitly
 renamed context path moves. Read-only normal bridge `stat` proves its stable
 entry ID, while ordinary logical reads agree with the physical fixture bytes.
 
+The first Pin opens a clean sidebar View options portal through the normal Views
+controls, then uses at most 48 actual Shift+Tab keys to reach the exact public
+Pin button and sends one Enter. Every step records public focus and unchanged
+panel/name/control state. No pointer, focus setter or fallback dismisses that
+portal; the Pin operation must remove it before the frozen rows are accepted.
+An unreachable keyboard route or an early/dirty/missing portal fails. This
+native case does not establish the separate dirty view-name portal behavior;
+that remains module-tested until a corresponding native scenario is run.
+
 Inputs use actual public controls and renderer mouse/key dispatch. DOM frames
 and a bounded passive observer record current versions, pin state, row values,
 focus-related title state and lifecycle messages. Only the specifically phased

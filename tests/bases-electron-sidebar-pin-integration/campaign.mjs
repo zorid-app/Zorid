@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import {MOD} from '../bases-electron-integration/ui.mjs';
 import {BASE, VIEW, A, B, RENAMED_A, ROW_A, ROW_B, ROW_NULL, fixtureFiles, expectedFiles, phases} from './fixtures.mjs';
-import {sidebarPinFrame, pinFrameReady, assertPinFrame, assertPinAudit, installPinAudit, assertRenamedIdentity} from './oracles.mjs';
+import {sidebarPinFrame, pinFrameReady, assertPinFrame, assertPinAudit, installPinAudit, assertRenamedIdentity, pinKeyboardPortalFrame, assertCleanPinKeyboardPortal} from './oracles.mjs';
 export {fixtureFiles, vaultName} from './fixtures.mjs';
 const sidebar = '.right-sidebar .sidebar-base-host';
 const pinScope = '.right-sidebar .right-tabs';
@@ -18,6 +19,23 @@ async function ready(c, expected, name) {
 }
 async function openNote(c, file, expected, name) { await c.ui.openFile(file); return ready(c, {...expected, title: titleOf(file)}, name); }
 async function clickPin(c, pinned) { await c.ui.button(pinned ? 'Pin sidebar Base' : 'Unpin sidebar Base', pinScope); }
+export async function keyboardPinFromCleanPortal(c) {
+  const route = {action: 'sidebar-pin-clean-portal-keyboard-route', maximumTabKeys: 48, frames: [], tabKeys: 0, activationKey: 'Enter', activated: false, at: Date.now()};
+  c.evidence.actions.push(route);
+  const observe = async initial => {
+    const frame = await c.ui.dom(`return (${pinKeyboardPortalFrame.toString()})(document);`);
+    route.frames.push({at: Date.now(), frame}); assertCleanPinKeyboardPortal(frame, {initial}); return frame;
+  };
+  let frame = await observe(true);
+  while (!frame.focusedPin && route.tabKeys < route.maximumTabKeys) {
+    await c.ui.key('Tab', {modifiers: MOD.shift}); route.tabKeys++;
+    frame = await observe(false);
+  }
+  assert.equal(frame.focusedPin, true, 'Pin must be reachable through bounded ordinary Shift+Tab navigation without closing the clean panel');
+  route.activationAt = Date.now(); await c.ui.key('Enter'); route.activated = true;
+  await c.ui.wait('return document.querySelectorAll(\'.bases-toolbar-popover[data-panel="View options"][role="dialog"]\').length===0;', 'Keyboard Pin dismisses the owned clean portal before its frozen-context result is accepted');
+  route.portalAbsentAt = Date.now();
+}
 async function sources(c, renamed, name) {
   const expected = expectedFiles({renamed});
   const names = (await fs.readdir(c.vault)).filter(file => file !== '.zorid').sort();
@@ -49,7 +67,10 @@ export async function journey(c) {
       await sources(c, false, 'initial-source');
     });
     await phase(phases[1], async () => {
-      await clickPin(c, true); await ready(c, {pinned: true, rows: [row(ROW_A, 11)], title: titleOf(A)}, 'Pin first current note');
+      await c.ui.button('Views', sidebar); await c.ui.button('Configure view ' + VIEW, '[role="dialog"][aria-label="Views"]');
+      await c.ui.wait('return !!document.querySelector(\'.bases-toolbar-popover[data-panel="View options"][role="dialog"]\');', 'Normal clean sidebar view-options portal opens');
+      await keyboardPinFromCleanPortal(c);
+      await ready(c, {pinned: true, rows: [row(ROW_A, 11)], title: titleOf(A)}, 'Pin first current note');
       await openNote(c, B, {pinned: true, rows: [row(ROW_A, 11)]}, 'Changing main note preserves pinned context'); await c.screenshot('pin-frozen-first-context');
     });
     await phase(phases[2], async () => {
