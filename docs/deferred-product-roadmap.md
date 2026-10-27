@@ -7,6 +7,78 @@ is historical where it conflicts with this checkpoint. The maintained stage
 sequence is in [roadmap.md](roadmap.md); S1 scope is in
 [plans/indexing-search.md](plans/indexing-search.md).
 
+**P008 bounded native PASS; P009 presentation pending — 2026-10-27.** Root
+`dd6c0b7f`: main-owner successor source review Standards 0/Spec 0, independently
+closed; root 52/52 focused + full TS/native frontend005 PASS. Actual **normal
+source-mode Electron** now passes recovered managed schema/hidden identity/Date
+controls, managed 8→9 and ordinary rating 4→5 clean acknowledgement, normal
+quit/reopen persistence 9/5/null/exact bodies. Typed filter 9/New inherits 9/edit 0
+hides while retaining editor/file; collection browser 3 vs view 1, Trash confirms
+all 3 including 2 hidden, unrelated data preserved, Restore exact 3IDs/9-null-0/bodies
+and filtered 1 returns. `desktop-acceptance-002.json` + `restored-final-data.json`
+under the disposable desktop evidence directory record bounded actual proof.
+All foreground sessions through 51898 normal exit 0; no live owned test app.
+P006/false postcommit refresh CLOSED within this actual scope, prior failures kept.
+
+P009 is the one assigned remaining presentation gate: known deleted collection
+shows duplicate raw Durable editor error/repair-source hint alongside working
+Restore. local_ui owns session/Workspace hint only, collection_ui_review reviews;
+source/results pending. Require fresh authoritative tombstone Trash card with
+Restore/Change source, real failures preserved, exact captured Restore command
+surviving rerender/uncertain retry. See [P008/P009](plans/types-properties-implementation.md#p008--2026-10-27--recovered-controls-and-clean-saves-bounded-native-pass).
+Main unchanged c36c4b0e; sole owner awaits clean final branch/evidence and root's explicit
+integration request to that owner. No installed production-package/full platform acceptance;
+browser untyped only, collections unavailable. No Tauri actions.
+
+**Latest user scope freeze — finish basic local delivery.** Complete basic
+create/edit/filter/delete/restore/restart and the already-coded truthful Trash
+card/working Change source. Final review expanded too far into secondary edges;
+finish only current implemented UI/controller seam and focused verification, then
+clean handoff/root integration request. No further exploratory edge work or new
+gates. Broader untested variants remain scope limits, not core-delivery blockers.
+
+P009 owner/dependency: local_ui session/Workspace card/Restore retry has 9 focused
+cases + TS PASS; view_source_model controller+tests fixes narrow source repair
+blocked by current.error and stale/initial-empty source on error refresh. Preserve
+coherent parsed readDefinition/witness/epoch and existing CAS/identity/stale-draft/
+preview/property-write guards; collection_ui_review reviews both. Current seams
+are implemented, combined focused verification/composition pending. No acceptance
+claim from UI-only passes or appearance of a Change source button.
+
+### Latest execution update
+
+**P007 successor — reviewed source, actual corrected startup pending.**
+P007 successor source: `4daa7e2b`→root `d02246e2`, recovered-only first-bind fix,
+independent exact review CLOSED/no must-fix. Worker 44/44 + final 13/13 overlap and
+pass. Root 13 recovery +24 target +10 setter tests (47), full TS/frontend004 are
+running in session 78982; corrected actual startup is not yet run. Old failed input 78
+escaped/reset 7/error cleared, session 58193 normal quit exit 0; no live test app.
+Earlier 73fa actual FAIL remains historical and held until P008 actual evidence.
+
+**Earlier P007 gate — native P006 failed at73fa; bounded browser PASS — 2026-10-27.**
+Root 73fa41c9 composes e37 coherent-target fallback, owner 24/root 34 source checks,
+full TS/native frontend003 and independent review PASS. Actual P006 retest still
+FAILS: generic controls and normal property edit errors before lookup at
+Workspace:1322. Two source audits confirm recovered checkpoint buffers have no
+`bufferEntries` binding after replaceVault/cache reuse; file token stays undefined.
+`managed_editor_saves` owns recovered-only eligible first binding + genuine
+checkpoint-start regressions (red 0/4 before fix), reviewed by collection_ui_review.
+The fallback fixes a separate valid bug, not this native gate. At the failed
+observation, session58193/PID89085/host89129 had user interaction and draft78 with
+saved7 unchanged. The successor update above records subsequent normal cleanup;
+corrected actual startup proof is still required, feature/main held.
+
+WASM002 PASS 3m26 offline one job, 454 unchanged build inputs; owned-cache cleanup
+freed 1.17 GiB with 4,258 protected hashes unchanged, no Tauri/other-owner caches.
+Actual normal browser CUA PASS bounded: fresh-origin untyped file-only Base,
+metadata filters/sort, immediate New inherits 4, edit to 2 hides/keeps note, reload
+persistence; collections explicitly unavailable and Cancel preserves view.
+Owned browser tab closed; Vite 92227 exact-owner TERM/exit 143, user tabs untouched.
+[P007](plans/types-properties-implementation.md#p007--2026-10-27--native-retest-fails-source-cause-and-bounded-browser-pass)
+records exact root tmp receipts (`browser-ui-observations-001.json`,
+`wasm-build-002-receipt.json`, `cleanup-cache-receipt-001.json`) and scope limits.
+No browser collection CRUD or native P006 acceptance inferred; no Tauri work.
+
 **Local collections P2 closed; P006 restart finding — 2026-10-27.** Root
 `7a810bb5` composes `fc72f099`, independently reviewed with no must-fix findings.
 Root P2 regression 10/10, full TS and native frontend002 PASS; unavailable-tsx
@@ -26,8 +98,6 @@ cause/fix unestablished. Feature/main integration remains held. See [P005](plans
 and [P006](plans/types-properties-implementation.md#p006--2026-10-27--managed-note-controls-after-app-restart).
 Browser WASM never compiled: 186MiB free <1.5GiB prerequisite. No matched browser
 artifact or browser acceptance; no Tauri actions, and main ownership unchanged.
-
-### Latest execution update
 
 **Local collections review correction — 2026-10-27, P005.** Independent main-owner
 review reports zero documented standards violations and one P2: retained
@@ -395,7 +465,7 @@ message handling, not renderer source. Receipt
 `/private/tmp/zorid-bases-20261026-products-001/frontend-receipt-005.json`.
 Native/CLI remain403cbeb8/8e4e61e4, Rust07265 unchanged. Mainclean e7d655e1.
 
-Recovery002/42961 PASSES36actions/36checks/all3protocols, five normal quits plus
+Recovery002/42961 PASSES36actions/36checks/all 3protocols, five normal quits plus
 one intentional lost-create SIGKILL interruption, no leaked children/freezeTRUE.
 Properties001 PASSES188/65 before the final summary-Tab/filter-advice changes.
 CLI125/17 and browser19groups/162typed expectations PASS. Durable factual history
@@ -414,7 +484,7 @@ physical7/late-import7null race. That source guard has separate causal tests.
 
 Filter002/58096 FAILS315actions/99checks after15Stringcases and list-exact
 remove/re-add checks; close-key pending-ack phase is a tested causal model,
-not captured002internalstate. Fresh advice+close readiness need native65-case
+not captured 002internalstate. Fresh advice+close readiness need native65-case
 acceptance. Normalweb002/8977 reaches actual Workspace but fails all5phases
 unexecuted because uncorrelated favicon404 was classed as a runtime error;
 module-loading failure is gone. A strict correlated ambient-error/fatal-wait
@@ -446,7 +516,7 @@ renderer regression; original synthetically constructed test missed the footer.
 The independent product navigation fix remains valid and separately tested.
 
 
-Latest 2026-10-26: CLI99317 PASSES125commands/17checks, browser30342 PASSES
+Latest 2026-10-26: CLI99317 PASSES125commands/17checks, browser 30342 PASSES
 19groups/162typedexpectations/16Q3diagnostics on currentRust07265/core products.
 Fresh reports are archived under ignored local
 `tmp/bases-validation-20261026/fresh-validation-001.tar.gz` with verified per-file
@@ -728,7 +798,7 @@ No generic mutation/receipt redesign; no Cargo/runtime grants yet.
 Typed toolbar7dd46aa7 has147 focused tests passing but independent review holds
 three confirmed issues: preserved datetime seconds validity, unknown-category
 comparison operand retention, and chip-removal keyboard focus. Author fixes
-pending. Provider ordered0a809ff0→cf557a74→7229c4e1 has15 author tests passing;
+pending. Provider ordered 0a809ff0→cf557a74→7229c4e1 has15 author tests passing;
 latest review pending, including readonly Vault.isMetadataRetired getter and
 same-frame wrapper/stale-construction/empty-frame retirement cases. Independently
 approved typed native campaign e9453d19 has65 authored cases/9 offline checks;
@@ -1059,7 +1129,7 @@ Previous complete core/client closure is Rust tree
 These accept the stated core/client campaigns, not full rendered Bases UI,
 visual equivalence, native recovery, mobile, sync or stress behavior.
 Failed browser006/007/008 are retained; strict reviewed test corrections handle
-published Error data's exact30 diagnostics and omitted authored-empty summary
+published Error data's exact 30 diagnostics and omitted authored-empty summary
 maps. No production semantic change or relaxed populated-summary checks.
 
 Reviewed source now includes C3 live manual-group preview, cancel/focus ownership
@@ -1083,7 +1153,7 @@ worker owns this Workspace/editor seam.
 Latest heavy Electron016 reaches244 actions/29 checks on **old Rust5e010112 /
 host176fcff5**, not the current359-test core. Rich-property durable edits pass,
 then native color SELECT readback fails. Passive diagnostic probe001 aborts
-before launch at its disk guard; prepared002 remains unlaunched. A fresh current
+before launch at its disk guard; prepared 002 remains unlaunched. A fresh current
 frontend build paired with a newly rebuilt matching date-v8 host is required
 for final current-core native acceptance. Existing source-corrected safety/config/
 properties,14-phase layouts, clipboard/recovery and23 matched visual states also
@@ -1209,7 +1279,7 @@ Completed WASM cache retirement is terminal0:304 reproducible intermediates
 removed; actual free space rises363.25390625MiB during that measurement window.
 All976 protected files remain byte-identical. Receipt:
 `/private/tmp/zorid-bases-completed-wasm-cache-retirement-20261022-001.json`.
-Later actual free space falls to242660KiB; cause is unknown. Native1GiB guard
+Later actual free space falls to 242660KiB; cause is unknown. Native1GiB guard
 is unchanged. `bases_controller` may retire only completed web campaign generated
 caches, preserving raw profile storage/IDB and evidence; no user/system data.
 
@@ -1319,13 +1389,13 @@ and `zorid-cli`, pinned tools/offline/locked/release/j1; log
 `/private/tmp/zorid-bases-final-native-cli-build-001.log`. No app may overlap.
 Artifact/runtime acceptance remains pending even after a successful build.
 
-Actual016 advances to244 actions/29 checks: multiselect, status, rooted relation,
+Actual016 advances to 244 actions/29 checks: multiselect, status, rooted relation,
 date/datetime, priority and plain-list mutations all pass durable-file oracles.
 The new generic enabled-state driver (`60c7fc46`, root `8cc941cd`) preserves the
 journey and all assertions. The next native option-color select fails its
 keyboard value readback after Home/eight Down/Enter; its pointer receipt is
 enabled, but per-key value/focus/open state was not captured. Cause remains
-unproven.016 is terminal with exact owned processes[]; all333 reused015 artifact
+unproven.016 is terminal with exact owned processes[]; all 333 reused015 artifact
 hashes and provenance match. `bases_ui_review` owns its independently reviewed
 evidence record; `bases_e2e` owns passive select frames and a minimal normal-UI
 native-select diagnostic campaign, with no recipe change or value injection.
@@ -1415,7 +1485,7 @@ complete desktop/visual/supplemental acceptance remain open. Main remains
 unchanged at `e7d655e1`.
 
 Space recovery preserves source, evidence, fixture data and product binaries.
-The exact30 fingerprinted test executables and13 compiled examples were retired
+The exact 30 fingerprinted test executables and13 compiled examples were retired
 with hashes, process-use checks and retained source/logs/fingerprints; four clean
 completed worktrees were removed while retaining their branches. Receipts:
 `/private/tmp/zorid-bases-exact-old-test-executable-cleanup-20261022.json`,
@@ -2004,7 +2074,7 @@ retains those failures and is narrowing whole-vault reconstruction, autonomous
 indexing during import, and per-operation serialization/storage hypotheses.
 
 Graph88934488 is independently source-approved for normal Text and schema16,
-and its exact33-file closure is integrated asf427885f. Original136 RED
+and its exact 33-file closure is integrated asf427885f. Original136 RED
 result86pass/50fail is preserved; narrowed paired-authorship reservation correction
 retains all original owned-byte/work limits. Fresh138/138 checks pass naturally.
 The tiny-body10k Store/cache test reports1 passing test, including exact query,
@@ -2228,7 +2298,7 @@ resource-hold statements below are superseded by this update.
   remain recorded. The fixture now asserts existing quiet automatic recovery;
   production recovery behavior did not change. Both metadata paging and a real
   maintenance subscription are required, so normal activation remains OFF.
-  Main's seven consumer files match the accepted source and all378 Rust/Cargo
+  Main's seven consumer files match the accepted source and all 378 Rust/Cargo
   inputs match `2bf929f9`; proof:
   `/private/tmp/zorid-main-b393-consumer-integration-proof.json`.
 - Next canonical Rust source `aea13f96` composes independently reviewed portable
@@ -3050,7 +3120,7 @@ detailed batch notes below describe their original execution points.
   correctness (all eight full literal oracles, complete coverage, exact physical/
   authority sources and watermark108). Rust inputs match integrated `2fb58f33`;
   later parser facts remain separately validated. Same default family10k profile
-  stops at32 passes with276 live files versus prior224, no index/query phase.
+  stops at32 passes with 276 live files versus prior224, no index/query phase.
   Host5.166s +rescans180.081s; external run197.420s. Inventory2385/unfinished
   differs from prior3030 and prior run included one observer window: partial
   admission progress is not full-vault or desktop-startup speedup acceptance.
@@ -4393,7 +4463,7 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17
 
 01:18UTC: finaladapter1597c1ed independentlySOURCEAPPROVED native library slice,
-including24fixtures+checkedpendingaggregate+testcleanup; wireblobs exact9dda.
+including 24fixtures+checkedpendingaggregate+testcleanup; wireblobs exact9dda.
 Actual53checks remainpending, samegrantedslot, no browser/host/UIclaim. Native
 Pageshistoryhooks1915f58f source-ready, rootreviewassigned exact58+/7- delta; owner
 composespatchpreserving2addheader, no fullfileoverwrite/newcompiler. Metadata
@@ -4527,7 +4597,7 @@ failedUIhandoff retains exactCID/entry/metadata retry, neverrecreatesnote.
 Actualsourcecontract/review required; occupied-name escape remainsopen.
 
 01:01UTC: native pinnedpnpm12.14 existingabsolute executable verified; isolated
-offline frozeninstall36802 terminal0 in2.5s, no lock/manifest edits/sharedtree
+offline frozeninstall 36802 terminal0 in2.5s, no lock/manifest edits/sharedtree
 mutation. Homehook source cherry fb1c04d7, reviewed coordinator/Mobile unchanged.
 FullSimulator10 retry39003 LIVE frozenfb1c04d7, exactcommand
 /private/tmp/zorid-ios-v10b-sim-command.json, log/private/tmp/zorid-ios-v10b-sim-build.log,
@@ -5499,7 +5569,7 @@ Historical preceding updates:
   uploaded140 encrypted records across bounded sweeps. Independent CLI received
   all140, with zero final pending authored/dependency/projection work; raw streamed
   output and physical disk exactly match the original17,825,809-byte hash. Normal
-  rebuilt Electron saved79 exact bytes through default Rust, read independently
+  rebuilt Electron saved 79 exact bytes through default Rust, read independently
   by CLI while host was open, discovered/opened an external file, and retained
   content after graceful quit/reopen. Both owned Electron passes exited0.
   See browser-relay-verification.md and native-progress-verification.md.
@@ -5528,7 +5598,7 @@ Historical preceding updates:
 - Actual normal-editor OS composition also passes: physical Zhuyin keystrokes
   produced marked phonetics and committed `你好`; undo removed the composed text
   and redo restored it. Independent CLI/physical reads and normal app restart
-  preserve the exact34-byte fixture (hash in native-progress-verification.md).
+  preserve the exact 34-byte fixture (hash in native-progress-verification.md).
   Owned sessions50032/64810 exited0; no owned native test app remains running.
   First-milestone runtime gates are closed; final requirement audit is recorded
   in shared-core-milestone-acceptance.md. Preserve the distinction between locally
@@ -5861,7 +5931,7 @@ Historical preceding updates:
   and bounded-diagnostic check passes1/1; CLI/host build7548 exit 0.
 - Retained actual fixture now reconciles ExternalTools->ExternalRenamed plus
   text edit and binary-child deletion through the rebuilt standalone CLI.
-  Folder/text IDs unchanged; exact33textbytes hash
+  Folder/text IDs unchanged; exact 33textbytes hash
   4c229322000382c309ae5e2e6bdb8d14b4dfef5afb4237fcb018063385258b9c,
   deleted binary absent from live list. Independent restart/rescan is complete,
   zero imports/namespace/issues. Original CLI/recovery-copy hashes unchanged.
@@ -5965,7 +6035,7 @@ Historical preceding updates:
   live at last observation; fixture note ConcurrentProof.md id
   a5cd22cf-01d4-4096-9ebe-d9ea5dea5e9a. Do not silently discard draft or claim merge.
 - Browser account-isolation proof completed; see browser-relay-verification.md.
-  Authorized B exact33 bytes, persisted-scope conflict, unauthorized A-scope denial
+  Authorized B exact 33 bytes, persisted-scope conflict, unauthorized A-scope denial
   with empty inventory and denial after reload. Both extra tabs closed.
 - User explicitly requests Rust as default desktop core, superseding opt-in
   rollout sequencing. desktop_integration owns startup/platform/init/host discovery
@@ -6173,7 +6243,7 @@ the current checkpoint and [final acceptance](history/shared-core-milestone-acce
   from `data_readiness`; the latter retains atomic store/apply/receipt ownership.
 - Current resource handoff: editor coordinator owns bounded Canvas/Bases tests
   and TypeScript via Orca `msg_4c1acfc31c9b`; root's last WASM session45875 exited0
-  with21 wrapper tests. No core heavy checks until editor explicitly releases.
+  with 21 wrapper tests. No core heavy checks until editor explicitly releases.
   New user-authorized Canvas/Bases UX work is active; NoteBuffer remains paused.
 - Editor acknowledged the handoff and reported Canvas session70192 as its live
   handle via `msg_8a891d676c3e`; wait for explicit slot release before core builds.
@@ -6237,7 +6307,7 @@ the current checkpoint and [final acceptance](history/shared-core-milestone-acce
   no authenticated authority. See `wasm-family-browser-verification.md`.
 - `5f6555e` integrates physical move frontier joining and retained historical
   binary witness validation. Candidate session44641 and current-main session4653
-  each passed all38 file-sync tests. These pure helpers do not prove filesystem
+  each passed all 38 file-sync tests. These pure helpers do not prove filesystem
   projection; native/browser adapters still must commit their own durable proof.
 - HTTP isolation candidate `ccad485` passed2 actual TCP tests, but review requires
   request deadlines and narrower overlap-race claims before integration. Timing

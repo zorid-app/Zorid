@@ -1,3 +1,91 @@
+# User findings queue
+
+## Scope freeze: finish basic local collections — latest user steering
+
+User questions spending time on secondary edge cases; root acknowledges final
+review overexpanded. Finish create/edit/filter/delete/restore/restart and the
+already-coded truthful deleted-source Trash card/Change source. Current model/UI
+seam guards are implemented: finish focused verification and clean handoff/
+integration. No new exploratory/secondary-edge work or acceptance gates. Broader
+unexecuted variants remain limits, not blockers to bounded core delivery.
+
+P009 essential dependency: local_ui owns session/Workspace card/Restore retry
+(nine focused tests + TS pass); view_source_model owns controller+tests for
+Change source blocked by current.error and coherent latest source/witness/epoch
+on error refresh. Retain CAS/identity/stale-draft/preview/property-write guards.
+collection_ui_review reviews both; combined verification/composition remains
+pending. [Tracker P009](plans/types-properties-implementation.md#p009--pending--expected-deleted-source-presentation-and-retry-ownership)
+has exact scope; no completed core-flow claim from UI-only checks.
+
+## Deleted-collection expected-state presentation — P009 pending, 2026-10-27
+
+Actual normal source-mode Electron at `dd6c0b7f` has passing collection Trash/
+Restore data behavior, including all 3 member files with 2 hidden by filter, exact
+IDs/9-null-0/body restoration and unrelated-data preservation. But its expected
+deleted source shows duplicate generic Durable editor errors and an Edit Base
+source repair hint alongside working Restore. This is a scoped presentation gate,
+not a new storage failure. `local_ui` owns Base session/Workspace hint files;
+`collection_ui_review` independently reviews. Fix/results pending.
+
+Require fresh authoritative tombstone typed Trash card + Restore/Change source;
+never fake query success or hide real source/config/get/action failures. Keep the
+same captured Restore command through rerender/uncertain retry. Full feature/main
+handoff awaits this gate plus root's explicit integration request to the sole main owner.
+
+## P006/false refresh closed in bounded actual native pass — P008, 2026-10-27
+
+Root `dd6c0b7f` successor reviewed Standards 0/Spec 0, root 52/52 focused + full
+TS/native frontend005 PASS. Actual normal Electron sessions 14374/51898 PASS:
+recovered managed schema controls/hidden identities/Date null type; managed 8→9
+and ordinary rating 4→5 clean saves; normal quit/reopen 9/5/null/exact bodies;
+Status 9 filter/New inherits 9 then 0 hides while keeping editor/file; collection
+browse 3/filter 1 Trash/Restore exact 3IDs/data. All owned foreground sessions through
+51898 normal exit 0; no live test app. Production app/real vault untouched.
+
+Exact receipts: `/private/tmp/zorid-local-collections-desktop-20261027/desktop-acceptance-002.json`
+and `restored-final-data.json` in the same directory. [Tracker P008/P009](plans/types-properties-implementation.md#p008--2026-10-27--recovered-controls-and-clean-saves-bounded-native-pass)
+retains original red/native failures, bounded successor results and untested
+variants. No installed-package/full visual/keyboard/mobile/sync parity claim;
+browser collection capability unsupported, actual untyped-browser pass separate.
+Main unchanged c36c4b0e/sole owner; no integration yet. No Tauri work.
+
+## Recovered checkpoint buffers block managed controls — 2026-10-27 P007
+
+Actual P006 retest at `73fa41c9` still fails after the independently reviewed
+coherent-target fallback. Its 24 owner/root 34 combined source checks, full TS and
+native frontend003 pass, but normal property edits fail before target lookup with
+"property note was replaced or removed". Two independent source audits identify
+recovered checkpoint buffers missing WeakMap `bufferEntries` identity binding:
+replaceVault adopts them after clearing tokens, cached bufferFor never binds,
+fileToken stays undefined/propertyCurrent false. The fallback fixes a separate
+valid issue; it is not actual P006 closure.
+
+`managed_editor_saves` owns recovered-only eligible first binding and genuine
+checkpoint-start regression coverage (red 0/4 before fix); `collection_ui_review`
+reviews. Actual restart/property-edit proof remains pending; the reviewed source successor
+below is not runtime closure.
+At the failed observation, Electron58193/PID89085/host89129 was live with user
+interaction and draft78 while disk saved7 stayed unchanged. Subsequent normal
+cleanup is recorded below; corrected actual retest still needed, feature/main held.
+
+Actual normal browser untyped flow now PASS bounded: file-only metadata-filter/
+sort browsing, New inherits 4, edit to 2 hides while note/popover remain, reload
+persists filters/order. Collections explicitly unavailable; Cancel preserves view.
+Fresh isolated origin, own tab closed and exact-owner Vite TERM observed exit 143;
+user tabs untouched. WASM002 PASS 3m26 offline one job/454 unchanged inputs; prior
+owned-cache cleanup freed 1.17 GiB/4,258 protected hashes unchanged, no Tauri work.
+[Tracker P007](plans/types-properties-implementation.md#p007--2026-10-27--native-retest-fails-source-cause-and-bounded-browser-pass)
+records browser/WASM/cleanup receipts under root tmp. No browser collection CRUD,
+recovered-note edit, native P006 or full feature acceptance inferred.
+
+Latest source successor: `4daa7e2b`→root `d02246e2` first-binds eligible recovered
+buffers after coherent saved ID/path/revision without old-token rebinding.
+Independent review closed/no must-fix; worker 44/44 + final 13/13 overlapping tests
+pass. Root 47 recovery/target/setter checks, TS/frontend004 running session 78982;
+no terminal pass or actual corrected startup inferred. Old failed input 78 was
+escaped/reset to saved 7 and error cleared before normal quit 58193/exit 0. No live
+test app now; the earlier failed native gate persists until actual P008 proof.
+
 ## Managed collection note controls missing after restart — 2026-10-27 P006
 
 Actual normal Electron restart on source `7a810bb5` shows generic frontmatter
@@ -15,8 +103,6 @@ allowed resumption. All three owned foreground sessions 79092/13222/42387 exited
 normally; no live test app. The earlier P2 correction/clear interaction passes
 within its bounded scope; that is not full feature acceptance. WASM compilation
 never started at 186 MiB free, no browser artifact/acceptance. No Tauri work.
-
-# User findings queue
 
 ## Retained datatype value cannot be corrected in note properties — 2026-10-27
 
@@ -389,7 +475,7 @@ failure: the partial-bulk fixture expects an ordinary concurrent body edit to
 produce recovery, but the actual note contains both local and external text.
 `bases_guarded_buffer` audits whether that conflict precondition contradicts
 intended CRDT merging; neither a product defect nor partial-bulk acceptance is
-established. Owned app closes SIGTERM exit0/no leaks; source/artifacts reverify.
+established. Owned app closes SIGTERM exit 0/no leaks; source/artifacts reverify.
 Evidence `/private/tmp/zorid-bases-safety-current-20261022-009/result.json`.
 Attempt008 had0actions/0checks: root supplied the wrong full commit hash and the
 provenance guard refused launch;009 uses the correct frozen hash.
@@ -402,7 +488,7 @@ protected in pending projection. No physical overwrite is demonstrated.
 inline containing-note ownership/dirty-body policy is being reconciled before
 implementation. Keep exact original attempt/retry identity and occurrence checks.
 
-Matching guard-core host/CLI build19034 and frontend009/77853 pass; all30 new
+Matching guard-core host/CLI build19034 and frontend009/77853 pass; all 30 new
 Rust guard cases pass. Full affected Rust run82532 remains incomplete after disk
 exhaustion; it is not a full-suite pass. Resource headroom subsequently recovers
 to5898764KiB; user requests continuing with available space. Reference typed003
@@ -729,7 +815,7 @@ Independent final review approved27e0e5ba; integrated as5e910fdf. Main
 preflight, local Electron packaging and354-file verification). Actual packaged
 launch opens a disposable vault note with no renderer exception; the owned app
 then exits normally. The initial smoke harness proved note opening but stalled
-awaiting a shutdown reply; corrected debugger-close handling passes exit0.
+awaiting a shutdown reply; corrected debugger-close handling passes exit 0.
 Installed at `/Applications/Zorid.app`, verified again after copying; Desktop
 `Zorid.app` now links there. No user vault/app data was changed. Evidence:
 `.worktrees/s1-evidence/desktop-package-20261021/`. This establishes the tested
@@ -1253,7 +1339,7 @@ and eligible answer reuse remain required S1.2 work.
 
 ## S1 normal storage repeatedly validates metadata graph views — measured setup bottleneck
 
-The first bounded normal-family10k baseline stops after32 passes with224 live
+The first bounded normal-family10k baseline stops after32 passes with 224 live
 files admitted (inventory3030/unfinished), before indexing. Limits remain5s soft
 per pass/30s hard per command; all10,003 physical source files and executable hashes
 remain exact. Evidence:
@@ -1763,9 +1849,9 @@ TypeScript0 and92 focused tests. Final native/WASM evidence and limits are in
 `shared-document-semantics-plan.md`; no mobile/runtime/security claim follows.
 
 Native owner separately reports signed Dev build5 (51d8b84f) installed on physical
-phone80513 exit0 and launched0. Simulator keyboard toolbar and PDF2pages/navigation/
+phone80513 exit 0 and launched0. Simulator keyboard toolbar and PDF2pages/navigation/
 save pass; focus-jump video remains inconclusive. New combined sourcef7d78f6d is
-source-reviewed with240 focused checks/typecheck0; FFI752 actual10/10 source blobs
+source-reviewed with 240 focused checks/typecheck0; FFI752 actual10/10 source blobs
 unchanged. This source is not yet main-integrated or verified on phone. Owner
 relays new user steering: combine Recents/Files into one Notes page with heading
 mode menu; Settings gear top-left on home root only. NativePages.swift assignment
@@ -1860,7 +1946,7 @@ keyboard. Expected uninterrupted keyboard visibility. Relayed msg5dc07b64e4ef to
 native owner for scoped focus fix and actual software-keyboard verification,
 preserving edits/title commits. Pending implementation and runtime evidence.
 Phone6 source829cd2c9 installed/launched successfully per owner, build52508 and
-install/launch24342 exit0; detailed interaction checks still pending separately.
+install/launch24342 exit 0; detailed interaction checks still pending separately.
 
 ### 2026-10-17 — Bases/tasks/calendar before Stage5
 
@@ -1922,7 +2008,7 @@ retaining row/menu/session-lending and return-highlight repair. Isolated source
 work only, outside frozen build8; actual UX verification remains pending.
 
 Native owner reports phone7 exact ce1e0ace signed, installed and launched on the
-physical iPhone (build91966 and install/launch12016 exit0). This supersedes phone6;
+physical iPhone (build91966 and install/launch12016 exit 0). This supersedes phone6;
 full keyboard interaction acceptance remains pending. The heavy slot returned to
 root via msg5e815eb955cf; no native compiler/helper/server remains active.
 

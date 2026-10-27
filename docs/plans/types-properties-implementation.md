@@ -1,7 +1,7 @@
 # Local collections, types and Base views — implementation tracker
 
 Updated: 2026-10-27. Owner: this discussion's coordinator (`/root`).
-State: **verifying — local only; bounded CLI/P2 UI passes, P006 desktop issue open**.
+State: **verifying — bounded CLI/native/browser passes; P009 presentation gate and main handoff pending**.
 Latest authorization: the user explicitly resumed with **"ok start"** on
 2026-10-27 after the documentation handoff. Root's built-in goal is active;
 this repository tracker remains the cross-session record. Collaboration/sync is
@@ -13,37 +13,36 @@ Future sync requirements: [roadmap](../roadmap.md#future-collection-collaboratio
 Repository execution/ownership: [checkpoint](../deferred-product-roadmap.md).
 Incoming corrections: [user findings](../user-findings.md).
 
+Latest user scope freeze: **finish the basic local create/edit/filter/delete/
+restore/restart flow**, including the already-coded truthful deleted-source Trash
+card and working Change source. The final review expanded too far into secondary
+edge cases. Finish only the current implemented UI/controller seam and focused
+verification, then prepare the clean handoff/integration request. No further
+exploratory/secondary edge-case work or new acceptance gates. Broader unexecuted
+variants remain honest limits, not blockers to a bounded core-delivery claim.
+
 ## Resume checkpoint
 
 | Item | Current state |
 | --- | --- |
-| Current task | P006: diagnose generic collection-note controls after normal app restart. P005/E11 retained-value correction is source-reviewed and bounded actual UI PASS; full feature/main handoff remains held by P006. No Tauri work. |
-| Composition branch/worktree | `codex/local-databases` / `.worktrees/local-databases`, main base `c36c4b0e`; current HEAD `7a810bb5` composes P2 fix `fc72f099`. Native artifacts retain their earlier receipt; frontend rebuilt and passed as `frontend-native-002.log`. |
-| Canonical main at resume | `c36c4b0e`, observed clean. Root does not integrate or mutate main. |
-| Main integration ownership | Shared-core owner acknowledged from `term_d8b43288-7bf1-464c-af5f-b779721982e3` at 2026-10-27 16:56:08 UTC; retains sole integration. Root terminal: `term_4603116b-4cb4-4e5a-b3a5-968bea283161`. |
-| Ordered handoff | Documentation `bc006f23` queued to that owner, not integrated at this cutoff. Product batches follow review and affected checks. |
-| Product implementation | P2 fix composed and independently reviewed with no must-fix findings; actual CLI and bounded E11 desktop correction pass. Newly observed P006 restart controls issue has no established cause/fix. Full feature/main acceptance held; browser unsupported/unbuilt at low-disk cutoff. |
-| Source checks | New root-composed P2 tests 10/10 PASS (`preserved-properties-composed-002.log`), full TS and native frontend002 PASS. First unavailable-tsx launch ran no tests. Earlier native/query/core/CLI/source receipts retain their exact limits and are not summed. |
-| Product verification | Normal Electron P2 correction/clear after Status→Number PASS, exact 7/null and bodies persist through normal quit/reopen. New P006 shows generic `_id`/`_type`/null controls despite persistent values/two Base members. Three foreground sessions exited 0; no live test app. Browser not built; feature/main acceptance open. |
-| Reference evidence | Bounded Notion filter-creation UI observations; design section 1 records exact cases and limits. |
-| Next action | `managed_editor_saves` read-only diagnosis of P006 lifecycle/managed-control attachment; reproduce/fix only after evidence identifies cause. User finished testing and allowed resumption; no active test window to preserve. Browser/main gates stay separate. |
-| Dependencies | P006 root cause/fix + focused restart verification, full desktop scope, browser readiness/space and sole main-owner integration. WASM preflight 186MiB <1.5GiB: no compilation started. Scoped indexing previews remain a safe capability gap. |
-| Resource lane | Root serializes actual validation and any required Rust work in shared `tmp/local-database-target`, release offline `-j1`; no parallel heavy builds or worker Git mutations. Latest user steering: no further Tauri work, including new benchmark/prototype/cleanup work from this pass. |
+| Current task | Finish basic local flow and already-coded P009 Trash card/Change source: local_ui owns session/Workspace, view_source_model owns controller source-repair seam; collection_ui_review reviews both. Focused verification then clean handoff; no secondary-edge exploration. |
+| Composition branch/worktree | `codex/local-databases` / `.worktrees/local-databases`, main base `c36c4b0e`; current and latest actual-verified HEAD `dd6c0b7f`. P009 successor source/head is pending. |
+| Main integration ownership | Shared-core sole owner `term_d8b43288-7bf1-464c-af5f-b779721982e3`; main unchanged `c36c4b0e`. Root terminal `term_4603116b-4cb4-4e5a-b3a5-968bea283161` composes only in isolation. |
+| Review/handoff | Main-owner successor review at dd6 reports Standards 0/Spec 0. Integration still awaits clean final branch/evidence and root's explicit integration request to the sole main owner; review is not completed integration. |
+| Source checks | Root 52/52 targeted + full TS + native frontend005 PASS. Earlier native/core/query/WASM/transport receipts retain exact source/scope; never add overlapping runs together. |
+| Actual CLI | P004 successor PASS 30 commands/13 checks/all 7 scenarios, with explicit exclusions. Native P2 contract separately PASS 12 commands/8 checks. |
+| Actual normal native | P008 PASS bounded: recovered managed controls/hidden IDs/declared null Date; managed8→9 and ordinary rating 4→5 clean acknowledgement; normal quit/reopen values 9/5/null and exact bodies. Typed filter/New/edit-out and collection Trash/Restore also pass; expected deleted-source card presentation remains P009. |
+| Actual browser | P007 fresh-origin untyped browsing/filter/sort/New/edit-out/reload PASS bounded; browser collection capability remains unavailable. No recovered-note or full platform parity inferred. |
+| Test-app lifecycle | All foreground sessions through 51898 normal exit 0 observed. No live owned test app. Normal source-mode Electron with retained matched host was tested, not an installed production package; production app/real vault untouched. |
+| Next action | Finish/review P009, validate affected scenarios on its exact source and normal test app, then prepare final source/receipt handoff and explicit integration request to sole main owner. |
+| Remaining limits | P009 source/results pending; browser collection CRUD, concurrent local clients, actual crash/interruption, broader filter/layout/visual/keyboard matrices, installed package and mobile/other OS acceptance are not claimed. Scoped indexing previews remain a safe capability gap. |
+| Resource/scope | Serial bounded validation; no overlapping heavy builds or worker Git mutations. Local collections first; no Tauri or new sync work. |
 
-Latest cutoff evidence: root `7a810bb5`, independent P2 review closed and
-`preserved-properties-composed-002.log` 10/10 + full TS/native frontend002 PASS.
-Actual normal Electron: UI-created Tasks/two notes, Status→Number, reopened notes
-corrected In progress→7 and Not started→null, warnings removed, bodies exact;
-normal quit/reopen independently confirms raw YAML 7/null and exact bodies.
-Receipts: `/private/tmp/zorid-local-collections-desktop-20261027/p2-ui-observations.json`
-and `/private/tmp/zorid-local-collections-desktop-20261027/p2-disk-after-normal-quit.json`.
-Sessions 79092/13222/42387 all normal exit 0. P006 remains an actual restart issue:
-generic editable identity/null controls replace managed collection controls;
-values/membership persist, including two Base-embed members. It persists across
-observations/note switch; cause/fix not established. `managed_editor_saves` owns
-read-only diagnosis. This closes only the reported P2 interaction, not P006 or
-full desktop/browser/main acceptance. WASM compilation did not start at 186 MiB
-free; no browser artifact or local-collection browser acceptance claimed.
+P008 evidence: `/private/tmp/zorid-local-collections-desktop-20261027/desktop-acceptance-002.json`
+and `restored-final-data.json` in the same directory. Root source `dd6c0b7f` is
+reviewed and bounded-runtime verified; P009 final source and evidence remain
+pending. Preserve P006/P007 failed actual receipts and their before-fix red tests.
+No product/main integration or installed-package acceptance is inferred.
 
 Before each resumed pass or after context compaction:
 
@@ -164,14 +163,14 @@ actual receipts; none of these rows is accepted merely because work is active.
 
 | Batch | Scope and required exit | Dependencies | Source / review | Integration | Runtime |
 | --- | --- | --- | --- | --- | --- |
-| L0 Contracts and current-code audit | Resolve identity/local storage, view-source format/legacy transition, publication owner, deletion/restore transactions and initial datatype scope; document exact API/file ownership. | Main/owner audit complete; remaining contracts with root | Implementing / root + read-only audit | None | N/A; no product acceptance |
-| L1 Local domain/storage | Stable schema identities, collection membership, validated property operations, revision guards and durable retries without new sync enrollment. | L0 | Implementing / local_core | None | Not run |
-| L2 Readable projection and editor saves | Managed type YAML plus `_id`/readable `_type` frontmatter; preserve bodies/unrelated data; guarded publication, restart repair and editor-save composition. | L0–L1 | Implementing / local_core + local_native + managed_editor_saves | None | Not run |
-| L3 Per-view source/query + registry retirement | Each view one collection or strictly untyped source; remove registry discovery/creation/watchers/admission in Rust/native/WASM/TS while preserving ordinary legacy files; audit IPC/CLI consumers. | L0–L2; query/transport owners coordinated | Implementing / registry_retirement_audit + view_source_model + database_transport | None | Not run |
-| L4 Base/view onboarding and browsing | Create Base/first view, create/select collection, add independently sourced view, Notion-style interactions; untyped title/preview/file browsing with no property grid. | L3; UI/workspace seam owner assigned | Implementing / local_ui | None | Not run |
-| L5 Collection editing and New | Property/option controls, configured first datatypes/layouts, immediate filtered creation/defaults, editing/row hiding/open-note preservation, multiple-view consistency. | L1–L4; deterministic defaults contract | Implementing / local_ui + view_source_model | None | Not run |
-| L6 Deletion, recovery and edge closure | E07–E20: duplicate/rename, schema changes, deletion and restore, inaccessible sources, file moves/external edits/identity repair. | L1–L5; recovery contracts | Planned / local_core + local_native; bounded work underway | None | Not run |
-| L7 Review, integration and delivery | Close material review findings, integrate coherent batches, run changed local journeys on exact installed source; record desktop/CLI/web results independently and platform limits. | Relevant earlier batches | Reviewing in parallel / root + local_model_audit | None | Not run |
+| L0 Contracts and current-code audit | Stable identity/source/ownership/storage/publication contracts used by this local slice. | Current main/owner audited | Reviewed/composed / root + source reviewers | Isolated root only; main pending | Bounded flows verified; unsupported capabilities listed |
+| L1 Local domain/storage | Stable schemas, typed values, membership, revision guards and durable retry without new sync enrollment. | L0 | Reviewed/composed / local_core | Isolated root only; main pending | Store64 selected checks + P004 CLI ownership/retry/rename/reopen PASS; broader concurrent/crash variants unrun |
+| L2 Projection/editor saves | Readable schema/frontmatter, exact bodies, guarded composition and recovered-note UI. | L0–L1 | Reviewed/composed through dd6; P006 and false postrefresh successor approved / native + saves | Isolated root only; main pending | Native source checks + P005/P008 actual correction/restart/managed and ordinary saves PASS bounded; actual crash/external-edit matrix open |
+| L3 Per-view sources/registry retirement | Trusted one-source queries, hidden metadata catalogs, no global Properties.yaml authority. | L0–L2 | Reviewed/composed / query + model + transport | Isolated root only; main pending | Query24/native facade3 source checks PASS; native typed filter and browser untyped catalogs PASS; scoped previews/browser collections unavailable |
+| L4 Onboarding/browsing | Create/select collection and untyped view flows, collection browsing. | L3 | Reviewed/composed / local_ui | Isolated root only; main pending | Normal native Tasks onboarding and collection browser + actual browser untyped onboarding PASS; all source/layout combinations not claimed |
+| L5 Editing/New | Property controls, templates, automatic New hints, clean acknowledgement and edit-out preservation. | L1–L4 | Reviewed/composed / UI + model + saves | Isolated root only; main pending | P008 native Status 9 New inherits 9 then0 hides with editor/file retained; ordinary4→5 and managed8→9 PASS. Browser rating 4 New/edit 2 PASS; other hint/layout/keyboard variants source-only or unrun |
+| L6 Deletion/recovery/edges | Schema conversion, identity, hidden members, Trash/Restore and deleted-source state. | L1–L5 | Data paths reviewed/composed; P009 presentation source pending / UI + reviewers | Isolated root only; main pending | P004 CLI + P005/P008 native data paths PASS bounded, exact 3IDs/9-null-0/bodies restored. P009 expected-state card/retry proof pending; broader edge matrix open |
+| L7 Review/integration/delivery | Final scoped review, artifacts, actual checks and ordered sole-owner integration. | P009 + final clean branch/evidence | dd6 owner review Standards 0/Spec 0; final successor pending | Main c36c4b0e unchanged; explicit integration request pending | CLI/native/browser bounded receipts retained; installed production package/other platforms not claimed |
 
 L7 review/integration can run alongside independent bounded source work once a
 batch is ready. Keep shared API changes coordinated and heavy compilation/native
@@ -180,27 +179,30 @@ iOS requires its own explicit validation slot and is not this pass's scope.
 
 ## Acceptance matrix
 
-Every row starts **not run** for Zorid. Add exact source/artifact identities and
-retained evidence to the pass receipt when exercised. UI reference observations
-are not product test passes. Use focused safety tests and ordinary journeys;
+Each row states its actual evidence layer: isolated source checks, independent
+CLI, normal source-mode Electron or normal browser. All main integration remains
+pending. Bounded passes do not establish unexecuted variants or other platforms.
+Retain exact source/artifact identities in the pass receipts; reference-only
+observations are not product test passes. Use focused safety tests and ordinary journeys;
 repeat passed scenarios only after relevant changes or unresolved failures.
 
-| Case | Integrated scenario / oracle | Status |
+| Case | Scenario / oracle | Evidence layer and remaining limits |
 | --- | --- | --- |
-| A01 Sources/onboarding | One Base has Books, Projects and untyped views; each selects only its own source and retains independent configuration after reopen. | Not run |
-| A02 Untyped browsing | Title/previews/file info + folder/tag/content/frontmatter filters work; collection notes excluded; no user-property columns/configuration/cell editing or implicit membership. | Not run |
-| A03 Ownership | Same-name fields in separate collections stay distinct; repeated preset creates independent collection; no import or cross-collection move UI/API path. | Not run |
-| A04 Immediate New | Equality, multiple choices, OR, number range, unsupported and contradictory predicates create without questions or filter-synthesis blocking; actual persisted values recorded. | Not run |
-| A05 Edit out of filter | Successful edit hides row, keeps collection entry and open editor; failed save retains draft/error. Reopen confirms actual saved state. | Not run |
-| A06 Shared entry | Two views/splits/linked placements reflect the same durable entry changes without overwriting body edits. | Not run |
-| A07 Untyped New | Ordinary note created in specified default/deduced folder without prompts; feasible filter defaults applied; no collection assigned. | Not run |
-| A08 Identity/rename/duplicate | Renames retain IDs/values; in-collection Duplicate gets new entry ID; folder moves retain membership; missing/duplicate external IDs cannot merge unrelated files. | Not run |
-| A09 Schema changes | Populated field/option deletion and incompatible datatype cases follow the settled contract, retain recovery evidence and survive restart. | Specific retained Status→Number correction/clear PASS in P005 normal UI; broader schema matrix open. |
-| A10 Delete/restore | Deleting view/Base preserves collections; deleting collection includes hidden members; referencing views show deleted source; restore/path collision/partial-failure cases preserve unrelated data. | Not run |
-| A11 Publication crash | Interrupt between structured commit and readable publication; restart resumes bounded work, preserves body/unknown external data and refuses stale overwrite. | Not run |
-| A12 Registry removal | No special Properties.yaml reads/writes/creation/watchers/admission; existing file is ordinary content and cannot grant schema authority or block queries, across affected hosts. | Not run |
-| A13 Independent clients | Standalone CLI and normal editor local operations follow same validation/storage guards; browser support/capability outcome recorded separately. | Bounded independent CLI PASS 30/13/all 7; concurrent editor and browser acceptance open. |
-| A14 Product lifecycle | Matching installed desktop create/configure/edit/delete/restore/normal quit/reopen; exact supported layouts/keyboard behavior and remaining platform limits recorded. | P005 bounded normal quit/reopen passes; P006 managed controls fail after restart. Full acceptance held. |
+| A01 Sources/onboarding | Independent typed/untyped view configuration and reopen. | Source-model/query checks PASS; native Tasks onboarding + browser untyped onboarding observed PASS. One Base with Books/Projects/untyped after reopen and every layout/source combination not separately exercised. |
+| A02 Untyped browsing | File-only presentation with hidden metadata filters/sort, no user-property editing grid. | Actual fresh-origin normal browser PASS: file-only table, rating/tags catalogs, filter/sort/reload; collection capability explicitly unavailable. Broad visual/accessibility/performance matrix unrun. |
+| A03 Ownership | Independent collection field identities and creation-only membership. | P004 actual CLI ownership PASS, typed normal-app collection flows PASS; source denies import/move/detach. Concurrent local clients or every API mutation variant not claimed. |
+| A04 Immediate New | No questions/blocking; feasible filter-derived values. | Native Status=9 New inherits 9 and browser rating=4 New inherits 4 PASS. OR/range/impossible/general-template precedence not established by actual app receipts; focused source evidence retained separately. |
+| A05 Edit out of filter | Successful save hides row while retaining entry/open editor; preserve failures. | P008 native new9→0 hides while file/popover/body remain; browser new4→2 similarly PASS. P006/false postrefresh failure history preserved and dd6 successor clean saves PASS; broader fault injections unrun. |
+| A06 Shared entry | Same entry reflected in views/note editor without lost body writes. | P008 normal managed setter+typed view/filter and exact body persistence PASS bounded. Concurrent split/linked placements/independent clients are not an actual-runtime acceptance claim. |
+| A07 Untyped New | Ordinary note, automatic feasible hints, no collection assigned. | Browser New inherits 4 immediately, edit 2 hides without deleting note; filter/sort persistence PASS. Broader folder destinations/default/filter combinations unrun. |
+| A08 Identity/rename/duplicate | Stable schema/member identities and safe duplicate/copy handling. | P004 actual CLI rename/duplicate PASS; P008 native Restore exact 3 original IDs PASS. External copies/missing IDs/folder-move variants retain source-level checks or remain unexecuted. |
+| A09 Schema changes | Preserve incompatible values until explicit correction/clear, no silent reinterpretation. | P005/P008 normal native Status→Number preserved labels then7/null correction and later9 clean save PASS, bodies intact. Full datatype/option-delete/recovery matrix not run. |
+| A10 Delete/restore | Delete collection includes hidden members; preserve unrelated data and restore identities. | P004 CLI collision restore PASS; P008 native collection 3 vs filtered 1, Trash removes all 3 (2 hidden), Base/ordinary/other collection retained, Restore exact 3IDs/9-null-0/bodies and filtered 1 PASS. P009 presentation and uncertain action-rerender retry proof pending. |
+| A11 Publication crash | Restart resumes guarded projection without stale overwrite. | Selected Store/native safety source tests PASS. Normal quit/reopen actual data/control persistence PASS; forced actual app crash/interruption and external-writer matrix are not exercised by CLI/UI receipts. |
+| A12 Registry removal | No vault-global Properties.yaml authority or automatic registry workflow. | Reviewed Rust/TS source retirement + query tests PASS; actual untyped browser has no property/grid/settings flow. No destructive migration/deletion of existing user registry files claimed. |
+| A13 Independent clients | Independent CLI, normal editor, browser support recorded separately. | P004 actual standalone CLI 30/13/all 7 PASS and P005 native contract 12/8 PASS; normal source Electron P008 functional pass bounded. Concurrent local clients unrun; browser untyped only, collections unavailable. |
+| A14 Product lifecycle | Matching normal app flows and explicit artifact/platform scope. | P008 normal source-mode Electron startup/clean saves/quit/reopen PASS; all foreground sessions through 51898 close exit 0. Not an installed production-package, full visual/keyboard/mobile/other OS parity claim. |
+| A15 Deleted-source presentation/retry | Authoritative tombstone card with Restore/Change source, real failures retained and original action identity preserved. | OPEN P009: data Trash/Restore works, but duplicate generic error/repair-source presentation remains. Two-file source fix and exact uncertain Restore retry through rerender need review/check/actual proof. |
 
 ## Open decisions and findings queue
 
@@ -498,6 +500,125 @@ shows its two collection entries. `managed_editor_saves` owns read-only lifecycl
 diagnosis first. Cause and fix are not yet established; never infer membership
 from readable `_type`. Full desktop acceptance/main integration remain held.
 See the P2 UI receipt for exact observations and input/automation caveats.
+
+Resource followup: only this pass's owned
+`tmp/local-database-target/release/{deps,build,.fingerprint,incremental,examples}`
+were retired after idle process/open-file checks. **1.17 GiB freed**, with all
+4,258 protected source/evidence/binary hashes unchanged; both retained executable
+copies link only system `libiconv`/`libSystem`, not deleted caches. Receipt:
+`tmp/local-databases-20261027/cleanup-cache-receipt-001.json`. No other owner's
+cache or source was touched; no process interrupted. `database_transport` now
+owns the serial offline one-job WASM build in a separate target, log
+`wasm-build-002.log`; compilation is underway, not accepted. Native test app
+diagnostic session 35077 also quit normally with exit zero; no app remains from
+this pass.
+
+### P007 — 2026-10-27 — native retest fails; source cause and bounded browser pass
+
+Current source `73fa41c9` composes `e37c31b6`, the coherent durable-target fallback.
+Its owner 24/24 and root-combined 34/34 checks PASS; full TypeScript and native
+frontend003 PASS; independent source review closed. This fixes a valid separate
+missing-target-identity bug. It did **not** close the original actual P006 gate.
+P005's retained-datatype correction pass and P006 resource followup stay intact.
+
+| Scope | Current observation / gate |
+| --- | --- |
+| Actual native P006 retest | **FAIL** at 73fa41c9: ordinary collection notes still use generic identity/null controls. A normal property edit reaches the earlier Workspace guard and fails "property note was replaced or removed" before target lookup. Do not reclassify the 34-source-pass set as native acceptance. |
+| Confirmed source diagnosis | Independent `managed_editor_saves` and `local_ui` audits agree: `recoverDurableBuffers` restores checkpoint buffers without `bufferEntries` WeakMap entries; `replaceVault` clears `entryTokens` and adopts the recovered map; cached `bufferFor` only loads/returns. The captured file token remains undefined and `propertyCurrent` stays false. This evidence supersedes the earlier startup hypothesis, but runtime closure still requires the corrected actual route. |
+| Fix successor | `managed_editor_saves` candidate `4daa7e2b` is independently reviewed CLOSED with no must-fix, composed as root `d02246e2`. Recovered-only eligibility WeakSet first-binds after coherent saved ID/path/revision; old tokens never rebind. Genuine startup cases were red 0/4. Worker 44/44 + final 13/13 sets pass with overlap; root 47/TS/frontend004 running (session 78982), actual corrected startup not yet tested. |
+| Failed-session state / cleanup | At the failed 73fa41c9 retest, session 58193/PID 89085/host 89129 had verification draft 78 while saved 7 stayed unchanged. After user testing finished, Escape reset that owned failed input to 7 and cleared the error; normal quit exit 0 observed. No live test app. New corrected startup/property-edit/managed-setter proof awaits build and is not accepted yet. |
+| WASM002 artifact | **PASS**, offline release one job, 3m26s. Receipt root `tmp/local-databases-20261027/wasm-build-002-receipt.json`: source HEAD 5970b95f before/after, 454 build inputs unchanged, fingerprint `8a12906380adf9216eae7bebf1d5bde87031a33e5084dddc3ff381428533e171`. Generated JS 204236 bytes/WASM 12418996 bytes hashes match build metadata. Current 73fa41c9 changes are TS-only relative to that Rust closure. Artifact build is not browser collection delivery. |
+| Actual browser interaction | **PASS, bounded**, CUA normal app on fresh unique origin `http://local-collections-20261027-a8f2.localhost:5173/`, empty browser vault, no fixture mode/injected mutations/user file picker. Receipt root `tmp/local-databases-20261027/browser-ui-observations-001.json`, source 73fa41c9, WASM002 receipt linked. |
+| Browser covered flow | Created ordinary note with rating 4/tags idea/body; created Base and chose untyped source. Table file-only: no property columns/add-property/group controls. Metadata catalog supplies rating/tags; rating=4 filters; New immediately inherits 4/matches; edit New to 2 hides row while popover/file remain. Reload preserves filter. Rating-ascending sort after removing filter shows 2 then 4, still file-only, and survives reload. Collection choice explicitly unavailable; Cancel leaves untyped view unchanged. |
+| Browser limits | Collection capability remains intentionally unsupported. Fresh-origin untyped pass does not cover editing a recovered checkpoint note after restart or close native P006; no collection CRUD, full visual/accessibility/performance/mobile/sync parity claim. |
+| Browser cleanup | Agent-created tab 1268047994 closed. Vite PID 92227 ownership verified by command/cwd, SIGTERM requested and exit 143 observed (exec 97354). User browser tabs untouched; isolated test storage retained. |
+| Owned-cache cleanup | Prior pass-owned release cache cleanup freed 1.17 GiB with 4,258 protected source/evidence/binary hashes unchanged; root `tmp/local-databases-20261027/cleanup-cache-receipt-001.json`. Only named local-collection caches, not Tauri or other-owner caches; no process interrupted. This enabled the successor WASM build, without erasing the earlier low-space preflight result. |
+
+Native P006/full feature/main integration remain **held**. Goal remains active;
+the old app has quit normally and no live test session remains. No Git/source/
+build/UI mutation is performed by this documentation update. Root 47/TS/frontend004
+are running; after terminal results, corrected actual startup/property edit and
+managed-setter proof become P008. The browser pass, fallback and first-bind source
+review are separately bounded results, not substitutes for that actual gate.
+No Tauri work; main owner unchanged.
+
+### P008 — 2026-10-27 — recovered controls and clean saves; bounded native pass
+
+Current root `dd6c0b7f` composes the postcommit-refresh successor. Main-owner
+successor review relayed by the user: **Standards 0/Spec 0**, independently closed
+for this source. Root **52/52** targeted tests + full TS + native frontend005
+PASS (`recovered-refresh-composed-001.log`, `frontend-native-005.log`). These are
+not additive with the worker's overlapping 52. Actual normal source-mode Electron
+now closes P006 and the false-postcommit-refresh symptom within the scope below;
+it is not an installed production package or universal feature acceptance.
+
+| Normal native observation | Actual result |
+| --- | --- |
+| Recovered checkpoint startup | Managed collection schema/declared Date null controls restored, `_id`/`_type` hidden; values/body loaded correctly. P006's earlier generic-control failures remain historical failed receipts. |
+| Clean property acknowledgement | Managed 8→9 and ordinary recovered rating 4→5 save/ack cleanly, no false ancillary-refresh error. Normal quit/reopen verifies 9/5/null and exact bodies, controls still managed. |
+| Typed filtered New/edit-out | Status 9 filters two collection entries to one; New immediately inherits 9 and matches, no questions. Named Filtered entry/body authored; changing 9→0 saves/hides row while popover/editor/file/body stay. |
+| Collection Trash/Restore | Collection browser lists 3 while Base shows 1. Delete confirms all 3; removes all three physical member files including 2 hidden members, preserving Base/ordinary/other collection. Restore returns exact 3 IDs/values 9-null-0/bodies and the filtered 1 result. |
+| Readback/cleanup | `desktop-acceptance-002.json` and `restored-final-data.json` under `/private/tmp/zorid-local-collections-desktop-20261027/`; readback explicitly PASS. Foreground sessions 14374/51898 (and all earlier listed sessions) normal quit exit 0; no live owned test app. Production app/real vault untouched. |
+| Remaining finding | P009 expected-deleted-source presentation: generic duplicate Durable editor error and Edit Base source repair hint appear alongside working Restore. Data restore passes; presentation is still open. |
+
+Native frontend005 index SHA256 is
+`d24a867b67348bb03b8b4d687eea890581bf35cd505062d13a509003eb4adc32`;
+the receipt references the retained native products receipt separately. The actual
+receipt limits exclude full native visual/keyboard/mobile/reference parity and
+browser collection delivery. The prior CLI/untyped browser results remain their
+own bounded passes; no blanket multi-platform acceptance or main merge follows.
+
+### P009 — pending — expected deleted-source presentation and retry ownership
+
+Ownership: `local_ui` owns `src/bases/session.ts` and `src/ui/workspace.ts`
+Trash card/Restore retry presentation; `view_source_model` owns the isolated
+`src/bases/controller.ts` + focused tests source-repair seam, aligned to dd6.
+`collection_ui_review` reviews both. Latest actual-verified code HEAD remains
+`dd6c0b7f`; current model/UI source seams are implemented in isolation, awaiting
+focused seam verification/composition and final handoff receipts, not acceptance.
+
+Essential core-flow finding: Change source was blocked by
+`controller.guard(current.error)`, while error refresh retained stale/initial-empty
+source and made fresh deleted-source classification unreliable. The implemented
+controller seam must retain coherent latest valid parsed `readDefinition` source,
+witness and epoch, with narrow source-repair admission. Existing CAS/version,
+identity, stale-draft, preview and property-write protections remain effective.
+The UI owner reports nine focused cases + TS PASS; the controller dependency and
+combined result remain pending. Do not mark Change source delivered from card
+rendering or UI-only checks alone.
+
+User scope freeze applies here: finish this already-coded truthful Trash card/
+working Change source and basic create/edit/filter/delete/restore/restart only.
+No additional exploratory edge cases, broader matrix gates or secondary polish
+work before the clean bounded-delivery handoff. Untested variants stay limits.
+
+For a fresh authoritative collection tombstone, show a typed Trash/deleted-source
+card with Restore and Change source. Do not manufacture query success or replace
+real active-source/configuration/get/action failures with a happy empty state.
+Remove the generic repair-source hint/duplicate raw error only for that known
+expected state. Restore must retain the exact captured command/operation identity
+through rerender and uncertain retry, rather than authoring a new Restore request.
+
+This is the final already-coded core-flow repair, not a new storage-failure
+claim or permission to expand secondary edge-case work. Root awaits its source/review/results before final handoff. Main remains
+`c36c4b0e` with sole shared-core owner; latest source review has passed but an
+**root's explicit integration request to that owner**, clean final branch and evidence are still needed.
+
+Final handoff fields (fill from actual P009 receipts, not a plan):
+
+- Final code HEAD / source closure: **pending P009**; last bounded actual HEAD dd6c0b7f.
+- P009 worker commit / root composition / exact review: **pending**.
+- Final frontend/native/WASM artifact identities and actual followup: **pending**;
+  reuse earlier receipts only where their closure still matches.
+- Main integration request / owner acknowledgement / resulting main commit:
+  **pending; no product merge claimed**.
+- Retained limits: browser collections unsupported; scoped indexing previews
+  unavailable; concurrent-client/crash/broader layout/filter/visual/keyboard and
+  installed production-package/mobile/other OS acceptance not claimed.
+
+Documentation followup only: no source edits, Git mutations, tests/builds, UI or
+Tauri actions by the documentation owner. Preserve P001–P007 failures and source
+limits; P008 bounded success does not rewrite earlier failed gates.
 
 ### Receipt template
 

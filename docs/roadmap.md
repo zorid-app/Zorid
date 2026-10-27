@@ -6,18 +6,33 @@ the [execution checkpoint](deferred-product-roadmap.md) records owners, branches
 and evidence; [user findings](user-findings.md) records incoming bugs/requests.
 Older plans remain detailed capability inventories, not competing delivery orders.
 
+Latest user scope freeze: finish the **basic local create/edit/filter/delete/
+restore/restart** experience, including the already-coded truthful deleted-source
+Trash card and working Change source. Complete only the current implemented
+UI/controller seam and focused verification, then clean handoff/integration.
+No further exploratory or secondary edge-case work, broader acceptance gates or
+matrix expansion. Retain untested variants as honest limits without blocking a
+bounded basic-delivery claim. [Tracker P009](plans/types-properties-implementation.md#p009--pending--expected-deleted-source-presentation-and-retry-ownership)
+records local_ui + view_source_model ownership and combined-review dependency.
+
 ## Current focus
 
-Current local-delivery cutoff: `7a810bb5` closes the independently reviewed
-retained-datatype correction P2 with 10/10 focused regressions and a bounded actual
-normal Electron correction/clear/quit-reopen PASS. Full feature acceptance/main
-integration is **held by P006**: after restart, collection notes show generic
-frontmatter/identity/null controls instead of managed schema controls, while data
-and membership persist. Read-only diagnosis is assigned; no cause/fix claimed.
-[Tracker P005/P006](plans/types-properties-implementation.md#p006--2026-10-27--managed-note-controls-after-app-restart)
-retains evidence and scope limits. The user finished testing; all owned foreground
-test sessions closed normally. Browser WASM did not compile due low disk, so no
-matched browser artifact/acceptance. No further Tauri work; finish local collections.
+Current bounded desktop cutoff: `dd6c0b7f`, independently reviewed successor
+Standards 0/Spec 0; root 52/52 focused, full TS/native frontend005 PASS. Actual normal
+source-mode Electron closes P006 managed-controls and false postcommit-refresh
+symptoms, with clean managed/ordinary saves, normal quit/reopen, filtered New/
+edit-out and hidden-member Trash/exact Restore passing within recorded scope.
+All owned foreground sessions closed normally; production package/real vault
+untouched. This is not installed-production-package or full-platform acceptance.
+
+**Final assigned gate P009 remains open:** expected deleted-source card should
+show Restore/Change source without duplicate raw error/repair hint, while retaining
+authoritative tombstone evidence, real failures and exact uncertain Restore retry.
+Source/review/actual followup pending. [Tracker P008/P009](plans/types-properties-implementation.md#p008--2026-10-27--recovered-controls-and-clean-saves-bounded-native-pass)
+keeps source/CLI/native/browser evidence and unexecuted variants distinct. Main
+unchanged c36c4b0e; sole owner still needs clean branch/evidence and root's explicit
+integration request to that owner. Browser untyped is bounded PASS; collections unavailable.
+No further Tauri work; finish the local collections handoff first.
 
 ### Latest local collection design steering — 2026-10-27
 
