@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {delay, until} from '../tasks-electron-integration/cdp.mjs';
+import {beginDrag} from '../bases-electron-layouts-integration/drag.mjs';
 export const MOD={alt:1,control:2,meta:4,shift:8};
 
 // Serialized into the renderer by both pointer locators. This reads standard DOM
@@ -86,29 +87,9 @@ export class UI {
     this.actions.push({action:'text',selector,text,at:Date.now()});
   }
   async drag(source,target) {
-    // Drag geometry does not require enabled controls (matching dragTo semantics).
-    const from=await this.point(source,0,{requireEnabled:false}),to=await this.point(target,0,{requireEnabled:false});
-    await this.cdp.call('Input.setInterceptDrags',{enabled:true});
-    let listener,timer;
-    const intercepted=new Promise((resolve,reject)=>{
-      timer=setTimeout(()=>reject(Error('Real Chromium dragstart was not intercepted')),8000);
-      listener=event=>{const value=JSON.parse(event.data);if(value.method==='Input.dragIntercepted'){clearTimeout(timer);resolve(value.params.data);}};
-      this.cdp.ws.addEventListener('message',listener);
-    });
-    // Observe rejection immediately while CDP inputs are still being dispatched.
-    intercepted.catch(()=>{});
-    try{
-      await this.cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',x:from.x,y:from.y});
-      await this.cdp.call('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',buttons:1,clickCount:1,x:from.x,y:from.y});
-      for(let i=1;i<=12;i++)await this.cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',button:'left',buttons:1,x:from.x+(to.x-from.x)*i/12,y:from.y+(to.y-from.y)*i/12});
-      const data=await intercepted;
-      for(const type of ['dragEnter','dragOver','drop'])await this.cdp.call('Input.dispatchDragEvent',{type,x:to.x,y:to.y,data});
-      this.actions.push({action:'chromium-intercepted-drag',source,target,types:data.items.map(item=>item.mimeType),at:Date.now()});
-    }finally{
-      clearTimeout(timer);if(listener)this.cdp.ws.removeEventListener('message',listener);
-      await this.cdp.call('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',buttons:0,clickCount:1,x:to.x,y:to.y});
-      await this.cdp.call('Input.setInterceptDrags',{enabled:false});
-    }
+    const drag=await beginDrag({cdp:this.cdp,ui:this,evidence:{actions:this.actions}},source);
+    try { await drag.over(target); await drag.dropAtLast(); }
+    finally { await drag.cleanup(); }
   }
   async select(selector, value) {
     const model = await this.wait(`const matches=[...document.querySelectorAll(${JSON.stringify(selector)})],e=matches[0];if(e?.tagName!=='SELECT')return false;const row=e.closest('.bases-filter-condition'),base=document.querySelector('.pane.is-active .bases-session'),attr=(node,name)=>node?.getAttribute(name)??null;return {matches:matches.length,connected:e.isConnected,label:e.getAttribute('aria-label'),custom:e.hidden&&e.nextElementSibling?.getAttribute('role')==='combobox',value:e.value,selectedIndex:e.selectedIndex,nativeDisabled:e.matches(':disabled'),ariaDisabled:!!e.closest('[aria-disabled="true"]'),inert:!!e.closest('[inert]'),values:[...e.options].map(o=>({value:o.value,label:o.textContent,disabled:o.disabled})),filterProperty:row?.querySelector('select[aria-label="Filter property"]')?.value??null,activeBase:base?{controllerVersion:attr(base,'data-base-controller-version'),controllerUpdating:attr(base,'data-base-controller-updating'),controllerError:attr(base,'data-base-controller-error'),busy:attr(base.querySelector('.bases-session-content'),'aria-busy'),renderedVersion:attr(base.querySelector('.zorid-bases-table'),'data-base-rendered-version')}:null};`, 'Select value model');

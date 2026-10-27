@@ -443,6 +443,7 @@ export async function journey(c){
   const embedBefore=(await import('./fixtures.mjs')).fixtureFiles().get('Embed host.md');
   assert.equal(await c.read('Embed host.md'),embedBefore,'Rendering embeds does not mutate Markdown');
   const inline='.pane.is-active .bases-embed[data-base-source="Embed host.md"] .bases-session';
+  await c.ui.wait(`const root=document.querySelector(${JSON.stringify(inline)});return root&&root.getAttribute('data-base-controller-version')!=='0'&&root.querySelector('.bases-session-content')?.getAttribute('aria-busy')==='false';`,'Inline Base initial result is ready before opening its menu');
   await c.ui.button('Views',inline);await c.ui.button('Configure view Embedded list',dialog('Views'));await c.ui.type(input('View name',dialog('View options')),'Inline renamed');await apply(c,'View options');
   await c.saved('Embed host.md',source=>assert.equal(source,embedBefore.replace('name: Embedded list','name: Inline renamed')),'fenced-view-configuration-updates-exact-original-markdown-block');
   await c.screenshot('08b-fenced-config-saved');
