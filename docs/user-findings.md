@@ -1,5 +1,28 @@
 # User findings queue
 
+## Final basic local flows verified; integration pending — P009, 2026-10-27
+
+Final code 05b73d5a08dc7c9a083041071d376b54020a71f9, product 262939e6/controller
+cd17f237/tests 2708115e independently reviewed zero must-fix. Root final002 99/99,
+full TS/native frontend006 PASS. Original001 98/99 failure stays recorded; its
+obsolete unsupported untyped-cell edit oracle was replaced test-only with the
+supported Results Limit draft guard/browse-only/Cancel checks.
+
+Actual normal source-mode Electron 70282 PASS: Delete all 3 including 2 hidden gives
+one clear Trash card with Restore/Change source and no duplicate raw error/repair
+hint; card Restore works. Delete again then Change source to untyped saves; old
+collection Restore returns exact 3 IDs/9-null-0/full hashes while selected view
+stays ordinary-note/file-only/untyped with no property/group/add controls. All
+owned test apps normally closed exit 0. Evidence:
+`/private/tmp/zorid-local-collections-desktop-20261027/deleted-source-final-smoke.json`
+and `restored-final-data.json` in that directory.
+
+P009 is CLOSED within frozen core-flow scope. [Final handoff](plans/types-properties-implementation.md#p009--2026-10-27--deleted-source-core-flow-verified)
+is ready for root clean docs commit/explicit integration request to sole main
+owner; main remains c36c4b0e, no merge claimed. Broader variants remain limits, not
+new gates; normal source app is not installed production package. Browser
+collection CRUD/scoped previews unavailable; no Tauri/new sync work.
+
 ## Scope freeze: finish basic local collections — latest user steering
 
 User questions spending time on secondary edge cases; root acknowledges final
@@ -14,7 +37,7 @@ P009 essential dependency: local_ui owns session/Workspace card/Restore retry
 Change source blocked by current.error and coherent latest source/witness/epoch
 on error refresh. Retain CAS/identity/stale-draft/preview/property-write guards.
 collection_ui_review reviews both; combined verification/composition remains
-pending. [Tracker P009](plans/types-properties-implementation.md#p009--pending--expected-deleted-source-presentation-and-retry-ownership)
+pending. [Tracker P009](plans/types-properties-implementation.md#p009--2026-10-27--deleted-source-core-flow-verified)
 has exact scope; no completed core-flow claim from UI-only checks.
 
 ## Deleted-collection expected-state presentation — P009 pending, 2026-10-27

@@ -45,6 +45,26 @@ preview/property-write guards; collection_ui_review reviews both. Current seams
 are implemented, combined focused verification/composition pending. No acceptance
 claim from UI-only passes or appearance of a Change source button.
 
+**FINAL P009 core-flow verification PASS; integration pending — 2026-10-27.**
+Code HEAD 05b73d5a08dc7c9a083041071d376b54020a71f9, product 262939e6,
+controller cd17f237/tests 2708115e; all independently reviewed zero must-fix.
+Final composed002 99/99 PASS 0 skip, full TS/native frontend006 PASS. Preserve first
+001 98/99 FAIL: obsolete unsupported untyped-cell editing oracle; test-only
+successor uses supported Results Limit draft guard/browse-only/Cancel assertions.
+Actual normal source Electron 70282 PASS: Delete 3 including 2 hidden produces one
+clear Trash card/Restore/Change source, no raw error/repair hint; card Restore
+works; second Delete/Change source saves explicit untyped. Restore old collection
+from browser preserves exact 3 IDs/9-null-0/full hashes while selected view stays
+untyped with ordinary file-only results/no property/group/add controls. Normal
+quit 70282 exit 0, all owned test apps closed. Receipt:
+`/private/tmp/zorid-local-collections-desktop-20261027/deleted-source-final-smoke.json`,
+readback `restored-final-data.json`. [Final P009/handoff](plans/types-properties-implementation.md#p009--2026-10-27--deleted-source-core-flow-verified)
+links source/CLI/native/browser bounded receipts and matched native Rust artifact
+receipt. Core frozen scope CLOSED; main c36 still awaits clean evidence handoff and
+root's explicit request to sole main owner, no product merge yet. No installed
+production-package/full platform claim; broad untested variants remain limits,
+not new delivery gates. Browser collections/previews unavailable; no Tauri work.
+
 ### Latest execution update
 
 **P007 successor — reviewed source, actual corrected startup pending.**
@@ -459,7 +479,7 @@ browser semantic passes retain their exact recorded source limits.
 Earlier coordinator state: root92887ca4 composes reviewed filter advice76bcf6db
 as43b21f6f, reviewed public filter-close acknowledgement4da3a735 ascf00a2a2,
 and reviewed definitive saved-source changed-message931280fa as92887ca4.
-Root21 advice tests and10 close/message tests PASS0skip. Desktop005/1538 PASS
+Root21 advice tests and10 close/message tests PASS 0 skip. Desktop005/1538 PASS
 inclTypeScript, producer43b21f6f; later changes are test/docs plus desktop preload
 message handling, not renderer source. Receipt
 `/private/tmp/zorid-bases-20261026-products-001/frontend-receipt-005.json`.
@@ -499,7 +519,7 @@ Root starts fresh Safety004 next; workers remain source-only in isolated trees.
 
 
 Current root update: reviewed enhanced-summary explicit Tab commit78cc48f9
-composes a8086315; root19 relevant tests PASS0skip, independent30/30 approved.
+composes a8086315; root19 relevant tests PASS 0 skip, independent30/30 approved.
 Desktop003/5716 PASS inclTypeScript, receipt
 `/private/tmp/zorid-bases-20261026-products-001/frontend-receipt-003.json`.
 Reviewed reproducible normal-web harness3478b100 composesb9a60f39, actualruntime
@@ -527,7 +547,7 @@ click13ms after Split right command, twoBases remain; ownedSIGTERM0/no leaks,
 freezeverified. Independent actualWorkspace regression proves an uncovered
 initial destination-render navigation race; reviewed fix0e628f31 composes as
 7e12ab41. Reviewed explicit split/note-mode setup7eb2609f composes11c246a9.
-Root25 composed navigation/setup tests PASS0skip; desktop002/90921 PASS incl
+Root25 composed navigation/setup tests PASS 0 skip; desktop002/90921 PASS incl
 TypeScript on74dcc2a9. Current frontend receipt
 `/private/tmp/zorid-bases-20261026-products-001/frontend-receipt-002.json`.
 Reviewed visual provenance63262c21 composes74dcc2a9; actual current reference

@@ -12,27 +12,26 @@ Trash card and working Change source. Complete only the current implemented
 UI/controller seam and focused verification, then clean handoff/integration.
 No further exploratory or secondary edge-case work, broader acceptance gates or
 matrix expansion. Retain untested variants as honest limits without blocking a
-bounded basic-delivery claim. [Tracker P009](plans/types-properties-implementation.md#p009--pending--expected-deleted-source-presentation-and-retry-ownership)
+bounded basic-delivery claim. [Tracker P009](plans/types-properties-implementation.md#p009--2026-10-27--deleted-source-core-flow-verified)
 records local_ui + view_source_model ownership and combined-review dependency.
 
 ## Current focus
 
-Current bounded desktop cutoff: `dd6c0b7f`, independently reviewed successor
-Standards 0/Spec 0; root 52/52 focused, full TS/native frontend005 PASS. Actual normal
-source-mode Electron closes P006 managed-controls and false postcommit-refresh
-symptoms, with clean managed/ordinary saves, normal quit/reopen, filtered New/
-edit-out and hidden-member Trash/exact Restore passing within recorded scope.
-All owned foreground sessions closed normally; production package/real vault
-untouched. This is not installed-production-package or full-platform acceptance.
+Frozen basic local scope is now **verified; main integration pending**. Final
+code `05b73d5a08dc7c9a083041071d376b54020a71f9`/product `262939e6` and controller
+successors are independently reviewed, zero must-fix; root 99/99 targeted/full TS/
+native frontend006 PASS. Final normal source Electron 70282 verifies truthful
+Trash card, card Restore and working Change source to untyped; restoring the old
+collection preserves exact 3 identities/values/full bytes without changing that
+selected untyped source. Normal quit exit 0, all owned test apps closed.
 
-**Final assigned gate P009 remains open:** expected deleted-source card should
-show Restore/Change source without duplicate raw error/repair hint, while retaining
-authoritative tombstone evidence, real failures and exact uncertain Restore retry.
-Source/review/actual followup pending. [Tracker P008/P009](plans/types-properties-implementation.md#p008--2026-10-27--recovered-controls-and-clean-saves-bounded-native-pass)
-keeps source/CLI/native/browser evidence and unexecuted variants distinct. Main
-unchanged c36c4b0e; sole owner still needs clean branch/evidence and root's explicit
-integration request to that owner. Browser untyped is bounded PASS; collections unavailable.
-No further Tauri work; finish the local collections handoff first.
+[Final tracker/handoff](plans/types-properties-implementation.md#p009--2026-10-27--deleted-source-core-flow-verified)
+retains earlier CLI/native/browser passes and failures, exact artifact receipts
+and limits. Main unchanged c36c4b0e; root will commit clean docs/evidence and make
+an explicit integration request to its sole owner. Review/isolated verification
+is not a main merge. No installed production-package or broad platform acceptance
+claim. Untested secondary variants remain limits, not blockers to the frozen basic
+scope. Browser collections/scoped previews unavailable. No Tauri or new sync work.
 
 ### Latest local collection design steering — 2026-10-27
 

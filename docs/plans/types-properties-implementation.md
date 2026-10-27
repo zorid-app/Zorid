@@ -1,7 +1,7 @@
 # Local collections, types and Base views — implementation tracker
 
 Updated: 2026-10-27. Owner: this discussion's coordinator (`/root`).
-State: **verifying — bounded CLI/native/browser passes; P009 presentation gate and main handoff pending**.
+State: **frozen core-flow scope verified; main integration pending**.
 Latest authorization: the user explicitly resumed with **"ok start"** on
 2026-10-27 after the documentation handoff. Root's built-in goal is active;
 this repository tracker remains the cross-session record. Collaboration/sync is
@@ -25,24 +25,27 @@ variants remain honest limits, not blockers to a bounded core-delivery claim.
 
 | Item | Current state |
 | --- | --- |
-| Current task | Finish basic local flow and already-coded P009 Trash card/Change source: local_ui owns session/Workspace, view_source_model owns controller source-repair seam; collection_ui_review reviews both. Focused verification then clean handoff; no secondary-edge exploration. |
-| Composition branch/worktree | `codex/local-databases` / `.worktrees/local-databases`, main base `c36c4b0e`; current and latest actual-verified HEAD `dd6c0b7f`. P009 successor source/head is pending. |
-| Main integration ownership | Shared-core sole owner `term_d8b43288-7bf1-464c-af5f-b779721982e3`; main unchanged `c36c4b0e`. Root terminal `term_4603116b-4cb4-4e5a-b3a5-968bea283161` composes only in isolation. |
-| Review/handoff | Main-owner successor review at dd6 reports Standards 0/Spec 0. Integration still awaits clean final branch/evidence and root's explicit integration request to the sole main owner; review is not completed integration. |
-| Source checks | Root 52/52 targeted + full TS + native frontend005 PASS. Earlier native/core/query/WASM/transport receipts retain exact source/scope; never add overlapping runs together. |
-| Actual CLI | P004 successor PASS 30 commands/13 checks/all 7 scenarios, with explicit exclusions. Native P2 contract separately PASS 12 commands/8 checks. |
-| Actual normal native | P008 PASS bounded: recovered managed controls/hidden IDs/declared null Date; managed8→9 and ordinary rating 4→5 clean acknowledgement; normal quit/reopen values 9/5/null and exact bodies. Typed filter/New/edit-out and collection Trash/Restore also pass; expected deleted-source card presentation remains P009. |
-| Actual browser | P007 fresh-origin untyped browsing/filter/sort/New/edit-out/reload PASS bounded; browser collection capability remains unavailable. No recovered-note or full platform parity inferred. |
-| Test-app lifecycle | All foreground sessions through 51898 normal exit 0 observed. No live owned test app. Normal source-mode Electron with retained matched host was tested, not an installed production package; production app/real vault untouched. |
-| Next action | Finish/review P009, validate affected scenarios on its exact source and normal test app, then prepare final source/receipt handoff and explicit integration request to sole main owner. |
-| Remaining limits | P009 source/results pending; browser collection CRUD, concurrent local clients, actual crash/interruption, broader filter/layout/visual/keyboard matrices, installed package and mobile/other OS acceptance are not claimed. Scoped indexing previews remain a safe capability gap. |
-| Resource/scope | Serial bounded validation; no overlapping heavy builds or worker Git mutations. Local collections first; no Tauri or new sync work. |
+| Current task | Core local create/edit/filter/delete/restore/restart + truthful deleted-source card/Change source are verified within frozen scope. Prepare clean final handoff and root's explicit integration request to sole main owner; no new exploratory work. |
+| Composition branch/worktree | `codex/local-databases` / `.worktrees/local-databases`, main base `c36c4b0e`; final code HEAD `05b73d5a08dc7c9a083041071d376b54020a71f9` (product `262939e6`, later test-only oracle correction). Root will commit current documentation separately. |
+| Main integration ownership | Shared-core sole owner `term_d8b43288-7bf1-464c-af5f-b779721982e3`; main unchanged `c36c4b0e`. Root terminal `term_4603116b-4cb4-4e5a-b3a5-968bea283161` has not merged product work. |
+| Review/handoff | All P009 controller/UI/test successors independently reviewed with zero must-fix findings. Main integration still needs root's explicit request, clean branch/evidence and owner action; review is not completed integration. |
+| Final source checks | `final-core-ui-composed-002.log` 99/99 PASS, 0 skipped; full TS/native frontend006 PASS. Original001 was98/99 FAIL on obsolete unsupported-untyped-edit oracle; test-only successor preserves supported draft guards. No retroactive pass or aggregate with earlier overlaps. |
+| Actual CLI | P004 successor30 commands/13 checks/all7 scenarios PASS; separate native P2 contract12 commands/8 checks PASS. Original oracle failure retained; exclusions remain scoped limits. |
+| Actual normal native | P008 functional pass + P009 final session70282 PASS: clear deleted card, Restore directly, Change source to untyped, old collection Restore leaves chosen view untyped, exact 3 IDs/9-null-0/full file hashes unchanged. Normal quit exit 0; all owned test apps closed. |
+| Actual browser | P007 source73fa fresh-origin untyped browsing/filter/sort/New/edit-out/reload PASS bounded. Browser collection CRUD unsupported. No final 05b browser rerun, recovered-note or broad platform parity claimed. |
+| Artifacts/runtime | Normal source-mode Electron used retained matched native host and native frontend006, not installed production package. Native products receipt and WASM002 source/hash receipts retained; latest browser actual receipt keeps its earlier source limit. Production app/real vault untouched. |
+| Next action | Root inspects/commits four documentation files, hands ordered reviewed source and exact receipts to sole main owner and explicitly requests integration. No further UI/source campaign required for this frozen core-flow scope. |
+| Remaining limits | Browser collections, scoped indexing previews, actual concurrent-client/crash and broad layout/filter/visual/keyboard/installed-package/mobile/other OS variants remain explicit limits, not new blockers to bounded core delivery. |
+| Resource/scope | No live owned test app. Serial bounded resource rules unchanged. No further Tauri, sync, exploratory or secondary-edge work. |
 
-P008 evidence: `/private/tmp/zorid-local-collections-desktop-20261027/desktop-acceptance-002.json`
-and `restored-final-data.json` in the same directory. Root source `dd6c0b7f` is
-reviewed and bounded-runtime verified; P009 final source and evidence remain
-pending. Preserve P006/P007 failed actual receipts and their before-fix red tests.
-No product/main integration or installed-package acceptance is inferred.
+Final native receipt:
+`/private/tmp/zorid-local-collections-desktop-20261027/deleted-source-final-smoke.json`;
+prior native functional/readback receipts: `desktop-acceptance-002.json` and
+`restored-final-data.json` in that directory. Final source and runtime gate are
+closed within the user-frozen core-flow scope; **main integration is still pending**.
+Retain earlier P006/P007 failures and first final001 98/99 failure as original
+history. The passing successor does not imply unexecuted variants or another
+platform/installed-package acceptance.
 
 Before each resumed pass or after context compaction:
 
@@ -163,14 +166,14 @@ actual receipts; none of these rows is accepted merely because work is active.
 
 | Batch | Scope and required exit | Dependencies | Source / review | Integration | Runtime |
 | --- | --- | --- | --- | --- | --- |
-| L0 Contracts and current-code audit | Stable identity/source/ownership/storage/publication contracts used by this local slice. | Current main/owner audited | Reviewed/composed / root + source reviewers | Isolated root only; main pending | Bounded flows verified; unsupported capabilities listed |
-| L1 Local domain/storage | Stable schemas, typed values, membership, revision guards and durable retry without new sync enrollment. | L0 | Reviewed/composed / local_core | Isolated root only; main pending | Store64 selected checks + P004 CLI ownership/retry/rename/reopen PASS; broader concurrent/crash variants unrun |
-| L2 Projection/editor saves | Readable schema/frontmatter, exact bodies, guarded composition and recovered-note UI. | L0–L1 | Reviewed/composed through dd6; P006 and false postrefresh successor approved / native + saves | Isolated root only; main pending | Native source checks + P005/P008 actual correction/restart/managed and ordinary saves PASS bounded; actual crash/external-edit matrix open |
-| L3 Per-view sources/registry retirement | Trusted one-source queries, hidden metadata catalogs, no global Properties.yaml authority. | L0–L2 | Reviewed/composed / query + model + transport | Isolated root only; main pending | Query24/native facade3 source checks PASS; native typed filter and browser untyped catalogs PASS; scoped previews/browser collections unavailable |
-| L4 Onboarding/browsing | Create/select collection and untyped view flows, collection browsing. | L3 | Reviewed/composed / local_ui | Isolated root only; main pending | Normal native Tasks onboarding and collection browser + actual browser untyped onboarding PASS; all source/layout combinations not claimed |
-| L5 Editing/New | Property controls, templates, automatic New hints, clean acknowledgement and edit-out preservation. | L1–L4 | Reviewed/composed / UI + model + saves | Isolated root only; main pending | P008 native Status 9 New inherits 9 then0 hides with editor/file retained; ordinary4→5 and managed8→9 PASS. Browser rating 4 New/edit 2 PASS; other hint/layout/keyboard variants source-only or unrun |
-| L6 Deletion/recovery/edges | Schema conversion, identity, hidden members, Trash/Restore and deleted-source state. | L1–L5 | Data paths reviewed/composed; P009 presentation source pending / UI + reviewers | Isolated root only; main pending | P004 CLI + P005/P008 native data paths PASS bounded, exact 3IDs/9-null-0/bodies restored. P009 expected-state card/retry proof pending; broader edge matrix open |
-| L7 Review/integration/delivery | Final scoped review, artifacts, actual checks and ordered sole-owner integration. | P009 + final clean branch/evidence | dd6 owner review Standards 0/Spec 0; final successor pending | Main c36c4b0e unchanged; explicit integration request pending | CLI/native/browser bounded receipts retained; installed production package/other platforms not claimed |
+| L0 Contracts and current-code audit | Stable identity/source/ownership/storage/publication contracts used by this local slice. | Current main/owner audited | Scoped source/review complete; see named owners above | Integration pending | Bounded flows verified; unsupported capabilities listed |
+| L1 Local domain/storage | Stable schemas, typed values, membership, revision guards and durable retry without new sync enrollment. | L0 | Scoped source/review complete; see named owners above | Integration pending | Store64 selected checks + P004 CLI ownership/retry/rename/reopen PASS; broader concurrent/crash variants unrun |
+| L2 Projection/editor saves | Readable schema/frontmatter, exact bodies, guarded composition and recovered-note UI. | L0–L1 | Scoped source/review complete; see named owners above | Integration pending | Native source checks + P005/P008 actual correction/restart/managed and ordinary saves PASS bounded; actual crash/external-edit matrix open |
+| L3 Per-view sources/registry retirement | Trusted one-source queries, hidden metadata catalogs, no global Properties.yaml authority. | L0–L2 | Scoped source/review complete; see named owners above | Integration pending | Query24/native facade3 source checks PASS; native typed filter and browser untyped catalogs PASS; scoped previews/browser collections unavailable |
+| L4 Onboarding/browsing | Create/select collection and untyped view flows, collection browsing. | L3 | Scoped source/review complete; see named owners above | Integration pending | Normal native Tasks onboarding and collection browser + actual browser untyped onboarding PASS; all source/layout combinations not claimed |
+| L5 Editing/New | Property controls, templates, automatic New hints, clean acknowledgement and edit-out preservation. | L1–L4 | Scoped source/review complete; see named owners above | Integration pending | P008 native Status 9 New inherits 9 then0 hides with editor/file retained; ordinary4→5 and managed8→9 PASS. Browser rating 4 New/edit 2 PASS; other hint/layout/keyboard variants source-only or unrun |
+| L6 Deletion/recovery/edges | Basic schema conversion, identity, hidden members, Trash/Restore and deleted-source state. | L1–L5 | Scoped source/review complete through05b / UI + model + reviewers | Integration pending | P004/P005/P008/P009 actual basic data/card/Restore/Change source PASS, exact 3IDs/9-null-0/full hashes. Broader variants remain limits, not new gates |
+| L7 Review/integration/delivery | Final scoped review/artifacts/checks and ordered sole-owner integration. | Final clean branch/evidence ready after root docs commit | Source/UI/controller review complete, zero must-fix;99/99/TS/frontend006 PASS | Main c36c4b0e unchanged; root explicit request + owner integration pending | Core-flow actual CLI/native and browser-untyped scoped proof complete; installed production package/unsupported platforms remain limits |
 
 L7 review/integration can run alongside independent bounded source work once a
 batch is ready. Keep shared API changes coordinated and heavy compilation/native
@@ -180,15 +183,17 @@ iOS requires its own explicit validation slot and is not this pass's scope.
 ## Acceptance matrix
 
 Each row states its actual evidence layer: isolated source checks, independent
-CLI, normal source-mode Electron or normal browser. All main integration remains
-pending. Bounded passes do not establish unexecuted variants or other platforms.
+CLI, normal source-mode Electron or normal browser. Frozen basic core-flow scope
+is verified; all main integration remains pending. Broader unexecuted variants
+below are limits, not additional delivery gates under the user's scope freeze.
+Bounded passes do not establish those variants or other platforms.
 Retain exact source/artifact identities in the pass receipts; reference-only
 observations are not product test passes. Use focused safety tests and ordinary journeys;
 repeat passed scenarios only after relevant changes or unresolved failures.
 
 | Case | Scenario / oracle | Evidence layer and remaining limits |
 | --- | --- | --- |
-| A01 Sources/onboarding | Independent typed/untyped view configuration and reopen. | Source-model/query checks PASS; native Tasks onboarding + browser untyped onboarding observed PASS. One Base with Books/Projects/untyped after reopen and every layout/source combination not separately exercised. |
+| A01 Sources/onboarding | Independent typed/untyped view configuration and reopen. | Source checks, native Tasks onboarding/browser untyped onboarding PASS; P009 Change source saves explicit untyped and remains untyped after old collection Restore. Every multi-source Base/layout combination not separately exercised; limit, not extra gate. |
 | A02 Untyped browsing | File-only presentation with hidden metadata filters/sort, no user-property editing grid. | Actual fresh-origin normal browser PASS: file-only table, rating/tags catalogs, filter/sort/reload; collection capability explicitly unavailable. Broad visual/accessibility/performance matrix unrun. |
 | A03 Ownership | Independent collection field identities and creation-only membership. | P004 actual CLI ownership PASS, typed normal-app collection flows PASS; source denies import/move/detach. Concurrent local clients or every API mutation variant not claimed. |
 | A04 Immediate New | No questions/blocking; feasible filter-derived values. | Native Status=9 New inherits 9 and browser rating=4 New inherits 4 PASS. OR/range/impossible/general-template precedence not established by actual app receipts; focused source evidence retained separately. |
@@ -196,13 +201,13 @@ repeat passed scenarios only after relevant changes or unresolved failures.
 | A06 Shared entry | Same entry reflected in views/note editor without lost body writes. | P008 normal managed setter+typed view/filter and exact body persistence PASS bounded. Concurrent split/linked placements/independent clients are not an actual-runtime acceptance claim. |
 | A07 Untyped New | Ordinary note, automatic feasible hints, no collection assigned. | Browser New inherits 4 immediately, edit 2 hides without deleting note; filter/sort persistence PASS. Broader folder destinations/default/filter combinations unrun. |
 | A08 Identity/rename/duplicate | Stable schema/member identities and safe duplicate/copy handling. | P004 actual CLI rename/duplicate PASS; P008 native Restore exact 3 original IDs PASS. External copies/missing IDs/folder-move variants retain source-level checks or remain unexecuted. |
-| A09 Schema changes | Preserve incompatible values until explicit correction/clear, no silent reinterpretation. | P005/P008 normal native Status→Number preserved labels then7/null correction and later9 clean save PASS, bodies intact. Full datatype/option-delete/recovery matrix not run. |
-| A10 Delete/restore | Delete collection includes hidden members; preserve unrelated data and restore identities. | P004 CLI collision restore PASS; P008 native collection 3 vs filtered 1, Trash removes all 3 (2 hidden), Base/ordinary/other collection retained, Restore exact 3IDs/9-null-0/bodies and filtered 1 PASS. P009 presentation and uncertain action-rerender retry proof pending. |
+| A09 Schema changes | Preserve incompatible values until explicit correction/clear, no silent reinterpretation. | P005/P008 normal native Status→Number preserved labels then 7/null correction and later 9 clean save PASS, bodies intact. Full datatype/option-delete/recovery matrix not run. |
+| A10 Delete/restore | Delete collection includes hidden members; preserve unrelated data and restore identities. | P004 CLI collision restore PASS; P008 native collection 3 vs filtered 1, Trash removes all 3 (2 hidden), Base/ordinary/other collection retained, Restore exact 3IDs/9-null-0/bodies and filtered 1 PASS. P009 actual card Restore/Change source PASS; source retry-identity guards reviewed/tested, actual uncertain-outcome fault variant not injected. |
 | A11 Publication crash | Restart resumes guarded projection without stale overwrite. | Selected Store/native safety source tests PASS. Normal quit/reopen actual data/control persistence PASS; forced actual app crash/interruption and external-writer matrix are not exercised by CLI/UI receipts. |
 | A12 Registry removal | No vault-global Properties.yaml authority or automatic registry workflow. | Reviewed Rust/TS source retirement + query tests PASS; actual untyped browser has no property/grid/settings flow. No destructive migration/deletion of existing user registry files claimed. |
 | A13 Independent clients | Independent CLI, normal editor, browser support recorded separately. | P004 actual standalone CLI 30/13/all 7 PASS and P005 native contract 12/8 PASS; normal source Electron P008 functional pass bounded. Concurrent local clients unrun; browser untyped only, collections unavailable. |
-| A14 Product lifecycle | Matching normal app flows and explicit artifact/platform scope. | P008 normal source-mode Electron startup/clean saves/quit/reopen PASS; all foreground sessions through 51898 close exit 0. Not an installed production-package, full visual/keyboard/mobile/other OS parity claim. |
-| A15 Deleted-source presentation/retry | Authoritative tombstone card with Restore/Change source, real failures retained and original action identity preserved. | OPEN P009: data Trash/Restore works, but duplicate generic error/repair-source presentation remains. Two-file source fix and exact uncertain Restore retry through rerender need review/check/actual proof. |
+| A14 Product lifecycle | Matching normal app flows and explicit artifact/platform scope. | P008 normal source-mode Electron startup/clean saves/quit/reopen PASS; all foreground sessions through 70282 close exit 0. Not an installed production-package, full visual/keyboard/mobile/other OS parity claim. |
+| A15 Deleted-source presentation/retry | Authoritative tombstone card, working Restore/Change source, real failures/retry identity retained. | P009 CLOSED bounded: one clear card, no raw error/repair banner; card Restore works, Change source saves untyped and old collection Restore leaves it untyped. Source guards/command retention reviewed and final99 tests pass; real uncertain-outcome fault variant remains unrun limit. |
 
 ## Open decisions and findings queue
 
@@ -215,10 +220,10 @@ batch and acceptance cases together.
 
 | Item | Owner / dependency | State |
 | --- | --- | --- |
-| Identity, durable authority, view/legacy migration and composition contracts | L0; root + scoped owners above | Partly specified; persistence/projection review open |
-| Default synthesis precedence, templates, ranges and untyped destination | L0/L5; view_source_model + local_ui | Synthesis details open; automatic creation without questions or filter-based blocking is settled |
-| Recovery details, datatype compatibility and external identity admission | L0/L6; local_core + local_native | Open |
-| Initial datatype/preset/layout inventory and platform sequence | L0; root + local_ui | Open |
+| Identity/local authority/view composition contracts | L0; root + scoped owners above | Implemented/reviewed for frozen local slice; wider migration/admission variants remain limits |
+| Wider default synthesis/templates/ranges/destinations | L0/L5; view_source_model + local_ui | Basic New/equality source+runtime passes; broader variants remain limits, no extra campaign under scope freeze |
+| Wider recovery/datatype/external identity variants | L0/L6; local_core + local_native | Basic scoped paths passed; broader variants remain limits, not new gates |
+| Broader datatype/preset/layout/platform coverage | L0; root + local_ui | Retain implemented scope/receipts; untested variants and unavailable platforms remain explicit limits |
 | Detach-to-untyped action | Root local membership contract | Excluded, together with import and cross-collection moves |
 | Documentation transfer to current main/roadmap | Acknowledged shared-core main integration owner | `bc006f23` queued; main observed clean at `c36c4b0e`, not integrated at cutoff |
 
@@ -321,7 +326,7 @@ changes and copied `bb06db81`; no clean final artifact/source claim is made.
 | Core authority | `8aae3e33`→`6f0bb1c4`; `a3ae5eaa`→`223d3733` | Earlier Store17 + host-source-guard14 PASS, logs `core-databases-002.log`. Retained-value correction has 23 authored tests not yet run. Review followups: preserve trash cohort, valid full-reload event journal, pinned database-state fence and superseded schema-artifact candidate history. |
 | Native publication/host | `0bbf4fa2`→`cc69ae38`; `f32923f8`→`5d6546ef`; `bb06db81` copied with native-owner fixes | First compile `native-databases-001.log` failed 3 type errors. After correction, `native-databases-002.log` FAIL24/25; failing `external_type_does_not_reassign_and_external_identity_mismatch_is_preserved` expects settled projection but gets one retained issue. Idempotent `_type` repair correction active. Valid external status/body/unknown-source cases pass in this bounded failed run; not full E18 acceptance. |
 | Query/registry | `c8c8fec0`→`1d4d86a9`; `4123b4bd`→`b6c9211f` | Original6 view-source tests PASS in `query-view-sources-002.log`. Followup has10 authored source tests (4 not part of prior 6), one preview guard and two native facade tests unrun at this cutoff. Hidden-sort scope fixed in source. Scoped previews disabled for missing trusted capture authority; saved native queries remain available. |
-| View/source model | `fd5cdd91`/`10fb3e33`/`76136398`/`26d69fb2`→`fbacd02f`/`adb5f525`/`5b8c6fa3`/`f5c173f0` | Scoped rename bytes, reverse legacy/explicit isolation and formula references corrected; prior three independent review findings fixed. Stable view IDs support repeated labels. Latest owner receipt86 focused/safety/reference PASS0skip and TS PASS; log `/private/tmp/zorid-view-identity-test-004.log`. External stable-ID deletion followup pending, no actual UI/runtime proof. |
+| View/source model | `fd5cdd91`/`10fb3e33`/`76136398`/`26d69fb2`→`fbacd02f`/`adb5f525`/`5b8c6fa3`/`f5c173f0` | Scoped rename bytes, reverse legacy/explicit isolation and formula references corrected; prior three independent review findings fixed. Stable view IDs support repeated labels. Latest owner receipt86 focused/safety/reference PASS 0 skip and TS PASS; log `/private/tmp/zorid-view-identity-test-004.log`. External stable-ID deletion followup pending, no actual UI/runtime proof. |
 | Managed editor saves | `b49`/`381`/`c3`→`a1a6d3f1`/`bc0ec3d4`/`4dfe6f3e` | P1 checkpoint-overflow correction fixed and independently source-approved. Owner reports 88 and57 focused passes in overlapping sets; do not sum. Native composition/body guard and retry behavior still need final integrated proof. |
 | Transport | `61c`/`3ec`/`af5`→`52d8d6d4`/`7f08726f`/`f9921a99` | Independently approved source, owner reports 54,32,14 focused pass sets with overlap; do not sum. Actual admitted desktop lifecycle unverified. |
 | Acceptance driver | `d388`/`da04`→`da6a1bab`/`cbc2f5d6` | Independently reviewed 30-command driver, not executed. Field-ID bracket quoting corrected; harness source is not product acceptance. |
@@ -568,57 +573,52 @@ receipt limits exclude full native visual/keyboard/mobile/reference parity and
 browser collection delivery. The prior CLI/untyped browser results remain their
 own bounded passes; no blanket multi-platform acceptance or main merge follows.
 
-### P009 — pending — expected deleted-source presentation and retry ownership
+### P009 — 2026-10-27 — deleted-source core flow verified
 
-Ownership: `local_ui` owns `src/bases/session.ts` and `src/ui/workspace.ts`
-Trash card/Restore retry presentation; `view_source_model` owns the isolated
-`src/bases/controller.ts` + focused tests source-repair seam, aligned to dd6.
-`collection_ui_review` reviews both. Latest actual-verified code HEAD remains
-`dd6c0b7f`; current model/UI source seams are implemented in isolation, awaiting
-focused seam verification/composition and final handoff receipts, not acceptance.
+**CLOSED within the frozen basic core-flow scope; main integration pending.**
+Final code HEAD `05b73d5a08dc7c9a083041071d376b54020a71f9`; product UI commit
+`262939e6`, controller `cd17f237`, controller tests `2708115e`; final 05b is a
+test-only successor. All source/controller/UI changes independently reviewed,
+zero must-fix findings. No new source/UI work or broader campaign is required.
 
-Essential core-flow finding: Change source was blocked by
-`controller.guard(current.error)`, while error refresh retained stale/initial-empty
-source and made fresh deleted-source classification unreliable. The implemented
-controller seam must retain coherent latest valid parsed `readDefinition` source,
-witness and epoch, with narrow source-repair admission. Existing CAS/version,
-identity, stale-draft, preview and property-write protections remain effective.
-The UI owner reports nine focused cases + TS PASS; the controller dependency and
-combined result remain pending. Do not mark Change source delivered from card
-rendering or UI-only checks alone.
+Original finding/ownership is retained: local_ui owns session/Workspace Trash
+card and Restore request retention; view_source_model owns controller source
+repair. Change source was blocked by guard(current.error), and error refresh
+kept stale/initial-empty source. The narrow coherent readDefinition/witness/epoch
+repair keeps CAS/version/identity/stale-draft/preview/property-write guards, real
+active/configuration/get/action errors and exact captured Restore retry identity.
+This is a known-tombstone presentation/repair path, not fake query success.
 
-User scope freeze applies here: finish this already-coded truthful Trash card/
-working Change source and basic create/edit/filter/delete/restore/restart only.
-No additional exploratory edge cases, broader matrix gates or secondary polish
-work before the clean bounded-delivery handoff. Untested variants stay limits.
+| Receipt | Actual final outcome / retained history |
+| --- | --- |
+| Final source checks | `final-core-ui-composed-002.log` **99/99 PASS, 0 skipped**, full TS/native frontend006 **PASS**. Earlier001 **FAIL 98/99** on obsolete untyped-cell editing oracle, an unsupported interaction under the agreed browse-only source. Test-only `bb0`→root05b replaces it with supported Results Limit draft guarding, browse-only assertions and Cancel transition. Preserve original failed log separately; no product change/retroactive pass inferred. |
+| Final normal Electron | Session70282 at final 05b, CUA normal source-mode app with retained matched host. Delete 3 members including 2 filtered out → exactly one clear Collection in Trash card, Restore/Change source, no raw Durable editor error or generic repair-source banner. |
+| Restore from card | Returns member files and filtered Numeric correction row. Delete again → Change source to Notes in your vault succeeds and saves explicit untyped Base source. |
+| Independent membership/source | Restoring the old collection through collection browser returns exact 3 original IDs/9-null-0/full bytes unchanged. The repaired view **stays untyped**, file-name-only ordinary notes, no Properties/Group/Add property controls; restored collection entries stay excluded. |
+| Readback and cleanup | `/private/tmp/zorid-local-collections-desktop-20261027/deleted-source-final-smoke.json` **PASS**, includes saved raw Base source; `restored-final-data.json` verifies exact original three hashes/IDs/values/body bytes. Session70282 normal quit exit 0; all owned foreground apps closed, production app/real vault untouched. |
 
-For a fresh authoritative collection tombstone, show a typed Trash/deleted-source
-card with Restore and Change source. Do not manufacture query success or replace
-real active-source/configuration/get/action failures with a happy empty state.
-Remove the generic repair-source hint/duplicate raw error only for that known
-expected state. Restore must retain the exact captured command/operation identity
-through rerender and uncertain retry, rather than authoring a new Restore request.
+Final artifact/evidence handoff — ready for root's clean documentation commit and
+explicit integration request to the sole main owner:
 
-This is the final already-coded core-flow repair, not a new storage-failure
-claim or permission to expand secondary edge-case work. Root awaits its source/review/results before final handoff. Main remains
-`c36c4b0e` with sole shared-core owner; latest source review has passed but an
-**root's explicit integration request to that owner**, clean final branch and evidence are still needed.
+| Item | Final reference / state |
+| --- | --- |
+| Code HEAD | `05b73d5a08dc7c9a083041071d376b54020a71f9` (root may add documentation-only commit afterward). |
+| Product/source review | Product `262939e6`, controller `cd17f237`, tests `2708115e`, test-only05b; all independently reviewed with zero must-fix. |
+| Source checks/frontend | Root `tmp/local-databases-20261027/final-core-ui-composed-002.log`, `frontend-native-006.log`;99/99, TS/Vite native PASS. |
+| Matched Rust artifacts | Root `tmp/local-databases-20261027/final-products-receipt-001.json`, retained CLI/host under `products-d7aecf48/`; exact hashes/recorded Rust closure and toolchain retained. Actual final UI receipt identifies this matched host. Later UI/controller/test successors are TS-only; no new native rebuild claimed. |
+| WASM/browser | `wasm-build-002-receipt.json` proves generated artifact hashes/454 unchanged inputs at5970; `browser-ui-observations-001.json` bounds actual untyped-browser result to73fa. Browser collection CRUD unavailable; no final 05b browser rerun claimed. |
+| Actual CLI | `/private/tmp/zorid-local-collections-cli-20261027-successor/zorid-local-collections-cli-w5e7nO/report.json`:30 commands/13 checks/all7 PASS; prior failure preserved. |
+| Actual native functional pass | `/private/tmp/zorid-local-collections-desktop-20261027/desktop-acceptance-002.json`, `restored-final-data.json`, final `deleted-source-final-smoke.json`. Normal source Electron, not installed production package. |
+| Main handoff | Main stillc36c4b0e; sole owner term_d8b43288-7bf1-464c-af5f-b779721982e3. Clean final branch/evidence and root's **explicit integration request** next; owner acknowledgement/resulting main commit not yet recorded. Confirmed work must not remain only on the isolated branch. |
 
-Final handoff fields (fill from actual P009 receipts, not a plan):
-
-- Final code HEAD / source closure: **pending P009**; last bounded actual HEAD dd6c0b7f.
-- P009 worker commit / root composition / exact review: **pending**.
-- Final frontend/native/WASM artifact identities and actual followup: **pending**;
-  reuse earlier receipts only where their closure still matches.
-- Main integration request / owner acknowledgement / resulting main commit:
-  **pending; no product merge claimed**.
-- Retained limits: browser collections unsupported; scoped indexing previews
-  unavailable; concurrent-client/crash/broader layout/filter/visual/keyboard and
-  installed production-package/mobile/other OS acceptance not claimed.
-
-Documentation followup only: no source edits, Git mutations, tests/builds, UI or
-Tauri actions by the documentation owner. Preserve P001–P007 failures and source
-limits; P008 bounded success does not rewrite earlier failed gates.
+The user-frozen core create/edit/filter/delete/restore/restart scope, including
+truthful deleted-source card and working Change source, is now verified within
+these actual receipts. Broader concurrent/crash/filter/layout/visual/keyboard,
+installed production-package/mobile/other OS variants remain honest limits, not
+new blockers. Scoped indexing previews and browser collections remain unavailable.
+No Tauri/new sync work. Preserve P001–P008 original failures, red regressions and
+source/platform limits; P009 does not rewrite those receipts. Documentation owner
+performed file edits only, no Git/source/build/test/UI actions.
 
 ### Receipt template
 
