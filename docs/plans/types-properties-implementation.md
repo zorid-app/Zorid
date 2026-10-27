@@ -1,7 +1,7 @@
 # Local collections, types and Base views — implementation tracker
 
 Updated: 2026-10-27. Owner: this discussion's coordinator (`/root`).
-State: **implementing — local only; no product acceptance yet**.
+State: **verifying — local only; bounded CLI pass, full UI acceptance open**.
 Latest authorization: the user explicitly resumed with **"ok start"** on
 2026-10-27 after the documentation handoff. Root's built-in goal is active;
 this repository tracker remains the cross-session record. Collaboration/sync is
@@ -17,18 +17,18 @@ Incoming corrections: [user findings](../user-findings.md).
 
 | Item | Current state |
 | --- | --- |
-| Current task | P001: implement local collection core/publication, per-view sources, UI and registry retirement in isolated coordinated branches. |
-| Composition branch/worktree | `codex/local-databases` / `.worktrees/local-databases`, based on current main `c36c4b0e`; documentation `bc006f23` composed there. |
+| Current task | P004: bounded actual CLI successor passes; normal Electron test window is live with user interaction. Preserve that active session and hold UI automation. Full UI/browser/main acceptance remains open; no Tauri work. |
+| Composition branch/worktree | `codex/local-databases` / `.worktrees/local-databases`, main base `c36c4b0e`; current HEAD `06696a2c` is test-only source `ab538c71` correcting the CLI status oracle. Product artifacts retain the recorded `d7aecf48`/equivalent-Rust `d7a033b7` identities. |
 | Canonical main at resume | `c36c4b0e`, observed clean. Root does not integrate or mutate main. |
 | Main integration ownership | Shared-core owner acknowledged from `term_d8b43288-7bf1-464c-af5f-b779721982e3` at 2026-10-27 16:56:08 UTC; retains sole integration. Root terminal: `term_4603116b-4cb4-4e5a-b3a5-968bea283161`. |
 | Ordered handoff | Documentation `bc006f23` queued to that owner, not integrated at this cutoff. Product batches follow review and affected checks. |
-| Product implementation | Active workers below; no accepted integrated feature or installed-runtime result. |
-| Source checks | View-model and registry TS focused checks reported below. Rust query source-contract retry PASS6/6 after a corrected compile failure; no native/runtime pass inferred. |
-| Product verification | Not run for this design. Earlier Bases acceptance does not cover it. |
+| Product implementation | Source composed; final narrow UI/source review closed through `06696a2c`, no remaining must-fix or source edits pending at this cutoff. Actual standalone CLI successor PASS 30 commands/13 checks/all 7 scenarios; full desktop/browser/main acceptance remains open. |
+| Source checks | Final query 24/24, native query-facade 3/3, CLI 3/3 + phase1/1 and error compatibility 2/2 PASS, in addition to earlier Store64/native32/host4/composedJS61/session5 receipts. Counts have distinct source/scope limits; do not aggregate overlapping runs. |
+| Product verification | CLI first receipt FAIL at command 29 on counter-type oracle; corrected strict successor PASS 30/13/all 7. Electron onboarding source choices observed through CUA; user actively uses the disposable test window. Full desktop UI/browser/main acceptance open. |
 | Reference evidence | Bounded Notion filter-creation UI observations; design section 1 records exact cases and limits. |
-| Next action | Compose reviewed source batches, finish local core/native/transport/save contracts and resolve query/UI gaps before actual app verification. |
-| Dependencies | Core snapshot DTOs and native guarded projection; trusted query membership; durable body-save composition; independent source review. |
-| Resource lane | Query owner completed its sole Rust-slot run and released the lane to root. Root serializes subsequent Rust compilation using `tmp/local-database-target`, release offline `-j1`; no overlapping heavy-build grant. |
+| Next action | Respect the user's live test window; hold UI input and do not close it. Record observations and resume bounded UI automation without interfering when the user is finished. Browser readiness/acceptance and ordered main-owner handoff remain separate gates. |
+| Dependencies | Remaining normal Electron scenarios/cleanup after user testing, browser readiness/acceptance and sole main-owner integration. Scoped indexing previews remain a safe capability gap; CLI excludes concurrent clients, crash and external-edit acceptance. |
+| Resource lane | Root serializes actual validation and any required Rust work in shared `tmp/local-database-target`, release offline `-j1`; no parallel heavy builds or worker Git mutations. Latest user steering: no further Tauri work, including new benchmark/prototype/cleanup work from this pass. |
 
 Before each resumed pass or after context compaction:
 
@@ -48,6 +48,11 @@ Before each resumed pass or after context compaction:
    receipt; keep large logs outside this file and link them.
 
 ## Scope boundaries
+
+Latest user steering: **do not work with Tauri; finish local collections first**.
+No further Tauri prototype, benchmark, migration or cleanup work is part of this
+pass. Earlier resource/cleanup requests in P002 remain historical, not current
+authorization to continue that work.
 
 The design is the source of truth for behavior; task rows below reference its
 E01–E20 IDs rather than redefine them. Required local scope includes independent
@@ -93,15 +98,15 @@ not product completion. Ask the named owner before changing an owned seam.
 | Owner | Branch / worktree suffix | Owned seam and current state |
 | --- | --- | --- |
 | `/root` | `codex/local-databases` / `local-databases` | Composition, API contract coordination, serial validation and ordered main-owner handoff. |
-| `local_core` | `codex/local-database-core` / `local-database-core` | Local Rust domain, Store schema/entry operations and durable projection records; source/tests pending owner receipt. |
-| `local_native` (+ CLI worker) | `codex/local-database-native` / `local-database-native` | Guarded publication/schema YAML, desktop-host database dispatcher/framing; native source uncommitted, no tests yet. CLI source commits `b8308b77`, `bf2561c9`. |
-| `registry_retirement_audit` | `codex/local-database-queries` / `local-database-queries` | Rust/native/WASM and TS query registry retirement; per-view trusted source scoping; TS focused checks pass and Rust source contracts PASS6/6. Native full typed hook still pending core DTOs. |
-| `view_source_model` | `codex/local-database-view-model` / `local-database-view-model` | Base document/controller/query/creation source model; source `fd5cdd91`, focused checks pass; independent source review pending. |
-| `local_ui` | `codex/local-database-ui` / `local-database-ui` | Base session/toolbar, workspace/properties/note targets and collection UI/CSS; source dirty, no tests yet. Managed setters are joining NoteBuffer projection refresh; management lifecycle UI still open. |
-| `database_transport` | `codex/local-database-transport` / `local-database-transport` | TS/CJS DTO client/validation, leased desktop capability and IPC/framing; syntax/full TS reported pass, focused boundary tests underway. |
-| `managed_editor_saves` | `codex/local-database-editor-saves` / `local-database-editor-saves` | Canonical durable-write composition, submitted-generation reconciliation and NoteBuffer projection refresh; source in progress, no tests yet; raw managed edits safely reject as E18 gap. |
-| `local_model_audit` | Read-only reviewer | Independent current-code/contract review; no product file ownership or build lane. |
-| `types_docs_review` | Root composition worktree, docs paths only | Tracker/design authorization/checkpoint/findings update; no product edits or heavy builds. |
+| `local_core` | `codex/local-database-core` / `local-database-core` | Local authority, trash/restore cohorts, pinned DB state and schema candidate history source fixes composed; current Store64/64 PASS. Material source-review findings closed. |
+| `local_native` (+ CLI worker) | `codex/local-database-native` / `local-database-native` | Guarded publication/external reconciliation and host/CLI services composed; native32/32, host4/4, CLI 3/3 + phase1/1 PASS; actual CLI driver running. No actual-app acceptance. |
+| `registry_retirement_audit` | `codex/local-database-queries` / `local-database-queries` | Trusted query/registry source reviewed/composed; query catalog `a128` queued, not composed during root Rust freeze. Query12 + preview 12 + native-query 3 await lane. Scoped previews remain disabled safely. |
+| `view_source_model` | `codex/local-database-view-model` / `local-database-view-model` | Stable view identities, external-deleted selection recovery and repeated-label toolbar source composed; review closed through `ec4`/`b492`. Actual UI/embed behavior still requires runtime verification. |
+| `local_ui` | `codex/local-database-ui` / `local-database-ui` | Collection/property/template/New UI and CSS source composed through current root `2d5aa427`; source review closed through `410025de` plus later narrow changes recorded P002. Historical 132-case failure and targeted successors remain separate receipts. |
+| `database_transport` | `codex/local-database-transport` / `local-database-transport` | Leased transport/framing source composed and reviewed; actual admitted app lifecycle unverified. |
+| `managed_editor_saves` | `codex/local-database-editor-saves` / `local-database-editor-saves` | Canonical composition/checkpoint protection source composed and reviewed; composed-source/session receipts pass, actual note editor lifecycle unverified. |
+| `local_model_audit` | Read-only reviewer | Material core/native/query/save source findings closed at current bounded review cutoff; product acceptance remains separate. |
+| `types_docs_review` | Root composition worktree, docs paths only | P002 tracker/checkpoint/findings update; file edits only during host/CLI freeze, no product edits, Git mutations or builds. |
 
 Root-coordinated local implementation contracts for this pass:
 
@@ -121,13 +126,17 @@ Root-coordinated local implementation contracts for this pass:
   `summaries` selects a view's configured summaries.
 - Typed queries use ID-keyed values and **trusted core manifest membership**;
   `_type` text or caller-supplied detached metadata is not membership authority.
-- Raw managed-property edits may be rejected safely as an **intermediate E18
-  gap**. Safe rejection is not delivery of valid external-value reconciliation.
-  Body-save composition/guarding is still work in progress.
-- E09 permits duplicate view names in the accepted design. Existing named view/
-  embed routes still require unique names in the current source: this is an
-  explicit implementation gap requiring identity-aware routing, not a new product
-  restriction or a completed case.
+- Valid external managed-value reconciliation and its repair correction now
+  pass in the later 32-case native library run. Native002's earlier 24/25 failure
+  remains historical. Raw edits may still reject when invalid or conflicting;
+  actual integrated E18 note-editor/external-file acceptance remains to be run.
+- E09 duplicate view labels have composed **stable view IDs**, repeated-label
+  toolbar support and external-deleted selection recovery. Legacy ambiguous name
+  references fail safely. Source review is closed; actual reopen/embed interaction
+  is still unverified, so E09 product acceptance is not inferred.
+- Scoped indexing previews are temporarily disabled until their captures carry
+  trusted collection membership. Saved native queries remain supported. This is
+  an explicit safe capability gap, not claimed preview delivery.
 
 ## Work breakdown
 
@@ -175,7 +184,7 @@ repeat passed scenarios only after relevant changes or unresolved failures.
 | A10 Delete/restore | Deleting view/Base preserves collections; deleting collection includes hidden members; referencing views show deleted source; restore/path collision/partial-failure cases preserve unrelated data. | Not run |
 | A11 Publication crash | Interrupt between structured commit and readable publication; restart resumes bounded work, preserves body/unknown external data and refuses stale overwrite. | Not run |
 | A12 Registry removal | No special Properties.yaml reads/writes/creation/watchers/admission; existing file is ordinary content and cannot grant schema authority or block queries, across affected hosts. | Not run |
-| A13 Independent clients | Standalone CLI and normal editor local operations follow same validation/storage guards; browser support/capability outcome recorded separately. | Not run |
+| A13 Independent clients | Standalone CLI and normal editor local operations follow same validation/storage guards; browser support/capability outcome recorded separately. | Bounded independent CLI PASS 30/13/all 7; concurrent editor and browser acceptance open. |
 | A14 Product lifecycle | Matching installed desktop create/configure/edit/delete/restore/normal quit/reopen; exact supported layouts/keyboard behavior and remaining platform limits recorded. | Not run |
 
 ## Open decisions and findings queue
@@ -227,7 +236,7 @@ source fix into an earlier runtime pass.
 - Ownership/resource receipt: main owner acknowledgment at 16:56:08 UTC from
   `term_d8b43288-7bf1-464c-af5f-b779721982e3`; sole Rust slot belongs to query owner,
   root `tmp/local-database-target`, release offline `-j1`. The owner has now
-  released the lane to root after PASS6/6. Root assigns the next heavy command;
+  released the lane to root after PASS 6/6. Root assigns the next heavy command;
   other workers have no overlapping grant. Source/TS work proceeds in parallel.
 - View-model source receipt: `view_source_model`, `fd5cdd91`, reports 77 focused
   and 32 adjacent checks PASS, zero skipped; these groups overlap and are not a
@@ -241,10 +250,10 @@ source fix into an earlier runtime pass.
   feature protocols, not silently rewritten into new acceptance claims.
 - Rust query receipt: first cold compile failed because `preparation` copied
   QueryOptions without new `source_scope`. Constructor corrected; scoped contexts
-  also bypass a cache whose key lacks authority. Retry completed **PASS6/6**, zero failed:
+  also bypass a cache whose key lacks authority. Retry completed **PASS 6/6**, zero failed:
   `cargo test --locked --offline --release -j1 -p zorid-bases --test view_sources
   -- --test-threads=1`. Logs in root `tmp/local-databases-20261027/`:
-  `query-view-sources-001.log` (failure) and `query-view-sources-002.log` (PASS6/6).
+  `query-view-sources-001.log` (failure) and `query-view-sources-002.log` (PASS 6/6).
   Native trusted typed-query hook still depends on the local-core snapshot API.
 - Transport source receipt: owner reports syntax/full TS PASS; boundary tests
   underway. Leased `databases` capability, max database request body 32 MiB,
@@ -281,6 +290,145 @@ source fix into an earlier runtime pass.
   hand exact commits/evidence to the sole main owner. Update this receipt with
   terminal command outcomes; never promote a running check to PASS. The Rust query
   retry above was updated only after the owner supplied its terminal PASS receipt.
+
+### P001 continuation — source composition and native failure cutoff
+
+This continuation supersedes the early P001 source-status bullets above, not
+their historical test outcomes. Main integration still belongs to the acknowledged
+shared-core owner; root goal remains active. Product A01–A14 acceptance is still
+unrun. Current composition is `223d3733` with native-owned dirty compile/repair
+changes and copied `bb06db81`; no clean final artifact/source claim is made.
+
+| Scope | Worker source → root composition | Bounded evidence and remaining work |
+| --- | --- | --- |
+| Core authority | `8aae3e33`→`6f0bb1c4`; `a3ae5eaa`→`223d3733` | Earlier Store17 + host-source-guard14 PASS, logs `core-databases-002.log`. Retained-value correction has 23 authored tests not yet run. Review followups: preserve trash cohort, valid full-reload event journal, pinned database-state fence and superseded schema-artifact candidate history. |
+| Native publication/host | `0bbf4fa2`→`cc69ae38`; `f32923f8`→`5d6546ef`; `bb06db81` copied with native-owner fixes | First compile `native-databases-001.log` failed 3 type errors. After correction, `native-databases-002.log` FAIL24/25; failing `external_type_does_not_reassign_and_external_identity_mismatch_is_preserved` expects settled projection but gets one retained issue. Idempotent `_type` repair correction active. Valid external status/body/unknown-source cases pass in this bounded failed run; not full E18 acceptance. |
+| Query/registry | `c8c8fec0`→`1d4d86a9`; `4123b4bd`→`b6c9211f` | Original6 view-source tests PASS in `query-view-sources-002.log`. Followup has10 authored source tests (4 not part of prior 6), one preview guard and two native facade tests unrun at this cutoff. Hidden-sort scope fixed in source. Scoped previews disabled for missing trusted capture authority; saved native queries remain available. |
+| View/source model | `fd5cdd91`/`10fb3e33`/`76136398`/`26d69fb2`→`fbacd02f`/`adb5f525`/`5b8c6fa3`/`f5c173f0` | Scoped rename bytes, reverse legacy/explicit isolation and formula references corrected; prior three independent review findings fixed. Stable view IDs support repeated labels. Latest owner receipt86 focused/safety/reference PASS0skip and TS PASS; log `/private/tmp/zorid-view-identity-test-004.log`. External stable-ID deletion followup pending, no actual UI/runtime proof. |
+| Managed editor saves | `b49`/`381`/`c3`→`a1a6d3f1`/`bc0ec3d4`/`4dfe6f3e` | P1 checkpoint-overflow correction fixed and independently source-approved. Owner reports 88 and57 focused passes in overlapping sets; do not sum. Native composition/body guard and retry behavior still need final integrated proof. |
+| Transport | `61c`/`3ec`/`af5`→`52d8d6d4`/`7f08726f`/`f9921a99` | Independently approved source, owner reports 54,32,14 focused pass sets with overlap; do not sum. Actual admitted desktop lifecycle unverified. |
+| Acceptance driver | `d388`/`da04`→`da6a1bab`/`cbc2f5d6` | Independently reviewed 30-command driver, not executed. Field-ID bracket quoting corrected; harness source is not product acceptance. |
+| UI | `b952bf81`, `codex/local-database-ui`, clean worker tree; not composed at receipt | Five reviewer findings/template gap source-repaired: exact Duplicate retry, stale setter baseline, default-option clearing/configuration, feasible filter hints, dirty/uncertain schema guards and full literal template body/unmanaged frontmatter with fresh IDs. Full TS PASS. Focused 132-case cutoff is 131PASS/1 stale view-ID oracle failure, then corrected oracle targeted 1/1PASS; not a rerun of the whole set. Logs `/private/tmp/zorid-local-collections-ui-focused.log` and `/private/tmp/zorid-local-collections-ui-stable-id-oracle.log`. Independent `collection_ui_review` auditing exact commit. Root CSS entrypoint wiring pending; multirow writes individually durable, inline picker option-create not implemented (property editor supports it). No visual/native acceptance. |
+
+Rust logs above live under root `tmp/local-databases-20261027/`.
+Source branches/worktrees are in the active ownership ledger; short commit prefixes
+retain the coordinator's bounded handoff receipt until full identifiers are added.
+Root holds the exclusive native/Rust lane in shared `tmp/local-database-target`,
+release offline `-j1`; **no parallel heavy builds**. Tracking edits during this
+native freeze do not mutate Git/index or product source.
+
+Next: finish the native failing case and pending safety corrections, adapt and run
+only affected query/preview/native checks, complete/review UI, freeze exact
+composed artifacts, execute the driver and actual local journeys, then send ordered
+reviewed batches to the sole main owner. Later source fixes do not retroactively
+turn native002 or earlier compile failures into passes.
+
+### P002 — 2026-10-27 — composed source checks; actual acceptance pending
+
+Current source cutoff: root `2d5aa427` plus compatibility-only dirty
+`crates/zorid-native-sync/src/error.rs`, exact source `8d0a0b2b`. The compatibility
+arm handles the new committed-error variant; it adds no sync feature. Query
+catalog followup `a128` is queued but not composed during the Rust freeze. Source
+reviewers report no remaining must-fix findings in the currently reviewed core,
+native, query and save slices; UI review closed through `410025de` and model review
+through `ec4`/`b492`. Later narrow UI/model changes are source-composed but still
+need matching actual-app verification. Root goal is active; main remains
+`c36c4b0e` under the sole owner `term_d8b43288-7bf1-464c-af5f-b779721982e3`.
+No product batch has been integrated to main by root.
+
+| Receipt | Observed terminal outcome / limit |
+| --- | --- |
+| Store core | **64/64 PASS** across 30 database + 14 host-source-guard tests (`core-composed-databases-005.log`), 10 pinned-state tests (`core-composed-pin-004.log`), 9 migrations (`core-composed-migrations-006.log`) and 1 schema15 accounting test (`core-composed-accounting-007.log`). These exact selected checks pass; no full-suite/app acceptance claim. |
+| Earlier core failure | `core-composed-databases-003.log` FAIL 28/30: independently tombstoned member test read an absent live record with `unwrap`, and schema-candidate-limit fixture used an invalid operation ID. Fixture corrections are source-composed (`d9c48f63`); retain original failure separately from later005's 30/30 pass. |
+| Native library | **32/32 PASS**, `native-final-001.log`, including the repaired `_type` identity case, valid external value/body/unknown-frontmatter reconciliation and projection/restart cases. This later source run does not rewrite native002's 24/25 failure. |
+| Host facade | `host-databases-final-001.log` failed compilation on an unhandled `DatabaseCommitted` error variant; no tests ran. Compatibility successor `host-databases-final-002.log` **4/4 PASS**, including committed-operation errors remaining uncertain. Dirty compatibility source still needs its coherent commit; no new sync capability claimed. |
+| Composed JS/source | `composed-source-001.log` **61/61 PASS**, zero skipped; `composed-session-002.log` **5/5 PASS**, zero skipped. These cover canonical-save/checkpoint/transport/setter and source/onboarding/New ownership paths respectively; they are not an actual desktop campaign or an aggregate with earlier overlapping owner sets. |
+| CLI | **3/3 PASS**, `cli-databases-final-001.log`, after the CLI compiler completed. Separate phase1 validation has no terminal receipt at this cutoff; no outcome inferred. |
+| Query followup | Full query 12, preview 12 and native-query 3 await root's exclusive lane and catalog composition. Source review is not their execution result. |
+| UI/model | Current root includes template initialization, creation ownership, ordinary scalar/color handling, externally deleted view recovery, repeated labels and stable-ID New/Duplicate configuration routing (`eb4390a0`→`2d5aa427`). Preserve original 132-case cutoff 131PASS/1 obsolete-oracle failure and later targeted successes separately; no all-green 132 successor campaign claimed. |
+| Actual acceptance/artifacts | Matching release artifacts, standalone CLI journey/driver and actual desktop UI/native lifecycle **not yet run** at this cutoff. A01–A14 product acceptance remains open. |
+
+All Rust/composed source logs above are under root
+`tmp/local-databases-20261027/`. P001's commit maps and original failure receipts
+remain immutable history; this section updates status without duplicating that
+map. Root retains the exclusive host/CLI/Rust lane in shared
+`tmp/local-database-target`, release offline `-j1`; no parallel heavy builds.
+Free disk is about 1.1 GB. The Tauri owner was asked about regenerable-cache cleanup;
+root has taken no cleanup action. These tracking file edits do not mutate the
+Git/index or frozen product source.
+
+Next: finish CLI, compose catalog and run queued bounded query/preview checks,
+freeze matching artifacts and perform actual CLI/UI journeys. Record exact
+artifact/source identity, source/platform limits and remaining gaps before the
+ordered main-owner handoff. Keep safe scoped-preview unavailability explicit.
+
+### P003 — 2026-10-27 — matched artifacts; actual CLI driver running
+
+Latest source HEAD: `d7a033b7`. User explicitly says **do not work with Tauri;
+finish local collections first**. No further Tauri work is authorized by this
+pass. Main integration remains with the acknowledged shared-core owner, not root;
+actual desktop UI, browser/WASM and final feature acceptance are still open.
+
+| Receipt | Terminal result / bounded evidence |
+| --- | --- |
+| Query/preview source | `final-query-tests-001.log` **24/24 PASS**, comprising 12 view-source and 12 preview tests. This proves the selected Rust checks, not actual browser rendering or advertised preview readiness. |
+| Native query facade | Three selected cases **3/3 PASS**: `final-native-registry-002.log`, `final-native-capture-002.log`, `final-native-deleted-002.log`, one each. Earlier registry001 selected zero tests and is not counted as a passed case. |
+| CLI/error compatibility | Earlier CLI 3/3 plus `cli-databases-phase-final-001.log` **1/1 PASS** and `native-error-compat-final-001.log` **2/2 PASS**. Compatibility preserves uncertain committed outcomes without enabling a new sync feature. |
+| Native artifact build | **PASS, exit 0**; `final-native-products-001.log` and `final-products-receipt-001.json`. Offline release `-j1`, standalone CLI + desktop host, both arm64 Mach-O. Retained binaries in `products-d7aecf48/`; the receipt contains full hashes, sizes, Cargo/toolchain and dependency/source closure identities. |
+| Source match | Artifact receipt starts at `d7aecf4810b41c60edca9deb45993fb8d6cc8005`, tree `351919b5d77039ef50aeca47dd754aca5194b3e9`, and verifies unchanged 486-file Rust/Cargo/proto closure through equivalent Rust HEAD `d7a033b7`. Only `vite.config.mjs` changed during compilation; this is explicitly recorded, not a blanket whole-tree freeze claim. |
+| Native frontend | `frontend-native-001.log`: TypeScript + Vite native build **PASS**. Bundler chunk/dynamic-import warnings remain; this build is not native UI or browser/WASM acceptance. |
+| Actual CLI driver | **Running**, `/private/tmp/zorid-local-collections-cli-20261027` (owned fixture subdirectory `zorid-local-collections-cli-Q5RQp1` observed). No completed case/count or acceptance inferred from launch. |
+| Actual desktop/browser/main | **Open**. No actual UI/browser acceptance or main product merge follows from matched artifacts and library/source checks. |
+
+Logs/receipt/binaries above live under root `tmp/local-databases-20261027/`.
+Retain P001/P002 original core/native/host/UI failures and their later bounded
+successors exactly as recorded; P003 does not replace them with retroactive PASS.
+Root coordinates validation serially. This documentation followup performs file
+edits only: no Git mutations, tests, builds or Tauri actions.
+
+Next: inspect actual CLI terminal results, complete normal desktop UI journeys
+with matching artifacts and resolve confirmed findings. Record browser readiness
+and gaps independently, then prepare the ordered reviewed handoff to the sole main
+owner. Scope remains local collections; sync/collaboration stays deferred.
+
+### P004 — 2026-10-27 — actual CLI successor pass; live Electron user test
+
+Current root HEAD `06696a2c` cherry-picks test-only `ab538c71`. The change corrects
+strict CLI status expectations to the Native Status decimal-string contract;
+it changes no product implementation or binary. Native frontend TypeScript/Vite
+PASS and the P003 matched artifact identities remain the relevant build receipts.
+Main integration and browser acceptance remain open under their existing owners.
+
+| Receipt | Actual outcome and limits |
+| --- | --- |
+| Final source review | `collection_ui_review` closed the final narrow delta through `06696a2c`, including stable-ID menu binding, rendered untyped catalog, collection CSS entrypoint and development alias changes. No remaining must-fix findings or source edits pending at this cutoff; this is source review, not UI acceptance. |
+| Original actual CLI | `/private/tmp/zorid-local-collections-cli-20261027/zorid-local-collections-cli-Q5RQp1/report.json`: **FAIL**, 29 executed commands/12 passed checks; first six scenarios pass, independent-process-reopen scenario stops at final status assertion `'0' !== 0`. This is retained as the original test-oracle failure, not a product mutation failure or a retroactive pass. |
+| Corrected successor CLI | `/private/tmp/zorid-local-collections-cli-20261027-successor/zorid-local-collections-cli-w5e7nO/report.json`: **PASS**, 30 commands/13 checks/all 7 authored scenarios. Executable SHA256 `1556b4b0795b5e268b1ac7184b6adb95fefae2eedbc5ca3c8b959e830337d5d7` matches the retained CLI build receipt. |
+| CLI covered scope | Independent collection ownership; readable note/schema projection; per-view sources and hidden-member handling; revision/operation retries; identity-preserving renames and same-collection duplicate; collection Trash/collision restore; state reopened by fresh CLI processes. |
+| Status contract | Successor retains `pending_projection: "0"` and `pending_outbox: "24"`; both are valid decimal strings. The local outbox contains retained local writes; neither an empty outbox nor remote sync is asserted. Oracle correction stays strict to the contract rather than coercing counts or changing product behavior. |
+| CLI exclusions | UI/onboarding/focus, New filter-default synthesis, concurrent local clients, projection interruption/crash, external-edit reconciliation, browser/WASM/mobile and sync/encryption guarantees remain outside this driver. Its pass does not close those acceptance gates. |
+| Electron launch | `/private/tmp/zorid-local-collections-desktop-20261027/launch.json`: normal Electron uses disposable `profile`/`vault`, matched host SHA256 `a812e939e6625345688dcdd29d62c9f3f6bd949176e5c410f86aac0da7b864f1`, source revision `d7a033b7`, frontend index SHA256 `ece826995cfb4a24ac76faa2da46ce9f30719a0cc74bcab821368cf969773cf9`. Initial background launch did not persist; the empty launcher was closed before a proper escalated foreground launch. |
+| Live session | Successful foreground Electron PID 30213, host PID 30256, unified exec session 79092. Onboarding source choices were observed via CUA. The user is actively interacting with this disposable test window; root holds automation and preserves the active session. No full UI journey, normal quit/reopen or cleanup acceptance is claimed. |
+
+Do not close the user's active test window or infer that holding UI automation
+pauses the overall goal. Root continues the local collection task within work
+that does not interfere with the user's session. No further Tauri work is part of
+this pass. Historical failure receipts and all P001–P003 source limits are retained.
+This tracking followup changes documentation only, with no Git, build, test or UI
+actions performed by the documentation owner.
+
+Next: collect/resolve the user's actual observations, complete remaining normal
+Electron scenarios after their session is finished, and separately establish
+browser support/limits. Handoff reviewed commits and exact evidence to the sole
+main integration owner; no main product merge or full feature acceptance yet.
+
+Browser artifact followup: `database_transport` owns a serial offline one-job
+WASM build using the cached Rust 1.95/bindgen toolchain and separate
+`tmp/local-database-wasm-target`. Native compilation is finished. This followup
+may write generated artifacts and receipts only; it must preserve native `dist`
+and the user's live Electron window. Build outcome remains pending. The browser
+adapter currently omits collection capability; ordinary-note/untyped behavior
+and collection delivery must be reported separately.
 
 ### Receipt template
 

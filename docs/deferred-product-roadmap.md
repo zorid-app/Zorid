@@ -9,6 +9,76 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+**Local collections actual CLI/live Electron cutoff — 2026-10-27, P004.**
+Root `06696a2c` contains test-only oracle correction `ab538c71`, no product change.
+Final narrow source/UI review closes through this HEAD with no remaining must-fix
+or source edits pending; actual UI acceptance remains separate.
+Original actual CLI failed at 29 executed commands on numeric 0 vs Native Status
+string `"0"`; retained receipt remains failed. Strict corrected successor
+**PASS 30 commands/13 checks/all 7 scenarios**, with valid retained local outbox
+`"24"` and pending projection `"0"`. Exact original/successor receipt paths and
+exclusions are in [P004](plans/types-properties-implementation.md#p004--2026-10-27--actual-cli-successor-pass-live-electron-user-test).
+Normal Electron was launched with disposable profile/vault and matched host;
+initial background launcher did not persist, then foreground launch succeeded
+(PID 30213/host 30256, exec 79092). CUA observed source onboarding only. User actively
+uses the test window, so root holds UI automation and preserves that session;
+full UI/quit-reopen acceptance is not claimed. Launch receipt:
+`/private/tmp/zorid-local-collections-desktop-20261027/launch.json`.
+Native frontend TypeScript/Vite passes; actual browser and main integration remain
+open. Main ownership unchanged; local-only scope and no further Tauri work remain.
+
+**Local collections artifact/CLI cutoff — 2026-10-27, P003.** Root HEAD
+`d7a033b7`; final query24/24, native query-facade3/3, CLI3/3 + phase1/1 and
+compatibility2/2 PASS. Matched arm64 CLI/host artifact build and native frontend
+TypeScript/Vite build PASS. Root receipt
+`tmp/local-databases-20261027/final-products-receipt-001.json` retains exact source,
+closure and binary hashes: Rust closure starts at `d7aecf48` and is unchanged at
+`d7a033b7`; Vite config changed during compilation and is recorded separately.
+Actual CLI driver is **running**, `/private/tmp/zorid-local-collections-cli-20261027`;
+no terminal acceptance yet. Actual UI/browser and main product integration stay
+open. See [P003](plans/types-properties-implementation.md#p003--2026-10-27--matched-artifacts-actual-cli-driver-running).
+Latest user instruction: **do not work with Tauri; finish local collections first**.
+No further Tauri activity is part of this pass. Main retains its acknowledged
+sole owner; root serializes validation. Historical failures remain intact, and
+source/artifact passes do not establish installed-app, browser or sync acceptance.
+
+**Local collections composed checks — 2026-10-27, P002.** Root source
+`2d5aa427` plus dirty committed-error compatibility source `8d0a0b2b`; query catalog
+`a128` not composed during Rust freeze. Current selected Store 64/64 and native 32/32
+checks PASS; host001 fails compile before tests, compatibility successor host002
+PASS 4/4. Composed JS 61/61 and session 5/5 PASS. CLI3/3 now PASS; separate phase1 terminal
+receipt pending; full
+query 12/preview 12/native-query 3 await the root lane. Source-review must-fix findings
+are closed for reviewed slices; UI/model source includes the latest template,
+creation, stable-ID/deleted-view/repeated-label fixes. Historical 132-case UI
+131PASS/1 stale-oracle failure, initial core 28/30 and native 24/25 failures remain
+recorded separately from successors. See [P002](plans/types-properties-implementation.md#p002--2026-10-27--composed-source-checks-actual-acceptance-pending)
+for exact logs and limits. Actual matching artifacts and CLI/UI journeys remain
+unrun; no main integration/app acceptance. Main `c36c4b0e` retains sole owner
+`term_d8b43288-7bf1-464c-af5f-b779721982e3`. Root exclusively holds host/CLI/Rust
+validation, release offline `-j1`; no parallel heavy builds. About 1.1 GB free;
+regenerable Tauri-cache cleanup requested from its owner, no root cleanup action.
+The compatibility error arm adds no sync feature; local-only scope is unchanged.
+
+**Local collections source/native cutoff — 2026-10-27.** Root continues
+`codex/local-databases` at `223d3733` plus native-owned dirty fixes/copied
+`bb06db81`; main remains under sole shared-core integration ownership, no product
+batch integration claimed. Core/native/query/model/save/transport/driver batches
+are composed. UI source `b952bf81` is clean/committed on its worker branch, not
+composed at receipt; exact-source review/CSS wiring pending. Its 132-case focused
+cutoff is 131PASS/1 stale view-ID oracle failure; corrected oracle targeted 1/1PASS,
+full TS PASS. Core/source safety followups remain active. Native first compile failed 3 type errors; corrected
+`native-databases-002.log` FAILS24/25 on idempotent `_type` repair and is under
+correction. Valid external status/body/unknown-frontmatter cases pass only within
+that bounded failed run. Core prior 31 source checks pass;23 retained-value cases
+and current query/preview/native followups are authored/unrun. Stable view IDs and
+hidden-sort fixes are source-composed; scoped previews remain disabled safely.
+See [P001 continuation](plans/types-properties-implementation.md#p001-continuation--source-composition-and-native-failure-cutoff)
+for exact commits, overlapping TS/source receipts, branches and root
+`tmp/local-databases-20261027/` logs. Root owns the exclusive native/Rust slot in
+shared target, release offline `-j1`; no parallel heavy builds. No installed app,
+driver execution, final integrated acceptance or sync completion is claimed.
+
 **Local collections implementation resumed — 2026-10-27.** User explicitly says
 "ok start" after the Base/view/type and untyped-browsing design handoff. Root owns
 `codex/local-databases` / `.worktrees/local-databases`, main baseline `c36c4b0e`.
@@ -18,7 +88,7 @@ integrated. Root does not mutate main. [Tracker P001](plans/types-properties-imp
 records named core/native/query/UI/view-model/transport/save owners, dependencies,
 source checks and pending results. Query owner has the sole Rust slot, root
 `tmp/local-database-target`, release offline `-j1`; first compile failed on a new
-QueryOptions field, was corrected, and the retry PASS6/6 is recorded. Query owner
+QueryOptions field, was corrected, and the retry PASS 6/6 is recorded. Query owner
 released the lane to root; no parallel heavy command is authorized by this entry.
 View-model and focused registry TS checks pass as separately recorded; no
 integrated/native/app verification or feature acceptance follows. Local only;
@@ -709,7 +779,7 @@ Matching native/CLI build9637 and WASM build48653 both completed successfully.
 Preserved product receipts:
 `/private/tmp/zorid-bases-final-native-8074eabf/receipt.json` and
 `/private/tmp/zorid-bases-final-wasm-8074eabf/receipt.json`.
-Native host SHA6e04fb5f, CLI3fdcdbdc, generated WASM8f9d8d63;
+Native host SHA6e04fb5f, CLI 3fdcdbdc, generated WASM8f9d8d63;
 WASM build fingerprint6041e8e6. Older958 and5e products are historical evidence.
 
 Current-core standalone [CLI007](history/bases-cli-actual-007-20261022.md)
@@ -1866,7 +1936,7 @@ This narrow follow-up is now implemented and measured. Reviewed host-only change
 05d7fcb8 batches payload-free source hints at500ms quiet/1000ms maximum timer
 eligibility; Rust still chooses indexing effects, foreground freshness bypasses
 the batching, rejected requests retain hints, and retirement cancels delivery.
-Eight regressions fail before the fix;66 focused checks plus28 runtime checks
+Eight regressions fail before the fix;66 focused checks plus 28 runtime checks
 and TypeScript pass afterwards. Only the host and its test file changed.
 Matched100-note import plus exact103-file readback and final automatic complete/
 current wait improves36.786s→30.672s in one diagnostic run each. Generations
@@ -2098,7 +2168,7 @@ resource-hold statements below are superseded by this update.
 - Buffer projection owner `s1_rich_search_controller` has a staged standalone
   boundary source-approved by `baseline_resources_impl` at `5f2ebcb3`. Canonical
   `64032dc6` on `tingkai-c/s1-buffer-draft-canonical` in the existing
-  `/private/tmp/zorid-s1-buffer-draft-projection` contains its exact six files atop
+  `/private/tmp/zorid-s1-buffer-draft-projection ` contains its exact six files atop
   main `6678eadd`; all other tracked inputs match that main freeze. Review fixes
   cover exact-view reuse, renewable private core leases, observer/cleanup promise
   reservation, bounded single-use facts decoding and same-service engine restart
@@ -4807,7 +4877,7 @@ tingkai-c/native9-integration HEADe2d8d2fc; source review/typecheck pending, not
 
 Resource update23:56UTC: native owner returned exclusive heavy slot. Frozen3288c1bb
 Simulator9 passes actual final Remove-disabled check; signed phoneDev9 build63961
-and install75081 exit0, strict signature/version checks pass. Launch failed only
+and install 75081 exit0, strict signature/version checks pass. Launch failed only
 because device was locked, not an app crash; native owner may retry launch without
 rebuild. Root now owns heavy slot for isolated import5fc59cae host10→ABI5 focused
 checks, official Rust1.95 -j1/offline/locked, existing stage4-verified cache.
@@ -4995,7 +5065,7 @@ Current update — 2026-10-17 21:31 UTC (supersedes older pending statuses):
   source frozen,16 focused tests/typecheck pass, independent review pending.
 - Reviewed engine39a306e7 composed into main without source conflicts. Normal
   browser backlink removal also PASS. Main full frontend typecheck7046 exit0,
-  focused document/browser/desktop/backlink/workspace tests24094 PASS48/48.
+  focused document/browser/desktop/backlink/workspace tests24094 PASS 48/48.
   No Rust engine changes since recorded native/WASM proof. Final merge commit
   records these gates; remaining search/Base migrations keep Stage4 active.
 - Candidate39a306e7 actual production browser/IDB full suite PASS18.235s, then
@@ -5058,7 +5128,7 @@ this update are historical checkpoints where their status differs:
   change or WASM rebuild for that fixture correction. Reports/results retained
   tmp/stage4-browser-document-{report,results}.json and
   tmp/stage4-browser-base-{report,results}-run2.json; failed run1 retained too.
-- Current native query12117 passes3 tests including all10 accepted queries and
+- Current native query 12117 passes3 tests including all10 accepted queries and
   resource/missing-witness/YAML checks. Current portable index18432 passes
   contracts7, generations15, metadata restore2 (tmp/stage4-index-run3.log).
 - Actual production worker/IndexedDB harness does NOT yet pass: browser
@@ -5093,7 +5163,7 @@ this update are historical checkpoints where their status differs:
   owns iOS slot now; root has no live Rust job and defers fullRust/WASM until
   compile terminal. Bounded Node/CJS work may continue.
 - New actual candidatea81de486 evidence: native enrolled reconciliation57303
-  passes1/1 (remaining four facade cases passed run2); CLI34144 passes3 indexed
+  passes1/1 (remaining four facade cases passed run2); CLI 34144 passes3 indexed
   documents+4 metadata subprocess cases, including moves/deletes/rebuild and
   raw-source preservation. Logs tmp/stage4-native-documents-run3.log and
   tmp/stage4-cli-documents-run1.log. Desktop host31416 compiles and clock3/3
@@ -6255,7 +6325,7 @@ the current checkpoint and [final acceptance](history/shared-core-milestone-acce
 - Backend foundation is integrated on main at `04bf12b`. Candidate `91694d3`
   passed 28 protocol/crypto/server checks including managed backup/restore
   (session65524 exit0); no-default-features crypto passed 8 including its doc
-  test (session5557 exit0). Offline lock resolution preserved existing pins.
+  test (session 5557 exit0). Offline lock resolution preserved existing pins.
   See `docs/history/backend-integration-acceptance.md`. The server remains a loopback
   fixture: hosted enrollment, admin UI and deployment are unfinished.
 - Web foundation is integrated on main `c369571`. Candidate8eb89de passed

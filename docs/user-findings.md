@@ -1,5 +1,74 @@
 # User findings queue
 
+## Local collections actual CLI pass; user testing Electron — 2026-10-27
+
+Original actual CLI run failed at 29 on a stale numeric counter oracle. Test-only
+`ab538c71`→root `06696a2c` corrects strict Native Status decimal-string expectations;
+retained outbox `"24"` is valid local work, not a requirement to sync or empty it.
+Successor actual CLI **PASS 30 commands/13 checks/all 7 authored scenarios**; both
+original failure and successor reports remain in the exact paths listed in
+[tracker P004](plans/types-properties-implementation.md#p004--2026-10-27--actual-cli-successor-pass-live-electron-user-test).
+No UI/concurrent-client/crash/external-edit/browser/sync coverage is inferred.
+Final narrow source review closes through `06696a2c` with no remaining must-fix
+findings or pending source edits at this cutoff; no actual UI acceptance inferred.
+
+Normal Electron runs a disposable profile/vault with matched native host; source
+onboarding was observed via CUA. After an initial nonpersistent background launch,
+the proper foreground session is live (PID 30213, host 30256, exec 79092; launch.json
+under `/private/tmp/zorid-local-collections-desktop-20261027/`). User actively tests
+that window, so root holds UI input and does not close the session. Full UI,
+normal quit/reopen, browser and main integration acceptance stay open. Native
+frontend build passes; no further Tauri work is in scope.
+
+## Local collections first; Tauri excluded — 2026-10-27
+
+User explicitly says **do not work with Tauri; finish local collections first**.
+No further Tauri prototype, benchmark, migration or cleanup work is in this pass.
+Root HEAD `d7a033b7` has final query24/24/native-facade3/3, CLI3/3 + phase1/1 and
+compatibility2/2 passing receipts, matched native CLI/host artifacts and a passing
+native frontend TypeScript/Vite build. Exact source and binary identities are in
+root `tmp/local-databases-20261027/final-products-receipt-001.json`.
+
+The actual CLI driver is **running** under
+`/private/tmp/zorid-local-collections-cli-20261027`, without a terminal acceptance
+result yet. Actual desktop UI/browser and main product integration remain open;
+[P003](plans/types-properties-implementation.md#p003--2026-10-27--matched-artifacts-actual-cli-driver-running)
+records the cutoff and source-match limits. Retain previous failures and bounded
+successors; no app/browser parity or sync completion follows from these builds.
+
+## Local collections composed validation — 2026-10-27 P002
+
+Source cutoff is root `2d5aa427` plus uncommitted committed-error compatibility
+mapping `8d0a0b2b`; query catalog followup is queued, not composed. Selected Store
+64/64, native 32/32, corrected host 4/4, composed JS 61/61 and session 5/5 pass, each
+with its own log/source limits. First host compile failed before tests; CLI3/3 now PASS, separate phase1 terminal
+receipt pending, and query/preview/native-query followups await the lane.
+[Tracker P002](plans/types-properties-implementation.md#p002--2026-10-27--composed-source-checks-actual-acceptance-pending)
+records remaining work. Earlier core 28/30/native 24/25/UI 131-of-132 cutoffs remain
+historical failures, not retroactive passes. Current review must-fix findings are
+closed for the reviewed source slices; actual artifacts, CLI/UI acceptance and
+main integration are still pending. Scoped preview unavailability remains explicit.
+Root serializes heavy checks; this remains local-only work, not sync activation.
+
+## Local collections implementation gaps — 2026-10-27 source/native cutoff
+
+Root's local-only implementation remains active; [P001 continuation](plans/types-properties-implementation.md#p001-continuation--source-composition-and-native-failure-cutoff)
+records current source, ownership and test limits. Native002 FAILS24/25 at
+idempotent `_type` projection repair, after the first compile's three corrected
+type errors. Valid external status/body/unknown-frontmatter reconciliation has
+bounded passing cases, not full E18 acceptance. E09 stable view IDs are composed;
+external-delete/UI wiring and actual repeated-label routes remain to verify.
+Scoped previews are temporarily disabled for missing trusted capture authority.
+
+Core trash-cohort, full-reload journal, pinned DB-state and superseded schema
+artifact-history corrections remain under review. UI five review findings/template behavior are source-repaired in worker commit
+`b952bf81`; exact-source review/root CSS wiring pending, not composed at receipt.
+Its 132-case source cutoff is 131PASS/1 stale-oracle failure; corrected oracle
+passes targeted 1/1, not a whole-set rerun. Full TS passes. The reviewed 30-command
+acceptance driver is unrun. No main product integration, final app/native
+acceptance or sync work is claimed. Root serializes heavy validation; prior source
+passes are preserved with their exact source limits, not added across overlaps.
+
 ## Local collections implementation resume — 2026-10-27
 
 User explicitly resumes with **"ok start"**. Scope remains local collections and
@@ -12,7 +81,7 @@ display names. Existing note/body data and guarded storage remain protected.
 Root composes `codex/local-databases` from main `c36c4b0e`; the acknowledged shared-
 core owner retains sole main integration. [Tracker P001](plans/types-properties-implementation.md#p001--2026-10-27--local-implementation-resumed-underway)
 records active ownership, source checks and pending native dependencies. Initial
-view-model/focused registry TS checks pass; Rust query source contracts PASS6/6 after a
+view-model/focused registry TS checks pass; Rust query source contracts PASS 6/6 after a
 corrected compile failure; the native trusted-membership hook remains pending. No integrated runtime acceptance or completion claim.
 E09 duplicate view-name routes and E18 external managed-value reconciliation are
 still gaps; safe raw-edit rejection is intermediate behavior. Sync remains
@@ -342,7 +411,7 @@ with dirty/stale/foreign-fence guards retained. All C1–C3 actual native campai
 remain unexecuted at the current full closure.
 
 Browser007 preserves the old failing assertion and captures the full malformed
-rollup payload:2 exact filter `type` conversion errors plus28 exact underlying
+rollup payload:2 exact filter `type` conversion errors plus 28 exact underlying
 property `unavailable` diagnostics, with all witness/empty-result checks intact.
 The stale filter-code oracle will be corrected to an exact multiset with
 negative tests; no production semantic change. Full19-group rerun remains open.
@@ -677,7 +746,7 @@ Latest user correction: “Focus on fixing it instead of introducing more code.�
 Three narrow fixes are integrated: duplicate next-state clone removed3d64a8b2;
 unchanged metadata/presentation puts skipped784c13ac; per-change managed scope
 lookup now uses fresh guarded point reads1a702c8f/bdcab7b7/e0b9a01e. Final writer
-validation and body repair remain. Composed72 focused checks pass, plus2 affected
+validation and body repair remain. Composed72 focused checks pass, plus 2 affected
 scope regressions after the final owner guard. Matched100-note browser rerun
 now passes26.637s versus30.672s including exact103-file readback and final current/
 complete index wait (one sample per version). Captures330→221; restores326→217.
@@ -867,7 +936,7 @@ index/writer contract and full-workload acceptance remain open.
 Metadata adapters are integrated through `4887a970` after275 focused Node checks
 and TypeScript. Vault/Workspace consumption is integrated through `b3930388`
 after132 focused Node checks and TypeScript. Actual platform activation and
-verification remain open. Reviewed stable browser allocation `5190017e` has23
+verification remain open. Reviewed stable browser allocation `5190017e` has 23
 new authored checks awaiting the next Rust/Node gates and actual IDB acceptance.
 
 Source inspection during E2 binding work found that browser `begin()` allocates a
@@ -1026,7 +1095,7 @@ repeated location indices across chunks, save-triggered navigation, source-refre
 IME preservation and later-click admission. Full common/browser composition and
 actual app acceptance remain pending; no general UX/performance completion claim.
 Presentation, common transport and controller are now integrated through main
-`8968632f`; all76 composed focused checks pass on main. The real platform binding
+`8968632f`; all 76 composed focused checks pass on main. The real platform binding
 capability still gates the mounted rich path. Actual Electron/web behavior and
 Find painting/input remain open, rather than inferred from these scripted checks.
 
