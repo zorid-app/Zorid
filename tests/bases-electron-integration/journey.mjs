@@ -369,7 +369,8 @@ export async function journey(c){
   await c.ui.type(`${newPopover} .inline-title[role="textbox"][aria-label="Note title"]`,'Created from template');await c.ui.key('Enter');
   const authoredFile='Created/Created from template.md',authoredBody=c.template+'\nPopup authored body marker 😀\n';
   await c.saved(authoredFile,source=>assert.equal(source,c.template),'new-popover-title-renames-real-note-without-replacing-template');
-  await c.ui.type(`${newPopover} .cm-content[contenteditable="true"]`,authoredBody);
+  // Live Edit selects the visible body; the property panel retains frontmatter.
+  await c.ui.type(`${newPopover} .cm-content[contenteditable="true"]`,authoredBody.replace(/^---\n[\s\S]*?\n---\n/,''));
   await c.saved(authoredFile,source=>assert.equal(source,authoredBody),'new-popover-shared-editor-saves-complete-literal-body');await c.screenshot('03f-new-popover-body-edit');
   await closeNew(c);
   await c.ui.openFile(authoredFile);await c.ui.wait(`return document.querySelector('.pane.is-active .note-title')?.value==='Created from template'&&document.querySelector('.pane.is-active .cm-content')?.textContent.includes('Popup authored body marker');`,'Created note reopens in ordinary editor with saved body');
