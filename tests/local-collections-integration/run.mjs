@@ -266,7 +266,14 @@ try {
     assert.equal(await fs.readFile(fixturePath('Properties.yaml'), 'utf8'), registry);
     assert.equal(await fs.readFile(fixturePath(paths.ordinary), 'utf8'), ordinary);
     assert.equal(await fs.readFile(fixturePath('Collections.base'), 'utf8'), baseSource);
-    const status = await ok('final-local-status', ['status']);assert.equal(status.pending_projection, 0);assert.equal(status.pending_outbox, 0);assert.equal(status.sync_available, false);
+    const status = await ok('final-local-status', ['status']);
+    // Native Status serializes both u64 counters as canonical decimal strings.
+    // The generic local outbox retains committed writes until remote ACK; an
+    // offline-only scenario must not mistake those records for failed file saves.
+    assert.equal(status.pending_projection, '0');
+    assert.match(status.pending_outbox, /^(0|[1-9][0-9]*)$/);
+    assert.ok(BigInt(status.pending_outbox) <= 18446744073709551615n);
+    assert.equal(status.sync_available, false);evidence.localStatus = structuredClone(status);
     const list = await ok('final-file-identities', ['list']);
     const states = list.entries.map(e => e.state ?? e);
     check('restore occupant stays ordinary and owned entries retain identity', () => {assert.equal(states.find(e => e.id === ids.occupant)?.path, paths.first);assert.equal(states.find(e => e.id === ids.first)?.path, first.path);});

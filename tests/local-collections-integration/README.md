@@ -66,7 +66,10 @@ remains named in the failed report rather than being reported as cleaned up.
    bytes stay exact.
 7. Reopen both collections and list them using fresh CLI processes. Check member
    identities/values, preserved ordinary note/legacy registry/Base source, zero
-   pending file publication and no pending outgoing work.
+   pending file publication, canonical decimal-string status counts and disabled
+   sync capability. Record the exact local outbox count; ordinary local writes
+   remain queued until remote acknowledgement, so an empty outbox is not a local
+   save-completion requirement.
 
 Database commands use exactly:
 
@@ -79,6 +82,14 @@ and failure use the normal CLI envelopes. Each successful database reply must
 report zero pending readable projections and no projection issues; a durable
 logical commit with failed publication is not accepted as completed file behavior.
 The driver does not silently try alternate command syntaxes or skip missing APIs.
+
+The general `status` command uses a different counter representation than the
+database projection reply: `pending_projection` and `pending_outbox` are decimal
+strings (`zorid-native::Status`), while `projection.pending` above is a bounded
+numeric count. The driver requires general pending projection to equal `"0"`,
+validates the outbox as a canonical `u64` decimal string and retains the full
+status reply in `report.json`. Generic Store operations append local outbox rows
+even without sync enrollment; their remote delivery is outside this scenario.
 
 ## Evidence and limits
 
