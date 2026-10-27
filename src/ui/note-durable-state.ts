@@ -6,6 +6,25 @@ import { boundedUtf8 } from '../core/checkpoint-input.ts';
 interface Operation { plan?:DurableWritePlan; input?:DurableWriteInput; content:string; ref?:DurableWriteRef; pendingAck?:DurableWriteOutcome; planningRejected?:string }
 interface State {version:1;writer:string;generation:number;base:DurableWriteRead;draft:string;conflict:boolean;operation?:Operation}
 const failure=(message:string)=>new Error(`Durable note recovery: ${message}`);
+/** Generated frontmatter can advance independently while the user keeps typing
+ * in the body. Reconcile only an untouched submitted header; a concurrently
+ * edited header is retained as a conflict rather than being guessed or lost. */
+function canonicalDraft(submitted:string,canonical:string,current:string):string|undefined {
+  if(current===submitted)return canonical;
+  if(canonical===submitted)return current;
+  const split=(source:string):{front:string;body:string}|undefined=>{
+    const bom=source.startsWith('\uFEFF')?'\uFEFF':'',text=source.slice(bom.length);
+    const opening=/^---[ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)/.exec(text);
+    if(!opening)return{front:bom,body:text};
+    const remainder=text.slice(opening[0].length),closing=/^(?:---|\.\.\.)[ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)/m.exec(remainder);
+    if(!closing)return undefined;
+    const end=bom.length+opening[0].length+closing.index+closing[0].length;
+    return{front:source.slice(0,end),body:source.slice(end)};
+  };
+  const before=split(submitted),after=split(canonical),draft=split(current);
+  if(!before||!after||!draft||before.body!==after.body||before.front!==draft.front)return undefined;
+  return after.front+draft.body;
+}
 /** Editor-owned checkpoints; provider plans and operation identities stay exact. */
 export class DurableNoteState {
   private state?:State;
@@ -29,6 +48,13 @@ export class DurableNoteState {
   get dirty(){return !!this.error||!!this.state&&(this.state.conflict||!!this.state.operation||!!this.uncertain||this.state.draft!==this.state.base.content);}
   private queue<T>(run:()=>Promise<T>):Promise<T>{const p=this.tail.then(run).catch(error=>{this.error=error instanceof Error?error:failure('operation failed');this.changed();throw this.error;});this.tail=p.catch(()=>{});return p;}
   private checkIdentity(value:DurableWritePlan|DurableWriteRef){const scope=this.writes.checkpoints.scope;if(value.vaultId!==scope.vaultId||value.clientId!==scope.clientId||value.entryId!==this.base.entryId||!value.operationId)throw failure('checkpoint identity mismatch');}
+  private checkPlan(plan:DurableWritePlan):void {
+    this.checkIdentity(plan);boundedUtf8(plan.encodedPlan,8*1024*1024,'plan_too_large');
+    if(Object.hasOwn(plan,'canonicalContent')){
+      if(typeof plan.canonicalContent!=='string')throw failure('invalid canonical write content');
+      boundedUtf8(plan.canonicalContent,8*1024*1024,'plan_too_large');
+    }
+  }
   conditionalSavedSourceStatus(capture:ConditionalSavedSourceCapture):ConditionalSavedSourceStatus{return this.captures.get(capture)??'foreign';}
   private checkWitness(witness:ConditionalSavedSourceWitness):void {
     const base=this.base;
@@ -110,7 +136,7 @@ export class DurableNoteState {
       const raw=JSON.parse(head.encodedState) as State;
       if(raw.version!==1||typeof raw.writer!=='string'||!Number.isSafeInteger(raw.generation)||raw.generation<0||typeof raw.draft!=='string'||typeof raw.conflict!=='boolean'||!raw.base||raw.base.entryId!==observed.entryId||typeof raw.base.content!=='string'||typeof raw.base.revision!=='string'||typeof raw.base.path!=='string')throw failure('malformed or unsupported checkpoint; retained');
       this.state=raw;
-      if(raw.operation){const op=raw.operation;if(typeof op.content!=='string'||!op.plan&&!op.input)throw failure('invalid saved operation');if(op.input!==undefined)this.checkInput(op);if(op.plan!==undefined){if(!op.plan||op.plan.version!==1||typeof op.plan.encodedPlan!=='string')throw failure('invalid saved operation');this.checkIdentity(op.plan);boundedUtf8(op.plan.encodedPlan,8*1024*1024,'plan_too_large');}if(op.ref){this.checkIdentity(op.ref);if(!op.plan||op.ref.operationId!==op.plan.operationId)throw failure('plan/ref mismatch');}}
+      if(raw.operation){const op=raw.operation;if(typeof op.content!=='string'||!op.plan&&!op.input)throw failure('invalid saved operation');if(op.input!==undefined)this.checkInput(op);if(op.plan!==undefined){if(!op.plan||op.plan.version!==1||typeof op.plan.encodedPlan!=='string')throw failure('invalid saved operation');this.checkPlan(op.plan);}if(op.ref){this.checkIdentity(op.ref);if(!op.plan||op.ref.operationId!==op.plan.operationId)throw failure('plan/ref mismatch');}}
       if(raw.operation?.ref)await this.resume(validate);
       else if(observed.revision!==raw.base.revision){if(!raw.operation&&raw.draft===raw.base.content){raw.base=observed;raw.draft=observed.content;}else raw.conflict=true;}
     }
@@ -139,10 +165,10 @@ export class DurableNoteState {
         // A verified definite planning rejection has no prepared/committing
         // intent to settle. Preserve the original baseline and latest draft;
         // unknown transport/provider errors remain ordinary pending failures.
-        if(error instanceof DurableWritePlanningError&&error.source==='host'&&error.code==='revision_conflict'&&!error.commitUncertain){this.state!.conflict=true;await this.persist();this.changed();}
+        if(error instanceof DurableWritePlanningError&&error.source==='host'&&['revision_conflict','collection_source_conflict'].includes(error.code)&&!error.commitUncertain){this.state!.conflict=true;await this.persist();this.changed();}
         throw error;
       }
-      this.checkIdentity(plan);boundedUtf8(plan.encodedPlan,8*1024*1024,'plan_too_large');
+      this.checkPlan(plan);
       this.state!.operation={plan,content};await this.persist();await this.resume(validate);
       if(this.state!.conflict)throw failure('file advanced or write rejected; draft preserved');
     }
@@ -150,6 +176,23 @@ export class DurableNoteState {
   });}
   /** Navigation may retain a conflict, but must durably checkpoint every edit. */
   preserveDraft():Promise<void>{return this.queue(()=>this.persist());}
+  /** Refresh a completed collection-property operation without replacing later
+   * body typing. In-flight intents retain their original plan and must settle
+   * first; a UI refresh never reinterprets or retries them. */
+  refreshManagedProjection(validate:()=>void):Promise<void>{return this.queue(async()=>{
+    validate();
+    if(!this.writes.composeNote)throw failure('managed projection composition is unavailable');
+    if(this.state!.operation||this.state!.conflict)throw failure('settle the retained note write before refreshing managed properties');
+    const base=this.base,submitted=this.text;
+    const result=await this.writes.composeNote({entryId:base.entryId,path:base.path,expectedRevision:base.revision,baseline:base.content,proposed:submitted});
+    validate();
+    if(!result)throw failure('this note has no managed collection projection');
+    if(result.current.entryId!==base.entryId||result.current.path!==base.path||typeof result.current.content!=='string'||typeof result.content!=='string')throw failure('managed projection identity mismatch');
+    const draft=canonicalDraft(submitted,result.content,this.text);
+    if(draft===undefined)throw failure('properties changed while refreshing; editor draft retained');
+    this.state!.base=result.current;this.state!.draft=draft;
+    await this.persist();this.error=null;this.changed();
+  });}
   /** Save a separate file before adopting the original's latest version. Never
    * rebase a rejected draft, and never discard edits made during this operation. */
   saveRecoveryCopy():Promise<{path:string;resolved:boolean}>{return this.queue(async()=>{
@@ -188,7 +231,7 @@ export class DurableNoteState {
         }
         throw error;
       }
-      this.checkIdentity(op.plan);this.checkInput(op);boundedUtf8(op.plan.encodedPlan,8*1024*1024,'plan_too_large');await this.persist();
+      this.checkPlan(op.plan);this.checkInput(op);await this.persist();
     }
     if(op.pendingAck){
       if(!op.ref||op.pendingAck.operationId!==op.ref.operationId||
@@ -208,7 +251,15 @@ export class DurableNoteState {
     for(const key of ['vaultId','clientId','token','operationId','entryId'] as const)if(outcome.ref[key]!==op.ref[key])throw failure('terminal outcome mismatch');
     if(outcome.state==='committed'){
       const result=await this.vault.reconcileDurableWrite(op.ref,outcome.receipt);
-      if(result.status==='current')this.state!.base=result.current;else this.state!.conflict=true;
+      if(result.status==='current'){
+        this.state!.base=result.current;
+        const canonical=op.plan!.canonicalContent;
+        if(canonical!==undefined){
+          const draft=result.current.content===canonical?canonicalDraft(op.content,canonical,this.text):undefined;
+          if(draft===undefined)this.state!.conflict=true;
+          else this.state!.draft=draft;
+        }
+      }else this.state!.conflict=true;
       op.pendingAck={status:'committed',operationId:outcome.receipt.operationId,sequence:outcome.receipt.sequence};
     }else{if(outcome.error.operationId!==op.ref.operationId)throw failure('rejection identity mismatch');this.state!.conflict=true;op.pendingAck={status:'rejected',operationId:outcome.error.operationId,code:outcome.error.code};}
     await this.persist();await this.writes.acknowledge(op.ref,op.pendingAck);

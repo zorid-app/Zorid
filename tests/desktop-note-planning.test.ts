@@ -27,6 +27,19 @@ test('successful plan envelope preserves exact encoded bytes and binds every ide
   for(const patch of [{vaultId:'other'},{clientId:'other'},{operationId:'other'},{entryId:'other'},{encodedPlan:'\ud800'}])assert.throws(()=>decodeDesktopNotePlan(input,scope,{...reply,value:{...value,...patch}}),error=>error instanceof DurableWritePlanningError&&error.commitUncertain);
 });
 
+test('canonical planning content is bound to the exact native payload across the bridge clone',()=>{
+  const canonicalContent='---\nStatus: Done\n---\nnew 😀';
+  const native={operation_id:input.operationId,mutation:{type:'write',id:input.expectedEntryId,expected:'new-revision'},content_base64:Buffer.from(canonicalContent).toString('base64')};
+  const value={version:1,...scope,operationId:input.operationId,entryId:input.expectedEntryId,encodedPlan:JSON.stringify(native),canonicalContent};
+  const envelope=(patch:Record<string,unknown>={})=>({notePlanning:true,schemaVersion:1,ok:true,value:{...value,...patch}});
+  assert.equal(decodeDesktopNotePlan(input,scope,JSON.parse(JSON.stringify(envelope()))).canonicalContent,canonicalContent);
+  for(const patch of [{canonicalContent:undefined},{canonicalContent:'forged'},{canonicalContent:'\ud800'},{encodedPlan:JSON.stringify({...native,content_base64:Buffer.from('other').toString('base64')})}]){
+    assert.throws(()=>decodeDesktopNotePlan(input,scope,envelope(patch)),error=>error instanceof DurableWritePlanningError&&error.commitUncertain);
+  }
+  const guarded={...input,conditionalSavedSource:{captureId:'capture',logicalWitness:{entryId:input.expectedEntryId,revision:input.expectedRevision,path:input.path}}};
+  assert.throws(()=>decodeDesktopNotePlan(guarded,scope,envelope()),error=>error instanceof DurableWritePlanningError&&error.commitUncertain);
+});
+
 
 test('conditional planning snapshots the exact original capture before an IPC await',()=>{
   const guard={captureId:'original-capture',logicalWitness:{entryId:input.expectedEntryId,revision:input.expectedRevision,path:input.path}};

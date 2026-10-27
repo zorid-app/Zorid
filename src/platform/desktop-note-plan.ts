@@ -30,13 +30,22 @@ export function decodeDesktopNotePlan(input:DurableWriteInput,scope:CheckpointSc
     throw new DurableWritePlanningError(error.code,error.commitUncertain);
   }
   const plan=reply.value;
-  if(reply.ok!==true||!keys(reply,['notePlanning','schemaVersion','ok','value'])||!object(plan)||!keys(plan,['version','vaultId','clientId','operationId','entryId','encodedPlan'])||plan.version!==1||plan.vaultId!==scope.vaultId||plan.clientId!==scope.clientId||plan.operationId!==input.operationId||plan.entryId!==input.expectedEntryId||typeof plan.encodedPlan!=='string')throw invalid();
+  if(reply.ok!==true||!keys(reply,['notePlanning','schemaVersion','ok','value'])||!object(plan)||!keys(plan,['version','vaultId','clientId','operationId','entryId','encodedPlan',...(Object.hasOwn(plan,'canonicalContent')?['canonicalContent']:[])])||plan.version!==1||plan.vaultId!==scope.vaultId||plan.clientId!==scope.clientId||plan.operationId!==input.operationId||plan.entryId!==input.expectedEntryId||typeof plan.encodedPlan!=='string')throw invalid();
   try{
     boundedUtf8(plan.encodedPlan,8*1024*1024,'plan_too_large');
+    if(Object.hasOwn(plan,'canonicalContent')){
+      if(typeof plan.canonicalContent!=='string'||Object.hasOwn(input,'conditionalSavedSource'))throw new Error();
+      boundedUtf8(plan.canonicalContent,8*1024*1024,'plan_too_large');
+      const encoded=JSON.parse(plan.encodedPlan);
+      if(!object(encoded)||JSON.stringify(encoded)!==plan.encodedPlan||encoded.operation_id!==input.operationId||!object(encoded.mutation)||encoded.mutation.type!=='write'||encoded.mutation.id!==input.expectedEntryId||typeof encoded.content_base64!=='string')throw new Error();
+      const bytes=new TextEncoder().encode(plan.canonicalContent);
+      let binary='';for(let index=0;index<bytes.length;index+=0x8000)binary+=String.fromCharCode(...bytes.subarray(index,index+0x8000));
+      if(btoa(binary)!==encoded.content_base64)throw new Error();
+    }
     if(Object.hasOwn(input,'conditionalSavedSource')){
       const guard=captureSavedSourceGuard(input.conditionalSavedSource),encoded=JSON.parse(plan.encodedPlan);
       if(!object(encoded)||JSON.stringify(encoded)!==plan.encodedPlan||encoded.source_capture!==guard.captureId||encoded.operation_id!==input.operationId||!object(encoded.mutation)||encoded.mutation.type!=='write'||encoded.mutation.id!==input.expectedEntryId||encoded.mutation.expected!==input.expectedRevision)throw new Error();
     }
   }catch{throw invalid();}
-  return Object.freeze({version:1,vaultId:scope.vaultId,clientId:scope.clientId,operationId:input.operationId,entryId:input.expectedEntryId,encodedPlan:plan.encodedPlan});
+  return Object.freeze({version:1,vaultId:scope.vaultId,clientId:scope.clientId,operationId:input.operationId,entryId:input.expectedEntryId,encodedPlan:plan.encodedPlan,...(typeof plan.canonicalContent==='string'?{canonicalContent:plan.canonicalContent}:{})});
 }

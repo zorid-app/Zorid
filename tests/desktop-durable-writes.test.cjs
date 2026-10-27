@@ -38,6 +38,62 @@ test('coherent text read binds plans to observed ID and revision, including same
   }
 });
 
+test('managed composition plans exact canonical bytes against the newer admitted source without preparing', async () => {
+  const f = fixture(), original = '\ufeffsame 🚀', proposed = 'Body typed in editor', canonical = '---\nStatus: Done\n---\nBody typed in editor', calls = [];
+  f.host.capabilities = ['databases'];
+  f.host.databaseCommand = async (clientId, request) => {
+    calls.push(structuredClone({ clientId, request }));
+    return { collections: [], entries: [], projection: { pending: 0, issues: [] }, composition: {
+      content: canonical, currentSource: original, currentFileRevision: 'projected-revision', entryRevision: 'entry-2', collectionRevision: 'collection-3',
+    } };
+  };
+  const writes = await desktopDurableWrites(f.service, { clientId: 'client' }), read = await writes.readText('note.md');
+  f.current = { ...f.current, entry: { ...f.current.entry, revision: 'projected-revision' } };
+  const plan = await writes.planWrite({ ...input(read), content: proposed });
+  assert.equal(plan.canonicalContent, canonical);
+  const request = JSON.parse(plan.encodedPlan);
+  assert.equal(Buffer.from(request.content_base64, 'base64').toString('utf8'), canonical);
+  assert.equal(request.mutation.expected, 'projected-revision');
+  assert.deepEqual(calls, [{ clientId: 'client', request: { schemaVersion: 1, command: {
+    op: 'compose', entryId: 'entry', expectedRevision: 'revision', baseline: original, proposed,
+  } } }]);
+  assert.equal(f.row, undefined, 'composition and planning are inert');
+  await assert.rejects(writes.prepare({ ...plan, canonicalContent: 'forged projected content' }), { code: 'invalid_write_plan' });
+  assert.equal(f.row, undefined);
+});
+
+test('untyped composition absence retains ordinary CAS and a managed rejection never falls back to raw save', async () => {
+  const f = fixture(); f.host.capabilities = ['databases'];
+  let compose = 0;
+  f.host.databaseCommand = async () => { compose++; return { collections: [], entries: [], projection: { pending: 0, issues: [] } }; };
+  const writes = await desktopDurableWrites(f.service, { clientId: 'client' }), read = await writes.readText('note.md');
+  const ordinary = await writes.planWrite(input(read));
+  assert.equal(Object.hasOwn(ordinary, 'canonicalContent'), false);
+  f.host.databaseCommand = async () => { throw Object.assign(new Error('managed field mismatch'), { code: 'database_conflict' }); };
+  await assert.rejects(writes.planWrite(input(read, 'other-operation')), { code: 'database_conflict' });
+  assert.equal(compose, 1); assert.equal(f.row, undefined);
+  f.host.databaseCommand = async () => ({ composition: { content: 'bad' } });
+  await assert.rejects(writes.planWrite(input(read, 'malformed')), { code: 'invalid_database_response' });
+  f.host.databaseCommand = undefined;
+  await assert.rejects(desktopDurableWrites(f.service, { clientId: 'client' }), { code: 'unsupported_host_capability' });
+});
+
+test('managed refresh accepts only a coherent readback of the composed file witness', async () => {
+  const f = fixture(), source = '---\nStatus: Done\n---\nBody';
+  f.host.capabilities = ['databases'];
+  f.host.databaseCommand = async () => ({ collections: [], entries: [], projection: { pending: 0, issues: [] }, composition: {
+    content: source+' draft', currentSource: source, currentFileRevision: 'projected', entryRevision: 'entry-2', collectionRevision: 'collection-3',
+  } });
+  const writes = await desktopDurableWrites(f.service, { clientId: 'client' });
+  f.current = { ...f.current, entry: { ...f.current.entry, revision: 'projected' }, bytes: Buffer.from(source), presentation: { id: 'entry', ctime_ms: 1, mtime_ms: 3, size_bytes: Buffer.byteLength(source) } };
+  const input = { entryId: 'entry', path: 'note.md', expectedRevision: 'revision', baseline: 'original', proposed: 'draft' };
+  const result = await writes.composeNote(input);
+  assert.equal(result.current.revision, 'projected'); assert.equal(result.current.content, source); assert.equal(result.content, source+' draft');
+  f.current = { ...f.current, entry: { ...f.current.entry, revision: 'advanced-again' } };
+  await assert.rejects(writes.composeNote(input), { code: 'revision_conflict' });
+  assert.equal(f.row, undefined, 'refresh is read-only even on a stale readback');
+});
+
 test('authority-bound exact plan survives serialization and remains inert until explicit commit', async () => {
   const f = fixture(), writes = await desktopDurableWrites(f.service, { clientId: 'client' });
   const plan = await writes.planWrite(input(await writes.readText('note.md')));

@@ -368,6 +368,17 @@ export class NoteBuffer {
     });
   }
 
+  /** A collection property command may publish while the body is being edited.
+   * Reconcile through the identity-bound provider, never a blind source reload. */
+  refreshManagedProjection(validate:()=>void=()=>{}):Promise<void> {
+    return this.enqueue(async()=>{
+      this.requireLoaded();validate();
+      if(!this.durable)throw new Error('Managed projection refresh requires durable note storage');
+      await this.durable.refreshManagedProjection(()=>{validate();if(this.disposing||this.disposed)throw new Error('This note buffer is closing');});
+      this.syncDurable();if(!this.dirty)this.writeValidators.clear();
+    });
+  }
+
   private async relocateNow(destination: string): Promise<void> {
     if(this.durable){await this.durable.reload(destination);this.syncDurable();return;}
     const oldPath = this.path;

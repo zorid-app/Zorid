@@ -35,6 +35,8 @@ async function desktopDurableWrites(service, { clientId } = {}) {
   if (!identity(clientId)) throw failure('invalid_client_id');
   const host = service.host;
   const conditionalSources = host.capabilities?.includes('conditional_saved_source') === true;
+  const databases = host.capabilities?.includes('databases') === true;
+  if (databases && typeof host.databaseCommand !== 'function') throw failure('unsupported_host_capability');
   if (conditionalSources && !['captureSavedSource', 'releaseSavedSource'].every(name => typeof host[name] === 'function')) throw failure('unsupported_host_capability');
   const authority = await host.identity();
   const vaultId = authority.local_store_id;
@@ -84,6 +86,22 @@ async function desktopDurableWrites(service, { clientId } = {}) {
     view(row, ref); // Reject foreign/non-write tokens before authorizing commit.
     return row;
   }
+  async function composeText(input) {
+    const { entryId, expectedRevision, baseline, proposed } = input;
+    if (!identity(entryId) || !identity(expectedRevision)) throw failure('invalid_write_plan');
+    text(baseline); text(proposed);
+    const reply = await host.databaseCommand(clientId, { schemaVersion: 1, command: {
+      op: 'compose', entryId, expectedRevision, baseline, proposed,
+    } });
+    active();
+    if (!reply || typeof reply !== 'object' || Array.isArray(reply)) throw failure('invalid_database_response');
+    if (reply.composition === undefined || reply.composition === null) return null;
+    const composed = reply.composition;
+    if (!keys(composed, ['content', 'currentSource', 'currentFileRevision', 'entryRevision', 'collectionRevision'])
+      || !identity(composed.currentFileRevision) || !identity(composed.entryRevision) || !identity(composed.collectionRevision)) throw failure('invalid_database_response');
+    text(composed.content); text(composed.currentSource);
+    return Object.freeze({ ...composed });
+  }
   function parsePlan(plan) {
     bound(plan);
     if (plan.version !== 1) throw failure('invalid_write_plan');
@@ -101,11 +119,26 @@ async function desktopDurableWrites(service, { clientId } = {}) {
       || typeof parsed.content_base64 !== 'string') throw failure('invalid_write_plan');
     const bytes = Buffer.from(parsed.content_base64, 'base64');
     if (bytes.toString('base64') !== parsed.content_base64) throw failure('invalid_write_plan');
-    decode(bytes); // This capability is for text writes, not arbitrary byte mutations.
+    const decoded = decode(bytes); // Text writes, not arbitrary byte mutations.
+    if (Object.hasOwn(plan, 'canonicalContent')) {
+      text(plan.canonicalContent);
+      if (guarded || plan.canonicalContent !== decoded) throw failure('invalid_write_plan');
+    }
     return Object.freeze({ native: Object.freeze({ operation_id: parsed.operation_id, mutation: Object.freeze(parsed.mutation), content_base64: parsed.content_base64 }), sourceCapture: guarded ? parsed.source_capture : undefined });
   }
   return Object.freeze({
     checkpoints: desktopCheckpoints(host, { vaultId, clientId }, active),
+    ...(databases ? { async composeNote(input) {
+      active();
+      const captured = { entryId: input?.entryId, path: input?.path, expectedRevision: input?.expectedRevision, baseline: input?.baseline, proposed: input?.proposed };
+      if (typeof captured.path !== 'string') throw failure('invalid_write_plan');
+      const composed = await composeText(captured);
+      if (!composed) return null;
+      const current = observation(await host.readPresentedById(captured.entryId));
+      active();
+      if (current.entryId !== captured.entryId || current.path !== captured.path || current.revision !== composed.currentFileRevision || current.content !== composed.currentSource) throw failure('revision_conflict');
+      return Object.freeze({ current, content: composed.content });
+    } } : {}),
     async captureSavedSource(input) {
       active();
       if (!conditionalSources) throw failure('unsupported_host_capability');
@@ -139,7 +172,8 @@ async function desktopDurableWrites(service, { clientId } = {}) {
     async planWrite(input) {
       active();
       if (!input || !identity(input.operationId) || !identity(input.expectedEntryId) || !identity(input.expectedRevision)) throw failure('invalid_write_plan');
-      const { operationId, path, expectedEntryId, expectedRevision, expectedContent, content } = input;
+      const { operationId, path, expectedEntryId } = input;
+      let { expectedRevision, expectedContent, content } = input;
       let guard;
       if (Object.hasOwn(input, 'conditionalSavedSource')) {
         if (!conditionalSources) throw failure('unsupported_host_capability');
@@ -147,6 +181,17 @@ async function desktopDurableWrites(service, { clientId } = {}) {
         if (guard.logicalWitness.entryId !== expectedEntryId || guard.logicalWitness.revision !== expectedRevision || guard.logicalWitness.path !== path) throw failure('intent_identity_mismatch');
       }
       text(content); text(expectedContent);
+      let canonicalContent;
+      if (databases && !guard) {
+        // Composition is inert. The native adapter admits a newer file baseline
+        // only when its body and unmanaged source still match the editor's base.
+        // Store validates current structured projections again at actual commit.
+        const composed = await composeText({ entryId: expectedEntryId, expectedRevision, baseline: expectedContent, proposed: content });
+        if (composed) {
+          content = composed.content; expectedContent = composed.currentSource; expectedRevision = composed.currentFileRevision;
+          canonicalContent = content;
+        }
+      }
       // Base64 is ASCII. Bound it before allocating the binary copy or JSON.
       const contentSize = Buffer.byteLength(content, 'utf8');
       const overhead = JSON.stringify({ operation_id: operationId, mutation: { type: 'write', id: expectedEntryId, expected: expectedRevision }, content_base64: '', ...(guard ? { source_capture: guard.captureId } : {}) }).length;
@@ -155,7 +200,8 @@ async function desktopDurableWrites(service, { clientId } = {}) {
       if (native.operation_id !== operationId || native.mutation.type !== 'write' || native.mutation.id !== expectedEntryId || native.mutation.expected !== expectedRevision) throw failure('intent_identity_mismatch');
       const encodedPlan = JSON.stringify({ ...native, ...(guard ? { source_capture: guard.captureId } : {}) });
       text(encodedPlan);
-      return Object.freeze({ version: 1, vaultId, clientId, operationId, entryId: expectedEntryId, encodedPlan });
+      return Object.freeze({ version: 1, vaultId, clientId, operationId, entryId: expectedEntryId, encodedPlan,
+        ...(canonicalContent === undefined ? {} : { canonicalContent }) });
     },
     async prepare(plan) {
       const { native, sourceCapture } = parsePlan(plan);
