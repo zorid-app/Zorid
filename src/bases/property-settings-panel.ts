@@ -72,13 +72,21 @@ export function createBasePropertySettingsPanel(container: HTMLElement, options:
       } else if (kind === 'relation') {
         detail.append(element('p', 'Relations store readable note links. Renaming in Zorid updates links; external moves may require repair. Deleting a target preserves its links.'));
         const filter = input('Target filter', definition.relation?.targetFilter), multiple = input('Allow multiple'); multiple.type = 'checkbox'; multiple.checked = !!definition.relation?.multiple;
-        readDetail = () => ({ type: kind, relation: { multiple: multiple.checked, ...(filter.value ? { targetFilter: filter.value } : {}) } });
+        readDetail = () => {
+          const relation = { ...definition.relation, multiple: multiple.checked };
+          if (filter.value) relation.targetFilter = filter.value; else delete relation.targetFilter;
+          return { type: kind, relation };
+        };
       } else if (kind === 'reverseRelation') {
-        const source = input('Source relation property', definition.reverseRelation?.property); readDetail = () => ({ type: kind, reverseRelation: { property: source.value } });
+        const source = input('Source relation property', definition.reverseRelation?.property); readDetail = () => ({ type: kind, reverseRelation: { ...definition.reverseRelation, property: source.value } });
       } else if (kind === 'rollup') {
         const relation = input('Relation property', definition.rollup?.relation), target = input('Related property', definition.rollup?.property), aggregation = element('select'); aggregation.setAttribute('aria-label', 'Aggregation');
         for (const value of ['count', 'sum', 'average', 'min', 'max', 'values', 'unique']) { const option = element('option', value); option.value = value; aggregation.append(option); } aggregation.value = definition.rollup?.aggregation ?? 'count'; detail.append(aggregation);
-        readDetail = () => ({ type: kind, rollup: { relation: relation.value, ...(target.value ? { property: target.value } : {}), aggregation: aggregation.value as NonNullable<BasePropertyDefinition['rollup']>['aggregation'] } });
+        readDetail = () => {
+          const rollup = { ...definition.rollup, relation: relation.value, aggregation: aggregation.value as NonNullable<BasePropertyDefinition['rollup']>['aggregation'] };
+          if (target.value) rollup.property = target.value; else delete rollup.property;
+          return { type: kind, rollup };
+        };
       } else readDetail = () => ({ type: kind });
     };
     const load = () => { expected = options.definitions().properties[property.value] ?? null; definition = expected ?? { type: 'text' }; if (initialType) { definition = { ...definition, type: initialType }; initialType = undefined; dirty = true; } activeProperty = property.value; activeType = definition.type; const cached = detailDrafts.get(`${activeProperty}\0${activeType}`); if (cached) { definition = cached.definition; expected = cached.expected; } type.value = definition.type; draw(); };

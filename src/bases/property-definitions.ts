@@ -1,4 +1,4 @@
-import { isMap, parseDocument } from 'yaml';
+import { isAlias, isMap, isScalar, parseDocument, visit } from 'yaml';
 import type { BaseExpressionValue } from './expression.ts';
 
 /** Ordinary visible vault file. There is no named note-Type registry. */
@@ -101,17 +101,61 @@ export function parseBasePropertyDefinitions(source: string): BasePropertyDefini
 export function updateBasePropertyDefinition(source: string, property: string, definition: BasePropertyDefinition | null): string {
   if (!text(property)) throw new BasePropertyDefinitionError('Property name must be nonempty bounded text.');
   if (definition !== null) validateBasePropertyDefinition(definition);
-  const { document } = readDocument(source);
+  const { document, raw } = readDocument(source);
+  const checkProjectedKeys = (doc: typeof document) => visit(doc, { Map(_key, map) {
+    const keys = new Set<string>();
+    for (const pair of map.items) {
+      const node = isAlias(pair.key) ? pair.key.resolve(doc) : pair.key;
+      if (node !== null && !isScalar(node)) throw new BasePropertyDefinitionError('Properties.yaml contains complex YAML keys. Edit the source before changing these settings.');
+      const value = node === null ? null : node.value;
+      if ((value !== null && typeof value === 'object') || typeof value === 'symbol' || typeof value === 'function') throw new BasePropertyDefinitionError('Properties.yaml contains complex YAML keys. Edit the source before changing these settings.');
+      // yaml's ordinary-object projection uses an empty key for null.
+      const key = value === null ? '' : String(value);
+      if (keys.has(key)) throw new BasePropertyDefinitionError('Properties.yaml contains overlapping YAML keys. Edit the source before changing these settings.');
+      keys.add(key);
+    }
+  } });
+  checkProjectedKeys(document);
+  const previous = isRecord(raw.properties) ? raw.properties[property] : undefined;
+  const ownedKeys = ['type', 'options', 'relation', 'reverseRelation', 'rollup'] as const;
+  const nestedKeys = { relation: ['multiple', 'targetFilter'], reverseRelation: ['property'], rollup: ['relation', 'property', 'aggregation'] };
   if (!document.has('properties')) document.set('properties', document.createNode({}));
   if (definition === null) document.deleteIn(['properties', property]);
   else {
-    if (!isMap(document.getIn(['properties', property], true))) document.setIn(['properties', property], document.createNode({}));
-    for (const key of ['type', 'options', 'relation', 'reverseRelation', 'rollup'] as const) {
+    // A selected alias is detached; its shared template is never edited.
+    if (!isMap(document.getIn(['properties', property], true))) document.setIn(['properties', property], document.createNode(isRecord(previous) ? previous : {}));
+    for (const key of ownedKeys) {
       if (definition[key] === undefined) document.deleteIn(['properties', property, key]);
-      else document.setIn(['properties', property, key], definition[key]);
+      else if (key === 'relation' || key === 'reverseRelation' || key === 'rollup') {
+        const path = ['properties', property, key], detail = definition[key] as unknown as Record<string, unknown>;
+        const fields = nestedKeys[key];
+        if (!isMap(document.getIn(path, true))) document.setIn(path, document.createNode(isRecord(previous) && isRecord(previous[key]) ? previous[key] : detail));
+        // Keep unfamiliar pairs and their AST nodes in place. Clearing a known
+        // optional field removes only that pair, not the whole settings map.
+        for (const field of fields) {
+          if (detail[field] === undefined) document.deleteIn([...path, field]);
+          else document.setIn([...path, field], detail[field]);
+        }
+      } else document.setIn(['properties', property, key], definition[key]);
     }
   }
-  const output = document.toString(); readDocument(output); return output;
+  const output = document.toString(), checked = readDocument(output), after = checked.raw;
+  checkProjectedKeys(checked.document);
+  // Editing an anchored owner can also alter aliases outside the owned fields.
+  // Refuse those side effects before returning any source to the save pipeline.
+  const retainedData = (data: Record<string, unknown>) => {
+    const properties = isRecord(data.properties) ? data.properties : {}, current = properties[property];
+    const unfamiliar: Record<string, unknown> = definition && isRecord(current) ? Object.fromEntries(Object.entries(current).filter(([key]) => !(ownedKeys as readonly string[]).includes(key))) : {};
+    if (definition && isRecord(previous) && isRecord(current)) for (const key of ['relation', 'reverseRelation', 'rollup'] as const) {
+      if (definition[key] !== undefined && isRecord(previous[key])) {
+        const detail = isRecord(current[key]) ? current[key] : {};
+        unfamiliar[key] = Object.fromEntries(Object.entries(detail).filter(([field]) => !nestedKeys[key].includes(field)));
+      }
+    }
+    return JSON.stringify([Object.entries(data).filter(([key]) => key !== 'properties'), Object.entries(properties).filter(([name]) => name !== property), unfamiliar]);
+  };
+  if (retainedData(raw) !== retainedData(after)) throw new BasePropertyDefinitionError('These settings share YAML values with another field. Edit Properties.yaml to change them together.');
+  return output;
 }
 export interface BasePropertyOptionMigration { readonly property: string; readonly from: string; readonly to: string; }
 /** Renaming a stored value is explicitly a separate, identity/revision-guarded note migration.
