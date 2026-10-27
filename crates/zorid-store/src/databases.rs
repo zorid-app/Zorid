@@ -1883,28 +1883,43 @@ impl Store {
         Ok(result)
     }
     pub fn database_pending_projections(&self, limit: u32) -> Result<Vec<DatabaseProjection>> {
+        self.database_pending_projections_after(None, limit)
+    }
+    pub fn database_pending_projections_after(
+        &self,
+        after: Option<&EntryId>,
+        limit: u32,
+    ) -> Result<Vec<DatabaseProjection>> {
         if limit == 0 || limit > 256 {
             return Err(invalid("Projection page limit must be between 1 and 256"));
         }
         let tx = self.connection.unchecked_transaction()?;
         let rows = tx
             .prepare(
-                "SELECT entry_id,kind FROM local_database_projections ORDER BY entry_id LIMIT ?1",
+                "SELECT entry_id,kind FROM local_database_projections WHERE (?1 IS NULL OR entry_id>?1) ORDER BY entry_id LIMIT ?2",
             )?
-            .query_map([limit], |r| {
+            .query_map(params![after.map(EntryId::as_str),limit], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        let result = rows
-            .into_iter()
-            .map(|(id, kind)| {
-                projection(
-                    &tx,
-                    &require_member(&tx, &EntryId::new(id)?, None)?,
-                    read_kind(&kind)?,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut result = Vec::new();
+        let mut bytes = 2;
+        for (id, kind) in rows {
+            let item = projection(
+                &tx,
+                &require_member(&tx, &EntryId::new(id)?, None)?,
+                read_kind(&kind)?,
+            )?;
+            let size = bounded(&item, MAX_RESPONSE_BYTES)?.len() + 1;
+            if bytes + size > MAX_RESPONSE_BYTES {
+                if result.is_empty() {
+                    return Err(invalid("Entry projection exceeds response budget"));
+                }
+                break;
+            }
+            bytes += size;
+            result.push(item);
+        }
         bounded(&result, MAX_RESPONSE_BYTES)?;
         tx.commit()?;
         Ok(result)
@@ -1977,13 +1992,20 @@ impl Store {
         &self,
         limit: u32,
     ) -> Result<Vec<DatabaseSchemaProjection>> {
+        self.database_pending_schema_projections_after(None, limit)
+    }
+    pub fn database_pending_schema_projections_after(
+        &self,
+        after: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<DatabaseSchemaProjection>> {
         if limit == 0 || limit > 256 {
             return Err(invalid(
                 "Schema projection page limit must be between 1 and 256",
             ));
         }
         let tx = self.connection.unchecked_transaction()?;
-        let ids=tx.prepare("SELECT collection_id FROM local_database_schema_projections ORDER BY collection_id LIMIT ?1")?.query_map([limit],|r|r.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;
+        let ids=tx.prepare("SELECT collection_id FROM local_database_schema_projections WHERE (?1 IS NULL OR collection_id>?1) ORDER BY collection_id LIMIT ?2")?.query_map(params![after,limit],|r|r.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;
         let mut result = Vec::new();
         let mut bytes = 2;
         for id in ids {

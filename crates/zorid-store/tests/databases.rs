@@ -1149,3 +1149,36 @@ fn pending_schema_candidate_limit_rejects_transaction_without_losing_recovery_ta
         1
     );
 }
+
+#[test]
+fn projection_page_continuation_can_pass_an_unsettled_first_member() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("db")).unwrap();
+    let collection = create(&mut store, "Books");
+    for name in ["a", "b", "c"] {
+        new_entry(&mut store, &collection, name);
+    }
+    let first = store.database_pending_projections_after(None, 1).unwrap();
+    assert_eq!(first[0].entry_id, id("a"));
+    let second = store
+        .database_pending_projections_after(Some(&first[0].entry_id), 1)
+        .unwrap();
+    assert_eq!(second[0].entry_id, id("b"));
+    let third = store
+        .database_pending_projections_after(Some(&second[0].entry_id), 1)
+        .unwrap();
+    assert_eq!(third[0].entry_id, id("c"));
+    assert!(store
+        .database_pending_projections_after(Some(&third[0].entry_id), 1)
+        .unwrap()
+        .is_empty());
+    assert_eq!(store.database_pending_projections(3).unwrap().len(), 3);
+    let schema = store
+        .database_pending_schema_projections_after(None, 1)
+        .unwrap();
+    assert_eq!(schema[0].collection_id, collection.id);
+    assert!(store
+        .database_pending_schema_projections_after(Some(&collection.id), 1)
+        .unwrap()
+        .is_empty());
+}
