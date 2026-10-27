@@ -9,20 +9,27 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
-**Current follow-up — native filesystem identity, 2026-10-27:** user explicitly
-requests fixing the persisted macOS device-number issue. Main product source is
-`460f8dbc` (compact availability status instead of a large banner); the underlying
-binding repair is active in `codex/content-equivalent-rebaseline` /
-`.worktrees/content-equivalent-rebaseline`, owner `bases_fixture_admission`.
-Root composes/rebuilds/installs; `bases_final_spec` reviews safety. No concurrent
-heavy builds. Actual vault contents/baselines match and active-work gates are zero.
-The accepted design refreshes only an idle, content-equivalent bound namespace
-under atomic Store CAS, preserving history and write-race protection. It does not
-guess volume identity or reset the vault. Changed/missing bound files block this
-conservative repair; extra untracked files are imported normally afterward.
-Focused native regression/implementation and real app acceptance remain pending.
-Temporary worktrees/build outputs must be removed again after delivery, preserving
-the prior cleanup request. No broad reference/test campaign is reopened.
+**Native filesystem identity repaired — 2026-10-27.** User explicitly requested
+fixing the cause, beyond compact warning UX at `460f8dbc`. Native owner
+`bases_fixture_admission` delivered reviewed `b935857e`, composed as `64e605e4`;
+`bases_final_spec` approved the exact implementation. Idle, content-equivalent
+bound files/folders are revalidated and rebound atomically; old device numbers no
+longer imply permanent ownership. Historical proofs and live write/race guards
+remain intact. Changed/missing bound files or active writes conservatively block
+the batch; extra untracked files can be imported normally afterward.
+
+Four focused public native cases PASS (actual red reproduced first), matched host
+build exits0 and355-file arm64 local package verifies. Installed/reopened normal
+`~/Applications/Zorid.app` automatically recovers the actual vault:11/11 original
+bindings current, compared with1/11 before; all original logical IDs preserved,
+no schema change or data reset. A later live snapshot has12/12 current, zero
+content/state mismatches and zero pending work. Native UI shows the normal Base
+and no availability warning. Ordinary acknowledged Test1 writes and another file
+creation occurred during live validation, so no blanket unchanged-file claim is
+made; nine other original files are unchanged at the first check. User activity
+confirmation was requested separately. Hashed snapshots, pre-repair DB backup,
+write timeline and build/test/install receipts: `tmp/native-identity-fix-20261027/`.
+See [repair closeout](history/native-file-identity-repair-20261027.md).
 
 **Local installation/cleanup follow-up:** main `6f7237ed` produced the verified
 355-file arm64 local app at `~/Applications/Zorid.app`. User requested worktree/

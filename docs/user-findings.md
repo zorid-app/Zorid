@@ -26,8 +26,22 @@ keep historical proofs immutable and retain all live pathname/parent/race checks
 Changed/missing bound files or unfinished writes block this conservative batch.
 No reset, deletion or overwrite of user note contents is authorized by this repair.
 
-Implementation, focused native regression and actual updated-app recovery are
-pending. Keep verification confined to this defect and its write-safety guards.
+Implemented/reviewed `b935857e` → main `64e605e4`. Four focused public native
+cases PASS after the original positive case reproduced red: nested text/binary
+recovery and normal save/history preservation, changed bytes rejection, pending
+write rejection, and original inode elsewhere rejection. Matched host build and
+355-file package verification pass; the updated app is installed/reopened.
+
+Actual vault recovery verifies11/11 original bindings current (formerly1/11), all
+original logical IDs retained, schema unchanged and no reset. Later live activity
+shows12/12 current with no baseline/content/state mismatch or pending work. Test1
+changed through normal acknowledged write operations and another file appeared;
+nine other originals remain unchanged at the first snapshot. User activity
+confirmation was requested; do not attribute these writes to metadata repair or
+claim all file contents were unchanged. The repair itself performs no file-byte or
+logical-content writes. Evidence, read-only checker and pre-repair DB backup are
+in `tmp/native-identity-fix-20261027/`; [closeout](history/native-file-identity-repair-20261027.md).
+No broad regression/reference campaign was added.
 
 ## Local app and cleanup request — 2026-10-26
 
