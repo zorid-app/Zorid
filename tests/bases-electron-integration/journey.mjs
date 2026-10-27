@@ -75,7 +75,7 @@ async function closeNew(c){
   await c.ui.wait(`return !document.querySelector(${JSON.stringify(newPopover)});`,'New item popover closed after save');await c.ui.idle();
 }
 async function fmSaved(c,file,check,name){return c.saved(file,source=>check(c.frontmatter(source),source),name);}
-async function visibleCell(c,file,property,expected){return c.ui.wait(`const e=document.querySelector(${JSON.stringify(c.ui.cell(file,property))});return e&&e.textContent.includes(${JSON.stringify(expected)});`,`${file} ${property} = ${expected}`);}
+async function visibleCell(c,file,property,expected,timeout){return c.ui.wait(`const e=document.querySelector(${JSON.stringify(c.ui.cell(file,property))});return e&&e.textContent.includes(${JSON.stringify(expected)});`,`${file} ${property} = ${expected}`,timeout);}
 async function noAlerts(c){await c.ui.wait(`return ![...document.querySelectorAll('.pane.is-active [role="alert"]')].some(e=>e.getClientRects().length&&e.textContent.trim());`,'No visible failure after positive flow');}
 async function confirmDelete(c,action){
   let listener,timer;
@@ -456,7 +456,8 @@ export async function journey(c){
   await c.external('Book 001.md',authoritative,'external-write-with-active-cell-draft');await delay(1200);await c.ui.key('Enter');
   await c.ui.wait(`return [...document.querySelectorAll('.pane.is-active [role="status"],.pane.is-active [role="alert"]')].some(e=>/stale|changed|conflict|refresh/i.test(e.textContent))||!!document.querySelector('.pane.is-active input[aria-invalid="true"]');`,'Stale edit has visible recovery feedback',45000);
   assert.equal(await c.read('Book 001.md'),authoritative,'Stale cell cannot overwrite external bytes');await c.screenshot('09-stale-retained-draft');await c.ui.key('Escape');
-  await c.ui.openFile('Book 001.md');await c.ui.openFile('Library.base');await c.ui.idle();await choose(c,'Books table');await visibleCell(c,'Book 001.md','note.rating','3');
+  // Normal desktop discovers external writes on its 30-second periodic scan.
+  await c.ui.openFile('Book 001.md');await c.ui.openFile('Library.base');await c.ui.idle();await choose(c,'Books table');await visibleCell(c,'Book 001.md','note.rating','3',45000);
   await noAlerts(c);
   const finalBook=await c.read('Book 001.md'),finalBase=await c.read('Library.base');
   c.evidence.checks.push({name:'pre-restart-durable-snapshot',book:finalBook,base:finalBase,kanbanMovedSource:move,newFile});
