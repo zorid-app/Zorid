@@ -39,7 +39,14 @@ export async function editCondition(c,owner,index,property,operator,value){
     if(state.indeterminate){await c.ui.click(operand);state=await c.ui.dom(`const e=document.querySelector(${JSON.stringify(operand)});return {checked:e.checked,indeterminate:e.indeterminate};`);}
     if(state.checked!==value)await c.ui.click(operand);
     await c.ui.wait(`const e=document.querySelector(${JSON.stringify(operand)});return e?.type==='checkbox'&&e.checked===${value}&&e.indeterminate===false;`,'Exact Boolean filter operand');
-  }else await c.ui.type(operand,value);
+  }else{
+    await c.ui.type(operand,value);
+    await c.ui.wait(`const e=document.querySelector(${JSON.stringify(operand)});return e?.value===${JSON.stringify(String(value))}&&document.activeElement===e&&!e.matches(':disabled')&&!e.closest('[inert]');`,'Exact owned filter operand before completion');
+    // Finish the field through its public keyboard interaction. Typing a
+    // configured choice leaves a popup which can cover the next parent action.
+    await c.ui.key('Tab');
+    await c.ui.wait(`const e=document.querySelector(${JSON.stringify(operand)}),host=e?.closest('.bases-filter-operand-host');return e?.value===${JSON.stringify(String(value))}&&!!host&&e.getAttribute('aria-expanded')!=='true'&&!host.querySelector('[role="listbox"]');`,'Filter operand autocomplete completed');
+  }
 }
 export async function savedConfiguration(c,check,name){return c.saved('Configuration.base',source=>{const config=c.yaml.parse(source);assert.equal(config.fixtureSentinel,'config-keep');assert.deepEqual(config.pluginRoot,{version:19,nested:['one','two']});assert.match(source,/# Configuration acceptance/);for(const view of config.views)assert.ok(view.pluginView,'Unknown per-view field retained');check(config);},name);}
 
