@@ -623,3 +623,259 @@ fn old_schema17_migrates_once_without_modifying_existing_files_or_receipts() {
     drop(store);
     Store::open(&path).unwrap();
 }
+
+fn bind_published(store: &mut Store, entry: &DatabaseEntry) {
+    let attempt = store
+        .begin_projection_bound(&entry.entry_id, "root-inode")
+        .unwrap();
+    store
+        .mark_projection(
+            &attempt.attempt_id,
+            zorid_store::ProjectionPhase::Staged,
+            Some("original-inode".into()),
+        )
+        .unwrap();
+    store
+        .finish_projection_bound(
+            &attempt.attempt_id,
+            &zorid_store::PhysicalIdentity {
+                inode: "original-inode".into(),
+                parent_inode: "root-inode".into(),
+            },
+        )
+        .unwrap();
+}
+fn capture_external(
+    store: &mut Store,
+    entry: &DatabaseEntry,
+    source: String,
+    bound: bool,
+) -> (zorid_store::ExternalObservation, MutationRequest) {
+    let baseline = store.projection_baseline(&entry.entry_id).unwrap().unwrap();
+    let observation = if bound {
+        let proof = zorid_store::ObservationPhysical {
+            physical: zorid_store::PhysicalIdentity {
+                inode: "external-inode".into(),
+                parent_inode: "root-inode".into(),
+            },
+            expected_binding: store.physical_binding(&entry.entry_id).unwrap(),
+        };
+        store
+            .record_external_bound(
+                &baseline.state.path,
+                Some(baseline.clone()),
+                source.as_bytes().to_vec(),
+                &proof,
+            )
+            .unwrap()
+    } else {
+        store
+            .record_external(
+                &baseline.state.path,
+                Some(baseline.clone()),
+                source.as_bytes().to_vec(),
+            )
+            .unwrap()
+    };
+    let command = MutationRequest {
+        operation_id: observation.observation_id.clone(),
+        mutation: Mutation::Write {
+            id: entry.entry_id.clone(),
+            expected: baseline.state.revision,
+            content: source.into_bytes(),
+        },
+    };
+    (observation, command)
+}
+
+#[test]
+fn proven_external_body_keeps_newer_structured_values_and_queues_reprojection() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("db")).unwrap();
+    let collection = create(&mut store, "Books");
+    let entry = new_entry(&mut store, &collection, "one");
+    let text = publish(&mut store, &entry, "publish");
+    bind_published(&mut store, &entry);
+    let current = get(&mut store, &collection).entries.remove(0);
+    request(
+        &mut store,
+        json!({"op":"set_entry","operationId":"newer-property","entryId":entry.entry_id,"expectedRevision":current.revision,"expectedCollectionRevision":collection.revision,"values":{collection.properties[0].id.clone():8}}),
+    );
+    let external = text.replace("Keep β exactly.", "Externally edited body.");
+    let (observation, command) = capture_external(&mut store, &entry, external.clone(), true);
+    // Authored saves have no observation exemption.
+    assert!(store.apply(&command).is_err());
+    store
+        .import_observation(&observation.observation_id, &command)
+        .unwrap();
+    assert_eq!(
+        store
+            .read(&entry.entry_id)
+            .unwrap()
+            .unwrap()
+            .content
+            .unwrap(),
+        external.as_bytes()
+    );
+    let current = get(&mut store, &collection).entries.remove(0);
+    assert_eq!(current.values[&collection.properties[0].id], json!(8));
+    assert!(current.pending_projection);
+    let projection = store
+        .database_entry_projection(&entry.entry_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(projection.properties["Score"], json!(8));
+    assert!(store
+        .database_projection_ack(
+            &entry.entry_id,
+            &projection.entry_revision,
+            &projection.collection_revision
+        )
+        .is_err());
+}
+
+#[test]
+fn external_changed_values_need_validated_field_operation_before_import() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("db")).unwrap();
+    let collection = create(&mut store, "Books");
+    let entry = new_entry(&mut store, &collection, "one");
+    let text = publish(&mut store, &entry, "publish");
+    bind_published(&mut store, &entry);
+    let external = text.replace("\"Score\": 3", "\"Score\": 9");
+    let (observation, command) = capture_external(&mut store, &entry, external, true);
+    assert!(store
+        .import_observation(&observation.observation_id, &command)
+        .is_err());
+    assert!(store
+        .external_observations()
+        .unwrap()
+        .iter()
+        .find(|o| o.observation_id == observation.observation_id)
+        .unwrap()
+        .resolution
+        .is_none());
+    let current = get(&mut store, &collection).entries.remove(0);
+    request(
+        &mut store,
+        json!({"op":"set_entry","operationId":"validated-external-value","entryId":entry.entry_id,"expectedRevision":current.revision,"expectedCollectionRevision":collection.revision,"values":{collection.properties[0].id.clone():9}}),
+    );
+    store
+        .import_observation(&observation.observation_id, &command)
+        .unwrap();
+    assert_eq!(
+        get(&mut store, &collection).entries[0].values[&collection.properties[0].id],
+        json!(9)
+    );
+}
+
+#[test]
+fn external_identity_edit_or_unproven_branch_is_retained_without_import() {
+    for (identity_change, bound) in [(true, true), (false, false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("db")).unwrap();
+        let collection = create(&mut store, "Books");
+        let entry = new_entry(&mut store, &collection, "one");
+        let text = publish(&mut store, &entry, "publish");
+        bind_published(&mut store, &entry);
+        let before = store.read(&entry.entry_id).unwrap();
+        let external = if identity_change {
+            text.replace("\"_id\": \"one\"", "\"_id\": \"someone-else\"")
+        } else {
+            text.replace("Keep β exactly.", "Unproven body.")
+        };
+        let (observation, command) = capture_external(&mut store, &entry, external, bound);
+        assert!(store
+            .import_observation(&observation.observation_id, &command)
+            .is_err());
+        assert_eq!(store.read(&entry.entry_id).unwrap(), before);
+        assert_eq!(
+            get(&mut store, &collection).entries[0].entry_id,
+            entry.entry_id
+        );
+    }
+}
+
+#[test]
+fn external_type_label_edit_is_projection_mismatch_without_membership_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("db")).unwrap();
+    let collection = create(&mut store, "Books");
+    let entry = new_entry(&mut store, &collection, "one");
+    let text = publish(&mut store, &entry, "publish");
+    bind_published(&mut store, &entry);
+    let external = text.replace("\"_type\": \"Books\"", "\"_type\": \"Other collection\"");
+    let (observation, command) = capture_external(&mut store, &entry, external, true);
+    store
+        .import_observation(&observation.observation_id, &command)
+        .unwrap();
+    let current = get(&mut store, &collection).entries.remove(0);
+    assert_eq!(current.collection_id, collection.id);
+    assert!(current.pending_projection);
+    assert_eq!(
+        store
+            .database_entry_projection(&entry.entry_id)
+            .unwrap()
+            .unwrap()
+            .properties["_type"],
+        json!("Books")
+    );
+}
+
+#[test]
+fn unrelated_schema_rename_keeps_incompatible_multiselect_scalar_without_confirmation() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("db")).unwrap();
+    let collection = create(&mut store, "Books");
+    let entry = new_entry(&mut store, &collection, "one");
+    publish(&mut store, &entry, "publish");
+    let mut fields = input(&collection);
+    fields[0]["datatype"] = json!("multi-select");
+    let converted = update(&mut store, &collection, "Books", fields, false);
+    assert_eq!(
+        converted.entries[0].values[&collection.properties[0].id],
+        json!(3)
+    );
+    let renamed = update(
+        &mut store,
+        &converted.collections[0],
+        "Library",
+        input(&converted.collections[0]),
+        false,
+    );
+    assert_eq!(
+        renamed.entries[0].values[&collection.properties[0].id],
+        json!(3)
+    );
+    assert!(renamed.entries[0]
+        .problems
+        .contains_key(&collection.properties[0].id));
+    assert_eq!(
+        store
+            .database_entry_projection(&entry.entry_id)
+            .unwrap()
+            .unwrap()
+            .properties["Score"],
+        json!(3)
+    );
+}
+
+#[test]
+fn datatype_change_converts_inherited_status_default_to_its_readable_label() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("db")).unwrap();
+    let collection = request(
+        &mut store,
+        json!({"op":"create","operationId":"tasks","name":"Tasks","preset":"tasks"}),
+    )
+    .collections
+    .remove(0);
+    let mut fields = input(&collection);
+    fields[0]["datatype"] = json!("text");
+    fields[0]["options"] = json!([]);
+    let changed = update(&mut store, &collection, "Tasks", fields, false);
+    assert_eq!(
+        changed.collections[0].properties[0].default,
+        Some(json!("Not started"))
+    );
+}

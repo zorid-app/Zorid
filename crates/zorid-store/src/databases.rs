@@ -268,6 +268,11 @@ fn label(text: &str) -> Result<()> {
 }
 fn collection_name(text: &str) -> Result<String> {
     label(text)?;
+    if text.len() > 240 {
+        return Err(invalid(
+            "Collection name is too long for its readable definition filename",
+        ));
+    }
     if text != text.trim()
         || text.ends_with('.')
         || text.chars().any(|c| "<>:\"/\\|?*".contains(c))
@@ -443,13 +448,20 @@ fn build_properties(
         } else if options.iter().any(|o| o.category.is_some()) {
             return Err(invalid("Only Status options have semantic categories"));
         }
-        let property = DatabaseProperty {
+        let mut property = DatabaseProperty {
             id,
             name: input.name.clone(),
             datatype: input.datatype.clone(),
             options,
             default: input.default.clone(),
         };
+        if let Some(old) = old {
+            if old.datatype != property.datatype && old.default == property.default {
+                if let Some(value) = &old.default {
+                    property.default = compatible_value(old, &property, value);
+                }
+            }
+        }
         if let Some(default) = &property.default {
             validate_value(&property, default)?;
         }
@@ -1110,7 +1122,8 @@ fn execute(tx: &Connection, operation: &OperationId, request: &DatabaseRequest) 
                         entry.preserved.remove(&property.id);
                         continue;
                     };
-                    if property.datatype == replacement.datatype
+                    if !entry.preserved.contains_key(&property.id)
+                        && property.datatype == replacement.datatype
                         && matches!(
                             property.datatype,
                             DatabaseDatatype::Select
