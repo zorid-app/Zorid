@@ -542,25 +542,30 @@ impl NativeVault {
                 mtime_ms: i64::try_from(presentation.mtime_ms).ok(),
             })
             .collect::<Vec<_>>();
-        let (_, definitions) = self.read_base_property_definitions(pin, properties)?;
-        let result = if let Some(definitions) = definitions {
-            // Config-derived relation maps are generation-local. Do not reuse
-            // an answer/preparation whose sealed key lacks this source identity.
-            zorid_bases::query_generation_with_properties(program.value(), pin.generation(), &facts, &definitions, &selected)?
-        } else {
-            let mut cache = self.base_preparation_cache.borrow_mut();
-            let prepared =
-                cache.prepare_generation(pin.generation(), &facts, &selected, monotonic_ms)?;
-            // Both sealed lookups retain their checked dependency/work identity.
-            // Answer reuse still validates this invocation's context and limits.
-            let answer = cache.query_prepared_cached(&program, &prepared, &selected, monotonic_ms)?;
-            drop(cache);
-            #[cfg(test)]
-            if answer.outcome() == zorid_bases::PreparationCacheOutcome::Hit {
-                self.point("base_query_answer_hit");
+        self.read_base_property_definitions(pin, properties)?;
+        let source_kind = program.value().view_source(selected.view_index).ok_or_else(|| {
+            zorid_bases::ExpressionDiagnostic::new("configuration", "View index out of range")
+        })?.clone();
+        // The Store captured schema, ownership and values in the same authority
+        // transaction as this generation's source manifest. Never read today's
+        // collection state while querying retained note bytes.
+        let state = manifest.database_state();
+        let scope = database_source_scope(state, source_kind)?;
+        let mut result = zorid_bases::query_generation_scoped(program.value(), pin.generation(), &facts, scope, &selected)?;
+        for row in &result.rows {
+            if let Some(entry) = state.entries.iter().find(|entry| entry.entry_id == row.entry_id) {
+                for (field, message) in &entry.problems {
+                    result.diagnostics.push(zorid_bases::QueryDiagnostic {
+                        phase: "property".into(), entry_id: row.entry_id.clone(), path: row.path.clone(),
+                        property: Some(format!("note.{field}")), code: "retained-datatype-value".into(), message: message.clone(),
+                    });
+                }
             }
-            answer.into_value()
-        };
+        }
+        let result_bytes = serde_json::to_vec(&result).map_err(|_| zorid_bases::ExpressionDiagnostic::new("input", "Collection query result cannot be encoded"))?;
+        if result_bytes.len() > selected.max_output_bytes {
+            return Err(zorid_bases::ExpressionDiagnostic::new("budget", "Collection query output exceeds byte budget").into());
+        }
         // Release the cache borrow before hooks or the final retained-pin fence.
         // No storage transaction or pin capability is held by the pure cache.
         #[cfg(test)]
@@ -588,4 +593,41 @@ fn metadata_error(error: zorid_index::MetadataRowsError) -> NativeDocumentError 
         M::InvalidRecord => IndexError::InvalidRecord.into(),
         M::ResourceLimit => IndexError::GenerationLimit.into(),
     }
+}
+
+
+/// Translate one retained Store authority snapshot into the query crate's
+/// in-process capability. Names/frontmatter never participate in ownership.
+fn database_source_scope(state: &zorid_store::databases::DatabaseQueryState, source: zorid_bases::BaseViewSource) -> NativeDocumentResult<zorid_bases::BaseSourceScope> {
+    use std::collections::BTreeMap;
+    use zorid_bases::{BaseViewSource, PropertyType, PropertyValue};
+    use zorid_store::databases::DatabaseDatatype;
+    let memberships = state.entries.iter().map(|entry| (entry.entry_id.clone(), entry.collection_id.clone())).collect::<BTreeMap<_, _>>();
+    let mut values = BTreeMap::new();
+    let mut types = Vec::new();
+    if let BaseViewSource::Collection { id } = &source {
+        let collection = state.collections.iter().find(|collection| &collection.id == id && !collection.deleted).ok_or_else(|| zorid_bases::ExpressionDiagnostic::new("source-unavailable", "The selected collection is deleted or unavailable"))?;
+        types = collection.properties.iter().map(|field| (field.id.clone(), match field.datatype {
+            DatabaseDatatype::Text | DatabaseDatatype::Select | DatabaseDatatype::Status => PropertyType::Text,
+            DatabaseDatatype::MultiSelect => PropertyType::List,
+            DatabaseDatatype::Number => PropertyType::Number,
+            DatabaseDatatype::Checkbox => PropertyType::Checkbox,
+            DatabaseDatatype::Date => PropertyType::Date,
+            DatabaseDatatype::Datetime => PropertyType::Datetime,
+        })).collect();
+        for entry in state.entries.iter().filter(|entry| &entry.collection_id == id && !entry.deleted) {
+            let mut fields = Vec::with_capacity(collection.properties.len());
+            for field in &collection.properties {
+                let value = if entry.problems.contains_key(&field.id) { PropertyValue::Null } else {
+                    match entry.values.get(&field.id) {
+                        None => PropertyValue::Null,
+                        Some(value) => serde_json::from_value::<PropertyValue>(value.clone()).map_err(|_| zorid_bases::ExpressionDiagnostic::new("source-unavailable", "A saved collection value cannot be queried safely"))?,
+                    }
+                };
+                fields.push((field.id.clone(), value));
+            }
+            values.insert(entry.entry_id.clone(), fields);
+        }
+    }
+    Ok(zorid_bases::BaseSourceScope::captured(source, state.revision.clone(), &memberships, values, types)?)
 }

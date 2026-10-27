@@ -51,6 +51,9 @@ impl BaseSourceScope {
             }
             for (_, value) in fields { value.validate_json_numbers().map_err(|message| ExpressionDiagnostic::new("input", message))?; }
         }
+        // Ownership includes tombstones so they never become untyped notes.
+        // Only the host-provided live entry values participate in this view.
+        let members = values.keys().cloned().collect();
         Ok(Self { source, revision, assigned: memberships.keys().cloned().collect(), members, values, types })
     }
     pub fn source(&self) -> &BaseViewSource { &self.source }

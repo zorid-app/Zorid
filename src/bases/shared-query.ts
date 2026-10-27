@@ -168,7 +168,10 @@ export class SharedBaseQueryRunner {
       if (input.query.currentFilePath === null && input.current !== null) return invalid('The Base current-file context is inconsistent.');
       if (input.query.currentFileEntryId !== undefined && (!input.current || input.current.entryId !== input.query.currentFileEntryId)) return invalid('The pinned current note changed. Refresh before using this Base.');
       const ignorePaths = input.query.ignore ? input.entries.filter(entry => entry.type === 'file' && input.query.ignore!(entry.path)).map(entry => entry.path) : undefined;
-      const previewSupported = !input.query.inlineSource && input.service.basePreviewAvailable === true && !!input.service.maintenance;
+      // Existing partial captures lack authoritative collection membership.
+      // Wait for a saved source-bound result rather than showing typed entries
+      // transiently in an untyped preview.
+      const previewSupported = false;
       if (previewSupported && typeof input.service.openPreview !== 'function') return invalid('The Base preview capability is incomplete.');
       run.previewEnabled = previewSupported && !!input.onPreview;
       const previewLive = () => live() && run.previewEnabled === true;

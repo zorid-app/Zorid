@@ -564,3 +564,13 @@ fn wiki_string_equality_in_partial_previews_is_unavailable_without_namespace_exp
         );
     }
 }
+
+
+#[test]
+fn unscoped_indexing_preview_fails_closed_instead_of_classifying_owned_notes_as_untyped() {
+    let builder = fixture();
+    let snapshot = capture_rows(&builder, &["definition", "a"]);
+    let program = compile_base_source(base()).unwrap();
+    let error = query_preview(&program, &snapshot, &id("definition"), &[], &QueryOptions::default(), MAX_PREVIEW_QUERY_OWNED_BYTES).unwrap_err();
+    assert_eq!(error.code, "source-unavailable");
+}

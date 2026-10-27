@@ -72,6 +72,10 @@ impl BaseProgram {
             .map(|view| get(&view.configuration, "name").and_then(text))
             .collect()
     }
+    /// Stable optional view identity. Duplicate IDs are rejected at compile time.
+    pub fn view_index_by_id(&self, id: &str) -> Option<usize> {
+        self.views.iter().position(|view| get(&view.configuration, "id").and_then(text) == Some(id))
+    }
     /// Exact names only. Duplicate names are ambiguous and return None.
     pub fn view_index_by_name(&self, name: &str) -> Option<usize> {
         let mut matches = self
@@ -375,7 +379,12 @@ pub fn compile_base(configuration: PropertyValue) -> Result<BaseProgram, Express
         _ => return Err(error("Base views must be an array")),
     };
     let mut views = Vec::new();
+    let mut view_ids = std::collections::BTreeSet::new();
     for configuration in raw_views {
+        if let Some(raw) = get(configuration, "id") {
+            let id = text(raw).ok_or_else(|| error("View identity must be text"))?;
+            if id.len() != 12 || !id.bytes().all(|c| c.is_ascii_digit() || c.is_ascii_lowercase()) || !view_ids.insert(id.to_string()) { return Err(error("View identity is invalid or duplicated")); }
+        }
         if ["type", "name"].iter().any(|key| {
             get(configuration, key)
                 .and_then(text)

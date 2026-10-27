@@ -2521,7 +2521,7 @@ pub(crate) fn query_rows_validated(
         })?;
         matched_available.push(format!("formula.{name}"));
     }
-    let available = if matches!(view.source, crate::BaseViewSource::Untyped) { matched_available.into_iter().filter(|key| key.starts_with("file.")).collect::<Vec<_>>() } else { matched_available };
+    let mut available = matched_available;
     admit(&mut admission, |admission| {
         admission.charge(0)?;
         Ok(available
@@ -2765,8 +2765,9 @@ pub(crate) fn query_rows_validated(
             (None, Vec::new())
         };
     if matches!(view.source, crate::BaseViewSource::Untyped) {
-        // Frontmatter remains available to predicates and sort expressions, but
-        // untyped browsing never exposes a property grid or editable cells.
+        // Keep internal values and sort admission intact until all predicates,
+        // sorting, grouping and summaries finish. Redact only public output.
+        available.retain(|key| key.starts_with("file."));
         for row in &mut rows { row.values.retain(|key, _| key.starts_with("file.")); row.edit_values.clear(); }
     }
     let dependency = program

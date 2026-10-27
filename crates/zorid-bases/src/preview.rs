@@ -441,6 +441,12 @@ pub fn query_preview(
     options: &QueryOptions,
     owned_byte_limit: usize,
 ) -> Result<CommittedBasePreviewResult, ExpressionDiagnostic> {
+    // Published collection queries require captured hidden ownership. Existing
+    // preview captures carry only parsed note facts; absence of that authority
+    // must not temporarily classify owned entries as untyped notes.
+    if options.source_scope.is_none() || matches!(program.view_source(options.view_index), Some(crate::BaseViewSource::Collection { .. })) {
+        return Err(ExpressionDiagnostic::new("source-unavailable", "Indexing previews require captured collection membership; wait for the saved view"));
+    }
     let mut admission = PreviewAdmission::new(owned_byte_limit, options)?;
     let view = preview.facts_view_checked(&mut |_| admission.charge(0))?;
     if view.rows().len() > options.max_scanned || facts.len() > crate::MAX_QUERY_SCANNED {

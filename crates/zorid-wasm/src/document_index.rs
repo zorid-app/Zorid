@@ -1232,7 +1232,7 @@ pub(crate) fn base_query_options(
         return Err(BaseReadError::Code("index_inline_source_requires_saved"));
     }
     if input.property_definitions_source.is_some() {
-        return Err(BaseReadError::Code("index_property_source_requires_saved"));
+        return Err(BaseReadError::Code("index_unsupported_property_definitions"));
     }
     if input.random_seed.is_some_and(|value| value > 9_007_199_254_740_991)
         || input.summary_preview_property.as_ref().is_some_and(|value| value.is_empty() || value.len() > 65536)
