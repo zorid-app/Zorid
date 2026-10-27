@@ -35,6 +35,11 @@ pub enum Command {
         #[arg(long, value_name = "FILE")]
         input: PathBuf,
     },
+    /// Duplicate an owned note within the same collection with a fresh identity.
+    DuplicateEntry {
+        #[arg(long, value_name = "FILE")]
+        input: PathBuf,
+    },
     /// Set typed values using stable field IDs and an explicit revision guard.
     Set {
         #[arg(long, value_name = "FILE")]
@@ -112,7 +117,8 @@ fn command_request(command: Command) -> Result<Value> {
         Command::Create { input } => envelope("create", input_json(&input)?),
         Command::Update { input } => envelope("update", input_json(&input)?),
         Command::CreateEntry { input } => envelope("create_entry", input_json(&input)?),
-        Command::Set { input } => envelope("set", input_json(&input)?),
+        Command::DuplicateEntry { input } => envelope("duplicate_entry", input_json(&input)?),
+        Command::Set { input } => envelope("set_entry", input_json(&input)?),
         Command::Delete { input } => envelope("delete", input_json(&input)?),
         Command::Restore { input } => envelope("restore", input_json(&input)?),
         Command::Request { input } => input_json(&input),
