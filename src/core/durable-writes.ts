@@ -23,6 +23,11 @@ export interface DurableWritePlan {
   /** Exact provider request, at most 8 MiB of UTF-8. Never replan on retry.
    * Provider serialization determines how much text fits inside this bound. */
   readonly encodedPlan: string;
+  /** Provider-composed text authored by this exact plan. Present only when a
+   * managed collection projection replaced unchanged generated frontmatter.
+   * Consumers reconcile this submitted generation after the exact commit; they
+   * must retain edits typed while the request was pending. */
+  readonly canonicalContent?: string;
 }
 export interface DurableWriteRef {
   /** Must match the store's persisted authority. Recreation creates a new ID;
@@ -76,6 +81,17 @@ export interface DurableWriteRead {
   readonly revision: string;
   readonly stat: {readonly ctime:number;readonly mtime:number;readonly size:number};
 }
+export interface DurableNoteCompositionInput {
+  readonly entryId: string;
+  readonly path: string;
+  readonly expectedRevision: string;
+  readonly baseline: string;
+  readonly proposed: string;
+}
+export interface DurableNoteComposition {
+  readonly current: DurableWriteRead;
+  readonly content: string;
+}
 /** Optional editor capability; it does not replace legacy adapter methods.
  * Persist plan BEFORE prepare; persist returned ref BEFORE commit; reconcile and
  * persist settled outcome BEFORE acknowledge. A failed checkpoint forbids the
@@ -85,6 +101,10 @@ export interface DurableWrites {
   readonly checkpoints: DurableCheckpoints;
   readText(path: string): Promise<DurableWriteRead>;
   readTextById(entryId: string): Promise<DurableWriteRead|null>;
+  /** Optional pure managed-property refresh. The provider admits unchanged
+   * baseline body/unmanaged source and returns one coherent current baseline.
+   * Null means this ordinary note has no managed collection projection. */
+  composeNote?(input: DurableNoteCompositionInput): Promise<DurableNoteComposition|null>;
   /** Optional paired capability. Captures do not advance the logical baseline. */
   captureSavedSource?(witness: ConditionalSavedSourceWitness): Promise<ConditionalSavedSourceCapture>;
   releaseSavedSource?(captureId: string): Promise<void>;
