@@ -373,17 +373,17 @@ for(const outcome of ['success','rejection'])for(const retired of ['destination-
 test('saved Base transports rich source selectors and previews beyond64KiB without enlarging other commands',()=>{
   const yaml=`# ${'\\"'.repeat(40000)}\nviews: []\n`;
   const groupKey=`opaque:[${'é'.repeat(40000)}]`;
-  const input=request('base',{pinId:'1',id:'note',options:{inlineSource:{source:yaml,startByte:4,endByte:yaml.length+20},propertyDefinitionsSource:{id:'settings',source:'properties: {}\n'},summaryPreviewProperty:'note.rating',summaryPreviewGroupKeyId:groupKey,randomSeed:9007199254740991}});
+  const input=request('base',{pinId:'1',id:'note',options:{inlineSource:{source:yaml,startByte:4,endByte:yaml.length+20},summaryPreviewProperty:'note.rating',summaryPreviewGroupKeyId:groupKey,randomSeed:9007199254740991}});
   const captured=captureDocumentRequest(input);assert.ok(Buffer.byteLength(JSON.stringify(captured))>65536);
-  input.command.options.inlineSource.source='changed';input.command.options.propertyDefinitionsSource.source='changed';
-  assert.equal(captured.command.options.inlineSource.source,yaml);assert.equal(captured.command.options.propertyDefinitionsSource.source,'properties: {}\n');
+  input.command.options.inlineSource.source='changed';
+  assert.equal(captured.command.options.inlineSource.source,yaml);
   assert.equal(captured.command.options.summaryPreviewProperty,'note.rating');assert.equal(captured.command.options.summaryPreviewGroupKeyId,groupKey);assert.equal(captured.command.options.randomSeed,9007199254740991);
   for(const options of [{inlineSource:null},{propertyDefinitionsSource:null},{randomSeed:null},{randomSeed:-1},{randomSeed:9007199254740992},{summaryPreviewProperty:null},{summaryPreviewGroupKeyId:null},{summaryPreviewGroupKeyId:'missing-property'},{inlineSource:{source:'x',startByte:0,endByte:1,unknown:true}}])assert.throws(()=>captureDocumentRequest(request('base',{pinId:'1',id:'note',options})),{code:'invalid_document_request'});
   assert.throws(()=>captureDocumentRequest(request('preview_base',{previewId:'1',id:'note',options:{inlineSource:{source:'x',startByte:0,endByte:1}}})),{code:'invalid_document_request'});
 });
 
 test('property target transport admits only the scoped method and retained pin identity',async()=>{
-  const value={snapshot,source,coverageComplete:true,value:{definition:{...entry,id:'settings',path:'Properties.yaml'},relationTargets:{author:[{entryId:'author',revision:'r1',path:'Author.md',label:'Author'}]},propertyDefinitionDiagnostics:[],refreshHint:null}};
+  const value={snapshot,source,coverageComplete:true,value:{definition:null,relationTargets:{author:[{entryId:'author',revision:'r1',path:'Author.md',label:'Author'}]},propertyDefinitionDiagnostics:[],refreshHint:null}};
   let calls=0;
   const host={async documentCommand(_client,input){calls++;const op=input.command.op;return decodeDocumentReply(input,...wire(op,op==='open'?{pinId:'1',snapshot,source,coverageComplete:true}:op==='close'?true:value));}};
   const old=createDesktopDocumentSemantics(host,'client','store');await old.invoke(request('open',{pinId:'1'}));
@@ -398,10 +398,21 @@ test('property target transport admits only the scoped method and retained pin i
 test('saved relation display frames stay bound to the requested note and paired raw properties',()=>{
   const command=request('property_targets',{pinId:'1',options:{currentEntryId:'note'}});
   const current={witness:{entryId:'note',revision:'r1'},values:{author:{type:'link',path:'People/Ada.md',display:'Boss',target:{entryId:'ada',revision:'r2'},external:false}},editValues:{author:{type:'string',value:'[[../People/Ada|Boss]]'}}};
-  const report={snapshot,source,coverageComplete:true,value:{definition:{...entry,id:'settings',path:'Properties.yaml'},relationTargets:{},propertyDefinitionDiagnostics:[],refreshHint:null,currentRelationValues:current}};
+  const report={snapshot,source,coverageComplete:true,value:{definition:null,relationTargets:{},propertyDefinitionDiagnostics:[],refreshHint:null,currentRelationValues:current}};
   assert.deepEqual(decodeDocumentReply(command,...wire('property_targets',report)),report);
   for(const invalid of [null,{...current,witness:{entryId:'other',revision:'r1'}},{...current,editValues:{}},{...current,values:{author:null}},{...current,extra:true}]){
     assert.throws(()=>decodeDocumentReply(command,...wire('property_targets',{...report,value:{...report.value,currentRelationValues:invalid}})),{code:'invalid_document_response'});
   }
   assert.throws(()=>decodeDocumentReply(request('property_targets',{pinId:'1'}),...wire('property_targets',report)),{code:'invalid_document_response'});
+});
+
+
+test('retired vault property registry cannot be attached by a renderer or reintroduced by native target replies',()=>{
+ for(const op of['base','property_targets']){
+  const fields={pinId:'1',...(op==='base'?{id:'note'}:{}),options:{propertyDefinitionsSource:{id:'settings',source:'properties: {}\n'}}};
+  assert.throws(()=>captureDocumentRequest(request(op,fields)),{code:'invalid_document_request'});
+ }
+ const command=request('property_targets',{pinId:'1',options:{currentEntryId:'note'}}),base={snapshot,source,coverageComplete:true,value:{definition:null,relationTargets:{},propertyDefinitionDiagnostics:[],refreshHint:null}};
+ assert.deepEqual(decodeDocumentReply(command,...wire('property_targets',base)),base);
+ for(const path of['Properties.yaml','Any other.yaml'])assert.throws(()=>decodeDocumentReply(command,...wire('property_targets',{...base,value:{...base.value,definition:{...entry,id:'settings',path}}})),{code:'invalid_document_response'});
 });
