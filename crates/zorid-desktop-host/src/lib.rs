@@ -2,6 +2,7 @@
 //! to NativeVault. No listener, daemon, filesystem writes or alternate store here.
 mod binary;
 mod documents;
+mod databases;
 mod document_runtime;
 mod document_drafts;
 mod recovery;
@@ -49,6 +50,7 @@ struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 enum Command {
+    DatabaseRequest { client_id: OperationId, request: databases::Request },
     RecoveryList {
         entry_id: EntryId,
         limit: usize,
@@ -291,6 +293,7 @@ fn read_frame_head(input: &mut impl Read) -> io::Result<Option<FrameHead>> {
     );
     let preview = matches!(&request.command, Command::Documents { request, .. } if request.is_preview());
     let maximum = match &request.command {
+        Command::DatabaseRequest { .. } => zorid_native::MAX_DATABASE_REQUEST_BYTES,
         Command::Documents { request, .. } if request.is_preview() => 0,
         Command::DocumentDrafts { request, .. } if request.accepts_body() => {
             document_drafts::MAX_CHUNK
@@ -398,6 +401,7 @@ fn reply(
     }
 }
 fn command_may_commit(command: &Command) -> bool {
+    if matches!(command, Command::DatabaseRequest { .. }) { return true; }
     if let Command::Workblocks { request, .. } = command { return request.may_commit(); }
     matches!(
         command,
@@ -463,6 +467,7 @@ impl ClientLeases {
         reference: Option<&ClientLeaseRef>,
     ) -> Result<(), Value> {
         let client = match command {
+            Command::DatabaseRequest { client_id, .. } => Some(client_id),
             Command::Binary { client_id }
             | Command::Documents { client_id, .. }
             | Command::Workblocks { client_id, .. }
@@ -603,6 +608,7 @@ fn execute(
     body: Vec<u8>,
 ) -> Result<(Value, Vec<u8>), Value> {
     let result = match command {
+        Command::DatabaseRequest { request, .. } => { return databases::execute(vault, request, &body); }
         Command::DocumentDrafts { .. } | Command::DocumentWork { .. } => {
             return Err(fault("client_operation_unsupported"));
         }
@@ -1350,7 +1356,7 @@ pub fn run_stdio() -> io::Result<()> {
     if initialize_local { snapshot_local_recovery_if_due(&mut vault, &mut leases, now_ms()); }
     write_frame(
         &mut output,
-        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"max_binary_frame":binary::MAX_FRAME,"binary_limits":{"maxFileBytes":"67108864","maxChunkBytes":binary::MAX_CHUNK,"smallReadBytes":binary::SMALL_READ.to_string()},"reconciliation":reconciliation,"capabilities":["conditional_saved_source","workblocks","documents","document_base_preview","document_metadata_rows","document_property_targets","document_runtime","document_drafts","binary_streams","reconciliation_status","local_family_status","file_command","file_command_compact","file_command_status","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","stat_path","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
+        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"max_database_body":zorid_native::MAX_DATABASE_REQUEST_BYTES,"max_binary_frame":binary::MAX_FRAME,"binary_limits":{"maxFileBytes":"67108864","maxChunkBytes":binary::MAX_CHUNK,"smallReadBytes":binary::SMALL_READ.to_string()},"reconciliation":reconciliation,"capabilities":["databases","conditional_saved_source","workblocks","documents","document_base_preview","document_metadata_rows","document_property_targets","document_runtime","document_drafts","binary_streams","reconciliation_status","local_family_status","file_command","file_command_compact","file_command_status","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","stat_path","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
         &[],
     )?;
     let mut input = io::stdin().lock();

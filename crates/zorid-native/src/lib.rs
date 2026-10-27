@@ -16,6 +16,8 @@ pub use local_storage::LocalStoragePaths;
 pub use document_api::*;
 mod conditional_source_api;
 pub use conditional_source_api::*;
+mod database_api;
+pub use database_api::*;
 pub use client_admission::{ClientAdmissionError, ClientLease, ClientLeaseRef};
 pub use zorid_store::{
     AuthoredTextStatus, AuthorityIdentity, ChangeOrigin, ChangePage, Checkpoint, CheckpointError,
@@ -263,6 +265,7 @@ pub enum ExternalFileMode {
 }
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
 impl NativeVault {
+    pub fn database_request(&mut self, _: &DatabaseRequest) -> Result<DatabaseReply> { unsupported() }
     pub fn capture_conditional_saved_source(&mut self, _: &ClientLease, _: &ConditionalSavedSourceWitness) -> Result<ConditionalSavedSourceCapture> { unsupported() }
     pub fn release_conditional_saved_source(&mut self, _: &ClientLease, _: &OperationId) -> Result<()> { unsupported() }
     pub fn retire_conditional_saved_sources(&mut self, _: &ClientLeaseRef) {}

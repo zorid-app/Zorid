@@ -57,6 +57,8 @@ mod family_observation_tests;
 mod host_intents;
 #[path = "conditional_source.rs"]
 mod conditional_source;
+#[path = "databases.rs"]
+mod databases;
 #[cfg(test)]
 #[path = "conditional_source_tests.rs"]
 mod conditional_source_tests;
