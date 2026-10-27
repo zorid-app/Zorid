@@ -5,6 +5,13 @@ This is the current feature scope and completion checklist for this pass. Follow
 the [roadmap](../roadmap.md) for other milestones. This document supersedes older
 Types/Bases designs and combined Bases/Tasks/Calendar implementation assignments.
 
+Latest verification steering (2026-10-26): the user explicitly requests no
+unnecessary tests. Stop expanding test harnesses/reference matrices and stop
+restarting passed scenarios. Finish focused checks for confirmed defects and one
+complete actual heavy-user desktop journey before integration. Retain earlier
+campaign results and unexecuted coverage honestly; do not turn partial reference
+captures or supplemental observer failures into product-parity claims.
+
 ## Goal and settled decisions
 
 Deliver fully usable local Bases over ordinary vault files, using the shared Rust

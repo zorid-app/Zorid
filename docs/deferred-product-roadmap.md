@@ -9,6 +9,17 @@ sequence is in [roadmap.md](roadmap.md); S1 scope is in
 
 ### Latest execution update
 
+Latest user steering: **do not do unnecessary tests**. Reference/harness expansion
+has stopped. Current root4ba88643 composes the reviewed following-context fix
+2299→2d5fbbe3 and completed test corrections. Desktop013 produceraf90928c passed;
+final rebuild and three focused known-bug checks precede ONE complete native
+heavy-user journey. Prior broad matrix gaps remain recorded, not new mandatory
+reruns. Current Obsidian reference logic13/13 PASS; visual005 captured14/23 and
+stopped on an observer counting an invisible measurement card, not a demonstrated
+product defect. Main remains e7d655e1; integrate confirmed implementation after
+focused verification and the final heavy journey, without another approval stop.
+
+
 Latest completed cutoff (2026-10-26, archive010; source throughc73b0805):
 Config001/e184/frontend009 FAILS1/1 at929/1023 durablefiles after180029ms.
 Config002/c0f5/frontend010 still FAILS1/1, but unchanged1023files/12Records/
