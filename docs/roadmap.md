@@ -8,6 +8,22 @@ Older plans remain detailed capability inventories, not competing delivery order
 
 ## Current focus
 
+### Latest local collection design steering — 2026-10-27
+
+The user now chooses local collections with internal Types and independently
+sourced Base views, superseding the older no-named-Types product direction below.
+Each view selects one collection/type or untyped notes; untyped views only browse
+notes and do not expose property grids. The special Properties.yaml registry is
+to be retired. Collection import and cross-collection moves are excluded.
+
+Product implementation is **stopped for discussion**. The latest authorization
+is documentation/tracking only; this addition does not resume feature work or
+change the accepted scope of shipped Bases. The [design decisions](design/types-properties-sync-discussion.md)
+and [implementation tracker](plans/types-properties-implementation.md) record
+local contracts, edge cases, owners, batches and separate verification gates.
+Earlier broad sync-first or no-Types language is historical where it conflicts
+with this later steering. Tasks/Calendar/provider/mobile expansion stays deferred.
+
 **S0, S0A and S1 are accepted within their recorded scopes.** On2026-10-20,
 the user deferred further performance optimization/stress budgets and requested
 ordinary functional acceptance. Matching macOS Electron, actual web and standalone
@@ -24,8 +40,8 @@ and note property editing do not depend on synced structured records. Settle
 only their concrete local contracts within S4; broader S3 remains planned.
 See [Obsidian mental-model findings](reference/bases-mental-model.md).
 
-Latest direct user decision: remove the named Types feature, rather than defer
-it. Bases select ordinary files using tags, folders and property filters. Users
+Historical 2026-10-21 decision (superseded for the new collection design):
+remove the named Types feature, rather than defer it. Bases select ordinary files using tags, folders and property filters. Users
 may write `type: book` like any other frontmatter property. Property value types
 (text, number, date, checkbox, etc.) remain necessary; they are not named Types.
 No implicit collection or schema ownership follows from a property called `type`.
@@ -538,3 +554,37 @@ roadmap. Link detailed plans instead of copying their implementation diary. Arch
 completed execution details while keeping a concise acceptance link per closed
 milestone. Review this roadmap at milestone boundaries and after material user
 steering; do not mark boxes complete from an agent's plan or isolated passing test.
+
+## Future collection collaboration and sync
+
+Status: **deferred requirements**, not part of the local collection delivery or
+its acceptance gate. Detailed discussion: [design sections 7–8](design/types-properties-sync-discussion.md#7-future-multiplayer-requirements--deferred).
+
+- Replicate structured schema/membership/typed values by stable identities. Field
+  or option renames preserve references; unrelated short-ID collisions never merge
+  objects. Local storage must operate without mandatory remote enrollment.
+- Specify causally later and concurrent scalar/rename resolution, set operations,
+  ordering, deletion, schema/datatype versions and old-client writes. Converge
+  automatically without rename-choice prompts; the set add/remove policy is open.
+- Extend the existing Rust/encrypted-sync foundation. Persist validated updates
+  and outgoing work durably; preserve operation identity across uncertain retries.
+  Do not sync live SQLite files or computed formula/rollup results as source state.
+- Retain updates arriving before their schema/option dependencies. Bound protocol
+  admission, versions and resource use; do not accept unrestricted raw client CRDT
+  updates as validated domain operations.
+- Give body saves, structured properties and generated frontmatter/type YAML one
+  coherent composition/replication contract. Projections must not become a second
+  authored sync stream, overwrite newer values or generate echo loops.
+- Reconcile supported external value edits against an observed projection/schema
+  baseline; preserve unknown or ambiguous input. This is not collection import
+  or permission to change membership by editing `_type`.
+- Include necessary authoritative hidden state and definitions in backup/restore
+  and supported transfer. Markdown-only copies do not guarantee collaborative
+  identity/history restoration; format and recovery contracts remain to be chosen.
+- Before future activation, demonstrate multi-client offline/concurrent edits,
+  schema rename/value retention, dependency reordering, retry/deduplication,
+  deletion and crash/restart recovery on actual integrated clients.
+
+Local source tests or durable local publication do not establish any of these
+future distributed guarantees. Reopen design and implementation explicitly when
+this roadmap work is authorized.

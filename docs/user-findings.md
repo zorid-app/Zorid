@@ -1,5 +1,26 @@
 # User findings queue
 
+## Local Bases/collections UX and edge-case decisions — 2026-10-27
+
+Latest direct user steering: Base is a container of views; each view selects one
+collection/type or untyped notes. Untyped views browse notes only, without property
+columns/configuration/cell editing. Use Notion-style UI interactions. New creates
+immediately with feasible filter-derived values, without questions or disabling
+creation for impossible filters; subsequent nonmatching edits hide the result.
+Remove the special Properties.yaml registry. Collection entries stay in their
+collection; ordinary-note import and field migration were explicitly withdrawn.
+Collection deletion includes its entries, without a keep-as-untyped conversion.
+
+Documentation owner: discussion coordinator on `codex/database-collaboration-design`.
+[Design](design/types-properties-sync-discussion.md) records agreed edge cases,
+remaining contracts and bounded actual Notion observations; [tracker](plans/types-properties-implementation.md)
+records resumable batches, ownership and separate source/integration/runtime gates.
+Sync is future roadmap work. Implementation stays stopped following the user's
+explicit discussion request; this docs request is not a resume. Earlier worker
+registry/docs drafts remain unreviewed, isolated and superseded where conflicting.
+Documentation consistency/link checks and independent review pass after clarity
+fixes; no product verification or completion claimed. Preserve older findings below as dated history.
+
 ## Tauri desktop performance feasibility — 2026-10-27
 
 Follow-up authorization: user asks for further RAM evaluation after the initial uncertain RSS result. Root resumes the isolated branch with `memory-run.mjs`; `benchmark_audit` owns a read-only libproc physical-footprint probe and `tauri_shell` owns phase-controlled UI workload evidence. Compare 100/1,000-note fixtures with one note, eight actual tabs and a roughly250KB note, using longer settling/sampling and alternating serial runs. This remains evaluation, not authorization to replace the production shell. Compressed-memory accounting, XPC attribution and cleanup must be reported separately from observed savings.
