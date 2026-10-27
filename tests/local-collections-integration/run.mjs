@@ -209,7 +209,7 @@ try {
     assert.equal(await fs.readFile(fixturePath('Properties.yaml'), 'utf8'), registry);
   });
   await scenario('per-view-sources-and-hidden-member', async () => {
-    baseSource = `views:\n  - type: table\n    name: Rated books\n    source: {kind: collection, id: ${books.id}}\n    filters: note.${fields.rating.id} >= 4\n    order: [file.name, note.${fields.rating.id}]\n  - type: table\n    name: Projects\n    source: {kind: collection, id: ${projects.id}}\n    order: [file.name]\n  - type: list\n    name: Loose notes\n    source: {kind: untyped}\n    order: [file.name]\n`;
+    baseSource = `views:\n  - type: table\n    name: Rated books\n    source: {kind: collection, id: ${books.id}}\n    filters: note[${JSON.stringify(fields.rating.id)}] >= 4\n    order: [file.name, note.${fields.rating.id}]\n  - type: table\n    name: Projects\n    source: {kind: collection, id: ${projects.id}}\n    order: [file.name]\n  - type: list\n    name: Loose notes\n    source: {kind: untyped}\n    order: [file.name]\n`;
     await createFile('create-independent-views', 'Collections.base', 'collection-views', baseSource);
     const snapshot = await build('publish-collection-query-snapshot');
     await query('query-visible-book-not-hidden-member', 'Rated books', [ids.first], snapshot);
