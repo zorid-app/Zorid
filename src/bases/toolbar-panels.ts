@@ -14,7 +14,6 @@ export function validateViewName(views: readonly BaseViewConfig[], name: string,
   const normalized = name.trim();
   if (!normalized) throw new Error('View name must not be empty.');
   if (/#|:|\||\^|%%|\[\[|\]\]/.test(normalized)) throw new Error('View names cannot contain # : | ^ %% [[ or ]].');
-  if (views.some((view, index) => index !== selectedIndex && view.name === normalized)) throw new Error('A view with that name already exists.');
   return normalized;
 }
 

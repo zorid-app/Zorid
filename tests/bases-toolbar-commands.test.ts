@@ -41,7 +41,7 @@ test('layout and limit validation rejects invalid values without affecting exten
  const f=fixture();try{for(const patch of [{limit:-1},{limit:1.2},{cardSize:801},{columnWidth:0},{imageAspectRatio:0},{imageFit:'stretch'},{markers:'circle'},{indentProperties:'yes'}])assert.throws(()=>validateToolbarPatch(f.result,patch));assert.deepEqual(validateToolbarPatch(f.result,{limit:30,rowHeight:'tall',imageFit:'contain',cardSize:200}),{limit:30,rowHeight:'tall',imageFit:'contain',cardSize:200});}finally{f.cleanup();}
 });
 test('view names and display labels are reusable configuration with extensions retained',()=>{
- assert.equal(uniqueViewName([{type:'table',name:'View'},{type:'cards',name:'View 2'}]),'View 3');assert.throws(()=>validateViewName([],'x#y'));assert.throws(()=>validateViewName([{type:'table',name:'Books'}],'Books'));
+ assert.equal(uniqueViewName([{type:'table',name:'View'},{type:'cards',name:'View 2'}]),'View 3');assert.throws(()=>validateViewName([],'x#y'));assert.equal(validateViewName([{type:'table',name:'Books'}],' Books '),'Books');
  assert.deepEqual(propertyDisplayPatch({properties:{score:{displayName:'Old',extension:'keep'}}},new Map([['score','Points']])),{properties:{score:{displayName:'Points',extension:'keep'}}});
 });
 
@@ -289,4 +289,13 @@ test('a synchronous host failure retains the editable toolbar draft and clears s
  const document=BaseDocument.parse('views: [{type: table, name: A}]'),result=executeBaseQuery(document,{version:1,files:[]});
  const toolbar=createBaseToolbar(doc.querySelector('main')!,{immediate:true,preflight(){},async selectView(){},save():Promise<void>{throw new Error('host unavailable');},onDraftChange(){},onError(){}});toolbar.update({result,views:document.views,selectedIndex:0,readOnly:false,allowRename:true,label:p=>p});
  try{doc.querySelector<HTMLButtonElement>('[aria-label="Results"]')!.click();const input=doc.querySelector<HTMLInputElement>('[aria-label="Limit"]')!;input.value='5';input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));doc.querySelector('form')!.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await tick();assert.equal(input.disabled,false);assert.equal(input.value,'5');assert.equal(toolbar.hasDraft(),true);assert.match(doc.querySelector('[role="alert"]')?.textContent??'',/host unavailable/);doc.querySelector<HTMLButtonElement>('[aria-label="Cancel"]')!.click();assert.equal(toolbar.hasDraft(),false);}finally{toolbar.destroy();dom.window.close();}
+});
+
+
+test('view forms accept repeated display labels for creation and indexed rename',async()=>{
+ const f=fixture();try{
+  f.click('Views');f.click('Add view');f.input('View name','Library');f.submit();await tick();assert.deepEqual(f.calls.pop(),['add',1,'table','Library',{}]);
+  f.click('Views');f.click('Configure view Covers');f.input('View name','Library');f.submit();await tick();assert.deepEqual(f.calls.pop(),['update',1,1,{type:'cards',name:'Library'}]);
+  assert.deepEqual(f.errors,[]);assert.equal(uniqueViewName(f.state.views,'Library'),'Library 2');
+ }finally{f.cleanup();}
 });
