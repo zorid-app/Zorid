@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import {createHash} from 'node:crypto';
-import { databaseName, noteName, notePath, marker, source, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, harnessInputs, trackedHarnessInputs, trackOwnedStartup, finalEvidence, phaseNames, classifyRuntimeErrors, awaitRuntimeHealth, waitForObservation, streamingStorageSchema, storageObservationSnapshot, observeWorkerTarget, productWorkerProof, liveWorkerCandidate, inspectWorker, workerLocationExpression } from './oracles.mjs';
+import { databaseName, noteName, notePath, marker, source, savedNote, editorFrame, reloadFrame, searchFrame, readOnlyDatabaseSnapshot, harnessInputs, trackedHarnessInputs, trackOwnedStartup, finalEvidence, phaseNames, classifyRuntimeErrors, awaitRuntimeHealth, waitForObservation, streamingStorageSchema, storageObservationSnapshot, observeWorkerTarget, productWorkerProof, liveWorkerCandidate, inspectWorker, workerLocationExpression, workerAutoAttach, workerAutoDetach } from './oracles.mjs';
 
 const entry = { id: 'ui-created-entry', revision: 'saved-revision', path: notePath, kind: 'file', deleted: false };
 const snapshot = () => ({ database: databaseName, version: 8, entries: [{ ...entry }], contents: [{ id: entry.id, bytes: [...new TextEncoder().encode(source)] }] });
@@ -17,8 +17,8 @@ function workerFixture() {
   const origin='http://127.0.0.1:60741',url=origin+'/src/platform/browser-core-worker.ts?worker_file&type=module';
   const snapshot={targets:[workerInfo('core',url)],eventsThrough:2,capturedAt:100};
   return {origin,normalPageTarget:'normal-page',workerTargetEvents:[workerEvent('targetCreated',workerInfo()),workerEvent('targetInfoChanged',workerInfo('core',url))],workerTargetSnapshot:snapshot,
-    workerInspection:{targetId:'core',sessionId:'owned-session',complete:true,detached:true,locationExpression:workerLocationExpression,location:{href:url,origin,pathname:'/src/platform/browser-core-worker.ts'},
-      commands:['Runtime.evaluate','Debugger.enable','Debugger.getScriptSource'].map((method,index)=>({id:index+1,method,replied:true})),scripts:[{scriptId:'entry',url}],entryScript:{scriptId:'entry',url,source:inspectedSource,bytes:Buffer.byteLength(inspectedSource),sha256:digest(inspectedSource)},driverSource:{url,status:200,bytes:Buffer.byteLength(inspectedSource),sha256:digest(inspectedSource)},postSnapshot:structuredClone(snapshot)},
+    workerInspection:{targetId:'core',parentId:'normal-page',autoAttach:{request:structuredClone(workerAutoAttach),acknowledged:true,disabled:true},attachedEvent:{sessionId:'owned-session',targetInfo:workerInfo('core',url),waitingForDebugger:false},protocolEvents:[{method:'Target.attachedToTarget',params:{sessionId:'owned-session',targetInfo:workerInfo('core',url),waitingForDebugger:false}},{method:'Target.detachedFromTarget',params:{sessionId:'owned-session',targetId:'core'}}],sessionId:'owned-session',complete:true,detached:true,locationExpression:workerLocationExpression,location:{href:url,origin,pathname:'/src/platform/browser-core-worker.ts'},
+      commands:['Runtime.evaluate','Debugger.enable','Debugger.getScriptSource'].map((method,index)=>({id:index+1,method,replied:true,ack:{status:'received'},reply:{status:'received'}})),scripts:[{scriptId:'entry',url}],entryScript:{scriptId:'entry',url,source:inspectedSource,bytes:Buffer.byteLength(inspectedSource),sha256:digest(inspectedSource)},driverSource:{url,status:200,bytes:Buffer.byteLength(inspectedSource),sha256:digest(inspectedSource)},postSnapshot:structuredClone(snapshot)},
     requests:[{path:'/src/platform/browser-core-worker.ts',method:'GET',statusCode:200,userAgent:'Chrome/156'}]};
 }
 test('Worker URL discovery retains created/changed/destroyed records across normal reload and proves the current exact target', () => {
@@ -59,17 +59,33 @@ test('Worker lifecycle collection is bounded and rejects impossible changed-befo
   for (const events of [[workerFixture().workerTargetEvents[1]], [message, message]]) { const evidence = workerFixture(); evidence.workerTargetEvents = events; assert.throws(() => productWorkerProof(evidence)); }
 });
 function inspectorTransport(options={}){
-  const evidence=workerFixture(),url=evidence.workerInspection.location.href,receipt={},listeners=new Set(),sent=[],detaches=[];
+  const evidence=workerFixture(),url=evidence.workerInspection.location.href,receipt={},listeners=new Set(),sent=[],detaches=[],policies=[];let resolveEnable;
   const ws={addEventListener(type,listener){assert.equal(type,'message');listeners.add(listener);},removeEventListener(type,listener){assert.equal(type,'message');listeners.delete(listener);}};
-  const emit=(message,{sessionId='owned-session',targetId='core'}={})=>{const event={data:JSON.stringify({method:'Target.receivedMessageFromTarget',params:{sessionId,targetId,message:JSON.stringify(message)}})};for(const listener of listeners)listener(event);};
+  const emit=(message,{sessionId='owned-session',targetId='core'}={})=>{const event={data:JSON.stringify({method:'Target.receivedMessageFromTarget',params:{sessionId,targetId,message:JSON.stringify(message)}})};const deliver=()=>{for(const listener of listeners)listener(event);};if(options.innerAfterAck)setImmediate(deliver);else deliver();};
+  const emitOuter=message=>{for(const listener of listeners)listener({data:JSON.stringify(message)});};
+  let attached=false;const attachment=()=>{attached=true;emitOuter({method:'Target.attachedToTarget',params:{sessionId:'owned-session',targetInfo:{...workerInfo('core',url),...options.attachInfo},waitingForDebugger:options.waiting===true}});};
   const script=()=>emit({method:'Debugger.scriptParsed',params:{scriptId:'entry',url}});
-  return{receipt,listeners,sent,detaches,evidence,async run(){
-    return inspectWorker({targetId:'core',origin:evidence.origin,ws,deadline:Date.now()+1000,rpcTimeoutMs:20,cleanupTimeoutMs:20,receipt,
-      attach:async target=>{assert.equal(target,'core');if(options.attachFailure)throw Error('attach unavailable');return{sessionId:'owned-session'};},
+  return{receipt,listeners,sent,detaches,policies,evidence,attachment,settleEnable:()=>resolveEnable?.(),async run(){
+    return inspectWorker({targetId:'core',parentId:'normal-page',origin:evidence.origin,ws,deadline:Date.now()+1000,rpcTimeoutMs:20,cleanupTimeoutMs:20,receipt,
+      setAutoAttach:async params=>{
+        policies.push(params);
+        if(params.autoAttach){assert.deepEqual(params,workerAutoAttach);if(options.attachFailure)throw Error('attach unavailable');
+          if(options.attachAfterAck){setImmediate(attachment);return;}
+          if(!options.missingAttach)attachment();if(options.duplicateAttach)attachment();
+          if(options.enableHang)return new Promise(resolve=>{resolveEnable=resolve;});return;
+        }
+        assert.deepEqual(params,workerAutoDetach);
+        if(options.lateAttach)attachment();
+        if(attached){detaches.push('owned-session');if(options.lateError)emit({method:'Runtime.exceptionThrown',params:{exceptionDetails:{text:'late actual failure'}}});
+          if(!options.missingDetach)emitOuter({method:'Target.detachedFromTarget',params:{sessionId:options.foreignDetach?'foreign-session':'owned-session',targetId:'core'}});
+        }
+        if(options.detachHang)return new Promise(()=>{});if(options.detachFailure)throw Error('detach unavailable');
+      },
       send:async(sessionId,raw)=>{
         assert.equal(sessionId,'owned-session');const request=JSON.parse(raw);sent.push(request);const reply=result=>emit({id:request.id,result},options.wrongTarget?{targetId:'foreign-worker'}:{});
         if(options.foreignOnly){emit({id:request.id,error:{message:'foreign failure'}},{sessionId:'foreign-session'});return;}
-        emit({id:request.id,error:{message:'foreign failure'}},{sessionId:'foreign-session'});
+        if(options.outerError)throw Error('outer ACK rejected');
+        if(options.noReply)return;
         if(options.commandError){emit({id:request.id,error:{message:'owned command failure'}});return;}
         if(request.method==='Runtime.evaluate'){assert.deepEqual(request.params,{expression:workerLocationExpression,returnByValue:true,awaitPromise:false});reply(options.locationException?{exceptionDetails:{text:'unavailable'}}:{result:{type:'object',value:{href:options.wrongLocation?'http://127.0.0.1:9/foreign-worker.ts':url,origin:evidence.origin,pathname:'/src/platform/browser-core-worker.ts'}}});}
         else if(request.method==='Debugger.enable'){if(options.scriptOverflow)for(let i=0;i<257;i++)emit({method:'Debugger.scriptParsed',params:{scriptId:'extra'+i,url:''}});if(options.pause)emit({method:'Debugger.paused',params:{reason:'other'}});if(!options.missingScript)script();reply({debuggerId:'owned-debugger'});}
@@ -78,7 +94,6 @@ function inspectorTransport(options={}){
         if(options.hungAcknowledgement)return new Promise(()=>{});
       },
       fetchSource:async href=>{assert.equal(href,url);return{url,status:200,bytes:Buffer.byteLength(inspectedSource),sha256:options.sourceMismatch?'0'.repeat(64):digest(inspectedSource)};},
-      detach:async sessionId=>{detaches.push(sessionId);if(options.lateError)emit({method:'Runtime.exceptionThrown',params:{exceptionDetails:{text:'late actual failure'}}});if(options.detachHang)return new Promise(()=>{});if(options.detachFailure)throw Error('detach unavailable');},
     });
   }};
 }
@@ -89,21 +104,43 @@ test('owned Inspector reads standard WorkerLocation and actual entry bytes witho
   fixture.evidence.workerInspection={...fixture.receipt,postSnapshot:fixture.evidence.workerTargetSnapshot};
   assert.equal(productWorkerProof(fixture.evidence).entrySourceSha256,digest(inspectedSource));
 });
-test('foreign session replies cannot prove the owned Worker and its timeout still detaches and removes the listener',async()=>{
-  const fixture=inspectorTransport({foreignOnly:true});await assert.rejects(fixture.run(),/reply deadline/);
+test('foreign session replies fail the owned Worker proof and still disable the policy and remove the listener',async()=>{
+  const fixture=inspectorTransport({foreignOnly:true});await assert.rejects(fixture.run(),/owned Worker session/);
   assert.equal(fixture.receipt.complete,false);assert.deepEqual(fixture.detaches,['owned-session']);assert.equal(fixture.listeners.size,0);
 });
 test('wrong target, own protocol errors, evaluation exceptions, wrong entry URL and source hash all fail with owned detach',async()=>{
-  for(const options of [{wrongTarget:true},{commandError:true},{locationException:true},{wrongLocation:true},{sourceMismatch:true},{oversized:true},{pause:true},{missingScript:true},{hungAcknowledgement:true},{scriptOverflow:true},{lateError:true}]){
+  for(const options of [{wrongTarget:true},{commandError:true},{locationException:true},{wrongLocation:true},{sourceMismatch:true},{oversized:true},{pause:true},{missingScript:true},{hungAcknowledgement:true},{outerError:true},{scriptOverflow:true},{lateError:true}]){
     const fixture=inspectorTransport(options);await assert.rejects(fixture.run());assert.equal(fixture.receipt.complete,false);assert.deepEqual(fixture.detaches,['owned-session']);assert.equal(fixture.listeners.size,0);
     assert.ok(!fixture.sent.some(item=>/pause|resume|setBreakpoint|runIfWaiting|setScriptSource/.test(item.method)),'No control fallback even after failure');
   }
 });
 test('attach or detach failure cannot leave a positive Inspector receipt or a retained observer',async()=>{
-  for(const options of [{attachFailure:true},{detachFailure:true},{detachHang:true}]){const fixture=inspectorTransport(options);await assert.rejects(fixture.run());assert.equal(fixture.receipt.complete,false);assert.equal(fixture.listeners.size,0);assert.equal(fixture.detaches.length,options.attachFailure?0:1);}
+  for(const options of [{attachFailure:true},{detachFailure:true},{detachHang:true},{missingDetach:true},{foreignDetach:true}]){const fixture=inspectorTransport(options);await assert.rejects(fixture.run());assert.equal(fixture.receipt.complete,false);assert.equal(fixture.listeners.size,0);assert.equal(fixture.detaches.length,options.attachFailure?0:1);}
+});
+test('parent reporting attaches the existing Worker both before and after its command ACK without manual reattachment',async()=>{
+  for(const options of [{},{attachAfterAck:true},{innerAfterAck:true}]){const fixture=inspectorTransport(options);await fixture.run();assert.deepEqual(fixture.policies,[workerAutoAttach,workerAutoDetach]);assert.equal(fixture.receipt.autoAttach.acknowledged,true);assert.equal(fixture.receipt.autoAttach.disabled,true);assert.equal(fixture.receipt.attachedEvent.waitingForDebugger,false);assert.ok(fixture.receipt.commands.every(row=>row.ack.status==='received'&&row.reply.status==='received'));assert.equal(fixture.receipt.protocolEvents[0].method,'Target.attachedToTarget');}
+});
+test('paused, duplicate, foreign target/type/parent, late or missing attachments fail without any Worker control command',async()=>{
+  for(const options of [{waiting:true},{duplicateAttach:true},{attachInfo:{targetId:'foreign'}},{attachInfo:{type:'page'}},{attachInfo:{parentId:'foreign-parent'}},{missingAttach:true},{missingAttach:true,lateAttach:true},{enableHang:true}]){
+    const fixture=inspectorTransport(options);await assert.rejects(fixture.run());assert.equal(fixture.receipt.complete,false);assert.deepEqual(fixture.policies,[workerAutoAttach,workerAutoDetach]);assert.equal(fixture.listeners.size,0);assert.equal(fixture.sent.length,0);
+  }
+});
+test('outer ACK and inner reply are retained independently when either is missing',async()=>{
+  const acknowledged=inspectorTransport({noReply:true});await assert.rejects(acknowledged.run(),/reply deadline/);assert.equal(acknowledged.receipt.commands[0].ack.status,'received');assert.equal(acknowledged.receipt.commands[0].reply.status,'pending');
+  const replied=inspectorTransport({hungAcknowledgement:true});await assert.rejects(replied.run(),/reply deadline/);assert.equal(replied.receipt.commands[0].ack.status,'pending');assert.equal(replied.receipt.commands[0].reply.status,'received');
+});
+test('late enable ACK cannot convert a failed setup into acceptance and raw metadata remains bounded',async()=>{
+  const fixture=inspectorTransport({enableHang:true});await assert.rejects(fixture.run(),/parent reporting deadline/);assert.equal(fixture.receipt.autoAttach.acknowledged,false);assert.equal(fixture.receipt.autoAttach.disabled,true);assert.equal(fixture.receipt.detached,true);fixture.settleEnable();await new Promise(resolve=>setImmediate(resolve));assert.equal(fixture.receipt.autoAttach.acknowledged,true);assert.equal(fixture.receipt.complete,false);assert.deepEqual(fixture.policies,[workerAutoAttach,workerAutoDetach]);
+  const oversized=inspectorTransport({attachInfo:{title:'x'.repeat(16385)}});await assert.rejects(oversized.run(),/Bounded Inspector event metadata/);assert.equal(oversized.receipt.complete,false);assert.equal(oversized.receipt.autoAttach.disabled,true);
+});
+test('actual runner enables only the owned page reporter after the five UI phases and tracks late policy cleanup',()=>{
+  const runner=readFileSync(new URL('./run.mjs',import.meta.url),'utf8');
+  assert.ok(runner.indexOf('await inspectWorker(')>runner.indexOf('await phase(4,'));assert.match(runner,/parentId:evidence.normalPageTarget/);
+  assert.match(runner,/name:'Worker parent reporting',closeLate:\(\)=>cleanupCall\('Target.setAutoAttach',workerAutoDetach\)/);
+  assert.doesNotMatch(runner,/Target.attachToTarget/);assert.deepEqual(workerAutoAttach,{autoAttach:true,waitForDebuggerOnStart:false,flatten:false,filter:[{type:'worker',exclude:false},{exclude:true}]});assert.deepEqual(workerAutoDetach,{autoAttach:false,waitForDebuggerOnStart:false,flatten:false});
 });
 test('strict final Worker proof rejects missing Inspector/source/parent/liveness evidence and rehashes retained entry source',()=>{
-  for(const change of [e=>{delete e.workerInspection;},e=>{e.workerInspection.detached=false;},e=>{e.workerInspection.location.href=e.origin+'/wrong-worker.ts';},e=>{e.workerInspection.entryScript.source+='changed';},e=>{e.workerInspection.driverSource.sha256='0'.repeat(64);},e=>{e.workerInspection.scripts[0].scriptId='wrong-entry';},e=>{e.workerInspection.postSnapshot.targets[0].parentId='other-page';},e=>{e.workerInspection.postSnapshot.targets=[];},e=>{e.workerInspection.protocolFailure='late worker failure';}]){const evidence=workerFixture();change(evidence);assert.throws(()=>productWorkerProof(evidence));}
+  for(const change of [e=>{delete e.workerInspection;},e=>{e.workerInspection.detached=false;},e=>{e.workerInspection.protocolEvents=[];},e=>{e.workerInspection.protocolEvents.push(e.workerInspection.protocolEvents[0]);},e=>{e.workerInspection.autoAttach.disabled=false;},e=>{e.workerInspection.autoAttach.acknowledged=false;},e=>{e.workerInspection.attachedEvent.waitingForDebugger=true;},e=>{e.workerInspection.commands[0].ack.status='pending';},e=>{e.workerInspection.location.href=e.origin+'/wrong-worker.ts';},e=>{e.workerInspection.entryScript.source+='changed';},e=>{e.workerInspection.driverSource.sha256='0'.repeat(64);},e=>{e.workerInspection.scripts[0].scriptId='wrong-entry';},e=>{e.workerInspection.postSnapshot.targets[0].parentId='other-page';},e=>{e.workerInspection.postSnapshot.targets=[];},e=>{e.workerInspection.protocolFailure='late worker failure';}]){const evidence=workerFixture();change(evidence);assert.throws(()=>productWorkerProof(evidence));}
 });
 
 test('the handwritten complete source is exactly51 UTF8 bytes including final newline', () => {

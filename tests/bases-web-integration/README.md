@@ -74,23 +74,49 @@ driver GETs verify those ordinary server routes' bytes; they are not counted as
 browser fetches. Exceptions/console errors and incomplete phases fail. The
 whole workflow has a bounded deadline; resource cleanup has its own bounds.
 Worker discovery retains bounded raw creation, URL-change and destruction events.
-Chrome156 can leave dedicated Worker target URLs blank even after a final
-`Target.getTargets` snapshot. Such metadata identifies only a unique live target
-whose creation and snapshot parents match the owned normal page; it does not
-identify the product script. The harness explicitly attaches to that already
-running target with `Target.attachToTarget(flatten: false)`, correlates replies
-through its exact session, and performs only three read-only Inspector commands:
+Chrome156 can publish a dedicated Worker host before its renderer Inspector
+channel is bound, with blank URL/name even in `Target.getTargets`. Such metadata
+identifies only a unique live target whose creation and snapshot parents match
+the owned normal page. It cannot identify the product script. Actual web007
+passed all five UI phases, then timed out reading that manually attached host;
+its combined ACK/reply receipt did not establish which response was missing.
+
+The exact recorded Chrome revision
+[`d0c02bfad08ec92a6ffcf989e53cd995e6381a4c`](https://github.com/chromium/chromium/tree/d0c02bfad08ec92a6ffcf989e53cd995e6381a4c)
+explains a likely mechanism: `WorkerDevToolsManager::WorkerCreated` creates the
+blank host; Blink `DevToolsAgent::WorkerThreadCreated` retains the actual child
+agent pipe until parent child reporting is enabled. `ReportChildTargetsImpl`
+flushes existing Workers, and `DevToolsRendererChannel::ChildTargetCreated`
+sets the real URL and renderer pipe. This is source-grounded inference, not
+captured internal state from that failed run.
+
+Only **after all five UI phases**, the harness enables child reporting on its
+fresh owned **page** session using `Target.setAutoAttach(autoAttach: true,
+waitForDebuggerOnStart: false, flatten: false)` with an explicit worker-only
+filter and final exclude-all entry. It accepts exactly one attached session:
+the prevalidated already-created live Worker, same immutable parent, expected
+entry URL, and `waitingForDebugger: false`. It never manually attaches a second
+session, recursively enables reporting, pauses, resumes, installs breakpoints,
+replaces source or calls a product API. An unexpected, duplicate, paused or late
+attachment fails. This setup is observer-only and does not establish production
+Worker behavior independently of the preceding normal workflows.
+
+The resulting exact session carries only three read-only Inspector commands:
 standard `self.location` properties, `Debugger.enable` to observe parsed scripts,
-and `Debugger.getScriptSource` for the exact entry script. It installs no auto
-attach, pause, breakpoint, resume, source replacement or product API call. If
-this nonflattened protocol is unsupported, the run fails with that exact cause.
+and `Debugger.getScriptSource` for the exact entry script. Bounded raw attach/
+detach metadata and inner-message IDs/methods/hash/byte summaries are retained.
+Each request separately records its outer send ACK and inner reply state/time,
+so a missing ACK cannot masquerade as a missing Worker reply. No timeout or
+identity fallback is used when the protocol fails.
 
 WorkerLocation and the actual entry-script URL must agree on the same-origin
 `/src/platform/browser-core-worker.ts` resource, including its observed query.
 The loaded entry source is retained with its independently recomputed SHA256
 and a one-MiB byte bound. A separately labelled ordinary driver GET of that exact
 module URL must return HTTP200 and identical bytes/hash; it does not replace the
-existing real Chrome GET/HTTP200 requirement. The Inspector detaches in `finally`;
+existing real Chrome GET/HTTP200 requirement. The parent reporter is disabled in `finally` (even after setup failure),
+which detaches only this page session's automatic attachments. Successful
+disable ACK and the exact owned detach event are required;
 a new read-only target snapshot must retain the same live owned ID/parent after
 detach. Both snapshots record exact lifecycle-event boundaries. Normal shutdown
 events remain retained without rewriting pre-close liveness proof. Foreign
@@ -98,7 +124,7 @@ sessions/targets, protocol or script errors, pauses, missing entry scripts,
 source mismatches, timeouts and failed detach all fail acceptance. Raw target
 metadata, network requests alone, or an unexecuted Inspector check cannot pass.
 
-Actual web005 and web006 each passed five UI phases but failed overall Worker
+Actual web005, web006 and web007 each passed five UI phases but failed overall Worker
 identity acceptance. Their blank-URL receipts remain insufficient; these new
 observations require a fresh run. Offline Inspector tests use a fake protocol
 transport and prove its admission/cleanup rules, not actual Chrome acceptance.

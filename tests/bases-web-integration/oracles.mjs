@@ -60,16 +60,21 @@ function workerURL(href,origin){
 export function productWorkerProof(evidence){
   const candidate=liveWorkerCandidate(evidence),inspection=evidence.workerInspection;
   assert.ok(inspection?.complete&&inspection.detached===true,'Actual owned Worker inspection and detach are required');
-  assert.equal(inspection.targetId,candidate.targetId);assert.ok(typeof inspection.sessionId==='string'&&inspection.sessionId.length>0);
+  assert.equal(inspection.targetId,candidate.targetId);assert.equal(inspection.parentId,evidence.normalPageTarget);
+  assert.deepEqual(inspection.autoAttach?.request,workerAutoAttach);assert.equal(inspection.autoAttach.acknowledged,true);assert.equal(inspection.autoAttach.disabled,true);
+  assert.ok(Array.isArray(inspection.protocolEvents)&&inspection.protocolEvents.length<=512,'Bounded raw Inspector receipts');
+  const attachments=inspection.protocolEvents.filter(row=>row.method==='Target.attachedToTarget'),detachments=inspection.protocolEvents.filter(row=>row.method==='Target.detachedFromTarget');
+  assert.equal(attachments.length,1);assert.equal(detachments.length,1);assert.deepEqual(attachments[0].params,inspection.attachedEvent);assert.equal(detachments[0].params.sessionId,inspection.sessionId);assert.ok(detachments[0].params.targetId===undefined||detachments[0].params.targetId===candidate.targetId);
+  assert.equal(inspection.attachedEvent?.sessionId,inspection.sessionId);assert.equal(inspection.attachedEvent.targetInfo.targetId,candidate.targetId);assert.equal(inspection.attachedEvent.targetInfo.parentId,evidence.normalPageTarget);assert.equal(inspection.attachedEvent.targetInfo.type,'worker');assert.equal(inspection.attachedEvent.waitingForDebugger,false);assert.ok(typeof inspection.sessionId==='string'&&inspection.sessionId.length>0);
   const location=inspection.location,url=workerURL(location.href,evidence.origin);
-  assert.equal(location.origin,url.origin);assert.equal(location.pathname,url.pathname);
+  assert.equal(inspection.attachedEvent.targetInfo.url,url.href);assert.equal(location.origin,url.origin);assert.equal(location.pathname,url.pathname);
   for(const observed of [...candidate.observedUrls,candidate.url].filter(Boolean))assert.equal(observed,url.href,'Every nonempty target URL agrees with actual WorkerLocation');
   const after=liveWorkerCandidate(evidence,inspection.postSnapshot);assert.equal(after.targetId,candidate.targetId);
   assert.ok(inspection.postSnapshot.eventsThrough>=evidence.workerTargetSnapshot.eventsThrough&&inspection.postSnapshot.capturedAt>=evidence.workerTargetSnapshot.capturedAt,'Post-detach liveness follows the original snapshot');
   for(const observed of [...after.observedUrls,after.url].filter(Boolean))assert.equal(observed,url.href);
   assert.equal(inspection.locationExpression,workerLocationExpression,'Only the standard read-only WorkerLocation expression was evaluated');
   assert.deepEqual(inspection.commands.map(item=>item.method),['Runtime.evaluate','Debugger.enable','Debugger.getScriptSource']);
-  assert.ok(inspection.commands.every((item,index)=>item.id===index+1&&item.replied===true&&!item.failure),'All three exact Inspector commands replied successfully');
+  assert.ok(inspection.commands.every((item,index)=>item.id===index+1&&item.replied===true&&item.ack?.status==='received'&&item.reply?.status==='received'&&!item.failure),'All three exact Inspector commands replied successfully');
   assert.ok(Array.isArray(inspection.scripts)&&inspection.scripts.length<=256,'Bounded retained script metadata');
   const entry=inspection.entryScript,parsed=inspection.scripts.filter(item=>item.url===url.href);
   assert.equal(parsed.length,1,'Exactly one actual entry script parsed in the attached Worker');assert.equal(parsed[0].scriptId,entry.scriptId);assert.equal(entry.url,url.href);
@@ -81,23 +86,50 @@ export function productWorkerProof(evidence){
   return{targetId:candidate.targetId,parentId:candidate.parentId,url:url.href,createdEvent:candidate.createdEvent,entrySourceSha256:entry.sha256};
 }
 
-/** Explicit attachment to the already-created, running owned Worker. No auto
- * attach, waiting-for-debugger, pause/resume, breakpoint or product API call. */
-export async function inspectWorker({targetId,origin,ws,attach,send,detach,deadline,fetchSource,receipt,now=Date.now,rpcTimeoutMs=5000,cleanupTimeoutMs=5000}){
+// Reporting existing child Workers binds Chromium's renderer channel. This is
+// enabled only after all UI phases, on the fresh owned parent page, never paused.
+export const workerAutoAttach = Object.freeze({autoAttach:true,waitForDebuggerOnStart:false,flatten:false,filter:[{type:'worker',exclude:false},{exclude:true}]});
+export const workerAutoDetach = Object.freeze({autoAttach:false,waitForDebuggerOnStart:false,flatten:false});
+export async function inspectWorker({targetId,parentId,origin,ws,setAutoAttach,send,deadline,fetchSource,receipt,now=Date.now,rpcTimeoutMs=5000,cleanupTimeoutMs=5000}){
   assert.ok(Number.isInteger(rpcTimeoutMs)&&rpcTimeoutMs>0&&rpcTimeoutMs<=5000);
   assert.ok(Number.isInteger(cleanupTimeoutMs)&&cleanupTimeoutMs>0&&cleanupTimeoutMs<=5000);
-  Object.assign(receipt,{targetId,commands:[],scripts:[],detached:false,complete:false,locationExpression:workerLocationExpression});
-  const pending=new Map();let sessionId,next=0,fatal,scriptWait,detaching=false;
+  assert.ok(typeof parentId==='string'&&parentId.length>0,'Owned parent page');
+  Object.assign(receipt,{targetId,parentId,commands:[],scripts:[],protocolEvents:[],autoAttach:{request:structuredClone(workerAutoAttach),acknowledged:false,disabled:false},detached:false,complete:false,locationExpression:workerLocationExpression});
+  const pending=new Map();let sessionId,next=0,fatal,scriptWait,closing=false;
+  let attachedResolve,attachedReject,detachedResolve;
+  const attached=new Promise((resolve,reject)=>{attachedResolve=resolve;attachedReject=reject;});attached.catch(()=>{});
+  const detached=new Promise(resolve=>{detachedResolve=resolve;});
   const remaining=()=>{const left=deadline-now();assert.ok(left>0,'Worker inspection workflow deadline');return Math.min(rpcTimeoutMs,left);};
-  const fail=error=>{fatal??=error;receipt.protocolFailure=fatal.message;for(const item of pending.values())item.reject(fatal);scriptWait?.reject(fatal);};
+  const limited=async(work,ms,label)=>{let timer;try{return await Promise.race([work,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(label)),ms);})]);}finally{clearTimeout(timer);}};
+  const fail=error=>{fatal??=error;receipt.protocolFailure=fatal.message;attachedReject(fatal);for(const item of pending.values())item.reject(fatal);scriptWait?.reject(fatal);};
+  function retain(value){assert.ok(Buffer.byteLength(JSON.stringify(value))<=16384,'Bounded Inspector event metadata');assert.ok(receipt.protocolEvents.length<512,'Bounded Worker protocol records');receipt.protocolEvents.push({at:now(),...structuredClone(value)});}
   const listener=event=>{
     try{
       const outer=JSON.parse(event.data);
-      if(outer.method==='Target.detachedFromTarget'&&outer.params?.sessionId===sessionId&&!detaching)throw Error('Owned Worker Inspector detached unexpectedly');
-      if(outer.method!=='Target.receivedMessageFromTarget'||outer.params?.sessionId!==sessionId)return;
-      assert.ok(outer.params.targetId===undefined||outer.params.targetId===targetId,'Worker Inspector target identity');
-      assert.ok(typeof outer.params.message==='string'&&outer.params.message.length<=2*workerSourceLimit,'Bounded Worker Inspector reply');
+      if(outer.method==='Target.attachedToTarget'){
+        const value=outer.params;retain({method:outer.method,params:value});
+        assert.equal(closing,false,'No late Worker attachment during cleanup');
+        assert.ok(typeof value?.sessionId==='string'&&value.sessionId.length>0&&value.sessionId.length<=256,'Owned Worker session');
+        assert.equal(value.targetInfo?.targetId,targetId,'Only the prevalidated live Worker may attach');
+        assert.equal(value.targetInfo.type,'worker');assert.equal(value.targetInfo.parentId,parentId,'Attached Worker belongs to the owned parent');
+        assert.equal(value.waitingForDebugger,false,'The existing Worker must never wait for a debugger');
+        assert.equal(sessionId,undefined,'Exactly one owned Worker attachment');
+        workerURL(value.targetInfo.url,origin);
+        sessionId=value.sessionId;receipt.sessionId=sessionId;receipt.attachedEvent=structuredClone(value);attachedResolve(value);return;
+      }
+      if(outer.method==='Target.detachedFromTarget'){
+        retain({method:outer.method,params:outer.params});
+        assert.equal(outer.params?.sessionId,sessionId,'Only the owned Inspector session may detach');
+        assert.ok(outer.params.targetId===undefined||outer.params.targetId===targetId,'Detached Worker identity');
+        assert.equal(closing,true,'Owned Worker Inspector detached unexpectedly');
+        assert.equal(receipt.detached,false,'Unique owned Worker detach');receipt.detached=true;detachedResolve();return;
+      }
+      if(outer.method!=='Target.receivedMessageFromTarget')return;
+      assert.ok(typeof outer.params?.message==='string'&&outer.params.message.length<=2*workerSourceLimit,'Bounded Worker Inspector reply');
       const message=JSON.parse(outer.params.message);
+      retain({method:outer.method,sessionId:outer.params.sessionId,targetId:outer.params.targetId,message:{id:message.id,method:message.method,error:message.error,bytes:Buffer.byteLength(outer.params.message),sha256:sourceDigest(outer.params.message)}});
+      assert.ok(sessionId&&outer.params.sessionId===sessionId,'Only the owned Worker session can send Inspector messages');
+      assert.ok(outer.params.targetId===undefined||outer.params.targetId===targetId,'Worker Inspector target identity');
       if(message.id!==undefined){const item=pending.get(message.id);assert.ok(item,'Only the exact pending Worker request can receive a reply');message.error?item.reject(Error('Worker Inspector command failed: '+JSON.stringify(message.error))):item.resolve(message.result);return;}
       if(message.method==='Debugger.paused'||message.method==='Debugger.scriptFailedToParse'||message.method==='Runtime.exceptionThrown'||message.method==='Runtime.consoleAPICalled'&&message.params?.type==='error')throw Error('Worker Inspector observed a pause or runtime/script error: '+message.method);
       if(message.method!=='Debugger.scriptParsed')return;
@@ -110,21 +142,21 @@ export async function inspectWorker({targetId,origin,ws,attach,send,detach,deadl
   ws.addEventListener('message',listener);
   async function request(method,params={}){
     if(fatal)throw fatal;assert.ok(++next<=3,'Only the three declared read-only Worker requests');
-    const id=next,command={id,method};receipt.commands.push(command);let timer;
-    const result=new Promise((resolve,reject)=>{let settled=false;pending.set(id,{resolve(value){assert.equal(settled,false,'Unique Worker reply');settled=true;resolve(value);},reject(error){settled=true;reject(error);}});});result.catch(()=>{});
+    const id=next,command={id,method,sentAt:now(),ack:{status:'pending'},reply:{status:'pending'}};receipt.commands.push(command);
+    const result=new Promise((resolve,reject)=>{let settled=false;pending.set(id,{resolve(value){assert.equal(settled,false,'Unique Worker reply');settled=true;command.reply={status:'received',at:now()};resolve(value);},reject(error){settled=true;command.reply={status:'failed',at:now(),error:error.message};reject(error);}});});result.catch(()=>{});
+    const acknowledgement=Promise.resolve().then(()=>send(sessionId,JSON.stringify({id,method,params}))).then(value=>{command.ack={status:'received',at:now()};return value;},error=>{command.ack={status:'failed',at:now(),error:error.message};throw error;});
     try{
-      const work=Promise.all([Promise.resolve().then(()=>send(sessionId,JSON.stringify({id,method,params}))),result]);
-      const [,reply]=await Promise.race([work,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Worker Inspector reply deadline: '+method)),remaining());})]);
+      const [,reply]=await limited(Promise.all([acknowledgement,result]),remaining(),'Worker Inspector reply deadline: '+method);
       command.replied=true;return reply;
-    }catch(error){pending.get(id)?.reject(error);command.failure=error.message;throw error;}
-    finally{clearTimeout(timer);pending.delete(id);}
-
+    }catch(error){command.failure=error.message;throw error;}
+    finally{pending.delete(id);}
   }
   let failure;
   try{
-    const attached=await attach(targetId);assert.ok(typeof attached.sessionId==='string'&&attached.sessionId.length>0&&attached.sessionId.length<=256,'Owned Worker Inspector session');sessionId=attached.sessionId;receipt.sessionId=sessionId;
+    const enabled=Promise.resolve().then(()=>setAutoAttach(structuredClone(workerAutoAttach))).then(()=>{receipt.autoAttach.acknowledged=true;receipt.autoAttach.acknowledgedAt=now();},error=>{receipt.autoAttach.failure=error.message;throw error;});
+    await limited(Promise.all([enabled,attached]),remaining(),'Worker parent reporting deadline');if(fatal)throw fatal;
     const location=await request('Runtime.evaluate',{expression:workerLocationExpression,returnByValue:true,awaitPromise:false});assert.ok(!location.exceptionDetails,'WorkerLocation read must succeed');receipt.location=location.result?.value;
-    const url=workerURL(receipt.location?.href,origin);assert.equal(receipt.location.origin,url.origin);assert.equal(receipt.location.pathname,url.pathname);
+    const url=workerURL(receipt.location?.href,origin);assert.equal(receipt.location.origin,url.origin);assert.equal(receipt.location.pathname,url.pathname);assert.equal(receipt.attachedEvent.targetInfo.url,url.href);
     await request('Debugger.enable');if(fatal)throw fatal;
     const parsed=receipt.scripts.filter(item=>item.url===url.href);assert.ok(parsed.length<=1,'Unique entry script');let scriptId=parsed[0]?.scriptId;
     if(!scriptId){let timer;try{scriptId=await new Promise((resolve,reject)=>{scriptWait={resolve,reject};timer=setTimeout(()=>reject(Error('Actual Worker entry script was not observed')),remaining());});}finally{clearTimeout(timer);scriptWait=undefined;}}
@@ -134,8 +166,13 @@ export async function inspectWorker({targetId,origin,ws,attach,send,detach,deadl
     if(fatal)throw fatal;
   }catch(error){failure=error;receipt.failure=error.message;}
   finally{
-    for(const item of pending.values())item.reject(Error('Worker Inspector closing'));scriptWait?.reject(Error('Worker Inspector closing'));
-    if(sessionId){detaching=true;let timer;try{await Promise.race([Promise.resolve().then(()=>detach(sessionId)),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Worker Inspector detach deadline')),cleanupTimeoutMs);})]);receipt.detached=true;}catch(error){receipt.detachFailure=error.message;failure??=error;}finally{clearTimeout(timer);}}
+    closing=true;for(const item of pending.values())item.reject(Error('Worker Inspector closing'));scriptWait?.reject(Error('Worker Inspector closing'));
+    try{
+      // This page session owns this fresh policy. Disabling it detaches only its
+      // automatic sessions, including a late attach; it touches no foreign client.
+      await limited(Promise.resolve().then(()=>setAutoAttach(structuredClone(workerAutoDetach))).then(()=>{receipt.autoAttach.disabled=true;receipt.autoAttach.disabledAt=now();}),cleanupTimeoutMs,'Worker parent reporting disable deadline');
+      if(sessionId)await limited(detached,cleanupTimeoutMs,'Worker Inspector detach event deadline');
+    }catch(error){receipt.detachFailure=error.message;failure??=error;}
     ws.removeEventListener('message',listener);
   }
   failure??=fatal;if(failure)throw failure;receipt.complete=true;return receipt;
