@@ -78,8 +78,8 @@ export async function journey(c) {
     });
     await phase(phases[3], async () => {
       const cell = sidebar + ' ' + c.ui.cell(ROW_B, 'note.score'), input = cell + ' input:not([type="checkbox"])';
-      await c.ui.click(cell, {count: 2}); await c.ui.type(input, '88'); await clickPin(c, true);
-      await ready(c, {pinned: false, rows: [row(ROW_B, 22)], title: titleOf(B), draft: true, allowRefusal: true}, 'Uncommitted draft refuses pin and remains intact');
+      await c.ui.click(cell, {count: 2}); await c.ui.type(input, '88 invalid'); await clickPin(c, true);
+      await ready(c, {pinned: false, rows: [row(ROW_B, 22)], title: titleOf(B), draft: true, allowRefusal: true}, 'Invalid numeric draft refuses pointer Pin and remains intact');
       assert.equal(await c.read(ROW_B), fixtureFiles().get(ROW_B)); await c.screenshot('pin-refused-retained-draft');
       await c.ui.click(input); await c.ui.key('Escape');
       await ready(c, {pinned: false, rows: [row(ROW_B, 22)], title: titleOf(B)}, 'Ordinary Escape cancels the intentionally retained draft'); await sources(c, false, 'draft-refusal-source');

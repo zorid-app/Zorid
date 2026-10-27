@@ -39,10 +39,10 @@ export function assertPinFrame(frame, {pinned, rows, title, noteTitle = title, d
   assert.equal(frame.rows.length, rows.length);
   for (const [index, expected] of rows.entries()) {
     assert.equal(frame.rows[index].path, expected.path); assert.equal(frame.rows[index].widgetVersion, frame.controllerVersion);
-    assert.equal(frame.rows[index].input, draft ? '88' : null);
+    assert.equal(frame.rows[index].input, draft ? '88 invalid' : null);
     if (!draft) assert.equal(frame.rows[index].score, String(expected.score));
   }
-  if (allowRefusal) { assert.ok(frame.errors.length > 0); assert.ok(frame.errors.every(text => /Finish or cancel the property edit/.test(text))); }
+  if (allowRefusal) { assert.ok(frame.errors.some(text => /Finish or cancel the property edit/.test(text)), 'The Pin refusal is observed in addition to numeric validation'); assert.ok(frame.errors.every(text => text === 'Enter a valid number.' || /Finish or cancel the property edit/.test(text))); }
   else assert.deepEqual(frame.errors, []);
   return frame;
 }
@@ -59,8 +59,8 @@ export function pinFrameReady(frame, expected, view) {
       && frame.pinPressed === String(pinned) && frame.pinLabel === (pinned ? 'Unpin sidebar Base' : 'Pin sidebar Base')
       && frame.activeTitle === title && frame.activeNoteTitle === noteTitle && frame.rows.length === rows.length
       && frame.rows.every((row, index) => row.path === rows[index].path && row.widgetVersion === frame.controllerVersion
-        && row.input === (draft ? '88' : null) && (draft || row.score === String(rows[index].score)))
-      && (allowRefusal ? frame.errors.length > 0 && frame.errors.every(text => /Finish or cancel the property edit/.test(text)) : frame.errors.length === 0);
+        && row.input === (draft ? '88 invalid' : null) && (draft || row.score === String(rows[index].score)))
+      && (allowRefusal ? frame.errors.some(text => /Finish or cancel the property edit/.test(text)) && frame.errors.every(text => text === 'Enter a valid number.' || /Finish or cancel the property edit/.test(text)) : frame.errors.length === 0);
   } catch { return false; }
 }
 export function assertRenamedIdentity(before, after, oldPath) {
@@ -73,9 +73,9 @@ export function assertPinAudit(audit, {requireRefusal = false} = {}) {
   assert.equal(audit.overflow, false, 'Passive notice/error audit is bounded and complete');
   for (const event of audit.events) {
     assert.equal(event.phase, 'retained-draft-refuses-pin', 'Unexpected lifecycle message outside the one intentional refusal');
-    assert.match(event.message, /Finish or cancel the property edit/);
+    assert.ok(event.message === 'Enter a valid number.' || /Finish or cancel the property edit/.test(event.message), 'Only the numeric validation or the specific Pin refusal is expected');
   }
-  if (requireRefusal) assert.ok(audit.events.length > 0, 'Intentional draft refusal was observed');
+  if (requireRefusal) assert.ok(audit.events.some(event => /Finish or cancel the property edit/.test(event.message)), 'Intentional Pin refusal was observed; numeric validation alone is insufficient');
 }
 /** Public focus/portal facts for the keyboard-only Pin route. */
 export function pinKeyboardPortalFrame(document) {

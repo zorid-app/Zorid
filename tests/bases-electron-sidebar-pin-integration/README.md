@@ -12,7 +12,7 @@ node tests/bases-electron-sidebar-pin-integration/run.mjs \
 ```
 
 Seven public-control phases cover ordinary current-note following, pin freeze,
-immediate unpin catch-up, refusal with an uncommitted property draft, explicit
+immediate unpin catch-up, refusal with an invalid numeric property draft, explicit
 null context for a blank main tab, identity-preserving ordinary note rename, and
 frozen renamed-context restoration across normal quit/relaunch while another
 main note remains active. The final unpin needs no additional note-open action.
@@ -30,11 +30,18 @@ An unreachable keyboard route or an early/dirty/missing portal fails. This
 native case does not establish the separate dirty view-name portal behavior;
 that remains module-tested until a corresponding native scenario is run.
 
+The retained numeric draft is exactly `88 invalid`. An ordinary outside pointer
+can save a valid `88` through the widget's blur handler, so a valid value cannot
+prove draft refusal or unchanged source. The invalid draft must survive pointer
+Pin, preserve the saved `22`, and cancel through ordinary Escape.
+
 Inputs use actual public controls and renderer mouse/key dispatch. DOM frames
 and a bounded passive observer record current versions, pin state, row values,
-focus-related title state and lifecycle messages. Only the specifically phased
-draft-refusal message is accepted. The synthetic offline test DOM and authored
-oracles establish source validity, not actual renderer/native acceptance.
+focus-related title state and lifecycle messages. The specific Pin-refusal and
+exact numeric-validation messages are accepted only in the retained-draft phase;
+numeric validation alone cannot satisfy the Pin-refusal oracle. The synthetic
+offline test DOM and authored oracles establish source validity, not actual
+renderer/native acceptance.
 
 Immediate unpin catch-up and frozen-context restoration are deliberate Zorid UX
 improvements. Reference pin findings are static and do not establish corresponding

@@ -48,8 +48,8 @@ test('blank main context requires null note title, the sentinel row and a matchi
   const stale = structuredClone(blank); stale.activeNoteTitle = 'Context A'; rejects(stale, target);
   const fallback = structuredClone(blank); fallback.rows = []; fallback.rowCount = '1'; rejects(fallback, target);
 });
-test('one intentional retained draft requires exact88 and a specific refusal without a changed pin or saved display', () => {
-  const retained = frame(); retained.activeTitle = 'Context B'; retained.activeNoteTitle = 'Context B'; retained.rows = [{path: ROW_B, score: '', widgetVersion: '7', input: '88'}]; retained.errors = ['Finish or cancel the property edit before leaving this base'];
+test('one intentional retained draft requires exact invalid numeric text and a specific refusal without a changed pin or saved display', () => {
+  const retained = frame(); retained.activeTitle = 'Context B'; retained.activeNoteTitle = 'Context B'; retained.rows = [{path: ROW_B, score: '', widgetVersion: '7', input: '88 invalid'}]; retained.errors = ['Finish or cancel the property edit before leaving this base'];
   const target = {pinned: false, rows: [{path: ROW_B, score: 22}], title: 'Context B', draft: true, allowRefusal: true}; accepts(retained, target);
   const lost = structuredClone(retained); lost.rows[0].input = null; rejects(lost, target);
   const wrong = structuredClone(retained); wrong.errors = ['The sidebar Base changed.']; rejects(wrong, target);
