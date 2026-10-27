@@ -1,5 +1,5 @@
 import { BaseController, createBaseMutationHost } from './controller.ts';
-import type { BaseBufferHost, BaseControllerState, BaseViewRenamed } from './controller.ts';
+import type { BaseBufferHost, BaseControllerState, BaseViewRenamed, BaseConfigurationRead } from './controller.ts';
 import { BaseDocument, baseViewSource, baseViewSetting } from './document.ts';
 import type { BaseViewSource } from './document.ts';
 import { mountSourceChooser, mountCollectionEditor, collectionPropertyDefinitions, collectionValue } from '../databases/collection-ui.ts';
@@ -186,6 +186,7 @@ export interface BaseSessionVisibility {
   isVisible(): boolean;
   subscribe(listener: () => void): () => void;
 }
+export interface BaseSourceUnavailable { readonly kind:'collection-in-trash'; readonly collectionId:string; readonly message:string }
 export interface BaseSessionOptions {
   readonly vault: Vault;
   readonly basePath: string;
@@ -216,7 +217,7 @@ export interface BaseSessionOptions {
   readonly openFile: (path: string, event: MouseEvent | KeyboardEvent, witness?: { readonly entryId: string; readonly revision: string }) => void;
   readonly validate: () => void;
   readonly loadThumbnail?: BaseCardsViewOptions['loadThumbnail'];
-  readonly onState?: (state: BaseControllerState) => void;
+  readonly onState?: (state: BaseControllerState, unavailable?:BaseSourceUnavailable) => void;
   /** A local draft or accepted edit finished; query refreshes alone do not emit this. */
   readonly onEditsSettled?: () => void;
   readonly onError?: (error: unknown) => void;
@@ -261,7 +262,10 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   status.className = 'bases-session-status'; status.setAttribute('role', 'status');
   const sourceBar = doc.createElement('div'); sourceBar.className = 'collection-source-bar';
   const sourcePanel = doc.createElement('div'); sourcePanel.className = 'collection-source-panel';
-  root.append(toolbar, sourceBar, sourcePanel, content, status); container.append(root);
+  const unavailableCard=doc.createElement('section');unavailableCard.className='bases-source-unavailable';unavailableCard.setAttribute('aria-label','Collection in Trash');unavailableCard.hidden=true;
+  const unavailableMessage=doc.createElement('p'),unavailableActions=doc.createElement('div');unavailableCard.append(unavailableMessage,unavailableActions);
+  const restoreRecovery=doc.createElement('div');restoreRecovery.className='collection-restore-recovery';restoreRecovery.hidden=true;
+  root.append(toolbar, sourceBar, sourcePanel, unavailableCard, restoreRecovery, content, status); container.append(root);
   let disposed = false, closing = false, mounted: MountedView | undefined, mountedType: string | undefined;
   let mountedResult: BaseQueryResult | undefined, renderingResult: BaseQueryResult | undefined, deferred: BaseControllerState | undefined;
   let mountedIndex = -1, mountedMove = false, mountedWritable = false;
@@ -274,6 +278,12 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   let propertyLabels:unknown;
   let collection: DatabaseCollection | undefined, collectionEntries = new Map<string, DatabaseEntry>();
   let collectionLoad = 0, loadedCollectionId: string | undefined;
+  let loadedSourceContext:string|undefined, deletedSourceContext:string|undefined;
+  let loadedConfigurationRead:BaseConfigurationRead|undefined,deletedConfigurationRead:BaseConfigurationRead|undefined;
+  let pendingCollectionRestore:DatabaseRequest & {op:'restore'}|undefined;
+  const configurationSource=()=>controller.configurationRead?.source??controller.state.source;
+  const configurationIndex=()=>controller.configurationRead?.viewIndex??controller.selectedViewIndex;
+  const sourceContext=()=>JSON.stringify([configurationSource(),configurationIndex(),controller.selectedViewIdentity,controller.configurationRead?.entryId,controller.configurationRead?.revision]);
   let chooser: SourceChooser | undefined, collectionEditor: CollectionEditor | undefined;
   const collectionMutations = new Map<string, DatabaseRequest>();
   const collectionVersions = new Map<string|number,{collection:DatabaseCollection;entries:Map<string,DatabaseEntry>}>();
@@ -281,7 +291,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   let pendingCollectionCreateOwner:{collectionId:string;viewId?:string;source:string}|undefined;
   const databaseService = options.vault.adapter.databases;
   const currentViewSource = (): BaseViewSource => {
-    const view = BaseDocument.parse(controller.state.source).views[controller.selectedViewIndex];
+    const view = BaseDocument.parse(configurationSource()).views[configurationIndex()];
     return view ? baseViewSource(view) : {kind:'untyped'};
   };
   const collectionMode = () => currentViewSource().kind === 'collection';
@@ -302,46 +312,63 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   let definitionEpoch = 0, definitionsRevision = 0, mountedDefinitionsRevision = -1;
   let definitionsLoading = false;
   let definitionsError: string | undefined;
+  // A query error is retained internally; only a fresh tombstone paired with
+  // the controller's coherent saved configuration changes its presentation.
+  const sourceUnavailable=():BaseSourceUnavailable|undefined=>{
+    if(definitionsLoading||definitionsError||!collection?.deleted||!deletedConfigurationRead||deletedConfigurationRead!==controller.configurationRead||deletedSourceContext!==sourceContext())return;
+    try{const source=currentViewSource();if(source.kind==='collection'&&source.id===loadedCollectionId&&source.id===collection.id)return{kind:'collection-in-trash',collectionId:collection.id,message:'This collection is in Trash. Restore it or choose another source.'};}catch{/* Invalid configuration keeps its ordinary error presentation. */}
+  };
   const loadDefinitions = async () => {
-    const source = currentViewSource(), epoch = ++collectionLoad;
+    const source = currentViewSource(), epoch = ++collectionLoad, context=sourceContext();
+    loadedSourceContext=context;loadedConfigurationRead=controller.configurationRead;deletedSourceContext=undefined;deletedConfigurationRead=undefined;
     if (source.kind === 'untyped') {
       loadedCollectionId = undefined; collection = undefined; collectionEntries.clear();
-      definitions = { properties: {}, diagnostics: [] }; definitionsLoading = false; definitionsError = undefined; definitionsRevision++;
+      definitions = { properties: {}, diagnostics: [] }; definitionsLoading = false; definitionsError = undefined; definitionsRevision++;unavailableCard.hidden=true;options.onState?.(controller.state);
       return;
     }
-    loadedCollectionId = source.id; collection=undefined;definitions={properties:{},diagnostics:[]};definitionsLoading = true;
+    loadedCollectionId = source.id; collection=undefined;definitions={properties:{},diagnostics:[]};definitionsLoading = true;unavailableCard.hidden=true;options.onState?.(controller.state);
     try {
       if (!databaseService) throw new Error('Collections are unavailable in this vault.');
       const response = await databaseService.request({op:'get',collectionId:source.id});
-      if (disposed || epoch !== collectionLoad || currentViewSource().kind !== 'collection' || (currentViewSource() as {id:string}).id !== source.id) return;
+      if (disposed || epoch !== collectionLoad || context!==sourceContext()) return;
       collection = response.collections.find(item=>item.id===source.id);
       collectionEntries = new Map(response.entries.map(item=>[item.entryId,item]));
-      if (!collection || collection.deleted) throw new Error('Collection deleted. Restore it or change this view’s source.');
-      definitions = {properties:collectionPropertyDefinitions(collection),diagnostics:[]}; definitionsError = undefined;
+      if (!collection) throw new Error('The selected collection is unavailable.');
+      if(collection.deleted){
+        const read=loadedConfigurationRead;
+        const saved=options.inlineSource?(await options.inlineSource.read()).source:await options.vault.read(options.basePath);
+        BaseDocument.parse(saved);
+        const entry=read&&(options.vault.adapter.stat?await options.vault.adapter.stat(read.path):options.vault.entries.get(read.path));
+        if(disposed||epoch!==collectionLoad||context!==sourceContext())return;
+        if(!read||read!==controller.configurationRead||saved!==read.source||entry?.entryId!==read.entryId||entry.revision!==read.revision)throw new Error('The Base configuration changed. Refresh before changing its source.');
+        deletedSourceContext=context;deletedConfigurationRead=loadedConfigurationRead;
+      }
+      definitions = {properties:collection.deleted?{}:collectionPropertyDefinitions(collection),diagnostics:[]}; definitionsError = undefined;
     } catch (failure) {
       if (disposed || epoch !== collectionLoad) return;
       definitions = {properties:{},diagnostics:[]}; definitionsError = failure instanceof Error ? failure.message : String(failure);
     }
     definitionsLoading = false; definitionsRevision++;
-    render(controller.state);
+    render(controller.state);options.onState?.(controller.state,sourceUnavailable());
   };
   let selectedIndex = options.query?.viewIndex ?? 0;
   let notice: string | undefined;
+  let actionMessage:string|undefined;
   let scheduled: ReturnType<typeof setTimeout> | undefined;
   const pending = new Set<Promise<unknown>>(), changedBuffers = new Set<NoteBuffer>();
   let configurationLifecycle = 0;
-  const canBeginPropertyEdit = () => !disposed && !closing && !configurationLifecycle && !pendingCollectionCreate && !pending.size && !mounted?.hasQueuedConfiguration?.() && !mounted?.hasActiveEdits?.() && controller.canBeginPropertyEdit;
+  const canBeginPropertyEdit = () => !disposed && !closing && !configurationLifecycle && !pendingCollectionRestore && !pendingCollectionCreate && !pending.size && !mounted?.hasQueuedConfiguration?.() && !mounted?.hasActiveEdits?.() && controller.canBeginPropertyEdit;
   const alive = () => { options.validate(); if (disposed) throw new Error('This base view is closed'); };
-  const action = () => { alive(); if (closing) throw new Error('This base view is closing'); notice = undefined; };
+  const action = () => { alive(); if (closing) throw new Error('This base view is closing'); notice = undefined;actionMessage=undefined; };
   const report = (error: unknown) => {
     if (!disposed) {
-      status.textContent = error instanceof Error ? error.message : String(error);
+      actionMessage=error instanceof Error ? error.message : String(error);status.textContent = actionMessage;
       const receipt = baseEditAdmissionReceipt(error); if (receipt) root.dataset.baseLastEditRejection = JSON.stringify(receipt);
     }
     try { options.onError?.(error); } catch { /* User error reporters do not change persistence. */ }
   };
   const propertyDraft = () => !!mounted?.hasActiveEdits?.() || !!content.querySelector('.zorid-bases-table-input, [data-base-editing]');
-  const activeDraft = () => !!pendingCollectionCreate || propertyDraft() || toolbarUI.hasDraft() || settings.hasDraft() || summaryDraft || !!chooser?.hasPendingChanges() || !!collectionEditor?.hasPendingChanges();
+  const activeDraft = () => !!pendingCollectionRestore || !!pendingCollectionCreate || propertyDraft() || toolbarUI.hasDraft() || settings.hasDraft() || summaryDraft || !!chooser?.hasPendingChanges() || !!collectionEditor?.hasPendingChanges();
   const editsPending = () => !!pending.size || !!mounted?.hasQueuedConfiguration?.() || controller.hasPendingViewReferences || activeDraft() || !!summaryHasRawDraft?.() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error);
   let editsWerePending = false;
   const schedule = () => {
@@ -388,7 +415,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   };
   const controller = new BaseController({ vault: options.vault, basePath: options.basePath, mutations, query, clock, viewName: options.viewName,viewId:options.viewId, ...(options.inlineSource ? { inlineSource: options.inlineSource } : {}),
     onViewRenamed: options.onViewRenamed,
-    onChange(state) { render(state); options.onState?.(state); },
+    onChange(state) { render(state); options.onState?.(state,sourceUnavailable()); },
   });
   const actions = createBaseViewActions(controller, { validate: action, canRename: !!options.buffers?.rename,
     isGroupListProperty(property) { const definition = definitions.properties[basePropertyName(property)]; return !!definition && (['list', 'tags', 'multiselect'].includes(definition.type) || definition.type === 'relation' && !!definition.relation?.multiple); },
@@ -402,7 +429,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const toolbarUI = createBaseToolbar(toolbar, {
     immediate: true,
     filterOperands: () => baseSessionFilterOperands(options.vault, definitions, controller.state.result?.availableProperties ?? [], filterOwnerCurrent),
-    preflight(kind) { action(); if(pendingCollectionCreate&&kind!=='new')throw new Error('Use New again to finish the original entry creation before changing this view.'); if (pending.size || propertyDraft() || settings.hasDraft() || summaryPanel || chooser?.hasPendingChanges() || collectionEditor?.hasPendingChanges()) throw new Error('Finish or cancel the current edit before changing the view.'); },
+    preflight(kind) { action(); if(pendingCollectionRestore)throw new Error('Retry the unfinished Restore before changing this view.'); if(pendingCollectionCreate&&kind!=='new')throw new Error('Use New again to finish the original entry creation before changing this view.'); if (pending.size || propertyDraft() || settings.hasDraft() || summaryPanel || chooser?.hasPendingChanges() || collectionEditor?.hasPendingChanges()) throw new Error('Finish or cancel the current edit before changing the view.'); },
     selectView,
     save(version, patch) { return saveConfigurationCommand(() => controller.updateView(numericVersion(version), patch)); },
     saveConfiguration(version, patch) { return saveConfigurationCommand(() => controller.updateConfiguration(numericVersion(version), patch)); },
@@ -440,7 +467,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   function closeSourceChooser(): void { chooser?.destroy(); chooser=undefined; }
   function chooseSource(choose:(source:BaseViewSource)=>Promise<void>, cancel=true):Promise<void> {
     action(); if (options.readOnly) return Promise.reject(new Error('This Base is read-only.'));
-    if(pendingCollectionCreate||chooser?.hasPendingChanges()||collectionEditor?.hasPendingChanges())return Promise.reject(new Error('Finish or cancel the current collection edit before changing the view source.'));
+    if(pendingCollectionRestore||pendingCollectionCreate||chooser?.hasPendingChanges()||collectionEditor?.hasPendingChanges())return Promise.reject(new Error('Finish or cancel the current collection edit before changing the view source.'));
     closeSourceChooser(); collectionEditor?.destroy(); collectionEditor=undefined;
     return new Promise((resolve,reject)=>{
       chooser=mountSourceChooser(sourcePanel,{service:databaseService,isCurrent:()=>!disposed&&!closing,
@@ -450,7 +477,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   }
   function openCollectionProperties(propertyId?:string):void {
     action();if(options.readOnly||!databaseService||!collection||collection.deleted)throw new Error('This collection is unavailable.');
-    if(pendingCollectionCreate||pending.size||propertyDraft()||toolbarUI.hasDraft())throw new Error('Finish editing the current value or retry the unfinished New first.');
+    if(pendingCollectionRestore||pendingCollectionCreate||pending.size||propertyDraft()||toolbarUI.hasDraft())throw new Error('Finish editing the current value or retry the unfinished New first.');
     if(collectionEditor){collectionEditor.element.querySelector<HTMLInputElement>('input')?.focus();return;}
     const editingCollection=collection;
     collectionEditor=mountCollectionEditor(sourcePanel,{service:databaseService,collection:editingCollection,entries:[...collectionEntries.values()],propertyId,
@@ -459,6 +486,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       onClose:()=>{collectionEditor?.destroy();collectionEditor=undefined;schedule();}});
   }
   async function editCollectionProperties(edits:readonly Parameters<typeof actions.editProperty>[0][]):Promise<void> {
+    if(pendingCollectionRestore)throw new Error('Retry the unfinished Restore before changing properties.');
     action();if(!databaseService||!collection||collection.deleted||!edits.length)throw new Error('This collection is unavailable.');
     const version=edits[0].version,captured=collectionVersions.get(version),result=widgetResults.get(version);
     if(!captured||!result||widgetSources.get(version)!==controller.state.source||captured.collection.id!==collection.id)throw new Error('This collection view changed. Refresh before editing.');
@@ -484,7 +512,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   const editCollectionProperty=(edit:Parameters<typeof actions.editProperty>[0])=>editCollectionProperties([edit]);
   const editProperty=(edit:Parameters<typeof actions.editProperty>[0])=>collectionMode()?editCollectionProperty(edit):Promise.reject(new Error('Vault note views are browsing only. Open the note to edit its properties.'));
   function saveConfigurationCommand(operation: () => Promise<void>): Promise<void> {
-    action();if(pendingCollectionCreate)throw new Error('Use New again to finish the original entry creation before changing this view.'); if (options.readOnly) return Promise.reject(new Error('This base is read-only'));
+    action();if(pendingCollectionRestore)throw new Error('Retry the unfinished Restore before changing this view.');if(pendingCollectionCreate)throw new Error('Use New again to finish the original entry creation before changing this view.'); if (options.readOnly) return Promise.reject(new Error('This base is read-only'));
     const attempt: { buffer?: NoteBuffer; text?: string } = {}; configurationAttempt = attempt;
     configurationLifecycle++; renderStatus(controller.state);
     let saving: Promise<void>;
@@ -725,6 +753,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   }
   function renderStatus(state: BaseControllerState): void {
     if (disposed) return;
+    renderRestoreRecovery();
     root.dataset.baseControllerVersion = String(state.version);
     root.dataset.baseControllerUpdating = String(!!state.updating);
     root.dataset.baseControllerError = String(!!state.error);
@@ -736,6 +765,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       element.setAttribute('aria-disabled', String(!canBeginPropertyEdit()));
       for (const checkbox of element.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) checkbox.disabled = !canBeginPropertyEdit();
     }
+    if(sourceUnavailable()){status.textContent=actionMessage??'';return;}
+    if(actionMessage){status.textContent=actionMessage;return;}
     if (state.error) { status.textContent = state.error.message; return; }
     if (definitionsError) { status.textContent = `Property settings: ${definitionsError}`; return; }
     if (definitions.diagnostics.length) { status.textContent = definitions.diagnostics.map(item => `${item.property ?? 'Property'}: ${item.message}`).join(' '); return; }
@@ -767,21 +798,55 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   }
   function renderSourceBar(source:BaseViewSource):void{
     sourceBar.replaceChildren();
-    const sourceButton=doc.createElement('button');sourceButton.type='button';sourceButton.className='collection-source-button';sourceButton.textContent=source.kind==='untyped'?'Notes in your vault':collection?.name??'Collection';sourceButton.setAttribute('aria-label','Change view source');
-    sourceButton.disabled=!!options.readOnly;sourceButton.onclick=()=>{if(activeDraft()){report(new Error('Finish or cancel the current edit first.'));return;}void chooseSource(async next=>{await saveConfigurationCommand(()=>controller.setViewSource(controller.state.version,selectedIndex,next));}).catch(report);};sourceBar.append(sourceButton);
+    const sourceButton=doc.createElement('button');sourceButton.type='button';sourceButton.className='collection-source-button';sourceButton.textContent=sourceUnavailable()?'Choose another source':source.kind==='untyped'?'Notes in your vault':collection?.name??'Collection';sourceButton.setAttribute('aria-label','Change view source');
+    sourceButton.disabled=!!options.readOnly;sourceButton.onclick=()=>{const repair=sourceUnavailable()?deletedConfigurationRead:undefined;if(activeDraft()){report(new Error('Finish or cancel the current edit first.'));return;}void chooseSource(async next=>{await saveConfigurationCommand(()=>repair?controller.repairViewSource(repair,next):controller.setViewSource(controller.state.version,selectedIndex,next));}).catch(report);};sourceBar.append(sourceButton);
     if(source.kind==='collection'&&collection&&!collection.deleted&&!options.readOnly){const configure=doc.createElement('button');configure.type='button';configure.textContent='Add property';configure.onclick=()=>{try{openCollectionProperties();}catch(failure){report(failure);}};sourceBar.append(configure);}
-    if(source.kind==='collection'&&collection?.deleted&&databaseService&&!options.readOnly){
-      const restore=doc.createElement('button');restore.type='button';restore.textContent='Restore collection';let request:DatabaseRequest|undefined;
-      restore.onclick=()=>{if(!request)request={op:'restore',operationId:crypto.randomUUID(),collectionId:collection!.id,expectedRevision:collection!.revision};restore.disabled=true;void track(async()=>{const reply=await databaseService.request(request!);if(reply.projection.pending||reply.projection.issues.length)throw new Error('Some collection files still need publication. Retry Restore.');await options.vault.reload();await loadDefinitions();await controller.refresh();}).catch(report).finally(()=>{restore.disabled=false;});};sourceBar.append(restore);
+    if(source.kind==='collection'&&databaseService&&!options.readOnly&&sourceUnavailable()&&!pendingCollectionRestore&&collection){
+      const restoringCollection=collection;
+      const restore=doc.createElement('button');restore.type='button';restore.textContent='Restore collection';restore.dataset.collectionRestore='';restore.disabled=!!pending.size;
+      restore.onclick=()=>{
+        if(pending.size||pendingCollectionRestore||!sourceUnavailable())return;
+        pendingCollectionRestore={op:'restore',operationId:crypto.randomUUID(),collectionId:restoringCollection.id,expectedRevision:restoringCollection.revision};
+        retryCollectionRestore();
+      };sourceBar.append(restore);
     }
   }
+  function renderRestoreRecovery():void{
+    restoreRecovery.replaceChildren();restoreRecovery.hidden=!pendingCollectionRestore;
+    for(const button of root.querySelectorAll<HTMLElement>('[data-collection-restore]'))button.hidden=!!pendingCollectionRestore;
+    if(!pendingCollectionRestore)return;
+    const retry=doc.createElement('button');retry.type='button';retry.textContent='Retry Restore';retry.setAttribute('aria-label',`Retry Restore for collection ${pendingCollectionRestore.collectionId}`);retry.disabled=!!pending.size;
+    retry.onclick=()=>retryCollectionRestore();restoreRecovery.append(retry);
+  }
+  function retryCollectionRestore():void{
+    const request=pendingCollectionRestore;
+    if(!request||!databaseService||pending.size)return;
+    void track(async()=>{
+      try{
+        const reply=await databaseService.request(request);
+        if(reply.projection.pending||reply.projection.issues.length)throw new Error('Some collection files still need publication. Retry Restore.');
+        pendingCollectionRestore=undefined;
+      }catch(failure){const rejection=failure as {source?:unknown;commitUncertain?:unknown};if(rejection?.source==='host'&&rejection.commitUncertain===false)pendingCollectionRestore=undefined;throw failure;}
+      await options.vault.reload();await loadDefinitions();await controller.refresh();
+    }).catch(()=>{/* track retains the action failure. */});
+  }
+
   function render(state: BaseControllerState): void {
     if (disposed) return;
     // Status changes never replace rows or a focused local property/config draft.
+    const unavailable=sourceUnavailable();unavailableCard.hidden=!unavailable;
     renderStatus(state);
+    if(unavailable){
+      toolbar.hidden=true;sourceBar.hidden=true;unavailableMessage.textContent=unavailable.message;
+      renderSourceBar({kind:'collection',id:unavailable.collectionId});unavailableActions.replaceChildren(...sourceBar.childNodes);
+      if(pending.size||activeDraft()){deferred=state;return;}
+      deferred=undefined;mounted?.destroy();mounted=undefined;mountedResult=undefined;content.replaceChildren();
+      return;
+    }
     if (state.error) {
+      toolbar.hidden=false;sourceBar.hidden=false;
       deferred = undefined;
-      try{const view=BaseDocument.parse(state.source).views[controller.selectedViewIndex];if(view){const source=baseViewSource(view);renderSourceBar(source);if(source.kind==='collection'&&loadedCollectionId!==source.id)void loadDefinitions();}}
+      try{const view=BaseDocument.parse(configurationSource()).views[configurationIndex()];if(view){const source=baseViewSource(view);renderSourceBar(source);if(source.kind==='collection'&&(loadedCollectionId!==source.id||loadedSourceContext!==sourceContext()||loadedConfigurationRead!==controller.configurationRead))void loadDefinitions();}}
       catch{/* The existing source error stays visible. */}
       if(!propertyDraft()&&!activeDraft()){mounted?.destroy();mounted=undefined;mountedResult=undefined;content.textContent=state.error.message;}
       return;
@@ -802,7 +867,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     selectedIndex = controller.selectedViewIndex;
     const document = BaseDocument.parse(state.source);propertyLabels=baseViewSetting(document,selectedIndex,'properties');
     const source=baseViewSource(document.views[selectedIndex]??result.view);
-    if(source.kind==='collection'&&loadedCollectionId!==source.id){void loadDefinitions();}
+    if(source.kind==='collection'&&(loadedCollectionId!==source.id||loadedSourceContext!==sourceContext()||loadedConfigurationRead!==controller.configurationRead)){void loadDefinitions();}
     else if(source.kind==='untyped'&&loadedCollectionId!==undefined){void loadDefinitions();}
     renderSourceBar(source);
     const toolbarState=filterToolbarState(result,document,selectedIndex),writable=!toolbarState.readOnly&&source.kind==='collection'&&!definitionsLoading&&!definitionsError;
@@ -1007,6 +1072,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     const configurationAcknowledged = await controller.acknowledgeConfigurationRetry();
     if (acknowledgesSavedDraft || configurationAcknowledged) acknowledgement();
     releaseCleanBuffers();
+    if(pendingCollectionRestore)throw new Error('The collection Restore is unfinished. Retry Restore before leaving this Base.');
     if(pendingCollectionCreate)throw new Error('The new entry is uncertain. Use New again to reconcile it before leaving this Base.');
     if (creation?.status === 'uncertain') throw new Error('The new note creation is uncertain. Use New again to reconcile it before leaving this base.');
     if (activeDraft()) throw new Error('Finish or cancel the property edit before leaving this base');
@@ -1049,7 +1115,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   return {
     ready: controller.refresh().then(()=>loadDefinitions()),
     get state() { return controller.state; },
-    refresh: async () => { await loadDefinitions(); await controller.refresh(); },
+    refresh: async () => { await controller.refresh(); await loadDefinitions(); },
     selectView,
     setCurrentFile: (path, expectedEntryId) => { action(); return controller.setCurrentFilePath(path, expectedEntryId); },
     get selectedViewIdentity(){return controller.selectedViewIdentity;},

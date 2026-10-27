@@ -10,6 +10,7 @@ import type { EditorOptions } from '../src/ui/editor.ts';
 import { MemoryAdapter } from '../src/core/memory-adapter.ts';
 import type { VaultEntry } from '../src/core/types.ts';
 import { BaseDocument } from '../src/bases/document.ts';
+import type { BaseSessionOptions } from '../src/bases/session.ts';
 
 const invalid = '# user comment\npluginRoot: {quoted: "001", unknown: [one, two]}\nviews:\n  - type: table\n    name: [broken\n';
 const repaired = '# user comment\npluginRoot: {quoted: "001", unknown: [one, two]}\nfilters: file.name == "One"\nviews:\n  - type: table\n    name: Repaired\n    order: [file.name, status]\n';
@@ -22,7 +23,7 @@ class Adapter extends MemoryAdapter {
   override async write(path: string, value: string) { if (this.fail && path === 'Invalid.base') throw new Error('Source disk full'); await super.write(path, value); this.revisions.set(path, (this.revisions.get(path) ?? 1) + 1); }
   async compareAndWrite(path: string, expected: string, next: string) { this.comparisons.push({ path, expected, next }); if (await this.read(path) !== expected) throw new Error('File changed outside this editor'); await this.write(path, next); }
 }
-async function setup(t: TestContext) {
+async function setup(t: TestContext, base?:typeof import('../src/bases/session.ts').createBaseSession) {
   const dom = new JSDOM('<!doctype html><body><div id="app"></div>', { url: 'https://zorid.test/', pretendToBeVisual: true });
   const saved = new Map<string, PropertyDescriptor | undefined>();
   const matchMedia = (media: string) => ({ matches: false, media, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} });
@@ -37,10 +38,10 @@ async function setup(t: TestContext) {
   const root = document.querySelector<HTMLElement>('#app')!, adapter = new Adapter({ 'Invalid.base': invalid, 'One.md': '---\nstatus: Todo\n---\nBody', 'Other.md': 'Other' });
   const editorOptions = new Map<unknown, EditorOptions>();
   const factory = (parent: HTMLElement, options: EditorOptions) => { const handle = createEditor(parent, options); editorOptions.set(handle, options); return handle; };
-  let workspace = new Workspace(root, factory);
+  let workspace = new Workspace(root, factory, {base});
   t.after(async () => { try { adapter.fail = false; await workspace.destroy(); } finally { dom.window.close(); for (const [key, descriptor] of saved) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } } });
   await workspace.start({ adapter, id: 'test:base-source', label: 'Test' });
-  return { root, adapter, editorOptions, get workspace() { return workspace; }, async restart() { await workspace.destroy(); workspace = new Workspace(root, factory); await workspace.start({ adapter, id: 'test:base-source', label: 'Test' }); return workspace; } };
+  return { root, adapter, editorOptions, get workspace() { return workspace; }, async restart() { await workspace.destroy(); workspace = new Workspace(root, factory, {base}); await workspace.start({ adapter, id: 'test:base-source', label: 'Test' }); return workspace; } };
 }
 async function until(check: () => boolean, label: string) { const end = Date.now() + 3000; while (!check()) { assert.ok(Date.now() < end, `${label}: ${[...document.querySelectorAll('.notice,.error-message')].map(node=>node.textContent).join(' | ')}`); await new Promise(resolve => setTimeout(resolve, 5)); } }
 function sourceEditor(workspace: Workspace): EditorView { const element = workspace.activePane.element.querySelector('.base-source-view .cm-editor'); assert.ok(element); return EditorView.findFromDOM(element as HTMLElement)!; }
@@ -191,4 +192,14 @@ for (const active of ['Other.md', 'Other.base']) test(`an inactive Base context-
   const command = commands.find(item => item.name === 'Edit source')!; assert.ok(command); await command.action();
   assert.equal(pane.active, target.id); assert.equal(sourceEditor(f.workspace).state.doc.toString(), invalid);
   assert.equal((other as any).baseSource, undefined); assert.equal((target as any).baseSource, true);
+});
+
+test('workspace source recovery follows typed fresh availability without discarding the underlying error',async t=>{
+  let publish:BaseSessionOptions['onState'];
+  const error=new Error('Underlying query failure'),state={source:repaired,version:1,result:null,error,updating:false};
+  const f=await setup(t,(_host,options)=>{publish=options.onState;options.onState?.(state,{kind:'collection-in-trash',collectionId:'abcdefghijkl',message:'This collection is in Trash. Restore it or choose another source.'});return{ready:Promise.resolve(),state,refresh:async()=>{},selectView:async()=>{},setCurrentFile:async()=>{},rebindViewName:()=>false,flush:async()=>{},hasPendingChanges:()=>false,close:async()=>{}};});
+  await f.workspace.openNote('Invalid.base');const recovery=f.workspace.activePane.element.querySelector<HTMLElement>('.base-source-recovery')!;
+  assert.equal(recovery.hidden,true);assert.equal(f.workspace.activePane.baseView!.state.error,error);
+  publish!(state);assert.equal(recovery.hidden,false);
+  publish!({...state,error:null});assert.equal(recovery.hidden,true);
 });

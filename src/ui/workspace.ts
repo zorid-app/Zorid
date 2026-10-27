@@ -55,7 +55,7 @@ import { createPdfView } from './pdf-view.ts';
 import type { PdfView } from './pdf-view.ts';
 import { createMediaView, mediaKind } from './media-view.ts';
 import type { MediaView } from './media-view.ts';
-import {createBaseSession, type BaseSession} from '../bases/session.ts';
+import {createBaseSession, type BaseSession, type BaseSourceUnavailable} from '../bases/session.ts';
 import {BaseEmbedSessions} from './base-embed-sessions.ts';
 import {openBaseNewItemPopover} from './base-new-item-popover.ts';
 import type {BaseNewItemPopoverHandle} from './base-new-item-popover.ts';
@@ -1278,7 +1278,7 @@ export class Workspace {
           }else{
             const recovery=el('div','base-source-recovery');recovery.hidden=true;
             recovery.append(el('p','','Edit this Base’s source to repair the configuration.'),textButton('Edit source',()=>this.run(()=>changeBaseSource(true)),'mod-cta'));host.append(recovery);
-            const session=this.createWorkspaceBaseSession(host,path,()=>pane,validate,undefined,undefined,undefined,error=>{recovery.hidden=!error;});
+            const session=this.createWorkspaceBaseSession(host,path,()=>pane,validate,undefined,undefined,undefined,(error,unavailable)=>{recovery.hidden=!error||!!unavailable;});
             pane.baseView=session;await session.ready;
           }
         }catch(error){if(version===pane.renderVersion){host.append(el('p','error-message',error instanceof Error?error.message:String(error)));if(!tab.baseSource)host.append(textButton('Edit source',()=>this.run(()=>changeBaseSource(true))));}}
@@ -1411,7 +1411,7 @@ export class Workspace {
     if(version===pane.renderVersion)pane.viewReady=true;this.renderStatus();
   }
 
-  private createWorkspaceBaseSession(host:HTMLElement,path:string,owner:()=>Pane,validate:()=>void,sourcePath?:string|SidebarBaseContext,viewName?:string,inline?:InlineBaseRequest,onSourceError?:(error:Error|null)=>void,onInlineSourceSaved?:(next:InlineBaseRequest)=>boolean,viewId?:string):BaseSession{
+  private createWorkspaceBaseSession(host:HTMLElement,path:string,owner:()=>Pane,validate:()=>void,sourcePath?:string|SidebarBaseContext,viewName?:string,inline?:InlineBaseRequest,onSourceError?:(error:Error|null,unavailable?:BaseSourceUnavailable)=>void,onInlineSourceSaved?:(next:InlineBaseRequest)=>boolean,viewId?:string):BaseSession{
     const vault=this.vault,resources=this.attachments!;
     const sourceContext=typeof sourcePath==='object'?sourcePath:{path:sourcePath??path};
     const hover=createBaseFileHover({parent:host,isMac:this.hotkeys.platform==='mac',
@@ -1498,7 +1498,7 @@ export class Workspace {
     let session:BaseSession,composed:BaseSession|undefined;
     try{session=(this.viewFactories.base??createBaseSession)(host,{vault,basePath:path,validate,viewName,viewId,inlineSource,query:{currentFilePath:sourceContext.path,...(sourceContext.entryId?{currentFileEntryId:sourceContext.entryId}:{})},
             hoverFile:(row,event)=>{try{validate();const anchor=baseFileHoverAnchor(row,event);if(anchor)hover.hover(row,event,anchor);}catch(error){notice(error instanceof Error?error.message:String(error));}},
-            ...(onSourceError?{onState:state=>onSourceError(state.error)}:{}),
+            ...(onSourceError?{onState:(state,unavailable)=>onSourceError(state.error,unavailable)}:{}),
             onEditsSettled:()=>{const sidebar=this.sidebarBase;if(sidebar&&sidebar.session===composed)this.retrySidebarFollowingContext(sidebar);},
             onViewRenamed:event=>{validate();const identity=this.treeEntryToken(event.basePath);if(!identity)return;for(const sessions of new Set([this.baseNewItemEmbeds,...this.baseHoverEmbeds,...this.loadedViews().map(pane=>pane.baseEmbeds)].filter((sessions):sessions is BaseEmbedSessions=>!!sessions)))sessions.renameViewBinding(event.basePath,event.from,event.to,identity,event.viewId);},
             closeCreatedFile:()=>this.baseNewItem?.element.contains(host)?false:this.closeBaseNewItem(),
