@@ -66,6 +66,106 @@ fn remove_proven(dir: &File, name: &str, source: &str) -> Result<()> {
     Ok(())
 }
 
+// Every allowed source comes from the last ACK or a durable pre-publication
+// candidate. Similar labels or an equal filename never grant ownership.
+fn known_sources(projection: &DatabaseSchemaProjection) -> Result<BTreeMap<String, Vec<String>>> {
+    let mut known: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for candidate in &projection.candidates {
+        known
+            .entry(leaf(&candidate.path)?.into())
+            .or_default()
+            .push(candidate.source.clone());
+    }
+    match (&projection.previous_path, &projection.previous_source) {
+        (Some(path), Some(source)) => known
+            .entry(leaf(path)?.into())
+            .or_default()
+            .push(source.clone()),
+        (None, None) => {}
+        _ => {
+            return Err(invalid(
+                "Collection definition has an incomplete publication baseline",
+            ))
+        }
+    }
+    known
+        .entry(leaf(&projection.path)?.into())
+        .or_default()
+        .push(projection.source.clone());
+    Ok(known)
+}
+
+fn source_is_known(snapshot: &fs::Snapshot, sources: &[String]) -> bool {
+    sources.iter().any(|source| agrees(snapshot, source))
+}
+
+/// A case/normalization alias of an exact known leaf is not another file to
+/// remove. Only descriptor metadata and a proven exact known inode can authorize
+/// this classification; no alias is opened or followed.
+fn snapshot_known(
+    dir: &File,
+    name: &str,
+    known: &BTreeMap<String, Vec<String>>,
+) -> Result<Option<fs::Snapshot>> {
+    match fs::snapshot(dir, name, MAX_DATABASE_RESPONSE_BYTES) {
+        Ok(value) => Ok(value),
+        Err(error @ Error::UnsafePath(_)) => {
+            let stat = match sys::statat(dir, name, sys::AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(stat) => stat,
+                Err(_) => return Err(error),
+            };
+            if sys::FileType::from_raw_mode(stat.st_mode) != sys::FileType::RegularFile
+                || stat.st_nlink != 1
+            {
+                return Err(error);
+            }
+            let identity = format!("{}:{}", stat.st_dev, stat.st_ino);
+            for (exact_name, sources) in known {
+                if exact_name == name {
+                    continue;
+                }
+                if let Ok(Some(snapshot)) =
+                    fs::snapshot(dir, exact_name, MAX_DATABASE_RESPONSE_BYTES)
+                {
+                    if snapshot.identity == identity && source_is_known(&snapshot, sources) {
+                        return Ok(None);
+                    }
+                }
+            }
+            Err(error)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Keep each exact schema version in recoverable private Trash. Repeated delete
+/// and restore never overwrite an older recovery copy.
+fn retain_known(dir: &File, name: &str, snapshot: &fs::Snapshot, collection: &str) -> Result<()> {
+    let key = operation("schema-trash", collection, "1", &snapshot.bytes)?;
+    let trash = format!(".trash-{}.yaml", key.as_str());
+    if let Some(previous) = fs::snapshot(dir, &trash, MAX_DATABASE_RESPONSE_BYTES)? {
+        if previous.bytes != snapshot.bytes {
+            return Err(Error::Busy(
+                "Collection definition recovery copy changed; source preserved",
+            ));
+        }
+        let source = std::str::from_utf8(&snapshot.bytes)
+            .map_err(|_| invalid("Generated collection definition is not UTF-8"))?;
+        remove_proven(dir, name, source)?;
+        return Ok(());
+    }
+    fs::rename_new(dir, name, dir, &trash)?;
+    let displaced = fs::snapshot(dir, &trash, MAX_DATABASE_RESPONSE_BYTES)?
+        .ok_or(Error::Busy("Retained collection definition disappeared"))?;
+    if displaced.identity != snapshot.identity || displaced.bytes != snapshot.bytes {
+        let _ = fs::rename_new(dir, &trash, dir, name);
+        return Err(Error::Busy(
+            "Collection definition changed during retirement; source retained",
+        ));
+    }
+    Ok(())
+}
+
 impl NativeVault {
     pub(super) fn database_publish_schema_locked(
         &mut self,
@@ -73,149 +173,100 @@ impl NativeVault {
     ) -> Result<()> {
         let dir = open_types(&self.paths)?;
         let name = leaf(&projection.path)?;
-        let previous_name = projection.previous_path.as_deref().map(leaf).transpose()?;
-        let previous_source = projection.previous_source.as_deref();
-        let trash = format!(
-            ".trash-{}.yaml",
-            hex(Sha256::digest(projection.collection_id.as_bytes()).as_slice())
-        );
-        let key = operation(
-            "schema",
-            &projection.collection_id,
-            &projection.revision,
-            &[],
-        )?;
-        let stage = format!(".projection-{}.yaml", key.as_str());
-        let retained = format!(".previous-{}.yaml", key.as_str());
-        // Every deterministic private artifact remains associated with this
-        // durable queue item until publication and acknowledgement complete.
+        let known = known_sources(projection)?;
         verify_types(&self.paths, &dir)?;
-        if projection.deleted {
-            if let Some(old_name) = previous_name {
-                if let Some(existing) = fs::snapshot(&dir, old_name, MAX_DATABASE_RESPONSE_BYTES)? {
-                    let expected = previous_source.ok_or_else(|| {
-                        invalid("Deleted collection definition has no publication baseline")
-                    })?;
-                    if !agrees(&existing, expected) {
-                        return Err(Error::Busy(
-                            "Collection definition changed outside Zorid; deletion is pending",
-                        ));
-                    }
-                    if let Some(saved) = fs::snapshot(&dir, &trash, MAX_DATABASE_RESPONSE_BYTES)? {
-                        if !agrees(&saved, expected) {
-                            return Err(Error::Busy(
-                                "Collection definition Trash already contains different source",
-                            ));
-                        }
-                        remove_proven(&dir, old_name, expected)?;
-                    } else {
-                        fs::rename_new(&dir, old_name, &dir, &trash)?;
-                        let saved = fs::snapshot(&dir, &trash, MAX_DATABASE_RESPONSE_BYTES)?
-                            .ok_or(Error::Busy("Trashed collection definition disappeared"))?;
-                        if !agrees(&saved, expected) {
-                            return Err(Error::Busy("Collection definition changed during deletion; source retained in Trash"));
-                        }
-                    }
-                }
-            }
-            verify_types(&self.paths, &dir)?;
-            self.store
-                .database_schema_projection_ack(&projection.collection_id, &projection.revision)?;
-            return Ok(());
-        }
-        // Target already equal is an exact retry after a crash before ACK.
-        let current_target = match fs::snapshot(&dir, name, MAX_DATABASE_RESPONSE_BYTES) {
-            Ok(value) => value,
-            Err(Error::UnsafePath(_))
-                if previous_name.is_some_and(|previous| {
-                    previous != name && previous.to_lowercase() == name.to_lowercase()
-                }) =>
-            {
-                None
-            }
-            Err(error) => return Err(error),
-        };
-        if current_target
-            .as_ref()
-            .is_some_and(|snapshot| agrees(snapshot, &projection.source))
-        {
-            if let Some(previous) = previous_name.filter(|previous| *previous != name) {
-                if let Some(expected) = previous_source {
-                    remove_proven(&dir, previous, expected)?;
-                }
-            }
-            verify_types(&self.paths, &dir)?;
-            self.store
-                .database_schema_projection_ack(&projection.collection_id, &projection.revision)?;
-            remove_proven(&dir, &stage, &projection.source)?;
-            if let Some(expected) = previous_source {
-                remove_proven(&dir, &retained, expected)?;
-            }
-            return Ok(());
-        }
-        if let Some(target) = current_target.as_ref() {
-            if previous_name != Some(name)
-                || previous_source.is_none_or(|expected| !agrees(target, expected))
-            {
-                return Err(Error::Busy("Collection definition filename is occupied or externally edited; source preserved"));
-            }
-        }
-        if let Some(staged) = fs::snapshot(&dir, &stage, MAX_DATABASE_RESPONSE_BYTES)? {
-            if !agrees(&staged, &projection.source) {
-                return Err(Error::Busy("Collection definition staging source changed"));
-            }
-        } else {
-            fs::stage(&dir, &stage, projection.source.as_bytes())?;
-        }
-        // Displace only the proven baseline into a retained private location.
-        // Recheck after moving; a concurrent external edit is kept and restored
-        // before any target is published. No replace operation touches user data.
-        if let Some(previous) = previous_name {
-            if let Some(existing) = fs::snapshot(&dir, previous, MAX_DATABASE_RESPONSE_BYTES)? {
-                let expected = previous_source
-                    .ok_or_else(|| invalid("Collection definition has no publication baseline"))?;
-                if !agrees(&existing, expected) {
+        // Check every known target before displacing any of them. Unknown edits
+        // and unrelated occupying files remain exactly where they were.
+        for (candidate_name, sources) in &known {
+            if let Some(snapshot) = snapshot_known(&dir, candidate_name, &known)? {
+                if !source_is_known(&snapshot, sources) {
                     return Err(Error::Busy(
                         "Collection definition changed outside Zorid; source preserved",
                     ));
                 }
-                if fs::snapshot(&dir, &retained, MAX_DATABASE_RESPONSE_BYTES)?.is_some() {
-                    return Err(Error::Busy("Collection definition has both old and retained sources; recovery is pending"));
-                }
-                fs::rename_new(&dir, previous, &dir, &retained)?;
-                let displaced = fs::snapshot(&dir, &retained, MAX_DATABASE_RESPONSE_BYTES)?
-                    .ok_or(Error::Busy("Retained definition disappeared"))?;
-                if !agrees(&displaced, expected) || displaced.identity != existing.identity {
-                    let _ = fs::rename_new(&dir, &retained, &dir, previous);
-                    return Err(Error::Busy(
-                        "Collection definition changed during publication; source retained",
-                    ));
-                }
             }
         }
-        verify_types(&self.paths, &dir)?;
-        fs::rename_new(&dir, &stage, &dir, name)?;
-        let published = fs::snapshot(&dir, name, MAX_DATABASE_RESPONSE_BYTES)?
-            .ok_or(Error::Busy("Published definition disappeared"))?;
-        if !agrees(&published, &projection.source) {
-            return Err(Error::Busy(
-                "Published collection definition changed before acknowledgement",
-            ));
+        // Retire superseded targets, including a target published just before a
+        // crash without its ACK. The candidate journal survives later renames.
+        for candidate_name in known.keys() {
+            if !projection.deleted && candidate_name == name {
+                continue;
+            }
+            if let Some(snapshot) = snapshot_known(&dir, candidate_name, &known)? {
+                let sources = &known[candidate_name];
+                if !source_is_known(&snapshot, sources) {
+                    return Err(Error::Busy(
+                        "Collection definition changed before retirement; source preserved",
+                    ));
+                }
+                retain_known(&dir, candidate_name, &snapshot, &projection.collection_id)?;
+            }
+        }
+        if !projection.deleted {
+            let current = snapshot_known(&dir, name, &known)?;
+            if current
+                .as_ref()
+                .is_none_or(|snapshot| !agrees(snapshot, &projection.source))
+            {
+                let key = operation(
+                    "schema",
+                    &projection.collection_id,
+                    &projection.revision,
+                    &[],
+                )?;
+                let stage = format!(".projection-{}.yaml", key.as_str());
+                if let Some(staged) = fs::snapshot(&dir, &stage, MAX_DATABASE_RESPONSE_BYTES)? {
+                    if !agrees(&staged, &projection.source) {
+                        return Err(Error::Busy("Collection definition staging source changed"));
+                    }
+                } else {
+                    fs::stage(&dir, &stage, projection.source.as_bytes())?;
+                }
+                if let Some(snapshot) = current {
+                    if !source_is_known(&snapshot, &known[name]) {
+                        return Err(Error::Busy(
+                            "Collection definition changed before replacement; source preserved",
+                        ));
+                    }
+                    retain_known(&dir, name, &snapshot, &projection.collection_id)?;
+                }
+                verify_types(&self.paths, &dir)?;
+                fs::rename_new(&dir, &stage, &dir, name)?;
+            }
+            let published = fs::snapshot(&dir, name, MAX_DATABASE_RESPONSE_BYTES)?
+                .ok_or(Error::Busy("Published collection definition disappeared"))?;
+            if !agrees(&published, &projection.source) {
+                return Err(Error::Busy(
+                    "Published collection definition changed before acknowledgement",
+                ));
+            }
+        }
+        // Deterministic staging artifacts are also associated with candidates.
+        // Never clear the journal while an unfamiliar artifact needs repair.
+        let all_sources: Vec<_> = known.values().flatten().cloned().collect();
+        for candidate in &projection.candidates {
+            let key = operation(
+                "schema",
+                &projection.collection_id,
+                &candidate.revision,
+                &[],
+            )?;
+            let stage = format!(".projection-{}.yaml", key.as_str());
+            remove_proven(&dir, &stage, &candidate.source)?;
+            let previous = format!(".previous-{}.yaml", key.as_str());
+            if let Some(snapshot) = fs::snapshot(&dir, &previous, MAX_DATABASE_RESPONSE_BYTES)? {
+                if !source_is_known(&snapshot, &all_sources) {
+                    return Err(Error::Busy(
+                        "Retained collection definition has unknown source; preserved for repair",
+                    ));
+                }
+                retain_known(&dir, &previous, &snapshot, &projection.collection_id)?;
+            }
         }
         verify_types(&self.paths, &dir)?;
         self.point("database_schema_projected");
         self.store
             .database_schema_projection_ack(&projection.collection_id, &projection.revision)?;
-        if let Some(expected) = previous_source {
-            remove_proven(&dir, &retained, expected)?;
-        }
-        // A restored schema can leave its old recovery copy behind; only retire
-        // exactly equal generated source, never unknown external content.
-        if let Some(snapshot) = fs::snapshot(&dir, &trash, MAX_DATABASE_RESPONSE_BYTES)? {
-            if agrees(&snapshot, &projection.source) {
-                fs::unlink_regular_identity(&dir, &trash, &snapshot.identity)?;
-            }
-        }
         Ok(())
     }
 }

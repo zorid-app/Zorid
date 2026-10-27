@@ -191,4 +191,18 @@ mod tests {
         let report: Value = serde_json::from_slice(&report).unwrap();
         assert!(report["value"].get("composition").is_none());
     }
+
+    #[test]
+    fn a_saved_operation_never_maps_a_later_domain_error_to_definite_rejection() {
+        let error = zorid_native::Error::DatabaseCommitted(Box::new(
+            zorid_native::Error::Contract(zorid_core::ContractError::InvalidMutation {
+                reason: "Local collection data exceeds its byte limit".into(),
+            }),
+        ));
+        assert_eq!(domain_code(&error), None);
+        let result = native_fault(error);
+        assert_eq!(result["code"], "collection_publication_pending");
+        assert_eq!(result["commit_uncertain"], true);
+        assert!(!result.to_string().contains("byte limit"));
+    }
 }

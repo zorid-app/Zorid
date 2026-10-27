@@ -50,6 +50,9 @@ use zorid_store::{DirectoryPhase, ProjectionPhase, ScanRun, StoredEntry};
 
 #[derive(Debug)]
 pub enum Error {
+    /// The exact local collection operation is already durable. Any enclosing
+    /// transport must retain its identity and must not report a definite reject.
+    DatabaseCommitted(Box<Error>),
     ConditionalSource(ConditionalSourceError),
     Io(std::io::Error),
     Recovery(zorid_recovery::RecoveryError),
@@ -63,6 +66,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DatabaseCommitted(error) => write!(f, "The local collection change was saved, but publication status is unavailable: {error}"),
             Self::ConditionalSource(error) => error.fmt(f),
             Self::Io(e) => e.fmt(f),
             Self::Recovery(e) => e.fmt(f),

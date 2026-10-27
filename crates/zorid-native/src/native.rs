@@ -114,6 +114,8 @@ pub struct NativeVault {
     document_drafts: Option<document_drafts::NativeDocumentDrafts>,
     #[cfg(test)]
     pub(crate) fault: Option<fn(&str)>,
+    #[cfg(test)]
+    pub(crate) database_after_commit_error: Option<fn() -> Error>,
 }
 impl NativeVault {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -165,6 +167,8 @@ impl NativeVault {
             document_drafts: None,
             #[cfg(test)]
             fault: None,
+            #[cfg(test)]
+            database_after_commit_error: None,
         })
     }
     fn point(&self, _name: &str) {

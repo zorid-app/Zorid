@@ -290,3 +290,145 @@ fn restart_after_logical_trash_move_requires_actual_physical_publication() {
         .unwrap()
         .ends_with("# Keep body\n\nText 🐈\n"));
 }
+
+#[test]
+fn a_known_error_after_logical_commit_is_uncertain_and_exact_retry_keeps_identity() {
+    fn fail() -> Error {
+        invalid("Local collection data exceeds its byte limit")
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    vault.database_after_commit_error = Some(fail);
+    let command = json!({"op":"create","operationId":"uncertain-create","name":"Saved collection"});
+    let error = request(&mut vault, command.clone()).unwrap_err();
+    assert!(matches!(error, Error::DatabaseCommitted(_)));
+    vault.database_after_commit_error = None;
+    drop(vault);
+    let mut vault = NativeVault::open_existing(dir.path()).unwrap();
+    let before = request(&mut vault, json!({"op":"list"})).unwrap();
+    assert_eq!(before.snapshot.collections.len(), 1);
+    let retried = request(&mut vault, command).unwrap();
+    assert_eq!(
+        retried.snapshot.collections[0].id,
+        before.snapshot.collections[0].id
+    );
+    let final_list = request(&mut vault, json!({"op":"list"})).unwrap();
+    assert_eq!(final_list.snapshot.collections.len(), 1);
+    assert_eq!(retried.projection.pending, 0);
+}
+
+#[test]
+fn new_entry_template_unknown_frontmatter_and_body_survive_filter_value_projection() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    let collection = request(&mut vault, json!({"op":"create","operationId":"template-schema","name":"Books","properties":[{"name":"Title","datatype":"text"}]})).unwrap().snapshot.collections.remove(0);
+    let title = collection.properties[0].id.clone();
+    let body = "---\ncustom: [keep, this]\n---\n# Literal {{date}}\n";
+    let result = request(&mut vault, json!({"op":"create_entry","operationId":"create-template","collectionId":collection.id,"expectedCollectionRevision":collection.revision,"entryId":"template-entry","path":"Template.md","body":body,"values":{(title):"Filtered title"}})).unwrap();
+    assert_eq!(result.projection.pending, 0, "{:?}", result.projection);
+    let source = std::fs::read_to_string(dir.path().join("Template.md")).unwrap();
+    assert!(source.contains("custom: [keep, this]\n"));
+    assert!(source.ends_with("---\n# Literal {{date}}\n"));
+    assert_eq!(
+        source::properties(&source).unwrap().get("Title"),
+        Some(&json!("Filtered title"))
+    );
+}
+
+#[test]
+fn a_superseded_unacknowledged_schema_target_is_recovered_after_rename() {
+    fn stop(stage: &str) {
+        if stage == "database_schema_projected" {
+            panic!("schema published without ACK");
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    vault.fault = Some(stop);
+    let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| create(&mut vault)));
+    assert!(interrupted.is_err());
+    vault.fault = None;
+    assert!(dir.path().join(".zorid/types/Work.yaml").is_file());
+    let collection = vault
+        .store
+        .database_request(&core_request(json!({"op":"list"})).unwrap())
+        .unwrap()
+        .collections
+        .remove(0);
+    let renamed = request(&mut vault, json!({"op":"update","operationId":"rename-unacked","collectionId":collection.id,"expectedRevision":collection.revision,"name":"Renamed","properties":collection.properties})).unwrap();
+    assert_eq!(renamed.projection.pending, 0, "{:?}", renamed.projection);
+    assert!(!dir.path().join(".zorid/types/Work.yaml").exists());
+    assert!(dir.path().join(".zorid/types/Renamed.yaml").is_file());
+    assert!(vault
+        .store
+        .database_pending_schema_projections(256)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn case_only_schema_rename_reopens_after_publication_without_ack() {
+    fn stop(stage: &str) {
+        if stage == "database_schema_projected" {
+            panic!("case rename published without ACK");
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    let collection = create(&mut vault);
+    vault.fault = Some(stop);
+    let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        request(
+            &mut vault,
+            json!({"op":"update","operationId":"case-rename","collectionId":collection.id,"expectedRevision":collection.revision,"name":"work","properties":collection.properties}),
+        )
+    }));
+    assert!(interrupted.is_err());
+    vault.fault = None;
+    drop(vault);
+    let mut vault = NativeVault::open_existing(dir.path()).unwrap();
+    let result = request(&mut vault, json!({"op":"get","collectionId":collection.id})).unwrap();
+    assert_eq!(result.projection.pending, 0, "{:?}", result.projection);
+    let names = std::fs::read_dir(dir.path().join(".zorid/types"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert!(names.iter().any(|name| name == "work.yaml"));
+    assert!(!names.iter().any(|name| name == "Work.yaml"));
+}
+
+#[test]
+fn blocked_first_page_does_not_starve_a_later_entry_projection() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    let collection = request(
+        &mut vault,
+        json!({"op":"create","operationId":"many-schema","name":"Many"}),
+    )
+    .unwrap()
+    .snapshot
+    .collections
+    .remove(0);
+    for index in 0..257 {
+        vault.store.database_request(&core_request(json!({"op":"create_entry","operationId":format!("create-{index:03}"),"collectionId":collection.id,"expectedCollectionRevision":collection.revision,"entryId":format!("entry-{index:03}"),"path":format!("Entry {index:03}.md"),"body":"Body\n"})).unwrap()).unwrap();
+        if index < 256 {
+            std::fs::write(
+                dir.path().join(format!("Entry {index:03}.md")),
+                "---\n_id: unrelated\n---\nPreserved\n",
+            )
+            .unwrap();
+        }
+    }
+    let result = request(&mut vault, json!({"op":"get","collectionId":collection.id})).unwrap();
+    assert_eq!(result.projection.pending, 256);
+    assert_eq!(result.projection.issues.len(), 256);
+    let last = std::fs::read_to_string(dir.path().join("Entry 256.md")).unwrap();
+    assert_eq!(
+        source::properties(&last).unwrap().get("_id"),
+        Some(&json!("entry-256"))
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("Entry 000.md")).unwrap(),
+        "---\n_id: unrelated\n---\nPreserved\n"
+    );
+}

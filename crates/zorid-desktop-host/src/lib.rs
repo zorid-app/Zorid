@@ -218,7 +218,7 @@ enum WireMutation {
 }
 
 fn fault(code: &'static str) -> Value {
-    json!({"code":code,"commit_uncertain":matches!(code, "storage_io" | "filesystem_io" | "sync_failed" | "crypto_failed" | "protocol_failed"),"message":"Native host operation failed; preserve the identical mutation request when acknowledgement is uncertain"})
+    json!({"code":code,"commit_uncertain":matches!(code, "collection_publication_pending" | "storage_io" | "filesystem_io" | "sync_failed" | "crypto_failed" | "protocol_failed"),"message":"Native host operation failed; preserve the identical mutation request when acknowledgement is uncertain"})
 }
 fn core_code(error: &zorid_core::ContractError) -> &'static str {
     use zorid_core::ContractError::*;
@@ -233,6 +233,7 @@ fn core_code(error: &zorid_core::ContractError) -> &'static str {
 fn native_fault(error: zorid_native::Error) -> Value {
     use zorid_native::Error::*;
     fault(match error {
+        DatabaseCommitted(_) => "collection_publication_pending",
         ConditionalSource(zorid_native::ConditionalSourceError::Changed) => "conditional_source_changed",
         ConditionalSource(zorid_native::ConditionalSourceError::Owner) => "source_capture_owner",
         ConditionalSource(zorid_native::ConditionalSourceError::Limit) => "source_capture_limit",

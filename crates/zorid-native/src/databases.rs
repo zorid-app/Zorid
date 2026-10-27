@@ -106,10 +106,13 @@ impl NativeVault {
                 .map_err(|_| invalid("Invalid collection maintenance request"))?;
             match maintenance {
                 Maintenance::Retry => {
-                    let projection = self.database_recover_locked()?;
+                    let projection = self
+                        .database_recover_locked()
+                        .map_err(|error| Error::DatabaseCommitted(Box::new(error)))?;
                     let snapshot = self
                         .store
-                        .database_request(&core_request(json!({"op":"list"}))?)?;
+                        .database_request(&core_request(json!({"op":"list"}))?)
+                        .map_err(|error| Error::DatabaseCommitted(Box::new(error.into())))?;
                     return Ok(DatabaseReply {
                         snapshot,
                         projection,
@@ -133,34 +136,41 @@ impl NativeVault {
         }
         let command = core_request(request.command.clone())?;
         let snapshot = self.store.database_request(&command)?;
-        self.point("database_logical_committed");
-        let mut projection = self.database_recover_locked()?;
-        if matches!(request.operation(), Some("list" | "get" | "get_entry")) {
-            let entries = if request.operation() == Some("list") {
-                self.store.database_query_state()?.entries
+        (|| -> Result<DatabaseReply> {
+            #[cfg(test)]
+            if let Some(fault) = self.database_after_commit_error {
+                return Err(fault());
+            }
+            self.point("database_logical_committed");
+            let mut projection = self.database_recover_locked()?;
+            if matches!(request.operation(), Some("list" | "get" | "get_entry")) {
+                let entries = if request.operation() == Some("list") {
+                    self.store.database_query_state()?.entries
+                } else {
+                    snapshot.entries.clone()
+                };
+                self.database_reconcile_visible_locked(&entries, &mut projection)?;
+                projection.pending = self.store.database_pending_projection_count()?;
+            }
+            // Exact mutation retries still return their original logical receipt,
+            // while the refreshed scoped snapshot reports actual file publication.
+            let refreshed = if matches!(request.operation(), Some("list" | "get_entry")) {
+                self.store.database_request(&command)?
+            } else if snapshot.collections.len() == 1 {
+                self.store.database_request(&core_request(
+                    json!({"op":"get","collectionId":snapshot.collections[0].id}),
+                )?)?
             } else {
-                snapshot.entries.clone()
+                self.store
+                    .database_request(&core_request(json!({"op":"list"}))?)?
             };
-            self.database_reconcile_visible_locked(&entries, &mut projection)?;
-            projection.pending = self.store.database_pending_projection_count()?;
-        }
-        // Exact mutation retries still return their original logical receipt,
-        // while the refreshed scoped snapshot reports actual file publication.
-        let refreshed = if matches!(request.operation(), Some("list" | "get_entry")) {
-            self.store.database_request(&command)?
-        } else if snapshot.collections.len() == 1 {
-            self.store.database_request(&core_request(
-                json!({"op":"get","collectionId":snapshot.collections[0].id}),
-            )?)?
-        } else {
-            self.store
-                .database_request(&core_request(json!({"op":"list"}))?)?
-        };
-        Ok(DatabaseReply {
-            snapshot: refreshed,
-            projection,
-            composition: None,
-        })
+            Ok(DatabaseReply {
+                snapshot: refreshed,
+                projection,
+                composition: None,
+            })
+        })()
+        .map_err(|error| Error::DatabaseCommitted(Box::new(error)))
     }
 
     fn database_compose_locked(
@@ -260,34 +270,45 @@ impl NativeVault {
 
     fn database_recover_locked(&mut self) -> Result<DatabaseProjectionReport> {
         let mut report = DatabaseProjectionReport::default();
-        for projection in self.store.database_pending_schema_projections(256)? {
-            if let Err(error) = self.database_publish_schema_locked(&projection) {
-                report.issues.push(DatabaseProjectionIssue {
-                    entry_id: None,
-                    message: publication_message(&error, true),
-                });
+        let mut schema_after: Option<String> = None;
+        // Pages may be short due to their byte budget. Continue by the last
+        // identity even when all earlier work is blocked; never revisit a failed
+        // prefix or infer end-of-work from a short page.
+        for _ in 0..256 {
+            let batch = self
+                .store
+                .database_pending_schema_projections_after(schema_after.as_deref(), 256)?;
+            if batch.is_empty() {
+                break;
+            }
+            schema_after = batch
+                .last()
+                .map(|projection| projection.collection_id.clone());
+            for projection in batch {
+                if let Err(error) = self.database_publish_schema_locked(&projection) {
+                    report.issues.push(DatabaseProjectionIssue {
+                        entry_id: None,
+                        message: publication_message(&error, true),
+                    });
+                }
             }
         }
-        let mut attempted = std::collections::BTreeSet::new();
-        // Each native turn is bounded. Failed work is retained, and successful
-        // pages allow later items to advance without unbounded retry loops.
-        for _ in 0..16 {
-            let batch = self.store.database_pending_projections(256)?;
-            let mut advanced = false;
+        let mut entry_after: Option<EntryId> = None;
+        for _ in 0..4096 {
+            let batch = self
+                .store
+                .database_pending_projections_after(entry_after.as_ref(), 256)?;
+            if batch.is_empty() {
+                break;
+            }
+            entry_after = batch.last().map(|projection| projection.entry_id.clone());
             for projection in batch {
-                if !attempted.insert(projection.entry_id.clone()) {
-                    continue;
-                }
-                advanced = true;
                 if let Err(error) = self.database_publish_entry_locked(&projection) {
                     report.issues.push(DatabaseProjectionIssue {
                         entry_id: Some(projection.entry_id.clone()),
                         message: publication_message(&error, false),
                     });
                 }
-            }
-            if !advanced {
-                break;
             }
         }
         report.pending = self.store.database_pending_projection_count()?;
