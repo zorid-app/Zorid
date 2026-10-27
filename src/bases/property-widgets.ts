@@ -107,7 +107,7 @@ export function mountBasePropertyWidget(element: HTMLElement, presentation: Base
   let value = suppliedRaw ?? presentation.value, displayValue = options.getDisplayValue?.(presentation) ?? presentation.value;
   let definition = options.getDefinition(presentation.property) ?? inferBasePropertyDefinition(value, presentation.property);
   const type = definition.type;
-  const rawUnavailable = presentation.property.startsWith('note.') && suppliedRaw === undefined && !rawSafe(presentation.value) && (!!options.getEditableValue || presentation.value.type === 'namespace' || type === 'relation' || type === 'link');
+  const rawUnavailable = type !== 'rollup' && type !== 'reverseRelation' && presentation.property.startsWith('note.') && suppliedRaw === undefined && !rawSafe(presentation.value) && (!!options.getEditableValue || presentation.value.type === 'namespace' || type === 'relation' || type === 'link');
   const editable = presentation.property.startsWith('note.') && /\.md$/i.test(presentation.row.path) && !rawUnavailable && !options.readOnly?.(presentation) && type !== 'rollup' && type !== 'reverseRelation';
   const multiple = ['list', 'tags', 'multiselect'].includes(type) || (type === 'relation' && !!definition.relation?.multiple);
   const inlineList = type === 'list' || type === 'tags';
