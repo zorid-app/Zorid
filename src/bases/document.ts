@@ -440,7 +440,8 @@ export class BaseDocument {
   private scopedViewDocument(index: number): BaseDocument {
     const view = this.views[index];
     if (!view) throw new BaseDocumentError('The selected base view does not exist');
-    return BaseDocument.parse(JSON.stringify({ formulas: view.formulas ?? {}, summaries: view.summaryDefinitions ?? {}, views: [view] }));
+    const isolated: BaseViewPatch = { ...view }; delete isolated.source;
+    return BaseDocument.parse(JSON.stringify({ formulas: view.formulas ?? {}, summaries: view.summaryDefinitions ?? {}, properties: view.properties ?? {}, views: [isolated] }));
   }
 
   setViewFormula(index: number, name: string, expression: string | undefined): void {
@@ -456,7 +457,7 @@ export class BaseDocument {
     if (!view) throw new BaseDocumentError('The selected base view does not exist');
     if (view.source === undefined) { this.renameFormula(from, to); return; }
     const next = this.scopedViewDocument(index); next.renameFormula(from, to);
-    this.updateView(index, { ...next.views[0], formulas: next.getRoot('formulas') });
+    this.updateView(index, { ...next.views[0], formulas: next.getRoot('formulas'), summaryDefinitions: next.getRoot('summaries'), properties: next.getRoot('properties') });
   }
 
   editViewSummary(index: number, originalName: string | undefined, name: string, expression: string): void {
@@ -504,7 +505,9 @@ export class BaseDocument {
         const pair = summaries.items.find(item => isScalar(item.key) && item.key.value === originalName);
         if (pair && isScalar(pair.key)) pair.key.value = name;
         for (let index = 0; index < this.viewList(doc).items.length; index++) {
-          const selections = this.viewAt(doc, index).get('summaries', true);
+          const view = this.viewAt(doc, index);
+          if (view.has('source')) continue;
+          const selections = view.get('summaries', true);
           if (selections === undefined) continue;
           if (!isMap(selections)) throw new BaseDocumentError('View summaries must be an editable mapping');
           for (const selection of selections.items) if (isScalar(selection.value) && selection.value.value === originalName) selection.value.value = name;
@@ -524,7 +527,9 @@ export class BaseDocument {
         summaries.delete(name);
       }
       for (let index = 0; index < this.viewList(doc).items.length; index++) {
-        const selections = this.viewAt(doc, index).get('summaries', true);
+        const view = this.viewAt(doc, index);
+        if (view.has('source')) continue;
+        const selections = view.get('summaries', true);
         if (selections === undefined) continue;
         if (!isMap(selections)) throw new BaseDocumentError('View summaries must be an editable mapping');
         selections.items = selections.items.filter(selection => !isScalar(selection.value) || selection.value.value !== name);
@@ -560,6 +565,7 @@ export class BaseDocument {
       const views = this.viewList(doc);
       for (const view of views.items) {
         if (!isMap(view)) throw new BaseDocumentError('Aliased view mappings cannot be edited directly');
+        if (view.has('source')) continue;
         filter(view.get('filters', true)); propertyMap(view.get('summaries', true));
         // Cards and Kanban persist their cover's property ID separately from
         // the visible property list.

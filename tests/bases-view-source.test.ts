@@ -45,10 +45,11 @@ test('explicit views ignore legacy root filters and formula definitions; sibling
 });
 
 test('formula, summary and former root controls stay scoped to their explicit view', () => {
-  const doc=document([view(books,{formulas:{label:'Status'},order:['file.name','formula.label'],filters:'formula.label == "Done"',summaryDefinitions:{Total:'values.sum()'},summaries:{score:'Total'}}),view(projects,{name:'Other',formulas:{label:'"Other"'},order:['formula.label'],summaryDefinitions:{Total:'values.average()'},summaries:{score:'Total'}})],{formulas:{label:'"Legacy"'},summaries:{Total:'values.count()'}});
+  const doc=document([view(books,{formulas:{label:'Status'},order:['file.name','formula.label'],filters:'formula.label == "Done"',summaryDefinitions:{Total:'values.sum() + formula.label'},properties:{'formula.label':{displayName:'Label'}},summaries:{score:'Total'}}),view(projects,{name:'Other',formulas:{label:'"Other"'},order:['formula.label'],summaryDefinitions:{Total:'values.average()'},summaries:{score:'Total'}})],{formulas:{label:'"Legacy"'},summaries:{Total:'values.count()'}});
   const sibling=structuredClone(doc.views[1]);
   doc.renameViewFormula(0,'label','caption');doc.setViewFormula(0,'extra','1');
   assert.deepEqual(doc.views[0].formulas,{caption:'Status',extra:'1'});assert.deepEqual(doc.views[0].order,['file.name','formula.caption']);assert.match(String(doc.views[0].filters),/formula.caption/);
+  assert.deepEqual(doc.views[0].summaryDefinitions,{Total:'(values.sum() + formula.caption)'});assert.deepEqual(doc.views[0].properties,{'formula.caption':{displayName:'Label'}});
   doc.editViewSummary(0,'Total','Sum','values.sum()');assert.deepEqual(doc.views[0].summaries,{score:'Sum'});assert.deepEqual(doc.views[0].summaryDefinitions,{Sum:'values.sum()'});
   doc.removeViewSummary(0,'Sum');assert.deepEqual(doc.views[0].summaries,{});assert.deepEqual(doc.views[0].summaryDefinitions,{});
   doc.updateViewConfiguration(0,{root:{filters:'Status == "Reading"',newItemFolder:'Books',properties:{Status:{displayName:'State'}}},view:{limit:20}});
@@ -122,4 +123,14 @@ test('combined explicit-source rename and root controls use identical scoped byt
     assert.equal(saved.getRoot('filters'),'legacy == true');assert.equal(saved.views[0].filters,'true');assert.equal(saved.views[0].newItemFolder,'Notes');assert.equal(saved.views[0].name,'Renamed');
     assert.equal(await f.vault.read('Link.md'),'[[Personal.base#Renamed]]');assert.equal(f.controller.hasPendingViewReferences,false);assert.equal(f.controller.state.error,null);
   }finally{await f.stop();}
+});
+
+
+test('legacy formula and summary edits cannot rewrite explicit-source sibling declarations or references',()=>{
+  const explicit=view(books,{name:'Books',formulas:{label:'"Book"'},summaryDefinitions:{Total:'values.sum() + formula.label'},properties:{'formula.label':{displayName:'Book caption'}},order:['formula.label'],filters:'formula.label == "Book"',summaries:{score:'Total'}});
+  const doc=document([{type:'table',name:'Legacy',filters:'formula.label == "Legacy"',order:['formula.label'],summaries:{score:'Total'}},explicit],{formulas:{label:'"Legacy"'},summaries:{Total:'values.count()'}});
+  const sibling=structuredClone(doc.views[1]);
+  doc.renameViewFormula(0,'label','caption');assert.deepEqual(doc.views[1],sibling);assert.deepEqual(doc.views[0].order,['formula.caption']);
+  doc.editViewSummary(0,'Total','Count','values.count()');assert.deepEqual(doc.views[1],sibling);assert.deepEqual(doc.views[0].summaries,{score:'Count'});
+  doc.removeViewSummary(0,'Count');assert.deepEqual(doc.views[1],sibling);assert.deepEqual(doc.views[0].summaries,{});
 });
