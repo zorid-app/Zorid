@@ -327,12 +327,8 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
       });
     });
     row.selector.addEventListener('change', () => {
-      if (options.vault) {
+      if (options.onPropertyDefinitionChange && options.getDefinitions) {
         const type = row.selector.value as BasePropertyDefinition['type'];
-        if (!options.onPropertyDefinitionChange) {
-          try { validatePropertyValue(type as PropertyType, current(options.getSource(), row).value); selectedTypes.set(row.key, type as PropertyType); row.renderedType = undefined; refresh(); } catch (problem) { report(problem, row.error); refresh(); }
-          return;
-        }
         const definition = definitionFor(row.key);
         row.selector.disabled = true;
         const operation = pending.then(async () => {mutationFailure=undefined;mutationFailureOwner=undefined; if (!live() || hasDraft(row)) throw new Error('Finish editing this property before changing its definition.'); await options.onPropertyDefinitionChange!(row.key, { ...definition, type }); await loadDefinitions(); });

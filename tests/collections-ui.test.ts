@@ -94,3 +94,11 @@ test('creation hints distinguish hidden field identities from readable template 
   assert.deepEqual(collectionInitialValues(schema,{bbbbbbbbbbbb:'Readable template value'},'names'),{aaaaaaaaaaaa:'Readable template value'});
   assert.deepEqual(collectionInitialValues(schema,{aaaaaaaaaaaa:'Unknown template metadata'},'names'),{});
 });
+
+test('ordinary note datatype conversion changes its own YAML scalar without a registry',async()=>{
+  const f=fixture();let source='---\nscore: "3"\n---\nKeep body';let reads=0;
+  const vault={entries:new Map(),read:async()=>{reads++;return'';},on:()=>()=>{}};
+  const view=renderProperties(f.host,{vault:vault as never,getSource:()=>source,onChange:next=>{source=next;}});
+  const type=f.host.querySelector<HTMLSelectElement>('[aria-label="score type"]')!;type.value='number';type.dispatchEvent(new f.dom.window.Event('change',{bubbles:true}));await tick();
+  assert.match(source,/score: 3/);assert.ok(source.endsWith('Keep body'));assert.equal(reads,0);view.destroy();f.dom.window.close();
+});
